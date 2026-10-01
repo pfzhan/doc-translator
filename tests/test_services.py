@@ -267,18 +267,18 @@ def test_temperature_retry_without_it():
     assert len(calls) == 2 and "temperature" not in calls[1]
 
 
-def test_cache_key_follows_service_id_not_model():
+def test_cache_key_follows_model_and_prompt():
     def tr(sid, **kw):
         return create_translator({"id": sid, "provider": "openai", "api_key": "k", "model": "a", **kw}, "zh-CN")
 
-    a, b, c, d = tr("s1"), tr("s1", model="b"), tr("s1", prompt="x"), tr("s2")
-    # 同一服务换模型/提示词：已翻好的段落继续复用；换服务 id 才重新翻译
-    assert a.cache_key == b.cache_key == c.cache_key != d.cache_key
-    # 旧版缓存 key 含模型和提示词，仍然各不相同
-    assert len({a.legacy_cache_key, b.legacy_cache_key, c.legacy_cache_key}) == 3
+    a, b, c, d, e = tr("s1"), tr("s1"), tr("s1", model="b"), tr("s1", prompt="x"), tr("s2")
+    # 同服务、同模型、同提示词：共用缓存，继续翻译时直接复用
+    assert a.cache_key == b.cache_key
+    # 换模型、换提示词、换服务：缓存键都不同，整本按新配置重翻
+    assert len({a.cache_key, c.cache_key, d.cache_key, e.cache_key}) == 4
 
 
-def test_legacy_cache_entries_are_reused_and_migrated(tmp_path):
+def test_switching_model_retranslates_and_switching_back_hits_cache(tmp_path):
     from app.runner import Cache, Runner
 
     calls = []
@@ -287,23 +287,21 @@ def test_legacy_cache_entries_are_reused_and_migrated(tmp_path):
         calls.append(json.loads(request.content)["model"])
         return httpx.Response(200, json={"choices": [{"message": {"content": "新译文"}}]})
 
-    svc = {"id": "s1", "provider": "openai", "api_key": "k", "model": "old", "base_url": "https://r.example.com/v1"}
+    svc = {"id": "s1", "provider": "openai", "api_key": "k", "model": "a", "base_url": "https://r.example.com/v1"}
     cache = Cache(tmp_path / "cache.sqlite3")
-    old = create_translator(svc, "zh-CN")
-    old.detected_source = "en"  # 旧版运行时同样先检测出原文语言再算 key
     text = "A sentence long enough to be translated by the model."
-    cache.put_many(old.legacy_cache_key, {text: "旧译文"})
 
-    # 升级后第一次继续翻译（同一模型）：旧缓存命中并迁移到新 key
-    same = create_translator(svc, "zh-CN", transport=httpx.MockTransport(handler))
-    assert run(Runner(same, cache=cache).translate_all([text])) == ["旧译文"] and calls == []
+    def run_with(model):
+        tr = create_translator({**svc, "model": model}, "zh-CN", transport=httpx.MockTransport(handler))
+        return run(Runner(tr, cache=cache).translate_all([text]))
 
-    # 之后换了模型：迁移过的段落照样复用，新段落才用新模型
-    tr = create_translator({**svc, "model": "new"}, "zh-CN", transport=httpx.MockTransport(handler))
-    other = "Another sentence that was never translated before."
-    out = run(Runner(tr, cache=cache).translate_all([text, other]))
-    assert out == ["旧译文", "新译文"] and calls == ["new"]
-    assert cache.get_many(tr.cache_key, [text]) == {text: "旧译文"}
+    run_with("a")
+    run_with("a")  # 同模型命中缓存
+    assert calls == ["a"]
+    run_with("b")  # 换模型：整本重翻
+    assert calls == ["a", "b"]
+    assert run_with("a") == ["新译文"]  # 换回旧模型：命中它自己的缓存
+    assert calls == ["a", "b"]
 
 
 def test_cache_reused_only_for_same_service_id():
