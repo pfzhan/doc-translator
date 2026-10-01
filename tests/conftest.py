@@ -32,4 +32,5 @@ def app_env(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "jobs", JobStore(tmp_path / "jobs"))
     monkeypatch.setattr(main, "settings", Settings(tmp_path / "settings.json"))
     monkeypatch.setattr(main, "running", {})
+    monkeypatch.setattr(main, "pause_requested", set())
     return main

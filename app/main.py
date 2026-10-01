@@ -28,8 +28,12 @@ CLEANUP_INTERVAL = 3600
 store = ServiceStore()
 settings = Settings()
 jobs = JobStore(history.JOBS_DIR)
-# 正在运行的翻译任务，防止被垃圾回收，也用于删除时取消
+# 正在运行的翻译任务，防止被垃圾回收，也用于暂停、删除时取消
 running: dict[str, asyncio.Task] = {}
+# 用户点了暂停的任务：取消时据此把状态记成“已暂停”，而不是“已中断”
+pause_requested: set[str] = set()
+ACTIVE = ("queued", "running")
+PROGRESS_SAVE_INTERVAL = 5
 
 
 def _cleanup():
@@ -55,8 +59,15 @@ app = FastAPI(title="Doc Translator", lifespan=lifespan)
 
 
 async def _run_job(job: Job, translator, bilingual: bool):
+    last_save = 0.0
+
     def progress(done, total):
+        nonlocal last_save
         job.done, job.total = done, total
+        # 隔几秒存一次进度，服务意外退出后记录里还能看到翻到了哪里
+        if time.time() - last_save > PROGRESS_SAVE_INTERVAL:
+            last_save = time.time()
+            jobs.save(job)
 
     job.status = "running"
     job.runner = Runner(translator, progress)
@@ -67,7 +78,11 @@ async def _run_job(job: Job, translator, bilingual: bool):
         job.outputs = [p.name for p in outputs]
         job.status = "done"
     except asyncio.CancelledError:
-        job.status, job.error = "error", "已取消"
+        if job.id in pause_requested:
+            job.status, job.error = "paused", ""
+        else:
+            # 服务关闭等原因被取消
+            job.status, job.error = "interrupted", "翻译被中断。已翻译的段落有缓存，继续翻译会很快。"
         raise
     except (TranslatorError, ValueError) as e:
         job.status, job.error = "error", str(e)
@@ -79,15 +94,61 @@ async def _run_job(job: Job, translator, bilingual: bool):
         jobs.save_preview(job)
         jobs.save(job)
         running.pop(job.id, None)
+        pause_requested.discard(job.id)
         await translator.aclose()
 
 
 def _start(job: Job, service: dict):
+    """开始（或继续）翻译。每次都按服务当前的配置创建引擎，所以继续翻译时用的是服务现在选中的模型。"""
     try:
         translator = create_translator(service, job.target_lang, job.source_lang)
     except TranslatorError as e:
         raise HTTPException(400, str(e))
+    job.model = getattr(translator, "model", "")
     running[job.id] = asyncio.create_task(_run_job(job, translator, job.mode == "bilingual"))
+
+
+async def _cancel(job_id: str):
+    """取消正在跑的翻译任务，等它真正停下来（写完记录）再返回。"""
+    task = running.pop(job_id, None)
+    if task and not task.done():
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            pass
+
+
+async def _pause(job: Job) -> bool:
+    if job.status not in ACTIVE:
+        return False
+    pause_requested.add(job.id)
+    await _cancel(job.id)
+    # 还在排队、没开始跑的任务被取消时不会进入 _run_job，状态要在这里改
+    if job.status in ACTIVE:
+        job.status, job.error, job.finished = "paused", "", time.time()
+        jobs.save(job)
+    pause_requested.discard(job.id)
+    return True
+
+
+def _resume(job: Job, service_id: str | None = None) -> Job:
+    """继续（或重新）翻译同一个文件。已翻好的段落在缓存里，不会重复请求。"""
+    if job.status in ACTIVE:
+        raise HTTPException(400, "这个任务还在翻译中")
+    if not jobs.source_path(job).exists():
+        raise HTTPException(400, "原文件已不存在，无法重新翻译")
+    service = store.get(service_id or job.service_id)
+    if not service:
+        raise HTTPException(400, "原来的翻译服务已不存在，请选择其他服务")
+    job.service_id, job.service_name = service["id"], service.get("name", "")
+    job.status, job.error, job.done, job.total, job.outputs, job.finished = "queued", "", 0, 0, [], 0.0
+    for old in jobs.out_dir(job.id).glob("*"):
+        old.unlink()
+    (jobs.dir(job.id) / "preview.json").unlink(missing_ok=True)
+    _start(job, service)
+    jobs.save(job)
+    return job
 
 
 @app.get("/api/languages")
@@ -256,40 +317,52 @@ def get_job(job_id: str):
 async def delete_job(job_id: str):
     """删除记录，连同原文件、译文和预览。正在翻译的会先停止。"""
     _job_or_404(job_id)
-    task = running.pop(job_id, None)
-    if task:
-        task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
+    await _cancel(job_id)
     jobs.delete(job_id)
     return {"ok": True}
 
 
+@app.post("/api/jobs/pause-all")
+async def pause_all_jobs():
+    """暂停所有正在翻译和排队的任务。"""
+    targets = [j for j in jobs.list() if j.status in ACTIVE]
+    results = await asyncio.gather(*(_pause(j) for j in targets))
+    return {"paused": sum(results)}
+
+
+@app.post("/api/jobs/resume-all")
+async def resume_all_jobs():
+    """继续所有已暂停和已中断的任务，各自用原来的翻译服务（服务当前选中的模型）。"""
+    resumed, failed = 0, []
+    for job in jobs.list():
+        if job.status not in ("paused", "interrupted"):
+            continue
+        try:
+            _resume(job)
+            resumed += 1
+        except HTTPException as e:
+            failed.append({"id": job.id, "filename": job.filename, "error": e.detail})
+    return {"resumed": resumed, "failed": failed}
+
+
+@app.post("/api/jobs/{job_id}/pause")
+async def pause_job(job_id: str):
+    """暂停：立即停止发送请求。已翻好的段落在缓存里，继续翻译时直接复用。"""
+    job = _job_or_404(job_id)
+    if not await _pause(job):
+        raise HTTPException(400, "这个任务没有在翻译")
+    return job.to_dict()
+
+
 @app.post("/api/jobs/{job_id}/retry")
 async def retry_job(job_id: str, data: dict | None = Body(None)):
-    """用同一个文件重新翻译（中断、失败后继续）。已翻好的段落在缓存里，不会重复请求。
+    """继续翻译（暂停、中断、失败后）。已翻好的段落在缓存里，不会重复请求。
 
+    用的是服务当前的配置：在服务里换了模型，后面的段落就用新模型。
     可以传 service_id 换一个服务；换了服务 id 就会按新服务重新翻译。
     必须是 async：_start 会创建后台任务，需要在事件循环里调用。
     """
-    job = _job_or_404(job_id)
-    if job.status in ("queued", "running"):
-        raise HTTPException(400, "这个任务还在翻译中")
-    if not jobs.source_path(job).exists():
-        raise HTTPException(400, "原文件已不存在，无法重新翻译")
-    service = store.get((data or {}).get("service_id") or job.service_id)
-    if not service:
-        raise HTTPException(400, "原来的翻译服务已不存在，请选择其他服务")
-    job.service_id, job.service_name = service["id"], service.get("name", "")
-    job.status, job.error, job.done, job.total, job.outputs, job.finished = "queued", "", 0, 0, [], 0.0
-    for old in jobs.out_dir(job.id).glob("*"):
-        old.unlink()
-    (jobs.dir(job.id) / "preview.json").unlink(missing_ok=True)
-    _start(job, service)
-    jobs.save(job)
-    return job.to_dict()
+    return _resume(_job_or_404(job_id), (data or {}).get("service_id")).to_dict()
 
 
 @app.get("/api/jobs/{job_id}/preview")

@@ -66,7 +66,10 @@
   <section class="recent" id="recent" hidden>
     <div class="section-head">
       <h2>最近翻译</h2>
-      <button type="button" class="btn ghost sm" data-goto="history">全部记录 →</button>
+      <div class="section-actions">
+        <span class="bulk-actions" data-bulk></span>
+        <button type="button" class="btn ghost sm" data-goto="history">全部记录 →</button>
+      </div>
     </div>
     <ul class="job-list" id="recent-list"></ul>
   </section>
@@ -99,6 +102,10 @@
     </form>
   </div>
 
+  <div class="bulk-bar" id="history-bulk" hidden>
+    <span class="hint" id="history-bulk-text"></span>
+    <span class="bulk-actions" data-bulk></span>
+  </div>
   <ul class="job-list" id="history-list"></ul>
   <div class="empty" id="history-empty" hidden>
     <div class="empty-mark" aria-hidden="true">译</div>

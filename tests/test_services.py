@@ -267,11 +267,43 @@ def test_temperature_retry_without_it():
     assert len(calls) == 2 and "temperature" not in calls[1]
 
 
-def test_cache_key_changes_with_model_and_prompt():
-    a = create_translator({"provider": "openai", "api_key": "k", "model": "a"}, "zh-CN")
-    b = create_translator({"provider": "openai", "api_key": "k", "model": "b"}, "zh-CN")
-    c = create_translator({"provider": "openai", "api_key": "k", "model": "a", "prompt": "x"}, "zh-CN")
-    assert len({a.cache_key, b.cache_key, c.cache_key}) == 3
+def test_cache_key_follows_service_id_not_model():
+    def tr(sid, **kw):
+        return create_translator({"id": sid, "provider": "openai", "api_key": "k", "model": "a", **kw}, "zh-CN")
+
+    a, b, c, d = tr("s1"), tr("s1", model="b"), tr("s1", prompt="x"), tr("s2")
+    # 同一服务换模型/提示词：已翻好的段落继续复用；换服务 id 才重新翻译
+    assert a.cache_key == b.cache_key == c.cache_key != d.cache_key
+    # 旧版缓存 key 含模型和提示词，仍然各不相同
+    assert len({a.legacy_cache_key, b.legacy_cache_key, c.legacy_cache_key}) == 3
+
+
+def test_legacy_cache_entries_are_reused_and_migrated(tmp_path):
+    from app.runner import Cache, Runner
+
+    calls = []
+
+    def handler(request):
+        calls.append(json.loads(request.content)["model"])
+        return httpx.Response(200, json={"choices": [{"message": {"content": "新译文"}}]})
+
+    svc = {"id": "s1", "provider": "openai", "api_key": "k", "model": "old", "base_url": "https://r.example.com/v1"}
+    cache = Cache(tmp_path / "cache.sqlite3")
+    old = create_translator(svc, "zh-CN")
+    old.detected_source = "en"  # 旧版运行时同样先检测出原文语言再算 key
+    text = "A sentence long enough to be translated by the model."
+    cache.put_many(old.legacy_cache_key, {text: "旧译文"})
+
+    # 升级后第一次继续翻译（同一模型）：旧缓存命中并迁移到新 key
+    same = create_translator(svc, "zh-CN", transport=httpx.MockTransport(handler))
+    assert run(Runner(same, cache=cache).translate_all([text])) == ["旧译文"] and calls == []
+
+    # 之后换了模型：迁移过的段落照样复用，新段落才用新模型
+    tr = create_translator({**svc, "model": "new"}, "zh-CN", transport=httpx.MockTransport(handler))
+    other = "Another sentence that was never translated before."
+    out = run(Runner(tr, cache=cache).translate_all([text, other]))
+    assert out == ["旧译文", "新译文"] and calls == ["new"]
+    assert cache.get_many(tr.cache_key, [text]) == {text: "旧译文"}
 
 
 def test_cache_reused_only_for_same_service_id():

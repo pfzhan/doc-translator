@@ -141,3 +141,107 @@ def test_settings_endpoint_triggers_cleanup(app_env):
         client.put("/api/settings", json={"retention_days": 7})
         assert client.get(f"/api/jobs/{job['id']}").status_code == 404
         assert client.put("/api/settings", json={"retention_days": -3}).status_code == 400
+
+
+LONG_MD = "\n\n".join(f"Paragraph number {i} of the long test document goes here." for i in range(80)).encode()
+
+
+@pytest.fixture
+def slow_mock(app_env, monkeypatch):
+    """每批慢一点，并记下每次请求用的模型（mock 服务的 model 字段）。"""
+    import asyncio
+
+    from app.translators import MockTranslator
+
+    calls: list[tuple[str, int]] = []
+    original = MockTranslator.translate_batch
+
+    async def slow(self, texts):
+        await asyncio.sleep(0.05)
+        calls.append((getattr(self, "model", ""), len(texts)))
+        return await original(self, texts)
+
+    real_create = app_env.create_translator
+
+    def create(service, *a, **kw):
+        tr = real_create(service, *a, **kw)
+        tr.model = service.get("model", "")
+        return tr
+
+    monkeypatch.setattr(MockTranslator, "translate_batch", slow)
+    monkeypatch.setattr(app_env, "create_translator", create)
+    return calls
+
+
+def wait_until(client, job_id, pred, timeout=30):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if pred(job):
+            return job
+        time.sleep(0.02)
+    raise AssertionError("condition not reached")
+
+
+def test_pause_then_resume_with_current_model(app_env, slow_mock):
+    main = app_env
+    main.store.get("mock")["model"] = "m-old"
+    with TestClient(main.app) as client:
+        job_id = submit(client, data=LONG_MD)["id"]
+        wait_until(client, job_id, lambda j: j["done"] > 0)
+        r = client.post(f"/api/jobs/{job_id}/pause")
+        assert r.status_code == 200, r.text
+        paused = r.json()
+        assert paused["status"] == "paused" and 0 < paused["done"] < paused["total"] and paused["model"] == "m-old"
+        translated_before, calls_before = sum(n for _, n in slow_mock), len(slow_mock)
+        time.sleep(0.2)
+        assert client.get(f"/api/jobs/{job_id}").json()["done"] == paused["done"]  # 真的停了
+        assert sum(n for _, n in slow_mock) == translated_before
+        assert client.post(f"/api/jobs/{job_id}/pause").status_code == 400  # 已暂停不能再暂停
+
+        # 暂停期间换了模型：继续翻译用新模型，翻好的段落不再请求
+        main.store.get("mock")["model"] = "m-new"
+        resumed = client.post(f"/api/jobs/{job_id}/retry", json={}).json()
+        assert resumed["model"] == "m-new"
+        done = wait_done(client, job_id)
+        assert done["status"] == "done" and done["model"] == "m-new"
+        assert {m for m, _ in slow_mock[:calls_before]} == {"m-old"}
+        assert {m for m, _ in slow_mock[calls_before:]} == {"m-new"}
+        assert sum(n for _, n in slow_mock) == done["total"]  # 每段只翻了一次
+
+
+def test_pause_all_and_resume_all(app_env, slow_mock):
+    main = app_env
+    with TestClient(main.app) as client:
+        ids = [submit(client, name=f"b{i}.md", data=LONG_MD + str(i).encode())["id"] for i in range(2)]
+        for job_id in ids:
+            wait_until(client, job_id, lambda j: j["status"] == "running")
+        assert client.post("/api/jobs/pause-all").json() == {"paused": 2}
+        assert {client.get(f"/api/jobs/{i}").json()["status"] for i in ids} == {"paused"}
+        assert client.post("/api/jobs/pause-all").json() == {"paused": 0}
+
+        # 暂停的记录重启后还是暂停，不会变成“中断”
+        reloaded = JobStore(main.jobs.root)
+        assert {reloaded.get(i).status for i in ids} == {"paused"}
+
+        assert client.post("/api/jobs/resume-all").json() == {"resumed": 2, "failed": []}
+        assert {wait_done(client, i)["status"] for i in ids} == {"done"}
+        assert client.post("/api/jobs/resume-all").json() == {"resumed": 0, "failed": []}
+
+
+def test_pause_queued_job(app_env):
+    import asyncio
+
+    main = app_env
+
+    async def scenario():
+        job = Job(id="q1", filename="x.md", status="queued")
+        main.jobs.dir(job.id).mkdir(parents=True)
+        main.jobs.add(job)
+        main.running[job.id] = asyncio.create_task(asyncio.sleep(10))  # 还没进入 _run_job 的任务
+        assert await main._pause(job)
+        return job
+
+    job = asyncio.run(scenario())
+    assert job.status == "paused" and job.finished > 0 and "q1" not in main.running
+    assert JobStore(main.jobs.root).get("q1").status == "paused"
