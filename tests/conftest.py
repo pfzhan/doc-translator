@@ -9,6 +9,15 @@ def isolate_ccswitch(tmp_path, monkeypatch):
     monkeypatch.setattr(ccswitch, "DB_PATH", tmp_path / "no-cc-switch.db")
 
 
+@pytest.fixture(autouse=True)
+def isolate_cache(tmp_path, monkeypatch):
+    """翻译缓存也用临时库：不读写真实的 data/cache.sqlite3。
+    否则上次跑测试留下的译文会让“是否重新翻译”的断言失效，测试的假译文也会混进真实缓存。"""
+    from app import runner
+
+    monkeypatch.setattr(runner, "_cache", runner.Cache(tmp_path / "cache.sqlite3"))
+
+
 @pytest.fixture
 def app_env(tmp_path, monkeypatch):
     """把 Web 服务的翻译服务、翻译记录、设置都换到临时目录，并加一个 mock 翻译服务。"""
