@@ -45,7 +45,10 @@ async def lifespan(_app):
     """启动时清理一次过期记录，之后每小时检查一次。"""
     async def loop():
         while True:
-            _cleanup()
+            try:
+                await asyncio.to_thread(_cleanup)  # 扫磁盘是重 IO，别卡事件循环
+            except Exception:  # noqa: BLE001
+                traceback.print_exc()  # 清理失败记录日志，下一轮再试，不能让后台任务结束
             await asyncio.sleep(CLEANUP_INTERVAL)
 
     task = asyncio.create_task(loop())
@@ -91,19 +94,27 @@ async def _run_job(job: Job, translator, bilingual: bool):
         job.status, job.error = "error", f"{type(e).__name__}: {e}"
     finally:
         job.finished = time.time()
-        jobs.save_preview(job)
+        # 快照可能很大，写盘放到线程里
+        await asyncio.to_thread(jobs.save_preview, job)
+        job.sync_info()
+        # 释放 Runner 占用的内存；之后预览接口从 preview.json 快照读
+        job.runner = None
         jobs.save(job)
         running.pop(job.id, None)
         pause_requested.discard(job.id)
         await translator.aclose()
 
 
-def _start(job: Job, service: dict):
-    """开始（或继续）翻译。每次都按服务当前的配置创建引擎，所以继续翻译时用的是服务现在选中的模型。"""
+def _make_translator(job: Job, service: dict):
+    """按服务当前的配置创建翻译引擎。配置无效时抛 400，此时任务状态和文件都还没动。"""
     try:
-        translator = create_translator(service, job.target_lang, job.source_lang)
+        return create_translator(service, job.target_lang, job.source_lang)
     except TranslatorError as e:
         raise HTTPException(400, str(e))
+
+
+def _start(job: Job, translator):
+    """开始（或继续）翻译。每次都按服务当前的配置创建引擎，所以继续翻译时用的是服务现在选中的模型。"""
     job.model = getattr(translator, "model", "")
     running[job.id] = asyncio.create_task(_run_job(job, translator, job.mode == "bilingual"))
 
@@ -113,10 +124,8 @@ async def _cancel(job_id: str):
     task = running.pop(job_id, None)
     if task and not task.done():
         task.cancel()
-        try:
-            await task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
-            pass
+        # 只吞被等待任务的取消和异常；当前协程自己被取消时仍会向上传播
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def _pause(job: Job) -> bool:
@@ -141,12 +150,14 @@ def _resume(job: Job, service_id: str | None = None) -> Job:
     service = store.get(service_id or job.service_id)
     if not service:
         raise HTTPException(400, "原来的翻译服务已不存在，请选择其他服务")
+    # 先验证配置，通过后才重置状态、删旧译文，否则配置失效时译文已丢
+    translator = _make_translator(job, service)
     job.service_id, job.service_name = service["id"], service.get("name", "")
     job.status, job.error, job.done, job.total, job.outputs, job.finished = "queued", "", 0, 0, [], 0.0
     for old in jobs.out_dir(job.id).glob("*"):
         old.unlink()
     (jobs.dir(job.id) / "preview.json").unlink(missing_ok=True)
-    _start(job, service)
+    _start(job, translator)
     jobs.save(job)
     return job
 
@@ -269,12 +280,12 @@ async def create_job(
     service_id: str = Form(""),
     mode: str = Form("bilingual"),
 ):
-    _cleanup()
+    await asyncio.to_thread(_cleanup)
     name = Path(file.filename or "upload").name
     ext = Path(name).suffix.lower()
     if ext not in SUPPORTED:
         raise HTTPException(400, f"不支持的格式 {ext}，支持: {', '.join(sorted(SUPPORTED))}")
-    service = store.get(service_id or store.default_id)
+    service = store.get(service_id or store.effective_default())
     if not service:
         raise HTTPException(400, "翻译服务不存在")
     # 先检查配置，避免上传完才发现服务不可用
@@ -287,24 +298,30 @@ async def create_job(
               mode="translated" if mode == "translated" else "bilingual", service_id=service["id"],
               service_name=service.get("name", ""), preview=ext in PREVIEW_FORMATS)
     jobs.out_dir(job.id).mkdir(parents=True)
-    size = 0
-    with jobs.source_path(job).open("wb") as f:
-        while chunk := await file.read(1024 * 1024):
-            size += len(chunk)
-            if size > MAX_UPLOAD:
-                f.close()
-                shutil.rmtree(jobs.dir(job.id), ignore_errors=True)
-                raise HTTPException(413, "文件太大（上限 200MB）")
-            f.write(chunk)
+    try:
+        size = 0
+        with jobs.source_path(job).open("wb") as f:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_UPLOAD:
+                    raise HTTPException(413, "文件太大（上限 200MB）")
+                # 大文件写盘放到线程里，别卡事件循环
+                await asyncio.to_thread(f.write, chunk)
+    except BaseException:
+        # 上传中途失败（读异常、超大小等）：清掉孤儿目录再抛出
+        shutil.rmtree(jobs.dir(job.id), ignore_errors=True)
+        raise
     job.size = size
     jobs.add(job)
-    _start(job, service)
+    _start(job, _make_translator(job, service))
     return job.to_dict()
 
 
 @app.get("/api/jobs")
-def list_jobs():
-    return {"jobs": [j.to_dict() for j in jobs.list()], "disk_usage": jobs.disk_usage(),
+async def list_jobs():
+    # 遍历所有任务目录算大小，放到线程里避免卡事件循环
+    usage = await asyncio.to_thread(jobs.disk_usage)
+    return {"jobs": [j.to_dict() for j in jobs.list()], "disk_usage": usage,
             "retention_days": settings.retention_days}
 
 
@@ -351,6 +368,9 @@ async def pause_job(job_id: str):
     job = _job_or_404(job_id)
     if not await _pause(job):
         raise HTTPException(400, "这个任务没有在翻译")
+    # 暂停期间记录可能被并发删除，别返回已过期的结果
+    if jobs.get(job_id) is None:
+        raise HTTPException(404, "翻译记录不存在")
     return job.to_dict()
 
 
@@ -384,18 +404,23 @@ def job_preview(job_id: str, since: int = -1):
 def job_focus(job_id: str, data: dict = Body(...)):
     """预览里用户跳到了哪一段，后面优先翻译这附近。"""
     job = _job_or_404(job_id)
-    if job.runner is None:
-        return {"ok": False}
     try:
-        job.runner.focus(int(data.get("index", 0)))
+        index = int(data.get("index", 0))
     except (TypeError, ValueError):
         raise HTTPException(400, "index 必须是整数")
+    if job.runner is None:
+        # 任务已结束（Runner 已释放）：聚焦没有意义，直接视为成功；还没开始的保持失败
+        return {"ok": job.status not in ACTIVE}
+    job.runner.focus(index)
     return {"ok": True}
 
 
 @app.get("/api/jobs/{job_id}/files/{name}")
 def download(job_id: str, name: str):
     job = _job_or_404(job_id)
+    # job.json 可能被篡改过，挡住带路径分隔符的文件名
+    if Path(name).name != name:
+        raise HTTPException(404, "文件不存在")
     if name in job.outputs:
         path = jobs.out_dir(job.id) / name
         if path.exists():
@@ -411,12 +436,12 @@ def get_settings():
 
 
 @app.put("/api/settings")
-def update_settings(data: dict = Body(...)):
+async def update_settings(data: dict = Body(...)):
     try:
         result = settings.update(data)
     except SettingsError as e:
         raise HTTPException(400, str(e))
-    _cleanup()  # 改短了保留时间，立即清理
+    await asyncio.to_thread(_cleanup)  # 改短了保留时间，立即清理
     return result
 
 

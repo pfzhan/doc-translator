@@ -144,10 +144,14 @@ class ServiceStore:
         self._load()
 
     def _load(self):
+        data = {}
         if self.path.exists():
-            data = json.loads(self.path.read_text(encoding="utf-8"))
-        else:
-            data = {}
+            try:
+                loaded = json.loads(self.path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    data = loaded
+            except (ValueError, OSError):
+                pass  # 文件损坏时回退到空配置，不影响启动
         self.services: list[dict] = data.get("services", [])
         self.default_id: str = data.get("default", "google")
         # CC Switch 服务的本地设置：{服务 id: {enabled, model, prompt, ...}}
@@ -208,14 +212,14 @@ class ServiceStore:
     def get(self, sid: str) -> dict | None:
         return next((s for s in self._all() if s["id"] == sid), None)
 
+    def effective_default(self) -> str:
+        """实际生效的默认服务 id：配置的服务不存在或已关闭（比如 CC Switch 暂时读不到）时退回谷歌翻译。"""
+        svc = self.get(self.default_id)
+        return self.default_id if svc and svc.get("enabled") else "google"
+
     def list(self) -> dict:
         all_services = self._all()
-        default = self.default_id
-        default_svc = next((s for s in all_services if s["id"] == default), None)
-        # 默认服务是 CC Switch 的但现在不可用了（比如切到了官方登录），退回谷歌翻译
-        if not default_svc or not default_svc.get("enabled"):
-            default = "google"
-        return {"default": default, "services": [public(s) for s in all_services],
+        return {"default": self.effective_default(), "services": [public(s) for s in all_services],
                 "ccswitch": {"db": str(self.ccswitch_db), "found": self.ccswitch_db.exists()}}
 
     def _update_ccswitch(self, svc: dict, data: dict) -> dict:

@@ -381,3 +381,56 @@ def test_api_endpoints(tmp_path, monkeypatch):
     # 缺 Key 时测试接口返回 400 和可读的错误
     r = client.post("/api/services/test", json={"provider": "claude", "model": "m"})
     assert r.status_code == 400 and "API Key" in r.json()["detail"]
+
+
+def test_corrupted_services_json_falls_back(tmp_path):
+    """services.json 损坏时回退到空配置，内置谷歌翻译仍在，不影响启动。"""
+    path = tmp_path / "s.json"
+    path.write_text("{not json", encoding="utf-8")
+    store = ServiceStore(path)
+    assert [s["id"] for s in store.services] == ["google"]
+    assert store.default_id == "google"
+    assert store.list()["default"] == "google"
+
+
+def test_ccswitch_default_unreadable_db_falls_back(tmp_path):
+    """默认服务是 CC Switch 的但数据库暂时读不到：配置保留，实际生效的默认退回谷歌翻译。"""
+    path = tmp_path / "s.json"
+    path.write_text(json.dumps({"default": "ccswitch-claude", "services": [], "ccswitch": {}}),
+                    encoding="utf-8")
+    store = ServiceStore(path, ccswitch_db=tmp_path / "missing.db")
+    assert store.default_id == "ccswitch-claude"  # 原值保留，数据库恢复后仍是默认
+    assert store.effective_default() == "google"
+    assert store.list()["default"] == "google"
+
+
+def test_empty_translation_is_not_cached(tmp_path):
+    """空译文不写缓存、不算完成：整批按失败处理，重试时空的段落重新请求。"""
+    from app.runner import Cache, Runner
+
+    class SometimesEmpty:
+        cache_key = "t"
+        concurrency = 1
+        max_batch_items = 20
+        max_batch_chars = 3000
+        source_lang = "en"
+        target_lang = "zh-CN"
+
+        def __init__(self):
+            self.calls = 0
+
+        async def translate_batch(self, texts):
+            self.calls += 1
+            if self.calls == 1 and len(texts) > 1:
+                return ["译:" + texts[0]] + [""] * (len(texts) - 1)  # 第一段正常，其余返回空
+            return ["译:" + t for t in texts]
+
+    cache = Cache(tmp_path / "c.sqlite3")
+    tr = SometimesEmpty()
+    with pytest.raises(TranslatorError, match="空译文"):
+        run(Runner(tr, cache=cache).translate_all(["good one", "bad one"]))
+    # 空译文没有进缓存，正常的进了
+    assert cache.get_many("t", ["good one", "bad one"]) == {"good one": "译:good one"}
+    # 重试：缓存命中的不再请求，空译文重新翻译
+    assert run(Runner(tr, cache=cache).translate_all(["good one", "bad one"])) == ["译:good one", "译:bad one"]
+    assert tr.calls == 2

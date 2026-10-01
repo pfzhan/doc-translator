@@ -11,12 +11,15 @@ from pathlib import Path
 from typing import Callable
 
 from . import langdetect
-from .translators import Translator
+from .translators import Translator, TranslatorError
 
 CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "cache.sqlite3"
 
 
 class Cache:
+    # 缓存只增不减会无限膨胀，超过上限时删掉最旧的一批
+    MAX_ENTRIES = 50000
+
     def __init__(self, path: Path = CACHE_PATH):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path, check_same_thread=False)
@@ -42,6 +45,13 @@ class Cache:
                 "INSERT OR REPLACE INTO t (k, v) VALUES (?, ?)",
                 [(self._key(prefix, s), d) for s, d in pairs.items()],
             )
+            (n,) = self.conn.execute("SELECT COUNT(*) FROM t").fetchone()
+            if n > self.MAX_ENTRIES:
+                # rowid 随写入递增（REPLACE 刷新过的条目也算新），删掉最旧的，留一成余量
+                self.conn.execute(
+                    "DELETE FROM t WHERE rowid IN (SELECT rowid FROM t ORDER BY rowid LIMIT ?)",
+                    (n - self.MAX_ENTRIES + self.MAX_ENTRIES // 10,),
+                )
             self.conn.commit()
 
 
@@ -198,12 +208,19 @@ class Runner:
                     pending.clear()  # 出错时让其他并发任务也尽快停下
                     raise
                 pairs = dict(zip(batch, result))
-                self.cache.put_many(prefix, pairs)
-                done_map.update(pairs)
-                if preview:
-                    self._record(batch)
-                done += len(batch)
-                self.progress(done, total)
+                # 空译文不写缓存、不计入完成（否则会永久缓存空结果），按失败处理
+                good = {s: d for s, d in pairs.items() if d and d.strip()}
+                empty = [s for s in batch if s not in good]
+                if good:
+                    self.cache.put_many(prefix, good)
+                    done_map.update(good)
+                    if preview:
+                        self._record(list(good))
+                    done += len(good)
+                    self.progress(done, total)
+                if empty:
+                    pending.clear()  # 让其他并发任务也尽快停下
+                    raise TranslatorError(f"翻译服务返回了空译文（{len(empty)} 段），请重试或更换服务")
 
         workers = min(self.translator.concurrency, len(pending))
         await asyncio.gather(*(worker() for _ in range(workers)))

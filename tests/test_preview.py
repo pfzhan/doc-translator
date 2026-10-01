@@ -2,6 +2,7 @@ import asyncio
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app import main
@@ -130,7 +131,7 @@ def test_preview_endpoints(app_env):
 def test_epub_preview_kinds_in_reading_order():
     src = SAMPLES / "alice.mobi"
     if not src.exists():
-        return
+        pytest.skip("sample missing")
     from app.formats import translate_file
 
     runner = Runner(MockTranslator("zh-CN"), cache=MemCache())

@@ -169,7 +169,10 @@ class JobStore:
             return
         path = self.dir(job.id) / "preview.json"
         if path.parent.exists():
-            path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            # 原子写：先写临时文件再替换，避免写到一半被读到
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(path)
 
     def load_preview(self, job: Job) -> dict | None:
         path = self.dir(job.id) / "preview.json"
