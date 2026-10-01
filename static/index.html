@@ -24,10 +24,18 @@
       <span id="drop-text">点击选择文件，或把文件拖到这里</span>
     </label>
 
-    <div class="row">
+    <div class="row lang-row">
+      <label>源语言
+        <select name="source_lang" id="source_lang"></select>
+      </label>
+      <button type="button" class="swap" id="swap-lang" title="交换源语言和目标语言" aria-label="交换源语言和目标语言">⇄</button>
       <label>目标语言
         <select name="target_lang" id="target_lang"></select>
       </label>
+    </div>
+    <p class="hint warn" id="lang-warning" hidden></p>
+
+    <div class="row">
       <label>输出
         <select name="mode">
           <option value="bilingual">双语对照</option>
@@ -47,6 +55,7 @@
     <div class="job-title" id="job-title"></div>
     <progress id="bar" max="100" value="0"></progress>
     <div id="status"></div>
+    <div id="job-lang" class="hint"></div>
     <ul id="outputs"></ul>
   </section>
 </main>

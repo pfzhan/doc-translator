@@ -6,6 +6,7 @@ import threading
 from pathlib import Path
 from typing import Callable
 
+from . import langdetect
 from .translators import Translator
 
 CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "cache.sqlite3"
@@ -51,10 +52,15 @@ def get_cache() -> Cache:
 
 
 class Runner:
-    def __init__(self, translator: Translator, progress: Callable[[int, int], None] | None = None, cache=None):
+    def __init__(self, translator: Translator, progress: Callable[[int, int], None] | None = None, cache=None,
+                 skip_same_lang: bool = True):
         self.translator = translator
         self.progress = progress or (lambda done, total: None)
         self.cache = cache if cache is not None else get_cache()
+        # 已经是目标语言的段落不翻（插件的段落语言检测）
+        self.skip_same_lang = skip_same_lang
+        # 给任务页展示：检测到的文档语言、跳过的段落数
+        self.info = {"detected_lang": "", "skipped": 0}
 
     def set_title(self, title: str):
         """文档标题作为翻译上下文（只有大模型引擎用得上）。"""
@@ -74,9 +80,23 @@ class Runner:
             batches.append(cur)
         return batches
 
+    def _detect(self, unique: list[str]) -> set[str]:
+        """检测文档语言，返回需要跳过（已是目标语言）的段落。"""
+        tr = self.translator
+        doc_lang = langdetect.detect_document(unique)
+        self.info["detected_lang"] = doc_lang or ""
+        if tr.source_lang == "auto" and doc_lang:
+            tr.detected_source = doc_lang
+        if not self.skip_same_lang:
+            return set()
+        return {t for t in unique if langdetect.same_language(langdetect.detect(t), tr.target_lang)}
+
     async def translate_all(self, texts: list[str]) -> list[str]:
-        """按原顺序返回译文；空白文本原样返回。"""
+        """按原顺序返回译文；空白文本和已是目标语言的段落原样返回。"""
         unique = list(dict.fromkeys(t for t in texts if t.strip()))
+        skipped = await asyncio.to_thread(self._detect, unique)
+        self.info["skipped"] = len(skipped)
+        unique = [t for t in unique if t not in skipped]
         prefix = self.translator.cache_key
         done_map = self.cache.get_many(prefix, unique)
         todo = [t for t in unique if t not in done_map]

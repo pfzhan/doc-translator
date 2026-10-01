@@ -10,19 +10,10 @@ import hashlib
 import httpx
 
 from . import prompts
+from .languages import GOOGLE_CODES, LANGUAGES
 
-LANG_NAMES = {
-    "zh-CN": "简体中文",
-    "zh-TW": "繁體中文",
-    "en": "English",
-    "ja": "日本語",
-    "ko": "한국어",
-    "fr": "Français",
-    "de": "Deutsch",
-    "es": "Español",
-    "pt": "Português",
-    "ru": "Русский",
-}
+# 前端下拉框用的语言列表：[(代码, 英文名, 本地名)]，顺序与插件一致
+LANG_CODES = {code for code, _, _ in LANGUAGES}
 
 
 class TranslatorError(Exception):
@@ -36,8 +27,18 @@ class Translator:
     concurrency = 4
 
     def __init__(self, target_lang: str, source_lang: str = "auto"):
+        if target_lang not in LANG_CODES or target_lang == "auto":
+            raise TranslatorError(f"不支持的目标语言: {target_lang}")
+        if source_lang not in LANG_CODES:
+            raise TranslatorError(f"不支持的源语言: {source_lang}")
         self.target_lang = target_lang
         self.source_lang = source_lang
+        # 源语言选“自动检测”时，由 Runner 检测文档语言后填进来，用于提示词的 {{from}}
+        self.detected_source = ""
+
+    @property
+    def effective_source(self) -> str:
+        return self.detected_source if self.source_lang == "auto" and self.detected_source else self.source_lang
 
     @property
     def cache_key(self) -> str:
@@ -87,11 +88,12 @@ class LLMTranslator(Translator):
     def cache_key(self):
         # 模型或提示词变了，译文也会不同，都要算进缓存 key
         p = hashlib.sha1(f"{self.prompt}\0{self.user_prompt}".encode()).hexdigest()[:8]
-        return f"{self.provider}:{self.model}:{p}:{self.source_lang}:{self.target_lang}"
+        # 源语言影响提示词（{{from}}、wyw2zh-CN 这类覆盖），用检测后的实际源语言
+        return f"{self.provider}:{self.model}:{p}:{self.effective_source}:{self.target_lang}"
 
     def build_messages(self, texts: list[str]) -> tuple[str, str]:
         return prompts.build_messages(
-            texts, self.target_lang, title=self.title,
+            texts, self.target_lang, source_lang=self.effective_source, title=self.title,
             system_template=self.prompt, user_template=self.user_prompt,
         )
 
@@ -260,6 +262,13 @@ class GoogleTranslator(Translator):
 
     def __init__(self, target_lang, source_lang="auto", transport=None):
         super().__init__(target_lang, source_lang)
+        # 插件的 Google 语言映射：zh-HK→zh-TW、pt-br→pt、pt→pt-PT、fil→tl，不在表里的语言不支持
+        if target_lang not in GOOGLE_CODES:
+            raise TranslatorError(f"谷歌翻译不支持目标语言「{prompts.lang_name(target_lang)}」，请换用 AI 翻译服务")
+        if source_lang != "auto" and source_lang not in GOOGLE_CODES:
+            raise TranslatorError(f"谷歌翻译不支持源语言「{prompts.lang_name(source_lang)}」，请改为自动检测或换用 AI 翻译服务")
+        self.tl = GOOGLE_CODES[target_lang]
+        self.sl = "auto" if source_lang == "auto" else GOOGLE_CODES[source_lang]
         self.client = httpx.AsyncClient(timeout=60, transport=transport)
 
     @property
@@ -267,7 +276,7 @@ class GoogleTranslator(Translator):
         return f"google:{self.source_lang}:{self.target_lang}"
 
     async def translate_batch(self, texts):
-        params = {"client": "gtx", "sl": self.source_lang, "tl": self.target_lang, "format": "text"}
+        params = {"client": "gtx", "sl": self.sl, "tl": self.tl, "format": "text"}
         for attempt in range(self.retries):
             last = attempt == self.retries - 1
             try:

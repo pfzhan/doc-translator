@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pymupdf
 
+from ..languages import RTL_LANGUAGES
+
 MATH_FONT_RE = re.compile(r"CMMI|CMSY|CMEX|MSBM|Math|Symbol|STIX|Cambria Math", re.I)
 CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
@@ -88,7 +90,13 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     return blocks
 
 
-def _render_translated(src_path: Path, blocks: list[TextBlock], translations: list[str]) -> pymupdf.Document:
+def _render_translated(src_path: Path, blocks: list[TextBlock], translations: list[str],
+                       target_lang: str = "") -> pymupdf.Document:
+    rtl = target_lang.split("-")[0] in RTL_LANGUAGES
+    # lang 让 MuPDF 为中日韩选对字形；dir=rtl 让阿拉伯语、希伯来语从右往左排
+    div_attrs = f' lang="{html.escape(target_lang)}"' if target_lang else ""
+    if rtl:
+        div_attrs += ' dir="rtl" style="text-align: right"'
     doc = pymupdf.open(src_path)
     by_page: dict[int, list[tuple[TextBlock, str]]] = {}
     for b, t in zip(blocks, translations):
@@ -113,7 +121,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             )
             # 留一点余量，避免译文比原文长时被截断；放不下由 scale_low=0 自动缩小
             rect = pymupdf.Rect(b.rect.x0, b.rect.y0, b.rect.x1 + 2, b.rect.y1 + b.size * 0.3)
-            page.insert_htmlbox(rect, f"<div>{body}</div>", css=css, scale_low=0)
+            page.insert_htmlbox(rect, f"<div{div_attrs}>{body}</div>", css=css, scale_low=0)
     return doc
 
 
@@ -127,7 +135,7 @@ def _render_side_by_side(src: pymupdf.Document, translated: pymupdf.Document) ->
     return out
 
 
-async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool) -> list[Path]:
+async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "") -> list[Path]:
     src_doc = pymupdf.open(src)
     if src_doc.needs_pass:
         raise ValueError("PDF 有密码保护，暂不支持")
@@ -142,7 +150,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool) -> li
     translations = await runner.translate_all([b.text for b in blocks])
 
     def build():
-        translated = _render_translated(src, blocks, translations)
+        translated = _render_translated(src, blocks, translations, target_lang)
         # insert_htmlbox 每次都会嵌入完整的 CJK 字体（十几 MB），必须做子集化
         translated.subset_fonts()
         if bilingual:
