@@ -60,11 +60,14 @@ class Translator:
 def _error_text(resp: httpx.Response) -> str:
     try:
         data = resp.json()
-        err = data.get("error", data)
-        msg = err.get("message") if isinstance(err, dict) else err
-        return str(msg or resp.text)[:300]
     except ValueError:
         return resp.text[:300]
+    # 中转站的错误响应不一定是 JSON 对象，可能是数组或字符串
+    if not isinstance(data, dict):
+        return str(data)[:300]
+    err = data.get("error", data)
+    msg = err.get("message") if isinstance(err, dict) else err
+    return str(msg or resp.text)[:300]
 
 
 # 这些状态码说明是我们这边的配置有问题（Key 错、没权限、地址错），重试也不会好，立即报错
@@ -73,6 +76,15 @@ FATAL_STATUS = {401, 403, 404}
 
 def _retryable(status: int) -> bool:
     return status not in FATAL_STATUS
+
+
+def _retry_delay(resp: httpx.Response, default: float) -> float:
+    """重试间隔：响应头带 Retry-After 时优先使用（上限 60s），否则用传入的指数退避值。"""
+    try:
+        delay = float(resp.headers.get("retry-after") or 0)
+    except ValueError:
+        delay = 0
+    return min(delay, 60) if delay > 0 else default
 
 
 def _json_or_error(resp: httpx.Response, url: str) -> dict:
@@ -118,6 +130,8 @@ class LLMTranslator(Translator):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.concurrency = max(1, int(concurrency))
+        # 并发上限：translate_batch 里拆批 / 补翻的 gather 也要过这个信号量，否则会绕过 Runner 的 worker 限制
+        self._sem = asyncio.Semaphore(self.concurrency)
         self.max_batch_items = max(1, int(max_items))
         self.max_batch_chars = max(200, int(max_chars))
         self.temperature = temperature
@@ -168,7 +182,9 @@ class LLMTranslator(Translator):
             if resp.status_code == 200:
                 return _json_or_error(resp, url)
             msg = _error_text(resp)
-            if resp.status_code == 400 and "temperature" in msg.lower() and self.temperature is not None:
+            # 最后一次尝试不再剥离 temperature 重发，让真实错误抛出来
+            if (resp.status_code == 400 and "temperature" in msg.lower()
+                    and self.temperature is not None and not last):
                 self.temperature = None
                 payload = {k: v for k, v in payload.items() if k != "temperature"}
                 gen = payload.get("generationConfig")
@@ -177,7 +193,7 @@ class LLMTranslator(Translator):
                 continue
             # 400 只原样重试一次（应付偶发故障）；再失败就交给 translate_batch 拆批，不在这里白等
             if _retryable(resp.status_code) and not last and not (resp.status_code == 400 and attempt >= 1):
-                await asyncio.sleep(2 ** (attempt + 1))
+                await asyncio.sleep(_retry_delay(resp, 2 ** (attempt + 1)))
                 continue
             raise TranslatorError(f"接口错误 {resp.status_code}: {msg}", status=resp.status_code)
         raise TranslatorError("重试次数用尽")
@@ -197,7 +213,9 @@ class LLMTranslator(Translator):
     async def translate_batch(self, texts):
         system, user = self.build_messages(texts)
         try:
-            content = await self._complete(system, user)
+            # 实际发请求的唯一入口，递归拆批 / 补翻最终也回到这里，都受同一个信号量限制
+            async with self._sem:
+                content = await self._complete(system, user)
         except TranslatorError as e:
             # 中转站会稳定拒绝某些段落组合（实测同一批 8 段每次都 400，拆开后每一部分都能翻），
             # 原样重试没用，拆成两半各自翻。只对 400 这样做：配置错误（401/403/404）拆了也没用，
@@ -210,7 +228,7 @@ class LLMTranslator(Translator):
             return left + right
         if len(texts) == 1:
             return [prompts.clean_output(content)]
-        found = prompts.parse_markers(content, len(texts))
+        found = prompts.parse_markers(content, len(texts), marker=prompts.pick_marker(texts))
         # 模型漏掉的段落补翻（和插件的 recovery 思路一样，只补缺失的），并行发出
         missing = [i for i in range(len(texts)) if i not in found]
         if missing:
@@ -360,6 +378,8 @@ class GoogleTranslator(Translator):
             raise TranslatorError(f"谷歌翻译不支持源语言「{prompts.lang_name(source_lang)}」，请改为自动检测或换用 AI 翻译服务")
         self.tl = GOOGLE_CODES[target_lang]
         self.sl = "auto" if source_lang == "auto" else GOOGLE_CODES[source_lang]
+        # 和 LLM 引擎一样，实际发请求都过同一个信号量
+        self._sem = asyncio.Semaphore(self.concurrency)
         self.client = httpx.AsyncClient(timeout=60, transport=transport)
 
     @property
@@ -371,24 +391,35 @@ class GoogleTranslator(Translator):
         for attempt in range(self.retries):
             last = attempt == self.retries - 1
             try:
-                resp = await self.client.post(
-                    "https://translate.googleapis.com/translate_a/t", params=params, data={"q": texts}
-                )
+                async with self._sem:
+                    resp = await self.client.post(
+                        "https://translate.googleapis.com/translate_a/t", params=params, data={"q": texts}
+                    )
             except httpx.HTTPError as e:
                 if last:
                     raise TranslatorError(f"Google 请求失败: {e}") from e
                 await asyncio.sleep(2**attempt)
                 continue
             if resp.status_code == 200:
-                # 每个 q 对应一项：sl=auto 时是 [译文, 检测到的语言]，否则直接是译文
-                out = [d[0] if isinstance(d, list) else d for d in resp.json()]
-                if len(out) != len(texts):
-                    raise TranslatorError("Google 返回条数不一致")
-                return out
+                # 被限流时偶尔 200 返回 HTML 验证码页，JSON 解析失败按可重试的限流处理
+                try:
+                    data = resp.json()
+                except ValueError:
+                    data = None
+                if isinstance(data, list):
+                    # 每个 q 对应一项：sl=auto 时是 [译文, 检测到的语言]，否则直接是译文
+                    out = [d[0] if isinstance(d, list) else d for d in data]
+                    if len(out) != len(texts):
+                        raise TranslatorError("Google 返回条数不一致")
+                    return out
+                if last:
+                    raise TranslatorError("Google 返回的不是 JSON（可能被限流，稍后重试或换用 AI 翻译）")
+                await asyncio.sleep(_retry_delay(resp, min(2 ** (attempt + 1), 30)))
+                continue
             # 302 跳到验证码页 / 429 都是限流，退避重试
             if resp.status_code not in (302, 429, 500, 503) or last:
                 raise TranslatorError(f"Google 接口错误 {resp.status_code}（可能被限流，稍后重试或换用 AI 翻译）")
-            await asyncio.sleep(min(2 ** (attempt + 1), 30))
+            await asyncio.sleep(_retry_delay(resp, min(2 ** (attempt + 1), 30)))
         raise TranslatorError("重试次数用尽")
 
     async def aclose(self):
