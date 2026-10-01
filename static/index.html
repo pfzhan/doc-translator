@@ -4,84 +4,152 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>文档翻译</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23d6336c'/%3E%3Ctext x='16' y='22.5' font-size='18' font-weight='700' text-anchor='middle' fill='white' font-family='PingFang SC,sans-serif'%3E%E8%AF%91%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="topbar">
-  <strong>文档翻译</strong>
-  <nav role="tablist">
-    <button role="tab" class="tab" data-view="translate" aria-selected="true">翻译文档</button>
+<header class="topbar" id="topbar">
+  <div class="brand"><span class="brand-mark" aria-hidden="true">译</span>文档翻译</div>
+  <nav class="nav" role="tablist" aria-label="页面">
+    <button role="tab" class="tab" data-view="translate" aria-selected="true">翻译</button>
+    <button role="tab" class="tab" data-view="history" aria-selected="false">记录<span class="tab-badge" id="running-badge" hidden></span></button>
     <button role="tab" class="tab" data-view="services" aria-selected="false">翻译服务</button>
   </nav>
 </header>
 
-<main id="view-translate">
-  <p class="hint">支持 EPUB、MOBI / AZW3、PDF、Markdown。输出双语对照或仅译文。</p>
+<!-- ============ 翻译 ============ -->
+<main id="view-translate" class="page narrow">
+  <div class="page-head">
+    <h1>翻译文档</h1>
+    <p class="hint">EPUB、MOBI / AZW3、PDF、Markdown，保留原有排版，输出双语对照或仅译文。</p>
+  </div>
 
-  <form id="form" class="card">
+  <form id="form" class="card form-card">
     <label class="drop" id="drop">
       <input type="file" id="file" name="file" accept=".epub,.mobi,.azw3,.azw,.pdf,.md,.markdown" required>
-      <span id="drop-text">点击选择文件，或把文件拖到这里</span>
+      <span class="drop-icon" aria-hidden="true">⇪</span>
+      <span class="drop-title" id="drop-text">选择文件，或拖到这里</span>
+      <span class="drop-sub" id="drop-sub">最大 200 MB</span>
     </label>
 
-    <div class="row lang-row">
-      <label>源语言
+    <div class="lang-row">
+      <label class="field">源语言
         <select name="source_lang" id="source_lang"></select>
       </label>
       <button type="button" class="swap" id="swap-lang" title="交换源语言和目标语言" aria-label="交换源语言和目标语言">⇄</button>
-      <label>目标语言
+      <label class="field">目标语言
         <select name="target_lang" id="target_lang"></select>
       </label>
     </div>
-    <p class="hint warn" id="lang-warning" hidden></p>
+    <p class="inline-msg warn" id="lang-warning" hidden></p>
 
-    <div class="row">
-      <label>输出
-        <select name="mode">
-          <option value="bilingual">双语对照</option>
-          <option value="translated">仅译文</option>
-        </select>
-      </label>
-      <label>翻译服务
+    <div class="field-row">
+      <fieldset class="field segmented-field">
+        <legend>输出</legend>
+        <div class="segmented" role="radiogroup">
+          <label><input type="radio" name="mode" value="bilingual" checked><span>双语对照</span></label>
+          <label><input type="radio" name="mode" value="translated"><span>仅译文</span></label>
+        </div>
+      </fieldset>
+      <label class="field">翻译服务
         <select name="service_id" id="service_id"></select>
       </label>
     </div>
-    <p class="hint">在「翻译服务」页添加和配置 OpenAI、Claude、Gemini、Grok 或任何 OpenAI 兼容接口。</p>
 
-    <button type="submit" id="submit" class="primary">开始翻译</button>
+    <div class="form-foot">
+      <span class="hint">在「翻译服务」里添加 OpenAI、Claude、Gemini、Grok 或任意 OpenAI 兼容接口。</span>
+      <button type="submit" id="submit" class="btn primary lg">开始翻译</button>
+    </div>
+    <p class="inline-msg error" id="submit-error" hidden></p>
   </form>
 
-  <section id="job" class="card" hidden aria-live="polite">
-    <div class="job-title" id="job-title"></div>
-    <progress id="bar" max="100" value="0"></progress>
-    <div id="status"></div>
-    <div id="job-lang" class="hint"></div>
-    <ul id="outputs"></ul>
+  <section class="recent" id="recent" hidden>
+    <div class="section-head">
+      <h2>最近翻译</h2>
+      <button type="button" class="btn ghost sm" data-goto="history">全部记录 →</button>
+    </div>
+    <ul class="job-list" id="recent-list"></ul>
   </section>
 </main>
 
-<section id="preview" class="preview" hidden aria-label="翻译预览">
-  <div class="preview-bar">
-    <strong>预览</strong>
-    <span class="hint" id="preview-stat"></span>
-    <div class="preview-tools">
-      <label class="check"><input type="checkbox" id="preview-original" checked> 显示原文</label>
-      <label class="check"><input type="checkbox" id="preview-follow" checked> 跟随翻译进度</label>
-      <button type="button" class="link small" id="preview-next">跳到未翻译处</button>
-    </div>
+<!-- ============ 翻译记录 ============ -->
+<main id="view-history" class="page narrow" hidden>
+  <div class="page-head">
+    <h1>翻译记录</h1>
+    <p class="hint">记录和文件会一直保留，直到你在这里删除，或者超过保留时间。</p>
   </div>
-  <div class="preview-body" id="preview-body" tabindex="0"></div>
+
+  <div class="card retention" id="retention">
+    <div>
+      <div class="retention-label">保留时间</div>
+      <div class="hint" id="usage">—</div>
+    </div>
+    <form class="retention-form" id="retention-form">
+      <select id="retention-days" aria-label="保留时间">
+        <option value="7">7 天</option>
+        <option value="30">30 天</option>
+        <option value="90">90 天</option>
+        <option value="365">1 年</option>
+        <option value="0">永久保留</option>
+        <option value="custom">自定义…</option>
+      </select>
+      <input type="number" id="retention-custom" min="1" max="3650" placeholder="天数" aria-label="自定义保留天数" hidden>
+      <button type="submit" class="btn sm" id="retention-save" hidden>保存</button>
+      <span class="hint" id="retention-status" aria-live="polite"></span>
+    </form>
+  </div>
+
+  <ul class="job-list" id="history-list"></ul>
+  <div class="empty" id="history-empty" hidden>
+    <div class="empty-mark" aria-hidden="true">译</div>
+    <p>还没有翻译记录</p>
+    <button type="button" class="btn primary" data-goto="translate">翻译一本书</button>
+  </div>
+</main>
+
+<!-- ============ 阅读器（边翻边预览） ============ -->
+<section id="reader" class="reader" hidden aria-label="阅读">
+  <header class="reader-bar">
+    <button type="button" class="btn ghost icon-btn" id="reader-back" aria-label="返回">←</button>
+    <div class="reader-title">
+      <div class="reader-name" id="reader-name"></div>
+      <div class="reader-meta" id="reader-meta"></div>
+    </div>
+    <div class="segmented compact" role="radiogroup" aria-label="显示方式">
+      <label><input type="radio" name="reader-view" value="both" checked><span>对照</span></label>
+      <label><input type="radio" name="reader-view" value="dst"><span>译文</span></label>
+      <label><input type="radio" name="reader-view" value="src"><span>原文</span></label>
+    </div>
+    <div class="reader-actions" id="reader-actions"></div>
+    <div class="reader-progress" aria-hidden="true"><div id="reader-progress-bar"></div></div>
+  </header>
+
+  <div class="reader-main">
+    <nav class="outline" id="outline" aria-label="目录">
+      <div class="outline-head">目录</div>
+      <ol id="outline-list"></ol>
+    </nav>
+    <article class="reader-body" id="reader-body" tabindex="0">
+      <div class="reader-notice" id="reader-notice" hidden></div>
+      <div class="reader-content" id="reader-content"></div>
+    </article>
+  </div>
+
+  <div class="reader-fab">
+    <button type="button" class="pill" id="follow-btn" hidden>跟随翻译进度 ↓</button>
+  </div>
 </section>
 
-<main id="view-services" class="wide" hidden>
-  <div class="services-head">
+<!-- ============ 翻译服务 ============ -->
+<main id="view-services" class="page wide" hidden>
+  <div class="page-head row-head">
     <div>
-      <h2>翻译服务列表</h2>
+      <h1>翻译服务</h1>
       <p class="hint">可以添加多个服务，开启常用的、关闭不需要的。开启的服务会出现在翻译页的下拉框里。</p>
     </div>
     <div class="add-service">
       <select id="add-provider" aria-label="服务类型"></select>
-      <button type="button" id="add-btn" class="primary">添加自定义翻译服务</button>
+      <button type="button" id="add-btn" class="btn primary">添加翻译服务</button>
     </div>
   </div>
 
@@ -92,7 +160,7 @@
       <div class="svc-title">
         <span class="icon" id="svc-icon"></span>
         <h3 id="svc-name-title"></h3>
-        <button type="button" class="link" id="test-btn">点此测试服务</button>
+        <button type="button" class="btn sm" id="test-btn">测试服务</button>
       </div>
       <p class="desc" id="svc-desc"></p>
       <p class="notice cc-notice" id="cc-notice" hidden></p>
@@ -101,20 +169,20 @@
       <div id="svc-fields">
         <p class="notice" id="key-notice"></p>
 
-        <label>APIKEY
+        <label class="field">API Key
           <input name="api_key" id="api_key" type="password" spellcheck="false">
         </label>
         <label class="check"><input type="checkbox" id="show-key"> 显示密码</label>
 
-        <label>自定义翻译服务名称
+        <label class="field">名称
           <input name="name" id="svc-name-input" required>
         </label>
 
-        <label>API 地址
+        <label class="field">API 地址
           <input name="base_url" id="base_url" spellcheck="false">
         </label>
 
-        <label>模型
+        <label class="field">模型
           <select id="model-select"></select>
           <input name="model" id="model-input" spellcheck="false" placeholder="输入模型名称，如 deepseek-chat" hidden>
         </label>
@@ -128,45 +196,47 @@
 
         <details>
           <summary>高级设置</summary>
-          <div class="row">
-            <label>并发请求数
+          <div class="field-row four">
+            <label class="field">并发请求数
               <input name="concurrency" type="number" min="1" max="32">
             </label>
-            <label>每批最多段落数
+            <label class="field">每批最多段落数
               <input name="max_items" type="number" min="1" max="200">
             </label>
-            <label>每批最多字符数
+            <label class="field">每批最多字符数
               <input name="max_chars" type="number" min="200" max="50000">
             </label>
-            <label>temperature
-              <input name="temperature" type="number" min="0" max="2" step="0.1" placeholder="留空用模型默认值">
+            <label class="field">temperature
+              <input name="temperature" type="number" min="0" max="2" step="0.1" placeholder="默认">
             </label>
           </div>
-          <label>System Prompt
+          <label class="field">System Prompt
             <textarea name="prompt" id="prompt" rows="8" spellcheck="false"></textarea>
           </label>
-          <label>Prompt
+          <label class="field">Prompt
             <textarea name="user_prompt" id="user_prompt" rows="3" spellcheck="false"></textarea>
           </label>
           <div class="inline">
-            <span class="hint">默认提示词取自沉浸式翻译，按目标语言自动切换。留空即使用默认值。</span>
+            <span class="hint">默认提示词取自沉浸式翻译，按语言自动切换。留空即使用默认值。</span>
             <button type="button" class="link" id="load-default-prompt">填入默认提示词</button>
           </div>
           <p class="hint">
-            可用变量：<code>{{to}}</code> 目标语言，<code>{{text}}</code> 待翻译文本，<code>{{title_prompt}}</code> 文档标题上下文。
-            多段时会自动附加 [[p0]]、[[p1]] 分段协议说明，不需要自己写。
+            可用变量：<code>{{to}}</code> 目标语言，<code>{{from}}</code> 源语言，<code>{{text}}</code> 待翻译文本，<code>{{title_prompt}}</code> 文档标题上下文。
+            多段时会自动附加 [[p0]]、[[p1]] 分段协议说明。
           </p>
         </details>
       </div>
 
       <div class="actions">
-        <button type="submit" class="primary" id="save-btn">保存</button>
+        <button type="submit" class="btn primary" id="save-btn">保存</button>
         <span id="save-status" class="hint" aria-live="polite"></span>
-        <button type="button" class="danger" id="delete-btn">删除此服务</button>
+        <button type="button" class="btn danger-ghost" id="delete-btn">删除此服务</button>
       </div>
     </form>
   </div>
 </main>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="app.js"></script>
 </body>
