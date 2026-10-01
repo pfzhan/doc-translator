@@ -82,6 +82,7 @@
         <button type="button" class="link" id="test-btn">点此测试服务</button>
       </div>
       <p class="desc" id="svc-desc"></p>
+      <p class="notice cc-notice" id="cc-notice" hidden></p>
       <div id="test-result" class="test-result" hidden></div>
 
       <div id="svc-fields">
@@ -93,7 +94,7 @@
         <label class="check"><input type="checkbox" id="show-key"> 显示密码</label>
 
         <label>自定义翻译服务名称
-          <input name="name" required>
+          <input name="name" id="svc-name-input" required>
         </label>
 
         <label>API 地址

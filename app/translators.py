@@ -67,10 +67,14 @@ class LLMTranslator(Translator):
 
     def __init__(self, target_lang, source_lang="auto", *, api_key="", base_url="", model="",
                  concurrency=4, max_items=20, max_chars=3000, temperature=0.0, prompt="", user_prompt="",
-                 transport=None):
+                 api_format="", auth_style="", transport=None):
         super().__init__(target_lang, source_lang)
         if not model:
             raise TranslatorError("未设置模型")
+        # api_format：OpenAI 系可选 "responses"（Responses API），默认 Chat Completions
+        # auth_style：Claude 可选 "bearer"（Authorization: Bearer，中转站常用），默认 x-api-key
+        self.api_format = api_format
+        self.auth_style = auth_style
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
@@ -164,6 +168,8 @@ class OpenAITranslator(LLMTranslator):
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
     async def _complete(self, system, user):
+        if self.api_format == "responses":
+            return await self._complete_responses(system, user)
         payload = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
@@ -175,6 +181,25 @@ class OpenAITranslator(LLMTranslator):
             return data["choices"][0]["message"]["content"] or ""
         except (KeyError, IndexError, TypeError) as e:
             raise TranslatorError(f"返回格式异常: {str(data)[:200]}") from e
+
+    async def _complete_responses(self, system, user):
+        """OpenAI Responses API（Codex / Grok Build 默认用这个）。"""
+        payload = {"model": self.model, "instructions": system, "input": user, "store": False}
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+        data = await self._post(f"{self.base_url}/responses", payload, self._headers())
+        if isinstance(data.get("output_text"), str):
+            return data["output_text"]
+        texts = [
+            c.get("text", "")
+            for item in data.get("output") or []
+            if item.get("type") == "message"
+            for c in item.get("content") or []
+            if c.get("type") in ("output_text", "text")
+        ]
+        if not texts and data.get("status") not in (None, "completed"):
+            raise TranslatorError(f"返回状态异常: {data.get('status')} {str(data.get('incomplete_details') or '')[:200]}")
+        return "".join(texts)
 
     async def list_models(self):
         data = await self._get(f"{self.base_url}/models", self._headers())
@@ -196,6 +221,8 @@ class ClaudeTranslator(LLMTranslator):
     api_version = "2023-06-01"
 
     def _headers(self):
+        if self.auth_style == "bearer":
+            return {"Authorization": f"Bearer {self.api_key}", "anthropic-version": self.api_version}
         return {"x-api-key": self.api_key, "anthropic-version": self.api_version}
 
     async def _complete(self, system, user):
@@ -352,5 +379,7 @@ def create_translator(service: dict, target_lang: str, source_lang: str = "auto"
         temperature=None if temperature in (None, "") else float(temperature),
         prompt=service.get("prompt") or "",
         user_prompt=service.get("user_prompt") or "",
+        api_format=service.get("api_format") or "",
+        auth_style=service.get("auth_style") or "",
         transport=transport,
     )
