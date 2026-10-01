@@ -245,3 +245,59 @@ def test_pause_queued_job(app_env):
     job = asyncio.run(scenario())
     assert job.status == "paused" and job.finished > 0 and "q1" not in main.running
     assert JobStore(main.jobs.root).get("q1").status == "paused"
+
+
+def test_runner_released_after_finish(app_env):
+    """任务结束后 Runner 释放内存，预览改从 preview.json 快照读。"""
+    main = app_env
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        assert main.jobs.get(job["id"]).runner is None
+        p = client.get(f"/api/jobs/{job['id']}/preview").json()
+        assert p["ready"] and p["status"] == "done" and len(p["updates"]) == 3
+
+
+def test_resume_with_invalid_service_keeps_result(app_env):
+    """继续翻译时配置失效：报 400，但旧译文和任务状态都不能丢。"""
+    main = app_env
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        main.store.services.append({"id": "broken", "provider": "claude", "builtin": False, "name": "Broken",
+                                    "enabled": True, "api_key": "", "model": "m"})
+        r = client.post(f"/api/jobs/{job['id']}/retry", json={"service_id": "broken"})
+        assert r.status_code == 400 and "API Key" in r.json()["detail"]
+        after = client.get(f"/api/jobs/{job['id']}").json()
+        assert after["status"] == "done" and after["outputs"] == job["outputs"]
+        assert client.get(job["outputs"][0]["url"]).status_code == 200
+
+
+def test_failed_upload_leaves_no_orphan_dir(app_env):
+    """上传中途读失败：目录要清理掉，不能留孤儿目录。"""
+    import asyncio
+
+    main = app_env
+
+    class BrokenUpload:
+        filename = "broken.md"
+
+        async def read(self, size=-1):
+            raise OSError("read failed")
+
+    with pytest.raises(OSError):
+        asyncio.run(main.create_job(BrokenUpload(), target_lang="zh-CN", source_lang="auto",
+                                    service_id="mock", mode="bilingual"))
+    root = main.jobs.root
+    assert not root.exists() or not list(root.iterdir())
+
+
+def test_download_rejects_path_traversal(app_env):
+    from fastapi import HTTPException
+
+    main = app_env
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        record = main.jobs.get(job["id"])
+        record.outputs.append("../job.json")  # 模拟被篡改的 job.json
+        with pytest.raises(HTTPException) as e:
+            main.download(job["id"], "../job.json")
+        assert e.value.status_code == 404
