@@ -27,6 +27,15 @@ python3 -m venv .venv
 
 每个服务可以配置 API Key、名称、API 地址、模型（下拉预置 / 自定义输入 / 从接口获取列表），高级设置里有并发数、每批段落数和字符数、temperature、System Prompt 和 Prompt。
 
+### 边翻边预览
+
+Markdown、EPUB、MOBI / AZW3 翻译时，任务下方会出现原文、译文对照的预览，翻好一段显示一段（PDF 暂不支持）。
+
+- 预览只是把已完成的段落推给页面，不会重建输出文件，翻译速度不受影响；最终文件在全部翻完后生成一次。
+- 第一批只发 4 段，让预览尽快出现，之后恢复正常批量。
+- 缓存命中和已是目标语言的段落立即显示。
+- 在预览里滚动或点「跳到未翻译处」，后端会优先翻译当前位置之后的内容，整本书最终仍会全部翻完。
+
 ### CC Switch
 
 如果本机装了 [CC Switch](https://github.com/farion1231/cc-switch)，「翻译服务」页会多一组「CC Switch 当前生效」，直接用它里面 Claude、Codex（ChatGPT）、Gemini、Grok 当前选中的供应商：

@@ -60,6 +60,19 @@
   </section>
 </main>
 
+<section id="preview" class="preview" hidden aria-label="翻译预览">
+  <div class="preview-bar">
+    <strong>预览</strong>
+    <span class="hint" id="preview-stat"></span>
+    <div class="preview-tools">
+      <label class="check"><input type="checkbox" id="preview-original" checked> 显示原文</label>
+      <label class="check"><input type="checkbox" id="preview-follow" checked> 跟随翻译进度</label>
+      <button type="button" class="link small" id="preview-next">跳到未翻译处</button>
+    </div>
+  </div>
+  <div class="preview-body" id="preview-body" tabindex="0"></div>
+</section>
+
 <main id="view-services" class="wide" hidden>
   <div class="services-head">
     <div>

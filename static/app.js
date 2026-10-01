@@ -25,6 +25,8 @@ function showView(name) {
   }
   $("view-translate").hidden = name !== "translate";
   $("view-services").hidden = name !== "services";
+  // 预览属于翻译页，切到服务页时隐藏
+  $("preview").hidden = name !== "translate" || !preview.jobId;
   try {
     localStorage.setItem("doc-translator-view", name);
   } catch {
@@ -593,10 +595,144 @@ async function poll(id) {
     }
     const job = await res.json();
     render(job);
-    if (job.status === "done" || job.status === "error") return;
+    if (job.preview) await pollPreview(id);
+    if (job.status === "done" || job.status === "error") {
+      // 最后再拉一次，确保收尾那一批也显示出来
+      if (job.preview) await pollPreview(id);
+      return;
+    }
     await new Promise((r) => setTimeout(r, 1000));
   }
 }
+
+// ---------- 边翻边预览 ----------
+// 后端按完成顺序记录译文，前端每秒用 version 增量拉取，只更新变化的段落，不重建文件
+
+const preview = { jobId: null, version: -1, nodes: [], done: 0, total: 0, focusTimer: null, lastFocus: -1 };
+
+function resetPreview(jobId) {
+  Object.assign(preview, { jobId, version: -1, nodes: [], done: 0, total: 0, lastFocus: -1 });
+  $("preview-body").replaceChildren();
+  $("preview-stat").textContent = "";
+  $("preview").hidden = true;
+}
+
+function buildPreview(segments) {
+  const body = $("preview-body");
+  const frag = document.createDocumentFragment();
+  let tocShown = false;
+  preview.nodes = segments.map((seg, i) => {
+    // 目录条目（来自 nav / ncx）集中放在一个小标题下面
+    if (seg.k === "toc" && !tocShown) {
+      const head = document.createElement("div");
+      head.className = "seg-toc-head";
+      head.textContent = "目录";
+      frag.append(head);
+      tocShown = true;
+    }
+    const div = document.createElement("div");
+    div.className = `seg seg-${seg.k}`;
+    div.dataset.i = i;
+    if (!seg.s.trim()) {
+      div.hidden = true;
+      frag.append(div);
+      return div;
+    }
+    div.classList.add("pending");
+    const src = document.createElement("div");
+    src.className = "src";
+    src.textContent = seg.s;
+    const dst = document.createElement("div");
+    dst.className = "dst";
+    dst.lang = $("target_lang").value;
+    div.append(src, dst);
+    frag.append(div);
+    return div;
+  });
+  body.replaceChildren(frag);
+  preview.total = segments.filter((s) => s.s.trim()).length;
+}
+
+function applyUpdates(updates, initial) {
+  let last = null;
+  for (const [i, text, skipped] of updates) {
+    const div = preview.nodes[i];
+    if (!div || !div.classList.contains("pending")) continue;
+    div.classList.remove("pending");
+    div.classList.toggle("skipped", !!skipped);
+    div.querySelector(".dst").textContent = skipped ? div.querySelector(".src").textContent : text;
+    if (!initial) {
+      div.classList.add("fresh");
+      setTimeout(() => div.classList.remove("fresh"), 1300);
+    }
+    preview.done += 1;
+    last = div;
+  }
+  $("preview-stat").textContent = `${preview.done} / ${preview.total} 段`;
+  // 跟随进度：把最新翻好的段落滚到视野里；用户手动滚动后会自动关掉
+  if (last && !initial && $("preview-follow").checked) {
+    following = true;
+    last.scrollIntoView({ block: "nearest" });
+    setTimeout(() => (following = false), 100);
+  }
+}
+
+async function pollPreview(id) {
+  if (preview.jobId !== id) resetPreview(id);
+  let data;
+  try {
+    data = await api(`/api/jobs/${id}/preview?since=${preview.version}`);
+  } catch {
+    return; // 预览拉取失败不影响翻译本身
+  }
+  if (!data.ready || preview.jobId !== id) return;
+  const initial = preview.version < 0;
+  if (initial) {
+    buildPreview(data.segments);
+    $("preview").hidden = $("view-translate").hidden;
+  }
+  applyUpdates(data.updates, initial);
+  preview.version = data.version;
+}
+
+// 用户在预览里滚动时，告诉后端优先翻译当前看到的位置
+let following = false;
+
+function visibleIndex() {
+  const body = $("preview-body");
+  const top = body.getBoundingClientRect().top;
+  const div = preview.nodes.find((n) => !n.hidden && n.getBoundingClientRect().bottom > top + 8);
+  return div ? Number(div.dataset.i) : 0;
+}
+
+function sendFocus(index) {
+  if (!preview.jobId || index === preview.lastFocus) return;
+  preview.lastFocus = index;
+  fetch(`/api/jobs/${preview.jobId}/focus`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ index }),
+  }).catch(() => {});
+}
+
+$("preview-body").addEventListener("scroll", () => {
+  if (following) return;
+  $("preview-follow").checked = false;
+  clearTimeout(preview.focusTimer);
+  preview.focusTimer = setTimeout(() => sendFocus(visibleIndex()), 300);
+});
+
+$("preview-original").addEventListener("change", (e) => {
+  $("preview").classList.toggle("no-original", !e.target.checked);
+});
+
+$("preview-next").addEventListener("click", () => {
+  const div = preview.nodes.find((n) => n.classList.contains("pending"));
+  if (!div) return;
+  $("preview-follow").checked = false;
+  div.scrollIntoView({ block: "start" });
+  sendFocus(Number(div.dataset.i));
+});
 
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -609,6 +745,7 @@ form.addEventListener("submit", async (e) => {
   $("bar").value = 0;
   $("job-title").textContent = fileInput.files[0].name;
   setStatus("上传中…");
+  resetPreview(null);
   try {
     const data = await api("/api/jobs", { method: "POST", body: new FormData(form) });
     await poll(data.id);

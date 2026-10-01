@@ -178,7 +178,48 @@ summary { cursor: pointer; color: var(--muted); margin-bottom: 10px; }
 .swap:hover { border-color: var(--accent); }
 .hint.warn { color: var(--error); }
 
+/* ---------- 边翻边预览 ---------- */
+.preview {
+  max-width: 960px; margin: 0 auto 32px; padding: 0 16px;
+}
+.preview-bar {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px;
+  padding: 10px 16px; background: var(--card);
+  border: 1px solid var(--border); border-radius: 10px 10px 0 0;
+}
+.preview-bar .hint { margin: 0; }
+.preview-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin-left: auto; }
+.preview-tools label.check { margin: 0; font-size: 13px; }
+.preview-body {
+  max-height: 75vh; overflow-y: auto; padding: 8px 24px 24px;
+  background: var(--card); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 10px 10px;
+  line-height: 1.75;
+}
+.seg { padding: 6px 0; scroll-margin-top: 48px; }
+.seg .src { color: var(--muted); }
+.seg .dst { margin-top: 2px; }
+.seg.pending .dst { color: var(--muted); font-style: italic; }
+.seg.pending .dst::before { content: "翻译中…"; }
+.seg.fresh .dst { animation: seg-in 1.2s ease-out; }
+@keyframes seg-in { from { background: color-mix(in srgb, var(--accent) 18%, transparent); } to { background: transparent; } }
+@media (prefers-reduced-motion: reduce) { .seg.fresh .dst { animation: none; } }
+.seg.skipped .dst { display: none; }
+.preview.no-original .seg .src { display: none; }
+.preview.no-original .seg.skipped .dst { display: block; }
+.seg-h1 { font-size: 1.6em; font-weight: 700; margin-top: 16px; }
+.seg-h2 { font-size: 1.35em; font-weight: 700; margin-top: 14px; }
+.seg-h3, .seg-h4 { font-size: 1.15em; font-weight: 600; margin-top: 10px; }
+.seg-h5, .seg-h6 { font-weight: 600; }
+.seg-li { padding-left: 1.2em; position: relative; }
+.seg-li::before { content: "•"; position: absolute; left: 0.2em; color: var(--muted); }
+.seg-quote { border-left: 3px solid var(--border); padding-left: 12px; }
+.seg-td { font-size: 0.92em; padding-left: 12px; border-left: 1px dashed var(--border); }
+.seg-toc { font-size: 0.92em; }
+.seg-toc-head { font-size: 13px; color: var(--muted); margin: 18px 0 4px; border-top: 1px solid var(--border); padding-top: 12px; }
+
 @media (max-width: 760px) {
+  .preview-body { padding: 8px 14px 20px; max-height: none; }
   .services { grid-template-columns: 1fr; }
   .service-list { border-right: 0; border-bottom: 1px solid var(--border); }
   .svc-detail { padding: 16px; }
