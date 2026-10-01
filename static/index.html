@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文档翻译</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <strong>文档翻译</strong>
+  <nav role="tablist">
+    <button role="tab" class="tab" data-view="translate" aria-selected="true">翻译文档</button>
+    <button role="tab" class="tab" data-view="services" aria-selected="false">翻译服务</button>
+  </nav>
+</header>
+
+<main id="view-translate">
+  <p class="hint">支持 EPUB、MOBI / AZW3、PDF、Markdown。输出双语对照或仅译文。</p>
+
+  <form id="form" class="card">
+    <label class="drop" id="drop">
+      <input type="file" id="file" name="file" accept=".epub,.mobi,.azw3,.azw,.pdf,.md,.markdown" required>
+      <span id="drop-text">点击选择文件，或把文件拖到这里</span>
+    </label>
+
+    <div class="row">
+      <label>目标语言
+        <select name="target_lang" id="target_lang"></select>
+      </label>
+      <label>输出
+        <select name="mode">
+          <option value="bilingual">双语对照</option>
+          <option value="translated">仅译文</option>
+        </select>
+      </label>
+      <label>翻译服务
+        <select name="service_id" id="service_id"></select>
+      </label>
+    </div>
+    <p class="hint">在「翻译服务」页添加和配置 OpenAI、Claude、Gemini、Grok 或任何 OpenAI 兼容接口。</p>
+
+    <button type="submit" id="submit" class="primary">开始翻译</button>
+  </form>
+
+  <section id="job" class="card" hidden aria-live="polite">
+    <div class="job-title" id="job-title"></div>
+    <progress id="bar" max="100" value="0"></progress>
+    <div id="status"></div>
+    <ul id="outputs"></ul>
+  </section>
+</main>
+
+<main id="view-services" class="wide" hidden>
+  <div class="services-head">
+    <div>
+      <h2>翻译服务列表</h2>
+      <p class="hint">可以添加多个服务，开启常用的、关闭不需要的。开启的服务会出现在翻译页的下拉框里。</p>
+    </div>
+    <div class="add-service">
+      <select id="add-provider" aria-label="服务类型"></select>
+      <button type="button" id="add-btn" class="primary">添加自定义翻译服务</button>
+    </div>
+  </div>
+
+  <div class="services card">
+    <ul id="service-list" class="service-list"></ul>
+
+    <form id="svc-form" class="svc-detail" autocomplete="off">
+      <div class="svc-title">
+        <span class="icon" id="svc-icon"></span>
+        <h3 id="svc-name-title"></h3>
+        <button type="button" class="link" id="test-btn">点此测试服务</button>
+      </div>
+      <p class="desc" id="svc-desc"></p>
+      <div id="test-result" class="test-result" hidden></div>
+
+      <div id="svc-fields">
+        <p class="notice" id="key-notice"></p>
+
+        <label>APIKEY
+          <input name="api_key" id="api_key" type="password" spellcheck="false">
+        </label>
+        <label class="check"><input type="checkbox" id="show-key"> 显示密码</label>
+
+        <label>自定义翻译服务名称
+          <input name="name" required>
+        </label>
+
+        <label>API 地址
+          <input name="base_url" id="base_url" spellcheck="false">
+        </label>
+
+        <label>模型
+          <select id="model-select"></select>
+          <input name="model" id="model-input" spellcheck="false" placeholder="输入模型名称，如 deepseek-chat" hidden>
+        </label>
+        <div class="inline">
+          <label class="check"><input type="checkbox" id="custom-model"> 输入自定义模型名称</label>
+          <button type="button" class="link" id="fetch-models">获取模型列表</button>
+        </div>
+
+        <details>
+          <summary>高级设置</summary>
+          <div class="row">
+            <label>并发请求数
+              <input name="concurrency" type="number" min="1" max="32">
+            </label>
+            <label>每批最多段落数
+              <input name="max_items" type="number" min="1" max="200">
+            </label>
+            <label>每批最多字符数
+              <input name="max_chars" type="number" min="200" max="50000">
+            </label>
+            <label>temperature
+              <input name="temperature" type="number" min="0" max="2" step="0.1" placeholder="留空用模型默认值">
+            </label>
+          </div>
+          <label>System Prompt
+            <textarea name="prompt" id="prompt" rows="8" spellcheck="false"></textarea>
+          </label>
+          <label>Prompt
+            <textarea name="user_prompt" id="user_prompt" rows="3" spellcheck="false"></textarea>
+          </label>
+          <div class="inline">
+            <span class="hint">默认提示词取自沉浸式翻译，按目标语言自动切换。留空即使用默认值。</span>
+            <button type="button" class="link" id="load-default-prompt">填入默认提示词</button>
+          </div>
+          <p class="hint">
+            可用变量：<code>{{to}}</code> 目标语言，<code>{{text}}</code> 待翻译文本，<code>{{title_prompt}}</code> 文档标题上下文。
+            多段时会自动附加 [[p0]]、[[p1]] 分段协议说明，不需要自己写。
+          </p>
+        </details>
+      </div>
+
+      <div class="actions">
+        <button type="submit" class="primary" id="save-btn">保存</button>
+        <span id="save-status" class="hint" aria-live="polite"></span>
+        <button type="button" class="danger" id="delete-btn">删除此服务</button>
+      </div>
+    </form>
+  </div>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
