@@ -6,6 +6,7 @@
 """
 import asyncio
 import hashlib
+from urllib.parse import urlparse
 
 import httpx
 
@@ -59,6 +60,31 @@ def _error_text(resp: httpx.Response) -> str:
         return str(msg or resp.text)[:300]
     except ValueError:
         return resp.text[:300]
+
+
+def _json_or_error(resp: httpx.Response, url: str) -> dict:
+    """解析 JSON 响应。返回的是网页（常见于 API 地址少了 /v1，请求落到了中转站首页）时给出可读的错误。"""
+    try:
+        data = resp.json()
+    except ValueError:
+        ctype = resp.headers.get("content-type", "")
+        hint = "，请检查 API 地址是否完整（通常以 /v1 结尾）" if "html" in ctype or resp.text.lstrip().startswith("<") else ""
+        raise TranslatorError(f"接口返回的不是 JSON（{ctype or '未知类型'}）：{url}{hint}") from None
+    if not isinstance(data, dict):
+        raise TranslatorError(f"返回格式异常: {str(data)[:200]}")
+    return data
+
+
+def _with_default_path(url: str, path: str) -> str:
+    """API 地址只填了域名（没有路径）时补上版本路径，和 OpenAI SDK、Cherry Studio 等客户端的习惯一致。"""
+    url = url.strip().rstrip("/")
+    if url and not urlparse(url).path:
+        url += path
+    return url
+
+
+# 只填了域名时补的版本路径：Claude 和 OpenAI 系是 /v1，Gemini 是 /v1beta
+DEFAULT_API_PATH = {"openai": "/v1", "grok": "/v1", "custom": "/v1", "claude": "/v1", "gemini": "/v1beta"}
 
 
 class LLMTranslator(Translator):
@@ -116,7 +142,7 @@ class LLMTranslator(Translator):
                 await asyncio.sleep(2**attempt)
                 continue
             if resp.status_code == 200:
-                return resp.json()
+                return _json_or_error(resp, url)
             msg = _error_text(resp)
             if resp.status_code == 400 and "temperature" in msg.lower() and self.temperature is not None:
                 self.temperature = None
@@ -138,7 +164,7 @@ class LLMTranslator(Translator):
             raise TranslatorError(f"请求失败: {e}") from e
         if resp.status_code != 200:
             raise TranslatorError(f"接口错误 {resp.status_code}: {_error_text(resp)}")
-        return resp.json()
+        return _json_or_error(resp, url)
 
     async def list_models(self) -> list[str]:
         raise NotImplementedError
@@ -364,6 +390,7 @@ def create_translator(service: dict, target_lang: str, source_lang: str = "auto"
     base_url = (service.get("base_url") or "").strip() or meta["base_url"]
     if not base_url:
         raise TranslatorError("未设置 API 地址")
+    base_url = _with_default_path(base_url, DEFAULT_API_PATH[provider])
     if meta["needs_key"] and not api_key:
         raise TranslatorError(f"「{service.get('name') or meta['label']}」需要先填写 API Key")
     temperature = service.get("temperature")

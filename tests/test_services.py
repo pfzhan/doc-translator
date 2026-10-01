@@ -151,6 +151,40 @@ def test_marker_parse_missing_item_is_retranslated():
     assert len(calls) == 2
 
 
+@pytest.mark.parametrize("provider,base,expected", [
+    ("openai", "https://relay.example.com/", "https://relay.example.com/v1/chat/completions"),
+    ("custom", "https://relay.example.com:1100", "https://relay.example.com:1100/v1/chat/completions"),
+    ("openai", "https://relay.example.com/api/v3", "https://relay.example.com/api/v3/chat/completions"),
+    ("claude", "https://relay.example.com", "https://relay.example.com/v1/messages"),
+    ("gemini", "https://relay.example.com", "https://relay.example.com/v1beta/models/m:generateContent"),
+])
+def test_domain_only_base_url_gets_version_path(provider, base, expected):
+    log = []
+
+    def handler(request):
+        log.append(request)
+        if provider == "claude":
+            return httpx.Response(200, json={"content": [{"type": "text", "text": "好"}]})
+        if provider == "gemini":
+            return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "好"}]}}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "好"}}]})
+
+    tr = create_translator({"provider": provider, "api_key": "k", "model": "m", "base_url": base}, "zh-CN",
+                           transport=httpx.MockTransport(handler))
+    run(tr.translate_batch(["good"]))
+    assert str(log[0].url) == expected
+
+
+def test_html_response_gives_readable_error():
+    # 中转站把未知路径返回成首页（200 + HTML），以前会抛 JSONDecodeError 变成 500
+    tr = create_translator({"provider": "openai", "api_key": "k", "model": "m", "base_url": "https://relay.example.com/x"},
+                           "zh-CN", transport=httpx.MockTransport(
+                               lambda r: httpx.Response(200, text="<!doctype html><html></html>",
+                                                        headers={"content-type": "text/html"})))
+    with pytest.raises(TranslatorError, match="不是 JSON.*/v1"):
+        run(tr.translate_batch(["good"]))
+
+
 def test_temperature_retry_without_it():
     calls = []
 
