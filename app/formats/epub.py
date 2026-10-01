@@ -90,7 +90,7 @@ async def translate_epub(src: Path, out_dir: Path, runner, bilingual: bool, targ
     # 3. 回写
     for (name, el, text, kind), translated in zip(tasks, results):
         if kind == "block":
-            hb.apply_translation(soups[name], el, text, translated, bilingual)
+            hb.apply_translation(soups[name], el, text, translated, bilingual, target_lang)
         else:
             hb.set_label(el, text, translated, bilingual)
     if bilingual:

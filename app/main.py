@@ -15,7 +15,9 @@ from .formats import SUPPORTED, translate_file
 from .prompts import default_prompts
 from .runner import Runner
 from .services import PROVIDERS, ServiceError, ServiceStore
-from .translators import LANG_NAMES, TranslatorError, create_translator
+from .langdetect import same_language
+from .languages import GOOGLE_CODES, LANGUAGES
+from .translators import TranslatorError, create_translator
 
 ROOT = Path(__file__).resolve().parent.parent
 JOBS_DIR = ROOT / "data" / "jobs"
@@ -36,8 +38,13 @@ class Job:
     error: str = ""
     outputs: list[Path] = field(default_factory=list)
     created: float = field(default_factory=time.time)
+    source_lang: str = "auto"
+    target_lang: str = ""
+    # Runner.info：检测到的文档语言、因已是目标语言而跳过的段落数
+    info: dict = field(default_factory=dict)
 
     def to_dict(self):
+        detected = self.info.get("detected_lang", "")
         return {
             "id": self.id,
             "filename": self.filename,
@@ -45,6 +52,12 @@ class Job:
             "done": self.done,
             "total": self.total,
             "error": self.error,
+            "source_lang": self.source_lang,
+            "target_lang": self.target_lang,
+            "detected_lang": detected,
+            "skipped": self.info.get("skipped", 0),
+            # 插件的 sameLangCheck：检测到的源语言和目标语言一致时提示
+            "same_lang": same_language(detected, self.target_lang),
             "outputs": [{"name": p.name, "url": f"/api/jobs/{self.id}/files/{p.name}"} for p in self.outputs],
         }
 
@@ -65,8 +78,10 @@ async def _run_job(job: Job, src: Path, out_dir: Path, translator, bilingual: bo
         job.done, job.total = done, total
 
     job.status = "running"
+    runner = Runner(translator, progress)
+    job.info = runner.info
     try:
-        job.outputs = await translate_file(src, out_dir, Runner(translator, progress), bilingual, target_lang)
+        job.outputs = await translate_file(src, out_dir, runner, bilingual, target_lang)
         job.status = "done"
     except (TranslatorError, ValueError) as e:
         job.status, job.error = "error", str(e)
@@ -79,7 +94,11 @@ async def _run_job(job: Job, src: Path, out_dir: Path, translator, bilingual: bo
 
 @app.get("/api/languages")
 def languages():
-    return LANG_NAMES
+    """语言列表，顺序和插件一致。google 字段表示谷歌翻译是否支持。"""
+    return [
+        {"code": code, "name": en, "native": native, "google": code == "auto" or code in GOOGLE_CODES}
+        for code, en, native in LANGUAGES
+    ]
 
 
 # ---------- 翻译服务管理 ----------
@@ -90,8 +109,8 @@ def providers():
 
 
 @app.get("/api/prompts/default")
-def default_prompt(target_lang: str = "zh-CN"):
-    return default_prompts(target_lang)
+def default_prompt(target_lang: str = "zh-CN", source_lang: str = "auto"):
+    return default_prompts(target_lang, source_lang)
 
 
 @app.get("/api/services")
@@ -135,7 +154,9 @@ def set_default_service(sid: str):
 
 async def _with_translator(data: dict, fn):
     try:
-        translator = create_translator(store.resolve(data), data.get("target_lang") or "zh-CN")
+        translator = create_translator(
+            store.resolve(data), data.get("target_lang") or "zh-CN", data.get("source_lang") or "auto"
+        )
     except (ServiceError, TranslatorError) as e:
         raise HTTPException(400, str(e))
     try:
@@ -149,7 +170,10 @@ async def _with_translator(data: dict, fn):
 @app.post("/api/services/test")
 async def test_service(data: dict = Body(...)):
     """用表单里当前（可能尚未保存）的配置翻译一句话，验证 Key / 地址 / 模型是否可用。"""
-    sample = data.get("text") or "Hello, world! This is a translation test."
+    # 目标语言是英语时用中文例句，否则用英文例句，避免“英译英”
+    target = data.get("target_lang") or "zh-CN"
+    default_sample = "你好，世界！这是一条翻译测试。" if target == "en" else "Hello, world! This is a translation test."
+    sample = data.get("text") or default_sample
 
     async def run(tr):
         start = time.monotonic()
@@ -192,7 +216,7 @@ async def create_job(
     except TranslatorError as e:
         raise HTTPException(400, str(e))
 
-    job = Job(id=uuid.uuid4().hex[:12], filename=name)
+    job = Job(id=uuid.uuid4().hex[:12], filename=name, source_lang=source_lang, target_lang=target_lang)
     job_dir = JOBS_DIR / job.id
     out_dir = job_dir / "out"
     out_dir.mkdir(parents=True)

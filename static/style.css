@@ -159,6 +159,15 @@ summary { cursor: pointer; color: var(--muted); margin-bottom: 10px; }
 .test-result.fail { color: var(--error); }
 .actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
 
+/* 源语言 ⇄ 目标语言 */
+.lang-row { align-items: flex-end; margin-bottom: 4px; }
+.swap {
+  flex: none; width: 36px; height: 36px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 17px;
+}
+.swap:hover { border-color: var(--accent); }
+.hint.warn { color: var(--error); }
+
 @media (max-width: 760px) {
   .services { grid-template-columns: 1fr; }
   .service-list { border-right: 0; border-bottom: 1px solid var(--border); }

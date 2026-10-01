@@ -67,6 +67,7 @@ function renderServiceSelect() {
   }
   const ids = [...select.options].map((o) => o.value);
   select.value = ids.includes(previous) ? previous : state.defaultId;
+  if (state.languages) checkLangPair();
 }
 
 function renderServiceList() {
@@ -216,11 +217,14 @@ function renderDetail() {
 const defaultPromptCache = {};
 
 async function getDefaultPrompts() {
-  const lang = $("target_lang").value || "zh-CN";
-  if (!defaultPromptCache[lang]) {
-    defaultPromptCache[lang] = await api(`/api/prompts/default?target_lang=${encodeURIComponent(lang)}`);
+  const to = $("target_lang").value || "zh-CN";
+  const from = $("source_lang").value || "auto";
+  const key = `${from}2${to}`;
+  if (!defaultPromptCache[key]) {
+    const qs = new URLSearchParams({ target_lang: to, source_lang: from });
+    defaultPromptCache[key] = await api(`/api/prompts/default?${qs}`);
   }
-  return defaultPromptCache[lang];
+  return defaultPromptCache[key];
 }
 
 async function showDefaultPromptPlaceholders() {
@@ -241,7 +245,9 @@ $("load-default-prompt").addEventListener("click", async () => {
   f.user_prompt.value = d.user;
 });
 
-$("target_lang").addEventListener("change", showDefaultPromptPlaceholders);
+for (const id of ["target_lang", "source_lang"]) {
+  $(id).addEventListener("change", showDefaultPromptPlaceholders);
+}
 
 $("show-key").addEventListener("change", (e) => {
   svcForm.elements.api_key.type = e.target.checked ? "text" : "password";
@@ -270,6 +276,7 @@ function formPayload() {
     prompt: f.prompt.value,
     user_prompt: f.user_prompt.value,
     target_lang: $("target_lang").value || "zh-CN",
+    source_lang: $("source_lang").value || "auto",
   };
 }
 
@@ -355,7 +362,7 @@ $("add-btn").addEventListener("click", async () => {
 const form = $("form");
 const fileInput = $("file");
 const drop = $("drop");
-const SAVED_FIELDS = ["target_lang", "mode", "service_id"];
+const SAVED_FIELDS = ["source_lang", "target_lang", "mode", "service_id"];
 
 function loadSettings() {
   try {
@@ -374,6 +381,75 @@ function saveSettings() {
     /* 隐私模式下可能不可用，忽略 */
   }
 }
+
+// ---------- 语言 ----------
+
+function langInfo(code) {
+  return (state.languages || []).find((l) => l.code === code);
+}
+
+function langLabel(code) {
+  const l = langInfo(code);
+  if (!l) return code;
+  if (code === "auto") return "自动检测";
+  // 本地名 + 英文名，如 “日本語 Japanese”；两者相同时只显示一个
+  return l.native && l.native !== l.name ? `${l.native} ${l.name}` : l.name;
+}
+
+// 和插件一样，默认目标语言跟随浏览器语言（navigator.language）
+function defaultTargetLang() {
+  const codes = (state.languages || []).map((l) => l.code);
+  for (const raw of navigator.languages || [navigator.language || "zh-CN"]) {
+    let code = raw;
+    if (/^zh-(TW|HK|MO|Hant)/i.test(raw)) code = /HK|MO/i.test(raw) ? "zh-HK" : "zh-TW";
+    else if (/^zh/i.test(raw)) code = "zh-CN";
+    else if (/^pt-BR$/i.test(raw)) code = "pt-br";
+    if (codes.includes(code)) return code;
+    const base = raw.split("-")[0];
+    if (codes.includes(base)) return base;
+  }
+  return "zh-CN";
+}
+
+function selectedService() {
+  const id = $("service_id").value;
+  return state.services.find((s) => s.id === id);
+}
+
+function checkLangPair() {
+  const from = $("source_lang").value;
+  const to = $("target_lang").value;
+  const warn = $("lang-warning");
+  const msgs = [];
+  if (from !== "auto" && from === to) msgs.push("源语言和目标语言相同，没有需要翻译的内容。");
+  const svc = selectedService();
+  if (svc && svc.provider === "google") {
+    const bad = [from, to].filter((c) => c !== "auto" && !langInfo(c)?.google);
+    if (bad.length) msgs.push(`谷歌翻译不支持${bad.map(langLabel).join("、")}，请换用 AI 翻译服务。`);
+  }
+  warn.textContent = msgs.join(" ");
+  warn.hidden = !msgs.length;
+  $("submit").disabled = msgs.length > 0;
+}
+
+for (const id of ["source_lang", "target_lang", "service_id"]) {
+  $(id).addEventListener("change", checkLangPair);
+}
+
+$("swap-lang").addEventListener("click", () => {
+  const src = $("source_lang");
+  const dst = $("target_lang");
+  // 源语言是“自动检测”时没法交换到目标语言，用上一次检测到的语言代替
+  const from = src.value === "auto" ? state.lastDetected : src.value;
+  if (!from) {
+    alert("源语言是自动检测，先翻译一次或手动选择源语言后再交换");
+    return;
+  }
+  src.value = dst.value;
+  dst.value = from;
+  checkLangPair();
+  showDefaultPromptPlaceholders();
+});
 
 function showFile() {
   const f = fileInput.files[0];
@@ -423,6 +499,22 @@ function render(job) {
   } else {
     setStatus("正在解析文档…");
   }
+  renderJobLang(job);
+}
+
+function renderJobLang(job) {
+  if (job.detected_lang) state.lastDetected = job.detected_lang;
+  const parts = [];
+  if (job.detected_lang) {
+    const from = job.source_lang === "auto" ? "检测到文档语言" : "文档语言检测结果";
+    parts.push(`${from}：${langLabel(job.detected_lang)}`);
+  }
+  if (job.skipped) parts.push(`${job.skipped} 段已经是${langLabel(job.target_lang)}，未翻译`);
+  if (job.same_lang) {
+    // 插件的 sameLangCheck 提示
+    parts.push(`检测到的源语言与目标语言一致（${langLabel(job.target_lang)}），文档可能没有需要翻译的内容`);
+  }
+  $("job-lang").textContent = parts.join("；");
 }
 
 async function poll(id) {
@@ -457,6 +549,7 @@ form.addEventListener("submit", async (e) => {
     setStatus(err.message, true);
   } finally {
     btn.disabled = false;
+    checkLangPair();
   }
 });
 
@@ -465,17 +558,26 @@ form.addEventListener("submit", async (e) => {
 async function init() {
   const [langs, providers] = await Promise.all([api("/api/languages"), api("/api/providers")]);
   state.providers = providers;
-  for (const [code, name] of Object.entries(langs)) {
-    form.elements.target_lang.add(new Option(name, code));
+  state.languages = langs;
+  for (const lang of langs) {
+    const label = langLabel(lang.code);
+    if (lang.code === "auto") {
+      form.elements.source_lang.add(new Option("自动检测", "auto"));
+      continue;
+    }
+    form.elements.source_lang.add(new Option(label, lang.code));
+    form.elements.target_lang.add(new Option(label, lang.code));
   }
   for (const [key, meta] of Object.entries(providers)) {
     if (meta.llm) $("add-provider").add(new Option(meta.label, key));
   }
   const saved = loadSettings();
-  for (const name of ["target_lang", "mode"]) {
+  for (const name of ["source_lang", "target_lang", "mode"]) {
     if (saved[name] !== undefined) form.elements[name].value = saved[name];
   }
+  if (!form.elements.target_lang.value) form.elements.target_lang.value = defaultTargetLang();
   await loadServices();
+  checkLangPair();
   let view = "translate";
   try {
     view = localStorage.getItem("doc-translator-view") || view;

@@ -17,5 +17,5 @@ async def translate_file(src: Path, out_dir: Path, runner, bilingual: bool, targ
     if ext in (".mobi", ".azw3", ".azw"):
         return await translate_mobi(src, out_dir, runner, bilingual, target_lang)
     if ext == ".pdf":
-        return await translate_pdf(src, out_dir, runner, bilingual)
+        return await translate_pdf(src, out_dir, runner, bilingual, target_lang)
     raise ValueError(f"不支持的格式: {ext}")

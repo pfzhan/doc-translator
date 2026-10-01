@@ -9,6 +9,8 @@ import re
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
+from ..languages import RTL_LANGUAGES
+
 BLOCK_TAGS = {
     "p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "div", "td", "th",
     "dt", "dd", "figcaption", "caption", "section", "article", "aside", "header",
@@ -126,15 +128,28 @@ def _set_text(soup, el: Tag, text: str, keep_media: bool = True):
         el.append(NavigableString(line))
 
 
-def apply_translation(soup, el: Tag, text: str, translated: str, bilingual: bool):
+def lang_attrs(lang: str) -> dict:
+    """译文元素的语言属性：阅读器据此选字体、断行；阿拉伯语等需要从右到左排版。"""
+    if not lang:
+        return {}
+    attrs = {"lang": lang, "xml:lang": lang}
+    if lang.split("-")[0] in RTL_LANGUAGES:
+        attrs["dir"] = "rtl"
+    return attrs
+
+
+def apply_translation(soup, el: Tag, text: str, translated: str, bilingual: bool, lang: str = ""):
     if not translated or translated.strip() == text.strip():
         return
     name = _local(el.name)
+    attrs = lang_attrs(lang)
     if not bilingual:
         _set_text(soup, el, translated)
+        for k, v in attrs.items():
+            el[k] = v
         return
     if name in INNER_TAGS:
-        span = soup.new_tag("span", attrs={"class": TRANSLATION_CLASS})
+        span = soup.new_tag("span", attrs={"class": TRANSLATION_CLASS, **attrs})
         _set_text(soup, span, translated)
         el.append(soup.new_tag("br"))
         el.append(span)
@@ -147,6 +162,8 @@ def apply_translation(soup, el: Tag, text: str, translated: str, bilingual: bool
     if isinstance(classes, str):
         classes = classes.split()
     clone["class"] = [*classes, TRANSLATION_CLASS]
+    for k, v in attrs.items():
+        clone[k] = v
     _set_text(soup, clone, translated, keep_media=False)
     el.insert_after(clone)
 
