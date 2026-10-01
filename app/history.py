@@ -34,6 +34,7 @@ class Job:
     mode: str = "bilingual"
     service_id: str = ""
     service_name: str = ""
+    model: str = ""  # 最近一次翻译用的模型（继续翻译时按服务当前选中的模型更新）
     size: int = 0
     preview: bool = False
     detected_lang: str = ""
@@ -65,6 +66,7 @@ class Job:
             "mode": self.mode,
             "service_id": self.service_id,
             "service_name": self.service_name,
+            "model": self.model,
             "size": self.size,
             "detected_lang": self.detected_lang,
             "skipped": self.skipped,

@@ -610,7 +610,9 @@ form.addEventListener("submit", async (e) => {
 // ---------- 翻译记录 ----------
 // 记录存在服务端磁盘上：刷新页面、换书、重启服务都不会丢，只有手动删除或超过保留时间才会删
 
-const STATUS_TEXT = { queued: "排队中", running: "翻译中", done: "已完成", error: "失败", interrupted: "已中断" };
+const STATUS_TEXT = { queued: "排队中", running: "翻译中", done: "已完成", error: "失败", interrupted: "已中断", paused: "已暂停" };
+// 可以“继续翻译”的状态：已翻好的段落在缓存里，继续时直接复用
+const RESUMABLE = new Set(["paused", "interrupted"]);
 const ACTIVE = new Set(["queued", "running"]);
 
 function fmtOf(name) {
@@ -671,7 +673,7 @@ function jobRow(job) {
   for (const [i, part] of [
     langPair(job),
     job.mode === "translated" ? "仅译文" : "双语对照",
-    job.service_name,
+    serviceLabel(job),
     formatSize(job.size),
     timeAgo(job.created),
   ].filter(Boolean).entries()) {
@@ -681,10 +683,10 @@ function jobRow(job) {
 
   const status = el("div", "job-status");
   status.append(el("span", `badge ${job.status}`, STATUS_TEXT[job.status] || job.status));
-  if (ACTIVE.has(job.status)) {
+  if (ACTIVE.has(job.status) || (job.status === "paused" && job.total)) {
     // 向下取整：没翻完不显示 100%（1184/1188 四舍五入会显示 100%，看起来像卡住了）
     const pct = job.total ? Math.floor((job.done / job.total) * 100) : 0;
-    const bar = el("div", "job-progress");
+    const bar = el("div", `job-progress${job.status === "paused" ? " paused" : ""}`);
     const fill = el("div");
     fill.style.width = `${pct}%`;
     bar.append(fill);
@@ -718,8 +720,13 @@ function jobRow(job) {
     if (job.outputs.length > 1) a.textContent = `下载 ${fmtOf(o.name).toUpperCase()}`;
     actions.append(a);
   }
-  if (job.status === "error" || job.status === "interrupted") {
-    const retry = el("button", "btn sm", job.status === "interrupted" ? "继续翻译" : "重试");
+  if (ACTIVE.has(job.status)) {
+    const pause = el("button", "btn sm", "暂停");
+    pause.type = "button";
+    pause.addEventListener("click", () => pauseJob(job.id, pause));
+    actions.append(pause);
+  } else if (RESUMABLE.has(job.status) || job.status === "error") {
+    const retry = el("button", "btn sm", job.status === "error" ? "重试" : "继续翻译");
     retry.type = "button";
     retry.addEventListener("click", () => retryJob(job.id));
     actions.append(retry);
@@ -730,6 +737,12 @@ function jobRow(job) {
   actions.append(del);
   li.append(actions);
   return li;
+}
+
+// 记录里显示“服务 · 模型”；模型名已经包含在服务名里时（CC Switch 的服务名不带模型）不重复
+function serviceLabel(job) {
+  if (!job.service_name) return "";
+  return job.model && !job.service_name.includes(job.model) ? `${job.service_name} · ${job.model}` : job.service_name;
 }
 
 function renderJobs() {
@@ -743,6 +756,73 @@ function renderJobs() {
   $("running-badge").hidden = !running;
   $("running-badge").textContent = running;
   $("usage").textContent = `${all.length} 条记录 · 占用 ${formatSize(state.diskUsage) || "0 KB"}`;
+  renderBulk(all);
+}
+
+// 全部暂停 / 全部继续：只在有需要的时候出现
+function renderBulk(all) {
+  const active = all.filter((j) => ACTIVE.has(j.status)).length;
+  const resumable = all.filter((j) => RESUMABLE.has(j.status)).length;
+  for (const box of document.querySelectorAll("[data-bulk]")) {
+    box.replaceChildren();
+    if (active) {
+      const b = el("button", "btn sm", `全部暂停（${active}）`);
+      b.type = "button";
+      b.addEventListener("click", () => pauseAll(b));
+      box.append(b);
+    }
+    if (resumable) {
+      const b = el("button", "btn sm", `全部继续（${resumable}）`);
+      b.type = "button";
+      b.addEventListener("click", () => resumeAll(b));
+      box.append(b);
+    }
+  }
+  const parts = [];
+  if (active) parts.push(`${active} 本正在翻译`);
+  if (resumable) parts.push(`${resumable} 本已暂停或中断`);
+  $("history-bulk").hidden = !parts.length;
+  $("history-bulk-text").textContent = parts.join("，");
+}
+
+async function pauseJob(id, btn) {
+  if (btn) btn.disabled = true;
+  try {
+    const job = await api(`/api/jobs/${id}/pause`, { method: "POST" });
+    upsertJob(job);
+    if (reader.jobId === id) refreshReader();
+    toast("已暂停，翻好的段落都保留着");
+  } catch (err) {
+    if (btn) btn.disabled = false;
+    toast(`暂停失败：${err.message}`);
+  }
+}
+
+async function pauseAll(btn) {
+  btn.disabled = true;
+  try {
+    const r = await api("/api/jobs/pause-all", { method: "POST" });
+    await refreshJobs();
+    if (reader.jobId) refreshReader();
+    toast(`已暂停 ${r.paused} 本`);
+  } catch (err) {
+    btn.disabled = false;
+    toast(`暂停失败：${err.message}`);
+  }
+}
+
+async function resumeAll(btn) {
+  btn.disabled = true;
+  try {
+    const r = await api("/api/jobs/resume-all", { method: "POST" });
+    await refreshJobs();
+    if (reader.jobId) refreshReader();
+    const failed = r.failed.length ? `，${r.failed.length} 本无法继续：${r.failed[0].error}` : "";
+    toast(`已继续 ${r.resumed} 本${failed}`);
+  } catch (err) {
+    btn.disabled = false;
+    toast(`继续失败：${err.message}`);
+  }
 }
 
 function upsertJob(job) {
@@ -888,6 +968,12 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// 暂停、继续之后立刻刷新阅读器（不等下一次轮询），避免出现两条轮询
+function refreshReader() {
+  clearTimeout(reader.timer);
+  readerTick();
+}
+
 async function readerTick() {
   const id = reader.jobId;
   if (!id) return;
@@ -919,7 +1005,7 @@ async function readerTick() {
 
 function renderReaderBar(job) {
   $("reader-name").textContent = job.filename;
-  const meta = [langPair(job), job.service_name];
+  const meta = [langPair(job), serviceLabel(job)];
   if (ACTIVE.has(job.status)) {
     meta.push(job.total ? `翻译中 ${job.done} / ${job.total} 段` : "正在解析文档…");
   } else {
@@ -938,6 +1024,13 @@ function renderReaderBar(job) {
   outlineBtn.setAttribute("aria-label", "目录");
   outlineBtn.addEventListener("click", () => $("reader").classList.toggle("show-outline"));
   actions.append(outlineBtn);
+  if (ACTIVE.has(job.status)) {
+    const pause = el("button", "btn sm");
+    pause.type = "button";
+    pause.append("❙❙ ", el("span", "", "暂停"));
+    pause.addEventListener("click", () => pauseJob(job.id, pause));
+    actions.append(pause);
+  }
   for (const o of job.outputs) {
     const a = el("a", "btn primary sm");
     a.href = o.url;
@@ -966,13 +1059,17 @@ function renderNotice(job) {
   const notice = $("reader-notice");
   notice.replaceChildren();
   notice.className = "reader-notice";
-  const failed = job.status === "error" || job.status === "interrupted";
-  if (failed) {
-    notice.classList.add("is-error");
+  const stopped = job.status === "error" || RESUMABLE.has(job.status);
+  if (stopped) {
+    const paused = job.status === "paused";
+    notice.classList.add("is-action", paused ? "is-paused" : "is-error");
     const body = el("div", "notice-body");
     const done = job.done ? `已翻译 ${job.done} / ${job.total} 段。` : "";
-    body.append(el("div", "notice-title", job.status === "interrupted" ? "翻译已中断" : "翻译失败"),
-      el("div", "notice-text", `${explainError(job.error)}${done ? " " + done : ""}`));
+    const title = paused ? "已暂停" : job.status === "interrupted" ? "翻译已中断" : "翻译失败";
+    const text = paused
+      ? `${done}继续翻译时，已翻好的段落直接复用，剩下的段落用翻译服务当前选中的模型。`
+      : `${explainError(job.error)}${done ? " " + done : ""}`;
+    body.append(el("div", "notice-title", title), el("div", "notice-text", text));
     if (job.error && job.status === "error") {
       const det = el("details", "notice-detail");
       det.append(el("summary", "", "详细信息"), el("code", "", job.error));
@@ -984,7 +1081,7 @@ function renderNotice(job) {
     pick.setAttribute("aria-label", "用哪个服务重新翻译");
     for (const s of services) pick.add(new Option(s.name, s.id));
     pick.value = services.some((s) => s.id === job.service_id) ? job.service_id : state.defaultId;
-    const retry = el("button", "btn primary sm", job.status === "interrupted" ? "继续翻译" : "重新翻译");
+    const retry = el("button", "btn primary sm", job.status === "error" ? "重新翻译" : "继续翻译");
     retry.type = "button";
     retry.addEventListener("click", async () => {
       retry.disabled = true;
