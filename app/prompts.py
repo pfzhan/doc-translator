@@ -62,6 +62,14 @@ TITLE_PROMPT = "\n\n## Context Awareness\nDocument Metadata:\nTitle: “{{imt_ti
 SOURCE_END = "[[source_end]]"
 MARKER_RE = re.compile(r"^\[\[(p\d+)\]\]$")
 CONTROL_RE = re.compile(r"^\[\[(?:p\d+|source_end|terms|term|end)\]\]$")
+
+
+def pick_marker(texts: list[str]) -> str:
+    """选段落标记前缀。原文本身有独占一行的 [[pN]] 时换用别的前缀，避免被当成协议标记截断。"""
+    for prefix in ("p", "q", "s"):
+        if not any(re.search(rf"^\[\[{prefix}\d+\]\]$", t, re.M) for t in texts):
+            return prefix
+    return "p"  # 三种前缀都被占用的极端情况，维持默认
 # 插件的 removeResRegexs：去掉推理模型输出的 <think> 段
 THINK_RE = re.compile(r"^\s*<think>[\s\S]*?</think>\s*|^\s*</think>\s*")
 
@@ -120,7 +128,8 @@ def build_messages(texts: list[str], target_lang: str, *, source_lang: str = "au
         body = texts[0]
     else:
         system = fill(system_t, values).strip() + PROTOCOL_SYSTEM_PROMPT
-        body = "\n".join(f"[[p{i}]]\n{t}" for i, t in enumerate(texts)) + "\n" + SOURCE_END
+        marker = pick_marker(texts)
+        body = "\n".join(f"[[{marker}{i}]]\n{t}" for i, t in enumerate(texts)) + "\n" + SOURCE_END
     # {{text}} 最后替换，避免原文里恰好有 {{xxx}} 被当成占位符
     user = fill(user_t.replace("{{text}}", "\0TEXT\0"), values).replace("\0TEXT\0", body)
     return system, user
@@ -133,8 +142,10 @@ def clean_output(content: str) -> str:
     return m.group(1).strip() if m else content
 
 
-def parse_markers(content: str, count: int) -> dict[int, str]:
-    """解析 [[pN]] 格式的回复，返回 {序号: 译文}；缺失的序号不在结果里。"""
+def parse_markers(content: str, count: int, marker: str = "p") -> dict[int, str]:
+    """解析 [[pN]] 格式的回复，返回 {序号: 译文}；缺失的序号不在结果里。marker 需与 build_messages 用的一致。"""
+    marker_re = MARKER_RE if marker == "p" else re.compile(rf"^\[\[({marker}\d+)\]\]$")
+    control_re = CONTROL_RE if marker == "p" else re.compile(rf"^\[\[(?:{marker}\d+|source_end|terms|term|end)\]\]$")
     result: dict[int, str] = {}
     current: int | None = None
     buf: list[str] = []
@@ -145,9 +156,9 @@ def parse_markers(content: str, count: int) -> dict[int, str]:
 
     for line in clean_output(content).split("\n"):
         stripped = line.strip()
-        if CONTROL_RE.match(stripped):
+        if control_re.match(stripped):
             flush()
-            m = MARKER_RE.match(stripped)
+            m = marker_re.match(stripped)
             current = int(m.group(1)[1:]) if m else None
             buf = []
             if stripped in ("[[terms]]", "[[end]]"):
