@@ -148,6 +148,20 @@ def collect_segments(blocks: list[Block]) -> list[str]:
     return texts
 
 
+def segment_kinds(blocks: list[Block]) -> list[str]:
+    """和 collect_segments 返回的文本一一对应的段落类型，给预览用。"""
+    kinds = []
+    for b in blocks:
+        for _, pre, text in b.segments:
+            if not _translatable(text):
+                continue
+            if b.kind == "heading":
+                kinds.append(f"h{min(pre.count('#'), 6)}")
+            else:
+                kinds.append({"list": "li", "table": "td", "quote": "quote"}.get(b.kind, "p"))
+    return kinds
+
+
 def _list_items(lines: list[str]) -> list[tuple[int, str, str, list[str]]]:
     """把列表块拆成列表项：(起始行号, 标记前缀, 合并后的文本, 原始行)。懒续行并入上一项。"""
     items = []
@@ -225,7 +239,7 @@ async def translate_markdown(src: Path, out_dir: Path, runner, bilingual: bool) 
     # 标题：第一个一级标题，没有就用文件名
     h1 = next((b.segments[0][2] for b in blocks if b.kind == "heading" and b.lines[0].lstrip().startswith("# ")), "")
     runner.set_title(h1 or src.stem)
-    results = await runner.translate_all(texts)
+    results = await runner.translate_all(texts, kinds=segment_kinds(blocks), preview=True)
     tr = dict(zip(texts, results))
     suffix = "bilingual" if bilingual else "translated"
     dst = out_dir / f"{src.stem}.{suffix}{src.suffix}"

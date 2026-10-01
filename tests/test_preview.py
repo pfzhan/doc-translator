@@ -1,0 +1,151 @@
+import asyncio
+import time
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from app import main
+from app.runner import Runner
+from app.services import ServiceStore
+from app.translators import MockTranslator
+
+SAMPLES = Path(__file__).resolve().parent.parent / "samples"
+
+
+class MemCache:
+    def __init__(self, data=None):
+        self.d = data or {}
+
+    def get_many(self, prefix, texts):
+        return {t: self.d[t] for t in texts if t in self.d}
+
+    def put_many(self, prefix, pairs):
+        self.d.update(pairs)
+
+
+class RecordingTranslator(MockTranslator):
+    """记录每批翻译的顺序，可以在批次之间插入回调（模拟用户在翻译过程中跳转）。"""
+
+    max_batch_items = 2
+    concurrency = 1
+
+    def __init__(self, *a, on_batch=None, **kw):
+        super().__init__(*a, **kw)
+        self.batches = []
+        self.on_batch = on_batch
+
+    async def translate_batch(self, texts):
+        self.batches.append(list(texts))
+        if self.on_batch:
+            self.on_batch(len(self.batches))
+        await asyncio.sleep(0)
+        return await super().translate_batch(texts)
+
+
+def paras(n):
+    return [f"Paragraph number {i} talks about something quite different from the others." for i in range(n)]
+
+
+def test_preview_incremental_and_duplicates():
+    texts = ["Title of the book", "Hello there my friend", "", "Hello there my friend"]
+    runner = Runner(MockTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
+    assert runner.preview() == {"ready": False, "version": 0}
+    asyncio.run(runner.translate_all(texts, kinds=["h1", "p", "p", "p"], preview=True))
+
+    full = runner.preview()
+    assert [s["k"] for s in full["segments"]] == ["h1", "p", "p", "p"]
+    # 同一句出现两次，两个位置都会更新；空段落不出现在更新里
+    assert sorted(u[0] for u in full["updates"]) == [0, 1, 3]
+    assert full["version"] == 2  # 两条不同的原文
+
+    assert runner.preview(since=full["version"])["updates"] == []
+    partial = runner.preview(since=1)
+    assert "segments" not in partial and len(partial["updates"]) == 2
+
+
+def test_cached_and_skipped_segments_show_immediately():
+    texts = ["Cached sentence here", "这一段本来就是中文，不需要再翻译成中文了。", "Fresh sentence to translate now"]
+    runner = Runner(MockTranslator("zh-CN"), cache=MemCache({"Cached sentence here": "已缓存"}))
+    asyncio.run(runner.translate_all(texts, preview=True))
+    log = runner._log
+    # 缓存命中和已是目标语言的段落排在最前面，不用等翻译
+    assert set(log[:2]) == {texts[0], texts[1]}
+    updates = {u[0]: u for u in runner.preview()["updates"]}
+    assert updates[0][1] == "已缓存" and updates[1][2] == 1 and updates[2][1].startswith("[zh-CN]")
+
+
+def test_first_batch_is_small():
+    tr = RecordingTranslator("zh-CN")
+    tr.max_batch_items = 20
+    asyncio.run(Runner(tr, cache=MemCache(), skip_same_lang=False).translate_all(paras(30)))
+    assert [len(b) for b in tr.batches] == [4, 20, 6]
+
+
+def test_focus_reorders_remaining_batches():
+    texts = paras(20)
+    runner = None
+
+    def jump(n):
+        if n == 1:
+            runner.focus(14)  # 第一批翻译时用户跳到了第 14 段
+
+    tr = RecordingTranslator("zh-CN", on_batch=jump)
+    runner = Runner(tr, cache=MemCache(), skip_same_lang=False)
+    out = asyncio.run(runner.translate_all(texts, preview=True))
+    order = [texts.index(b[0]) for b in tr.batches]
+    assert order[0] == 0
+    assert order[1] == 14  # 跳转后先翻关注位置
+    assert order[1:4] == [14, 16, 18]  # 然后顺着往后翻
+    assert all(o.startswith("[zh-CN]") for o in out)  # 最终全部翻完
+    assert sum(len(b) for b in tr.batches) == 20
+
+
+def test_preview_endpoints(tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "store", ServiceStore(tmp_path / "s.json"))
+    monkeypatch.setattr(main, "JOBS_DIR", tmp_path / "jobs")
+    store = main.store
+    store.services.append({"id": "mock", "provider": "mock", "builtin": True, "name": "mock", "enabled": True})
+    md = b"# Title here\n\nFirst paragraph of the document.\n\n- item one in list\n"
+    # with 块里共用一个事件循环，后台翻译任务才能在两次请求之间继续跑
+    with TestClient(main.app) as client:
+        r = client.post("/api/jobs", files={"file": ("a.md", md)}, data={"service_id": "mock", "target_lang": "zh-CN"})
+        job = r.json()
+        assert job["preview"] is True
+        # 等到任务结束（最多 30 秒），整套测试一起跑时机器负载高，不能用很短的固定超时
+        deadline = time.monotonic() + 30
+        status = None
+        while time.monotonic() < deadline:
+            status = client.get(f"/api/jobs/{job['id']}").json()
+            if status["status"] in ("done", "error"):
+                break
+            time.sleep(0.05)
+        assert status["status"] == "done", status
+        p = client.get(f"/api/jobs/{job['id']}/preview").json()
+        assert p["ready"] and p["status"] == "done", p
+        assert [s["k"] for s in p["segments"]] == ["h1", "p", "li"]
+        assert len(p["updates"]) == 3
+        assert client.post(f"/api/jobs/{job['id']}/focus", json={"index": 2}).json() == {"ok": True}
+        assert client.post(f"/api/jobs/{job['id']}/focus", json={"index": "x"}).status_code == 400
+        assert client.get("/api/jobs/nope/preview").status_code == 404
+
+        pdf = client.post("/api/jobs", files={"file": ("a.pdf", b"%PDF-1.4")}, data={"service_id": "mock"}).json()
+        assert pdf["preview"] is False
+
+
+def test_epub_preview_kinds_in_reading_order():
+    src = SAMPLES / "alice.mobi"
+    if not src.exists():
+        return
+    from app.formats import translate_file
+
+    runner = Runner(MockTranslator("zh-CN"), cache=MemCache())
+    out = Path(__import__("tempfile").mkdtemp())
+    asyncio.run(translate_file(src, out, runner, True, "zh-CN"))
+    segs = runner.preview()["segments"]
+    kinds = {s["k"] for s in segs}
+    assert "toc" in kinds and "p" in kinds
+    # MOBI7 的裸文本段落按阅读顺序排列：正文第一句出现在“CHAPTER I”之后
+    texts = [s["s"] for s in segs]
+    ch1 = next(i for i, t in enumerate(texts) if t.startswith("CHAPTER I.") and "Rabbit" in t)
+    alice = next(i for i, t in enumerate(texts) if t.startswith("Alice was beginning"))
+    assert ch1 < alice

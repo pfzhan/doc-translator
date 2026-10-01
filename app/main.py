@@ -22,6 +22,8 @@ from .translators import TranslatorError, create_translator
 ROOT = Path(__file__).resolve().parent.parent
 JOBS_DIR = ROOT / "data" / "jobs"
 MAX_UPLOAD = 200 * 1024 * 1024
+# 支持边翻边预览的格式（PDF 之后单独做）
+PREVIEW_FORMATS = {".md", ".markdown", ".epub", ".mobi", ".azw3", ".azw"}
 JOB_TTL = 24 * 3600
 
 app = FastAPI(title="Doc Translator")
@@ -42,6 +44,9 @@ class Job:
     target_lang: str = ""
     # Runner.info：检测到的文档语言、因已是目标语言而跳过的段落数
     info: dict = field(default_factory=dict)
+    # 预览数据从 Runner 里读；PDF 暂不支持预览，preview 为 False
+    runner: object = None
+    preview: bool = False
 
     def to_dict(self):
         detected = self.info.get("detected_lang", "")
@@ -58,6 +63,7 @@ class Job:
             "skipped": self.info.get("skipped", 0),
             # 插件的 sameLangCheck：检测到的源语言和目标语言一致时提示
             "same_lang": same_language(detected, self.target_lang),
+            "preview": self.preview,
             "outputs": [{"name": p.name, "url": f"/api/jobs/{self.id}/files/{p.name}"} for p in self.outputs],
         }
 
@@ -80,6 +86,7 @@ async def _run_job(job: Job, src: Path, out_dir: Path, translator, bilingual: bo
     job.status = "running"
     runner = Runner(translator, progress)
     job.info = runner.info
+    job.runner = runner
     try:
         job.outputs = await translate_file(src, out_dir, runner, bilingual, target_lang)
         job.status = "done"
@@ -216,7 +223,8 @@ async def create_job(
     except TranslatorError as e:
         raise HTTPException(400, str(e))
 
-    job = Job(id=uuid.uuid4().hex[:12], filename=name, source_lang=source_lang, target_lang=target_lang)
+    job = Job(id=uuid.uuid4().hex[:12], filename=name, source_lang=source_lang, target_lang=target_lang,
+              preview=ext in PREVIEW_FORMATS)
     job_dir = JOBS_DIR / job.id
     out_dir = job_dir / "out"
     out_dir.mkdir(parents=True)
@@ -243,6 +251,30 @@ def get_job(job_id: str):
     if not job:
         raise HTTPException(404, "任务不存在")
     return job.to_dict()
+
+
+@app.get("/api/jobs/{job_id}/preview")
+def job_preview(job_id: str, since: int = -1):
+    """边翻边预览。since=-1 返回全部段落和已完成译文；之后用返回的 version 增量拉取。"""
+    job = jobs.get(job_id)
+    if not job:
+        raise HTTPException(404, "任务不存在")
+    if not job.runner:
+        return {"ready": False, "version": 0, "status": job.status}
+    return {**job.runner.preview(since), "status": job.status}
+
+
+@app.post("/api/jobs/{job_id}/focus")
+def job_focus(job_id: str, data: dict = Body(...)):
+    """预览里用户跳到了哪一段，后面优先翻译这附近。"""
+    job = jobs.get(job_id)
+    if not job or not job.runner:
+        raise HTTPException(404, "任务不存在")
+    try:
+        job.runner.focus(int(data.get("index", 0)))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "index 必须是整数")
+    return {"ok": True}
 
 
 @app.get("/api/jobs/{job_id}/files/{name}")

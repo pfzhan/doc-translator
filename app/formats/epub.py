@@ -85,7 +85,9 @@ async def translate_epub(src: Path, out_dir: Path, runner, bilingual: bool, targ
     # 2. 翻译（书名作为上下文）
     title_el = opf.find("dc:title") or opf.find("title")
     runner.set_title(title_el.get_text(strip=True) if title_el else src.stem)
-    results = await runner.translate_all([t[2] for t in tasks])
+    # 预览里目录（nav / ncx）用 toc 类型，正文用元素名（h1、p、li…）
+    kinds = ["toc" if kind == "label" else hb.preview_kind(el) for _, el, _, kind in tasks]
+    results = await runner.translate_all([t[2] for t in tasks], kinds=kinds, preview=True)
 
     # 3. 回写
     for (name, el, text, kind), translated in zip(tasks, results):

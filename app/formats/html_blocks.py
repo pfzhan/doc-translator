@@ -83,7 +83,27 @@ def find_blocks(soup: BeautifulSoup) -> list[tuple[Tag, str]]:
             text = _text_of(run)
             if translatable(text):
                 result.append((run, text))
+    # 按文档顺序排列（裸文本是第二遍才找到的），这样预览和翻译顺序都和阅读顺序一致
+    order = {id(el): i for i, el in enumerate(body.find_all(True))}
+    result.sort(key=lambda item: order.get(id(item[0]), len(order)))
     return result
+
+
+HEADING_KINDS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+
+
+def preview_kind(el: Tag) -> str:
+    """预览里的段落类型：标题保留级别，列表、引用、表格单元格各自一类，其他都算段落。"""
+    name = _local(el.name)
+    if name in HEADING_KINDS:
+        return name
+    if name in ("li", "dt", "dd"):
+        return "li"
+    if name in ("td", "th", "caption"):
+        return "td"
+    if name == "blockquote" or any(_local(p.name) == "blockquote" for p in el.parents if isinstance(p, Tag)):
+        return "quote"
+    return "p"
 
 
 def _inline_runs(container: Tag, soup) -> list[Tag]:

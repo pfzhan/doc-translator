@@ -1,4 +1,8 @@
-"""批量翻译调度：去重、缓存、切批、并发、进度回调。"""
+"""批量翻译调度：去重、缓存、切批、并发、进度回调，以及边翻边预览。
+
+并发用固定数量的 worker 从待翻批次里取活：默认按文档顺序，预览里用户滚动或跳转后，
+优先取关注位置之后的批次（类似沉浸式翻译“翻译可视区域”的思路，但整本书最终都会翻完）。
+"""
 import asyncio
 import hashlib
 import sqlite3
@@ -52,6 +56,9 @@ def get_cache() -> Cache:
 
 
 class Runner:
+    # 第一批只发几段，让预览尽快出现；之后恢复正常批量
+    first_batch_items = 4
+
     def __init__(self, translator: Translator, progress: Callable[[int, int], None] | None = None, cache=None,
                  skip_same_lang: bool = True):
         self.translator = translator
@@ -62,6 +69,17 @@ class Runner:
         # 给任务页展示：检测到的文档语言、跳过的段落数
         self.info = {"detected_lang": "", "skipped": 0}
 
+        # ---- 边翻边预览 ----
+        # segments：文档顺序的段落 [{"s": 原文, "k": 类型}]，translate_all(preview=True) 时填充
+        self.segments: list[dict] | None = None
+        self._indices: dict[str, list[int]] = {}  # 原文 → 出现的段落序号（同一句可能出现多次）
+        self._done: dict[str, str] = {}
+        self._skipped: set[str] = set()
+        # 完成顺序的日志，下标就是版本号；预览接口按 since 增量返回
+        self._log: list[str] = []
+        # 用户正在看的位置（段落序号），优先翻译它后面的内容
+        self._focus: int | None = None
+
     def set_title(self, title: str):
         """文档标题作为翻译上下文（只有大模型引擎用得上）。"""
         if hasattr(self.translator, "title"):
@@ -71,7 +89,8 @@ class Runner:
         tr = self.translator
         batches, cur, size = [], [], 0
         for t in texts:
-            if cur and (len(cur) >= tr.max_batch_items or size + len(t) > tr.max_batch_chars):
+            limit = min(self.first_batch_items, tr.max_batch_items) if not batches else tr.max_batch_items
+            if cur and (len(cur) >= limit or size + len(t) > tr.max_batch_chars):
                 batches.append(cur)
                 cur, size = [], 0
             cur.append(t)
@@ -79,6 +98,40 @@ class Runner:
         if cur:
             batches.append(cur)
         return batches
+
+    # ---------- 预览 ----------
+
+    def focus(self, index: int):
+        """预览里用户滚动或跳转到了第 index 段，之后优先翻译这附近。"""
+        self._focus = max(0, int(index))
+
+    def _record(self, texts: list[str]):
+        self._log.extend(texts)
+
+    def preview(self, since: int = -1) -> dict:
+        """since < 0 时返回全部段落和所有已完成的译文；否则只返回版本 since 之后完成的。"""
+        if self.segments is None:
+            return {"ready": False, "version": 0}
+        start = 0 if since < 0 else min(since, len(self._log))
+        updates = []
+        for text in self._log[start:]:
+            translated = self._done.get(text, text)
+            skipped = 1 if text in self._skipped else 0
+            for i in self._indices.get(text, ()):
+                updates.append([i, translated, skipped])
+        out = {"ready": True, "version": len(self._log), "updates": updates, "focus": self._focus}
+        if since < 0:
+            out["segments"] = self.segments
+        return out
+
+    def _next_batch(self, pending: list[tuple[int, list[str]]]):
+        """取下一批：有关注位置时取它之后最近的一批，否则按文档顺序。"""
+        if not pending:
+            return None
+        pick = 0
+        if self._focus is not None:
+            pick = next((n for n, (pos, _) in enumerate(pending) if pos >= self._focus), 0)
+        return pending.pop(pick)[1]
 
     def _detect(self, unique: list[str]) -> set[str]:
         """检测文档语言，返回需要跳过（已是目标语言）的段落。"""
@@ -91,8 +144,13 @@ class Runner:
             return set()
         return {t for t in unique if langdetect.same_language(langdetect.detect(t), tr.target_lang)}
 
-    async def translate_all(self, texts: list[str]) -> list[str]:
-        """按原顺序返回译文；空白文本和已是目标语言的段落原样返回。"""
+    async def translate_all(self, texts: list[str], kinds: list[str] | None = None,
+                            preview: bool = False) -> list[str]:
+        """按原顺序返回译文；空白文本和已是目标语言的段落原样返回。
+
+        preview=True 时记录段落供预览接口读取；kinds 是每段的类型（h1~h6 / p / li / quote / td / toc），
+        只影响预览的显示样式。
+        """
         unique = list(dict.fromkeys(t for t in texts if t.strip()))
         skipped = await asyncio.to_thread(self._detect, unique)
         self.info["skipped"] = len(skipped)
@@ -101,21 +159,45 @@ class Runner:
         done_map = self.cache.get_many(prefix, unique)
         todo = [t for t in unique if t not in done_map]
 
+        # 每段原文第一次出现的位置，用来按“离关注位置的远近”挑批次
+        first_pos: dict[str, int] = {}
+        for i, t in enumerate(texts):
+            first_pos.setdefault(t, i)
+
+        if preview:
+            self._indices = {}
+            for i, t in enumerate(texts):
+                if t.strip():
+                    self._indices.setdefault(t, []).append(i)
+            self._done = done_map
+            self._skipped = skipped
+            self._log = []
+            self.segments = [{"s": t, "k": (kinds[i] if kinds else "p")} for i, t in enumerate(texts)]
+            # 已是目标语言的和缓存命中的，预览里直接显示
+            self._record([t for t in dict.fromkeys(texts) if t in skipped or t in done_map])
+
         total = len(unique)
         done = len(done_map)
         self.progress(done, total)
 
-        sem = asyncio.Semaphore(self.translator.concurrency)
+        pending = [(first_pos[b[0]], b) for b in self._make_batches(todo)]
 
-        async def run(batch):
+        async def worker():
             nonlocal done
-            async with sem:
-                result = await self.translator.translate_batch(batch)
-            pairs = dict(zip(batch, result))
-            self.cache.put_many(prefix, pairs)
-            done_map.update(pairs)
-            done += len(batch)
-            self.progress(done, total)
+            while (batch := self._next_batch(pending)) is not None:
+                try:
+                    result = await self.translator.translate_batch(batch)
+                except BaseException:
+                    pending.clear()  # 出错时让其他并发任务也尽快停下
+                    raise
+                pairs = dict(zip(batch, result))
+                self.cache.put_many(prefix, pairs)
+                done_map.update(pairs)
+                if preview:
+                    self._record(batch)
+                done += len(batch)
+                self.progress(done, total)
 
-        await asyncio.gather(*(run(b) for b in self._make_batches(todo)))
+        workers = min(self.translator.concurrency, len(pending))
+        await asyncio.gather(*(worker() for _ in range(workers)))
         return [done_map.get(t, t) if t.strip() else t for t in texts]
