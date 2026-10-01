@@ -59,6 +59,19 @@ function toast(text) {
   toastTimer = setTimeout(() => (el.hidden = true), 2600);
 }
 
+// 异步按钮的即时反馈：点击后立即禁用并显示忙碌文案，结束（无论成败）后恢复
+async function busy(btn, text, fn) {
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = text;
+  try {
+    await fn();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
 
 // ---------- 服务数据 ----------
 
@@ -117,7 +130,16 @@ function renderServiceList() {
   refresh.className = "link small";
   refresh.textContent = "刷新";
   refresh.title = "在 CC Switch 里切换供应商后，点这里重新读取";
-  refresh.addEventListener("click", loadServices);
+  refresh.addEventListener("click", () =>
+    busy(refresh, "刷新中…", async () => {
+      try {
+        await loadServices();
+        toast("服务列表已刷新");
+      } catch (err) {
+        toast(`刷新失败：${err.message}`);
+      }
+    })
+  );
   const sections = [["本地配置", local, null]];
   if (state.ccswitch?.found || cc.length) sections.push(["CC Switch 当前生效", cc, refresh]);
   for (const [title, items, extra] of sections) {
@@ -367,42 +389,48 @@ svcForm.addEventListener("submit", async (e) => {
     $("save-status").textContent = "请先选择或输入模型";
     return;
   }
-  try {
-    await api(`/api/services/${payload.id}`, { method: "PUT", json: payload });
-    await loadServices();
-    $("save-status").textContent = "已保存";
-  } catch (err) {
-    $("save-status").textContent = `保存失败：${err.message}`;
-  }
+  await busy($("save-btn"), "保存中…", async () => {
+    try {
+      await api(`/api/services/${payload.id}`, { method: "PUT", json: payload });
+      await loadServices();
+      $("save-status").textContent = "已保存";
+    } catch (err) {
+      $("save-status").textContent = `保存失败：${err.message}`;
+    }
+  });
 });
 
-$("delete-btn").addEventListener("click", async () => {
+$("delete-btn").addEventListener("click", async (e) => {
   const s = selected();
   if (!s || !confirm(`确定删除「${s.name}」吗？`)) return;
-  try {
-    await api(`/api/services/${s.id}`, { method: "DELETE" });
-    state.selectedId = state.defaultId;
-    await loadServices();
-  } catch (err) {
-    alert(err.message);
-  }
+  await busy(e.currentTarget, "删除中…", async () => {
+    try {
+      await api(`/api/services/${s.id}`, { method: "DELETE" });
+      state.selectedId = state.defaultId;
+      await loadServices();
+    } catch (err) {
+      alert(err.message);
+    }
+  });
 });
 
-$("test-btn").addEventListener("click", async () => {
+$("test-btn").addEventListener("click", async (e) => {
   const box = $("test-result");
   const s = selected();
   box.hidden = false;
   box.className = "test-result";
   box.textContent = "测试中…";
-  try {
-    const payload = state.providers[s.provider]?.llm ? formPayload() : { id: s.id, provider: s.provider };
-    const r = await api("/api/services/test", { json: payload });
-    box.classList.add("ok");
-    box.textContent = `测试成功（${r.ms} ms）：${r.source} → ${r.result}`;
-  } catch (err) {
-    box.classList.add("fail");
-    box.textContent = `测试失败：${err.message}`;
-  }
+  await busy(e.currentTarget, "测试中…", async () => {
+    try {
+      const payload = state.providers[s.provider]?.llm ? formPayload() : { id: s.id, provider: s.provider };
+      const r = await api("/api/services/test", { json: payload });
+      box.classList.add("ok");
+      box.textContent = `测试成功（${r.ms} ms）：${r.source} → ${r.result}`;
+    } catch (err) {
+      box.classList.add("fail");
+      box.textContent = `测试失败：${err.message}`;
+    }
+  });
 });
 
 // 已获取的模型列表按服务缓存，切换服务再切回来时不用重新获取
@@ -427,10 +455,12 @@ $("fetch-models").addEventListener("click", async () => {
     fetchedModels[sid] = models;
     if (state.selectedId !== sid) return; // 获取期间切到了别的服务
     const current = $("custom-model").checked ? $("model-input").value : $("model-select").value;
-    // 只用接口返回的列表，不再混入预置模型；当前模型不在列表里时保留在最前面
-    setModelOptions(models, current || models[0]);
+    // 只用接口返回的列表，不再混入预置模型；当前模型不在列表里（服务商根本不支持）时改选第一个，不再保留失效选择
+    const fallback = models.includes(current) ? current : models[0];
+    setModelOptions(models, fallback);
     useCustomModel(false);
-    setFetchStatus(`已获取 ${models.length} 个模型 · ${new Date().toLocaleTimeString()}`);
+    const note = current && current !== fallback ? `，原模型 ${current} 不在列表中已切换` : "";
+    setFetchStatus(`已获取 ${models.length} 个模型${note} · ${new Date().toLocaleTimeString()}`);
   } catch (err) {
     if (state.selectedId === sid) setFetchStatus(`获取失败：${err.message}`, true);
   } finally {
@@ -439,15 +469,17 @@ $("fetch-models").addEventListener("click", async () => {
   }
 });
 
-$("add-btn").addEventListener("click", async () => {
-  try {
-    const svc = await api("/api/services", { json: { provider: $("add-provider").value } });
-    state.selectedId = svc.id;
-    await loadServices();
-    svcForm.elements.api_key.focus();
-  } catch (err) {
-    alert(err.message);
-  }
+$("add-btn").addEventListener("click", async (e) => {
+  await busy(e.currentTarget, "添加中…", async () => {
+    try {
+      const svc = await api("/api/services", { json: { provider: $("add-provider").value } });
+      state.selectedId = svc.id;
+      await loadServices();
+      svcForm.elements.api_key.focus();
+    } catch (err) {
+      alert(err.message);
+    }
+  });
 });
 
 // ---------- 翻译页 ----------
