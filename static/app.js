@@ -62,7 +62,8 @@ function iconFor(provider) {
 
 function renderServiceSelect() {
   const select = $("service_id");
-  const previous = select.value || loadSettings().service_id;
+  // 打开页面时选中默认服务；之后用户手动改过的保持不变（刷新服务列表时不会被重置）
+  const previous = state.serviceTouched ? select.value : state.defaultId;
   select.replaceChildren();
   for (const s of state.services.filter((s) => s.enabled)) {
     const label = s.id === state.defaultId ? `${s.name}（默认）` : s.name;
@@ -431,7 +432,8 @@ $("add-btn").addEventListener("click", async () => {
 const form = $("form");
 const fileInput = $("file");
 const drop = $("drop");
-const SAVED_FIELDS = ["source_lang", "target_lang", "mode", "service_id"];
+// 翻译服务不记住：每次打开页面都从默认服务开始
+const SAVED_FIELDS = ["source_lang", "target_lang", "mode"];
 
 function loadSettings() {
   try {
@@ -504,6 +506,7 @@ function checkLangPair() {
 for (const id of ["source_lang", "target_lang", "service_id"]) {
   $(id).addEventListener("change", checkLangPair);
 }
+$("service_id").addEventListener("change", () => (state.serviceTouched = true));
 
 $("swap-lang").addEventListener("click", () => {
   const src = $("source_lang");
