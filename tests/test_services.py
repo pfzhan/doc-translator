@@ -185,6 +185,72 @@ def test_html_response_gives_readable_error():
         run(tr.translate_batch(["good"]))
 
 
+def test_transient_400_from_relay_is_retried(monkeypatch):
+    # 中转站把上游的偶发故障包装成 400 INVALID_MODEL_ID，同样的请求过几秒就成功
+    monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(400, json={"error": {"message": 'Upstream rejected... {"reason":"INVALID_MODEL_ID"}'}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "好"}}]})
+
+    tr = create_translator({"provider": "openai", "api_key": "k", "model": "m"}, "zh-CN",
+                           transport=httpx.MockTransport(handler))
+    assert run(tr.translate_batch(["good"])) == ["好"]
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+def test_config_errors_fail_fast(monkeypatch, status):
+    monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(status, json={"error": {"message": "bad key"}})
+
+    tr = create_translator({"provider": "openai", "api_key": "k", "model": "m"}, "zh-CN",
+                           transport=httpx.MockTransport(handler))
+    with pytest.raises(TranslatorError, match=str(status)):
+        run(tr.translate_batch(["good"]))
+    assert len(calls) == 1  # Key 错、没权限、地址错，重试没用，立即报错
+
+
+def test_batch_rejected_by_relay_is_split(monkeypatch):
+    # 实测：某个 8 段的批次每次都被中转站 400 拒绝，拆开后每一部分都能翻
+    monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
+    sizes = []
+
+    def handler(request):
+        user = json.loads(request.content)["messages"][-1]["content"]
+        n = user.count("[[p") if "[[source_end]]" in user else 1
+        sizes.append(n)
+        if n >= 8:
+            return httpx.Response(400, json={"error": {"message": "INVALID_MODEL_ID"}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": fake_marker_reply(user)}}]})
+
+    tr = create_translator({"provider": "openai", "api_key": "k", "model": "m"}, "zh-CN",
+                           transport=httpx.MockTransport(handler))
+    texts = [f"para {i}" for i in range(8)]
+    assert run(tr.translate_batch(texts)) == [f"T:para {i}" for i in range(8)]
+    assert sizes == [8, 8, 4, 4]  # 原样重试一次，然后拆成两半
+
+
+def test_single_segment_400_still_fails(monkeypatch):
+    monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
+    tr = create_translator({"provider": "openai", "api_key": "k", "model": "m"}, "zh-CN",
+                           transport=httpx.MockTransport(lambda r: httpx.Response(400, json={"error": {"message": "x"}})))
+    with pytest.raises(TranslatorError) as e:
+        run(tr.translate_batch(["only one"]))
+    assert e.value.status == 400
+
+
+async def _no_sleep(_seconds):
+    return None
+
+
 def test_temperature_retry_without_it():
     calls = []
 
