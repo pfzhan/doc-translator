@@ -160,6 +160,8 @@ label.check { flex-direction: row; align-items: center; gap: 6px; margin: -6px 0
 label.check input { width: auto; }
 .inline { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: -6px; }
 .inline label.check { margin: 0; }
+.fetch-models { display: inline-flex; align-items: baseline; gap: 10px; }
+.fetch-models .hint { margin: 0; }
 details { margin: 14px 0; }
 summary { cursor: pointer; color: var(--muted); margin-bottom: 10px; }
 .test-result { padding: 10px 12px; border-radius: 6px; margin-bottom: 14px; background: var(--card); word-break: break-word; }
