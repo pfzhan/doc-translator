@@ -6,6 +6,8 @@ from .mobi import translate_mobi
 from .pdf import translate_pdf
 
 SUPPORTED = {".md", ".markdown", ".epub", ".mobi", ".azw3", ".azw", ".pdf"}
+# 支持边翻边预览的格式（PDF 之后单独做）
+PREVIEW_FORMATS = {".md", ".markdown", ".epub", ".mobi", ".azw3", ".azw"}
 
 
 async def translate_file(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str) -> list[Path]:

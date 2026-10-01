@@ -6,7 +6,6 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.runner import Runner
-from app.services import ServiceStore
 from app.translators import MockTranslator
 
 SAMPLES = Path(__file__).resolve().parent.parent / "samples"
@@ -100,11 +99,7 @@ def test_focus_reorders_remaining_batches():
     assert sum(len(b) for b in tr.batches) == 20
 
 
-def test_preview_endpoints(tmp_path, monkeypatch):
-    monkeypatch.setattr(main, "store", ServiceStore(tmp_path / "s.json"))
-    monkeypatch.setattr(main, "JOBS_DIR", tmp_path / "jobs")
-    store = main.store
-    store.services.append({"id": "mock", "provider": "mock", "builtin": True, "name": "mock", "enabled": True})
+def test_preview_endpoints(app_env):
     md = b"# Title here\n\nFirst paragraph of the document.\n\n- item one in list\n"
     # with 块里共用一个事件循环，后台翻译任务才能在两次请求之间继续跑
     with TestClient(main.app) as client:

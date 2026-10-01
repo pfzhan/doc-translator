@@ -1,7 +1,10 @@
 const $ = (id) => document.getElementById(id);
 const SETTINGS_KEY = "doc-translator-settings";
 
-const state = { providers: {}, services: [], defaultId: "google", selectedId: null };
+const state = {
+  providers: {}, services: [], defaultId: "google", selectedId: null,
+  jobs: [], diskUsage: 0, retentionDays: 30, readerView: "both", view: "translate",
+};
 
 async function api(url, options = {}) {
   const init = { ...options };
@@ -18,15 +21,18 @@ async function api(url, options = {}) {
 }
 
 // ---------- 视图切换 ----------
+// 页面：translate（翻译）/ history（翻译记录）/ services（翻译服务）；阅读器是覆盖在上面的全屏层
+
+const VIEWS = ["translate", "history", "services"];
 
 function showView(name) {
+  if (!VIEWS.includes(name)) name = "translate";
   for (const tab of document.querySelectorAll(".tab")) {
     tab.setAttribute("aria-selected", String(tab.dataset.view === name));
   }
-  $("view-translate").hidden = name !== "translate";
-  $("view-services").hidden = name !== "services";
-  // 预览属于翻译页，切到服务页时隐藏
-  $("preview").hidden = name !== "translate" || !preview.jobId;
+  for (const v of VIEWS) $(`view-${v}`).hidden = v !== name;
+  state.view = name;
+  if (name === "history") refreshJobs();
   try {
     localStorage.setItem("doc-translator-view", name);
   } catch {
@@ -34,8 +40,25 @@ function showView(name) {
   }
 }
 for (const tab of document.querySelectorAll(".tab")) {
-  tab.addEventListener("click", () => showView(tab.dataset.view));
+  tab.addEventListener("click", () => {
+    if (reader.jobId) closeReader();
+    showView(tab.dataset.view);
+  });
 }
+document.addEventListener("click", (e) => {
+  const goto = e.target.closest("[data-goto]");
+  if (goto) showView(goto.dataset.goto);
+});
+
+let toastTimer;
+function toast(text) {
+  const el = $("toast");
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (el.hidden = true), 2600);
+}
+
 
 // ---------- 服务数据 ----------
 
@@ -453,6 +476,7 @@ function saveSettings() {
   }
 }
 
+
 // ---------- 语言 ----------
 
 function langInfo(code) {
@@ -512,7 +536,9 @@ $("swap-lang").addEventListener("click", () => {
   const src = $("source_lang");
   const dst = $("target_lang");
   // 源语言是“自动检测”时没法交换到目标语言，用上一次检测到的语言代替
-  const from = src.value === "auto" ? state.lastDetected : src.value;
+  // 用最近一条记录里检测到的语言
+  const lastDetected = (state.jobs || []).find((j) => j.detected_lang)?.detected_lang;
+  const from = src.value === "auto" ? lastDetected : src.value;
   if (!from) {
     alert("源语言是自动检测，先翻译一次或手动选择源语言后再交换");
     return;
@@ -523,9 +549,18 @@ $("swap-lang").addEventListener("click", () => {
   showDefaultPromptPlaceholders();
 });
 
+function formatSize(bytes) {
+  if (!bytes) return "";
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+}
+
 function showFile() {
   const f = fileInput.files[0];
-  $("drop-text").textContent = f ? `${f.name}（${(f.size / 1024 / 1024).toFixed(2)} MB）` : "点击选择文件，或把文件拖到这里";
+  drop.classList.toggle("has-file", !!f);
+  $("drop-text").textContent = f ? f.name : "选择文件，或拖到这里";
+  $("drop-sub").textContent = f ? `${formatSize(f.size)} · 点击更换` : "最大 200 MB";
 }
 fileInput.addEventListener("change", showFile);
 drop.addEventListener("dragover", (e) => {
@@ -542,99 +577,395 @@ drop.addEventListener("drop", (e) => {
   }
 });
 
-function setStatus(text, isError = false) {
-  $("status").textContent = text;
-  $("status").classList.toggle("error", isError);
+function showSubmitError(text) {
+  const el = $("submit-error");
+  el.textContent = text || "";
+  el.hidden = !text;
 }
 
-function render(job) {
-  $("job-title").textContent = job.filename;
-  const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
-  $("bar").value = job.status === "done" ? 100 : pct;
-  const outputs = $("outputs");
-  outputs.replaceChildren();
-  if (job.status === "error") {
-    setStatus(`翻译失败：${job.error}`, true);
-  } else if (job.status === "done") {
-    setStatus("翻译完成");
-    for (const o of job.outputs) {
-      const li = document.createElement("li");
-      const a = document.createElement("a");
-      a.href = o.url;
-      a.textContent = `下载 ${o.name}`;
-      a.download = o.name;
-      li.append(a);
-      outputs.append(li);
+form.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!fileInput.files.length) return;
+  saveSettings();
+  showSubmitError("");
+  const btn = $("submit");
+  btn.disabled = true;
+  btn.textContent = "上传中…";
+  try {
+    const job = await api("/api/jobs", { method: "POST", body: new FormData(form) });
+    fileInput.value = "";
+    showFile();
+    upsertJob(job);
+    // 支持预览的格式直接进入阅读器边翻边看，其他格式在记录里看进度
+    if (job.preview) openReader(job.id);
+    else {
+      toast("已开始翻译，可以在记录里查看进度");
+      showView("history");
     }
-  } else if (job.total) {
-    setStatus(`翻译中 ${job.done} / ${job.total} 段（${pct}%）`);
+  } catch (err) {
+    showSubmitError(err.message);
+  } finally {
+    btn.textContent = "开始翻译";
+    btn.disabled = false;
+    checkLangPair();
+  }
+});
+
+// ---------- 翻译记录 ----------
+// 记录存在服务端磁盘上：刷新页面、换书、重启服务都不会丢，只有手动删除或超过保留时间才会删
+
+const STATUS_TEXT = { queued: "排队中", running: "翻译中", done: "已完成", error: "失败", interrupted: "已中断" };
+const ACTIVE = new Set(["queued", "running"]);
+
+function fmtOf(name) {
+  return (name.split(".").pop() || "").toLowerCase().replace("markdown", "md");
+}
+
+function timeAgo(ts) {
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  if (s < 60) return "刚刚";
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+  if (s < 86400 * 7) return `${Math.floor(s / 86400)} 天前`;
+  return new Date(ts * 1000).toLocaleDateString();
+}
+
+function expiryText(job) {
+  const days = state.retentionDays;
+  if (!days || ACTIVE.has(job.status)) return "";
+  const left = (job.finished || job.created) + days * 86400 - Date.now() / 1000;
+  if (left <= 0) return "即将删除";
+  const d = Math.ceil(left / 86400);
+  return d <= 3 ? `${d} 天后自动删除` : "";
+}
+
+function langPair(job) {
+  const from = job.source_lang === "auto" ? job.detected_lang || "auto" : job.source_lang;
+  return `${langShort(from)} → ${langShort(job.target_lang)}`;
+}
+
+function langShort(code) {
+  const l = langInfo(code);
+  if (!l || code === "auto") return code === "auto" ? "自动" : code;
+  return l.native || l.name;
+}
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function jobRow(job) {
+  const li = el("li", "job");
+  li.dataset.id = job.id;
+  const fmt = fmtOf(job.filename);
+  li.append(el("div", `job-fmt ${fmt}`, fmt.toUpperCase()));
+
+  const main = el("div", "job-main");
+  const name = el("button", "job-name", job.filename);
+  name.type = "button";
+  name.title = job.preview ? "打开阅读" : job.filename;
+  name.disabled = !job.preview;
+  name.addEventListener("click", () => openReader(job.id));
+  main.append(name);
+
+  const meta = el("div", "job-meta");
+  for (const [i, part] of [
+    langPair(job),
+    job.mode === "translated" ? "仅译文" : "双语对照",
+    job.service_name,
+    formatSize(job.size),
+    timeAgo(job.created),
+  ].filter(Boolean).entries()) {
+    meta.append(el("span", i ? "sep" : "", part));
+  }
+  main.append(meta);
+
+  const status = el("div", "job-status");
+  status.append(el("span", `badge ${job.status}`, STATUS_TEXT[job.status] || job.status));
+  if (ACTIVE.has(job.status)) {
+    const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
+    const bar = el("div", "job-progress");
+    const fill = el("div");
+    fill.style.width = `${pct}%`;
+    bar.append(fill);
+    status.append(bar, el("span", "hint", job.total ? `${job.done} / ${job.total} 段 · ${pct}%` : "解析文档…"));
+  } else if (job.status === "error" || job.status === "interrupted") {
+    const err = el("span", "job-error", job.error);
+    err.title = job.error;
+    status.append(err);
   } else {
-    setStatus("正在解析文档…");
+    const parts = [job.total ? `${job.total} 段` : ""];
+    if (job.skipped) parts.push(`${job.skipped} 段无需翻译`);
+    const exp = expiryText(job);
+    if (exp) parts.push(exp);
+    status.append(el("span", "hint", parts.filter(Boolean).join(" · ")));
   }
-  renderJobLang(job);
+  main.append(status);
+  li.append(main);
+
+  const actions = el("div", "job-actions");
+  if (job.preview && (job.status !== "error" || job.done)) {
+    const read = el("button", "btn sm", ACTIVE.has(job.status) ? "查看进度" : "阅读");
+    read.type = "button";
+    read.addEventListener("click", () => openReader(job.id));
+    actions.append(read);
+  }
+  for (const o of job.outputs) {
+    const a = el("a", "btn sm primary", "下载");
+    a.href = o.url;
+    a.download = o.name;
+    a.title = o.name;
+    if (job.outputs.length > 1) a.textContent = `下载 ${fmtOf(o.name).toUpperCase()}`;
+    actions.append(a);
+  }
+  if (job.status === "error" || job.status === "interrupted") {
+    const retry = el("button", "btn sm", job.status === "interrupted" ? "继续翻译" : "重试");
+    retry.type = "button";
+    retry.addEventListener("click", () => retryJob(job.id));
+    actions.append(retry);
+  }
+  const del = el("button", "btn sm ghost", "删除");
+  del.type = "button";
+  del.addEventListener("click", () => deleteJob(job));
+  actions.append(del);
+  li.append(actions);
+  return li;
 }
 
-function renderJobLang(job) {
-  if (job.detected_lang) state.lastDetected = job.detected_lang;
-  const parts = [];
-  if (job.detected_lang) {
-    const from = job.source_lang === "auto" ? "检测到文档语言" : "文档语言检测结果";
-    parts.push(`${from}：${langLabel(job.detected_lang)}`);
-  }
-  if (job.skipped) parts.push(`${job.skipped} 段已经是${langLabel(job.target_lang)}，未翻译`);
-  if (job.same_lang) {
-    // 插件的 sameLangCheck 提示
-    parts.push(`检测到的源语言与目标语言一致（${langLabel(job.target_lang)}），文档可能没有需要翻译的内容`);
-  }
-  $("job-lang").textContent = parts.join("；");
+function renderJobs() {
+  const all = state.jobs;
+  const list = $("history-list");
+  list.replaceChildren(...all.map(jobRow));
+  $("history-empty").hidden = all.length > 0;
+  $("recent").hidden = all.length === 0;
+  $("recent-list").replaceChildren(...all.slice(0, 3).map(jobRow));
+  const running = all.filter((j) => ACTIVE.has(j.status)).length;
+  $("running-badge").hidden = !running;
+  $("running-badge").textContent = running;
+  $("usage").textContent = `${all.length} 条记录 · 占用 ${formatSize(state.diskUsage) || "0 KB"}`;
 }
 
-async function poll(id) {
-  while (true) {
-    const res = await fetch(`/api/jobs/${id}`);
-    if (!res.ok) {
-      setStatus("任务丢失，服务可能已重启", true);
-      return;
-    }
-    const job = await res.json();
-    render(job);
-    if (job.preview) await pollPreview(id);
-    if (job.status === "done" || job.status === "error") {
-      // 最后再拉一次，确保收尾那一批也显示出来
-      if (job.preview) await pollPreview(id);
-      return;
-    }
-    await new Promise((r) => setTimeout(r, 1000));
+function upsertJob(job) {
+  const i = state.jobs.findIndex((j) => j.id === job.id);
+  if (i >= 0) state.jobs[i] = job;
+  else state.jobs.unshift(job);
+  renderJobs();
+  scheduleJobsPoll();
+}
+
+async function refreshJobs() {
+  try {
+    const data = await api("/api/jobs");
+    state.jobs = data.jobs;
+    state.diskUsage = data.disk_usage;
+    state.retentionDays = data.retention_days;
+    renderJobs();
+  } catch {
+    /* 网络问题时保留旧列表 */
+  }
+  scheduleJobsPoll();
+}
+
+// 有任务在跑时每 2 秒刷新列表（阅读器自己轮询，不重复）
+let jobsTimer;
+function scheduleJobsPoll() {
+  clearTimeout(jobsTimer);
+  if (state.jobs.some((j) => ACTIVE.has(j.status))) jobsTimer = setTimeout(refreshJobs, 2000);
+}
+
+async function deleteJob(job) {
+  const running = ACTIVE.has(job.status);
+  const msg = running
+    ? `「${job.filename}」还在翻译，删除会停止翻译并删除所有文件。确定吗？`
+    : `删除「${job.filename}」的翻译记录？原文件和译文都会被删除，无法恢复。`;
+  if (!confirm(msg)) return;
+  try {
+    await api(`/api/jobs/${job.id}`, { method: "DELETE" });
+    state.jobs = state.jobs.filter((j) => j.id !== job.id);
+    renderJobs();
+    if (reader.jobId === job.id) closeReader();
+    toast("已删除");
+  } catch (err) {
+    toast(`删除失败：${err.message}`);
   }
 }
 
-// ---------- 边翻边预览 ----------
+async function retryJob(id) {
+  try {
+    const job = await api(`/api/jobs/${id}/retry`, { method: "POST", json: {} });
+    upsertJob(job);
+    if (job.preview) openReader(job.id);
+  } catch (err) {
+    toast(`无法重新翻译：${err.message}`);
+  }
+}
+
+// 保留时间
+function renderRetention() {
+  const sel = $("retention-days");
+  const days = String(state.retentionDays ?? 30);
+  const preset = [...sel.options].some((o) => o.value === days);
+  sel.value = preset ? days : "custom";
+  $("retention-custom").hidden = preset;
+  $("retention-custom").value = preset ? "" : days;
+  $("retention-save").hidden = preset;
+}
+
+async function saveRetention(days) {
+  const status = $("retention-status");
+  try {
+    const r = await api("/api/settings", { method: "PUT", json: { retention_days: days } });
+    state.retentionDays = r.retention_days;
+    renderRetention();
+    status.textContent = r.retention_days ? "已保存" : "已保存，记录将永久保留";
+    refreshJobs();
+  } catch (err) {
+    status.textContent = err.message;
+    renderRetention();
+  }
+  setTimeout(() => (status.textContent = ""), 2500);
+}
+
+$("retention-days").addEventListener("change", (e) => {
+  if (e.target.value === "custom") {
+    $("retention-custom").hidden = false;
+    $("retention-save").hidden = false;
+    $("retention-custom").focus();
+    return;
+  }
+  saveRetention(Number(e.target.value));
+});
+$("retention-form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const days = Number($("retention-custom").value);
+  if (!days) return;
+  saveRetention(days);
+});
+
+// ---------- 阅读器（边翻边预览） ----------
 // 后端按完成顺序记录译文，前端每秒用 version 增量拉取，只更新变化的段落，不重建文件
 
-const preview = { jobId: null, version: -1, nodes: [], done: 0, total: 0, focusTimer: null, lastFocus: -1 };
+const reader = {
+  jobId: null, job: null, version: -1, nodes: [], headings: [], done: 0, total: 0,
+  timer: null, focusTimer: null, lastFocus: -1, following: true, autoScrolling: false,
+};
+const HEADING = /^h[1-6]$/;
 
-function resetPreview(jobId) {
-  Object.assign(preview, { jobId, version: -1, nodes: [], done: 0, total: 0, lastFocus: -1 });
-  $("preview-body").replaceChildren();
-  $("preview-stat").textContent = "";
-  $("preview").hidden = true;
+function openReader(id) {
+  closeReader(true);
+  reader.jobId = id;
+  reader.following = true;
+  document.body.classList.add("reading");
+  $("reader").hidden = false;
+  $("reader-content").replaceChildren(el("div", "hint", "加载中…"));
+  $("outline-list").replaceChildren();
+  $("reader-notice").hidden = true;
+  $("follow-btn").hidden = true;
+  history.replaceState(null, "", `#read/${id}`);
+  readerTick();
 }
 
-function buildPreview(segments) {
-  const body = $("preview-body");
-  const frag = document.createDocumentFragment();
-  let tocShown = false;
-  preview.nodes = segments.map((seg, i) => {
-    // 目录条目（来自 nav / ncx）集中放在一个小标题下面
-    if (seg.k === "toc" && !tocShown) {
-      const head = document.createElement("div");
-      head.className = "seg-toc-head";
-      head.textContent = "目录";
-      frag.append(head);
-      tocShown = true;
+function closeReader(keepHash) {
+  clearTimeout(reader.timer);
+  Object.assign(reader, { jobId: null, job: null, version: -1, nodes: [], headings: [], done: 0, total: 0, lastFocus: -1 });
+  $("reader").hidden = true;
+  $("reader").classList.remove("show-outline");
+  document.body.classList.remove("reading");
+  if (!keepHash) history.replaceState(null, "", location.pathname);
+}
+
+$("reader-back").addEventListener("click", () => {
+  closeReader();
+  refreshJobs();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && reader.jobId && !$("reader").hidden) {
+    if ($("reader").classList.contains("show-outline")) $("reader").classList.remove("show-outline");
+    else {
+      closeReader();
+      refreshJobs();
     }
-    const div = document.createElement("div");
-    div.className = `seg seg-${seg.k}`;
+  }
+});
+
+async function readerTick() {
+  const id = reader.jobId;
+  if (!id) return;
+  try {
+    const [job, data] = await Promise.all([
+      api(`/api/jobs/${id}`),
+      api(`/api/jobs/${id}/preview?since=${reader.version}`),
+    ]);
+    if (reader.jobId !== id) return;
+    reader.job = job;
+    upsertJob(job);
+    renderReaderBar(job);
+    if (data.ready) {
+      const initial = reader.version < 0;
+      if (initial) buildReader(data.segments);
+      applyUpdates(data.updates, initial);
+      reader.version = data.version;
+    } else if (reader.version < 0 && !ACTIVE.has(job.status)) {
+      $("reader-content").replaceChildren(el("div", "hint", "这条记录没有可预览的内容。"));
+    }
+    renderNotice(job);
+    if (ACTIVE.has(job.status) || !data.ready) reader.timer = setTimeout(readerTick, 1000);
+  } catch (err) {
+    if (reader.jobId !== id) return;
+    $("reader-notice").hidden = false;
+    $("reader-notice").textContent = `无法读取：${err.message}`;
+  }
+}
+
+function renderReaderBar(job) {
+  $("reader-name").textContent = job.filename;
+  const meta = [langPair(job), job.service_name];
+  if (ACTIVE.has(job.status)) {
+    meta.push(job.total ? `翻译中 ${job.done} / ${job.total} 段` : "正在解析文档…");
+  } else {
+    meta.push(STATUS_TEXT[job.status]);
+  }
+  $("reader-meta").textContent = meta.filter(Boolean).join(" · ");
+  const pct = job.status === "done" ? 100 : job.total ? (job.done / job.total) * 100 : 0;
+  $("reader-progress-bar").style.width = `${pct}%`;
+  $("reader-progress-bar").parentElement.hidden = job.status === "done";
+
+  const actions = $("reader-actions");
+  actions.replaceChildren();
+  const outlineBtn = el("button", "btn ghost icon-btn", "☰");
+  outlineBtn.type = "button";
+  outlineBtn.id = "outline-toggle";
+  outlineBtn.setAttribute("aria-label", "目录");
+  outlineBtn.addEventListener("click", () => $("reader").classList.toggle("show-outline"));
+  actions.append(outlineBtn);
+  for (const o of job.outputs) {
+    const a = el("a", "btn primary sm");
+    a.href = o.url;
+    a.download = o.name;
+    a.append("↓ ", el("span", "", "下载"));
+    actions.append(a);
+  }
+}
+
+function renderNotice(job) {
+  const notice = $("reader-notice");
+  const msgs = [];
+  if (job.status === "error" || job.status === "interrupted") msgs.push(job.error);
+  if (job.same_lang) msgs.push(`文档语言和目标语言一致（${langLabel(job.target_lang)}），可能没有需要翻译的内容。`);
+  notice.hidden = !msgs.length;
+  notice.textContent = msgs.join(" ");
+}
+
+function buildReader(segments) {
+  const frag = document.createDocumentFragment();
+  const lang = reader.job?.target_lang || "";
+  let toc = null;
+  reader.headings = [];
+  reader.nodes = segments.map((seg, i) => {
+    const div = el("div", `seg k-${seg.k}`);
     div.dataset.i = i;
     if (!seg.s.trim()) {
       div.hidden = true;
@@ -642,123 +973,178 @@ function buildPreview(segments) {
       return div;
     }
     div.classList.add("pending");
-    const src = document.createElement("div");
-    src.className = "src";
-    src.textContent = seg.s;
-    const dst = document.createElement("div");
-    dst.className = "dst";
-    dst.lang = $("target_lang").value;
+    const src = el("div", "src", seg.s);
+    const dst = el("div", "dst");
+    if (lang) dst.lang = lang;
     div.append(src, dst);
-    frag.append(div);
+    // 书里自带的目录（nav / ncx）收进一个可折叠块，不打断正文
+    if (seg.k === "toc") {
+      if (!toc) {
+        toc = el("details", "toc-block");
+        toc.append(el("summary", "", "书中目录"));
+        frag.append(toc);
+      }
+      toc.append(div);
+    } else {
+      frag.append(div);
+      if (HEADING.test(seg.k)) reader.headings.push({ i, level: Number(seg.k[1]), div });
+    }
     return div;
   });
-  body.replaceChildren(frag);
-  preview.total = segments.filter((s) => s.s.trim()).length;
+  $("reader-content").replaceChildren(frag);
+  reader.total = segments.filter((s) => s.s.trim()).length;
+  reader.done = 0;
+  buildOutline();
+}
+
+// 左侧大纲：用文档里的标题，最多三级；标题太少时不显示
+function buildOutline() {
+  const list = $("outline-list");
+  const levels = [...new Set(reader.headings.map((h) => h.level))].sort().slice(0, 3);
+  const items = reader.headings.filter((h) => levels.includes(h.level));
+  // 章节标题太少时不显示大纲，正文占满宽度
+  $("reader").classList.toggle("no-outline", items.length < 2);
+  list.replaceChildren(
+    ...items.map((h) => {
+      const li = el("li", `l${levels.indexOf(h.level) + 1}`);
+      const btn = el("button");
+      btn.type = "button";
+      btn.append(el("span", "dot"), el("span", "label", h.div.querySelector(".src").textContent));
+      btn.addEventListener("click", () => {
+        $("reader").classList.remove("show-outline");
+        jumpTo(h.i);
+      });
+      li.append(btn);
+      h.li = li;
+      h.label = btn.querySelector(".label");
+      return li;
+    }),
+  );
+  reader.outline = items;
+  if (items.length < 2) $("outline-list").replaceChildren(el("li", "hint", "没有章节标题"));
 }
 
 function applyUpdates(updates, initial) {
   let last = null;
   for (const [i, text, skipped] of updates) {
-    const div = preview.nodes[i];
+    const div = reader.nodes[i];
     if (!div || !div.classList.contains("pending")) continue;
     div.classList.remove("pending");
     div.classList.toggle("skipped", !!skipped);
-    div.querySelector(".dst").textContent = skipped ? div.querySelector(".src").textContent : text;
+    div.querySelector(".dst").textContent = skipped ? "" : text;
     if (!initial) {
       div.classList.add("fresh");
-      setTimeout(() => div.classList.remove("fresh"), 1300);
+      setTimeout(() => div.classList.remove("fresh"), 1500);
     }
-    preview.done += 1;
+    reader.done += 1;
     last = div;
   }
-  $("preview-stat").textContent = `${preview.done} / ${preview.total} 段`;
-  // 跟随进度：把最新翻好的段落滚到视野里；用户手动滚动后会自动关掉
-  if (last && !initial && $("preview-follow").checked) {
-    following = true;
-    last.scrollIntoView({ block: "nearest" });
-    setTimeout(() => (following = false), 100);
+  refreshOutlineState();
+  // 跟随翻译进度：把最新翻好的段落带进视野；用户自己滚动后暂停，点“跟随”恢复
+  if (last && !initial && reader.following) {
+    reader.autoScrolling = true;
+    last.scrollIntoView({ block: "center" });
+    setTimeout(() => (reader.autoScrolling = false), 80);
   }
+  const active = reader.job && ACTIVE.has(reader.job.status);
+  $("follow-btn").hidden = reader.following || !active;
 }
 
-async function pollPreview(id) {
-  if (preview.jobId !== id) resetPreview(id);
-  let data;
-  try {
-    data = await api(`/api/jobs/${id}/preview?since=${preview.version}`);
-  } catch {
-    return; // 预览拉取失败不影响翻译本身
-  }
-  if (!data.ready || preview.jobId !== id) return;
-  const initial = preview.version < 0;
-  if (initial) {
-    buildPreview(data.segments);
-    $("preview").hidden = $("view-translate").hidden;
-  }
-  applyUpdates(data.updates, initial);
-  preview.version = data.version;
+// 大纲上的点：灰色未开始、蓝色翻译中、绿色已完成；章节标题翻好后大纲显示译文
+function refreshOutlineState() {
+  const items = reader.outline || [];
+  items.forEach((h, n) => {
+    const end = n + 1 < items.length ? items[n + 1].i : reader.nodes.length;
+    let pending = 0;
+    let total = 0;
+    for (let k = h.i; k < end; k++) {
+      const d = reader.nodes[k];
+      if (!d || d.hidden) continue;
+      total += 1;
+      if (d.classList.contains("pending")) pending += 1;
+    }
+    h.li.classList.toggle("complete", pending === 0);
+    h.li.classList.toggle("partial", pending > 0 && pending < total);
+    const dst = h.div.querySelector(".dst").textContent;
+    if (dst && state.readerView !== "src") h.label.textContent = dst;
+  });
 }
 
-// 用户在预览里滚动时，告诉后端优先翻译当前看到的位置
-let following = false;
+function jumpTo(i) {
+  const div = reader.nodes[i];
+  if (!div) return;
+  setFollowing(false);
+  div.scrollIntoView({ block: "start" });
+  sendFocus(i);
+}
+
+function setFollowing(on) {
+  reader.following = on;
+  const active = reader.job && ACTIVE.has(reader.job.status);
+  $("follow-btn").hidden = on || !active;
+}
+
+$("follow-btn").addEventListener("click", () => {
+  setFollowing(true);
+  const lastDone = [...reader.nodes].reverse().find((n) => !n.hidden && !n.classList.contains("pending"));
+  (lastDone || reader.nodes[0])?.scrollIntoView({ block: "center" });
+});
 
 function visibleIndex() {
-  const body = $("preview-body");
-  const top = body.getBoundingClientRect().top;
-  const div = preview.nodes.find((n) => !n.hidden && n.getBoundingClientRect().bottom > top + 8);
+  const top = $("reader-body").getBoundingClientRect().top;
+  const div = reader.nodes.find((n) => !n.hidden && n.getBoundingClientRect().bottom > top + 8);
   return div ? Number(div.dataset.i) : 0;
 }
 
+// 用户在阅读器里滚动时，告诉后端优先翻译当前看到的位置
 function sendFocus(index) {
-  if (!preview.jobId || index === preview.lastFocus) return;
-  preview.lastFocus = index;
-  fetch(`/api/jobs/${preview.jobId}/focus`, {
+  if (!reader.jobId || index === reader.lastFocus || !reader.job || !ACTIVE.has(reader.job.status)) return;
+  reader.lastFocus = index;
+  fetch(`/api/jobs/${reader.jobId}/focus`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ index }),
   }).catch(() => {});
 }
 
-$("preview-body").addEventListener("scroll", () => {
-  if (following) return;
-  $("preview-follow").checked = false;
-  clearTimeout(preview.focusTimer);
-  preview.focusTimer = setTimeout(() => sendFocus(visibleIndex()), 300);
-});
-
-$("preview-original").addEventListener("change", (e) => {
-  $("preview").classList.toggle("no-original", !e.target.checked);
-});
-
-$("preview-next").addEventListener("click", () => {
-  const div = preview.nodes.find((n) => n.classList.contains("pending"));
-  if (!div) return;
-  $("preview-follow").checked = false;
-  div.scrollIntoView({ block: "start" });
-  sendFocus(Number(div.dataset.i));
-});
-
-form.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  if (!fileInput.files.length) return;
-  saveSettings();
-  const btn = $("submit");
-  btn.disabled = true;
-  $("job").hidden = false;
-  $("outputs").replaceChildren();
-  $("bar").value = 0;
-  $("job-title").textContent = fileInput.files[0].name;
-  setStatus("上传中…");
-  resetPreview(null);
-  try {
-    const data = await api("/api/jobs", { method: "POST", body: new FormData(form) });
-    await poll(data.id);
-  } catch (err) {
-    setStatus(err.message, true);
-  } finally {
-    btn.disabled = false;
-    checkLangPair();
+function highlightCurrentHeading() {
+  const items = reader.outline || [];
+  const top = $("reader-body").getBoundingClientRect().top + 80;
+  let current = null;
+  for (const h of items) {
+    if (h.div.getBoundingClientRect().top <= top) current = h;
+    else break;
   }
+  for (const h of items) h.li.classList.toggle("current", h === current);
+  current?.li.scrollIntoView({ block: "nearest" });
+}
+
+$("reader-body").addEventListener("scroll", () => {
+  if (!reader.autoScrolling) setFollowing(false);
+  clearTimeout(reader.focusTimer);
+  reader.focusTimer = setTimeout(() => {
+    highlightCurrentHeading();
+    if (!reader.following) sendFocus(visibleIndex());
+  }, 200);
 });
+
+// 显示方式：对照 / 只看译文 / 只看原文
+for (const r of document.querySelectorAll('input[name="reader-view"]')) {
+  r.addEventListener("change", () => setReaderView(r.value));
+}
+function setReaderView(view) {
+  state.readerView = view;
+  const content = $("reader-content");
+  content.classList.remove("view-both", "view-dst", "view-src");
+  content.classList.add(`view-${view}`);
+  for (const r of document.querySelectorAll('input[name="reader-view"]')) r.checked = r.value === view;
+  try {
+    localStorage.setItem("doc-translator-reader-view", view);
+  } catch {
+    /* 忽略 */
+  }
+}
+
 
 // ---------- 初始化 ----------
 
@@ -783,15 +1169,23 @@ async function init() {
     if (saved[name] !== undefined) form.elements[name].value = saved[name];
   }
   if (!form.elements.target_lang.value) form.elements.target_lang.value = defaultTargetLang();
-  await loadServices();
-  checkLangPair();
   let view = "translate";
+  let readerView = "both";
   try {
     view = localStorage.getItem("doc-translator-view") || view;
+    readerView = localStorage.getItem("doc-translator-reader-view") || readerView;
   } catch {
     /* 忽略 */
   }
+  setReaderView(["both", "dst", "src"].includes(readerView) ? readerView : "both");
+  await Promise.all([loadServices(), refreshJobs(), api("/api/settings").then((s) => (state.retentionDays = s.retention_days))]);
+  renderRetention();
+  renderJobs();
+  checkLangPair();
   showView(view);
+  // 刷新页面时回到正在看的那本书
+  const m = location.hash.match(/^#read\/(\w+)$/);
+  if (m && state.jobs.some((j) => j.id === m[1])) openReader(m[1]);
 }
 
 init().catch((err) => alert(`初始化失败：${err.message}`));
