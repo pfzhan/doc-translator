@@ -347,4 +347,14 @@ def update_settings(data: dict = Body(...)):
     return result
 
 
-app.mount("/", StaticFiles(directory=ROOT / "static", html=True), name="static")
+class NoCacheStaticFiles(StaticFiles):
+    """前端文件不让浏览器凭缓存直接用：每次都带 ETag 问一下服务器，没改过返回 304，改过就拿新的。
+    否则改了 app.js 后，浏览器可能继续用旧版本（实际发生过：提交后仍然跳进阅读器）。"""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+app.mount("/", NoCacheStaticFiles(directory=ROOT / "static", html=True), name="static")
