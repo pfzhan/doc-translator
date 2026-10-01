@@ -850,6 +850,7 @@ async function refreshJobs() {
 let jobsTimer;
 function scheduleJobsPoll() {
   clearTimeout(jobsTimer);
+  if (reader.jobId) return;
   if (state.jobs.some((j) => ACTIVE.has(j.status))) jobsTimer = setTimeout(refreshJobs, 2000);
 }
 
@@ -891,6 +892,8 @@ function renderRetention() {
   $("retention-save").hidden = preset;
 }
 
+// 参照 toast：先取消上一次定时器，避免误清新的提示
+let retentionStatusTimer;
 async function saveRetention(days) {
   const status = $("retention-status");
   try {
@@ -903,7 +906,8 @@ async function saveRetention(days) {
     status.textContent = err.message;
     renderRetention();
   }
-  setTimeout(() => (status.textContent = ""), 2500);
+  clearTimeout(retentionStatusTimer);
+  retentionStatusTimer = setTimeout(() => (status.textContent = ""), 2500);
 }
 
 $("retention-days").addEventListener("change", (e) => {
@@ -917,8 +921,13 @@ $("retention-days").addEventListener("change", (e) => {
 });
 $("retention-form").addEventListener("submit", (e) => {
   e.preventDefault();
-  const days = Number($("retention-custom").value);
-  if (!days) return;
+  const raw = $("retention-custom").value.trim();
+  const days = Number(raw);
+  // 0 表示永久保留，是合法值；只拒绝空、非整数和负数
+  if (raw === "" || !Number.isInteger(days) || days < 0) {
+    toast("保留天数需为不小于 0 的整数（0 表示永久保留）");
+    return;
+  }
   saveRetention(days);
 });
 
@@ -995,11 +1004,14 @@ async function readerTick() {
       $("reader-content").replaceChildren(el("div", "hint", "这条记录没有可预览的内容。"));
     }
     renderNotice(job);
-    if (ACTIVE.has(job.status) || !data.ready) reader.timer = setTimeout(readerTick, 1000);
+    // preview=false 的任务（如 PDF）永远没有预览内容，不在“未就绪”分支里空转
+    if (ACTIVE.has(job.status) || (!data.ready && job.preview !== false)) reader.timer = setTimeout(readerTick, 1000);
   } catch (err) {
     if (reader.jobId !== id) return;
     $("reader-notice").hidden = false;
     $("reader-notice").textContent = `无法读取：${err.message}`;
+    // 出错后也要继续轮询，退避 4 秒，避免一次网络抖动就永久停更
+    reader.timer = setTimeout(readerTick, 4000);
   }
 }
 
@@ -1328,9 +1340,9 @@ async function init() {
   renderJobs();
   checkLangPair();
   showView(view);
-  // 刷新页面时回到正在看的那本书
+  // 刷新页面时回到正在看的那本书（preview=false 的任务没有预览内容，不恢复）
   const m = location.hash.match(/^#read\/(\w+)$/);
-  if (m && state.jobs.some((j) => j.id === m[1])) openReader(m[1]);
+  if (m && state.jobs.some((j) => j.id === m[1] && j.preview !== false)) openReader(m[1]);
 }
 
 init().catch((err) => alert(`初始化失败：${err.message}`));
