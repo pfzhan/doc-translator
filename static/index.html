@@ -107,7 +107,10 @@
         </label>
         <div class="inline">
           <label class="check"><input type="checkbox" id="custom-model"> 输入自定义模型名称</label>
-          <button type="button" class="link" id="fetch-models">获取模型列表</button>
+          <span class="fetch-models">
+            <span class="hint" id="fetch-models-status" aria-live="polite"></span>
+            <button type="button" class="link" id="fetch-models">获取模型列表</button>
+          </span>
         </div>
 
         <details>

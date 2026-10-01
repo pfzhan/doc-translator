@@ -252,10 +252,15 @@ function renderDetail() {
   f.user_prompt.value = s.user_prompt || "";
   showDefaultPromptPlaceholders();
 
-  const models = meta.models || [];
+  // 获取过模型列表就用获取到的，否则用预置模型
+  const fetched = fetchedModels[s.id];
+  const models = fetched || meta.models || [];
   setModelOptions(models, s.model);
   f.model.value = s.model;
-  // 没有预置模型（如 OpenAI 兼容接口）、或者 CC Switch 用的是中转站自己的模型名时，默认用输入框
+  $("fetch-models").textContent = fetched ? "重新获取" : "获取模型列表";
+  $("fetch-models").disabled = false;
+  setFetchStatus(fetched ? `已获取 ${fetched.length} 个模型` : "");
+  // 没有可选模型（如 OpenAI 兼容接口）、或者当前模型不在列表里（中转站自定义的模型名）时，默认用输入框
   useCustomModel(!models.length || (fromCC && !models.includes(s.model)));
   if (fromCC) {
     $("model-input").placeholder = `留空使用 CC Switch 里的模型（${s.ccswitch_model}）`;
@@ -374,24 +379,37 @@ $("test-btn").addEventListener("click", async () => {
   }
 });
 
+// 已获取的模型列表按服务缓存，切换服务再切回来时不用重新获取
+const fetchedModels = {};
+
+function setFetchStatus(text, isError = false) {
+  const el = $("fetch-models-status");
+  el.textContent = text;
+  el.classList.toggle("warn", isError);
+}
+
 $("fetch-models").addEventListener("click", async () => {
   const btn = $("fetch-models");
+  const sid = state.selectedId;
   btn.disabled = true;
-  btn.textContent = "获取中…";
+  setFetchStatus("获取中…");
   try {
     const payload = formPayload();
     payload.model = payload.model || "placeholder"; // 获取列表时还没选模型
     const { models } = await api("/api/services/models", { json: payload });
     if (!models.length) throw new Error("接口没有返回模型");
+    fetchedModels[sid] = models;
+    if (state.selectedId !== sid) return; // 获取期间切到了别的服务
     const current = $("custom-model").checked ? $("model-input").value : $("model-select").value;
-    setModelOptions(models, models.includes(current) ? current : models[0]);
+    // 只用接口返回的列表，不再混入预置模型；当前模型不在列表里时保留在最前面
+    setModelOptions(models, current || models[0]);
     useCustomModel(false);
-    btn.textContent = `已获取 ${models.length} 个模型`;
+    setFetchStatus(`已获取 ${models.length} 个模型 · ${new Date().toLocaleTimeString()}`);
   } catch (err) {
-    btn.textContent = "获取模型列表";
-    alert(`获取失败：${err.message}`);
+    if (state.selectedId === sid) setFetchStatus(`获取失败：${err.message}`, true);
   } finally {
     btn.disabled = false;
+    btn.textContent = fetchedModels[sid] ? "重新获取" : "获取模型列表";
   }
 });
 
