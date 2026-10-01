@@ -596,12 +596,8 @@ form.addEventListener("submit", async (e) => {
     fileInput.value = "";
     showFile();
     upsertJob(job);
-    // 支持预览的格式直接进入阅读器边翻边看，其他格式在记录里看进度
-    if (job.preview) openReader(job.id);
-    else {
-      toast("已开始翻译，可以在记录里查看进度");
-      showView("history");
-    }
+    // 留在当前页：新任务出现在下方「最近翻译」里，想看的时候点「查看进度」进入阅读器
+    toast("已开始翻译");
   } catch (err) {
     showSubmitError(err.message);
   } finally {
@@ -798,7 +794,7 @@ async function retryJob(id) {
   try {
     const job = await api(`/api/jobs/${id}/retry`, { method: "POST", json: {} });
     upsertJob(job);
-    if (job.preview) openReader(job.id);
+    toast("已重新开始翻译");
   } catch (err) {
     toast(`无法重新翻译：${err.message}`);
   }
