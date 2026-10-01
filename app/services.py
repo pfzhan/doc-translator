@@ -8,6 +8,8 @@ import threading
 import uuid
 from pathlib import Path
 
+from . import ccswitch
+
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "services.json"
 
 # 预置模型只是方便选择，可能不是最新的；页面上可以“获取模型列表”或手动输入模型名
@@ -94,6 +96,11 @@ def _mask(key: str) -> str:
     return key[:3] + "…" + key[-4:] if len(key) > 10 else "…" * 3
 
 
+# CC Switch 服务可以在本项目里调整的字段；连接信息（地址、Key）始终以 CC Switch 为准
+CCSWITCH_LOCAL_FIELDS = {"enabled", "model", "concurrency", "max_items", "max_chars", "temperature",
+                         "prompt", "user_prompt"}
+
+
 def public(service: dict) -> dict:
     """返回给前端的版本：不带明文 Key。"""
     out = {k: v for k, v in service.items() if k != "api_key"}
@@ -130,8 +137,9 @@ def _clean(data: dict) -> dict:
 
 
 class ServiceStore:
-    def __init__(self, path: Path = DATA_PATH):
+    def __init__(self, path: Path = DATA_PATH, ccswitch_db: Path | None = None):
         self.path = path
+        self.ccswitch_db = Path(ccswitch_db or ccswitch.DB_PATH)
         self.lock = threading.Lock()
         self._load()
 
@@ -142,28 +150,86 @@ class ServiceStore:
             data = {}
         self.services: list[dict] = data.get("services", [])
         self.default_id: str = data.get("default", "google")
+        # CC Switch 服务的本地设置：{服务 id: {enabled, model, prompt, ...}}
+        self.ccswitch_settings: dict[str, dict] = data.get("ccswitch", {})
         # 内置服务始终存在，用户可以改启用状态
         for b in BUILTIN:
             if not any(s["id"] == b["id"] for s in self.services):
                 self.services.insert(0, dict(b))
-        if not self.get(self.default_id):
+        # CC Switch 的服务可能暂时读不到（比如数据库被占用），默认值保留，list() 时再兜底
+        if not self.get(self.default_id) and not self.default_id.startswith("ccswitch-"):
             self.default_id = "google"
 
     def _save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(
-            json.dumps({"default": self.default_id, "services": self.services}, ensure_ascii=False, indent=2),
+            json.dumps({"default": self.default_id, "services": self.services, "ccswitch": self.ccswitch_settings},
+                       ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         tmp.chmod(0o600)  # 里面有 API Key，只允许当前用户读写
         tmp.replace(self.path)
 
+    # ---------- CC Switch ----------
+
+    def _ccswitch_services(self) -> list[dict]:
+        """CC Switch 当前生效的供应商。连接信息每次现读；本地只保存开关、并发、提示词等设置。"""
+        out = []
+        for cc in ccswitch.read_current(self.ccswitch_db):
+            local = self.ccswitch_settings.get(cc["id"], {})
+            svc = {
+                "id": cc["id"],
+                "provider": cc["provider"],
+                "builtin": True,
+                "source": "ccswitch",
+                **FIELDS,
+                "enabled": cc["available"],
+                **{k: v for k, v in local.items() if k in CCSWITCH_LOCAL_FIELDS},
+                # 下面这些来自 CC Switch，不能在本项目里改
+                "name": f"{cc['label']} · {cc['provider_name']}",
+                "base_url": cc["base_url"],
+                "api_key": cc["api_key"],
+                "model": local.get("model") or cc["model"],
+                "ccswitch_model": cc["model"],
+                "api_format": cc["api_format"],
+                "auth_style": cc["auth_style"],
+                "available": cc["available"],
+                "unavailable_reason": cc["reason"],
+            }
+            if not cc["available"]:
+                svc["enabled"] = False
+            out.append(svc)
+        return out
+
+    def _all(self) -> list[dict]:
+        return [*self.services, *self._ccswitch_services()]
+
     def get(self, sid: str) -> dict | None:
-        return next((s for s in self.services if s["id"] == sid), None)
+        return next((s for s in self._all() if s["id"] == sid), None)
 
     def list(self) -> dict:
-        return {"default": self.default_id, "services": [public(s) for s in self.services]}
+        all_services = self._all()
+        default = self.default_id
+        default_svc = next((s for s in all_services if s["id"] == default), None)
+        # 默认服务是 CC Switch 的但现在不可用了（比如切到了官方登录），退回谷歌翻译
+        if not default_svc or not default_svc.get("enabled"):
+            default = "google"
+        return {"default": default, "services": [public(s) for s in all_services],
+                "ccswitch": {"db": str(self.ccswitch_db), "found": self.ccswitch_db.exists()}}
+
+    def _update_ccswitch(self, svc: dict, data: dict) -> dict:
+        changes = {k: v for k, v in _clean(data).items() if k in CCSWITCH_LOCAL_FIELDS}
+        if changes.get("enabled") and not svc["available"]:
+            raise ServiceError(f"无法启用：{svc['unavailable_reason']}")
+        if changes.get("enabled") is False and self.default_id == svc["id"]:
+            raise ServiceError("默认服务不能关闭，请先把别的服务设为默认")
+        # 模型和 CC Switch 一致时不单独保存，这样在 CC Switch 里改模型也会跟着变
+        if "model" in changes and changes["model"] in ("", svc["ccswitch_model"]):
+            changes["model"] = ""
+        self.ccswitch_settings.setdefault(svc["id"], {}).update(changes)
+        self._save()
+        return public(self.get(svc["id"]))
 
     def create(self, data: dict) -> dict:
         provider = data.get("provider")
@@ -186,6 +252,8 @@ class ServiceStore:
             svc = self.get(sid)
             if not svc:
                 raise ServiceError("服务不存在")
+            if svc.get("source") == "ccswitch":
+                return self._update_ccswitch(svc, data)
             changes = _clean(data)
             # Key 留空表示不修改；要清空 Key 需显式传 clear_api_key
             if not changes.get("api_key") and not data.get("clear_api_key"):
@@ -206,7 +274,8 @@ class ServiceStore:
             if not svc:
                 raise ServiceError("服务不存在")
             if svc.get("builtin"):
-                raise ServiceError("内置服务不能删除")
+                raise ServiceError("内置服务不能删除" if svc.get("source") != "ccswitch" else
+                                   "CC Switch 的服务不能删除，可以关闭它")
             self.services.remove(svc)
             if self.default_id == sid:
                 self.default_id = "google"
@@ -217,17 +286,30 @@ class ServiceStore:
             svc = self.get(sid)
             if not svc:
                 raise ServiceError("服务不存在")
-            svc["enabled"] = True
+            if svc.get("source") == "ccswitch":
+                if not svc["available"]:
+                    raise ServiceError(f"无法设为默认：{svc['unavailable_reason']}")
+                self.ccswitch_settings.setdefault(sid, {})["enabled"] = True
+            else:
+                svc["enabled"] = True
             self.default_id = sid
             self._save()
 
     def resolve(self, data: dict) -> dict:
         """把前端表单里的（可能未保存的）配置和已保存的配置合并，用于测试服务、获取模型列表。"""
         sid = data.get("id")
-        base = dict(self.get(sid)) if sid and self.get(sid) else {"provider": data.get("provider"), **FIELDS}
+        found = self.get(sid) if sid else None
+        base = dict(found) if found else {"provider": data.get("provider"), **FIELDS}
         changes = _clean(data)
         if not changes.get("api_key"):
             changes.pop("api_key", None)
+        if base.get("source") == "ccswitch":
+            if not base["available"]:
+                raise ServiceError(base["unavailable_reason"])
+            # 地址和 Key 以 CC Switch 为准，表单里只有本地设置能临时覆盖
+            changes = {k: v for k, v in changes.items() if k in CCSWITCH_LOCAL_FIELDS}
+            if not changes.get("model"):
+                changes.pop("model", None)
         base.update(changes)
         if base.get("provider") not in PROVIDERS:
             raise ServiceError("不支持的服务类型")

@@ -27,6 +27,16 @@ python3 -m venv .venv
 
 每个服务可以配置 API Key、名称、API 地址、模型（下拉预置 / 自定义输入 / 从接口获取列表），高级设置里有并发数、每批段落数和字符数、temperature、System Prompt 和 Prompt。
 
+### CC Switch
+
+如果本机装了 [CC Switch](https://github.com/farion1231/cc-switch)，「翻译服务」页会多一组「CC Switch 当前生效」，直接用它里面 Claude、Codex（ChatGPT）、Gemini、Grok 当前选中的供应商：
+
+- 只读打开 `~/.cc-switch/cc-switch.db`（可用环境变量 `CC_SWITCH_DB` 指定），每次翻译时现读，Key 不会复制到本项目。
+- 在 CC Switch 里切换供应商后，点列表里的「刷新」即可生效。
+- 地址和 Key 以 CC Switch 为准；模型、并发、提示词等可以在这里单独调整。
+- Codex 和 Grok Build 配置了 `wire_api` / `api_backend = "responses"` 时走 OpenAI Responses API；Claude 用 `ANTHROPIC_AUTH_TOKEN` 时按 Bearer 认证。
+- 官方账号登录（OAuth）的配置没有 API Key，会显示为不可用。
+
 ### 语言
 
 源语言和目标语言都可以选，语言表（128 种，含文言文、粤语、东北话等）取自沉浸式翻译。

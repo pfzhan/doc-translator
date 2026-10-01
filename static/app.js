@@ -41,6 +41,7 @@ async function loadServices() {
   const data = await api("/api/services");
   state.services = data.services;
   state.defaultId = data.default;
+  state.ccswitch = data.ccswitch;
   if (!state.services.some((s) => s.id === state.selectedId)) state.selectedId = state.defaultId;
   renderServiceList();
   renderServiceSelect();
@@ -70,68 +71,100 @@ function renderServiceSelect() {
   if (state.languages) checkLangPair();
 }
 
+function groupHeader(text, extra) {
+  const li = document.createElement("li");
+  li.className = "service-group";
+  const span = document.createElement("span");
+  span.textContent = text;
+  li.append(span);
+  if (extra) li.append(extra);
+  return li;
+}
+
 function renderServiceList() {
   const list = $("service-list");
   list.replaceChildren();
-  for (const s of state.services) {
-    const li = document.createElement("li");
-    li.className = "service-item";
-    li.classList.toggle("active", s.id === state.selectedId);
-
-    const pick = document.createElement("button");
-    pick.type = "button";
-    pick.className = "service-pick";
-    pick.append(iconFor(s.provider));
-    const name = document.createElement("span");
-    name.className = "service-name";
-    name.textContent = s.name;
-    pick.append(name);
-    pick.addEventListener("click", () => {
-      state.selectedId = s.id;
-      renderServiceList();
-      renderDetail();
-    });
-    li.append(pick);
-
-    if (s.id === state.defaultId) {
-      const tag = document.createElement("span");
-      tag.className = "tag";
-      tag.textContent = "当前默认";
-      li.append(tag);
-    } else if (s.enabled) {
-      const setDefault = document.createElement("button");
-      setDefault.type = "button";
-      setDefault.className = "link small";
-      setDefault.textContent = "设为默认";
-      setDefault.addEventListener("click", async () => {
-        try {
-          await api(`/api/services/${s.id}/default`, { method: "POST" });
-          await loadServices();
-        } catch (err) {
-          alert(err.message);
-        }
-      });
-      li.append(setDefault);
+  const local = state.services.filter((s) => s.source !== "ccswitch");
+  const cc = state.services.filter((s) => s.source === "ccswitch");
+  const refresh = document.createElement("button");
+  refresh.type = "button";
+  refresh.className = "link small";
+  refresh.textContent = "刷新";
+  refresh.title = "在 CC Switch 里切换供应商后，点这里重新读取";
+  refresh.addEventListener("click", loadServices);
+  const sections = [["本地配置", local, null]];
+  if (state.ccswitch?.found || cc.length) sections.push(["CC Switch 当前生效", cc, refresh]);
+  for (const [title, items, extra] of sections) {
+    list.append(groupHeader(title, extra));
+    if (!items.length) {
+      const empty = document.createElement("li");
+      empty.className = "hint service-empty";
+      empty.textContent = "没有读到配置";
+      list.append(empty);
     }
+    for (const s of items) list.append(serviceItem(s));
+  }
+}
 
-    const toggle = document.createElement("input");
-    toggle.type = "checkbox";
-    toggle.className = "switch";
-    toggle.checked = s.enabled;
-    toggle.disabled = s.id === state.defaultId;
-    toggle.setAttribute("aria-label", `启用 ${s.name}`);
-    toggle.addEventListener("change", async () => {
+function serviceItem(s) {
+  const li = document.createElement("li");
+  li.className = "service-item";
+  li.classList.toggle("active", s.id === state.selectedId);
+
+  const pick = document.createElement("button");
+  pick.type = "button";
+  pick.className = "service-pick";
+  pick.append(iconFor(s.provider));
+  const name = document.createElement("span");
+  name.className = "service-name";
+  name.textContent = s.name;
+  pick.append(name);
+  pick.addEventListener("click", () => {
+    state.selectedId = s.id;
+    renderServiceList();
+    renderDetail();
+  });
+  li.append(pick);
+
+  if (s.id === state.defaultId) {
+    const tag = document.createElement("span");
+    tag.className = "tag";
+    tag.textContent = "当前默认";
+    li.append(tag);
+  } else if (s.enabled) {
+    const setDefault = document.createElement("button");
+    setDefault.type = "button";
+    setDefault.className = "link small";
+    setDefault.textContent = "设为默认";
+    setDefault.addEventListener("click", async () => {
       try {
-        await api(`/api/services/${s.id}`, { method: "PUT", json: { enabled: toggle.checked } });
+        await api(`/api/services/${s.id}/default`, { method: "POST" });
         await loadServices();
       } catch (err) {
-        toggle.checked = !toggle.checked;
         alert(err.message);
       }
     });
-    li.append(toggle);
-    list.append(li);
+    li.append(setDefault);
   }
+
+  const toggle = document.createElement("input");
+  toggle.type = "checkbox";
+  toggle.className = "switch";
+  toggle.checked = s.enabled;
+  toggle.disabled = s.id === state.defaultId || s.available === false;
+  if (s.available === false) li.title = s.unavailable_reason;
+  toggle.setAttribute("aria-label", `启用 ${s.name}`);
+  toggle.addEventListener("change", async () => {
+    try {
+      await api(`/api/services/${s.id}`, { method: "PUT", json: { enabled: toggle.checked } });
+      await loadServices();
+    } catch (err) {
+      toggle.checked = !toggle.checked;
+      alert(err.message);
+    }
+  });
+  li.append(toggle);
+  return li;
 }
 
 // ---------- 服务详情 ----------
@@ -166,15 +199,26 @@ function renderDetail() {
   $("test-result").hidden = true;
   $("save-status").textContent = "";
 
-  const editable = meta.llm;
+  const fromCC = s.source === "ccswitch";
+  const editable = meta.llm && (!fromCC || s.available);
   $("svc-fields").hidden = !editable;
   $("save-btn").hidden = !editable;
   $("delete-btn").hidden = s.builtin;
+  $("test-btn").hidden = fromCC && !s.available;
+  // CC Switch 的地址、Key、名称以 CC Switch 为准，这里只读
+  for (const id of ["api_key", "base_url", "svc-name-input"]) $(id).readOnly = fromCC;
+  $("show-key").closest("label").hidden = fromCC;
+  $("cc-notice").hidden = !fromCC;
+  if (fromCC) {
+    $("cc-notice").textContent = s.available
+      ? `来自 CC Switch 当前生效的「${s.name.split(" · ").pop()}」。地址和 API Key 每次翻译时现读，在 CC Switch 里切换供应商后点列表里的「刷新」即可。模型和高级设置可以在这里单独调整。`
+      : `CC Switch 当前生效的「${s.name.split(" · ").pop()}」不能用于翻译：${s.unavailable_reason}。在 CC Switch 里切换到带 API Key 的供应商后点「刷新」。`;
+  }
   if (!editable) return;
 
   const notice = $("key-notice");
   notice.replaceChildren();
-  if (meta.needs_key && !s.api_key_hint) {
+  if (meta.needs_key && !s.api_key_hint && !fromCC) {
     const strong = document.createElement("strong");
     strong.textContent = s.name;
     notice.append(strong, " 需要填写 API Key 后才可用");
@@ -191,7 +235,9 @@ function renderDetail() {
 
   const f = svcForm.elements;
   f.api_key.value = "";
-  f.api_key.placeholder = s.api_key_hint ? `已保存（${s.api_key_hint}），留空则不修改` : meta.needs_key ? "必填" : "可选";
+  f.api_key.placeholder = fromCC
+    ? `来自 CC Switch（${s.api_key_hint}）`
+    : s.api_key_hint ? `已保存（${s.api_key_hint}），留空则不修改` : meta.needs_key ? "必填" : "可选";
   f.api_key.type = "password";
   $("show-key").checked = false;
   f.name.value = s.name;
@@ -209,8 +255,11 @@ function renderDetail() {
   const models = meta.models || [];
   setModelOptions(models, s.model);
   f.model.value = s.model;
-  // 没有预置模型（如 OpenAI 兼容接口）时默认用输入框
-  useCustomModel(!models.length);
+  // 没有预置模型（如 OpenAI 兼容接口）、或者 CC Switch 用的是中转站自己的模型名时，默认用输入框
+  useCustomModel(!models.length || (fromCC && !models.includes(s.model)));
+  if (fromCC) {
+    $("model-input").placeholder = `留空使用 CC Switch 里的模型（${s.ccswitch_model}）`;
+  }
 }
 
 // 默认提示词随目标语言变化，留空的输入框里用 placeholder 展示
@@ -283,7 +332,7 @@ function formPayload() {
 svcForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const payload = formPayload();
-  if (!payload.model) {
+  if (!payload.model && selected()?.source !== "ccswitch") {
     $("save-status").textContent = "请先选择或输入模型";
     return;
   }

@@ -107,6 +107,14 @@ progress { width: 100%; height: 10px; margin: 10px 0; }
 .services { display: grid; grid-template-columns: 300px 1fr; padding: 0; overflow: hidden; }
 .service-list { list-style: none; margin: 0; padding: 8px; border-right: 1px solid var(--border); }
 .service-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; }
+.service-group {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 8px 4px; font-size: 12px; color: var(--muted);
+}
+.service-group:first-child { padding-top: 4px; }
+.service-empty { padding: 4px 8px; margin: 0; }
+.cc-notice { background: var(--card); border-radius: 6px; padding: 10px 12px; }
+input[readonly] { opacity: 0.7; cursor: default; }
 .service-item.active { background: var(--soft); }
 .service-pick {
   display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0;
