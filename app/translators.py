@@ -36,6 +36,8 @@ class Translator:
         self.source_lang = source_lang
         # 源语言选“自动检测”时，由 Runner 检测文档语言后填进来，用于提示词的 {{from}}
         self.detected_source = ""
+        # 翻译服务 id，算进缓存 key：换了服务就重新翻译，同一个服务重用缓存
+        self.service_id = ""
 
     @property
     def effective_source(self) -> str:
@@ -43,7 +45,7 @@ class Translator:
 
     @property
     def cache_key(self) -> str:
-        return f"{type(self).__name__}:{self.source_lang}:{self.target_lang}"
+        return f"{self.service_id}:{type(self).__name__}:{self.source_lang}:{self.target_lang}"
 
     async def translate_batch(self, texts: list[str]) -> list[str]:
         raise NotImplementedError
@@ -119,7 +121,8 @@ class LLMTranslator(Translator):
         # 模型或提示词变了，译文也会不同，都要算进缓存 key
         p = hashlib.sha1(f"{self.prompt}\0{self.user_prompt}".encode()).hexdigest()[:8]
         # 源语言影响提示词（{{from}}、wyw2zh-CN 这类覆盖），用检测后的实际源语言
-        return f"{self.provider}:{self.model}:{p}:{self.effective_source}:{self.target_lang}"
+        return (f"{self.service_id}:{self.provider}:{self.model}:{p}:"
+                f"{self.effective_source}:{self.target_lang}")
 
     def build_messages(self, texts: list[str]) -> tuple[str, str]:
         return prompts.build_messages(
@@ -326,7 +329,7 @@ class GoogleTranslator(Translator):
 
     @property
     def cache_key(self):
-        return f"google:{self.source_lang}:{self.target_lang}"
+        return f"{self.service_id}:google:{self.source_lang}:{self.target_lang}"
 
     async def translate_batch(self, texts):
         params = {"client": "gtx", "sl": self.sl, "tl": self.tl, "format": "text"}
@@ -375,6 +378,12 @@ LLM_CLASSES = {
 
 def create_translator(service: dict, target_lang: str, source_lang: str = "auto", transport=None) -> Translator:
     """根据翻译服务配置（见 services.py）创建引擎。"""
+    translator = _build_translator(service, target_lang, source_lang, transport)
+    translator.service_id = service.get("id") or ""
+    return translator
+
+
+def _build_translator(service: dict, target_lang: str, source_lang: str, transport) -> Translator:
     from .services import PROVIDERS
 
     provider = service.get("provider")

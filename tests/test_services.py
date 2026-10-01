@@ -208,6 +208,39 @@ def test_cache_key_changes_with_model_and_prompt():
     assert len({a.cache_key, b.cache_key, c.cache_key}) == 3
 
 
+def test_cache_reused_only_for_same_service_id():
+    from app.runner import Runner
+
+    class Cache:
+        def __init__(self):
+            self.d = {}
+
+        def get_many(self, prefix, texts):
+            return {t: self.d[(prefix, t)] for t in texts if (prefix, t) in self.d}
+
+        def put_many(self, prefix, pairs):
+            self.d.update({(prefix, s): t for s, t in pairs.items()})
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "译文"}}]})
+
+    def svc(sid):
+        # 两个服务除了 id 完全相同（同一个中转站、同一个模型）
+        return {"id": sid, "provider": "openai", "api_key": "k", "model": "m", "base_url": "https://r.example.com/v1"}
+
+    cache = Cache()
+    text = ["A sentence long enough to be translated by the model."]
+    for sid in ("svc-a", "svc-a", "svc-b"):
+        tr = create_translator(svc(sid), "zh-CN", transport=httpx.MockTransport(handler))
+        run(Runner(tr, cache=cache).translate_all(text))
+    # 第二次同一服务命中缓存；换了服务 id 就重新翻译
+    assert len(calls) == 2
+    assert {k[0].split(":")[0] for k in cache.d} == {"svc-a", "svc-b"}
+
+
 def test_store_crud(tmp_path):
     store = ServiceStore(tmp_path / "s.json")
     assert [s["id"] for s in store.services] == ["google"]
