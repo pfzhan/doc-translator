@@ -39,8 +39,8 @@ def _join_lines(lines: list[str]) -> str:
             continue
         if not out:
             out = line
-        elif out.endswith("-") and re.match(r"[a-z]", line):
-            out = out[:-1] + line  # 行尾连字符断词
+        elif out.endswith("-") and re.match(r"[a-zA-ZÀ-ÿ]", line):
+            out = out[:-1] + line  # 行尾连字符断词（德语等断词后首字母可能大写）
         elif CJK_RE.search(out[-1]) or CJK_RE.search(line[0]):
             out += line
         else:
