@@ -167,13 +167,6 @@ class Runner:
         unique = [t for t in unique if t not in skipped]
         prefix = self.translator.cache_key
         done_map = self.cache.get_many(prefix, unique)
-        # 旧版缓存 key 里带了模型和提示词，读不到时用旧 key 再查一次，查到的迁移到新 key
-        legacy = getattr(self.translator, "legacy_cache_key", None)
-        if legacy and legacy != prefix:
-            old = self.cache.get_many(legacy, [t for t in unique if t not in done_map])
-            if old:
-                self.cache.put_many(prefix, old)
-                done_map.update(old)
         todo = [t for t in unique if t not in done_map]
 
         # 每段原文第一次出现的位置，用来按“离关注位置的远近”挑批次

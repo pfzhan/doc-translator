@@ -143,14 +143,8 @@ class LLMTranslator(Translator):
 
     @property
     def cache_key(self):
-        # 同一个服务 id 共用缓存：在服务里换了模型或提示词，已经翻好的段落保留，只有后面的段落用新配置。
-        # 想整本按新模型重翻，换一个翻译服务（不同的服务 id）即可。
+        # 模型和提示词进缓存键：换模型或提示词自动整本重翻，换回来仍命中该配置自己的缓存。
         # 源语言影响提示词（{{from}}、wyw2zh-CN 这类覆盖），用检测后的实际源语言
-        return f"{self.service_id}:{self.provider}:{self.effective_source}:{self.target_lang}"
-
-    @property
-    def legacy_cache_key(self) -> str:
-        """旧版缓存 key（带模型和提示词）。读缓存时作为后备，旧版本翻到一半的书继续翻时不用重翻。"""
         p = hashlib.sha1(f"{self.prompt}\0{self.user_prompt}".encode()).hexdigest()[:8]
         return (f"{self.service_id}:{self.provider}:{self.model}:{p}:"
                 f"{self.effective_source}:{self.target_lang}")
