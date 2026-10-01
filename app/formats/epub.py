@@ -15,10 +15,14 @@ HTML_TYPES = {"application/xhtml+xml", "text/html"}
 
 
 def _opf_path(zf: zipfile.ZipFile) -> str:
-    container = BeautifulSoup(zf.read("META-INF/container.xml"), "lxml-xml")
+    try:
+        data = zf.read("META-INF/container.xml")
+    except KeyError:
+        raise ValueError("不是有效的 EPUB：缺少 META-INF/container.xml") from None
+    container = BeautifulSoup(data, "lxml-xml")
     rootfile = container.find("rootfile")
     if rootfile is None:
-        raise ValueError("EPUB 缺少 rootfile")
+        raise ValueError("不是有效的 EPUB：container.xml 里没有 rootfile")
     return rootfile["full-path"]
 
 
@@ -38,7 +42,8 @@ def _content_docs(zf: zipfile.ZipFile, opf_path: str):
     docs = []
     for ref in opf.find_all("itemref"):
         href, mt = items.get(ref.get("idref"), (None, None))
-        if href and mt in HTML_TYPES and href not in docs:
+        # nav 常同时出现在 spine 里：跳过，由专门的 label 翻译路径处理，避免同一文档解析两次、第一次的译文被丢弃
+        if href and mt in HTML_TYPES and href not in docs and href != nav:
             docs.append(href)
     # spine 之外的 HTML（少见）也一起翻译
     for href, mt in items.values():
@@ -57,65 +62,72 @@ def _set_language(opf: BeautifulSoup, lang: str, bilingual: bool):
 
 async def translate_epub(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "",
                          dst: Path | None = None) -> list[Path]:
-    zin = zipfile.ZipFile(src)
-    opf_path = _opf_path(zin)
-    docs, nav, ncx, opf = _content_docs(zin, opf_path)
-    names = set(zin.namelist())
+    try:
+        zin = zipfile.ZipFile(src)
+    except zipfile.BadZipFile:
+        raise ValueError(f"不是有效的 EPUB 文件: {src.name}") from None
+    with zin:
+        opf_path = _opf_path(zin)
+        docs, nav, ncx, opf = _content_docs(zin, opf_path)
+        names = set(zin.namelist())
 
-    # 1. 解析所有文档，收集段落
-    soups: dict[str, BeautifulSoup] = {}
-    tasks: list[tuple[str, object, str, str]] = []  # (文档, 元素, 原文, 类型)
-    for name in docs:
-        if name not in names:
-            continue
-        soup = hb.parse(zin.read(name), xml=True)
-        soups[name] = soup
-        tasks.extend((name, el, text, "block") for el, text in hb.find_blocks(soup))
-    if nav and nav in names:
-        soup = hb.parse(zin.read(nav), xml=True)
-        soups[nav] = soup
-        tasks.extend((nav, el, text, "label") for el, text in hb.translate_nav_links(soup))
-    if ncx and ncx in names:
-        soup = BeautifulSoup(zin.read(ncx), "lxml-xml")
-        soups[ncx] = soup
-        for el in soup.select("navLabel > text"):
-            if hb.translatable(el.get_text(strip=True)):
-                tasks.append((ncx, el, el.get_text(strip=True), "label"))
-
-    # 2. 翻译（书名作为上下文）
-    title_el = opf.find("dc:title") or opf.find("title")
-    runner.set_title(title_el.get_text(strip=True) if title_el else src.stem)
-    # 预览里目录（nav / ncx）用 toc 类型，正文用元素名（h1、p、li…）
-    kinds = ["toc" if kind == "label" else hb.preview_kind(el) for _, el, _, kind in tasks]
-    results = await runner.translate_all([t[2] for t in tasks], kinds=kinds, preview=True)
-
-    # 3. 回写
-    for (name, el, text, kind), translated in zip(tasks, results):
-        if kind == "block":
-            hb.apply_translation(soups[name], el, text, translated, bilingual, target_lang)
-        else:
-            hb.set_label(el, text, translated, bilingual)
-    if bilingual:
+        # 1. 解析所有文档，收集段落
+        soups: dict[str, BeautifulSoup] = {}
+        tasks: list[tuple[str, object, str, str]] = []  # (文档, 元素, 原文, 类型)
         for name in docs:
-            if name in soups:
-                hb.add_style(soups[name])
-    if target_lang:
-        _set_language(opf, target_lang, bilingual)
-
-    # 4. 打包：mimetype 必须是第一个文件且不压缩
-    suffix = "bilingual" if bilingual else "translated"
-    dst = dst or out_dir / f"{src.stem}.{suffix}.epub"
-    with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
-        zout.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
-        for info in zin.infolist():
-            if info.filename == "mimetype":
+            if name not in names:
                 continue
-            if info.filename in soups:
-                data = str(soups[info.filename]).encode("utf-8")
-            elif info.filename == opf_path:
-                data = str(opf).encode("utf-8")
+            soup = hb.parse(zin.read(name), xml=True)
+            if soup.find(True) is None:
+                continue  # 解析结果为空（如内部 DTD 问题回退也失败）：保留原文件，不用空文档覆盖
+            soups[name] = soup
+            tasks.extend((name, el, text, "block") for el, text in hb.find_blocks(soup))
+        if nav and nav in names:
+            soup = hb.parse(zin.read(nav), xml=True)
+            if soup.find(True) is not None:
+                soups[nav] = soup
+                tasks.extend((nav, el, text, "label") for el, text in hb.translate_nav_links(soup))
+        if ncx and ncx in names:
+            soup = BeautifulSoup(zin.read(ncx), "lxml-xml")
+            if soup.find(True) is not None:
+                soups[ncx] = soup
+                for el in soup.select("navLabel > text"):
+                    if hb.translatable(el.get_text(strip=True)):
+                        tasks.append((ncx, el, el.get_text(strip=True), "label"))
+
+        # 2. 翻译（书名作为上下文）
+        title_el = opf.find("dc:title") or opf.find("title")
+        runner.set_title(title_el.get_text(strip=True) if title_el else src.stem)
+        # 预览里目录（nav / ncx）用 toc 类型，正文用元素名（h1、p、li…）
+        kinds = ["toc" if kind == "label" else hb.preview_kind(el) for _, el, _, kind in tasks]
+        results = await runner.translate_all([t[2] for t in tasks], kinds=kinds, preview=True)
+
+        # 3. 回写
+        for (name, el, text, kind), translated in zip(tasks, results):
+            if kind == "block":
+                hb.apply_translation(soups[name], el, text, translated, bilingual, target_lang)
             else:
-                data = zin.read(info.filename)
-            zout.writestr(info.filename, data)
-    zin.close()
+                hb.set_label(el, text, translated, bilingual)
+        if bilingual:
+            for name in docs:
+                if name in soups:
+                    hb.add_style(soups[name])
+        if target_lang:
+            _set_language(opf, target_lang, bilingual)
+
+        # 4. 打包：mimetype 必须是第一个文件且不压缩
+        suffix = "bilingual" if bilingual else "translated"
+        dst = dst or out_dir / f"{src.stem}.{suffix}.epub"
+        with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:
+            zout.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+            for info in zin.infolist():
+                if info.filename == "mimetype":
+                    continue
+                if info.filename in soups:
+                    data = str(soups[info.filename]).encode("utf-8")
+                elif info.filename == opf_path:
+                    data = str(opf).encode("utf-8")
+                else:
+                    data = zin.read(info.filename)
+                zout.writestr(info.filename, data)
     return [dst]

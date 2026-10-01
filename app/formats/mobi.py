@@ -39,6 +39,15 @@ def _xhtml_from_mobi7(src_html: str) -> bytes:
     ).encode("utf-8")
 
 
+def _read_mobi7_html(html_path: Path) -> str:
+    """kindleunpack 按 MOBI 头 codec 把原始字节写进 book.html：先试 UTF-8，失败按 cp1252（老书常见）解码。"""
+    raw = html_path.read_bytes()
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("cp1252", errors="replace")
+
+
 def _epub_from_mobi7(html_path: Path, epub_path: Path):
     base = html_path.parent
     opf = BeautifulSoup((base / "content.opf").read_text(encoding="utf-8"), "lxml-xml")
@@ -61,7 +70,7 @@ def _epub_from_mobi7(html_path: Path, epub_path: Path):
         )
         z.writestr("OEBPS/content.opf", str(opf))
         z.writestr("OEBPS/toc.ncx", ncx)
-        z.writestr("OEBPS/book.xhtml", _xhtml_from_mobi7(html_path.read_text(encoding="utf-8", errors="replace")))
+        z.writestr("OEBPS/book.xhtml", _xhtml_from_mobi7(_read_mobi7_html(html_path)))
         for f in base.rglob("*"):
             rel = f.relative_to(base).as_posix()
             if f.is_file() and rel not in ("book.html", "content.opf", "toc.ncx"):

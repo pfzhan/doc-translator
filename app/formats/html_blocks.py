@@ -189,7 +189,12 @@ def apply_translation(soup, el: Tag, text: str, translated: str, bilingual: bool
 
 
 def parse(content: bytes | str, xml: bool) -> BeautifulSoup:
-    return BeautifulSoup(content, "lxml-xml" if xml else "lxml")
+    soup = BeautifulSoup(content, "lxml-xml" if xml else "lxml")
+    # lxml-xml 遇到带内部 DTD 子集（<!DOCTYPE html [<!ENTITY nbsp "&#160;">]>）的 XHTML 会静默产出空文档，
+    # 原文非空但解析不出任何元素时回退到 HTML 模式重新解析
+    if xml and soup.find(True) is None and content.strip():
+        soup = BeautifulSoup(content, "lxml")
+    return soup
 
 
 def add_style(soup, css: str = BILINGUAL_CSS):

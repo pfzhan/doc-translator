@@ -7,7 +7,10 @@ import pytest
 from bs4 import BeautifulSoup
 
 from app.formats import translate_file
+from app.formats.epub import _content_docs, translate_epub
 from app.formats.markdown import collect_segments, render, split_blocks
+from app.formats.mobi import _read_mobi7_html, _xhtml_from_mobi7
+from app.formats.pdf import _join_lines
 from app.runner import Runner
 from app.translators import MockTranslator, OpenAITranslator
 
@@ -136,3 +139,111 @@ def test_llm_unparseable_batch_falls_back_to_single():
     tr._complete = fake_complete
     assert run(tr.translate_batch(["a", "b"])) == ["你好", "你好"]  # 批量结果无法解析，逐条补翻
     assert len(calls) == 3
+
+
+# --- 第二批：格式修复的回归测试（EPUB/MOBI/Markdown/PDF 样本全部内联构造） ---
+
+CONTAINER_XML = (
+    '<?xml version="1.0"?>'
+    '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+    '<rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>'
+    "</rootfiles></container>"
+)
+
+
+def _write_epub(path, manifest: str, spine: str, docs: dict[str, str]):
+    """构造最小 EPUB：mimetype 第一个且不压缩，OEBPS/content.opf + 给定文档。"""
+    opf = (
+        '<?xml version="1.0"?>'
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">'
+        '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+        "<dc:title>Test Book</dc:title><dc:language>en</dc:language>"
+        f"</metadata><manifest>{manifest}</manifest><spine>{spine}</spine></package>"
+    )
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+        z.writestr("META-INF/container.xml", CONTAINER_XML)
+        z.writestr("OEBPS/content.opf", opf)
+        for name, data in docs.items():
+            z.writestr(f"OEBPS/{name}", data)
+
+
+def test_epub_chapter_with_internal_dtd_not_dropped(tmp_path):
+    """带内部 DTD 子集的 XHTML 章节：lxml-xml 解析会静默产出空文档，回退后内容必须保留。"""
+    chapter = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<!DOCTYPE html [<!ENTITY nbsp "&#160;">]>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>c1</title></head>'
+        "<body><p>Chapter one text&nbsp;here</p></body></html>"
+    )
+    src = tmp_path / "book.epub"
+    _write_epub(
+        src,
+        '<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>',
+        '<itemref idref="ch1"/>',
+        {"ch1.xhtml": chapter},
+    )
+    [out] = run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))
+    text = _epub_texts(out)
+    # 章节没有被清空，原文段落照常翻译（&nbsp; 归并成普通空格）
+    assert "[zh-CN] Chapter one text here" in text
+
+
+def test_mobi7_cp1252_decoding(tmp_path):
+    """老 MOBI7 的 book.html 按 cp1252 解码：é 等字符不能变成 U+FFFD。"""
+    html_file = tmp_path / "book.html"
+    html_file.write_bytes("<html><body><p>café et naïve</p></body></html>".encode("cp1252"))
+    text = _read_mobi7_html(html_file)
+    assert "café et naïve" in text
+    assert "\ufffd" not in text
+    # 转成 XHTML 后字符也保留
+    assert "café et naïve" in _xhtml_from_mobi7(text).decode("utf-8")
+
+
+def test_markdown_list_does_not_swallow_following_blocks():
+    """列表后没有空行时，紧跟的标题 / 引用是独立的块，不能并进最后一个列表项。"""
+    blocks = split_blocks("- item\n# Heading\n> quote")
+    assert [b.kind for b in blocks] == ["list", "heading", "quote"]
+    assert collect_segments(blocks) == ["item", "Heading", "quote"]
+
+
+def test_epub_nav_in_spine_parsed_once(tmp_path):
+    """EPUB3 的 nav 文档同时在 spine 里：只走 label 翻译路径一次，不重复解析、译文不丢。"""
+    nav = (
+        '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">'
+        '<head><title>Nav</title></head><body>'
+        '<nav epub:type="toc"><ol><li><a href="ch1.xhtml">Chapter One</a></li></ol></nav>'
+        "</body></html>"
+    )
+    chapter = (
+        '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>c1</title></head>'
+        "<body><p>Body paragraph</p></body></html>"
+    )
+    src = tmp_path / "book.epub"
+    _write_epub(
+        src,
+        '<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>'
+        '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
+        '<itemref idref="ch1"/><itemref idref="nav"/>',
+        {"ch1.xhtml": chapter, "nav.xhtml": nav},
+    )
+    with zipfile.ZipFile(src) as z:
+        docs, nav_href, _, _ = _content_docs(z, "OEBPS/content.opf")
+    assert nav_href == "OEBPS/nav.xhtml"
+    assert "OEBPS/nav.xhtml" not in docs  # nav 不作为正文再解析一遍
+
+    [out] = run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))
+    with zipfile.ZipFile(out) as z:
+        nav_html = z.read("OEBPS/nav.xhtml").decode()
+        ch_html = z.read("OEBPS/ch1.xhtml").decode()
+    # 目录项恰好翻译一次，没有重复也没有丢回原文
+    assert nav_html.count("[zh-CN] Chapter One") == 1
+    assert "<a href=\"ch1.xhtml\">" in nav_html  # 链接结构不变
+    assert "[zh-CN] Body paragraph" in ch_html
+
+
+def test_pdf_hyphen_joins_uppercase_word():
+    """行尾连字符断词：德语断词后首字母大写也要合并掉连字符。"""
+    assert _join_lines(["Donau-", "Dampfschiff"]) == "DonauDampfschiff"
+    assert _join_lines(["word-", "wrap"]) == "wordwrap"
+    assert _join_lines(["hello", "world"]) == "hello world"  # 非断词只是换行

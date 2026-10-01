@@ -94,6 +94,12 @@ def split_blocks(text: str) -> list[Block]:
         if LIST_RE.match(line) and not para:
             j = i
             while j < len(lines) and lines[j].strip() and not FENCE_RE.match(lines[j]):
+                # 列表后紧跟的标题 / 引用 / HTML 块 / 分隔线是新的块级结构，不能并进最后一个列表项
+                if j > i and not LIST_RE.match(lines[j]) and (
+                    HEADING_RE.match(lines[j]) or QUOTE_RE.match(lines[j])
+                    or HTML_BLOCK_RE.match(lines[j]) or HR_RE.match(lines[j])
+                ):
+                    break
                 j += 1
             blocks.append(Block("list", lines[i:j]))
             i = j
