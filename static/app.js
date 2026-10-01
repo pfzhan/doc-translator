@@ -686,15 +686,16 @@ function jobRow(job) {
   const status = el("div", "job-status");
   status.append(el("span", `badge ${job.status}`, STATUS_TEXT[job.status] || job.status));
   if (ACTIVE.has(job.status)) {
-    const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
+    // 向下取整：没翻完不显示 100%（1184/1188 四舍五入会显示 100%，看起来像卡住了）
+    const pct = job.total ? Math.floor((job.done / job.total) * 100) : 0;
     const bar = el("div", "job-progress");
     const fill = el("div");
     fill.style.width = `${pct}%`;
     bar.append(fill);
     status.append(bar, el("span", "hint", job.total ? `${job.done} / ${job.total} 段 · ${pct}%` : "解析文档…"));
   } else if (job.status === "error" || job.status === "interrupted") {
-    const err = el("span", "job-error", job.error);
-    err.title = job.error;
+    const err = el("span", "job-error", explainError(job.error));
+    err.title = job.error; // 鼠标悬停看原始错误
     status.append(err);
   } else {
     const parts = [job.total ? `${job.total} 段` : ""];
@@ -950,13 +951,64 @@ function renderReaderBar(job) {
   }
 }
 
+// 把接口返回的原始错误整理成一句人话；原文放在“详细信息”里，排查时还能看到
+function explainError(raw) {
+  const text = raw || "";
+  if (/INVALID_MODEL|Invalid model|model.*(not found|does not exist|不存在)/i.test(text)) {
+    return "翻译服务暂时不接受这个模型。中转站偶尔会这样，通常过一会儿重试就好；一直不行的话，换个模型或服务。";
+  }
+  if (/\b401\b|invalid.*api.?key|Incorrect API key|unauthori[sz]ed/i.test(text)) return "API Key 无效或已过期，请到「翻译服务」里检查。";
+  if (/\b403\b|forbidden|permission/i.test(text)) return "这个 API Key 没有权限使用该模型。";
+  if (/\b429\b|rate.?limit|quota|余额|insufficient/i.test(text)) return "请求太频繁或额度不足，稍后重试，或在服务里调低并发。";
+  if (/不是 JSON|API 地址/.test(text)) return "API 地址可能不对（通常以 /v1 结尾），请到「翻译服务」里检查。";
+  if (/服务重启/.test(text)) return "服务重启时翻译被中断了。已经翻好的段落有缓存，继续翻译会很快。";
+  if (/请求失败|timed? ?out|ConnectError|超时/i.test(text)) return "连不上翻译服务，请检查网络或服务地址后重试。";
+  return "翻译没有完成。";
+}
+
 function renderNotice(job) {
   const notice = $("reader-notice");
-  const msgs = [];
-  if (job.status === "error" || job.status === "interrupted") msgs.push(job.error);
-  if (job.same_lang) msgs.push(`文档语言和目标语言一致（${langLabel(job.target_lang)}），可能没有需要翻译的内容。`);
-  notice.hidden = !msgs.length;
-  notice.textContent = msgs.join(" ");
+  notice.replaceChildren();
+  notice.className = "reader-notice";
+  const failed = job.status === "error" || job.status === "interrupted";
+  if (failed) {
+    notice.classList.add("is-error");
+    const body = el("div", "notice-body");
+    const done = job.done ? `已翻译 ${job.done} / ${job.total} 段。` : "";
+    body.append(el("div", "notice-title", job.status === "interrupted" ? "翻译已中断" : "翻译失败"),
+      el("div", "notice-text", `${explainError(job.error)}${done ? " " + done : ""}`));
+    if (job.error && job.status === "error") {
+      const det = el("details", "notice-detail");
+      det.append(el("summary", "", "详细信息"), el("code", "", job.error));
+      body.append(det);
+    }
+    const actions = el("div", "notice-actions");
+    const services = state.services.filter((s) => s.enabled);
+    const pick = el("select", "notice-service");
+    pick.setAttribute("aria-label", "用哪个服务重新翻译");
+    for (const s of services) pick.add(new Option(s.name, s.id));
+    pick.value = services.some((s) => s.id === job.service_id) ? job.service_id : state.defaultId;
+    const retry = el("button", "btn primary sm", job.status === "interrupted" ? "继续翻译" : "重新翻译");
+    retry.type = "button";
+    retry.addEventListener("click", async () => {
+      retry.disabled = true;
+      try {
+        const next = await api(`/api/jobs/${job.id}/retry`, { method: "POST", json: { service_id: pick.value } });
+        upsertJob(next);
+        openReader(job.id);
+      } catch (err) {
+        retry.disabled = false;
+        toast(`无法重新翻译：${err.message}`);
+      }
+    });
+    actions.append(pick, retry);
+    notice.append(body, actions);
+  } else if (job.same_lang) {
+    notice.append(el("div", "notice-text", `文档语言和目标语言一致（${langLabel(job.target_lang)}），可能没有需要翻译的内容。`));
+  }
+  notice.hidden = !notice.childNodes.length;
+  // 任务停了，还没翻到的段落不再显示“加载中”的闪烁，改成静态的未翻译状态
+  $("reader-content").classList.toggle("stopped", !ACTIVE.has(job.status));
 }
 
 function buildReader(segments) {

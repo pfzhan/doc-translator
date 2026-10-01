@@ -18,7 +18,10 @@ LANG_CODES = {code for code, _, _ in LANGUAGES}
 
 
 class TranslatorError(Exception):
-    pass
+    def __init__(self, message: str = "", status: int | None = None):
+        super().__init__(message)
+        # 接口返回的 HTTP 状态码；网络错误、解析错误等没有状态码时为 None
+        self.status = status
 
 
 class Translator:
@@ -62,6 +65,14 @@ def _error_text(resp: httpx.Response) -> str:
         return str(msg or resp.text)[:300]
     except ValueError:
         return resp.text[:300]
+
+
+# 这些状态码说明是我们这边的配置有问题（Key 错、没权限、地址错），重试也不会好，立即报错
+FATAL_STATUS = {401, 403, 404}
+
+
+def _retryable(status: int) -> bool:
+    return status not in FATAL_STATUS
 
 
 def _json_or_error(resp: httpx.Response, url: str) -> dict:
@@ -134,7 +145,11 @@ class LLMTranslator(Translator):
         raise NotImplementedError
 
     async def _post(self, url: str, payload: dict, headers: dict) -> dict:
-        """带重试的 POST。部分推理模型不接受 temperature，遇到这种 400 会去掉后重发。"""
+        """带重试的 POST。部分推理模型不接受 temperature，遇到这种 400 会去掉后重发。
+
+        中转站经常把上游的偶发故障（号池轮换、渠道临时下线）原样包装成 400 返回，
+        同样的请求过几秒就能成功，所以除了明确是我们这边配置错误的情况，400 也按可重试处理。
+        """
         for attempt in range(self.retries):
             last = attempt == self.retries - 1
             try:
@@ -154,10 +169,11 @@ class LLMTranslator(Translator):
                 if isinstance(gen, dict):
                     payload["generationConfig"] = {k: v for k, v in gen.items() if k != "temperature"}
                 continue
-            if (resp.status_code == 429 or resp.status_code >= 500) and not last:
+            # 400 只原样重试一次（应付偶发故障）；再失败就交给 translate_batch 拆批，不在这里白等
+            if _retryable(resp.status_code) and not last and not (resp.status_code == 400 and attempt >= 1):
                 await asyncio.sleep(2 ** (attempt + 1))
                 continue
-            raise TranslatorError(f"接口错误 {resp.status_code}: {msg}")
+            raise TranslatorError(f"接口错误 {resp.status_code}: {msg}", status=resp.status_code)
         raise TranslatorError("重试次数用尽")
 
     async def _get(self, url: str, headers: dict, params: dict | None = None) -> dict:
@@ -174,14 +190,27 @@ class LLMTranslator(Translator):
 
     async def translate_batch(self, texts):
         system, user = self.build_messages(texts)
-        content = await self._complete(system, user)
+        try:
+            content = await self._complete(system, user)
+        except TranslatorError as e:
+            # 中转站会稳定拒绝某些段落组合（实测同一批 8 段每次都 400，拆开后每一部分都能翻），
+            # 原样重试没用，拆成两半各自翻。只对 400 这样做：配置错误（401/403/404）拆了也没用，
+            # 429、5xx 已经在 _post 里退避重试过了，再拆只会放大请求量
+            if len(texts) == 1 or e.status != 400:
+                raise
+            mid = len(texts) // 2
+            # 两半并行翻：串行的话批次越拆越深，最后几段会排很久的队
+            left, right = await asyncio.gather(self.translate_batch(texts[:mid]), self.translate_batch(texts[mid:]))
+            return left + right
         if len(texts) == 1:
             return [prompts.clean_output(content)]
         found = prompts.parse_markers(content, len(texts))
-        # 模型漏掉的段落逐条补翻（和插件的 recovery 思路一样，只补缺失的）
+        # 模型漏掉的段落补翻（和插件的 recovery 思路一样，只补缺失的），并行发出
         missing = [i for i in range(len(texts)) if i not in found]
-        for i in missing:
-            [found[i]] = await self.translate_batch([texts[i]])
+        if missing:
+            redone = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in missing))
+            for i, [text] in zip(missing, redone):
+                found[i] = text
         return [found[i] for i in range(len(texts))]
 
     async def aclose(self):
