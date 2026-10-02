@@ -222,6 +222,14 @@ def set_default_service(sid: str):
     return store.list()
 
 
+@app.post("/api/services/{sid}/clone")
+def clone_service(sid: str):
+    try:
+        return store.clone_to_local(sid)
+    except ServiceError as e:
+        raise HTTPException(400, str(e))
+
+
 async def _with_translator(data: dict, fn):
     try:
         translator = create_translator(

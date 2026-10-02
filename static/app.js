@@ -217,6 +217,22 @@ function serviceItem(s) {
 
 // ---------- 服务详情 ----------
 
+// CC Switch 服务复制到本地：连接信息固化，之后不再跟随 CC Switch
+async function cloneService(s, btn) {
+  const run = async () => {
+    try {
+      const svc = await api(`/api/services/${s.id}/clone`, { method: "POST" });
+      state.selectedId = svc.id;
+      await loadServices();
+      toast("已复制到本地配置，连接信息已固化，不再跟随 CC Switch");
+    } catch (err) {
+      toast(`复制失败：${err.message}`);
+    }
+  };
+  if (btn) await busy(btn, "复制中…", run);
+  else await run();
+}
+
 const svcForm = $("svc-form");
 
 function selected() {
@@ -253,6 +269,9 @@ function renderDetail() {
   $("save-btn").hidden = !editable;
   $("delete-btn").hidden = s.builtin;
   $("test-btn").hidden = fromCC && !s.available;
+  // CC Switch 服务可以复制成本地配置（连接信息固化，不再跟随 CC Switch）；不可用的没有 Key 可复制
+  $("clone-btn").hidden = !fromCC;
+  $("clone-btn").disabled = fromCC && !s.available;
   // CC Switch 的地址、Key、名称以 CC Switch 为准，这里只读
   for (const id of ["api_key", "base_url", "svc-name-input"]) $(id).readOnly = fromCC;
   $("show-key").closest("label").hidden = fromCC;
@@ -412,6 +431,11 @@ $("delete-btn").addEventListener("click", async (e) => {
       alert(err.message);
     }
   });
+});
+
+$("clone-btn").addEventListener("click", (e) => {
+  const s = selected();
+  if (s) cloneService(s, e.currentTarget);
 });
 
 $("test-btn").addEventListener("click", async (e) => {

@@ -285,6 +285,27 @@ class ServiceStore:
                 self.default_id = "google"
             self._save()
 
+    def clone_to_local(self, sid: str) -> dict:
+        """把 CC Switch 服务复制成本地服务：地址、Key、模型等连接信息固化，之后不再跟随 CC Switch。"""
+        with self.lock:
+            svc = self.get(sid)
+            if not svc:
+                raise ServiceError("服务不存在")
+            if svc.get("source") != "ccswitch":
+                raise ServiceError("本地服务不需要复制，直接编辑即可")
+            if not svc["available"]:
+                raise ServiceError(f"无法复制：{svc['unavailable_reason']}")
+            clone = {"id": uuid.uuid4().hex[:8], "provider": svc["provider"], "builtin": False,
+                     **{k: svc.get(k, v) for k, v in FIELDS.items()},
+                     "name": f"{svc['name']}（本地）"}
+            # api_format/auth_style 不在 FIELDS 里，但创建引擎时要用（Claude 系走 Responses/Bearer 的情况）
+            for k in ("api_format", "auth_style"):
+                if svc.get(k):
+                    clone[k] = svc[k]
+            self.services.append(clone)
+            self._save()
+        return public(clone)
+
     def set_default(self, sid: str):
         with self.lock:
             svc = self.get(sid)
