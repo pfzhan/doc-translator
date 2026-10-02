@@ -139,6 +139,35 @@ def test_unavailable_service_cannot_be_enabled(tmp_path):
         store.set_default("ccswitch-grok")
 
 
+def test_clone_ccswitch_service_to_local(tmp_path, cc_db):
+    store = ServiceStore(tmp_path / "s.json", ccswitch_db=cc_db)
+    clone = store.clone_to_local("ccswitch-codex")
+    assert "api_key" not in clone  # 返回给前端的版本不带明文 Key
+    assert clone["name"].endswith("（本地）")
+
+    # 连接信息（地址、Key、模型、api_format）从 CC Switch 固化成本地配置
+    saved = store.get(clone["id"])
+    assert (saved["provider"], saved["base_url"], saved["model"], saved["api_key"]) == (
+        "openai", "https://relay.example.com/v1", "gpt-test", "sk-openai-key-123456")
+    assert saved["api_format"] == "responses" and not saved["builtin"]
+
+    # 落盘且不再跟随 CC Switch：数据库读不到时本地副本照常可用
+    again = ServiceStore(tmp_path / "s.json", ccswitch_db=tmp_path / "gone.db")
+    assert again.get(clone["id"])["api_key"] == "sk-openai-key-123456"
+
+    with pytest.raises(ServiceError, match="不需要复制"):
+        store.clone_to_local(clone["id"])
+    with pytest.raises(ServiceError, match="不存在"):
+        store.clone_to_local("nope")
+
+
+def test_unavailable_service_cannot_be_cloned(tmp_path):
+    db = make_db(tmp_path / "cc.db", [("grokbuild", "Grok Official", {"config": ""}, {}, 1)])
+    store = ServiceStore(tmp_path / "s.json", ccswitch_db=db)
+    with pytest.raises(ServiceError, match="无法复制"):
+        store.clone_to_local("ccswitch-grok")
+
+
 def capture(reply):
     log = []
 
