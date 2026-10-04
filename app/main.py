@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import history
-from .formats import PREVIEW_FORMATS, SUPPORTED, translate_file
+from .formats import PREVIEW_FORMATS, SUPPORTED, output_variant, translate_file
 from .history import Job, JobStore
 from .languages import GOOGLE_CODES, LANGUAGES
 from .prompts import default_prompts
@@ -30,14 +30,17 @@ settings = Settings()
 jobs = JobStore(history.JOBS_DIR)
 # 正在运行的翻译任务，防止被垃圾回收，也用于暂停、删除时取消
 running: dict[str, asyncio.Task] = {}
+# 正在补生成另一种版本的请求。删除和过期清理要等它写完，第二次请求直接拒绝。
+variant_tasks: dict[str, asyncio.Future[None]] = {}
 # 用户点了暂停的任务：取消时据此把状态记成“已暂停”，而不是“已中断”
 pause_requested: set[str] = set()
 ACTIVE = ("queued", "running")
 PROGRESS_SAVE_INTERVAL = 5
 
 
-def _cleanup():
-    jobs.cleanup(settings.retention_days)
+def _cleanup() -> None:
+    # 补生成进行中的记录先不删，避免目录在写入时被清掉
+    jobs.cleanup(settings.retention_days, busy=frozenset(variant_tasks))
 
 
 @asynccontextmanager
@@ -342,9 +345,12 @@ def get_job(job_id: str):
 
 @app.delete("/api/jobs/{job_id}")
 async def delete_job(job_id: str):
-    """删除记录，连同原文件、译文和预览。正在翻译的会先停止。"""
+    """删除记录，连同原文件、译文和预览。正在翻译的会先停止；正在补生成的等它写完再删。"""
     _job_or_404(job_id)
     await _cancel(job_id)
+    task = variant_tasks.get(job_id)
+    if task is not None and task is not asyncio.current_task() and not task.done():
+        await asyncio.gather(task, return_exceptions=True)
     jobs.delete(job_id)
     return {"ok": True}
 
@@ -395,32 +401,70 @@ async def retry_job(job_id: str, data: dict | None = Body(None)):
     return _resume(_job_or_404(job_id), (data or {}).get("service_id")).to_dict()
 
 
+def _variant_service(job: Job, service: dict) -> dict:
+    """用当初翻译时的模型去对缓存。不改服务里当前选中的模型。"""
+    if not job.model:
+        return service
+    pinned = dict(service)
+    pinned["model"] = job.model
+    return pinned
+
+
 @app.post("/api/jobs/{job_id}/variant")
 async def build_variant(job_id: str):
-    """生成另一种版本（双语 ⇄ 仅译文）。译文都在缓存里，只重新排版，不重复请求翻译服务。"""
+    """生成另一种版本（双语 ⇄ 仅译文）。只按当时的缓存重新排版，不请求翻译服务。"""
     job = _job_or_404(job_id)
     if job.status != "done":
         raise HTTPException(400, "翻译完成后才能生成另一种版本")
     bilingual = job.mode != "bilingual"
-    marker = ".bilingual." if bilingual else ".translated."
-    if any(marker in name for name in job.outputs):
+    want = "bilingual" if bilingual else "translated"
+    if any(output_variant(name) == want for name in job.outputs):
         return job.to_dict()  # 已经生成过
-    if not jobs.source_path(job).exists():
-        raise HTTPException(400, "原文件已不存在，无法生成")
-    service = store.get(job.service_id)
-    if not service:
-        raise HTTPException(400, "原来的翻译服务已不存在，无法生成")
-    translator = _make_translator(job, service)
+    if job.id in variant_tasks:
+        raise HTTPException(409, "正在生成另一种版本，请稍候")
+    task = asyncio.current_task()
+    if task is None:
+        raise HTTPException(500, "无法生成另一种版本")
+    # 登记必须发生在下一个 await 之前，否则两个请求会同时通过上面的检查
+    variant_tasks[job.id] = task
+    translator = None
+    stage = jobs.dir(job.id) / ".variant"
     try:
-        outputs = await translate_file(jobs.source_path(job), jobs.out_dir(job.id), Runner(translator),
-                                       bilingual, job.target_lang)
-    except (TranslatorError, ValueError) as e:
-        raise HTTPException(400, str(e))
-    for p in outputs:
-        if p.name not in job.outputs:
-            job.outputs.append(p.name)
-    jobs.save(job)
-    return job.to_dict()
+        if not jobs.source_path(job).exists():
+            raise HTTPException(400, "原文件已不存在，无法生成")
+        service = store.get(job.service_id)
+        if not service:
+            raise HTTPException(400, "原来的翻译服务已不存在，无法生成")
+        translator = _make_translator(job, _variant_service(job, service))
+        if stage.exists():
+            shutil.rmtree(stage)
+        stage.mkdir(parents=True)
+        try:
+            outputs = await translate_file(
+                jobs.source_path(job), stage, Runner(translator, cache_only=True), bilingual, job.target_lang,
+            )
+        except (TranslatorError, ValueError) as e:
+            raise HTTPException(400, str(e))
+        current = jobs.get(job.id)
+        if current is None or not jobs.dir(job.id).exists():
+            raise HTTPException(404, "翻译记录不存在")
+        out_dir = jobs.out_dir(job.id)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # 先落到临时目录，替换进 out/ 后再写入记录，避免写到一半被读到
+        for path in outputs:
+            path.replace(out_dir / path.name)
+            if path.name not in current.outputs:
+                current.outputs.append(path.name)
+        jobs.save(current)
+        if jobs.get(job.id) is None:
+            raise HTTPException(404, "翻译记录不存在")
+        return current.to_dict()
+    finally:
+        variant_tasks.pop(job.id, None)
+        if stage.exists():
+            shutil.rmtree(stage, ignore_errors=True)
+        if translator is not None:
+            await translator.aclose()
 
 
 @app.get("/api/jobs/{job_id}/preview")

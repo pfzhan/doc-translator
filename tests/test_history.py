@@ -141,6 +141,113 @@ def test_variant_generates_other_mode(app_env):
         MockTranslator.translate_batch = original
 
 
+def test_variant_refuses_cache_miss_and_closes_client(app_env):
+    """缓存对不上时不要在这次请求里重译，并且无论成败都关掉翻译客户端。"""
+    main = app_env
+    from app.runner import get_cache
+    from app.translators import MockTranslator
+
+    calls = []
+    closed = []
+    original = MockTranslator.translate_batch
+    original_close = MockTranslator.aclose
+
+    async def counting(self, texts):
+        calls.append(len(texts))
+        return await original(self, texts)
+
+    async def close(self):
+        closed.append(self)
+        await original_close(self)
+
+    MockTranslator.translate_batch = counting
+    MockTranslator.aclose = close
+    try:
+        with TestClient(main.app) as client:
+            job = wait_done(client, submit(client)["id"])
+            before = sum(calls)
+            cache = get_cache()
+            cache.conn.execute("DELETE FROM t")
+            cache.conn.commit()
+            missed = client.post(f"/api/jobs/{job['id']}/variant")
+            assert missed.status_code == 400
+            assert "重新翻译" in missed.json()["detail"]
+            assert sum(calls) == before
+            assert closed
+            assert client.get(job["outputs"][0]["url"]).status_code == 200
+            assert job["id"] not in main.variant_tasks
+    finally:
+        MockTranslator.translate_batch = original
+        MockTranslator.aclose = original_close
+
+
+def test_variant_pins_the_model_that_produced_the_job(app_env, monkeypatch):
+    """补生成用任务记录里的模型对缓存，不用服务现在选中的模型。"""
+    main = app_env
+    seen: list[str] = []
+    original = main._make_translator
+
+    def wrapped(job, service):
+        seen.append(str(service.get("model") or ""))
+        return original(job, service)
+
+    monkeypatch.setattr(main, "_make_translator", wrapped)
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        seen.clear()
+        stored = main.jobs.get(job["id"])
+        assert stored is not None
+        stored.model = "old-model"
+        service = main.store.get("mock")
+        service["model"] = "new-model"
+        again = client.post(f"/api/jobs/{job['id']}/variant")
+        assert again.status_code == 200, again.text
+        assert seen == ["old-model"]
+
+
+def test_variant_matches_marker_at_extension(app_env):
+    """原文件名本身带 .bilingual. 时，仍要能生成另一种版本，不能把子串当成已生成。"""
+    main = app_env
+    from app.formats import output_variant
+
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client, name="book.bilingual.md", mode="translated")["id"])
+        names = [o["name"] for o in job["outputs"]]
+        assert names == ["book.bilingual.translated.md"]
+        assert output_variant(names[0]) == "translated"
+        again = client.post(f"/api/jobs/{job['id']}/variant")
+        assert again.status_code == 200, again.text
+        both = [o["name"] for o in again.json()["outputs"]]
+        assert "book.bilingual.bilingual.md" in both
+        assert output_variant("book.bilingual.bilingual.md") == "bilingual"
+
+
+def test_variant_rejects_second_request_and_discards_partial(app_env, monkeypatch):
+    """生成进行中拒绝第二个请求；写到一半失败时不改记录，临时目录也会清掉。"""
+    main = app_env
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        main.variant_tasks[job["id"]] = object()  # 只检查是否在生成，不需要真正的 Task
+        busy = client.post(f"/api/jobs/{job['id']}/variant")
+        assert busy.status_code == 409
+        main.variant_tasks.pop(job["id"])
+
+        async def boom(src: object, out_dir: object, runner: object, bilingual: bool, target_lang: str) -> list[object]:
+            from pathlib import Path
+
+            (Path(str(out_dir)) / "partial.md").write_text("x", encoding="utf-8")
+            raise ValueError("boom")
+
+        monkeypatch.setattr(main, "translate_file", boom)
+        failed = client.post(f"/api/jobs/{job['id']}/variant")
+        assert failed.status_code == 400
+        again = client.get(f"/api/jobs/{job['id']}").json()
+        assert [o["name"] for o in again["outputs"]] == [o["name"] for o in job["outputs"]]
+        assert not (main.jobs.out_dir(job["id"]) / "partial.md").exists()
+        assert not (main.jobs.dir(job["id"]) / ".variant").exists()
+        assert job["id"] not in main.variant_tasks
+
+
 def test_delete_removes_record_and_files(app_env):
     main = app_env
     with TestClient(main.app) as client:
@@ -163,6 +270,8 @@ def test_cleanup_respects_retention(tmp_path):
                   finished=0 if status == "running" else now - age_days * DAY)
         store.add(job)
     assert store.cleanup(0, now) == []  # 0 = 永久保留
+    assert store.cleanup(30, now, busy=frozenset({"old"})) == []  # 正在补生成的不删
+    assert store.get("old")
     assert store.cleanup(30, now) == ["old"]
     assert not store.dir("old").exists() and store.get("new") and store.get("busy")
 

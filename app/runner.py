@@ -70,12 +70,14 @@ class Runner:
     first_batch_items = 4
 
     def __init__(self, translator: Translator, progress: Callable[[int, int], None] | None = None, cache=None,
-                 skip_same_lang: bool = True):
+                 skip_same_lang: bool = True, cache_only: bool = False):
         self.translator = translator
         self.progress = progress or (lambda done, total: None)
         self.cache = cache if cache is not None else get_cache()
         # 已经是目标语言的段落不翻（插件的段落语言检测）
         self.skip_same_lang = skip_same_lang
+        # 只排版、不请求翻译服务：缺缓存时直接失败，避免用另一套配置悄悄重译
+        self.cache_only = cache_only
         # 给任务页展示：检测到的文档语言、跳过的段落数
         self.info = {"detected_lang": "", "skipped": 0}
 
@@ -168,6 +170,8 @@ class Runner:
         prefix = self.translator.cache_key
         done_map = self.cache.get_many(prefix, unique)
         todo = [t for t in unique if t not in done_map]
+        if self.cache_only and todo:
+            raise ValueError("有段落不在翻译缓存里，无法只重新排版。请重新翻译。")
 
         # 每段原文第一次出现的位置，用来按“离关注位置的远近”挑批次
         first_pos: dict[str, int] = {}

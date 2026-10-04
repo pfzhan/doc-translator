@@ -59,7 +59,9 @@ def _split_lines(items: list[tuple[str, "pymupdf.Rect", list[dict]]]) -> list[li
     项目符号变成行内文字、把不相干的内容拼在一起。三处拆段：
     - 行首带列表标记；
     - 纯符号行（“=”“→”等）单独成段，之后被过滤器跳过、原样保留；
-    - 行首明显左跳（并列排布的独立标签被并进同一块的情况）；
+    - 行首明显左跳，且上行没撑到块的右边距（并列短标签被并进同一块）；两行都撑满
+      右边距是首行缩进的自动换行，不能拆。跳幅超过约 3 个字号、且不是两行都撑满时
+      也拆，用来抓住上行恰好是块里最宽行的并列标签。
     - 上行明显没到右边距（硬换行而非自动换行）且下行像新句子开头；上行以逗号等
       连接标点结尾的不算硬换行。
     自动换行的续行（小写开头、上行撑满）仍并入上一段。
@@ -80,14 +82,30 @@ def _split_lines(items: list[tuple[str, "pymupdf.Rect", list[dict]]]) -> list[li
             and not prev_symbol
             and not ptext.rstrip().endswith((",", "，", "、", ";", "；", "(", "+", "*", "/", "=", "<", ">"))
         )
-        if BULLET_RE.match(text) or NO_TEXT_RE.match(stripped) or prev_symbol or hard_break \
-                or rect.x0 < prect.x0 - 8:
+        jump = prect.x0 - rect.x0
+        prev_short = max_x1 - prect.x1 > 3 * psize
+        both_full = max_x1 - prect.x1 <= 3 * psize and max_x1 - rect.x1 <= 3 * psize
+        # 1–2em 的左跳是首行缩进；超过约 3 个字号才像换了一列标签
+        left_jump = jump > 8 and not both_full and (prev_short or jump > 3 * psize)
+        if BULLET_RE.match(text) or NO_TEXT_RE.match(stripped) or prev_symbol or hard_break or left_jump:
             groups.append(cur)
             cur = [i]
         else:
             cur.append(i)
     groups.append(cur)
     return groups
+
+
+def _preview_kind(block: TextBlock, median: float) -> str:
+    """短块里，明显大于正文的、以及略大于正文的粗体，当作小标题。
+
+    只看粗体不够：作者名和图注标签也常是粗体，但字号不超过正文。
+    """
+    if len(block.text) >= 100:
+        return "p"
+    if block.size >= median * 1.3 or (block.bold and block.size >= median * 1.15):
+        return "h2"
+    return "p"
 
 
 def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
@@ -196,9 +214,8 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     if re.search(r"\.(docx?|pdf|tex|indd)$|^untitled$", meta_title, re.I):
         meta_title = ""
     runner.set_title(meta_title or src.stem)
-    # 预览的段落类型：字号明显大于正文中位数且较短的块当作小标题，其余按段落
     median = sorted(b.size for b in blocks)[len(blocks) // 2]
-    kinds = ["h2" if b.size >= median * 1.3 and len(b.text) < 100 else "p" for b in blocks]
+    kinds = [_preview_kind(b, median) for b in blocks]
     translations = await runner.translate_all([b.text for b in blocks], kinds=kinds, preview=True)
 
     def build():

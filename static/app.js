@@ -675,30 +675,52 @@ function fmtOf(name) {
   return (name.split(".").pop() || "").toLowerCase().replace("markdown", "md");
 }
 
+// 和 app/formats/__init__.py 的 output_variant 同一条规则：标记紧挨扩展名
+function outputVariant(name) {
+  const stem = name.slice(0, Math.max(0, name.lastIndexOf(".")));
+  const token = stem.slice(stem.lastIndexOf(".") + 1);
+  return token === "bilingual" || token === "translated" ? token : "";
+}
+
 function downloadLabel(name, multiple) {
-  const variant = name.includes(".bilingual.") ? "双语" : name.includes(".translated.") ? "译文" : "";
+  const variant = outputVariant(name) === "bilingual" ? "双语" : outputVariant(name) === "translated" ? "译文" : "";
   return `下载${variant}${multiple ? ` ${fmtOf(name).toUpperCase()}` : ""}`;
 }
 
-// 已完成的任务可以补生成另一种版本（双语 ⇄ 仅译文），服务端用缓存重新排版，很快
+// 已完成的任务可以补生成另一种版本。服务端只按缓存重新排版，缺缓存会失败。
+const variantInflight = new Set();
+
 function variantButton(job) {
   if (job.status !== "done") return null;
   const want = job.mode === "bilingual" ? "仅译文" : "双语";
-  const marker = job.mode === "bilingual" ? ".translated." : ".bilingual.";
-  if (job.outputs.some((o) => o.name.includes(marker))) return null;
+  const marker = job.mode === "bilingual" ? "translated" : "bilingual";
+  if (job.outputs.some((o) => outputVariant(o.name) === marker)) return null;
   const btn = el("button", "btn sm", `生成${want}版`);
   btn.type = "button";
+  if (variantInflight.has(job.id)) {
+    btn.disabled = true;
+    btn.textContent = "生成中…";
+  }
   btn.addEventListener("click", async () => {
+    if (variantInflight.has(job.id)) return;
+    variantInflight.add(job.id);
     btn.disabled = true;
     btn.textContent = "生成中…";
     try {
       const updated = await api(`/api/jobs/${job.id}/variant`, { method: "POST" });
       upsertJob(updated);
+      if (reader.jobId === job.id) {
+        reader.job = updated;
+        renderReaderBar(updated);
+      }
       toast(`已生成${want}版，可以下载了`);
     } catch (err) {
-      btn.disabled = false;
-      btn.textContent = `生成${want}版`;
       toast(`生成失败：${err.message}`);
+    } finally {
+      variantInflight.delete(job.id);
+      const current = state.jobs.find((j) => j.id === job.id);
+      if (current) upsertJob(current);
+      if (reader.jobId === job.id) renderReaderBar(reader.job || current);
     }
   });
   return btn;
@@ -1090,8 +1112,9 @@ async function readerTick() {
       $("reader-content").replaceChildren(el("div", "hint", "这条记录没有可预览的内容。"));
     }
     renderNotice(job);
-    // preview=false 的任务（旧格式任务的历史记录）永远没有预览内容，不在“未就绪”分支里空转
-    if (ACTIVE.has(job.status) || (!data.ready && job.preview !== false)) reader.timer = setTimeout(readerTick, 1000);
+    // 已经不在翻译、预览也没就绪时不再轮询。加密或扫描版 PDF 会一直 ready=false，
+    // 继续翻译后由 refreshReader / openReader 重新拉。
+    if (ACTIVE.has(job.status)) reader.timer = setTimeout(readerTick, 1000);
   } catch (err) {
     if (reader.jobId !== id) return;
     $("reader-notice").hidden = false;
