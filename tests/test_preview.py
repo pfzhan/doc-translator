@@ -1,7 +1,9 @@
 import asyncio
+import io
 import time
 from pathlib import Path
 
+import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 
@@ -147,20 +149,85 @@ def test_epub_preview_kinds_in_reading_order():
     assert ch1 < alice
 
 
-def test_pdf_preview_segments():
-    src = SAMPLES / "attention.pdf"
-    if not src.exists():
-        pytest.skip("sample missing")
+def _heading_pdf() -> bytes:
+    """正文 10pt，标题 17pt，章节名 12pt 粗体，一句 12pt 非粗体，作者名 10pt 粗体。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=500, height=700)
+    page.insert_text((40, 40), "Attention Is All You Need", fontsize=17, fontname="hebo")
+    page.insert_text((40, 80), "Introduction", fontsize=12, fontname="hebo")
+    page.insert_text((40, 110), "scholarly works.", fontsize=12, fontname="helv")
+    page.insert_text((40, 140), "Jakob Uszkoreit", fontsize=10, fontname="hebo")
+    y = 180
+    for i in range(6):
+        page.insert_text(
+            (40, y),
+            f"This is body paragraph number {i} with enough words to look like a normal line of text.",
+            fontsize=10,
+            fontname="helv",
+        )
+        y += 28
+    return doc.tobytes()
+
+
+def test_pdf_preview_marks_section_headings(tmp_path):
+    """略大于正文的粗体短块是小标题；同字号的非粗体、以及不大于正文的粗体仍是段落。"""
     from app.formats import translate_file
 
+    src = tmp_path / "paper.pdf"
+    src.write_bytes(_heading_pdf())
     runner = Runner(MockTranslator("zh-CN"), cache=MemCache())
-    out = Path(__import__("tempfile").mkdtemp())
-    asyncio.run(translate_file(src, out, runner, False, "zh-CN"))
-    preview = runner.preview()
-    assert preview["ready"]
-    segs = preview["segments"]
-    assert segs and all(s["k"] in ("h2", "p") for s in segs)
-    assert "p" in {s["k"] for s in segs}
-    # 每个非空段落都有译文更新
-    updated = {u[0] for u in preview["updates"]}
-    assert updated == {i for i, s in enumerate(segs) if s["s"].strip()}
+    asyncio.run(translate_file(src, tmp_path, runner, False, "zh-CN"))
+    kinds = {s["s"]: s["k"] for s in runner.preview()["segments"]}
+    assert kinds["Attention Is All You Need"] == "h2"
+    assert kinds["Introduction"] == "h2"
+    assert kinds["scholarly works."] == "p"
+    assert kinds["Jakob Uszkoreit"] == "p"
+    body = [s for s in runner.preview()["segments"] if s["s"].startswith("This is body")]
+    assert body and all(s["k"] == "p" for s in body)
+
+
+def _wait_terminal(client, job_id):
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] in ("done", "error"):
+            return job
+        time.sleep(0.05)
+    raise AssertionError("job did not finish")
+
+
+def test_pdf_preview_headings_survive_the_job(app_env, tmp_path):
+    main = app_env
+    src = tmp_path / "paper.pdf"
+    src.write_bytes(_heading_pdf())
+    with TestClient(main.app) as client:
+        job = client.post(
+            "/api/jobs",
+            files={"file": ("paper.pdf", src.read_bytes())},
+            data={"service_id": "mock", "target_lang": "zh-CN"},
+        ).json()
+        done = _wait_terminal(client, job["id"])
+        assert done["status"] == "done" and done["preview"] is True
+        kinds = {s["s"]: s["k"] for s in client.get(f"/api/jobs/{job['id']}/preview").json()["segments"]}
+        assert kinds["Introduction"] == "h2"
+        assert kinds["scholarly works."] == "p"
+
+
+def test_failed_pdf_stays_previewable_but_not_ready(app_env):
+    """加密或没有文字的 PDF 预览标记为真，但不会有段落；客户端不该为此继续轮询。"""
+    main = app_env
+    empty = pymupdf.open()
+    empty.new_page()
+    locked = pymupdf.open()
+    locked.new_page().insert_text((72, 72), "Secret text that cannot be read")
+    buf = io.BytesIO()
+    locked.save(buf, encryption=pymupdf.PDF_ENCRYPT_AES_256, user_pw="secret", owner_pw="secret")
+    cases = [("empty.pdf", empty.tobytes()), ("locked.pdf", buf.getvalue()), ("bad.pdf", b"%PDF-1.4")]
+    with TestClient(main.app) as client:
+        for name, data in cases:
+            created = client.post("/api/jobs", files={"file": (name, data)}, data={"service_id": "mock"}).json()
+            assert created["preview"] is True
+            job = _wait_terminal(client, created["id"])
+            assert job["status"] == "error", (name, job)
+            preview = client.get(f"/api/jobs/{job['id']}/preview").json()
+            assert preview["ready"] is False and preview["status"] == "error"

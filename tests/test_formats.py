@@ -271,3 +271,97 @@ def test_pdf_hard_break_splits_lines():
     doc = _pdf_with_text("Short Name\nA Much Longer Affiliation Line Here")
     texts = [b.text for b in extract_blocks(doc)]
     assert texts == ["Short Name", "A Much Longer Affiliation Line Here"]
+
+
+def _line(text: str, x0: float, x1: float, y0: float, size: float = 10) -> tuple[str, pymupdf.Rect, list[dict[str, float]]]:
+    return (text, pymupdf.Rect(x0, y0, x1, y0 + size + 2), [{"size": size}])
+
+
+def test_pdf_left_jump_keeps_full_width_wrap():
+    """首行缩进、两行都撑到右边距，是自动换行，不能拆成两段。"""
+    from app.formats.pdf import _split_lines
+
+    items = [
+        _line("started", 120, 400, 10),
+        _line("the effort continues here", 108, 400, 24),
+    ]
+    assert _split_lines(items) == [[0, 1]]
+
+
+def test_pdf_cjk_indent_wrap_stays_one_segment():
+    """2em 首行缩进、续行没撑满，仍是同一段。"""
+    from app.formats.pdf import _split_lines
+
+    items = [
+        _line("第一行撑满右边距", 64, 400, 10, size=12),
+        _line("续行", 40, 80, 26, size=12),
+    ]
+    assert _split_lines(items) == [[0, 1]]
+
+
+def test_pdf_left_jump_splits_stacked_labels():
+    """上行没撑满、下行明显左跳，是并列短标签，要拆开。"""
+    from app.formats.pdf import _split_lines
+
+    items = [
+        _line("Fig", 180, 210, 10),
+        _line("A longer caption here", 40, 300, 24),
+    ]
+    assert _split_lines(items) == [[0], [1]]
+
+
+def test_pdf_wrapped_body_on_attention_sample():
+    """论文正文的首行缩进不能把句子从中间切开。"""
+    src = SAMPLES / "attention.pdf"
+    if not src.exists():
+        pytest.skip("sample missing")
+    from app.formats.pdf import extract_blocks
+
+    texts = [b.text for b in extract_blocks(pymupdf.open(src))]
+    for sentence in (
+        "started the effort",
+        "Each layer has two sub-layers",
+        "independent random variables",
+        "added to the sub-layer input",
+    ):
+        assert any(sentence in t for t in texts), sentence
+
+
+def test_pdf_cjk_lines_do_not_overlap(tmp_path):
+    """中日韩译文缩小并下移，两行不重叠；非中日韩仍用原字号。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = pymupdf.open()
+    page = src.new_page(width=400, height=200)
+    page.insert_text((40, 40), "AAAA BBBB CCCC", fontsize=12)
+    page.insert_text((40, 54), "DDDD EEEE FFFF", fontsize=12)
+    src_path = tmp_path / "src.pdf"
+    src.save(src_path)
+
+    def block(y0: float, text: str) -> TextBlock:
+        rect = pymupdf.Rect(40, y0, 200, y0 + 14)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=12, color="#000000", bold=False)
+
+    blocks = [block(28, "AAAA BBBB CCCC"), block(42, "DDDD EEEE FFFF")]
+
+    def line_boxes(lang: str, translations: list[str]) -> list[tuple[pymupdf.Rect, float]]:
+        out = _render_translated(src_path, blocks, translations, lang)
+        boxes = []
+        for b in out[0].get_text("dict")["blocks"]:
+            if b.get("type") != 0:
+                continue
+            for ln in b["lines"]:
+                boxes.append((pymupdf.Rect(ln["bbox"]), ln["spans"][0]["size"]))
+        return boxes
+
+    cjk = line_boxes("zh-CN", ["第一行中文译文加长", "第二行中文译文加长"])
+    en = line_boxes("en", ["First line translation", "Second line translation"])
+    assert len(cjk) == 2 and len(en) == 2
+    assert cjk[0][0].y1 <= cjk[1][0].y0 + 0.05
+    assert abs(cjk[0][1] - 12 * 0.88) < 0.2
+    assert abs(en[0][1] - 12) < 0.2
+    # 下移之后，字形仍落在为溢出留出的扩展框里（允许 1pt 字面溢出）
+    expanded_y0 = 28 + 12 * 0.1
+    expanded_y1 = 42 + 12 * 0.3
+    assert cjk[0][0].y0 >= expanded_y0 - 1
+    assert cjk[0][0].y1 <= expanded_y1 + 1

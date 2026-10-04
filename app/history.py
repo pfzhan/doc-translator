@@ -146,14 +146,17 @@ class JobStore:
         shutil.rmtree(self.dir(job_id), ignore_errors=True)
         return True
 
-    def cleanup(self, retention_days: int, now: float | None = None) -> list[str]:
-        """删除超过保留时间的记录（运行中的不删）。retention_days=0 表示永久保留。"""
+    def cleanup(self, retention_days: int, now: float | None = None,
+                busy: frozenset[str] | None = None) -> list[str]:
+        """删除超过保留时间的记录（运行中的、以及正在补生成另一种版本的不删）。retention_days=0 表示永久保留。"""
         if retention_days <= 0:
             return []
         now = now or time.time()
+        busy = busy or frozenset()
         expired = [
             j.id for j in list(self.jobs.values())
-            if j.status not in ("queued", "running") and now - (j.finished or j.created) > retention_days * DAY
+            if j.id not in busy and j.status not in ("queued", "running")
+            and now - (j.finished or j.created) > retention_days * DAY
         ]
         for jid in expired:
             self.delete(jid)
