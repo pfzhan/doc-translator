@@ -97,6 +97,11 @@ async def _run_job(job: Job, translator, bilingual: bool):
         job.status, job.error = "error", f"{type(e).__name__}: {e}"
     finally:
         job.finished = time.time()
+        # 累计本次运行的 token 用量（继续/重试会加在之前的数上）
+        usage = getattr(translator, "usage", None)
+        if usage:
+            job.prompt_tokens += usage.get("prompt", 0)
+            job.completion_tokens += usage.get("completion", 0)
         # 快照可能很大，写盘放到线程里
         await asyncio.to_thread(jobs.save_preview, job)
         job.sync_info()

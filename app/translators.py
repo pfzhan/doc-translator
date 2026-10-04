@@ -45,6 +45,12 @@ class Translator:
         self.detected_source = ""
         # 翻译服务 id，算进缓存 key：换了服务就重新翻译，同一个服务重用缓存
         self.service_id = ""
+        # 接口返回的 token 用量（大模型引擎在 _complete 里累计）；谷歌等不提供的保持 0
+        self.usage = {"prompt": 0, "completion": 0}
+
+    def _record_usage(self, prompt: int, completion: int):
+        self.usage["prompt"] += prompt or 0
+        self.usage["completion"] += completion or 0
 
     @property
     def effective_source(self) -> str:
@@ -258,6 +264,8 @@ class OpenAITranslator(LLMTranslator):
         if self.temperature is not None:
             payload["temperature"] = self.temperature
         data = await self._post(f"{self.base_url}/chat/completions", payload, self._headers())
+        usage = data.get("usage") or {}
+        self._record_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
         try:
             return data["choices"][0]["message"]["content"] or ""
         except (KeyError, IndexError, TypeError) as e:
@@ -269,6 +277,8 @@ class OpenAITranslator(LLMTranslator):
         if self.temperature is not None:
             payload["temperature"] = self.temperature
         data = await self._post(f"{self.base_url}/responses", payload, self._headers())
+        usage = data.get("usage") or {}
+        self._record_usage(usage.get("input_tokens"), usage.get("output_tokens"))
         if isinstance(data.get("output_text"), str):
             return data["output_text"]
         texts = [
@@ -316,6 +326,8 @@ class ClaudeTranslator(LLMTranslator):
         if self.temperature is not None:
             payload["temperature"] = self.temperature
         data = await self._post(f"{self.base_url}/messages", payload, self._headers())
+        usage = data.get("usage") or {}
+        self._record_usage(usage.get("input_tokens"), usage.get("output_tokens"))
         return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
 
     async def list_models(self):
@@ -342,6 +354,10 @@ class GeminiTranslator(LLMTranslator):
         }
         model = self.model.removeprefix("models/")
         data = await self._post(f"{self.base_url}/models/{model}:generateContent", payload, self._headers())
+        usage = data.get("usageMetadata") or {}
+        # 思考 token 会计费，只记 candidates 会把推理模型的用量算少
+        completion = (usage.get("candidatesTokenCount") or 0) + (usage.get("thoughtsTokenCount") or 0)
+        self._record_usage(usage.get("promptTokenCount"), completion)
         candidates = data.get("candidates") or []
         if not candidates:
             reason = (data.get("promptFeedback") or {}).get("blockReason", "无返回内容")

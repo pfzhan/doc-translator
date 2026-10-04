@@ -769,6 +769,18 @@ function timeAgo(ts) {
   return new Date(ts * 1000).toLocaleDateString();
 }
 
+// token 用量：大模型接口才有，谷歌等返回 0 不显示
+function tokensText(job) {
+  const total = (job.prompt_tokens || 0) + (job.completion_tokens || 0);
+  if (!total) return "";
+  const text = total >= 1e6 ? `${(total / 1e6).toFixed(2)}M` : total >= 1e3 ? `${(total / 1e3).toFixed(1)}k` : `${total}`;
+  return `${text} tokens`;
+}
+
+function tokensTitle(job) {
+  return `输入 ${(job.prompt_tokens || 0).toLocaleString()} · 输出 ${(job.completion_tokens || 0).toLocaleString()}`;
+}
+
 function expiryText(job) {
   const days = state.retentionDays;
   if (!days || ACTIVE.has(job.status)) return "";
@@ -843,9 +855,13 @@ function jobRow(job) {
   } else {
     const parts = [job.total ? `${job.total} 段` : ""];
     if (job.skipped) parts.push(`${job.skipped} 段无需翻译`);
+    const tokens = tokensText(job);
+    if (tokens) parts.push(tokens);
     const exp = expiryText(job);
     if (exp) parts.push(exp);
-    status.append(el("span", "hint", parts.filter(Boolean).join(" · ")));
+    const hint = el("span", "hint", parts.filter(Boolean).join(" · "));
+    if (tokens) hint.title = tokensTitle(job);  // 悬停看输入/输出拆分
+    status.append(hint);
   }
   main.append(status);
   li.append(main);
@@ -1173,7 +1189,11 @@ function renderReaderBar(job) {
   } else {
     meta.push(STATUS_TEXT[job.status]);
   }
-  $("reader-meta").textContent = meta.filter(Boolean).join(" · ");
+  const tokens = tokensText(job);
+  if (tokens) meta.push(tokens);
+  const metaEl = $("reader-meta");
+  metaEl.textContent = meta.filter(Boolean).join(" · ");
+  metaEl.title = tokens ? tokensTitle(job) : "";
   const pct = job.status === "done" ? 100 : job.total ? (job.done / job.total) * 100 : 0;
   $("reader-progress-bar").style.width = `${pct}%`;
   $("reader-progress-bar").parentElement.hidden = job.status === "done";
