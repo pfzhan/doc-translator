@@ -247,3 +247,27 @@ def test_pdf_hyphen_joins_uppercase_word():
     assert _join_lines(["Donau-", "Dampfschiff"]) == "DonauDampfschiff"
     assert _join_lines(["word-", "wrap"]) == "wordwrap"
     assert _join_lines(["hello", "world"]) == "hello world"  # 非断词只是换行
+
+
+def _pdf_with_text(text: str) -> "pymupdf.Document":
+    doc = pymupdf.open()
+    doc.new_page(width=400, height=300).insert_textbox(pymupdf.Rect(30, 30, 370, 250), text, fontsize=12)
+    return doc
+
+
+def test_pdf_list_items_split_into_segments():
+    """同一块里的列表项各自成为独立翻译单元（幻灯片常见）；换行续行仍并入上一项。"""
+    from app.formats.pdf import extract_blocks
+
+    doc = _pdf_with_text("- First item here\n- Second item continues\nonto next line\n- Third item")
+    texts = [b.text for b in extract_blocks(doc)]
+    assert texts == ["- First item here", "- Second item continues onto next line", "- Third item"]
+
+
+def test_pdf_hard_break_splits_lines():
+    """无项目符号的硬换行（上行远短于块最宽行、下行大写开头、左对齐）也拆成两段。"""
+    from app.formats.pdf import extract_blocks
+
+    doc = _pdf_with_text("Short Name\nA Much Longer Affiliation Line Here")
+    texts = [b.text for b in extract_blocks(doc)]
+    assert texts == ["Short Name", "A Much Longer Affiliation Line Here"]
