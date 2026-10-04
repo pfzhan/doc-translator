@@ -1,3 +1,4 @@
+import re
 import asyncio
 import io
 import time
@@ -232,3 +233,115 @@ def test_failed_pdf_stays_previewable_but_not_ready(app_env):
             assert job["status"] == "error", (name, job)
             preview = client.get(f"/api/jobs/{job['id']}/preview").json()
             assert preview["ready"] is False and preview["status"] == "error"
+
+
+def test_normalize_numbered_units():
+    from app.runner import normalize_numbered_units as norm
+
+    texts = ["h1", "toc1", "toc2", "body", "cite", "long"]
+    results = [
+        "第2卷",
+        "第3卷　论三种政体的原则",
+        "第卷26　论法律应当与其所规范的事物秩序具有的关系",
+        "第一章",
+        "《Science》307卷第5708期（2005）：414–16",  # 不以“第”开头，不动
+        "第4卷　" + "很长的条目" * 10,  # 超长不动
+    ]
+    fixed = norm(texts, results, "zh-CN")
+    assert fixed["h1"] == "第二卷"
+    assert fixed["toc1"] == "第三卷　论三种政体的原则"
+    assert fixed["toc2"] == "第二十六卷　论法律应当与其所规范的事物秩序具有的关系"
+    assert "body" not in fixed and "cite" not in fixed and "long" not in fixed
+    assert norm(texts, results, "en") == {}
+    from app.runner import fix_numbered_unit as fix
+    assert fix("第110章", "zh-CN") == "第一百一十章"
+    assert fix("第111章", "zh-CN") == "第一百一十一章"
+    assert fix("第210卷", "zh-CN") == "第二百一十卷"
+    assert fix("第1010章", "zh-CN") == "第一千零一十章"
+    assert fix("第1110章", "zh-CN") == "第一千一百一十章"
+    assert fix("第10章", "zh-CN") == "第十章"
+    # 卷期页号保留阿拉伯数字
+    for cite in ("第25卷第1期", "第25卷第1期（2005）：414–16", "第307卷第5708期", "第2章第3页"):
+        assert fix(cite, "zh-CN") == cite
+
+
+def test_normalize_numbered_units_updates_cache():
+    from app.runner import Runner
+
+    class DictTranslator(MockTranslator):
+        async def translate_batch(self, texts):
+            return ["第2卷" if t == "BOOK 2" else f"[zh-CN] {t}" for t in texts]
+
+    runner = Runner(DictTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
+    out = asyncio.run(runner.translate_all(
+        ["BOOK 2", "para one"], kinds=["h1", "p"], preview=True))
+    assert out[0] == "第二卷"
+    # 缓存里也写成归一化后的版本，预览和历史快照都一致
+    assert runner.cache.get_many("x", []) == {}
+    assert runner._done["BOOK 2"] == "第二卷"
+    # 正文即使译文是「第2卷」也不改、不写进被改过的缓存
+    body = Runner(DictTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
+    assert asyncio.run(body.translate_all(["BOOK 2"], kinds=["p"], preview=True)) == ["第2卷"]
+
+
+def test_normalize_applies_to_cache_hits():
+    """缓存里的旧样式译文（归一化之前翻的）：命中时就地改写，预览立即是新样式。"""
+    from app.runner import Runner
+
+    class NeverCalled(MockTranslator):
+        async def translate_batch(self, texts):
+            raise AssertionError("全部命中缓存，不该发请求")
+
+    cache = MemCache({"BOOK 2": "第2卷", "BOOK 26": "第卷26", "cite": "第25卷第1期"})
+    runner = Runner(NeverCalled("zh-CN"), cache=cache, skip_same_lang=False)
+    out = asyncio.run(runner.translate_all(
+        ["BOOK 2", "BOOK 26", "cite"], kinds=["h1", "toc", "h2"], preview=True))
+    assert out == ["第二卷", "第二十六卷", "第25卷第1期"]
+    assert cache.d["BOOK 2"] == "第二卷" and cache.d["BOOK 26"] == "第二十六卷"
+    assert cache.d["cite"] == "第25卷第1期"
+    updates = {u[0]: u[1] for u in runner.preview()["updates"]}
+    assert updates[0] == "第二卷" and updates[1] == "第二十六卷" and updates[2] == "第25卷第1期"
+
+
+def test_fix_numbered_unit_inside_html():
+    """富文本译文：数字被 <small> 包住或嵌在 <a> 里时，按文本节点改写，标签原样保留。"""
+    from app.runner import fix_numbered_unit
+
+    html = '<a class="c1" href="part0015.html">第<small class="c2">1</small>卷</a>  论一般的法律'
+    out = fix_numbered_unit(html, "zh-CN", html=True)
+    assert 'href="part0015.html"' in out and "<small class=\"c2\">一</small>" in out
+    assert re.sub(r"<[^>]+>", "", out).startswith("第一卷")
+    inv = '<a href="x">第<small>卷26</small></a>　论法律'
+    assert re.sub(r"<[^>]+>", "", fix_numbered_unit(inv, "zh-CN", html=True)).startswith("第二十六卷")
+    # 脚注号和页码不并进章节号；尖括号纯文本不送进解析器
+    assert fix_numbered_unit("第2<sup>1</sup>章", "zh-CN", html=True) == "第二<sup>1</sup>章"
+    page = '<span epub:type="pagebreak" id="page7" role="doc-pagebreak">7</span>第2章'
+    assert fix_numbered_unit(page, "zh-CN", html=True) == page.replace("第2章", "第二章")
+    mid = '第2<span epub:type="pagebreak" id="page7">7</span>章'
+    assert fix_numbered_unit(mid, "zh-CN", html=True) == mid.replace("第2", "第二")
+    assert fix_numbered_unit("第2章 <vector>", "zh-CN") == "第二章 <vector>"
+    assert fix_numbered_unit("第2章</div>标题还在", "zh-CN", html=True) == "第2章</div>标题还在"
+    # 长段和引文格式不动
+    cite = '<a href="x">参考文献</a>：《Science》307卷第5708期'
+    assert fix_numbered_unit(cite, "zh-CN", html=True) == cite
+
+
+def test_fix_numbered_unit_with_selfclosed_anchor():
+    """自闭合锚点（<a id="x"/>、<span id="x"/>）旁的编号也要归一，且锚点结构不被吞。"""
+    from app.runner import fix_numbered_unit as fix
+
+    h = '<a class="calibre1" id="chapter15"/>第<small class="calibre5">15</small>卷'
+    out = fix(h, "zh-CN", html=True)
+    assert re.sub(r"<[^>]+>", "", out) == "第十五卷"
+    assert 'id="chapter15"' in out
+    # 锚点仍然是空元素，不能把编号吞进 <a> 里
+    assert re.search(r"<a [^>]*></a>", out) or "/>" in out
+    assert fix('<span id="pg"/>第2卷', "zh-CN", html=True) != '<span id="pg"/>第2卷'
+    # 斜杠前有空白时也要展开干净，编号不能留着不改
+    spaced = '<a class="calibre1" id="chapter15" />第<small class="calibre5">15</small>卷'
+    sout = fix(spaced, "zh-CN", html=True)
+    assert re.sub(r"<[^>]+>", "", sout) == "第十五卷"
+    assert 'id="chapter15"' in sout and re.search(r"<a [^>]*></a>", sout)
+    span = fix('<span id="pg" />第2卷', "zh-CN", html=True)
+    assert re.sub(r"<[^>]+>", "", span) == "第二卷"
+    assert re.search(r"<span [^>]*></span>", span)

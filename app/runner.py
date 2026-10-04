@@ -5,6 +5,7 @@
 """
 import asyncio
 import hashlib
+import re
 import sqlite3
 import threading
 from pathlib import Path
@@ -170,7 +171,21 @@ class Runner:
         self.info["skipped"] = len(skipped)
         unique = [t for t in unique if t not in skipped]
         prefix = self.translator.cache_key
+        tl = self.translator.target_lang
         done_map = self.cache.get_many(prefix, unique)
+        headings = {t for t, k in zip(texts, kinds or []) if k in _HEADING_KINDS}
+        html_sources = self.translator.html_texts
+
+        def fixed(src: str, dst: str) -> str:
+            if src not in headings:
+                return dst
+            return fix_numbered_unit(dst, tl, html=src in html_sources)
+
+        # 标题和目录的旧缓存可能还是「第2卷」：命中时改写成中文数字，预览不用重翻
+        rewrites = {t: d2 for t, d in done_map.items() if (d2 := fixed(t, d)) != d}
+        if rewrites:
+            self.cache.put_many(prefix, rewrites)
+            done_map.update(rewrites)
         todo = [t for t in unique if t not in done_map]
         if self.cache_only and todo:
             raise ValueError("有段落不在翻译缓存里，无法只重新排版。请重新翻译。")
@@ -207,8 +222,9 @@ class Runner:
                     pending.clear()  # 出错时让其他并发任务也尽快停下
                     raise
                 pairs = dict(zip(batch, result))
-                # 空译文不写缓存、不计入完成（否则会永久缓存空结果），按失败处理
-                good = {s: d for s, d in pairs.items() if d and d.strip()}
+                # 空译文不写缓存、不计入完成（否则会永久缓存空结果），按失败处理。
+                # 标题和目录的「第2卷」在入库前改成中文数字
+                good = {s: fixed(s, d) for s, d in pairs.items() if d and d.strip()}
                 empty = [s for s in batch if s not in good]
                 if good:
                     self.cache.put_many(prefix, good)
@@ -224,3 +240,140 @@ class Runner:
         workers = min(self.translator.concurrency, len(pending))
         await asyncio.gather(*(worker() for _ in range(workers)))
         return [done_map.get(t, t) if t.strip() else t for t in texts]
+
+
+_CN_DIGITS = "零一二三四五六七八九"
+_HEADING_KINDS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6", "toc"})
+# 第2卷、第２卷，以及模型翻串了的“第卷26”。单位不含页/期/号，那些保留阿拉伯数字
+_UNIT_HEAD_RE = re.compile(r"^第([0-9０-９]{1,4})(?=[卷章部篇集册])")
+_UNIT_INVERTED_RE = re.compile(r"^第([卷章部篇集册])([0-9０-９]{1,4})")
+# 第25卷第1期、第3页、第5号：卷期页号不是章节标题
+_CITE_RE = re.compile(r"第[0-9０-９]{1,4}\s*[期页号]|[卷章部篇集册]\s*第?\s*[0-9０-９]{1,4}\s*期")
+_FULLWIDTH = str.maketrans("０１２３４５６７８９", "0123456789")
+_NUM_CHARS = frozenset("第0123456789０１２３４５６７８９卷章部篇集册")
+
+
+def _cn_number(n: int, *, higher: bool = False) -> str:
+    """1–9999 转中文。单独的 10–19 是「十 / 十一」；作为更高位的余数时补「一」（一百一十）。"""
+    if n < 0:
+        return str(n)
+    if n < 10:
+        return _CN_DIGITS[n]
+    if n < 20:
+        rest = _CN_DIGITS[n % 10] if n % 10 else ""
+        return ("一" if higher else "") + "十" + rest
+    if n < 100:
+        q, r = divmod(n, 10)
+        return _CN_DIGITS[q] + "十" + (_CN_DIGITS[r] if r else "")
+    if n < 1000:
+        q, r = divmod(n, 100)
+        tail = "" if not r else ("零" if r < 10 else "") + _cn_number(r, higher=True)
+        return _CN_DIGITS[q] + "百" + tail
+    q, r = divmod(n, 1000)
+    tail = "" if not r else ("零" if r < 100 else "") + _cn_number(r, higher=True)
+    return _CN_DIGITS[q] + "千" + tail
+
+
+def _unit_span(text: str) -> tuple[int, int, str] | None:
+    """可见文字里要替换的区间（相对 text）和替换串。不适用时返回 None。
+
+    普通形式只替换数字（「第2卷」→ 把 2 换成「二」），单位留在原处。
+    颠倒形式「第卷26」把单位和数字一起换成「二十六卷」。
+    """
+    stripped = text.strip()
+    if len(stripped) > 40 or not stripped.startswith("第") or _CITE_RE.search(stripped):
+        return None
+    lead = len(text) - len(text.lstrip())
+    body = text[lead:]
+    inverted = _UNIT_INVERTED_RE.match(body)
+    if inverted:
+        unit, digits = inverted.group(1), inverted.group(2)
+        cn = _cn_number(int(digits.translate(_FULLWIDTH)))
+        return lead + 1, lead + inverted.end(), cn + unit
+    head = _UNIT_HEAD_RE.match(body)
+    if not head:
+        return None
+    cn = _cn_number(int(head.group(1).translate(_FULLWIDTH)))
+    return lead + 1, lead + head.end(), cn
+
+
+def fix_numbered_unit(dst: str, target_lang: str, *, html: bool = False) -> str:
+    """标题、目录开头的阿拉伯数字章节编号改成中文数字。不适用时原样返回。
+
+    html=True 才解析标签（调用方标记的富文本）。纯文本里的尖括号只做字符串替换。
+    后面跟着期、页、号的短引文不改。
+    """
+    if not target_lang.startswith("zh"):
+        return dst
+    if html:
+        return _fix_html_unit(dst)
+    span = _unit_span(dst.strip())
+    if span is None:
+        return dst
+    start, end, replacement = span
+    core = dst.strip()
+    new = core[:start] + replacement + core[end:]
+    return dst.replace(core, new, 1) if new != core else dst
+
+
+# 自闭合的行内标签（calibre 的 <a id="x"/>、<span id="x"/> 锚点）：
+# html.parser 会把它们当成开放标签吞掉后面的内容，先展开成显式闭合再解析。
+# 斜杠前的空白要丢掉，否则序列化结果和展开串对不上，编号不会改。
+_SELFCLOSED_INLINE_RE = re.compile(r"<(a|span)\b([^>]*?)\s*/>")
+
+
+def _fix_html_unit(dst: str) -> str:
+    """富文本只改数字所在的文本节点。解析器改动了标签或丢掉文字时原样返回。"""
+    from bs4 import BeautifulSoup, NavigableString, Tag
+
+    from .formats.html_blocks import _is_page_anchor
+
+    expanded = _SELFCLOSED_INLINE_RE.sub(r"<\1\2></\1>", dst)
+    soup = BeautifulSoup(f"<dt-frag>{expanded}</dt-frag>", "html.parser")
+    frag = soup.find("dt-frag")
+    if not isinstance(frag, Tag):
+        return dst
+    if "".join(str(child) for child in frag.children) != expanded:
+        return dst
+    nodes: list[NavigableString] = []
+    for node in list(frag.descendants):
+        if type(node) is not NavigableString or not str(node):
+            continue
+        parents = [p for p in node.parents if isinstance(p, Tag)]
+        if any(_is_page_anchor(p) or p.name in ("sup", "sub") for p in parents):
+            continue
+        nodes.append(node)
+    span = _unit_span("".join(str(node) for node in nodes))
+    if span is None:
+        return dst
+    start, end, replacement = span
+    pos = 0
+    pieces: list[tuple[NavigableString, int, int]] = []
+    for node in nodes:
+        text = str(node)
+        ns, ne = pos, pos + len(text)
+        if ne > start and ns < end:
+            a, b = max(start - ns, 0), min(end - ns, len(text))
+            if any(ch not in _NUM_CHARS for ch in text[a:b]):
+                return dst
+            pieces.append((node, a, b))
+        pos = ne
+    if not pieces:
+        return dst
+    first, a, b = pieces[0]
+    text = str(first)
+    first.replace_with(NavigableString(text[:a] + replacement + text[b:]))
+    for node, a, b in pieces[1:]:
+        text = str(node)
+        node.replace_with(NavigableString(text[:a] + text[b:]))
+    return "".join(str(child) for child in frag.children)
+
+
+def normalize_numbered_units(texts: list[str], results: list[str], target_lang: str) -> dict[str, str]:
+    """批量版的 fix_numbered_unit，返回 {原文: 修正后译文}。"""
+    fixed: dict[str, str] = {}
+    for src, dst in zip(texts, results):
+        new = fix_numbered_unit(dst, target_lang)
+        if new != dst:
+            fixed.setdefault(src, new)
+    return fixed
