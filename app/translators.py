@@ -6,12 +6,16 @@
 """
 import asyncio
 import hashlib
+import re
 from urllib.parse import urlparse
 
 import httpx
 
 from . import prompts
 from .languages import GOOGLE_CODES, LANGUAGES
+
+# 文本里带 HTML 标签（富文本段落，需要保留行内格式）
+TAG_RE = re.compile(r"<[a-zA-Z/][^>]*>")
 
 # 前端下拉框用的语言列表：[(代码, 英文名, 本地名)]，顺序与插件一致
 LANG_CODES = {code for code, _, _ in LANGUAGES}
@@ -153,6 +157,7 @@ class LLMTranslator(Translator):
         return prompts.build_messages(
             texts, self.target_lang, source_lang=self.effective_source, title=self.title,
             system_template=self.prompt, user_template=self.user_prompt,
+            contains_html=any(TAG_RE.search(t) for t in texts),
         )
 
     async def _complete(self, system: str, user: str) -> str:
@@ -381,7 +386,25 @@ class GoogleTranslator(Translator):
         return f"{self.service_id}:google:{self.source_lang}:{self.target_lang}"
 
     async def translate_batch(self, texts):
-        params = {"client": "gtx", "sl": self.sl, "tl": self.tl, "format": "text"}
+        # 混合批按是否带 HTML 标签拆成两组分别请求：富文本组用 format=html 保留行内格式，
+        # 纯文本组保持 format=text，避免 & 等字符被实体转义
+        html_idx = [i for i, t in enumerate(texts) if TAG_RE.search(t)]
+        if not html_idx or len(html_idx) == len(texts):
+            return await self._request(texts, html=bool(html_idx))
+        plain_idx = [i for i in range(len(texts)) if i not in set(html_idx)]
+        html_out, plain_out = await asyncio.gather(
+            self._request([texts[i] for i in html_idx], html=True),
+            self._request([texts[i] for i in plain_idx], html=False),
+        )
+        out = [""] * len(texts)
+        for i, t in zip(html_idx, html_out):
+            out[i] = t
+        for i, t in zip(plain_idx, plain_out):
+            out[i] = t
+        return out
+
+    async def _request(self, texts, html: bool):
+        params = {"client": "gtx", "sl": self.sl, "tl": self.tl, "format": "html" if html else "text"}
         for attempt in range(self.retries):
             last = attempt == self.retries - 1
             try:

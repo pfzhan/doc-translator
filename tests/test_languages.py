@@ -120,3 +120,10 @@ def test_google_language_codes():
         GoogleTranslator("wyw")
     with pytest.raises(TranslatorError, match="不支持的目标语言"):
         MockTranslator("xx-YY")
+
+
+def test_build_messages_html_suffix():
+    system, _ = build_messages(["x <b>y</b>"], "zh-CN", contains_html=True)
+    assert "HTML fragments" in system and "href" in system
+    system, _ = build_messages(["plain"], "zh-CN")
+    assert "HTML fragments" not in system

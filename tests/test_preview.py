@@ -143,7 +143,8 @@ def test_epub_preview_kinds_in_reading_order():
     kinds = {s["k"] for s in segs}
     assert "toc" in kinds and "p" in kinds
     # MOBI7 的裸文本段落按阅读顺序排列：正文第一句出现在“CHAPTER I”之后
-    texts = [s["s"] for s in segs]
+    # 富文本段的 s 带行内标签，匹配前剥掉（前端预览同样处理）
+    texts = [__import__("re").sub(r"<[^>]+>", "", s["s"]).strip() for s in segs]
     ch1 = next(i for i, t in enumerate(texts) if t.startswith("CHAPTER I.") and "Rabbit" in t)
     alice = next(i for i, t in enumerate(texts) if t.startswith("Alice was beginning"))
     assert ch1 < alice

@@ -163,3 +163,25 @@ def test_marker_collision_end_to_end():
     # 请求体里没有 [[pN]] 协议标记（原文的 [[p1]] 只是内容，不是分隔符）
     assert not re.search(r"^\[\[p0\]\]$", bodies[0], re.M)
     run(tr.aclose())
+
+
+def test_google_splits_html_and_plain_batches():
+    """混合批：带标签的段落走 format=html，纯文本走 format=text，结果按原顺序重组。"""
+    from urllib.parse import parse_qs
+
+    formats = []
+
+    def handler(request):
+        fmt = request.url.params["format"]
+        formats.append(fmt)
+        qs = parse_qs(request.content.decode())["q"]
+        return httpx.Response(200, json=[[f"{fmt}:{q}", "en"] for q in qs])
+
+    tr = GoogleTranslator("zh-CN", transport=httpx.MockTransport(handler))
+    out = run(tr.translate_batch(["plain one", "x <b>bold</b> y", "plain two"]))
+    assert out == ["text:plain one", "html:x <b>bold</b> y", "text:plain two"]
+    assert sorted(formats) == ["html", "text"]
+    # 全是纯文本时不拆组
+    out = run(tr.translate_batch(["a", "b"]))
+    assert out == ["text:a", "text:b"]
+    run(tr.aclose())
