@@ -69,9 +69,32 @@ def translatable(text: str) -> bool:
     return bool(text) and not NO_TEXT_RE.match(text)
 
 
+def _attr_local(el: Tag, local: str) -> list[str]:
+    out: list[str] = []
+    for key, val in el.attrs.items():
+        if _local(str(key)) != local:
+            continue
+        if isinstance(val, list):
+            out.extend(str(v) for v in val)
+        else:
+            out.append(str(val))
+    return out
+
+
+def _is_page_anchor(el: Tag) -> bool:
+    """分页锚点：epub:type=pagebreak，或没有可见文字的 id 锚点。纯文本回写会把它们清掉。"""
+    if any("pagebreak" in v.lower() for v in _attr_local(el, "type")):
+        return True
+    return bool(el.has_attr("id") and not el.get_text(strip=True) and _local(el.name) in ("a", "span"))
+
+
+def _has_kept_structure(el: Tag) -> bool:
+    return el.find(lambda t: isinstance(t, Tag) and (_local(t.name) in RICH_TAGS or _is_page_anchor(t))) is not None
+
+
 def _inner_html(el: Tag) -> str | None:
-    """块内有需要保留的行内格式元素时返回 inner HTML（走富文本翻译）；否则 None（纯文本路径）。"""
-    if not el.find(lambda t: _local(t.name) in RICH_TAGS):
+    """块内有需要保留的行内格式或分页锚点时返回 inner HTML；否则 None（纯文本路径）。"""
+    if not _has_kept_structure(el):
         return None
     return "".join(str(c) for c in el.children)
 
@@ -173,22 +196,23 @@ def lang_attrs(lang: str) -> dict:
     return attrs
 
 
-def apply_translation(soup, el: Tag, text: str, translated: str, bilingual: bool, lang: str = ""):
+def apply_translation(soup, el: Tag, text: str, translated: str, bilingual: bool, lang: str = "") -> Tag | None:
+    """回写纯文本译文，返回译文落在的元素（el 本身 / 内部 span / 克隆块）；跳过返回 None。"""
     if not translated or translated.strip() == text.strip():
-        return
+        return None
     name = _local(el.name)
     attrs = lang_attrs(lang)
     if not bilingual:
         _set_text(soup, el, translated)
         for k, v in attrs.items():
             el[k] = v
-        return
+        return el
     if name in INNER_TAGS:
         span = soup.new_tag("span", attrs={"class": TRANSLATION_CLASS, **attrs})
         _set_text(soup, span, translated)
         el.append(soup.new_tag("br"))
         el.append(span)
-        return
+        return span
     clone = copy.copy(el)
     for attr in ("id", "name"):
         if clone.has_attr(attr):
@@ -201,6 +225,7 @@ def apply_translation(soup, el: Tag, text: str, translated: str, bilingual: bool
         clone[k] = v
     _set_text(soup, clone, translated, keep_media=False)
     el.insert_after(clone)
+    return clone
 
 
 def _parse_fragment(html: str) -> Tag | None:
@@ -210,12 +235,85 @@ def _parse_fragment(html: str) -> Tag | None:
         return None
 
 
+_URL_ATTRS = frozenset({"href", "src", "xlink:href"})
+
+
+# svg+xml 能内嵌脚本；只放行浏览器当图片画的栅格 data URI
+_RASTER_DATA_RE = re.compile(r"^data:image/(?:png|jpe?g|gif|webp)[;,]")
+
+
+def _unsafe_url(value: object, tag: str) -> bool:
+    """javascript:/vbscript: 一律危险；data: 只放行 img/image 上的栅格图。"""
+    if not isinstance(value, str):
+        return False
+    v = value.strip().lower()
+    if v.startswith(("javascript:", "vbscript:")):
+        return True
+    if not v.startswith("data:"):
+        return False
+    return not (tag in ("img", "image") and _RASTER_DATA_RE.match(v) is not None)
+
+
+def _clean_attrs(src: Tag, frag: Tag) -> None:
+    """只留原文同名标签上出现过的属性，并丢掉事件处理和脚本 URL。"""
+    allowed: dict[str, set[str]] = {}
+    styles: set[str] = set()
+    for t in src.find_all(True):
+        allowed.setdefault(_local(t.name), set()).update(str(k) for k in t.attrs)
+        if "style" in t.attrs:
+            styles.add(str(t.attrs["style"]))
+    for t in frag.find_all(True):
+        keep = allowed.get(_local(t.name), set())
+        for attr in list(t.attrs):
+            key = str(attr)
+            val = t.attrs[attr]
+            if key.lower().startswith("on") or key not in keep or _unsafe_url(val, _local(t.name)):
+                del t[attr]
+            elif key == "style" and str(val) not in styles:
+                del t[attr]
+
+
+def _restore_page_anchors(src: Tag, dest: Tag) -> None:
+    """译文丢掉的分页锚点补回去，否则书内页码链接失效。"""
+    have = {t.get("id") for t in dest.find_all(True) if t.has_attr("id")}
+    missing = []
+    for anchor in src.find_all(True):
+        if not _is_page_anchor(anchor):
+            continue
+        aid = anchor.get("id")
+        if aid and aid not in have:
+            missing.append(copy.copy(anchor))
+            have.add(aid)
+    for anchor in reversed(missing):
+        dest.insert(0, anchor)
+
+
+def _prose_of(el: Tag) -> str:
+    """段落纯文本。分页锚点里的页码不是正文，不能拿来判断译文还在不在。"""
+    parts: list[str] = []
+    for node in el.descendants:
+        if isinstance(node, Tag) and _local(node.name) == "br":
+            if not any(_is_page_anchor(p) for p in node.parents if isinstance(p, Tag)):
+                parts.append("\n")
+        elif type(node) is NavigableString:
+            parents = [p for p in node.parents if isinstance(p, Tag)]
+            if any(_is_page_anchor(p) for p in parents):
+                continue
+            if any(_local(p.name) in SKIP_TAGS - {"code"} for p in parents):
+                continue
+            parts.append(str(node))
+    text = "".join(parts)
+    lines = [WS_RE.sub(" ", line).strip() for line in text.split("\n")]
+    return "\n".join(line for line in lines if line)
+
+
 def _sanitize_translation(src_html: str, translated_html: str) -> list | None:
     """校验并清洗译文 HTML 片段，返回可插入的节点列表；不合格返回 None（调用方回退纯文本）。
 
     - 剔除 script/style 等危险标签；
     - 原文没有的标签 unwrap（只保留文字），防模型自造结构；
-    - 译文为空、解析失败、或原文的行内格式一个都没保住时，判为不合格。
+    - 丢掉事件处理、脚本 URL，以及原文没有的属性；
+    - 译文为空、解析失败、原文的行内格式一个都没保住，或原文有正文而译文去掉分页锚点后没有文字时，判为不合格。
     """
     if not translated_html or not translated_html.strip():
         return None
@@ -226,10 +324,15 @@ def _sanitize_translation(src_html: str, translated_html: str) -> list | None:
     allowed = {_local(t.name) for t in src.find_all(True)} | {"br"}
     for t in frag.find_all(lambda t: _local(t.name) in DANGER_TAGS):
         t.decompose()
-    for t in frag.find_all(True):
+    for t in list(frag.find_all(True)):
         if _local(t.name) not in allowed:
             t.unwrap()
-    if not frag.get_text(strip=True):
+    _clean_attrs(src, frag)
+    _restore_page_anchors(src, frag)
+    # 页码在分页锚点里，补回来之后仍不算译文。原文去掉锚点后还有文字、译文没有，就是模型把段落清空了。
+    if _prose_of(src) and not _prose_of(frag):
+        return None
+    if not frag.get_text(strip=True) and not any(_is_page_anchor(t) for t in frag.find_all(True)):
         return None
     src_rich = src.find(lambda t: _local(t.name) in RICH_TAGS)
     if src_rich and not frag.find(lambda t: _local(t.name) in RICH_TAGS):
@@ -244,8 +347,12 @@ def apply_translation_html(soup, el: Tag, src_html: str, translated_html: str, b
     nodes = _sanitize_translation(src_html, translated_html)
     if nodes is None:
         frag = _parse_fragment(translated_html)
-        plain = frag.get_text() if frag is not None else translated_html
-        apply_translation(soup, el, _text_of(el), plain, bilingual, lang)
+        # <br> 换成换行；分页锚点里的页码不是译文，不能拿来覆盖原文
+        plain = _prose_of(frag) if frag is not None else translated_html
+        target = apply_translation(soup, el, _text_of(el), plain, bilingual, lang)
+        src = _parse_fragment(src_html)
+        if target is not None and src is not None:
+            _restore_page_anchors(src, target)
         return
     name = _local(el.name)
     attrs = lang_attrs(lang)

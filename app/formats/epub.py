@@ -101,7 +101,10 @@ async def translate_epub(src: Path, out_dir: Path, runner, bilingual: bool, targ
         # 预览里目录（nav / ncx）用 toc 类型，正文用元素名（h1、p、li…）
         kinds = ["toc" if kind == "label" else hb.preview_kind(el) for _, el, _, kind, _ in tasks]
         # 富文本段落送 inner HTML 翻译，保留行内格式（加粗、链接）
-        results = await runner.translate_all([t[4] or t[2] for t in tasks], kinds=kinds, preview=True)
+        results = await runner.translate_all(
+            [t[4] or t[2] for t in tasks], kinds=kinds, preview=True,
+            html=[t[4] is not None for t in tasks],
+        )
 
         # 3. 回写
         for (name, el, text, kind, html), translated in zip(tasks, results):

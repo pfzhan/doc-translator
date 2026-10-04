@@ -157,12 +157,14 @@ class Runner:
         return {t for t in unique if langdetect.same_language(langdetect.detect(t), tr.target_lang)}
 
     async def translate_all(self, texts: list[str], kinds: list[str] | None = None,
-                            preview: bool = False) -> list[str]:
+                            preview: bool = False, html: list[bool] | None = None) -> list[str]:
         """按原顺序返回译文；空白文本和已是目标语言的段落原样返回。
 
         preview=True 时记录段落供预览接口读取；kinds 是每段的类型（h1~h6 / p / li / quote / td / toc），
-        只影响预览的显示样式。
+        只影响预览的显示样式。html 与 texts 对齐，标记哪些段是电子书富文本片段。
         """
+        # 只有调用方标了的段才按 HTML 发送；正文里的 <Note> 不是标签
+        self.translator.html_texts = {t for t, flag in zip(texts, html or []) if flag}
         unique = list(dict.fromkeys(t for t in texts if t.strip()))
         skipped = await asyncio.to_thread(self._detect, unique)
         self.info["skipped"] = len(skipped)

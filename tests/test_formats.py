@@ -249,9 +249,10 @@ def test_pdf_hyphen_joins_uppercase_word():
     assert _join_lines(["hello", "world"]) == "hello world"  # 非断词只是换行
 
 
-def _pdf_with_text(text: str) -> "pymupdf.Document":
+def _pdf_with_text(text: str, fontname: str = "helv") -> "pymupdf.Document":
     doc = pymupdf.open()
-    doc.new_page(width=400, height=300).insert_textbox(pymupdf.Rect(30, 30, 370, 250), text, fontsize=12)
+    doc.new_page(width=400, height=300).insert_textbox(
+        pymupdf.Rect(30, 30, 370, 250), text, fontsize=12, fontname=fontname)
     return doc
 
 
@@ -360,6 +361,9 @@ def test_pdf_cjk_lines_do_not_overlap(tmp_path):
     assert cjk[0][0].y1 <= cjk[1][0].y0 + 0.05
     assert abs(cjk[0][1] - 12 * 0.88) < 0.2
     assert abs(en[0][1] - 12) < 0.2
+    for lang in ("yue", "wyw"):
+        sized = line_boxes(lang, ["第一行", "第二行"])
+        assert sized and abs(sized[0][1] - 12 * 0.88) < 0.2
     # 下移之后，字形仍落在为溢出留出的扩展框里（允许 1pt 字面溢出）
     expanded_y0 = 28 + 12 * 0.1
     expanded_y1 = 42 + 12 * 0.3
@@ -416,9 +420,47 @@ def test_apply_translation_html_falls_back_when_tags_lost():
 
     soup = hb.parse(RICH_CHAPTER, xml=True)
     el, _, html = hb.find_blocks(soup)[1]
-    hb.apply_translation_html(soup, el, html, "完全没有标签的译文。", False, "zh-CN")
+    hb.apply_translation_html(soup, el, html, "第一行<br>第二行，完全没有标签。", False, "zh-CN")
     p = soup.find_all("p")[1]
-    assert p.find("b") is None and p.get_text() == "完全没有标签的译文。"
+    assert p.find("b") is None
+    assert p.get_text(separator="\n") == "第一行\n第二行，完全没有标签。"
+    assert p.find("br") is not None
+
+
+def test_pagebreak_anchor_kept_without_rich_tags():
+    """只有分页锚点的段落也走富文本路径；译文丢掉锚点时补回去。"""
+    from app.formats import html_blocks as hb
+
+    chapter = (
+        '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">'
+        "<body><p>"
+        '<span epub:type="pagebreak" id="page7"></span>'
+        "The chapter continues here."
+        "</p></body></html>"
+    )
+    soup = hb.parse(chapter, xml=True)
+    blocks = hb.find_blocks(soup)
+    assert len(blocks) == 1 and blocks[0][2] is not None
+    assert 'id="page7"' in blocks[0][2]
+    el, _, html = blocks[0]
+    hb.apply_translation_html(soup, el, html, "章节从这里继续。", False, "zh-CN")
+    anchor = soup.find(id="page7")
+    assert anchor is not None and "pagebreak" in str(anchor.get("epub:type") or anchor.get("type") or "")
+
+
+def test_sanitize_drops_event_handlers_and_script_urls():
+    from app.formats import html_blocks as hb
+
+    soup = hb.parse(RICH_CHAPTER, xml=True)
+    el, _, html = hb.find_blocks(soup)[1]
+    hb.apply_translation_html(
+        soup, el, html,
+        '<a href="javascript:alert(1)" onclick="alert(1)">链接</a><b onerror="x">粗体</b>',
+        False, "zh-CN")
+    p = soup.find_all("p")[1]
+    link = p.find("a")
+    assert link is not None and "href" not in link.attrs and "onclick" not in link.attrs
+    assert p.find("b") is not None and "onerror" not in p.find("b").attrs
 
 
 def test_epub_rich_paragraphs_keep_inline_formatting(tmp_path):
