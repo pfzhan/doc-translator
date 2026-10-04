@@ -395,6 +395,34 @@ async def retry_job(job_id: str, data: dict | None = Body(None)):
     return _resume(_job_or_404(job_id), (data or {}).get("service_id")).to_dict()
 
 
+@app.post("/api/jobs/{job_id}/variant")
+async def build_variant(job_id: str):
+    """生成另一种版本（双语 ⇄ 仅译文）。译文都在缓存里，只重新排版，不重复请求翻译服务。"""
+    job = _job_or_404(job_id)
+    if job.status != "done":
+        raise HTTPException(400, "翻译完成后才能生成另一种版本")
+    bilingual = job.mode != "bilingual"
+    marker = ".bilingual." if bilingual else ".translated."
+    if any(marker in name for name in job.outputs):
+        return job.to_dict()  # 已经生成过
+    if not jobs.source_path(job).exists():
+        raise HTTPException(400, "原文件已不存在，无法生成")
+    service = store.get(job.service_id)
+    if not service:
+        raise HTTPException(400, "原来的翻译服务已不存在，无法生成")
+    translator = _make_translator(job, service)
+    try:
+        outputs = await translate_file(jobs.source_path(job), jobs.out_dir(job.id), Runner(translator),
+                                       bilingual, job.target_lang)
+    except (TranslatorError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    for p in outputs:
+        if p.name not in job.outputs:
+            job.outputs.append(p.name)
+    jobs.save(job)
+    return job.to_dict()
+
+
 @app.get("/api/jobs/{job_id}/preview")
 def job_preview(job_id: str, since: int = -1):
     """边翻边预览。since=-1 返回全部段落和已完成译文；之后用返回的 version 增量拉取。"""

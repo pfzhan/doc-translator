@@ -108,6 +108,39 @@ def test_retry_recomputes_preview_flag_for_legacy_jobs(app_env):
         assert p["ready"] and p["segments"]
 
 
+def test_variant_generates_other_mode(app_env):
+    """已完成的任务可以补生成另一种版本（双语 ⇄ 仅译文），不重复请求翻译服务。"""
+    main = app_env
+    from app.translators import MockTranslator
+
+    calls = []
+    original = MockTranslator.translate_batch
+
+    async def counting(self, texts):
+        calls.append(len(texts))
+        return await original(self, texts)
+
+    MockTranslator.translate_batch = counting
+    try:
+        with TestClient(main.app) as client:
+            job = wait_done(client, submit(client)["id"])  # 默认双语
+            assert job["status"] == "done"
+            assert any("bilingual" in o["name"] for o in job["outputs"])
+            first = sum(calls)
+
+            again = client.post(f"/api/jobs/{job['id']}/variant").json()
+            names = [o["name"] for o in again["outputs"]]
+            assert any("translated" in n for n in names) and any("bilingual" in n for n in names)
+            assert sum(calls) == first  # 全部命中缓存
+            url = next(o["url"] for o in again["outputs"] if "translated" in o["name"])
+            assert client.get(url).status_code == 200
+
+            once_more = client.post(f"/api/jobs/{job['id']}/variant").json()
+            assert [o["name"] for o in once_more["outputs"]] == names  # 幂等
+    finally:
+        MockTranslator.translate_batch = original
+
+
 def test_delete_removes_record_and_files(app_env):
     main = app_env
     with TestClient(main.app) as client:
