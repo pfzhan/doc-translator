@@ -39,6 +39,9 @@ class Job:
     preview: bool = False
     detected_lang: str = ""
     skipped: int = 0
+    # 大模型接口返回的 token 用量，跨继续/重试累计；谷歌等接口不提供，保持 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
     # 不落盘的运行时字段
     runner: object = field(default=None, repr=False, compare=False)
@@ -70,6 +73,8 @@ class Job:
             "size": self.size,
             "detected_lang": self.detected_lang,
             "skipped": self.skipped,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
             # 插件的 sameLangCheck：检测到的源语言和目标语言一致时提示
             "same_lang": same_language(self.detected_lang, self.target_lang),
             "preview": self.preview,

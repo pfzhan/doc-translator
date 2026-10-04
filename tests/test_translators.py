@@ -185,3 +185,34 @@ def test_google_splits_html_and_plain_batches():
     out = run(tr.translate_batch(["a", "b"]))
     assert out == ["text:a", "text:b"]
     run(tr.aclose())
+
+
+def test_llm_token_usage_accumulated():
+    """接口返回的 usage 累计到 translator.usage：批量、补翻的请求都算。"""
+    def handler(request):
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "译"}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+        })
+
+    tr = make_openai(handler)
+    run(tr.translate_batch(["one"]))
+    run(tr.translate_batch(["two"]))
+    assert tr.usage == {"prompt": 200, "completion": 40}
+    run(tr.aclose())
+
+
+def test_gemini_token_usage_mapping():
+    """Gemini 的 usageMetadata 字段名映射到 prompt/completion。"""
+    def handler(request):
+        return httpx.Response(200, json={
+            "candidates": [{"content": {"parts": [{"text": "译"}]}}],
+            "usageMetadata": {"promptTokenCount": 50, "candidatesTokenCount": 10, "thoughtsTokenCount": 30},
+        })
+
+    from app.translators import GeminiTranslator
+    tr = GeminiTranslator("zh-CN", api_key="x", base_url="http://localhost", model="m",
+                          transport=httpx.MockTransport(handler))
+    assert run(tr.translate_batch(["one"])) == ["译"]
+    assert tr.usage == {"prompt": 50, "completion": 40}
+    run(tr.aclose())
