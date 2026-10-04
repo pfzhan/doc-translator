@@ -20,8 +20,12 @@ CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
 # 行首列表标记：符号弹点（可不带空格）、短横线类（须带空格，避免误伤连字符单词）、数字/字母编号
 BULLET_RE = re.compile(r"^\s*(?:[•◦▪‣·○■□►»]\s*|[-–—*]\s+|\d{1,3}[.)]\s+|[a-zA-Z][.)]\s+)")
-# 新段落的开头：大写字母、数字、CJK、引号/括号（小写字母开头多半是自动换行的续行）
-SEG_START_RE = re.compile(r"^[A-Z0-9À-Þ぀-ヿ㐀-鿿가-힯(\"'“‘\[（【]")
+# 新段落的开头：大写字母、数字、引号/括号（小写字母开头多半是自动换行的续行）。
+# CJK 不在其中：CJK 行首无法区分新句子和续行，只有上行以句末标点结尾才算新段落（见下）
+SEG_START_RE = re.compile(r"^[A-Z0-9À-Þ(\"'“‘\[（【]")
+CJK_START_RE = re.compile(r"^[぀-ヿ㐀-鿿가-힯]")
+# 不含分号：分号在下面的连接标点里，硬换行不会因此拆段
+SENT_ENDS = ("。", "！", "？", "：", "…", ".", "!", "?", ":", '"', "'", "”", "’", "」", "』", ")", "）")
 
 
 @dataclass
@@ -59,11 +63,10 @@ def _split_lines(items: list[tuple[str, "pymupdf.Rect", list[dict]]]) -> list[li
     项目符号变成行内文字、把不相干的内容拼在一起。三处拆段：
     - 行首带列表标记；
     - 纯符号行（“=”“→”等）单独成段，之后被过滤器跳过、原样保留；
-    - 行首明显左跳，且上行没撑到块的右边距（并列短标签被并进同一块）；两行都撑满
-      右边距是首行缩进的自动换行，不能拆。跳幅超过约 3 个字号、且不是两行都撑满时
-      也拆，用来抓住上行恰好是块里最宽行的并列标签。
+    - 左跳超过约 3 个字号、且两行没有都撑满右边距（并列标签）。1–2em 是首行缩进，
+      不管上一行有没有撑满，都不拆。
     - 上行明显没到右边距（硬换行而非自动换行）且下行像新句子开头；上行以逗号等
-      连接标点结尾的不算硬换行。
+      连接标点结尾、左跳只是缩进、或仍是同一条列表项的续行，都不算硬换行。
     自动换行的续行（小写开头、上行撑满）仍并入上一段。
     """
     if not items:
@@ -76,17 +79,24 @@ def _split_lines(items: list[tuple[str, "pymupdf.Rect", list[dict]]]) -> list[li
         psize = max((s["size"] for s in pspans), default=10)
         stripped = text.lstrip()
         prev_symbol = bool(NO_TEXT_RE.match(ptext.strip()))  # 纯符号行独立成段，后面的内容不和它拼
+        jump = prect.x0 - rect.x0
+        indent = 0 < jump <= 3 * psize  # 1–2em 左跳是首行缩进，不是新段落
+        # 列表项的续行：缩进在弹点之后的悬挂对齐。同 x0 或左跳的不是续行，可能是下一段
+        continuing_list = bool(BULLET_RE.match(ptext)) and not BULLET_RE.match(text) and rect.x0 > prect.x0
+        # CJK 行首分不出新句子和续行，要求上行以句末标点结尾才算新段落
+        seg_start = bool(SEG_START_RE.match(stripped)) or (
+            bool(CJK_START_RE.match(stripped)) and ptext.rstrip().endswith(SENT_ENDS)
+        )
         hard_break = (
             max_x1 - prect.x1 > 3 * psize
-            and SEG_START_RE.match(stripped)
+            and seg_start
             and not prev_symbol
+            and not indent
+            and not continuing_list
             and not ptext.rstrip().endswith((",", "，", "、", ";", "；", "(", "+", "*", "/", "=", "<", ">"))
         )
-        jump = prect.x0 - rect.x0
-        prev_short = max_x1 - prect.x1 > 3 * psize
         both_full = max_x1 - prect.x1 <= 3 * psize and max_x1 - rect.x1 <= 3 * psize
-        # 1–2em 的左跳是首行缩进；超过约 3 个字号才像换了一列标签
-        left_jump = jump > 8 and not both_full and (prev_short or jump > 3 * psize)
+        left_jump = jump > 3 * psize and not both_full
         if BULLET_RE.match(text) or NO_TEXT_RE.match(stripped) or prev_symbol or hard_break or left_jump:
             groups.append(cur)
             cur = [i]
@@ -157,7 +167,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
     rtl = target_lang.split("-")[0] in RTL_LANGUAGES
     # CJK 字体的行框比拉丁高（约 1.31em vs 1.16em），且字形顶部会越出给定区域：
     # 按原字号写入会和下一行叠在一起，字号缩小并下移补偿
-    cjk = target_lang.split("-")[0] in ("zh", "ja", "ko")
+    # 粤语、文言文走同一套 CJK 字体，行框一样偏高
+    cjk = target_lang.split("-")[0] in ("zh", "ja", "ko", "yue", "wyw")
     # lang 让 MuPDF 为中日韩选对字形；dir=rtl 让阿拉伯语、希伯来语从右往左排
     div_attrs = f' lang="{html.escape(target_lang)}"' if target_lang else ""
     if rtl:

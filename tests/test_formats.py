@@ -289,6 +289,33 @@ def test_pdf_left_jump_keeps_full_width_wrap():
     assert _split_lines(items) == [[0, 1]]
 
 
+def test_pdf_short_indent_stays_one_segment():
+    """第一行又短又缩进、续行更长，仍是自动换行，不能拆。中文续行也不因为像新句子就拆。"""
+    from app.formats.pdf import _split_lines
+
+    latin = [
+        _line("Hello", 64, 140, 10, size=12),
+        _line("And the sentence continues much further", 40, 400, 26, size=12),
+    ]
+    cjk = [
+        _line("开始", 64, 120, 10, size=12),
+        _line("续行比第一行长很多", 40, 360, 26, size=12),
+    ]
+    assert _split_lines(latin) == [[0, 1]]
+    assert _split_lines(cjk) == [[0, 1]]
+
+
+def test_pdf_list_continuation_keeps_capital():
+    """列表项的续行即使大写开头，也还是这一项，不是新段落。"""
+    from app.formats.pdf import _split_lines
+
+    items = [
+        _line("- First item", 40, 120, 10),
+        _line("Continues Here", 55, 220, 24),
+    ]
+    assert _split_lines(items) == [[0, 1]]
+
+
 def test_pdf_cjk_indent_wrap_stays_one_segment():
     """2em 首行缩进、续行没撑满，仍是同一段。"""
     from app.formats.pdf import _split_lines
@@ -471,3 +498,100 @@ def test_epub_rich_paragraphs_keep_inline_formatting(tmp_path):
     html = "".join(z.read(n).decode() for n in z.namelist() if n.endswith((".xhtml", ".html", ".htm")))
     assert "<b>" in html and 'href="https://example.com"' in html
     assert "[zh-CN]" in html
+
+
+def test_sanitize_rejects_anchor_only_translation():
+    """原文有文字、译文只剩锚点（模型抽风）：判不合格回退，不能清空原段落。"""
+    from app.formats import html_blocks as hb
+
+    soup = hb.parse('<html><body><p><a id="page42"/>Anchor and plain text here.</p></body></html>', xml=False)
+    el, _, html = hb.find_blocks(soup)[0]
+    assert html is not None  # 锚点段落走富文本路径
+    hb.apply_translation_html(soup, el, html, '<a id="page42"/>', False, "zh-CN")
+    p = soup.find("p")
+    assert p.get_text()  # 回退后仍有内容（译文不合格时原文或纯文本译文，不能是空壳）
+
+
+def test_sanitize_rejects_numbered_pagebreak_as_only_text():
+    """带页码的 pagebreak 不是幸存译文。只回锚点、<br>、或空标签加页码，都不能把正文清成页码。"""
+    from app.formats import html_blocks as hb
+
+    def chapter(body: str) -> str:
+        return (
+            '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">'
+            f"<body><p>{body}</p></body></html>"
+        )
+
+    anchor = '<span epub:type="pagebreak" id="page7" role="doc-pagebreak">7</span>'
+    prose = "The chapter continues here."
+
+    def apply(body: str, translated: str) -> str:
+        soup = hb.parse(chapter(body), xml=True)
+        el, _, html = hb.find_blocks(soup)[0]
+        assert html is not None
+        hb.apply_translation_html(soup, el, html, translated, False, "zh-CN")
+        text = soup.find("p").get_text()
+        assert soup.find(id="page7") is not None
+        return text
+
+    assert prose in apply(anchor + prose, anchor)
+    assert prose in apply(anchor + prose, "<br/>")
+    assert "Important" in apply(anchor + "<b>Important</b> words.", anchor + "<b></b>")
+    kept = apply(anchor + prose, anchor + "章节从这里继续。")
+    assert "章节从这里继续。" in kept
+
+
+def test_sanitize_keeps_raster_data_image_but_strips_script_url():
+    from app.formats import html_blocks as hb
+
+    src = '<p>Text <img src="data:image/png;base64,AAAA"/> with <a href="https://x">link</a></p>'
+    soup = hb.parse(f"<html><body>{src}</body></html>", xml=False)
+    el, _, html = hb.find_blocks(soup)[0]
+    hb.apply_translation_html(
+        soup, el, html,
+        '文字 <img src="data:image/png;base64,AAAA" onerror="alert(1)"/>'
+        '<img src="data:image/svg+xml;base64,PHN2Zw=="/> 和 '
+        '<a href="javascript:alert(1)">坏链接</a><a href="https://x">链接</a>',
+        False, "zh-CN")
+    raster, svg = soup.find_all("img")
+    assert raster["src"].startswith("data:image/png") and not raster.has_attr("onerror")
+    assert not svg.has_attr("src")
+    bad, good = soup.find_all("a")
+    assert not bad.has_attr("href") and good["href"] == "https://x"
+    assert hb._unsafe_url("data:image/jpeg;base64,AAAA", "image") is False
+    assert hb._unsafe_url("data:image/svg+xml,<svg></svg>", "image") is True
+
+
+def test_pdf_list_continuation_must_be_indented():
+    """列表项后同 x0 的新行不是续行（可能是下一段）；缩进的悬挂对齐行才是续行。"""
+    from app.formats.pdf import extract_blocks
+
+    doc = _pdf_with_text("- Short item\nNew paragraph at same indent")
+    assert [b.text for b in extract_blocks(doc)] == ["- Short item", "New paragraph at same indent"]
+
+
+def test_pdf_cjk_continuation_needs_sentence_end():
+    """CJK 行首：上行不以句末标点结尾视为续行；以句末标点结尾才拆段。"""
+    from app.formats.pdf import extract_blocks
+
+    # 第一行明显短于第二行（硬换行特征），但上行不是句末 → 不拆
+    doc = _pdf_with_text("这是一个短行\n而这是一行明显更长的内容用来撑满整行的宽度", fontname="china-s")
+    assert len(extract_blocks(doc)) == 1
+    doc = _pdf_with_text("这是完整的一句。\n而这是一行明显更长的内容用来撑满整行的宽度", fontname="china-s")
+    assert len(extract_blocks(doc)) == 2
+
+
+def test_pdf_cjk_straight_quote_ends_sentence():
+    """句末 ASCII 直引号和弯引号一样算句末；分号是连接标点，不拆段。"""
+    from app.formats.pdf import _split_lines
+
+    def pair(end: str) -> list[tuple[str, pymupdf.Rect, list[dict[str, float]]]]:
+        return [
+            _line(f"完整一句。{end}", 40, 140, 10, size=12),
+            _line("而这是一行明显更长的内容用来撑满整行的宽度", 40, 400, 26, size=12),
+        ]
+
+    assert _split_lines(pair('"')) == [[0], [1]]
+    assert _split_lines(pair("'")) == [[0], [1]]
+    assert _split_lines(pair("”")) == [[0], [1]]
+    assert _split_lines(pair("；")) == [[0, 1]]
