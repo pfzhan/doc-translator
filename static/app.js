@@ -687,15 +687,23 @@ function downloadLabel(name, multiple) {
   return `下载${variant}${multiple ? ` ${fmtOf(name).toUpperCase()}` : ""}`;
 }
 
-// 已完成的任务可以补生成另一种版本。服务端只按缓存重新排版，缺缓存会失败。
+// 批量算按钮文字：只有同一版本存在多个格式（如 MOBI 任务的 EPUB+MOBI）才带格式名
+function downloadLabels(outputs) {
+  const variants = outputs.map((o) => outputVariant(o.name));
+  const dup = variants.some((v, i) => v && variants.indexOf(v) !== i);
+  return outputs.map((o) => downloadLabel(o.name, dup));
+}
+
+// 另一种版本的按钮：文案和已有文件的下载按钮完全一致（“下载译文/下载双语”），
+// 文件还没生成时点击就在后台现生成（服务端按缓存重新排版，几秒）然后直接开始下载
 const variantInflight = new Set();
 
 function variantButton(job) {
   if (job.status !== "done") return null;
-  const want = job.mode === "bilingual" ? "仅译文" : "双语";
+  const want = job.mode === "bilingual" ? "译文" : "双语";
   const marker = job.mode === "bilingual" ? "translated" : "bilingual";
   if (job.outputs.some((o) => outputVariant(o.name) === marker)) return null;
-  const btn = el("button", "btn sm", `生成${want}版`);
+  const btn = el("button", "btn sm", `下载${want}`);
   btn.type = "button";
   if (variantInflight.has(job.id)) {
     btn.disabled = true;
@@ -713,7 +721,15 @@ function variantButton(job) {
         reader.job = updated;
         renderReaderBar(updated);
       }
-      toast(`已生成${want}版，可以下载了`);
+      const o = updated.outputs.find((out) => outputVariant(out.name) === marker);
+      if (o) {
+        const a = document.createElement("a");
+        a.href = o.url;
+        a.download = o.name;
+        document.body.append(a);
+        a.click();
+        a.remove();
+      }
     } catch (err) {
       toast(`生成失败：${err.message}`);
     } finally {
@@ -777,16 +793,20 @@ function jobRow(job) {
   main.append(name);
 
   const meta = el("div", "job-meta");
+  // 两行固定布局：第一行语言/模式/服务，第二行大小/时间。
+  // 单行 flex-wrap 的换行点会随按钮宽度漂移，不同卡片换行位置不一致，还会把“·”甩到行首
   for (const [i, part] of [
     langPair(job),
     job.mode === "translated" ? "仅译文" : "双语对照",
     serviceLabel(job),
-    formatSize(job.size),
-    timeAgo(job.created),
   ].filter(Boolean).entries()) {
     meta.append(el("span", i ? "sep" : "", part));
   }
-  main.append(meta);
+  const meta2 = el("div", "job-meta");
+  for (const [i, part] of [formatSize(job.size), timeAgo(job.created)].filter(Boolean).entries()) {
+    meta2.append(el("span", i ? "sep" : "", part));
+  }
+  main.append(meta, meta2);
 
   const status = el("div", "job-status");
   status.append(el("span", `badge ${job.status}`, STATUS_TEXT[job.status] || job.status));
@@ -819,8 +839,11 @@ function jobRow(job) {
     read.addEventListener("click", () => openReader(job.id));
     actions.append(read);
   }
-  for (const o of job.outputs) {
-    const a = el("a", "btn sm primary", downloadLabel(o.name, job.outputs.length > 1));
+  const curVariant = job.mode === "bilingual" ? "bilingual" : "translated";
+  for (const [i, o] of job.outputs.entries()) {
+    // 当前模式对应的版本是主按钮；另一种版本已生成时降为普通按钮，和“生成X版”占位一致
+    const primary = outputVariant(o.name) === curVariant;
+    const a = el("a", primary ? "btn sm primary" : "btn sm", downloadLabels(job.outputs)[i]);
     a.href = o.url;
     a.download = o.name;
     a.title = o.name;
@@ -1152,11 +1175,13 @@ function renderReaderBar(job) {
     pause.addEventListener("click", () => pauseJob(job.id, pause));
     actions.append(pause);
   }
-  for (const o of job.outputs) {
-    const a = el("a", "btn primary sm");
+  const curVariant = job.mode === "bilingual" ? "bilingual" : "translated";
+  for (const [i, o] of job.outputs.entries()) {
+    const primary = outputVariant(o.name) === curVariant;
+    const a = el("a", primary ? "btn primary sm" : "btn sm");
     a.href = o.url;
     a.download = o.name;
-    a.append("↓ ", el("span", "", downloadLabel(o.name, job.outputs.length > 1)));
+    a.append("↓ ", el("span", "", downloadLabels(job.outputs)[i]));
     actions.append(a);
   }
   const variant = variantButton(job);
