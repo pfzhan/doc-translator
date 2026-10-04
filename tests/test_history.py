@@ -90,6 +90,24 @@ def test_retry_reuses_cache_and_can_switch_service(app_env):
         MockTranslator.translate_batch = original
 
 
+def test_retry_recomputes_preview_flag_for_legacy_jobs(app_env):
+    """加预览功能之前创建的记录存的是 preview=False，重新翻译时应按格式重新计算。"""
+    main = app_env
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        assert job["status"] == "done"
+        # 模拟旧记录：preview=False，没有预览快照
+        legacy = main.jobs.get(job["id"])
+        legacy.preview = False
+        main.jobs.save(legacy)
+        (main.jobs.dir(job["id"]) / "preview.json").unlink(missing_ok=True)
+
+        again = wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={}).json()["id"])
+        assert again["status"] == "done" and again["preview"] is True
+        p = client.get(f"/api/jobs/{job['id']}/preview").json()
+        assert p["ready"] and p["segments"]
+
+
 def test_delete_removes_record_and_files(app_env):
     main = app_env
     with TestClient(main.app) as client:

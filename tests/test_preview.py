@@ -125,7 +125,7 @@ def test_preview_endpoints(app_env):
         assert client.get("/api/jobs/nope/preview").status_code == 404
 
         pdf = client.post("/api/jobs", files={"file": ("a.pdf", b"%PDF-1.4")}, data={"service_id": "mock"}).json()
-        assert pdf["preview"] is False
+        assert pdf["preview"] is True
 
 
 def test_epub_preview_kinds_in_reading_order():
@@ -145,3 +145,22 @@ def test_epub_preview_kinds_in_reading_order():
     ch1 = next(i for i, t in enumerate(texts) if t.startswith("CHAPTER I.") and "Rabbit" in t)
     alice = next(i for i, t in enumerate(texts) if t.startswith("Alice was beginning"))
     assert ch1 < alice
+
+
+def test_pdf_preview_segments():
+    src = SAMPLES / "attention.pdf"
+    if not src.exists():
+        pytest.skip("sample missing")
+    from app.formats import translate_file
+
+    runner = Runner(MockTranslator("zh-CN"), cache=MemCache())
+    out = Path(__import__("tempfile").mkdtemp())
+    asyncio.run(translate_file(src, out, runner, False, "zh-CN"))
+    preview = runner.preview()
+    assert preview["ready"]
+    segs = preview["segments"]
+    assert segs and all(s["k"] in ("h2", "p") for s in segs)
+    assert "p" in {s["k"] for s in segs}
+    # 每个非空段落都有译文更新
+    updated = {u[0] for u in preview["updates"]}
+    assert updated == {i for i, s in enumerate(segs) if s["s"].strip()}
