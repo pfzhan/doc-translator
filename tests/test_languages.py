@@ -43,6 +43,15 @@ def test_lang_overrides_match_plugin_rules(src, dst, expected):
     assert default_prompts(dst, src)["system"].startswith(expected)
 
 
+def test_zh_prompts_ask_for_chinese_numerals():
+    assert "中文数字" in default_prompts("zh-CN")["system"]
+    assert "中文數字" in default_prompts("zh-TW")["system"]
+    assert "中文数字" in default_prompts("zh-CN-NE")["system"]
+    assert "中文数字" in default_prompts("zh-CN", "wyw")["system"]
+    system, _ = build_messages(["Book 2"], "zh-HK")
+    assert "第二卷" in system
+
+
 def test_from_and_to_placeholders():
     system, user = build_messages(["a", "b"], "it", source_lang="ja")
     assert system.startswith("You are a professional Italian native translator")
@@ -124,6 +133,7 @@ def test_google_language_codes():
 
 def test_build_messages_html_suffix():
     system, _ = build_messages(["x <b>y</b>"], "zh-CN", contains_html=True)
-    assert "HTML fragments" in system and "href" in system
+    assert "HTML fragments" in system and "href" in system and "word order" in system
+    assert "reorder" not in system
     system, _ = build_messages(["plain"], "zh-CN")
     assert "HTML fragments" not in system
