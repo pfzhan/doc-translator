@@ -151,18 +151,23 @@ class JobStore:
         shutil.rmtree(self.dir(job_id), ignore_errors=True)
         return True
 
-    def cleanup(self, retention_days: int, now: float | None = None,
-                busy: frozenset[str] | None = None) -> list[str]:
-        """删除超过保留时间的记录（运行中的、以及正在补生成另一种版本的不删）。retention_days=0 表示永久保留。"""
+    def expired_ids(self, retention_days: int, now: float | None = None) -> list[str]:
+        """超过保留时间、且不在翻译中的记录 id。不在这里删，调用方还要避开正在补生成的任务。"""
         if retention_days <= 0:
             return []
         now = now or time.time()
+        with self.lock:  # 在调用方的线程里跑，遍历要和 add/delete 互斥
+            return [
+                j.id for j in list(self.jobs.values())
+                if j.status not in ("queued", "running")
+                and now - (j.finished or j.created) > retention_days * DAY
+            ]
+
+    def cleanup(self, retention_days: int, now: float | None = None,
+                busy: frozenset[str] | None = None) -> list[str]:
+        """删除超过保留时间的记录（运行中的、以及 busy 里的不删）。retention_days=0 表示永久保留。"""
         busy = busy or frozenset()
-        expired = [
-            j.id for j in list(self.jobs.values())
-            if j.id not in busy and j.status not in ("queued", "running")
-            and now - (j.finished or j.created) > retention_days * DAY
-        ]
+        expired = [jid for jid in self.expired_ids(retention_days, now) if jid not in busy]
         for jid in expired:
             self.delete(jid)
         return expired

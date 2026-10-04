@@ -33,5 +33,6 @@ def app_env(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "settings", Settings(tmp_path / "settings.json"))
     monkeypatch.setattr(main, "running", {})
     monkeypatch.setattr(main, "variant_tasks", {})
+    monkeypatch.setattr(main, "deleting", set())
     monkeypatch.setattr(main, "pause_requested", set())
     return main
