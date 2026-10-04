@@ -290,6 +290,21 @@ def test_settings(tmp_path):
     assert Settings(tmp_path / "broken.json").retention_days == 30
 
 
+def test_cleanup_skips_inflight_variant(app_env):
+    """过期清理不能删掉正在补生成的记录。"""
+    main = app_env
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        record = main.jobs.get(job["id"])
+        record.finished = record.created = time.time() - 10 * DAY
+        main.variant_tasks[job["id"]] = object()
+        assert client.put("/api/settings", json={"retention_days": 7}).status_code == 200
+        assert client.get(f"/api/jobs/{job['id']}").status_code == 200
+        main.variant_tasks.pop(job["id"])
+        client.put("/api/settings", json={"retention_days": 7})
+        assert client.get(f"/api/jobs/{job['id']}").status_code == 404
+
+
 def test_settings_endpoint_triggers_cleanup(app_env):
     main = app_env
     with TestClient(main.app) as client:

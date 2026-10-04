@@ -32,15 +32,29 @@ jobs = JobStore(history.JOBS_DIR)
 running: dict[str, asyncio.Task] = {}
 # 正在补生成另一种版本的请求。删除和过期清理要等它写完，第二次请求直接拒绝。
 variant_tasks: dict[str, asyncio.Future[None]] = {}
+# 过期清理已经决定要删、还没删完的任务。补生成看到它就停，避免删目录时还在写。
+deleting: set[str] = set()
 # 用户点了暂停的任务：取消时据此把状态记成“已暂停”，而不是“已中断”
 pause_requested: set[str] = set()
 ACTIVE = ("queued", "running")
 PROGRESS_SAVE_INTERVAL = 5
 
 
-def _cleanup() -> None:
-    # 补生成进行中的记录先不删，避免目录在写入时被清掉
-    jobs.cleanup(settings.retention_days, busy=frozenset(variant_tasks))
+async def _cleanup() -> None:
+    """删过期记录。是否在补生成只在事件循环里判断，不把那个字典交给别的线程。"""
+    expired = await asyncio.to_thread(jobs.expired_ids, settings.retention_days)
+    for jid in expired:
+        if jid in variant_tasks or jid in running or jid in deleting:
+            continue
+        deleting.add(jid)
+        # 登记和再检查之间没有 await，补生成插不进来
+        if jid in variant_tasks:
+            deleting.discard(jid)
+            continue
+        try:
+            await asyncio.to_thread(jobs.delete, jid)
+        finally:
+            deleting.discard(jid)
 
 
 @asynccontextmanager
@@ -49,7 +63,7 @@ async def lifespan(_app):
     async def loop():
         while True:
             try:
-                await asyncio.to_thread(_cleanup)  # 扫磁盘是重 IO，别卡事件循环
+                await _cleanup()  # 扫磁盘放在 _cleanup 里的线程，别卡事件循环
             except Exception:  # noqa: BLE001
                 traceback.print_exc()  # 清理失败记录日志，下一轮再试，不能让后台任务结束
             await asyncio.sleep(CLEANUP_INTERVAL)
@@ -298,7 +312,7 @@ async def create_job(
     service_id: str = Form(""),
     mode: str = Form("bilingual"),
 ):
-    await asyncio.to_thread(_cleanup)
+    await _cleanup()
     name = Path(file.filename or "upload").name
     ext = Path(name).suffix.lower()
     if ext not in SUPPORTED:
@@ -425,6 +439,8 @@ async def build_variant(job_id: str):
     want = "bilingual" if bilingual else "translated"
     if any(output_variant(name) == want for name in job.outputs):
         return job.to_dict()  # 已经生成过
+    if job.id in deleting:
+        raise HTTPException(409, "这条记录正在清理，请稍后再试")
     if job.id in variant_tasks:
         raise HTTPException(409, "正在生成另一种版本，请稍候")
     task = asyncio.current_task()
@@ -528,7 +544,7 @@ async def update_settings(data: dict = Body(...)):
         result = settings.update(data)
     except SettingsError as e:
         raise HTTPException(400, str(e))
-    await asyncio.to_thread(_cleanup)  # 改短了保留时间，立即清理
+    await _cleanup()  # 改短了保留时间，立即清理
     return result
 
 
