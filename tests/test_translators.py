@@ -178,9 +178,15 @@ def test_google_splits_html_and_plain_batches():
         return httpx.Response(200, json=[[f"{fmt}:{q}", "en"] for q in qs])
 
     tr = GoogleTranslator("zh-CN", transport=httpx.MockTransport(handler))
+    tr.html_texts = {"x <b>bold</b> y"}
     out = run(tr.translate_batch(["plain one", "x <b>bold</b> y", "plain two"]))
     assert out == ["text:plain one", "html:x <b>bold</b> y", "text:plain two"]
     assert sorted(formats) == ["html", "text"]
+    # 正文里的尖括号不是富文本，不能因为长得像标签就改成 format=html
+    formats.clear()
+    out = run(tr.translate_batch(["see <Note> and <b>"]))
+    assert out == ["text:see <Note> and <b>"]
+    assert formats == ["text"]
     # 全是纯文本时不拆组
     out = run(tr.translate_batch(["a", "b"]))
     assert out == ["text:a", "text:b"]

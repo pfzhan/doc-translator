@@ -674,15 +674,14 @@ const ACTIVE = new Set(["queued", "running"]);
 // 电子书富文本段落的原文/译文带行内标签（<b>、<a> 等），预览显示时剥掉：
 // 纯字符串处理（不走 DOM，译文来自模型，避免 onerror 之类的属性被触发）
 function htmlToText(s) {
-  if (!/<[a-zA-Z/]/.test(s)) return s;
+  if (!/<[a-zA-Z/]/.test(s) && !/&(?:#\d+|#x[0-9a-f]+|[a-z]+);/i.test(s)) return s;
+  const named = { nbsp: "\u00a0", apos: "'", amp: "&", lt: "<", gt: ">", quot: '"' };
   return s
-    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<br\b[^>]*>/gi, "\n")
     .replace(/<[^>]*>/g, "")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n))
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, "&");
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)))
+    .replace(/&([a-z]+);/gi, (m, name) => named[name.toLowerCase()] ?? m);
 }
 
 function isEbookJob(job) {

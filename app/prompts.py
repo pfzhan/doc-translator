@@ -61,9 +61,10 @@ belong to the processed content."""
 HTML_SUFFIX = """
 
 ## HTML fragments
-Some items are HTML fragments. Preserve every tag and attribute exactly as in
-the source (including href and class); translate only the text between tags.
-Do not add, remove, reorder, or nest tags."""
+Some items are HTML fragments. Keep every tag name and attribute (including href
+and class) and translate only the text between tags. Move a tag together with the
+words it wraps so the markup follows the target word order. Do not add, drop, or
+nest tags."""
 
 TITLE_PROMPT = "\n\n## Context Awareness\nDocument Metadata:\nTitle: “{{imt_title}}”"
 
