@@ -675,6 +675,35 @@ function fmtOf(name) {
   return (name.split(".").pop() || "").toLowerCase().replace("markdown", "md");
 }
 
+function downloadLabel(name, multiple) {
+  const variant = name.includes(".bilingual.") ? "双语" : name.includes(".translated.") ? "译文" : "";
+  return `下载${variant}${multiple ? ` ${fmtOf(name).toUpperCase()}` : ""}`;
+}
+
+// 已完成的任务可以补生成另一种版本（双语 ⇄ 仅译文），服务端用缓存重新排版，很快
+function variantButton(job) {
+  if (job.status !== "done") return null;
+  const want = job.mode === "bilingual" ? "仅译文" : "双语";
+  const marker = job.mode === "bilingual" ? ".translated." : ".bilingual.";
+  if (job.outputs.some((o) => o.name.includes(marker))) return null;
+  const btn = el("button", "btn sm", `生成${want}版`);
+  btn.type = "button";
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    btn.textContent = "生成中…";
+    try {
+      const updated = await api(`/api/jobs/${job.id}/variant`, { method: "POST" });
+      upsertJob(updated);
+      toast(`已生成${want}版，可以下载了`);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = `生成${want}版`;
+      toast(`生成失败：${err.message}`);
+    }
+  });
+  return btn;
+}
+
 function timeAgo(ts) {
   const s = Math.max(0, Date.now() / 1000 - ts);
   if (s < 60) return "刚刚";
@@ -769,13 +798,14 @@ function jobRow(job) {
     actions.append(read);
   }
   for (const o of job.outputs) {
-    const a = el("a", "btn sm primary", "下载");
+    const a = el("a", "btn sm primary", downloadLabel(o.name, job.outputs.length > 1));
     a.href = o.url;
     a.download = o.name;
     a.title = o.name;
-    if (job.outputs.length > 1) a.textContent = `下载 ${fmtOf(o.name).toUpperCase()}`;
     actions.append(a);
   }
+  const variant = variantButton(job);
+  if (variant) actions.append(variant);
   if (ACTIVE.has(job.status)) {
     const pause = el("button", "btn sm", "暂停");
     pause.type = "button";
@@ -1103,9 +1133,11 @@ function renderReaderBar(job) {
     const a = el("a", "btn primary sm");
     a.href = o.url;
     a.download = o.name;
-    a.append("↓ ", el("span", "", "下载"));
+    a.append("↓ ", el("span", "", downloadLabel(o.name, job.outputs.length > 1)));
     actions.append(a);
   }
+  const variant = variantButton(job);
+  if (variant) actions.append(variant);
 }
 
 // 把接口返回的原始错误整理成一句人话；原文放在“详细信息”里，排查时还能看到
