@@ -18,6 +18,10 @@ from ..languages import RTL_LANGUAGES
 MATH_FONT_RE = re.compile(r"CMMI|CMSY|CMEX|MSBM|Math|Symbol|STIX|Cambria Math", re.I)
 CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
+# 行首列表标记：符号弹点（可不带空格）、短横线类（须带空格，避免误伤连字符单词）、数字/字母编号
+BULLET_RE = re.compile(r"^\s*(?:[•◦▪‣·○■□►»]\s*|[-–—*]\s+|\d{1,3}[.)]\s+|[a-zA-Z][.)]\s+)")
+# 新段落的开头：大写字母、数字、CJK、引号/括号（小写字母开头多半是自动换行的续行）
+SEG_START_RE = re.compile(r"^[A-Z0-9À-Þ぀-ヿ㐀-鿿가-힯(\"'“‘\[（【]")
 
 
 @dataclass
@@ -48,6 +52,44 @@ def _join_lines(lines: list[str]) -> str:
     return out
 
 
+def _split_lines(items: list[tuple[str, "pymupdf.Rect", list[dict]]]) -> list[list[int]]:
+    """把一个文本块里的行分成独立段落（返回每组的行下标）。
+
+    幻灯片里多个列表项、甚至不同的图注标签常被 PyMuPDF 归进同一块，整段翻译会把
+    项目符号变成行内文字、把不相干的内容拼在一起。三处拆段：
+    - 行首带列表标记；
+    - 纯符号行（“=”“→”等）单独成段，之后被过滤器跳过、原样保留；
+    - 行首明显左跳（并列排布的独立标签被并进同一块的情况）；
+    - 上行明显没到右边距（硬换行而非自动换行）且下行像新句子开头；上行以逗号等
+      连接标点结尾的不算硬换行。
+    自动换行的续行（小写开头、上行撑满）仍并入上一段。
+    """
+    if not items:
+        return []
+    max_x1 = max(r.x1 for _, r, _ in items)
+    groups, cur = [], [0]
+    for i in range(1, len(items)):
+        text, rect, _ = items[i]
+        ptext, prect, pspans = items[cur[-1]]
+        psize = max((s["size"] for s in pspans), default=10)
+        stripped = text.lstrip()
+        prev_symbol = bool(NO_TEXT_RE.match(ptext.strip()))  # 纯符号行独立成段，后面的内容不和它拼
+        hard_break = (
+            max_x1 - prect.x1 > 3 * psize
+            and SEG_START_RE.match(stripped)
+            and not prev_symbol
+            and not ptext.rstrip().endswith((",", "，", "、", ";", "；", "(", "+", "*", "/", "=", "<", ">"))
+        )
+        if BULLET_RE.match(text) or NO_TEXT_RE.match(stripped) or prev_symbol or hard_break \
+                or rect.x0 < prect.x0 - 8:
+            groups.append(cur)
+            cur = [i]
+        else:
+            cur.append(i)
+    groups.append(cur)
+    return groups
+
+
 def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     blocks = []
     for pno, page in enumerate(doc):
@@ -55,44 +97,49 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
         for b in data["blocks"]:
             if b.get("type") != 0:
                 continue
-            lines, line_rects, spans = [], [], []
+            items: list[tuple[str, pymupdf.Rect, list[dict]]] = []
             for ln in b["lines"]:
                 if abs(ln["dir"][1]) > 0.01:  # 旋转 / 竖排文字不处理
                     continue
                 text = "".join(s["text"] for s in ln["spans"])
                 if not text.strip():
                     continue
-                lines.append(text)
-                line_rects.append(pymupdf.Rect(ln["bbox"]))
-                spans.extend(s for s in ln["spans"] if s["text"].strip())
-            if not spans:
-                continue
-            text = _join_lines(lines)
-            total = sum(len(s["text"]) for s in spans)
-            math_chars = sum(len(s["text"]) for s in spans if MATH_FONT_RE.search(s["font"]))
-            letters = sum(c.isalpha() for c in text)
-            if NO_TEXT_RE.match(text) or math_chars > total * 0.3 or letters < 2 or letters < len(text) * 0.4:
-                continue
-            # 字号、颜色取占比最多的 span
-            main = max(spans, key=lambda s: len(s["text"]))
-            rect = pymupdf.Rect()
-            for r in line_rects:
-                rect |= r
-            blocks.append(TextBlock(
-                page=pno,
-                rect=rect,
-                line_rects=line_rects,
-                text=text,
-                size=round(main["size"], 1),
-                color=f"#{main['color']:06x}",
-                bold=bool(main["flags"] & 16) or "Bold" in main["font"],
-            ))
+                spans = [s for s in ln["spans"] if s["text"].strip()]
+                if spans:
+                    items.append((text, pymupdf.Rect(ln["bbox"]), spans))
+            for group in _split_lines(items):
+                texts = [items[i][0] for i in group]
+                line_rects = [items[i][1] for i in group]
+                spans = [s for i in group for s in items[i][2]]
+                text = _join_lines(texts)
+                total = sum(len(s["text"]) for s in spans)
+                math_chars = sum(len(s["text"]) for s in spans if MATH_FONT_RE.search(s["font"]))
+                letters = sum(c.isalpha() for c in text)
+                if NO_TEXT_RE.match(text) or math_chars > total * 0.3 or letters < 2 or letters < len(text) * 0.4:
+                    continue
+                # 字号、颜色取占比最多的 span
+                main = max(spans, key=lambda s: len(s["text"]))
+                rect = pymupdf.Rect()
+                for r in line_rects:
+                    rect |= r
+                blocks.append(TextBlock(
+                    page=pno,
+                    rect=rect,
+                    line_rects=line_rects,
+                    text=text,
+                    size=round(main["size"], 1),
+                    color=f"#{main['color']:06x}",
+                    bold=bool(main["flags"] & 16) or "Bold" in main["font"],
+                ))
     return blocks
 
 
 def _render_translated(src_path: Path, blocks: list[TextBlock], translations: list[str],
                        target_lang: str = "") -> pymupdf.Document:
     rtl = target_lang.split("-")[0] in RTL_LANGUAGES
+    # CJK 字体的行框比拉丁高（约 1.31em vs 1.16em），且字形顶部会越出给定区域：
+    # 按原字号写入会和下一行叠在一起，字号缩小并下移补偿
+    cjk = target_lang.split("-")[0] in ("zh", "ja", "ko")
     # lang 让 MuPDF 为中日韩选对字形；dir=rtl 让阿拉伯语、希伯来语从右往左排
     div_attrs = f' lang="{html.escape(target_lang)}"' if target_lang else ""
     if rtl:
@@ -115,12 +162,14 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         for b, t in items:
             weight = "bold" if b.bold else "normal"
             body = html.escape(t).replace("\n", "<br>")
+            size = b.size * 0.88 if cjk else b.size
             css = (
-                f"* {{font-family: sans-serif; font-size: {b.size}px; color: {b.color}; "
+                f"* {{font-family: sans-serif; font-size: {size}px; color: {b.color}; "
                 f"font-weight: {weight}; line-height: 1.2; margin: 0; padding: 0;}}"
             )
             # 留一点余量，避免译文比原文长时被截断；放不下由 scale_low=0 自动缩小
-            rect = pymupdf.Rect(b.rect.x0, b.rect.y0, b.rect.x1 + 2, b.rect.y1 + b.size * 0.3)
+            y0 = b.rect.y0 + b.size * 0.1 if cjk else b.rect.y0
+            rect = pymupdf.Rect(b.rect.x0, y0, b.rect.x1 + 2, b.rect.y1 + b.size * 0.3)
             page.insert_htmlbox(rect, f"<div{div_attrs}>{body}</div>", css=css, scale_low=0)
     return doc
 
@@ -147,7 +196,10 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     if re.search(r"\.(docx?|pdf|tex|indd)$|^untitled$", meta_title, re.I):
         meta_title = ""
     runner.set_title(meta_title or src.stem)
-    translations = await runner.translate_all([b.text for b in blocks])
+    # 预览的段落类型：字号明显大于正文中位数且较短的块当作小标题，其余按段落
+    median = sorted(b.size for b in blocks)[len(blocks) // 2]
+    kinds = ["h2" if b.size >= median * 1.3 and len(b.text) < 100 else "p" for b in blocks]
+    translations = await runner.translate_all([b.text for b in blocks], kinds=kinds, preview=True)
 
     def build():
         translated = _render_translated(src, blocks, translations, target_lang)
