@@ -365,3 +365,67 @@ def test_pdf_cjk_lines_do_not_overlap(tmp_path):
     expanded_y1 = 42 + 12 * 0.3
     assert cjk[0][0].y0 >= expanded_y0 - 1
     assert cjk[0][0].y1 <= expanded_y1 + 1
+
+
+# --- 行内格式（富文本段落）保留 ---
+
+RICH_CHAPTER = (
+    '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>c1</title></head><body>'
+    "<p>Plain paragraph without formatting.</p>"
+    '<p>With <b>bold</b> and <a href="https://example.com">a link</a> inside.</p>'
+    "</body></html>"
+)
+
+
+def _rich_epub(path):
+    _write_epub(
+        path,
+        '<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>',
+        '<itemref idref="ch1"/>',
+        {"ch1.xhtml": RICH_CHAPTER},
+    )
+
+
+def test_find_blocks_marks_rich_paragraphs():
+    from app.formats import html_blocks as hb
+
+    soup = hb.parse(RICH_CHAPTER, xml=True)
+    blocks = hb.find_blocks(soup)
+    assert [html is not None for _, _, html in blocks] == [False, True]
+    assert "<b>bold</b>" in blocks[1][2] and 'href="https://example.com"' in blocks[1][2]
+
+
+def test_apply_translation_html_keeps_tags_and_strips_script():
+    from app.formats import html_blocks as hb
+
+    soup = hb.parse(RICH_CHAPTER, xml=True)
+    el, _, html = hb.find_blocks(soup)[1]
+    hb.apply_translation_html(
+        soup, el, html,
+        '带有<b>粗体</b>和<a href="https://example.com">链接</a><script>alert(1)</script>。',
+        False, "zh-CN")
+    p = soup.find_all("p")[1]
+    assert p.find("b").get_text() == "粗体"
+    assert p.find("a")["href"] == "https://example.com"
+    assert p.find("script") is None
+
+
+def test_apply_translation_html_falls_back_when_tags_lost():
+    """译文把行内标签全丢了（模型不守规矩时）：回退纯文本，不写入空壳。"""
+    from app.formats import html_blocks as hb
+
+    soup = hb.parse(RICH_CHAPTER, xml=True)
+    el, _, html = hb.find_blocks(soup)[1]
+    hb.apply_translation_html(soup, el, html, "完全没有标签的译文。", False, "zh-CN")
+    p = soup.find_all("p")[1]
+    assert p.find("b") is None and p.get_text() == "完全没有标签的译文。"
+
+
+def test_epub_rich_paragraphs_keep_inline_formatting(tmp_path):
+    src = tmp_path / "book.epub"
+    _rich_epub(src)
+    [out] = run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))
+    z = zipfile.ZipFile(out)
+    html = "".join(z.read(n).decode() for n in z.namelist() if n.endswith((".xhtml", ".html", ".htm")))
+    assert "<b>" in html and 'href="https://example.com"' in html
+    assert "[zh-CN]" in html

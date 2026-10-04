@@ -57,6 +57,14 @@ Return only the processed text, without source text, markers, titles,
 explanations, or an enclosing Markdown fence. Preserve fenced code blocks that
 belong to the processed content."""
 
+# 批次里含 HTML 片段（电子书富文本段落）时附加：保留行内格式（加粗、链接）
+HTML_SUFFIX = """
+
+## HTML fragments
+Some items are HTML fragments. Preserve every tag and attribute exactly as in
+the source (including href and class); translate only the text between tags.
+Do not add, remove, reorder, or nest tags."""
+
 TITLE_PROMPT = "\n\n## Context Awareness\nDocument Metadata:\nTitle: “{{imt_title}}”"
 
 SOURCE_END = "[[source_end]]"
@@ -106,7 +114,7 @@ def fill(template: str, values: dict) -> str:
 
 
 def build_messages(texts: list[str], target_lang: str, *, source_lang: str = "auto", title: str = "",
-                   system_template: str = "", user_template: str = "") -> tuple[str, str]:
+                   system_template: str = "", user_template: str = "", contains_html: bool = False) -> tuple[str, str]:
     """返回 (system, user)。自定义模板为空时用默认模板。source_lang 是用户选的或检测出的源语言。"""
     defaults = default_prompts(target_lang, source_lang)
     system_t = system_template.strip() or defaults["system"]
@@ -130,6 +138,8 @@ def build_messages(texts: list[str], target_lang: str, *, source_lang: str = "au
         system = fill(system_t, values).strip() + PROTOCOL_SYSTEM_PROMPT
         marker = pick_marker(texts)
         body = "\n".join(f"[[{marker}{i}]]\n{t}" for i, t in enumerate(texts)) + "\n" + SOURCE_END
+    if contains_html:
+        system += HTML_SUFFIX
     # {{text}} 最后替换，避免原文里恰好有 {{xxx}} 被当成占位符
     user = fill(user_t.replace("{{text}}", "\0TEXT\0"), values).replace("\0TEXT\0", body)
     return system, user

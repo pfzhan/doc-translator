@@ -671,6 +671,24 @@ const STATUS_TEXT = { queued: "排队中", running: "翻译中", done: "已完�
 const RESUMABLE = new Set(["paused", "interrupted"]);
 const ACTIVE = new Set(["queued", "running"]);
 
+// 电子书富文本段落的原文/译文带行内标签（<b>、<a> 等），预览显示时剥掉：
+// 纯字符串处理（不走 DOM，译文来自模型，避免 onerror 之类的属性被触发）
+function htmlToText(s) {
+  if (!/<[a-zA-Z/]/.test(s)) return s;
+  return s
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(n))
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&");
+}
+
+function isEbookJob(job) {
+  return /\.(epub|mobi|azw3?|azw)$/i.test(job?.filename || "");
+}
+
 function fmtOf(name) {
   return (name.split(".").pop() || "").toLowerCase().replace("markdown", "md");
 }
@@ -1255,6 +1273,7 @@ function renderNotice(job) {
 function buildReader(segments) {
   const frag = document.createDocumentFragment();
   const lang = reader.job?.target_lang || "";
+  const ebook = isEbookJob(reader.job);
   let toc = null;
   reader.headings = [];
   reader.nodes = segments.map((seg, i) => {
@@ -1266,7 +1285,7 @@ function buildReader(segments) {
       return div;
     }
     div.classList.add("pending");
-    const src = el("div", "src", seg.s);
+    const src = el("div", "src", ebook ? htmlToText(seg.s) : seg.s);
     const dst = el("div", "dst");
     if (lang) dst.lang = lang;
     div.append(src, dst);
@@ -1324,7 +1343,7 @@ function applyUpdates(updates, initial) {
     if (!div || !div.classList.contains("pending")) continue;
     div.classList.remove("pending");
     div.classList.toggle("skipped", !!skipped);
-    div.querySelector(".dst").textContent = skipped ? "" : text;
+    div.querySelector(".dst").textContent = skipped ? "" : (isEbookJob(reader.job) ? htmlToText(text) : text);
     if (!initial) {
       div.classList.add("fresh");
       setTimeout(() => div.classList.remove("fresh"), 1500);

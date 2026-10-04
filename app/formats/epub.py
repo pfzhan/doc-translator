@@ -73,7 +73,7 @@ async def translate_epub(src: Path, out_dir: Path, runner, bilingual: bool, targ
 
         # 1. 解析所有文档，收集段落
         soups: dict[str, BeautifulSoup] = {}
-        tasks: list[tuple[str, object, str, str]] = []  # (文档, 元素, 原文, 类型)
+        tasks: list[tuple[str, object, str, str, str | None]] = []  # (文档, 元素, 原文, 类型, 富文本 HTML)
         for name in docs:
             if name not in names:
                 continue
@@ -81,31 +81,35 @@ async def translate_epub(src: Path, out_dir: Path, runner, bilingual: bool, targ
             if soup.find(True) is None:
                 continue  # 解析结果为空（如内部 DTD 问题回退也失败）：保留原文件，不用空文档覆盖
             soups[name] = soup
-            tasks.extend((name, el, text, "block") for el, text in hb.find_blocks(soup))
+            tasks.extend((name, el, text, "block", html) for el, text, html in hb.find_blocks(soup))
         if nav and nav in names:
             soup = hb.parse(zin.read(nav), xml=True)
             if soup.find(True) is not None:
                 soups[nav] = soup
-                tasks.extend((nav, el, text, "label") for el, text in hb.translate_nav_links(soup))
+                tasks.extend((nav, el, text, "label", None) for el, text in hb.translate_nav_links(soup))
         if ncx and ncx in names:
             soup = BeautifulSoup(zin.read(ncx), "lxml-xml")
             if soup.find(True) is not None:
                 soups[ncx] = soup
                 for el in soup.select("navLabel > text"):
                     if hb.translatable(el.get_text(strip=True)):
-                        tasks.append((ncx, el, el.get_text(strip=True), "label"))
+                        tasks.append((ncx, el, el.get_text(strip=True), "label", None))
 
         # 2. 翻译（书名作为上下文）
         title_el = opf.find("dc:title") or opf.find("title")
         runner.set_title(title_el.get_text(strip=True) if title_el else src.stem)
         # 预览里目录（nav / ncx）用 toc 类型，正文用元素名（h1、p、li…）
-        kinds = ["toc" if kind == "label" else hb.preview_kind(el) for _, el, _, kind in tasks]
-        results = await runner.translate_all([t[2] for t in tasks], kinds=kinds, preview=True)
+        kinds = ["toc" if kind == "label" else hb.preview_kind(el) for _, el, _, kind, _ in tasks]
+        # 富文本段落送 inner HTML 翻译，保留行内格式（加粗、链接）
+        results = await runner.translate_all([t[4] or t[2] for t in tasks], kinds=kinds, preview=True)
 
         # 3. 回写
-        for (name, el, text, kind), translated in zip(tasks, results):
+        for (name, el, text, kind, html), translated in zip(tasks, results):
             if kind == "block":
-                hb.apply_translation(soups[name], el, text, translated, bilingual, target_lang)
+                if html is not None:
+                    hb.apply_translation_html(soups[name], el, html, translated, bilingual, target_lang)
+                else:
+                    hb.apply_translation(soups[name], el, text, translated, bilingual, target_lang)
             else:
                 hb.set_label(el, text, translated, bilingual)
         if bilingual:
