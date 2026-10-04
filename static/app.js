@@ -1060,7 +1060,7 @@ async function readerTick() {
       $("reader-content").replaceChildren(el("div", "hint", "这条记录没有可预览的内容。"));
     }
     renderNotice(job);
-    // preview=false 的任务（如 PDF）永远没有预览内容，不在“未就绪”分支里空转
+    // preview=false 的任务（旧格式任务的历史记录）永远没有预览内容，不在“未就绪”分支里空转
     if (ACTIVE.has(job.status) || (!data.ready && job.preview !== false)) reader.timer = setTimeout(readerTick, 1000);
   } catch (err) {
     if (reader.jobId !== id) return;

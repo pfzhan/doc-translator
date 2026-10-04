@@ -154,6 +154,8 @@ def _resume(job: Job, service_id: str | None = None) -> Job:
     translator = _make_translator(job, service)
     job.service_id, job.service_name = service["id"], service.get("name", "")
     job.status, job.error, job.done, job.total, job.outputs, job.finished = "queued", "", 0, 0, [], 0.0
+    # 重新计算预览标记：旧记录可能是加预览功能之前创建的（存的是 False）
+    job.preview = Path(job.filename).suffix.lower() in PREVIEW_FORMATS
     for old in jobs.out_dir(job.id).glob("*"):
         old.unlink()
     (jobs.dir(job.id) / "preview.json").unlink(missing_ok=True)
