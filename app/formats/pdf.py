@@ -115,7 +115,16 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         )
         both_full = max_x1 - prect.x1 <= 3 * psize and max_x1 - rect.x1 <= 3 * psize
         left_jump = jump > 3 * psize and not both_full
-        if BULLET_RE.match(text) or NO_TEXT_RE.match(stripped) or prev_symbol or hard_break or left_jump:
+        # 两行纵向交叠超过一半、且横向区间相交：是同一可视行被上下标/公式拆出来的
+        # （y_1^T 的 1 和 T 各算一行，x 区间是交错咬合的），不能在这里拆段。
+        # 并排标签横向是分开的（无横向交叠），left_jump 照常拆开。
+        overlap = min(prect.y1, rect.y1) - max(prect.y0, rect.y0)
+        h_overlap = min(prect.x1, rect.x1) - max(prect.x0, rect.x0)
+        same_visual_line = (h_overlap > 0
+                            and overlap > min(prect.y1 - prect.y0, rect.y1 - rect.y0) * 0.5)
+        if not same_visual_line and (
+            BULLET_RE.match(text) or NO_TEXT_RE.match(stripped) or prev_symbol or hard_break or left_jump
+        ):
             groups.append(cur)
             cur = [i]
         else:
@@ -164,16 +173,130 @@ def _math_chars(spans: list[dict]) -> int:
     return n
 
 
+# 句末标点：判断页面末尾的块是不是被页边界切断的段落
+_SENT_END_PUNCT = tuple(".!?:;…。！？；：\"'”’)]}》")
+
+
+def _cross_page_units(blocks: list[TextBlock], median: float, skip_ids: set[int] = frozenset()) -> list[list[TextBlock]]:
+    """把跨页续段两两合并成翻译单元（返回块列表的列表，每单元 1~2 块）。
+
+    上一页最后一个正文块不以句末标点结尾、下一页第一个块以小写/数字开头且不像标题时，
+    视为被页边界切断的同一段。页脚脚注（字号明显小于正文）和指定跳过的块不参与。
+    """
+    by_page: dict[int, list[TextBlock]] = {}
+    for b in blocks:
+        by_page.setdefault(b.page, []).append(b)
+
+    units: list[list[TextBlock]] = []
+    pages = sorted(by_page)
+    used: set[int] = set()
+    for pno in pages:
+        body = [b for b in by_page[pno] if b.size >= median * 0.8]
+        for b in by_page[pno]:
+            if id(b) in used:
+                continue
+            nxt = by_page.get(pno + 1)
+            first = next((x for x in (nxt or []) if x.size >= median * 0.8), None)
+            head = first.text.lstrip()[:1] if first else ""
+            if (body and b is body[-1] and first is not None and id(first) not in used
+                    and id(b) not in skip_ids and id(first) not in skip_ids
+                    and not b.text.rstrip().endswith(_SENT_END_PUNCT)
+                    and (head.islower() or head.isdigit())
+                    and first.size <= b.size * 1.4):
+                units.append([b, first])
+                used.add(id(b))
+                used.add(id(first))
+            else:
+                units.append([b])
+                used.add(id(b))
+    return units
+
+
+def _split_translation(t: str, ratio: float) -> tuple[str, str]:
+    """把跨页合并段的译文按比例切回两页：优先在比例附近的句读点断开，
+    没有合适标点时按空格，再不行硬切。"""
+    target = len(t) * ratio
+    best = None
+    for m in re.finditer(r"[。！？；，、：.!?;,:]", t):
+        if best is None or abs(m.end() - target) < abs(best - target):
+            best = m.end()
+    if best is not None and abs(best - target) <= len(t) * 0.3:
+        return t[:best], t[best:]
+    # 拉丁文本按空格切
+    spaces = [m.start() for m in re.finditer(r"\s", t)]
+    if spaces:
+        cut = min(spaces, key=lambda s: abs(s - target))
+        return t[:cut], t[cut:]
+    cut = round(target)
+    return t[:cut], t[cut:]
+
+
+def _merge_visual_lines(blocks: list[TextBlock]) -> list[TextBlock]:
+    """合并其实是同一可视行的相邻块（字体在公式处切换时，PyMuPDF 会把一行拆成两块）。
+
+    判定：纵向交叠超过较矮块的一半、且横向区间相交。双栏的左右栏横向不相交，
+    不会被误并。不合并的话，两块译文会写进互相交叠的矩形里叠在一起。
+    """
+    out: list[TextBlock] = []
+    for b in blocks:
+        if out:
+            p = out[-1]
+            v_overlap = min(p.rect.y1, b.rect.y1) - max(p.rect.y0, b.rect.y0)
+            h_overlap = min(p.rect.x1, b.rect.x1) - max(p.rect.x0, b.rect.x0)
+            if (p.page == b.page and h_overlap > 0
+                    and v_overlap > min(p.rect.y1 - p.rect.y0, b.rect.y1 - b.rect.y0) * 0.5):
+                p.line_rects.extend(b.line_rects)
+                if p.span_lines and b.span_lines:
+                    p.span_lines.extend(b.span_lines)
+                else:
+                    p.span_lines = None
+                p.text = _join_lines([p.text, b.text])
+                p.rect |= b.rect
+                continue
+        out.append(b)
+    return out
+
+
 def _is_formula_span(span: dict, main_size: float) -> bool:
     """行内公式：数学字体的 span，或明显小于正文的角标 span（引用编号等）。"""
     return _font_is_math(span["font"]) or span["size"] < main_size * 0.79
+
+
+def _formula_markup(run_spans: list[dict], main_size: float) -> str:
+    """把公式 run 拼成带上下标哨兵的字符串（\\x01s\\x02..\\x01/s\\x02 上标，b 为下标）。
+    恢复进译文后由渲染层换成 <sup>/<sub>，y_1^T 不再被拍平成 y1T。
+    上/下标按 baseline 偏移判定：比正文 baseline 高的是上标，低的是下标。"""
+    text_spans = [s for s in run_spans if s["size"] >= main_size * 0.79]
+    origins = [s["origin"][1] for s in text_spans if s.get("origin")]
+    main_origin = origins[0] if origins else None
+    if main_origin is None:
+        return "".join(s["text"] for s in run_spans)
+    out, role = [], ""
+    for s in run_spans:
+        r = ""
+        if s["size"] < main_size * 0.79 and s.get("origin"):
+            dy = s["origin"][1] - main_origin
+            if dy < -1:
+                r = "s"
+            elif dy > 1:
+                r = "b"
+        if r != role:
+            if role:
+                out.append(f"\x01/{role}\x02")
+            if r:
+                out.append(f"\x01{r}\x02")
+            role = r
+        out.append(s["text"])
+    if role:
+        out.append(f"\x01/{role}\x02")
+    return "".join(out)
 
 
 def _placeholderize(block: TextBlock) -> tuple[str, list[str]]:
     """把块里的行内公式换成 {vN} 占位符（BabelDOC 的翻译协议），返回 (送翻文本, 公式列表)。
 
     没有公式时返回的文本与原文逐字一致，缓存照常命中。相邻的公式 span 和它们之间的
-    空白合并成一个占位符。
+    空白合并成一个占位符；上/下标用哨兵标记随公式一起保留。
     """
     if not block.span_lines:
         return block.text, []
@@ -185,12 +308,25 @@ def _placeholderize(block: TextBlock) -> tuple[str, list[str]]:
         while i < n:
             if _is_formula_span(spans[i], block.size):
                 run = spans[i]["text"]
+                run_spans = [spans[i]]
                 j = i + 1
-                while j < n and (not spans[j]["text"].strip() or _is_formula_span(spans[j], block.size)):
+                while j < n:
+                    if not spans[j]["text"].strip():
+                        # 空白 span：只有后面还跟着公式时才并入 run；
+                        # run 末尾的空白留在原文里，保住公式和正文之间的间隔
+                        if any(_is_formula_span(spans[k], block.size) for k in range(j + 1, n)):
+                            run += spans[j]["text"]
+                            run_spans.append(spans[j])
+                            j += 1
+                            continue
+                        break
+                    if not _is_formula_span(spans[j], block.size):
+                        break
                     run += spans[j]["text"]
+                    run_spans.append(spans[j])
                     j += 1
                 if run.strip():
-                    formulas.append(run.strip())
+                    formulas.append(_formula_markup(run_spans, block.size).strip())
                     parts.append(f"{{v{len(formulas)}}}")
                 else:
                     parts.append(run)
@@ -259,7 +395,7 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                     bold=bool(main["flags"] & 16) or "Bold" in main["font"],
                     span_lines=span_lines,
                 ))
-    return blocks
+    return _merge_visual_lines(blocks)
 
 
 def _render_translated(src_path: Path, blocks: list[TextBlock], translations: list[str],
@@ -290,7 +426,14 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         )
         for b, t in items:
             weight = "bold" if b.bold else "normal"
-            body = html.escape(t).replace("\n", "<br>")
+            body = (
+                html.escape(t)
+                .replace("\n", "<br>")
+                .replace("\x01s\x02", "<sup>")
+                .replace("\x01/s\x02", "</sup>")
+                .replace("\x01b\x02", "<sub>")
+                .replace("\x01/b\x02", "</sub>")
+            )
             size = b.size * 0.88 if cjk else b.size
             css = (
                 f"* {{font-family: sans-serif; font-size: {size}px; color: {b.color}; "
@@ -642,19 +785,49 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     runner.set_title(meta_title or src.stem)
     median = sorted(b.size for b in blocks)[len(blocks) // 2]
     kinds = [_preview_kind(b, median) for b in blocks]
-    # 行内公式换成 {vN} 占位符送翻（数学字体和角标不被翻译、不被语序重排弄乱）
-    sent_meta = [_placeholderize(b) for b in blocks]
-    raw = await runner.translate_all([s for s, _ in sent_meta], kinds=kinds, preview=True,
-                                     skip=biblio_skips(blocks))
-    translations: list[str] = []
-    for b, t, (sent_text, formulas) in zip(blocks, raw, sent_meta):
+    skips = biblio_skips(blocks)
+    skip_ids = {id(b) for b, s in zip(blocks, skips) if s}
+    # 跨页续段合并成翻译单元：“quite / well” 这类被页边界切断的句子不再拆成两半各翻各的
+    units = _cross_page_units(blocks, median, skip_ids)
+    block_kind = {id(b): k for b, k in zip(blocks, kinds)}
+
+    sent_texts, sent_formulas, sent_kinds, sent_skips, flat_units = [], [], [], [], []
+    for unit in units:
+        texts, formulas = [], []
+        for b in unit:
+            s, f = _placeholderize(b)
+            offset = len(formulas)
+            if offset:
+                s = re.sub(r"\{v(\d+)\}", lambda m: f"{{v{int(m.group(1)) + offset}}}", s)
+            formulas.extend(f)
+            texts.append(s)
+        flat_units.append(unit)
+        sent_texts.append(_join_lines(texts))
+        sent_formulas.append(formulas)
+        sent_kinds.append(block_kind[id(unit[0])])
+        sent_skips.append(all(id(b) in skip_ids for b in unit))
+
+    raw = await runner.translate_all(sent_texts, kinds=sent_kinds, preview=True, skip=sent_skips)
+
+    per_block: dict[int, str] = {}
+    for unit, t, sent_text, formulas in zip(flat_units, raw, sent_texts, sent_formulas):
         restored = _restore_placeholders(t, formulas) if formulas else _STRAY_PLACEHOLDER_RE.sub("", t)
         if restored is None:
-            restored = b.text  # 模型弄丢占位符：这段回退原文，不产出坏文档
-        translations.append(restored)
+            parts = [b.text for b in unit]  # 模型弄丢占位符：整单元回退原文，不产出坏文档
+            shown = _join_lines([b.text for b in unit])
+        else:
+            if len(unit) == 1:
+                parts = [restored]
+            else:
+                ratio = len(unit[0].text) / (len(unit[0].text) + len(unit[1].text))
+                parts = list(_split_translation(restored, ratio))
+            shown = restored
+        for b, part in zip(unit, parts):
+            per_block[id(b)] = part
         # 预览里显示恢复后的译文（缓存仍按占位符版本存，重跑照样命中）
         if formulas and getattr(runner, "_done", None) and runner._done.get(sent_text) == t:
-            runner._done[sent_text] = restored
+            runner._done[sent_text] = shown
+    translations = [per_block[id(b)] for b in blocks]
 
     def build():
         translated = _render_translated(src, blocks, translations, target_lang)

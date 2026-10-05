@@ -690,10 +690,10 @@ function isEbookJob(job) {
   return /\.(epub|mobi|azw3?|azw)$/i.test(job?.filename || "");
 }
 
-// 阅读器显示用：电子书剥行内标签，PDF 剥公式占位符（{vN}）
+// 阅读器显示用：电子书剥行内标签，PDF 剥公式占位符（{vN}）和上下标哨兵
 function previewText(job, s) {
   if (isEbookJob(job)) return htmlToText(s);
-  if (/\.pdf$/i.test(job?.filename || "")) return s.replace(/\{\s*v\s*\d+\s*\}/g, "");
+  if (/\.pdf$/i.test(job?.filename || "")) return s.replace(/\{\s*v\s*\d+\s*\}/g, "").replace(/\x01\/?[sb]\x02/g, "");
   return s;
 }
 
