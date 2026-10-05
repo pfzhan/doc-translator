@@ -1360,3 +1360,45 @@ def test_pdf_biblio_long_bold_citation_stays():
         blk("Index entry text.", 12),
     ]
     assert biblio_skips(blocks) == [False, False, True, True, True, True, False, False]
+
+
+def test_scan_status_detection():
+    from app.formats.pdf import _scan_status
+
+    # 正常 PDF
+    doc = _pdf_with_text("Visible paragraph text here.")
+    assert _scan_status(doc) == "ok"
+    # 带隐藏 OCR 文本层（render mode 3）
+    doc = pymupdf.open()
+    for _ in range(4):
+        p = doc.new_page()
+        p.insert_text((50, 50), "hidden layer text here", fontsize=12, render_mode=3)
+    assert _scan_status(doc) == "hidden_text"
+    # 纯图片扫描件
+    doc = pymupdf.open()
+    for _ in range(2):
+        doc.new_page().insert_image(pymupdf.Rect(10, 10, 60, 60),
+                                    pixmap=pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 5, 5)))
+    assert _scan_status(doc) == "scanned"
+
+
+def test_pdf_scanned_error_guides_ocr(tmp_path):
+    from app.formats.pdf import translate_pdf
+
+    src = tmp_path / "scan.pdf"
+    doc = pymupdf.open()
+    doc.new_page().insert_image(pymupdf.Rect(10, 10, 60, 60),
+                                pixmap=pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 5, 5)))
+    doc.save(src)
+    with pytest.raises(ValueError, match="OCR"):
+        run(translate_pdf(src, tmp_path, runner(), False, "zh-CN"))
+
+
+def test_pdf_bookmarks_migrated(tmp_path):
+    doc = _pdf_with_text("Chapter one content here for testing.")
+    doc.set_toc([(1, "Chapter One", 1)])
+    src = tmp_path / "book.pdf"
+    doc.save(src)
+    for bilingual in (False, True):
+        [out] = run(translate_file(src, tmp_path, runner(), bilingual, "zh-CN"))
+        assert pymupdf.open(out).get_toc() == [[1, "Chapter One", 1]]

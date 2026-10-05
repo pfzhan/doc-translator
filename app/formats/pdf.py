@@ -428,13 +428,38 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
     return skips
 
 
+def _scan_status(doc: pymupdf.Document) -> str:
+    """ok=正常；hidden_text=带隐藏 OCR 文本层（render mode 3，文字不可见但可提取）；
+    scanned=完全没有文本层的纯扫描件。
+
+    隐藏层文件照翻：OCR 层的坐标通常和图像对齐，译文写回原位置后是可见的，
+    效果和 BabelDOC 的 ocr_workaround 一样。纯扫描件没有可翻的东西，明确拒绝。
+    """
+    text_pages = hidden_pages = 0
+    for page in doc:
+        if not page.get_text().strip():
+            continue
+        text_pages += 1
+        if b" 3 Tr" in page.read_contents():  # 渲染模式 3 = 不可见文字
+            hidden_pages += 1
+    if text_pages == 0:
+        return "scanned"
+    if text_pages >= 3 and hidden_pages / text_pages > 0.8:
+        return "hidden_text"
+    return "ok"
+
+
 async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "") -> list[Path]:
     src_doc = pymupdf.open(src)
     if src_doc.needs_pass:
         raise ValueError("PDF 有密码保护，暂不支持")
+    if _scan_status(src_doc) == "scanned":
+        raise ValueError("这是没有文本层的扫描版 PDF：请先用 Acrobat、ABBYY 或 WPS 的 OCR 功能识别文字，"
+                         "再上传识别后的文件")
     blocks = await asyncio.to_thread(extract_blocks, src_doc)
     if not blocks:
-        raise ValueError("没有提取到文字，可能是扫描版 PDF（需要 OCR，暂不支持）")
+        raise ValueError("没有提取到可用的文字：可能是图片型页面或 OCR 文本层质量太差")
+    toc = src_doc.get_toc()  # 输出文件带上原书签
     # PDF 元数据里的标题经常是 "Microsoft Word - xxx.docx" 之类，看起来像文件名就不用
     meta_title = ((src_doc.metadata or {}).get("title") or "").strip()
     if re.search(r"\.(docx?|pdf|tex|indd)$|^untitled$", meta_title, re.I):
@@ -453,9 +478,14 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             dst = out_dir / f"{src.stem}.bilingual.pdf"
             # 先落盘再读回，并排页面引用的是已经子集化的字体
             tmp = pymupdf.open("pdf", translated.tobytes(garbage=4, deflate=True))
-            _render_side_by_side(src_doc, tmp).save(dst, garbage=4, deflate=True)
+            side = _render_side_by_side(src_doc, tmp)
+            if toc:
+                side.set_toc(toc)  # 并排页和原页一一对应，书签页码不用映射
+            side.save(dst, garbage=4, deflate=True)
         else:
             dst = out_dir / f"{src.stem}.translated.pdf"
+            if toc:
+                translated.set_toc(toc)
             translated.save(dst, garbage=4, deflate=True)
         return dst
 
