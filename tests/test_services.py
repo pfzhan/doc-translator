@@ -403,7 +403,7 @@ def test_ccswitch_default_unreadable_db_falls_back(tmp_path):
 
 
 def test_empty_translation_is_not_cached(tmp_path):
-    """空译文不写缓存、不算完成：整批按失败处理，重试时空的段落重新请求。"""
+    """空译文不写缓存、回填原文（低于失败阈值），重试时空的段落重新请求。"""
     from app.runner import Cache, Runner
 
     class SometimesEmpty:
@@ -425,9 +425,11 @@ def test_empty_translation_is_not_cached(tmp_path):
 
     cache = Cache(tmp_path / "c.sqlite3")
     tr = SometimesEmpty()
-    with pytest.raises(TranslatorError, match="空译文"):
-        run(Runner(tr, cache=cache).translate_all(["good one", "bad one"]))
-    # 空译文没有进缓存，正常的进了
+    runner = Runner(tr, cache=cache)
+    out = run(runner.translate_all(["good one", "bad one"]))
+    # 低于阈值：空译文回填原文，不计入缓存
+    assert out == ["译:good one", "bad one"]
+    assert runner.info["failed"] == 1
     assert cache.get_many("t", ["good one", "bad one"]) == {"good one": "译:good one"}
     # 重试：缓存命中的不再请求，空译文重新翻译
     assert run(Runner(tr, cache=cache).translate_all(["good one", "bad one"])) == ["译:good one", "译:bad one"]

@@ -39,6 +39,7 @@ class Job:
     preview: bool = False
     detected_lang: str = ""
     skipped: int = 0
+    failed: int = 0  # 翻译服务返回空译文、回填原文的段数
     # 大模型接口返回的 token 用量，跨继续/重试累计；谷歌等接口不提供，保持 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -52,6 +53,7 @@ class Job:
             info = self.runner.info
             self.detected_lang = info.get("detected_lang", "") or self.detected_lang
             self.skipped = info.get("skipped", 0) or self.skipped
+            self.failed = info.get("failed", 0) or self.failed
 
     def to_dict(self) -> dict:
         self.sync_info()
@@ -73,6 +75,7 @@ class Job:
             "size": self.size,
             "detected_lang": self.detected_lang,
             "skipped": self.skipped,
+            "failed": self.failed,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             # 插件的 sameLangCheck：检测到的源语言和目标语言一致时提示

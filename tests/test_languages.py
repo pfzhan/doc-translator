@@ -93,7 +93,7 @@ def test_runner_skips_paragraphs_already_in_target_and_detects_source():
     out = run(runner.translate_all(texts))
     assert out[0].startswith("[zh-CN] ")
     assert out[2] == texts[2]
-    assert runner.info == {"detected_lang": "en", "skipped": 1}
+    assert runner.info == {"detected_lang": "en", "skipped": 1, "failed": 0}
     assert tr.effective_source == "en"
 
     # 关闭跳过后全部翻译

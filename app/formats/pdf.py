@@ -196,11 +196,43 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 f"* {{font-family: sans-serif; font-size: {size}px; color: {b.color}; "
                 f"font-weight: {weight}; line-height: 1.2; margin: 0; padding: 0;}}"
             )
-            # 留一点余量，避免译文比原文长时被截断；放不下由 scale_low=0 自动缩小
+            # 留一点余量，避免译文比原文长时被截断；放不下时走三级收缩阶梯
             y0 = b.rect.y0 + b.size * 0.1 if cjk else b.rect.y0
             rect = pymupdf.Rect(b.rect.x0, y0, b.rect.x1 + 2, b.rect.y1 + b.size * 0.3)
-            page.insert_htmlbox(rect, f"<div{div_attrs}>{body}</div>", css=css, scale_low=0)
+            obstacles = [ob.rect for ob in blocks if ob.page == pno and ob is not b]
+            _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, obstacles)
     return doc
+
+
+def _expand_right(rect: "pymupdf.Rect", page_width: float, obstacles: list["pymupdf.Rect"]) -> "pymupdf.Rect":
+    """排版收缩第一级：把写入框向右扩（上限 90% 页宽），不盖住右侧纵向有交叠的文本块。"""
+    x1 = page_width * 0.9
+    for o in obstacles:
+        if o.x0 <= rect.x0 + 1:  # 不是右侧的块
+            continue
+        if o.y0 < rect.y1 and o.y1 > rect.y0:  # 纵向上有交叠
+            x1 = min(x1, o.x0 - 2)
+    return pymupdf.Rect(rect.x0, rect.y0, max(x1, rect.x1), rect.y1)
+
+
+def _insert_fitting(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, css: str,
+                    obstacles: list["pymupdf.Rect"]):
+    """排版三级收缩（BabelDOC 思路）：先右扩 → 压行距 → 最后才缩字号。
+
+    每一级只在放不下（insert_htmlbox 返回负值，此时不会画出内容）时进入下一级，
+    放得下的段落和旧的 scale_low=0 直接缩比，字号明显更大。
+    """
+    if page.insert_htmlbox(rect, html_text, css=css, scale_low=0.9)[0] >= 0:
+        return
+    wide = _expand_right(rect, page.rect.width, obstacles)
+    if wide.x1 > rect.x1 + 1 and page.insert_htmlbox(wide, html_text, css=css, scale_low=0.9)[0] >= 0:
+        return
+    target = wide if wide.x1 > rect.x1 + 1 else rect
+    css_tight = css.replace("line-height: 1.2", "line-height: 1.1")
+    if page.insert_htmlbox(target, html_text, css=css_tight, scale_low=0.9)[0] >= 0:
+        return
+    # 兜底：和原来一样缩到能放下为止
+    page.insert_htmlbox(target, html_text, css=css_tight, scale_low=0)
 
 
 def _render_side_by_side(src: pymupdf.Document, translated: pymupdf.Document) -> pymupdf.Document:
@@ -449,6 +481,30 @@ def _scan_status(doc: pymupdf.Document) -> str:
     return "ok"
 
 
+def _subset_worker(data: bytes, queue):
+    doc = pymupdf.open("pdf", data)
+    doc.subset_fonts()
+    queue.put(doc.tobytes(garbage=4, deflate=True))
+
+
+def _subset_fonts_safe(doc: pymupdf.Document) -> pymupdf.Document:
+    """子集化放到子进程里跑（BabelDOC 同款）：PyMuPDF 子集化偶尔崩溃或卡死，
+    60 秒没结果就放弃，用未子集化的版本——文件大一些，但能看。"""
+    import multiprocessing
+
+    data = doc.tobytes(garbage=4, deflate=True)
+    queue = multiprocessing.Queue()
+    proc = multiprocessing.Process(target=_subset_worker, args=(data, queue))
+    proc.start()
+    try:
+        out = queue.get(timeout=60)
+        proc.join(timeout=5)
+        return pymupdf.open("pdf", out)
+    except Exception:  # noqa: BLE001 - 超时或子进程崩溃都回退
+        proc.kill()
+        return pymupdf.open("pdf", data)
+
+
 async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "") -> list[Path]:
     src_doc = pymupdf.open(src)
     if src_doc.needs_pass:
@@ -472,8 +528,8 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
 
     def build():
         translated = _render_translated(src, blocks, translations, target_lang)
-        # insert_htmlbox 每次都会嵌入完整的 CJK 字体（十几 MB），必须做子集化
-        translated.subset_fonts()
+        # insert_htmlbox 每次都会嵌入完整的 CJK 字体（十几 MB），必须做子集化；失败则用未子集化版本
+        translated = _subset_fonts_safe(translated)
         if bilingual:
             dst = out_dir / f"{src.stem}.bilingual.pdf"
             # 先落盘再读回，并排页面引用的是已经子集化的字体

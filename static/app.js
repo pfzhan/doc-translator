@@ -856,6 +856,7 @@ function jobRow(job) {
   } else {
     const parts = [job.total ? `${job.total} 段` : ""];
     if (job.skipped) parts.push(`${job.skipped} 段无需翻译`);
+    if (job.failed) parts.push(`${job.failed} 段失败保留原文`);
     const tokens = tokensText(job);
     if (tokens) parts.push(tokens);
     const exp = expiryText(job);

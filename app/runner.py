@@ -245,6 +245,7 @@ class Runner:
         total = len(need)
         done = len(done_map)
         self.progress(done, total)
+        failed: list[str] = []  # 返回空译文的段落：回填原文，超过阈值才判失败
 
         pending = [(first_pos[b[0]], b) for b in self._make_batches(todo)]
 
@@ -267,13 +268,18 @@ class Runner:
                     if preview:
                         self._record(list(good))
                     done += len(good)
-                    self.progress(done, total)
                 if empty:
-                    pending.clear()  # 让其他并发任务也尽快停下
-                    raise TranslatorError(f"翻译服务返回了空译文（{len(empty)} 段），请重试或更换服务")
+                    # 回填策略（BabelDOC 同款）：个别段落空译文保留原文，不让整本书失败；
+                    # 但服务持续吐空译文（坏了）时不能全本回填，最后按阈值判失败
+                    failed.extend(empty)
+                    done += len(empty)
+                self.progress(done, total)
 
         workers = min(self.translator.concurrency, len(pending))
         await asyncio.gather(*(worker() for _ in range(workers)))
+        self.info["failed"] = len(failed)
+        if len(failed) > max(3, total // 10):
+            raise TranslatorError(f"翻译服务持续返回空译文（{len(failed)} / {total} 段），请重试或更换服务")
         return [
             texts[i] if not texts[i].strip() or kept(i) else done_map.get(texts[i], texts[i])
             for i in range(n)
