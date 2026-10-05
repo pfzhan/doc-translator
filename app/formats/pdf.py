@@ -258,8 +258,11 @@ def _merge_visual_lines(blocks: list[TextBlock]) -> list[TextBlock]:
 
 
 def _is_formula_span(span: dict, main_size: float) -> bool:
-    """行内公式：数学字体的 span，或明显小于正文的角标 span（引用编号等）。"""
-    return _font_is_math(span["font"]) or span["size"] < main_size * 0.79
+    """行内公式：数学字体的 span，或明显小于正文的角标 span（引用编号等）。
+    粗体 CM（CMBX 等）的一两个字符按 \mathbf 单字母算公式；粗体单词仍是正文。"""
+    if _font_is_math(span["font"]) or span["size"] < main_size * 0.79:
+        return True
+    return bool(re.match(r"^CMB", span["font"]) and len(span["text"].strip()) <= 2)
 
 
 def _formula_markup(run_spans: list[dict], main_size: float) -> str:
@@ -292,48 +295,157 @@ def _formula_markup(run_spans: list[dict], main_size: float) -> str:
     return "".join(out)
 
 
-def _placeholderize(block: TextBlock) -> tuple[str, list[str]]:
-    """把块里的行内公式换成 {vN} 占位符（BabelDOC 的翻译协议），返回 (送翻文本, 公式列表)。
+# 孤立标点不当公式：<EOS> 这类 token 的尖括号是数学字体，单独抽出来会把 token 拆散、
+# 还把上下行的括号粘成跨行怪图。括号/标点留在正文里排版（正文字体本来就画得出）。
+_LONE_PUNCT_RE = re.compile(r"^[\s<>[\]{}()|/\\=+\-_.,;:'\"~·，。；：！？（）【】]+$")
+# 重音符号（hat/tilde/bar/dot 等）：落在公式 bbox 上的要并进公式，不能留在正文
+_ACCENT_CHARS = {"^", "ˆ", "̂", "~", "̃", "¯", "̄", "´", "`", "˙", "̇", "¨", "̈", "ˇ", "̌", "⃗"}
 
-    没有公式时返回的文本与原文逐字一致，缓存照常命中。相邻的公式 span 和它们之间的
-    空白合并成一个占位符；上/下标用哨兵标记随公式一起保留。
+
+def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[dict]]:
+    """把块里的行内公式换成 {vN} 占位符（BabelDOC 的翻译协议），返回 (送翻文本, 公式记录列表)。
+
+    每条公式记录：bbox（原页裁剪区域）、name、w/h/d（落位几何）、text（无图环境回退）。
+    渲染时以 show_pdf_page 矢量透传，视觉和原版一致。
+    关键归并：上下标常被 PyMuPDF 拆到另一个 dict 行，按行收集的 run 会把一个公式
+    拆成互相交叠的两段（画两遍、上标错位），所以先全块收集 run，再把 x 区间交叠的
+    归并成一个。没有公式时返回的文本与原文逐字一致，缓存照常命中。
     """
     if not block.span_lines:
         return block.text, []
-    formulas: list[str] = []
-    out_lines: list[str] = []
-    for spans in block.span_lines:
-        parts: list[str] = []
+
+    # 1) 按 dict 行收集公式 run，并记录在块 span 流里的位置（供阅读序邻接判断）
+    runs: list[dict] = []
+    for line_no, spans in enumerate(block.span_lines):
         i, n = 0, len(spans)
         while i < n:
             if _is_formula_span(spans[i], block.size):
-                run = spans[i]["text"]
                 run_spans = [spans[i]]
                 j = i + 1
-                while j < n:
-                    if not spans[j]["text"].strip():
-                        # 空白 span：只有后面还跟着公式时才并入 run；
-                        # run 末尾的空白留在原文里，保住公式和正文之间的间隔
-                        if any(_is_formula_span(spans[k], block.size) for k in range(j + 1, n)):
-                            run += spans[j]["text"]
-                            run_spans.append(spans[j])
-                            j += 1
-                            continue
-                        break
-                    if not _is_formula_span(spans[j], block.size):
-                        break
-                    run += spans[j]["text"]
+                while j < n and (not spans[j]["text"].strip() or _is_formula_span(spans[j], block.size)):
                     run_spans.append(spans[j])
                     j += 1
-                if run.strip():
-                    formulas.append(_formula_markup(run_spans, block.size).strip())
-                    parts.append(f"{{v{len(formulas)}}}")
-                else:
-                    parts.append(run)
+                while run_spans and not run_spans[-1]["text"].strip():
+                    run_spans.pop()
+                if run_spans and any(s["text"].strip() for s in run_spans):
+                    # 孤立标点 run 不当公式（<EOS> 的尖括号、括号、等号），留在正文里
+                    joined = "".join(s["text"] for s in run_spans).strip()
+                    if not _LONE_PUNCT_RE.match(joined):
+                        bbox = pymupdf.Rect(run_spans[0]["bbox"])
+                        for s in run_spans[1:]:
+                            bbox |= pymupdf.Rect(s["bbox"])
+                        runs.append({"spans": run_spans, "bbox": bbox,
+                                     "max_size": max(s["size"] for s in run_spans),
+                                     "pos": (line_no, i, j - 1)})
                 i = j
             else:
-                parts.append(spans[i]["text"])
                 i += 1
+
+    # 2) 归并 run，两种情形：
+    # a) 上下标拆到不同 dict 行：x 交叠够深（≥30% 较窄 run 的宽）且必有一方是小字号
+    #    （<0.79 正文）；两个正文字号 run 即使 x 深度交叠也是相邻文本行上碰巧对齐
+    #    的两个公式（如行末 (X,Y) 和下一行的 y_1,…,y_T）。
+    # b) 阅读序上真正邻接（中间只有空白 span）且 x 间距小于一个字号：同一数学表达式
+    #    被拆成的连续片段（y^i_1, y^i_2, … 的元素），并回一个公式，否则下标会被
+    #    占位符间的空格推到离基底很远的位置。行间隔着正文的不并（(X,Y) vs y_1,…,y_T）。
+    member_ids = {id(s) for r in runs for s in r["spans"]}
+
+    def flow_adjacent(a: dict, b: dict) -> bool:
+        l1, _, e1 = a["pos"]
+        l2, s2, _ = b["pos"]
+        for ln in range(l1, l2 + 1):
+            line = block.span_lines[ln]
+            lo = e1 + 1 if ln == l1 else 0
+            hi = s2 if ln == l2 else len(line)
+            for s in line[lo:hi]:
+                if s["text"].strip() and id(s) not in member_ids:
+                    return False
+        return True
+
+    runs.sort(key=lambda r: r["pos"])
+    merged: list[dict] = []
+    for r in runs:
+        if merged:
+            m = merged[-1]
+            x_overlap = min(m["bbox"].x1, r["bbox"].x1) - max(m["bbox"].x0, r["bbox"].x0)
+            y_gap = max(m["bbox"].y0, r["bbox"].y0) - min(m["bbox"].y1, r["bbox"].y1)
+            min_w = min(m["bbox"].width, r["bbox"].width)
+            lo, hi = sorted([m["max_size"], r["max_size"]])
+            geometric = (x_overlap > max(1.0, 0.3 * min_w) and y_gap < block.size
+                         and lo < hi * 0.79)
+            adjacent = (flow_adjacent(m, r)
+                        and r["bbox"].x0 - m["bbox"].x1 < block.size
+                        and y_gap < 2 * block.size)
+            if geometric or adjacent:
+                m["spans"].extend(r["spans"])
+                m["bbox"] |= r["bbox"]
+                m["max_size"] = hi
+                continue
+        merged.append(r)
+
+    # 2.5) 吸收落在公式 bbox 上的重音符 span（ŷ 的 ^、x̄ 的 ¯ 等）：
+    # 它们常是不被判定为公式的独立 span，留在正文里会在公式图边上多出一个孤符号；
+    # 并进 run 后 bbox 上移把符头顶部也包进裁剪，正文里删掉
+    for spans in block.span_lines:
+        for s in spans:
+            if s["text"].strip() not in _ACCENT_CHARS:
+                continue
+            sb = pymupdf.Rect(s["bbox"])
+            cx, cy = (sb.x0 + sb.x1) / 2, (sb.y0 + sb.y1) / 2
+            for m in merged:
+                if any(s is x for x in m["spans"]):
+                    break
+                rb = m["bbox"]
+                if (rb.x0 - 1 <= cx <= rb.x1 + 1
+                        and rb.y0 - block.size * 0.8 <= cy <= rb.y1 + 1):
+                    m["spans"].append(s)
+                    m["bbox"] |= sb
+                    break
+
+    formulas: list[dict] = []
+    first_span: dict[int, int] = {}  # span id → 公式序号
+    span_line = {id(s): li for li, line in enumerate(block.span_lines) for s in line}
+    for n, m in enumerate(merged, 1):
+        bbox = m["bbox"]
+        spans = sorted(m["spans"], key=lambda s: (s["bbox"][0], s["bbox"][1]))
+        main_span = max(spans, key=lambda s: s["size"])
+        baseline = main_span["origin"][1] if main_span.get("origin") else bbox.y1
+        # 孤立角标公式（(1−ε_i)² 的 ²）的 origin 是抬高的：渲染时按它所在
+        # 正文行的 baseline 高差抬回去，否则平方落到正文基线上像个普通数字。
+        # 高差必须相对本行正文（正文行 origin 的中位数），不能相对全块
+        run_lines = {span_line.get(id(s)) for s in m["spans"]}
+        line_origins = sorted(s["origin"][1] for li in run_lines if li is not None
+                              for s in block.span_lines[li]
+                              if s["text"].strip() and s.get("origin") and s["size"] >= block.size * 0.9)
+        own_origin = line_origins[len(line_origins) // 2] if line_origins else baseline
+        raise_dy = max(0.0, own_origin - baseline)
+        formulas.append({
+            "page": block.page,
+            "bbox": bbox,
+            "name": f"f{block_index}_{n}.png",
+            "w": round(bbox.width, 1),
+            "h": round(bbox.height, 1),
+            "d": round(max(0.0, bbox.y1 - baseline), 1),
+            "raise": round(raise_dy, 1),
+            "text": _formula_markup(spans, block.size).strip(),
+            "spans": spans,
+        })
+        # 锚点 = x0 最小的 span，占位符放在它在原文里的位置
+        anchor = min(m["spans"], key=lambda s: s["bbox"][0])
+        first_span[id(anchor)] = n
+
+    # 3) 按行重建送翻文本：遇到公式锚点 span 放占位符，公式内其他 span 跳过
+    out_lines: list[str] = []
+    for spans in block.span_lines:
+        parts: list[str] = []
+        for s in spans:
+            n = first_span.get(id(s))
+            if n is not None:
+                parts.append(f"{{v{n}}}")
+            elif any(s is x for m in merged for x in m["spans"]):
+                continue  # 已被某个公式吞掉
+            else:
+                parts.append(s["text"])
         out_lines.append("".join(parts))
     return _join_lines(out_lines), formulas
 
@@ -342,15 +454,23 @@ def _placeholderize(block: TextBlock) -> tuple[str, list[str]]:
 _STRAY_PLACEHOLDER_RE = re.compile(r"\{\s*v\s*\d+\s*\}")
 
 
-def _restore_placeholders(translation: str, formulas: list[str]) -> str | None:
+def _restore_placeholders(translation: str, formulas: list[dict]) -> str | None:
     """译后恢复 {vN}（容忍模型在占位符里塞的空格）；有占位符丢失时返回 None（回退原文）。
+    恢复出来的是图片哨兵（\\x01i\\x02N\\x01/i\\x02），渲染层换成对应公式的 <img>。
     译文里多出来的幻觉占位符直接删掉。"""
-    for n, formula in enumerate(formulas, 1):
+    for n, _f in enumerate(formulas, 1):
         pattern = re.compile(rf"\{{\s*v\s*{n}\s*\}}")
         if not pattern.search(translation):
             return None
-        translation = pattern.sub(lambda _: formula, translation, count=1)
+        translation = pattern.sub(lambda _: f"\x01i\x02{n}\x01/i\x02", translation, count=1)
     return re.sub(r"\{\s*v\s*\d+\s*\}", "", translation)
+
+
+def _prose_units(text: str) -> int:
+    """正文词数：拉丁单词（≥2 字母）+ CJK 字符数 / 2。用来区分"公式行"和"含公式的句子"。"""
+    latin = len(re.findall(r"[A-Za-z]{2,}", text))
+    cjk = len(CJK_RE.findall(text))
+    return latin + cjk // 2
 
 
 def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
@@ -378,7 +498,10 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                 text = _join_lines(texts)
                 total = sum(len(s["text"]) for s in spans)
                 letters = sum(c.isalpha() for c in text)
-                if NO_TEXT_RE.match(text) or _math_chars(spans) > total * 0.3 or letters < 2 or letters < len(text) * 0.4:
+                # 只跳过"纯公式行"：数学字符多且几乎没有正文词。
+                # 含公式的正常句子（正文词 ≥4）照翻，公式走占位符，不再整句留成英文
+                is_equation = _math_chars(spans) > total * 0.3 and _prose_units(text) < 4
+                if NO_TEXT_RE.match(text) or is_equation or letters < 2 or letters < len(text) * 0.4:
                     continue
                 # 字号、颜色取占比最多的 span
                 main = max(spans, key=lambda s: len(s["text"]))
@@ -398,8 +521,258 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     return _merge_visual_lines(blocks)
 
 
+def _marker_png(idx: int) -> bytes:
+    """1x1 彩色像素：颜色编码公式的全局序号（R + G<<8），供插入后找回落位。
+    必须全局唯一：同色的标记图会被 MuPDF 去重成同一 xref，落位全串到第一处。"""
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 1, 1))
+    pix.set_pixel(0, 0, ((idx + 1) & 0xFF, ((idx + 1) >> 8) & 0xFF, 200))
+    return pix.tobytes("png")
+
+
+def _white_pixmap(doc) -> "pymupdf.Pixmap":
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 1, 1))
+    pix.set_pixel(0, 0, (255, 255, 255))
+    return pix
+
+
+def _page_form(doc: "pymupdf.Document", page: "pymupdf.Page") -> int:
+    """把页面内容打包成 Form XObject（在 redact 之前调用），返回 xref。
+    供公式透传引用：资源沿用页面自己的，BBox 为整页。"""
+    mb = page.rect
+    fm = doc.get_new_xref()
+    doc.update_object(fm, (
+        f"<< /Type /XObject /Subtype /Form /BBox [0 0 {mb.width} {mb.height}] "
+        f"/Matrix [1 0 0 1 0 0] /Resources {doc.xref_get_key(page.xref, 'Resources')[1]} >>"
+    ))
+    doc.update_stream(fm, page.read_contents())
+    return fm
+
+
+def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
+                  f: dict, f_name: str, page_spans: list[dict] | None = None) -> int:
+    """给单个公式造紧致 BBox 的包裹 Form（按 span 逐个裁剪后引用源页 Form），返回 xref。
+
+    裁剪路径是 run 里每个 span 的矩形并集，不是整个外框矩形：外框矩形会把间隙里
+    的邻字笔画（上一行 p 的降部等）也裁进来，在公式上方留下横杠。
+    BBox 取并集外框，选择/复制时不会框出一大片。
+
+    裁剪用 even-odd：run 的 span 矩形按侧扩展后取并集（斜体笔画会越出 span 的
+    排版 bbox——Y 的右臂能越出 1.2pt，扩展以不碰到邻居为限），再减去外来 span
+    的矩形孔（上一行降部等），既不削自己的字，也不沾别人的。
+    """
+    H = page.rect.height
+    bbox = f["bbox"]
+    clip_outer = pymupdf.Rect(bbox.x0, H - bbox.y1, bbox.x1, H - bbox.y0)  # PDF 坐标 y 向上
+    fmT = doc.get_new_xref()
+    doc.update_object(fmT, (
+        f"<< /Type /XObject /Subtype /Form /BBox [{clip_outer.x0:.2f} {clip_outer.y0:.2f} "
+        f"{clip_outer.x1:.2f} {clip_outer.y1:.2f}] "
+        f"/Matrix [1 0 0 1 0 0] /Resources << /XObject << /FmS {fmS} 0 R >> >> >>"
+    ))
+    # run 的 span 来自 extract_blocks 的另一次 get_text 调用，和 page_spans 是不同
+    # 对象，只能按 bbox 相等判断是不是 run 成员，否则兄弟 span（本公式的上标）会被
+    # 当成外来 span 被挖洞挖掉
+    run_rects = [pymupdf.Rect(s["bbox"]) for s in f["spans"]]
+
+    def merge_rects(rects: list["pymupdf.Rect"]) -> list["pymupdf.Rect"]:
+        out: list[pymupdf.Rect] = []
+        for b in rects:
+            for i, mb in enumerate(out):
+                if not (b & mb).is_empty:
+                    out[i] = mb | b
+                    break
+            else:
+                out.append(b)
+        return out
+
+    def is_run_member(fr: "pymupdf.Rect") -> bool:
+        return any(abs(fr.x0 - rr.x0) < 0.5 and abs(fr.y0 - rr.y0) < 0.5
+                   and abs(fr.x1 - rr.x1) < 0.5 and abs(fr.y1 - rr.y1) < 0.5
+                   for rr in run_rects)
+
+    # 先并成不相交集合（ŷ 的符头 bbox 和 y 几乎完全重叠，不并掉 even-odd 会把
+    # y 的躯干整个关掉），再按侧扩展：每侧扩到 1.5pt 为止、以不贴到邻居 bbox 为限
+    base = merge_rects([pymupdf.Rect(s["bbox"]) for s in f["spans"]])
+    union = pymupdf.Rect()
+    for rr in base:
+        union |= rr
+    lim = {"l": 1.5, "r": 1.5, "t": 1.5, "b": 1.5}  # 每侧扩展上限（pt）
+    if page_spans:
+        for fb in page_spans:
+            if not fb["text"].strip():  # 空白 span 没有墨迹，不限扩展也不挖洞
+                continue
+            fr = pymupdf.Rect(fb["bbox"])
+            if is_run_member(fr) or not (fr.y0 < union.y1 and fr.y1 > union.y0):
+                continue
+            if fr.x1 <= union.x0 + 0.01:      # 左侧邻居
+                lim["l"] = max(0.2, min(lim["l"], union.x0 - fr.x1 - 0.3))
+            elif fr.x0 >= union.x1 - 0.01:    # 右侧邻居
+                lim["r"] = max(0.2, min(lim["r"], fr.x0 - union.x1 - 0.3))
+            if fr.y1 <= union.y0 + 0.01:      # 上方邻居（pymupdf y 向下）
+                lim["t"] = max(0.2, min(lim["t"], union.y0 - fr.y1 - 0.3))
+            elif fr.y0 >= union.y1 - 0.01:    # 下方邻居
+                lim["b"] = max(0.2, min(lim["b"], fr.y0 - union.y1 - 0.3))
+    our_rects = merge_rects([pymupdf.Rect(b.x0 - lim["l"], b.y0 - lim["t"],
+                                          b.x1 + lim["r"], b.y1 + lim["b"]) for b in base])
+    ours, holes = [], []
+    for b in our_rects:
+        r = pymupdf.Rect(b.x0, H - b.y1, b.x1, H - b.y0)
+        if r.width > 0.2 and r.height > 0.2:
+            ours.append(f"{r.x0:.2f} {r.y0:.2f} {r.width:.2f} {r.height:.2f} re")
+    if page_spans and our_rects:
+        hole_rects = []
+        for fb in page_spans:
+            if not fb["text"].strip():  # 空白 span 没有墨迹，限扩展和挖洞都不参与
+                continue
+            fr = pymupdf.Rect(fb["bbox"])
+            if any(abs(fr.x0 - rr.x0) < 0.5 and abs(fr.y0 - rr.y0) < 0.5
+                   and abs(fr.x1 - rr.x1) < 0.5 and abs(fr.y1 - rr.y1) < 0.5
+                   for rr in run_rects):
+                continue
+            # 孔 = 外来 span 与我们的每个矩形的交。必须完全落在我们的矩形内：
+            # even-odd 裁剪下越出并集的孔会反开，把正要排除的外来笔画整个画出来。
+            # 只挖纵向不共线的 span（降部、邻公式的角标等）：同行邻字的 bbox 常常
+            # 仅仅贴边且纵向几乎等长，挖掉会把本公式的笔画（y 的左干）削了。
+            # 孔不内收：降部墨迹和 span bbox 底边之间本就有缝隙，内收会留下一道残影
+            for rr in our_rects:
+                y_ov = min(fr.y1, rr.y1) - max(fr.y0, rr.y0)
+                if y_ov > 0.7 * (rr.y1 - rr.y0):
+                    continue
+                hb = fr & rr
+                if not hb.is_empty and hb.width >= 0.3 and hb.height >= 0.3:
+                    hole_rects.append(hb)
+        # 相交的孔合并成一个：两个孔相交处在 even-odd 下会反开
+        merged: list[pymupdf.Rect] = []
+        for hb in hole_rects:
+            for i, mb in enumerate(merged):
+                if not (hb & mb).is_empty:
+                    merged[i] = mb | hb
+                    break
+            else:
+                merged.append(hb)
+        for hb in merged:
+            hr = pymupdf.Rect(hb.x0, H - hb.y1, hb.x1, H - hb.y0)
+            holes.append(f"{hr.x0:.2f} {hr.y0:.2f} {hr.width:.2f} {hr.height:.2f} re")
+    doc.update_stream(fmT, f"q {' '.join(ours + holes)} W* n /FmS Do Q".encode())
+    res_v = doc.xref_get_key(page.xref, "Resources")[1]
+    # redact 后 /Resources 会变成直接字典（键要带 Resources/ 前缀）；
+    # 间接引用则在资源对象上直接设键
+    m = re.match(r"(\d+) \d+ R", res_v)
+    res_xref, base = (int(m.group(1)), "") if m else (page.xref, "Resources/")
+    xo_v = doc.xref_get_key(res_xref, f"{base}XObject")[1]
+    if xo_v == "null":
+        doc.xref_set_key(res_xref, f"{base}XObject", "<<>>")
+        xo_v = "<<"
+    m = re.match(r"(\d+) \d+ R", xo_v)
+    if m:
+        doc.xref_set_key(int(m.group(1)), f_name, f"{fmT} 0 R")
+    else:
+        doc.xref_set_key(res_xref, f"{base}XObject/{f_name}", f"{fmT} 0 R")
+    return fmT
+
+
+def _place_formula_images(page: "pymupdf.Page", doc: "pymupdf.Document", before: set[int],
+                          mid_map: dict[int, dict], fmS: int | None = None,
+                          page_spans: list[dict] | None = None):
+    """把占位标记换成公式内容并校准基线。
+
+    htmlbox 对 <img> 只做图片底部对齐，公式的 baseline 在图片内部（上下标在 baseline
+    之下还有延伸），直接插会整体浮起来。所以先插一个按公式宽高占位的 1x1 标记像素，
+    从落位矩形读出文本基线位置，再把公式按“bbox 底 − 公式 baseline”下移贴到精确位置。
+    有源页 Form（fmS）时用紧致 BBox 的包裹 Form 做矢量透传（原 glyph、可选中、选择
+    不爆框）；失败回退到 PNG 位图。
+
+    标记像素按全局序号（mid）编码，整页一次处理；所有公式绘制集中在最后一条新内容
+    流里：insert_htmlbox 每块新建内容流，标记涂白后白块仍在块的内容流里，公式若画在
+    之前的流里会被后续块的白块盖住上半截。
+    """
+    draws = []
+    # 渲染后的文本 span：htmlbox 对 img 只做底部对齐，且标记底边和文本 baseline 有
+    # ~1pt 系统偏差，公式 baseline 直接锚到同一行文字的 origin 上最稳
+    text_spans = [s for blk in page.get_text("dict")["blocks"] if blk.get("type") == 0
+                  for ln in blk["lines"] for s in ln["spans"]
+                  if s["text"].strip() and s.get("origin")]
+    now = {img[0] for img in page.get_images(full=True)}
+    for xref in now - before:
+        pix = pymupdf.Pixmap(doc, xref)
+        p = pix.pixel(0, 0)
+        if len(p) < 3 or p[2] != 200:
+            continue
+        f = mid_map.get(p[0] + (p[1] << 8) - 1)
+        if f is None:
+            continue
+        rects = page.get_image_rects(xref)
+        if not rects:
+            continue
+        rect = rects[0]
+        rs = f.get("rs", 1.0)
+        # raise：孤立角标公式（²）的 origin 比正文 baseline 高，落位时按高差抬回去
+        w, h = f["w"] * rs, f["h"] * rs
+        d = (f["d"] - f.get("raise", 0.0)) * rs
+        cy = (rect.y0 + rect.y1) / 2
+        baseline = None
+        best_key = (0.0, float("inf"))
+        for s in text_spans:
+            sb = s["bbox"]
+            if not (sb[1] - 1 <= cy <= sb[3] + 1):  # 不在同一行
+                continue
+            # CJK line-height 放大后相邻行的 glyph bbox 会交叠：按与标记矩形的
+            # y 交叠量取最大（同一行交叠最多），并列再取 x 最近
+            overlap = min(sb[3], rect.y1) - max(sb[1], rect.y0)
+            dx = max(0.0, sb[0] - rect.x1, rect.x0 - sb[2])
+            if (overlap, -dx) > (best_key[0], -best_key[1]):
+                best_key, baseline = (overlap, dx), s["origin"][1]
+        if baseline is not None:
+            target = pymupdf.Rect(rect.x0 + 2.0, baseline + d - h, rect.x0 + 2.0 + w, baseline + d)
+        else:
+            target = pymupdf.Rect(rect.x0 + 2.0, rect.y0 + d, rect.x0 + 2.0 + w, rect.y0 + d + h)
+        page.replace_image(xref, pixmap=_white_pixmap(doc))
+        placed = False
+        if fmS is not None:
+            try:
+                # 资源名必须全页唯一：n 只是块内序号，不同块的 FmF0 会互相覆盖
+                f_name = "FmF_" + re.sub(r"[^A-Za-z0-9_]", "_", f["name"])
+                fmT = _formula_form(doc, page, fmS, f, f_name, page_spans)
+                bbox = f["bbox"]
+                sx = target.width / bbox.width
+                sy = target.height / bbox.height
+                # 带缩放的仿射：平移量必须吸收缩放，否则公式整体往下漂 (1-sy)*H
+                tx = target.x0 - sx * bbox.x0
+                ty = (page.rect.height - target.y1) - sy * (page.rect.height - bbox.y1)
+                draws.append(f"q {sx:.4f} 0 0 {sy:.4f} {tx:.2f} {ty:.2f} cm /{f_name} Do Q")
+                placed = True
+            except Exception:  # noqa: BLE001 - 矢量透传失败回退位图
+                placed = False
+        if not placed and f.get("png"):
+            page.insert_image(target, stream=f["png"], keep_proportion=False, overlay=True)
+    if draws:
+        ns = doc.get_new_xref()
+        doc.update_object(ns, "<<>>")
+        doc.update_stream(ns, ("\n" + "\n".join(draws) + "\n").encode())
+        cont_v = doc.xref_get_key(page.xref, "Contents")[1].strip()
+        if cont_v.startswith("["):
+            doc.xref_set_key(page.xref, "Contents", f"{cont_v[:-1].rstrip()} {ns} 0 R]")
+        else:
+            doc.xref_set_key(page.xref, "Contents", f"[{cont_v} {ns} 0 R]")
+
+
+def _nowrap_parens(body: str) -> str:
+    """短括号组包 nowrap span：MuPDF 的 CJK 换行可以在任意处断，会出现
+    '（如\\n序列）' 这种断在括号中间的丑行，以及 '（y_1^{t-1}' 把右括号单独
+    留在下一行。整组不拆（含公式图的组，括号跟着公式一起走），长组不包（防溢出）。"""
+    def repl(m):
+        inner = m.group(0)
+        # 估算渲染宽度：<img> 按 3 个字符计，其余标签不计
+        plain = re.sub(r"<[^>]+>", lambda t: "@@@" if t.group(0).startswith("<img") else "", inner)
+        if len(plain) <= 10:
+            return f'<span style="white-space: nowrap">{inner}</span>'
+        return inner
+    return re.sub(r"（[^（）]+）|\([^()]+\)", repl, body)
+
+
 def _render_translated(src_path: Path, blocks: list[TextBlock], translations: list[str],
-                       target_lang: str = "") -> pymupdf.Document:
+                       target_lang: str = "", formulas_map: dict | None = None,
+                       archive=None, orig: "pymupdf.Document | None" = None) -> pymupdf.Document:
     rtl = target_lang.split("-")[0] in RTL_LANGUAGES
     # CJK 字体的行框比拉丁高（约 1.31em vs 1.16em），且字形顶部会越出给定区域：
     # 按原字号写入会和下一行叠在一起，字号缩小并下移补偿
@@ -417,6 +790,14 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
 
     for pno, items in by_page.items():
         page = doc[pno]
+        mid_map = {f["mid"]: f for b, _ in items for f in (formulas_map or {}).get(id(b), [])
+                   if "mid" in f}
+        # redact 之前把整页打包成 Form：公式透传从它里面裁剪原 glyph；
+        # 同时收集页面全部 span（检测上标区域被上一行降部侵入的污染）
+        page_spans = [s for blk in page.get_text("dict")["blocks"] if blk.get("type") == 0
+                      for ln in blk["lines"] for s in ln["spans"]] \
+            if mid_map else None
+        fmS = _page_form(doc, page) if page_spans else None
         for b, _ in items:
             for r in b.line_rects:
                 page.add_redact_annot(r, fill=False)
@@ -424,7 +805,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             images=pymupdf.PDF_REDACT_IMAGE_NONE,
             graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
         )
+        images_before = {img[0] for img in page.get_images(full=True)}
         for b, t in items:
+            bformulas = (formulas_map or {}).get(id(b), [])
             weight = "bold" if b.bold else "normal"
             body = (
                 html.escape(t)
@@ -434,16 +817,43 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 .replace("\x01b\x02", "<sub>")
                 .replace("\x01/b\x02", "</sub>")
             )
+
+            def img_repl(m):
+                n = int(m.group(1))
+                if 1 <= n <= len(bformulas):
+                    f = bformulas[n - 1]
+                    if f.get("has_img"):
+                        # 行内公式按渲染字号缩放：高超过 1.35em 的压到 1.35em，
+                        # 否则行框被图片撑出大缝、放不下的被挤到下一行独自成行
+                        rs = min(size / b.size, 1.35 * size / f["h"])
+                        f["rs"] = rs
+                        # 槽位两侧各留 2pt：斜体字形（X、T）会微微越出 bbox，
+                        # 紧贴排布时看起来像被前后汉字压住
+                        return (f'<img src="ph_{f["name"]}" '
+                                f'style="width: {f["w"] * rs + 4.0:.1f}px; height: {f["h"] * rs:.1f}px;">')
+                    frag = html.escape(f["text"])
+                    return (frag.replace("\x01s\x02", "<sup>").replace("\x01/s\x02", "</sup>")
+                                .replace("\x01b\x02", "<sub>").replace("\x01/b\x02", "</sub>"))
+                return ""
+
             size = b.size * 0.88 if cjk else b.size
+            body = re.sub(r"\x01i\x02(\d+)\x01/i\x02", img_repl, body)
+            body = _nowrap_parens(body)
+            # CJK 字体的行框约 1.3em，line-height 1.2 会把行间压没；1.45 才透气和原文相当
             css = (
                 f"* {{font-family: sans-serif; font-size: {size}px; color: {b.color}; "
-                f"font-weight: {weight}; line-height: 1.2; margin: 0; padding: 0;}}"
+                f"font-weight: {weight}; line-height: {1.45 if cjk else 1.2}; margin: 0; padding: 0; "
+                f"text-align: {'right' if rtl else 'left'};}}"
             )
-            # 留一点余量，避免译文比原文长时被截断；放不下时走三级收缩阶梯
+            # 留一点余量，避免译文比原文长时被截断；放不下时走三级收缩阶梯。
+            # CJK 行框更高且起始有 0.1em 下移补偿，盒高多留到 0.5em，避免末行描边压到下一行
             y0 = b.rect.y0 + b.size * 0.1 if cjk else b.rect.y0
-            rect = pymupdf.Rect(b.rect.x0, y0, b.rect.x1 + 2, b.rect.y1 + b.size * 0.3)
+            pad = b.size * 0.5 if cjk else b.size * 0.3
+            rect = pymupdf.Rect(b.rect.x0, y0, b.rect.x1 + 2, b.rect.y1 + pad)
             obstacles = [ob.rect for ob in blocks if ob.page == pno and ob is not b]
-            _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, obstacles)
+            _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, obstacles, archive)
+        if mid_map:
+            _place_formula_images(page, doc, images_before, mid_map, fmS, page_spans)
     return doc
 
 
@@ -458,33 +868,36 @@ def _expand_right(rect: "pymupdf.Rect", page_width: float, obstacles: list["pymu
     return pymupdf.Rect(rect.x0, rect.y0, max(x1, rect.x1), rect.y1)
 
 
-def _try_insert(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, css: str, scale_low: float) -> bool:
+def _try_insert(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, css: str, scale_low: float,
+                archive=None) -> bool:
     """insert_htmlbox 放不下返回负值（此时不画内容）。pymupdf 在缩放刚好等于 scale_low 时
     会因浮点误差触发 assert（0.8999999999999999 < 0.9），按没放下来处理。"""
     try:
-        return page.insert_htmlbox(rect, html_text, css=css, scale_low=scale_low)[0] >= 0
+        return page.insert_htmlbox(rect, html_text, css=css, scale_low=scale_low, archive=archive)[0] >= 0
     except AssertionError:
         return False
 
 
 def _insert_fitting(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, css: str,
-                    obstacles: list["pymupdf.Rect"]):
+                    obstacles: list["pymupdf.Rect"], archive=None):
     """排版三级收缩（BabelDOC 思路）：先右扩 → 压行距 → 最后才缩字号。
 
-    每一级只在放不下（insert_htmlbox 返回负值，此时不会画出内容）时进入下一级，
-    放得下的段落和旧的 scale_low=0 直接缩比，字号明显更大。
+    每一级只在放不下（insert_htmlbox 返回负值，此时不会画出内容）时进入下一级。
+    右扩只对明显窄于栏宽的块（标签、图注、短行）生效：满栏段落右扩会越过栏边界，
+    且扩完不缩字号时 CJK 行框（1.31em）比盒子（按拉丁 1.16em 算）高，会向下溢出
+    压到下一行内容。
     """
-    if _try_insert(page, rect, html_text, css, 0.9):
+    if _try_insert(page, rect, html_text, css, 0.9, archive):
         return
-    wide = _expand_right(rect, page.rect.width, obstacles)
-    if wide.x1 > rect.x1 + 1 and _try_insert(page, wide, html_text, css, 0.9):
+    wide = _expand_right(rect, page.rect.width, obstacles) if rect.width < page.rect.width * 0.6 else rect
+    if wide.x1 > rect.x1 + 1 and _try_insert(page, wide, html_text, css, 0.9, archive):
         return
-    target = wide if wide.x1 > rect.x1 + 1 else rect
+    target = wide
     css_tight = css.replace("line-height: 1.2", "line-height: 1.1")
-    if _try_insert(page, target, html_text, css_tight, 0.9):
+    if _try_insert(page, target, html_text, css_tight, 0.9, archive):
         return
     # 兜底：和原来一样缩到能放下为止
-    page.insert_htmlbox(target, html_text, css=css_tight, scale_low=0)
+    page.insert_htmlbox(target, html_text, css=css_tight, scale_low=0, archive=archive)
 
 
 def _render_side_by_side(src: pymupdf.Document, translated: pymupdf.Document) -> pymupdf.Document:
@@ -792,15 +1205,18 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     block_kind = {id(b): k for b, k in zip(blocks, kinds)}
 
     sent_texts, sent_formulas, sent_kinds, sent_skips, flat_units = [], [], [], [], []
-    for unit in units:
+    record_by_name: dict[str, tuple[int, dict]] = {}  # 图片名 → (页码, 公式记录)
+    for bi, unit in enumerate(units):
         texts, formulas = [], []
         for b in unit:
-            s, f = _placeholderize(b)
+            s, f = _placeholderize(b, bi)
             offset = len(formulas)
             if offset:
                 s = re.sub(r"\{v(\d+)\}", lambda m: f"{{v{int(m.group(1)) + offset}}}", s)
             formulas.extend(f)
             texts.append(s)
+        for f in formulas:
+            record_by_name[f["name"]] = (b.page, f)
         flat_units.append(unit)
         sent_texts.append(_join_lines(texts))
         sent_formulas.append(formulas)
@@ -809,7 +1225,27 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
 
     raw = await runner.translate_all(sent_texts, kinds=sent_kinds, preview=True, skip=sent_skips)
 
+    # 公式从原页裁成图片存到记录里；Archive 里放的是按公式宽高占位的标记像素
+    archive = pymupdf.Archive()
+    for name, (pno, f) in record_by_name.items():
+        bbox = f["bbox"]
+        if bbox.width < 1 or bbox.height < 1:
+            continue
+        f["png"] = src_doc[pno].get_pixmap(dpi=300, clip=bbox).tobytes("png")
+        f["has_img"] = True
+        # 裁剪向内收 0.4pt：bbox 来自 span 外框，边缘常沾到相邻文字的一小段笔画
+        f["clip"] = bbox + (0.4, 0.4, -0.4, -0.4)
+    # 标记像素按全文全局序号编码（同色的会被 MuPDF 去重成同一图片，落位全串）
+    marker_idx = 0
+    for formulas in sent_formulas:
+        for f in formulas:
+            if f.get("has_img"):
+                f["mid"] = marker_idx
+                archive.add(_marker_png(marker_idx), f"ph_{f['name']}")
+                marker_idx += 1
+
     per_block: dict[int, str] = {}
+    block_formulas: dict[int, list] = {}
     for unit, t, sent_text, formulas in zip(flat_units, raw, sent_texts, sent_formulas):
         restored = _restore_placeholders(t, formulas) if formulas else _STRAY_PLACEHOLDER_RE.sub("", t)
         if restored is None:
@@ -824,13 +1260,26 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             shown = restored
         for b, part in zip(unit, parts):
             per_block[id(b)] = part
+            block_formulas[id(b)] = formulas
         # 预览里显示恢复后的译文（缓存仍按占位符版本存，重跑照样命中）
         if formulas and getattr(runner, "_done", None) and runner._done.get(sent_text) == t:
             runner._done[sent_text] = shown
     translations = [per_block[id(b)] for b in blocks]
+    # 模型会把跨段的连接语在相邻两段译文里各写一遍（如“序列），而目标输出”出现在
+    # 上一段末尾、又出现在下一段开头）：后一段开头与上一段结尾重复的原文去掉
+    for i in range(1, len(blocks)):
+        prev, cur = translations[i - 1], translations[i]
+        if not prev or not cur or "\x01" in cur[:40]:
+            continue
+        limit = min(40, len(prev), len(cur))
+        for k in range(limit, 3, -1):
+            if prev.endswith(cur[:k]):
+                translations[i] = cur[k:]
+                break
 
     def build():
-        translated = _render_translated(src, blocks, translations, target_lang)
+        translated = _render_translated(src, blocks, translations, target_lang, block_formulas, archive,
+                                        orig=src_doc)
         # insert_htmlbox 每次都会嵌入完整的 CJK 字体（十几 MB），必须做子集化；失败则用未子集化版本
         translated = _subset_fonts_safe(translated)
         if bilingual:

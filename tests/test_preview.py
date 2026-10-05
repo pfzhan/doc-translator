@@ -4,6 +4,7 @@ import io
 import time
 from pathlib import Path
 
+import httpx
 import pymupdf
 import pytest
 from fastapi.testclient import TestClient
@@ -382,19 +383,26 @@ def test_empty_translations_backfilled_below_threshold():
 
 
 def test_echo_translations_retried_individually():
-    """批量里整段照抄原文（回显）的段落单独重翻一次；仍回显才保留（专有名词不误伤）。"""
-    class EchoTranslator(MockTranslator):
-        async def translate_batch(self, texts):
-            # 批量模式下长段回显，单段请求时正常翻译
-            if len(texts) > 1:
-                return [t if len(t) > 20 else f"[zh-CN] {t}" for t in texts]
-            return [f"[zh-CN] {t}" for t in texts]
+    """批量里整段回显（译文仍是源语言）的段落单独重翻一次；仍回显才保留。"""
+    calls = []
 
+    def handler(request):
+        import json as _json
+        n = len(_json.loads(request.content)["messages"][1]["content"].split("[[p"))
+        calls.append(n)
+        if n > 2:  # 批量：回显原文
+            return httpx.Response(200, json={"choices": [{"message": {"content":
+                "[[p0]]\nThis is a fairly long sentence that should really be translated.\n"
+                "[[p1]]\nLSTM\n[[source_end]]"}}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content":
+            "这是一个相当长的句子，确实应该被翻译出来。"}}]})
+
+    tr = __import__("tests.test_translators", fromlist=["make_openai"]).make_openai(handler)
     long_text = "This is a fairly long sentence that should really be translated."
-    runner = Runner(EchoTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
+    runner = Runner(tr, cache=MemCache(), skip_same_lang=False)
     out = asyncio.run(runner.translate_all([long_text, "LSTM"]))
-    assert out[0] == f"[zh-CN] {long_text}"  # 回显被单独重翻修好了
-    assert out[1] == "[zh-CN] LSTM"  # 专有名词不受影响
+    assert out[0] == "这是一个相当长的句子，确实应该被翻译出来。"  # 回显被单独重翻修好了
+    assert out[1] == "LSTM"  # 专有名词不受影响
 
 
 def test_stray_placeholders_cleaned_from_formula_free_blocks():
