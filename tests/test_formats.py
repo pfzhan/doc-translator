@@ -1414,30 +1414,29 @@ def test_subset_fonts_safe_returns_valid_doc():
 
 def test_typesetting_ladder_expands_before_shrinking():
     """放不下时先向右扩（避开右侧文本块）：扩出去后字号比直接缩更大，且不盖住右侧块。"""
-    from app.formats.pdf import TextBlock, _render_translated
+    from app.formats.pdf import _render_translated, extract_blocks
 
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=100)
-    page.insert_text((20, 30), "Short left", fontsize=12)
-    page.insert_text((300, 30), "Right block", fontsize=12)
+    page.insert_textbox(pymupdf.Rect(20, 17, 100, 40), "Short left", fontsize=12)
+    page.insert_textbox(pymupdf.Rect(300, 17, 390, 40), "Right block", fontsize=12)
     src = doc.tobytes()
 
     import tempfile
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
         f.write(src)
         src_path = Path(f.name)
-    blocks_src = pymupdf.open(src_path)
-    from app.formats.pdf import extract_blocks
-    blocks = extract_blocks(blocks_src)
+    blocks = extract_blocks(pymupdf.open(src_path))
     left = next(b for b in blocks if b.text.startswith("Short"))
+    right = next(b for b in blocks if b.text.startswith("Right"))
     translations = ["这是一段比原文长很多的译文，原来肯定放不下" if b is left else b.text for b in blocks]
     out = _render_translated(src_path, blocks, translations, "zh-CN")
     spans = [ln for blk in out[0].get_text("dict")["blocks"] for ln in blk["lines"]]
     zh = [ln for ln in spans if "译文" in "".join(s["text"] for s in ln["spans"])]
     assert zh
     zh_rect = zh[0]["bbox"]
-    # 译文越过了原块的右边界（发生了右扩），且没有盖住右侧块（x0=300）
-    assert zh_rect[2] > left.rect.x1 + 1 and zh_rect[2] <= 300
+    # 译文越过了原块的右边界（发生了右扩），且没有盖住右侧块
+    assert zh_rect[2] > left.rect.x1 + 1 and zh_rect[2] <= right.rect.x0
     # 右侧块原文还在
     assert "Right block" in out[0].get_text()
 
@@ -1511,3 +1510,41 @@ def test_attention_formula_placeholders_end_to_end(tmp_path):
     [out] = run(translate_file(src, tmp_path, runner(), False, "zh-CN"))
     text = pymupdf.open(out)[0].get_text() + pymupdf.open(out)[1].get_text()
     assert "{v" not in text  # 全部恢复成功
+
+
+def test_cross_page_units_merge_continuation():
+    """跨页续段合并：上页末块不以句末标点结尾、下页首块小写开头 → 合成一个翻译单元。"""
+    from app.formats.pdf import TextBlock, _cross_page_units
+
+    def blk(text, page, size=10.0, y=0):
+        return TextBlock(page=page, rect=pymupdf.Rect(0, y, 100, y + 10), line_rects=[],
+                         text=text, size=size, color="#000", bold=False)
+
+    blocks = [
+        blk("It can be seen that the model performs quite", 0, y=700),
+        blk("4https://example.com/footnote", 0, size=7.0, y=760),  # 页脚脚注，不参与
+        blk("well. We hypothesize that this has to do with it.", 1, y=60),
+        blk("A new section starts here.", 1, y=90),
+    ]
+    units = _cross_page_units(blocks, 10.0)
+    merged = [u for u in units if len(u) == 2]
+    assert len(merged) == 1
+    assert merged[0][0].text.endswith("quite") and merged[0][1].text.startswith("well")
+    # 完整句子不合并
+    blocks2 = [
+        blk("This sentence is complete.", 0, y=700),
+        blk("another paragraph starts here.", 1, y=60),
+    ]
+    assert all(len(u) == 1 for u in _cross_page_units(blocks2, 10.0))
+
+
+def test_split_translation_at_clause_boundary():
+    from app.formats.pdf import _split_translation
+
+    t = "可以看出，基线模型的性能优于采样模型。这是意料之中的。然而还可以看出模型的表现相当好。我们推测原因在此。"
+    a, b = _split_translation(t, 0.6)
+    assert a.endswith(("。", "，", "；")) and len(a) > len(b) * 0.8
+    assert a + b == t
+    # 拉丁文本按空格切
+    a2, b2 = _split_translation("the quick brown fox jumps over the lazy dog", 0.5)
+    assert a2.endswith("fox") and a2 + b2 == "the quick brown fox jumps over the lazy dog"
