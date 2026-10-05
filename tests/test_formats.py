@@ -595,3 +595,768 @@ def test_pdf_cjk_straight_quote_ends_sentence():
     assert _split_lines(pair("'")) == [[0], [1]]
     assert _split_lines(pair("”")) == [[0], [1]]
     assert _split_lines(pair("；")) == [[0, 1]]
+
+
+# --- 参考文献章节保留原文 ---
+
+def _biblio_epub(path):
+    ch1 = ('<html xmlns="http://www.w3.org/1999/xhtml"><body>'
+           "<h1>Chapter One</h1><p>Normal paragraph here.</p>"
+           "<h2>Bibliography</h2><p>Smith, J. (2020). Some book. Press.</p>"
+           "<h3>Primary sources</h3><p>Jones, A. (2019). Another book.</p>"
+           "<h2>Appendix</h2><p>Appendix paragraph here.</p></body></html>")
+    biblio = ('<html xmlns="http://www.w3.org/1999/xhtml"><body>'
+              "<h1>References</h1><p>Doe, B. (2018). Cited work.</p></body></html>")
+    _write_epub(
+        path,
+        '<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>'
+        '<item id="bib" href="bibliography.xhtml" media-type="application/xhtml+xml"/>',
+        '<itemref idref="ch1"/><itemref idref="bib"/>',
+        {"ch1.xhtml": ch1, "bibliography.xhtml": biblio},
+    )
+
+
+def test_epub_bibliography_kept_original(tmp_path):
+    src = tmp_path / "book.epub"
+    _biblio_epub(src)
+    r = runner()
+    [out] = run(translate_epub(src, tmp_path, r, False, "zh-CN"))
+    text = _epub_texts(out)
+    # 正文和附录照翻；参考文献标题照翻；引文条目保留原文
+    assert "[zh-CN] Normal paragraph here." in text
+    assert "[zh-CN] Appendix paragraph here." in text
+    assert "Smith, J. (2020). Some book. Press." in text and "[zh-CN] Smith" not in text
+    assert "Jones, A. (2019). Another book." in text
+    assert "Doe, B. (2018). Cited work." in text and "[zh-CN] Doe" not in text
+    # 预览里标成跳过
+    updates = {u[0]: u for u in r.preview()["updates"]}
+    segs = r.preview()["segments"]
+    skipped_srcs = {segs[u[0]]["s"] for u in updates.values() if u[2] == 1}
+    assert any("Smith, J." in s for s in skipped_srcs)
+    assert any("Doe, B." in s for s in skipped_srcs)
+
+
+def test_pdf_biblio_skips_follows_font_size():
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, page=0, bold=False):
+        return TextBlock(page=page, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    blocks = [
+        blk("Chapter body text.", 10),
+        blk("References", 14),
+        blk("Smith, J. (2020). Some book.", 10),
+        blk("Jones, A. (2019). Another.", 10),
+        blk("Index", 14),
+        blk("Index entry text.", 10),
+    ]
+    assert biblio_skips(blocks) == [False, False, True, True, False, False]
+    # 页眉不能把阈值改小；同等字号的引文不是退出标题；略小的下一章标题要退出
+    mixed = [
+        blk("Chapter body text.", 11),
+        blk("References", 16),
+        blk("Smith, J. (2020). Some book.", 12),
+        blk("References", 9),
+        blk("Jones, A. (2019). Another.", 12),
+        blk("Appendix: supplementary notes for the study of this volume", 14),
+        blk("Appendix paragraph here.", 11),
+    ]
+    assert biblio_skips(mixed) == [False, False, True, True, True, False, False]
+    # 目录里的 References 后面没有引文，不进入
+    toc = [
+        blk("References", 14),
+        blk("A normal chapter paragraph without a citation year.", 11),
+        blk("More body text here.", 11),
+    ]
+    assert biblio_skips(toc) == [False, False, False]
+    # 标题和引文同字号时，引文仍保留原文，下一标题退出
+    same = [
+        blk("Intro paragraph.", 11),
+        blk("参考文献：", 12),
+        blk("Smith, J. (2020). Some book.", 12),
+        blk("Index", 12),
+        blk("Index entry text.", 11),
+    ]
+    assert biblio_skips(same) == [False, False, True, False, False]
+
+
+def test_pdf_biblio_entry_needs_a_citation_not_a_year_in_prose():
+    """正文里的年份、arXiv 字样，以及更小的下一标题，都不能确认进入。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    prose = [
+        blk("Chapter body text.", 11),
+        blk("References", 14),
+        blk("In 2017 the authors published a follow-up.", 11),
+        blk("WMT 2014 is a common benchmark.", 11),
+        blk("See the arXiv preprint for details.", 11),
+        blk("More body text here.", 11),
+    ]
+    assert biblio_skips(prose) == [False] * 6
+    zh = [
+        blk("这是正文段落。", 11),
+        blk("参考文献", 14),
+        blk("这项工作发表于2016年。", 11),
+        blk("后续正文还在这里。", 11),
+    ]
+    assert biblio_skips(zh) == [False, False, False, False]
+    # 14pt 目录标题后面是更小的加粗章节，前瞻必须停，不能把这一章吞掉
+    toc = [
+        blk("Contents line.", 11),
+        blk("References", 14),
+        blk("Introduction", 11, bold=True),
+        blk("In 2017 the authors wrote this chapter.", 11),
+        blk("The chapter continues here.", 11),
+    ]
+    assert biblio_skips(toc) == [False] * 5
+
+
+def test_pdf_biblio_same_size_citations_do_not_exit():
+    """行尾裸年份、CoRR、编号条目和换行续行都不是下一章；正文字号的加粗标题要退出。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    same = [
+        blk("Intro paragraph.", 11),
+        blk("References", 12, bold=True),
+        blk("Vaswani, A. Attention is all you need. CoRR, abs/1706.03762, 2017.", 12),
+        blk("1. Zhang, S. A paper title goes here. 2017.", 12),
+        blk("[2] Dzmitry Bahdanau and Yoshua Bengio. Neural machine translation by jointly", 12),
+        blk("learning to align and translate. CoRR, abs/1409.0473, 2014.", 12),
+        blk("张三. 书名. 2016.", 12),
+        blk("Index", 12, bold=True),
+        blk("Index entry text.", 11),
+    ]
+    assert biblio_skips(same) == [False, False, True, True, True, True, True, False, False]
+    bold_next = [
+        blk("Chapter body text.", 10),
+        blk("Another body line.", 10),
+        blk("References", 12, bold=True),
+        blk("Smith, J. (2020). Some book.", 10),
+        blk("Acknowledgements", 10.1, bold=True),
+        blk("Thanks to the reviewers.", 10),
+    ]
+    assert biblio_skips(bold_next) == [False, False, False, True, False, False]
+    numbered_heading = [
+        blk("Chapter body text.", 10),
+        blk("References", 12, bold=True),
+        blk("[1] Smith, J. A paper. CoRR, abs/1706.03762, 2017.", 10),
+        blk("[1] Appendix", 14, bold=True),
+        blk("Appendix paragraph here.", 10),
+    ]
+    assert biblio_skips(numbered_heading) == [False, False, True, False, False]
+    appendix = [
+        blk("Chapter body text.", 10),
+        blk("Another body line.", 10),
+        blk("References", 12, bold=True),
+        blk("Smith, J. (2020). Some book.", 10),
+        blk("1. Appendix", 10.1, bold=True),
+        blk("Appendix paragraph here.", 10),
+    ]
+    assert biblio_skips(appendix) == [False, False, False, True, False, False]
+
+
+def _one_epub(path, docs: dict[str, str]):
+    items = "".join(
+        f'<item id="d{i}" href="{name}" media-type="application/xhtml+xml"/>'
+        for i, name in enumerate(docs)
+    )
+    spine = "".join(f'<itemref idref="d{i}"/>' for i in range(len(docs)))
+    _write_epub(path, items, spine, docs)
+
+
+def _xhtml(body: str) -> str:
+    return (
+        '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">'
+        f"<body>{body}</body></html>"
+    )
+
+
+def test_epub_chapter_titled_papers_ends_bibliography(tmp_path):
+    """平铺文档里 h2 Papers 是下一章，不能因为单词像小标题就留成原文。"""
+    src = tmp_path / "book.epub"
+    _one_epub(src, {"book.xhtml": _xhtml(
+        "<h1>References</h1><p>Doe, B. (2018). Cited work.</p>"
+        "<h2>Papers</h2><p>Papers chapter paragraph.</p>"
+        "<h2>Appendix</h2><p>Appendix paragraph here.</p>"
+    )})
+    text = _epub_texts(run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))[0])
+    assert "Doe, B. (2018). Cited work." in text and "[zh-CN] Doe" not in text
+    assert "[zh-CN] Papers chapter paragraph." in text
+    assert "[zh-CN] Appendix paragraph here." in text
+
+
+def test_epub_deeper_heading_ends_flat_bibliography(tmp_path):
+    """单文件里 h1 参考文献后的 h2 附录是下一章，不能把后面整篇留成原文。
+
+    包在后一个 section 里的更深标题同样结束，不靠标题数字单独判断。
+    """
+    src = tmp_path / "book.epub"
+    _one_epub(src, {"book.xhtml": _xhtml(
+        "<h1>References</h1><p>Doe, B. (2018). Cited work.</p>"
+        "<h2>Appendix</h2><p>Appendix paragraph here.</p>"
+        "<section><h1>References</h1><p>Lee, C. (2017). Third work.</p></section>"
+        "<section><h2>Appendix</h2><p>Second appendix paragraph.</p></section>"
+    )})
+    text = _epub_texts(run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))[0])
+    assert "Doe, B. (2018). Cited work." in text and "[zh-CN] Doe" not in text
+    assert "[zh-CN] Appendix paragraph here." in text
+    assert "Lee, C. (2017). Third work." in text and "[zh-CN] Lee" not in text
+    assert "[zh-CN] Second appendix paragraph." in text
+
+
+def test_epub_filename_substring_does_not_skip_chapter(tmp_path):
+    src = tmp_path / "book.epub"
+    _one_epub(src, {
+        "chapter-references.xhtml": _xhtml("<h1>Cross References in Plato</h1><p>Normal paragraph here.</p>"),
+        "bibliographical-notes.xhtml": _xhtml("<h1>Notes</h1><p>Another normal paragraph.</p>"),
+    })
+    text = _epub_texts(run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))[0])
+    assert "[zh-CN] Cross References in Plato" in text
+    assert "[zh-CN] Normal paragraph here." in text
+    assert "[zh-CN] Another normal paragraph." in text
+
+
+def test_epub_bibliography_file_still_exits_on_next_heading(tmp_path):
+    src = tmp_path / "book.epub"
+    _one_epub(src, {"bibliography.xhtml": _xhtml(
+        "<h1>References</h1><p>Doe, B. (2018). Cited work.</p>"
+        "<h1>Index</h1><p>Index entry text here.</p>"
+    )})
+    text = _epub_texts(run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))[0])
+    assert "Doe, B. (2018). Cited work." in text and "[zh-CN] Doe" not in text
+    assert "[zh-CN] Index entry text here." in text
+
+
+def test_epub_bibliography_continues_across_spine(tmp_path):
+    src = tmp_path / "book.epub"
+    _one_epub(src, {
+        "ch1.xhtml": _xhtml("<h2>Bibliography</h2><p>Smith, J. (2020). Some book. Press.</p>"),
+        "index_split_002.xhtml": _xhtml(
+            "<p>Jones, A. (2019). Another book.</p><h1>Appendix</h1><p>Appendix paragraph here.</p>"
+        ),
+    })
+    text = _epub_texts(run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))[0])
+    assert "Smith, J. (2020). Some book. Press." in text and "[zh-CN] Smith" not in text
+    assert "Jones, A. (2019). Another book." in text and "[zh-CN] Jones" not in text
+    assert "[zh-CN] Appendix paragraph here." in text
+
+
+def test_epub_repeated_citation_in_body_is_translated(tmp_path):
+    src = tmp_path / "book.epub"
+    cite = "Smith, J. (2020). Some book. Press."
+    _one_epub(src, {"ch1.xhtml": _xhtml(
+        f"<p>{cite}</p><h2>Bibliography</h2><p>{cite}</p>"
+        "<h2>Appendix</h2><p>Appendix paragraph here.</p>"
+    )})
+    r = runner()
+    text = _epub_texts(run(translate_epub(src, tmp_path, r, False, "zh-CN"))[0])
+    assert f"[zh-CN] {cite}" in text
+    assert text.count(cite) >= 1
+    updates = {u[0]: u for u in r.preview()["updates"]}
+    segs = r.preview()["segments"]
+    cite_idxs = [i for i, seg in enumerate(segs) if cite in seg["s"]]
+    assert len(cite_idxs) == 2
+    assert updates[cite_idxs[0]][2] == 0 and updates[cite_idxs[0]][1].startswith("[zh-CN]")
+    assert updates[cite_idxs[1]][2] == 1
+
+
+def test_epub_styled_heading_colon_and_epub_type(tmp_path):
+    src = tmp_path / "book.epub"
+    _one_epub(src, {"ch1.xhtml": _xhtml(
+        '<p class="heading">Bibliography</p><p>Smith, J. (2020). Some book. Press.</p>'
+        "<h2>Appendix</h2><p>Appendix paragraph here.</p>"
+        '<h2>参考文献：</h2><p>Doe, B. (2018). Cited work.</p>'
+        "<h2>Index</h2><p>Index entry text here.</p>"
+        '<section epub:type="bibliography"><h2>Notes</h2>'
+        "<p>Lee, C. (2017). Third work.</p></section>"
+        "<h2>Afterword</h2><p>Afterword paragraph here.</p>"
+        "<p>Bibliography</p><p>This sentence mentions Bibliography but is body text.</p>"
+        "<h2>12. References</h2><p>Ng, D. (2016). Fourth work.</p>"
+        "<h2>Glossary</h2><p>Glossary paragraph here.</p>"
+    )})
+    text = _epub_texts(run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))[0])
+    assert "Smith, J. (2020). Some book. Press." in text and "[zh-CN] Smith" not in text
+    assert "[zh-CN] Appendix paragraph here." in text
+    assert "Doe, B. (2018). Cited work." in text and "[zh-CN] Doe" not in text
+    assert "[zh-CN] Index entry text here." in text
+    assert "Lee, C. (2017). Third work." in text and "[zh-CN] Lee" not in text
+    assert "[zh-CN] Afterword paragraph here." in text
+    assert "[zh-CN] This sentence mentions Bibliography but is body text." in text
+    assert "Ng, D. (2016). Fourth work." in text and "[zh-CN] Ng" not in text
+    assert "[zh-CN] Glossary paragraph here." in text
+
+
+def test_pdf_biblio_skips_on_attention_paper():
+    """arXiv 风格引文（年份在行尾不带括号）也要识别：attention.pdf 的 References 整节跳过。"""
+    src = SAMPLES / "attention.pdf"
+    if not src.exists():
+        pytest.skip("sample missing")
+    from app.formats.pdf import extract_blocks, biblio_skips
+
+    blocks = extract_blocks(pymupdf.open(src))
+    skips = biblio_skips(blocks)
+    refs = next(i for i, b in enumerate(blocks) if b.text.strip() == "References")
+    viz = next(i for i, b in enumerate(blocks) if b.text.strip() == "Attention Visualizations")
+    assert skips.index(True) == refs + 1
+    assert blocks[refs + 1].text.strip().startswith("[")
+    assert all(skips[refs + 1:viz])
+    assert not skips[viz]
+    assert not any(skips[viz + 1:])
+
+
+def test_pdf_biblio_entry_with_bold_subheadings():
+    """References 下先出现加粗小标题（Books/Articles）再出现引文，也要进入参考文献。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000", bold=bold)
+
+    blocks = [
+        blk("Body paragraph.", 10),
+        blk("References", 14, bold=True),
+        blk("Books", 11, bold=True),
+        blk("Smith, J. (2020). Some book title here. Press.", 10),
+        blk("Articles", 11, bold=True),
+        blk("Doe, A. (2019). Some article title. Journal.", 10),
+        blk("Index", 14, bold=True),
+        blk("Index entry.", 10),
+    ]
+    assert biblio_skips(blocks) == [False, False, False, True, False, True, False, False]
+
+
+def test_pdf_biblio_section_title_stops_lookahead():
+    """更大的 References 不能穿过 Endnotes 进入，否则正文字号的下一标题退不出去。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    blocks = [
+        blk("Chapter body text.", 10),
+        blk("Another body line.", 10),
+        blk("References", 16, bold=True),
+        blk("This paragraph is still the chapter.", 10),
+        blk("Endnotes", 12, bold=True),
+        blk("See Smith et al. (2018). A cited work.", 10),
+        blk("Acknowledgements", 10.1, bold=True),
+        blk("Thanks to the reviewers.", 10),
+    ]
+    assert biblio_skips(blocks) == [False, False, False, False, False, True, False, False]
+
+
+def test_pdf_biblio_journal_line_does_not_end_numbered_entry():
+    """引文里单独一行 Journal 不是小标题，后面的小写续行仍留在参考文献里。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    blocks = [
+        blk("Intro paragraph.", 11),
+        blk("References", 12, bold=True),
+        blk("[2] Dzmitry Bahdanau and Yoshua Bengio. Neural machine translation by jointly", 12),
+        blk("Journal", 12),
+        blk("of medicine and was widely cited afterward.", 12),
+        blk("Smith, J. (2019). Another paper.", 12),
+        blk("Index", 12, bold=True),
+        blk("Index entry text.", 11),
+    ]
+    assert biblio_skips(blocks) == [False, False, True, True, True, True, False, False]
+
+
+def test_pdf_biblio_chapter_titled_books_or_paper_does_not_enter():
+    """同字号或更大的 Books、论文是下一章。更小的 Paper 仍是内部小标题。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    books = [
+        blk("Body paragraph.", 10),
+        blk("References", 14, bold=True),
+        blk("Books", 16, bold=True),
+        blk("Smith, J. (2020). Some book.", 10),
+        blk("Chapter continues here.", 10),
+    ]
+    assert biblio_skips(books) == [False, False, False, False, False]
+    thesis = [
+        blk("这是正文段落。", 11),
+        blk("参考文献", 14, bold=True),
+        blk("论文", 12, bold=True),
+        blk("这项研究发表于某出版社。", 11),
+        blk("后续正文还在这里。", 11),
+    ]
+    assert biblio_skips(thesis) == [False, False, False, False, False]
+    paper = [
+        blk("Body paragraph.", 10),
+        blk("References", 14, bold=True),
+        blk("Paper", 11, bold=True),
+        blk("Smith, J. (2020). Some book.", 10),
+        blk("Index", 14, bold=True),
+        blk("Index entry.", 10),
+    ]
+    assert biblio_skips(paper) == [False, False, False, True, False, False]
+
+
+def test_pdf_biblio_chinese_gbt_citations():
+    """中文 GB/T 引文（[J][M] 类型标记）：小一号“论文”是分组，引文跳过，正文提出版社不进入。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    blocks = [
+        blk("这是正文段落。", 11),
+        blk("参考文献", 14, bold=True),
+        blk("论文", 12, bold=True),
+        blk("张三. 某某研究[J]. 某某学报, 2020, 3(2): 1-10.", 11),
+        blk("李四. 某书[M]. 人民出版社, 2019.", 11),
+        blk("Index", 14, bold=True),
+        blk("索引条目。", 11),
+    ]
+    assert biblio_skips(blocks) == [False, False, False, True, True, False, False]
+
+
+def test_pdf_biblio_type_mark_does_not_swallow_headings():
+    """行内 [J]/[M] 不是引文。含标记的下一章标题要退出，标题本身不跳过。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    prose = [
+        blk("Chapter body text.", 10),
+        blk("References", 16, bold=True),
+        blk("期刊论文的类型标识为[J]，专著为[M]。", 10),
+        blk("See note [J]", 10),
+        blk("The concentration [M] was measured carefully.", 10),
+        blk("Endnotes", 12, bold=True),
+        blk("See Smith et al. (2018). A cited work.", 10),
+        blk("Acknowledgements", 10.1, bold=True),
+        blk("Thanks to the reviewers.", 10),
+    ]
+    assert biblio_skips(prose) == [False, False, False, False, False, False, True, False, False]
+    appendix = [
+        blk("这是正文段落。", 11),
+        blk("参考文献", 14, bold=True),
+        blk("张三. 某某研究[J]. 某某学报, 2020, 3(2): 1-10.", 11),
+        blk("Appendix [C]", 14, bold=True),
+        blk("Appendix paragraph.", 11),
+    ]
+    assert biblio_skips(appendix) == [False, False, True, False, False]
+    cn = [
+        blk("这是正文段落。", 11),
+        blk("参考文献", 14, bold=True),
+        blk("张三. 某某研究[J]. 某某学报, 2020, 3(2): 1-10.", 11),
+        blk("附录[J]", 14, bold=True),
+        blk("附录正文。", 11),
+    ]
+    assert biblio_skips(cn) == [False, False, True, False, False]
+    larger = [
+        blk("这是正文段落。", 11),
+        blk("参考文献", 14, bold=True),
+        blk("张三. 某某研究[J]. 某某学报, 2020, 3(2): 1-10.", 11),
+        blk("第2章 [M]", 16, bold=True),
+        blk("章正文。", 11),
+    ]
+    assert biblio_skips(larger) == [False, False, True, False, False]
+
+
+def test_pdf_biblio_numbered_publisher_entry_without_space():
+    """[1] 后没有空格，或出版社在下一块，仍进入。无编号正文里的出版社不进入。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    tight = [
+        blk("这是正文段落。", 11),
+        blk("参考文献", 14, bold=True),
+        blk("[1]张三. 书名. 北京: 人民出版社, 2019.", 11),
+        blk("Index", 14, bold=True),
+        blk("索引条目。", 11),
+    ]
+    assert biblio_skips(tight) == [False, False, True, False, False]
+    split = [
+        blk("这是正文段落。", 11),
+        blk("参考文献", 14, bold=True),
+        blk("[1] 张三. 书名.", 11),
+        blk("北京: 人民出版社, 2019.", 11),
+        blk("Index", 14, bold=True),
+        blk("索引条目。", 11),
+    ]
+    assert biblio_skips(split) == [False, False, True, True, False, False]
+    prose = [
+        blk("这是正文段落。", 11),
+        blk("参考文献", 14, bold=True),
+        blk("这项研究发表于某出版社。", 11),
+        blk("后续正文还在这里。", 11),
+    ]
+    assert biblio_skips(prose) == [False, False, False, False]
+
+
+def test_pdf_biblio_edition_heading_exits():
+    """以年版结尾的编号短标题是下一章，标题本身不跳过。真正的著录行仍跳过。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    year = [
+        blk("这是正文段落。", 11),
+        blk("参考文献", 14, bold=True),
+        blk("张三. 某某研究[J]. 某某学报, 2020, 3(2): 1-10.", 11),
+        blk("1. 2019年版", 14, bold=True),
+        blk("后续正文。", 11),
+    ]
+    assert biblio_skips(year) == [False, False, True, False, False]
+    press = [
+        blk("这是正文段落。", 11),
+        blk("参考文献", 14, bold=True),
+        blk("[1]张三. 书名. 人民出版社, 2019年版.", 11),
+        blk("1. 人民出版社2019年版", 14, bold=True),
+        blk("后续正文。", 11),
+    ]
+    assert biblio_skips(press) == [False, False, True, False, False]
+
+
+def test_pdf_biblio_type_mark_in_prose_does_not_enter():
+    """正文句子中间的 [M]。 不是引文（没有年份），不能把后面的正文留成原文。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    blocks = [
+        blk("Body text.", 11),
+        blk("References", 14, bold=True),
+        blk("这个概念的出处见某书[M]。后续还有讨论。", 11),
+        blk("正文继续。", 11),
+    ]
+    assert biblio_skips(blocks) == [False, False, False, False]
+    later = [
+        blk("Body text.", 11),
+        blk("References", 14, bold=True),
+        blk("这个概念的出处见某书[M]。后续还有讨论。", 11),
+        blk("2020年又有新的讨论。", 11),
+        blk("正文继续。", 11),
+    ]
+    assert biblio_skips(later) == [False, False, False, False, False]
+
+
+def test_pdf_biblio_type_mark_year_on_next_block_enters():
+    """类型标记和年份被拆开时仍进入。下一块要是卷期或出版社，不能是任意后文。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    volume = [
+        blk("这是正文段落。", 11),
+        blk("参考文献", 14, bold=True),
+        blk("张三. 某某研究[J]. 某某学报", 11),
+        blk("2020, 3(2): 1-10.", 11),
+        blk("Index", 14, bold=True),
+        blk("索引条目。", 11),
+    ]
+    assert biblio_skips(volume) == [False, False, True, True, False, False]
+    numbered = [
+        blk("这是正文段落。", 11),
+        blk("参考文献", 14, bold=True),
+        blk("[1]张三. 某某研究[J]. 某某学报", 11),
+        blk("2020, 3(2): 1-10.", 11),
+        blk("Index", 14, bold=True),
+        blk("索引条目。", 11),
+    ]
+    assert biblio_skips(numbered) == [False, False, True, True, False, False]
+    press = [
+        blk("这是正文段落。", 11),
+        blk("参考文献", 14, bold=True),
+        blk("张三. 某书[M]. 书名", 11),
+        blk("北京: 人民出版社, 2019.", 11),
+        blk("Index", 14, bold=True),
+        blk("索引条目。", 11),
+    ]
+    assert biblio_skips(press) == [False, False, True, True, False, False]
+
+
+def test_pdf_biblio_year_continuation_tightened():
+    """拆行的年份确认不能松到正文：年份开头的英文句子、提到出版社和年份的正文都不算续行。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    def scenario(second: str):
+        return biblio_skips([
+            blk("参考文献", 14, bold=True),
+            blk("见某书[M]。如下。", 11),
+            blk(second, 11),
+        ])
+
+    assert scenario("2020, we showed more.") == [False, False, False]
+    assert scenario("2020, volume were higher than expected.") == [False, False, False]
+    assert scenario("2020, Volume of the series was larger.") == [False, False, False]
+    assert scenario("这项研究2020年发表于某出版社。") == [False, False, False]
+    assert scenario("人民出版社, 2019年出版.") == [False, False, False]
+    # 卷期页码、第N期，以及以「年」或中文句号收尾的出版社行仍算
+    assert scenario("2020, 3(2): 1-10.") == [False, True, True]
+    assert scenario("2020, Vol. 3") == [False, True, True]
+    assert scenario("2020, Volume 3") == [False, True, True]
+    assert scenario("2020, volume. 12, no. 2") == [False, True, True]
+    assert scenario("2020, pp. 1-10.") == [False, True, True]
+    assert scenario("2020, 第3期") == [False, True, True]
+    assert scenario("北京: 人民出版社, 2019.") == [False, True, True]
+    assert scenario("北京: 人民出版社, 2019年.") == [False, True, True]
+    assert scenario("北京: 人民出版社, 2019。") == [False, True, True]
+    assert scenario("北京: 人民出版社2019年.") == [False, True, True]
+
+
+def test_pdf_biblio_vol_abbreviation_also_needs_digit():
+    """Vol 缩写和 Volume 全拼一样：后面必须是数字，“2020, Vol were…” 是正文。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    def scenario(second: str):
+        return biblio_skips([
+            blk("参考文献", 14, bold=True),
+            blk("见某书[M]。如下。", 11),
+            blk(second, 11),
+        ])
+
+    assert scenario("2020, Vol were higher than expected.") == [False, False, False]
+    assert scenario("2020, Vol of the series was larger.") == [False, False, False]
+    assert scenario("2020, Vol. mix") == [False, False, False]
+    assert scenario("2020, Vol. mill") == [False, False, False]
+    assert scenario("2020, Vol. 3") == [False, True, True]
+    assert scenario("2020, Vol 3") == [False, True, True]
+    assert scenario("2020, Vol. III") == [False, True, True]
+    assert scenario("2020, Vol. IV, pp. 1-10.") == [False, True, True]
+    assert scenario("2020, Vol. xii, pp. 1-10.") == [False, True, True]
+
+
+def test_pdf_biblio_volume_lines_protected_at_same_size():
+    """参考文献标题和正文同字号时，卷期/出版社续行也不能被误判为下一章。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    blocks = [
+        blk("Body text.", 12),
+        blk("参考文献", 12, bold=True),
+        blk("张三. 某某研究[J]. 某某学报", 12),
+        blk("2020, 3(2): 1-10.", 12),
+        blk("李四. 某书[M]. 书名", 12),
+        blk("2020, Vol. III", 12),
+        blk("王五. 另一本书[M]. 书名", 12),
+        blk("北京: 人民出版社, 2019年。", 12),
+        blk("Index", 12, bold=True),
+        blk("索引条目。", 12),
+    ]
+    assert biblio_skips(blocks) == [False, False, True, True, True, True, True, True, False, False]
+
+
+def test_pdf_biblio_year_prefixed_chapter_still_exits():
+    """行首是年份的下一章不是卷期续行。加粗的长标题同样退出。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    def scenario(line: str, *, bold: bool = False) -> list[bool]:
+        body = (
+            "这是后续正文，需要被翻译，不能因为上一行像年份就留在参考文献里。"
+            "这里再补上一整句，让整段明显超过六十个字，避免它本身被当成同字号短标题。"
+        )
+        return biblio_skips([
+            blk("Body text.", 12),
+            blk("References", 12, bold=True),
+            blk("Smith, J. (2020). Some book.", 12),
+            blk(line, 12, bold=bold),
+            blk(body, 12),
+        ])
+
+    assert scenario("2020, 1. Introduction") == [False, False, True, False, False]
+    assert scenario("2020, 3. Results") == [False, False, True, False, False]
+    assert scenario("2020, 第1章 结论") == [False, False, True, False, False]
+    assert scenario("2020, No further reading") == [False, False, True, False, False]
+    assert scenario("2020, p < 0.05.") == [False, False, True, False, False]
+    assert scenario("2020, 3 days later.") == [False, False, True, False, False]
+    assert scenario("2020, 1. Introduction to machine translation systems", bold=True) == [
+        False, False, True, False, False,
+    ]
+    assert scenario("2020, 3(2): 1-10.") == [False, False, True, True, True]
+    assert scenario("2020, Vol. III") == [False, False, True, True, True]
+
+
+def test_pdf_biblio_long_bold_chapter_title_exits():
+    """超过 80 字的加粗长章节标题也要退出（heading_like 的加粗分支有 80 字上限，不能靠它兜底）。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    body = "这是后续正文，需要被翻译，这里再补上一整句，让整段明显超过六十个字，避免被当成短标题。"
+    blocks = [
+        blk("Body text.", 12),
+        blk("References", 12, bold=True),
+        blk("Smith, J. (2020). Some book.", 12),
+        blk("Chapter 12: On the relationship between government forms and the laws that govern them", 12, bold=True),
+        blk(body, 12),
+    ]
+    assert biblio_skips(blocks) == [False, False, True, False, False]
+
+
+def test_pdf_biblio_long_bold_citation_stays():
+    """超过 80 字的加粗著录行不是下一章。类型标记或行尾年份仍要跳过。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    gbt = (
+        "张三. 某某研究的题目在这里继续写长，把期刊论文的背景、方法和结论都写进题名，"
+        "直到这一行确实超过八十个字。[J]. 某某学报, 2020, 3(2): 1-10."
+    )
+    smith = "Smith, J. A long paper title goes here and continues past eighty characters. 2019."
+    assert len(gbt) > 80 and len(smith) > 80
+    body = "Jones, K. (2018). Another citation that must stay untranslated."
+    blocks = [
+        blk("Body text.", 12),
+        blk("References", 12, bold=True),
+        blk("Smith, J. (2020). Some book.", 12),
+        blk(gbt, 12, bold=True),
+        blk(smith, 12, bold=True),
+        blk(body, 12),
+        blk("Index", 12, bold=True),
+        blk("Index entry text.", 12),
+    ]
+    assert biblio_skips(blocks) == [False, False, True, True, True, True, False, False]

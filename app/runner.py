@@ -88,6 +88,7 @@ class Runner:
         self._indices: dict[str, list[int]] = {}  # 原文 → 出现的段落序号（同一句可能出现多次）
         self._done: dict[str, str] = {}
         self._skipped: set[str] = set()
+        self._skip_idx: set[int] = set()
         # 完成顺序的日志，下标就是版本号；预览接口按 since 增量返回
         self._log: list[str] = []
         # 用户正在看的位置（段落序号），优先翻译它后面的内容
@@ -129,9 +130,12 @@ class Runner:
         updates = []
         for text in self._log[start:]:
             translated = self._done.get(text, text)
-            skipped = 1 if text in self._skipped else 0
             for i in self._indices.get(text, ()):
-                updates.append([i, translated, skipped])
+                # 参考文献按位置跳过：同一句在正文里仍显示译文
+                if i in self._skip_idx or text in self._skipped:
+                    updates.append([i, text, 1])
+                else:
+                    updates.append([i, translated, 0])
         out = {"ready": True, "version": len(self._log), "updates": updates, "focus": self._focus}
         if since < 0:
             out["segments"] = self.segments
@@ -158,21 +162,40 @@ class Runner:
         return {t for t in unique if langdetect.same_language(langdetect.detect(t), tr.target_lang)}
 
     async def translate_all(self, texts: list[str], kinds: list[str] | None = None,
-                            preview: bool = False, html: list[bool] | None = None) -> list[str]:
+                            preview: bool = False, html: list[bool] | None = None,
+                            skip: list[bool] | None = None) -> list[str]:
         """按原顺序返回译文；空白文本和已是目标语言的段落原样返回。
 
         preview=True 时记录段落供预览接口读取；kinds 是每段的类型（h1~h6 / p / li / quote / td / toc），
         只影响预览的显示样式。html 与 texts 对齐，标记哪些段是电子书富文本片段。
+        skip 与 texts 对齐，标记调用方要求保留原文的段落（如参考文献章节），预览里标注为跳过。
+        这个标记按位置生效：同一句在正文里出现时仍会翻译。
         """
+        n = len(texts)
+        skip_flags = list(skip or [])
+        if len(skip_flags) < n:
+            skip_flags.extend([False] * (n - len(skip_flags)))
+        else:
+            skip_flags = skip_flags[:n]
+        html_flags = list(html or [])
+        if len(html_flags) < n:
+            html_flags.extend([False] * (n - len(html_flags)))
         # 只有调用方标了的段才按 HTML 发送；正文里的 <Note> 不是标签
-        self.translator.html_texts = {t for t, flag in zip(texts, html or []) if flag}
         unique = list(dict.fromkeys(t for t in texts if t.strip()))
-        skipped = await asyncio.to_thread(self._detect, unique)
-        self.info["skipped"] = len(skipped)
-        unique = [t for t in unique if t not in skipped]
+        lang_skipped = await asyncio.to_thread(self._detect, unique)
+
+        def kept(i: int) -> bool:
+            text = texts[i]
+            return bool(text.strip()) and (skip_flags[i] or text in lang_skipped)
+
+        self.info["skipped"] = sum(1 for i in range(n) if kept(i))
+        self.translator.html_texts = {
+            texts[i] for i in range(n) if html_flags[i] and texts[i].strip() and not kept(i)
+        }
+        need = list(dict.fromkeys(texts[i] for i in range(n) if texts[i].strip() and not kept(i)))
         prefix = self.translator.cache_key
         tl = self.translator.target_lang
-        done_map = self.cache.get_many(prefix, unique)
+        done_map = self.cache.get_many(prefix, need)
         headings = {t for t, k in zip(texts, kinds or []) if k in _HEADING_KINDS}
         html_sources = self.translator.html_texts
 
@@ -186,14 +209,15 @@ class Runner:
         if rewrites:
             self.cache.put_many(prefix, rewrites)
             done_map.update(rewrites)
-        todo = [t for t in unique if t not in done_map]
+        todo = [t for t in need if t not in done_map]
         if self.cache_only and todo:
             raise ValueError("有段落不在翻译缓存里，无法只重新排版。请重新翻译。")
 
         # 每段原文第一次出现的位置，用来按“离关注位置的远近”挑批次
         first_pos: dict[str, int] = {}
         for i, t in enumerate(texts):
-            first_pos.setdefault(t, i)
+            if t.strip() and not kept(i):
+                first_pos.setdefault(t, i)
 
         if preview:
             self._indices = {}
@@ -201,13 +225,24 @@ class Runner:
                 if t.strip():
                     self._indices.setdefault(t, []).append(i)
             self._done = done_map
-            self._skipped = skipped
+            self._skipped = lang_skipped
+            self._skip_idx = {i for i in range(n) if skip_flags[i]}
             self._log = []
             self.segments = [{"s": t, "k": (kinds[i] if kinds else "p")} for i, t in enumerate(texts)]
-            # 已是目标语言的和缓存命中的，预览里直接显示
-            self._record([t for t in dict.fromkeys(texts) if t in skipped or t in done_map])
+            # 已是目标语言的、调用方整句跳过的、缓存命中的，预览里直接显示。
+            # 同一句只有部分位置跳过时，等译文出来再按位置分别标。
+            immediate: list[str] = []
+            seen: set[str] = set()
+            for t in texts:
+                if not t.strip() or t in seen:
+                    continue
+                seen.add(t)
+                indexes = self._indices[t]
+                if all(kept(i) for i in indexes) or t in done_map:
+                    immediate.append(t)
+            self._record(immediate)
 
-        total = len(unique)
+        total = len(need)
         done = len(done_map)
         self.progress(done, total)
 
@@ -239,7 +274,10 @@ class Runner:
 
         workers = min(self.translator.concurrency, len(pending))
         await asyncio.gather(*(worker() for _ in range(workers)))
-        return [done_map.get(t, t) if t.strip() else t for t in texts]
+        return [
+            texts[i] if not texts[i].strip() or kept(i) else done_map.get(texts[i], texts[i])
+            for i in range(n)
+        ]
 
 
 _CN_DIGITS = "零一二三四五六七八九"

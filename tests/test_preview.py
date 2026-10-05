@@ -66,6 +66,18 @@ def test_preview_incremental_and_duplicates():
     assert "segments" not in partial and len(partial["updates"]) == 2
 
 
+def test_positional_skip_does_not_suppress_the_same_sentence():
+    cite = "Smith, J. (2020). Some book. Press."
+    texts = [cite, "Bibliography", cite]
+    runner = Runner(MockTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
+    out = asyncio.run(runner.translate_all(texts, skip=[False, False, True], preview=True))
+    assert out[0].startswith("[zh-CN] ") and out[2] == cite
+    updates = {u[0]: u for u in runner.preview()["updates"]}
+    assert updates[0][2] == 0 and updates[0][1].startswith("[zh-CN]")
+    assert updates[2][2] == 1 and updates[2][1] == cite
+    assert runner.info["skipped"] == 1
+
+
 def test_cached_and_skipped_segments_show_immediately():
     texts = ["Cached sentence here", "这一段本来就是中文，不需要再翻译成中文了。", "Fresh sentence to translate now"]
     runner = Runner(MockTranslator("zh-CN"), cache=MemCache({"Cached sentence here": "已缓存"}))

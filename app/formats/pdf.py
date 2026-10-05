@@ -213,6 +213,221 @@ def _render_side_by_side(src: pymupdf.Document, translated: pymupdf.Document) ->
     return out
 
 
+_BIBLIO_CITE_RE = re.compile(r"\((?:19|20)\d{2}\)|et al\.|doi:|https?://", re.I)
+# 行尾 “, 2016.” 在正文里太常见。确认进入时必须同时是编号条目，或带 arXiv/CoRR/doi。
+_BIBLIO_YEAR_END_RE = re.compile(r",\s*(?:19|20)\d{2}\s*[.]?\s*$")
+_BIBLIO_TRAIL_YEAR_RE = re.compile(r"(?:19|20)\d{2}\s*[.]?\s*$|年版\s*[.。]?\s*$")
+_BIBLIO_YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+# 卷期续行：2020, 3(2) / Vol. 3 / Volume 3 / pp. 1-10 / 第3期。
+# Volume 后面必须是阿拉伯数字，避免 “volume were”。
+_BIBLIO_VOLUME_RE = re.compile(
+    r"^(?:19|20)\d{2}\s*[,，(（]\s*(?:[\d(（]|[Vv]ol\.?\s*\d|[Vv]olume\.?\s*\d|[Nn]o\.?(?:\s|\d)|[Pp]p?\.?(?:\s|\d)|第)"
+)
+# 只认缩写 Vol. 后的罗马数字。不含 M/D，否则 mix / mill 会当成卷号。
+_ROMAN_VOL_RE = re.compile(
+    r"(?=[IVXLC])C{0,3}(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})(?![A-Za-z])",
+    re.I,
+)
+_BIBLIO_VOL_LABEL_RE = re.compile(r"^(?:19|20)\d{2}\s*[,，(（]\s*[Vv]ol\.?\s*")
+# 同字号退出用。数字后要是期号、页码或行尾；No/pp 后要是数字；「第」后要是「期」。
+# 行首只是年份的下一章（2020, 1. Introduction / 第1章）不能靠这条留下。
+_BIBLIO_EXIT_VOLUME_RE = re.compile(
+    r"^(?:19|20)\d{2}\s*[,，(（]\s*(?:"
+    r"\d+\s*(?:[（(]|[:：]\s*\d|[,，]\s*\d|[.。]?\s*$)"
+    r"|\d+\s*[）)]"
+    r"|[Vv]ol\.?\s*\d|[Vv]olume\.?\s*\d|[Nn]o\.?\s*\d|[Pp]p?\.?\s*\d"
+    r"|第\s*\d+\s*期"
+    r")"
+)
+# 出版社行可以收在 2019。 / 2019年。 / 年版。出版社后面还有字的是正文。
+_BIBLIO_IMPRINT_END_RE = re.compile(r"(?:(?:19|20)\d{2}年?|年版)\s*[.。]?\s*$")
+_BIBLIO_MARK_RE = re.compile(r"\barXiv\b|\bCoRR\b|doi:|https?://", re.I)
+# 题名后的著录位置才算，如 研究[J]. 刊名。句末单独的 [M]。 是正文，不是引文。
+_BIBLIO_TYPE_MARK_RE = re.compile(r"(?<=\S)\[[JMDCNRP]\]\s*[.。]\s*\S")
+# [1]张三 中间常没有空格。1. 仍要空格，避免把 1.2 当成编号。
+_BIBLIO_LEAD_RE = re.compile(r"^(?:\[\d+\]\s*|\d{1,3}[.)]\s+)")
+_BIBLIO_WRAP_RE = re.compile(r"^[a-zà-öø-ÿ]")
+# 弱信号：只有编号条目才算。“这项研究发表于某出版社。”是正文。
+_BIBLIO_CN_PUB_RE = re.compile(r"出版社|年版")
+
+
+def _biblio_heading_like(block: TextBlock, text: str, median: float) -> bool:
+    if not text or len(text) > 120:
+        return False
+    if block.size > median + 0.4:
+        return True
+    return bool(block.bold and block.size + 0.4 >= median and len(text) < 80)
+
+
+def _biblio_entry_citation(text: str) -> bool:
+    """标题后面这行像引文，才进入参考文献。正文里的 2017 / arXiv / 出版社 / [J] 不算。"""
+    if _BIBLIO_CITE_RE.search(text):
+        return True
+    # 类型标记 + 年份才是著录条目；“出处见某书[M]。后续还有讨论。”是正文
+    if _BIBLIO_TYPE_MARK_RE.search(text) and _BIBLIO_YEAR_RE.search(text):
+        return True
+    lead = bool(_BIBLIO_LEAD_RE.match(text))
+    mark = bool(_BIBLIO_MARK_RE.search(text))
+    if _BIBLIO_YEAR_END_RE.search(text) and (lead or mark):
+        return True
+    return lead and (mark or bool(_BIBLIO_CN_PUB_RE.search(text)))
+
+
+def _vol_roman_continuation(text: str) -> bool:
+    """Vol. III / vol. xii 是卷号。单词 mix / mill 不是。"""
+    head = _BIBLIO_VOL_LABEL_RE.match(text)
+    if head is None:
+        return False
+    return _ROMAN_VOL_RE.match(text, head.end()) is not None
+
+
+def _biblio_exit_continuation(text: str) -> bool:
+    """同字号时仍算引文续行。行首像年份的下一章不算。"""
+    if _BIBLIO_EXIT_VOLUME_RE.match(text) or _vol_roman_continuation(text):
+        return True
+    return bool(_BIBLIO_CN_PUB_RE.search(text) and _BIBLIO_IMPRINT_END_RE.search(text))
+
+
+def _biblio_year_continuation(text: str) -> bool:
+    """类型标记的下一块仍是著录。后来随便出现的年份不算。"""
+    if _BIBLIO_VOLUME_RE.match(text) or _vol_roman_continuation(text):
+        return True
+    # 出版社行以年份或「年版」收尾。正文提到出版社后还有下文的不算。
+    return bool(_BIBLIO_CN_PUB_RE.search(text) and _BIBLIO_IMPRINT_END_RE.search(text))
+
+
+def _biblio_citation_line(block: TextBlock, text: str, start_size: float, median: float) -> bool:
+    """已经在参考文献里：这行是引文或换行前的条目，不能当成下一章。"""
+    if _BIBLIO_CITE_RE.search(text) or _BIBLIO_MARK_RE.search(text):
+        return True
+    heading = _biblio_heading_like(block, text, median)
+    short_heading = heading and len(text) < 40
+    # 比起始标题更大，或同字号短标题，仍是下一章。超过 80 字的加粗行先让给出类型标记和行尾年份。
+    if block.size > start_size + 0.5 or short_heading or (block.bold and heading):
+        return False
+    if _BIBLIO_TYPE_MARK_RE.search(text) or _BIBLIO_TRAIL_YEAR_RE.search(text):
+        return True
+    # 真正的卷期、出版社续行和标题同字号也不是下一章。
+    if _biblio_exit_continuation(text):
+        return True
+    if not _BIBLIO_LEAD_RE.match(text):
+        return False
+    return True
+
+
+def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
+    """标记参考文献章节的块。标题本身不跳过，章节正文保留原文。
+
+    页眉和目录里的同名短行不能把进入字号改小；同等字号的引文也不是下一章标题。
+    """
+    from .html_blocks import BIBLIO_HEADING_RE, BIBLIO_SHORT_LABEL_RE, BIBLIO_SUBHEADING_RE
+
+    if not blocks:
+        return []
+    sizes = sorted(b.size for b in blocks)
+    median = sizes[len(sizes) // 2]
+    prepared = [(b, re.sub(r"\s+", " ", b.text).strip()) for b in blocks]
+
+    def smaller_subsection(block: TextBlock, text: str, origin: float) -> bool:
+        # 同字号或更大的 Books / 论文是下一章，不能当成内部小标题。
+        if len(text) >= 40 or block.size + 0.4 >= origin:
+            return False
+        if BIBLIO_SUBHEADING_RE.match(text):
+            return True
+        return bool(BIBLIO_SHORT_LABEL_RE.match(text) and _biblio_heading_like(block, text, median))
+
+    def citations_follow(idx: int) -> bool:
+        origin = prepared[idx][0].size
+        pending_lead = False
+        pending_type = False
+        for block, text in prepared[idx + 1:idx + 16]:
+            # Endnotes / 参考文献是另一节的标题，必须停住，不能把进入字号抬高
+            if len(text) < 40 and BIBLIO_HEADING_RE.match(text):
+                return False
+            if smaller_subsection(block, text, origin):
+                pending_lead = False
+                pending_type = False
+                continue
+            # 像标题的行即使含 [J] 或年份也不是引文，先停住
+            if _biblio_heading_like(block, text, median) and len(text) < 80:
+                return False
+            # 编号和出版社、类型标记和年份，都常被拆成相邻两块。只看下一块。
+            if (
+                _biblio_entry_citation(text)
+                or (pending_lead and _BIBLIO_CN_PUB_RE.search(text))
+                or (pending_type and _biblio_year_continuation(text))
+            ):
+                return True
+            pending_lead = bool(_BIBLIO_LEAD_RE.match(text))
+            pending_type = bool(_BIBLIO_TYPE_MARK_RE.search(text) and not _BIBLIO_YEAR_RE.search(text))
+        return False
+
+    def exits(block: TextBlock, text: str, start_size: float, prev_numbered: bool) -> bool:
+        if not text or len(text) > 120 or smaller_subsection(block, text, start_size):
+            return False
+        if block.size + 0.5 < start_size * 0.8:
+            return False
+        if _biblio_citation_line(block, text, start_size, median):
+            return False
+        # 引文里单独一行 Journal 不是下一章
+        if len(text) < 40 and BIBLIO_SHORT_LABEL_RE.match(text) and not _biblio_heading_like(block, text, median):
+            return False
+        # 编号条目的换行续行以小写字母开头，不是下一章
+        if prev_numbered and _BIBLIO_WRAP_RE.match(text):
+            return False
+        if _biblio_heading_like(block, text, median):
+            return True
+        # 加粗长标题（heading_like 的加粗分支有 80 字上限）
+        if block.bold and block.size + 0.4 >= median:
+            return True
+        return len(text) < 60 and block.size >= start_size - 0.5
+
+    skips: list[bool] = []
+    in_biblio = False
+    start_size = 0.0
+    prev_numbered = False
+    for i, (block, text) in enumerate(prepared):
+        title = len(text) < 40 and bool(BIBLIO_HEADING_RE.match(text))
+        if title and in_biblio:
+            prev_numbered = False
+            if block.size + 0.5 >= start_size * 0.8:
+                if block.size > start_size:
+                    start_size = block.size
+                skips.append(False)
+            else:
+                skips.append(True)
+            continue
+        if title and citations_follow(i) and (_biblio_heading_like(block, text, median) or block.size + 0.4 >= median):
+            in_biblio = True
+            start_size = block.size
+            prev_numbered = False
+            skips.append(False)
+            continue
+        if in_biblio and smaller_subsection(block, text, start_size):
+            prev_numbered = False
+            skips.append(False)
+            continue
+        if in_biblio and exits(block, text, start_size, prev_numbered):
+            in_biblio = False
+            prev_numbered = False
+            skips.append(False)
+            continue
+        skips.append(in_biblio)
+        if in_biblio and _BIBLIO_LEAD_RE.match(text):
+            prev_numbered = True
+        elif _BIBLIO_WRAP_RE.match(text):
+            pass
+        elif (
+            len(text) < 40
+            and BIBLIO_SHORT_LABEL_RE.match(text)
+            and not _biblio_heading_like(block, text, median)
+        ):
+            pass  # 引文单词不是标题，编号条目的续行还没结束
+        else:
+            prev_numbered = False
+    return skips
+
+
 async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "") -> list[Path]:
     src_doc = pymupdf.open(src)
     if src_doc.needs_pass:
@@ -227,7 +442,8 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     runner.set_title(meta_title or src.stem)
     median = sorted(b.size for b in blocks)[len(blocks) // 2]
     kinds = [_preview_kind(b, median) for b in blocks]
-    translations = await runner.translate_all([b.text for b in blocks], kinds=kinds, preview=True)
+    translations = await runner.translate_all([b.text for b in blocks], kinds=kinds, preview=True,
+                                              skip=biblio_skips(blocks))
 
     def build():
         translated = _render_translated(src, blocks, translations, target_lang)
