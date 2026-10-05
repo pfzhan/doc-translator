@@ -1440,3 +1440,74 @@ def test_typesetting_ladder_expands_before_shrinking():
     assert zh_rect[2] > left.rect.x1 + 1 and zh_rect[2] <= 300
     # 右侧块原文还在
     assert "Right block" in out[0].get_text()
+
+
+def test_formula_font_and_char_rules():
+    from app.formats.pdf import _font_is_math, _is_formula_char, _math_chars
+
+    assert _font_is_math("CMMI10") and _font_is_math("STIXTwoMath")
+    assert _font_is_math("LibertinusMath-Regular")
+    assert not _font_is_math("TimesNewRomanPSMT") and not _font_is_math("ArialMT")
+    assert not _font_is_math("NotoSansCJK-Regular")
+    # 黑名单优先：Noto 系正文字体不匹配宽泛 *Sans* 启发式
+    assert _is_formula_char("α") and _is_formula_char("∑") and _is_formula_char("∂")
+    assert not _is_formula_char("a") and not _is_formula_char("中")
+    spans = [
+        {"text": "E = mc", "font": "TimesNewRomanPSMT"},
+        {"text": "αβγ", "font": "TimesNewRomanPSMT"},
+        {"text": " + more text here", "font": "ArialMT"},
+    ]
+    assert _math_chars(spans) == 5  # αβγ 三个，加上 = 和 +（Sm 类数学符号）
+
+
+def _block_with_spans(span_lines, size=12.0):
+    from app.formats.pdf import TextBlock
+
+    return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                     text="", size=size, color="#000", bold=False, span_lines=span_lines)
+
+
+def test_placeholderize_and_restore_roundtrip():
+    from app.formats.pdf import _placeholderize, _restore_placeholders
+
+    spans = [
+        {"text": "The formula ", "font": "TimesNewRomanPSMT", "size": 12.0},
+        {"text": "E=mc", "font": "CMMI10", "size": 12.0},
+        {"text": "2", "font": "CMR10", "size": 8.5},  # 角标并入公式 run
+        {"text": " shows energy", "font": "TimesNewRomanPSMT", "size": 12.0},
+    ]
+    b = _block_with_spans([spans])
+    sent, formulas = _placeholderize(b)
+    assert sent == "The formula {v1} shows energy"
+    assert formulas == ["E=mc2"]
+    out = _restore_placeholders("公式 { v 1 } 说明了能量", formulas)
+    assert out == "公式 E=mc2 说明了能量"
+    # 占位符丢失 → None（回退原文）；幻觉占位符被删掉
+    assert _restore_placeholders("没有占位符", formulas) is None
+    assert _restore_placeholders("公式 {v1} {v9}", formulas) == "公式 E=mc2 "
+
+
+def test_placeholderize_no_formula_keeps_text_identical():
+    from app.formats.pdf import _placeholderize
+
+    spans = [{"text": "Plain sentence ", "font": "TimesNewRomanPSMT", "size": 12.0},
+             {"text": "without any math.", "font": "ArialMT", "size": 12.0}]
+    b = _block_with_spans([spans])
+    b.text = "Plain sentence without any math."
+    sent, formulas = _placeholderize(b)
+    assert sent == b.text and formulas == []
+
+
+def test_attention_formula_placeholders_end_to_end(tmp_path):
+    src = SAMPLES / "attention.pdf"
+    if not src.exists():
+        pytest.skip("sample missing")
+    from app.formats.pdf import _placeholderize, extract_blocks
+
+    blocks = extract_blocks(pymupdf.open(src))
+    sent_meta = [_placeholderize(b) for b in blocks]
+    n_ph = sum(len(f) for _, f in sent_meta)
+    assert n_ph > 50  # 论文里有大量行内公式和角标
+    [out] = run(translate_file(src, tmp_path, runner(), False, "zh-CN"))
+    text = pymupdf.open(out)[0].get_text() + pymupdf.open(out)[1].get_text()
+    assert "{v" not in text  # 全部恢复成功

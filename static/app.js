@@ -690,6 +690,13 @@ function isEbookJob(job) {
   return /\.(epub|mobi|azw3?|azw)$/i.test(job?.filename || "");
 }
 
+// 阅读器显示用：电子书剥行内标签，PDF 剥公式占位符（{vN}）
+function previewText(job, s) {
+  if (isEbookJob(job)) return htmlToText(s);
+  if (/\.pdf$/i.test(job?.filename || "")) return s.replace(/\{\s*v\s*\d+\s*\}/g, "");
+  return s;
+}
+
 function fmtOf(name) {
   return (name.split(".").pop() || "").toLowerCase().replace("markdown", "md");
 }
@@ -1295,7 +1302,6 @@ function renderNotice(job) {
 function buildReader(segments) {
   const frag = document.createDocumentFragment();
   const lang = reader.job?.target_lang || "";
-  const ebook = isEbookJob(reader.job);
   let toc = null;
   reader.headings = [];
   reader.nodes = segments.map((seg, i) => {
@@ -1307,7 +1313,7 @@ function buildReader(segments) {
       return div;
     }
     div.classList.add("pending");
-    const src = el("div", "src", ebook ? htmlToText(seg.s) : seg.s);
+    const src = el("div", "src", previewText(reader.job, seg.s));
     const dst = el("div", "dst");
     if (lang) dst.lang = lang;
     div.append(src, dst);
@@ -1365,7 +1371,7 @@ function applyUpdates(updates, initial) {
     if (!div || !div.classList.contains("pending")) continue;
     div.classList.remove("pending");
     div.classList.toggle("skipped", !!skipped);
-    div.querySelector(".dst").textContent = skipped ? "" : (isEbookJob(reader.job) ? htmlToText(text) : text);
+    div.querySelector(".dst").textContent = skipped ? "" : previewText(reader.job, text);
     if (!initial) {
       div.classList.add("fresh");
       setTimeout(() => div.classList.remove("fresh"), 1500);
