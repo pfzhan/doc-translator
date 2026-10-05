@@ -128,6 +128,161 @@ def find_blocks(soup: BeautifulSoup) -> list[tuple[Tag, str, str | None]]:
 
 
 HEADING_KINDS = {"h1", "h2", "h3", "h4", "h5", "h6"}
+# 引文翻成目标语言后对不上原书。必须整段命中，正文里出现 references 不算。
+_BIBLIO_TITLE = (
+    r"(?:selected bibliography|further reading|works cited|bibliography|references|endnotes"
+    r"|参考文献|参考书目|引用文献)"
+)
+BIBLIO_HEADING_RE = re.compile(
+    rf"^(?:\d{{1,3}}[.)]\s+)?{_BIBLIO_TITLE}\s*[:：.。]?\s*$", re.I)
+# 明确是参考文献内部的小标题。Books / 论文 也是常见章名，不放这里。
+BIBLIO_SUBHEADING_RE = re.compile(
+    r"^(?:\d{1,3}[.)]\s+)?"
+    r"(?:primary sources?|secondary sources?|archival sources?|online sources?"
+    r"|web sources?|internet sources?|printed sources?|unpublished sources?"
+    r"|book chapters?"
+    r"|主要文献|次要文献|原始文献|一手文献|二手文献|网络文献)"
+    r"\s*[:：.。]?\s*$",
+    re.I,
+)
+# 单词小标题。只有比参考文献标题更小、又像标题时才算，避免引文里单独一行 Journal。
+BIBLIO_SHORT_LABEL_RE = re.compile(
+    r"^(?:\d{1,3}[.)]\s+)?"
+    r"(?:books?|articles?|journals?|essays?|papers?|magazines?|newspapers?"
+    r"|图书|期刊|论文|报纸|杂志|文章|著作)"
+    r"\s*[:：.。]?\s*$",
+    re.I,
+)
+BIBLIO_EPUB_TYPES = frozenset({"bibliography", "rearnotes", "endnotes"})
+_BIBLIO_ROLES = frozenset({"doc-bibliography", "doc-endnotes"})
+_HEADING_CLASS_RE = re.compile(r"\b(?:heading|title|chapter|h[1-6])\b", re.I)
+
+
+def heading_level(el: Tag) -> int:
+    """标题元素返回级别（1-6），否则 0。"""
+    name = _local(el.name)
+    return int(name[1]) if name in HEADING_KINDS else 0
+
+
+def structural_heading_level(el: Tag) -> int:
+    """h1–h6 的级别。class 或 role 标成标题的短块也算，否则 <p class="heading"> 认不出。"""
+    level = heading_level(el)
+    if level:
+        return level
+    text = WS_RE.sub(" ", el.get_text()).strip()
+    if not text or len(text) > 80:
+        return 0
+    classes = " ".join(_attr_local(el, "class"))
+    match = re.search(r"\bh([1-6])\b", classes, re.I)
+    if match:
+        return int(match.group(1))
+    roles = {v.lower() for v in _attr_local(el, "role")}
+    if "heading" in roles or _HEADING_CLASS_RE.search(classes):
+        return 2
+    return 0
+
+
+def _heading_text(el: Tag) -> str:
+    return WS_RE.sub(" ", el.get_text()).strip()
+
+
+def biblio_heading_level(el: Tag) -> int:
+    """是参考文献章节标题时返回级别（1-6），否则 0。"""
+    level = structural_heading_level(el)
+    if not level:
+        return 0
+    text = _heading_text(el)
+    if len(text) > 40 or not BIBLIO_HEADING_RE.match(text):
+        return 0
+    return level
+
+
+def is_biblio_subheading(text: str) -> bool:
+    """参考文献内部的小标题，或又一个参考文献标题。"""
+    text = WS_RE.sub(" ", text).strip()
+    if len(text) > 40:
+        return False
+    return bool(BIBLIO_SUBHEADING_RE.match(text) or BIBLIO_HEADING_RE.match(text))
+
+
+def _type_values(el: Tag) -> set[str]:
+    out: set[str] = set()
+    for raw in _attr_local(el, "type"):
+        out.update(part.strip().lower() for part in raw.split() if part.strip())
+    return out
+
+
+def _biblio_container(el: Tag) -> Tag | None:
+    """祖先里带 bibliography / rearnotes / endnotes 的 section。标题自己不算容器。"""
+    for parent in el.parents:
+        if not isinstance(parent, Tag):
+            continue
+        if _type_values(parent) & BIBLIO_EPUB_TYPES:
+            return parent
+        roles = {v.strip().lower() for v in _attr_local(parent, "role")}
+        if roles & _BIBLIO_ROLES:
+            return parent
+    return None
+
+
+def _owning_section(heading: Tag) -> Tag | None:
+    """这个标题是其第一个标题的 section/article；平铺在 body 下则没有。"""
+    for parent in heading.parents:
+        if not isinstance(parent, Tag):
+            continue
+        name = _local(parent.name)
+        if name in {"section", "article"}:
+            first = parent.find(lambda t: isinstance(t, Tag) and structural_heading_level(t) > 0)
+            return parent if first is heading else None
+        if name in {"body", "html"}:
+            return None
+    return None
+
+
+def _biblio_should_exit(el: Tag, heading_lv: int, level: int, section: Tag | None) -> bool:
+    # 平铺文档里 h1 参考文献后的 h2 附录不是小标题；同一 section 里更深的标题才留下。
+    if section is not None and section not in el.parents:
+        return True
+    if heading_lv <= level:
+        return True
+    if is_biblio_subheading(_heading_text(el)):
+        return False
+    return section is None
+
+
+def bibliography_skips(blocks: list[Tag], *, start_level: int = 0) -> tuple[list[bool], int]:
+    """标记应保留原文的块，并返回带到下一个 spine 文件的级别（0 表示已退出）。
+
+    标题本身不跳过。epub:type 容器内的正文整段跳过，离开容器后按标题级别继续。
+    """
+    level = start_level if 0 <= start_level <= 6 else 0
+    section: Tag | None = None
+    skips: list[bool] = []
+    ended_in_container = False
+    for el in blocks:
+        container = _biblio_container(el)
+        heading_lv = structural_heading_level(el)
+        if container is not None:
+            ended_in_container = True
+            skips.append(False if heading_lv else True)
+            continue
+        ended_in_container = False
+        biblio_lv = biblio_heading_level(el)
+        if biblio_lv:
+            if level == 0 or biblio_lv <= level:
+                level = biblio_lv
+                section = _owning_section(el)
+            skips.append(False)
+            continue
+        if level and heading_lv and _biblio_should_exit(el, heading_lv, level, section):
+            level = 0
+            section = None
+            skips.append(False)
+            continue
+        skips.append(bool(level))
+    if ended_in_container and level == 0:
+        level = 1
+    return skips, level
 
 
 def preview_kind(el: Tag) -> str:

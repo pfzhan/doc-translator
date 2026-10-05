@@ -3,6 +3,7 @@
 不依赖 ebooklib，直接按 zip 处理，原书里的 CSS、图片、字体、元数据全部原样保留。
 """
 import posixpath
+import re
 import zipfile
 from pathlib import Path
 from urllib.parse import unquote
@@ -12,6 +13,12 @@ from bs4 import BeautifulSoup
 from . import html_blocks as hb
 
 HTML_TYPES = {"application/xhtml+xml", "text/html"}
+# 只认文件名主体。子串会把 chapter-references 整篇锁死，而且锁死后标题也无法退出。
+_BIBLIO_DOC_STEMS = frozenset({
+    "bibliography", "references", "works-cited", "works cited", "endnotes",
+    "further-reading", "further reading", "selected-bibliography", "selected bibliography",
+    "参考文献", "参考书目", "引用文献",
+})
 
 
 def _opf_path(zf: zipfile.ZipFile) -> str:
@@ -52,6 +59,13 @@ def _content_docs(zf: zipfile.ZipFile, opf_path: str):
     return docs, nav, ncx, opf
 
 
+def _is_biblio_doc(name: str) -> bool:
+    stem = name.rsplit("/", 1)[-1].rsplit(".", 1)[0].casefold().replace("_", "-")
+    stem = re.sub(r"-split-\d+$", "", stem)
+    stem = re.sub(r"-\d+$", "", stem)
+    return stem in _BIBLIO_DOC_STEMS
+
+
 def _set_language(opf: BeautifulSoup, lang: str, bilingual: bool):
     if bilingual:
         return
@@ -73,7 +87,8 @@ async def translate_epub(src: Path, out_dir: Path, runner, bilingual: bool, targ
 
         # 1. 解析所有文档，收集段落
         soups: dict[str, BeautifulSoup] = {}
-        tasks: list[tuple[str, object, str, str, str | None]] = []  # (文档, 元素, 原文, 类型, 富文本 HTML)
+        tasks: list[tuple[str, object, str, str, str | None, bool]] = []  # (文档, 元素, 原文, 类型, 富文本 HTML, 跳过)
+        carry = 0
         for name in docs:
             if name not in names:
                 continue
@@ -81,33 +96,38 @@ async def translate_epub(src: Path, out_dir: Path, runner, bilingual: bool, targ
             if soup.find(True) is None:
                 continue  # 解析结果为空（如内部 DTD 问题回退也失败）：保留原文件，不用空文档覆盖
             soups[name] = soup
-            tasks.extend((name, el, text, "block", html) for el, text, html in hb.find_blocks(soup))
+            blocks = hb.find_blocks(soup)
+            start = carry or (1 if _is_biblio_doc(name) else 0)
+            flags, carry = hb.bibliography_skips([el for el, _, _ in blocks], start_level=start)
+            for (el, text, html), skip in zip(blocks, flags):
+                tasks.append((name, el, text, "block", html, skip))
         if nav and nav in names:
             soup = hb.parse(zin.read(nav), xml=True)
             if soup.find(True) is not None:
                 soups[nav] = soup
-                tasks.extend((nav, el, text, "label", None) for el, text in hb.translate_nav_links(soup))
+                tasks.extend((nav, el, text, "label", None, False) for el, text in hb.translate_nav_links(soup))
         if ncx and ncx in names:
             soup = BeautifulSoup(zin.read(ncx), "lxml-xml")
             if soup.find(True) is not None:
                 soups[ncx] = soup
                 for el in soup.select("navLabel > text"):
                     if hb.translatable(el.get_text(strip=True)):
-                        tasks.append((ncx, el, el.get_text(strip=True), "label", None))
+                        tasks.append((ncx, el, el.get_text(strip=True), "label", None, False))
 
         # 2. 翻译（书名作为上下文）
         title_el = opf.find("dc:title") or opf.find("title")
         runner.set_title(title_el.get_text(strip=True) if title_el else src.stem)
         # 预览里目录（nav / ncx）用 toc 类型，正文用元素名（h1、p、li…）
-        kinds = ["toc" if kind == "label" else hb.preview_kind(el) for _, el, _, kind, _ in tasks]
+        kinds = ["toc" if kind == "label" else hb.preview_kind(el) for _, el, _, kind, _, _ in tasks]
         # 富文本段落送 inner HTML 翻译，保留行内格式（加粗、链接）
         results = await runner.translate_all(
             [t[4] or t[2] for t in tasks], kinds=kinds, preview=True,
             html=[t[4] is not None for t in tasks],
+            skip=[t[5] for t in tasks],
         )
 
         # 3. 回写
-        for (name, el, text, kind, html), translated in zip(tasks, results):
+        for (name, el, text, kind, html, _skip), translated in zip(tasks, results):
             if kind == "block":
                 if html is not None:
                     hb.apply_translation_html(soups[name], el, html, translated, bilingual, target_lang)
