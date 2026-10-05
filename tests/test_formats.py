@@ -1402,3 +1402,41 @@ def test_pdf_bookmarks_migrated(tmp_path):
     for bilingual in (False, True):
         [out] = run(translate_file(src, tmp_path, runner(), bilingual, "zh-CN"))
         assert pymupdf.open(out).get_toc() == [[1, "Chapter One", 1]]
+
+
+def test_subset_fonts_safe_returns_valid_doc():
+    from app.formats.pdf import _subset_fonts_safe
+
+    doc = _pdf_with_text("Some text for subsetting.")
+    out = _subset_fonts_safe(doc)
+    assert out.page_count == doc.page_count and "Some text" in out[0].get_text()
+
+
+def test_typesetting_ladder_expands_before_shrinking():
+    """放不下时先向右扩（避开右侧文本块）：扩出去后字号比直接缩更大，且不盖住右侧块。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=100)
+    page.insert_text((20, 30), "Short left", fontsize=12)
+    page.insert_text((300, 30), "Right block", fontsize=12)
+    src = doc.tobytes()
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+        f.write(src)
+        src_path = Path(f.name)
+    blocks_src = pymupdf.open(src_path)
+    from app.formats.pdf import extract_blocks
+    blocks = extract_blocks(blocks_src)
+    left = next(b for b in blocks if b.text.startswith("Short"))
+    translations = ["这是一段比原文长很多的译文，原来肯定放不下" if b is left else b.text for b in blocks]
+    out = _render_translated(src_path, blocks, translations, "zh-CN")
+    spans = [ln for blk in out[0].get_text("dict")["blocks"] for ln in blk["lines"]]
+    zh = [ln for ln in spans if "译文" in "".join(s["text"] for s in ln["spans"])]
+    assert zh
+    zh_rect = zh[0]["bbox"]
+    # 译文越过了原块的右边界（发生了右扩），且没有盖住右侧块（x0=300）
+    assert zh_rect[2] > left.rect.x1 + 1 and zh_rect[2] <= 300
+    # 右侧块原文还在
+    assert "Right block" in out[0].get_text()

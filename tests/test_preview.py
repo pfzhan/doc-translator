@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.runner import Runner
-from app.translators import MockTranslator
+from app.translators import MockTranslator, TranslatorError
 
 SAMPLES = Path(__file__).resolve().parent.parent / "samples"
 
@@ -357,3 +357,25 @@ def test_fix_numbered_unit_with_selfclosed_anchor():
     span = fix('<span id="pg" />第2卷', "zh-CN", html=True)
     assert re.sub(r"<[^>]+>", "", span) == "第二卷"
     assert re.search(r"<span [^>]*></span>", span)
+
+
+def test_empty_translations_backfilled_below_threshold():
+    """个别空译文回填原文，任务照常完成并计数；超过阈值才判失败。"""
+    class FlakyEmpty(MockTranslator):
+        def __init__(self, target_lang, empty_at):
+            super().__init__(target_lang)
+            self.empty_at = empty_at
+
+        async def translate_batch(self, texts):
+            return ["" if t in self.empty_at else f"[zh-CN] {t}" for t in texts]
+
+    texts = [f"Sentence number {i} here." for i in range(20)]
+    runner = Runner(FlakyEmpty("zh-CN", empty_at={texts[3]}), cache=MemCache(), skip_same_lang=False)
+    out = asyncio.run(runner.translate_all(texts))
+    assert out[3] == texts[3]  # 回填原文
+    assert runner.info["failed"] == 1
+    assert out[4].startswith("[zh-CN]")
+
+    runner2 = Runner(FlakyEmpty("zh-CN", empty_at=set(texts[:8])), cache=MemCache(), skip_same_lang=False)
+    with pytest.raises(TranslatorError, match="空译文"):
+        asyncio.run(runner2.translate_all(texts))
