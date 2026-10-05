@@ -129,7 +129,7 @@ class LLMTranslator(Translator):
 
     def __init__(self, target_lang, source_lang="auto", *, api_key="", base_url="", model="",
                  concurrency=4, max_items=20, max_chars=3000, temperature=0.0, prompt="", user_prompt="",
-                 api_format="", auth_style="", transport=None):
+                 api_format="", auth_style="", transport=None, glossary=""):
         super().__init__(target_lang, source_lang)
         if not model:
             raise TranslatorError("未设置模型")
@@ -148,15 +148,16 @@ class LLMTranslator(Translator):
         self.temperature = temperature
         self.prompt = prompt.strip()
         self.user_prompt = user_prompt.strip()
+        self.glossary = glossary
         # 文档标题，作为上下文填进提示词的 {{title_prompt}}
         self.title = ""
         self.client = httpx.AsyncClient(timeout=180, transport=transport)
 
     @property
     def cache_key(self):
-        # 模型和提示词进缓存键：换模型或提示词自动整本重翻，换回来仍命中该配置自己的缓存。
+        # 模型、提示词、术语表进缓存键：换了就自动整本重翻，换回来仍命中该配置自己的缓存。
         # 源语言影响提示词（{{from}}、wyw2zh-CN 这类覆盖），用检测后的实际源语言
-        p = hashlib.sha1(f"{self.prompt}\0{self.user_prompt}".encode()).hexdigest()[:8]
+        p = hashlib.sha1(f"{self.prompt}\0{self.user_prompt}\0{self.glossary}".encode()).hexdigest()[:8]
         return (f"{self.service_id}:{self.provider}:{self.model}:{p}:"
                 f"{self.effective_source}:{self.target_lang}")
 
@@ -165,6 +166,7 @@ class LLMTranslator(Translator):
             texts, self.target_lang, source_lang=self.effective_source, title=self.title,
             system_template=self.prompt, user_template=self.user_prompt,
             contains_html=any(self.is_html_item(t) for t in texts),
+            glossary=self.glossary,
         )
 
     async def _complete(self, system: str, user: str) -> str:
@@ -518,4 +520,5 @@ def _build_translator(service: dict, target_lang: str, source_lang: str, transpo
         api_format=service.get("api_format") or "",
         auth_style=service.get("auth_style") or "",
         transport=transport,
+        glossary=service.get("glossary") or "",
     )

@@ -69,6 +69,9 @@ nest tags."""
 
 TITLE_PROMPT = "\n\n## Context Awareness\nDocument Metadata:\nTitle: “{{imt_title}}”"
 
+# 术语表：每行“原文 = 译文”，翻译时保持一致
+TERMS_PROMPT = "\n\n## Glossary\nUse these translations consistently:\n{{glossary}}"
+
 SOURCE_END = "[[source_end]]"
 MARKER_RE = re.compile(r"^\[\[(p\d+)\]\]$")
 CONTROL_RE = re.compile(r"^\[\[(?:p\d+|source_end|terms|term|end)\]\]$")
@@ -116,13 +119,16 @@ def fill(template: str, values: dict) -> str:
 
 
 def build_messages(texts: list[str], target_lang: str, *, source_lang: str = "auto", title: str = "",
-                   system_template: str = "", user_template: str = "", contains_html: bool = False) -> tuple[str, str]:
+                   system_template: str = "", user_template: str = "", contains_html: bool = False,
+                   glossary: str = "") -> tuple[str, str]:
     """返回 (system, user)。自定义模板为空时用默认模板。source_lang 是用户选的或检测出的源语言。"""
     defaults = default_prompts(target_lang, source_lang)
     system_t = system_template.strip() or defaults["system"]
     user_t = user_template.strip() or defaults["user"]
     if "{{text}}" not in user_t:
         user_t += "\n\n{{text}}"
+    # 术语表：每行“原文 = 译文”，多余的空行去掉
+    terms = "\n".join(line for line in (glossary or "").splitlines() if line.strip())
     values = {
         "to": lang_name(target_lang),
         # 不知道源语言时，插件也是把 {{from}} 填成 "Auto Detect"
@@ -130,7 +136,8 @@ def build_messages(texts: list[str], target_lang: str, *, source_lang: str = "au
         "title_prompt": TITLE_PROMPT if title else "",
         "imt_title": title,
         "summary_prompt": "",
-        "terms_prompt": "",
+        "terms_prompt": TERMS_PROMPT.replace("{{glossary}}", terms) if terms else "",
+        "glossary": terms,
         "imt_style_guide": "",
     }
     if len(texts) == 1:

@@ -137,3 +137,19 @@ def test_build_messages_html_suffix():
     assert "reorder" not in system
     system, _ = build_messages(["plain"], "zh-CN")
     assert "HTML fragments" not in system
+
+
+def test_glossary_injected_into_messages_and_cache_key():
+    system, _ = build_messages(["x"], "zh-CN", glossary="Book = 卷\n\nHBase = HBase")
+    assert "Book = 卷" in system and "Glossary" in system
+    system2, _ = build_messages(["x"], "zh-CN")
+    assert "Glossary" not in system2
+    # 术语表进缓存键：换了术语表就重翻，换回来仍命中
+    from app.translators import OpenAITranslator
+    a = OpenAITranslator("zh-CN", api_key="x", base_url="http://localhost", model="m",
+                         glossary="Book = 卷")
+    b = OpenAITranslator("zh-CN", api_key="x", base_url="http://localhost", model="m",
+                         glossary="Book = 册")
+    c = OpenAITranslator("zh-CN", api_key="x", base_url="http://localhost", model="m",
+                         glossary="Book = 卷")
+    assert a.cache_key != b.cache_key and a.cache_key == c.cache_key
