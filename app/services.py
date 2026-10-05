@@ -81,6 +81,7 @@ FIELDS = {
     "temperature": 0,
     "prompt": "",
     "user_prompt": "",
+    "glossary": "",
 }
 
 BUILTIN = [{"id": "google", "provider": "google", "builtin": True, **FIELDS, "name": "谷歌翻译"}]
@@ -98,7 +99,7 @@ def _mask(key: str) -> str:
 
 # CC Switch 服务可以在本项目里调整的字段；连接信息（地址、Key）始终以 CC Switch 为准
 CCSWITCH_LOCAL_FIELDS = {"enabled", "model", "concurrency", "max_items", "max_chars", "temperature",
-                         "prompt", "user_prompt"}
+                         "prompt", "user_prompt", "glossary"}
 
 
 def public(service: dict) -> dict:
@@ -131,7 +132,7 @@ def _clean(data: dict) -> dict:
                 except (TypeError, ValueError):
                     raise ServiceError("temperature 必须是数字")
         else:
-            v = str(v or "") if k in ("prompt", "user_prompt") else str(v or "").strip()
+            v = str(v or "") if k in ("prompt", "user_prompt", "glossary") else str(v or "").strip()
         out[k] = v
     return out
 
