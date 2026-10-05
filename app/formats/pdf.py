@@ -8,6 +8,7 @@
 import asyncio
 import html
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +17,20 @@ import pymupdf
 from ..languages import RTL_LANGUAGES
 
 MATH_FONT_RE = re.compile(r"CMMI|CMSY|CMEX|MSBM|Math|Symbol|STIX|Cambria Math", re.I)
+# 精确的数学字体白名单（直接判公式）
+MATH_FONT_PRECISE_RE = re.compile(
+    r"Asana|FiraMath|STIX|TeXGyre.*Math|XITSMath|LibertinusMath|MathJax|Cambria Math|LatinModern.*Math", re.I)
+# 常见正文字体黑名单（优先于启发式，里面的希腊字母/符号靠字符级规则识别）
+TEXT_FONT_RE = re.compile(
+    r"Times|Arial|Calibri|Minion|Palatino|\bCMR|Charter|Georgia|Helvetica|Verdana|Roboto|Lato|"
+    r"Open ?Sans|Source ?Sans|Noto(?!.*Math)|Libertine(?!.*Math)|Garamond|Baskerville|Bookman|"
+    r"Courier|Consolas|Menlo|Monaco|Ubuntu|DejaVu|Liberation|FreeSerif|FreeSans|Nimbus|"
+    r"Trebuchet|Candara|Constantia|Franklin|Gill|Lucida|Segoe|Optima|Futura|Avenir|Univers|"
+    r"Myriad|Frutiger|\bDIN\b|Proxima|Museo|\bPT S|Merriweather|Lora|Crimson|Playfair|Cormorant|"
+    r"Spectral|Inter|Work Sans|IBM Plex|Charis|Gentium|Doulos|Andika|"
+    r"PingFang|SimSun|SimHei|Songti|Heiti|Kaiti|FangSong|SourceHan|WenQuanYi|YaHei|YouYuan|LiSu|"
+    r"STFangsong|STHeiti|STKaiti|STSong|STXihei|Yuanti|Hiragino|Ryumin|GothicBBB|Kozuka|IPA|"
+    r"Takao|Sazanami|Motoya|Yomogi|BIZ |M PLUS|GenShin|GenRyu|NotoSansCJK|NotoSerifCJK", re.I)
 CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
 # 行首列表标记：符号弹点（可不带空格）、短横线类（须带空格，避免误伤连字符单词）、数字/字母编号
@@ -37,6 +52,8 @@ class TextBlock:
     size: float
     color: str
     bold: bool
+    # 每行的原始 span（含空白 span）：重建送翻文本时与原文逐字一致
+    span_lines: list[list[dict]] = None
 
 
 def _join_lines(lines: list[str]) -> str:
@@ -56,7 +73,7 @@ def _join_lines(lines: list[str]) -> str:
     return out
 
 
-def _split_lines(items: list[tuple[str, "pymupdf.Rect", list[dict]]]) -> list[list[int]]:
+def _split_lines(items: list[tuple]) -> list[list[int]]:
     """把一个文本块里的行分成独立段落（返回每组的行下标）。
 
     幻灯片里多个列表项、甚至不同的图注标签常被 PyMuPDF 归进同一块，整段翻译会把
@@ -68,14 +85,15 @@ def _split_lines(items: list[tuple[str, "pymupdf.Rect", list[dict]]]) -> list[li
     - 上行明显没到右边距（硬换行而非自动换行）且下行像新句子开头；上行以逗号等
       连接标点结尾、左跳只是缩进、或仍是同一条列表项的续行，都不算硬换行。
     自动换行的续行（小写开头、上行撑满）仍并入上一段。
+    items 的元素是 (行文本, 行 rect, 行 span, ...) 的元组，只用前三个。
     """
     if not items:
         return []
-    max_x1 = max(r.x1 for _, r, _ in items)
+    max_x1 = max(it[1].x1 for it in items)
     groups, cur = [], [0]
     for i in range(1, len(items)):
-        text, rect, _ = items[i]
-        ptext, prect, pspans = items[cur[-1]]
+        text, rect = items[i][0], items[i][1]
+        ptext, prect, pspans = items[cur[-1]][0], items[cur[-1]][1], items[cur[-1]][2]
         psize = max((s["size"] for s in pspans), default=10)
         stripped = text.lstrip()
         prev_symbol = bool(NO_TEXT_RE.match(ptext.strip()))  # 纯符号行独立成段，后面的内容不和它拼
@@ -118,6 +136,83 @@ def _preview_kind(block: TextBlock, median: float) -> str:
     return "p"
 
 
+def _font_is_math(font: str) -> bool:
+    """字体三层判定（BabelDOC 思路）：精确白名单 → 是公式；正文黑名单 → 不是；宽泛启发式 → 是。
+    黑名单优先，避免 Times/Arial 里的数学段落被误判。"""
+    if MATH_FONT_PRECISE_RE.search(font):
+        return True
+    if TEXT_FONT_RE.search(font):
+        return False
+    return bool(MATH_FONT_RE.search(font))
+
+
+def _is_formula_char(c: str) -> bool:
+    """字符级公式判定：希腊字母、数学符号/修饰符、私用区。"""
+    if 0x370 <= ord(c) <= 0x3FF:
+        return True
+    return unicodedata.category(c) in ("Sm", "Sk", "Mn", "Co")
+
+
+def _math_chars(spans: list[dict]) -> int:
+    """块里公式字符数：公式字体的全部字符 + 正文字体里的公式字符。"""
+    n = 0
+    for s in spans:
+        if _font_is_math(s["font"]):
+            n += len(s["text"])
+        else:
+            n += sum(1 for c in s["text"] if _is_formula_char(c))
+    return n
+
+
+def _is_formula_span(span: dict, main_size: float) -> bool:
+    """行内公式：数学字体的 span，或明显小于正文的角标 span（引用编号等）。"""
+    return _font_is_math(span["font"]) or span["size"] < main_size * 0.79
+
+
+def _placeholderize(block: TextBlock) -> tuple[str, list[str]]:
+    """把块里的行内公式换成 {vN} 占位符（BabelDOC 的翻译协议），返回 (送翻文本, 公式列表)。
+
+    没有公式时返回的文本与原文逐字一致，缓存照常命中。相邻的公式 span 和它们之间的
+    空白合并成一个占位符。
+    """
+    if not block.span_lines:
+        return block.text, []
+    formulas: list[str] = []
+    out_lines: list[str] = []
+    for spans in block.span_lines:
+        parts: list[str] = []
+        i, n = 0, len(spans)
+        while i < n:
+            if _is_formula_span(spans[i], block.size):
+                run = spans[i]["text"]
+                j = i + 1
+                while j < n and (not spans[j]["text"].strip() or _is_formula_span(spans[j], block.size)):
+                    run += spans[j]["text"]
+                    j += 1
+                if run.strip():
+                    formulas.append(run.strip())
+                    parts.append(f"{{v{len(formulas)}}}")
+                else:
+                    parts.append(run)
+                i = j
+            else:
+                parts.append(spans[i]["text"])
+                i += 1
+        out_lines.append("".join(parts))
+    return _join_lines(out_lines), formulas
+
+
+def _restore_placeholders(translation: str, formulas: list[str]) -> str | None:
+    """译后恢复 {vN}（容忍模型在占位符里塞的空格）；有占位符丢失时返回 None（回退原文）。
+    译文里多出来的幻觉占位符直接删掉。"""
+    for n, formula in enumerate(formulas, 1):
+        pattern = re.compile(rf"\{{\s*v\s*{n}\s*\}}")
+        if not pattern.search(translation):
+            return None
+        translation = pattern.sub(lambda _: formula, translation, count=1)
+    return re.sub(r"\{\s*v\s*\d+\s*\}", "", translation)
+
+
 def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     blocks = []
     for pno, page in enumerate(doc):
@@ -134,16 +229,16 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                     continue
                 spans = [s for s in ln["spans"] if s["text"].strip()]
                 if spans:
-                    items.append((text, pymupdf.Rect(ln["bbox"]), spans))
+                    items.append((text, pymupdf.Rect(ln["bbox"]), spans, ln["spans"]))
             for group in _split_lines(items):
                 texts = [items[i][0] for i in group]
                 line_rects = [items[i][1] for i in group]
                 spans = [s for i in group for s in items[i][2]]
+                span_lines = [items[i][3] for i in group]
                 text = _join_lines(texts)
                 total = sum(len(s["text"]) for s in spans)
-                math_chars = sum(len(s["text"]) for s in spans if MATH_FONT_RE.search(s["font"]))
                 letters = sum(c.isalpha() for c in text)
-                if NO_TEXT_RE.match(text) or math_chars > total * 0.3 or letters < 2 or letters < len(text) * 0.4:
+                if NO_TEXT_RE.match(text) or _math_chars(spans) > total * 0.3 or letters < 2 or letters < len(text) * 0.4:
                     continue
                 # 字号、颜色取占比最多的 span
                 main = max(spans, key=lambda s: len(s["text"]))
@@ -158,6 +253,7 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                     size=round(main["size"], 1),
                     color=f"#{main['color']:06x}",
                     bold=bool(main["flags"] & 16) or "Bold" in main["font"],
+                    span_lines=span_lines,
                 ))
     return blocks
 
@@ -523,8 +619,19 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     runner.set_title(meta_title or src.stem)
     median = sorted(b.size for b in blocks)[len(blocks) // 2]
     kinds = [_preview_kind(b, median) for b in blocks]
-    translations = await runner.translate_all([b.text for b in blocks], kinds=kinds, preview=True,
-                                              skip=biblio_skips(blocks))
+    # 行内公式换成 {vN} 占位符送翻（数学字体和角标不被翻译、不被语序重排弄乱）
+    sent_meta = [_placeholderize(b) for b in blocks]
+    raw = await runner.translate_all([s for s, _ in sent_meta], kinds=kinds, preview=True,
+                                     skip=biblio_skips(blocks))
+    translations: list[str] = []
+    for b, t, (sent_text, formulas) in zip(blocks, raw, sent_meta):
+        restored = _restore_placeholders(t, formulas) if formulas else t
+        if restored is None:
+            restored = b.text  # 模型弄丢占位符：这段回退原文，不产出坏文档
+        translations.append(restored)
+        # 预览里显示恢复后的译文（缓存仍按占位符版本存，重跑照样命中）
+        if formulas and getattr(runner, "_done", None) and runner._done.get(sent_text) == t:
+            runner._done[sent_text] = restored
 
     def build():
         translated = _render_translated(src, blocks, translations, target_lang)
