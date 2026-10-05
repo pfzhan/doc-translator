@@ -258,6 +258,14 @@ class Runner:
                     pending.clear()  # 出错时让其他并发任务也尽快停下
                     raise
                 pairs = dict(zip(batch, result))
+                # 原样回显不是翻译：模型在批量模式下偶尔整段照抄原文。单独重翻一次，
+                # 仍回显才保留（专有名词、编号本就不变，不会误伤）
+                echoes = [s for s, d in pairs.items() if d and d.strip() == s.strip() and len(s) > 20]
+                if echoes:
+                    retried = await asyncio.gather(*(self.translator.translate_batch([s]) for s in echoes))
+                    for s, (rt,) in zip(echoes, retried):
+                        if rt and rt.strip() and rt.strip() != s.strip():
+                            pairs[s] = rt
                 # 空译文不写缓存、不计入完成（否则会永久缓存空结果），按失败处理。
                 # 标题和目录的「第2卷」在入库前改成中文数字
                 good = {s: fixed(s, d) for s, d in pairs.items() if d and d.strip()}

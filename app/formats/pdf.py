@@ -202,6 +202,10 @@ def _placeholderize(block: TextBlock) -> tuple[str, list[str]]:
     return _join_lines(out_lines), formulas
 
 
+# 译文里游离的 {vN} 占位符（模型把占位符写进了别的段）
+_STRAY_PLACEHOLDER_RE = re.compile(r"\{\s*v\s*\d+\s*\}")
+
+
 def _restore_placeholders(translation: str, formulas: list[str]) -> str | None:
     """译后恢复 {vN}（容忍模型在占位符里塞的空格）；有占位符丢失时返回 None（回退原文）。
     译文里多出来的幻觉占位符直接删掉。"""
@@ -311,6 +315,15 @@ def _expand_right(rect: "pymupdf.Rect", page_width: float, obstacles: list["pymu
     return pymupdf.Rect(rect.x0, rect.y0, max(x1, rect.x1), rect.y1)
 
 
+def _try_insert(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, css: str, scale_low: float) -> bool:
+    """insert_htmlbox 放不下返回负值（此时不画内容）。pymupdf 在缩放刚好等于 scale_low 时
+    会因浮点误差触发 assert（0.8999999999999999 < 0.9），按没放下来处理。"""
+    try:
+        return page.insert_htmlbox(rect, html_text, css=css, scale_low=scale_low)[0] >= 0
+    except AssertionError:
+        return False
+
+
 def _insert_fitting(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, css: str,
                     obstacles: list["pymupdf.Rect"]):
     """排版三级收缩（BabelDOC 思路）：先右扩 → 压行距 → 最后才缩字号。
@@ -318,14 +331,14 @@ def _insert_fitting(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, 
     每一级只在放不下（insert_htmlbox 返回负值，此时不会画出内容）时进入下一级，
     放得下的段落和旧的 scale_low=0 直接缩比，字号明显更大。
     """
-    if page.insert_htmlbox(rect, html_text, css=css, scale_low=0.9)[0] >= 0:
+    if _try_insert(page, rect, html_text, css, 0.9):
         return
     wide = _expand_right(rect, page.rect.width, obstacles)
-    if wide.x1 > rect.x1 + 1 and page.insert_htmlbox(wide, html_text, css=css, scale_low=0.9)[0] >= 0:
+    if wide.x1 > rect.x1 + 1 and _try_insert(page, wide, html_text, css, 0.9):
         return
     target = wide if wide.x1 > rect.x1 + 1 else rect
     css_tight = css.replace("line-height: 1.2", "line-height: 1.1")
-    if page.insert_htmlbox(target, html_text, css=css_tight, scale_low=0.9)[0] >= 0:
+    if _try_insert(page, target, html_text, css_tight, 0.9):
         return
     # 兜底：和原来一样缩到能放下为止
     page.insert_htmlbox(target, html_text, css=css_tight, scale_low=0)
@@ -585,12 +598,22 @@ def _subset_worker(data: bytes, queue):
 
 def _subset_fonts_safe(doc: pymupdf.Document) -> pymupdf.Document:
     """子集化放到子进程里跑（BabelDOC 同款）：PyMuPDF 子集化偶尔崩溃或卡死，
-    60 秒没结果就放弃，用未子集化的版本——文件大一些，但能看。"""
+    60 秒没结果就放弃，用未子集化的版本——文件大一些，但能看。
+    用 fork 上下文：spawn 会重新 import 主模块，在 stdin/REPL 里直接失败。
+    不支持 fork 的平台（Windows）退回进程内直接子集化。"""
     import multiprocessing
 
+    try:
+        ctx = multiprocessing.get_context("fork")
+    except ValueError:
+        try:
+            doc.subset_fonts()
+        except Exception:  # noqa: BLE001
+            pass
+        return doc
     data = doc.tobytes(garbage=4, deflate=True)
-    queue = multiprocessing.Queue()
-    proc = multiprocessing.Process(target=_subset_worker, args=(data, queue))
+    queue = ctx.Queue()
+    proc = ctx.Process(target=_subset_worker, args=(data, queue))
     proc.start()
     try:
         out = queue.get(timeout=60)
@@ -625,7 +648,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
                                      skip=biblio_skips(blocks))
     translations: list[str] = []
     for b, t, (sent_text, formulas) in zip(blocks, raw, sent_meta):
-        restored = _restore_placeholders(t, formulas) if formulas else t
+        restored = _restore_placeholders(t, formulas) if formulas else _STRAY_PLACEHOLDER_RE.sub("", t)
         if restored is None:
             restored = b.text  # 模型弄丢占位符：这段回退原文，不产出坏文档
         translations.append(restored)

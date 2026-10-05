@@ -379,3 +379,28 @@ def test_empty_translations_backfilled_below_threshold():
     runner2 = Runner(FlakyEmpty("zh-CN", empty_at=set(texts[:8])), cache=MemCache(), skip_same_lang=False)
     with pytest.raises(TranslatorError, match="空译文"):
         asyncio.run(runner2.translate_all(texts))
+
+
+def test_echo_translations_retried_individually():
+    """批量里整段照抄原文（回显）的段落单独重翻一次；仍回显才保留（专有名词不误伤）。"""
+    class EchoTranslator(MockTranslator):
+        async def translate_batch(self, texts):
+            # 批量模式下长段回显，单段请求时正常翻译
+            if len(texts) > 1:
+                return [t if len(t) > 20 else f"[zh-CN] {t}" for t in texts]
+            return [f"[zh-CN] {t}" for t in texts]
+
+    long_text = "This is a fairly long sentence that should really be translated."
+    runner = Runner(EchoTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
+    out = asyncio.run(runner.translate_all([long_text, "LSTM"]))
+    assert out[0] == f"[zh-CN] {long_text}"  # 回显被单独重翻修好了
+    assert out[1] == "[zh-CN] LSTM"  # 专有名词不受影响
+
+
+def test_stray_placeholders_cleaned_from_formula_free_blocks():
+    """没有公式的块：模型错配/幻觉产生的 {vN} 占位符一律剥掉，不漏进输出。"""
+    from app.formats.pdf import _STRAY_PLACEHOLDER_RE
+
+    t = "其中{v1}从{v2}到{v3}进行线性递减"
+    assert _STRAY_PLACEHOLDER_RE.sub("", t) == "其中从到进行线性递减"
+    assert _STRAY_PLACEHOLDER_RE.sub("", "正常译文") == "正常译文"
