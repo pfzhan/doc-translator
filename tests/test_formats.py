@@ -1469,21 +1469,27 @@ def _block_with_spans(span_lines, size=12.0):
 def test_placeholderize_and_restore_roundtrip():
     from app.formats.pdf import _placeholderize, _restore_placeholders
 
+    def span(text, font, size, x0=0, y0=0):
+        return {"text": text, "font": font, "size": size, "bbox": (x0, y0, x0 + 10, y0 + 10),
+                "origin": (x0, y0 + 8)}
+
     spans = [
-        {"text": "The formula ", "font": "TimesNewRomanPSMT", "size": 12.0},
-        {"text": "E=mc", "font": "CMMI10", "size": 12.0},
-        {"text": "2", "font": "CMR10", "size": 8.5},  # 角标并入公式 run
-        {"text": " shows energy", "font": "TimesNewRomanPSMT", "size": 12.0},
+        span("The formula ", "TimesNewRomanPSMT", 12.0),
+        span("E=mc", "CMMI10", 12.0, x0=60),
+        span("2", "CMR10", 8.5, x0=80, y0=-2),  # 上标并入公式 run
+        span(" shows energy", "TimesNewRomanPSMT", 12.0, x0=90),
     ]
     b = _block_with_spans([spans])
-    sent, formulas = _placeholderize(b)
+    sent, formulas = _placeholderize(b, 0)
     assert sent == "The formula {v1} shows energy"
-    assert formulas == ["E=mc2"]
+    assert len(formulas) == 1
+    f = formulas[0]
+    assert f["name"] == "f0_1.png" and f["h"] > 0 and f["bbox"].width > 0
     out = _restore_placeholders("公式 { v 1 } 说明了能量", formulas)
-    assert out == "公式 E=mc2 说明了能量"
+    assert out == "公式 \x01i\x021\x01/i\x02 说明了能量"
     # 占位符丢失 → None（回退原文）；幻觉占位符被删掉
     assert _restore_placeholders("没有占位符", formulas) is None
-    assert _restore_placeholders("公式 {v1} {v9}", formulas) == "公式 E=mc2 "
+    assert _restore_placeholders("公式 {v1} {v9}", formulas) == "公式 \x01i\x021\x01/i\x02 "
 
 
 def test_placeholderize_no_formula_keeps_text_identical():
@@ -1548,3 +1554,158 @@ def test_split_translation_at_clause_boundary():
     # 拉丁文本按空格切
     a2, b2 = _split_translation("the quick brown fox jumps over the lazy dog", 0.5)
     assert a2.endswith("fox") and a2 + b2 == "the quick brown fox jumps over the lazy dog"
+
+
+def test_equation_vs_prose_with_formula():
+    """公式行（数学字符多、正文词少）跳过；含公式的正常句子照翻。"""
+    from app.formats.pdf import extract_blocks
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=500, height=200)
+    # 含公式的句子：正文词多，必须翻
+    page.insert_textbox(pymupdf.Rect(30, 20, 480, 45),
+                        "The sequence y_1, y_2, ..., y_T has a variable number of tokens here", fontsize=11)
+    # 公式行：几乎没正文词，跳过
+    page.insert_textbox(pymupdf.Rect(30, 60, 480, 85), "x + y = z", fontsize=11)
+    blocks = extract_blocks(doc)
+    texts = [b.text for b in blocks]
+    assert any("sequence" in t for t in texts)
+    assert not any("x + y = z" in t for t in texts)
+
+
+def test_formula_runs_merge_requires_deep_x_overlap():
+    """跨 dict 行的 run 归并：上下标（x 深度交叠）并成一个公式；
+    相邻两行各自的公式（x 只沾 1pt 边）不能并。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text, font, size, x0, y0, x1=None, y1=None):
+        return {"text": text, "font": font, "size": size,
+                "bbox": (x0, y0, x1 if x1 is not None else x0 + 10,
+                         y1 if y1 is not None else y0 + 10),
+                "origin": (x0, (y1 if y1 is not None else y0 + 10) - 2)}
+
+    # y 和上标 T 拆在两行，x 几乎全叠 → 并成一个
+    b = _block_with_spans([
+        [span("see ", "TimesNewRomanPSMT", 10, 0, 50), span("y", "CMMI10", 10, 50, 50)],
+        [span("T", "CMR7", 7, 55, 44, x1=59, y1=50)],
+    ], size=10.0)
+    sent, formulas = _placeholderize(b, 0)
+    assert len(formulas) == 1 and sent.count("{v1}") == 1
+
+    # θ⋆ 在第一行末、X^i 在第二行，x 只沾 1pt → 两个独立公式
+    b2 = _block_with_spans([
+        [span("use ", "TimesNewRomanPSMT", 10, 0, 50),
+         span("θ", "CMMI10", 10, 50, 50, x1=58),
+         span(" then", "TimesNewRomanPSMT", 10, 62, 50)],
+        [span("and ", "TimesNewRomanPSMT", 10, 0, 65),
+         span("X", "CMMI10", 10, 57, 65, x1=65, y1=75),
+         span("i", "CMR7", 7, 60, 62, x1=63, y1=68)],
+    ], size=10.0)
+    sent2, formulas2 = _placeholderize(b2, 1)
+    assert len(formulas2) == 2
+    assert "{v1}" in sent2 and "{v2}" in sent2
+
+
+def test_marker_png_unique_per_formula():
+    """标记像素按全局序号编码：同色标记会被 MuPDF 去重成同一 xref，落位全串。"""
+    from app.formats.pdf import _marker_png
+
+    def decode(png):
+        pix = pymupdf.Pixmap(png)
+        p = pix.pixel(0, 0)
+        assert p[2] == 200  # 标记签名
+        return p[0] + (p[1] << 8) - 1
+
+    assert decode(_marker_png(0)) == 0
+    assert decode(_marker_png(255)) == 255
+    assert decode(_marker_png(300)) == 300  # 超过单字节上限也能区分
+    assert len({_marker_png(i) for i in range(300)}) == 300
+
+
+def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
+    """矢量透传端到端：两个块的公式各落各的槽位、只画一次、画在最后一条内容流。
+
+    回归场景：块内序号命名的标记图互相去重，所有块的公式 #1 全堆到第一个块的
+    槽位；公式绘制写进 stream[0] 又被后续块的涂白标记盖住上半截。
+    """
+    from app.formats.pdf import TextBlock, _marker_png, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    page.insert_text((50, 50), "alpha BETA gamma", fontsize=10)
+    page.insert_text((50, 100), "delta EPSILON zeta", fontsize=10)
+    doc.save(src)
+    doc.close()
+
+    d = pymupdf.open(src)
+    r1 = d[0].search_for("BETA")[0]
+    r2 = d[0].search_for("EPSILON")[0]
+
+    def record(name, mid, rect):
+        return {"bbox": rect, "name": name, "mid": mid,
+                "w": round(rect.width, 1), "h": round(rect.height, 1), "d": 2.0,
+                "text": "x", "has_img": True,
+                "png": d[0].get_pixmap(dpi=150, clip=rect).tobytes("png"),
+                "spans": [{"bbox": tuple(rect), "text": "x", "size": 10,
+                           "origin": (rect.x0, rect.y1 - 2)}]}
+
+    f1, f2 = record("a_1.png", 0, r1), record("b_1.png", 1, r2)
+    d.close()
+    archive = pymupdf.Archive()
+    archive.add(_marker_png(0), "ph_a_1.png")
+    archive.add(_marker_png(1), "ph_b_1.png")
+
+    def blk(text, y):
+        rect = pymupdf.Rect(40, y, 200, y + 15)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text,
+                         size=10, color="#000", bold=False)
+
+    b1, b2 = blk("alpha BETA gamma", 40), blk("delta EPSILON zeta", 90)
+    t1, t2 = "译文 \x01i\x021\x01/i\x02 甲", "译文 \x01i\x021\x01/i\x02 乙"
+    out = _render_translated(src, [b1, b2], [t1, t2], "zh-CN",
+                             {id(b1): [f1], id(b2): [f2]}, archive)
+    page = out[0]
+    streams = [out.xref_stream(x) or b"" for x in page.get_contents()]
+    # 每个公式只画一次，且集中画在最后一条内容流（不被后续块的白块盖住）
+    assert sum(s.count(b"/FmF_a_1_png Do") for s in streams) == 1
+    assert sum(s.count(b"/FmF_b_1_png Do") for s in streams) == 1
+    assert b"/FmF_a_1_png Do" in streams[-1] and b"/FmF_b_1_png Do" in streams[-1]
+    # 原文被 redact 后公式 glyph 由透传补回：各出现一次，槽位不同
+    assert len(page.search_for("BETA")) == 1
+    assert len(page.search_for("EPSILON")) == 1
+    hit1, hit2 = page.search_for("BETA")[0], page.search_for("EPSILON")[0]
+    # 各落各的槽位（块 rect 附近）：带缩放的 cm 平移量算错会让公式整体往下漂
+    assert pymupdf.Rect(30, 30, 210, 75).contains(hit1)
+    assert pymupdf.Rect(30, 80, 210, 125).contains(hit2)
+
+
+def test_placeholderize_absorbs_accent_over_formula():
+    """ŷ 的 ^ 常是独立 span（正文字体、不被判为公式），留在正文会在公式图边
+    多出一个孤符号：落在公式 bbox 上的重音符要并进公式、正文里删掉。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text, font, size, x0, y0, x1=None, y1=None):
+        return {"text": text, "font": font, "size": size,
+                "bbox": (x0, y0, x1 if x1 is not None else x0 + 10,
+                         y1 if y1 is not None else y0 + 10),
+                "origin": (x0, (y1 if y1 is not None else y0 + 10) - 2)}
+
+    b = _block_with_spans([
+        [span("an estimate ", "TimesNewRomanPSMT", 10, 0, 50),
+         span("y", "CMMI10", 10, 40, 50, x1=48, y1=60),
+         span(" coming", "TimesNewRomanPSMT", 10, 60, 50)],
+        [span("^", "CMR10", 10, 41, 42, x1=45, y1=48)],  # 帽子是独立 dict 行
+    ], size=10.0)
+    sent, formulas = _placeholderize(b, 0)
+    assert "^" not in sent
+    assert len(formulas) == 1
+    assert formulas[0]["bbox"].y0 <= 42  # 符头顶部包进裁剪区域
+    # 远离公式的 ^ 不吸收（如正文里确实有个符号）
+    b2 = _block_with_spans([
+        [span("y", "CMMI10", 10, 0, 50, x1=8, y1=60),
+         span(" then ^ alone", "TimesNewRomanPSMT", 10, 100, 50)],
+    ], size=10.0)
+    sent2, _ = _placeholderize(b2, 0)
+    assert "^" in sent2
+
