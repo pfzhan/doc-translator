@@ -85,15 +85,20 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
     - 上行明显没到右边距（硬换行而非自动换行）且下行像新句子开头；上行以逗号等
       连接标点结尾、左跳只是缩进、或仍是同一条列表项的续行，都不算硬换行。
     自动换行的续行（小写开头、上行撑满）仍并入上一段。
+    左跳/硬换行的比较基准是"上一条正文字号的行"（参考行）：上下标拆出的 dict
+    小行会把左跳量算飞，让段落在公式处被切碎。
     items 的元素是 (行文本, 行 rect, 行 span, ...) 的元组，只用前三个。
     """
     if not items:
         return []
     max_x1 = max(it[1].x1 for it in items)
     groups, cur = [], [0]
+    ref = 0  # 参考行：上一条正文字号的行。上下标拆出的 dict 小行不能当参考，
+    # 否则左跳量相对小行算，段落会在公式处被切碎（"(like a | sequence)"）
+    ref_size = max((s["size"] for s in items[0][2]), default=10)
     for i in range(1, len(items)):
         text, rect = items[i][0], items[i][1]
-        ptext, prect, pspans = items[cur[-1]][0], items[cur[-1]][1], items[cur[-1]][2]
+        ptext, prect, pspans = items[ref][0], items[ref][1], items[ref][2]
         psize = max((s["size"] for s in pspans), default=10)
         stripped = text.lstrip()
         prev_symbol = bool(NO_TEXT_RE.match(ptext.strip()))  # 纯符号行独立成段，后面的内容不和它拼
@@ -118,17 +123,25 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         # 两行纵向交叠超过一半、且横向区间相交：是同一可视行被上下标/公式拆出来的
         # （y_1^T 的 1 和 T 各算一行，x 区间是交错咬合的），不能在这里拆段。
         # 并排标签横向是分开的（无横向交叠），left_jump 照常拆开。
-        overlap = min(prect.y1, rect.y1) - max(prect.y0, rect.y0)
-        h_overlap = min(prect.x1, rect.x1) - max(prect.x0, rect.x0)
+        qrect = items[i - 1][1]
+        overlap = min(qrect.y1, rect.y1) - max(qrect.y0, rect.y0)
+        h_overlap = min(qrect.x1, rect.x1) - max(qrect.x0, rect.x0)
         same_visual_line = (h_overlap > 0
-                            and overlap > min(prect.y1 - prect.y0, rect.y1 - rect.y0) * 0.5)
-        if not same_visual_line and (
+                            and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5)
+        # 章节号和标题是同一行的整体（'2.2 Training'）：纯数字的上行不当符号行，
+        # 也不按硬换行拆开，否则数字被过滤不遮罩、标题单独翻，基线对不齐
+        sec_label = (bool(re.fullmatch(r"\d+(?:\.\d+)*\.?", ptext.strip()))
+                     and overlap > min(prect.y1 - prect.y0, rect.y1 - rect.y0) * 0.5)
+        if not same_visual_line and not sec_label and (
             BULLET_RE.match(text) or NO_TEXT_RE.match(stripped) or prev_symbol or hard_break or left_jump
         ):
             groups.append(cur)
             cur = [i]
         else:
             cur.append(i)
+        isize = max((s["size"] for s in items[i][2]), default=10)
+        if isize >= ref_size * 0.79:
+            ref, ref_size = i, isize
     groups.append(cur)
     return groups
 
@@ -502,6 +515,14 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                 # 含公式的正常句子（正文词 ≥4）照翻，公式走占位符，不再整句留成英文
                 is_equation = _math_chars(spans) > total * 0.3 and _prose_units(text) < 4
                 if NO_TEXT_RE.match(text) or is_equation or letters < 2 or letters < len(text) * 0.4:
+                    # 标点碎片（如公式后自成一行的 ')'）不送翻，但它贴在上一块的同一
+                    # 可视行上时把矩形捐给它遮罩，否则原符号会留在译文区里
+                    if blocks and blocks[-1].page == pno and line_rects:
+                        pb = blocks[-1]
+                        r0 = line_rects[0]
+                        v_ov = min(pb.rect.y1, r0.y1) - max(pb.rect.y0, r0.y0)
+                        if v_ov > 0.5 * (r0.y1 - r0.y0) and r0.x0 - pb.rect.x1 < 2:
+                            pb.line_rects.extend(line_rects)
                     continue
                 # 字号、颜色取占比最多的 span
                 main = max(spans, key=lambda s: len(s["text"]))
@@ -518,7 +539,75 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                     bold=bool(main["flags"] & 16) or "Bold" in main["font"],
                     span_lines=span_lines,
                 ))
-    return _merge_visual_lines(blocks)
+    return _merge_continuations(_merge_caption_fragments(_merge_visual_lines(blocks)))
+
+
+def _absorb_block(p: TextBlock, b: TextBlock):
+    p.text = _join_lines([p.text, b.text])
+    p.rect |= b.rect
+    p.line_rects.extend(b.line_rects)
+    if p.span_lines and b.span_lines:
+        p.span_lines.extend(b.span_lines)
+    else:
+        p.span_lines = None
+    if len(b.text) > len(p.text) - len(b.text):  # 风格跟随占多的片段
+        p.size, p.color, p.bold = b.size, b.color, b.bold
+
+
+def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
+    """合并同页内被公式/碎片拆断的段落续行：上行无句末标点、下行小写（或闭括号）
+    开头、同左 margin、行距正常，就是同一段被拆开的两行。各翻各的会产出半截译文，
+    渲染时在断点强制换行（'（如 | 序列）'）。"""
+    out: list[TextBlock] = []
+    for b in blocks:
+        if out:
+            p = out[-1]
+            first = b.text[:1]
+            # 大字号标题碎片（'…with' + 'Recurrent Neural Networks'）：换行的第二行
+            # 往往大写开头、也不带句读。仅当两行左边界明显漂移（居中对齐的标题行）
+            # 才并：左对齐的大字号块（小标题、署名行）各自独立
+            title_frag = (p.size >= 12 and b.size >= p.size * 0.7
+                          and 0 <= b.rect.y0 - p.rect.y1 < 1.5 * p.size
+                          and abs(b.rect.x0 - p.rect.x0) > p.size * 0.5
+                          and not p.text.rstrip().endswith(tuple(SENT_ENDS))
+                          and not b.text.rstrip().endswith(tuple(SENT_ENDS)))
+            if p.page == b.page and (
+                title_frag
+                or (-0.8 * p.size <= b.rect.y0 - p.rect.y1 < 1.5 * p.size
+                    and abs(b.rect.x0 - p.rect.x0) < 2 * p.size
+                    and len(p.text.split()) >= 3  # 一两个词的无标点短块是标题/标签，不是段落
+                    and not p.text.rstrip().endswith(tuple(SENT_ENDS))
+                    and (first.islower() or first in "),;%,；，"))):
+                _absorb_block(p, b)
+                continue
+        out.append(b)
+    return out
+
+
+def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
+    """合并被拆碎的图注/表注：'Figure 2:'、'Examples of decay'、'schedules.' 三个
+    碎片各翻各的，再塞回各自小框里换行丑陋。拼回一个块后整句翻译、一行排下。
+    规则保守，只拼两类：a) 同一视觉行上 '<短标签>:' 后紧跟的片段；b) 带冒号的
+    图注组内、以左对齐小写开头且上行无句末标点的短续行（表格行和标题都不会误并）。"""
+    out: list[TextBlock] = []
+    for b in blocks:
+        if out:
+            p = out[-1]
+            if p.page == b.page:
+                y_ov = min(p.rect.y1, b.rect.y1) - max(p.rect.y0, b.rect.y0)
+                same_line = y_ov > 0.5 * min(p.rect.y1 - p.rect.y0, b.rect.y1 - b.rect.y0)
+                gap = b.rect.x0 - p.rect.x1
+                below = (0 <= b.rect.y0 - p.rect.y1 < 1.2 * p.size
+                         and abs(b.rect.x0 - p.rect.x0) < p.size)
+                label = p.text.rstrip().endswith((":", "：")) and len(p.text) < 30
+                continuation = (len(p.text) < 60 and b.text[:1].islower()
+                                and (":" in p.text or "：" in p.text)
+                                and not p.text.rstrip().endswith(tuple(SENT_ENDS)))
+                if (same_line and -1 <= gap < 3 * p.size and label) or (below and continuation):
+                    _absorb_block(p, b)
+                    continue
+        out.append(b)
+    return out
 
 
 def _marker_png(idx: int) -> bytes:

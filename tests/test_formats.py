@@ -1709,3 +1709,82 @@ def test_placeholderize_absorbs_accent_over_formula():
     sent2, _ = _placeholderize(b2, 0)
     assert "^" in sent2
 
+
+
+def test_caption_fragments_merge_into_one_block():
+    """'Figure 2:' + 'Examples of decay' + 'schedules.' 三个碎片要拼回一个块：
+    各翻各的再塞回小框会换行丑陋、译文也断。标题和无冒号的块不受影响。"""
+    from app.formats.pdf import TextBlock, _merge_caption_fragments
+
+    def blk(text, x0, y0, x1, size=10.0):
+        return TextBlock(page=0, rect=pymupdf.Rect(x0, y0, x1, y0 + 10),
+                         line_rects=[pymupdf.Rect(x0, y0, x1, y0 + 10)],
+                         text=text, size=size, color="#000", bold=False)
+
+    blocks = [
+        blk("Figure 2:", 60, 100, 105),
+        blk("Examples of decay", 112, 100, 220),
+        blk("schedules.", 60, 112, 110),
+    ]
+    merged = _merge_caption_fragments(blocks)
+    assert len(merged) == 1
+    assert merged[0].text == "Figure 2: Examples of decay schedules."
+    assert len(merged[0].line_rects) == 3
+
+    # 标题 + 正文（无冒号、大写开头）不合并
+    b2 = [blk("Introduction", 40, 100, 130, size=12.0),
+          blk("Scholarly works.", 40, 130, 130, size=10.0)]
+    assert len(_merge_caption_fragments(b2)) == 2
+
+    # 表格行（大写开头、无冒号）不合并
+    b3 = [blk("Always Sampling", 60, 100, 160),
+          blk("Scheduled Sampling 1", 60, 112, 190),
+          blk("Baseline LSTM", 60, 124, 150)]
+    assert len(_merge_caption_fragments(b3)) == 3
+
+
+def test_same_page_continuations_merge():
+    """被公式碎行拆断的段落（'…(like a' | 'sequence)…' | 'that belong…'）要并回
+    一个块：各翻各的会产出半截译文、在断点强制换行。标题、表格行不受影响。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, y, x0=108.0, size=10.0, nwords_pad=0):
+        return TextBlock(page=0, rect=pymupdf.Rect(x0, y, 504, y + 11),
+                         line_rects=[pymupdf.Rect(x0, y, 504, y + 11)],
+                         text=text, size=size, color="#000", bold=False)
+
+    blocks = [
+        blk("We are considering supervised tasks where the training set is given (like a", 280),
+        blk("sequence) while the target output is a sequence of tokens", 292),
+        blk("that belong to a fixed known dictionary.", 303),
+        blk("2.1 Model", 330),
+        blk("Given a single pair the log probability can be computed as follows", 345),
+    ]
+    merged = _merge_continuations(blocks)
+    assert len(merged) == 3
+    assert merged[0].text.endswith("fixed known dictionary.")
+    assert merged[1].text == "2.1 Model"
+
+    # 上行有句末标点 → 不并
+    b2 = [blk("This is a full sentence with several words.", 100),
+          blk("another paragraph starts here with lowercase", 112)]
+    assert len(_merge_continuations(b2)) == 2
+
+
+def test_section_number_stays_with_heading():
+    """'2.2' + 'Training' 两条 dict 行不能拆：纯数字被当符号行拆开后，数字被过滤
+    不遮罩（原文残留）、标题单独翻，两者基线对不齐。"""
+    from app.formats.pdf import _split_lines
+
+    items = [
+        ("2.2", pymupdf.Rect(108, 84, 120, 94), [{"text": "2.2", "size": 10.0}], None),
+        ("Training", pymupdf.Rect(130, 84, 167, 94), [{"text": "Training", "size": 10.0}], None),
+    ]
+    assert _split_lines(items) == [[0, 1]]
+    # 页码和正文不在同一可视行（纵向不重叠），照常拆
+    items2 = [
+        ("3", pymupdf.Rect(300, 760, 308, 770), [{"text": "3", "size": 10.0}], None),
+        ("Next paragraph starts here", pymupdf.Rect(108, 700, 500, 712),
+         [{"text": "Next paragraph starts here", "size": 10.0}], None),
+    ]
+    assert _split_lines(items2) == [[0], [1]]
