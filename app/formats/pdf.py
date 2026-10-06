@@ -27,6 +27,7 @@ from .pdf_flow import (
     writer_for,
 )
 from .pdf_layout import PageGeometry
+from .pdf_roles import HeuristicLayout, LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
 from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, typeset_lines
 
@@ -166,12 +167,9 @@ def _preview_kind(block: TextBlock, median: float) -> str:
     """短块里，明显大于正文的、以及略大于正文的粗体，当作小标题。
 
     只看粗体不够：作者名和图注标签也常是粗体，但字号不超过正文。
+    有版面角色时，标题以角色为准，这里只留字号兜底。
     """
-    if len(block.text) >= 100:
-        return "p"
-    if block.size >= median * 1.3 or (block.bold and block.size >= median * 1.15):
-        return "h2"
-    return "p"
+    return "h2" if is_size_heading(block.text, block.size, block.bold, median) else "p"
 
 
 def _font_is_math(font: str) -> bool:
@@ -229,6 +227,7 @@ def _cross_page_units(
     median: float,
     skip_ids: set[int] = frozenset(),
     geometries: list[PageGeometry] | None = None,
+    halt_ids: set[int] | None = None,
 ) -> list[list[TextBlock]]:
     """把跨页续段两两合并成翻译单元（返回块列表的列表，每单元 1~2 块）。
 
@@ -251,9 +250,16 @@ def _cross_page_units(
             nxt = by_page.get(pno + 1)
             first = next((x for x in (nxt or []) if x.size >= median * 0.8), None)
             head = first.text.lstrip()[:1] if first else ""
-            # 数字开头的章节标题（'1 Introduction'）不是续段；标题块也不并
+            # 数字开头的章节标题（'1 Introduction'）不是续段；标题、图注、图内文字也不并
             numbered_heading = bool(first and _SRC_HEAD_NUM_RE.match(first.text.lstrip()))
-            is_heading = bool(first and _preview_kind(first, median) != "p")
+            if halt_ids is None:
+                is_heading = bool(first and _preview_kind(first, median) != "p")
+            else:
+                is_heading = bool(first and id(first) in halt_ids)
+            if halt_ids is not None and id(b) in halt_ids:
+                units.append([b])
+                used.add(id(b))
+                continue
             continues = bool(first) and not numbered_heading and not is_heading and (
                 head.islower() or head.isdigit())
             if (body and b is body[-1] and continues and id(first) not in used
@@ -2002,15 +2008,21 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         meta_title = ""
     runner.set_title(meta_title or src.stem)
     median = sorted(b.size for b in blocks)[len(blocks) // 2]
-    kinds = [_preview_kind(b, median) for b in blocks]
-    skips = biblio_skips(blocks)
-    skip_ids = {id(b) for b, s in zip(blocks, skips) if s}
-    # 栏和障碍先于跨页合并、也先于写入：右栏页末不和下一页左栏页首拼成一段
+    # 栏和障碍先于角色、也先于跨页合并：图内文字和图注靠这些框来认
     geometries = [
         PageGeometry.from_page(src_doc[i], [b.rect for b in blocks if b.page == i])
         for i in range(src_doc.page_count)
     ]
-    units = _cross_page_units(blocks, median, skip_ids, geometries)
+    roles = HeuristicLayout().classify(
+        [LayoutItem(b.page, pymupdf.Rect(b.rect), b.text, b.size, b.bold) for b in blocks],
+        geometries,
+        median,
+    )
+    kinds = ["h2" if role is Role.HEADING else "p" for role in roles]
+    skips = [bib or role is Role.FIGURE for bib, role in zip(biblio_skips(blocks), roles)]
+    skip_ids = {id(b) for b, s in zip(blocks, skips) if s}
+    halt_ids = {id(b) for b, role in zip(blocks, roles) if role is not Role.BODY}
+    units = _cross_page_units(blocks, median, skip_ids, geometries, halt_ids)
     block_kind = {id(b): k for b, k in zip(blocks, kinds)}
 
     sent_texts: list[str] = []

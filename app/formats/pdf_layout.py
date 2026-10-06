@@ -35,6 +35,7 @@ class PageGeometry:
     width: float
     columns: tuple[Column, ...]
     figures: tuple[pymupdf.Rect, ...]
+    height: float = 0.0
 
     def index_of(self, rect: pymupdf.Rect) -> int:
         """块中心落在哪一栏。落在栏间空白时取最近的一栏。"""
@@ -65,14 +66,17 @@ class PageGeometry:
         page_width: float,
         rects: list[pymupdf.Rect],
         figures: list[pymupdf.Rect] | None = None,
+        height: float = 0.0,
     ) -> PageGeometry:
         usable = [rect for rect in rects if rect.width >= _USABLE_W and rect.height >= _USABLE_H]
         columns = _columns_of(page_width, usable)
-        return PageGeometry(page_width, columns, tuple(figures or ()))
+        return PageGeometry(page_width, columns, tuple(figures or ()), height)
 
     @staticmethod
     def from_page(page: pymupdf.Page, text_rects: list[pymupdf.Rect]) -> PageGeometry:
-        return PageGeometry.from_rects(page.rect.width, text_rects, _figure_rects(page))
+        return PageGeometry.from_rects(
+            page.rect.width, text_rects, _figure_rects(page), page.rect.height,
+        )
 
 
 def _interval_distance(x: float, column: Column) -> float:
