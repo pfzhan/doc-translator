@@ -4,12 +4,13 @@
 栏间空档至少 12pt，左右各有三块以上、纵向交叠够深。空档不必落在页宽正中，
 所以三栏也能分开。图把一侧的文字吃掉时，图缘仍是栏墙，写入不会跨过去。
 有横竖线的表格用格子限制写入；页眉、页脚和页码另作跳过，不参与分栏。
+文字栏沟明确时，阅读顺序按栏从上到下；只靠图缘切开的页面不重排。
 """
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Protocol, Sequence
+from typing import Generic, Protocol, Sequence, TypeVar
 
 import pymupdf
 
@@ -64,6 +65,8 @@ class PageGeometry:
     figures: tuple[pymupdf.Rect, ...]
     height: float = 0.0
     tables: tuple[RuledTable, ...] = ()
+    # 图缘可以挡住写入，但一侧文字不够三块时不能据此重排。
+    reads_in_columns: bool = False
 
     def index_of(self, rect: pymupdf.Rect) -> int:
         """块中心落在哪一栏。落在栏间空白时取最近的一栏。"""
@@ -78,6 +81,10 @@ class PageGeometry:
 
     def column_of(self, rect: pymupdf.Rect) -> Column:
         return self.columns[self.index_of(rect)]
+
+    def spans_columns(self, rect: pymupdf.Rect) -> bool:
+        """跨栏标题和整表。中心会落进某一栏，不能拿来当栏首或栏尾。"""
+        return _spans_columns(rect, self)
 
     def cell_of(self, rect: pymupdf.Rect) -> pymupdf.Rect | None:
         return cell_containing(rect, self.tables)
@@ -111,8 +118,12 @@ class PageGeometry:
         )
         voting = _voting_rects(rects, figure_tuple, table_tuple, page_width, height)
         usable = [rect for rect in voting if rect.width >= _USABLE_W and rect.height >= _USABLE_H]
+        body = [rect for rect in usable if rect.width <= page_width * _SPAN_MAX]
         columns = _columns_of(page_width, usable, _cutting_figures(figure_tuple, page_width, height))
-        return PageGeometry(page_width, columns, figure_tuple, height, table_tuple)
+        return PageGeometry(
+            page_width, columns, figure_tuple, height, table_tuple,
+            reads_in_columns=bool(_find_gutters(body)),
+        )
 
     @staticmethod
     def from_page(page: pymupdf.Page, text_rects: list[pymupdf.Rect]) -> PageGeometry:
@@ -151,6 +162,107 @@ def cell_containing(rect: pymupdf.Rect, tables: Sequence[RuledTable]) -> pymupdf
     if best is None or best_area < area * 0.5:
         return None
     return best
+
+
+class _OrderedBlock(Protocol):
+    rect: pymupdf.Rect
+    clip: tuple[float, float, float, float] | None
+
+
+_BlockT = TypeVar("_BlockT", bound=_OrderedBlock)
+
+
+@dataclass(frozen=True)
+class _ReadUnit(Generic[_BlockT]):
+    y0: float
+    x0: float
+    column: int
+    order: int
+    spanning: bool
+    blocks: tuple[_BlockT, ...]
+
+
+def reading_order(blocks: Sequence[_BlockT], geo: PageGeometry) -> list[_BlockT]:
+    """栏沟明确时按栏从上到下。跨栏标题和整表留在纵向位置，不塞进某一栏。
+
+    单栏、以及只靠图缘切开的页面保持传入顺序。表内格子已有行序，跨栏表不拆开。
+    """
+    if not geo.reads_in_columns or len(geo.columns) < 2 or len(blocks) < 2:
+        return list(blocks)
+    units = _read_units(blocks, geo)
+    separators = sorted(
+        (unit for unit in units if unit.spanning),
+        key=lambda unit: (unit.y0, unit.order),
+    )
+    flow = [unit for unit in units if not unit.spanning]
+    ordered: list[_BlockT] = []
+    cursor = -1e9
+    for separator in separators:
+        band = [unit for unit in flow if cursor <= unit.y0 < separator.y0]
+        ordered.extend(_emit_band(band))
+        ordered.extend(separator.blocks)
+        taken = {id(unit) for unit in band}
+        flow = [unit for unit in flow if id(unit) not in taken]
+        cursor = separator.y0
+    ordered.extend(_emit_band(flow))
+    return ordered
+
+
+def _read_units(blocks: Sequence[_BlockT], geo: PageGeometry) -> list[_ReadUnit[_BlockT]]:
+    spanning_tables = tuple(table for table in geo.tables if _spans_columns(table.rect, geo))
+    grouped: dict[int, list[tuple[int, _BlockT]]] = {}
+    loose: list[tuple[int, _BlockT]] = []
+    for order, block in enumerate(blocks):
+        table_index = _spanning_table_index(block, spanning_tables)
+        if table_index is None:
+            loose.append((order, block))
+        else:
+            grouped.setdefault(table_index, []).append((order, block))
+    units: list[_ReadUnit[_BlockT]] = []
+    for index, pairs in grouped.items():
+        table = spanning_tables[index]
+        cells = tuple(block for _order, block in pairs)
+        units.append(_ReadUnit(
+            table.rect.y0, table.rect.x0, geo.index_of(table.rect), pairs[0][0], True, cells,
+        ))
+    for order, block in loose:
+        units.append(_ReadUnit(
+            block.rect.y0,
+            block.rect.x0,
+            geo.index_of(block.rect),
+            order,
+            _spans_columns(block.rect, geo),
+            (block,),
+        ))
+    return units
+
+
+def _emit_band(units: Sequence[_ReadUnit[_BlockT]]) -> list[_BlockT]:
+    ordered: list[_BlockT] = []
+    for unit in sorted(units, key=lambda unit: (unit.column, unit.y0, unit.x0, unit.order)):
+        ordered.extend(unit.blocks)
+    return ordered
+
+
+def _spans_columns(rect: pymupdf.Rect, geo: PageGeometry) -> bool:
+    if geo.width > 0 and rect.width > geo.width * _SPAN_MAX:
+        return True
+    hits = 0
+    for column in geo.columns:
+        overlap = min(rect.x1, column.x1) - max(rect.x0, column.x0)
+        if overlap > _GUTTER_MIN:
+            hits += 1
+    return hits >= 2
+
+
+def _spanning_table_index(block: _OrderedBlock, tables: Sequence[RuledTable]) -> int | None:
+    if block.clip is None:
+        return None
+    rect = pymupdf.Rect(block.clip)
+    for index, table in enumerate(tables):
+        if cell_containing(rect, (table,)) is not None:
+            return index
+    return None
 
 
 def ruled_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:

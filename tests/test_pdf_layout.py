@@ -1,7 +1,9 @@
 import pymupdf
 
-from app.formats.pdf import TextBlock, _cross_page_units, _expand_right, _render_translated, extract_blocks
-from app.formats.pdf_layout import PageGeometry, RuledTable, margin_skips
+from app.formats.pdf import (
+    TextBlock, _cross_page_units, _expand_right, _merge_continuations, _render_translated, extract_blocks,
+)
+from app.formats.pdf_layout import PageGeometry, RuledTable, margin_skips, reading_order
 
 
 def _stack(x0: float, x1: float, y0: float, n: int = 4, step: float = 24) -> list[pymupdf.Rect]:
@@ -16,6 +18,7 @@ def _two_columns() -> PageGeometry:
 
 def test_one_mass_is_one_column():
     geo = PageGeometry.from_rects(400, _stack(40, 200, 40, n=5))
+    assert not geo.reads_in_columns
     assert len(geo.columns) == 1
     assert geo.columns[0].x0 == 40
     assert geo.columns[0].x1 == 200
@@ -23,6 +26,7 @@ def test_one_mass_is_one_column():
 
 def test_gutter_splits_two_columns():
     geo = _two_columns()
+    assert geo.reads_in_columns
     assert len(geo.columns) == 2
     assert geo.columns[0].x1 == 150
     assert geo.columns[1].x0 == 250
@@ -98,6 +102,17 @@ def test_cross_page_joins_the_right_column_end_to_the_next_left_column():
     assert all(len(unit) == 1 for unit in stopped)
 
 
+def test_spanning_footer_does_not_steal_the_next_page_join():
+    """跨栏页脚排在页末时，右栏末行仍接到下一页左栏，不被页脚抢走。"""
+    geo = _two_columns()
+    right = _block("the model performs quite", 0, pymupdf.Rect(250, 500, 360, 512))
+    footer = _block("the notes continue", 0, pymupdf.Rect(40, 700, 360, 712))
+    left = _block("well on this split.", 1, pymupdf.Rect(40, 60, 150, 72))
+    units = _cross_page_units([right, footer, left], 10.0, geometries=[geo, geo])
+    joined = [unit for unit in units if len(unit) == 2]
+    assert joined == [[right, left]]
+
+
 def test_two_column_translation_stops_at_the_gutter(tmp_path):
     """左栏短行的长译文可以右扩，但旁边的右栏即使纵向错开也不能被盖住。"""
     doc = pymupdf.open()
@@ -141,6 +156,7 @@ def test_figure_beside_a_short_column_still_stops_the_other_side():
     figure = pymupdf.Rect(220, 36, 360, 150)
     below = _stack(230, 350, 180, n=2)
     geo = PageGeometry.from_rects(400, left + below, [figure], height=400)
+    assert not geo.reads_in_columns
     assert geo.column_of(left[0]).x1 <= 150.1
     assert geo.right_limit(left[0], []) < figure.x0
 
@@ -166,6 +182,102 @@ def test_ruled_cells_are_separate_blocks_and_keep_the_translation_inside(tmp_pat
     assert max(ln["bbox"][2] for ln in zh) <= blocks[1].clip[2] + 2
     assert "Alpha cell" in out[0].get_text()
     assert "beta cell" not in out[0].get_text()
+
+
+def test_reading_order_joins_a_column_before_the_other_column():
+    """另一栏插在中间时，本栏被拆开的两行仍要按栏接上。没有文字栏沟则保持原顺序。"""
+    geo = _two_columns()
+    left_a = _block("the training set is given like a", 0, pymupdf.Rect(40, 40, 150, 52))
+    right_a = _block("The other column starts here.", 0, pymupdf.Rect(250, 40, 360, 52))
+    left_b = _block("sequence while the target stays put.", 0, pymupdf.Rect(40, 64, 150, 76))
+    right_b = _block("It has its own ending.", 0, pymupdf.Rect(250, 64, 360, 76))
+    streamed = [left_a, right_a, left_b, right_b]
+    streamed_merged = _merge_continuations(streamed)
+    assert all(
+        "sequence" not in block.text or not block.text.startswith("the training")
+        for block in streamed_merged
+    )
+    ordered = reading_order(streamed, geo)
+    assert [block.text for block in ordered] == [left_a.text, left_b.text, right_a.text, right_b.text]
+    merged = _merge_continuations(ordered)
+    assert merged[0].text.startswith("the training") and "sequence while" in merged[0].text
+    assert all("other column" not in block.text or "sequence" not in block.text for block in merged)
+
+    one = PageGeometry.from_rects(400, _stack(40, 200, 40, n=5))
+    assert [block.text for block in reading_order(list(reversed(streamed)), one)] == [
+        block.text for block in reversed(streamed)
+    ]
+    wall = PageGeometry.from_rects(
+        400, _stack(40, 150, 40, n=4) + _stack(230, 350, 180, n=2),
+        [pymupdf.Rect(220, 36, 360, 150)], height=400,
+    )
+    assert [block.text for block in reading_order(streamed, wall)] == [block.text for block in streamed]
+
+
+def test_reading_order_keeps_spanning_title_and_table_between_bands():
+    """跨栏标题和整表留在纵向位置。表内格子保持原顺序，不按页面分栏拆开。"""
+    title = _block("3 Methods", 0, pymupdf.Rect(40, 120, 360, 136), size=14)
+    left_above = _block("Left above.", 0, pymupdf.Rect(40, 40, 150, 52))
+    right_above = _block("Right above.", 0, pymupdf.Rect(250, 40, 360, 52))
+    left_below = _block("Left below.", 0, pymupdf.Rect(40, 170, 150, 182))
+    right_below = _block("Right below.", 0, pymupdf.Rect(250, 170, 360, 182))
+    geo = PageGeometry.from_rects(400, [title.rect, *_stack(40, 150, 40), *_stack(250, 360, 40)])
+    ordered = reading_order(
+        [left_below, right_below, title, right_above, left_above], geo,
+    )
+    assert [block.text for block in ordered] == [
+        "Left above.", "Right above.", "3 Methods", "Left below.", "Right below.",
+    ]
+
+    table = RuledTable(
+        pymupdf.Rect(40, 200, 360, 248),
+        (pymupdf.Rect(40, 200, 180, 248), pymupdf.Rect(180, 200, 360, 248)),
+    )
+    table_geo = PageGeometry.from_rects(
+        400, [*_stack(40, 150, 40), *_stack(250, 360, 40)], tables=(table,),
+    )
+    right_cell = TextBlock(
+        page=0, rect=pymupdf.Rect(190, 210, 340, 230), line_rects=[], text="beta",
+        size=10, color="#000", bold=False, clip=(180, 200, 360, 248),
+    )
+    left_cell = TextBlock(
+        page=0, rect=pymupdf.Rect(48, 210, 160, 230), line_rects=[], text="alpha",
+        size=10, color="#000", bold=False, clip=(40, 200, 180, 248),
+    )
+    below = _block("After the table.", 0, pymupdf.Rect(40, 270, 150, 282))
+    ordered = reading_order([right_cell, left_above, left_cell, right_above, below], table_geo)
+    assert [block.text for block in ordered] == [
+        "Left above.", "Right above.", "beta", "alpha", "After the table.",
+    ]
+
+
+def test_extract_reads_two_columns_down_each_column(tmp_path):
+    """提取顺序左右交错时，写回前的块序仍是先左栏后右栏，拆开的段落能接上。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=320)
+    lines = [
+        (40, 50, "the training set is given like a"),
+        (250, 50, "The other column starts here."),
+        (40, 64, "sequence while the target stays put."),
+        (250, 64, "It has its own ending."),
+    ]
+    for index in range(3):
+        lines.append((40, 100 + index * 16, f"Left filler line number {index} here."))
+        lines.append((250, 100 + index * 16, f"Right filler line number {index} here."))
+    for x, y, text in lines:
+        page.insert_text((x, y), text, fontsize=10)
+    src = tmp_path / "cols.pdf"
+    doc.save(src)
+    doc.close()
+
+    blocks = extract_blocks(pymupdf.open(src))
+    texts = [block.text for block in blocks]
+    joined = next(text for text in texts if "sequence while" in text)
+    assert joined.startswith("the training")
+    assert all("other column" not in text or "sequence" not in text for text in texts)
+    left_at = next(index for index, text in enumerate(texts) if text.startswith("Left filler"))
+    right_at = next(index for index, text in enumerate(texts) if text.startswith("Right filler") or text.startswith("The other"))
+    assert left_at < right_at
 
 
 def test_text_alignment_is_not_a_table():

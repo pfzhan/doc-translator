@@ -27,7 +27,9 @@ from .pdf_flow import (
     strip_style_marks,
     writer_for,
 )
-from .pdf_layout import PageGeometry, RuledTable, cell_containing, margin_skips, ruled_tables
+from .pdf_layout import (
+    PageGeometry, RuledTable, cell_containing, margin_skips, reading_order, ruled_tables,
+)
 from .pdf_roles import HeuristicLayout, LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
 from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, typeset_lines
@@ -243,13 +245,47 @@ def _column_index(geo: PageGeometry, block: TextBlock) -> int:
     return geo.index_of(block.rect)
 
 
+def _in_column(geo: PageGeometry, block: TextBlock) -> bool:
+    return len(geo.columns) < 2 or not geo.spans_columns(block.rect)
+
+
+def _column_page_end(
+    body: list[TextBlock], geometries: list[PageGeometry] | None,
+) -> TextBlock | None:
+    """同栏跨页看的页末。多栏页上的跨栏块不占这个位置，否则会抢走右栏末行。"""
+    return _column_edge(body, geometries, last=True)
+
+
+def _column_page_start(
+    body: list[TextBlock], geometries: list[PageGeometry] | None,
+) -> TextBlock | None:
+    return _column_edge(body, geometries, last=False)
+
+
+def _column_edge(
+    body: list[TextBlock], geometries: list[PageGeometry] | None, last: bool,
+) -> TextBlock | None:
+    if not body:
+        return None
+    if not geometries:
+        return body[-1] if last else body[0]
+    ordered = reversed(body) if last else body
+    for block in ordered:
+        if block.page >= len(geometries) or _in_column(geometries[block.page], block):
+            return block
+    return None
+
+
 def _is_last_in_right_column(
     block: TextBlock, page_blocks: list[TextBlock], geo: PageGeometry,
 ) -> bool:
-    if len(geo.columns) < 2 or _column_index(geo, block) != len(geo.columns) - 1:
+    if len(geo.columns) < 2 or not _in_column(geo, block):
+        return False
+    if _column_index(geo, block) != len(geo.columns) - 1:
         return False
     return not any(
-        other is not block and _column_index(geo, other) == len(geo.columns) - 1
+        other is not block and _in_column(geo, other)
+        and _column_index(geo, other) == len(geo.columns) - 1
         and other.rect.y0 > block.rect.y0 + 1
         for other in page_blocks
     )
@@ -260,9 +296,9 @@ def _left_column_head(page_blocks: list[TextBlock], geo: PageGeometry) -> TextBl
         return None
     heads = [
         block for block in page_blocks
-        if _column_index(geo, block) == 0
+        if _in_column(geo, block) and _column_index(geo, block) == 0
         and not any(
-            other is not block and _column_index(geo, other) == 0
+            other is not block and _in_column(geo, other) and _column_index(geo, other) == 0
             and other.rect.y0 < block.rect.y0 - 1
             for other in page_blocks
         )
@@ -285,7 +321,7 @@ def _cross_page_units(
     上一页最后一个正文块不以句末标点结尾、下一页第一个块以小写/数字开头且不像标题时，
     视为被页边界切断的同一段。页脚脚注（字号明显小于正文）和指定跳过的块不参与。
     同一栏的续段照旧合并。多栏时，只再放开「本页最右栏的末块接到下页最左栏的首块」。
-    ignore_ids 是页眉页脚，不占页末、也不挡页首。
+    ignore_ids 是页眉页脚，不占页末、也不挡页首。跨栏标题和整表同样不占栏首栏尾。
     """
     by_page: dict[int, list[TextBlock]] = {}
     for b in blocks:
@@ -299,7 +335,8 @@ def _cross_page_units(
         body = [b for b in by_page[pno] if b.size >= median * 0.8 and id(b) not in ignored]
         nxt = by_page.get(pno + 1) or []
         nxt_body = [x for x in nxt if x.size >= median * 0.8 and id(x) not in ignored]
-        first = nxt_body[0] if nxt_body else None
+        first = _column_page_start(nxt_body, geometries)
+        end = _column_page_end(body, geometries)
         head = (
             _left_column_head(nxt_body, geometries[pno + 1])
             if geometries and pno + 1 < len(geometries) else None
@@ -312,7 +349,7 @@ def _cross_page_units(
                 used.add(id(b))
                 continue
             same = bool(
-                body and b is body[-1] and first is not None and id(first) not in used
+                end is not None and b is end and first is not None and id(first) not in used
                 and id(b) not in skip_ids and id(first) not in skip_ids
                 and _can_continue(b, first, median, halt_ids)
                 and not _different_columns(geometries, b, first)
@@ -915,7 +952,16 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     for block in blocks:
         tables = tables_by_page[block.page] if block.page < len(tables_by_page) else ()
         split.extend(_split_table_blocks([block], tables))
-    return _merge_continuations(_merge_caption_fragments(_merge_visual_lines(split)))
+    # 栏沟明确时先排成阅读顺序。同页续段只看相邻块，另一栏插在中间就接不上本栏的下一行。
+    ordered: list[TextBlock] = []
+    by_page: dict[int, list[TextBlock]] = {}
+    for block in split:
+        by_page.setdefault(block.page, []).append(block)
+    for pno in sorted(by_page):
+        page_blocks = by_page[pno]
+        geo = PageGeometry.from_page(doc[pno], [block.rect for block in page_blocks])
+        ordered.extend(reading_order(page_blocks, geo))
+    return _merge_continuations(_merge_caption_fragments(_merge_visual_lines(ordered)))
 
 
 def _absorb_block(p: TextBlock, b: TextBlock):
