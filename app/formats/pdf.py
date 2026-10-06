@@ -928,17 +928,27 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             size = b.size * 0.88 if cjk else b.size
             body = re.sub(r"\x01i\x02(\d+)\x01/i\x02", img_repl, body)
             body = _nowrap_parens(body)
+            # 栏宽参考（本页最宽块）：居中块（论文标题、作者行）用整栏宽 + 居中，
+            # 短译文不再被小框挤成孤字行；满栏正文用 justify，右边缘和原文一样齐
+            col = max((ob.rect for ob, _ in items), key=lambda r: r.width, default=b.rect)
+            centered = (not rtl and len(b.text) < 100 and b.rect.width < col.width * 0.85
+                        and abs((b.rect.x0 + b.rect.x1) / 2 - (col.x0 + col.x1) / 2) < 15)
+            align = "center" if centered else (
+                "right" if rtl else "justify" if b.rect.width > page.rect.width * 0.6 else "left")
             # CJK 字体的行框约 1.3em，line-height 1.2 会把行间压没；1.45 才透气和原文相当
             css = (
                 f"* {{font-family: sans-serif; font-size: {size}px; color: {b.color}; "
                 f"font-weight: {weight}; line-height: {1.45 if cjk else 1.2}; margin: 0; padding: 0; "
-                f"text-align: {'right' if rtl else 'left'};}}"
+                f"text-align: {align};}}"
             )
             # 留一点余量，避免译文比原文长时被截断；放不下时走三级收缩阶梯。
             # CJK 行框更高且起始有 0.1em 下移补偿，盒高多留到 0.5em，避免末行描边压到下一行
             y0 = b.rect.y0 + b.size * 0.1 if cjk else b.rect.y0
             pad = b.size * 0.5 if cjk else b.size * 0.3
-            rect = pymupdf.Rect(b.rect.x0, y0, b.rect.x1 + 2, b.rect.y1 + pad)
+            if centered:
+                rect = pymupdf.Rect(col.x0, y0, col.x1, b.rect.y1 + pad)
+            else:
+                rect = pymupdf.Rect(b.rect.x0, y0, b.rect.x1 + 2, b.rect.y1 + pad)
             obstacles = [ob.rect for ob in blocks if ob.page == pno and ob is not b]
             _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, obstacles, archive)
         if mid_map:
