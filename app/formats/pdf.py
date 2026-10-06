@@ -19,6 +19,7 @@ from ..languages import RTL_LANGUAGES
 from .pdf_flow import STYLE_MARK_RE, Emphasis, break_lines, emphasis_of, nowrap_lines, restore_emphasis, writer_for
 from .pdf_layout import PageGeometry
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
+from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, typeset_lines
 
 MATH_FONT_RE = re.compile(r"CMMI|CMSY|CMEX|MSBM|Math|Symbol|STIX|Cambria Math", re.I)
 # 精确的数学字体白名单（直接判公式）
@@ -1004,24 +1005,7 @@ def _place_formula_images(page: "pymupdf.Page", doc: "pymupdf.Document", before:
         else:
             target = pymupdf.Rect(rect.x0 + 2.0, rect.y0 + d, rect.x0 + 2.0 + w, rect.y0 + d + h)
         page.replace_image(xref, pixmap=_white_pixmap(doc))
-        placed = False
-        if fmS is not None:
-            try:
-                # 资源名必须全页唯一：n 只是块内序号，不同块的 FmF0 会互相覆盖
-                f_name = "FmF_" + re.sub(r"[^A-Za-z0-9_]", "_", f["name"])
-                fmT = _formula_form(doc, page, fmS, f, f_name, page_spans)
-                bbox = f["bbox"]
-                sx = target.width / bbox.width
-                sy = target.height / bbox.height
-                # 带缩放的仿射：平移量必须吸收缩放，否则公式整体往下漂 (1-sy)*H
-                tx = target.x0 - sx * bbox.x0
-                ty = (page.rect.height - target.y1) - sy * (page.rect.height - bbox.y1)
-                draws.append(f"q {sx:.4f} 0 0 {sy:.4f} {tx:.2f} {ty:.2f} cm /{f_name} Do Q")
-                placed = True
-            except Exception:  # noqa: BLE001 - 矢量透传失败回退位图
-                placed = False
-        if not placed and f.get("png"):
-            page.insert_image(target, stream=f["png"], keep_proportion=False, overlay=True)
+        _paint_formula(page, doc, f, target, fmS, page_spans, draws)
     if draws:
         ns = doc.get_new_xref()
         doc.update_object(ns, "<<>>")
@@ -1031,6 +1015,203 @@ def _place_formula_images(page: "pymupdf.Page", doc: "pymupdf.Document", before:
             doc.xref_set_key(page.xref, "Contents", f"{cont_v[:-1].rstrip()} {ns} 0 R]")
         else:
             doc.xref_set_key(page.xref, "Contents", f"[{cont_v} {ns} 0 R]")
+
+
+def _paint_formula(
+    page: "pymupdf.Page",
+    doc: "pymupdf.Document",
+    formula: dict,
+    target: "pymupdf.Rect",
+    fmS: int | None,
+    page_spans: list[dict] | None,
+    draws: list[str],
+    deferred_png: list[tuple["pymupdf.Rect", bytes]] | None = None,
+) -> None:
+    """把公式画进 target。矢量透传失败时回退位图。绘制命令先攒着，最后一条内容流再写。"""
+    bbox = formula.get("bbox")
+    if fmS is not None and bbox is not None and bbox.width > 0.5 and bbox.height > 0.5 and target.width > 0.5:
+        try:
+            # 资源名必须全页唯一：块内序号相同的 FmF0 会互相覆盖
+            f_name = "FmF_" + re.sub(r"[^A-Za-z0-9_]", "_", str(formula["name"]))
+            _formula_form(doc, page, fmS, formula, f_name, page_spans)
+            sx = target.width / bbox.width
+            sy = target.height / bbox.height
+            # 带缩放的仿射：平移量必须吸收缩放，否则公式整体往下漂 (1-sy)*H
+            tx = target.x0 - sx * bbox.x0
+            ty = (page.rect.height - target.y1) - sy * (page.rect.height - bbox.y1)
+            draws.append(f"q {sx:.4f} 0 0 {sy:.4f} {tx:.2f} {ty:.2f} cm /{f_name} Do Q")
+            return
+        except Exception:  # noqa: BLE001 - 矢量透传失败回退位图
+            pass
+    png = formula.get("png")
+    if not png:
+        return
+    if deferred_png is not None:
+        deferred_png.append((target, png))
+        return
+    page.insert_image(target, stream=png, keep_proportion=False, overlay=True)
+
+
+def _formula_metrics(formulas: list[dict], block_size: float, em: float) -> dict[int, FormulaMetric]:
+    """按当前字号给出每个公式槽。rs 写回记录，矢量缩放和槽位用同一个数。"""
+    metrics: dict[int, FormulaMetric] = {}
+    for index, formula in enumerate(formulas, 1):
+        scale, slot_width, height = _formula_slot(formula, block_size, em)
+        formula["rs"] = scale
+        body = float(formula["w"]) * scale if formula.get("has_img") else slot_width
+        below = (float(formula.get("d") or 0) - float(formula.get("raise") or 0)) * scale
+        metrics[index] = FormulaMetric(slot_width, body, height, below)
+    return metrics
+
+
+def _fit_typeset(
+    text: str,
+    formulas: list[dict],
+    rect: "pymupdf.Rect",
+    em: float,
+    block_size: float,
+    cjk: bool,
+    page: "pymupdf.Page",
+    obstacles: list["pymupdf.Rect"],
+    right_limit: float | None,
+) -> tuple[list[TypesetLine], float, float, "pymupdf.Rect"]:
+    """放得下就按原字号排。放不下先在本栏右扩，再压行距，最后才缩字号。"""
+    gap = 1.45 if cjk else 1.2
+    box = rect
+    expanded = False
+    tightened = False
+    lines: list[TypesetLine] = []
+    for _ in range(24):
+        lines = typeset_lines(text, em, max(box.width, 1.0), _formula_metrics(formulas, block_size, em))
+        height = max(len(lines), 1) * em * gap
+        overflows = any(line.width > box.width + 1 for line in lines)
+        too_tall = height > box.height + 1
+        if not overflows and not too_tall:
+            return lines, em, gap, box
+        if not expanded and box.width < page.rect.width * 0.6:
+            expanded = True
+            wide = _expand_right(box, page.rect.width, obstacles, right_limit)
+            if wide.x1 > box.x1 + 1:
+                box = wide
+                continue
+        if not tightened:
+            gap = 1.1 if gap <= 1.25 else gap - 0.25
+            tightened = True
+            continue
+        if em <= 1.5:
+            break
+        em = max(1.5, em * 0.9)
+    return lines, em, gap, box
+
+
+def _line_baseline(spans: list[dict], line_top: float, line_h: float, em: float, cjk: bool) -> float:
+    """这一行已写入文字的 origin。纯公式行没有文字，用 htmlbox 的经验基线。"""
+    best: tuple[float, float] | None = None
+    for span in spans:
+        origin = span.get("origin")
+        bbox = span.get("bbox")
+        if not origin or not bbox:
+            continue
+        if bbox[3] < line_top - 1 or bbox[1] > line_top + line_h + 1:
+            continue
+        overlap = min(bbox[3], line_top + line_h) - max(bbox[1], line_top)
+        if best is None or overlap > best[0]:
+            best = (overlap, float(origin[1]))
+    if best is not None and best[0] > 0:
+        return best[1]
+    return line_top + em * (1.12 if cjk else 1.0)
+
+
+def _place_typeset(
+    page: "pymupdf.Page",
+    doc: "pymupdf.Document",
+    block: TextBlock,
+    text: str,
+    formulas: list[dict],
+    rect: "pymupdf.Rect",
+    em: float,
+    cjk: bool,
+    centered: bool,
+    div_attrs: str,
+    color: str,
+    weight: str,
+    obstacles: list["pymupdf.Rect"],
+    right_limit: float | None,
+    fmS: int | None,
+    page_spans: list[dict] | None,
+    draws: list[str],
+    deferred_png: list[tuple["pymupdf.Rect", bytes]],
+) -> None:
+    """按行写入文字，公式槽用记录的下沿贴到该行基线。"""
+    lines, em, gap, box = _fit_typeset(
+        text, formulas, rect, em, block.size, cjk, page, obstacles, right_limit,
+    )
+    css = (
+        f"* {{font-family: sans-serif; font-size: {em}px; color: {color}; "
+        f"font-weight: {weight}; line-height: {gap}; margin: 0; padding: 0; text-align: left;}}"
+    )
+    line_h = em * gap
+    pending: list[tuple[FormulaPiece, float, float]] = []
+    y = box.y0
+    for line in lines:
+        origin_x = box.x0
+        if centered and line.width < box.width:
+            origin_x += (box.width - line.width) / 2
+        for piece in line.pieces:
+            if isinstance(piece, TextPiece):
+                if not piece.text.strip():
+                    continue
+                fragment = _inline_marks(restore_emphasis(html.escape(piece.text)))
+                html_text = f'<div{div_attrs}><span style="white-space:nowrap">{fragment}</span></div>'
+                slot = pymupdf.Rect(origin_x + piece.x, y, origin_x + piece.x + piece.width + 4, y + line_h)
+                if not _try_insert(page, slot, html_text, css, 0.9):
+                    try:
+                        page.insert_htmlbox(slot, html_text, css=css, scale_low=0)
+                    except AssertionError:
+                        pass
+            elif isinstance(piece, FormulaPiece) and 1 <= piece.index <= len(formulas):
+                pending.append((piece, origin_x + piece.x, y))
+        y += line_h
+    if not pending:
+        return
+    spans = [
+        span
+        for blk in page.get_text("dict")["blocks"] if blk.get("type") == 0
+        for ln in blk["lines"] for span in ln["spans"]
+        if span.get("text", "").strip() and span.get("origin")
+    ]
+    for piece, slot_x, line_top in pending:
+        baseline = _line_baseline(spans, line_top, line_h, em, cjk)
+        target = pymupdf.Rect(
+            slot_x + 2.0,
+            baseline + piece.below - piece.height,
+            slot_x + 2.0 + piece.body_width,
+            baseline + piece.below,
+        )
+        _paint_formula(page, doc, formulas[piece.index - 1], target, fmS, page_spans, draws, deferred_png)
+
+
+def _flush_draws(
+    page: "pymupdf.Page",
+    doc: "pymupdf.Document",
+    draws: list[str],
+    deferred_png: list[tuple["pymupdf.Rect", bytes]] | None = None,
+) -> None:
+    for target, png in deferred_png or []:
+        page.insert_image(target, stream=png, keep_proportion=False, overlay=True)
+    if deferred_png is not None:
+        deferred_png.clear()
+    if not draws:
+        return
+    ns = doc.get_new_xref()
+    doc.update_object(ns, "<<>>")
+    doc.update_stream(ns, ("\n" + "\n".join(draws) + "\n").encode())
+    cont_v = doc.xref_get_key(page.xref, "Contents")[1].strip()
+    if cont_v.startswith("["):
+        doc.xref_set_key(page.xref, "Contents", f"{cont_v[:-1].rstrip()} {ns} 0 R]")
+    else:
+        doc.xref_set_key(page.xref, "Contents", f"[{cont_v} {ns} 0 R]")
+    draws.clear()
 
 
 def _nowrap_parens(body: str) -> str:
@@ -1174,6 +1355,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         )
         images_before = {img[0] for img in page.get_images(full=True)}
         geo = geometries[pno] if geometries and pno < len(geometries) else None
+        draws: list[str] = []
+        deferred_png: list[tuple[pymupdf.Rect, bytes]] = []
         for b, t in items:
             bformulas = (formulas_map or {}).get(id(b), [])
             weight = "bold" if b.bold else "normal"
@@ -1194,7 +1377,15 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             if geo is not None:
                 obstacles = [*obstacles, *geo.figures]
             limit = geo.right_limit(rect, obstacles) if geo is not None else None
-            _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, obstacles, archive, limit)
+            # 有公式图时自己排：公式槽按基线贴回，MuPDF 不能从公式中间折行。
+            if not rtl and any(f.get("has_img") for f in bformulas):
+                _place_typeset(
+                    page, doc, b, t, bformulas, rect, size, cjk, centered, div_attrs, b.color, weight,
+                    obstacles, limit, fmS, page_spans, draws, deferred_png,
+                )
+            else:
+                _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, obstacles, archive, limit)
+        _flush_draws(page, doc, draws, deferred_png)
         if mid_map:
             _place_formula_images(page, doc, images_before, mid_map, fmS, page_spans)
     return doc
