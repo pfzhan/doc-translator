@@ -3,7 +3,8 @@
 不依赖版面模型。跨栏标题（宽过页宽六成）不参与分栏。
 栏间空档至少 12pt，左右各有三块以上、纵向交叠够深。空档不必落在页宽正中，
 所以三栏也能分开。图把一侧的文字吃掉时，图缘仍是栏墙，写入不会跨过去。
-有横竖线的表格用格子限制写入；页眉、页脚和页码另作跳过，不参与分栏。
+有横竖线的表格，以及列缘对齐的短格子表，用格子限制写入。整段正文不算表。
+页眉、页脚和页码另作跳过，不参与分栏。
 文字栏沟明确时，阅读顺序按栏从上到下；只靠图缘切开的页面不重排。
 """
 from __future__ import annotations
@@ -30,6 +31,14 @@ _CELL_MIN_W = 18.0
 _CELL_MIN_H = 8.0
 _CELL_NARROW = 16.0
 _MAX_TABLE_COLS = 12
+_TEXT_JOIN = 8.0
+_COL_ALIGN = 5.0
+_MIN_TEXT_ROWS = 3
+_MIN_PITCH = 8.0
+_MAX_PITCH = 36.0
+_SHORT_WORDS = 3
+_SHORT_WIDTH = 80.0
+_SHORT_SHARE = 0.8
 _INSIDE = 0.6
 _MARGIN_BAND = 0.07
 _MARGIN_MIN = 42.0
@@ -132,7 +141,7 @@ class PageGeometry:
             text_rects,
             _figure_rects(page),
             page.rect.height,
-            ruled_tables(page),
+            page_tables(page),
         )
 
 
@@ -278,6 +287,158 @@ def ruled_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
         if _usable_table(cells):
             tables.append(RuledTable(pymupdf.Rect(table.bbox), cells))
     return tuple(tables)
+
+
+def page_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
+    """有线表，再加上列缘对齐的短格子表。两栏正文和整段文字不在这里。"""
+    ruled = ruled_tables(page)
+    return (*ruled, *unruled_tables(page, ruled))
+
+
+@dataclass(frozen=True)
+class _TextWord:
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+    text: str
+
+    @property
+    def width(self) -> float:
+        return self.x1 - self.x0
+
+
+@dataclass(frozen=True)
+class _TextCell:
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+    words: int
+
+    @property
+    def width(self) -> float:
+        return self.x1 - self.x0
+
+
+def unruled_tables(page: pymupdf.Page, ruled: Sequence[RuledTable] = ()) -> tuple[RuledTable, ...]:
+    """没有线时，只认短格子组成的网格：列的左缘或右缘对齐，行高重复。
+
+    词间距并成一格。栏间大空档上的长行是正文，不是表。
+    """
+    zones = [table.rect for table in ruled]
+    words = [
+        _TextWord(float(item[0]), float(item[1]), float(item[2]), float(item[3]), str(item[4]))
+        for item in page.get_text("words")
+        if str(item[4]).strip()
+        and not _mostly_inside(pymupdf.Rect(item[:4]), zones)
+    ]
+    rows = [_row_cells(row) for row in _word_rows(words)]
+    tables: list[RuledTable] = []
+    index = 0
+    while index < len(rows):
+        run = [rows[index]]
+        cursor = index + 1
+        while cursor < len(rows) and _continues_grid(run, rows[cursor]):
+            run.append(rows[cursor])
+            cursor += 1
+        table = _grid_table(run, page.rect.width)
+        if table is not None:
+            tables.append(table)
+            index = cursor
+        else:
+            index += 1
+    return tuple(tables)
+
+
+def _word_rows(words: Sequence[_TextWord]) -> list[list[_TextWord]]:
+    rows: list[list[_TextWord]] = []
+    for word in sorted(words, key=lambda item: (item.y0, item.x0)):
+        if rows and abs(word.y0 - rows[-1][0].y0) <= 4.0:
+            rows[-1].append(word)
+        else:
+            rows.append([word])
+    for row in rows:
+        row.sort(key=lambda item: item.x0)
+    return rows
+
+
+def _row_cells(row: Sequence[_TextWord]) -> list[_TextCell]:
+    if not row:
+        return []
+    groups: list[list[_TextWord]] = [[row[0]]]
+    for word in row[1:]:
+        if word.x0 - groups[-1][-1].x1 <= _TEXT_JOIN:
+            groups[-1].append(word)
+        else:
+            groups.append([word])
+    cells: list[_TextCell] = []
+    for group in groups:
+        cells.append(_TextCell(
+            min(word.x0 for word in group),
+            min(word.y0 for word in group),
+            max(word.x1 for word in group),
+            max(word.y1 for word in group),
+            len(group),
+        ))
+    return cells
+
+
+def _continues_grid(run: Sequence[Sequence[_TextCell]], row: Sequence[_TextCell]) -> bool:
+    if len(row) != len(run[0]) or len(row) < 2:
+        return False
+    pitch = row[0].y0 - run[-1][0].y0
+    if pitch < _MIN_PITCH or pitch > _MAX_PITCH:
+        return False
+    pitches = [run[i + 1][0].y0 - run[i][0].y0 for i in range(len(run) - 1)]
+    pitches.append(pitch)
+    median = sorted(pitches)[len(pitches) // 2]
+    if abs(pitch - median) > max(4.0, median * 0.3):
+        return False
+    return all(_edge_aligned(anchor, cell) for anchor, cell in zip(run[0], row))
+
+
+def _edge_aligned(anchor: _TextCell, cell: _TextCell) -> bool:
+    return abs(cell.x0 - anchor.x0) <= _COL_ALIGN or abs(cell.x1 - anchor.x1) <= _COL_ALIGN
+
+
+def _grid_table(rows: Sequence[Sequence[_TextCell]], page_width: float) -> RuledTable | None:
+    if len(rows) < _MIN_TEXT_ROWS or len(rows[0]) < 2:
+        return None
+    flat = [cell for row in rows for cell in row]
+    short = sum(1 for cell in flat if cell.words <= _SHORT_WORDS and cell.width <= _SHORT_WIDTH)
+    if short < len(flat) * _SHORT_SHARE:
+        return None
+    widths = sorted(cell.width for cell in flat)
+    if widths[len(widths) // 2] > min(88.0, max(page_width, 1.0) * 0.28):
+        return None
+    cells = _grid_cells(rows)
+    if not _usable_table(cells):
+        return None
+    rect = pymupdf.Rect()
+    for cell in cells:
+        rect |= cell
+    return RuledTable(rect, cells)
+
+
+def _grid_cells(rows: Sequence[Sequence[_TextCell]]) -> tuple[pymupdf.Rect, ...]:
+    columns = len(rows[0])
+    anchors = [min(row[col].x0 for row in rows) for col in range(columns)]
+    rights: list[float] = []
+    for col in range(columns - 1):
+        rights.append(anchors[col + 1] - 3.0)
+    last_text = max(row[-1].x1 for row in rows)
+    rights.append(max(last_text + 8.0, anchors[-1] + 28.0))
+    tops = [min(cell.y0 for cell in row) for row in rows]
+    bottoms: list[float] = []
+    for index in range(len(rows) - 1):
+        bottoms.append(tops[index + 1] - 1.0)
+    bottoms.append(max(cell.y1 for cell in rows[-1]) + 2.0)
+    cells: list[pymupdf.Rect] = []
+    for top, bottom, row in zip(tops, bottoms, rows):
+        for anchor, right in zip(anchors, rights):
+            cells.append(pymupdf.Rect(anchor - 1.0, top - 1.0, max(right, anchor + 18.0), bottom))
+    return tuple(cells)
 
 
 def margin_skips(blocks: Sequence[_MarginBlock], geometries: Sequence[PageGeometry]) -> list[bool]:
