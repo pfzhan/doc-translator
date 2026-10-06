@@ -58,6 +58,14 @@ Return only the processed text, without source text, markers, titles,
 explanations, or an enclosing Markdown fence. Preserve fenced code blocks that
 belong to the processed content."""
 
+# 跨页段落的 run 分界。模型必须原样保留，译完才知道从哪里切回两页。
+BOUNDARY_SUFFIX = """
+
+## Page-boundary placeholder
+Some items contain a {|} placeholder. It marks where one paragraph crosses a
+page. Keep {|} and every {vN} unchanged, in the same order. Do not translate,
+drop, or move the braces."""
+
 # 批次里含 HTML 片段（电子书富文本段落）时附加：保留行内格式（加粗、链接）
 HTML_SUFFIX = """
 
@@ -149,6 +157,8 @@ def build_messages(texts: list[str], target_lang: str, *, source_lang: str = "au
         body = "\n".join(f"[[{marker}{i}]]\n{t}" for i, t in enumerate(texts)) + "\n" + SOURCE_END
     if contains_html:
         system += HTML_SUFFIX
+    if any("{|}" in text for text in texts):
+        system += BOUNDARY_SUFFIX
     # {{text}} 最后替换，避免原文里恰好有 {{xxx}} 被当成占位符
     user = fill(user_t.replace("{{text}}", "\0TEXT\0"), values).replace("\0TEXT\0", body)
     return system, user

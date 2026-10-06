@@ -1,7 +1,7 @@
 """PDF 翻译，保留原版式。
 
 1. 用 PyMuPDF 提取每页的文本块（坐标、字号、颜色、粗体）。
-2. 跳过整块公式、纯数字、旋转文字。行内公式换成占位符，译后按原样贴回。
+2. 跳过整块公式、纯数字、旋转文字。行内公式是段落里的一个 run，译后按原样贴回。
 3. 译文版：擦掉原文字（图片和矢量图形保留），在原位置写入译文。
    放不下时先在本栏内右扩（不盖住图和其他文字），再压行距，最后缩字号。
 4. 双语版：原页面和译文页面左右并排放在同一页上，方便对照阅读。
@@ -10,14 +10,15 @@ import asyncio
 import html
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import pymupdf
 
 from ..languages import RTL_LANGUAGES
-from .pdf_flow import STYLE_MARK_RE, break_lines, emphasis_of, nowrap_lines, restore_emphasis, writer_for
+from .pdf_flow import STYLE_MARK_RE, Emphasis, break_lines, emphasis_of, nowrap_lines, restore_emphasis, writer_for
 from .pdf_layout import PageGeometry
+from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
 
 MATH_FONT_RE = re.compile(r"CMMI|CMSY|CMEX|MSBM|Math|Symbol|STIX|Cambria Math", re.I)
 # 精确的数学字体白名单（直接判公式）
@@ -57,6 +58,8 @@ class TextBlock:
     bold: bool
     # 每行的原始 span（含空白 span）：重建送翻文本时与原文逐字一致
     span_lines: list[list[dict]] = None
+    # 占位符重建后的有序 run。提取阶段还没有，送翻前才填。
+    runs: list[Run] = field(default_factory=list)
 
 
 def _join_lines(lines: list[str]) -> str:
@@ -462,10 +465,12 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                     break
 
     formulas: list[dict] = []
+    formula_runs: dict[int, FormulaRun] = {}
     first_span: dict[int, int] = {}  # span id → 公式序号
     span_line = {id(s): li for li, line in enumerate(block.span_lines) for s in line}
+    line_x0 = [_line_x0(spans) for spans in block.span_lines]
     for n, m in enumerate(merged, 1):
-        bbox = m["bbox"]
+        bbox = pymupdf.Rect(m["bbox"])
         spans = sorted(m["spans"], key=lambda s: (s["bbox"][0], s["bbox"][1]))
         main_span = max(spans, key=lambda s: s["size"])
         baseline = main_span["origin"][1] if main_span.get("origin") else bbox.y1
@@ -478,39 +483,157 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                               if s["text"].strip() and s.get("origin") and s["size"] >= block.size * 0.9)
         own_origin = line_origins[len(line_origins) // 2] if line_origins else baseline
         raise_dy = max(0.0, own_origin - baseline)
-        formulas.append({
-            "page": block.page,
-            "bbox": bbox,
-            "name": f"f{block_index}_{n}.png",
-            "w": round(bbox.width, 1),
-            "h": round(bbox.height, 1),
-            "d": round(max(0.0, bbox.y1 - baseline), 1),
-            "raise": round(raise_dy, 1),
-            "text": _formula_markup(spans, block.size).strip(),
-            "spans": spans,
-        })
-        # 锚点 = x0 最小的 span，占位符放在它在原文里的位置
         anchor = min(m["spans"], key=lambda s: s["bbox"][0])
+        anchor_line = span_line.get(id(anchor), 0)
+        formula_run = FormulaRun(
+            index=n,
+            bbox=bbox,
+            baseline=baseline,
+            dx=round(bbox.x0 - line_x0[anchor_line], 1),
+            dy=round(raise_dy, 1),
+            descent=round(max(0.0, bbox.y1 - baseline), 1),
+            text=_formula_markup(spans, block.size).strip(),
+            page=block.page,
+            name=f"f{block_index}_{n}.png",
+            line=anchor_line,
+        )
+        formula_runs[n] = formula_run
+        formulas.append(_formula_record(formula_run, spans))
         first_span[id(anchor)] = n
 
-    # 3) 按行重建送翻文本：遇到公式锚点 span 放占位符，公式内其他 span 跳过。
-    # 块内强调不一致时才写 {b}/{i}；整块同一风格不写，送翻文本与原文逐字一致。
+    # 3) 按行重建送翻文本，并记下有序 run。公式锚点是一个 FormulaRun，
+    # 同行同风格的文字并成一个 TextRun。块内强调不一致时才写 {b}/{i}。
     formula_ids = {id(s) for m in merged for s in m["spans"]}
     writer = writer_for([s for line in block.span_lines for s in line if id(s) not in formula_ids])
+    runs: list[Run] = []
     out_lines: list[str] = []
-    for spans in block.span_lines:
+    pending: TextRun | None = None
+
+    def flush() -> None:
+        nonlocal pending
+        if pending is not None:
+            runs.append(pending)
+            pending = None
+
+    for line_no, spans in enumerate(block.span_lines):
         parts: list[str] = []
         for s in spans:
             n = first_span.get(id(s))
             if n is not None:
+                flush()
+                runs.append(formula_runs[n])
                 parts.append(writer.atom(f"{{v{n}}}"))
             elif id(s) in formula_ids:
                 continue  # 已被某个公式吞掉
             else:
-                parts.append(writer.text(s["text"], emphasis_of(s.get("font") or "", int(s.get("flags") or 0))))
+                emphasis = emphasis_of(s.get("font") or "", int(s.get("flags") or 0))
+                parts.append(writer.text(s["text"], emphasis))
+                if pending is not None and not _same_text_style(pending, s, emphasis):
+                    flush()
+                pending = _extend_text_run(pending, s, emphasis, line_no)
+        flush()
         parts.append(writer.close())
         out_lines.append("".join(parts))
+    block.runs = runs
     return _join_lines(out_lines), formulas
+
+
+def _line_x0(spans: list[dict]) -> float:
+    xs = [pymupdf.Rect(s["bbox"]).x0 for s in spans if s.get("bbox") is not None]
+    return min(xs) if xs else 0.0
+
+
+def _span_box(span: dict) -> pymupdf.Rect:
+    raw = span.get("bbox")
+    return pymupdf.Rect(raw) if raw is not None else pymupdf.Rect(0, 0, 0, 0)
+
+
+def _same_text_style(pending: TextRun, span: dict, emphasis: Emphasis) -> bool:
+    return (
+        pending.emphasis == emphasis
+        and pending.font == str(span.get("font") or "")
+        and abs(pending.size - float(span.get("size") or 0)) < 0.1
+    )
+
+
+def _extend_text_run(pending: TextRun | None, span: dict, emphasis: Emphasis, line: int) -> TextRun:
+    """同行、同字体、同强调的相邻 span 并成一个文字 run。"""
+    bbox = _span_box(span)
+    baseline = span["origin"][1] if span.get("origin") else bbox.y1
+    font = str(span.get("font") or "")
+    size = float(span.get("size") or 0)
+    if pending is not None and _same_text_style(pending, span, emphasis):
+        return replace(pending, text=pending.text + str(span.get("text") or ""), bbox=pending.bbox | bbox)
+    return TextRun(
+        text=str(span.get("text") or ""),
+        font=font,
+        size=size,
+        emphasis=emphasis,
+        baseline=baseline,
+        bbox=bbox,
+        line=line,
+    )
+
+
+def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
+    try:
+        drawings = page.get_drawings()
+    except Exception:  # noqa: BLE001 - 个别页面的矢量表读不出来，当没有曲线
+        return []
+    rects: list[pymupdf.Rect] = []
+    for drawing in drawings:
+        raw = drawing.get("rect")
+        if raw is None:
+            continue
+        rect = pymupdf.Rect(raw)
+        if not rect.is_empty:
+            rects.append(rect)
+    return rects
+
+
+def _absorb_curves(formula: dict, drawings: list[pymupdf.Rect], block: TextBlock) -> None:
+    """把相交曲线并进公式框，并写回对应的 FormulaRun。"""
+    old = pymupdf.Rect(formula["bbox"])
+    curves = intersecting_curves(old, drawings)
+    formula["curves"] = list(curves)
+    if not curves:
+        return
+    box = expand_box(old, curves)
+    baseline = old.y1 - float(formula.get("d") or 0)
+    formula["bbox"] = box
+    formula["w"] = round(box.width, 1)
+    formula["h"] = round(box.height, 1)
+    formula["d"] = round(max(0.0, box.y1 - baseline), 1)
+    formula["dx"] = round(float(formula.get("dx") or 0) + (box.x0 - old.x0), 1)
+    block.runs = [
+        replace(
+            run,
+            bbox=pymupdf.Rect(box),
+            curves=curves,
+            descent=formula["d"],
+            dx=formula["dx"],
+        )
+        if isinstance(run, FormulaRun) and run.name == formula["name"] else run
+        for run in block.runs
+    ]
+
+
+def _formula_record(run: FormulaRun, spans: list[dict]) -> dict:
+    """渲染层仍读这条记录。框和曲线随后可能变，run 再同步回去。"""
+    return {
+        "page": run.page,
+        "bbox": pymupdf.Rect(run.bbox),
+        "name": run.name,
+        "w": round(run.bbox.width, 1),
+        "h": round(run.bbox.height, 1),
+        "d": run.descent,
+        "raise": run.dy,
+        "dx": run.dx,
+        "text": run.text,
+        "spans": spans,
+        "curves": [],
+        "owner": run.owner,
+    }
 
 
 # 译文里游离的 {vN} 占位符（模型把占位符写进了别的段）
@@ -725,7 +848,8 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
     # run 的 span 来自 extract_blocks 的另一次 get_text 调用，和 page_spans 是不同
     # 对象，只能按 bbox 相等判断是不是 run 成员，否则兄弟 span（本公式的上标）会被
     # 当成外来 span 被挖洞挖掉
-    run_rects = [pymupdf.Rect(s["bbox"]) for s in f["spans"]]
+    curve_rects = [pymupdf.Rect(r) for r in f.get("curves") or []]
+    run_rects = [pymupdf.Rect(s["bbox"]) for s in f["spans"]] + curve_rects
 
     def merge_rects(rects: list["pymupdf.Rect"]) -> list["pymupdf.Rect"]:
         out: list[pymupdf.Rect] = []
@@ -745,7 +869,7 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
 
     # 先并成不相交集合（ŷ 的符头 bbox 和 y 几乎完全重叠，不并掉 even-odd 会把
     # y 的躯干整个关掉），再按侧扩展：每侧扩到 1.5pt 为止、以不贴到邻居 bbox 为限
-    base = merge_rects([pymupdf.Rect(s["bbox"]) for s in f["spans"]])
+    base = merge_rects([pymupdf.Rect(s["bbox"]) for s in f["spans"]] + curve_rects)
     union = pymupdf.Rect()
     for rr in base:
         union |= rr
@@ -1427,8 +1551,22 @@ _TRANS_HEAD_NUM_RE = re.compile(
     r"|^\d+(?:\.\d+)*\.?[章节]?(?:\s+|$)")
 
 
+def _retag_runs(runs: list[Run], owner: int, index_offset: int) -> list[Run]:
+    """公式序号改成单元内的全局序号，归属记在 run 上。"""
+    retagged: list[Run] = []
+    for run in runs:
+        if isinstance(run, FormulaRun):
+            retagged.append(replace(run, owner=owner, index=run.index + index_offset))
+        else:
+            retagged.append(replace(run, owner=owner))
+    return retagged
+
+
 def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dict], int]:
-    """一个翻译单元的送翻文本和公式记录。公式名按块递增，避免跨页两块撞名。"""
+    """一个翻译单元的送翻文本和公式记录。公式名按块递增，避免跨页两块撞名。
+
+    两块合成一段时，中间插入 {| }。这是 run 的分界，译完按它切开。
+    """
     texts: list[str] = []
     formulas: list[dict] = []
     name_i = name_start
@@ -1444,8 +1582,11 @@ def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dic
             )
         for rec in found:
             rec["owner"] = ui
+        block.runs = _retag_runs(block.runs, ui, offset)
         formulas.extend(found)
         texts.append(sent)
+    if len(texts) == 2:
+        return _join_lines([texts[0], BOUNDARY, texts[1]]), formulas, name_i
     return _join_lines(texts), formulas, name_i
 
 
@@ -1488,12 +1629,18 @@ def _localize_sentinels(text: str, formulas: list[dict], owner: int) -> tuple[st
 def _assign_restored_parts(
     restored: str, unit: list[TextBlock], formulas: list[dict],
 ) -> tuple[list[str], list[list[dict]]]:
-    """把恢复后的译文按公式归属分回各块。比例切分只切正文，哨兵跟自己的块走。"""
+    """把恢复后的译文按 run 分界分回各块。哨兵仍跟自己的 run 走。
+
+    模型丢掉 {| } 时才退回按原文长度比例切，避免整段堆在一页。
+    """
     if len(unit) != 2:
-        return [restored], [formulas]
-    total = len(unit[0].text) + len(unit[1].text)
-    ratio = len(unit[0].text) / total if total else 0.5
-    left, right = _split_translation(restored, ratio)
+        return [strip_boundary(restored)], [formulas]
+    split = split_page_boundary(restored)
+    if split is None:
+        total = len(unit[0].text) + len(unit[1].text)
+        ratio = len(unit[0].text) / total if total else 0.5
+        split = _split_translation(restored, ratio)
+    left, right = split
     left, to_right = _take_owner(left, formulas, 0)
     right, to_left = _take_owner(right, formulas, 1)
     left_text, left_formulas = _localize_sentinels(left + "".join(to_left), formulas, 0)
@@ -1607,7 +1754,12 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     raw = await runner.translate_all(sent_texts, kinds=sent_kinds, preview=True, skip=sent_skips)
 
     # 公式从它所在的原页裁图。不能用单元最后一块的页码，跨页时会裁错页。
+    # 框内相交的曲线并进裁剪，根号、分式线才不会被切掉。
     archive = pymupdf.Archive()
+    curve_rects = [_page_curve_rects(page) for page in src_doc]
+    for unit, formulas in zip(flat_units, sent_formulas):
+        for f in formulas:
+            _absorb_curves(f, curve_rects[int(f["page"])], unit[int(f.get("owner") or 0)])
     for formulas in sent_formulas:
         for f in formulas:
             bbox = f["bbox"]
@@ -1636,7 +1788,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             shown = _join_lines(parts)
         else:
             parts, formula_lists = _assign_restored_parts(restored, unit, formulas)
-            shown = restored
+            shown = strip_boundary(restored)
         for b, part, flist in zip(unit, parts, formula_lists):
             per_block[id(b)] = _heading_number_for(block_kind[id(b)], b.text, part)
             block_formulas[id(b)] = flist
