@@ -1,8 +1,9 @@
 """PDF 翻译，保留原版式。
 
 1. 用 PyMuPDF 提取每页的文本块（坐标、字号、颜色、粗体）。
-2. 跳过公式、纯数字、旋转文字等不适合翻译的块。
-3. 译文版：用 redaction 擦掉原文字（图片和矢量图形保留），在原位置用 HTML 盒子写入译文，字号放不下时自动缩小。
+2. 跳过整块公式、纯数字、旋转文字。行内公式换成占位符，译后按原样贴回。
+3. 译文版：擦掉原文字（图片和矢量图形保留），在原位置写入译文。
+   放不下时先在本栏内右扩（不盖住图和其他文字），再压行距，最后缩字号。
 4. 双语版：原页面和译文页面左右并排放在同一页上，方便对照阅读。
 """
 import asyncio
@@ -15,6 +16,8 @@ from pathlib import Path
 import pymupdf
 
 from ..languages import RTL_LANGUAGES
+from .pdf_flow import STYLE_MARK_RE, break_lines, emphasis_of, nowrap_lines, restore_emphasis, writer_for
+from .pdf_layout import PageGeometry
 
 MATH_FONT_RE = re.compile(r"CMMI|CMSY|CMEX|MSBM|Math|Symbol|STIX|Cambria Math", re.I)
 # 精确的数学字体白名单（直接判公式）
@@ -192,11 +195,33 @@ _SENT_END_PUNCT = tuple(".!?:;…。！？；：\"'”’)]}》")
 _SRC_HEAD_NUM_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+\S")
 
 
-def _cross_page_units(blocks: list[TextBlock], median: float, skip_ids: set[int] = frozenset()) -> list[list[TextBlock]]:
+def _different_columns(
+    geometries: list[PageGeometry] | None, left: TextBlock, right: TextBlock,
+) -> bool:
+    """两页里只要有一页是多栏、且两块不在同一栏序号，就不是跨页续段。
+
+    流顺序里的页末块常常是右栏底，下一页页首是左栏顶。没有阅读顺序模型时，
+    跨栏合并比漏合并更糟。单栏页面序号都是 0，行为和原来一样。
+    """
+    if not geometries or left.page >= len(geometries) or right.page >= len(geometries):
+        return False
+    a, b = geometries[left.page], geometries[right.page]
+    if len(a.columns) < 2 and len(b.columns) < 2:
+        return False
+    return a.index_of(left.rect) != b.index_of(right.rect)
+
+
+def _cross_page_units(
+    blocks: list[TextBlock],
+    median: float,
+    skip_ids: set[int] = frozenset(),
+    geometries: list[PageGeometry] | None = None,
+) -> list[list[TextBlock]]:
     """把跨页续段两两合并成翻译单元（返回块列表的列表，每单元 1~2 块）。
 
     上一页最后一个正文块不以句末标点结尾、下一页第一个块以小写/数字开头且不像标题时，
     视为被页边界切断的同一段。页脚脚注（字号明显小于正文）和指定跳过的块不参与。
+    传入页面几何时，跨栏的两块不合并。
     """
     by_page: dict[int, list[TextBlock]] = {}
     for b in blocks:
@@ -221,7 +246,8 @@ def _cross_page_units(blocks: list[TextBlock], median: float, skip_ids: set[int]
             if (body and b is body[-1] and continues and id(first) not in used
                     and id(b) not in skip_ids and id(first) not in skip_ids
                     and not b.text.rstrip().endswith(_SENT_END_PUNCT)
-                    and first.size <= b.size * 1.4):
+                    and first.size <= b.size * 1.4
+                    and not _different_columns(geometries, b, first)):
                 units.append([b, first])
                 used.add(id(b))
                 used.add(id(first))
@@ -237,9 +263,10 @@ _SENTINEL_NUM_RE = re.compile(r"\x01i\x02(\d+)\x01/i\x02")
 
 def _snap_cut(text: str, cut: int) -> int:
     cut = max(0, min(len(text), cut))
-    for m in _SENTINEL_NUM_RE.finditer(text):
-        if m.start() < cut < m.end():
-            return m.start() if cut - m.start() <= m.end() - cut else m.end()
+    for pattern in (_SENTINEL_NUM_RE, STYLE_MARK_RE):
+        for m in pattern.finditer(text):
+            if m.start() < cut < m.end():
+                return m.start() if cut - m.start() <= m.end() - cut else m.end()
     return cut
 
 
@@ -466,18 +493,22 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         anchor = min(m["spans"], key=lambda s: s["bbox"][0])
         first_span[id(anchor)] = n
 
-    # 3) 按行重建送翻文本：遇到公式锚点 span 放占位符，公式内其他 span 跳过
+    # 3) 按行重建送翻文本：遇到公式锚点 span 放占位符，公式内其他 span 跳过。
+    # 块内强调不一致时才写 {b}/{i}；整块同一风格不写，送翻文本与原文逐字一致。
+    formula_ids = {id(s) for m in merged for s in m["spans"]}
+    writer = writer_for([s for line in block.span_lines for s in line if id(s) not in formula_ids])
     out_lines: list[str] = []
     for spans in block.span_lines:
         parts: list[str] = []
         for s in spans:
             n = first_span.get(id(s))
             if n is not None:
-                parts.append(f"{{v{n}}}")
-            elif any(s is x for m in merged for x in m["spans"]):
+                parts.append(writer.atom(f"{{v{n}}}"))
+            elif id(s) in formula_ids:
                 continue  # 已被某个公式吞掉
             else:
-                parts.append(s["text"])
+                parts.append(writer.text(s["text"], emphasis_of(s.get("font") or "", int(s.get("flags") or 0))))
+        parts.append(writer.close())
         out_lines.append("".join(parts))
     return _join_lines(out_lines), formulas
 
@@ -892,9 +923,99 @@ def _nowrap_parens(body: str) -> str:
     return re.sub(r"（[^（）]+）|\([^()]+\)", repl, body)
 
 
+def _formula_slot(formula: dict, block_size: float, render_size: float) -> tuple[float, float, float]:
+    """行内公式槽位 (缩放, 宽, 高)。高超过 1.35em 时压到 1.35em，避免行框被图片撑开。"""
+    height = float(formula.get("h") or 0)
+    if not formula.get("has_img") or height <= 0 or block_size <= 0:
+        text = str(formula.get("text") or "")
+        return 1.0, len(text) * render_size * 0.5, render_size
+    scale = min(render_size / block_size, 1.35 * render_size / height)
+    return scale, float(formula["w"]) * scale + 4.0, height * scale
+
+
+def _inline_marks(body: str) -> str:
+    return (
+        body.replace("\x01s\x02", "<sup>")
+        .replace("\x01/s\x02", "</sup>")
+        .replace("\x01b\x02", "<sub>")
+        .replace("\x01/b\x02", "</sub>")
+    )
+
+
+def _translation_html(
+    text: str,
+    formulas: list[dict],
+    block_size: float,
+    render_size: float,
+    max_width: float,
+) -> str:
+    """译文 HTML。含公式哨兵时自己断行，每行 nowrap；否则仍交给 MuPDF 折行。"""
+
+    def img_repl(match: re.Match[str]) -> str:
+        number = int(match.group(1))
+        if not 1 <= number <= len(formulas):
+            return ""
+        formula = formulas[number - 1]
+        if formula.get("has_img"):
+            scale, width, height = _formula_slot(formula, block_size, render_size)
+            formula["rs"] = scale
+            # 槽位两侧各留 2pt：斜体字形会微微越出 bbox，紧贴排布时像被前后汉字压住
+            return (
+                f'<img src="ph_{formula["name"]}" '
+                f'style="width: {width:.1f}px; height: {height:.1f}px;">'
+            )
+        return _inline_marks(html.escape(str(formula.get("text") or "")))
+
+    def one(fragment: str) -> str:
+        escaped = _inline_marks(restore_emphasis(html.escape(fragment)))
+        return re.sub(r"\x01i\x02(\d+)\x01/i\x02", img_repl, escaped)
+
+    if "\x01i\x02" not in text:
+        return _nowrap_parens(one(text).replace("\n", "<br>"))
+    widths = {
+        index: _formula_slot(formula, block_size, render_size)[1]
+        for index, formula in enumerate(formulas, 1)
+    }
+    return nowrap_lines([one(line) for line in break_lines(text, render_size, max_width, widths)])
+
+
+def _write_rect(
+    block: TextBlock,
+    items: list[tuple[TextBlock, str]],
+    cjk: bool,
+    rtl: bool,
+    geo: PageGeometry | None,
+) -> tuple[pymupdf.Rect, bool]:
+    """写入框。多栏且块落在某一栏内时，居中参照该栏；单栏仍用本页最宽块。"""
+    y0 = block.rect.y0 + block.size * 0.1 if cjk else block.rect.y0
+    pad = block.size * 0.5 if cjk else block.size * 0.3
+    column = None
+    if geo is not None and len(geo.columns) >= 2:
+        candidate = geo.column_of(block.rect)
+        if block.rect.x0 >= candidate.x0 - 2 and block.rect.x1 <= candidate.x1 + 2:
+            column = candidate
+    if column is not None:
+        col_x0, col_x1 = column.x0, column.x1
+        col_width = col_x1 - col_x0
+    else:
+        widest = max((other.rect for other, _ in items), key=lambda rect: rect.width, default=block.rect)
+        col_x0, col_x1 = widest.x0, widest.x1
+        col_width = widest.width
+    centered = (
+        not rtl and len(block.text) < 100 and block.rect.width < col_width * 0.85
+        and abs((block.rect.x0 + block.rect.x1) / 2 - (col_x0 + col_x1) / 2) < 15
+    )
+    if centered:
+        rect = pymupdf.Rect(col_x0, y0, col_x1, block.rect.y1 + pad)
+    else:
+        rect = pymupdf.Rect(block.rect.x0, y0, block.rect.x1 + 2, block.rect.y1 + pad)
+    return rect, centered
+
+
 def _render_translated(src_path: Path, blocks: list[TextBlock], translations: list[str],
                        target_lang: str = "", formulas_map: dict | None = None,
-                       archive=None, orig: "pymupdf.Document | None" = None) -> pymupdf.Document:
+                       archive=None, orig: "pymupdf.Document | None" = None,
+                       geometries: list[PageGeometry] | None = None) -> pymupdf.Document:
     rtl = target_lang.split("-")[0] in RTL_LANGUAGES
     # CJK 字体的行框比拉丁高（约 1.31em vs 1.16em），且字形顶部会越出给定区域：
     # 按原字号写入会和下一行叠在一起，字号缩小并下移补偿
@@ -928,44 +1049,15 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
         )
         images_before = {img[0] for img in page.get_images(full=True)}
+        geo = geometries[pno] if geometries and pno < len(geometries) else None
         for b, t in items:
             bformulas = (formulas_map or {}).get(id(b), [])
             weight = "bold" if b.bold else "normal"
-            body = (
-                html.escape(t)
-                .replace("\n", "<br>")
-                .replace("\x01s\x02", "<sup>")
-                .replace("\x01/s\x02", "</sup>")
-                .replace("\x01b\x02", "<sub>")
-                .replace("\x01/b\x02", "</sub>")
-            )
-
-            def img_repl(m):
-                n = int(m.group(1))
-                if 1 <= n <= len(bformulas):
-                    f = bformulas[n - 1]
-                    if f.get("has_img"):
-                        # 行内公式按渲染字号缩放：高超过 1.35em 的压到 1.35em，
-                        # 否则行框被图片撑出大缝、放不下的被挤到下一行独自成行
-                        rs = min(size / b.size, 1.35 * size / f["h"])
-                        f["rs"] = rs
-                        # 槽位两侧各留 2pt：斜体字形（X、T）会微微越出 bbox，
-                        # 紧贴排布时看起来像被前后汉字压住
-                        return (f'<img src="ph_{f["name"]}" '
-                                f'style="width: {f["w"] * rs + 4.0:.1f}px; height: {f["h"] * rs:.1f}px;">')
-                    frag = html.escape(f["text"])
-                    return (frag.replace("\x01s\x02", "<sup>").replace("\x01/s\x02", "</sup>")
-                                .replace("\x01b\x02", "<sub>").replace("\x01/b\x02", "</sub>"))
-                return ""
-
             size = b.size * 0.88 if cjk else b.size
-            body = re.sub(r"\x01i\x02(\d+)\x01/i\x02", img_repl, body)
-            body = _nowrap_parens(body)
-            # 栏宽参考（本页最宽块）：居中块（论文标题、作者行）用整栏宽 + 居中，
+            # 栏宽参考：单栏用本页最宽块；多栏用本块所在栏。居中块用整栏宽，
             # 短译文不再被小框挤成孤字行；满栏正文用 justify，右边缘和原文一样齐
-            col = max((ob.rect for ob, _ in items), key=lambda r: r.width, default=b.rect)
-            centered = (not rtl and len(b.text) < 100 and b.rect.width < col.width * 0.85
-                        and abs((b.rect.x0 + b.rect.x1) / 2 - (col.x0 + col.x1) / 2) < 15)
+            rect, centered = _write_rect(b, items, cjk, rtl, geo)
+            body = _translation_html(t, bformulas, b.size, size, rect.width)
             align = "center" if centered else (
                 "right" if rtl else "justify" if b.rect.width > page.rect.width * 0.6 else "left")
             # CJK 字体的行框约 1.3em，line-height 1.2 会把行间压没；1.45 才透气和原文相当
@@ -974,29 +1066,34 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 f"font-weight: {weight}; line-height: {1.45 if cjk else 1.2}; margin: 0; padding: 0; "
                 f"text-align: {align};}}"
             )
-            # 留一点余量，避免译文比原文长时被截断；放不下时走三级收缩阶梯。
-            # CJK 行框更高且起始有 0.1em 下移补偿，盒高多留到 0.5em，避免末行描边压到下一行
-            y0 = b.rect.y0 + b.size * 0.1 if cjk else b.rect.y0
-            pad = b.size * 0.5 if cjk else b.size * 0.3
-            if centered:
-                rect = pymupdf.Rect(col.x0, y0, col.x1, b.rect.y1 + pad)
-            else:
-                rect = pymupdf.Rect(b.rect.x0, y0, b.rect.x1 + 2, b.rect.y1 + pad)
             obstacles = [ob.rect for ob in blocks if ob.page == pno and ob is not b]
-            _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, obstacles, archive)
+            if geo is not None:
+                obstacles = [*obstacles, *geo.figures]
+            limit = geo.right_limit(rect, obstacles) if geo is not None else None
+            _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, obstacles, archive, limit)
         if mid_map:
             _place_formula_images(page, doc, images_before, mid_map, fmS, page_spans)
     return doc
 
 
-def _expand_right(rect: "pymupdf.Rect", page_width: float, obstacles: list["pymupdf.Rect"]) -> "pymupdf.Rect":
-    """排版收缩第一级：把写入框向右扩（上限 90% 页宽），不盖住右侧纵向有交叠的文本块。"""
+def _expand_right(
+    rect: "pymupdf.Rect",
+    page_width: float,
+    obstacles: list["pymupdf.Rect"],
+    right_limit: float | None = None,
+) -> "pymupdf.Rect":
+    """排版收缩第一级：向右扩，不盖住右侧纵向交叠的文字或图。
+
+    上限是页宽的 90%，有栏缘时再取更小的那个。结果不会小于原来的右缘。
+    """
     x1 = page_width * 0.9
-    for o in obstacles:
-        if o.x0 <= rect.x0 + 1:  # 不是右侧的块
+    if right_limit is not None:
+        x1 = min(x1, right_limit)
+    for obstacle in obstacles:
+        if obstacle.x0 <= rect.x0 + 1:
             continue
-        if o.y0 < rect.y1 and o.y1 > rect.y0:  # 纵向上有交叠
-            x1 = min(x1, o.x0 - 2)
+        if obstacle.y0 < rect.y1 and obstacle.y1 > rect.y0:
+            x1 = min(x1, obstacle.x0 - 2)
     return pymupdf.Rect(rect.x0, rect.y0, max(x1, rect.x1), rect.y1)
 
 
@@ -1021,17 +1118,20 @@ def _tighten_line_height(css: str) -> str:
 
 
 def _insert_fitting(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, css: str,
-                    obstacles: list["pymupdf.Rect"], archive=None):
+                    obstacles: list["pymupdf.Rect"], archive=None, right_limit: float | None = None):
     """排版三级收缩（BabelDOC 思路）：先右扩 → 压行距 → 最后才缩字号。
 
     每一级只在放不下（insert_htmlbox 返回负值，此时不会画出内容）时进入下一级。
-    右扩只对明显窄于栏宽的块（标签、图注、短行）生效：满栏段落右扩会越过栏边界，
+    右扩只对明显窄于页宽的块（标签、图注、短行）生效：满栏段落右扩会越过栏边界，
     且扩完不缩字号时 CJK 行框（1.31em）比盒子（按拉丁 1.16em 算）高，会向下溢出
-    压到下一行内容。
+    压到下一行内容。right_limit 是本栏右缘，扩出去也不能越过它。
     """
     if _try_insert(page, rect, html_text, css, 0.9, archive):
         return
-    wide = _expand_right(rect, page.rect.width, obstacles) if rect.width < page.rect.width * 0.6 else rect
+    wide = (
+        _expand_right(rect, page.rect.width, obstacles, right_limit)
+        if rect.width < page.rect.width * 0.6 else rect
+    )
     if wide.x1 > rect.x1 + 1 and _try_insert(page, wide, html_text, css, 0.9, archive):
         return
     target = wide
@@ -1482,8 +1582,12 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     kinds = [_preview_kind(b, median) for b in blocks]
     skips = biblio_skips(blocks)
     skip_ids = {id(b) for b, s in zip(blocks, skips) if s}
-    # 跨页续段合并成翻译单元：“quite / well” 这类被页边界切断的句子不再拆成两半各翻各的
-    units = _cross_page_units(blocks, median, skip_ids)
+    # 栏和障碍先于跨页合并、也先于写入：右栏页末不和下一页左栏页首拼成一段
+    geometries = [
+        PageGeometry.from_page(src_doc[i], [b.rect for b in blocks if b.page == i])
+        for i in range(src_doc.page_count)
+    ]
+    units = _cross_page_units(blocks, median, skip_ids, geometries)
     block_kind = {id(b): k for b, k in zip(blocks, kinds)}
 
     sent_texts: list[str] = []
@@ -1548,8 +1652,10 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     _sync_unit_preview(runner, flat_units, sent_texts, per_block)
 
     def build():
-        translated = _render_translated(src, blocks, translations, target_lang, block_formulas, archive,
-                                        orig=src_doc)
+        translated = _render_translated(
+            src, blocks, translations, target_lang, block_formulas, archive,
+            orig=src_doc, geometries=geometries,
+        )
         # insert_htmlbox 每次都会嵌入完整的 CJK 字体（十几 MB），必须做子集化；失败则用未子集化版本
         translated = _subset_fonts_safe(translated)
         if bilingual:

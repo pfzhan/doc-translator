@@ -1492,6 +1492,32 @@ def test_placeholderize_and_restore_roundtrip():
     assert _restore_placeholders("公式 {v1} {v9}", formulas) == "公式 \x01i\x021\x01/i\x02 "
 
 
+def test_placeholderize_marks_mixed_emphasis_only():
+    from app.formats.pdf import _placeholderize
+
+    def span(text, font="TimesNewRomanPSMT", flags=0, x0=0):
+        return {"text": text, "font": font, "size": 12.0, "flags": flags,
+                "bbox": (x0, 0, x0 + 20, 12), "origin": (x0, 10)}
+
+    mixed = _block_with_spans([[
+        span("See "),
+        span("this", flags=16, x0=20),
+        span(" word", x0=40),
+    ]])
+    sent, formulas = _placeholderize(mixed)
+    assert sent == "See {b}this{/b} word" and formulas == []
+
+    italic = _block_with_spans([[
+        span("A "),
+        span("term", font="TimesNewRomanPS-ItalicMT", x0=12),
+        span(" here", x0=30),
+    ]])
+    assert _placeholderize(italic)[0] == "A {i}term{/i} here"
+
+    uniform = _block_with_spans([[span("All bold words here", flags=16)]])
+    assert "{b}" not in _placeholderize(uniform)[0]
+
+
 def test_placeholderize_no_formula_keeps_text_identical():
     from app.formats.pdf import _placeholderize
 
