@@ -58,6 +58,16 @@ Return only the processed text, without source text, markers, titles,
 explanations, or an enclosing Markdown fence. Preserve fenced code blocks that
 belong to the processed content."""
 
+# 块内和正文不同的粗体、斜体、字号。模型必须带着标记走，译完才写得回原样式。
+STYLE_SUFFIX = """
+
+## Style placeholders
+Some items contain {b} {/b}, {i} {/i}, or {zN} {/z}. They mark bold, italic, or a
+different font size. Keep every marker unchanged, and move it with the words it
+wraps. Do not translate, drop, or invent markers."""
+
+_STYLE_IN_TEXT = re.compile(r"\{/?[bi]\}|\{z\d+\}")
+
 # 跨页段落的 run 分界。模型必须原样保留，译完才知道从哪里切回两页。
 BOUNDARY_SUFFIX = """
 
@@ -159,6 +169,8 @@ def build_messages(texts: list[str], target_lang: str, *, source_lang: str = "au
         system += HTML_SUFFIX
     if any("{|}" in text for text in texts):
         system += BOUNDARY_SUFFIX
+    if any(_STYLE_IN_TEXT.search(text) for text in texts):
+        system += STYLE_SUFFIX
     # {{text}} 最后替换，避免原文里恰好有 {{xxx}} 被当成占位符
     user = fill(user_t.replace("{{text}}", "\0TEXT\0"), values).replace("\0TEXT\0", body)
     return system, user

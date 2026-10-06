@@ -122,3 +122,35 @@ def test_boundary_placeholder_is_mentioned_to_the_model():
     assert "{|}" in system and "{vN}" in system
     plain, _ = build_messages(["quite well"], "zh-CN")
     assert "Page-boundary" not in plain
+
+
+def test_size_difference_is_a_style_mark():
+    block = _block([[
+        _span("See ", size=12),
+        _span("this", size=10, flags=16, x0=20),
+        _span(" word", size=12, x0=40),
+    ]])
+    sent, formulas = _placeholderize(block)
+    assert sent == "See {z85}{b}this{/b}{/z} word" and formulas == []
+    assert block.runs[1].size == 10
+
+
+def test_size_mark_does_not_swallow_a_formula():
+    block = _block([[
+        _span("see ", size=10),
+        _span("E", font="CMMI10", size=12, x0=30),
+        _span(" note", size=10, x0=50),
+    ]], size=12)
+    sent, formulas = _placeholderize(block)
+    assert formulas and "{v1}" in sent
+    assert sent.index("{/z}") < sent.index("{v1}")
+    assert "{z" not in sent[sent.index("{v1}"):sent.index("{v1}") + 4]
+
+
+def test_style_placeholder_is_mentioned_to_the_model():
+    system, _ = build_messages(["See {b}this{/b}"], "zh-CN")
+    assert "{b}" in system and "{zN}" in system
+    sized, _ = build_messages(["See {z85}this{/z}"], "zh-CN")
+    assert "{zN}" in sized
+    plain, _ = build_messages(["See this"], "zh-CN")
+    assert "Style placeholders" not in plain

@@ -16,7 +16,16 @@ from pathlib import Path
 import pymupdf
 
 from ..languages import RTL_LANGUAGES
-from .pdf_flow import STYLE_MARK_RE, Emphasis, break_lines, emphasis_of, nowrap_lines, restore_emphasis, writer_for
+from .pdf_flow import (
+    STYLE_MARK_RE,
+    Emphasis,
+    break_lines,
+    emphasis_of,
+    nowrap_lines,
+    restore_emphasis,
+    strip_style_marks,
+    writer_for,
+)
 from .pdf_layout import PageGeometry
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
 from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, typeset_lines
@@ -503,9 +512,12 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         first_span[id(anchor)] = n
 
     # 3) 按行重建送翻文本，并记下有序 run。公式锚点是一个 FormulaRun，
-    # 同行同风格的文字并成一个 TextRun。块内强调不一致时才写 {b}/{i}。
+    # 同行同风格的文字并成一个 TextRun。和底色不同的强调、字号才写标记。
     formula_ids = {id(s) for m in merged for s in m["spans"]}
-    writer = writer_for([s for line in block.span_lines for s in line if id(s) not in formula_ids])
+    writer = writer_for(
+        [s for line in block.span_lines for s in line if id(s) not in formula_ids],
+        block.size,
+    )
     runs: list[Run] = []
     out_lines: list[str] = []
     pending: TextRun | None = None
@@ -528,7 +540,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 continue  # 已被某个公式吞掉
             else:
                 emphasis = emphasis_of(s.get("font") or "", int(s.get("flags") or 0))
-                parts.append(writer.text(s["text"], emphasis))
+                parts.append(writer.text(s["text"], emphasis, float(s.get("size") or 0)))
                 if pending is not None and not _same_text_style(pending, s, emphasis):
                     flush()
                 pending = _extend_text_run(pending, s, emphasis, line_no)
@@ -1894,7 +1906,7 @@ def _sync_unit_preview(
     if not isinstance(overrides, dict) or not isinstance(done, dict):
         return
     for ui, (unit, sent_text) in enumerate(zip(units, sent_texts)):
-        shown = _join_lines(per_block.get(id(b), b.text) for b in unit)
+        shown = strip_style_marks(_join_lines(per_block.get(id(b), b.text) for b in unit))
         current = done.get(sent_text)
         if current is not None and shown != current:
             overrides[ui] = shown
@@ -1979,7 +1991,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             shown = _join_lines(parts)
         else:
             parts, formula_lists = _assign_restored_parts(restored, unit, formulas)
-            shown = strip_boundary(restored)
+            shown = strip_style_marks(strip_boundary(restored))
         for b, part, flist in zip(unit, parts, formula_lists):
             per_block[id(b)] = _heading_number_for(block_kind[id(b)], b.text, part)
             block_formulas[id(b)] = flist
