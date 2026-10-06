@@ -144,6 +144,19 @@ def nowrap_lines(lines: list[str]) -> str:
     return "<br>".join(f'<span style="white-space:nowrap">{line}</span>' for line in lines)
 
 
+def tokenize(text: str) -> list[str]:
+    return _tokenize(text)
+
+
+def measure_token(token: str, em: float, formula_widths: dict[int, float]) -> float:
+    return _token_width(token, em, formula_widths)
+
+
+def formula_index(token: str) -> int | None:
+    matched = _SENTINEL_RE.fullmatch(token)
+    return int(matched.group(1)) if matched else None
+
+
 def _tokenize(text: str) -> list[str]:
     tokens: list[str] = []
     index = 0
