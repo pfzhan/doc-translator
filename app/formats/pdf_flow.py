@@ -126,14 +126,14 @@ def writer_for(spans: list[dict[str, object]], base_size: float = 0) -> Emphasis
     return EmphasisWriter(base, mixed, base_size)
 
 
-def restore_emphasis(escaped_html: str, cjk: bool = False) -> str:
+def restore_emphasis(escaped_html: str) -> str:
     """html.escape 之后把样式标记换成标签。标记本身没有需要转义的字符。
-    CJK 字体没有斜体字形，<i> 画了等于没画；映射成 <b> 保住强调。"""
+    斜体保持 <i>：回退字体没有汉字粗体，改成 <b> 既不能强调汉字，又会丢掉拉丁斜体。"""
     tagged = (
         escaped_html.replace("{b}", "<b>")
         .replace("{/b}", "</b>")
-        .replace("{i}", "<b>" if cjk else "<i>")
-        .replace("{/i}", "</b>" if cjk else "</i>")
+        .replace("{i}", "<i>")
+        .replace("{/i}", "</i>")
         .replace("{/z}", "</span>")
     )
     return _SIZE_OPEN_RE.sub(r'<span style="font-size:\1%">', tagged)
