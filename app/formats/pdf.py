@@ -1269,6 +1269,23 @@ def _subset_fonts_safe(doc: pymupdf.Document) -> pymupdf.Document:
         return pymupdf.open("pdf", data)
 
 
+_SRC_HEAD_NUM_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+\S")
+_TRANS_HEAD_NUM_RE = re.compile(
+    r"^第[0-9零〇一二三四五六七八九十百]+章(?:第[0-9零〇一二三四五六七八九十百]+节)?\s*"
+    r"|^\d+(?:\.\d+)*[章节]?\s*")
+
+
+def _normalize_heading_number(src_text: str, translation: str) -> str:
+    """标题的章节号保留原文形式（'2 Proposed Approach' → '2 所提方法'）：
+    模型按提示词把编号译成中文数字（'第二章第一节'），学术论文里还是 '2.1' 顺眼。
+    只对无句末标点的短标题块做归一，段落里以数字开头的句子不受影响。"""
+    m = _SRC_HEAD_NUM_RE.match(src_text.strip())
+    if not m or len(src_text) > 60 or src_text.rstrip().endswith(tuple(SENT_ENDS)):
+        return translation
+    t = _TRANS_HEAD_NUM_RE.sub("", translation.strip(), count=1)
+    return f"{m.group(1)} {t}" if t else translation
+
+
 async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "") -> list[Path]:
     src_doc = pymupdf.open(src)
     if src_doc.needs_pass:
@@ -1348,7 +1365,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
                 parts = list(_split_translation(restored, ratio))
             shown = restored
         for b, part in zip(unit, parts):
-            per_block[id(b)] = part
+            per_block[id(b)] = _normalize_heading_number(b.text, part)
             block_formulas[id(b)] = formulas
         # 预览里显示恢复后的译文（缓存仍按占位符版本存，重跑照样命中）
         if formulas and getattr(runner, "_done", None) and runner._done.get(sent_text) == t:

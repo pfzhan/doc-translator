@@ -1788,3 +1788,19 @@ def test_section_number_stays_with_heading():
          [{"text": "Next paragraph starts here", "size": 10.0}], None),
     ]
     assert _split_lines(items2) == [[0], [1]]
+
+
+def test_heading_number_kept_in_source_form():
+    """标题章节号保留原文形式：模型按提示词译成中文数字（'第二章第一节'），
+    学术论文里要回 '2.1'。段落里以数字开头的句子不受影响。"""
+    from app.formats.pdf import _normalize_heading_number as norm
+
+    assert norm("2 Proposed Approach", "第二章 所提方法") == "2 所提方法"
+    assert norm("2.1 Model", "第二章第一节 模型") == "2.1 模型"
+    assert norm("4.3 Speech Recognition", "第四章第三节 语音识别") == "4.3 语音识别"
+    assert norm("2.1 Model", "2.1 模型") == "2.1 模型"  # 幂等
+    # 长段落以数字开头：不动
+    para = "40 dimensional log Mel filter banks and their first and second order derivatives were used"
+    assert norm(para, "使用了 40 维对数 Mel 滤波器组") == "使用了 40 维对数 Mel 滤波器组"
+    # 有句末标点的短句：不动
+    assert norm("3 states remain.", "还剩 3 个状态。") == "还剩 3 个状态。"
