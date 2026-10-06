@@ -289,6 +289,37 @@ def test_text_alignment_is_not_a_table():
     geo = PageGeometry.from_page(page, _stack(40, 160, 40) + _stack(230, 360, 40))
     assert geo.tables == ()
     assert len(geo.columns) == 2
+    assert all(block.clip is None for block in extract_blocks(doc))
+
+
+def test_unruled_short_cells_stay_inside_and_do_not_vote_as_columns(tmp_path):
+    """没有线的短格子按列缘对齐认成表，译文不越出格子，也不把页面拆成分栏。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=240)
+    rows = [("Name", "Alice"), ("Age", "30"), ("City", "Beijing"), ("Role", "Editor")]
+    for index, (left, right) in enumerate(rows):
+        page.insert_text((48, 50 + index * 18), left, fontsize=11)
+        page.insert_text((140, 50 + index * 18), right, fontsize=11)
+    src = tmp_path / "plain-table.pdf"
+    doc.save(src)
+    doc.close()
+
+    opened = pymupdf.open(src)
+    blocks = extract_blocks(opened)
+    alice = next(block for block in blocks if block.text == "Alice")
+    assert alice.clip is not None and alice.clip[0] >= 130
+    assert all(block.clip is not None for block in blocks)
+    word_rects = [pymupdf.Rect(word[:4]) for word in opened[0].get_text("words")]
+    geo = PageGeometry.from_page(opened[0], word_rects)
+    assert len(geo.tables) == 1
+    assert len(geo.columns) == 1
+
+    translation = "这是一段很长的译文一定会向右铺开直到越过格子才停下来"
+    out = _render_translated(src, blocks, [block.text if block is not alice else translation for block in blocks], "zh-CN")
+    lines = [ln for blk in out[0].get_text("dict")["blocks"] if blk.get("type") == 0 for ln in blk["lines"]]
+    zh = [ln for ln in lines if any("\u4e00" <= ch <= "\u9fff" for ch in "".join(s["text"] for s in ln["spans"]))]
+    assert zh
+    assert max(ln["bbox"][2] for ln in zh) <= alice.clip[2] + 2
 
 
 def test_repeated_header_and_page_number_stay_untranslated():

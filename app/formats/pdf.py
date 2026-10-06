@@ -28,7 +28,7 @@ from .pdf_flow import (
     writer_for,
 )
 from .pdf_layout import (
-    PageGeometry, RuledTable, cell_containing, margin_skips, reading_order, ruled_tables,
+    PageGeometry, RuledTable, cell_containing, margin_skips, page_tables, reading_order,
 )
 from .pdf_roles import HeuristicLayout, LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
@@ -901,7 +901,7 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     blocks = []
     tables_by_page: list[tuple[RuledTable, ...]] = []
     for pno, page in enumerate(doc):
-        tables_by_page.append(ruled_tables(page))
+        tables_by_page.append(page_tables(page))
         data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
         for b in data["blocks"]:
             if b.get("type") != 0:
