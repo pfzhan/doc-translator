@@ -4,6 +4,7 @@
 2. 跳过整块公式、纯数字、旋转文字。行内公式是段落里的一个 run，译后按原样贴回。
 3. 译文版：擦掉原文字（图片和矢量图形保留），在原位置写入译文。
    放不下时先在本栏内右扩（不盖住图和其他文字），再压行距，最后缩字号。
+   有线表格按格翻译，写回时不越出格子。重复的页眉页脚和页码保留原文。
 4. 双语版：原页面和译文页面左右并排放在同一页上，方便对照阅读。
 """
 import asyncio
@@ -26,7 +27,7 @@ from .pdf_flow import (
     strip_style_marks,
     writer_for,
 )
-from .pdf_layout import PageGeometry
+from .pdf_layout import PageGeometry, RuledTable, cell_containing, margin_skips, ruled_tables
 from .pdf_roles import HeuristicLayout, LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
 from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, typeset_lines
@@ -71,6 +72,8 @@ class TextBlock:
     span_lines: list[list[dict]] = None
     # 占位符重建后的有序 run。提取阶段还没有，送翻前才填。
     runs: list[Run] = field(default_factory=list)
+    # 有线表格的格子。写入不得越出；不同格子的块不能并成一段。
+    clip: tuple[float, float, float, float] | None = None
 
 
 def _join_lines(lines: list[str]) -> str:
@@ -209,10 +212,9 @@ _SRC_HEAD_NUM_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+\S")
 def _different_columns(
     geometries: list[PageGeometry] | None, left: TextBlock, right: TextBlock,
 ) -> bool:
-    """两页里只要有一页是多栏、且两块不在同一栏序号，就不是跨页续段。
+    """两页里只要有一页是多栏、且两块不在同一栏序号，就不是同一栏的跨页续段。
 
-    流顺序里的页末块常常是右栏底，下一页页首是左栏顶。没有阅读顺序模型时，
-    跨栏合并比漏合并更糟。单栏页面序号都是 0，行为和原来一样。
+    右栏页尾接到下一页左栏是另一条规则，不走这里。单栏页面序号都是 0。
     """
     if not geometries or left.page >= len(geometries) or right.page >= len(geometries):
         return False
@@ -222,54 +224,112 @@ def _different_columns(
     return a.index_of(left.rect) != b.index_of(right.rect)
 
 
+def _can_continue(
+    prev: TextBlock, nxt: TextBlock, median: float, halt_ids: set[int] | None,
+) -> bool:
+    """页末块没有句末标点，页首块以小写或数字开头，且不是标题。"""
+    head = nxt.text.lstrip()[:1]
+    numbered_heading = bool(_SRC_HEAD_NUM_RE.match(nxt.text.lstrip()))
+    if halt_ids is None:
+        is_heading = _preview_kind(nxt, median) != "p"
+    else:
+        is_heading = id(nxt) in halt_ids
+    return bool(not numbered_heading and not is_heading and (head.islower() or head.isdigit())
+                and not prev.text.rstrip().endswith(_SENT_END_PUNCT)
+                and nxt.size <= prev.size * 1.4)
+
+
+def _column_index(geo: PageGeometry, block: TextBlock) -> int:
+    return geo.index_of(block.rect)
+
+
+def _is_last_in_right_column(
+    block: TextBlock, page_blocks: list[TextBlock], geo: PageGeometry,
+) -> bool:
+    if len(geo.columns) < 2 or _column_index(geo, block) != len(geo.columns) - 1:
+        return False
+    return not any(
+        other is not block and _column_index(geo, other) == len(geo.columns) - 1
+        and other.rect.y0 > block.rect.y0 + 1
+        for other in page_blocks
+    )
+
+
+def _left_column_head(page_blocks: list[TextBlock], geo: PageGeometry) -> TextBlock | None:
+    if len(geo.columns) < 2:
+        return None
+    heads = [
+        block for block in page_blocks
+        if _column_index(geo, block) == 0
+        and not any(
+            other is not block and _column_index(geo, other) == 0
+            and other.rect.y0 < block.rect.y0 - 1
+            for other in page_blocks
+        )
+    ]
+    if not heads:
+        return None
+    return min(heads, key=lambda block: (block.rect.y0, block.rect.x0))
+
+
 def _cross_page_units(
     blocks: list[TextBlock],
     median: float,
     skip_ids: set[int] = frozenset(),
     geometries: list[PageGeometry] | None = None,
     halt_ids: set[int] | None = None,
+    ignore_ids: set[int] | None = None,
 ) -> list[list[TextBlock]]:
     """把跨页续段两两合并成翻译单元（返回块列表的列表，每单元 1~2 块）。
 
     上一页最后一个正文块不以句末标点结尾、下一页第一个块以小写/数字开头且不像标题时，
     视为被页边界切断的同一段。页脚脚注（字号明显小于正文）和指定跳过的块不参与。
-    传入页面几何时，跨栏的两块不合并。
+    同一栏的续段照旧合并。多栏时，只再放开「本页最右栏的末块接到下页最左栏的首块」。
+    ignore_ids 是页眉页脚，不占页末、也不挡页首。
     """
     by_page: dict[int, list[TextBlock]] = {}
     for b in blocks:
         by_page.setdefault(b.page, []).append(b)
+    ignored = ignore_ids or set()
 
     units: list[list[TextBlock]] = []
     pages = sorted(by_page)
     used: set[int] = set()
     for pno in pages:
-        body = [b for b in by_page[pno] if b.size >= median * 0.8]
+        body = [b for b in by_page[pno] if b.size >= median * 0.8 and id(b) not in ignored]
+        nxt = by_page.get(pno + 1) or []
+        nxt_body = [x for x in nxt if x.size >= median * 0.8 and id(x) not in ignored]
+        first = nxt_body[0] if nxt_body else None
+        head = (
+            _left_column_head(nxt_body, geometries[pno + 1])
+            if geometries and pno + 1 < len(geometries) else None
+        )
         for b in by_page[pno]:
             if id(b) in used:
                 continue
-            nxt = by_page.get(pno + 1)
-            first = next((x for x in (nxt or []) if x.size >= median * 0.8), None)
-            head = first.text.lstrip()[:1] if first else ""
-            # 数字开头的章节标题（'1 Introduction'）不是续段；标题、图注、图内文字也不并
-            numbered_heading = bool(first and _SRC_HEAD_NUM_RE.match(first.text.lstrip()))
-            if halt_ids is None:
-                is_heading = bool(first and _preview_kind(first, median) != "p")
-            else:
-                is_heading = bool(first and id(first) in halt_ids)
             if halt_ids is not None and id(b) in halt_ids:
                 units.append([b])
                 used.add(id(b))
                 continue
-            continues = bool(first) and not numbered_heading and not is_heading and (
-                head.islower() or head.isdigit())
-            if (body and b is body[-1] and continues and id(first) not in used
-                    and id(b) not in skip_ids and id(first) not in skip_ids
-                    and not b.text.rstrip().endswith(_SENT_END_PUNCT)
-                    and first.size <= b.size * 1.4
-                    and not _different_columns(geometries, b, first)):
-                units.append([b, first])
+            same = bool(
+                body and b is body[-1] and first is not None and id(first) not in used
+                and id(b) not in skip_ids and id(first) not in skip_ids
+                and _can_continue(b, first, median, halt_ids)
+                and not _different_columns(geometries, b, first)
+            )
+            cross_target = head if head is not None and id(head) not in used else None
+            cross = bool(
+                not same and cross_target is not None and geometries is not None
+                and pno < len(geometries)
+                and _is_last_in_right_column(b, body, geometries[pno])
+                and id(b) not in skip_ids and id(cross_target) not in skip_ids
+                and _can_continue(b, cross_target, median, halt_ids)
+            )
+            other = first if same else cross_target
+            if (same or cross) and other is not None:
+                units.append([b, other])
                 used.add(id(b))
-                used.add(id(first))
+                used.add(id(other))
             else:
                 units.append([b])
                 used.add(id(b))
@@ -336,7 +396,7 @@ def _merge_visual_lines(blocks: list[TextBlock]) -> list[TextBlock]:
             p = out[-1]
             v_overlap = min(p.rect.y1, b.rect.y1) - max(p.rect.y0, b.rect.y0)
             h_overlap = min(p.rect.x1, b.rect.x1) - max(p.rect.x0, b.rect.x0)
-            if (p.page == b.page and h_overlap > 0
+            if (p.page == b.page and p.clip == b.clip and h_overlap > 0
                     and v_overlap > min(p.rect.y1 - p.rect.y0, b.rect.y1 - b.rect.y0) * 0.5):
                 p.line_rects.extend(b.line_rects)
                 if p.span_lines and b.span_lines:
@@ -711,9 +771,95 @@ def _donate_punct_rects(prev: TextBlock, line_rects: list[pymupdf.Rect]) -> None
             return
 
 
+def _clip_key(cell: pymupdf.Rect | None) -> tuple[float, float, float, float] | None:
+    if cell is None:
+        return None
+    return (cell.x0, cell.y0, cell.x1, cell.y1)
+
+
+def _split_table_blocks(blocks: list[TextBlock], tables: tuple[RuledTable, ...]) -> list[TextBlock]:
+    """一行里并排的格子拆成独立块。小写开头的邻格不会被硬换行规则切开。"""
+    if not tables:
+        return blocks
+    out: list[TextBlock] = []
+    for block in blocks:
+        out.extend(_split_one_table_block(block, tables))
+    return out
+
+
+def _split_one_table_block(block: TextBlock, tables: tuple[RuledTable, ...]) -> list[TextBlock]:
+    lines = block.span_lines or []
+    if len(lines) != len(block.line_rects):
+        block.clip = _clip_key(cell_containing(block.rect, tables))
+        return [block]
+    grouped: dict[tuple[float, float, float, float] | None, list[tuple[pymupdf.Rect, list[dict]]]] = {}
+    order: list[tuple[float, float, float, float] | None] = []
+    for line_rect, spans in zip(block.line_rects, lines):
+        by_cell: dict[tuple[float, float, float, float] | None, list[dict]] = {}
+        cell_order: list[tuple[float, float, float, float] | None] = []
+        for span in spans:
+            if not str(span.get("text", "")).strip():
+                continue
+            bbox = span.get("bbox")
+            key = _clip_key(cell_containing(pymupdf.Rect(bbox), tables) if bbox else None)
+            if key not in by_cell:
+                cell_order.append(key)
+                by_cell[key] = []
+            by_cell[key].append(span)
+        if not cell_order:
+            key = _clip_key(cell_containing(line_rect, tables))
+            _remember_cell(grouped, order, key, line_rect, [])
+            continue
+        if len(cell_order) == 1:
+            _remember_cell(grouped, order, cell_order[0], line_rect, by_cell[cell_order[0]])
+            continue
+        for key in cell_order:
+            box = pymupdf.Rect()
+            for span in by_cell[key]:
+                box |= pymupdf.Rect(span["bbox"])
+            _remember_cell(grouped, order, key, box, by_cell[key])
+    if len(order) <= 1:
+        block.clip = order[0] if order else _clip_key(cell_containing(block.rect, tables))
+        return [block]
+    parts: list[TextBlock] = []
+    for key in order:
+        pieces = grouped[key]
+        rect = pymupdf.Rect()
+        for line_rect, _spans in pieces:
+            rect |= line_rect
+        text = _join_lines(["".join(str(span.get("text", "")) for span in spans) for _rect, spans in pieces])
+        if not text.strip():
+            continue
+        parts.append(replace(
+            block,
+            rect=rect,
+            line_rects=[line_rect for line_rect, _spans in pieces],
+            text=text,
+            span_lines=[spans for _rect, spans in pieces],
+            clip=key,
+            runs=[],
+        ))
+    return parts or [block]
+
+
+def _remember_cell(
+    grouped: dict[tuple[float, float, float, float] | None, list[tuple[pymupdf.Rect, list[dict]]]],
+    order: list[tuple[float, float, float, float] | None],
+    key: tuple[float, float, float, float] | None,
+    line_rect: pymupdf.Rect,
+    spans: list[dict],
+) -> None:
+    if key not in grouped:
+        order.append(key)
+        grouped[key] = []
+    grouped[key].append((line_rect, spans))
+
+
 def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     blocks = []
+    tables_by_page: list[tuple[RuledTable, ...]] = []
     for pno, page in enumerate(doc):
+        tables_by_page.append(ruled_tables(page))
         data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
         for b in data["blocks"]:
             if b.get("type") != 0:
@@ -760,7 +906,11 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                     bold=bool(main["flags"] & 16) or "Bold" in main["font"],
                     span_lines=span_lines,
                 ))
-    return _merge_continuations(_merge_caption_fragments(_merge_visual_lines(blocks)))
+    split: list[TextBlock] = []
+    for block in blocks:
+        tables = tables_by_page[block.page] if block.page < len(tables_by_page) else ()
+        split.extend(_split_table_blocks([block], tables))
+    return _merge_continuations(_merge_caption_fragments(_merge_visual_lines(split)))
 
 
 def _absorb_block(p: TextBlock, b: TextBlock):
@@ -792,7 +942,7 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                           and abs(b.rect.x0 - p.rect.x0) > p.size * 0.5
                           and not p.text.rstrip().endswith(tuple(SENT_ENDS))
                           and not b.text.rstrip().endswith(tuple(SENT_ENDS)))
-            if p.page == b.page and (
+            if p.page == b.page and p.clip == b.clip and (
                 title_frag
                 or (-0.8 * p.size <= b.rect.y0 - p.rect.y1 < 1.5 * p.size
                     and abs(b.rect.x0 - p.rect.x0) < 2 * p.size
@@ -814,7 +964,7 @@ def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
     for b in blocks:
         if out:
             p = out[-1]
-            if p.page == b.page:
+            if p.page == b.page and p.clip == b.clip:
                 y_ov = min(p.rect.y1, b.rect.y1) - max(p.rect.y0, b.rect.y0)
                 same_line = y_ov > 0.5 * min(p.rect.y1 - p.rect.y0, b.rect.y1 - b.rect.y0)
                 gap = b.rect.x0 - p.rect.x1
@@ -1401,7 +1551,34 @@ def _write_rect(
         rect = pymupdf.Rect(col_x0, y0, col_x1, block.rect.y1 + pad)
     else:
         rect = pymupdf.Rect(block.rect.x0, y0, block.rect.x1 + 2, block.rect.y1 + pad)
-    return rect, centered
+    return _clip_write_rect(rect, block.clip), centered
+
+
+def _clip_write_rect(
+    rect: pymupdf.Rect, clip: tuple[float, float, float, float] | None,
+) -> pymupdf.Rect:
+    """格子是硬边界。缩无可缩时保持原框，避免写出一个空盒子。"""
+    if clip is None:
+        return rect
+    bounded = pymupdf.Rect(
+        max(rect.x0, clip[0] + 0.6),
+        max(rect.y0, clip[1] + 0.4),
+        min(rect.x1, clip[2] - 0.8),
+        min(rect.y1, clip[3] - 0.8),
+    )
+    if bounded.width < 4 or bounded.height < 4:
+        return rect
+    return bounded
+
+
+def _write_limit(
+    block: TextBlock, rect: pymupdf.Rect, geo: PageGeometry | None, obstacles: list[pymupdf.Rect],
+) -> float | None:
+    limit = geo.right_limit(rect, obstacles) if geo is not None else None
+    if block.clip is not None:
+        cap = block.clip[2] - 0.8
+        limit = cap if limit is None else min(limit, cap)
+    return limit
 
 
 def _render_translated(src_path: Path, blocks: list[TextBlock], translations: list[str],
@@ -1440,6 +1617,14 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             images=pymupdf.PDF_REDACT_IMAGE_NONE,
             graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
         )
+        # redaction 会把 /Resources 改写成内联字典；排版器写入后 /XObject 条目上百个，
+        # 这么大的内联嵌套字典在保存的 GC（garbage≥3）里会被写坏（第一个表单的条目
+        # 指向字体流，内容静默丢失）。规范成间接引用避开这个 MuPDF bug。
+        res_v = doc.xref_get_key(page.xref, "Resources")[1]
+        if res_v.startswith("<<"):
+            res_x = doc.get_new_xref()
+            doc.update_object(res_x, res_v)
+            doc.xref_set_key(page.xref, "Resources", f"{res_x} 0 R")
         images_before = {img[0] for img in page.get_images(full=True)}
         geo = geometries[pno] if geometries and pno < len(geometries) else None
         draws: list[str] = []
@@ -1454,7 +1639,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             obstacles = [ob.rect for ob in blocks if ob.page == pno and ob is not b]
             if geo is not None:
                 obstacles = [*obstacles, *geo.figures]
-            limit = geo.right_limit(rect, obstacles) if geo is not None else None
+            limit = _write_limit(b, rect, geo, obstacles)
             # 从右往左仍交给 HTML 盒子。其余段落由排版器断行：有公式图时按行落位，
             # 没有公式图时写进一个锁住换行的盒子，避免一行嵌一次整套字体。
             if rtl:
@@ -2019,10 +2204,15 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         median,
     )
     kinds = ["h2" if role is Role.HEADING else "p" for role in roles]
-    skips = [bib or role is Role.FIGURE for bib, role in zip(biblio_skips(blocks), roles)]
+    edges = margin_skips(blocks, geometries)
+    skips = [
+        bib or role is Role.FIGURE or edge
+        for bib, role, edge in zip(biblio_skips(blocks), roles, edges)
+    ]
     skip_ids = {id(b) for b, s in zip(blocks, skips) if s}
-    halt_ids = {id(b) for b, role in zip(blocks, roles) if role is not Role.BODY}
-    units = _cross_page_units(blocks, median, skip_ids, geometries, halt_ids)
+    margin_ids = {id(b) for b, edge in zip(blocks, edges) if edge}
+    halt_ids = {id(b) for b, role in zip(blocks, roles) if role is not Role.BODY} | margin_ids
+    units = _cross_page_units(blocks, median, skip_ids, geometries, halt_ids, margin_ids)
     block_kind = {id(b): k for b, k in zip(blocks, kinds)}
 
     sent_texts: list[str] = []

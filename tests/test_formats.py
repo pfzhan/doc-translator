@@ -1967,3 +1967,29 @@ def test_split_translation_balances_style_marks():
     assert b.count("{b}") == b.count("{/b}")
     from app.formats.pdf_flow import strip_style_marks
     assert strip_style_marks(a) + strip_style_marks(b) == strip_style_marks(t)
+
+
+def test_save_after_redact_with_many_forms_keeps_first_form(tmp_path):
+    """redact 后 /Resources 是内联字典，写上百个表单再 garbage 保存会丢第一个表单
+    （MuPDF GC 对内联嵌套字典的 bug）。规范成间接引用后内容必须都在。"""
+    import pymupdf as pm
+    from app.formats.pdf import _render_translated
+
+    src = tmp_path / "t.pdf"
+    doc = pm.open()
+    page = doc.new_page(width=400, height=600)
+    page.insert_text((40, 60), "First block here")
+    for i in range(40):
+        page.insert_text((40, 80 + i * 12), f"Body line number {i} with enough text to matter")
+    doc.save(src)
+    doc.close()
+
+    from app.formats.pdf import extract_blocks
+    blocks = extract_blocks(pm.open(src))
+    # 每个块一句不同译文，制造大量表单
+    trans = [f"译文第{i}段的内容写在这里测试保存" for i, _ in enumerate(blocks)]
+    out = _render_translated(src, blocks, trans, "zh-CN")
+    data = out.tobytes(garbage=4, deflate=True)
+    check = pm.open("pdf", data)
+    text = check[0].get_text()
+    assert "译文第0段" in text and f"译文第{len(blocks) - 1}段" in text
