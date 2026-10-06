@@ -53,7 +53,9 @@ class Job:
             info = self.runner.info
             self.detected_lang = info.get("detected_lang", "") or self.detected_lang
             self.skipped = info.get("skipped", 0) or self.skipped
-            self.failed = info.get("failed", 0) or self.failed
+            # 0 是有效的新计数（重试后全部成功），不能用 or 把 0 当成缺省
+            if "failed" in info:
+                self.failed = int(info["failed"])
 
     def to_dict(self) -> dict:
         self.sync_info()

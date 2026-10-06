@@ -434,3 +434,24 @@ def test_empty_translation_is_not_cached(tmp_path):
     # 重试：缓存命中的不再请求，空译文重新翻译
     assert run(Runner(tr, cache=cache).translate_all(["good one", "bad one"])) == ["译:good one", "译:bad one"]
     assert tr.calls == 2
+
+
+def test_all_empty_translations_fail_on_short_doc(tmp_path):
+    """不超过 3 段时，整批空译文也要失败，不能当成翻译完成。"""
+    from app.runner import Cache, Runner
+
+    class AlwaysEmpty:
+        cache_key = "t"
+        concurrency = 1
+        max_batch_items = 20
+        max_batch_chars = 3000
+        source_lang = "en"
+        target_lang = "zh-CN"
+
+        async def translate_batch(self, texts):
+            return [""] * len(texts)
+
+    runner = Runner(AlwaysEmpty(), cache=Cache(tmp_path / "c.sqlite3"))
+    with pytest.raises(TranslatorError, match="2 / 2"):
+        run(runner.translate_all(["one sentence", "two sentence"]))
+    assert runner.info["failed"] == 2

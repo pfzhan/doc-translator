@@ -81,6 +81,8 @@ class Runner:
         self.cache_only = cache_only
         # 给任务页展示：检测到的文档语言、跳过的段落数
         self.info = {"detected_lang": "", "skipped": 0}
+        # 按段落序号覆盖预览译文（标题改写、段界去重），同一句在不同位置可以不同
+        self._index_overrides: dict[int, str] = {}
 
         # ---- 边翻边预览 ----
         # segments：文档顺序的段落 [{"s": 原文, "k": 类型}]，translate_all(preview=True) 时填充
@@ -135,7 +137,7 @@ class Runner:
                 if i in self._skip_idx or text in self._skipped:
                     updates.append([i, text, 1])
                 else:
-                    updates.append([i, translated, 0])
+                    updates.append([i, self._index_overrides.get(i, translated), 0])
         out = {"ready": True, "version": len(self._log), "updates": updates, "focus": self._focus}
         if since < 0:
             out["segments"] = self.segments
@@ -225,6 +227,7 @@ class Runner:
                 if t.strip():
                     self._indices.setdefault(t, []).append(i)
             self._done = done_map
+            self._index_overrides = {}
             self._skipped = lang_skipped
             self._skip_idx = {i for i in range(n) if skip_flags[i]}
             self._log = []
@@ -285,7 +288,7 @@ class Runner:
                     done += len(good)
                 if empty:
                     # 回填策略（BabelDOC 同款）：个别段落空译文保留原文，不让整本书失败；
-                    # 但服务持续吐空译文（坏了）时不能全本回填，最后按阈值判失败
+                    # 但全部失败，或失败段超过阈值时，不能当成功返回
                     failed.extend(empty)
                     done += len(empty)
                 self.progress(done, total)
@@ -293,7 +296,7 @@ class Runner:
         workers = min(self.translator.concurrency, len(pending))
         await asyncio.gather(*(worker() for _ in range(workers)))
         self.info["failed"] = len(failed)
-        if len(failed) > max(3, total // 10):
+        if failed and (len(failed) == total or len(failed) > max(3, total // 10)):
             raise TranslatorError(f"翻译服务持续返回空译文（{len(failed)} / {total} 段），请重试或更换服务")
         return [
             texts[i] if not texts[i].strip() or kept(i) else done_map.get(texts[i], texts[i])
