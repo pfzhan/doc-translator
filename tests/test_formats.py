@@ -1957,3 +1957,13 @@ def test_preview_override_replaces_shared_translation():
     runner._log = ["2 Proposed"]
     runner._index_overrides[0] = "2 所提"
     assert runner.preview()["updates"] == [[0, "2 所提", 0]]
+def test_split_translation_balances_style_marks():
+    """跨页切分时样式标记要配对：左半补闭、右半补开，避免未闭合的 <b>。"""
+    from app.formats.pdf import _split_translation
+
+    t = "前面一段结束。{b}后半加粗的内容比较长，跨页了{/b}。"
+    a, b = _split_translation(t, 0.4)
+    assert a.count("{b}") == a.count("{/b}")
+    assert b.count("{b}") == b.count("{/b}")
+    from app.formats.pdf_flow import strip_style_marks
+    assert strip_style_marks(a) + strip_style_marks(b) == strip_style_marks(t)

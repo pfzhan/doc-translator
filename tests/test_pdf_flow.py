@@ -5,6 +5,7 @@ from app.formats.pdf_flow import (
     EmphasisWriter,
     break_lines,
     emphasis_of,
+    measure_token,
     nowrap_lines,
     restore_emphasis,
     size_percent,
@@ -31,6 +32,27 @@ def test_wide_formula_takes_its_own_line():
 
 def test_cjk_wraps_by_character():
     assert break_lines("甲乙丙丁戊", em=10, max_width=25, formula_widths={}) == ["甲乙", "丙丁", "戊"]
+
+
+def test_short_parentheses_stay_on_one_line():
+    text = "甲甲甲（如序列）乙乙乙"
+    lines = break_lines(text, em=10, max_width=50, formula_widths={})
+    assert any("（如序列）" in line for line in lines)
+    assert all("（" not in line or "）" in line for line in lines)
+    ascii_lines = break_lines("see (term) next", em=10, max_width=40, formula_widths={})
+    assert any("(term)" in line for line in ascii_lines)
+
+
+def test_parentheses_around_a_formula_stay_together():
+    text = "甲（" + _SENTINEL + "）乙"
+    lines = break_lines(text, em=10, max_width=40, formula_widths={1: 20})
+    assert any("（" + _SENTINEL + "）" in line for line in lines)
+
+
+def test_long_parentheses_may_split():
+    lines = break_lines("（" + "甲" * 20 + "）", em=10, max_width=50, formula_widths={})
+    assert len(lines) > 1
+    assert not any("（" in line and "）" in line for line in lines)
 
 
 def test_style_marks_have_zero_width():
@@ -87,3 +109,32 @@ def test_writer_for_uses_the_longest_span_as_base():
     uniform = writer_for([{"text": "All regular words", "font": "Times", "flags": 0}])
     assert not uniform.mixed
     assert uniform.text("All regular words", Emphasis(False, False)) == "All regular words"
+
+
+def test_paren_group_at_width_edge_terminates():
+    """括号组宽度落在容差带内时不能死循环：锁组条件必须和填充溢出判定一致。"""
+    text = "前面占位" + "（一二三四五六七）" + "尾巴"
+    for width in (7.7, 7.8, 7.9, 8.0, 8.1):
+        lines = break_lines(text, em=1.0, max_width=width, formula_widths={})
+        assert "".join(lines) == text
+
+
+def test_oversize_word_split_to_fit():
+    """长 URL 这类超宽词按字符硬切，不能 nowrap 越出右缘。"""
+    text = "见 http://example.com/very/long/path 结束"
+    lines = break_lines(text, em=1.0, max_width=8.0, formula_widths={})
+    assert "".join(lines).replace(" ", "") == text.replace(" ", "")
+    assert all(len(line) <= 20 for line in lines)
+
+
+def test_restore_emphasis_keeps_italic_tag():
+    """斜体保持 <i>。回退字体没有汉字粗体，改成 <b> 不能强调汉字，还会丢掉拉丁斜体。"""
+    assert restore_emphasis("正常{i}强调{/i}文字") == "正常<i>强调</i>文字"
+
+
+def test_fullwidth_punctuation_measures_one_em():
+    """全角标点（，。（）等）不在 CJK 正则里，按 east_asian_width 也得算 1em。
+    按 0.5em 低估行宽，letter-spacing 两端对齐时会把行推出右缘。"""
+    assert measure_token("，", 10.0, {}) == 10.0
+    assert measure_token("（", 10.0, {}) == 10.0
+    assert measure_token("a", 10.0, {}) == 5.0

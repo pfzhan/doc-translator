@@ -59,6 +59,36 @@ def test_style_marks_are_written_back(tmp_path):
     assert "{z" not in out[0].get_text() and "{b}" not in out[0].get_text()
 
 
+def test_plain_paragraph_keeps_parentheses_and_separates_lines(tmp_path):
+    """没有公式的段落也由排版器断行：短括号组留在同一行，行与行不重叠。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=200, height=160)
+    page.insert_text((30, 40), "Source", fontsize=12)
+    doc.save(src)
+    doc.close()
+    # 宽过页宽的 60%，不再右扩，长译文必须换行。盒子够高，不必压行距。
+    rect = pymupdf.Rect(30, 28, 150, 90)
+    block = TextBlock(
+        page=0, rect=rect, line_rects=[rect],
+        text="Source", size=12, color="#000000", bold=False,
+    )
+    out = _render_translated(src, [block], ["甲" * 8 + "（如序列）" + "乙" * 8], "zh-CN")
+    lines = [
+        ln for blk in out[0].get_text("dict")["blocks"] if blk.get("type") == 0
+        for ln in blk["lines"]
+        if any("\u4e00" <= ch <= "\u9fff" for ch in "".join(span["text"] for span in ln["spans"]))
+    ]
+    texts = ["".join(span["text"] for span in ln["spans"]) for ln in lines]
+    assert any("（如序列）" in text for text in texts)
+    boxes = sorted((pymupdf.Rect(ln["bbox"]) for ln in lines), key=lambda box: box.y0)
+    assert len(boxes) >= 2
+    for above, below in zip(boxes, boxes[1:]):
+        assert above.y1 <= below.y0 + 0.5
+
+
 def test_typeset_formula_tracks_the_line_baseline(tmp_path):
     """公式下沿贴在同一行文字的基线上，不跟盒子顶走。"""
     from app.formats.pdf import TextBlock, _render_translated
