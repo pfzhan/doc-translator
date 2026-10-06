@@ -1,12 +1,14 @@
 """译文断行，以及块内粗体、斜体、字号差的占位符。
 
-公式哨兵是不可拆的原子。样式标记不占宽，只在和块的底色不同时写出。
+公式哨兵是不可拆的原子。短括号组放得下时也不从中间切开。
+样式标记不占宽，只在和块的底色不同时写出。
 整块同一风格仍交给块级字号和字重，送翻文本和原来逐字一致。
 字号标记是相对底色的百分比，写回时按这个比例缩放，跟着收缩阶梯一起变。
 """
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
 _SENTINEL_RE = re.compile(r"\x01i\x02(\d+)\x01/i\x02")
@@ -17,6 +19,8 @@ _CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 
 _BOLD_FLAG = 16
 _ITALIC_FLAG = 2
+_PAREN_CLOSE = {"（": "）", "(": ")"}
+_PAREN_LIMIT = 10
 
 
 @dataclass(frozen=True)
@@ -122,13 +126,14 @@ def writer_for(spans: list[dict[str, object]], base_size: float = 0) -> Emphasis
     return EmphasisWriter(base, mixed, base_size)
 
 
-def restore_emphasis(escaped_html: str) -> str:
-    """html.escape 之后把样式标记换成标签。标记本身没有需要转义的字符。"""
+def restore_emphasis(escaped_html: str, cjk: bool = False) -> str:
+    """html.escape 之后把样式标记换成标签。标记本身没有需要转义的字符。
+    CJK 字体没有斜体字形，<i> 画了等于没画；映射成 <b> 保住强调。"""
     tagged = (
         escaped_html.replace("{b}", "<b>")
         .replace("{/b}", "</b>")
-        .replace("{i}", "<i>")
-        .replace("{/i}", "</i>")
+        .replace("{i}", "<b>" if cjk else "<i>")
+        .replace("{/i}", "</b>" if cjk else "</i>")
         .replace("{/z}", "</span>")
     )
     return _SIZE_OPEN_RE.sub(r'<span style="font-size:\1%">', tagged)
@@ -145,7 +150,7 @@ def break_lines(
     max_width: float,
     formula_widths: dict[int, float],
 ) -> list[str]:
-    """按估算宽度断行。哨兵和超宽公式各自占一整行，绝不拆开。"""
+    """按估算宽度断行。哨兵、超宽公式、放得下的短括号组都不拆开。"""
     if "\n" in text:
         lines: list[str] = []
         for part in text.split("\n"):
@@ -153,31 +158,107 @@ def break_lines(
         return lines
     if not text or max_width <= 0:
         return [text]
+    tokens = _tokenize(text)
+    group_of = _paren_groups(tokens, em, formula_widths, max_width)
     lines: list[str] = []
-    buf: list[str] = []
+    buf: list[tuple[int, str]] = []
     width = 0.0
 
     def flush() -> None:
         nonlocal width
         if buf:
-            lines.append("".join(buf))
+            lines.append("".join(token for _, token in buf))
             buf.clear()
         width = 0.0
 
-    for token in _tokenize(text):
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
         token_width = _token_width(token, em, formula_widths)
         if not token.isspace() and token_width > max_width:
             flush()
-            lines.append(token)
+            if _SENTINEL_RE.fullmatch(token):
+                lines.append(token)  # 公式超宽：独占一行（调用方会缩它）
+            else:
+                # 超宽普通词（长 URL 等）按字符硬切，不 nowrap 越出右缘
+                chunk, cw = "", 0.0
+                for ch in token:
+                    chw = _token_width(ch, em, formula_widths)
+                    if chunk and cw + chw > max_width:
+                        lines.append(chunk)
+                        chunk, cw = "", 0.0
+                    chunk += ch
+                    cw += chw
+                if chunk:
+                    buf.append((index, chunk))
+                    width += cw
+            index += 1
             continue
         if buf and width + token_width > max_width:
+            start = group_of.get(index)
+            if start is not None and any(token_index >= start for token_index, _ in buf):
+                buf[:] = [(token_index, item) for token_index, item in buf if token_index < start]
+                width = sum(_token_width(item, em, formula_widths) for _, item in buf)
+                flush()
+                index = start
+                continue
             flush()
             if token.isspace():
+                index += 1
                 continue
-        buf.append(token)
+        buf.append((index, token))
         width += token_width
+        index += 1
     flush()
     return lines or [text]
+
+
+def _visible_len(token: str) -> int:
+    """括号组的长度不计样式标记。公式哨兵算一个字，不按哨兵原文的字符数。"""
+    if STYLE_MARK_RE.fullmatch(token):
+        return 0
+    if _SENTINEL_RE.fullmatch(token):
+        return 1
+    return len(token)
+
+
+def _paren_groups(
+    tokens: list[str],
+    em: float,
+    formula_widths: dict[int, float],
+    max_width: float,
+) -> dict[int, int]:
+    """短括号组里每个 token 指向开括号的下标。组本身超宽时不锁，允许切开。"""
+    group_of: dict[int, int] = {}
+    index = 0
+    count = len(tokens)
+    while index < count:
+        close = _PAREN_CLOSE.get(tokens[index])
+        if close is None:
+            index += 1
+            continue
+        end: int | None = None
+        chars = 0
+        width = 0.0
+        for cursor in range(index, count):
+            chars += _visible_len(tokens[cursor])
+            width += _token_width(tokens[cursor], em, formula_widths)
+            if chars > _PAREN_LIMIT:
+                break
+            if cursor > index and tokens[cursor] in _PAREN_CLOSE:
+                break
+            if tokens[cursor] == close and cursor > index:
+                end = cursor
+                break
+        # 锁组条件和填充的溢出判定必须一致：放宽到 +0.5 会让组在填充时超宽，
+        # 触发回滚后又因组已锁再次回滚，死循环
+        if end is not None and width <= max_width:
+            for cursor in range(index, end + 1):
+                group_of[cursor] = index
+            index = end + 1
+        else:
+            index += 1
+    return group_of
 
 
 def nowrap_lines(lines: list[str]) -> str:
@@ -242,7 +323,7 @@ def _token_width(token: str, em: float, formula_widths: dict[int, float]) -> flo
         return 0.0
     width = 0.0
     for char in token:
-        if _CJK_RE.match(char):
+        if _CJK_RE.match(char) or unicodedata.east_asian_width(char) in ("W", "F"):
             width += em
         elif char.isspace():
             width += em * 0.33

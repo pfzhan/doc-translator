@@ -285,7 +285,7 @@ def _snap_cut(text: str, cut: int) -> int:
 
 def _split_translation(t: str, ratio: float) -> tuple[str, str]:
     """把跨页合并段的译文按比例切回两页：优先在比例附近的句读点断开，
-    没有合适标点时按空格，再不行硬切。切点避开公式哨兵。"""
+    没有合适标点时按空格，再不行硬切。切点避开公式哨兵，且两侧样式标记配对。"""
     target = len(t) * ratio
     best = None
     for m in re.finditer(r"[。！？；，、：.!?;,:]", t):
@@ -293,14 +293,29 @@ def _split_translation(t: str, ratio: float) -> tuple[str, str]:
             best = m.end()
     if best is not None and abs(best - target) <= len(t) * 0.3:
         cut = _snap_cut(t, best)
-        return t[:cut], t[cut:]
+        return _balance_marks(t[:cut], t[cut:])
     # 拉丁文本按空格切
     spaces = [m.start() for m in re.finditer(r"\s", t)]
     if spaces:
         cut = _snap_cut(t, min(spaces, key=lambda s: abs(s - target)))
-        return t[:cut], t[cut:]
+        return _balance_marks(t[:cut], t[cut:])
     cut = _snap_cut(t, round(target))
-    return t[:cut], t[cut:]
+    return _balance_marks(t[:cut], t[cut:])
+
+
+def _balance_marks(left: str, right: str) -> tuple[str, str]:
+    """切开处把没配对的样式标记补齐：左边补闭、右边补开，避免未闭合的 <b>。"""
+    for mark, close in (("{b}", "{/b}"), ("{i}", "{/i}")):
+        opens = left.count(mark) - left.count(close)
+        if opens > 0:
+            left += close * opens
+            right = mark * opens + right
+    for m in re.finditer(r"\{z(\d+)\}", left):
+        if left.count("{/z}") < left.count("{z"):
+            left += "{/z}"
+            right = m.group(0) + right
+            break
+    return left, right
 
 
 def _merge_visual_lines(blocks: list[TextBlock]) -> list[TextBlock]:
@@ -1095,7 +1110,9 @@ def _fit_typeset(
     lines: list[TypesetLine] = []
     for _ in range(24):
         lines = typeset_lines(text, em, max(box.width, 1.0), _formula_metrics(formulas, block_size, em))
-        height = max(len(lines), 1) * em * gap
+        # 首行字形顶部还有 0.3em 的出头（实测 MuPDF 盒子内容高 = 行数×行距 + ~0.25em），
+        # 只算行距会让临界盒子在写入时被静默缩到 0.93 倍
+        height = max(len(lines), 1) * em * gap + em * 0.3
         overflows = any(line.width > box.width + 1 for line in lines)
         too_tall = height > box.height + 1
         if not overflows and not too_tall:
@@ -1132,6 +1149,55 @@ def _line_baseline(spans: list[dict], line_top: float, line_h: float, em: float,
     if best is not None and best[0] > 0:
         return best[1]
     return line_top + em * (1.12 if cjk else 1.0)
+
+
+def _typeset_line_html(line: TypesetLine, formulas: list[dict], cjk: bool = False) -> str:
+    """一行的 HTML。没有图的公式退回记录里的文字。"""
+    parts: list[str] = []
+    for piece in line.pieces:
+        if isinstance(piece, TextPiece):
+            if piece.text:
+                parts.append(_inline_marks(restore_emphasis(html.escape(piece.text), cjk)))
+        elif isinstance(piece, FormulaPiece) and 1 <= piece.index <= len(formulas):
+            formula = formulas[piece.index - 1]
+            if not formula.get("has_img"):
+                parts.append(_inline_marks(html.escape(str(formula.get("text") or ""))))
+    return "".join(parts)
+
+
+def _place_plain(
+    page: "pymupdf.Page",
+    text: str,
+    formulas: list[dict],
+    rect: "pymupdf.Rect",
+    em: float,
+    block_size: float,
+    cjk: bool,
+    centered: bool,
+    div_attrs: str,
+    color: str,
+    weight: str,
+    obstacles: list["pymupdf.Rect"],
+    right_limit: float | None,
+    archive: pymupdf.Archive | None,
+) -> None:
+    """排版器断行，再写入一个盒子。一行一个盒子会把整套字体嵌进每一次写入。"""
+    lines, em, gap, box = _fit_typeset(
+        text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit,
+    )
+    rendered = [_typeset_line_html(line, formulas, cjk) for line in lines]
+    body = nowrap_lines([line for line in rendered if line])
+    if not body:
+        return
+    align = "center" if centered else ("justify" if rect.width > page.rect.width * 0.6 else "left")
+    css = (
+        f"* {{font-family: sans-serif; font-size: {em}px; color: {color}; "
+        f"font-weight: {weight}; line-height: {gap}; margin: 0; padding: 0; text-align: {align};}}"
+    )
+    html_text = f"<div{div_attrs}>{body}</div>"
+    if _try_insert(page, box, html_text, css, 0.9, archive):
+        return
+    _insert_fitting(page, box, html_text, css, obstacles, archive, right_limit)
 
 
 def _place_typeset(
@@ -1173,9 +1239,12 @@ def _place_typeset(
             if isinstance(piece, TextPiece):
                 if not piece.text.strip():
                     continue
-                fragment = _inline_marks(restore_emphasis(html.escape(piece.text)))
+                fragment = _inline_marks(restore_emphasis(html.escape(piece.text), cjk))
                 html_text = f'<div{div_attrs}><span style="white-space:nowrap">{fragment}</span></div>'
-                slot = pymupdf.Rect(origin_x + piece.x, y, origin_x + piece.x + piece.width + 4, y + line_h)
+                # 单行盒子也要留首行出头的余量（MuPDF 一行内容高 = 行距 + ~0.25em），
+                # 否则每个小片都被静默缩到 0.93 倍
+                slot = pymupdf.Rect(origin_x + piece.x, y, origin_x + piece.x + piece.width + 4,
+                                    y + line_h + em * 0.3)
                 if not _try_insert(page, slot, html_text, css, 0.9):
                     try:
                         page.insert_htmlbox(slot, html_text, css=css, scale_low=0)
@@ -1374,29 +1443,33 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             weight = "bold" if b.bold else "normal"
             size = b.size * 0.88 if cjk else b.size
             # 栏宽参考：单栏用本页最宽块；多栏用本块所在栏。居中块用整栏宽，
-            # 短译文不再被小框挤成孤字行；满栏正文用 justify，右边缘和原文一样齐
+            # 短译文不再被小框挤成孤字行。排版器按这个宽度断行。
             rect, centered = _write_rect(b, items, cjk, rtl, geo)
-            body = _translation_html(t, bformulas, b.size, size, rect.width)
-            align = "center" if centered else (
-                "right" if rtl else "justify" if b.rect.width > page.rect.width * 0.6 else "left")
-            # CJK 字体的行框约 1.3em，line-height 1.2 会把行间压没；1.45 才透气和原文相当
-            css = (
-                f"* {{font-family: sans-serif; font-size: {size}px; color: {b.color}; "
-                f"font-weight: {weight}; line-height: {1.45 if cjk else 1.2}; margin: 0; padding: 0; "
-                f"text-align: {align};}}"
-            )
             obstacles = [ob.rect for ob in blocks if ob.page == pno and ob is not b]
             if geo is not None:
                 obstacles = [*obstacles, *geo.figures]
             limit = geo.right_limit(rect, obstacles) if geo is not None else None
-            # 有公式图时自己排：公式槽按基线贴回，MuPDF 不能从公式中间折行。
-            if not rtl and any(f.get("has_img") for f in bformulas):
+            # 从右往左仍交给 HTML 盒子。其余段落由排版器断行：有公式图时按行落位，
+            # 没有公式图时写进一个锁住换行的盒子，避免一行嵌一次整套字体。
+            if rtl:
+                body = _translation_html(t, bformulas, b.size, size, rect.width)
+                align = "right" if not centered else "center"
+                css = (
+                    f"* {{font-family: sans-serif; font-size: {size}px; color: {b.color}; "
+                    f"font-weight: {weight}; line-height: {1.45 if cjk else 1.2}; margin: 0; padding: 0; "
+                    f"text-align: {align};}}"
+                )
+                _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, obstacles, archive, limit)
+            elif any(f.get("has_img") for f in bformulas):
                 _place_typeset(
                     page, doc, b, t, bformulas, rect, size, cjk, centered, div_attrs, b.color, weight,
                     obstacles, limit, fmS, page_spans, draws, deferred_png,
                 )
             else:
-                _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, obstacles, archive, limit)
+                _place_plain(
+                    page, t, bformulas, rect, size, b.size, cjk, centered, div_attrs, b.color, weight,
+                    obstacles, limit, archive,
+                )
         _flush_draws(page, doc, draws, deferred_png)
         if mid_map:
             _place_formula_images(page, doc, images_before, mid_map, fmS, page_spans)
