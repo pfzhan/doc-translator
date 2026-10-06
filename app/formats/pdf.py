@@ -188,6 +188,8 @@ def _math_chars(spans: list[dict]) -> int:
 
 # 句末标点：判断页面末尾的块是不是被页边界切断的段落
 _SENT_END_PUNCT = tuple(".!?:;…。！？；：\"'”’)]}》")
+# '1 Introduction'、'3.1 Encoder' 是章节标题，不能当成跨页续段
+_SRC_HEAD_NUM_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+\S")
 
 
 def _cross_page_units(blocks: list[TextBlock], median: float, skip_ids: set[int] = frozenset()) -> list[list[TextBlock]]:
@@ -211,10 +213,14 @@ def _cross_page_units(blocks: list[TextBlock], median: float, skip_ids: set[int]
             nxt = by_page.get(pno + 1)
             first = next((x for x in (nxt or []) if x.size >= median * 0.8), None)
             head = first.text.lstrip()[:1] if first else ""
-            if (body and b is body[-1] and first is not None and id(first) not in used
+            # 数字开头的章节标题（'1 Introduction'）不是续段；标题块也不并
+            numbered_heading = bool(first and _SRC_HEAD_NUM_RE.match(first.text.lstrip()))
+            is_heading = bool(first and _preview_kind(first, median) != "p")
+            continues = bool(first) and not numbered_heading and not is_heading and (
+                head.islower() or head.isdigit())
+            if (body and b is body[-1] and continues and id(first) not in used
                     and id(b) not in skip_ids and id(first) not in skip_ids
                     and not b.text.rstrip().endswith(_SENT_END_PUNCT)
-                    and (head.islower() or head.isdigit())
                     and first.size <= b.size * 1.4):
                 units.append([b, first])
                 used.add(id(b))
@@ -225,22 +231,35 @@ def _cross_page_units(blocks: list[TextBlock], median: float, skip_ids: set[int]
     return units
 
 
+# 公式哨兵。硬切不能落在哨兵内部，否则两页都匹配不上。
+_SENTINEL_NUM_RE = re.compile(r"\x01i\x02(\d+)\x01/i\x02")
+
+
+def _snap_cut(text: str, cut: int) -> int:
+    cut = max(0, min(len(text), cut))
+    for m in _SENTINEL_NUM_RE.finditer(text):
+        if m.start() < cut < m.end():
+            return m.start() if cut - m.start() <= m.end() - cut else m.end()
+    return cut
+
+
 def _split_translation(t: str, ratio: float) -> tuple[str, str]:
     """把跨页合并段的译文按比例切回两页：优先在比例附近的句读点断开，
-    没有合适标点时按空格，再不行硬切。"""
+    没有合适标点时按空格，再不行硬切。切点避开公式哨兵。"""
     target = len(t) * ratio
     best = None
     for m in re.finditer(r"[。！？；，、：.!?;,:]", t):
         if best is None or abs(m.end() - target) < abs(best - target):
             best = m.end()
     if best is not None and abs(best - target) <= len(t) * 0.3:
-        return t[:best], t[best:]
+        cut = _snap_cut(t, best)
+        return t[:cut], t[cut:]
     # 拉丁文本按空格切
     spaces = [m.start() for m in re.finditer(r"\s", t)]
     if spaces:
-        cut = min(spaces, key=lambda s: abs(s - target))
+        cut = _snap_cut(t, min(spaces, key=lambda s: abs(s - target)))
         return t[:cut], t[cut:]
-    cut = round(target)
+    cut = _snap_cut(t, round(target))
     return t[:cut], t[cut:]
 
 
@@ -486,6 +505,24 @@ def _prose_units(text: str) -> int:
     return latin + cjk // 2
 
 
+def _donate_punct_rects(prev: TextBlock, line_rects: list[pymupdf.Rect]) -> None:
+    """标点碎片贴在上一块某一行的行尾时，把矩形并进那一行去遮罩。
+
+    间隙相对该行的 x1，不用整块并集：并集会把右侧公式擦掉，而公式行不会重画。
+    """
+    if not line_rects or not prev.line_rects:
+        return
+    fragment = line_rects[0]
+    height = fragment.y1 - fragment.y0
+    if height <= 0:
+        return
+    for tail in prev.line_rects:
+        overlap = min(tail.y1, fragment.y1) - max(tail.y0, fragment.y0)
+        if overlap > 0.5 * height and fragment.x0 - tail.x1 < 2:
+            prev.line_rects.extend(line_rects)
+            return
+
+
 def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     blocks = []
     for pno, page in enumerate(doc):
@@ -515,14 +552,10 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                 # 含公式的正常句子（正文词 ≥4）照翻，公式走占位符，不再整句留成英文
                 is_equation = _math_chars(spans) > total * 0.3 and _prose_units(text) < 4
                 if NO_TEXT_RE.match(text) or is_equation or letters < 2 or letters < len(text) * 0.4:
-                    # 标点碎片（如公式后自成一行的 ')'）不送翻，但它贴在上一块的同一
-                    # 可视行上时把矩形捐给它遮罩，否则原符号会留在译文区里
-                    if blocks and blocks[-1].page == pno and line_rects:
-                        pb = blocks[-1]
-                        r0 = line_rects[0]
-                        v_ov = min(pb.rect.y1, r0.y1) - max(pb.rect.y0, r0.y0)
-                        if v_ov > 0.5 * (r0.y1 - r0.y0) and r0.x0 - pb.rect.x1 < 2:
-                            pb.line_rects.extend(line_rects)
+                    # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
+                    # 捐了会被 redact，而这些行没有占位符、不会重画。
+                    if NO_TEXT_RE.match(text) and blocks and blocks[-1].page == pno:
+                        _donate_punct_rects(blocks[-1], line_rects)
                     continue
                 # 字号、颜色取占比最多的 span
                 main = max(spans, key=lambda s: len(s["text"]))
@@ -977,6 +1010,16 @@ def _try_insert(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, css:
         return False
 
 
+def _tighten_line_height(css: str) -> str:
+    """压一级行距。CJK 样式是 1.45，写死替换 1.2 时这一步不会生效。"""
+    match = re.search(r"line-height:\s*([0-9.]+)", css)
+    if match is None:
+        return css
+    current = float(match.group(1))
+    tight = 1.1 if current <= 1.25 else current - 0.25
+    return f"{css[:match.start(1)]}{tight:g}{css[match.end(1):]}"
+
+
 def _insert_fitting(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, css: str,
                     obstacles: list["pymupdf.Rect"], archive=None):
     """排版三级收缩（BabelDOC 思路）：先右扩 → 压行距 → 最后才缩字号。
@@ -992,7 +1035,7 @@ def _insert_fitting(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, 
     if wide.x1 > rect.x1 + 1 and _try_insert(page, wide, html_text, css, 0.9, archive):
         return
     target = wide
-    css_tight = css.replace("line-height: 1.2", "line-height: 1.1")
+    css_tight = _tighten_line_height(css)
     if _try_insert(page, target, html_text, css_tight, 0.9, archive):
         return
     # 兜底：和原来一样缩到能放下为止
@@ -1279,21 +1322,144 @@ def _subset_fonts_safe(doc: pymupdf.Document) -> pymupdf.Document:
         return pymupdf.open("pdf", data)
 
 
-_SRC_HEAD_NUM_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+\S")
 _TRANS_HEAD_NUM_RE = re.compile(
     r"^第[0-9零〇一二三四五六七八九十百]+章(?:第[0-9零〇一二三四五六七八九十百]+节)?\s*"
-    r"|^\d+(?:\.\d+)*[章节]?\s*")
+    r"|^\d+(?:\.\d+)*\.?[章节]?(?:\s+|$)")
+
+
+def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dict], int]:
+    """一个翻译单元的送翻文本和公式记录。公式名按块递增，避免跨页两块撞名。"""
+    texts: list[str] = []
+    formulas: list[dict] = []
+    name_i = name_start
+    for ui, block in enumerate(unit):
+        sent, found = _placeholderize(block, name_i)
+        name_i += 1
+        offset = len(formulas)
+        if offset:
+            sent = re.sub(
+                r"\{v(\d+)\}",
+                lambda m, off=offset: f"{{v{int(m.group(1)) + off}}}",
+                sent,
+            )
+        for rec in found:
+            rec["owner"] = ui
+        formulas.extend(found)
+        texts.append(sent)
+    return _join_lines(texts), formulas, name_i
+
+
+def _take_owner(text: str, formulas: list[dict], owner: int) -> tuple[str, list[str]]:
+    """留下属于 owner 的公式哨兵，其余原样抽出（保持相对顺序）。"""
+    kept: list[str] = []
+    foreign: list[str] = []
+    pos = 0
+    for m in _SENTINEL_NUM_RE.finditer(text):
+        kept.append(text[pos:m.start()])
+        n = int(m.group(1))
+        if 1 <= n <= len(formulas) and formulas[n - 1].get("owner", 0) == owner:
+            kept.append(m.group(0))
+        elif 1 <= n <= len(formulas):
+            foreign.append(m.group(0))
+        pos = m.end()
+    kept.append(text[pos:])
+    return "".join(kept), foreign
+
+
+def _localize_sentinels(text: str, formulas: list[dict], owner: int) -> tuple[str, list[dict]]:
+    """哨兵改成本块公式列表的序号，渲染时按下标取图。"""
+    local = [f for f in formulas if f.get("owner", 0) == owner]
+    index_map: dict[int, int] = {}
+    local_n = 1
+    for i, rec in enumerate(formulas, 1):
+        if rec.get("owner", 0) == owner:
+            index_map[i] = local_n
+            local_n += 1
+
+    def repl(m: re.Match[str]) -> str:
+        mapped = index_map.get(int(m.group(1)))
+        if mapped is None:
+            return ""
+        return f"\x01i\x02{mapped}\x01/i\x02"
+
+    return _SENTINEL_NUM_RE.sub(repl, text), local
+
+
+def _assign_restored_parts(
+    restored: str, unit: list[TextBlock], formulas: list[dict],
+) -> tuple[list[str], list[list[dict]]]:
+    """把恢复后的译文按公式归属分回各块。比例切分只切正文，哨兵跟自己的块走。"""
+    if len(unit) != 2:
+        return [restored], [formulas]
+    total = len(unit[0].text) + len(unit[1].text)
+    ratio = len(unit[0].text) / total if total else 0.5
+    left, right = _split_translation(restored, ratio)
+    left, to_right = _take_owner(left, formulas, 0)
+    right, to_left = _take_owner(right, formulas, 1)
+    left_text, left_formulas = _localize_sentinels(left + "".join(to_left), formulas, 0)
+    right_text, right_formulas = _localize_sentinels("".join(to_right) + right, formulas, 1)
+    return [left_text, right_text], [left_formulas, right_formulas]
 
 
 def _normalize_heading_number(src_text: str, translation: str) -> str:
-    """标题的章节号保留原文形式（'2 Proposed Approach' → '2 所提方法'）：
-    模型按提示词把编号译成中文数字（'第二章第一节'），学术论文里还是 '2.1' 顺眼。
-    只对无句末标点的短标题块做归一，段落里以数字开头的句子不受影响。"""
+    """标题译文开头已有章节号时改回原文编号（'第二章' → '2'）。
+
+    没有章节号就不加前缀。译文与原文相同则原样返回，避免跳过块被重新排版。
+    """
+    if translation.strip() == src_text.strip():
+        return translation
     m = _SRC_HEAD_NUM_RE.match(src_text.strip())
     if not m or len(src_text) > 60 or src_text.rstrip().endswith(tuple(SENT_ENDS)):
         return translation
+    if not _TRANS_HEAD_NUM_RE.match(translation.strip()):
+        return translation
     t = _TRANS_HEAD_NUM_RE.sub("", translation.strip(), count=1)
     return f"{m.group(1)} {t}" if t else translation
+
+
+def _heading_number_for(kind: str, src_text: str, translation: str) -> str:
+    if kind == "p":
+        # 正文尺寸的节标题（'2.1 Model' 与正文同字号，kind 是 p）：带点节号
+        # （2.1、3.2.1）几乎不会出现在正文句首；bare 整数开头可能是正文数量
+        # （'2 samples'），不动。且译文以章节号开头才改写。
+        if not (re.match(r"^\d+(?:\.\d+)+\s", src_text.strip())
+                and _TRANS_HEAD_NUM_RE.match(translation.strip())):
+            return translation
+    return _normalize_heading_number(src_text, translation)
+
+
+def _strip_boundary_echo(prev_src: str, cur_src: str, prev_t: str, cur_t: str) -> str:
+    """去掉模型在段界复读的连接语。
+
+    相同原文会命中同一条缓存，译文必然相同，不能删。无标点的短重叠
+    （「如下所示」）是常见短语，也不是断点复读。整段重叠不删。
+    """
+    if not prev_t or not cur_t or prev_src.strip() == cur_src.strip() or "\x01" in cur_t[:40]:
+        return cur_t
+    limit = min(40, len(prev_t), len(cur_t) - 1)
+    for k in range(limit, 3, -1):
+        overlap = cur_t[:k]
+        if not prev_t.endswith(overlap) or overlap in prev_src:
+            continue
+        if k <= 8 and not re.search(r"[，。；：、,.;:）)\]]", overlap):
+            continue
+        return cur_t[k:]
+    return cur_t
+
+
+def _sync_unit_preview(
+    runner: object, units: list[list[TextBlock]], sent_texts: list[str], per_block: dict[int, str],
+) -> None:
+    """标题改写和段界去重发生在预览写入之后，按段落序号把最终译文补回去。"""
+    overrides = getattr(runner, "_index_overrides", None)
+    done = getattr(runner, "_done", None)
+    if not isinstance(overrides, dict) or not isinstance(done, dict):
+        return
+    for ui, (unit, sent_text) in enumerate(zip(units, sent_texts)):
+        shown = _join_lines(per_block.get(id(b), b.text) for b in unit)
+        current = done.get(sent_text)
+        if current is not None and shown != current:
+            overrides[ui] = shown
 
 
 async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "") -> list[Path]:
@@ -1320,37 +1486,33 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     units = _cross_page_units(blocks, median, skip_ids)
     block_kind = {id(b): k for b, k in zip(blocks, kinds)}
 
-    sent_texts, sent_formulas, sent_kinds, sent_skips, flat_units = [], [], [], [], []
-    record_by_name: dict[str, tuple[int, dict]] = {}  # 图片名 → (页码, 公式记录)
-    for bi, unit in enumerate(units):
-        texts, formulas = [], []
-        for b in unit:
-            s, f = _placeholderize(b, bi)
-            offset = len(formulas)
-            if offset:
-                s = re.sub(r"\{v(\d+)\}", lambda m: f"{{v{int(m.group(1)) + offset}}}", s)
-            formulas.extend(f)
-            texts.append(s)
-        for f in formulas:
-            record_by_name[f["name"]] = (b.page, f)
+    sent_texts: list[str] = []
+    sent_formulas: list[list[dict]] = []
+    sent_kinds: list[str] = []
+    sent_skips: list[bool] = []
+    flat_units: list[list[TextBlock]] = []
+    name_i = 0
+    for unit in units:
+        sent, formulas, name_i = _prepare_unit(unit, name_i)
         flat_units.append(unit)
-        sent_texts.append(_join_lines(texts))
+        sent_texts.append(sent)
         sent_formulas.append(formulas)
         sent_kinds.append(block_kind[id(unit[0])])
         sent_skips.append(all(id(b) in skip_ids for b in unit))
 
     raw = await runner.translate_all(sent_texts, kinds=sent_kinds, preview=True, skip=sent_skips)
 
-    # 公式从原页裁成图片存到记录里；Archive 里放的是按公式宽高占位的标记像素
+    # 公式从它所在的原页裁图。不能用单元最后一块的页码，跨页时会裁错页。
     archive = pymupdf.Archive()
-    for name, (pno, f) in record_by_name.items():
-        bbox = f["bbox"]
-        if bbox.width < 1 or bbox.height < 1:
-            continue
-        f["png"] = src_doc[pno].get_pixmap(dpi=300, clip=bbox).tobytes("png")
-        f["has_img"] = True
-        # 裁剪向内收 0.4pt：bbox 来自 span 外框，边缘常沾到相邻文字的一小段笔画
-        f["clip"] = bbox + (0.4, 0.4, -0.4, -0.4)
+    for formulas in sent_formulas:
+        for f in formulas:
+            bbox = f["bbox"]
+            if bbox.width < 1 or bbox.height < 1:
+                continue
+            f["png"] = src_doc[int(f["page"])].get_pixmap(dpi=300, clip=bbox).tobytes("png")
+            f["has_img"] = True
+            # 裁剪向内收 0.4pt：bbox 来自 span 外框，边缘常沾到相邻文字的一小段笔画
+            f["clip"] = bbox + (0.4, 0.4, -0.4, -0.4)
     # 标记像素按全文全局序号编码（同色的会被 MuPDF 去重成同一图片，落位全串）
     marker_idx = 0
     for formulas in sent_formulas:
@@ -1366,32 +1528,24 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         restored = _restore_placeholders(t, formulas) if formulas else _STRAY_PLACEHOLDER_RE.sub("", t)
         if restored is None:
             parts = [b.text for b in unit]  # 模型弄丢占位符：整单元回退原文，不产出坏文档
-            shown = _join_lines([b.text for b in unit])
+            formula_lists: list[list[dict]] = [[] for _ in unit]
+            shown = _join_lines(parts)
         else:
-            if len(unit) == 1:
-                parts = [restored]
-            else:
-                ratio = len(unit[0].text) / (len(unit[0].text) + len(unit[1].text))
-                parts = list(_split_translation(restored, ratio))
+            parts, formula_lists = _assign_restored_parts(restored, unit, formulas)
             shown = restored
-        for b, part in zip(unit, parts):
-            per_block[id(b)] = _normalize_heading_number(b.text, part)
-            block_formulas[id(b)] = formulas
+        for b, part, flist in zip(unit, parts, formula_lists):
+            per_block[id(b)] = _heading_number_for(block_kind[id(b)], b.text, part)
+            block_formulas[id(b)] = flist
         # 预览里显示恢复后的译文（缓存仍按占位符版本存，重跑照样命中）
         if formulas and getattr(runner, "_done", None) and runner._done.get(sent_text) == t:
             runner._done[sent_text] = shown
     translations = [per_block[id(b)] for b in blocks]
-    # 模型会把跨段的连接语在相邻两段译文里各写一遍（如“序列），而目标输出”出现在
-    # 上一段末尾、又出现在下一段开头）：后一段开头与上一段结尾重复的原文去掉
     for i in range(1, len(blocks)):
-        prev, cur = translations[i - 1], translations[i]
-        if not prev or not cur or "\x01" in cur[:40]:
-            continue
-        limit = min(40, len(prev), len(cur))
-        for k in range(limit, 3, -1):
-            if prev.endswith(cur[:k]):
-                translations[i] = cur[k:]
-                break
+        translations[i] = _strip_boundary_echo(
+            blocks[i - 1].text, blocks[i].text, translations[i - 1], translations[i],
+        )
+        per_block[id(blocks[i])] = translations[i]
+    _sync_unit_preview(runner, flat_units, sent_texts, per_block)
 
     def build():
         translated = _render_translated(src, blocks, translations, target_lang, block_formulas, archive,

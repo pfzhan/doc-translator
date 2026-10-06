@@ -27,6 +27,17 @@ def submit(client, name="book.md", data=MD, **form):
     return r.json()
 
 
+def test_sync_info_clears_failed_after_retry():
+    job = Job(id="x", filename="a.pdf", failed=4)
+
+    class Runner:
+        info = {"failed": 0, "detected_lang": "en", "skipped": 0}
+
+    job.runner = Runner()
+    job.sync_info()
+    assert job.failed == 0
+
+
 def test_records_persist_across_restart(app_env, tmp_path):
     main = app_env
     with TestClient(main.app) as client:

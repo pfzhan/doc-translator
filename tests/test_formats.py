@@ -1804,3 +1804,130 @@ def test_heading_number_kept_in_source_form():
     assert norm(para, "使用了 40 维对数 Mel 滤波器组") == "使用了 40 维对数 Mel 滤波器组"
     # 有句末标点的短句：不动
     assert norm("3 states remain.", "还剩 3 个状态。") == "还剩 3 个状态。"
+    # 译文没有章节号时不加前缀；跳过块原文必须原样返回
+    assert norm("10 epochs were used", "使用了 10 个轮次") == "使用了 10 个轮次"
+    assert norm("2.5 hours later", "两个半小时后") == "两个半小时后"
+    assert norm("2. Smith 2019", "2. Smith 2019") == "2. Smith 2019"
+    assert norm("2 Smith 2019", "2. Smith 2019") == "2 Smith 2019"
+
+
+def test_heading_number_skips_body_blocks():
+    from app.formats.pdf import _heading_number_for
+
+    assert _heading_number_for("p", "2 samples", "第二章 样本") == "第二章 样本"
+    assert _heading_number_for("h2", "2 Proposed Approach", "第二章 所提方法") == "2 所提方法"
+    # 与正文同字号的节标题（kind 是 p）：带点节号照样改回
+    assert _heading_number_for("p", "2.1 Model", "第二章第一节 模型") == "2.1 模型"
+    # 正文尺寸的标题但译文没有章节号：不加前缀
+    assert _heading_number_for("p", "2.1 Model", "模型") == "模型"
+
+
+def test_punct_fragment_uses_line_end_not_union():
+    """公式碎片落在整块并集内、但离上一行行尾超过 2pt 时不能捐出去遮罩。"""
+    from app.formats.pdf import TextBlock, _donate_punct_rects
+
+    line1 = pymupdf.Rect(72, 80, 400, 92)
+    line2 = pymupdf.Rect(72, 96, 200, 108)
+    prev = TextBlock(page=0, rect=line1 | line2, line_rects=[line1, line2],
+                     text="scale the dot products by", size=11, color="#000", bold=False)
+    far = pymupdf.Rect(210, 96, 240, 108)
+    _donate_punct_rects(prev, [far])
+    assert len(prev.line_rects) == 2
+    close = pymupdf.Rect(201, 96, 210, 108)
+    _donate_punct_rects(prev, [close])
+    assert prev.line_rects[-1] == close
+
+
+def test_cross_page_does_not_merge_numbered_heading():
+    from app.formats.pdf import TextBlock, _cross_page_units
+
+    def blk(text, page, size=10.0, y=0, bold=False):
+        return TextBlock(page=page, rect=pymupdf.Rect(0, y, 200, y + 12), line_rects=[],
+                         text=text, size=size, color="#000", bold=bold)
+
+    blocks = [
+        blk("The previous section ends without a period", 0, y=700),
+        blk("1 Introduction", 1, y=60),
+        blk("3.1 Encoder layers follow", 1, y=80),
+    ]
+    assert all(len(u) == 1 for u in _cross_page_units(blocks, 10.0))
+    # 小写续段仍然合并
+    cont = [
+        blk("performs quite", 0, y=700),
+        blk("well on this split.", 1, y=60),
+    ]
+    merged = [u for u in _cross_page_units(cont, 10.0) if len(u) == 2]
+    assert len(merged) == 1
+
+
+def test_split_translation_does_not_break_sentinel():
+    from app.formats.pdf import _split_translation
+
+    sentinel = "\x01i\x0212\x01/i\x02"
+    text = "甲" * 8 + sentinel + "乙" * 8
+    a, b = _split_translation(text, 0.5)
+    assert a + b == text
+    assert sentinel in a or sentinel in b
+    assert "\x01" not in a.replace(sentinel, "")
+    assert "\x01" not in b.replace(sentinel, "")
+
+
+def test_cross_page_formulas_keep_own_page_and_name():
+    from app.formats.pdf import TextBlock, _assign_restored_parts, _prepare_unit
+
+    def span(text, font, size, x0, y0):
+        return {"text": text, "font": font, "size": size, "bbox": (x0, y0, x0 + 12, y0 + 10),
+                "origin": (x0, y0 + 8)}
+
+    def block(page, prose):
+        spans = [span(prose, "TimesNewRomanPSMT", 12, 0, 0),
+                 span("E", "CMMI10", 12, 40, 0)]
+        b = _block_with_spans([spans])
+        b.page = page
+        b.text = prose + "E"
+        return b
+
+    unit = [block(0, "sequence "), block(1, "length ")]
+    sent, formulas, name_i = _prepare_unit(unit, 0)
+    assert name_i == 2
+    assert {f["name"] for f in formulas} == {"f0_1.png", "f1_1.png"}
+    assert [f["page"] for f in formulas] == [0, 1]
+    assert formulas[0]["owner"] == 0 and formulas[1]["owner"] == 1
+    assert "{v1}" in sent and "{v2}" in sent
+    restored = sent.replace("{v1}", "\x01i\x021\x01/i\x02").replace("{v2}", "\x01i\x022\x01/i\x02")
+    parts, lists = _assign_restored_parts(restored, unit, formulas)
+    assert len(lists[0]) == 1 and lists[0][0]["page"] == 0
+    assert len(lists[1]) == 1 and lists[1][0]["page"] == 1
+    assert parts[0].count("\x01i\x021\x01/i\x02") == 1
+    assert parts[1].count("\x01i\x021\x01/i\x02") == 1
+    assert "\x01i\x022\x01/i\x02" not in parts[0] and "\x01i\x022\x01/i\x02" not in parts[1]
+
+
+def test_boundary_echo_keeps_repeated_cells_and_short_phrases():
+    from app.formats.pdf import _strip_boundary_echo
+
+    assert _strip_boundary_echo("WSJ only", "WSJ only", "仅 WSJ", "仅 WSJ") == "仅 WSJ"
+    assert _strip_boundary_echo("see below", "next", "如下所示", "如下所示的结果") == "如下所示的结果"
+    prev = "前文结束序列），而目标输出"
+    cur = "序列），而目标输出才是下一段"
+    assert _strip_boundary_echo("alpha beta", "gamma delta", prev, cur) == "才是下一段"
+
+
+def test_tighten_line_height_for_cjk():
+    from app.formats.pdf import _tighten_line_height
+
+    cjk = "* {line-height: 1.45; margin: 0;}"
+    latin = "* {line-height: 1.2; margin: 0;}"
+    assert "line-height: 1.2" in _tighten_line_height(cjk)
+    assert "line-height: 1.1" in _tighten_line_height(latin)
+    assert _tighten_line_height(cjk) != cjk
+
+
+def test_preview_override_replaces_shared_translation():
+    runner = Runner(MockTranslator("zh-CN"), cache=MemCache())
+    runner.segments = [{"s": "2 Proposed", "k": "h2"}]
+    runner._indices = {"2 Proposed": [0]}
+    runner._done = {"2 Proposed": "第二章 所提"}
+    runner._log = ["2 Proposed"]
+    runner._index_overrides[0] = "2 所提"
+    assert runner.preview()["updates"] == [[0, "2 所提", 0]]
