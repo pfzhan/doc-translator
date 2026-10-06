@@ -27,6 +27,38 @@ def test_wide_formula_is_its_own_line():
     )
 
 
+def test_style_marks_are_written_back(tmp_path):
+    """粗体、斜体、较小字号按标记写回，不留在页面文字里。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=120)
+    page.insert_text((40, 40), "See this term word", fontsize=12)
+    doc.save(src)
+    doc.close()
+    rect = pymupdf.Rect(30, 28, 280, 50)
+    block = TextBlock(
+        page=0, rect=rect, line_rects=[rect],
+        text="See this term word", size=12, color="#000000", bold=False,
+    )
+    out = _render_translated(
+        src, [block], ["See {b}this{/b} {i}term{/i} {z80}word{/z}"], "en",
+    )
+    spans = [
+        span
+        for blk in out[0].get_text("dict")["blocks"] if blk.get("type") == 0
+        for ln in blk["lines"] for span in ln["spans"]
+    ]
+    bold = next(span for span in spans if "this" in span["text"])
+    italic = next(span for span in spans if "term" in span["text"])
+    small = next(span for span in spans if "word" in span["text"])
+    assert bold["flags"] & 16
+    assert italic["flags"] & 2
+    assert small["size"] < 11
+    assert "{z" not in out[0].get_text() and "{b}" not in out[0].get_text()
+
+
 def test_typeset_formula_tracks_the_line_baseline(tmp_path):
     """公式下沿贴在同一行文字的基线上，不跟盒子顶走。"""
     from app.formats.pdf import TextBlock, _render_translated
