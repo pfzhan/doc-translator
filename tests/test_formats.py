@@ -1957,38 +1957,63 @@ def test_preview_override_replaces_shared_translation():
     runner._log = ["2 Proposed"]
     runner._index_overrides[0] = "2 所提"
     assert runner.preview()["updates"] == [[0, "2 所提", 0]]
+
+
 def test_split_translation_balances_style_marks():
-    """跨页切分时样式标记要配对：左半补闭、右半补开，避免未闭合的 <b>。"""
+    """跨页切分时样式标记要配对：左半补闭、右半补开，且重开的是仍开着的字号。"""
     from app.formats.pdf import _split_translation
+    from app.formats.pdf_flow import strip_style_marks
 
     t = "前面一段结束。{b}后半加粗的内容比较长，跨页了{/b}。"
-    a, b = _split_translation(t, 0.4)
-    assert a.count("{b}") == a.count("{/b}")
-    assert b.count("{b}") == b.count("{/b}")
-    from app.formats.pdf_flow import strip_style_marks
-    assert strip_style_marks(a) + strip_style_marks(b) == strip_style_marks(t)
+    left, right = _split_translation(t, 0.55)
+    assert "{b}" in left and left.endswith("{/b}")
+    assert right.startswith("{b}")
+    assert left.count("{b}") == left.count("{/b}")
+    assert right.count("{b}") == right.count("{/b}")
+    assert strip_style_marks(left) + strip_style_marks(right) == strip_style_marks(t)
+
+    sized = "{z80}小号结束。{/z}{z120}大号内容比较长，会跨页继续写下去直到句号。{/z}"
+    left, right = _split_translation(sized, 0.45)
+    assert left.endswith("{/z}")
+    assert right.startswith("{z120}")
+    assert "{z80}" not in right
+    assert strip_style_marks(left) + strip_style_marks(right) == strip_style_marks(sized)
+
+    nested = "{z120}{b}{i}强调的内容比较长，会跨页继续写下去直到句号。{/i}{/b}{/z}"
+    left, right = _split_translation(nested, 0.4)
+    assert left.endswith("{/i}{/b}{/z}")
+    assert right.startswith("{z120}{b}{i}")
+    assert strip_style_marks(left) + strip_style_marks(right) == strip_style_marks(nested)
 
 
-def test_save_after_redact_with_many_forms_keeps_first_form(tmp_path):
-    """redact 后 /Resources 是内联字典，写上百个表单再 garbage 保存会丢第一个表单
-    （MuPDF GC 对内联嵌套字典的 bug）。规范成间接引用后内容必须都在。"""
+def test_save_after_redact_keeps_resources_indirect(tmp_path):
+    """redact 把 /Resources 改成内联字典。写回前必须改成间接引用，否则大字典在 garbage 保存时会被写坏。"""
     import pymupdf as pm
-    from app.formats.pdf import _render_translated
+    from app.formats.pdf import TextBlock, _render_translated
 
     src = tmp_path / "t.pdf"
     doc = pm.open()
     page = doc.new_page(width=400, height=600)
     page.insert_text((40, 60), "First block here")
-    for i in range(40):
+    for i in range(8):
         page.insert_text((40, 80 + i * 12), f"Body line number {i} with enough text to matter")
     doc.save(src)
     doc.close()
 
-    from app.formats.pdf import extract_blocks
-    blocks = extract_blocks(pm.open(src))
-    # 每个块一句不同译文，制造大量表单
-    trans = [f"译文第{i}段的内容写在这里测试保存" for i, _ in enumerate(blocks)]
+    lines = ["First block here"] + [
+        f"Body line number {n} with enough text to matter" for n in range(8)
+    ]
+    blocks = []
+    for index, line in enumerate(lines):
+        y = 48 + index * 12
+        rect = pm.Rect(40, y, 360, y + 12)
+        blocks.append(TextBlock(
+            page=0, rect=rect, line_rects=[rect], text=line, size=11, color="#000000", bold=False,
+        ))
+    trans = [f"译文第{i}段的内容写在这里测试保存" for i in range(len(blocks))]
     out = _render_translated(src, blocks, trans, "zh-CN")
+    kind, value = out.xref_get_key(out[0].xref, "Resources")
+    assert kind == "xref" and value.endswith(" 0 R")
     data = out.tobytes(garbage=4, deflate=True)
     check = pm.open("pdf", data)
     text = check[0].get_text()

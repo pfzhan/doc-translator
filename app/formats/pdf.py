@@ -370,18 +370,23 @@ def _split_translation(t: str, ratio: float) -> tuple[str, str]:
 
 
 def _balance_marks(left: str, right: str) -> tuple[str, str]:
-    """切开处把没配对的样式标记补齐：左边补闭、右边补开，避免未闭合的 <b>。"""
-    for mark, close in (("{b}", "{/b}"), ("{i}", "{/i}")):
-        opens = left.count(mark) - left.count(close)
-        if opens > 0:
-            left += close * opens
-            right = mark * opens + right
-    for m in re.finditer(r"\{z(\d+)\}", left):
-        if left.count("{/z}") < left.count("{z"):
-            left += "{/z}"
-            right = m.group(0) + right
-            break
-    return left, right
+    """切开处补上仍开着的样式标记。字号不嵌套，必须重开还开着的那一个，不能重开更早已经闭合的。"""
+    open_stack: list[str] = []
+    for matched in STYLE_MARK_RE.finditer(left):
+        token = matched.group(0)
+        if token.startswith("{/"):
+            kind = token[2:-1]
+            for index in range(len(open_stack) - 1, -1, -1):
+                opened = open_stack[index]
+                if (kind == "z" and opened.startswith("{z")) or opened == "{" + kind + "}":
+                    del open_stack[index]
+                    break
+            continue
+        open_stack.append(token)
+    if not open_stack:
+        return left, right
+    closes = ["{/z}" if token.startswith("{z") else "{/" + token[1:] for token in reversed(open_stack)]
+    return left + "".join(closes), "".join(open_stack) + right
 
 
 def _merge_visual_lines(blocks: list[TextBlock]) -> list[TextBlock]:
@@ -1307,13 +1312,13 @@ def _line_baseline(spans: list[dict], line_top: float, line_h: float, em: float,
     return line_top + em * (1.12 if cjk else 1.0)
 
 
-def _typeset_line_html(line: TypesetLine, formulas: list[dict], cjk: bool = False) -> str:
+def _typeset_line_html(line: TypesetLine, formulas: list[dict]) -> str:
     """一行的 HTML。没有图的公式退回记录里的文字。"""
     parts: list[str] = []
     for piece in line.pieces:
         if isinstance(piece, TextPiece):
             if piece.text:
-                parts.append(_inline_marks(restore_emphasis(html.escape(piece.text), cjk)))
+                parts.append(_inline_marks(restore_emphasis(html.escape(piece.text))))
         elif isinstance(piece, FormulaPiece) and 1 <= piece.index <= len(formulas):
             formula = formulas[piece.index - 1]
             if not formula.get("has_img"):
@@ -1341,11 +1346,11 @@ def _place_plain(
     lines, em, gap, box = _fit_typeset(
         text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit,
     )
-    rendered = [_typeset_line_html(line, formulas, cjk) for line in lines]
+    rendered = [_typeset_line_html(line, formulas) for line in lines]
     body = nowrap_lines([line for line in rendered if line])
     if not body:
         return
-    align = "center" if centered else ("justify" if rect.width > page.rect.width * 0.6 else "left")
+    align = "center" if centered else "left"
     css = (
         f"* {{font-family: sans-serif; font-size: {em}px; color: {color}; "
         f"font-weight: {weight}; line-height: {gap}; margin: 0; padding: 0; text-align: {align};}}"
@@ -1395,7 +1400,7 @@ def _place_typeset(
             if isinstance(piece, TextPiece):
                 if not piece.text.strip():
                     continue
-                fragment = _inline_marks(restore_emphasis(html.escape(piece.text), cjk))
+                fragment = _inline_marks(restore_emphasis(html.escape(piece.text)))
                 html_text = f'<div{div_attrs}><span style="white-space:nowrap">{fragment}</span></div>'
                 # 单行盒子也要留首行出头的余量（MuPDF 一行内容高 = 行距 + ~0.25em），
                 # 否则每个小片都被静默缩到 0.93 倍
