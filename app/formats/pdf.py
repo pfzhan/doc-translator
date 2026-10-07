@@ -113,6 +113,7 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
     - 上行明显没到右边距（硬换行而非自动换行）且下行像新句子开头；上行以逗号等
       连接标点结尾、左跳只是缩进、或仍是同一条列表项的续行，都不算硬换行。
     自动换行的续行（小写开头、上行撑满）仍并入上一段。
+    标题行下面字号明显更小、又是完整句子的正文单独成段。角标拆出的短行字数不够，不拆。
     左跳/硬换行的比较基准是"上一条正文字号的行"（参考行）：上下标拆出的 dict
     小行会把左跳量算飞，让段落在公式处被切碎。
     items 的元素是 (行文本, 行 rect, 行 span, ...) 的元组，只用前三个。
@@ -160,15 +161,26 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         # 也不按硬换行拆开，否则数字被过滤不遮罩、标题单独翻，基线对不齐
         sec_label = (bool(re.fullmatch(r"\d+(?:\.\d+)*\.?", ptext.strip()))
                      and overlap > min(prect.y1 - prect.y0, rect.y1 - rect.y0) * 0.5)
+        line_size = max((s["size"] for s in items[i][2]), default=10)
+        # 12pt 标题下的 9pt 导语左缘只差一截节号，看起来像缩进。字号落下才是新段。
+        size_drop = (
+            not same_visual_line
+            and line_size < ref_size * 0.85
+            and _prose_units(stripped) >= 4
+        )
         if not same_visual_line and not sec_label and (
-            BULLET_RE.match(text) or NO_TEXT_RE.match(stripped) or prev_symbol or hard_break or left_jump
+            BULLET_RE.match(text) or NO_TEXT_RE.match(stripped) or prev_symbol
+            or hard_break or left_jump or size_drop
         ):
             groups.append(cur)
             cur = [i]
         else:
             cur.append(i)
+            size_drop = False
         isize = max((s["size"] for s in items[i][2]), default=10)
-        if isize >= ref_size * 0.79:
+        # 字号落下拆出的新段，基准改成这一行。否则后面的同字号续行仍对着标题拆。
+        # 角标短行不在这里更新，避免左跳量相对小行算飞。
+        if size_drop or isize >= ref_size * 0.79:
             ref, ref_size = i, isize
     groups.append(cur)
     return groups
@@ -519,11 +531,24 @@ def _merge_visual_lines(
     return out
 
 
-def _is_formula_span(span: dict, main_size: float) -> bool:
+def _smaller_prose_line(spans: list[dict], main_size: float) -> bool:
+    """这一行整体都比块里最大的标题小，而且是完整句子。那是标题下的正文，不是角标。"""
+    visible = [span for span in spans if str(span.get("text") or "").strip()]
+    if not visible or main_size <= 0:
+        return False
+    if max(float(span.get("size") or 0) for span in visible) >= main_size * 0.9:
+        return False
+    return _prose_units("".join(str(span.get("text") or "") for span in visible)) >= 4
+
+
+def _is_formula_span(span: dict, main_size: float, *, prose_line: bool = False) -> bool:
     """行内公式：数学字体的 span，或明显小于正文的角标 span（引用编号等）。
     粗体 CM（CMBX 等）的一两个字符按 mathbf 单字母算公式；粗体单词仍是正文。
-    正文字体里的希腊字母和数学符号也是公式。单个拉丁字母不是，除非贴在角标上。"""
-    if _font_is_math(span["font"]) or span["size"] < main_size * 0.79:
+    正文字体里的希腊字母和数学符号也是公式。单个拉丁字母不是，除非贴在角标上。
+    prose_line 为真时，整行都是比标题小的正文，不能单凭字号收成公式。"""
+    if _font_is_math(span["font"]):
+        return True
+    if span["size"] < main_size * 0.79 and not prose_line:
         return True
     if re.match(r"^CMB", span["font"]) and len(span["text"].strip()) <= 2:
         return True
@@ -805,12 +830,16 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
     # 1) 按 dict 行收集公式 run，并记录在块 span 流里的位置（供阅读序邻接判断）
     runs: list[dict] = []
     for line_no, spans in enumerate(block.span_lines):
+        prose_line = _smaller_prose_line(spans, block.size)
         i, n = 0, len(spans)
         while i < n:
-            if _is_formula_span(spans[i], block.size):
+            if _is_formula_span(spans[i], block.size, prose_line=prose_line):
                 run_spans = [spans[i]]
                 j = i + 1
-                while j < n and (not spans[j]["text"].strip() or _is_formula_span(spans[j], block.size)):
+                while j < n and (
+                    not spans[j]["text"].strip()
+                    or _is_formula_span(spans[j], block.size, prose_line=prose_line)
+                ):
                     run_spans.append(spans[j])
                     j += 1
                 while run_spans and not run_spans[-1]["text"].strip():

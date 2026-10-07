@@ -2222,6 +2222,48 @@ def test_same_page_continuations_merge():
     assert len(_merge_continuations(b2)) == 2
 
 
+def test_smaller_body_under_a_heading_splits():
+    """12pt 标题和 9pt 导语常在同一 dict 块。导语左缘只让出节号，不能当成缩进留在标题里。"""
+    from app.formats.pdf import _split_lines
+
+    items = [
+        _line("4.", 316, 326, 674, size=12),
+        _line("QUERY OPTIMIZATION", 338, 475, 674, size=12),
+        _line("We describe Orca's optimization workflow in Section 4.1.", 326, 556, 689, size=9),
+        _line("We then show how the process can be conducted in parallel.", 317, 556, 700, size=9),
+    ]
+    assert _split_lines(items) == [[0, 1], [2, 3]]
+    # 角标短行字数不够，即使更小也不拆。纯数字行本来就会按符号行拆开，这里用序数后缀。
+    script = [
+        _line("the i", 40, 80, 10, size=12),
+        _line("th", 82, 94, 6, size=7),
+    ]
+    assert _split_lines(script) == [[0, 1]]
+
+
+def test_heading_does_not_turn_the_following_sentence_into_a_formula():
+    """就算标题和导语还在一块里，9pt 正文也不能因为小于 12pt 就被裁成公式图。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text: str, size: float, x0: float, y0: float, font: str) -> dict[str, object]:
+        return {
+            "text": text, "font": font, "size": size, "flags": 16 if size >= 12 else 0,
+            "bbox": (x0, y0, x0 + max(8, len(text) * size * 0.45), y0 + size),
+            "origin": (x0, y0 + size * 0.8),
+        }
+
+    heading = [
+        span("4. ", 12, 0, 0, "NimbusRomNo9L-Medi"),
+        span("QUERY OPTIMIZATION", 12, 24, 0, "NimbusRomNo9L-Medi"),
+    ]
+    words = "We describe Orca optimization workflow in Section".split()
+    body = [span(word + " ", 9, index * 42, 16, "CMR9") for index, word in enumerate(words)]
+    sent, formulas = _placeholderize(_block_with_spans([heading, body], size=12), 0)
+    assert formulas == []
+    assert "{v" not in sent
+    assert "workflow" in sent
+
+
 def test_section_number_stays_with_heading():
     """'2.2' + 'Training' 两条 dict 行不能拆：纯数字被当符号行拆开后，数字被过滤
     不遮罩（原文残留）、标题单独翻，两者基线对不齐。"""
