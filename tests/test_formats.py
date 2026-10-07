@@ -915,6 +915,51 @@ def test_pdf_biblio_skips_on_attention_paper():
     assert not any(skips[viz + 1:])
 
 
+def test_skipped_bibliography_keeps_hanging_indent(tmp_path):
+    """跳过的引文留在原页。刊名斜体不能触发擦除重排，否则悬挂缩进和行尾断词会丢。"""
+    from app.formats.pdf import translate_pdf
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=420, height=240)
+    roman = pymupdf.Font("tiro")
+    italic = pymupdf.Font("tiit")
+    bold = pymupdf.Font("tibo")
+    writer = pymupdf.TextWriter(page.rect)
+    writer.append((40, 36), "A body paragraph long enough to set the median size.", font=roman, fontsize=10)
+    writer.append((40, 70), "References", font=bold, fontsize=14)
+    _, cursor = writer.append((40, 100), "[1] Smith, J. (2020). A paper. In ", font=roman, fontsize=9)
+    writer.append(cursor, "Proceedings of the Inter-", font=italic, fontsize=9)
+    _, cursor = writer.append((54, 112), "national Conference, ", font=italic, fontsize=9)
+    writer.append(cursor, "ICML, 2009.", font=roman, fontsize=9)
+    writer.write_text(page)
+    src = tmp_path / "refs.pdf"
+    doc.save(src)
+
+    before = pymupdf.open(src)[0]
+    national = before.search_for("national")
+    proceedings = before.search_for("Proceedings")
+    assert national and proceedings
+
+    [out] = run(translate_pdf(src, tmp_path, runner(), False, "zh-CN"))
+    page = pymupdf.open(out)[0]
+    assert "[zh-CN]" in page.get_text()
+    assert "Inter- national" not in page.get_text()
+    kept = page.search_for("national")
+    kept_proc = page.search_for("Proceedings")
+    assert kept and kept_proc
+    assert abs(kept[0].x0 - national[0].x0) < 0.8
+    assert abs(kept_proc[0].x0 - proceedings[0].x0) < 0.8
+    fonts = {
+        span["font"]
+        for block in page.get_text("dict")["blocks"] if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
+        if "Proceedings" in span["text"] or "national" in span["text"]
+    }
+    assert fonts
+    assert all("Times" in name or "NimbusRom" in name for name in fonts)
+
+
 def test_pdf_biblio_entry_with_bold_subheadings():
     """References 下先出现加粗小标题（Books/Articles）再出现引文，也要进入参考文献。"""
     from app.formats.pdf import TextBlock, biblio_skips

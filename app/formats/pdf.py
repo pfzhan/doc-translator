@@ -3005,12 +3005,21 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     flat_units: list[list[TextBlock]] = []
     name_i = 0
     for unit in units:
+        # 整单元都跳过时不打占位符、也不标斜体。标记后的字符串和原文不同，
+        # 写回会把原字擦掉重排，参考文献的悬挂缩进和行尾断词就没了。
+        if all(id(b) in skip_ids for b in unit):
+            flat_units.append(unit)
+            sent_texts.append(_join_lines(b.text for b in unit))
+            sent_formulas.append([])
+            sent_kinds.append(block_kind[id(unit[0])])
+            sent_skips.append(True)
+            continue
         sent, formulas, name_i = _prepare_unit(unit, name_i)
         flat_units.append(unit)
         sent_texts.append(sent)
         sent_formulas.append(formulas)
         sent_kinds.append(block_kind[id(unit[0])])
-        sent_skips.append(all(id(b) in skip_ids for b in unit))
+        sent_skips.append(False)
 
     raw = await runner.translate_all(sent_texts, kinds=sent_kinds, preview=True, skip=sent_skips)
 
@@ -3078,6 +3087,12 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             blocks[i - 1].text, blocks[i].text, translations[i - 1], translations[i],
         )
         per_block[id(blocks[i])] = translations[i]
+    # 段界去重也可能改到跳过的块。写回只认和原文逐字相同的字符串，才会把原字留下。
+    for b in blocks:
+        if id(b) in skip_ids:
+            per_block[id(b)] = b.text
+            block_formulas[id(b)] = []
+    translations = [per_block[id(b)] for b in blocks]
     _sync_unit_preview(runner, flat_units, sent_texts, per_block)
 
     def build():
