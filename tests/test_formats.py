@@ -1706,6 +1706,50 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
     assert pymupdf.Rect(30, 80, 210, 125).contains(hit2)
 
 
+def test_body_font_symbols_and_script_bases_become_formulas():
+    """Times 里的希腊字母是公式。贴在角标上的单字母并进角标。
+    斜体单词、孤立等号、引用上标前的 a 仍留在正文。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text, font, size, x0, y0, x1=None, y1=None, flags=0):
+        return {"text": text, "font": font, "size": size, "flags": flags,
+                "bbox": (x0, y0, x1 if x1 is not None else x0 + 8,
+                         y1 if y1 is not None else y0 + 10),
+                "origin": (x0, (y1 if y1 is not None else y0 + 10) - 2)}
+
+    greek = _block_with_spans([[
+        span("see ", "TimesNewRomanPSMT", 10, 0, 50),
+        span("α", "TimesNewRomanPSMT", 10, 28, 50, x1=36),
+        span(" here", "TimesNewRomanPSMT", 10, 38, 50),
+    ]], size=10.0)
+    sent, formulas = _placeholderize(greek)
+    assert sent == "see {v1} here" and len(formulas) == 1
+
+    base = _block_with_spans([
+        [span("let ", "TimesNewRomanPSMT", 10, 0, 50),
+         span("x", "TimesNewRomanPSMT", 10, 30, 50, x1=36)],
+        [span("i", "TimesNewRomanPSMT", 7, 34, 44, x1=38, y1=50)],
+    ], size=10.0)
+    sent_b, formulas_b = _placeholderize(base)
+    assert sent_b == "let {v1}" and len(formulas_b) == 1
+    assert "x" not in sent_b
+
+    cite = _block_with_spans([[
+        span("a", "TimesNewRomanPSMT", 10, 0, 50, x1=6),
+        span("1", "TimesNewRomanPSMT", 7, 8, 46, x1=12, y1=52),
+        span(" word", "TimesNewRomanPSMT", 10, 14, 50),
+    ]], size=10.0)
+    sent_c, _ = _placeholderize(cite)
+    assert sent_c.startswith("a") and "{v1}" in sent_c
+
+    equals = _block_with_spans([[
+        span("E ", "TimesNewRomanPSMT", 10, 0, 50),
+        span("=", "TimesNewRomanPSMT", 10, 14, 50, x1=22),
+        span(" mc", "TimesNewRomanPSMT", 10, 24, 50),
+    ]], size=10.0)
+    assert "=" in _placeholderize(equals)[0]
+
+
 def test_placeholderize_absorbs_accent_over_formula():
     """ŷ 的 ^ 常是独立 span（正文字体、不被判为公式），留在正文会在公式图边
     多出一个孤符号：落在公式 bbox 上的重音符要并进公式、正文里删掉。"""
@@ -1735,6 +1779,101 @@ def test_placeholderize_absorbs_accent_over_formula():
     sent2, _ = _placeholderize(b2, 0)
     assert "^" in sent2
 
+
+
+def test_same_line_gap_stays_inside_one_column():
+    """公式把一行拆成两块时，间隙小于栏沟就接上。另一栏即使只隔 4pt 也不接。"""
+    from app.formats.pdf import TextBlock, _merge_visual_lines
+    from app.formats.pdf_layout import Column, PageGeometry
+
+    def blk(text, x0, x1, y=100.0):
+        rect = pymupdf.Rect(x0, y, x1, y + 11)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text,
+                         size=10, color="#000", bold=False)
+
+    one = PageGeometry(400, (Column(30, 380),), ())
+    merged = _merge_visual_lines(
+        [blk("the value", 40, 90), blk("x", 93, 102), blk("is large", 105, 160)],
+        {0: one},
+    )
+    assert len(merged) == 1
+    assert merged[0].text == "the value x is large"
+
+    two = PageGeometry(400, (Column(30, 180), Column(186, 380)), (), reads_in_columns=True)
+    split = _merge_visual_lines(
+        [blk("left side", 40, 180), blk("continues", 184, 280)],
+        {0: two},
+    )
+    assert len(split) == 2
+
+
+def test_cjk_wrap_merges_and_short_labels_stay():
+    """左缘对齐、上行够长的中文换行接回一段。短标签和缩进的新段不接。"""
+    from app.formats.pdf import TextBlock, _cross_page_units, _merge_continuations
+
+    def blk(text, y, x0=40.0, x1=280.0, page=0, size=10.0):
+        rect = pymupdf.Rect(x0, y, x1, y + 12)
+        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text,
+                         size=size, color="#000", bold=False)
+
+    wrapped = _merge_continuations([
+        blk("这是一行已经写到栏边还没有句号的正文", 100),
+        blk("下一行从左缘接着写。", 114, x1=180),
+    ])
+    assert len(wrapped) == 1
+    assert wrapped[0].text.endswith("接着写。")
+
+    labels = _merge_continuations([
+        blk("姓名", 100, x1=70),
+        blk("年龄", 114, x1=70),
+    ])
+    assert len(labels) == 2
+
+    indented = _merge_continuations([
+        blk("这是一行已经写到栏边还没有句号的正文", 100),
+        blk("新的一段从缩进开始写起。", 114, x0=62, x1=220),
+    ])
+    assert len(indented) == 2
+
+    pages = _cross_page_units([
+        blk("上一页在这里被切断还没写完", 700, page=0),
+        blk("下一页从同一边距继续。", 60, page=1),
+    ], 10.0)
+    assert any(len(unit) == 2 for unit in pages)
+    heading = _cross_page_units([
+        blk("上一页在这里被切断还没写完", 700, page=0),
+        blk("1 引言", 60, page=1),
+    ], 10.0)
+    assert all(len(unit) == 1 for unit in heading)
+
+
+def test_caption_label_without_colon_merges():
+    """「图 2」「Fig. 1.」后面的注记要接上。标题和表格行不接。"""
+    from app.formats.pdf import TextBlock, _merge_caption_fragments
+
+    def blk(text, x0, y0, x1, size=10.0):
+        rect = pymupdf.Rect(x0, y0, x1, y0 + 10)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text,
+                         size=size, color="#000", bold=False)
+
+    zh = _merge_caption_fragments([
+        blk("图 2", 60, 100, 88),
+        blk("衰减曲线示意。", 60, 112, 160),
+    ])
+    assert len(zh) == 1
+    assert zh[0].text == "图 2衰减曲线示意。"
+
+    fig = _merge_caption_fragments([
+        blk("Fig. 1.", 60, 100, 98),
+        blk("Examples of decay", 104, 100, 220),
+    ])
+    assert len(fig) == 1
+
+    title = _merge_caption_fragments([
+        blk("Introduction", 40, 100, 130, size=12.0),
+        blk("Scholarly works.", 40, 130, 150, size=10.0),
+    ])
+    assert len(title) == 2
 
 
 def test_caption_fragments_merge_into_one_block():
@@ -2018,3 +2157,27 @@ def test_save_after_redact_keeps_resources_indirect(tmp_path):
     check = pm.open("pdf", data)
     text = check[0].get_text()
     assert "译文第0段" in text and f"译文第{len(blocks) - 1}段" in text
+
+
+def test_wrapped_formula_tail_stays_its_own_placeholder():
+    """跨可视行折行的公式（行末 'y_{t-1} =' + 下行开头 's|h_{t-1}'）不能并成一个
+    占位符：两片源坐标在不同行，一个槽位放不下，会摊成一坨。同一可视行的
+    序列元素（y^i_1, y^i_2）仍并成一个。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text, font, size, x0, y0, x1=None, y1=None):
+        return {"text": text, "font": font, "size": size,
+                "bbox": (x0, y0, x1 if x1 is not None else x0 + 10,
+                         y1 if y1 is not None else y0 + 10),
+                "origin": (x0, (y1 if y1 is not None else y0 + 10) - 2)}
+
+    b = _block_with_spans([
+        [span("taken as ", "TimesNewRomanPSMT", 10, 100, 100),
+         span("y", "CMMI10", 10, 400, 100, x1=405, y1=110),
+         span("t−1 =", "CMR7", 7, 405, 104, x1=415, y1=110)],
+        [span("s|h", "CMMI10", 10, 108, 114, x1=120, y1=124),
+         span("t−1", "CMR7", 7, 120, 117, x1=128, y1=124),
+         span("). This", "TimesNewRomanPSMT", 10, 130, 114)],
+    ], size=10.0)
+    _, formulas = _placeholderize(b, 0)
+    assert len(formulas) == 2  # 'yt−1 =' 和 's|ht−1' 各自一个占位符

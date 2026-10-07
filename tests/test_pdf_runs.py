@@ -92,6 +92,20 @@ def test_assign_splits_at_the_run_boundary_not_by_ratio():
     assert strip_boundary("甲乙丙丁戊己庚辛，壬癸。{|}续页。") == "甲乙丙丁戊己庚辛，壬癸。 续页。"
 
 
+def test_stroke_just_outside_the_glyph_box_joins_the_formula():
+    """分式线贴在框外、根号竖笔贴在左侧时要收进裁剪。通栏线和下划线不收。"""
+    box = pymupdf.Rect(40, 40, 70, 54)
+    bar = pymupdf.Rect(38, 36.8, 74, 38.2)  # 高出框 1.8pt 的分式线
+    radical = pymupdf.Rect(32, 38, 39, 56)  # 贴在左侧的根号
+    rule = pymupdf.Rect(0, 37, 400, 38.2)  # 贴着框、但是通栏
+    underline = pymupdf.Rect(10, 52, 38, 53.2)  # 左侧单词的下划线
+    curves = intersecting_curves(box, [bar, radical, rule, underline])
+    assert pymupdf.Rect(bar) in curves
+    assert pymupdf.Rect(radical) in curves
+    assert pymupdf.Rect(rule) not in curves
+    assert pymupdf.Rect(underline) not in curves
+
+
 def test_intersecting_curve_joins_the_formula_box():
     box = pymupdf.Rect(40, 40, 70, 54)
     bar = pymupdf.Rect(42, 38, 68, 42)  # 压在框顶上的分式线
