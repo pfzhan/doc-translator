@@ -93,8 +93,8 @@ def _join_lines(lines: list[str]) -> str:
             out = out[:-1] + line  # 行尾连字符断词（德语等断词后首字母可能大写）
         elif CJK_RE.search(out[-1]) or CJK_RE.search(line[0]):
             out += line
-        elif line[:1] in ")]}>，。；：、）】」":
-            out += line  # 换行后的右括号贴回公式，不在 ) 前加空格
+        elif line[:1] in ")]}>，。；：、）】」.,":
+            out += line  # 换行后的右括号、句号贴回公式，不在标点前加空格
         else:
             out += " " + line
     return out
@@ -587,6 +587,182 @@ def _absorb_script_bases(runs: list[dict], span_lines: list[list[dict]], block_s
                 run["pos"] = (line_no, index, end)
             taken.add(id(span))
             break
+
+
+# 数学罗马体（CMR）在黑名单里，不当公式字体。贴着公式的数字、括号、算子名仍是式子的一部分。
+_CM_ROMAN_RE = re.compile(r"CMR\d")
+_OPERATOR_NAMES = (
+    "arg|max|min|log|ln|sin|cos|tan|cot|sec|csc|exp|lim|sup|inf|det|dim|"
+    "ker|gcd|mod|sgn|deg|hom|Pr|arcsin|sinh|cosh"
+)
+_GLUE_ATOM = rf"(?:[\d.()\[\]{{}}|]+|(?:{_OPERATOR_NAMES}))"
+_MATH_GLUE_RE = re.compile(rf"^(?:{_GLUE_ATOM})(?:\s+{_GLUE_ATOM})*$")
+_ORDINAL_SUFFIXES = {"st", "nd", "rd", "th"}
+
+
+def _is_math_glue(span: dict) -> bool:
+    """CMR 上的数字、括号或算子名。正文字体里的同形字不收。"""
+    if not _CM_ROMAN_RE.search(str(span.get("font") or "")):
+        return False
+    return bool(_MATH_GLUE_RE.match(str(span.get("text") or "").strip()))
+
+
+def _attach_span(run: dict, span: dict, line_no: int, index: int) -> None:
+    run["spans"].append(span)
+    run["bbox"] |= pymupdf.Rect(span["bbox"])
+    run["max_size"] = max(float(run["max_size"]), float(span.get("size") or 0))
+    cur_line, start, end = run["pos"]
+    if line_no == cur_line:
+        run["pos"] = (cur_line, min(start, index), max(end, index))
+
+
+def _gap_is_clear(
+    span: dict, run: dict, span_lines: list[list[dict]], taken: set[int],
+) -> bool:
+    """两框之间不能隔着还没收进公式的字。空白可以。"""
+    box = pymupdf.Rect(span["bbox"])
+    other = run["bbox"]
+    if box.x0 <= other.x0:
+        left, right = box.x1, other.x0
+    else:
+        left, right = other.x1, box.x0
+    if right - left <= 0.4:
+        return True
+    for line in span_lines:
+        for item in line:
+            if id(item) in taken or id(item) == id(span) or not str(item.get("text") or "").strip():
+                continue
+            item_box = pymupdf.Rect(item["bbox"])
+            if item_box.x1 <= left + 0.2 or item_box.x0 >= right - 0.2:
+                continue
+            y_overlap = min(box.y1, item_box.y1) - max(box.y0, item_box.y0)
+            if y_overlap > 0:
+                return False
+    return True
+
+
+def _glue_host(
+    span: dict, runs: list[dict], span_lines: list[list[dict]],
+    block_size: float, taken: set[int],
+) -> dict | None:
+    box = pymupdf.Rect(span["bbox"])
+    best: tuple[float, dict] | None = None
+    for run in runs:
+        other = run["bbox"]
+        y_overlap = min(box.y1, other.y1) - max(box.y0, other.y0)
+        if y_overlap <= 0.3 * min(box.height, other.height):
+            continue
+        gap = box.x0 - other.x1 if box.x0 >= other.x0 else other.x0 - box.x1
+        if gap < 0:
+            gap = 0.0
+        if gap >= block_size * 0.8 or not _gap_is_clear(span, run, span_lines, taken):
+            continue
+        if best is None or gap < best[0]:
+            best = (gap, run)
+    return best[1] if best else None
+
+
+def _blanks_between(
+    span: dict, run: dict, span_lines: list[list[dict]], taken: set[int],
+) -> list[tuple[int, int, dict]]:
+    """公式和这段胶水之间的空白。收进公式后，送翻文本里不再留一个空档。"""
+    box = pymupdf.Rect(span["bbox"])
+    other = run["bbox"]
+    if box.x0 <= other.x0:
+        left, right = box.x1, other.x0
+    else:
+        left, right = other.x1, box.x0
+    if right - left <= 0.4:
+        return []
+    found: list[tuple[int, int, dict]] = []
+    for line_no, line in enumerate(span_lines):
+        for index, item in enumerate(line):
+            if id(item) in taken or str(item.get("text") or "").strip():
+                continue
+            item_box = pymupdf.Rect(item["bbox"])
+            if item_box.x0 < left - 0.4 or item_box.x1 > right + 0.4:
+                continue
+            y_overlap = min(box.y1, item_box.y1) - max(box.y0, item_box.y0)
+            if y_overlap > 0:
+                found.append((line_no, index, item))
+    return found
+
+
+def _absorb_math_glue(
+    runs: list[dict], span_lines: list[list[dict]], block_size: float,
+) -> None:
+    """把贴着公式的 CMR 数字、括号、算子名并进公式。远处的数字仍是正文。"""
+    taken = {id(span) for run in runs for span in run["spans"]}
+    pending = [
+        (line_no, index, span)
+        for line_no, line in enumerate(span_lines)
+        for index, span in enumerate(line)
+        if id(span) not in taken and _is_math_glue(span)
+    ]
+    while pending:
+        attached = False
+        still: list[tuple[int, int, dict]] = []
+        for line_no, index, span in pending:
+            host = _glue_host(span, runs, span_lines, block_size, taken)
+            if host is None:
+                still.append((line_no, index, span))
+                continue
+            for blank_line, blank_index, blank in _blanks_between(span, host, span_lines, taken):
+                _attach_span(host, blank, blank_line, blank_index)
+                taken.add(id(blank))
+            _attach_span(host, span, line_no, index)
+            taken.add(id(span))
+            attached = True
+        if not attached:
+            return
+        pending = still
+
+
+def _ordinal_reading(run: dict, block_size: float) -> str | None:
+    """i^{th}、1^{st} 这类序数。上标不是 st/nd/rd/th 的角标不是序数。"""
+    base: list[str] = []
+    suffix: list[str] = []
+    for span in run["spans"]:
+        text = str(span.get("text") or "").strip()
+        if not text:
+            continue
+        if float(span.get("size") or 0) < block_size * 0.79:
+            suffix.append(text)
+        else:
+            base.append(text)
+    tail = "".join(suffix).lower()
+    head = "".join(base)
+    if tail not in _ORDINAL_SUFFIXES or not re.fullmatch(r"[A-Za-z]|\d{1,3}", head):
+        return None
+    return f"{head}-{tail}"
+
+
+def _release_ordinals(runs: list[dict], block_size: float) -> tuple[dict[int, str], set[int]]:
+    """序数不做成公式图，改成 i-th 送翻，模型才能译成「第 i 个」。"""
+    kept: list[dict] = []
+    ordinal_at: dict[int, str] = {}
+    ordinal_skip: set[int] = set()
+    for run in runs:
+        reading = _ordinal_reading(run, block_size)
+        if reading is None:
+            kept.append(run)
+            continue
+        anchor = next(
+            (span for span in run["spans"] if str(span.get("text") or "").strip()
+             and float(span.get("size") or 0) >= block_size * 0.79),
+            None,
+        )
+        if anchor is None:
+            kept.append(run)
+            continue
+        ordinal_at[id(anchor)] = reading
+        for span in run["spans"]:
+            if span is not anchor and str(span.get("text") or "").strip():
+                ordinal_skip.add(id(span))
+    runs[:] = kept
+    return ordinal_at, ordinal_skip
+
+
 # 重音符号（hat/tilde/bar/dot 等）：落在公式 bbox 上的要并进公式，不能留在正文
 _ACCENT_CHARS = {"^", "ˆ", "̂", "~", "̃", "¯", "̄", "´", "`", "˙", "̇", "¨", "̈", "ˇ", "̌", "⃗"}
 
@@ -630,6 +806,8 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
             else:
                 i += 1
     _absorb_script_bases(runs, block.span_lines, block.size)
+    ordinal_at, ordinal_skip = _release_ordinals(runs, block.size)
+    _absorb_math_glue(runs, block.span_lines, block.size)
 
     # 2) 归并 run，两种情形：
     # a) 上下标拆到不同 dict 行：x 交叠够深（≥30% 较窄 run 的宽）且必有一方是小字号
@@ -674,6 +852,10 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 m["spans"].extend(r["spans"])
                 m["bbox"] |= r["bbox"]
                 m["max_size"] = hi
+                m_line, m_start, m_end = m["pos"]
+                r_line, r_start, r_end = r["pos"]
+                if m_line == r_line:
+                    m["pos"] = (m_line, min(m_start, r_start), max(m_end, r_end))
                 continue
         merged.append(r)
 
@@ -768,8 +950,17 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 flush()
                 runs.append(formula_runs[n])
                 parts.append(writer.atom(f"{{v{n}}}"))
-            elif id(s) in formula_ids:
-                continue  # 已被某个公式吞掉
+            elif id(s) in formula_ids or id(s) in ordinal_skip:
+                continue  # 已被某个公式吞掉，或是序数的上标
+            elif id(s) in ordinal_at:
+                reading = ordinal_at[id(s)]
+                emphasis = emphasis_of(s.get("font") or "", int(s.get("flags") or 0))
+                parts.append(writer.text(reading, emphasis, float(s.get("size") or 0)))
+                shown = dict(s)
+                shown["text"] = reading
+                if pending is not None and not _same_text_style(pending, s, emphasis):
+                    flush()
+                pending = _extend_text_run(pending, shown, emphasis, line_no)
             else:
                 emphasis = emphasis_of(s.get("font") or "", int(s.get("flags") or 0))
                 parts.append(writer.text(s["text"], emphasis, float(s.get("size") or 0)))
