@@ -283,6 +283,33 @@ def formula_index(token: str) -> int | None:
 _NO_FORMULA_SPACE = frozenset("。，、；：？！）】」』〉》％%.,;:?!)]}>（【「『《〈([{")
 
 
+_MARK_RUN = r"(?:\{/?[bi]\}|\{z\d+\}|\{/z\})*"
+_CJK_CHAR = r"[぀-ヿ㐀-鿿가-힯]"
+_LATIN_CHAR = r"[A-Za-z]"
+
+
+def space_around_latin(text: str) -> str:
+    """汉字和夹在中间的拉丁字母两侧各留一个空格。
+
+    序数写成 {i} i-th{/i} 时，空格在斜体里面，后面的汉字又贴着字母。
+    把标记内的空格挪出来，边界上没有的补一个，已经有的收成一个。
+    """
+    if not text or not _CJK_RE.search(text):
+        return text
+    text = re.sub(r"(\{(?:[bi]|z\d+)\})\s+", r" \1", text)
+    text = re.sub(r"\s+(\{/(?:[bi]|z)\})", r"\1 ", text)
+    text = re.sub(
+        rf"({_CJK_CHAR})[ \t]*({_MARK_RUN})[ \t]*({_LATIN_CHAR})",
+        r"\1 \2\3",
+        text,
+    )
+    return re.sub(
+        rf"({_LATIN_CHAR})[ \t]*({_MARK_RUN})[ \t]*({_CJK_CHAR})",
+        r"\1\2 \3",
+        text,
+    )
+
+
 def separate_after_formula(text: str) -> str:
     """公式哨兵后面如果直接接字母、数字或汉字，补一个空格。"""
     if "\x01i\x02" not in text:

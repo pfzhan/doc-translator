@@ -2472,6 +2472,51 @@ def test_cjk_lines_share_the_right_edge(tmp_path):
     assert rect.y0 - 2 < grouped[0][0][3] < rect.y1
 
 
+def test_italic_run_does_not_open_a_wide_gap_before_the_formula(tmp_path):
+    """i-th 两侧各有一个空格。斜体按 0.5em 估宽会把后面的公式推开，应贴着写出的字。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=500, height=200)
+    page.insert_text((80, 80), "y=", fontsize=11)
+    doc.save(src)
+    doc.close()
+    d = pymupdf.open(src)
+    y_box = d[0].search_for("y=")[0]
+    d.close()
+    formula = {
+        "bbox": y_box, "name": "f0_1.png", "w": round(y_box.width, 1), "h": round(y_box.height, 1),
+        "d": 2.0, "raise": 0.0, "text": "y=", "has_img": True, "page": 0, "mid": 0,
+        "png": pymupdf.open(src)[0].get_pixmap(clip=y_box, dpi=72).tobytes("png"),
+        "spans": [{"bbox": tuple(y_box), "text": "y=", "size": 10, "origin": (y_box.x0, y_box.y1 - 2)}],
+    }
+    rect = pymupdf.Rect(40, 40, 460, 120)
+    block = TextBlock(
+        page=0, rect=rect, line_rects=[rect],
+        text="the i-th token", size=11, color="#000", bold=False,
+    )
+    sentinel = "\x01i\x021\x01/i\x02"
+    out = _render_translated(
+        src, [block], [f"第{{i}} i-th{{/i}}个词元{sentinel}。"], "zh-CN", {id(block): [formula]},
+    )
+    page = out[0]
+    spans = [
+        span
+        for blk in page.get_text("dict")["blocks"] if blk.get("type") == 0
+        for ln in blk["lines"] for span in ln["spans"]
+    ]
+    italic = next(span for span in spans if "i-th" in span["text"])
+    before = next(span for span in spans if span["text"].endswith("第"))
+    after = next(span for span in spans if span["text"].startswith("个"))
+    assert 1.2 <= italic["bbox"][0] - before["bbox"][2] <= 5
+    assert 1.2 <= after["bbox"][0] - italic["bbox"][2] <= 5
+    yuan = next(span for span in spans if "元" in span["text"])
+    painted = page.search_for("y=")
+    assert painted
+    assert painted[0].x0 - yuan["bbox"][2] < 5
+
+
 def test_formula_keeps_a_space_before_following_text(tmp_path):
     """公式后面接文字时，中间有一个空格宽的分界，不贴在一起。"""
     from app.formats.pdf import TextBlock, _render_translated

@@ -27,6 +27,7 @@ from .pdf_flow import (
     peel_leading_space,
     restore_emphasis,
     separate_after_formula,
+    space_around_latin,
     strip_style_marks,
     writer_for,
 )
@@ -2051,7 +2052,7 @@ def _place_plain(
     archive: pymupdf.Archive | None,
 ) -> None:
     """排版器断行，再写入。中文按字形两端对齐；缺字或带样式标记时退回一个 HTML 盒子。"""
-    text = separate_after_formula(text)
+    text = space_around_latin(separate_after_formula(text))
     lines, em, gap, box = _fit_typeset(
         text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit,
     )
@@ -2080,6 +2081,23 @@ def _place_plain(
     _insert_fitting(page, box, html_text, css, obstacles, archive, right_limit)
 
 
+def _written_right(page: "pymupdf.Page", x0: float, y0: float, y1: float) -> float:
+    """这一条刚写进去的文字的右缘。估算宽度不准时，下一槽跟着它走。"""
+    right = x0
+    for block in page.get_text("dict")["blocks"]:
+        if block.get("type") != 0:
+            continue
+        for line in block["lines"]:
+            for span in line["spans"]:
+                box = span.get("bbox")
+                if not box or not str(span.get("text") or "").strip():
+                    continue
+                if box[3] < y0 - 1 or box[1] > y1 + 1 or box[0] < x0 - 1:
+                    continue
+                right = max(right, float(box[2]))
+    return right
+
+
 def _place_typeset(
     page: "pymupdf.Page",
     doc: "pymupdf.Document",
@@ -2101,7 +2119,7 @@ def _place_typeset(
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
 ) -> None:
     """按行写入文字，公式槽用记录的下沿贴到该行基线。"""
-    text = separate_after_formula(text)
+    text = space_around_latin(separate_after_formula(text))
     lines, em, gap, box = _fit_typeset(
         text, formulas, rect, em, block.size, cjk, page, obstacles, right_limit,
     )
@@ -2121,27 +2139,35 @@ def _place_typeset(
         origin_x = box.x0
         if centered and line.width < box.width:
             origin_x += (box.width - line.width) / 2
+        # 拉丁字母按 0.5em 估算，i-th 这种窄词会偏宽。公式若跟估算走，就会被推开。
+        # 文字按实际写出的右缘接着排，两侧只留公式槽自己的 2pt。
+        cursor = origin_x
+        after_formula = False
         for piece in line.pieces:
             if isinstance(piece, TextPiece):
                 if not piece.text.strip():
                     continue
-                # 公式后的分界空格在单独的盒子开头会被吃掉，改成同样宽的偏移
                 body, had_space = peel_leading_space(piece.text)
-                lead = em * 0.33 if had_space else 0.0
+                if had_space and not after_formula:
+                    cursor += em * 0.33
                 fragment = _inline_marks(restore_emphasis(html.escape(body)))
                 html_text = f'<div{div_attrs}><span style="white-space:nowrap">{fragment}</span></div>'
-                # 单行盒子也要留首行出头的余量（MuPDF 一行内容高 = 行距 + ~0.25em），
-                # 否则每个小片都被静默缩到 0.93 倍
-                slot = pymupdf.Rect(origin_x + piece.x + lead, y,
-                                    origin_x + piece.x + piece.width + 4,
-                                    y + line_h + em * 0.3)
+                # 盒子按估算加宽，避免窄词被缩字；落位不用这个宽，用写出的右缘。
+                slot = pymupdf.Rect(
+                    cursor, y, cursor + max(piece.width, 4) + 4, y + line_h + em * 0.3,
+                )
                 if not _try_insert(page, slot, html_text, css, 0.9):
                     try:
                         page.insert_htmlbox(slot, html_text, css=css, scale_low=0)
                     except AssertionError:
                         pass
+                written = _written_right(page, cursor, slot.y0, slot.y1)
+                cursor = written if written > cursor + 0.4 else cursor + piece.width
+                after_formula = False
             elif isinstance(piece, FormulaPiece) and 1 <= piece.index <= len(formulas):
-                pending.append((piece, origin_x + piece.x, y))
+                pending.append((piece, cursor, y))
+                cursor += piece.slot_width
+                after_formula = True
         y += line_h
     if not pending:
         return
