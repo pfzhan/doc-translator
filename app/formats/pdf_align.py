@@ -3,14 +3,16 @@
 MuPDF 的 letter-spacing、word-spacing、text-align:justify 都拉不动纯汉字行。
 这里按字形自己写文本：非末行的余量摊到字与字之间，标点前面不拉开。
 复制出来的仍是原来的字，不含为对齐插入的空格。
+斜体标记不改走 HTML：汉字没有斜体字形，仍用正文字体；拉丁字母换斜体字体。
 """
 from __future__ import annotations
 
+import re
+import unicodedata
 from dataclasses import dataclass
 
 import pymupdf
 
-from .pdf_flow import STYLE_MARK_RE
 from .pdf_typeset import FormulaPiece, TextPiece, TypesetLine
 
 # htmlbox 首行 origin 相对盒子顶的比例。和它对齐，换写法后行高不变。
@@ -23,7 +25,15 @@ _MAX_GAP_EM = 0.35
 _NO_GAP_BEFORE = frozenset("。，、；：？！）】」』〉》％%.,;:?!)]}>")
 _NO_GAP_AFTER = frozenset("（【「『《〈([{")
 
+_MARK_RE = re.compile(r"\{i\}|\{/i\}|\{b\}|\{/b\}|\{/z\}|\{z(\d+)\}")
+_LATIN_FONTS = {
+    (True, False): ("DocIT", "heit"),
+    (False, True): ("DocBO", "hebo"),
+    (True, True): ("DocBI", "hebi"),
+}
+
 _font: pymupdf.Font | None = None
+_latin: dict[str, pymupdf.Font] = {}
 
 
 @dataclass(frozen=True)
@@ -33,11 +43,142 @@ class FormulaSlot:
     baseline: float
 
 
+@dataclass(frozen=True)
+class _Run:
+    text: str
+    italic: bool
+    bold: bool
+    size_pct: int
+
+
+@dataclass(frozen=True)
+class _Segment:
+    text: str
+    font_name: str
+    font: pymupdf.Font
+    size: float
+
+    @property
+    def width(self) -> float:
+        return self.font.text_length(self.text, self.size) if self.text else 0.0
+
+
 def cjk_font() -> pymupdf.Font:
     global _font
     if _font is None:
         _font = pymupdf.Font("china-ss")
     return _font
+
+
+def _latin_font(italic: bool, bold: bool) -> tuple[str, pymupdf.Font]:
+    name, builtin = _LATIN_FONTS[(italic, bold)]
+    face = _latin.get(name)
+    if face is None:
+        face = pymupdf.Font(builtin)
+        _latin[name] = face
+    return name, face
+
+
+def _styled_runs(text: str) -> list[_Run]:
+    """按 {i} {b} {zN} 切开。标记本身不占字。"""
+    italic = False
+    bold = False
+    size = 100
+    runs: list[_Run] = []
+    buf: list[str] = []
+
+    def flush() -> None:
+        if buf:
+            runs.append(_Run("".join(buf), italic, bold, size))
+            buf.clear()
+
+    index = 0
+    while index < len(text):
+        mark = _MARK_RE.match(text, index)
+        if mark is None:
+            buf.append(text[index])
+            index += 1
+            continue
+        flush()
+        token = mark.group(0)
+        if token == "{i}":
+            italic = True
+        elif token == "{/i}":
+            italic = False
+        elif token == "{b}":
+            bold = True
+        elif token == "{/b}":
+            bold = False
+        elif token == "{/z}":
+            size = 100
+        else:
+            size = int(mark.group(1))
+        index = mark.end()
+    flush()
+    return runs
+
+
+def _keeps_body_font(char: str) -> bool:
+    """汉字和全角符号没有斜体字形，强调也不换字体。"""
+    code = ord(char)
+    if 0x3040 <= code <= 0x30FF or 0x3400 <= code <= 0x9FFF or 0xAC00 <= code <= 0xD7AF:
+        return True
+    return unicodedata.east_asian_width(char) in ("W", "F")
+
+
+def _face_for(char: str, italic: bool, bold: bool) -> tuple[str, pymupdf.Font] | None:
+    body = cjk_font()
+    if _keeps_body_font(char) or not (italic or bold):
+        if body.has_glyph(ord(char)):
+            return _FONT_NAME, body
+        if not (italic or bold):
+            return None
+    name, face = _latin_font(italic, bold)
+    if face.has_glyph(ord(char)):
+        return name, face
+    if body.has_glyph(ord(char)):
+        return _FONT_NAME, body
+    return None
+
+
+def _append_segment(
+    segments: list[_Segment],
+    buf: list[str],
+    face: tuple[str, pymupdf.Font] | None,
+    size: float,
+) -> None:
+    if not buf or face is None:
+        return
+    name, font = face
+    text = "".join(buf)
+    if segments and segments[-1].font_name == name and segments[-1].size == size:
+        prev = segments[-1]
+        segments[-1] = _Segment(prev.text + text, name, font, size)
+    else:
+        segments.append(_Segment(text, name, font, size))
+    buf.clear()
+
+
+def _segments(text: str, em: float) -> list[_Segment] | None:
+    """同一字体、同一字号的相邻片段合成一段。缺字返回 None。"""
+    if "\x01" in text:
+        return None
+    segments: list[_Segment] = []
+    for run in _styled_runs(text):
+        pct = run.size_pct if 50 <= run.size_pct <= 200 else 100
+        size = em * pct / 100.0
+        buf: list[str] = []
+        face: tuple[str, pymupdf.Font] | None = None
+        for char in run.text:
+            picked = _face_for(char, run.italic, run.bold)
+            if picked is None:
+                return None
+            if face is not None and picked != face:
+                _append_segment(segments, buf, face, size)
+            face = picked
+            buf.append(char)
+        _append_segment(segments, buf, face, size)
+    return segments
 
 
 def can_stretch(left: str, right: str) -> bool:
@@ -72,16 +213,16 @@ def draw_cjk_lines(
     image_indexes: frozenset[int],
     fallback_text: dict[int, str],
 ) -> list[FormulaSlot] | None:
-    """写成两端对齐的行。缺字或带样式标记时返回 None，调用方改走 HTML 盒子。"""
-    font = cjk_font()
+    """写成两端对齐的行。缺字时返回 None，调用方改走 HTML 盒子。"""
     placed = _place_lines(
-        lines, box, em, gap, color, centered, font, image_indexes, fallback_text, page.rect.height,
+        lines, box, em, gap, color, centered, image_indexes, fallback_text, page.rect.height,
     )
     if placed is None:
         return None
-    commands, slots = placed
+    commands, slots, fonts = placed
     if commands:
-        page.insert_font(fontname=_FONT_NAME, fontbuffer=font.buffer)
+        for name, face in fonts.items():
+            page.insert_font(fontname=name, fontbuffer=face.buffer)
         _append_contents(page, doc, commands)
     return slots
 
@@ -93,25 +234,24 @@ def _place_lines(
     gap: float,
     color: str,
     centered: bool,
-    font: pymupdf.Font,
     image_indexes: frozenset[int],
     fallback_text: dict[int, str],
     page_height: float,
-) -> tuple[str, list[FormulaSlot]] | None:
+) -> tuple[str, list[FormulaSlot], dict[str, pymupdf.Font]] | None:
     red, green, blue = _rgb(color)
     chunks: list[str] = [
         "q",
         "BT",
         f"{red:.4f} {green:.4f} {blue:.4f} rg",
-        f"/{_FONT_NAME} {em:.2f} Tf",
     ]
     slots: list[FormulaSlot] = []
+    fonts: dict[str, pymupdf.Font] = {}
     last = len(lines) - 1
     wrote = False
     for index, line in enumerate(lines):
         baseline = box.y0 + em * FIRST_BASELINE + index * em * gap
         row = _place_line(
-            line, box.x0, box.width, em, font,
+            line, box.x0, box.width, em,
             justify=not centered and index != last,
             centered=centered,
             image_indexes=image_indexes,
@@ -119,7 +259,8 @@ def _place_lines(
         )
         if row is None:
             return None
-        ops, line_slots = row
+        ops, line_slots, line_fonts = row
+        fonts.update(line_fonts)
         if ops:
             wrote = True
             pdf_y = page_height - baseline
@@ -127,10 +268,10 @@ def _place_lines(
         for slot_index, slot_x in line_slots:
             slots.append(FormulaSlot(slot_index, slot_x, baseline))
     if not wrote and not slots:
-        return "", []
+        return "", [], {}
     chunks.append("ET")
     chunks.append("Q")
-    return "\n".join(chunks) + "\n", slots
+    return "\n".join(chunks) + "\n", slots, fonts
 
 
 def _place_line(
@@ -138,30 +279,28 @@ def _place_line(
     x0: float,
     width: float,
     em: float,
-    font: pymupdf.Font,
     justify: bool,
     centered: bool,
     image_indexes: frozenset[int],
     fallback_text: dict[int, str],
-) -> tuple[list[str], list[tuple[int, float]]] | None:
+) -> tuple[list[str], list[tuple[int, float]], dict[str, pymupdf.Font]] | None:
     """一行的文本操作（基线 y 先写成 {Y}）和公式槽的横坐标。"""
+    pieces: list[tuple[list[_Segment], int | None, float, str]] = []
+    fonts: dict[str, pymupdf.Font] = {}
     for piece in line.pieces:
-        if isinstance(piece, TextPiece) and (STYLE_MARK_RE.search(piece.text) or "\x01" in piece.text):
+        drawn = _draw_piece(piece, em, image_indexes, fallback_text)
+        if drawn is None:
             return None
-    parts = [_visible(piece, image_indexes, fallback_text) for piece in line.pieces]
-    texts: list[str | None] = []
-    widths: list[float] = []
-    for piece, text in zip(line.pieces, parts):
-        if text is None:
-            if not isinstance(piece, FormulaPiece):
-                return None
-            texts.append(None)
-            widths.append(piece.slot_width)
-            continue
-        if "\x01" in text or _glyphs(font, text) is None:
-            return None
-        texts.append(text)
-        widths.append(font.text_length(text, em) if text else 0.0)
+        segments, slot = drawn
+        for seg in segments:
+            fonts[seg.font_name] = seg.font
+        if slot is not None:
+            pieces.append((segments, slot, piece.slot_width if isinstance(piece, FormulaPiece) else 0.0, ""))
+        else:
+            visible = "".join(seg.text for seg in segments)
+            pieces.append((segments, None, sum(seg.width for seg in segments), visible))
+    texts: list[str | None] = [None if slot is not None else visible for _, slot, _, visible in pieces]
+    widths = [piece_width for _, _, piece_width, _ in pieces]
     total = sum(widths)
     slack = width - total
     extras = _line_extras(texts, slack, em) if justify and slack > 0 else []
@@ -169,23 +308,49 @@ def _place_line(
     ops: list[str] = []
     slots: list[tuple[int, float]] = []
     extra_at = 0
-    for piece, text, piece_width in zip(line.pieces, texts, widths):
-        if text is None:
-            if isinstance(piece, FormulaPiece):
-                slots.append((piece.index, cursor))
+    face_now: tuple[str, float] | None = None
+    for segments, slot, piece_width, visible in pieces:
+        if slot is not None:
+            slots.append((slot, cursor))
             cursor += piece_width
             continue
-        count = max(len(text) - 1, 0)
+        count = max(len(visible) - 1, 0)
         piece_extras = extras[extra_at:extra_at + count]
         extra_at += count
-        glyphs = _glyphs(font, text)
-        if glyphs is None:
-            return None
-        if text:
+        pos = 0
+        for seg in segments:
+            n = len(seg.text)
+            internal = piece_extras[pos:pos + max(n - 1, 0)]
+            glyphs = _glyphs(seg.font, seg.text)
+            if glyphs is None:
+                return None
+            if (seg.font_name, seg.size) != face_now:
+                ops.append(f"/{seg.font_name} {seg.size:.2f} Tf")
+                face_now = (seg.font_name, seg.size)
             ops.append(f"1 0 0 1 {cursor:.2f} {{Y}} Tm")
-            ops.append(_tj(glyphs, piece_extras, em))
-        cursor += piece_width + sum(piece_extras)
-    return ops, slots
+            ops.append(_tj(glyphs, internal, seg.size))
+            advance = seg.width + sum(internal)
+            pos += n
+            if pos < len(visible) and pos - 1 < len(piece_extras):
+                advance += piece_extras[pos - 1]
+            cursor += advance
+    return ops, slots, fonts
+
+
+def _draw_piece(
+    piece: TextPiece | FormulaPiece,
+    em: float,
+    image_indexes: frozenset[int],
+    fallback_text: dict[int, str],
+) -> tuple[list[_Segment], int | None] | None:
+    """文字片返回片段。公式图返回空片段和占位符序号。缺字返回 None。"""
+    if isinstance(piece, FormulaPiece) and piece.index in image_indexes:
+        return [], piece.index
+    text = piece.text if isinstance(piece, TextPiece) else fallback_text.get(piece.index, "")
+    segments = _segments(text, em)
+    if segments is None:
+        return None
+    return segments, None
 
 
 def _line_extras(texts: list[str | None], slack: float, em: float) -> list[float]:
@@ -207,19 +372,6 @@ def _line_extras(texts: list[str | None], slack: float, em: float) -> list[float
         for index in range(len(text) - 1):
             extras.append(each if can_stretch(text[index], text[index + 1]) else 0.0)
     return extras
-
-
-def _visible(
-    piece: TextPiece | FormulaPiece,
-    image_indexes: frozenset[int],
-    fallback_text: dict[int, str],
-) -> str | None:
-    """文字片返回要写的字。有图的公式返回 None，表示这里是一个槽。"""
-    if isinstance(piece, TextPiece):
-        return STYLE_MARK_RE.sub("", piece.text)
-    if piece.index in image_indexes:
-        return None
-    return fallback_text.get(piece.index, "")
 
 
 def _glyphs(font: pymupdf.Font, text: str) -> list[int] | None:
