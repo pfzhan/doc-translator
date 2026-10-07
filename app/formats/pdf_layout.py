@@ -692,6 +692,21 @@ def _is_page_number(text: str) -> bool:
     return len(stripped) >= 1 and _ROMAN_RE.match(stripped) is not None
 
 
+def _is_blank_fill(drawing: dict) -> bool:
+    """近白、只有矩形填充、没有描边。这是底色，不是图。描边框和图片仍算图。"""
+    if drawing.get("type") != "f":
+        return False
+    fill = drawing.get("fill")
+    if not isinstance(fill, (tuple, list)) or len(fill) < 3:
+        return False
+    if any(float(channel) < 0.96 for channel in fill[:3]):
+        return False
+    items = drawing.get("items") or []
+    return bool(items) and all(
+        isinstance(item, (tuple, list)) and bool(item) and item[0] == "re" for item in items
+    )
+
+
 def _figure_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
     width, height = page.rect.width, page.rect.height
     found: list[pymupdf.Rect] = []
@@ -704,6 +719,8 @@ def _figure_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
     except Exception:  # noqa: BLE001 - 个别页面的矢量表读不出来，当没有图
         drawings = []
     for drawing in drawings:
+        if _is_blank_fill(drawing):
+            continue
         rect = pymupdf.Rect(drawing.get("rect"))
         if rect.width < _DRAW_MIN or rect.height < _DRAW_MIN:
             continue

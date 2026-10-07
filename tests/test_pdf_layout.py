@@ -16,6 +16,34 @@ def _two_columns() -> PageGeometry:
     return PageGeometry.from_rects(400, left + right)
 
 
+def test_white_rectangle_fill_is_not_a_figure():
+    """近白矩形是底色。盖住它的正文不能被当成图内文字跳过。描边框和图片仍是图。"""
+    from app.formats.pdf_layout import _figure_rects
+    from app.formats.pdf_roles import HeuristicLayout, LayoutItem, Role
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=400)
+    page.draw_rect(pymupdf.Rect(40, 30, 300, 340), fill=(1, 1, 1), color=None, width=0)
+    page.draw_rect(pymupdf.Rect(40, 30, 180, 120), fill=(1, 1, 1), color=(0, 0, 0), width=1)
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 8, 8))
+    pix.set_rect(pix.irect, (80, 80, 80))
+    page.insert_image(pymupdf.Rect(50, 40, 170, 110), pixmap=pix)
+    page.insert_text((50, 200), "The remainder of this paper is organized as follows.", fontsize=10)
+    rects = _figure_rects(page)
+    assert any(rect.y1 <= 120 for rect in rects)
+    assert all(rect.y1 < 160 for rect in rects)
+
+    blocks = extract_blocks(doc)
+    prose = next(block for block in blocks if "remainder" in block.text)
+    geo = PageGeometry.from_page(page, [block.rect for block in blocks])
+    roles = HeuristicLayout().classify(
+        [LayoutItem(prose.page, pymupdf.Rect(prose.rect), prose.text, prose.size, prose.bold)],
+        [geo],
+        10,
+    )
+    assert roles == [Role.BODY]
+
+
 def test_one_mass_is_one_column():
     geo = PageGeometry.from_rects(400, _stack(40, 200, 40, n=5))
     assert not geo.reads_in_columns
