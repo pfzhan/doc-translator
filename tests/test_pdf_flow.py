@@ -157,7 +157,17 @@ def test_separate_after_formula_adds_one_space():
 
 def test_fullwidth_punctuation_measures_one_em():
     """全角标点（，。（）等）不在 CJK 正则里，按 east_asian_width 也得算 1em。
-    按 0.5em 低估行宽，letter-spacing 两端对齐时会把行推出右缘。"""
+    按 0.5em 低估行宽，两端对齐时会把行推出右缘。"""
     assert measure_token("，", 10.0, {}) == 10.0
     assert measure_token("（", 10.0, {}) == 10.0
-    assert measure_token("a", 10.0, {}) == 5.0
+    assert measure_token("a", 10.0, {}) >= 5.0
+
+
+def test_wide_glyphs_wrap_before_they_pass_the_edge():
+    """破折号和 M 比 0.5em 宽。按半字宽估算时，这两个字会多挤在行尾外面。"""
+    assert measure_token("—", 10.0, {}) >= 10.0
+    assert measure_token("M", 10.0, {}) > 5.0
+    assert break_lines("甲乙丙丁——", em=10, max_width=50, formula_widths={}) != ["甲乙丙丁——"]
+    lines = break_lines("甲甲甲HMM", em=10, max_width=45, formula_widths={})
+    assert lines[0] == "甲甲甲"
+    assert "HMM" in lines[1]

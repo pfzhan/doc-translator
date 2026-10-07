@@ -11,6 +11,8 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
+import pymupdf
+
 _SENTINEL_RE = re.compile(r"\x01i\x02(\d+)\x01/i\x02")
 STYLE_MARK_RE = re.compile(r"\{z\d+\}|\{/z\}|\{/?[bi]\}")
 _ATOM_RE = re.compile(rf"\x01i\x02\d+\x01/i\x02|{STYLE_MARK_RE.pattern}")
@@ -394,18 +396,40 @@ def _is_word_char(char: str) -> bool:
     return char.isalnum() or char in "-'"
 
 
+_drawing_fonts: tuple[pymupdf.Font, ...] | None = None
+
+
+def _drawing_fonts_loaded() -> tuple[pymupdf.Font, ...]:
+    """断行要用真正写出的字宽。破折号和 M 按 0.5em 估，一行会多挤出一个字。"""
+    global _drawing_fonts
+    if _drawing_fonts is None:
+        _drawing_fonts = (
+            pymupdf.Font("china-ss"),
+            pymupdf.Font("heit"),
+            pymupdf.Font("hebo"),
+        )
+    return _drawing_fonts
+
+
+def _char_width(char: str, em: float) -> float:
+    if _CJK_RE.match(char) or unicodedata.east_asian_width(char) in ("W", "F"):
+        estimate = em
+    elif char.isspace():
+        estimate = em * 0.33
+    else:
+        estimate = em * 0.5
+    drawn = 0.0
+    code = ord(char)
+    for font in _drawing_fonts_loaded():
+        if font.has_glyph(code):
+            drawn = max(drawn, font.text_length(char, em))
+    return max(estimate, drawn)
+
+
 def _token_width(token: str, em: float, formula_widths: dict[int, float]) -> float:
     sentinel = _SENTINEL_RE.fullmatch(token)
     if sentinel:
         return formula_widths.get(int(sentinel.group(1)), em)
     if STYLE_MARK_RE.fullmatch(token):
         return 0.0
-    width = 0.0
-    for char in token:
-        if _CJK_RE.match(char) or unicodedata.east_asian_width(char) in ("W", "F"):
-            width += em
-        elif char.isspace():
-            width += em * 0.33
-        else:
-            width += em * 0.5
-    return width
+    return sum(_char_width(char, em) for char in token)

@@ -254,6 +254,17 @@ def _cjk_page_continue(prev: TextBlock, nxt: TextBlock) -> bool:
     return abs(nxt.rect.x0 - prev.rect.x0) <= prev.size * 1.2
 
 
+# 脚注比正文小一号，又以编号开头（1 Although / 2Note / 4https://）。
+# 节号 1. / 2.2 不是脚注。它贴在页末时不能占跨页的页尾，否则 quite 接不上 well。
+_FOOTNOTE_LEAD_RE = re.compile(r"^\d{1,2}(?!\.\d)(?:https?://|\s*[A-Za-z])", re.I)
+
+
+def _is_page_footnote(block: TextBlock, median: float) -> bool:
+    if block.size + 0.6 >= median:
+        return False
+    return _FOOTNOTE_LEAD_RE.match(block.text.lstrip()) is not None
+
+
 def _can_continue(
     prev: TextBlock, nxt: TextBlock, median: float, halt_ids: set[int] | None,
 ) -> bool:
@@ -268,6 +279,17 @@ def _can_continue(
     return bool(not numbered_heading and not is_heading and continues
                 and not prev.text.rstrip().endswith(_SENT_END_PUNCT)
                 and nxt.size <= prev.size * 1.4)
+
+
+def _page_edge_blocks(
+    blocks: list[TextBlock], median: float, ignored: set[int],
+) -> list[TextBlock]:
+    """页首页尾只看正文。小一号的编号脚注留在原处翻译，不占跨页位置。"""
+    return [
+        block for block in blocks
+        if block.size >= median * 0.8 and id(block) not in ignored
+        and not _is_page_footnote(block, median)
+    ]
 
 
 def _column_index(geo: PageGeometry, block: TextBlock) -> int:
@@ -348,7 +370,7 @@ def _cross_page_units(
     """把跨页续段两两合并成翻译单元（返回块列表的列表，每单元 1~2 块）。
 
     上一页最后一个正文块不以句末标点结尾、下一页第一个块以小写/数字开头且不像标题时，
-    视为被页边界切断的同一段。页脚脚注（字号明显小于正文）和指定跳过的块不参与。
+    视为被页边界切断的同一段。页脚脚注（字号明显小于正文，或小一号且以编号、链接开头）和指定跳过的块不参与。
     同一栏的续段照旧合并。多栏时，只再放开「本页最右栏的末块接到下页最左栏的首块」。
     ignore_ids 是页眉页脚，不占页末、也不挡页首。跨栏标题和整表同样不占栏首栏尾。
     """
@@ -361,9 +383,9 @@ def _cross_page_units(
     pages = sorted(by_page)
     used: set[int] = set()
     for pno in pages:
-        body = [b for b in by_page[pno] if b.size >= median * 0.8 and id(b) not in ignored]
+        body = _page_edge_blocks(by_page[pno], median, ignored)
         nxt = by_page.get(pno + 1) or []
-        nxt_body = [x for x in nxt if x.size >= median * 0.8 and id(x) not in ignored]
+        nxt_body = _page_edge_blocks(nxt, median, ignored)
         first = _column_page_start(nxt_body, geometries)
         end = _column_page_end(body, geometries)
         head = (
