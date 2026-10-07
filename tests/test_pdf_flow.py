@@ -34,6 +34,19 @@ def test_cjk_wraps_by_character():
     assert break_lines("甲乙丙丁戊", em=10, max_width=25, formula_widths={}) == ["甲乙", "丙丁", "戊"]
 
 
+def test_punctuation_does_not_start_a_line():
+    lines = break_lines("甲乙丙丁。", em=10, max_width=40, formula_widths={})
+    assert lines == ["甲乙丙", "丁。"]
+    assert all(not line.startswith("。") for line in lines)
+
+
+def test_halfwidth_punct_drops_the_trailing_space():
+    lines = break_lines("甲乙, 丙丁", em=10, max_width=32, formula_widths={})
+    assert any(line.endswith(",") for line in lines)
+    assert all(not line.endswith(", ") for line in lines)
+    assert "".join(lines).replace(" ", "") == "甲乙,丙丁"
+
+
 def test_short_parentheses_stay_on_one_line():
     text = "甲甲甲（如序列）乙乙乙"
     lines = break_lines(text, em=10, max_width=50, formula_widths={})

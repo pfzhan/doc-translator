@@ -23,6 +23,10 @@ _BOLD_FLAG = 16
 _ITALIC_FLAG = 2
 _PAREN_CLOSE = {"（": "）", "(": ")"}
 _PAREN_LIMIT = 10
+# 这些标点不能出现在行首。放不下时把前一个字带到下一行，标点跟在它后面。
+_NO_LINE_START = frozenset("。，、；：？！）】」』〉》％%.,;:?!)]}>")
+# 半角标点在行尾时，后面的空格是标点自带的间隔，不留在这一行。
+_HALF_PUNCT = frozenset(".,;:?!)]}%")
 
 
 @dataclass(frozen=True)
@@ -169,7 +173,7 @@ def break_lines(
     def flush() -> None:
         nonlocal width
         if buf:
-            lines.append("".join(token for _, token in buf))
+            lines.append(_trim_line_end("".join(token for _, token in buf)))
             buf.clear()
         width = 0.0
 
@@ -187,8 +191,15 @@ def break_lines(
                 for ch in token:
                     chw = _token_width(ch, em, formula_widths)
                     if chunk and cw + chw > max_width:
-                        lines.append(chunk)
-                        chunk, cw = "", 0.0
+                        moved = _detach_char(chunk) if ch in _NO_LINE_START else None
+                        if moved is not None:
+                            head, tail = moved
+                            if head:
+                                lines.append(_trim_line_end(head))
+                            chunk, cw = tail, _token_width(tail, em, formula_widths)
+                        else:
+                            lines.append(_trim_line_end(chunk))
+                            chunk, cw = "", 0.0
                     chunk += ch
                     cw += chw
                 if chunk:
@@ -204,15 +215,75 @@ def break_lines(
                 flush()
                 index = start
                 continue
-            flush()
-            if token.isspace():
-                index += 1
-                continue
+            if token in _NO_LINE_START:
+                detached = _detach_for_punct(buf)
+                if detached is not None:
+                    detached_width = sum(_token_width(item, em, formula_widths) for _, item in detached)
+                    if detached_width + token_width <= max_width:
+                        flush()
+                        buf.extend(detached)
+                        width = detached_width
+                    else:
+                        buf.extend(detached)
+                        flush()
+                        if token.isspace():
+                            index += 1
+                            continue
+                else:
+                    flush()
+                    if token.isspace():
+                        index += 1
+                        continue
+            else:
+                flush()
+                if token.isspace():
+                    index += 1
+                    continue
         buf.append((index, token))
         width += token_width
         index += 1
     flush()
     return lines or [text]
+
+
+def _trim_line_end(line: str) -> str:
+    """半角标点在行尾时去掉后面的空格。样式标记不算字。"""
+    body = line
+    marks = ""
+    while True:
+        matched = re.search(r"(\{/?[bi]\}|\{/z\}|\{z\d+\})$", body)
+        if matched is None:
+            break
+        marks = matched.group(0) + marks
+        body = body[:matched.start()]
+    stripped = body.rstrip(" \t")
+    if stripped != body and stripped and stripped[-1] in _HALF_PUNCT:
+        return stripped + marks
+    return line
+
+
+def _detach_char(chunk: str) -> tuple[str, str] | None:
+    """超宽硬切时，把最后一个字留给行首的标点。"""
+    if len(chunk) < 2 or chunk[-1] in _NO_LINE_START:
+        return None
+    return chunk[:-1], chunk[-1]
+
+
+def _detach_for_punct(buf: list[tuple[int, str]]) -> list[tuple[int, str]] | None:
+    """行尾标点放不下时，带上前一个字。行里没有可带的字就不动。"""
+    end = len(buf)
+    while end > 0 and (
+        STYLE_MARK_RE.fullmatch(buf[end - 1][1]) or buf[end - 1][1].isspace() or buf[end - 1][1] in _NO_LINE_START
+    ):
+        end -= 1
+    if end == 0:
+        return None
+    start = end - 1
+    while start > 0 and STYLE_MARK_RE.fullmatch(buf[start - 1][1]):
+        start -= 1
+    detached = buf[start:]
+    del buf[start:]
+    return detached
 
 
 def _visible_len(token: str) -> int:
