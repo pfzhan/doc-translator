@@ -1921,14 +1921,18 @@ def _write_rect(
 def _clip_write_rect(
     rect: pymupdf.Rect, clip: tuple[float, float, float, float] | None,
 ) -> pymupdf.Rect:
-    """格子是硬边界。缩无可缩时保持原框，避免写出一个空盒子。"""
+    """格子左右是硬边界。上下保留行框高度。
+
+    贴着格子下沿的一行，如果把下沿余量裁掉，行框会矮过一行。排版器误以为
+    高度不够，把这一格的字号单独缩小，同一张表里就会大小不齐。
+    """
     if clip is None:
         return rect
     bounded = pymupdf.Rect(
         max(rect.x0, clip[0] + 0.6),
-        max(rect.y0, clip[1] + 0.4),
+        rect.y0,
         min(rect.x1, clip[2] - 0.8),
-        min(rect.y1, clip[3] - 0.8),
+        rect.y1,
     )
     if bounded.width < 4 or bounded.height < 4:
         return rect
