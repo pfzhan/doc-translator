@@ -1885,6 +1885,16 @@ def _translation_html(
     return nowrap_lines([one(line) for line in break_lines(text, render_size, max_width, widths)])
 
 
+def _centered_in_cell(block: TextBlock) -> bool:
+    """原文在格子里居中。栏中线对不上格子中线，不能拿栏来判断。"""
+    clip = block.clip
+    if clip is None:
+        return False
+    cell_mid = (clip[0] + clip[2]) / 2
+    text_mid = (block.rect.x0 + block.rect.x1) / 2
+    return abs(text_mid - cell_mid) <= 2.0
+
+
 def _write_rect(
     block: TextBlock,
     items: list[tuple[TextBlock, str]],
@@ -1892,9 +1902,14 @@ def _write_rect(
     rtl: bool,
     geo: PageGeometry | None,
 ) -> tuple[pymupdf.Rect, bool]:
-    """写入框。多栏且块落在某一栏内时，居中参照该栏；单栏仍用本页最宽块。"""
+    """写入框。多栏且块落在某一栏内时，居中参照该栏；单栏仍用本页最宽块。
+    格子里原本居中的文字，改以格子中线居中。"""
     y0 = block.rect.y0 + block.size * 0.1 if cjk else block.rect.y0
     pad = block.size * 0.5 if cjk else block.size * 0.3
+    if _centered_in_cell(block) and block.clip is not None:
+        clip = block.clip
+        rect = pymupdf.Rect(clip[0], y0, clip[2], block.rect.y1 + pad)
+        return _clip_write_rect(rect, clip), True
     column = None
     if geo is not None and len(geo.columns) >= 2:
         candidate = geo.column_of(block.rect)

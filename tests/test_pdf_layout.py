@@ -161,6 +161,61 @@ def test_figure_beside_a_short_column_still_stops_the_other_side():
     assert geo.right_limit(left[0], []) < figure.x0
 
 
+def _cjk_line(page: pymupdf.Page) -> dict | None:
+    for block in page.get_text("dict")["blocks"]:
+        if block.get("type") != 0:
+            continue
+        for line in block["lines"]:
+            text = "".join(span["text"] for span in line["spans"])
+            if any("\u4e00" <= ch <= "\u9fff" for ch in text):
+                return line
+    return None
+
+
+def test_centered_table_cell_keeps_the_translation_centered(tmp_path):
+    """原文在格子中线上时，更短的译文也要落在格子中线上，不能从原文字左缘起排。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=160)
+    page.insert_text((80, 60), "Baseline", fontsize=10)
+    src = tmp_path / "cell.pdf"
+    doc.save(src)
+    doc.close()
+
+    clip = (40.0, 40.0, 200.0, 80.0)
+    block = TextBlock(
+        page=0, rect=pymupdf.Rect(97.5, 50, 142.5, 62),
+        line_rects=[pymupdf.Rect(97.5, 50, 142.5, 62)],
+        text="Baseline", size=10, color="#000000", bold=False, clip=clip,
+    )
+    out = _render_translated(src, [block], ["基线"], "zh-CN")
+    line = _cjk_line(out[0])
+    assert line is not None
+    mid = (line["bbox"][0] + line["bbox"][2]) / 2
+    assert abs(mid - 120.0) < 1.5
+    assert line["bbox"][2] <= clip[2] + 2
+
+
+def test_left_aligned_table_cell_stays_left(tmp_path):
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=160)
+    page.insert_text((48, 60), "Name", fontsize=10)
+    src = tmp_path / "cell.pdf"
+    doc.save(src)
+    doc.close()
+
+    clip = (40.0, 40.0, 200.0, 80.0)
+    block = TextBlock(
+        page=0, rect=pymupdf.Rect(46, 50, 80, 62),
+        line_rects=[pymupdf.Rect(46, 50, 80, 62)],
+        text="Name", size=10, color="#000000", bold=False, clip=clip,
+    )
+    out = _render_translated(src, [block], ["姓名"], "zh-CN")
+    line = _cjk_line(out[0])
+    assert line is not None
+    assert line["bbox"][0] < 70
+    assert (line["bbox"][0] + line["bbox"][2]) / 2 < 90
+
+
 def test_cell_bottom_line_keeps_the_table_font_size(tmp_path):
     """贴着格子下沿的一行，字号要和同格上一行一样，不能被裁矮后单独缩小。"""
     doc = pymupdf.open()
