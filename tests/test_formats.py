@@ -1750,6 +1750,90 @@ def test_body_font_symbols_and_script_bases_become_formulas():
     assert "=" in _placeholderize(equals)[0]
 
 
+def test_line_wrapped_formula_is_one_placeholder():
+    """行末 y_{t-1}= 和下一行行首 s|h_{t-1} 是同一式子。一个占位符、两片，
+    不并成横跨整行的大框。行中的公式不和下一行行首的公式并。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text, font, size, x0, y0, x1, y1=None):
+        return {"text": text, "font": font, "size": size,
+                "bbox": (x0, y0, x1, y1 if y1 is not None else y0 + size),
+                "origin": (x0, (y1 if y1 is not None else y0 + size) - 2)}
+
+    wrapped = _block_with_spans([
+        [span("take arg max ", "TimesNewRomanPSMT", 10, 40, 80, 150),
+         span("y", "CMMI10", 10, 470, 80, 478),
+         span("=", "CMR10", 10, 490, 80, 504)],
+        [span("s|h", "CMMI10", 10, 40, 92, 70),
+         span(").", "TimesNewRomanPSMT", 10, 72, 92, 90)],
+    ], size=10.0)
+    sent, formulas = _placeholderize(wrapped)
+    assert sent.count("{v") == 1
+    assert "s|h" not in sent and "y=" not in sent.replace(" ", "")
+    assert len(formulas) == 1
+    parts = formulas[0]["parts"]
+    assert len(parts) == 2
+    assert parts[0]["bbox"].x0 >= 470
+    assert parts[1]["bbox"].x0 <= 40
+    assert parts[0]["bbox"].x1 < 510 and parts[1]["bbox"].width < 40
+
+    separate = _block_with_spans([
+        [span("see ", "TimesNewRomanPSMT", 10, 40, 80, 70),
+         span("x", "CMMI10", 10, 80, 80, 90),
+         span(" then more words here", "TimesNewRomanPSMT", 10, 92, 80, 220)],
+        [span("y", "CMMI10", 10, 40, 92, 50),
+         span(" follows", "TimesNewRomanPSMT", 10, 54, 92, 110)],
+    ], size=10.0)
+    sent2, formulas2 = _placeholderize(separate)
+    assert len(formulas2) == 2
+    assert "{v1}" in sent2 and "{v2}" in sent2
+
+
+def test_wrapped_formula_parts_stay_in_order(tmp_path):
+    """两片按阅读顺序并排，后半段不再留在下一行行首的源文横坐标。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=200)
+    page.insert_text((40, 80), "y= left", fontsize=11)
+    page.insert_text((40, 100), "sh right", fontsize=11)
+    doc.save(src)
+    doc.close()
+    d = pymupdf.open(src)
+    y_box = d[0].search_for("y=")[0]
+    sh_box = d[0].search_for("sh")[0]
+    d.close()
+
+    def part(name, rect, text):
+        return {
+            "bbox": rect, "name": name, "w": round(rect.width, 1), "h": round(rect.height, 1),
+            "d": 2.0, "raise": 0.0, "text": text, "has_img": True, "page": 0,
+            "png": pymupdf.open(src)[0].get_pixmap(clip=rect, dpi=72).tobytes("png"),
+            "spans": [{"bbox": tuple(rect), "text": text, "size": 10, "origin": (rect.x0, rect.y1 - 2)}],
+        }
+
+    first = part("f0_1.png", y_box, "y=")
+    second = part("f0_1_p1.png", sh_box, "sh")
+    first["parts"] = [first, second]
+    first["has_img"] = True
+    first["mid"] = 0
+    rect = pymupdf.Rect(40, 40, 360, 80)
+    block = TextBlock(
+        page=0, rect=rect, line_rects=[rect, pymupdf.Rect(y_box), pymupdf.Rect(sh_box)],
+        text="take arg max", size=10, color="#000", bold=False,
+    )
+    sentinel = "\x01i\x021\x01/i\x02"
+    out = _render_translated(src, [block], [f"也可以取 arg max({sentinel})。"], "zh-CN", {id(block): [first]})
+    page = out[0]
+    y_hit = page.search_for("y=")
+    sh_hit = page.search_for("sh")
+    assert y_hit and sh_hit
+    assert y_hit[0].x0 < sh_hit[0].x0
+    assert sh_hit[0].x0 - y_hit[0].x1 < 20
+    assert abs(y_hit[0].y0 - sh_hit[0].y0) < 8
+
+
 def test_placeholderize_absorbs_accent_over_formula():
     """ŷ 的 ^ 常是独立 span（正文字体、不被判为公式），留在正文会在公式图边
     多出一个孤符号：落在公式 bbox 上的重音符要并进公式、正文里删掉。"""
@@ -1985,6 +2069,8 @@ def test_heading_number_skips_body_blocks():
     assert _heading_number_for("p", "2.1 Model", "第二章第一节 模型") == "2.1 模型"
     # 正文尺寸的标题但译文没有章节号：不加前缀
     assert _heading_number_for("p", "2.1 Model", "模型") == "模型"
+    # 模型写成"第二节"（没有"章"）也改回
+    assert _heading_number_for("h2", "2 Proposed Approach", "第二节 所提方法") == "2 所提方法"
 
 
 def test_punct_fragment_uses_line_end_not_union():
@@ -2159,10 +2245,8 @@ def test_save_after_redact_keeps_resources_indirect(tmp_path):
     assert "译文第0段" in text and f"译文第{len(blocks) - 1}段" in text
 
 
-def test_wrapped_formula_tail_stays_its_own_placeholder():
-    """跨可视行折行的公式（行末 'y_{t-1} =' + 下行开头 's|h_{t-1}'）不能并成一个
-    占位符：两片源坐标在不同行，一个槽位放不下，会摊成一坨。同一可视行的
-    序列元素（y^i_1, y^i_2）仍并成一个。"""
+def test_wrapped_formula_tail_stays_one_placeholder_without_a_wide_box():
+    """跨可视行折行的公式收成一个占位符的两片。不并 bbox，否则裁进两行之间的整栏空白。"""
     from app.formats.pdf import _placeholderize
 
     def span(text, font, size, x0, y0, x1=None, y1=None):
@@ -2179,5 +2263,26 @@ def test_wrapped_formula_tail_stays_its_own_placeholder():
          span("t−1", "CMR7", 7, 120, 117, x1=128, y1=124),
          span("). This", "TimesNewRomanPSMT", 10, 130, 114)],
     ], size=10.0)
-    _, formulas = _placeholderize(b, 0)
-    assert len(formulas) == 2  # 'yt−1 =' 和 's|ht−1' 各自一个占位符
+    sent, formulas = _placeholderize(b, 0)
+    assert len(formulas) == 1
+    assert sent.count("{v") == 1
+    parts = formulas[0]["parts"]
+    assert len(parts) == 2
+    assert parts[0]["bbox"].x0 >= 400
+    assert parts[1]["bbox"].x0 <= 108
+    assert parts[0]["bbox"] | parts[1]["bbox"] != formulas[0]["bbox"]
+
+
+def test_justify_spacing_caps_and_skips():
+    """两端对齐摊字距：不足 1em 的余量不拉（视觉上已贴边）；
+    余量大时按字符数分摊但封顶 0.12em；太短的行不拉。"""
+    from app.formats.pdf import _justify_spacing
+    from app.formats.pdf_typeset import TextPiece, TypesetLine
+
+    def line(width, chars=40):
+        return TypesetLine((TextPiece("字" * chars, 0.0, width),), width)
+
+    assert _justify_spacing(line(390), 396.0, 8.8) == 0.0
+    spacing = _justify_spacing(line(350), 396.0, 8.8)
+    assert 0 < spacing <= 8.8 * 0.12 + 1e-9
+    assert _justify_spacing(line(350, chars=3), 396.0, 8.8) == 0.0

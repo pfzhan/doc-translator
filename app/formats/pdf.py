@@ -90,6 +90,8 @@ def _join_lines(lines: list[str]) -> str:
             out = out[:-1] + line  # 行尾连字符断词（德语等断词后首字母可能大写）
         elif CJK_RE.search(out[-1]) or CJK_RE.search(line[0]):
             out += line
+        elif line[:1] in ")]}>，。；：、）】」":
+            out += line  # 换行后的右括号贴回公式，不在 ) 前加空格
         else:
             out += " " + line
     return out
@@ -633,8 +635,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
     # b) 阅读序上真正邻接（中间只有空白 span）且 x 间距小于一个字号、纵向相交
     #    （同一可视行）：同一数学表达式被拆成的连续片段（y^i_1, y^i_2, … 的元素），
     #    并回一个公式，否则下标会被占位符间的空格推到离基底很远的位置。
-    #    行间隔着正文的不并（(X,Y) vs y_1,…,y_T）；只沾边的跨行折行也不并
-    #    （行末 "y_{t-1} =" 和下一行开头的 "s|h_{t-1}" 是两片，得各占各的槽位）。
+    #    行间隔着正文的不并（(X,Y) vs y_1,…,y_T）。跨行折行的两半不在这里并 bbox。
     member_ids = {id(s) for r in runs for s in r["spans"]}
 
     def flow_adjacent(a: dict, b: dict) -> bool:
@@ -660,11 +661,8 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
             lo, hi = sorted([m["max_size"], r["max_size"]])
             geometric = (x_overlap > max(1.0, 0.3 * min_w) and y_gap < block.size
                          and lo < hi * 0.79)
-            # b) 阅读序上真正邻接（中间只有空白 span）且 x 间距小于一个字号、
-            #    且纵向确实相交（同一可视行）：同一数学表达式被拆成的连续片段
-            #    （y^i_1, y^i_2, … 的元素）。y 只沾边的是跨行折行的公式尾部
-            #    （行末 "y_{t-1} =" 和下一行开头的 "s|h_{t-1}"），并成一个占位符
-            #    会让两片画在同一个槽位里，摊成一坨。
+            # b) 同一可视行上、阅读序邻接、x 间距小于一个字号。跨行折行的两半
+            #    纵向不相交，不在这里并成一个大框。
             y_overlap = min(m["bbox"].y1, r["bbox"].y1) - max(m["bbox"].y0, r["bbox"].y0)
             adjacent = (flow_adjacent(m, r)
                         and r["bbox"].x0 - m["bbox"].x1 < block.size
@@ -694,6 +692,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                     m["spans"].append(s)
                     m["bbox"] |= sb
                     break
+    merged = _join_line_wrapped_formulas(merged, block.span_lines, block.size)
 
     formulas: list[dict] = []
     formula_runs: dict[int, FormulaRun] = {}
@@ -729,12 +728,21 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
             line=anchor_line,
         )
         formula_runs[n] = formula_run
-        formulas.append(_formula_record(formula_run, spans))
+        record = _formula_record(formula_run, spans)
+        extras = m.get("extras") or []
+        if extras:
+            record["text"] = " ".join(
+                piece for piece in [record["text"], *(_formula_markup(extra["spans"], block.size).strip() for extra in extras)]
+                if piece
+            )
+            record["parts"] = [record, *(_part_record(extra, block.page, f"{formula_run.name[:-4]}_p{i}.png") for i, extra in enumerate(extras, 1))]
+        formulas.append(record)
         first_span[id(anchor)] = n
 
     # 3) 按行重建送翻文本，并记下有序 run。公式锚点是一个 FormulaRun，
     # 同行同风格的文字并成一个 TextRun。和底色不同的强调、字号才写标记。
     formula_ids = {id(s) for m in merged for s in m["spans"]}
+    formula_ids |= {id(s) for m in merged for extra in m.get("extras") or [] for s in extra["spans"]}
     writer = writer_for(
         [s for line in block.span_lines for s in line if id(s) not in formula_ids],
         block.size,
@@ -825,8 +833,7 @@ def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
     return rects
 
 
-def _absorb_curves(formula: dict, drawings: list[pymupdf.Rect], block: TextBlock) -> None:
-    """把相交曲线并进公式框，并写回对应的 FormulaRun。"""
+def _absorb_one_box(formula: dict, drawings: list[pymupdf.Rect]) -> None:
     old = pymupdf.Rect(formula["bbox"])
     curves = intersecting_curves(old, drawings)
     formula["curves"] = list(curves)
@@ -839,17 +846,101 @@ def _absorb_curves(formula: dict, drawings: list[pymupdf.Rect], block: TextBlock
     formula["h"] = round(box.height, 1)
     formula["d"] = round(max(0.0, box.y1 - baseline), 1)
     formula["dx"] = round(float(formula.get("dx") or 0) + (box.x0 - old.x0), 1)
+
+
+def _absorb_curves(formula: dict, drawings: list[pymupdf.Rect], block: TextBlock) -> None:
+    """把相交曲线并进公式框，并写回对应的 FormulaRun。换行续片各自收自己的框。"""
+    _absorb_one_box(formula, drawings)
+    for part in formula.get("parts") or []:
+        if part is not formula:
+            _absorb_one_box(part, drawings)
     block.runs = [
         replace(
             run,
-            bbox=pymupdf.Rect(box),
-            curves=curves,
+            bbox=pymupdf.Rect(formula["bbox"]),
+            curves=tuple(formula.get("curves") or ()),
             descent=formula["d"],
-            dx=formula["dx"],
+            dx=formula.get("dx", run.dx),
         )
         if isinstance(run, FormulaRun) and run.name == formula["name"] else run
         for run in block.runs
     ]
+
+
+def _line_edge(span_lines: list[list[dict]], line_no: int, side: str) -> float:
+    edges: list[float] = []
+    for span in span_lines[line_no]:
+        raw = span.get("bbox")
+        if raw is None or not str(span.get("text") or "").strip():
+            continue
+        box = pymupdf.Rect(raw)
+        edges.append(box.x0 if side == "x0" else box.x1)
+    if not edges:
+        return 0.0
+    return min(edges) if side == "x0" else max(edges)
+
+
+def _only_this_run(run: dict, span_lines: list[list[dict]], head: bool) -> bool:
+    line_no, start, end = run["pos"]
+    spans = span_lines[line_no][:start] if head else span_lines[line_no][end + 1:]
+    return not any(str(span.get("text") or "").strip() for span in spans)
+
+
+def _continues_wrapped_formula(
+    prev: dict, nxt: dict, span_lines: list[list[dict]], block_size: float,
+) -> bool:
+    """行末公式接到下一行行首，是同一式子被换行切开。中间不能还有正文。"""
+    last = (prev.get("extras") or [prev])[-1]
+    last_line, _, _ = last["pos"]
+    next_line, _, _ = nxt["pos"]
+    if next_line != last_line + 1:
+        return False
+    if not _only_this_run(last, span_lines, head=False) or not _only_this_run(nxt, span_lines, head=True):
+        return False
+    if _line_edge(span_lines, last_line, "x1") - last["bbox"].x1 > block_size * 1.5:
+        return False
+    if nxt["bbox"].x0 - _line_edge(span_lines, next_line, "x0") > block_size * 1.2:
+        return False
+    y_gap = nxt["bbox"].y0 - last["bbox"].y1
+    return -block_size * 0.5 <= y_gap < block_size * 1.8
+
+
+def _join_line_wrapped_formulas(
+    runs: list[dict], span_lines: list[list[dict]], block_size: float,
+) -> list[dict]:
+    """换行切开的公式收成一个占位符的多片。不并 bbox，否则裁进两行之间的整栏空白。"""
+    if len(runs) < 2:
+        return runs
+    joined: list[dict] = []
+    for run in runs:
+        if joined and _continues_wrapped_formula(joined[-1], run, span_lines, block_size):
+            joined[-1].setdefault("extras", []).append(run)
+            continue
+        joined.append(run)
+    return joined
+
+
+def _part_record(run: dict, page: int, name: str) -> dict:
+    bbox = pymupdf.Rect(run["bbox"])
+    spans = run["spans"]
+    main = max(spans, key=lambda span: span["size"])
+    baseline = main["origin"][1] if main.get("origin") else bbox.y1
+    return {
+        "page": page,
+        "bbox": bbox,
+        "name": name,
+        "w": round(bbox.width, 1),
+        "h": round(bbox.height, 1),
+        "d": round(max(0.0, bbox.y1 - baseline), 1),
+        "raise": 0.0,
+        "spans": spans,
+        "curves": [],
+        "text": _formula_markup(spans, float(main["size"])).strip(),
+    }
+
+
+def _formula_parts(formula: dict) -> list[dict]:
+    return formula.get("parts") or [formula]
 
 
 def _formula_record(run: FormulaRun, spans: list[dict]) -> dict:
@@ -1460,9 +1551,12 @@ def _fit_typeset(
     return lines, em, gap, box
 
 
-def _line_baseline(spans: list[dict], line_top: float, line_h: float, em: float, cjk: bool) -> float:
-    """这一行已写入文字的 origin。纯公式行没有文字，用 htmlbox 的经验基线。"""
-    best: tuple[float, float] | None = None
+def _line_baseline(
+    spans: list[dict], line_top: float, line_h: float, em: float, cjk: bool, slot_x: float | None = None,
+) -> float:
+    """这一行已写入文字的 origin。纯公式行没有文字，用 htmlbox 的经验基线。
+    相邻行的字框会交叠，离槽位更近的文字优先，避免公式掉到下一行仍留在原横坐标。"""
+    best: tuple[tuple[float, float], float] | None = None
     for span in spans:
         origin = span.get("origin")
         bbox = span.get("bbox")
@@ -1471,11 +1565,44 @@ def _line_baseline(spans: list[dict], line_top: float, line_h: float, em: float,
         if bbox[3] < line_top - 1 or bbox[1] > line_top + line_h + 1:
             continue
         overlap = min(bbox[3], line_top + line_h) - max(bbox[1], line_top)
-        if best is None or overlap > best[0]:
-            best = (overlap, float(origin[1]))
-    if best is not None and best[0] > 0:
+        if overlap <= 0:
+            continue
+        dx = 0.0
+        if slot_x is not None:
+            if bbox[2] < slot_x:
+                dx = slot_x - bbox[2]
+            elif bbox[0] > slot_x:
+                dx = bbox[0] - slot_x
+        near = overlap if dx <= em * 4 else overlap * 0.2
+        key = (near, -dx)
+        if best is None or key > best[0]:
+            best = (key, float(origin[1]))
+    if best is not None:
         return best[1]
     return line_top + em * (1.12 if cjk else 1.0)
+
+
+def _paint_formula_parts(
+    page: "pymupdf.Page",
+    doc: "pymupdf.Document",
+    formula: dict,
+    slot_x: float,
+    baseline: float,
+    fmS: int | None,
+    page_spans: list[dict] | None,
+    draws: list[str],
+    deferred_png: list[tuple["pymupdf.Rect", bytes]],
+) -> None:
+    """一个占位符的几片按阅读顺序并排贴。换行切开的后半段不再留在源文横坐标。"""
+    scale = float(formula.get("rs") or 1)
+    x = slot_x + 2.0
+    for part in _formula_parts(formula):
+        width = float(part["w"]) * scale
+        height = float(part["h"]) * scale
+        below = (float(part.get("d") or 0) - float(part.get("raise") or 0)) * scale
+        target = pymupdf.Rect(x, baseline + below - height, x + width, baseline + below)
+        _paint_formula(page, doc, part, target, fmS, page_spans, draws, deferred_png)
+        x += width + 1.5
 
 
 def _typeset_line_html(line: TypesetLine, formulas: list[dict]) -> str:
@@ -1490,6 +1617,19 @@ def _typeset_line_html(line: TypesetLine, formulas: list[dict]) -> str:
             if not formula.get("has_img"):
                 parts.append(_inline_marks(html.escape(str(formula.get("text") or ""))))
     return "".join(parts)
+
+
+def _justify_spacing(line: TypesetLine, box_width: float, em: float) -> float:
+    """一行该摊多少字距（letter-spacing px）。MuPDF 的 justify 只拉伸带空格的行，
+    纯 CJK 行拉不动，排版器自己摊：余量除以可见字符数，封顶 0.12em，
+    免得估计偏低时把行拉出右缘。返回 0 表示不动（末行、贴边的行不拉）。"""
+    slack = box_width - line.width
+    if slack < em:
+        return 0.0
+    n = sum(len(piece.text.strip()) if isinstance(piece, TextPiece) else 1 for piece in line.pieces)
+    if n < 8:
+        return 0.0
+    return min(slack / n, em * 0.12)
 
 
 def _place_plain(
@@ -1513,7 +1653,21 @@ def _place_plain(
         text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit,
     )
     rendered = [_typeset_line_html(line, formulas) for line in lines]
-    body = nowrap_lines([line for line in rendered if line])
+    # 两端对齐：MuPDF 的 justify 只拉伸带空格的行（纯 CJK 拉不动），宽段落改为
+    # 排版器把每行余量摊成字距；字距是渲染属性，不改文本内容，复制不受影响。
+    # 摊了字距的行不再 nowrap：估计偏低时让 MuPDF 自己重排，而不是画出右缘
+    justify = not centered and rect.width > page.rect.width * 0.6
+    parts: list[str] = []
+    last_line = len(lines) - 1
+    for li, (line, line_html) in enumerate(zip(lines, rendered)):
+        if not line_html:
+            continue
+        ls = _justify_spacing(line, box.width, em) if justify and li != last_line else 0.0
+        if ls:
+            parts.append(f'<span style="letter-spacing: {ls:.2f}px">{line_html}</span>')
+        else:
+            parts.append(f'<span style="white-space:nowrap">{line_html}</span>')
+    body = "<br>".join(parts)
     if not body:
         return
     align = "center" if centered else "left"
@@ -1558,10 +1712,18 @@ def _place_typeset(
     line_h = em * gap
     pending: list[tuple[FormulaPiece, float, float]] = []
     y = box.y0
-    for line in lines:
+    # 宽段落两端对齐：字距摊在文字片里，后面的片（含公式槽）跟着右移
+    justify = not centered and rect.width > page.rect.width * 0.6
+    last_line = len(lines) - 1
+    for li, line in enumerate(lines):
         origin_x = box.x0
         if centered and line.width < box.width:
             origin_x += (box.width - line.width) / 2
+        ls = _justify_spacing(line, box.width, em) if justify and li != last_line else 0.0
+        css_line = css
+        if ls:
+            css_line = css[:-2] + f" letter-spacing: {ls:.2f}px;" + "}}"
+        extra = 0.0
         for piece in line.pieces:
             if isinstance(piece, TextPiece):
                 if not piece.text.strip():
@@ -1570,15 +1732,18 @@ def _place_typeset(
                 html_text = f'<div{div_attrs}><span style="white-space:nowrap">{fragment}</span></div>'
                 # 单行盒子也要留首行出头的余量（MuPDF 一行内容高 = 行距 + ~0.25em），
                 # 否则每个小片都被静默缩到 0.93 倍
-                slot = pymupdf.Rect(origin_x + piece.x, y, origin_x + piece.x + piece.width + 4,
+                stretch = ls * len(piece.text)
+                slot = pymupdf.Rect(origin_x + piece.x + extra, y,
+                                    origin_x + piece.x + extra + piece.width + stretch + 4,
                                     y + line_h + em * 0.3)
-                if not _try_insert(page, slot, html_text, css, 0.9):
+                if not _try_insert(page, slot, html_text, css_line, 0.9):
                     try:
-                        page.insert_htmlbox(slot, html_text, css=css, scale_low=0)
+                        page.insert_htmlbox(slot, html_text, css=css_line, scale_low=0)
                     except AssertionError:
                         pass
+                extra += stretch
             elif isinstance(piece, FormulaPiece) and 1 <= piece.index <= len(formulas):
-                pending.append((piece, origin_x + piece.x, y))
+                pending.append((piece, origin_x + piece.x + extra, y))
         y += line_h
     if not pending:
         return
@@ -1589,14 +1754,10 @@ def _place_typeset(
         if span.get("text", "").strip() and span.get("origin")
     ]
     for piece, slot_x, line_top in pending:
-        baseline = _line_baseline(spans, line_top, line_h, em, cjk)
-        target = pymupdf.Rect(
-            slot_x + 2.0,
-            baseline + piece.below - piece.height,
-            slot_x + 2.0 + piece.body_width,
-            baseline + piece.below,
+        baseline = _line_baseline(spans, line_top, line_h, em, cjk, slot_x)
+        _paint_formula_parts(
+            page, doc, formulas[piece.index - 1], slot_x, baseline, fmS, page_spans, draws, deferred_png,
         )
-        _paint_formula(page, doc, formulas[piece.index - 1], target, fmS, page_spans, draws, deferred_png)
 
 
 def _flush_draws(
@@ -1637,13 +1798,17 @@ def _nowrap_parens(body: str) -> str:
 
 
 def _formula_slot(formula: dict, block_size: float, render_size: float) -> tuple[float, float, float]:
-    """行内公式槽位 (缩放, 宽, 高)。高超过 1.35em 时压到 1.35em，避免行框被图片撑开。"""
-    height = float(formula.get("h") or 0)
+    """行内公式槽位 (缩放, 宽, 高)。高超过 1.35em 时压到 1.35em，避免行框被图片撑开。
+    换行切开的几片按阅读顺序横排，宽度相加，不把两行空白裁进同一个框。"""
+    parts = _formula_parts(formula)
+    height = max(float(part.get("h") or 0) for part in parts)
     if not formula.get("has_img") or height <= 0 or block_size <= 0:
         text = str(formula.get("text") or "")
         return 1.0, len(text) * render_size * 0.5, render_size
     scale = min(render_size / block_size, 1.35 * render_size / height)
-    return scale, float(formula["w"]) * scale + 4.0, height * scale
+    gaps = 1.5 * (len(parts) - 1)
+    width = sum(float(part["w"]) * scale for part in parts) + gaps + 4.0
+    return scale, width, height * scale
 
 
 def _inline_marks(body: str) -> str:
@@ -2185,7 +2350,7 @@ def _subset_fonts_safe(doc: pymupdf.Document) -> pymupdf.Document:
 
 
 _TRANS_HEAD_NUM_RE = re.compile(
-    r"^第[0-9零〇一二三四五六七八九十百]+章(?:第[0-9零〇一二三四五六七八九十百]+节)?\s*"
+    r"^第[0-9零〇一二三四五六七八九十百]+[章节](?:第[0-9零〇一二三四五六七八九十百]+节)?\s*"
     r"|^\d+(?:\.\d+)*\.?[章节]?(?:\s+|$)")
 
 
@@ -2411,13 +2576,17 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             _absorb_curves(f, curve_rects[int(f["page"])], unit[int(f.get("owner") or 0)])
     for formulas in sent_formulas:
         for f in formulas:
-            bbox = f["bbox"]
-            if bbox.width < 1 or bbox.height < 1:
-                continue
-            f["png"] = src_doc[int(f["page"])].get_pixmap(dpi=300, clip=bbox).tobytes("png")
-            f["has_img"] = True
-            # 裁剪向内收 0.4pt：bbox 来自 span 外框，边缘常沾到相邻文字的一小段笔画
-            f["clip"] = bbox + (0.4, 0.4, -0.4, -0.4)
+            pieces = _formula_parts(f)
+            ready = False
+            for part in pieces:
+                bbox = part["bbox"]
+                if bbox.width < 1 or bbox.height < 1:
+                    continue
+                part["png"] = src_doc[int(part.get("page") or f["page"])].get_pixmap(dpi=300, clip=bbox).tobytes("png")
+                part["has_img"] = True
+                part["clip"] = bbox + (0.4, 0.4, -0.4, -0.4)
+                ready = True
+            f["has_img"] = ready
     # 标记像素按全文全局序号编码（同色的会被 MuPDF 去重成同一图片，落位全串）
     marker_idx = 0
     for formulas in sent_formulas:
