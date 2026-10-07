@@ -2315,6 +2315,13 @@ def test_heading_number_skips_body_blocks():
     assert _heading_number_for("p", "2.1 Model", "模型") == "模型"
     # 模型写成"第二节"（没有"章"）也改回
     assert _heading_number_for("h2", "2 Proposed Approach", "第二节 所提方法") == "2 所提方法"
+    assert _heading_number_for("h2", "2.1 Massively Parallel Processing", "第二点一节 大规模并行处理") == "2.1 大规模并行处理"
+    assert _heading_number_for("h2", "4.2 Parallel Query Optimization", "四点二 并行查询优化") == "4.2 并行查询优化"
+    assert _heading_number_for("h2", "8. RELATED WORK", "八, 相关工作") == "8 相关工作"
+    assert _heading_number_for("h2", "9. SUMMARY", "九, 总结") == "9 总结"
+    assert _heading_number_for("h2", "10. REFERENCES", "十, 参考文献") == "10 参考文献"
+    assert _heading_number_for("h2", "8.1 Query Optimization Foundations", "八点一 查询优化基础") == "8.1 查询优化基础"
+    assert _heading_number_for("h2", "2.2 SQL on Hadoop", "第2.2节 Hadoop 上的 SQL") == "2.2 Hadoop 上的 SQL"
 
 
 def test_punct_fragment_uses_line_end_not_union():
@@ -2585,6 +2592,103 @@ def test_justify_extras_skip_punctuation_and_short_lines():
     assert extras[0] > 0
     assert justify_extras(text, 1.0, 10.0) == []
     assert justify_extras("短行", 20.0, 10.0) == []
+    names = "Zhongxian Gu, Entong Shen, George Caragea 等人继续写"
+    extras = justify_extras(names, 40.0, 10.0)
+    assert extras[0] == 0.0
+    assert extras[names.index(" ")] > 0
+
+
+def test_caption_word_in_bold_cm_is_not_a_formula():
+    from app.formats.pdf import _is_formula_span
+
+    assert _is_formula_span({"font": "CMBX8", "text": "of", "size": 8.0}, 9.0) is False
+    assert _is_formula_span({"font": "CMBX10", "text": "x", "size": 10.0}, 10.0) is True
+
+
+def test_garbled_figure_label_is_recognized():
+    from app.formats.pdf import _garbled_label
+
+    assert _garbled_label("(c)$Bo8om(up$sta.s.cs$deriva.on$")
+    assert not _garbled_label("Figure 2: Interaction of Orca with database system")
+
+
+def test_right_fragment_starts_below_the_shared_line():
+    from app.formats.pdf import TextBlock, _flow_y0
+
+    fragment = pymupdf.Rect(190, 40, 360, 52)
+    nxt = pymupdf.Rect(40, 56, 360, 68)
+    block = TextBlock(
+        page=0, rect=fragment | nxt, line_rects=[fragment, nxt],
+        text="At the end of exploration.", size=9, color="#000", bold=False,
+    )
+    assert _flow_y0(block, True) == pytest.approx(56 + 0.9, abs=0.01)
+    indent = pymupdf.Rect(52, 40, 360, 52)
+    body = pymupdf.Rect(40, 56, 360, 68)
+    indented = TextBlock(
+        page=0, rect=indent | body, line_rects=[indent, body],
+        text="A normal indented paragraph.", size=9, color="#000", bold=False,
+    )
+    assert _flow_y0(indented, False) == 40
+
+
+def test_affiliation_tails_split_and_stack():
+    from app.formats.pdf import TextBlock, _affiliation_write_rects, _split_affiliation_tails
+
+    names = [
+        pymupdf.Rect(100, 120, 400, 132),
+        pymupdf.Rect(100, 134, 400, 146),
+        pymupdf.Rect(116, 160, 180, 172),
+    ]
+    author = TextBlock(
+        page=0, rect=names[0] | names[2], line_rects=names,
+        text="Zhongxian Gu Entong Shen ∗Pivotal Inc.",
+        size=12, color="#000", bold=False,
+        span_lines=[[{"text": "Zhongxian Gu"}], [{"text": "Entong Shen"}], [{"text": "∗Pivotal Inc."}]],
+    )
+    datometry = TextBlock(
+        page=0, rect=pymupdf.Rect(210, 160, 300, 184),
+        line_rects=[pymupdf.Rect(210, 160, 300, 172), pymupdf.Rect(210, 172, 300, 184)],
+        text="‡ Datometry Inc. San Francisco", size=10, color="#000", bold=False,
+    )
+    split = _split_affiliation_tails([author, datometry])
+    assert len(split) == 3
+    assert "Pivotal" not in split[0].text
+    assert "Pivotal" in split[1].text
+    stacked = _affiliation_write_rects(split)
+    assert stacked[id(split[1])].y0 != stacked[id(split[2])].y0
+
+
+def test_shared_line_translation_does_not_cover_the_left_block(tmp_path):
+    """右半句从下一行起写。标题留在这一行，不被下一段盖住。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=500, height=300).insert_text((40, 80), "heading and sentence", fontsize=11)
+    doc.save(src)
+    doc.close()
+    heading_line = pymupdf.Rect(40, 40, 180, 52)
+    fragment = pymupdf.Rect(190, 40, 360, 52)
+    nxt = pymupdf.Rect(40, 56, 360, 68)
+    heading = TextBlock(
+        page=0, rect=heading_line, line_rects=[heading_line],
+        text="(2) Statistics Derivation.", size=9, color="#000000", bold=False,
+    )
+    body = TextBlock(
+        page=0, rect=fragment | nxt, line_rects=[fragment, nxt],
+        text="At the end of exploration the memo keeps the space.",
+        size=9, color="#000000", bold=False,
+    )
+    out = _render_translated(
+        src, [body, heading],
+        ["探索结束时备忘录保存完整的逻辑空间并且继续写下一段说明", "(2) 统计信息推导。"],
+        "zh-CN",
+    )
+    chars = _cjk_chars(out[0])
+    heading_y = [item[3] for item in chars if item[0] == "统"]
+    body_y = [item[3] for item in chars if item[0] == "探"]
+    assert heading_y and body_y
+    assert min(body_y) > max(heading_y) + 4
 
 
 def test_cjk_lines_share_the_right_edge(tmp_path):

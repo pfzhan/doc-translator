@@ -26,6 +26,10 @@ class MemCache:
     def put_many(self, prefix, pairs):
         self.d.update(pairs)
 
+    def drop_many(self, prefix, texts):
+        for text in texts:
+            self.d.pop(text, None)
+
 
 class RecordingTranslator(MockTranslator):
     """记录每批翻译的顺序，可以在批次之间插入回调（模拟用户在翻译过程中跳转）。"""
@@ -330,6 +334,8 @@ def test_normalize_punctuation():
     # 句末标点补的空格不留尾巴
     assert normalize_punctuation("结束了吗？", "zh-CN") == "结束了吗?"
     assert normalize_punctuation("（保持），不变", "en") == "（保持），不变"
+    assert normalize_punctuation("我们将在第二点一节介绍", "zh-CN") == "我们将在第2.1节介绍"
+    assert normalize_punctuation("第二点二节 Hadoop", "zh-CN") == "第2.2节 Hadoop"
 
     class FullwidthTranslator(MockTranslator):
         async def translate_batch(self, texts):
@@ -436,6 +442,28 @@ def test_echo_translations_retried_individually():
     out = asyncio.run(runner.translate_all([long_text, "LSTM"]))
     assert out[0] == "这是一个相当长的句子, 确实应该被翻译出来。"  # 回显被单独重翻修好了（逗号归一化为半角）
     assert out[1] == "LSTM"  # 专有名词不受影响
+
+
+def test_cached_prose_echo_is_dropped_and_retried():
+    """整句英文回显不留在缓存里。下次重排会再翻，而不是一直贴回英文。"""
+    src = (
+        "To obtain a better coverage across the different systems, we used a larger "
+        "benchmark so the comparison stays fair for every engine involved."
+    )
+    cache = MemCache({src: src})
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(200, json={"choices": [{"message": {"content":
+            "为了在不同系统之间获得更好的覆盖, 我们使用了更大的基准, 让每个引擎的比较都公平。"}}]})
+
+    tr = __import__("tests.test_translators", fromlist=["make_openai"]).make_openai(handler)
+    runner = Runner(tr, cache=cache, skip_same_lang=False)
+    out = asyncio.run(runner.translate_all([src]))
+    assert calls
+    assert "覆盖" in out[0]
+    assert cache.d[src] != src
 
 
 def test_stray_placeholders_cleaned_from_formula_free_blocks():

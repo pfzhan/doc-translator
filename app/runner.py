@@ -40,6 +40,17 @@ class Cache:
                     out[t] = row[0]
         return out
 
+    def drop_many(self, prefix: str, texts: list[str]) -> None:
+        """丢掉不该留下的缓存。整句英文回显下次还要再翻。"""
+        if not texts:
+            return
+        with self.lock:
+            self.conn.executemany(
+                "DELETE FROM t WHERE k=?",
+                [(self._key(prefix, text),) for text in texts],
+            )
+            self.conn.commit()
+
     def put_many(self, prefix: str, pairs: dict[str, str]):
         with self.lock:
             self.conn.executemany(
@@ -198,6 +209,13 @@ class Runner:
         prefix = self.translator.cache_key
         tl = self.translator.target_lang
         done_map = self.cache.get_many(prefix, need)
+        # 整句英文回显进过缓存的话，下次重排仍是英文。丢掉，让这次重新翻译。
+        echoed = [src for src, dst in done_map.items() if _is_prose_echo(src, dst)]
+        if echoed:
+            done_map = {src: dst for src, dst in done_map.items() if src not in set(echoed)}
+            drop = getattr(self.cache, "drop_many", None)
+            if callable(drop):
+                drop(prefix, echoed)
         headings = {t for t, k in zip(texts, kinds or []) if k in _HEADING_KINDS}
         html_sources = self.translator.html_texts
 
@@ -279,7 +297,10 @@ class Runner:
                                 pairs[s] = rt
                 # 空译文不写缓存、不计入完成（否则会永久缓存空结果），按失败处理。
                 # 标题和目录的「第2卷」在入库前改成中文数字
-                good = {s: fixed(s, d) for s, d in pairs.items() if d and d.strip()}
+                good = {
+                    s: fixed(s, d) for s, d in pairs.items()
+                    if d and d.strip() and not _is_prose_echo(s, d)
+                }
                 empty = [s for s in batch if s not in good]
                 if good:
                     self.cache.put_many(prefix, good)
@@ -311,6 +332,9 @@ _PARENS = str.maketrans("（）", "()")
 # 句号、书名号、引号保持全角；其余全角标点换成半角并补一个空格（已有空格不重复）
 _PUNCT_HALF = {"，": ",", "、": ",", "；": ";", "：": ":", "？": "?", "！": "!"}
 _PUNCT_RE = re.compile(r"([，、；：？！])\s*")
+_CN_SMALL = {c: i for i, c in enumerate("零一二三四五六七八九")}
+_CN_SMALL["〇"] = 0
+_DOT_SECTION_RE = re.compile(r"第([一二三四五六七八九十]+)点([一二三四五六七八九十]+)节")
 # 第2卷、第２卷，以及模型翻串了的“第卷26”。单位不含页/期/号，那些保留阿拉伯数字
 _UNIT_HEAD_RE = re.compile(r"^第([0-9０-９]{1,4})(?=[卷章部篇集册])")
 _UNIT_INVERTED_RE = re.compile(r"^第([卷章部篇集册])([0-9０-９]{1,4})")
@@ -320,14 +344,56 @@ _FULLWIDTH = str.maketrans("０１２３４５６７８９", "0123456789")
 _NUM_CHARS = frozenset("第0123456789０１２３４５６７８９卷章部篇集册")
 
 
+def _cn_small(text: str) -> int | None:
+    """一到九十九。节号用得到，百以上不在这里认。"""
+    if text.isdigit():
+        return int(text)
+    if text == "十":
+        return 10
+    if text.startswith("十") and len(text) == 2 and text[1] in _CN_SMALL:
+        return 10 + _CN_SMALL[text[1]]
+    if len(text) == 2 and text[1] == "十" and text[0] in _CN_SMALL:
+        return _CN_SMALL[text[0]] * 10
+    if len(text) == 3 and text[1] == "十" and text[0] in _CN_SMALL and text[2] in _CN_SMALL:
+        return _CN_SMALL[text[0]] * 10 + _CN_SMALL[text[2]]
+    if len(text) == 1 and text in _CN_SMALL:
+        return _CN_SMALL[text]
+    return None
+
+
+def _dot_section(match: re.Match[str]) -> str:
+    major = _cn_small(match.group(1))
+    minor = _cn_small(match.group(2))
+    if major is None or minor is None:
+        return match.group(0)
+    return f"第{major}.{minor}节"
+
+
 def normalize_punctuation(dst: str, target_lang: str) -> str:
     """中文译文的全角标点统一半角：括号直接换，逗号/顿号/分号/冒号/问号/叹号
     换成半角并补一个空格。句号、书名号、引号保持全角——它们是中文排版的一部分，
-    而全角的 , ; : ? ! 和汉字同宽，夹在正文里又宽又笨。"""
+    而全角的 , ; : ? ! 和汉字同宽，夹在正文里又宽又笨。
+    第二点一节改成第 2.1 节，避免节号被点开。"""
     if not target_lang.startswith("zh"):
         return dst
     out = _PUNCT_RE.sub(lambda m: _PUNCT_HALF[m.group(1)] + " ", dst.translate(_PARENS))
+    out = _DOT_SECTION_RE.sub(_dot_section, out)
     return out.rstrip() if out.endswith(" ") else out
+
+
+def _is_prose_echo(src: str, dst: str) -> bool:
+    """一整句英文正文被原样回显。代码和短标签不算，那些留着不会更差。"""
+    plain = dst.strip()
+    if not plain or plain.startswith("<") or "dxl:" in plain.lower():
+        return False
+    words = re.findall(r"[A-Za-z]{4,}", plain)
+    if len(words) < 12 or len(plain) < 80:
+        return False
+    if len(re.findall(r"[\u4e00-\u9fff]", plain)) >= 4:
+        return False
+    folded_src = re.sub(r"\s+", " ", src.strip())
+    folded = re.sub(r"\s+", " ", plain)
+    return folded == folded_src or folded.startswith(folded_src[:40])
 
 
 def _cn_number(n: int, *, higher: bool = False) -> str:
