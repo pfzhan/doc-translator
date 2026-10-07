@@ -161,6 +161,40 @@ def test_figure_beside_a_short_column_still_stops_the_other_side():
     assert geo.right_limit(left[0], []) < figure.x0
 
 
+def test_cell_bottom_line_keeps_the_table_font_size(tmp_path):
+    """贴着格子下沿的一行，字号要和同格上一行一样，不能被裁矮后单独缩小。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=160)
+    page.insert_text((50, 48), "Baseline", fontsize=10)
+    page.insert_text((50, 92), "Scheduled Sampling ensemble of 5", fontsize=10)
+    src = tmp_path / "cell.pdf"
+    doc.save(src)
+    doc.close()
+
+    # 下沿几乎贴着第二行字形。旧逻辑会把这一行的下沿余量裁掉，行框矮过一行。
+    clip = (40.0, 30.0, 220.0, 93.0)
+    top = TextBlock(
+        page=0, rect=pymupdf.Rect(50, 38, 110, 50),
+        line_rects=[pymupdf.Rect(50, 38, 110, 50)],
+        text="Baseline", size=10, color="#000000", bold=False, clip=clip,
+    )
+    bottom = TextBlock(
+        page=0, rect=pymupdf.Rect(48, 82, 210, 94),
+        line_rects=[pymupdf.Rect(48, 82, 210, 94)],
+        text="Scheduled Sampling ensemble of 5", size=10, color="#000000", bold=False, clip=clip,
+    )
+    out = _render_translated(src, [top, bottom], ["基线", "五个模型的计划采样集成"], "zh-CN")
+    sizes = [
+        max(span["size"] for span in line["spans"])
+        for block in out[0].get_text("dict")["blocks"] if block.get("type") == 0
+        for line in block["lines"]
+        if any("\u4e00" <= ch <= "\u9fff" for ch in "".join(span["text"] for span in line["spans"]))
+    ]
+    assert len(sizes) == 2
+    assert max(sizes) - min(sizes) < 0.6
+    assert min(sizes) > 8.0
+
+
 def test_ruled_cells_are_separate_blocks_and_keep_the_translation_inside(tmp_path):
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=200)
