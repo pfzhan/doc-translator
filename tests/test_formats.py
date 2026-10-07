@@ -1601,7 +1601,8 @@ def test_cross_page_units_merge_continuation():
 
     blocks = [
         blk("It can be seen that the model performs quite", 0, y=700),
-        blk("4https://example.com/footnote", 0, size=7.0, y=760),  # 页脚脚注，不参与
+        blk("1 Although one could also use another projection.", 0, size=9.0, y=740),
+        blk("4https://example.com/footnote", 0, size=9.0, y=760),  # 小一号脚注，不占页尾
         blk("well. We hypothesize that this has to do with it.", 1, y=60),
         blk("A new section starts here.", 1, y=90),
     ]
@@ -2515,6 +2516,33 @@ def test_cjk_lines_share_the_right_edge(tmp_path):
             if nxt[0] == "，":
                 assert nxt[1] - prev[2] < 0.8
     assert rect.y0 - 2 < grouped[0][0][3] < rect.y1
+
+
+def test_em_dash_line_stays_inside_the_box(tmp_path):
+    """破折号和 HMM 按实际字宽断行，不能再多出一个字到右缘外面。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=500, height=240).insert_text((40, 60), "source paragraph", fontsize=11)
+    doc.save(src)
+    doc.close()
+    rect = pymupdf.Rect(40, 40, 280, 160)
+    block = TextBlock(
+        page=0, rect=rect, line_rects=[rect],
+        text="source paragraph that differs", size=12, color="#111111", bold=False,
+    )
+    text = "标准配置——每一帧都经过 HMM 对齐，破折号不能再多挤出一个字到栏外去。"
+    out = _render_translated(src, [block], [text], "zh-CN")
+    right = rect.x1 + 2
+    for item in out[0].get_text("dict")["blocks"]:
+        if item.get("type") != 0:
+            continue
+        for line in item["lines"]:
+            for span in line["spans"]:
+                if span["bbox"][0] < 20:
+                    continue
+                assert span["bbox"][2] <= right + 1.0, span["text"]
 
 
 def test_italic_marks_still_justify_the_line(tmp_path):
