@@ -316,6 +316,39 @@ def test_normalize_applies_to_cache_hits():
     assert updates[0] == "第二卷" and updates[1] == "第二十六卷" and updates[2] == "第25卷第1期"
 
 
+def test_normalize_punctuation():
+    """中文译文的全角标点统一半角（逗号类补空格）：句号、书名号、引号保持全角；
+    新翻译和缓存命中都改写，其他语言不动。"""
+    from app.runner import Runner, normalize_punctuation
+
+    assert normalize_punctuation("词元（token）的概率", "zh-CN") == "词元(token)的概率"
+    assert normalize_punctuation("训练时，我们随机决定，是否采样", "zh-CN") == "训练时, 我们随机决定, 是否采样"
+    assert normalize_punctuation("已有空格， 不重复", "zh-CN") == "已有空格, 不重复"
+    assert normalize_punctuation("甲、乙；丙：丁？戊！己", "zh-CN") == "甲, 乙; 丙: 丁? 戊! 己"
+    # 句号、书名号、引号保持全角
+    assert normalize_punctuation("完了。《论文》里说“保持”。", "zh-CN") == "完了。《论文》里说“保持”。"
+    # 句末标点补的空格不留尾巴
+    assert normalize_punctuation("结束了吗？", "zh-CN") == "结束了吗?"
+    assert normalize_punctuation("（保持），不变", "en") == "（保持），不变"
+
+    class FullwidthTranslator(MockTranslator):
+        async def translate_batch(self, texts):
+            return [f"译（{t}）文，完" for t in texts]
+
+    runner = Runner(FullwidthTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
+    assert asyncio.run(runner.translate_all(["para"], kinds=["p"], preview=True)) == ["译(para)文, 完"]
+    assert runner.cache.d["para"] == "译(para)文, 完"
+
+    class NeverCalled(MockTranslator):
+        async def translate_batch(self, texts):
+            raise AssertionError("全部命中缓存，不该发请求")
+
+    cache = MemCache({"old": "旧（缓存）译文，嗯"})
+    hit = Runner(NeverCalled("zh-CN"), cache=cache, skip_same_lang=False)
+    assert asyncio.run(hit.translate_all(["old"], kinds=["p"], preview=True)) == ["旧(缓存)译文, 嗯"]
+    assert cache.d["old"] == "旧(缓存)译文, 嗯"
+
+
 def test_fix_numbered_unit_inside_html():
     """富文本译文：数字被 <small> 包住或嵌在 <a> 里时，按文本节点改写，标签原样保留。"""
     from app.runner import fix_numbered_unit
@@ -401,7 +434,7 @@ def test_echo_translations_retried_individually():
     long_text = "This is a fairly long sentence that should really be translated."
     runner = Runner(tr, cache=MemCache(), skip_same_lang=False)
     out = asyncio.run(runner.translate_all([long_text, "LSTM"]))
-    assert out[0] == "这是一个相当长的句子，确实应该被翻译出来。"  # 回显被单独重翻修好了
+    assert out[0] == "这是一个相当长的句子, 确实应该被翻译出来。"  # 回显被单独重翻修好了（逗号归一化为半角）
     assert out[1] == "LSTM"  # 专有名词不受影响
 
 
