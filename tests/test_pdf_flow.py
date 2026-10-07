@@ -132,6 +132,18 @@ def test_restore_emphasis_keeps_italic_tag():
     assert restore_emphasis("正常{i}强调{/i}文字") == "正常<i>强调</i>文字"
 
 
+def test_separate_after_formula_adds_one_space():
+    """公式后面直接接文字时补一个空格。标点、已有空格、样式标记都不重复补。"""
+    from app.formats.pdf_flow import separate_after_formula
+
+    sent = "\x01i\x021\x01/i\x02"
+    assert separate_after_formula(f"使用{sent}时") == f"使用{sent} 时"
+    assert separate_after_formula(f"取 arg max{sent})。") == f"取 arg max{sent})。"
+    assert separate_after_formula(f"已有{sent} 空格") == f"已有{sent} 空格"
+    assert separate_after_formula(f"{sent}{{b}}时") == f"{sent}{{b}} 时"
+    assert separate_after_formula("没有公式") == "没有公式"
+
+
 def test_fullwidth_punctuation_measures_one_em():
     """全角标点（，。（）等）不在 CJK 正则里，按 east_asian_width 也得算 1em。
     按 0.5em 低估行宽，letter-spacing 两端对齐时会把行推出右缘。"""
