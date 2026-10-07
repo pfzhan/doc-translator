@@ -247,6 +247,8 @@ def test_pdf_hyphen_joins_uppercase_word():
     assert _join_lines(["Donau-", "Dampfschiff"]) == "DonauDampfschiff"
     assert _join_lines(["word-", "wrap"]) == "wordwrap"
     assert _join_lines(["hello", "world"]) == "hello world"  # 非断词只是换行
+    assert _join_lines(["the {v1}", ". This"]) == "the {v1}. This"
+    assert _join_lines(["end", ", next"]) == "end, next"
 
 
 def _pdf_with_text(text: str, fontname: str = "helv") -> "pymupdf.Document":
@@ -1748,6 +1750,77 @@ def test_body_font_symbols_and_script_bases_become_formulas():
         span(" mc", "TimesNewRomanPSMT", 10, 24, 50),
     ]], size=10.0)
     assert "=" in _placeholderize(equals)[0]
+
+
+def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
+    """贴着公式的 CMR 数字、括号、算子名并进同一占位符。
+    i^{th} 留在正文，送翻成 i-th。远处的数字、Times 里的数字不收。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text, font, size, x0, y0, x1, y1=None):
+        return {"text": text, "font": font, "size": size,
+                "bbox": (x0, y0, x1, y1 if y1 is not None else y0 + size),
+                "origin": (x0, (y1 if y1 is not None else y0 + size) - 2)}
+
+    equation = _block_with_spans([[
+        span("When", "NimbusRomNo9L-Regu", 10, 0, 50, 28),
+        span("ε", "CMMI10", 10, 30, 50, 36),
+        span("i", "CMMI7", 7, 36, 53, 40, 60),
+        span("=", "CMR10", 10, 44, 50, 52),
+        span(" ", "CMR10", 10, 52, 50, 56),
+        span("1", "CMR10", 10, 56, 50, 62),
+        span(",", "NimbusRomNo9L-Regu", 10, 62, 50, 66),
+    ]], size=10.0)
+    sent, formulas = _placeholderize(equation)
+    assert len(formulas) == 1
+    assert sent == "When{v1},"
+    assert "1" in formulas[0]["text"]
+
+    wrapped = _block_with_spans([
+        [span("taken as the ", "NimbusRomNo9L-Regu", 10, 40, 80, 130),
+         span("arg max", "CMR10", 10, 130, 80, 180),
+         span("s", "CMMI7", 7, 180, 84, 186, 90),
+         span("P", "CMMI10", 10, 188, 80, 196),
+         span("(", "CMR10", 10, 197, 80, 203),
+         span("y", "CMMI10", 10, 203, 80, 210),
+         span("=", "CMR10", 10, 220, 80, 228)],
+        [span("s", "CMMI10", 10, 40, 94, 46),
+         span(")", "CMR10", 10, 48, 94, 54),
+         span(". This", "NimbusRomNo9L-Regu", 10, 56, 94, 90)],
+    ], size=10.0)
+    sent_w, formulas_w = _placeholderize(wrapped)
+    assert sent_w.count("{v") == 1
+    assert "arg" not in sent_w and "P" not in sent_w
+    assert "{v1}." in sent_w and " ." not in sent_w
+    assert "arg max" in formulas_w[0]["text"]
+    assert len(formulas_w[0]["parts"]) == 2
+    assert formulas_w[0]["parts"][0]["bbox"].x0 >= 130
+    assert formulas_w[0]["parts"][1]["bbox"].x0 <= 40
+
+    ordinal = _block_with_spans([[
+        span("of the ", "NimbusRomNo9L-Regu", 10, 0, 50, 40),
+        span("i", "CMMI10", 10, 40, 50, 44),
+        span("th", "CMMI7", 7, 44, 44, 54, 51),
+        span(" mini-batch", "NimbusRomNo9L-Regu", 10, 56, 50, 120),
+    ]], size=10.0)
+    sent_o, formulas_o = _placeholderize(ordinal)
+    assert formulas_o == []
+    assert sent_o == "of the i-th mini-batch"
+
+    distant = _block_with_spans([[
+        span("x", "CMMI10", 10, 0, 50, 8),
+        span(" see page ", "NimbusRomNo9L-Regu", 10, 10, 50, 70),
+        span("1", "CMR10", 10, 80, 50, 86),
+    ]], size=10.0)
+    sent_d, formulas_d = _placeholderize(distant)
+    assert len(formulas_d) == 1 and "1" in sent_d
+
+    times_digit = _block_with_spans([[
+        span("x", "CMMI10", 10, 0, 50, 8),
+        span("1", "TimesNewRomanPSMT", 10, 10, 50, 16),
+    ]], size=10.0)
+    sent_t, _ = _placeholderize(times_digit)
+    assert "1" in sent_t
 
 
 def test_line_wrapped_formula_is_one_placeholder():
