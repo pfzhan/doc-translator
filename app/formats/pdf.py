@@ -1042,6 +1042,185 @@ def _absorb_one_box(formula: dict, drawings: list[pymupdf.Rect]) -> None:
     formula["dx"] = round(float(formula.get("dx") or 0) + (box.x0 - old.x0), 1)
 
 
+_TEXT_FLAGS = pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES
+# 墨迹外再留这一条，避免抗锯齿和斜体笔尖被切掉。左右用同一个数。
+_FORMULA_SIDE_PAD = 0.45
+_FORMULA_INK_DPI = 180
+
+
+def _page_text_spans(page: pymupdf.Page) -> list[dict]:
+    data = page.get_text("dict", flags=_TEXT_FLAGS)
+    return [
+        span
+        for block in data["blocks"]
+        if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
+    ]
+
+
+def _page_char_index(
+    page: pymupdf.Page,
+) -> list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]]:
+    data = page.get_text("rawdict", flags=_TEXT_FLAGS)
+    index: list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]] = []
+    for block in data["blocks"]:
+        if block.get("type") != 0:
+            continue
+        for line in block["lines"]:
+            for span in line["spans"]:
+                chars = [
+                    (str(char.get("c") or ""), pymupdf.Rect(char["bbox"]))
+                    for char in span.get("chars") or []
+                    if char.get("bbox") is not None
+                ]
+                index.append((pymupdf.Rect(span["bbox"]), chars))
+    return index
+
+
+def _boxes_match(left: pymupdf.Rect, right: pymupdf.Rect) -> bool:
+    return (
+        abs(left.x0 - right.x0) < 0.5
+        and abs(left.y0 - right.y0) < 0.5
+        and abs(left.x1 - right.x1) < 0.5
+        and abs(left.y1 - right.y1) < 0.5
+    )
+
+
+def _span_ink_boxes(
+    span: dict,
+    char_index: list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]],
+) -> list[pymupdf.Rect]:
+    """非空白字符的框。空白不算墨迹；没有字符数据时整段非空文字算一块。"""
+    raw = span.get("bbox")
+    if raw is None:
+        return []
+    box = pymupdf.Rect(raw)
+    for span_box, chars in char_index:
+        if not _boxes_match(box, span_box):
+            continue
+        return [rect for text, rect in chars if text.strip()]
+    if str(span.get("text") or "").strip():
+        return [box]
+    return []
+
+
+def _ink_x_bounds(
+    pix: pymupdf.Pixmap,
+    clip: pymupdf.Rect,
+    ours: list[pymupdf.Rect],
+    foreign: list[pymupdf.Rect],
+) -> tuple[float, float] | None:
+    """本公式墨迹的左右边界。邻居的字不算，斜体越出字框的笔尖算。"""
+    width, height = pix.width, pix.height
+    if width < 2 or height < 1:
+        return None
+    samples = pix.samples
+    channels = pix.n
+    step_x = clip.width / width
+    step_y = clip.height / height
+
+    def is_dark(x: int, y: int) -> bool:
+        offset = (y * width + x) * channels
+        if channels >= 3:
+            return samples[offset] < 245 or samples[offset + 1] < 245 or samples[offset + 2] < 245
+        return samples[offset] < 245
+
+    def near(rects: list[pymupdf.Rect], px: float, py: float, pad: float) -> bool:
+        return any(
+            rect.x0 - pad <= px <= rect.x1 + pad and rect.y0 - pad <= py <= rect.y1 + pad
+            for rect in rects
+        )
+
+    def is_ours(x: int, y: int) -> bool:
+        px = clip.x0 + (x + 0.5) * step_x
+        py = clip.y0 + (y + 0.5) * step_y
+        # 字框内和紧贴字框的笔尖算自己的。再远的墨迹是邻字伸进来的，不能挡住收边。
+        if near(ours, px, py, 0.35):
+            return True
+        if any(rect.x0 <= px <= rect.x1 and rect.y0 <= py <= rect.y1 for rect in foreign):
+            return False
+        if not ours:
+            return True
+        return near(ours, px, py, 1.5)
+
+    def column_has_ink(x: int) -> bool:
+        return any(is_dark(x, y) and is_ours(x, y) for y in range(height))
+
+    left = next((x for x in range(width) if column_has_ink(x)), None)
+    if left is None:
+        return None
+    right = next(x for x in range(width - 1, left - 1, -1) if column_has_ink(x))
+    return clip.x0 + left * step_x, clip.x0 + (right + 1) * step_x
+
+
+def _tighten_formula_sides(
+    part: dict,
+    page: pymupdf.Page,
+    page_spans: list[dict] | None = None,
+    char_index: list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]] | None = None,
+) -> None:
+    """公式框左右收到墨迹外同一条窄边。上下和式子内部的间距不动。"""
+    raw = part.get("bbox")
+    if raw is None:
+        return
+    bbox = pymupdf.Rect(raw)
+    if bbox.width < 1.2 or bbox.height < 1:
+        return
+    if char_index is None:
+        char_index = _page_char_index(page)
+    if page_spans is None:
+        page_spans = _page_text_spans(page)
+    own_spans = [
+        pymupdf.Rect(span["bbox"])
+        for span in part.get("spans") or []
+        if span.get("bbox") is not None
+    ]
+    ours = [box for span in part.get("spans") or [] for box in _span_ink_boxes(span, char_index)]
+    ours.extend(
+        pymupdf.Rect(curve) for curve in part.get("curves") or [] if curve is not None
+    )
+    foreign: list[pymupdf.Rect] = []
+    for span in page_spans:
+        if not str(span.get("text") or "").strip() or span.get("bbox") is None:
+            continue
+        rect = pymupdf.Rect(span["bbox"])
+        if any(_boxes_match(rect, own) for own in own_spans):
+            continue
+        if rect.y1 < bbox.y0 - 1 or rect.y0 > bbox.y1 + 1:
+            continue
+        if rect.x1 < bbox.x0 - 1 or rect.x0 > bbox.x1 + 1:
+            continue
+        foreign.append(rect)
+    clip = bbox & page.rect
+    if clip.width < 1 or clip.height < 1:
+        return
+    bounds = _ink_x_bounds(
+        page.get_pixmap(dpi=_FORMULA_INK_DPI, clip=clip, alpha=False),
+        clip,
+        ours,
+        foreign,
+    )
+    if bounds is None:
+        return
+    ink_x0, ink_x1 = bounds
+    new_x0 = max(bbox.x0, ink_x0 - _FORMULA_SIDE_PAD)
+    new_x1 = min(bbox.x1, ink_x1 + _FORMULA_SIDE_PAD)
+    if new_x1 - new_x0 < 1.2:
+        return
+    if new_x0 <= bbox.x0 + 0.35 and new_x1 >= bbox.x1 - 0.35:
+        return
+    width = round(new_x1 - new_x0, 1)
+    if new_x0 + width > bbox.x1:
+        width = round(bbox.x1 - new_x0, 1)
+    if width < 1.2:
+        return
+    part["bbox"] = pymupdf.Rect(new_x0, bbox.y0, new_x0 + width, bbox.y1)
+    part["w"] = width
+    if "dx" in part:
+        part["dx"] = round(float(part.get("dx") or 0) + (new_x0 - bbox.x0), 1)
+
+
 def _absorb_curves(formula: dict, drawings: list[pymupdf.Rect], block: TextBlock) -> None:
     """把相交曲线并进公式框，并写回对应的 FormulaRun。换行续片各自收自己的框。"""
     _absorb_one_box(formula, drawings)
@@ -2813,15 +2992,25 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     for unit, formulas in zip(flat_units, sent_formulas):
         for f in formulas:
             _absorb_curves(f, curve_rects[int(f["page"])], unit[int(f.get("owner") or 0)])
+    span_cache: dict[int, list[dict]] = {}
+    char_cache: dict[int, list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]]] = {}
     for formulas in sent_formulas:
         for f in formulas:
             pieces = _formula_parts(f)
             ready = False
             for part in pieces:
-                bbox = part["bbox"]
+                # 字框里的前导空格会让有的公式两侧很宽、有的又贴着笔画。先收到墨迹。
+                part_page = int(part.get("page") or f["page"])
+                if part_page not in span_cache:
+                    span_cache[part_page] = _page_text_spans(src_doc[part_page])
+                    char_cache[part_page] = _page_char_index(src_doc[part_page])
+                _tighten_formula_sides(
+                    part, src_doc[part_page], span_cache[part_page], char_cache[part_page],
+                )
+                bbox = pymupdf.Rect(part["bbox"])
                 if bbox.width < 1 or bbox.height < 1:
                     continue
-                part["png"] = src_doc[int(part.get("page") or f["page"])].get_pixmap(dpi=300, clip=bbox).tobytes("png")
+                part["png"] = src_doc[part_page].get_pixmap(dpi=300, clip=bbox).tobytes("png")
                 part["has_img"] = True
                 part["clip"] = bbox + (0.4, 0.4, -0.4, -0.4)
                 ready = True

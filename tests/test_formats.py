@@ -1823,6 +1823,89 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
     assert "1" in sent_t
 
 
+def test_formula_crop_trims_side_whitespace_to_the_ink():
+    """字框里的前导空格不再留在公式图两侧。式子内部的空格还在。
+    左边叠进来的邻字不算本公式的墨迹。"""
+    from app.formats.pdf import _tighten_formula_sides
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=200)
+    page.insert_text((40, 80), "word", fontsize=12, fontname="tiro")
+    page.insert_text((100, 80), " y", fontsize=12, fontname="tiro")
+    page.insert_text((40, 130), "a = b", fontsize=12, fontname="times-roman")
+    spans = [
+        span
+        for block in page.get_text("dict")["blocks"]
+        if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
+    ]
+    spaced = next(span for span in spans if span["text"] == " y")
+    equation = next(span for span in spans if "a = b" in span["text"])
+    word = next(span for span in spans if span["text"] == "word")
+
+    wide = pymupdf.Rect(spaced["bbox"])
+    part = {
+        "bbox": wide,
+        "w": round(wide.width, 1),
+        "dx": 0.0,
+        "spans": [spaced],
+        "curves": [],
+    }
+    _tighten_formula_sides(part, page)
+    tight = pymupdf.Rect(part["bbox"])
+    assert tight.x0 >= wide.x0 + 1.5
+    assert tight.x1 <= wide.x1 + 0.2
+    assert abs(tight.width - part["w"]) < 0.15
+    assert part["dx"] == round(tight.x0 - wide.x0, 1)
+    # 字母还在框里，左右空白都收到窄边
+    letter = next(
+        pymupdf.Rect(char["bbox"])
+        for span in page.get_text("rawdict")["blocks"]
+        if span.get("type") == 0
+        for line in span["lines"]
+        for raw in line["spans"]
+        for char in raw["chars"]
+        if char["c"] == "y" and abs(char["bbox"][0] - 100) < 30
+    )
+    assert tight.x0 <= letter.x0 + 0.2
+    assert tight.x1 >= letter.x1 - 0.2
+    assert tight.x0 >= letter.x0 - 1.0
+    assert tight.x1 <= letter.x1 + 1.0
+
+    inner = pymupdf.Rect(equation["bbox"])
+    kept = {"bbox": inner, "w": round(inner.width, 1), "spans": [equation], "curves": []}
+    _tighten_formula_sides(kept, page)
+    kept_box = pymupdf.Rect(kept["bbox"])
+    assert kept_box.width > inner.width * 0.7
+    assert kept_box.x0 < inner.x0 + 2
+    assert kept_box.x1 > inner.x1 - 2
+
+    word_box = pymupdf.Rect(word["bbox"])
+    overlapped = pymupdf.Rect(word_box.x1 - 4, wide.y0, wide.x1, wide.y1)
+    neighbor = {
+        "bbox": overlapped,
+        "w": round(overlapped.width, 1),
+        "spans": [spaced],
+        "curves": [],
+    }
+    _tighten_formula_sides(neighbor, page)
+    trimmed = pymupdf.Rect(neighbor["bbox"])
+    assert trimmed.x0 > word_box.x1 - 0.5
+
+    page.draw_line((70, 78), (96, 78), width=0.8)
+    bar = pymupdf.Rect(70, 77.2, 96, 78.8)
+    with_bar = {
+        "bbox": pymupdf.Rect(bar.x0, wide.y0, wide.x1, wide.y1),
+        "w": 40.0,
+        "spans": [spaced],
+        "curves": [bar],
+    }
+    _tighten_formula_sides(with_bar, page)
+    assert pymupdf.Rect(with_bar["bbox"]).x0 <= bar.x0 + 0.6
+    doc.close()
+
+
 def test_line_wrapped_formula_is_one_placeholder():
     """行末 y_{t-1}= 和下一行行首 s|h_{t-1} 是同一式子。一个占位符、两片，
     不并成横跨整行的大框。行中的公式不和下一行行首的公式并。"""
