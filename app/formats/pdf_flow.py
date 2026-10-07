@@ -279,6 +279,58 @@ def formula_index(token: str) -> int | None:
     return int(matched.group(1)) if matched else None
 
 
+# 公式后面直接接文字时要有一个空格。标点和已有空白不补，补第二次也不再加。
+_NO_FORMULA_SPACE = frozenset("。，、；：？！）】」』〉》％%.,;:?!)]}>（【「『《〈([{")
+
+
+def separate_after_formula(text: str) -> str:
+    """公式哨兵后面如果直接接字母、数字或汉字，补一个空格。"""
+    if "\x01i\x02" not in text:
+        return text
+    out: list[str] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        matched = _SENTINEL_RE.match(text, index)
+        if matched is None:
+            out.append(text[index])
+            index += 1
+            continue
+        out.append(matched.group(0))
+        index = matched.end()
+        while True:
+            mark = STYLE_MARK_RE.match(text, index)
+            if mark is None:
+                break
+            out.append(mark.group(0))
+            index = mark.end()
+        nxt = text[index:index + 1]
+        if nxt and not nxt.isspace() and nxt not in _NO_FORMULA_SPACE and _wants_formula_space(nxt):
+            out.append(" ")
+    return "".join(out)
+
+
+def peel_leading_space(text: str) -> tuple[str, bool]:
+    """去掉样式标记之后的第一个空格。HTML 盒子会吃掉开头的普通空格。"""
+    index = 0
+    while True:
+        mark = STYLE_MARK_RE.match(text, index)
+        if mark is None:
+            break
+        index = mark.end()
+    if index < len(text) and text[index] == " ":
+        return text[:index] + text[index + 1:], True
+    return text, False
+
+
+def _wants_formula_space(char: str) -> bool:
+    if char.isalpha() or char.isdigit():
+        return True
+    if _CJK_RE.match(char):
+        return True
+    return unicodedata.east_asian_width(char) in ("W", "F")
+
+
 def _tokenize(text: str) -> list[str]:
     tokens: list[str] = []
     index = 0

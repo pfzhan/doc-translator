@@ -2273,16 +2273,114 @@ def test_wrapped_formula_tail_stays_one_placeholder_without_a_wide_box():
     assert parts[0]["bbox"] | parts[1]["bbox"] != formulas[0]["bbox"]
 
 
-def test_justify_spacing_caps_and_skips():
-    """两端对齐摊字距：不足 1em 的余量不拉（视觉上已贴边）；
-    余量大时按字符数分摊但封顶 0.12em；太短的行不拉。"""
-    from app.formats.pdf import _justify_spacing
-    from app.formats.pdf_typeset import TextPiece, TypesetLine
+def test_justify_extras_skip_punctuation_and_short_lines():
+    """两端对齐摊在字与字之间，标点前面不拉开。余量太小或缝太少时不拉。"""
+    from app.formats.pdf_align import justify_extras
 
-    def line(width, chars=40):
-        return TypesetLine((TextPiece("字" * chars, 0.0, width),), width)
+    text = "我们在此提出一种，采样机制已经写完"
+    extras = justify_extras(text, 24.0, 10.0)
+    assert len(extras) == len(text) - 1
+    comma = text.index("，")
+    assert extras[comma - 1] == 0.0
+    assert extras[0] > 0
+    assert justify_extras(text, 1.0, 10.0) == []
+    assert justify_extras("短行", 20.0, 10.0) == []
 
-    assert _justify_spacing(line(390), 396.0, 8.8) == 0.0
-    spacing = _justify_spacing(line(350), 396.0, 8.8)
-    assert 0 < spacing <= 8.8 * 0.12 + 1e-9
-    assert _justify_spacing(line(350, chars=3), 396.0, 8.8) == 0.0
+
+def test_cjk_lines_share_the_right_edge(tmp_path):
+    """非末行的右缘对齐到写入框。标点贴着前一个字。末行保持左齐。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=500, height=240).insert_text((40, 60), "source paragraph", fontsize=11)
+    doc.save(src)
+    doc.close()
+    rect = pymupdf.Rect(40, 40, 360, 140)
+    block = TextBlock(
+        page=0, rect=rect, line_rects=[rect],
+        text="source paragraph that differs", size=12, color="#111111", bold=False,
+    )
+    text = "我们在此提出一种采样机制，在训练过程中随机决定使用真实的前一个词元，还是来自模型本身的估计值。"
+    out = _render_translated(src, [block], [text], "zh-CN")
+    chars = _cjk_chars(out[0])
+    grouped = _group_chars(chars)
+    assert len(grouped) >= 2
+    right = rect.x1 + 2
+    assert abs(grouped[0][-1][2] - right) < 1.5
+    assert grouped[-1][-1][2] < right - 8
+    for line in grouped[:-1]:
+        for prev, nxt in zip(line, line[1:]):
+            if nxt[0] == "，":
+                assert nxt[1] - prev[2] < 0.8
+    assert rect.y0 - 2 < grouped[0][0][3] < rect.y1
+
+
+def test_formula_keeps_a_space_before_following_text(tmp_path):
+    """公式后面接文字时，中间有一个空格宽的分界，不贴在一起。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=500, height=200)
+    page.insert_text((80, 80), "y=", fontsize=11)
+    doc.save(src)
+    doc.close()
+    d = pymupdf.open(src)
+    y_box = d[0].search_for("y=")[0]
+    d.close()
+    formula = {
+        "bbox": y_box, "name": "f0_1.png", "w": round(y_box.width, 1), "h": round(y_box.height, 1),
+        "d": 2.0, "raise": 0.0, "text": "y=", "has_img": True, "page": 0, "mid": 0,
+        "png": pymupdf.open(src)[0].get_pixmap(clip=y_box, dpi=72).tobytes("png"),
+        "spans": [{"bbox": tuple(y_box), "text": "y=", "size": 10, "origin": (y_box.x0, y_box.y1 - 2)}],
+    }
+    rect = pymupdf.Rect(40, 50, 420, 110)
+    block = TextBlock(
+        page=0, rect=rect, line_rects=[rect, pymupdf.Rect(y_box)],
+        text="take the value", size=11, color="#000", bold=False,
+    )
+    sentinel = "\x01i\x021\x01/i\x02"
+    out = _render_translated(
+        src, [block], [f"前面{sentinel}后面还有一段说明文字。"], "zh-CN", {id(block): [formula]},
+    )
+    page = out[0]
+    y_hit = page.search_for("y=")
+    after = page.search_for("后")
+    assert y_hit and after
+    gap = after[0].x0 - y_hit[0].x1
+    assert gap >= 2.5
+    stuck = page.search_for(")。")
+    # 标点仍然贴着公式，不在 ) 前加空格
+    close = _render_translated(
+        src, [block], [f"取{sentinel})。"], "zh-CN", {id(block): [formula]},
+    )
+    paren = close[0].search_for(")")
+    painted = close[0].search_for("y=")
+    if paren and painted:
+        assert paren[0].x0 - painted[0].x1 < 4
+
+
+def _cjk_chars(page: pymupdf.Page) -> list[tuple[str, float, float, float]]:
+    chars: list[tuple[str, float, float, float]] = []
+    for blk in page.get_text("rawdict")["blocks"]:
+        if blk.get("type") != 0:
+            continue
+        for ln in blk["lines"]:
+            for span in ln["spans"]:
+                for ch in span["chars"]:
+                    if "\u4e00" <= ch["c"] <= "\u9fff" or ch["c"] in "，。":
+                        chars.append((ch["c"], ch["bbox"][0], ch["bbox"][2], ch["origin"][1]))
+    return chars
+
+
+def _group_chars(
+    chars: list[tuple[str, float, float, float]],
+) -> list[list[tuple[str, float, float, float]]]:
+    grouped: list[list[tuple[str, float, float, float]]] = []
+    for item in chars:
+        if not grouped or abs(item[3] - grouped[-1][0][3]) > 2:
+            grouped.append([item])
+        else:
+            grouped[-1].append(item)
+    return grouped

@@ -17,13 +17,16 @@ from pathlib import Path
 import pymupdf
 
 from ..languages import RTL_LANGUAGES
+from .pdf_align import draw_cjk_lines
 from .pdf_flow import (
     STYLE_MARK_RE,
     Emphasis,
     break_lines,
     emphasis_of,
     nowrap_lines,
+    peel_leading_space,
     restore_emphasis,
+    separate_after_formula,
     strip_style_marks,
     writer_for,
 )
@@ -1619,17 +1622,46 @@ def _typeset_line_html(line: TypesetLine, formulas: list[dict]) -> str:
     return "".join(parts)
 
 
-def _justify_spacing(line: TypesetLine, box_width: float, em: float) -> float:
-    """一行该摊多少字距（letter-spacing px）。MuPDF 的 justify 只拉伸带空格的行，
-    纯 CJK 行拉不动，排版器自己摊：余量除以可见字符数，封顶 0.12em，
-    免得估计偏低时把行拉出右缘。返回 0 表示不动（末行、贴边的行不拉）。"""
-    slack = box_width - line.width
-    if slack < em:
-        return 0.0
-    n = sum(len(piece.text.strip()) if isinstance(piece, TextPiece) else 1 for piece in line.pieces)
-    if n < 8:
-        return 0.0
-    return min(slack / n, em * 0.12)
+def _formula_draw_args(formulas: list[dict]) -> tuple[frozenset[int], dict[int, str]]:
+    images = frozenset(index for index, formula in enumerate(formulas, 1) if formula.get("has_img"))
+    fallback = {
+        index: str(formula.get("text") or "")
+        for index, formula in enumerate(formulas, 1)
+        if index not in images
+    }
+    return images, fallback
+
+
+def _draw_cjk(
+    page: "pymupdf.Page",
+    doc: "pymupdf.Document",
+    lines: list[TypesetLine],
+    formulas: list[dict],
+    box: "pymupdf.Rect",
+    em: float,
+    gap: float,
+    color: str,
+    centered: bool,
+    fmS: int | None,
+    page_spans: list[dict] | None,
+    draws: list[str],
+    deferred_png: list[tuple["pymupdf.Rect", bytes]],
+) -> bool:
+    """中文行按字形两端对齐。写不成时返回 False。"""
+    images, fallback = _formula_draw_args(formulas)
+    slots = draw_cjk_lines(
+        page, doc, lines, box, em, gap, color, centered, images, fallback,
+    )
+    if slots is None:
+        return False
+    for slot in slots:
+        if not 1 <= slot.index <= len(formulas):
+            continue
+        _paint_formula_parts(
+            page, doc, formulas[slot.index - 1], slot.x, slot.baseline,
+            fmS, page_spans, draws, deferred_png,
+        )
+    return True
 
 
 def _place_plain(
@@ -1648,25 +1680,22 @@ def _place_plain(
     right_limit: float | None,
     archive: pymupdf.Archive | None,
 ) -> None:
-    """排版器断行，再写入一个盒子。一行一个盒子会把整套字体嵌进每一次写入。"""
+    """排版器断行，再写入。中文按字形两端对齐；缺字或带样式标记时退回一个 HTML 盒子。"""
+    text = separate_after_formula(text)
     lines, em, gap, box = _fit_typeset(
         text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit,
     )
+    if cjk and _draw_cjk(
+        page, page.parent, lines, formulas, box, em, gap, color, centered,
+        None, None, [], [],
+    ):
+        return
     rendered = [_typeset_line_html(line, formulas) for line in lines]
-    # 两端对齐：MuPDF 的 justify 只拉伸带空格的行（纯 CJK 拉不动），宽段落改为
-    # 排版器把每行余量摊成字距；字距是渲染属性，不改文本内容，复制不受影响。
-    # 摊了字距的行不再 nowrap：估计偏低时让 MuPDF 自己重排，而不是画出右缘
-    justify = not centered and rect.width > page.rect.width * 0.6
-    parts: list[str] = []
-    last_line = len(lines) - 1
-    for li, (line, line_html) in enumerate(zip(lines, rendered)):
-        if not line_html:
-            continue
-        ls = _justify_spacing(line, box.width, em) if justify and li != last_line else 0.0
-        if ls:
-            parts.append(f'<span style="letter-spacing: {ls:.2f}px">{line_html}</span>')
-        else:
-            parts.append(f'<span style="white-space:nowrap">{line_html}</span>')
+    parts = [
+        f'<span style="white-space:nowrap">{line_html}</span>'
+        for line_html in rendered
+        if line_html
+    ]
     body = "<br>".join(parts)
     if not body:
         return
@@ -1702,9 +1731,15 @@ def _place_typeset(
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
 ) -> None:
     """按行写入文字，公式槽用记录的下沿贴到该行基线。"""
+    text = separate_after_formula(text)
     lines, em, gap, box = _fit_typeset(
         text, formulas, rect, em, block.size, cjk, page, obstacles, right_limit,
     )
+    if cjk and _draw_cjk(
+        page, doc, lines, formulas, box, em, gap, color, centered,
+        fmS, page_spans, draws, deferred_png,
+    ):
+        return
     css = (
         f"* {{font-family: sans-serif; font-size: {em}px; color: {color}; "
         f"font-weight: {weight}; line-height: {gap}; margin: 0; padding: 0; text-align: left;}}"
@@ -1712,38 +1747,31 @@ def _place_typeset(
     line_h = em * gap
     pending: list[tuple[FormulaPiece, float, float]] = []
     y = box.y0
-    # 宽段落两端对齐：字距摊在文字片里，后面的片（含公式槽）跟着右移
-    justify = not centered and rect.width > page.rect.width * 0.6
-    last_line = len(lines) - 1
-    for li, line in enumerate(lines):
+    for line in lines:
         origin_x = box.x0
         if centered and line.width < box.width:
             origin_x += (box.width - line.width) / 2
-        ls = _justify_spacing(line, box.width, em) if justify and li != last_line else 0.0
-        css_line = css
-        if ls:
-            css_line = css[:-2] + f" letter-spacing: {ls:.2f}px;" + "}}"
-        extra = 0.0
         for piece in line.pieces:
             if isinstance(piece, TextPiece):
                 if not piece.text.strip():
                     continue
-                fragment = _inline_marks(restore_emphasis(html.escape(piece.text)))
+                # 公式后的分界空格在单独的盒子开头会被吃掉，改成同样宽的偏移
+                body, had_space = peel_leading_space(piece.text)
+                lead = em * 0.33 if had_space else 0.0
+                fragment = _inline_marks(restore_emphasis(html.escape(body)))
                 html_text = f'<div{div_attrs}><span style="white-space:nowrap">{fragment}</span></div>'
                 # 单行盒子也要留首行出头的余量（MuPDF 一行内容高 = 行距 + ~0.25em），
                 # 否则每个小片都被静默缩到 0.93 倍
-                stretch = ls * len(piece.text)
-                slot = pymupdf.Rect(origin_x + piece.x + extra, y,
-                                    origin_x + piece.x + extra + piece.width + stretch + 4,
+                slot = pymupdf.Rect(origin_x + piece.x + lead, y,
+                                    origin_x + piece.x + piece.width + 4,
                                     y + line_h + em * 0.3)
-                if not _try_insert(page, slot, html_text, css_line, 0.9):
+                if not _try_insert(page, slot, html_text, css, 0.9):
                     try:
-                        page.insert_htmlbox(slot, html_text, css=css_line, scale_low=0)
+                        page.insert_htmlbox(slot, html_text, css=css, scale_low=0)
                     except AssertionError:
                         pass
-                extra += stretch
             elif isinstance(piece, FormulaPiece) and 1 <= piece.index <= len(formulas):
-                pending.append((piece, origin_x + piece.x + extra, y))
+                pending.append((piece, origin_x + piece.x, y))
         y += line_h
     if not pending:
         return
@@ -1966,6 +1994,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         draws: list[str] = []
         deferred_png: list[tuple[pymupdf.Rect, bytes]] = []
         for b, t in items:
+            t = separate_after_formula(t)
             bformulas = (formulas_map or {}).get(id(b), [])
             weight = "bold" if b.bold else "normal"
             size = b.size * 0.88 if cjk else b.size
@@ -2600,6 +2629,8 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     block_formulas: dict[int, list] = {}
     for unit, t, sent_text, formulas in zip(flat_units, raw, sent_texts, sent_formulas):
         restored = _restore_placeholders(t, formulas) if formulas else _STRAY_PLACEHOLDER_RE.sub("", t)
+        if restored is not None:
+            restored = separate_after_formula(restored)
         if restored is None:
             parts = [b.text for b in unit]  # 模型弄丢占位符：整单元回退原文，不产出坏文档
             formula_lists: list[list[dict]] = [[] for _ in unit]
