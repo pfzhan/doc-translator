@@ -551,6 +551,10 @@ def _is_formula_span(span: dict, main_size: float, *, prose_line: bool = False) 
     if span["size"] < main_size * 0.79 and not prose_line:
         return True
     if re.match(r"^CMB", span["font"]) and len(span["text"].strip()) <= 2:
+        # 图注里的 of / to 也是两个字母，但是词，不是 mathbf 变量。
+        token = span["text"].strip()
+        if len(token) == 2 and token.isalpha() and token.islower():
+            return False
         return True
     return _is_symbol_span(span["text"])
 
@@ -1577,7 +1581,87 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
         geo = PageGeometry.from_page(doc[pno], [block.rect for block in page_blocks])
         geometries[pno] = geo
         ordered.extend(reading_order(page_blocks, geo))
-    return _merge_continuations(_merge_caption_fragments(_merge_visual_lines(ordered, geometries)))
+    merged = _merge_continuations(_merge_caption_fragments(_merge_visual_lines(ordered, geometries)))
+    return _split_affiliation_tails(merged)
+
+
+_AFFIL_MARK_RE = re.compile(r"^[∗*†‡§¶]")
+
+
+def _garbled_label(text: str) -> bool:
+    """图内标签用符号字体时，$ 顶替了空格。重排会把乱码译出来，留下原字。"""
+    compact = re.sub(r"\s+", "", text)
+    if not compact or len(compact) > 80:
+        return False
+    return compact.count("$") >= 1 and bool(re.search(r"[A-Za-z]\$|\$[A-Za-z]", compact))
+
+
+def _line_text(span_lines: list[list[dict]], index: int) -> str:
+    return "".join(str(span.get("text") or "") for span in span_lines[index])
+
+
+def _block_slice(block: TextBlock, start: int, end: int) -> TextBlock:
+    lines = block.line_rects[start:end]
+    spans = block.span_lines[start:end] if block.span_lines else None
+    texts = [_line_text(spans, i) for i in range(len(spans or []))]
+    rect = pymupdf.Rect()
+    for line in lines:
+        rect |= line
+    return TextBlock(
+        page=block.page,
+        rect=rect,
+        line_rects=list(lines),
+        text=_join_lines(texts) if texts else block.text,
+        size=block.size,
+        color=block.color,
+        bold=block.bold,
+        span_lines=list(spans) if spans is not None else None,
+        clip=block.clip,
+    )
+
+
+def _affiliation_neighbor(blocks: list[TextBlock], block: TextBlock, line: pymupdf.Rect) -> bool:
+    """这一行右边有没有并排的短单位行。"""
+    for other in blocks:
+        if other is block or other.page != block.page or other.clip is not None:
+            continue
+        if other.rect.height > 32 or len(other.line_rects) > 2:
+            continue
+        overlap = min(line.y1, other.rect.y1) - max(line.y0, other.rect.y0)
+        if overlap < min(line.height, other.rect.height) * 0.5:
+            continue
+        gap = other.rect.x0 - line.x1
+        if 0 <= gap < 40 and _AFFIL_MARK_RE.match(other.text.lstrip()):
+            return True
+    return False
+
+
+def _split_affiliation_tails(blocks: list[TextBlock]) -> list[TextBlock]:
+    """作者行末尾的单位如果和旁边的单位并排，拆成独立块。否则译文会盖住它们。"""
+    out: list[TextBlock] = []
+    for block in blocks:
+        spans = block.span_lines
+        if spans is None or block.clip is not None or len(block.line_rects) < 3:
+            out.append(block)
+            continue
+        if len(spans) != len(block.line_rects):
+            out.append(block)
+            continue
+        cut: int | None = None
+        for index, line in enumerate(block.line_rects):
+            if index == 0 or line.width > block.rect.width * 0.5:
+                continue
+            if not _AFFIL_MARK_RE.match(_line_text(spans, index).strip()):
+                continue
+            if _affiliation_neighbor(blocks, block, line):
+                cut = index
+                break
+        if cut is None:
+            out.append(block)
+            continue
+        out.append(_block_slice(block, 0, cut))
+        out.append(_block_slice(block, cut, len(block.line_rects)))
+    return out
 
 
 def _absorb_block(p: TextBlock, b: TextBlock):
@@ -2362,6 +2446,86 @@ def _centered_in_cell(block: TextBlock) -> bool:
     return abs(text_mid - cell_mid) <= 2.0
 
 
+def _flow_y0(block: TextBlock, cjk: bool) -> float:
+    """写入起点。第一行只是同一基线上的右半句时，从下一行起写，左边那一块留在这一行。"""
+    origin = block.line_rects[0].y0 if block.line_rects else block.rect.y0
+    if len(block.line_rects) >= 2 and block.size > 0:
+        first = block.line_rects[0]
+        rest_left = min(line.x0 for line in block.line_rects[1:])
+        right_fragment = (
+            first.x0 > rest_left + max(block.size * 3.5, 28)
+            and first.width < block.rect.width * 0.75
+        )
+        if right_fragment:
+            origin = block.line_rects[1].y0
+    return origin + block.size * 0.1 if cjk else origin
+
+
+def _affiliation_write_rects(blocks: list[TextBlock]) -> dict[int, pymupdf.Rect]:
+    """并排的作者单位改成逐行写下。中文比原文宽，并排写会叠在一起。"""
+    marked = [
+        block for block in blocks
+        if block.clip is None and block.rect.height <= 32 and len(block.line_rects) <= 2
+        and _AFFIL_MARK_RE.match(block.text.lstrip())
+    ]
+    used: set[int] = set()
+    out: dict[int, pymupdf.Rect] = {}
+    for block in marked:
+        if id(block) in used:
+            continue
+        group = [block]
+        used.add(id(block))
+        grew = True
+        while grew:
+            grew = False
+            for other in marked:
+                if id(other) in used or other.page != block.page:
+                    continue
+                if any(
+                    min(item.rect.y1, other.rect.y1) - max(item.rect.y0, other.rect.y0)
+                    >= min(item.rect.height, other.rect.height) * 0.5
+                    and 0 <= other.rect.x0 - item.rect.x1 < 40
+                    for item in group
+                ) or any(
+                    min(item.rect.y1, other.rect.y1) - max(item.rect.y0, other.rect.y0)
+                    >= min(item.rect.height, other.rect.height) * 0.5
+                    and 0 <= item.rect.x0 - other.rect.x1 < 40
+                    for item in group
+                ):
+                    group.append(other)
+                    used.add(id(other))
+                    grew = True
+        if len(group) < 2:
+            continue
+        group.sort(key=lambda item: item.rect.x0)
+        top = min(item.rect.y0 for item in group)
+        left = min(item.rect.x0 for item in group)
+        right = max(item.rect.x1 for item in group)
+        members = {id(item) for item in group}
+        def overlaps_row(other: TextBlock) -> bool:
+            return other.rect.x1 > left - 2 and other.rect.x0 < right - 4
+
+        above = [
+            other.rect.y1 for other in blocks
+            if other.page == block.page and id(other) not in members
+            and other.rect.y1 <= top + 1 and overlaps_row(other)
+        ]
+        if above:
+            top = max(max(above) + 1, top - 8)
+        below = [
+            other.rect.y0 for other in blocks
+            if other.page == block.page and id(other) not in members
+            and other.rect.y0 > top + 4 and overlaps_row(other)
+        ]
+        floor = min(below) - 3 if below else top + 12 * len(group)
+        slot = max(9.0, (floor - top) / len(group))
+        y = top
+        for item in group:
+            out[id(item)] = pymupdf.Rect(left, y, max(right, left + 80), y + slot)
+            y += slot
+    return out
+
+
 def _write_rect(
     block: TextBlock,
     items: list[tuple[TextBlock, str]],
@@ -2371,7 +2535,7 @@ def _write_rect(
 ) -> tuple[pymupdf.Rect, bool]:
     """写入框。多栏且块落在某一栏内时，居中参照该栏；单栏仍用本页最宽块。
     格子里原本居中的文字，改以格子中线居中。"""
-    y0 = block.rect.y0 + block.size * 0.1 if cjk else block.rect.y0
+    y0 = _flow_y0(block, cjk)
     pad = block.size * 0.5 if cjk else block.size * 0.3
     if _centered_in_cell(block) and block.clip is not None:
         clip = block.clip
@@ -2530,6 +2694,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         images_before = {img[0] for img in page.get_images(full=True)}
         draws: list[str] = []
         deferred_png: list[tuple[pymupdf.Rect, bytes]] = []
+        stacked = _affiliation_write_rects(blocks)
 
         def write_one(
             block: TextBlock, text: str, rect: pymupdf.Rect, centered: bool,
@@ -2578,6 +2743,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             # 栏宽参考：单栏用本页最宽块；多栏用本块所在栏。居中块用整栏宽，
             # 短译文不再被小框挤成孤字行。排版器按这个宽度断行。
             rect, centered = _write_rect(b, visible, cjk, rtl, geo)
+            if id(b) in stacked:
+                rect, centered = stacked[id(b)], False
             tail = continuations.get(id(b))
             if tail is None:
                 write_one(b, t, rect, centered)
@@ -2948,9 +3115,19 @@ def _subset_fonts_safe(doc: pymupdf.Document) -> pymupdf.Document:
         return pymupdf.open("pdf", data)
 
 
+_CN_NUM = r"[0-9零〇一二三四五六七八九十百]+"
+# 模型会把 2.1 写成 第二点一节、四点二，把 8 写成 八,。都从标题开头剥掉，改回原文编号。
 _TRANS_HEAD_NUM_RE = re.compile(
-    r"^第[0-9零〇一二三四五六七八九十百]+[章节](?:第[0-9零〇一二三四五六七八九十百]+节)?\s*"
-    r"|^\d+(?:\.\d+)*\.?[章节]?(?:\s+|$)")
+    r"^(?:"
+    r"第" + _CN_NUM + r"点" + _CN_NUM + r"节?"
+    r"|第" + _CN_NUM + r"[章节](?:第" + _CN_NUM + r"节)?"
+    r"|第\d+(?:\.\d+)+节?"
+    r"|" + _CN_NUM + r"(?:点" + _CN_NUM + r")+"
+    r"|第?" + _CN_NUM + r"[章节]"
+    r"|" + _CN_NUM + r"\s*[,，、]"
+    r"|\d+(?:\.\d+)*\.?[章节]?"
+    r")\s*"
+)
 
 
 def _retag_runs(runs: list[Run], owner: int, index_offset: int) -> list[Run]:
@@ -3147,8 +3324,8 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     kinds = ["h2" if role is Role.HEADING else "p" for role in roles]
     edges = margin_skips(blocks, geometries)
     skips = [
-        bib or role is Role.FIGURE or edge
-        for bib, role, edge in zip(biblio_skips(blocks), roles, edges)
+        bib or role is Role.FIGURE or edge or _garbled_label(block.text)
+        for bib, role, edge, block in zip(biblio_skips(blocks), roles, edges, blocks)
     ]
     skip_ids = {id(b) for b, s in zip(blocks, skips) if s}
     margin_ids = {id(b) for b, edge in zip(blocks, edges) if edge}

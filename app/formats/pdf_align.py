@@ -181,8 +181,18 @@ def _segments(text: str, em: float) -> list[_Segment] | None:
     return segments
 
 
+def _latin_unit(ch: str) -> bool:
+    """词内的拉丁字母、数字和连字符。两端对齐不能从这里拉开。"""
+    return ch.isascii() and (ch.isalnum() or ch in "-'’")
+
+
 def can_stretch(left: str, right: str) -> bool:
-    return right not in _NO_GAP_BEFORE and left not in _NO_GAP_AFTER
+    if right in _NO_GAP_BEFORE or left in _NO_GAP_AFTER:
+        return False
+    # 作者名被拉成 Z h o n g，就是把词内的字母也拉开了。只在词与词之间留缝。
+    if _latin_unit(left) and _latin_unit(right):
+        return False
+    return True
 
 
 def justify_extras(text: str, slack: float, em: float) -> list[float]:
