@@ -202,11 +202,12 @@ class Runner:
         html_sources = self.translator.html_texts
 
         def fixed(src: str, dst: str) -> str:
+            dst = normalize_punctuation(dst, tl)
             if src not in headings:
                 return dst
             return fix_numbered_unit(dst, tl, html=src in html_sources)
 
-        # 标题和目录的旧缓存可能还是「第2卷」：命中时改写成中文数字，预览不用重翻
+        # 标题和目录的旧缓存可能还是「第2卷」、译文可能还带全角括号/逗号：命中时改写，预览不用重翻
         rewrites = {t: d2 for t, d in done_map.items() if (d2 := fixed(t, d)) != d}
         if rewrites:
             self.cache.put_many(prefix, rewrites)
@@ -306,6 +307,10 @@ class Runner:
 
 _CN_DIGITS = "零一二三四五六七八九"
 _HEADING_KINDS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6", "toc"})
+_PARENS = str.maketrans("（）", "()")
+# 句号、书名号、引号保持全角；其余全角标点换成半角并补一个空格（已有空格不重复）
+_PUNCT_HALF = {"，": ",", "、": ",", "；": ";", "：": ":", "？": "?", "！": "!"}
+_PUNCT_RE = re.compile(r"([，、；：？！])\s*")
 # 第2卷、第２卷，以及模型翻串了的“第卷26”。单位不含页/期/号，那些保留阿拉伯数字
 _UNIT_HEAD_RE = re.compile(r"^第([0-9０-９]{1,4})(?=[卷章部篇集册])")
 _UNIT_INVERTED_RE = re.compile(r"^第([卷章部篇集册])([0-9０-９]{1,4})")
@@ -313,6 +318,16 @@ _UNIT_INVERTED_RE = re.compile(r"^第([卷章部篇集册])([0-9０-９]{1,4})")
 _CITE_RE = re.compile(r"第[0-9０-９]{1,4}\s*[期页号]|[卷章部篇集册]\s*第?\s*[0-9０-９]{1,4}\s*期")
 _FULLWIDTH = str.maketrans("０１２３４５６７８９", "0123456789")
 _NUM_CHARS = frozenset("第0123456789０１２３４５６７８９卷章部篇集册")
+
+
+def normalize_punctuation(dst: str, target_lang: str) -> str:
+    """中文译文的全角标点统一半角：括号直接换，逗号/顿号/分号/冒号/问号/叹号
+    换成半角并补一个空格。句号、书名号、引号保持全角——它们是中文排版的一部分，
+    而全角的 , ; : ? ! 和汉字同宽，夹在正文里又宽又笨。"""
+    if not target_lang.startswith("zh"):
+        return dst
+    out = _PUNCT_RE.sub(lambda m: _PUNCT_HALF[m.group(1)] + " ", dst.translate(_PARENS))
+    return out.rstrip() if out.endswith(" ") else out
 
 
 def _cn_number(n: int, *, higher: bool = False) -> str:
