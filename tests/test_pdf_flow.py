@@ -132,6 +132,17 @@ def test_restore_emphasis_keeps_italic_tag():
     assert restore_emphasis("正常{i}强调{/i}文字") == "正常<i>强调</i>文字"
 
 
+def test_space_around_latin_balances_both_sides():
+    """汉字和 i-th 之间各留一个空格。标记里的空格挪出来，英文句子不动。"""
+    from app.formats.pdf_flow import space_around_latin
+
+    assert space_around_latin("第{i} i-th{/i}个") == "第 {i}i-th{/i} 个"
+    assert space_around_latin("第i-th个") == "第 i-th 个"
+    assert space_around_latin("the i-th mini-batch") == "the i-th mini-batch"
+    sentinel = "\x01i\x021\x01/i\x02"
+    assert space_around_latin(f"词元{sentinel},") == f"词元{sentinel},"
+
+
 def test_separate_after_formula_adds_one_space():
     """公式后面直接接文字时补一个空格。标点、已有空格、样式标记都不重复补。"""
     from app.formats.pdf_flow import separate_after_formula
