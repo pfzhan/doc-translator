@@ -64,18 +64,57 @@ def strip_boundary(text: str) -> str:
     return re.sub(r" {2,}", " ", cleaned).strip()
 
 
+# 分式线、根号经常贴在字形框外一两磅，相交判定收不到。再远就是下划线或通栏线。
+_STROKE_GAP = 2.5
+_STROKE_THIN = 2.4
+
+
+def _edge_gap(a: pymupdf.Rect, b: pymupdf.Rect) -> float:
+    dx = max(0.0, a.x0 - b.x1, b.x0 - a.x1)
+    dy = max(0.0, a.y0 - b.y1, b.y0 - a.y1)
+    return max(dx, dy)
+
+
+def _axis_overlap(a0: float, a1: float, b0: float, b1: float) -> float:
+    return min(a1, b1) - max(a0, b0)
+
+
+def _near_formula_stroke(box: pymupdf.Rect, rect: pymupdf.Rect) -> bool:
+    """贴着框、但没有相交的细线或根号竖笔。长出一截的通栏线不收。"""
+    if _edge_gap(box, rect) > _STROKE_GAP:
+        return False
+    if min(rect.width, rect.height) <= _STROKE_THIN and rect.height <= rect.width:
+        overlap = _axis_overlap(rect.x0, rect.x1, box.x0, box.x1)
+        cap = max(box.width * 2.5, box.width + 16)
+        return overlap >= 0.55 * min(rect.width, box.width) and rect.width <= cap and rect.width < 200
+    if min(rect.width, rect.height) <= _STROKE_THIN:
+        overlap = _axis_overlap(rect.y0, rect.y1, box.y0, box.y1)
+        cap = max(box.height * 2.5, box.height + 12)
+        return overlap >= 0.55 * min(rect.height, box.height) and rect.height <= cap
+    beside = rect.x1 <= box.x0 + 1 and _axis_overlap(
+        rect.y0, rect.y1, box.y0, box.y1,
+    ) >= 0.6 * min(rect.height, box.height)
+    return bool(
+        beside
+        and rect.width <= max(8.0, box.width * 0.45)
+        and rect.height <= max(box.height * 2.2, box.height + 10)
+    )
+
+
 def intersecting_curves(box: pymupdf.Rect, drawings: list[pymupdf.Rect]) -> tuple[pymupdf.Rect, ...]:
-    """和公式框相交、且自身不大过公式太多的曲线。整页通栏线不并进来。"""
+    """和公式框相交、或紧贴框外的分式线与根号。整页通栏线不并进来。"""
     found: list[pymupdf.Rect] = []
     for rect in drawings:
         if rect.width < 0.4 or rect.height < 0.3:
             continue
         hit = rect & box
-        if hit.is_empty or hit.width < 0.4 or hit.height < 0.3:
-            continue
-        if rect.width > max(box.width * 3, box.width + 8):
-            continue
-        if rect.height > max(box.height * 3, box.height + 8):
+        intersects = not hit.is_empty and hit.width >= 0.4 and hit.height >= 0.3
+        if intersects:
+            if rect.width > max(box.width * 3, box.width + 8):
+                continue
+            if rect.height > max(box.height * 3, box.height + 8):
+                continue
+        elif not _near_formula_stroke(box, rect):
             continue
         found.append(pymupdf.Rect(rect))
     return tuple(found)

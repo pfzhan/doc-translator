@@ -194,6 +194,14 @@ def _is_formula_char(c: str) -> bool:
     return unicodedata.category(c) in ("Sm", "Sk", "Mn", "Co")
 
 
+def _is_symbol_span(text: str) -> bool:
+    """正文字体里整段都是希腊字母或数学符号。纯重音留给重音吸收，不当成公式。"""
+    stripped = text.strip()
+    if not stripped or all(unicodedata.category(c) in ("Sk", "Mn") for c in stripped):
+        return False
+    return all(_is_formula_char(c) for c in stripped)
+
+
 def _math_chars(spans: list[dict]) -> int:
     """块里公式字符数：公式字体的全部字符 + 正文字体里的公式字符。"""
     n = 0
@@ -226,17 +234,32 @@ def _different_columns(
     return a.index_of(left.rect) != b.index_of(right.rect)
 
 
+def _caption_label(text: str) -> bool:
+    return bool(_CAPTION_LABEL_RE.match(text.strip()))
+
+
+def _cjk_page_continue(prev: TextBlock, nxt: TextBlock) -> bool:
+    """跨页中文续段没有大小写。短标签、缩进的新段、图注标签不接。"""
+    head = nxt.text.lstrip()[:1]
+    if not head or CJK_RE.search(head) is None or _caption_label(nxt.text):
+        return False
+    if len(CJK_RE.findall(prev.text)) < 4:
+        return False
+    return abs(nxt.rect.x0 - prev.rect.x0) <= prev.size * 1.2
+
+
 def _can_continue(
     prev: TextBlock, nxt: TextBlock, median: float, halt_ids: set[int] | None,
 ) -> bool:
-    """页末块没有句末标点，页首块以小写或数字开头，且不是标题。"""
+    """页末块没有句末标点，页首块以小写、数字或中文开头，且不是标题。"""
     head = nxt.text.lstrip()[:1]
     numbered_heading = bool(_SRC_HEAD_NUM_RE.match(nxt.text.lstrip()))
     if halt_ids is None:
         is_heading = _preview_kind(nxt, median) != "p"
     else:
         is_heading = id(nxt) in halt_ids
-    return bool(not numbered_heading and not is_heading and (head.islower() or head.isdigit())
+    continues = head.islower() or head.isdigit() or _cjk_page_continue(prev, nxt)
+    return bool(not numbered_heading and not is_heading and continues
                 and not prev.text.rstrip().endswith(_SENT_END_PUNCT)
                 and nxt.size <= prev.size * 1.4)
 
@@ -426,11 +449,25 @@ def _balance_marks(left: str, right: str) -> tuple[str, str]:
     return left + "".join(closes), "".join(open_stack) + right
 
 
-def _merge_visual_lines(blocks: list[TextBlock]) -> list[TextBlock]:
+def _blocks_share_column(
+    left: TextBlock, right: TextBlock, geometries: dict[int, PageGeometry] | None,
+) -> bool:
+    """间隙小于栏沟时，仍要确认两块落在同一栏。没有栏信息时只靠间隙本身。"""
+    if not geometries or left.page not in geometries:
+        return True
+    geo = geometries[left.page]
+    if len(geo.columns) < 2:
+        return True
+    return geo.index_of(left.rect) == geo.index_of(right.rect) and not geo.spans_columns(left.rect | right.rect)
+
+
+def _merge_visual_lines(
+    blocks: list[TextBlock], geometries: dict[int, PageGeometry] | None = None,
+) -> list[TextBlock]:
     """合并其实是同一可视行的相邻块（字体在公式处切换时，PyMuPDF 会把一行拆成两块）。
 
-    判定：纵向交叠超过较矮块的一半、且横向区间相交。双栏的左右栏横向不相交，
-    不会被误并。不合并的话，两块译文会写进互相交叠的矩形里叠在一起。
+    判定：纵向交叠超过较矮块的一半，并且横向相交，或间隙小于 6pt。栏沟至少 12pt，
+    这个间隙接不上另一栏。不合并的话，两块译文会写进互相交叠的矩形里叠在一起。
     """
     out: list[TextBlock] = []
     for b in blocks:
@@ -438,8 +475,10 @@ def _merge_visual_lines(blocks: list[TextBlock]) -> list[TextBlock]:
             p = out[-1]
             v_overlap = min(p.rect.y1, b.rect.y1) - max(p.rect.y0, b.rect.y0)
             h_overlap = min(p.rect.x1, b.rect.x1) - max(p.rect.x0, b.rect.x0)
-            if (p.page == b.page and p.clip == b.clip and h_overlap > 0
-                    and v_overlap > min(p.rect.y1 - p.rect.y0, b.rect.y1 - b.rect.y0) * 0.5):
+            gap = b.rect.x0 - p.rect.x1
+            same_line = v_overlap > min(p.rect.y1 - p.rect.y0, b.rect.y1 - b.rect.y0) * 0.5
+            near = h_overlap > 0 or (0 <= gap < 6 and _blocks_share_column(p, b, geometries))
+            if p.page == b.page and p.clip == b.clip and same_line and near:
                 p.line_rects.extend(b.line_rects)
                 if p.span_lines and b.span_lines:
                     p.span_lines.extend(b.span_lines)
@@ -454,10 +493,13 @@ def _merge_visual_lines(blocks: list[TextBlock]) -> list[TextBlock]:
 
 def _is_formula_span(span: dict, main_size: float) -> bool:
     """行内公式：数学字体的 span，或明显小于正文的角标 span（引用编号等）。
-    粗体 CM（CMBX 等）的一两个字符按 \mathbf 单字母算公式；粗体单词仍是正文。"""
+    粗体 CM（CMBX 等）的一两个字符按 mathbf 单字母算公式；粗体单词仍是正文。
+    正文字体里的希腊字母和数学符号也是公式。单个拉丁字母不是，除非贴在角标上。"""
     if _font_is_math(span["font"]) or span["size"] < main_size * 0.79:
         return True
-    return bool(re.match(r"^CMB", span["font"]) and len(span["text"].strip()) <= 2)
+    if re.match(r"^CMB", span["font"]) and len(span["text"].strip()) <= 2:
+        return True
+    return _is_symbol_span(span["text"])
 
 
 def _formula_markup(run_spans: list[dict], main_size: float) -> str:
@@ -493,6 +535,53 @@ def _formula_markup(run_spans: list[dict], main_size: float) -> str:
 # 孤立标点不当公式：<EOS> 这类 token 的尖括号是数学字体，单独抽出来会把 token 拆散、
 # 还把上下行的括号粘成跨行怪图。括号/标点留在正文里排版（正文字体本来就画得出）。
 _LONE_PUNCT_RE = re.compile(r"^[\s<>[\]{}()|/\\=+\-_.,;:'\"~·，。；：！？（）【】]+$")
+# 贴在角标上的正体变量。两个字母会把 of/to 吸进上标，只收一个字母。
+_VARIABLE_BASE_RE = re.compile(r"^[A-Za-z]['′]?$")
+# 图注标签可以没有冒号：图 2、Fig. 1.
+_CAPTION_LABEL_RE = re.compile(
+    r"^(?:(?:Figure|Fig\.?|Table|Tab\.?|Scheme|Plate)\s*\d+|(?:图|表)\s*\d+)\s*[:.。：]?\s*$",
+    re.I,
+)
+
+
+def _script_base(span: dict, bbox: pymupdf.Rect, block_size: float) -> bool:
+    """单字母贴在较小角标上，才并进公式。引用上标在字母右侧，中心出了字框，不收。"""
+    if not _VARIABLE_BASE_RE.match(str(span.get("text") or "").strip()):
+        return False
+    if float(span.get("size") or 0) < block_size * 0.79:
+        return False
+    raw = span.get("bbox")
+    if raw is None:
+        return False
+    base = pymupdf.Rect(raw)
+    y_gap = max(base.y0, bbox.y0) - min(base.y1, bbox.y1)
+    center = (bbox.x0 + bbox.x1) / 2
+    # 角标可以略伸出字母右缘。再往右就是引用上标，中心已经离开字框。
+    return y_gap < block_size and bbox.x0 <= base.x1 + 0.4 and base.x0 - 1 <= center <= base.x1 + 2.0
+
+
+def _absorb_script_bases(runs: list[dict], span_lines: list[list[dict]], block_size: float) -> None:
+    """把贴在角标上的正体变量并进该角标。单词和引用编号留在正文。"""
+    taken = {id(span) for run in runs for span in run["spans"]}
+    for run in runs:
+        if float(run["max_size"]) >= block_size * 0.79:
+            continue
+        line_no, start, end = run["pos"]
+        candidates: list[tuple[int, int, dict]] = []
+        if start > 0:
+            candidates.append((line_no, start - 1, span_lines[line_no][start - 1]))
+        if line_no > 0:
+            for index, span in enumerate(span_lines[line_no - 1]):
+                candidates.append((line_no - 1, index, span))
+        for other_no, index, span in candidates:
+            if id(span) in taken or not _script_base(span, run["bbox"], block_size):
+                continue
+            run["spans"].insert(0, span)
+            run["bbox"] |= pymupdf.Rect(span["bbox"])
+            if other_no == line_no:
+                run["pos"] = (line_no, index, end)
+            taken.add(id(span))
+            break
 # 重音符号（hat/tilde/bar/dot 等）：落在公式 bbox 上的要并进公式，不能留在正文
 _ACCENT_CHARS = {"^", "ˆ", "̂", "~", "̃", "¯", "̄", "´", "`", "˙", "̇", "¨", "̈", "ˇ", "̌", "⃗"}
 
@@ -535,14 +624,17 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 i = j
             else:
                 i += 1
+    _absorb_script_bases(runs, block.span_lines, block.size)
 
     # 2) 归并 run，两种情形：
     # a) 上下标拆到不同 dict 行：x 交叠够深（≥30% 较窄 run 的宽）且必有一方是小字号
     #    （<0.79 正文）；两个正文字号 run 即使 x 深度交叠也是相邻文本行上碰巧对齐
     #    的两个公式（如行末 (X,Y) 和下一行的 y_1,…,y_T）。
-    # b) 阅读序上真正邻接（中间只有空白 span）且 x 间距小于一个字号：同一数学表达式
-    #    被拆成的连续片段（y^i_1, y^i_2, … 的元素），并回一个公式，否则下标会被
-    #    占位符间的空格推到离基底很远的位置。行间隔着正文的不并（(X,Y) vs y_1,…,y_T）。
+    # b) 阅读序上真正邻接（中间只有空白 span）且 x 间距小于一个字号、纵向相交
+    #    （同一可视行）：同一数学表达式被拆成的连续片段（y^i_1, y^i_2, … 的元素），
+    #    并回一个公式，否则下标会被占位符间的空格推到离基底很远的位置。
+    #    行间隔着正文的不并（(X,Y) vs y_1,…,y_T）；只沾边的跨行折行也不并
+    #    （行末 "y_{t-1} =" 和下一行开头的 "s|h_{t-1}" 是两片，得各占各的槽位）。
     member_ids = {id(s) for r in runs for s in r["spans"]}
 
     def flow_adjacent(a: dict, b: dict) -> bool:
@@ -568,9 +660,15 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
             lo, hi = sorted([m["max_size"], r["max_size"]])
             geometric = (x_overlap > max(1.0, 0.3 * min_w) and y_gap < block.size
                          and lo < hi * 0.79)
+            # b) 阅读序上真正邻接（中间只有空白 span）且 x 间距小于一个字号、
+            #    且纵向确实相交（同一可视行）：同一数学表达式被拆成的连续片段
+            #    （y^i_1, y^i_2, … 的元素）。y 只沾边的是跨行折行的公式尾部
+            #    （行末 "y_{t-1} =" 和下一行开头的 "s|h_{t-1}"），并成一个占位符
+            #    会让两片画在同一个槽位里，摊成一坨。
+            y_overlap = min(m["bbox"].y1, r["bbox"].y1) - max(m["bbox"].y0, r["bbox"].y0)
             adjacent = (flow_adjacent(m, r)
                         and r["bbox"].x0 - m["bbox"].x1 < block.size
-                        and y_gap < 2 * block.size)
+                        and y_overlap > 0.3 * min(m["bbox"].height, r["bbox"].height))
             if geometric or adjacent:
                 m["spans"].extend(r["spans"])
                 m["bbox"] |= r["bbox"]
@@ -955,13 +1053,15 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     # 栏沟明确时先排成阅读顺序。同页续段只看相邻块，另一栏插在中间就接不上本栏的下一行。
     ordered: list[TextBlock] = []
     by_page: dict[int, list[TextBlock]] = {}
+    geometries: dict[int, PageGeometry] = {}
     for block in split:
         by_page.setdefault(block.page, []).append(block)
     for pno in sorted(by_page):
         page_blocks = by_page[pno]
         geo = PageGeometry.from_page(doc[pno], [block.rect for block in page_blocks])
+        geometries[pno] = geo
         ordered.extend(reading_order(page_blocks, geo))
-    return _merge_continuations(_merge_caption_fragments(_merge_visual_lines(ordered)))
+    return _merge_continuations(_merge_caption_fragments(_merge_visual_lines(ordered, geometries)))
 
 
 def _absorb_block(p: TextBlock, b: TextBlock):
@@ -976,10 +1076,25 @@ def _absorb_block(p: TextBlock, b: TextBlock):
         p.size, p.color, p.bold = b.size, b.color, b.bold
 
 
+def _cjk_wrap(prev: TextBlock, nxt: TextBlock) -> bool:
+    """中文换行不分大小写，也不按词数计。新段有约 2em 缩进，短标签宽度不够。"""
+    head = nxt.text.lstrip()[:1]
+    if not head or CJK_RE.search(head) is None:
+        return False
+    if prev.text.rstrip().endswith(tuple(SENT_ENDS)):
+        return False
+    if abs(nxt.size - prev.size) > prev.size * 0.2:
+        return False
+    if abs(nxt.rect.x0 - prev.rect.x0) > prev.size * 0.6:
+        return False
+    return len(CJK_RE.findall(prev.text)) >= 8 or prev.rect.width >= prev.size * 12
+
+
 def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
     """合并同页内被公式/碎片拆断的段落续行：上行无句末标点、下行小写（或闭括号）
     开头、同左 margin、行距正常，就是同一段被拆开的两行。各翻各的会产出半截译文，
-    渲染时在断点强制换行（'（如 | 序列）'）。"""
+    渲染时在断点强制换行（'（如 | 序列）'）。中文换行左缘对齐、上行够长时同样接上。
+    英文大写开头的换行仍分开，那和下一句分不开。"""
     out: list[TextBlock] = []
     for b in blocks:
         if out:
@@ -993,13 +1108,15 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                           and abs(b.rect.x0 - p.rect.x0) > p.size * 0.5
                           and not p.text.rstrip().endswith(tuple(SENT_ENDS))
                           and not b.text.rstrip().endswith(tuple(SENT_ENDS)))
-            if p.page == b.page and p.clip == b.clip and (
-                title_frag
-                or (-0.8 * p.size <= b.rect.y0 - p.rect.y1 < 1.5 * p.size
-                    and abs(b.rect.x0 - p.rect.x0) < 2 * p.size
-                    and len(p.text.split()) >= 3  # 一两个词的无标点短块是标题/标签，不是段落
-                    and not p.text.rstrip().endswith(tuple(SENT_ENDS))
-                    and (first.islower() or first in "),;%,；，"))):
+            y_close = -0.8 * p.size <= b.rect.y0 - p.rect.y1 < 1.5 * p.size
+            latin = (
+                y_close
+                and abs(b.rect.x0 - p.rect.x0) < 2 * p.size
+                and len(p.text.split()) >= 3  # 一两个词的无标点短块是标题/标签，不是段落
+                and not p.text.rstrip().endswith(tuple(SENT_ENDS))
+                and (first.islower() or first in "),;%,；，")
+            )
+            if p.page == b.page and p.clip == b.clip and (title_frag or latin or (y_close and _cjk_wrap(p, b))):
                 _absorb_block(p, b)
                 continue
         out.append(b)
@@ -1009,8 +1126,9 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
 def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
     """合并被拆碎的图注/表注：'Figure 2:'、'Examples of decay'、'schedules.' 三个
     碎片各翻各的，再塞回各自小框里换行丑陋。拼回一个块后整句翻译、一行排下。
-    规则保守，只拼两类：a) 同一视觉行上 '<短标签>:' 后紧跟的片段；b) 带冒号的
-    图注组内、以左对齐小写开头且上行无句末标点的短续行（表格行和标题都不会误并）。"""
+    规则保守，只拼三类：a) 同一视觉行上短标签后紧跟的片段，标签可以是冒号，
+    也可以是「图 2」「Fig. 1.」；b) 这种标签正下方的一行注记；c) 带冒号的
+    图注组内、以左对齐小写开头且上行无句末标点的短续行。表格行和标题不并。"""
     out: list[TextBlock] = []
     for b in blocks:
         if out:
@@ -1021,11 +1139,13 @@ def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
                 gap = b.rect.x0 - p.rect.x1
                 below = (0 <= b.rect.y0 - p.rect.y1 < 1.2 * p.size
                          and abs(b.rect.x0 - p.rect.x0) < p.size)
-                label = p.text.rstrip().endswith((":", "：")) and len(p.text) < 30
+                label = (p.text.rstrip().endswith((":", "：")) and len(p.text) < 30) or _caption_label(p.text)
+                head = b.text.lstrip()[:1]
+                note = bool(head and (head.islower() or CJK_RE.search(head)) and not _caption_label(b.text))
                 continuation = (len(p.text) < 60 and b.text[:1].islower()
                                 and (":" in p.text or "：" in p.text)
                                 and not p.text.rstrip().endswith(tuple(SENT_ENDS)))
-                if (same_line and -1 <= gap < 3 * p.size and label) or (below and continuation):
+                if (same_line and -1 <= gap < 3 * p.size and label) or (below and (continuation or (label and note))):
                     _absorb_block(p, b)
                     continue
         out.append(b)
