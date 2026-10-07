@@ -76,8 +76,10 @@ def test_prepare_unit_marks_the_run_boundary():
     assert left is not None and "{|}" not in left and "{|}" not in right
 
 
-def test_assign_splits_at_the_run_boundary_not_by_ratio():
-    """原文很短的左页，比例切会落在逗号上。分界把逗号留在左页。"""
+def test_assign_keeps_the_cross_page_paragraph_together():
+    """跨页译文整段留在起始页。汉字分界不加空格，否则「相当」和「不错」会分开。"""
+    from app.formats.pdf import SPILL_TAIL
+
     left = TextBlock(
         page=0, rect=pymupdf.Rect(0, 0, 40, 12), line_rects=[],
         text="abcd", size=10, color="#000", bold=False,
@@ -86,8 +88,8 @@ def test_assign_splits_at_the_run_boundary_not_by_ratio():
         page=1, rect=pymupdf.Rect(0, 0, 80, 12), line_rects=[],
         text="efghijklmnop", size=10, color="#000", bold=False,
     )
-    parts, lists = _assign_restored_parts("甲乙丙丁戊己庚辛，壬癸。{|}续页。", [left, right], [])
-    assert parts == ["甲乙丙丁戊己庚辛，壬癸。", "续页。"]
+    parts, lists = _assign_restored_parts("表现相当{| }不错。我们推测原因在此。", [left, right], [])
+    assert parts == ["表现相当不错。我们推测原因在此。", SPILL_TAIL]
     assert lists == [[], []]
     assert strip_boundary("甲乙丙丁戊己庚辛，壬癸。{|}续页。") == "甲乙丙丁戊己庚辛，壬癸。 续页。"
 

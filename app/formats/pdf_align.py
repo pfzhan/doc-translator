@@ -212,10 +212,16 @@ def draw_cjk_lines(
     centered: bool,
     image_indexes: frozenset[int],
     fallback_text: dict[int, str],
+    justify_last: bool = False,
 ) -> list[FormulaSlot] | None:
-    """写成两端对齐的行。缺字时返回 None，调用方改走 HTML 盒子。"""
+    """写成两端对齐的行。缺字时返回 None，调用方改走 HTML 盒子。
+
+    段落还要接到下一页时，这一页的末行也是满行，同样两端对齐。
+    """
     placed = _place_lines(
-        lines, box, em, gap, color, centered, image_indexes, fallback_text, page.rect.height,
+        # 页顶是 mediabox 的上沿。向下加长页面时页高变了，页顶不变，不能用 page.rect.height。
+        lines, box, em, gap, color, centered, image_indexes, fallback_text, page.mediabox.y1,
+        justify_last,
     )
     if placed is None:
         return None
@@ -237,6 +243,7 @@ def _place_lines(
     image_indexes: frozenset[int],
     fallback_text: dict[int, str],
     page_height: float,
+    justify_last: bool = False,
 ) -> tuple[str, list[FormulaSlot], dict[str, pymupdf.Font]] | None:
     red, green, blue = _rgb(color)
     chunks: list[str] = [
@@ -252,7 +259,7 @@ def _place_lines(
         baseline = box.y0 + em * FIRST_BASELINE + index * em * gap
         row = _place_line(
             line, box.x0, box.width, em,
-            justify=not centered and index != last,
+            justify=not centered and (justify_last or index != last),
             centered=centered,
             image_indexes=image_indexes,
             fallback_text=fallback_text,

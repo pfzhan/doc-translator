@@ -1653,6 +1653,11 @@ def _white_pixmap(doc) -> "pymupdf.Pixmap":
     return pix
 
 
+def _page_top(page: "pymupdf.Page") -> float:
+    """PDF 坐标的页顶。向下加长页面时页高变了，页顶不变。"""
+    return float(page.mediabox.y1)
+
+
 def _page_form(doc: "pymupdf.Document", page: "pymupdf.Page") -> int:
     """把页面内容打包成 Form XObject（在 redact 之前调用），返回 xref。
     供公式透传引用：资源沿用页面自己的，BBox 为整页。"""
@@ -1678,9 +1683,9 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
     排版 bbox——Y 的右臂能越出 1.2pt，扩展以不碰到邻居为限），再减去外来 span
     的矩形孔（上一行降部等），既不削自己的字，也不沾别人的。
     """
-    H = page.rect.height
+    top = _page_top(page)
     bbox = f["bbox"]
-    clip_outer = pymupdf.Rect(bbox.x0, H - bbox.y1, bbox.x1, H - bbox.y0)  # PDF 坐标 y 向上
+    clip_outer = pymupdf.Rect(bbox.x0, top - bbox.y1, bbox.x1, top - bbox.y0)  # PDF 坐标 y 向上
     fmT = doc.get_new_xref()
     doc.update_object(fmT, (
         f"<< /Type /XObject /Subtype /Form /BBox [{clip_outer.x0:.2f} {clip_outer.y0:.2f} "
@@ -1735,7 +1740,7 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
                                           b.x1 + lim["r"], b.y1 + lim["b"]) for b in base])
     ours, holes = [], []
     for b in our_rects:
-        r = pymupdf.Rect(b.x0, H - b.y1, b.x1, H - b.y0)
+        r = pymupdf.Rect(b.x0, top - b.y1, b.x1, top - b.y0)
         if r.width > 0.2 and r.height > 0.2:
             ours.append(f"{r.x0:.2f} {r.y0:.2f} {r.width:.2f} {r.height:.2f} re")
     if page_spans and our_rects:
@@ -1770,7 +1775,7 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
             else:
                 merged.append(hb)
         for hb in merged:
-            hr = pymupdf.Rect(hb.x0, H - hb.y1, hb.x1, H - hb.y0)
+            hr = pymupdf.Rect(hb.x0, top - hb.y1, hb.x1, top - hb.y0)
             holes.append(f"{hr.x0:.2f} {hr.y0:.2f} {hr.width:.2f} {hr.height:.2f} re")
     doc.update_stream(fmT, f"q {' '.join(ours + holes)} W* n /FmS Do Q".encode())
     res_v = doc.xref_get_key(page.xref, "Resources")[1]
@@ -1868,9 +1873,17 @@ def _paint_formula(
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]] | None = None,
 ) -> None:
-    """把公式画进 target。矢量透传失败时回退位图。绘制命令先攒着，最后一条内容流再写。"""
+    """把公式画进 target。矢量透传失败时回退位图。绘制命令先攒着，最后一条内容流再写。
+
+    公式若来自另一页，本页的 Form 里没有它的笔画，只能贴已经裁好的图。
+    """
     bbox = formula.get("bbox")
-    if fmS is not None and bbox is not None and bbox.width > 0.5 and bbox.height > 0.5 and target.width > 0.5:
+    source_page = formula.get("page")
+    same_page = source_page is None or int(source_page) == page.number
+    if (
+        same_page and fmS is not None and bbox is not None
+        and bbox.width > 0.5 and bbox.height > 0.5 and target.width > 0.5
+    ):
         try:
             # 资源名必须全页唯一：块内序号相同的 FmF0 会互相覆盖
             f_name = "FmF_" + re.sub(r"[^A-Za-z0-9_]", "_", str(formula["name"]))
@@ -1878,8 +1891,9 @@ def _paint_formula(
             sx = target.width / bbox.width
             sy = target.height / bbox.height
             # 带缩放的仿射：平移量必须吸收缩放，否则公式整体往下漂 (1-sy)*H
+            top = _page_top(page)
             tx = target.x0 - sx * bbox.x0
-            ty = (page.rect.height - target.y1) - sy * (page.rect.height - bbox.y1)
+            ty = (top - target.y1) - sy * (top - bbox.y1)
             draws.append(f"q {sx:.4f} 0 0 {sy:.4f} {tx:.2f} {ty:.2f} cm /{f_name} Do Q")
             return
         except Exception:  # noqa: BLE001 - 矢量透传失败回退位图
@@ -2039,11 +2053,12 @@ def _draw_cjk(
     page_spans: list[dict] | None,
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
+    justify_last: bool = False,
 ) -> bool:
     """中文行按字形两端对齐。缺字时返回 False。"""
     images, fallback = _formula_draw_args(formulas)
     slots = draw_cjk_lines(
-        page, doc, lines, box, em, gap, color, centered, images, fallback,
+        page, doc, lines, box, em, gap, color, centered, images, fallback, justify_last,
     )
     if slots is None:
         return False
@@ -2072,6 +2087,7 @@ def _place_plain(
     obstacles: list["pymupdf.Rect"],
     right_limit: float | None,
     archive: pymupdf.Archive | None,
+    justify_last: bool = False,
 ) -> None:
     """排版器断行，再写入。中文按字形两端对齐；缺字时退回一个 HTML 盒子。"""
     text = space_around_latin(separate_after_formula(text))
@@ -2080,7 +2096,7 @@ def _place_plain(
     )
     if cjk and _draw_cjk(
         page, page.parent, lines, formulas, box, em, gap, color, centered,
-        None, None, [], [],
+        None, None, [], [], justify_last,
     ):
         return
     rendered = [_typeset_line_html(line, formulas) for line in lines]
@@ -2142,6 +2158,7 @@ def _place_typeset(
     page_spans: list[dict] | None,
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
+    justify_last: bool = False,
 ) -> None:
     """按行写入文字，公式槽用记录的下沿贴到该行基线。"""
     text = space_around_latin(separate_after_formula(text))
@@ -2150,7 +2167,7 @@ def _place_typeset(
     )
     if cjk and _draw_cjk(
         page, doc, lines, formulas, box, em, gap, color, centered,
-        fmS, page_spans, draws, deferred_png,
+        fmS, page_spans, draws, deferred_png, justify_last,
     ):
         return
     css = (
@@ -2385,10 +2402,58 @@ def _write_limit(
     return limit
 
 
+@dataclass(frozen=True)
+class _Carry:
+    """跨页段落在下一页接着写的后半。行已经按栏宽断好，不再重新折。"""
+
+    text: str
+    formulas: list[dict]
+    width: float
+
+
+def _room_below(
+    page: "pymupdf.Page", block: TextBlock, y0: float, x0: float, x1: float, blocks: list[TextBlock],
+) -> float:
+    """这一栏往下还能写到哪里。停在页边，也停在后面的脚注、页码或其他块前面。"""
+    limit = page.rect.y1 - 6
+    for other in blocks:
+        if other.page != block.page or other is block or other.rect.y0 <= y0 + 1:
+            continue
+        if other.rect.x1 < x0 + 4 or other.rect.x0 > x1 - 4:
+            continue
+        limit = min(limit, other.rect.y0 - 2)
+    return limit
+
+
+def _split_filled_lines(
+    text: str, formulas: list[dict], em: float, block_size: float, width: float, cjk: bool,
+    y0: float, limit: float,
+) -> tuple[str, str]:
+    """按满行切开。这一页放得下几行整行，就留几行；剩下的从下一页继续。"""
+    prepared = space_around_latin(separate_after_formula(text))
+    gap = 1.45 if cjk else 1.2
+    metrics = _formula_metrics(formulas, block_size, em)
+    widths = {index: metric.slot_width for index, metric in metrics.items()}
+    raw = break_lines(prepared, em, max(width, 1.0), widths)
+    line_h = em * gap
+    room = limit - y0
+    count = 0
+    for index in range(len(raw)):
+        if (index + 1) * line_h + em * 0.3 > room + 1:
+            break
+        count = index + 1
+    if count >= len(raw):
+        return prepared, ""
+    if count <= 0:
+        return "", prepared
+    return "\n".join(raw[:count]), "\n".join(raw[count:])
+
+
 def _render_translated(src_path: Path, blocks: list[TextBlock], translations: list[str],
                        target_lang: str = "", formulas_map: dict | None = None,
                        archive=None, orig: "pymupdf.Document | None" = None,
-                       geometries: list[PageGeometry] | None = None) -> pymupdf.Document:
+                       geometries: list[PageGeometry] | None = None,
+                       continuations: dict[int, TextBlock] | None = None) -> pymupdf.Document:
     rtl = target_lang.split("-")[0] in RTL_LANGUAGES
     # CJK 字体的行框比拉丁高（约 1.31em vs 1.16em），且字形顶部会越出给定区域：
     # 按原字号写入会和下一行叠在一起，字号缩小并下移补偿
@@ -2398,15 +2463,19 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
     div_attrs = f' lang="{html.escape(target_lang)}"' if target_lang else ""
     if rtl:
         div_attrs += ' dir="rtl" style="text-align: right"'
+    continuations = continuations or {}
+    carried: dict[int, _Carry] = {}
     doc = pymupdf.open(src_path)
     by_page: dict[int, list[tuple[TextBlock, str]]] = {}
     for b, t in zip(blocks, translations):
-        if t and t.strip() and t.strip() != b.text.strip():
+        if t == SPILL_TAIL or (t and t.strip() and t.strip() != b.text.strip()):
             by_page.setdefault(b.page, []).append((b, t))
 
     for pno, items in by_page.items():
         page = doc[pno]
-        mid_map = {f["mid"]: f for b, _ in items for f in (formulas_map or {}).get(id(b), [])
+        visible = [(b, t) for b, t in items if t != SPILL_TAIL]
+        geo = geometries[pno] if geometries and pno < len(geometries) else None
+        mid_map = {f["mid"]: f for b, _ in visible for f in (formulas_map or {}).get(id(b), [])
                    if "mid" in f}
         # redact 之前把整页打包成 Form：公式透传从它里面裁剪原 glyph；
         # 同时收集页面全部 span（检测上标区域被上一行降部侵入的污染）
@@ -2415,7 +2484,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             if mid_map else None
         fmS = _page_form(doc, page) if page_spans else None
         for b, _ in items:
-            for r in b.line_rects:
+            for r in b.line_rects or [b.rect]:
                 page.add_redact_annot(r, fill=False)
         page.apply_redactions(
             images=pymupdf.PDF_REDACT_IMAGE_NONE,
@@ -2430,42 +2499,72 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             doc.update_object(res_x, res_v)
             doc.xref_set_key(page.xref, "Resources", f"{res_x} 0 R")
         images_before = {img[0] for img in page.get_images(full=True)}
-        geo = geometries[pno] if geometries and pno < len(geometries) else None
         draws: list[str] = []
         deferred_png: list[tuple[pymupdf.Rect, bytes]] = []
-        for b, t in items:
-            t = separate_after_formula(t)
-            bformulas = (formulas_map or {}).get(id(b), [])
-            weight = "bold" if b.bold else "normal"
-            size = b.size * 0.88 if cjk else b.size
-            # 栏宽参考：单栏用本页最宽块；多栏用本块所在栏。居中块用整栏宽，
-            # 短译文不再被小框挤成孤字行。排版器按这个宽度断行。
-            rect, centered = _write_rect(b, items, cjk, rtl, geo)
-            obstacles = [ob.rect for ob in blocks if ob.page == pno and ob is not b]
+
+        def write_one(
+            block: TextBlock, text: str, rect: pymupdf.Rect, centered: bool,
+            formulas: list[dict] | None = None, justify_last: bool = False,
+        ) -> None:
+            bformulas = formulas if formulas is not None else (formulas_map or {}).get(id(block), [])
+            weight = "bold" if block.bold else "normal"
+            size = block.size * 0.88 if cjk else block.size
+            obstacles = [ob.rect for ob in blocks if ob.page == pno and ob is not block]
             if geo is not None:
                 obstacles = [*obstacles, *geo.figures]
-            limit = _write_limit(b, rect, geo, obstacles)
+            limit = _write_limit(block, rect, geo, obstacles)
             # 从右往左仍交给 HTML 盒子。其余段落由排版器断行：有公式图时按行落位，
             # 没有公式图时写进一个锁住换行的盒子，避免一行嵌一次整套字体。
             if rtl:
-                body = _translation_html(t, bformulas, b.size, size, rect.width)
+                body = _translation_html(text, bformulas, block.size, size, rect.width)
                 align = "right" if not centered else "center"
                 css = (
-                    f"* {{font-family: sans-serif; font-size: {size}px; color: {b.color}; "
+                    f"* {{font-family: sans-serif; font-size: {size}px; color: {block.color}; "
                     f"font-weight: {weight}; line-height: {1.45 if cjk else 1.2}; margin: 0; padding: 0; "
                     f"text-align: {align};}}"
                 )
                 _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, obstacles, archive, limit)
             elif any(f.get("has_img") for f in bformulas):
                 _place_typeset(
-                    page, doc, b, t, bformulas, rect, size, cjk, centered, div_attrs, b.color, weight,
-                    obstacles, limit, fmS, page_spans, draws, deferred_png,
+                    page, doc, block, text, bformulas, rect, size, cjk, centered, div_attrs,
+                    block.color, weight, obstacles, limit, fmS, page_spans, draws, deferred_png,
+                    justify_last,
                 )
             else:
                 _place_plain(
-                    page, t, bformulas, rect, size, b.size, cjk, centered, div_attrs, b.color, weight,
-                    obstacles, limit, archive,
+                    page, text, bformulas, rect, size, block.size, cjk, centered, div_attrs,
+                    block.color, weight, obstacles, limit, archive, justify_last,
                 )
+
+        for b, t in items:
+            if t == SPILL_TAIL:
+                carry = carried.get(id(b))
+                if carry is None or not carry.text.strip():
+                    continue
+                rect, centered = _write_rect(b, visible or [(b, carry.text)], cjk, rtl, geo)
+                room = _room_below(page, b, rect.y0, rect.x0, rect.x0 + carry.width, blocks)
+                placed = pymupdf.Rect(rect.x0, rect.y0, rect.x0 + carry.width, max(room, rect.y0 + 4))
+                write_one(b, carry.text, placed, centered, carry.formulas, False)
+                continue
+            # 栏宽参考：单栏用本页最宽块；多栏用本块所在栏。居中块用整栏宽，
+            # 短译文不再被小框挤成孤字行。排版器按这个宽度断行。
+            rect, centered = _write_rect(b, visible, cjk, rtl, geo)
+            tail = continuations.get(id(b))
+            if tail is None:
+                write_one(b, t, rect, centered)
+                continue
+            bformulas = (formulas_map or {}).get(id(b), [])
+            size = b.size * 0.88 if cjk else b.size
+            room = _room_below(page, b, rect.y0, rect.x0, rect.x1, blocks)
+            head, rest = _split_filled_lines(t, bformulas, size, b.size, rect.width, cjk, rect.y0, room)
+            if head:
+                gap = 1.45 if cjk else 1.2
+                lines = head.count("\n") + 1
+                bottom = min(rect.y0 + lines * size * gap + size * 0.3, room, page.rect.y1)
+                head_rect = pymupdf.Rect(rect.x0, rect.y0, rect.x1, max(bottom, rect.y0 + 4))
+                write_one(b, head, head_rect, centered, bformulas, bool(rest))
+            if rest:
+                carried[id(tail)] = _Carry(rest, bformulas, rect.width)
         _flush_draws(page, doc, draws, deferred_png)
         if mid_map:
             _place_formula_images(page, doc, images_before, mid_map, fmS, page_spans)
@@ -2542,9 +2641,11 @@ def _render_side_by_side(src: pymupdf.Document, translated: pymupdf.Document) ->
     out = pymupdf.open()
     for i in range(len(src)):
         w, h = src[i].rect.width, src[i].rect.height
-        page = out.new_page(width=w * 2, height=h)
+        # 译文页可能为了整段跨页段落向下加长。并排页跟着加高，超出的几行才看得见。
+        th = translated[i].rect.height
+        page = out.new_page(width=w * 2, height=max(h, th))
         page.show_pdf_page(pymupdf.Rect(0, 0, w, h), src, i)
-        page.show_pdf_page(pymupdf.Rect(w, 0, w * 2, h), translated, i)
+        page.show_pdf_page(pymupdf.Rect(w, 0, w * 2, th), translated, i)
     return out
 
 
@@ -2837,7 +2938,7 @@ def _retag_runs(runs: list[Run], owner: int, index_offset: int) -> list[Run]:
 def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dict], int]:
     """一个翻译单元的送翻文本和公式记录。公式名按块递增，避免跨页两块撞名。
 
-    两块合成一段时，中间插入 {| }。这是 run 的分界，译完按它切开。
+    两块合成一段时，中间插入 {| }。译完收成一段，按满行排，排满再接到下一页。
     """
     texts: list[str] = []
     formulas: list[dict] = []
@@ -2898,26 +2999,28 @@ def _localize_sentinels(text: str, formulas: list[dict], owner: int) -> tuple[st
     return _SENTINEL_NUM_RE.sub(repl, text), local
 
 
+# 续页块只擦原文。整段译文写在起始页，可以稍微超出页边。
+SPILL_TAIL = "\x02"
+
+
+def _join_boundary(text: str) -> str:
+    """跨页分界收成一段。汉字两侧不加空格，否则「相当」和「不错」会分开。"""
+    split = split_page_boundary(text)
+    if split is None:
+        return strip_boundary(text)
+    return _join_lines([split[0], split[1]])
+
+
 def _assign_restored_parts(
     restored: str, unit: list[TextBlock], formulas: list[dict],
 ) -> tuple[list[str], list[list[dict]]]:
-    """把恢复后的译文按 run 分界分回各块。哨兵仍跟自己的 run 走。
+    """跨页单元的译文整段留在起始块。续页只擦原文，不再按分界切回两页。
 
-    模型丢掉 {| } 时才退回按原文长度比例切，避免整段堆在一页。
+    模型丢掉 {| } 时同样整段留下。哨兵仍按单元内的序号，公式图跟这段走。
     """
     if len(unit) != 2:
         return [strip_boundary(restored)], [formulas]
-    split = split_page_boundary(restored)
-    if split is None:
-        total = len(unit[0].text) + len(unit[1].text)
-        ratio = len(unit[0].text) / total if total else 0.5
-        split = _split_translation(restored, ratio)
-    left, right = split
-    left, to_right = _take_owner(left, formulas, 0)
-    right, to_left = _take_owner(right, formulas, 1)
-    left_text, left_formulas = _localize_sentinels(left + "".join(to_left), formulas, 0)
-    right_text, right_formulas = _localize_sentinels("".join(to_right) + right, formulas, 1)
-    return [left_text, right_text], [left_formulas, right_formulas]
+    return [_join_boundary(restored), SPILL_TAIL], [formulas, []]
 
 
 def _normalize_heading_number(src_text: str, translation: str) -> str:
@@ -2975,7 +3078,11 @@ def _sync_unit_preview(
     if not isinstance(overrides, dict) or not isinstance(done, dict):
         return
     for ui, (unit, sent_text) in enumerate(zip(units, sent_texts)):
-        shown = strip_style_marks(_join_lines(per_block.get(id(b), b.text) for b in unit))
+        pieces = [
+            part for b in unit
+            if (part := per_block.get(id(b), b.text)) != SPILL_TAIL
+        ]
+        shown = strip_style_marks(_join_lines(pieces))
         current = done.get(sent_text)
         if current is not None and shown != current:
             overrides[ui] = shown
@@ -3096,8 +3203,12 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             shown = _join_lines(parts)
         else:
             parts, formula_lists = _assign_restored_parts(restored, unit, formulas)
-            shown = strip_style_marks(strip_boundary(restored))
+            shown = strip_style_marks(parts[0])
         for b, part, flist in zip(unit, parts, formula_lists):
+            if part == SPILL_TAIL:
+                per_block[id(b)] = SPILL_TAIL
+                block_formulas[id(b)] = []
+                continue
             per_block[id(b)] = _heading_number_for(block_kind[id(b)], b.text, part)
             block_formulas[id(b)] = flist
         # 预览里显示恢复后的译文（缓存仍按占位符版本存，重跑照样命中）
@@ -3105,6 +3216,8 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             runner._done[sent_text] = shown
     translations = [per_block[id(b)] for b in blocks]
     for i in range(1, len(blocks)):
+        if translations[i] == SPILL_TAIL or translations[i - 1] == SPILL_TAIL:
+            continue
         translations[i] = _strip_boundary_echo(
             blocks[i - 1].text, blocks[i].text, translations[i - 1], translations[i],
         )
@@ -3116,11 +3229,15 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             block_formulas[id(b)] = []
     translations = [per_block[id(b)] for b in blocks]
     _sync_unit_preview(runner, flat_units, sent_texts, per_block)
+    continuations = {
+        id(unit[0]): unit[1] for unit in flat_units
+        if len(unit) == 2 and not all(id(b) in skip_ids for b in unit)
+    }
 
     def build():
         translated = _render_translated(
             src, blocks, translations, target_lang, block_formulas, archive,
-            orig=src_doc, geometries=geometries,
+            orig=src_doc, geometries=geometries, continuations=continuations,
         )
         # insert_htmlbox 每次都会嵌入完整的 CJK 字体（十几 MB），必须做子集化；失败则用未子集化版本
         translated = _subset_fonts_safe(translated)

@@ -12,7 +12,7 @@ import pymupdf
 
 from .pdf_flow import Emphasis
 
-# 跨页单元的 run 分界。送翻文本里保留它，译完按它切开，不再按字数比例猜。
+# 跨页单元的 run 分界。送翻文本里保留它，写回时收成一段，不再按它切回两页。
 BOUNDARY = "{|}"
 _BOUNDARY_RE = re.compile(r"\s*\{\s*\|\s*\}\s*")
 

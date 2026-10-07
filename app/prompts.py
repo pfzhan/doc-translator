@@ -68,7 +68,7 @@ wraps. Do not translate, drop, or invent markers."""
 
 _STYLE_IN_TEXT = re.compile(r"\{/?[bi]\}|\{z\d+\}")
 
-# 跨页段落的 run 分界。模型必须原样保留，译完才知道从哪里切回两页。
+# 跨页段落的 run 分界。模型原样保留，写回时收成一段，不再切回两页。
 BOUNDARY_SUFFIX = """
 
 ## Page-boundary placeholder

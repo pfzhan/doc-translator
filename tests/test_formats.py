@@ -2325,6 +2325,62 @@ def test_split_translation_does_not_break_sentinel():
     assert "\x01" not in b.replace(sentinel, "")
 
 
+def test_cross_page_paragraph_continues_on_the_next_page(tmp_path):
+    """跨页译文按满行排。这一页排满就接到下一页，行不画出页边，脚注留在原处。"""
+    from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    first = doc.new_page(width=420, height=220)
+    first.insert_text((40, 168), "performs quite", fontsize=10)
+    first.insert_text((40, 200), "1 Note here.", fontsize=8)
+    second = doc.new_page(width=420, height=220)
+    second.insert_text((40, 48), "well. We hypothesize.", fontsize=10)
+    doc.save(src)
+    doc.close()
+    host = TextBlock(
+        page=0, rect=pymupdf.Rect(40, 140, 300, 174), line_rects=[pymupdf.Rect(40, 156, 180, 174)],
+        text="performs quite", size=10, color="#000000", bold=False,
+    )
+    note = TextBlock(
+        page=0, rect=pymupdf.Rect(40, 188, 180, 206), line_rects=[pymupdf.Rect(40, 188, 140, 206)],
+        text="1 Note here.", size=8, color="#000000", bold=False,
+    )
+    tail = TextBlock(
+        page=1, rect=pymupdf.Rect(40, 36, 300, 80), line_rects=[pymupdf.Rect(40, 36, 220, 54)],
+        text="well. We hypothesize.", size=10, color="#000000", bold=False,
+    )
+    paragraph = (
+        "对于这个问题，模型的表现相当不错。我们推测这与数据集的性质有关，"
+        "因此这一段按满行往下排，这一页排满再从下一页接着写，不要把行画出页边。"
+        "后面这几行放不进页末的空隙，就从下一页的栏首继续，脚注仍留在原来的位置。"
+    )
+    out = _render_translated(
+        src, [host, note, tail],
+        [paragraph, "脚注仍在原处。", SPILL_TAIL],
+        "zh-CN",
+        continuations={id(host): tail},
+    )
+    page0 = out[0].get_text()
+    page1 = out[1].get_text()
+    assert "相当不错" in page0 + page1
+    assert "well" not in page1
+    assert out[0].rect.height == 220
+    assert all(span["bbox"][3] <= 221 for block in out[0].get_text("dict")["blocks"]
+               if block.get("type") == 0 for line in block["lines"] for span in line["spans"])
+    note_top = None
+    for block in out[0].get_text("dict")["blocks"]:
+        if block.get("type") != 0:
+            continue
+        text = "".join(span["text"] for line in block["lines"] for span in line["spans"])
+        if "脚注" in text:
+            note_top = block["bbox"][1]
+    assert note_top is not None and note_top > 180
+    assert page1.strip()
+    assert "相当不错" in page0
+    assert "相当" not in page1 or "不错" in page1
+
+
 def test_cross_page_formulas_keep_own_page_and_name():
     from app.formats.pdf import TextBlock, _assign_restored_parts, _prepare_unit
 
@@ -2349,11 +2405,11 @@ def test_cross_page_formulas_keep_own_page_and_name():
     assert "{v1}" in sent and "{v2}" in sent
     restored = sent.replace("{v1}", "\x01i\x021\x01/i\x02").replace("{v2}", "\x01i\x022\x01/i\x02")
     parts, lists = _assign_restored_parts(restored, unit, formulas)
-    assert len(lists[0]) == 1 and lists[0][0]["page"] == 0
-    assert len(lists[1]) == 1 and lists[1][0]["page"] == 1
+    from app.formats.pdf import SPILL_TAIL
+    assert parts[1] == SPILL_TAIL and lists[1] == []
+    assert [f["page"] for f in lists[0]] == [0, 1]
     assert parts[0].count("\x01i\x021\x01/i\x02") == 1
-    assert parts[1].count("\x01i\x021\x01/i\x02") == 1
-    assert "\x01i\x022\x01/i\x02" not in parts[0] and "\x01i\x022\x01/i\x02" not in parts[1]
+    assert parts[0].count("\x01i\x022\x01/i\x02") == 1
 
 
 def test_boundary_echo_keeps_repeated_cells_and_short_phrases():
