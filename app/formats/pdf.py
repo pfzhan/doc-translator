@@ -2018,7 +2018,7 @@ def _draw_cjk(
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
 ) -> bool:
-    """中文行按字形两端对齐。写不成时返回 False。"""
+    """中文行按字形两端对齐。缺字时返回 False。"""
     images, fallback = _formula_draw_args(formulas)
     slots = draw_cjk_lines(
         page, doc, lines, box, em, gap, color, centered, images, fallback,
@@ -2051,7 +2051,7 @@ def _place_plain(
     right_limit: float | None,
     archive: pymupdf.Archive | None,
 ) -> None:
-    """排版器断行，再写入。中文按字形两端对齐；缺字或带样式标记时退回一个 HTML 盒子。"""
+    """排版器断行，再写入。中文按字形两端对齐；缺字时退回一个 HTML 盒子。"""
     text = space_around_latin(separate_after_formula(text))
     lines, em, gap, box = _fit_typeset(
         text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit,

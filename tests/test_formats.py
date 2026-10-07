@@ -2472,6 +2472,29 @@ def test_cjk_lines_share_the_right_edge(tmp_path):
     assert rect.y0 - 2 < grouped[0][0][3] < rect.y1
 
 
+def test_italic_marks_still_justify_the_line(tmp_path):
+    """斜体标记不再改走 HTML。汉字没有斜体字形，行仍两端对齐。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=500, height=240).insert_text((40, 60), "source paragraph", fontsize=11)
+    doc.save(src)
+    doc.close()
+    rect = pymupdf.Rect(40, 40, 360, 140)
+    block = TextBlock(
+        page=0, rect=rect, line_rects=[rect],
+        text="source paragraph that differs", size=12, color="#111111", bold=False,
+    )
+    text = "我们在此提出一种{i}均匀计划采样{/i}机制，在训练过程中随机决定使用真实的前一个词元，还是来自模型本身的估计值。"
+    out = _render_translated(src, [block], [text], "zh-CN")
+    grouped = _group_chars(_cjk_chars(out[0]))
+    assert len(grouped) >= 2
+    right = rect.x1 + 2
+    assert abs(grouped[0][-1][2] - right) < 1.5
+    assert grouped[-1][-1][2] < right - 8
+
+
 def test_italic_run_does_not_open_a_wide_gap_before_the_formula(tmp_path):
     """i-th 两侧各有一个空格。斜体按 0.5em 估宽会把后面的公式推开，应贴着写出的字。"""
     from app.formats.pdf import TextBlock, _render_translated
@@ -2506,11 +2529,19 @@ def test_italic_run_does_not_open_a_wide_gap_before_the_formula(tmp_path):
         for blk in page.get_text("dict")["blocks"] if blk.get("type") == 0
         for ln in blk["lines"] for span in ln["spans"]
     ]
+    chars = [
+        ch
+        for blk in page.get_text("rawdict")["blocks"] if blk.get("type") == 0
+        for ln in blk["lines"] for span in ln["spans"] for ch in span["chars"]
+    ]
+    di = next(ch for ch in chars if ch["c"] == "第")
+    ith = next(ch for ch in chars if ch["c"] == "i" and ch["bbox"][0] > di["bbox"][2])
+    aitch = next(ch for ch in chars if ch["c"] == "h" and ch["bbox"][0] > ith["bbox"][0])
+    ge = next(ch for ch in chars if ch["c"] == "个" and ch["bbox"][0] > aitch["bbox"][0])
+    assert 1.2 <= ith["bbox"][0] - di["bbox"][2] <= 5
+    assert 1.2 <= ge["bbox"][0] - aitch["bbox"][2] <= 5
     italic = next(span for span in spans if "i-th" in span["text"])
-    before = next(span for span in spans if span["text"].endswith("第"))
-    after = next(span for span in spans if span["text"].startswith("个"))
-    assert 1.2 <= italic["bbox"][0] - before["bbox"][2] <= 5
-    assert 1.2 <= after["bbox"][0] - italic["bbox"][2] <= 5
+    assert "Italic" in italic["font"] or "Oblique" in italic["font"] or int(italic.get("flags") or 0) & 2
     yuan = next(span for span in spans if "元" in span["text"])
     painted = page.search_for("y=")
     assert painted
