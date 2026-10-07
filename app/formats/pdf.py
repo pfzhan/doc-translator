@@ -2082,7 +2082,8 @@ def _place_plain(
 
 
 def _written_right(page: "pymupdf.Page", x0: float, y0: float, y1: float) -> float:
-    """这一条刚写进去的文字的右缘。估算宽度不准时，下一槽跟着它走。"""
+    """这一条刚写进去的文字的右缘。估算宽度不准时，下一槽跟着它走。
+    只认基线落在本盒子里的字。上一行的字框会探进盒子上沿，拿它的右缘会把公式推到栏边。"""
     right = x0
     for block in page.get_text("dict")["blocks"]:
         if block.get("type") != 0:
@@ -2090,9 +2091,11 @@ def _written_right(page: "pymupdf.Page", x0: float, y0: float, y1: float) -> flo
         for line in block["lines"]:
             for span in line["spans"]:
                 box = span.get("bbox")
-                if not box or not str(span.get("text") or "").strip():
+                origin = span.get("origin")
+                if not box or not origin or not str(span.get("text") or "").strip():
                     continue
-                if box[3] < y0 - 1 or box[1] > y1 + 1 or box[0] < x0 - 1:
+                baseline = float(origin[1])
+                if baseline < y0 or baseline > y1 + 1 or float(box[0]) < x0 - 1:
                     continue
                 right = max(right, float(box[2]))
     return right

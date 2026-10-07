@@ -2495,6 +2495,46 @@ def test_italic_marks_still_justify_the_line(tmp_path):
     assert grouped[-1][-1][2] < right - 8
 
 
+def test_formula_does_not_jump_to_the_line_above(tmp_path):
+    """上一行伸到栏边时，下一行的公式仍贴着本行文字。
+    上一行的字框会探进本行的写入盒子，不能拿它的右缘当光标。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=500, height=240)
+    page.insert_text((80, 80), "t", fontsize=11)
+    doc.save(src)
+    doc.close()
+    d = pymupdf.open(src)
+    box = d[0].search_for("t")[0]
+    d.close()
+    formula = {
+        "bbox": box, "name": "f0_1.png", "w": round(box.width, 1), "h": round(box.height, 1),
+        "d": 2.0, "raise": 0.0, "text": "t", "has_img": True, "page": 0, "mid": 0,
+        "png": pymupdf.open(src)[0].get_pixmap(clip=box, dpi=72).tobytes("png"),
+        "spans": [{"bbox": tuple(box), "text": "t", "size": 10, "origin": (box.x0, box.y1 - 2)}],
+    }
+    rect = pymupdf.Rect(40, 40, 360, 160)
+    block = TextBlock(
+        page=0, rect=rect, line_rects=[rect],
+        text="source paragraph", size=11, color="#000", bold=False,
+    )
+    sentinel = "\x01i\x021\x01/i\x02"
+    # 零宽空格让字形写入失败，改走会测量右缘的 HTML 盒子。
+    text = (
+        "我们在此提出一种采样机制，在训练过程中随机决定使用真实的前一个词元还是估计值。"
+        f"在时间{sentinel}, 模型需要上一个标记。\u200b"
+    )
+    out = _render_translated(src, [block], [text], "zh-CN", {id(block): [formula]})
+    page = out[0]
+    time = page.search_for("在时间")
+    painted = page.search_for("t")
+    assert time and painted
+    assert painted[0].x0 - time[0].x1 < 8
+    assert painted[0].x0 < rect.x1 - 40
+
+
 def test_italic_run_does_not_open_a_wide_gap_before_the_formula(tmp_path):
     """i-th 两侧各有一个空格。斜体按 0.5em 估宽会把后面的公式推开，应贴着写出的字。"""
     from app.formats.pdf import TextBlock, _render_translated
