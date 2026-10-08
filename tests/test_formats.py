@@ -3431,6 +3431,78 @@ def test_page_margins_stay_with_the_source(tmp_path):
     assert _room_below(out[0], note, 750, 53, 200, [note]) > 780
 
 
+def test_last_short_line_keeps_body_size(tmp_path):
+    """页末一两行的行框余量留着。裁掉之后中文装不下一行，字号不能因此比上面的正文小。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=612, height=792)
+    doc.new_page(width=612, height=792)
+    doc.save(src)
+    doc.close()
+    above = pymupdf.Rect(72, 640.5, 540, 651.4)
+    last = pymupdf.Rect(90, 667.6, 276.9, 678.5)
+    heading = pymupdf.Rect(72, 640.0, 280, 652.0)
+    pair = pymupdf.Rect(72, 685.5, 540, 710.0)
+    blocks = [
+        TextBlock(page=0, rect=above, line_rects=[above],
+                  text="Copying data on every read and write access slows the DBMS.",
+                  size=10.9, color="#000000", bold=False),
+        TextBlock(page=0, rect=last, line_rects=[last],
+                  text="Default libc malloc is slow. Never use it.",
+                  size=10.9, color="#000000", bold=False),
+        TextBlock(page=1, rect=heading, line_rects=[heading],
+                  text="Optimistic Concurrency Control.",
+                  size=12, color="#000000", bold=True),
+        TextBlock(
+            page=1, rect=pair,
+            line_rects=[
+                pymupdf.Rect(72, 685.5, 540, 696.4),
+                pymupdf.Rect(72, 699.1, 265, 710.0),
+            ],
+            text="Store all changes in a private workspace and merge them at commit time.",
+            size=10.9, color="#000000", bold=False,
+        ),
+    ]
+    out = _render_translated(
+        src, blocks,
+        [
+            "每次读和写都会复制数据，因此数据库会变慢。",
+            "默认的 libc malloc 速度很慢。永远不要使用它。",
+            "乐观并发控制。",
+            "将所有更改先放进私有工作区，提交时再检查冲突并合并。这个做法最早在一九八一年提出，后来被广泛使用。",
+        ],
+        "zh-CN",
+    )
+
+    def sizes(page: pymupdf.Page, y0: float) -> list[float]:
+        found = [
+            span["size"]
+            for block in page.get_text("dict")["blocks"] if block.get("type") == 0
+            for line in block["lines"]
+            for span in line["spans"]
+            if span["text"].strip() and span["bbox"][1] >= y0
+        ]
+        assert found
+        return found
+
+    body = 10.9 * 0.88
+    assert min(sizes(out[0], 660)) >= body - 0.05
+    assert min(sizes(out[1], 670)) >= body - 0.05
+    bottoms = [
+        ch["bbox"][3]
+        for page in out
+        for block in page.get_text("rawdict")["blocks"] if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
+        for ch in span["chars"]
+        if "\u4e00" <= ch["c"] <= "\u9fff"
+    ]
+    assert bottoms
+    assert max(bottoms) < 730
+
+
 def test_cjk_lines_share_the_right_edge(tmp_path):
     """非末行的右缘对齐到写入框。标点贴着前一个字。末行保持左齐。"""
     from app.formats.pdf import TextBlock, _render_translated
