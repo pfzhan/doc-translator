@@ -2174,10 +2174,15 @@ def _sits_on_last_line(host: TextBlock, guest: TextBlock) -> bool:
 
 
 def _continues_fragment(host: TextBlock, guest: TextBlock) -> bool:
-    """行尾半句的下一行回到栏边、小写开头。即使这一行右侧还有下一句，也先接上。"""
+    """行尾半句的下一行回到栏边、小写开头。即使这一行右侧还有下一句，也先接上。
+
+    右半行已经到句末就不是半句。公式条件行的 otherwise. 不能把下面的正文接上来。
+    """
     if host.page != guest.page or host.clip != guest.clip:
         return False
     if not host.line_rects or not guest.line_rects or host.size <= 0:
+        return False
+    if host.text.rstrip().endswith(tuple(SENT_ENDS)):
         return False
     if abs(host.size - guest.size) > host.size * 0.2:
         return False
