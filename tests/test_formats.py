@@ -3123,6 +3123,69 @@ def test_side_label_stays_beside_the_first_line(tmp_path):
     assert min(item[1] for item in later_body) < 80
 
 
+def test_inset_rest_reflows_at_the_column_width():
+    """侧标让出的第一行按窄宽断完后，剩下的按整栏宽重排，不把窄行的换行留住。"""
+    from app.formats.pdf import _split_own_lines
+
+    text = (
+        "Orca 包含一个可扩展框架, 用于基于形式化的属性规范描述查询需求和计划特征。"
+        "属性有不同类型, 包括逻辑属性。"
+    )
+    head, rest = _split_own_lines(text, [], 7.92, 9.0, 120.0, 240.0)
+    rest_lines = [line for line in rest.split("\n") if line]
+    assert head and rest_lines
+    assert max(len(line) for line in rest_lines) > len(head)
+    assert "框架用于" not in head + rest
+    glued = (head + rest.replace("\n", "")).replace(" ", "")
+    assert glued == text.replace(" ", "")
+
+
+def test_inset_continuation_fills_the_column(tmp_path):
+    """侧标旁边的正文，续行回到栏左缘并写到栏右缘，字号不再因为窄行太多而被压小。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=500, height=400).insert_text((40, 80), "heading and sentence", fontsize=11)
+    doc.save(src)
+    doc.close()
+    heading_line = pymupdf.Rect(40, 40, 180, 52)
+    first = pymupdf.Rect(190, 40, 360, 52)
+    later = [pymupdf.Rect(40, 56 + i * 12, 360, 68 + i * 12) for i in range(8)]
+    heading = TextBlock(
+        page=0, rect=heading_line, line_rects=[heading_line],
+        text="(2) Statistics Derivation.", size=9, color="#000000", bold=True,
+        span_lines=[[{"text": "(2) Statistics Derivation.", "font": "CMBX9", "flags": 16}]],
+    )
+    body = TextBlock(
+        page=0, rect=first | later[-1], line_rects=[first, *later],
+        text="At the end of exploration the memo keeps the space and continues.",
+        size=9, color="#000000", bold=False,
+    )
+    text = (
+        "探索结束时备忘录保存完整的逻辑空间并且继续写下一段很长的说明"
+        "用来占满这一栏的宽度然后再换行继续写到栏的右缘这里应该用整栏宽度"
+        "而不是停在第一行那么窄的位置上。"
+    )
+    out = _render_translated(src, [body, heading], [text, "(2) 统计信息推导。"], "zh-CN")
+    chars = _cjk_chars(out[0])
+    grouped = _group_chars(chars)
+    body_lines = [line for line in grouped if line[0][1] >= 185 or line[0][3] > 58]
+    assert len(body_lines) >= 3
+    assert body_lines[0][0][1] >= 185
+    full = [line for line in body_lines[1:-1] if line[-1][2] > 300]
+    assert full, [(line[0][1], line[-1][2], "".join(item[0] for item in line)) for line in body_lines]
+    sizes = [
+        span["size"]
+        for block in out[0].get_text("dict")["blocks"] if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
+        if span["bbox"][1] > 58 and span["bbox"][0] < 80 and span["text"].strip()
+    ]
+    assert sizes
+    assert min(sizes) > 7.5
+
+
 def test_cjk_lines_share_the_right_edge(tmp_path):
     """非末行的右缘对齐到写入框。标点贴着前一个字。末行保持左齐。"""
     from app.formats.pdf import TextBlock, _render_translated

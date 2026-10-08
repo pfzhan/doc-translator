@@ -3244,11 +3244,22 @@ def _own_line_box(block: TextBlock, cjk: bool) -> pymupdf.Rect:
     return _clip_write_rect(rect, block.clip)
 
 
+def _after_first_line(source: str, head: str) -> str:
+    """第一行从原文切下去。断行吃掉的那个空格不要留在下一行行首。"""
+    if not head or not source.startswith(head):
+        return source
+    return source[len(head):].lstrip(" \t")
+
+
 def _split_own_lines(
     text: str, formulas: list[dict], em: float, block_size: float,
     host_width: float, tail_width: float,
 ) -> tuple[str, str]:
-    """第一行按半句的宽度断，剩下的按续行自己的宽度再断。"""
+    """第一行按半句的宽度断，剩下的按续行自己的宽度再断。
+
+    按窄宽断好的换行不能留在后半里。break_lines 把换行当成硬断，
+    短行再送进更宽的框也不会并回去，侧标旁边的正文就会一直只有第一行那么窄。
+    """
     prepared = space_around_latin(separate_after_formula(text))
     metrics = _formula_metrics(formulas, block_size, em)
     widths = {index: metric.slot_width for index, metric in metrics.items()}
@@ -3257,7 +3268,8 @@ def _split_own_lines(
         return "", ""
     if len(raw) == 1:
         return raw[0], ""
-    rest = break_lines("\n".join(raw[1:]), em, max(tail_width, 1.0), widths)
+    rest_src = _after_first_line(prepared, raw[0])
+    rest = break_lines(rest_src, em, max(tail_width, 1.0), widths)
     return raw[0], "\n".join(line for line in rest if line)
 
 
