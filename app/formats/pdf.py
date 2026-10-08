@@ -102,6 +102,29 @@ def _join_lines(lines: list[str]) -> str:
     return out
 
 
+def _same_line_word(
+    prev: str, nxt: str, prev_rect: pymupdf.Rect, rect: pymupdf.Rect, size: float,
+) -> bool:
+    """同一基线上、词距内的下一个词。按词拆行时，行内大写词仍是这一句。"""
+    height = min(prev_rect.height, rect.height)
+    overlap = min(prev_rect.y1, rect.y1) - max(prev_rect.y0, rect.y0)
+    if height <= 0 or overlap <= height * 0.5:
+        return False
+    gap = rect.x0 - prev_rect.x1
+    if not (-1 <= gap < max(size * 1.4, 12)):
+        return False
+    if prev.rstrip().endswith(tuple(SENT_ENDS)):
+        return False
+    head = nxt.lstrip()[:1]
+    if not head.isalpha():
+        return False
+    if prev.lstrip()[:1] == "<" or nxt.lstrip()[:1] == "<":
+        return False
+    if "%" in prev or prev.rstrip()[-1:] in "!%":
+        return False
+    return True
+
+
 def _split_lines(items: list[tuple]) -> list[list[int]]:
     """把一个文本块里的行分成独立段落（返回每组的行下标）。
 
@@ -156,8 +179,13 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         qrect = items[i - 1][1]
         overlap = min(qrect.y1, rect.y1) - max(qrect.y0, rect.y0)
         h_overlap = min(qrect.x1, rect.x1) - max(qrect.x0, rect.x0)
-        same_visual_line = (h_overlap > 0
-                            and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5)
+        # 同一基线上、词距内的下一个词。按词拆行时，行内大写词（DXL）不是新段落。
+        # 句末、标记语言和图内标签仍拆开，避免把侧标或格子并进正文。
+        same_word = _same_line_word(items[i - 1][0], text, qrect, rect, psize)
+        same_visual_line = (
+            (h_overlap > 0 and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5)
+            or same_word
+        )
         # 章节号和标题是同一行的整体（'2.2 Training'）：纯数字的上行不当符号行，
         # 也不按硬换行拆开，否则数字被过滤不遮罩、标题单独翻，基线对不齐
         sec_label = (bool(re.fullmatch(r"\d+(?:\.\d+)*\.?", ptext.strip()))
@@ -3292,6 +3320,49 @@ class _Carry:
     own_line: bool = False
 
 
+def _page_content_bottom(blocks: list[TextBlock], page: int, height: float) -> float:
+    """这一页原文正文的下沿。页码带里的块不算，译文不写进这条线以下。"""
+    floor = content_floor(height)
+    bottoms = [
+        block.rect.y1 for block in blocks
+        if block.page == page and block.rect.y0 < floor - 4
+    ]
+    if not bottoms:
+        return floor
+    return max(bottoms)
+
+
+def _is_column_top(block: TextBlock, blocks: list[TextBlock]) -> bool:
+    """这一栏最靠上的块。页首不再下移，上边距跟原文对齐。"""
+    for other in blocks:
+        if other is block or other.page != block.page or other.rect.y0 >= block.rect.y0 - 0.5:
+            continue
+        overlap = min(other.rect.x1, block.rect.x1) - max(other.rect.x0, block.rect.x0)
+        if overlap > 8:
+            return False
+    return True
+
+
+def _fit_page_margins(
+    block: TextBlock, rect: pymupdf.Rect, blocks: list[TextBlock], height: float, cjk: bool,
+) -> pymupdf.Rect:
+    """页首对齐原文上沿，正文不写进原文下沿以下。格子下沿不裁，避免表内字号被单独缩小。"""
+    y0, y1 = rect.y0, rect.y1
+    if cjk and _is_column_top(block, blocks):
+        # 整框上移，不把框拉高。拉高之后一行会换到两行。
+        shift = block.size * 0.1
+        y0 = max(0.0, y0 - shift)
+        y1 -= shift
+    floor = content_floor(height)
+    if block.clip is None and block.rect.y0 < floor - 4:
+        bottom = _page_content_bottom(blocks, block.page, height)
+        if block.rect.y0 < bottom - 4:
+            y1 = min(y1, bottom)
+    if y1 - y0 < 4:
+        return rect
+    return pymupdf.Rect(rect.x0, y0, rect.x1, y1)
+
+
 def _room_below(
     page: "pymupdf.Page", block: TextBlock, y0: float, x0: float, x1: float, blocks: list[TextBlock],
 ) -> float:
@@ -3299,11 +3370,15 @@ def _room_below(
 
     页码常常是纯数字，提取时被丢掉，x 方向也不一定和这一栏相交。
     块自己已经在页脚带里时不再下刀，贴底的脚注不会因此被缩掉。
+    正文下沿以上的块停在原文正文下沿，不写进下边距。
     """
     limit = page.rect.y1 - 6
     floor = content_floor(page.rect.height)
     if y0 < floor - 4:
         limit = min(limit, floor)
+        bottom = _page_content_bottom(blocks, block.page, page.rect.height)
+        if y0 < bottom - 4:
+            limit = min(limit, bottom)
     for other in blocks:
         if other.page != block.page or other is block or other.rect.y0 <= y0 + 1:
             continue
@@ -3441,6 +3516,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             formulas: list[dict] | None = None, justify_last: bool = False,
             x_cap: float | None = None,
         ) -> None:
+            rect = _fit_page_margins(block, rect, blocks, page.rect.height, cjk)
             bformulas = formulas if formulas is not None else (formulas_map or {}).get(id(block), [])
             weight = "bold" if block.bold else "normal"
             size = block.size * 0.88 if cjk else block.size

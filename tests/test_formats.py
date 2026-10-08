@@ -267,6 +267,38 @@ def test_pdf_list_items_split_into_segments():
     assert texts == ["- First item here", "- Second item continues onto next line", "- Third item"]
 
 
+def test_mid_line_capital_stays_in_the_sentence():
+    """按词拆行时，行内大写词仍是这一句。句末之后的下一句、标记语言仍分开。"""
+    from app.formats.pdf import _split_lines
+
+    items = [
+        _line("The", 325.8, 341.6, 590.3, size=9),
+        _line("extracted", 350.8, 388.4, 590.3, size=9),
+        _line("plan", 397.6, 414.9, 590.3, size=9),
+        _line("is", 424.1, 430.3, 590.3, size=9),
+        _line("serialized", 439.4, 476.3, 590.3, size=9),
+        _line("in", 485.5, 493.2, 590.3, size=9),
+        _line("DXL", 502.3, 519.9, 590.3, size=9),
+        _line("format", 529.0, 555.9, 590.3, size=9),
+        _line("and", 316.8, 331.6, 600.7, size=9),
+        _line("shipped.", 339.9, 370.9, 600.7, size=9),
+    ]
+    groups = _split_lines(items)
+    assert groups[0] == [0, 1, 2, 3, 4, 5, 6, 7]
+    assert 8 in groups[1]
+
+    ended = [
+        _line("workloads.", 316.8, 448.3, 338.4, size=9),
+        _line("It is distinguished from", 457.3, 555.9, 338.4, size=9),
+    ]
+    assert _split_lines(ended) == [[0], [1]]
+    markup = [
+        _line("<dxl:Ident", 53.8, 110.0, 80, size=8),
+        _line('ColId="0" Name="a"/>', 116.0, 220.0, 80, size=8),
+    ]
+    assert _split_lines(markup) == [[0], [1]]
+
+
 def test_pdf_hard_break_splits_lines():
     """无项目符号的硬换行（上行远短于块最宽行、下行大写开头、左对齐）也拆成两段。"""
     from app.formats.pdf import extract_blocks
@@ -3361,6 +3393,42 @@ def test_cross_page_stops_above_the_page_number(tmp_path):
     )
     kept = _room_below(out[0], note, 750, 53, 200, [note])
     assert kept > 780
+
+
+def test_page_margins_stay_with_the_source(tmp_path):
+    """页首对齐原文上沿，正文不写进原文下沿以下。页脚带里的脚注仍不额外下刀。"""
+    from app.formats.pdf import TextBlock, _render_translated, _room_below
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=612, height=792)
+    doc.save(src)
+    doc.close()
+    top = pymupdf.Rect(53.8, 56.8, 293.0, 90.0)
+    bottom = pymupdf.Rect(53.8, 690.0, 293.0, 719.3)
+    blocks = [
+        TextBlock(page=0, rect=top, line_rects=[top], text="During query execution, data can be distributed.",
+                  size=9, color="#000000", bold=False),
+        TextBlock(page=0, rect=bottom, line_rects=[bottom],
+                  text="DXL. Decoupling the optimizer from the database system requires a communication mechanism.",
+                  size=9, color="#000000", bold=False),
+    ]
+    long = "在查询执行期间，数据可以通过多种方式分布到各个分段节点，包括广播、哈希和复制。" * 6
+    out = _render_translated(src, blocks, ["查询执行期间数据会分布到分段节点。", long], "zh-CN")
+    chars = [
+        ch for block in out[0].get_text("rawdict")["blocks"] if block.get("type") == 0
+        for line in block["lines"] for span in line["spans"] for ch in span["chars"]
+        if "\u4e00" <= ch["c"] <= "\u9fff"
+    ]
+    assert chars
+    assert min(ch["bbox"][1] for ch in chars) <= 57.6
+    assert max(ch["bbox"][3] for ch in chars) <= 719.5
+    note = TextBlock(
+        page=0, rect=pymupdf.Rect(53, 750, 200, 762),
+        line_rects=[pymupdf.Rect(53, 750, 200, 762)],
+        text="1 Note.", size=8, color="#000", bold=False,
+    )
+    assert _room_below(out[0], note, 750, 53, 200, [note]) > 780
 
 
 def test_cjk_lines_share_the_right_edge(tmp_path):
