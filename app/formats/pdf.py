@@ -1820,6 +1820,17 @@ def _remember_cell(
     grouped[key].append((line_rect, spans))
 
 
+_LIST_ITEM_RE = re.compile(r"^\d+[\.,]\s+[A-Za-z]")
+
+
+def _numbered_list_item(text: str) -> bool:
+    """'5. part (0.2M)' 字母占比低，但仍是列表项，不是公式行。"""
+    stripped = text.strip()
+    if not _LIST_ITEM_RE.match(stripped) or len(stripped) > 80:
+        return False
+    return any(len(word) >= 3 and word.isalpha() for word in re.findall(r"[A-Za-z]+", stripped))
+
+
 def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     blocks = []
     tables_by_page: list[tuple[RuledTable, ...]] = []
@@ -1852,7 +1863,8 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                 # 只跳过"纯公式行"：数学字符多且几乎没有正文词。
                 # 含公式的正常句子（正文词 ≥4）照翻，公式走占位符，不再整句留成英文
                 is_equation = _math_chars(spans) > total * 0.3 and _prose_units(text) < 4
-                if NO_TEXT_RE.match(text) or is_equation or letters < 2 or letters < len(text) * 0.4:
+                low_letter = letters < 2 or letters < len(text) * 0.4
+                if NO_TEXT_RE.match(text) or is_equation or (low_letter and not _numbered_list_item(text)):
                     # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
                     # 捐了会被 redact，而这些行没有占位符、不会重画。
                     if NO_TEXT_RE.match(text) and blocks and blocks[-1].page == pno:
