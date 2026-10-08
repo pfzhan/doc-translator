@@ -612,10 +612,28 @@ def _cross_page_units(
         by_page.setdefault(b.page, []).append(b)
     ignored = ignore_ids or set()
     # 不传几何时保持旧的页末/页首规则。传了几何才按左缘把换栏续句接上。
-    extra: dict[int, TextBlock] = (
-        _column_continuations(by_page, median, skip_ids, halt_ids, ignored)
-        if geometries is not None else {}
-    )
+    # 共基线的半句不依赖栏几何：下一行仍和它成对送翻，只是不并成一个外框。
+    extra: dict[int, TextBlock] = {}
+    taken: set[int] = set()
+    for host_id, tail in _shared_line_pairs(blocks).items():
+        if host_id in skip_ids or id(tail) in skip_ids:
+            continue
+        if host_id in ignored or id(tail) in ignored:
+            continue
+        if halt_ids is not None and (host_id in halt_ids or id(tail) in halt_ids):
+            continue
+        extra[host_id] = tail
+        taken.add(host_id)
+        taken.add(id(tail))
+    if geometries is not None:
+        for host_id, tail in _column_continuations(
+            by_page, median, skip_ids, halt_ids, ignored,
+        ).items():
+            if host_id in taken or id(tail) in taken:
+                continue
+            extra[host_id] = tail
+            taken.add(host_id)
+            taken.add(id(tail))
 
     units: list[list[TextBlock]] = []
     pages = sorted(by_page)
@@ -2006,25 +2024,67 @@ def _line_tail_blocked(nxt: TextBlock, fragment: TextBlock, blocks: list[TextBlo
     return False
 
 
+def _line_tail_match(block: TextBlock, nxt: TextBlock) -> bool:
+    """下一行回到栏边、小写开头，才是这半句的续写。"""
+    if nxt.page != block.page or nxt.clip != block.clip:
+        return False
+    if abs(nxt.size - block.size) > block.size * 0.2:
+        return False
+    if nxt.rect.x0 > block.rect.x0 - max(block.size * 3.5, 28):
+        return False
+    gap = nxt.rect.y0 - block.rect.y1
+    if not (-0.4 * block.size <= gap < 1.6 * block.size):
+        return False
+    return bool(nxt.text.lstrip()[:1].islower())
+
+
 def _line_tail_continuation(
     block: TextBlock, later: list[TextBlock], blocks: list[TextBlock],
 ) -> TextBlock | None:
     for nxt in later:
         if nxt.page != block.page or nxt.rect.y0 > block.rect.y1 + block.size * 2:
             return None
-        if nxt.clip != block.clip or abs(nxt.size - block.size) > block.size * 0.2:
-            continue
-        if nxt.rect.x0 > block.rect.x0 - max(block.size * 3.5, 28):
-            continue
-        gap = nxt.rect.y0 - block.rect.y1
-        if not (-0.4 * block.size <= gap < 1.6 * block.size):
-            continue
-        if not nxt.text.lstrip()[:1].islower():
-            continue
-        if _line_tail_blocked(nxt, block, blocks):
+        if not _line_tail_match(block, nxt) or _line_tail_blocked(nxt, block, blocks):
             continue
         return nxt
     return None
+
+
+def _shared_line_pairs(blocks: list[TextBlock]) -> dict[int, TextBlock]:
+    """续行和另一段共基线时不并进外框，但仍成对送翻。并进去写回会盖住那一段。
+
+    阅读顺序会把另一栏插在半句和续行中间。续行的纵坐标仍贴着半句，
+    不能因为中间那栏已经往下走了就停。
+    """
+    pairs: dict[int, TextBlock] = {}
+    claimed: set[int] = set()
+    for index, block in enumerate(blocks):
+        if id(block) in claimed or not _is_line_tail(block, blocks[:index]):
+            continue
+        for nxt in blocks[index + 1:]:
+            if nxt.page != block.page:
+                break
+            if nxt.rect.y0 > block.rect.y1 + block.size * 2:
+                continue
+            if not _line_tail_match(block, nxt):
+                continue
+            if not _line_tail_blocked(nxt, block, blocks) or id(nxt) in claimed:
+                break
+            pairs[id(block)] = nxt
+            claimed.add(id(block))
+            claimed.add(id(nxt))
+            break
+    return pairs
+
+
+def _same_page_line_pair(host: TextBlock, tail: TextBlock) -> bool:
+    """同一页的行尾半句接到下一短行。换栏和跨页不是这种，分界仍留着。"""
+    if host.page != tail.page or len(host.line_rects) > 1:
+        return False
+    if tail.rect.x0 > host.rect.x0 - max(host.size * 3.5, 28):
+        return False
+    gap = tail.rect.y0 - host.rect.y1
+    return -0.4 * host.size <= gap < 1.6 * host.size
 
 
 def _merge_line_tails(blocks: list[TextBlock]) -> list[TextBlock]:
@@ -2917,11 +2977,12 @@ def _write_limit(
 
 @dataclass(frozen=True)
 class _Carry:
-    """跨页段落在下一页接着写的后半。行已经按栏宽断好，不再重新折。"""
+    """续页接着写的后半。普通跨页按栏宽断好；共基线的半句按续行自己的宽度再断。"""
 
     text: str
     formulas: list[dict]
     width: float
+    own_line: bool = False
 
 
 def _room_below(
@@ -2962,6 +3023,35 @@ def _split_filled_lines(
     if count <= 0:
         return "", prepared
     return "\n".join(raw[:count]), "\n".join(raw[count:])
+
+
+def _own_line_box(block: TextBlock, cjk: bool) -> pymupdf.Rect:
+    """半句和续行只占自己这一行。框高至少一行，左右不超出这一行。"""
+    origin = block.line_rects[0].y0 if block.line_rects else block.rect.y0
+    y0 = origin + block.size * 0.1 if cjk else origin
+    size = block.size * 0.88 if cjk else block.size
+    pad = block.size * 0.5 if cjk else block.size * 0.3
+    gap = 1.45 if cjk else 1.2
+    bottom = max(block.rect.y1 + pad, y0 + size * gap + size * 0.3)
+    rect = pymupdf.Rect(block.rect.x0, y0, block.rect.x1 + 2, bottom)
+    return _clip_write_rect(rect, block.clip)
+
+
+def _split_own_lines(
+    text: str, formulas: list[dict], em: float, block_size: float,
+    host_width: float, tail_width: float,
+) -> tuple[str, str]:
+    """第一行按半句的宽度断，剩下的按续行自己的宽度再断。"""
+    prepared = space_around_latin(separate_after_formula(text))
+    metrics = _formula_metrics(formulas, block_size, em)
+    widths = {index: metric.slot_width for index, metric in metrics.items()}
+    raw = break_lines(prepared, em, max(host_width, 1.0), widths)
+    if not raw:
+        return "", ""
+    if len(raw) == 1:
+        return raw[0], ""
+    rest = break_lines("\n".join(raw[1:]), em, max(tail_width, 1.0), widths)
+    return raw[0], "\n".join(line for line in rest if line)
 
 
 def _render_translated(src_path: Path, blocks: list[TextBlock], translations: list[str],
@@ -3021,6 +3111,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         def write_one(
             block: TextBlock, text: str, rect: pymupdf.Rect, centered: bool,
             formulas: list[dict] | None = None, justify_last: bool = False,
+            x_cap: float | None = None,
         ) -> None:
             bformulas = formulas if formulas is not None else (formulas_map or {}).get(id(block), [])
             weight = "bold" if block.bold else "normal"
@@ -3029,6 +3120,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             if geo is not None:
                 obstacles = [*obstacles, *geo.figures]
             limit = _write_limit(block, rect, geo, obstacles)
+            if x_cap is not None:
+                limit = x_cap if limit is None else min(limit, x_cap)
             # 从右往左仍交给 HTML 盒子。其余段落由排版器断行：有公式图时按行落位，
             # 没有公式图时写进一个锁住换行的盒子，避免一行嵌一次整套字体。
             if rtl:
@@ -3052,15 +3145,43 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     block.color, weight, obstacles, limit, archive, justify_last,
                 )
 
+        # 续行可能排在半句前面。先把后半放进 carry，写的时候才不会丢掉。
+        shared_head: dict[int, tuple[str, pymupdf.Rect, list[dict], bool]] = {}
+        for b, t in items:
+            if t == SPILL_TAIL:
+                continue
+            tail = continuations.get(id(b))
+            if tail is None or not _same_page_line_pair(b, tail):
+                continue
+            bformulas = (formulas_map or {}).get(id(b), [])
+            size = b.size * 0.88 if cjk else b.size
+            host_box = _own_line_box(b, cjk)
+            tail_box = _own_line_box(tail, cjk)
+            head, rest = _split_own_lines(
+                t, bformulas, size, b.size, host_box.width, tail_box.width,
+            )
+            shared_head[id(b)] = (head, host_box, bformulas, bool(rest.strip()))
+            carried[id(tail)] = _Carry(rest, bformulas, tail_box.width, True)
+
         for b, t in items:
             if t == SPILL_TAIL:
                 carry = carried.get(id(b))
                 if carry is None or not carry.text.strip():
                     continue
+                if carry.own_line:
+                    box = _own_line_box(b, cjk)
+                    write_one(b, carry.text, box, False, carry.formulas, False, box.x1)
+                    continue
                 rect, centered = _write_rect(b, visible or [(b, carry.text)], cjk, rtl, geo)
                 room = _room_below(page, b, rect.y0, rect.x0, rect.x0 + carry.width, blocks)
                 placed = pymupdf.Rect(rect.x0, rect.y0, rect.x0 + carry.width, max(room, rect.y0 + 4))
                 write_one(b, carry.text, placed, centered, carry.formulas, False)
+                continue
+            prepared = shared_head.get(id(b))
+            if prepared is not None:
+                head, host_box, bformulas, justify = prepared
+                if head:
+                    write_one(b, head, host_box, False, bformulas, justify, host_box.x1)
                 continue
             # 栏宽参考：单栏用本页最宽块；多栏用本块所在栏。居中块用整栏宽，
             # 短译文不再被小框挤成孤字行。排版器按这个宽度断行。
@@ -3483,7 +3604,8 @@ def _bridge_hyphen(left: str, right: str) -> tuple[str, str]:
 def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dict], int]:
     """一个翻译单元的送翻文本和公式记录。公式名按块递增，避免跨页两块撞名。
 
-    两块合成一段时，中间插入 {| }。译完收成一段，按满行排，排满再接到下一页。
+    两块合成一段时，中间插入 {| }。同一页共基线的半句已经是一句，不插分界。
+    译完收成一段，按满行排，排满再接到下一页。
     行尾连字符先把词补全，模型看到的是完整单词，分界仍在。
     """
     texts: list[str] = []
@@ -3506,6 +3628,9 @@ def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dic
         texts.append(sent)
     if len(texts) == 2:
         left, right = _bridge_hyphen(texts[0], texts[1])
+        # 同一页的半句已经是一句。换栏和跨页仍留分界，写回再按满行接。
+        if _same_page_line_pair(unit[0], unit[1]):
+            return _join_lines([left, right] if right else [left]), formulas, name_i
         parts = [left, BOUNDARY]
         if right:
             parts.append(right)
