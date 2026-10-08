@@ -57,6 +57,7 @@ class _Segment:
     font_name: str
     font: pymupdf.Font
     size: float
+    bold: bool = False
 
     @property
     def width(self) -> float:
@@ -146,16 +147,23 @@ def _append_segment(
     buf: list[str],
     face: tuple[str, pymupdf.Font] | None,
     size: float,
+    bold: bool,
 ) -> None:
     if not buf or face is None:
         return
     name, font = face
     text = "".join(buf)
-    if segments and segments[-1].font_name == name and segments[-1].size == size:
+    # 汉字没有粗体字形。粗体只记在片段上，写的时候描一笔，不换字体。
+    if (
+        segments
+        and segments[-1].font_name == name
+        and segments[-1].size == size
+        and segments[-1].bold == bold
+    ):
         prev = segments[-1]
-        segments[-1] = _Segment(prev.text + text, name, font, size)
+        segments[-1] = _Segment(prev.text + text, name, font, size, bold)
     else:
-        segments.append(_Segment(text, name, font, size))
+        segments.append(_Segment(text, name, font, size, bold))
     buf.clear()
 
 
@@ -169,15 +177,18 @@ def _segments(text: str, em: float) -> list[_Segment] | None:
         size = em * pct / 100.0
         buf: list[str] = []
         face: tuple[str, pymupdf.Font] | None = None
+        # 拉丁粗体已经换了 hebo。描边只加在仍用正文字体的汉字上。
+        stroke = run.bold
         for char in run.text:
             picked = _face_for(char, run.italic, run.bold)
             if picked is None:
                 return None
             if face is not None and picked != face:
-                _append_segment(segments, buf, face, size)
+                _append_segment(segments, buf, face, size, stroke and face[0] == _FONT_NAME)
             face = picked
             buf.append(char)
-        _append_segment(segments, buf, face, size)
+        if face is not None:
+            _append_segment(segments, buf, face, size, stroke and face[0] == _FONT_NAME)
     return segments
 
 
@@ -260,6 +271,7 @@ def _place_lines(
         "q",
         "BT",
         f"{red:.4f} {green:.4f} {blue:.4f} rg",
+        f"{red:.4f} {green:.4f} {blue:.4f} RG",
     ]
     slots: list[FormulaSlot] = []
     fonts: dict[str, pymupdf.Font] = {}
@@ -344,8 +356,14 @@ def _place_line(
             if (seg.font_name, seg.size) != face_now:
                 ops.append(f"/{seg.font_name} {seg.size:.2f} Tf")
                 face_now = (seg.font_name, seg.size)
+            # 正文字体没有汉字粗体。填充再描边，字还是一个，复制出来不会变两个。
+            if seg.bold:
+                ops.append("2 Tr")
+                ops.append(f"{max(seg.size * 0.045, 0.2):.2f} w")
             ops.append(f"1 0 0 1 {cursor:.2f} {{Y}} Tm")
             ops.append(_tj(glyphs, internal, seg.size))
+            if seg.bold:
+                ops.append("0 Tr")
             advance = seg.width + sum(internal)
             pos += n
             if pos < len(visible) and pos - 1 < len(piece_extras):
