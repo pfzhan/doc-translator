@@ -2241,6 +2241,53 @@ def test_right_fragment_joins_the_following_line():
     assert any(block.text == "expression-specific." for block in blocked)
 
 
+def test_shared_baseline_continuation_is_one_translation():
+    """下一行和后一段共基线时不并成外框，但仍成对送翻，不插分界，也不接左边已经结束的句子。"""
+    from app.formats.pdf import TextBlock, _cross_page_units, _merge_line_tails, _prepare_unit
+
+    def line(text, x0, y0, x1, y1):
+        rect = pymupdf.Rect(x0, y0, x1, y1)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text,
+                         size=9, color="#000", bold=False)
+
+    def para(text, lines):
+        rects = [pymupdf.Rect(*box) for box in lines]
+        union = rects[0]
+        for rect in rects[1:]:
+            union |= rect
+        return TextBlock(page=0, rect=union, line_rects=rects, text=text,
+                         size=9, color="#000", bold=False)
+
+    ended = para("In order to derive statistics.", [(316.8, 386.0, 556.0, 396.0),
+                                                    (316.8, 406.9, 406.2, 415.9)])
+    promise = line("Statistics promise computation is", 416.0, 406.9, 556.0, 415.9)
+    specific = line("expression-specific.", 316.8, 417.4, 392.7, 426.4)
+    example = para("For example the next sentence starts here.",
+                   [(401.6, 417.4, 555.9, 426.4), (316.8, 428.0, 556.0, 438.0)])
+    figure = para("Figure 5 ends.", [(316.8, 616.0, 556.0, 626.0), (316.8, 626.6, 346.0, 635.6)])
+    requests = line("For example, InnerJoin(T1,T2) on (a=b) requests", 353.5, 626.6, 555.9, 635.6)
+    histograms = line("histograms on T1.a and T2.b.", 316.8, 637.1, 441.3, 646.0)
+    requested = para("The requested histograms are used later.",
+                     [(449.4, 637.1, 555.9, 646.0), (316.8, 648.0, 556.0, 658.0)])
+    heading = line("(2) Statistics Derivation.", 316.8, 200.0, 435.3, 212.0)
+    beside = para("At the end of exploration the optimizer stops.",
+                  [(444.4, 200.0, 556.0, 212.0), (316.8, 214.0, 556.0, 226.0)])
+    # 另一栏会插在半句和续行中间，而且已经写到更下面。不能因此把续行丢掉。
+    other_column = line("ORDER BY T1.a where the distribution is hashed.", 53.8, 434.7, 280.0, 446.0)
+    blocks = [heading, beside, ended, promise, example, other_column, specific,
+              figure, requests, requested, histograms]
+    merged = _merge_line_tails(blocks)
+    assert any(block.text == "expression-specific." for block in merged)
+    assert any(block.text == "histograms on T1.a and T2.b." for block in merged)
+    units = _cross_page_units(blocks, 9.0)
+    pairs = [unit for unit in units if len(unit) == 2]
+    assert pairs == [[promise, specific], [requests, histograms]]
+    sent, _, _ = _prepare_unit(pairs[0], 0)
+    assert "{|}" not in sent
+    assert "expression-specific." in sent
+    assert "Statistics promise computation is" in sent
+
+
 def test_column_wrap_joins_when_geometry_misses_the_gutter():
     """几何栏不准时，仍按正文左缘把左栏页尾接到右栏页首。图注不占这个位置。"""
     from app.formats.pdf import TextBlock, _cross_page_units
@@ -2655,6 +2702,59 @@ def test_narrow_fragment_is_written_at_the_continuation_width(tmp_path):
     assert sizes
     assert min(sizes) >= 7
     assert out[1].get_text().strip()
+
+
+def test_shared_baseline_continuation_stays_in_its_lines(tmp_path):
+    """共基线的续行只写在自己的两行里，不盖住右边的下一段，字号保持正文。"""
+    from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=420, height=300)
+    page.insert_text((140, 126), "For example the next sentence.", fontsize=9)
+    doc.save(src)
+    doc.close()
+    host = TextBlock(
+        page=0, rect=pymupdf.Rect(160, 100, 300, 112),
+        line_rects=[pymupdf.Rect(160, 100, 300, 112)],
+        text="Statistics promise computation is", size=9, color="#000000", bold=False,
+    )
+    tail = TextBlock(
+        page=0, rect=pymupdf.Rect(40, 114, 130, 126),
+        line_rects=[pymupdf.Rect(40, 114, 130, 126)],
+        text="expression-specific.", size=9, color="#000000", bold=False,
+    )
+    neighbor_lines = [pymupdf.Rect(140, 114, 300, 126), pymupdf.Rect(40, 128, 300, 140)]
+    neighbor = TextBlock(
+        page=0, rect=neighbor_lines[0] | neighbor_lines[1], line_rects=neighbor_lines,
+        text="For example the next sentence starts here.", size=9, color="#000000", bold=False,
+    )
+    paragraph = "统计承诺所描述的计算过程只对特定表达式成立。"
+    out = _render_translated(
+        src, [host, neighbor, tail],
+        [paragraph, neighbor.text, SPILL_TAIL],
+        "zh-CN",
+        continuations={id(host): tail},
+    )
+    spans = [
+        span
+        for block in out[0].get_text("dict")["blocks"]
+        if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
+        if any("\u4e00" <= ch <= "\u9fff" for ch in span["text"])
+    ]
+    assert spans
+    assert min(span["size"] for span in spans) >= 7
+    assert any(span["bbox"][1] < 113 for span in spans)
+    assert any(span["bbox"][1] >= 113 for span in spans)
+    for span in spans:
+        x0, y0, x1, _y1 = span["bbox"]
+        if y0 >= 113:
+            assert x1 <= 136
+        else:
+            assert x0 >= 155
+    assert "For example" in out[0].get_text()
 
 
 def test_cross_page_formulas_keep_own_page_and_name():
