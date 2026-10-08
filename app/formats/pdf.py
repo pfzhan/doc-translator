@@ -279,8 +279,13 @@ def _is_page_footnote(block: TextBlock, median: float) -> bool:
 
 def _can_continue(
     prev: TextBlock, nxt: TextBlock, median: float, halt_ids: set[int] | None,
+    allow_capital: bool = False,
 ) -> bool:
-    """页末块没有句末标点，页首块以小写、数字或中文开头，且不是标题。"""
+    """页末块没有句末标点，页首块以小写、数字或中文开头，且不是标题。
+
+    换栏时允许大写开头：没写完的句子常常断在 SQL 这种专有名词上。
+    同一栏里的普通换行仍不放开，那和下一句分不开。
+    """
     head = nxt.text.lstrip()[:1]
     numbered_heading = bool(_SRC_HEAD_NUM_RE.match(nxt.text.lstrip()))
     if halt_ids is None:
@@ -288,8 +293,11 @@ def _can_continue(
     else:
         is_heading = id(nxt) in halt_ids
     continues = head.islower() or head.isdigit() or _cjk_page_continue(prev, nxt)
+    if allow_capital and head.isalpha() and head.isupper() and len(prev.text.split()) >= 3:
+        continues = True
     return bool(not numbered_heading and not is_heading and continues
                 and not prev.text.rstrip().endswith(_SENT_END_PUNCT)
+                and not _is_float_text(nxt.text)
                 and nxt.size <= prev.size * 1.4)
 
 
@@ -371,6 +379,219 @@ def _left_column_head(page_blocks: list[TextBlock], geo: PageGeometry) -> TextBl
     return min(heads, key=lambda block: (block.rect.y0, block.rect.x0))
 
 
+# 栏顶的图注、清单不占续句的位置。正文里的 Figure 3 shows 不是图注。
+_FLOAT_HEAD_RE = re.compile(
+    r"^(?:Figure|Fig\.?|Table|Tab\.?|Listing|List\.?|Scheme|Plate|Algorithm|图|表|清单)\s*\d+\b",
+    re.I,
+)
+_CODE_LINE_RE = re.compile(r"^(?:<|\d+\s+0x[0-9a-fA-F])")
+_CLUSTER_GAP = 28.0
+
+
+def _is_float_text(text: str) -> bool:
+    """栏顶的图注或清单标题。后面的正文才是上一段的续句。"""
+    return _FLOAT_HEAD_RE.match(text.strip()) is not None
+
+
+def _is_code_line(text: str) -> bool:
+    """XML、堆栈和图内标签。它们贴在栏顶时不能占续句的位置。
+
+    短续句（well.、tomer）仍是正文。没有空格、又夹着数字或符号的才是标签。
+    """
+    stripped = text.strip()
+    if not stripped or _CODE_LINE_RE.match(stripped):
+        return True
+    if stripped[:1] in "<{" or "::" in stripped or '="' in stripped or "/>" in stripped:
+        return True
+    letters = sum(ch.isalpha() for ch in stripped)
+    if letters < len(stripped) * 0.45:
+        return True
+    return " " not in stripped and re.search(r"[\d%$<>!#_]", stripped) is not None
+
+
+def _continuation_prose(
+    block: TextBlock, median: float, skip_ids: set[int], halt_ids: set[int] | None, ignored: set[int],
+) -> bool:
+    if id(block) in skip_ids or id(block) in ignored:
+        return False
+    if halt_ids is not None and id(block) in halt_ids:
+        return False
+    if block.size < median * 0.8 or _is_page_footnote(block, median):
+        return False
+    if _AFFIL_MARK_RE.match(block.text.lstrip()):
+        return False
+    return not _is_float_text(block.text) and not _is_code_line(block.text)
+
+
+def _column_anchors(blocks: list[TextBlock]) -> list[float]:
+    """正文左缘。至少两块落在同一左缘才算一栏，单行右半句不另起栏。"""
+    if not blocks:
+        return []
+    groups: list[list[float]] = []
+    for x in sorted(block.rect.x0 for block in blocks):
+        if groups and x - groups[-1][0] < 8:
+            groups[-1].append(x)
+        else:
+            groups.append([x])
+    anchors = [sum(group) / len(group) for group in groups if len(group) >= 2]
+    merged: list[float] = []
+    for anchor in anchors:
+        if merged and anchor - merged[-1] < _CLUSTER_GAP:
+            continue
+        merged.append(anchor)
+    return merged
+
+
+def _anchor_index(block: TextBlock, anchors: list[float]) -> int | None:
+    if not anchors:
+        return None
+    best = min(range(len(anchors)), key=lambda index: abs(block.rect.x0 - anchors[index]))
+    if abs(block.rect.x0 - anchors[best]) <= max(block.size * 4, 36):
+        return best
+    return None
+
+
+def _assigned_columns(
+    blocks: list[TextBlock], anchors: list[float],
+) -> tuple[list[list[TextBlock]], list[TextBlock]]:
+    columns: list[list[TextBlock]] = [[] for _ in anchors]
+    orphans: list[TextBlock] = []
+    for block in blocks:
+        index = _anchor_index(block, anchors)
+        if index is None:
+            orphans.append(block)
+        else:
+            columns[index].append(block)
+    return columns, orphans
+
+
+def _column_body(column: list[TextBlock]) -> list[TextBlock]:
+    """栏末的小一号脚注不占续句的位置。整栏都是这个字号时全部留下。"""
+    if not column:
+        return []
+    sizes = sorted(block.size for block in column)
+    body_size = sizes[len(sizes) // 2]
+    body = [block for block in column if block.size + 0.6 >= body_size]
+    return body or column
+
+
+def _column_top(blocks: list[TextBlock]) -> TextBlock:
+    return min(blocks, key=lambda block: (block.rect.y0, block.rect.x0))
+
+
+def _column_bottom(blocks: list[TextBlock]) -> TextBlock:
+    return max(blocks, key=lambda block: (block.rect.y1, block.rect.x0))
+
+
+def _overlaps_line(block: TextBlock, other: TextBlock) -> bool:
+    lines = other.line_rects or [other.rect]
+    height = block.rect.height or block.size
+    for line in lines:
+        overlap = min(block.rect.y1, line.y1) - max(block.rect.y0, line.y0)
+        if overlap > min(height, line.height) * 0.5:
+            return True
+    return False
+
+
+def _fragment_host(tail: TextBlock, orphans: list[TextBlock]) -> TextBlock:
+    """栏末正文已经句号结束时，同一行右侧没写完的半句才是续句的起点。
+
+    用行框而不是块的并集。并集会盖住右侧那半句，半句就不算贴在行尾了。
+    """
+    if not tail.text.rstrip().endswith(tuple(SENT_ENDS)):
+        return tail
+    lines = tail.line_rects or [tail.rect]
+    for orphan in orphans:
+        if orphan.page != tail.page or len(orphan.line_rects) > 1:
+            continue
+        if orphan.text.rstrip().endswith(tuple(SENT_ENDS)):
+            continue
+        height = orphan.rect.height or orphan.size
+        for line in lines:
+            overlap = min(orphan.rect.y1, line.y1) - max(orphan.rect.y0, line.y0)
+            if overlap <= min(height, line.height) * 0.5:
+                continue
+            gap = orphan.rect.x0 - line.x1
+            if -2 <= gap < 16:
+                return orphan
+    return tail
+
+
+def _try_column_pair(
+    pairs: dict[int, TextBlock], tails: set[int], host: TextBlock | None, tail: TextBlock | None,
+    median: float, halt_ids: set[int] | None, skip_ids: set[int],
+) -> None:
+    if host is None or tail is None or host is tail:
+        return
+    if id(host) in pairs or id(host) in tails or id(tail) in pairs or id(tail) in tails:
+        return
+    if id(host) in skip_ids or id(tail) in skip_ids:
+        return
+    if abs(host.size - tail.size) > max(host.size, 1.0) * 0.25:
+        return
+    if not _can_continue(host, tail, median, halt_ids, allow_capital=True):
+        return
+    pairs[id(host)] = tail
+    tails.add(id(tail))
+
+
+def _column_continuations(
+    by_page: dict[int, list[TextBlock]],
+    median: float,
+    skip_ids: set[int],
+    halt_ids: set[int] | None,
+    ignored: set[int],
+) -> dict[int, TextBlock]:
+    """左栏页尾接到右栏页首，右栏页尾接到下一页左栏。
+
+    栏顶的图、清单和图注跳过，续句在它们下面。几何栏不准时也按左缘分，
+    不依赖 reads_in_columns。
+    """
+    pairs: dict[int, TextBlock] = {}
+    tails: set[int] = set()
+    pages = sorted(by_page)
+    prose: dict[int, list[TextBlock]] = {
+        pno: [block for block in blocks if _continuation_prose(block, median, skip_ids, halt_ids, ignored)]
+        for pno, blocks in by_page.items()
+    }
+    columns_of: dict[int, list[list[TextBlock]]] = {}
+    orphans_of: dict[int, list[TextBlock]] = {}
+    for pno, blocks in prose.items():
+        columns, orphans = _assigned_columns(blocks, _column_anchors(blocks))
+        columns_of[pno] = [column for column in columns if column]
+        orphans_of[pno] = orphans
+
+    def head_of(column: list[TextBlock]) -> TextBlock | None:
+        body = _column_body(column)
+        return _column_top(body) if body else None
+
+    def host_of(pno: int, column: list[TextBlock]) -> TextBlock | None:
+        body = _column_body(column)
+        if not body:
+            return None
+        return _fragment_host(_column_bottom(body), orphans_of.get(pno) or [])
+
+    for pno in pages:
+        columns = columns_of.get(pno) or []
+        for index in range(len(columns) - 1):
+            host = host_of(pno, columns[index])
+            head = head_of(columns[index + 1])
+            # 左栏写到底、再跳到右栏顶，才是换栏续句。并排开头不接。
+            if host is None or head is None or host.rect.y0 <= head.rect.y0 + host.size:
+                continue
+            if host.rect.x1 > head.rect.x0 + 4:
+                continue
+            _try_column_pair(pairs, tails, host, head, median, halt_ids, skip_ids)
+        nxt = columns_of.get(pno + 1) or []
+        if not columns or not nxt:
+            continue
+        _try_column_pair(
+            pairs, tails, host_of(pno, columns[-1]), head_of(nxt[0]),
+            median, halt_ids, skip_ids,
+        )
+    return pairs
+
+
 def _cross_page_units(
     blocks: list[TextBlock],
     median: float,
@@ -390,10 +611,15 @@ def _cross_page_units(
     for b in blocks:
         by_page.setdefault(b.page, []).append(b)
     ignored = ignore_ids or set()
+    # 不传几何时保持旧的页末/页首规则。传了几何才按左缘把换栏续句接上。
+    extra: dict[int, TextBlock] = (
+        _column_continuations(by_page, median, skip_ids, halt_ids, ignored)
+        if geometries is not None else {}
+    )
 
     units: list[list[TextBlock]] = []
     pages = sorted(by_page)
-    used: set[int] = set()
+    used: set[int] = {id(tail) for tail in extra.values()}
     for pno in pages:
         body = _page_edge_blocks(by_page[pno], median, ignored)
         nxt = by_page.get(pno + 1) or []
@@ -406,6 +632,12 @@ def _cross_page_units(
         )
         for b in by_page[pno]:
             if id(b) in used:
+                continue
+            if id(b) in extra:
+                tail = extra[id(b)]
+                units.append([b, tail])
+                used.add(id(b))
+                used.add(id(tail))
                 continue
             if halt_ids is not None and id(b) in halt_ids:
                 units.append([b])
@@ -501,24 +733,40 @@ def _blocks_share_column(
     return geo.index_of(left.rect) == geo.index_of(right.rect) and not geo.spans_columns(left.rect | right.rect)
 
 
+def _shares_visual_row(
+    left: TextBlock, right: TextBlock, geometries: dict[int, PageGeometry] | None,
+) -> bool:
+    """两块有没有落在同一基线上、并且横向挨着。
+
+    用行框，不用块的并集。左边的短标题只和正文第一行并排，并集会盖住它，
+    整段就会把标题吞进去。栏沟至少 12pt，6pt 的间隙接不上另一栏。
+    """
+    left_lines = left.line_rects or [left.rect]
+    right_lines = right.line_rects or [right.rect]
+    for a in left_lines:
+        for b in right_lines:
+            overlap = min(a.y1, b.y1) - max(a.y0, b.y0)
+            if overlap <= min(a.height, b.height) * 0.5:
+                continue
+            horizontal = min(a.x1, b.x1) - max(a.x0, b.x0)
+            gap = b.x0 - a.x1 if b.x0 >= a.x0 else a.x0 - b.x1
+            if horizontal > 0 or (0 <= gap < 6 and _blocks_share_column(left, right, geometries)):
+                return True
+    return False
+
+
 def _merge_visual_lines(
     blocks: list[TextBlock], geometries: dict[int, PageGeometry] | None = None,
 ) -> list[TextBlock]:
     """合并其实是同一可视行的相邻块（字体在公式处切换时，PyMuPDF 会把一行拆成两块）。
 
-    判定：纵向交叠超过较矮块的一半，并且横向相交，或间隙小于 6pt。栏沟至少 12pt，
-    这个间隙接不上另一栏。不合并的话，两块译文会写进互相交叠的矩形里叠在一起。
+    不合并的话，两块译文会写进互相交叠的矩形里叠在一起。
     """
     out: list[TextBlock] = []
     for b in blocks:
         if out:
             p = out[-1]
-            v_overlap = min(p.rect.y1, b.rect.y1) - max(p.rect.y0, b.rect.y0)
-            h_overlap = min(p.rect.x1, b.rect.x1) - max(p.rect.x0, b.rect.x0)
-            gap = b.rect.x0 - p.rect.x1
-            same_line = v_overlap > min(p.rect.y1 - p.rect.y0, b.rect.y1 - b.rect.y0) * 0.5
-            near = h_overlap > 0 or (0 <= gap < 6 and _blocks_share_column(p, b, geometries))
-            if p.page == b.page and p.clip == b.clip and same_line and near:
+            if p.page == b.page and p.clip == b.clip and _shares_visual_row(p, b, geometries):
                 p.line_rects.extend(b.line_rects)
                 if p.span_lines and b.span_lines:
                     p.span_lines.extend(b.span_lines)
@@ -1582,7 +1830,7 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
         geometries[pno] = geo
         ordered.extend(reading_order(page_blocks, geo))
     merged = _merge_continuations(_merge_caption_fragments(_merge_visual_lines(ordered, geometries)))
-    return _split_affiliation_tails(merged)
+    return _split_affiliation_tails(_merge_line_tails(merged))
 
 
 _AFFIL_MARK_RE = re.compile(r"^[∗*†‡§¶]")
@@ -1709,9 +1957,13 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                           and not p.text.rstrip().endswith(tuple(SENT_ENDS))
                           and not b.text.rstrip().endswith(tuple(SENT_ENDS)))
             y_close = -0.8 * p.size <= b.rect.y0 - p.rect.y1 < 1.5 * p.size
+            # 悬挂缩进大约 2–3em。2em 卡太紧时，特征列表的续行拆成两段，
+            # 短行再被单独缩小。向左跳仍用 2em，避免把另一栏接进来。
+            x_jump = b.rect.x0 - p.rect.x0
+            x_close = abs(x_jump) < 2 * p.size or 0 < x_jump <= max(4 * p.size, 36)
             latin = (
                 y_close
-                and abs(b.rect.x0 - p.rect.x0) < 2 * p.size
+                and x_close
                 and len(p.text.split()) >= 3  # 一两个词的无标点短块是标题/标签，不是段落
                 and not p.text.rstrip().endswith(tuple(SENT_ENDS))
                 and (first.islower() or first in "),;%,；，")
@@ -1720,6 +1972,74 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                 _absorb_block(p, b)
                 continue
         out.append(b)
+    return out
+
+
+def _is_line_tail(block: TextBlock, earlier: list[TextBlock]) -> bool:
+    """这一行贴在左边某块的行尾右侧，是半句，不是新起的一段。"""
+    if len(block.line_rects) > 1 or block.text.rstrip().endswith(tuple(SENT_ENDS)):
+        return False
+    for other in earlier:
+        if other.page != block.page or other.clip != block.clip:
+            continue
+        lines = other.line_rects or [other.rect]
+        height = block.rect.height or block.size
+        for line in lines:
+            overlap = min(block.rect.y1, line.y1) - max(block.rect.y0, line.y0)
+            if overlap <= min(height, line.height) * 0.5:
+                continue
+            gap = block.rect.x0 - line.x1
+            if -2 <= gap < 12 and block.rect.x0 > line.x0 + max(block.size * 3, 24):
+                return True
+    return False
+
+
+def _line_tail_blocked(nxt: TextBlock, fragment: TextBlock, blocks: list[TextBlock]) -> bool:
+    """续写这一行还挨着另一块时不并。并进去写回会盖住那一块。"""
+    for other in blocks:
+        if other is nxt or other is fragment or other.page != nxt.page:
+            continue
+        if not _overlaps_line(nxt, other):
+            continue
+        if other.rect.x0 < nxt.rect.x1 and other.rect.x1 > nxt.rect.x0:
+            return True
+    return False
+
+
+def _line_tail_continuation(
+    block: TextBlock, later: list[TextBlock], blocks: list[TextBlock],
+) -> TextBlock | None:
+    for nxt in later:
+        if nxt.page != block.page or nxt.rect.y0 > block.rect.y1 + block.size * 2:
+            return None
+        if nxt.clip != block.clip or abs(nxt.size - block.size) > block.size * 0.2:
+            continue
+        if nxt.rect.x0 > block.rect.x0 - max(block.size * 3.5, 28):
+            continue
+        gap = nxt.rect.y0 - block.rect.y1
+        if not (-0.4 * block.size <= gap < 1.6 * block.size):
+            continue
+        if not nxt.text.lstrip()[:1].islower():
+            continue
+        if _line_tail_blocked(nxt, block, blocks):
+            continue
+        return nxt
+    return None
+
+
+def _merge_line_tails(blocks: list[TextBlock]) -> list[TextBlock]:
+    """同一行右侧的半句，和下一行回到栏边的续写，接成一段。不并进左边那句。"""
+    used: set[int] = set()
+    out: list[TextBlock] = []
+    for index, block in enumerate(blocks):
+        if id(block) in used:
+            continue
+        if _is_line_tail(block, blocks[:index]):
+            nxt = _line_tail_continuation(block, blocks[index + 1:], blocks)
+            if nxt is not None and id(nxt) not in used:
+                _absorb_block(block, nxt)
+                used.add(id(nxt))
+        out.append(block)
     return out
 
 
@@ -2636,7 +2956,9 @@ def _split_filled_lines(
             break
         count = index + 1
     if count >= len(raw):
-        return prepared, ""
+        # 返回已经断好的行。返回原文的话，调用方会按一行去量盒子，
+        # 整段就被挤进一行高，字号缩到看不清。
+        return "\n".join(raw), ""
     if count <= 0:
         return "", prepared
     return "\n".join(raw[:count]), "\n".join(raw[count:])
@@ -2750,6 +3072,11 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 write_one(b, t, rect, centered)
                 continue
             bformulas = (formulas_map or {}).get(id(b), [])
+            # 行尾半句只有几个词宽。按它的宽度断行，续页也会被挤小。
+            # 原文擦掉，整段按续页的栏宽写在续页上。
+            if len(b.line_rects) <= 1 and rect.width < tail.rect.width * 0.7:
+                carried[id(tail)] = _Carry(t, bformulas, tail.rect.width)
+                continue
             size = b.size * 0.88 if cjk else b.size
             room = _room_below(page, b, rect.y0, rect.x0, rect.x1, blocks)
             head, rest = _split_filled_lines(t, bformulas, size, b.size, rect.width, cjk, rect.y0, room)
@@ -3141,10 +3468,23 @@ def _retag_runs(runs: list[Run], owner: int, index_offset: int) -> list[Run]:
     return retagged
 
 
+def _bridge_hyphen(left: str, right: str) -> tuple[str, str]:
+    """行尾连字符断词时，把词补全再送翻。分界仍留在两页之间。"""
+    stripped = left.rstrip()
+    if not stripped.endswith("-"):
+        return left, right
+    rest = right.lstrip()
+    head, sep, tail = rest.partition(" ")
+    if not head or re.match(r"[A-Za-zÀ-ÿ]", head) is None:
+        return left, right
+    return stripped[:-1] + head, tail if sep else ""
+
+
 def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dict], int]:
     """一个翻译单元的送翻文本和公式记录。公式名按块递增，避免跨页两块撞名。
 
     两块合成一段时，中间插入 {| }。译完收成一段，按满行排，排满再接到下一页。
+    行尾连字符先把词补全，模型看到的是完整单词，分界仍在。
     """
     texts: list[str] = []
     formulas: list[dict] = []
@@ -3165,7 +3505,11 @@ def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dic
         formulas.extend(found)
         texts.append(sent)
     if len(texts) == 2:
-        return _join_lines([texts[0], BOUNDARY, texts[1]]), formulas, name_i
+        left, right = _bridge_hyphen(texts[0], texts[1])
+        parts = [left, BOUNDARY]
+        if right:
+            parts.append(right)
+        return _join_lines(parts), formulas, name_i
     return _join_lines(texts), formulas, name_i
 
 
@@ -3205,7 +3549,7 @@ def _localize_sentinels(text: str, formulas: list[dict], owner: int) -> tuple[st
     return _SENTINEL_NUM_RE.sub(repl, text), local
 
 
-# 续页块只擦原文。整段译文写在起始页，可以稍微超出页边。
+# 续页块只擦原文。译文按满行写在起始块，排满再接到续页，不画出页边。
 SPILL_TAIL = "\x02"
 
 

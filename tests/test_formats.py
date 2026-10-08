@@ -2194,6 +2194,114 @@ def test_caption_fragments_merge_into_one_block():
     assert len(_merge_caption_fragments(b3)) == 3
 
 
+def test_heading_beside_the_first_line_is_not_absorbed():
+    """短标题只和正文第一行并排。用块的并集会把它吞进正文。"""
+    from app.formats.pdf import TextBlock, _merge_visual_lines
+
+    memo_line = pymupdf.Rect(40, 100, 72, 111)
+    memo = TextBlock(page=0, rect=memo_line, line_rects=[memo_line], text="Memo.",
+                     size=9, color="#000", bold=False)
+    first = pymupdf.Rect(80, 100, 220, 111)
+    later = pymupdf.Rect(40, 114, 220, 125)
+    para = TextBlock(page=0, rect=first | later, line_rects=[first, later],
+                     text="The space of plan alternatives is large.",
+                     size=9, color="#000", bold=False)
+    assert len(_merge_visual_lines([memo, para])) == 2
+
+
+def test_right_fragment_joins_the_following_line():
+    """同一行右侧的半句接回下一行，不并进左边已经结束的那句。"""
+    from app.formats.pdf import TextBlock, _merge_line_tails
+
+    left_lines = [pymupdf.Rect(40, 100, 180, 112), pymupdf.Rect(40, 112, 90, 124)]
+    left = TextBlock(page=0, rect=left_lines[0] | left_lines[1], line_rects=left_lines,
+                     text="The paragraph already ended.", size=9, color="#000", bold=False)
+    frag_line = pymupdf.Rect(100, 112, 180, 124)
+    fragment = TextBlock(page=0, rect=frag_line, line_rects=[frag_line],
+                         text="It is distinguished from", size=9, color="#000", bold=False)
+    next_line = pymupdf.Rect(40, 126, 170, 138)
+    nxt = TextBlock(page=0, rect=next_line, line_rects=[next_line],
+                    text="other optimizers in several ways:", size=9, color="#000", bold=False)
+    merged = _merge_line_tails([left, fragment, nxt])
+    assert len(merged) == 2
+    assert merged[0].text == "The paragraph already ended."
+    assert merged[1].text.startswith("It is distinguished from")
+    assert merged[1].text.endswith("several ways:")
+
+    shared_lines = [pymupdf.Rect(40, 126, 200, 138), pymupdf.Rect(40, 140, 200, 152)]
+    shared = TextBlock(page=0, rect=shared_lines[0] | shared_lines[1], line_rects=shared_lines,
+                       text="For example the next sentence starts here.",
+                       size=9, color="#000", bold=False)
+    short = TextBlock(page=0, rect=pymupdf.Rect(40, 126, 110, 138),
+                      line_rects=[pymupdf.Rect(40, 126, 110, 138)],
+                      text="expression-specific.", size=9, color="#000", bold=False)
+    blocked = _merge_line_tails([left, fragment, shared, short])
+    assert all("expression-specific." != block.text or "distinguished" not in block.text
+               for block in blocked)
+    assert any(block.text == "expression-specific." for block in blocked)
+
+
+def test_column_wrap_joins_when_geometry_misses_the_gutter():
+    """几何栏不准时，仍按正文左缘把左栏页尾接到右栏页首。图注不占这个位置。"""
+    from app.formats.pdf import TextBlock, _cross_page_units
+    from app.formats.pdf_layout import Column, PageGeometry
+
+    def blk(text, x0, y, page=0, x1=None):
+        rect = pymupdf.Rect(x0, y, x1 if x1 is not None else x0 + 180, y + 12)
+        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text,
+                         size=9, color="#000", bold=False)
+
+    wide = PageGeometry(600, (Column(40, 560),), ())
+    filler = blk("Earlier sentence in the left column ends.", 40, 660)
+    host = blk("Effective usage of CPUs trans-", 40, 700)
+    caption = blk("Figure 8: Optimization jobs dependency graph", 300, 40, x1=520)
+    tail = blk("lates to better query plans.", 300, 80)
+    later = blk("Parallelizing the optimizer is crucial.", 300, 100)
+    units = _cross_page_units([filler, host, caption, tail, later], 9.0, geometries=[wide])
+    assert [unit for unit in units if len(unit) == 2] == [[host, tail]]
+    # 不传几何时，同页两栏仍按原来的规则分开
+    assert all(len(unit) == 1 for unit in _cross_page_units(
+        [filler, host, caption, tail, later], 9.0,
+    ))
+
+    listing = blk("<dxl:Metadata SystemIds=\"0\">", 40, 40, page=1)
+    code = blk("1 0x000e8106df gpos::CException::Raise", 40, 56, page=1)
+    prose = blk("tomer issues in the optimizer.", 40, 80, page=1)
+    prose2 = blk("The dump can be replayed later.", 40, 96, page=1)
+    cus = blk("reproduce and debug cus-", 300, 700)
+    cus2 = blk("The tool captures the optimizer state.", 300, 660)
+    joined = _cross_page_units(
+        [cus2, cus, listing, code, prose, prose2], 9.0, geometries=[wide, wide],
+    )
+    assert [unit for unit in joined if len(unit) == 2] == [[cus, prose]]
+
+
+def test_capital_continuation_joins_across_columns_only():
+    """换栏可以接在专有名词上。同一栏的大写换行仍分开。"""
+    from app.formats.pdf import TextBlock, _cross_page_units, _merge_continuations
+    from app.formats.pdf_layout import Column, PageGeometry
+
+    def blk(text, x0, y, page=0):
+        rect = pymupdf.Rect(x0, y, x0 + 180, y + 12)
+        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text,
+                         size=9, color="#000", bold=False)
+
+    wide = PageGeometry(600, (Column(40, 560),), ())
+    host = blk("query engines that allow", 300, 700)
+    host2 = blk("Several efforts have addressed this.", 300, 660)
+    tail = blk("SQL-based processing of data in HDFS.", 40, 60, page=1)
+    tail2 = blk("The exchange avoids another platform.", 40, 80, page=1)
+    units = _cross_page_units([host2, host, tail, tail2], 9.0, geometries=[wide, wide])
+    assert [unit for unit in units if len(unit) == 2] == [[host, tail]]
+    assert all(len(unit) == 1 for unit in _cross_page_units([host2, host, tail, tail2], 9.0))
+
+    same_column = _merge_continuations([
+        blk("the previous line does not end", 40, 100),
+        blk("SQL-based processing starts a new sentence.", 40, 114),
+    ])
+    assert len(same_column) == 2
+
+
 def test_same_page_continuations_merge():
     """被公式碎行拆断的段落（'…(like a' | 'sequence)…' | 'that belong…'）要并回
     一个块：各翻各的会产出半截译文、在断点强制换行。标题、表格行不受影响。"""
@@ -2220,6 +2328,18 @@ def test_same_page_continuations_merge():
     b2 = [blk("This is a full sentence with several words.", 100),
           blk("another paragraph starts here with lowercase", 112)]
     assert len(_merge_continuations(b2)) == 2
+
+    # 悬挂缩进大约 2.5em。2em 卡太紧时，特征列表的续行拆成两段并单独缩小。
+    hanging = [
+        blk("Modularity. Using a highly extensible abstraction meta-", 100, x0=40),
+        blk("data and system description stay together.", 112, x0=62),
+    ]
+    assert len(_merge_continuations(hanging)) == 1
+    ended = [
+        blk("This feature list item already ended.", 100, x0=40),
+        blk("data and system description stay together.", 112, x0=62),
+    ]
+    assert len(_merge_continuations(ended)) == 2
 
 
 def test_smaller_body_under_a_heading_splits():
@@ -2428,6 +2548,113 @@ def test_cross_page_paragraph_continues_on_the_next_page(tmp_path):
     assert page1.strip()
     assert "相当不错" in page0
     assert "相当" not in page1 or "不错" in page1
+
+
+def test_split_filled_lines_keeps_breaks_when_the_page_has_room():
+    """这一页放得下时返回已经断好的行。返回原文会让调用方按一行去缩字号。"""
+    from app.formats.pdf import _split_filled_lines
+
+    text = "在实验研究中我们首先比较旧优化器与新优化器的计划质量并说明新优化器的收益"
+    head, rest = _split_filled_lines(text, [], em=8.8, block_size=10, width=120, cjk=True, y0=100, limit=400)
+    assert "\n" in head
+    assert rest == ""
+
+
+def test_hyphen_bridge_keeps_the_page_boundary():
+    from app.formats.pdf import TextBlock, _prepare_unit
+
+    def blk(text, page):
+        return TextBlock(page=page, rect=pymupdf.Rect(40, 40, 200, 52), line_rects=[],
+                         text=text, size=9, color="#000", bold=False)
+
+    sent, formulas, name_i = _prepare_unit([blk("debug cus-", 0), blk("tomer issues later", 1)], 0)
+    assert "customer" in sent
+    assert "{|}" in sent
+    assert "cus-" not in sent
+    assert "issues later" in sent
+    assert formulas == []
+    assert name_i == 2
+
+
+def test_fitted_cross_page_paragraph_keeps_body_size(tmp_path):
+    """跨页译文这一页放得下时保持原字号，不再整段挤进一行高的框里。"""
+    from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    first = doc.new_page(width=420, height=400)
+    first.insert_text((40, 220), "In our experimental study we", fontsize=10)
+    second = doc.new_page(width=420, height=400)
+    second.insert_text((40, 48), "first compare the systems.", fontsize=10)
+    doc.save(src)
+    doc.close()
+    host = TextBlock(
+        page=0, rect=pymupdf.Rect(40, 200, 280, 230),
+        line_rects=[pymupdf.Rect(40, 208, 220, 222), pymupdf.Rect(40, 222, 180, 234)],
+        text="In our experimental study we", size=10, color="#000000", bold=False,
+    )
+    tail = TextBlock(
+        page=1, rect=pymupdf.Rect(40, 36, 280, 70),
+        line_rects=[pymupdf.Rect(40, 36, 220, 50)],
+        text="first compare the systems.", size=10, color="#000000", bold=False,
+    )
+    paragraph = (
+        "在实验研究中我们首先比较旧优化器与新优化器的计划质量，"
+        "并说明新优化器在大规模数据上的收益，这一段应该保持正文字号。"
+    )
+    out = _render_translated(
+        src, [host, tail], [paragraph, SPILL_TAIL], "zh-CN",
+        continuations={id(host): tail},
+    )
+    sizes = [
+        span["size"]
+        for block in out[0].get_text("dict")["blocks"]
+        if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
+        if any("\u4e00" <= ch <= "\u9fff" for ch in span["text"])
+    ]
+    assert sizes
+    assert min(sizes) >= 7
+
+
+def test_narrow_fragment_is_written_at_the_continuation_width(tmp_path):
+    """行尾半句不按自己的窄框排。译文写到续页，字号保持正文。"""
+    from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=420, height=300)
+    doc.new_page(width=420, height=300)
+    doc.save(src)
+    doc.close()
+    host = TextBlock(
+        page=0, rect=pymupdf.Rect(250, 250, 290, 262),
+        line_rects=[pymupdf.Rect(250, 250, 290, 262)],
+        text="An opti-", size=10, color="#000000", bold=False,
+    )
+    tail = TextBlock(
+        page=1, rect=pymupdf.Rect(40, 40, 280, 90),
+        line_rects=[pymupdf.Rect(40, 40, 280, 54)],
+        text="mization stage continues here.", size=10, color="#000000", bold=False,
+    )
+    paragraph = "优化阶段在满足下列任一条件时结束，资源受限的系统也可以在这里停下来。"
+    out = _render_translated(
+        src, [host, tail], [paragraph, SPILL_TAIL], "zh-CN",
+        continuations={id(host): tail},
+    )
+    sizes = [
+        span["size"]
+        for page in out
+        for block in page.get_text("dict")["blocks"]
+        if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
+        if any("\u4e00" <= ch <= "\u9fff" for ch in span["text"])
+    ]
+    assert sizes
+    assert min(sizes) >= 7
+    assert out[1].get_text().strip()
 
 
 def test_cross_page_formulas_keep_own_page_and_name():
