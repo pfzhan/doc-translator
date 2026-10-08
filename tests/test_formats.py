@@ -2442,6 +2442,27 @@ def test_capital_continuation_joins_across_columns_only():
     ])
     assert len(same_column) == 2
 
+    # 另一栏没形成左缘时，页末左栏也不能把下一页大写开头的新段接进来。
+    def edge(text, x0, y, page, x1=280.0):
+        rect = pymupdf.Rect(x0, y, x1, y + 12)
+        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text,
+                         size=9, color="#000", bold=False)
+
+    two = PageGeometry(612, (Column(40, 290), Column(316, 560)), ())
+    host = edge("tunately even with this setting, we were", 53.8, 700, 0)
+    earlier = edge("To obtain a better coverage across systems,", 53.8, 680, 0)
+    nxt = edge("For queries where HAWQ has the most speedups.", 53.8, 56, 1)
+    nxt2 = edge("Impala joins the fact tables first.", 53.8, 72, 1)
+    units = _cross_page_units(
+        [earlier, host, nxt, nxt2], 9.0, geometries=[two, two],
+    )
+    assert all(len(unit) == 1 for unit in units)
+    lower = edge("and the sentence goes on", 53.8, 56, 1)
+    joined = _cross_page_units(
+        [earlier, host, lower, nxt2], 9.0, geometries=[two, two],
+    )
+    assert [unit for unit in joined if len(unit) == 2] == [[host, lower]]
+
 
 def test_same_page_continuations_merge():
     """被公式碎行拆断的段落（'…(like a' | 'sequence)…' | 'that belong…'）要并回
@@ -3056,6 +3077,21 @@ def test_right_fragment_stays_on_its_own_line():
     )
     assert _flow_y0(indented, False) == 40
     assert _inset_write_boxes(indented, False) is None
+    # 同一基线上的碎片不是下一行。续行从真正的下一行起，不压回第一行。
+    fragments = [
+        pymupdf.Rect(127.9, 595.2, 134.1, 604.2),
+        pymupdf.Rect(141.4, 595.2, 198.1, 604.2),
+        pymupdf.Rect(205.5, 595.2, 292.9, 604.2),
+        pymupdf.Rect(53.8, 605.7, 292.9, 614.7),
+    ]
+    torn = TextBlock(
+        page=0, rect=fragments[0] | fragments[-1], line_rects=fragments,
+        text="is an extensible optimizer framework.", size=9, color="#000", bold=False,
+    )
+    torn_first, torn_rest = _inset_write_boxes(torn, True)
+    assert torn_first.x0 == pytest.approx(127.9)
+    assert torn_rest.x0 == pytest.approx(53.8)
+    assert torn_rest.y0 > torn_first.y0 + 4
 
 
 def test_affiliation_tails_split_and_stack():
@@ -3109,17 +3145,22 @@ def test_side_label_stays_beside_the_first_line(tmp_path):
     )
     out = _render_translated(
         src, [body, heading],
-        ["探索结束时备忘录保存完整的逻辑空间并且继续写下一段说明", "(2) 统计信息推导。"],
+        ["探索结束时备忘录保存完整的逻辑空间并且继续写下一段说明，后面这几个字回到栏左缘。", "(2) 统计信息推导。"],
         "zh-CN",
     )
     chars = _cjk_chars(out[0])
     heading_chars = [item for item in chars if item[3] < 54 and item[0] in "统计信息推导"]
     first_body = [item for item in chars if item[0] == "探"]
-    later_body = [item for item in chars if item[0] == "写"]
-    assert heading_chars and first_body and later_body
-    assert max(item[2] for item in heading_chars) <= 188
-    assert min(item[1] for item in first_body) >= 185
+    assert heading_chars and first_body
+    heading_right = max(item[2] for item in heading_chars)
+    body_left = min(item[1] for item in first_body)
+    assert heading_right <= 188
+    # 英文正文从 190 起。中文标签更短，第一行要补上让出来的空白，并且不压到标签。
+    assert body_left >= heading_right - 0.6
+    assert body_left < 170
     assert abs(first_body[0][3] - heading_chars[0][3]) < 4
+    later_body = [item for item in chars if item[3] > first_body[0][3] + 4]
+    assert later_body
     assert min(item[1] for item in later_body) < 80
 
 
@@ -3170,9 +3211,9 @@ def test_inset_continuation_fills_the_column(tmp_path):
     out = _render_translated(src, [body, heading], [text, "(2) 统计信息推导。"], "zh-CN")
     chars = _cjk_chars(out[0])
     grouped = _group_chars(chars)
-    body_lines = [line for line in grouped if line[0][1] >= 185 or line[0][3] > 58]
+    body_lines = [line for line in grouped if line[0][1] >= 100 or line[0][3] > 58]
     assert len(body_lines) >= 3
-    assert body_lines[0][0][1] >= 185
+    assert 80 < body_lines[0][0][1] < 170
     full = [line for line in body_lines[1:-1] if line[-1][2] > 300]
     assert full, [(line[0][1], line[-1][2], "".join(item[0] for item in line)) for line in body_lines]
     sizes = [
@@ -3184,6 +3225,101 @@ def test_inset_continuation_fills_the_column(tmp_path):
     ]
     assert sizes
     assert min(sizes) > 7.5
+
+
+def test_same_baseline_fragments_do_not_cover_the_lead(tmp_path):
+    """同一基线的碎片不是续行。续文从下一行起写，不压到左侧未译的 Cascades 上。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=200)
+    page.insert_text((62, 50), "Cascades", fontsize=9)
+    doc.save(src)
+    doc.close()
+    lead = pymupdf.Rect(62.8, 40, 99, 52)
+    fragments = [
+        pymupdf.Rect(127.9, 40, 160, 52),
+        pymupdf.Rect(168, 40, 220, 52),
+        pymupdf.Rect(40, 56, 280, 68),
+        pymupdf.Rect(40, 70, 280, 82),
+    ]
+    cascades = TextBlock(
+        page=0, rect=lead, line_rects=[lead], text="Cascades",
+        size=9, color="#000000", bold=False,
+    )
+    body = TextBlock(
+        page=0, rect=fragments[0] | fragments[-1], line_rects=fragments,
+        text="is an extensible optimizer framework whose principles have been used.",
+        size=9, color="#000000", bold=False,
+    )
+    text = "是一个可扩展的优化器框架，其原则已被用于构建查询优化器，并且继续写到下一行。"
+    out = _render_translated(src, [cascades, body], ["Cascades", text], "zh-CN")
+    chars = _cjk_chars(out[0])
+    first = [item for item in chars if item[0] == "是"]
+    assert first
+    same_line = [item for item in chars if abs(item[3] - first[0][3]) < 2]
+    below = [item for item in chars if item[3] > first[0][3] + 4]
+    assert same_line and below
+    assert min(item[1] for item in same_line) >= 120
+    assert "Cascades" in out[0].get_text()
+
+
+def test_cross_page_stops_above_the_page_number(tmp_path):
+    """跨页译文停在页码带上面。页码是纯数字，不在块列表里，也不能写穿它。"""
+    from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated, _room_below
+    from app.formats.pdf_layout import content_floor
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=612, height=792)
+    doc.new_page(width=612, height=792)
+    doc.save(src)
+    doc.close()
+    host = TextBlock(
+        page=0, rect=pymupdf.Rect(316.8, 699.8, 556, 719.3),
+        line_rects=[
+            pymupdf.Rect(325.8, 699.8, 556, 708.8),
+            pymupdf.Rect(316.8, 710.3, 556, 719.3),
+        ],
+        text="Several efforts have addressed interactive processing on Hadoop by creating specialized query engines that allow",
+        size=9, color="#000000", bold=False,
+    )
+    tail = TextBlock(
+        page=1, rect=pymupdf.Rect(53.8, 56.8, 293, 180),
+        line_rects=[pymupdf.Rect(53.8, 56.8, 293, 66)],
+        text="SQL-based processing of data in HDFS.",
+        size=9, color="#000000", bold=False,
+    )
+    paragraph = (
+        "一些研究通过创建专用查询引擎来解决交互式处理问题，使得无需使用 MapReduce 即可基于 SQL 处理数据。"
+        "这些方法在查询优化器和执行引擎的设计上各不相同。数据库与大数据平台的共置使数据能够以原生方式处理。"
+        "后面这几行放不进页末，就从下一页接着写，不能压到页码上。"
+    )
+    out = _render_translated(
+        src, [host, tail], [paragraph, SPILL_TAIL], "zh-CN",
+        continuations={id(host): tail},
+    )
+    floor = content_floor(792)
+    bottoms = [
+        ch["bbox"][3]
+        for block in out[0].get_text("rawdict")["blocks"] if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
+        for ch in span["chars"]
+        if "\u4e00" <= ch["c"] <= "\u9fff"
+    ]
+    assert bottoms
+    assert max(bottoms) < floor + 4
+    assert max(bottoms) < 745
+    assert out[1].get_text().strip()
+    note = TextBlock(
+        page=0, rect=pymupdf.Rect(53, 750, 200, 762),
+        line_rects=[pymupdf.Rect(53, 750, 200, 762)],
+        text="1 Note.", size=8, color="#000", bold=False,
+    )
+    kept = _room_below(out[0], note, 750, 53, 200, [note])
+    assert kept > 780
 
 
 def test_cjk_lines_share_the_right_edge(tmp_path):

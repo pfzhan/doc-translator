@@ -663,6 +663,13 @@ def _usable_table(cells: tuple[pymupdf.Rect, ...]) -> bool:
     return columns <= _MAX_TABLE_COLS
 
 
+def content_floor(height: float) -> float:
+    """正文能写到的最下沿。再往下是页码和页脚，跨页续写停在这里。"""
+    if height <= 0:
+        return 0.0
+    return height - max(_MARGIN_MIN, height * _MARGIN_BAND)
+
+
 def _margin_zone(block: _MarginBlock, geometries: Sequence[PageGeometry]) -> str | None:
     if block.page < 0 or block.page >= len(geometries):
         return None
@@ -674,7 +681,7 @@ def _margin_zone(block: _MarginBlock, geometries: Sequence[PageGeometry]) -> str
     band = max(_MARGIN_MIN, geo.height * _MARGIN_BAND)
     if block.rect.y1 <= band:
         return "header"
-    if block.rect.y0 >= geo.height - band:
+    if block.rect.y0 >= content_floor(geo.height):
         return "footer"
     return None
 

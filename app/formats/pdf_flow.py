@@ -482,6 +482,20 @@ def _drawing_fonts_loaded() -> tuple[pymupdf.Font, ...]:
     return _drawing_fonts
 
 
+def measure_width(text: str, em: float, formula_widths: dict[int, float] | None = None) -> float:
+    """一段译文占多宽。样式标记为 0，公式哨兵用槽宽，缺槽宽时按一个 em。"""
+    widths = formula_widths or {}
+    cleaned = strip_style_marks(text)
+    total = 0.0
+    pos = 0
+    for match in _SENTINEL_RE.finditer(cleaned):
+        total += sum(_char_width(ch, em) for ch in cleaned[pos:match.start()])
+        total += widths.get(int(match.group(1)), em)
+        pos = match.end()
+    total += sum(_char_width(ch, em) for ch in cleaned[pos:])
+    return total
+
+
 def _char_width(char: str, em: float) -> float:
     if _CJK_RE.match(char) or unicodedata.east_asian_width(char) in ("W", "F"):
         estimate = em
