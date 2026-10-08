@@ -37,6 +37,7 @@ from .pdf_layout import (
 )
 from .pdf_roles import HeuristicLayout, LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
+from .pdf_type3 import recover_type3_page
 from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, typeset_lines
 
 MATH_FONT_RE = re.compile(r"CMMI|CMSY|CMEX|MSBM|Math|Symbol|STIX|Cambria Math", re.I)
@@ -1825,6 +1826,8 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     for pno, page in enumerate(doc):
         tables_by_page.append(page_tables(page))
         data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
+        # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
+        recover_type3_page(page, data)
         for b in data["blocks"]:
             if b.get("type") != 0:
                 continue
@@ -2006,9 +2009,10 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             first = b.text[:1]
             # 大字号标题碎片（'…with' + 'Recurrent Neural Networks'）：换行的第二行
             # 往往大写开头、也不带句读。仅当两行左边界明显漂移（居中对齐的标题行）
-            # 才并：左对齐的大字号块（小标题、署名行）各自独立
+            # 才并：左对齐的大字号块（小标题、署名行）各自独立。
+            # 署名在标题下面隔开将近一行，左缘也会漂移，不能当成标题的下一行。
             title_frag = (p.size >= 12 and b.size >= p.size * 0.7
-                          and 0 <= b.rect.y0 - p.rect.y1 < 1.5 * p.size
+                          and 0 <= b.rect.y0 - p.rect.y1 < 0.75 * p.size
                           and abs(b.rect.x0 - p.rect.x0) > p.size * 0.5
                           and not p.text.rstrip().endswith(tuple(SENT_ENDS))
                           and not b.text.rstrip().endswith(tuple(SENT_ENDS)))
