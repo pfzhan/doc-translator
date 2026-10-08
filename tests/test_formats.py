@@ -2241,6 +2241,100 @@ def test_right_fragment_joins_the_following_line():
     assert any(block.text == "expression-specific." for block in blocked)
 
 
+def test_same_line_sentence_joins_the_paragraph_and_keeps_side_labels():
+    """行尾起的下一句并进上一段。短粗体侧标和图内标签不并。续行即使被后一句挡住也先接上。"""
+    from app.formats.pdf import TextBlock, _merge_same_line_sentences, _with_source_bold
+
+    def line(text, x0, y0, x1, y1, bold=False):
+        rect = pymupdf.Rect(x0, y0, x1, y1)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text,
+                         size=9, color="#000", bold=bold)
+
+    def para(text, boxes, bold=False):
+        rects = [pymupdf.Rect(*box) for box in boxes]
+        union = rects[0]
+        for rect in rects[1:]:
+            union |= rect
+        return TextBlock(page=0, rect=union, line_rects=rects, text=text,
+                         size=9, color="#000", bold=bold)
+
+    intro = para("In this paper we describe Orca for demanding analytics workloads.",
+                 [(316.8, 307.0, 555.9, 316.0), (316.8, 338.4, 448.3, 347.3)])
+    distinguished = para("It is distinguished from other optimizers in several important ways:",
+                         [(457.3, 338.4, 555.9, 347.3), (316.8, 348.8, 491.7, 357.8)])
+    extensibility = para("Extensibility. Certain optimizations are dealt with as an afterthought.",
+                         [(316.8, 441.9, 555.9, 450.9), (339.2, 483.8, 384.5, 492.7)])
+    multiphase = para("Multi-phase optimizers are notoriously difficult to extend.",
+                      [(394.4, 483.8, 556.0, 492.7), (339.2, 494.2, 555.9, 503.2)])
+    ended = para("In order to derive statistics.",
+                 [(316.8, 386.0, 556.0, 396.0), (316.8, 406.9, 406.2, 415.9)])
+    promise = line("Statistics promise computation is", 416.0, 406.9, 556.0, 415.9)
+    specific = line("expression-specific.", 316.8, 417.4, 392.7, 426.4)
+    example = para("For example the next sentence starts here.",
+                   [(401.6, 417.4, 555.9, 426.4), (316.8, 428.0, 556.0, 438.0)])
+    label = line("Property Enforcement.", 316.8, 350.0, 426.7, 359.0, bold=True)
+    body = para("Orca includes an extensible framework for describing query requirements.",
+                [(438.2, 350.0, 555.9, 359.0), (316.8, 360.5, 555.9, 369.5)])
+    diagram = line("Get(T1)%", 360.0, 200.0, 381.0, 209.0)
+    diagram2 = line("Get(T2)%", 394.6, 200.0, 416.0, 209.0)
+    merged = _merge_same_line_sentences([
+        intro, distinguished, extensibility, multiphase, label, body,
+        ended, promise, example, specific, diagram, diagram2,
+    ])
+    texts = [block.text for block in merged]
+    assert any(text.startswith("In this paper") and "distinguished" in text for text in texts)
+    assert any(text.startswith("Extensibility.") and "Multi-phase" in text for text in texts)
+    joined = next(text for text in texts if "Statistics promise" in text)
+    assert "expression-specific." in joined
+    assert "For example" in joined
+    assert "In order to derive" in joined
+    assert any(text == "Property Enforcement." for text in texts)
+    assert any(text.startswith("Orca includes") for text in texts)
+    assert any(text == "Get(T1)%" for text in texts)
+    assert any(text == "Get(T2)%" for text in texts)
+
+    lead = TextBlock(
+        page=0, rect=pymupdf.Rect(40, 40, 200, 52),
+        line_rects=[pymupdf.Rect(40, 40, 200, 52)],
+        text="Modularity. Using a highly extensible abstraction.",
+        size=9, color="#000", bold=False,
+        span_lines=[[
+            {"text": "Modularity.", "font": "CMBX9", "flags": 16},
+            {"text": " Using a highly extensible abstraction.", "font": "CMR9", "flags": 4},
+        ]],
+    )
+    assert _with_source_bold(lead, "模块化。借助高度可扩展的抽象。") == "{b}模块化。{/b}借助高度可扩展的抽象。"
+    assert _with_source_bold(lead, "{b}模块化。{/b}借助。") == "{b}模块化。{/b}借助。"
+    memo = line("Memo.", 40, 100, 72, 112, bold=True)
+    memo.span_lines = [[{"text": "Memo.", "font": "CMBX9", "flags": 16}]]
+    assert _with_source_bold(memo, "备忘录。") == "{b}备忘录。{/b}"
+
+
+def test_cjk_bold_strokes_once(tmp_path):
+    """汉字粗体描边，提取出来仍是一个字。"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=400, height=200)
+    doc.save(src)
+    doc.close()
+    rect = pymupdf.Rect(40, 40, 280, 80)
+    block = TextBlock(
+        page=0, rect=rect, line_rects=[rect],
+        text="Modularity. Using a highly extensible abstraction of metadata.",
+        size=9, color="#000000", bold=False,
+        span_lines=[[
+            {"text": "Modularity.", "font": "CMBX9", "flags": 16},
+            {"text": " Using a highly extensible abstraction of metadata.", "font": "CMR9", "flags": 4},
+        ]],
+    )
+    out = _render_translated(src, [block], ["模块化。借助高度可扩展的抽象来描述元数据。"], "zh-CN")
+    text = out[0].get_text()
+    assert text.count("模") == 1
+    assert "2 Tr" in out[0].read_contents().decode("latin1")
+
+
 def test_shared_baseline_continuation_is_one_translation():
     """下一行和后一段共基线时不并成外框，但仍成对送翻，不插分界，也不接左边已经结束的句子。"""
     from app.formats.pdf import TextBlock, _cross_page_units, _merge_line_tails, _prepare_unit
@@ -2939,8 +3033,9 @@ def test_garbled_figure_label_is_recognized():
     assert not _garbled_label("Figure 2: Interaction of Orca with database system")
 
 
-def test_right_fragment_starts_below_the_shared_line():
-    from app.formats.pdf import TextBlock, _flow_y0
+def test_right_fragment_stays_on_its_own_line():
+    """侧标让出的第一行仍从这一行起写，左缘用这一行自己的，不整段下移。"""
+    from app.formats.pdf import TextBlock, _flow_y0, _inset_write_boxes
 
     fragment = pymupdf.Rect(190, 40, 360, 52)
     nxt = pymupdf.Rect(40, 56, 360, 68)
@@ -2948,7 +3043,11 @@ def test_right_fragment_starts_below_the_shared_line():
         page=0, rect=fragment | nxt, line_rects=[fragment, nxt],
         text="At the end of exploration.", size=9, color="#000", bold=False,
     )
-    assert _flow_y0(block, True) == pytest.approx(56 + 0.9, abs=0.01)
+    assert _flow_y0(block, True) == pytest.approx(40 + 0.9, abs=0.01)
+    first, rest = _inset_write_boxes(block, True)
+    assert first.x0 == pytest.approx(190)
+    assert rest.x0 == pytest.approx(40)
+    assert rest.y0 > first.y0
     indent = pymupdf.Rect(52, 40, 360, 52)
     body = pymupdf.Rect(40, 56, 360, 68)
     indented = TextBlock(
@@ -2956,6 +3055,7 @@ def test_right_fragment_starts_below_the_shared_line():
         text="A normal indented paragraph.", size=9, color="#000", bold=False,
     )
     assert _flow_y0(indented, False) == 40
+    assert _inset_write_boxes(indented, False) is None
 
 
 def test_affiliation_tails_split_and_stack():
@@ -2985,8 +3085,8 @@ def test_affiliation_tails_split_and_stack():
     assert stacked[id(split[1])].y0 != stacked[id(split[2])].y0
 
 
-def test_shared_line_translation_does_not_cover_the_left_block(tmp_path):
-    """右半句从下一行起写。标题留在这一行，不被下一段盖住。"""
+def test_side_label_stays_beside_the_first_line(tmp_path):
+    """短标题留在正文第一行左边。正文从标题右侧起写，下一行再回到栏左缘。"""
     from app.formats.pdf import TextBlock, _render_translated
 
     src = tmp_path / "src.pdf"
@@ -2999,7 +3099,8 @@ def test_shared_line_translation_does_not_cover_the_left_block(tmp_path):
     nxt = pymupdf.Rect(40, 56, 360, 68)
     heading = TextBlock(
         page=0, rect=heading_line, line_rects=[heading_line],
-        text="(2) Statistics Derivation.", size=9, color="#000000", bold=False,
+        text="(2) Statistics Derivation.", size=9, color="#000000", bold=True,
+        span_lines=[[{"text": "(2) Statistics Derivation.", "font": "CMBX9", "flags": 16}]],
     )
     body = TextBlock(
         page=0, rect=fragment | nxt, line_rects=[fragment, nxt],
@@ -3012,10 +3113,14 @@ def test_shared_line_translation_does_not_cover_the_left_block(tmp_path):
         "zh-CN",
     )
     chars = _cjk_chars(out[0])
-    heading_y = [item[3] for item in chars if item[0] == "统"]
-    body_y = [item[3] for item in chars if item[0] == "探"]
-    assert heading_y and body_y
-    assert min(body_y) > max(heading_y) + 4
+    heading_chars = [item for item in chars if item[3] < 54 and item[0] in "统计信息推导"]
+    first_body = [item for item in chars if item[0] == "探"]
+    later_body = [item for item in chars if item[0] == "写"]
+    assert heading_chars and first_body and later_body
+    assert max(item[2] for item in heading_chars) <= 188
+    assert min(item[1] for item in first_body) >= 185
+    assert abs(first_body[0][3] - heading_chars[0][3]) < 4
+    assert min(item[1] for item in later_body) < 80
 
 
 def test_cjk_lines_share_the_right_edge(tmp_path):
