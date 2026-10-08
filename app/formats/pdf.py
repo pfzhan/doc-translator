@@ -3343,10 +3343,23 @@ def _is_column_top(block: TextBlock, blocks: list[TextBlock]) -> bool:
     return True
 
 
+def _keeps_line_pad(block: TextBlock) -> bool:
+    """页末只有一两行。行框余量裁掉之后，中文装不下一行，字号会被单独缩小。
+
+    更高的段落仍停在原文下沿。长译文不能借这点余量写进下边距。
+    """
+    if block.size <= 0:
+        return False
+    return block.rect.height <= block.size * 2.6
+
+
 def _fit_page_margins(
     block: TextBlock, rect: pymupdf.Rect, blocks: list[TextBlock], height: float, cjk: bool,
 ) -> pymupdf.Rect:
-    """页首对齐原文上沿，正文不写进原文下沿以下。格子下沿不裁，避免表内字号被单独缩小。"""
+    """页首对齐原文上沿，正文不写进原文下沿以下。格子下沿不裁，避免表内字号被单独缩小。
+
+    页末一两行的行框余量留着。那一点高度只够放下这一行，不会把段落拉进下边距。
+    """
     y0, y1 = rect.y0, rect.y1
     if cjk and _is_column_top(block, blocks):
         # 整框上移，不把框拉高。拉高之后一行会换到两行。
@@ -3354,7 +3367,11 @@ def _fit_page_margins(
         y0 = max(0.0, y0 - shift)
         y1 -= shift
     floor = content_floor(height)
-    if block.clip is None and block.rect.y0 < floor - 4:
+    if (
+        block.clip is None
+        and block.rect.y0 < floor - 4
+        and not (cjk and _keeps_line_pad(block))
+    ):
         bottom = _page_content_bottom(blocks, block.page, height)
         if block.rect.y0 < bottom - 4:
             y1 = min(y1, bottom)
