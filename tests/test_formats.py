@@ -2310,6 +2310,47 @@ def test_same_line_sentence_joins_the_paragraph_and_keeps_side_labels():
     assert _with_source_bold(memo, "备忘录。") == "{b}备忘录。{/b}"
 
 
+def test_finished_condition_line_does_not_swallow_the_next_paragraph():
+    """公式条件行以句号结束时，不把下面回到栏边的正文接进来。没写完的右半句仍接下一行。"""
+    from app.formats.pdf import TextBlock, _continues_fragment, _merge_same_line_sentences
+
+    formula = pymupdf.Rect(254.4, 329.7, 333.6, 340.5)
+    condition = pymupdf.Rect(343.5, 329.9, 384.8, 339.9)
+    host = TextBlock(
+        page=0, rect=formula | condition, line_rects=[formula, condition],
+        text="f(ht-1, yt-1, xt; θ) otherwise.", size=10, color="#000", bold=False,
+    )
+    guest_lines = [pymupdf.Rect(108.0, 349.4, 504.0, 361.1),
+                   pymupdf.Rect(108.0, 360.6, 305.0, 370.5)]
+    guest = TextBlock(
+        page=0, rect=guest_lines[0] | guest_lines[1], line_rects=guest_lines,
+        text="where oh is a vector of 0's with same dimensionality as ht's.",
+        size=10, color="#000", bold=False,
+    )
+    assert not _continues_fragment(host, guest)
+    merged = _merge_same_line_sentences([host, guest])
+    assert [block.text for block in merged] == [host.text, guest.text]
+    assert merged[0].rect.y1 < guest.rect.y0
+
+    left = pymupdf.Rect(316.8, 406.9, 406.2, 415.9)
+    right = pymupdf.Rect(416.0, 406.9, 556.0, 415.9)
+    open_host = TextBlock(
+        page=0, rect=left | right, line_rects=[left, right],
+        text="derive statistics. Statistics promise computation is",
+        size=9, color="#000", bold=False,
+    )
+    next_line = pymupdf.Rect(316.8, 417.4, 392.7, 426.4)
+    nxt = TextBlock(
+        page=0, rect=next_line, line_rects=[next_line],
+        text="expression-specific.", size=9, color="#000", bold=False,
+    )
+    assert _continues_fragment(open_host, nxt)
+    joined = _merge_same_line_sentences([open_host, nxt])
+    assert len(joined) == 1
+    assert "Statistics promise" in joined[0].text
+    assert joined[0].text.endswith("expression-specific.")
+
+
 def test_cjk_bold_strokes_once(tmp_path):
     """汉字粗体描边，提取出来仍是一个字。"""
     from app.formats.pdf import TextBlock, _render_translated
