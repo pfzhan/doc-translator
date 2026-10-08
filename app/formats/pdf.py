@@ -23,6 +23,7 @@ from .pdf_flow import (
     Emphasis,
     break_lines,
     emphasis_of,
+    measure_width,
     nowrap_lines,
     peel_leading_space,
     restore_emphasis,
@@ -32,7 +33,7 @@ from .pdf_flow import (
     writer_for,
 )
 from .pdf_layout import (
-    PageGeometry, RuledTable, cell_containing, margin_skips, page_tables, reading_order,
+    PageGeometry, RuledTable, cell_containing, content_floor, margin_skips, page_tables, reading_order,
 )
 from .pdf_roles import HeuristicLayout, LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
@@ -517,9 +518,15 @@ def _fragment_host(tail: TextBlock, orphans: list[TextBlock]) -> TextBlock:
     return tail
 
 
+def _column_wrap(host: TextBlock, tail: TextBlock) -> bool:
+    """左缘差出一栏，才是换栏。同一栏页首的大写仍是下一段。"""
+    return abs(host.rect.x0 - tail.rect.x0) > max(host.size * 4, 36.0)
+
+
 def _try_column_pair(
     pairs: dict[int, TextBlock], tails: set[int], host: TextBlock | None, tail: TextBlock | None,
     median: float, halt_ids: set[int] | None, skip_ids: set[int],
+    allow_capital: bool = True,
 ) -> None:
     if host is None or tail is None or host is tail:
         return
@@ -529,7 +536,7 @@ def _try_column_pair(
         return
     if abs(host.size - tail.size) > max(host.size, 1.0) * 0.25:
         return
-    if not _can_continue(host, tail, median, halt_ids, allow_capital=True):
+    if not _can_continue(host, tail, median, halt_ids, allow_capital=allow_capital):
         return
     pairs[id(host)] = tail
     tails.add(id(tail))
@@ -545,7 +552,8 @@ def _column_continuations(
     """左栏页尾接到右栏页首，右栏页尾接到下一页左栏。
 
     栏顶的图、清单和图注跳过，续句在它们下面。几何栏不准时也按左缘分，
-    不依赖 reads_in_columns。
+    不依赖 reads_in_columns。同一栏跨页不放开大写：另一栏没形成左缘时，
+    页末左栏不能把下一页新起的一段吞进去。
     """
     pairs: dict[int, TextBlock] = {}
     tails: set[int] = set()
@@ -585,9 +593,11 @@ def _column_continuations(
         nxt = columns_of.get(pno + 1) or []
         if not columns or not nxt:
             continue
+        host = host_of(pno, columns[-1])
+        head = head_of(nxt[0])
         _try_column_pair(
-            pairs, tails, host_of(pno, columns[-1]), head_of(nxt[0]),
-            median, halt_ids, skip_ids,
+            pairs, tails, host, head, median, halt_ids, skip_ids,
+            allow_capital=bool(host and head and _column_wrap(host, head)),
         )
     return pairs
 
@@ -3009,24 +3019,109 @@ def _with_source_bold(block: TextBlock, text: str) -> str:
     return text
 
 
+def _visual_lines(block: TextBlock) -> list[list[pymupdf.Rect]]:
+    """同一基线上的碎片并成一行。行框按词切开时，下一碎片不是下一行。"""
+    grouped: list[list[pymupdf.Rect]] = []
+    gap = max(block.size * 0.4, 2.0)
+    for rect in block.line_rects:
+        placed = False
+        for line in grouped:
+            if abs(rect.y0 - line[0].y0) <= gap:
+                line.append(rect)
+                placed = True
+                break
+        if not placed:
+            grouped.append([rect])
+    return grouped
+
+
 def _inset_write_boxes(block: TextBlock, cjk: bool) -> tuple[pymupdf.Rect, pymupdf.Rect] | None:
-    """第一行比后面几行靠右时，第一行从自己的左缘写，后面的行从栏左缘写。"""
-    if len(block.line_rects) < 2 or block.size <= 0:
+    """第一行比后面几行靠右时，第一行从自己的左缘写，后面的行从栏左缘写。
+
+    续行从下一视觉行起。同一基线的碎片如果当成下一行，续文会压到第一行和左侧标签上。
+    """
+    lines = _visual_lines(block)
+    if len(lines) < 2 or block.size <= 0:
         return None
-    first = block.line_rects[0]
-    rest_left = min(line.x0 for line in block.line_rects[1:])
-    if first.x0 <= rest_left + max(block.size * 2, 16):
+    first_line = lines[0]
+    first_left = min(rect.x0 for rect in first_line)
+    rest_left = min(rect.x0 for line in lines[1:] for rect in line)
+    if first_left <= rest_left + max(block.size * 2, 16):
         return None
-    right = max(line.x1 for line in block.line_rects) + 2
-    y0 = first.y0 + block.size * 0.1 if cjk else first.y0
+    right = max(rect.x1 for rect in block.line_rects) + 2
+    origin = min(rect.y0 for rect in first_line)
+    y0 = origin + block.size * 0.1 if cjk else origin
     size = block.size * 0.88 if cjk else block.size
-    gap = 1.45 if cjk else 1.2
-    first_box = pymupdf.Rect(first.x0, y0, right, y0 + size * gap + size * 0.3)
-    rest_origin = block.line_rects[1].y0
+    line_gap = 1.45 if cjk else 1.2
+    first_box = pymupdf.Rect(first_left, y0, right, y0 + size * line_gap + size * 0.3)
+    rest_origin = min(rect.y0 for rect in lines[1])
     rest_y = rest_origin + block.size * 0.1 if cjk else rest_origin
     pad = block.size * 0.5 if cjk else block.size * 0.3
     rest_box = pymupdf.Rect(rest_left, rest_y, right, block.rect.y1 + pad)
     return _clip_write_rect(first_box, block.clip), _clip_write_rect(rest_box, block.clip)
+
+
+def _short_left_label(block: TextBlock) -> bool:
+    """正文第一行左边的短标签。Memo.、Property Enforcement.、(2) Statistics Derivation."""
+    text = block.text.strip()
+    if not text.endswith(".") or len(text.split()) > 6 or block.rect.width > 150:
+        return False
+    return not _diagramish(block)
+
+
+def _label_beside(body: TextBlock, blocks: list[TextBlock]) -> TextBlock | None:
+    """和正文第一行并排、源文几乎贴到正文左缘的短标签。"""
+    if not body.line_rects:
+        return None
+    first = body.line_rects[0]
+    found: TextBlock | None = None
+    for other in blocks:
+        if other is body or other.page != body.page or not _short_left_label(other):
+            continue
+        height = min(other.rect.height, first.height) or 1.0
+        overlap = min(other.rect.y1, first.y1) - max(other.rect.y0, first.y0)
+        if overlap <= height * 0.5:
+            continue
+        gap = first.x0 - other.rect.x1
+        if -2 <= gap < 40 and (found is None or other.rect.x0 < found.rect.x0):
+            found = other
+    return found
+
+
+def _body_first_starts(
+    blocks: list[TextBlock],
+    items: list[tuple[TextBlock, str]],
+    cjk: bool,
+    formulas_map: dict[int, list[dict]] | None,
+) -> dict[int, float]:
+    """短译文标签让出的第一行空白补上。译文比英文宽时，正文让到标签右边。"""
+    out: dict[int, float] = {}
+    by_id = {id(block): text for block, text in items}
+    known = formulas_map or {}
+    for block, _text in items:
+        inset = _inset_write_boxes(block, cjk)
+        if inset is None:
+            continue
+        first_box = inset[0]
+        label = _label_beside(block, blocks)
+        if label is None:
+            continue
+        translation = by_id.get(id(label))
+        if translation is None or translation.strip() == label.text.strip():
+            continue
+        formulas = known.get(id(label), [])
+        if _SENTINEL_NUM_RE.search(translation) and not formulas:
+            continue
+        em = label.size * 0.88 if cjk else label.size
+        metrics = _formula_metrics(formulas, label.size, em)
+        widths = {index: metric.slot_width for index, metric in metrics.items()}
+        start = label.rect.x0 + measure_width(translation, em, widths) + 8.0
+        if start >= first_box.x1 - max(em * 4, 24):
+            continue
+        if abs(start - first_box.x0) < 1:
+            continue
+        out[id(block)] = start
+    return out
 
 
 def _beside_body(block: TextBlock, blocks: list[TextBlock]) -> TextBlock | None:
@@ -3195,8 +3290,15 @@ class _Carry:
 def _room_below(
     page: "pymupdf.Page", block: TextBlock, y0: float, x0: float, x1: float, blocks: list[TextBlock],
 ) -> float:
-    """这一栏往下还能写到哪里。停在页边，也停在后面的脚注、页码或其他块前面。"""
+    """这一栏往下还能写到哪里。停在页码带上面，也停在后面的脚注或其他块前面。
+
+    页码常常是纯数字，提取时被丢掉，x 方向也不一定和这一栏相交。
+    块自己已经在页脚带里时不再下刀，贴底的脚注不会因此被缩掉。
+    """
     limit = page.rect.y1 - 6
+    floor = content_floor(page.rect.height)
+    if y0 < floor - 4:
+        limit = min(limit, floor)
     for other in blocks:
         if other.page != block.page or other is block or other.rect.y0 <= y0 + 1:
             continue
@@ -3327,6 +3429,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         draws: list[str] = []
         deferred_png: list[tuple[pymupdf.Rect, bytes]] = []
         stacked = _affiliation_write_rects(blocks)
+        starts = _body_first_starts(blocks, items, cjk, formulas_map)
 
         def write_one(
             block: TextBlock, text: str, rect: pymupdf.Rect, centered: bool,
@@ -3406,6 +3509,11 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             inset = _inset_write_boxes(b, cjk)
             if inset is not None and id(b) not in stacked:
                 first_box, rest_box = inset
+                moved = starts.get(id(b))
+                if moved is not None:
+                    first_box = _clip_write_rect(
+                        pymupdf.Rect(moved, first_box.y0, first_box.x1, first_box.y1), b.clip,
+                    )
                 bformulas = (formulas_map or {}).get(id(b), [])
                 size = b.size * 0.88 if cjk else b.size
                 head, rest = _split_own_lines(
@@ -3442,6 +3550,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             beside = _beside_body(b, blocks)
             if beside is not None and id(b) not in stacked:
                 cap = beside.line_rects[0].x0 - 2
+                moved = starts.get(id(beside))
+                if moved is not None:
+                    cap = min(cap, moved - 2)
                 rect = pymupdf.Rect(rect.x0, rect.y0, min(rect.x1, max(cap, rect.x0 + 4)), rect.y1)
                 write_one(b, t, rect, False, None, False, rect.x1)
                 continue
