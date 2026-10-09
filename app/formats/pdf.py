@@ -59,6 +59,7 @@ CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
 # 单个字母加句点，像 "a. " 也像换行后的 "Q. The cost"。后者不是列表项。
 _LETTER_BULLET_RE = re.compile(r"^[a-zA-Z][.)]\s+")
+_PAREN_ITEM_RE = re.compile(r"^\([a-zA-Z]\)\s+")
 _LIST_INTRO_END = (".", "?", "!", "。", "！", "？", ":", ";", "：", "；")
 # 行首列表标记：符号弹点（可不带空格）、短横线类（须带空格，避免误伤连字符单词）、数字/字母编号
 BULLET_RE = re.compile(r"^\s*(?:[•◦▪‣·○■□►»]\s*|[-–—*]\s+|\d{1,3}[.)]\s+|[a-zA-Z][.)]\s+)")
@@ -129,6 +130,12 @@ def _same_line_word(
     return True
 
 
+def _list_item(text: str) -> bool:
+    """a. 和 (a) 都是列表项。换行后的 Q. 由调用处另行排除。"""
+    stripped = text.lstrip()
+    return bool(BULLET_RE.match(text) or _PAREN_ITEM_RE.match(stripped))
+
+
 def _split_lines(items: list[tuple]) -> list[list[int]]:
     """把一个文本块里的行分成独立段落（返回每组的行下标）。
 
@@ -162,7 +169,11 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         jump = prect.x0 - rect.x0
         indent = 0 < jump <= 3 * psize  # 1–2em 左跳是首行缩进，不是新段落
         # 列表项的续行：缩进在弹点之后的悬挂对齐。同 x0 或左跳的不是续行，可能是下一段
-        continuing_list = bool(BULLET_RE.match(ptext)) and not BULLET_RE.match(text) and rect.x0 > prect.x0
+        continuing_list = (
+            _list_item(ptext)
+            and not _list_item(text)
+            and rect.x0 > prect.x0
+        )
         # CJK 行首分不出新句子和续行，要求上行以句末标点结尾才算新段落
         seg_start = bool(SEG_START_RE.match(stripped)) or (
             bool(CJK_START_RE.match(stripped)) and ptext.rstrip().endswith(SENT_ENDS)
@@ -207,7 +218,7 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             and max_x1 - prect.x1 <= 3 * psize
             and not ptext.rstrip().endswith(_LIST_INTRO_END)
         )
-        bullet = bool(BULLET_RE.match(text)) and not wrapped_letter
+        bullet = _list_item(text) and not wrapped_letter
         if not same_visual_line and not sec_label and (
             bullet or NO_TEXT_RE.match(stripped) or prev_symbol
             or hard_break or left_jump or size_drop

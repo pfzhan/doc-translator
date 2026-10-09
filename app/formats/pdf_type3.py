@@ -7,6 +7,7 @@
 公式位图会被认成乱码。并进下一句后，写入框盖住公式，译文再压到下一段。
 这类词收成行内占位符，原字形贴回去，句子不再从公式处拆开。居中的公式行、
 矢量格子上的节点标签，以及用竖线字形画出的表，留下原字，不重排。
+同一页正文用一个字号。缩进的伪代码不揉进正文。
 """
 from __future__ import annotations
 
@@ -45,6 +46,22 @@ _DISPLAY_MARK = re.compile(r"[=<>≤≥≠≈∈∉]|[{}]")
 _CAPTION_START = re.compile(r"^(?:Figure|Fig\.?|Table|EXAMPLE|Example)\b")
 _FOOTNOTE_START = re.compile(r"""^["“”?]\s*[A-Za-z]""")
 _EXAMPLE_START = re.compile(r"^EXAMPLE\b", re.I)
+_LETTER_ITEM = re.compile(r"^\([a-zA-Z]\)\s")
+# 缩进的伪代码。正文从栏左缘起笔，不在这里。
+_LISTING_LINE = re.compile(
+    r"(?:"
+    r"end;"
+    r"|for\b.+\bdo\b.*\bbegin\b"
+    r"|select that view\b.+"
+    r"|resulting\b.+\bselection;?"
+    r"|[A-Za-z]\s*=\s*\{.+"
+    r"|[A-Za-z]\s*=\s*S\b.+"
+    r")$",
+    re.I,
+)
+_LISTING_X = 95.0
+# 下标被认成 B,,、a;、6;。单个逗号是 S,、is,，不能收成公式。
+_BROKEN_SUB = re.compile(r"^(?:[A-Za-z]{1,2}[,;]{2,}|[A-Za-z]{1,2};|\d;)$")
 _BAR_CHAR = re.compile(r"[|¦│]")
 # 公式槽用数学字体，后面的占位符才会把这块裁成图贴回去。
 _FORMULA_FONT = "CMMI10"
@@ -183,6 +200,7 @@ def recover_type3_page(page: pymupdf.Page, data: PageData) -> bool:
     rebuilt = _compose_lines(prose, debris, originals)
     if not rebuilt:
         raise ValueError("点阵字页面没有认出可翻译的文字。请确认 tesseract 的英文语言包已安装")
+    _snap_page_sizes(rebuilt)
     for group in _group_lines(rebuilt):
         data["blocks"].append({"type": 0, "bbox": _union_bbox(group), "lines": group})
     return True
@@ -285,7 +303,7 @@ def _compose_lines(
     for row in _baseline_rows(prose):
         for pieces in _row_pieces(row, debris, glyphs):
             pieces = _without_bullet(pieces)
-            if not pieces or _display_formula(pieces):
+            if not pieces or _display_formula(pieces) or _listing_line(pieces):
                 continue
             line = _line_from_pieces(_peel_operators(pieces), glyphs)
             if line is not None:
@@ -449,18 +467,45 @@ def _display_formula(pieces: list[_Piece]) -> bool:
     return len(long_words) <= 1
 
 
+def _listing_line(pieces: list[_Piece]) -> bool:
+    """缩进的 end;、for … do begin、S = {…} 是伪代码。留下原字，不揉进正文。"""
+    prose = [piece for piece in pieces if piece.kind == "prose"]
+    if not prose:
+        return False
+    box = pymupdf.Rect()
+    for piece in prose:
+        box |= piece.rect
+    if box.x0 < _LISTING_X:
+        return False
+    text = " ".join(piece.text for piece in prose).strip()
+    return bool(_LISTING_LINE.fullmatch(text))
+
+
 def _peel_operators(pieces: list[_Piece]) -> list[_Piece]:
-    """行内单独的比较符、以及夹在括号组之间的单个数字，是认错的公式。"""
+    """行内单独的比较符、夹在括号组之间的数字，以及认成 B,, 的下标，是公式。"""
     peeled: list[_Piece] = []
     for index, piece in enumerate(pieces):
-        if piece.kind == "formula" or _OPERATOR.fullmatch(piece.text.strip()):
+        token = piece.text.strip()
+        if piece.kind == "formula" or _OPERATOR.fullmatch(token) or _broken_sub(pieces, index):
             peeled.append(_Piece("formula", _FORMULA_MARK, piece.rect))
             continue
-        if piece.text.strip().isdigit() and len(piece.text.strip()) == 1 and _between_parens(pieces, index):
+        if token.isdigit() and len(token) == 1 and _between_parens(pieces, index):
             peeled.append(_Piece("formula", _FORMULA_MARK, piece.rect))
             continue
         peeled.append(piece)
     return peeled
+
+
+def _broken_sub(pieces: list[_Piece], index: int) -> bool:
+    """B,,、a;、6; 是下标。后面接大写词的 Q; 是句首，S, 是正文。"""
+    token = pieces[index].text.strip()
+    if not _BROKEN_SUB.fullmatch(token):
+        return False
+    if token.endswith(";") and ",," not in token and ";" not in token[:-1]:
+        nxt = next((piece for piece in pieces[index + 1:] if piece.kind == "prose"), None)
+        if nxt is not None and nxt.text[:1].isupper():
+            return False
+    return True
 
 
 def _between_parens(pieces: list[_Piece], index: int) -> bool:
@@ -494,8 +539,23 @@ def _line_from_pieces(pieces: list[_Piece], glyphs: list[GlyphBox]) -> dict[str,
     box = pymupdf.Rect()
     for span in spans:
         box |= pymupdf.Rect(span["bbox"])
+    box = _cover_line_glyphs(box, glyphs)
     bbox = (box.x0, box.y0, box.x1, box.y1)
     return {"spans": spans, "wmode": 0, "dir": (1.0, 0.0), "bbox": bbox}
+
+
+def _cover_line_glyphs(box: pymupdf.Rect, glyphs: list[GlyphBox]) -> pymupdf.Rect:
+    """擦除要盖住这一行的点阵字。字框比墨迹高，只加宽，纵向仍停在这一行。"""
+    covered = pymupdf.Rect(box)
+    for glyph in glyphs:
+        cy = (glyph.rect.y0 + glyph.rect.y1) / 2
+        if not (box.y0 - 1 <= cy <= box.y1 + 1):
+            continue
+        if not _x_hits(glyph.rect, box):
+            continue
+        covered.x0 = min(covered.x0, glyph.rect.x0)
+        covered.x1 = max(covered.x1, glyph.rect.x1)
+    return covered
 
 
 def _spans_from_pieces(pieces: list[_Piece]) -> list[dict[str, Any]]:
@@ -552,8 +612,8 @@ def _table_bar(word: OcrWord) -> bool:
 
 
 def _formula_row(row: list[OcrWord]) -> bool:
-    """同一基线上有大括号或等号，竖线是集合分隔符，不是格子。"""
-    return any(any(mark in word.text for mark in "{}=") for word in row)
+    """同一基线上有大括号，竖线是集合分隔符，不是格子。格子里的等号仍是表。"""
+    return any(any(mark in word.text for mark in "{}") for word in row)
 
 
 def _table_row(row: list[OcrWord]) -> bool:
@@ -781,6 +841,11 @@ def _example_start(line: dict[str, Any]) -> bool:
     return bool(_EXAMPLE_START.match(_span_text(line)))
 
 
+def _letter_item(line: dict[str, Any]) -> bool:
+    """(a) (b) 各自起条。续行不是这种开头，仍接在这一条上。"""
+    return bool(_LETTER_ITEM.match(_span_text(line)))
+
+
 def _starts_after_hole(prev: pymupdf.Rect, nxt: pymupdf.Rect) -> bool:
     """从远远的右侧起笔。左边是没认出来的公式，悬挂缩进没有这么宽。
 
@@ -991,6 +1056,8 @@ def _group_lines(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
                 continue
             if _footnote_start(line) and not _footnote_start(prev_line):
                 continue
+            if _letter_item(line):
+                continue
             if _starts_after_hole(prev, box) or _returns_past_hole(prev, box):
                 continue
             if _covers_right_neighbor(prev, box, neighbors):
@@ -1007,19 +1074,53 @@ def _group_lines(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
 
 
 def _ink_size(text: str, height: float) -> float:
-    """墨迹高度换成磅值。同一套点阵字的字框一样高，画出的标题和正文并不一样大。"""
+    """墨迹高度就是磅值。有没有下伸字母不再另乘一档，否则同一段写出两种字号。"""
+    del text
     if height <= 0:
         return 0.0
-    letters = [ch for ch in text if ch.isalpha()]
-    has_desc = any(ch in "gjpqy" for ch in letters)
-    has_asc = any(ch.isupper() or ch in "bdfhiklt" for ch in letters)
-    if has_desc:
-        factor = 0.95
-    elif has_asc:
-        factor = 0.72
-    else:
-        factor = 0.52
-    return round(min(max(height / factor, 6.0), 36.0), 1)
+    return round(min(max(height, 6.0), 36.0), 1)
+
+
+def _prose_height(line: dict[str, Any]) -> float:
+    """公式槽的高框不算。一行的字号看正文墨迹。"""
+    height = 0.0
+    for span in line.get("spans") or []:
+        if span.get("font") == _FORMULA_FONT:
+            continue
+        raw = span.get("bbox")
+        if not raw or len(raw) < 4:
+            continue
+        height = max(height, float(raw[3]) - float(raw[1]))
+    return height
+
+
+def _snap_page_sizes(lines: list[dict[str, Any]]) -> None:
+    """同一页正文用一个字号，取正文墨迹高度的中位数。
+
+    字数够成句的行就是正文，墨迹被公式撑高也不另起一档。
+    墨迹明显更高的短行是标题，留下原来的字号。
+    """
+    heights = [
+        height
+        for line in lines
+        if (height := _prose_height(line)) >= 6 and height <= 20
+        and sum(ch.isalpha() for ch in _span_text(line)) >= 12
+    ]
+    if not heights:
+        return
+    median = sorted(heights)[len(heights) // 2]
+    body = round(min(max(median, 8.0), 14.0), 1)
+    limit = median * 1.35
+    for line in lines:
+        height = _prose_height(line)
+        letters = sum(ch.isalpha() for ch in _span_text(line))
+        if height <= 0:
+            continue
+        if letters < 12 and height > limit and letters >= 4:
+            continue
+        for span in line.get("spans") or []:
+            if span.get("size"):
+                span["size"] = body
 
 
 def _line_size(text: str, ink_height: float, em: float) -> float:

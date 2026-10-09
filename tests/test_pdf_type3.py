@@ -15,9 +15,11 @@ from app.formats.pdf_type3 import (
     _drop_broken_lines,
     _group_lines,
     _hidden,
+    _ink_size,
     _label_zones,
     _line_from_words,
     _pipe_zones,
+    _snap_page_sizes,
     _without_noise,
     broken_type3_names,
     recover_type3_page,
@@ -371,7 +373,7 @@ def test_bullet_letter_is_not_the_first_word():
 
 
 def test_set_builder_bar_is_not_a_table():
-    """集合记号里单独的竖线不是表。同一基线上有等号和大括号就不成区。"""
+    """集合记号里单独的竖线不是表。同一基线上有大括号就不成区。"""
     words = [
         _word("descendant(a)", 239, 306, 215, 226),
         _word("=", 311, 318, 219, 222),
@@ -447,6 +449,123 @@ def test_label_just_above_a_figure_stays_a_glyph():
     caption = _word("Hierarchy", 263, 309, 264, 275)
     assert _hidden(day, [zone])
     assert not _hidden(caption, [zone])
+
+
+def test_descender_does_not_inflate_the_line():
+    """有没有 g、p 不能把同样高的墨迹估成两档字号。"""
+    assert _ink_size("cost", 11.5) == 11.5
+    assert _ink_size("gap", 11.5) == 11.5
+
+
+def test_page_body_snaps_to_one_size_and_taller_ink_stays():
+    """同一页正文收成墨迹中位数。明显更高的标题留下。公式槽的高框不算。"""
+    body = _line("we compute the benefit of each view", 72, 100, 400, 111.5, 16.9)
+    other = _line("picking a view reduces the query cost", 72, 114, 400, 125.5, 12.1)
+    title = _line("Theorem", 72, 40, 160, 58, 18.0)
+    bloated = _line("This bound comes most easily from the first inequality", 88, 200, 400, 217.5, 17.5)
+    mixed = {
+        "bbox": (72, 130, 400, 154),
+        "spans": [
+            {"text": "the benefit of selecting this view", "size": 16.9, "font": "Times-Roman", "bbox": (72, 130, 300, 141.5)},
+            {"text": "×", "size": 16.9, "font": "CMMI10", "bbox": (304, 126, 360, 150)},
+        ],
+    }
+    _snap_page_sizes([body, other, title, mixed, bloated])
+    assert body["spans"][0]["size"] == other["spans"][0]["size"] == mixed["spans"][0]["size"]
+    assert bloated["spans"][0]["size"] == body["spans"][0]["size"]
+    assert title["spans"][0]["size"] == 18.0
+
+
+def test_letter_item_does_not_join_the_paragraph():
+    """(a) 不并进上一段，(b) 不并进 (a)。(a) 的续行仍留在这一条。"""
+    prev = _line("there must be at least one such view in S.", 72, 67, 500, 79)
+    item = _line("(a) Let u be the view of least cost in S.", 105, 82, 500, 94)
+    cont = _line("S, there must be at least one such view.", 124, 96, 500, 108)
+    item_b = _line("(b) If C(v) is smaller then stop here.", 104, 111, 500, 123)
+    groups = _group_lines([prev, item, cont, item_b])
+    texts = [" ".join(span["text"] for line in group for span in line["spans"]) for group in groups]
+    assert any(text.startswith("(a)") and "S, there must" in text for text in texts)
+    assert all("least one such view in S." not in text or "(a)" not in text for text in texts)
+    assert any(text.startswith("(b)") and "(a)" not in text for text in texts)
+
+
+def test_listing_line_is_left_as_glyphs():
+    """缩进的伪代码不送去翻译。栏左缘的正文留下。"""
+    listing = [
+        _word("S = {top view};", 101, 220, 278, 290),
+        _word("for i=1 to k do begin", 101, 250, 293, 305),
+        _word("select that view v not in S such that B(v,S) is maximized;", 124, 360, 306, 318),
+        _word("end;", 101, 130, 334, 346),
+        _word("resulting S is the greedy selection;", 101, 280, 347, 359),
+    ]
+    body = [
+        _word("We", 72, 90, 320, 332),
+        _word("compute", 94, 150, 320, 332),
+        _word("the", 154, 172, 320, 332),
+        _word("benefit", 176, 220, 320, 332),
+    ]
+    lines = _compose_lines([*listing, *body], [], _glyphs_for([*listing, *body]))
+    text = " ".join(span["text"] for line in lines for span in line["spans"])
+    assert "top view" not in text
+    assert "do begin" not in text
+    assert "select that view" not in text
+    assert "greedy selection" not in text
+    assert "benefit" in text
+
+
+def test_equals_in_a_cell_still_zones_the_table():
+    """格子里的等号不是公式。竖线围出的表留下，表注在带外。"""
+    words = [
+        _word("First Choice | Second", 197, 420, 169, 181),
+        _word("b |", 179, 198, 186, 198),
+        _word("50 x 5 = 250", 204, 320, 186, 198),
+        _word("f |", 178, 196, 240, 252),
+        _word("60 x 2 = 120", 202, 320, 240, 252),
+        _word("Figure 8: Benefits of each round", 184, 420, 303, 315),
+    ]
+    zones = _bar_zones(words)
+    assert len(zones) == 1
+    assert _hidden(words[0], zones)
+    assert _hidden(words[1], zones)
+    assert _hidden(words[3], zones)
+    assert not _hidden(words[5], zones)
+
+
+def test_broken_subscript_becomes_a_formula_slot():
+    """B,, 和 6; 是认错的下标，收成公式槽。an 和 Bu- 仍是正文。"""
+    words = [
+        _word("define", 72, 110, 70, 82),
+        _word("B,,", 114, 132, 72, 84),
+        _word("to", 136, 150, 70, 82),
+        _word("be", 154, 170, 70, 82),
+        _word("an", 174, 190, 70, 82),
+        _word("Bu-", 194, 214, 70, 82),
+        _word("S,", 218, 234, 70, 82),
+    ]
+    lines = _compose_lines(words, [], _glyphs_for(words))
+    assert len(lines) == 1
+    prose = " ".join(span["text"] for span in lines[0]["spans"] if span["font"] != "CMMI10")
+    assert "B,," not in prose
+    assert "an" in prose and "Bu-" in prose and "S," in prose
+    assert any(span["font"] == "CMMI10" for span in lines[0]["spans"])
+    kept = _compose_lines(
+        [_word("Q;", 72, 90, 100, 112), _word("The", 94, 120, 100, 112), _word("cost", 124, 150, 100, 112)],
+        [],
+        _glyphs_for([_word("Q;", 72, 90, 100, 112), _word("The", 94, 120, 100, 112)]),
+    )
+    kept_text = " ".join(span["text"] for line in kept for span in line["spans"] if span["font"] != "CMMI10")
+    assert "Q;" in kept_text
+
+
+def test_line_bbox_covers_glyph_width_not_its_height():
+    """擦除加宽到点阵字的左右。19pt 字框的高度不并进行框，以免压到下一行。"""
+    word = _word("cost", 72, 100, 100, 111)
+    glyphs = [GlyphBox(pymupdf.Rect(70, 90, 108, 112), 13.8, 0, 110, 0)]
+    lines = _compose_lines([word], [], glyphs)
+    box = lines[0]["bbox"]
+    assert box[0] <= 70
+    assert box[2] >= 108
+    assert box[3] - box[1] < 16
 
 
 def test_close_ink_sizes_in_one_paragraph_snap():
