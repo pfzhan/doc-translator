@@ -327,6 +327,13 @@ def test_wrapped_letter_period_stays_in_the_paragraph():
         _line("a. How many views must we materialize?", 85, 430, 116, size=12),
     ]
     assert _split_lines(listed) == [[0], [1]]
+    paren = [
+        _line("Note that since the top view is in S.", 72, 500, 80, size=12),
+        _line("(a) Let u be the view of least cost", 105, 500, 96, size=12),
+        _line("S, there must be at least one view.", 124, 500, 110, size=12),
+        _line("(b) If C(v) is smaller then stop.", 104, 480, 126, size=12),
+    ]
+    assert _split_lines(paren) == [[0], [1, 2], [3]]
 
 
 def test_pdf_left_jump_keeps_full_width_wrap():
