@@ -312,6 +312,23 @@ def _line(text: str, x0: float, x1: float, y0: float, size: float = 10) -> tuple
     return (text, pymupdf.Rect(x0, y0, x1, y0 + size + 2), [{"size": size}])
 
 
+def test_wrapped_letter_period_stays_in_the_paragraph():
+    """撑满的上一行没有句末时，下一行的 Q. 是换行，不是列表项。句末之后的 a. 仍拆开。"""
+    from app.formats.pdf import _split_lines
+
+    wrapped = [
+        _line("corresponding to QA to answer", 72, 540, 414, size=12),
+        _line("Q. The cost of answering Q is a function", 72, 540, 427, size=12),
+        _line("the simplest cost-model:", 72, 187, 441, size=12),
+    ]
+    assert _split_lines(wrapped) == [[0, 1, 2]]
+    listed = [
+        _line("We can now ask the following questions.", 72, 540, 100, size=12),
+        _line("a. How many views must we materialize?", 85, 430, 116, size=12),
+    ]
+    assert _split_lines(listed) == [[0], [1]]
+
+
 def test_pdf_left_jump_keeps_full_width_wrap():
     """首行缩进、两行都撑到右边距，是自动换行，不能拆成两段。"""
     from app.formats.pdf import _split_lines
@@ -2677,6 +2694,8 @@ def test_heading_number_skips_body_blocks():
     assert _heading_number_for("h2", "10. REFERENCES", "十, 参考文献") == "10 参考文献"
     assert _heading_number_for("h2", "8.1 Query Optimization Foundations", "八点一 查询优化基础") == "8.1 查询优化基础"
     assert _heading_number_for("h2", "2.2 SQL on Hadoop", "第2.2节 Hadoop 上的 SQL") == "2.2 Hadoop 上的 SQL"
+    assert _heading_number_for("h2", "1.3 Related Work", "一.三. 相关工作") == "1.3 相关工作"
+    assert _heading_number_for("h2", "2.5 Composite Lattices", "二．五 复合格") == "2.5 复合格"
 
 
 def test_punct_fragment_uses_line_end_not_union():
