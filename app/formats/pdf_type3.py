@@ -5,7 +5,8 @@
 点阵字的行框和词对不齐，词心会落在碎片之间，所以不能把词填回旧行框。
 
 公式位图会被认成乱码。并进下一句后，写入框盖住公式，译文再压到下一段。
-这类词留下原字形。矢量格子上的节点标签，以及用竖线字形画出的表，也不重排。
+这类词收成行内占位符，原字形贴回去，句子不再从公式处拆开。居中的公式行、
+矢量格子上的节点标签，以及用竖线字形画出的表，留下原字，不重排。
 """
 from __future__ import annotations
 
@@ -37,6 +38,20 @@ _MIN_ZONE_AREA = 2000.0
 # 公式位图的词置信度很低。节号偶尔也低，不能一起丢掉。
 _NOISE_CONF = 40.0
 _JUNK_CONF = 22.0
+# 单独一个比较符是点阵公式，不是正文里的小于号。
+_OPERATOR = re.compile(r"^[=<>≤≥≠≈∈∉⊂⊃±×÷&]$")
+_BULLET_WORD = re.compile(r"^[eco*•·]$")
+_DISPLAY_MARK = re.compile(r"[=<>≤≥≠≈∈∉]|[{}]")
+_CAPTION_START = re.compile(r"^(?:Figure|Fig\.?|Table|EXAMPLE|Example)\b")
+_FOOTNOTE_START = re.compile(r"""^["“”?]\s*[A-Za-z]""")
+_EXAMPLE_START = re.compile(r"^EXAMPLE\b", re.I)
+_BAR_CHAR = re.compile(r"[|¦│]")
+# 公式槽用数学字体，后面的占位符才会把这块裁成图贴回去。
+_FORMULA_FONT = "CMMI10"
+_FORMULA_MARK = "×"
+# 公式空洞比栏沟窄。再宽就是两栏，不能从中间接上。
+_HOLE_LIMIT = 160.0
+_LEAD_LIMIT = 180.0
 # 坏字体占这一页文字的比例。零星符号字体不整页重认。
 _BROKEN_SHARE = 0.4
 _MIN_BROKEN_CHARS = 20
@@ -64,6 +79,15 @@ class _Zone:
 
     rect: pymupdf.Rect
     labels_only: bool = False
+
+
+@dataclass(frozen=True)
+class _Piece:
+    """一行里的一段：正文词，或公式空洞。"""
+
+    kind: str
+    text: str
+    rect: pymupdf.Rect
 
 
 @dataclass(frozen=True)
@@ -148,18 +172,15 @@ def recover_type3_page(page: pymupdf.Page, data: PageData) -> bool:
     if not names or _broken_share(data, names) < _BROKEN_SHARE:
         return False
     words = ocr_page(page)
-    zones = [*_drawing_zones(page), *_pipe_zones(words)]
+    zones = [*_drawing_zones(page), *_pipe_zones(words), *_bar_zones(words)]
     zones.extend(_label_zones(words, zones))
-    words = [word for word in _without_noise(words) if not _hidden(word, zones)]
+    visible = [word for word in words if not _hidden(word, zones)]
+    prose = _without_noise(visible)
+    kept = {id(word) for word in prose}
+    debris = [word for word in visible if id(word) not in kept]
     originals = _broken_lines(data, names)
     _drop_broken_lines(data, names)
-    rebuilt: list[dict[str, Any]] = []
-    for segment in segment_ocr_words(words):
-        if not segment:
-            continue
-        line = _line_from_words(segment, originals)
-        if line is not None:
-            rebuilt.append(line)
+    rebuilt = _compose_lines(prose, debris, originals)
     if not rebuilt:
         raise ValueError("点阵字页面没有认出可翻译的文字。请确认 tesseract 的英文语言包已安装")
     for group in _group_lines(rebuilt):
@@ -254,6 +275,317 @@ def _is_fringe(word: OcrWord) -> bool:
         return False
     letters = sum(ch.isalpha() for ch in text)
     return len(text) <= 4 and letters <= 1
+
+
+def _compose_lines(
+    prose: list[OcrWord], debris: list[OcrWord], glyphs: list[GlyphBox],
+) -> list[dict[str, Any]]:
+    """同一基线上被公式空洞切开的正文仍是一句。空洞收成公式槽，居中的公式行不重排。"""
+    lines: list[dict[str, Any]] = []
+    for row in _baseline_rows(prose):
+        for pieces in _row_pieces(row, debris, glyphs):
+            pieces = _without_bullet(pieces)
+            if not pieces or _display_formula(pieces):
+                continue
+            line = _line_from_pieces(_peel_operators(pieces), glyphs)
+            if line is not None:
+                lines.append(line)
+    return lines
+
+
+def _baseline_rows(words: list[OcrWord]) -> list[list[OcrWord]]:
+    ordered = sorted(words, key=lambda word: ((word.rect.y0 + word.rect.y1) / 2, word.rect.x0))
+    rows: list[list[OcrWord]] = []
+    for word in ordered:
+        cy = (word.rect.y0 + word.rect.y1) / 2
+        if rows:
+            last = rows[-1]
+            ly = sum((item.rect.y0 + item.rect.y1) / 2 for item in last) / len(last)
+            limit = max(word.rect.height, last[0].rect.height, 8.0) * 0.55
+            if abs(cy - ly) <= limit:
+                last.append(word)
+                continue
+        rows.append([word])
+    for row in rows:
+        row.sort(key=lambda word: word.rect.x0)
+    return rows
+
+
+def _row_pieces(
+    row: list[OcrWord], debris: list[OcrWord], glyphs: list[GlyphBox],
+) -> list[list[_Piece]]:
+    if not row:
+        return []
+    segments: list[list[_Piece]] = []
+    current: list[_Piece] = []
+    lead = _formula_before(row[0], debris, glyphs)
+    if lead is not None:
+        current.append(lead)
+    current.append(_Piece("prose", row[0].text, row[0].rect))
+    for prev, word in zip(row, row[1:]):
+        gap = word.rect.x0 - prev.rect.x1
+        bridge = _formula_between(prev, word, debris, glyphs)
+        section = _section_only(current) and gap <= 22.0
+        if section or (bridge is not None and gap <= _HOLE_LIMIT):
+            if bridge is not None and not section:
+                current.append(bridge)
+            current.append(_Piece("prose", word.text, word.rect))
+            continue
+        if gap > max(prev.rect.height * 1.1, 12.0):
+            segments.append(current)
+            current = [_Piece("prose", word.text, word.rect)]
+            continue
+        current.append(_Piece("prose", word.text, word.rect))
+    trail = _formula_after(row[-1], debris, glyphs)
+    if trail is not None:
+        current.append(trail)
+    segments.append(current)
+    return segments
+
+
+def _section_only(pieces: list[_Piece]) -> bool:
+    prose = [piece for piece in pieces if piece.kind == "prose"]
+    return len(prose) == 1 and bool(_SECTION_NO.fullmatch(prose[0].text.strip()))
+
+
+def _formula_before(
+    word: OcrWord, debris: list[OcrWord], glyphs: list[GlyphBox],
+) -> _Piece | None:
+    box = _evidence_box(
+        debris, glyphs, word.rect.x0 - _LEAD_LIMIT, word.rect.x0, word.rect.y0, word.rect.y1,
+    )
+    if box is None or word.rect.x0 - box.x1 > 24 or box.width < 6:
+        return None
+    return _Piece("formula", _FORMULA_MARK, box)
+
+
+def _formula_after(
+    word: OcrWord, debris: list[OcrWord], glyphs: list[GlyphBox],
+) -> _Piece | None:
+    box = _evidence_box(
+        debris, glyphs, word.rect.x1, word.rect.x1 + 80, word.rect.y0, word.rect.y1,
+    )
+    if box is None or box.x0 - word.rect.x1 > 24 or box.width < 6:
+        return None
+    return _Piece("formula", _FORMULA_MARK, box)
+
+
+def _formula_between(
+    prev: OcrWord, nxt: OcrWord, debris: list[OcrWord], glyphs: list[GlyphBox],
+) -> _Piece | None:
+    gap = nxt.rect.x0 - prev.rect.x1
+    if gap <= max(prev.rect.height * 1.1, 12.0) or gap > _HOLE_LIMIT:
+        return None
+    y0 = min(prev.rect.y0, nxt.rect.y0)
+    y1 = max(prev.rect.y1, nxt.rect.y1)
+    box = _evidence_box(debris, glyphs, prev.rect.x1, nxt.rect.x0, y0, y1)
+    if box is None or box.width < 6:
+        return None
+    return _Piece("formula", _FORMULA_MARK, box)
+
+
+def _evidence_box(
+    debris: list[OcrWord], glyphs: list[GlyphBox],
+    x0: float, x1: float, y0: float, y1: float,
+) -> pymupdf.Rect | None:
+    """空洞里的乱码或没对上正文的点阵，就是公式墨迹。字框比墨迹高，裁到这一行。"""
+    box = pymupdf.Rect()
+    # 下标落在基线下面几个点。上一行的字框中心不能算进这一行的空洞。
+    debris_band = pymupdf.Rect(x0, y0 - 4, x1, y1 + 8)
+    glyph_band = pymupdf.Rect(x0, y0 - 2, x1, y1 + 4)
+    for word in debris:
+        if _center_in(word.rect, debris_band):
+            box |= word.rect
+    if box.is_empty:
+        for glyph in glyphs:
+            if not _center_in(glyph.rect, glyph_band):
+                continue
+            clipped = pymupdf.Rect(
+                glyph.rect.x0, max(glyph.rect.y0, y0 - 2),
+                glyph.rect.x1, min(glyph.rect.y1, y1 + 6),
+            )
+            if clipped.width >= 1 and clipped.height >= 1:
+                box |= clipped
+    if box.is_empty or box.x0 >= x1 or box.x1 <= x0:
+        return None
+    return pymupdf.Rect(max(box.x0, x0), box.y0, min(box.x1, x1), box.y1)
+
+
+def _center_in(rect: pymupdf.Rect, band: pymupdf.Rect) -> bool:
+    cx = (rect.x0 + rect.x1) / 2
+    cy = (rect.y0 + rect.y1) / 2
+    return band.x0 <= cx <= band.x1 and band.y0 <= cy <= band.y1
+
+
+def _without_bullet(pieces: list[_Piece]) -> list[_Piece]:
+    """行首的单字母 e 是项目符号的点阵，不是单词。留下原字，句子从后面起翻。"""
+    if len(pieces) < 2 or pieces[0].kind != "prose":
+        return pieces
+    head, nxt = pieces[0], pieces[1]
+    if nxt.kind != "prose" or not nxt.text[:1].isupper():
+        return pieces
+    if head.rect.width <= 14 and _BULLET_WORD.fullmatch(head.text.strip()):
+        return pieces[1:]
+    return pieces
+
+
+def _display_formula(pieces: list[_Piece]) -> bool:
+    """居中、几乎没有正文词、又带着比较符的一行是公式。认出来的符号是错的，留下原字。"""
+    prose = [piece for piece in pieces if piece.kind == "prose"]
+    if not prose:
+        return True
+    box = pymupdf.Rect()
+    for piece in prose:
+        box |= piece.rect
+    if box.x0 < 160:
+        return False
+    text = " ".join(piece.text for piece in prose)
+    if len(text) > 90 or not _DISPLAY_MARK.search(text):
+        return False
+    if _NUMBERED_LINE.match(text) or _SQL_LINE.match(text) or _CAPTION_START.match(text):
+        return False
+    outside = re.sub(r"\([^)]*\)", " ", text)
+    long_words = re.findall(r"[A-Za-z]{4,}", outside)
+    return len(long_words) <= 1
+
+
+def _peel_operators(pieces: list[_Piece]) -> list[_Piece]:
+    """行内单独的比较符、以及夹在括号组之间的单个数字，是认错的公式。"""
+    peeled: list[_Piece] = []
+    for index, piece in enumerate(pieces):
+        if piece.kind == "formula" or _OPERATOR.fullmatch(piece.text.strip()):
+            peeled.append(_Piece("formula", _FORMULA_MARK, piece.rect))
+            continue
+        if piece.text.strip().isdigit() and len(piece.text.strip()) == 1 and _between_parens(pieces, index):
+            peeled.append(_Piece("formula", _FORMULA_MARK, piece.rect))
+            continue
+        peeled.append(piece)
+    return peeled
+
+
+def _between_parens(pieces: list[_Piece], index: int) -> bool:
+    left = next((piece for piece in reversed(pieces[:index]) if piece.kind == "prose"), None)
+    right = next((piece for piece in pieces[index + 1:] if piece.kind == "prose"), None)
+    if left is None or right is None:
+        return False
+    return "(" in left.text and ")" in right.text
+
+
+def _line_from_pieces(pieces: list[_Piece], glyphs: list[GlyphBox]) -> dict[str, Any] | None:
+    """正文槽和公式槽合成一行。没盖住点阵字的词不是这页的坏字体，不另起一行。"""
+    spans = _spans_from_pieces(pieces)
+    prose = [span for span in spans if span["font"] != _FORMULA_FONT]
+    if not prose:
+        return None
+    ink = pymupdf.Rect()
+    for span in prose:
+        ink |= pymupdf.Rect(span["bbox"])
+    matched = [glyph for glyph in glyphs if _same_band(glyph.rect, ink) and _x_hits(glyph.rect, ink)]
+    if not matched:
+        return None
+    glyph = max(matched, key=lambda item: _overlap_width(item.rect, ink))
+    text = " ".join(str(span["text"]) for span in prose)
+    size = _line_size(text, ink.height, glyph.em)
+    for span in spans:
+        span["size"] = size
+        span["flags"] = glyph.flags
+        span["color"] = glyph.color
+        span["origin"] = (span["bbox"][0], glyph.origin_y)
+    box = pymupdf.Rect()
+    for span in spans:
+        box |= pymupdf.Rect(span["bbox"])
+    bbox = (box.x0, box.y0, box.x1, box.y1)
+    return {"spans": spans, "wmode": 0, "dir": (1.0, 0.0), "bbox": bbox}
+
+
+def _spans_from_pieces(pieces: list[_Piece]) -> list[dict[str, Any]]:
+    spans: list[dict[str, Any]] = []
+    prose: list[_Piece] = []
+
+    def flush(trailing_formula: bool) -> None:
+        if not prose:
+            return
+        box = pymupdf.Rect()
+        for piece in prose:
+            box |= piece.rect
+        text = " ".join(piece.text for piece in prose)
+        if spans and spans[-1]["font"] == _FORMULA_FONT:
+            text = " " + text
+        if trailing_formula:
+            text += " "
+        spans.append(_span(text, box, "Times-Roman"))
+        prose.clear()
+
+    for index, piece in enumerate(pieces):
+        if piece.kind == "formula":
+            nxt = pieces[index + 1] if index + 1 < len(pieces) else None
+            flush(nxt is not None and nxt.kind == "prose")
+            spans.append(_span(_FORMULA_MARK, piece.rect, _FORMULA_FONT))
+            continue
+        prose.append(piece)
+    flush(False)
+    return spans
+
+
+def _span(text: str, box: pymupdf.Rect, font: str) -> dict[str, Any]:
+    pad = 0.6
+    bbox = (box.x0 - pad, box.y0 - pad, box.x1 + pad, box.y1 + pad)
+    return {
+        "text": text,
+        "bbox": bbox,
+        "size": 10.0,
+        "font": font,
+        "flags": 0,
+        "color": 0,
+        "origin": (bbox[0], bbox[3]),
+        "ascender": 0.8,
+        "descender": -0.2,
+    }
+
+
+def _table_bar(word: OcrWord) -> bool:
+    """格子里的竖线。集合记号 {b | a < b} 里的竖线不是表。"""
+    text = word.text
+    if not _BAR_CHAR.search(text) or any(mark in text for mark in "{}="):
+        return False
+    return len(text) <= 48
+
+
+def _formula_row(row: list[OcrWord]) -> bool:
+    """同一基线上有大括号或等号，竖线是集合分隔符，不是格子。"""
+    return any(any(mark in word.text for mark in "{}=") for word in row)
+
+
+def _table_row(row: list[OcrWord]) -> bool:
+    """竖线粘在格子文字里，或单独的竖线旁边还有格子文字。光一根竖线是公式分隔符。"""
+    bars = [word for word in row if _table_bar(word)]
+    if not bars or _formula_row(row):
+        return False
+    if any(len(word.text.strip()) > 1 for word in bars):
+        return True
+    return any(not _table_bar(word) for word in row)
+
+
+def _bar_zones(words: list[OcrWord]) -> list[_Zone]:
+    """竖线写在格子文字里，不是单独的词。这样的几行围出一张字形表，整表留下原字。
+
+    竖线常在格子中间。左列，以及夹在中间、没认出竖线的行，都在这张表的纵带里。
+    """
+    table_rows = [row for row in _baseline_rows(words) if _table_row(row)]
+    if len(table_rows) < 2:
+        return []
+    y0 = min(word.rect.y0 for row in table_rows for word in row)
+    y1 = max(word.rect.y1 for row in table_rows for word in row)
+    if y1 - y0 < 24 or y1 - y0 > 220:
+        return []
+    box = pymupdf.Rect()
+    for word in words:
+        cy = (word.rect.y0 + word.rect.y1) / 2
+        if y0 - 4 <= cy <= y1 + 4:
+            box |= word.rect
+    if box.is_empty or box.height > 240:
+        return []
+    return [_Zone(pymupdf.Rect(box.x0 - 6, box.y0 - 4, box.x1 + 8, box.y1 + 4))]
 
 
 def _drawing_zones(page: pymupdf.Page) -> list[_Zone]:
@@ -413,11 +745,13 @@ def _hidden(word: OcrWord, zones: list[_Zone]) -> bool:
     cy = (word.rect.y0 + word.rect.y1) / 2
     short = word.rect.width <= 48 and len(word.text.strip()) <= 8
     for zone in zones:
-        if not (zone.rect.x0 <= cx <= zone.rect.x1 and zone.rect.y0 <= cy <= zone.rect.y1):
-            continue
-        if zone.labels_only and not short:
-            continue
-        return True
+        inside = zone.rect.x0 <= cx <= zone.rect.x1 and zone.rect.y0 <= cy <= zone.rect.y1
+        if inside and (not zone.labels_only or short):
+            return True
+        # 节点标签贴在笔画上方几个点。整句正文比标签长，不挡。
+        if short and not zone.labels_only and zone.rect.x0 - 8 <= cx <= zone.rect.x1 + 8:
+            if zone.rect.y0 - 14 <= cy < zone.rect.y0:
+                return True
     return False
 
 
@@ -436,6 +770,15 @@ def _stands_alone(line: dict[str, Any]) -> bool:
     if _SQL_LINE.match(text):
         return True
     return bool(_NUMBERED_LINE.match(text) and len(text) <= 90)
+
+
+def _footnote_start(line: dict[str, Any]) -> bool:
+    """脚注记号被认成引号或问号。它不是上一段的下一行。"""
+    return bool(_FOOTNOTE_START.match(_span_text(line)))
+
+
+def _example_start(line: dict[str, Any]) -> bool:
+    return bool(_EXAMPLE_START.match(_span_text(line)))
 
 
 def _starts_after_hole(prev: pymupdf.Rect, nxt: pymupdf.Rect) -> bool:
@@ -643,6 +986,10 @@ def _group_lines(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
             if gap > max(prev.height * 0.9, _LINE_GAP) or not _x_aligned(prev, box):
                 continue
             if _stands_alone(prev_line) or _stands_alone(line):
+                continue
+            if _example_start(line) and not _example_start(prev_line):
+                continue
+            if _footnote_start(line) and not _footnote_start(prev_line):
                 continue
             if _starts_after_hole(prev, box) or _returns_past_hole(prev, box):
                 continue

@@ -57,6 +57,9 @@ TEXT_FONT_RE = re.compile(
     r"Takao|Sazanami|Motoya|Yomogi|BIZ |M PLUS|GenShin|GenRyu|NotoSansCJK|NotoSerifCJK", re.I)
 CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
+# 单个字母加句点，像 "a. " 也像换行后的 "Q. The cost"。后者不是列表项。
+_LETTER_BULLET_RE = re.compile(r"^[a-zA-Z][.)]\s+")
+_LIST_INTRO_END = (".", "?", "!", "。", "！", "？", ":", ";", "：", "；")
 # 行首列表标记：符号弹点（可不带空格）、短横线类（须带空格，避免误伤连字符单词）、数字/字母编号
 BULLET_RE = re.compile(r"^\s*(?:[•◦▪‣·○■□►»]\s*|[-–—*]\s+|\d{1,3}[.)]\s+|[a-zA-Z][.)]\s+)")
 # 新段落的开头：大写字母、数字、引号/括号（小写字母开头多半是自动换行的续行）。
@@ -198,8 +201,15 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             and line_size < ref_size * 0.85
             and _prose_units(stripped) >= 4
         )
+        # 撑满的上一行没有句末，下一行的 "Q. " 是换行，不是 "a. " 这种列表项。
+        wrapped_letter = (
+            bool(_LETTER_BULLET_RE.match(stripped))
+            and max_x1 - prect.x1 <= 3 * psize
+            and not ptext.rstrip().endswith(_LIST_INTRO_END)
+        )
+        bullet = bool(BULLET_RE.match(text)) and not wrapped_letter
         if not same_visual_line and not sec_label and (
-            BULLET_RE.match(text) or NO_TEXT_RE.match(stripped) or prev_symbol
+            bullet or NO_TEXT_RE.match(stripped) or prev_symbol
             or hard_break or left_jump or size_drop
         ):
             groups.append(cur)
@@ -4046,7 +4056,8 @@ def _subset_fonts_safe(doc: pymupdf.Document) -> pymupdf.Document:
 
 
 _CN_NUM = r"[0-9零〇一二三四五六七八九十百]+"
-# 模型会把 2.1 写成 第二点一节、四点二，把 8 写成 八,。都从标题开头剥掉，改回原文编号。
+# 模型会把 2.1 写成 第二点一节、四点二、一.三.，把 8 写成 八,。都从标题开头剥掉，改回原文编号。
+_CN_DOT = r"[零〇一二三四五六七八九十]+"
 _TRANS_HEAD_NUM_RE = re.compile(
     r"^(?:"
     r"第" + _CN_NUM + r"点" + _CN_NUM + r"节?"
@@ -4054,6 +4065,7 @@ _TRANS_HEAD_NUM_RE = re.compile(
     r"|第\d+(?:\.\d+)+节?"
     r"|" + _CN_NUM + r"(?:点" + _CN_NUM + r")+"
     r"|第?" + _CN_NUM + r"[章节]"
+    r"|" + _CN_DOT + r"(?:[.．]" + _CN_DOT + r")+\.?"
     r"|" + _CN_NUM + r"\s*[,，、]"
     r"|\d+(?:\.\d+)*\.?[章节]?"
     r")\s*"

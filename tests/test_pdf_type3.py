@@ -9,7 +9,9 @@ from app.formats.pdf import _numbered_list_item
 from app.formats.pdf_type3 import (
     GlyphBox,
     OcrWord,
+    _bar_zones,
     _cluster_drawings,
+    _compose_lines,
     _drop_broken_lines,
     _group_lines,
     _hidden,
@@ -298,6 +300,155 @@ def test_short_numbered_list_item_is_not_a_formula_line():
     assert not _numbered_list_item("(p, ALL, c)")
 
 
+def _glyphs_for(words: list[OcrWord]) -> list[GlyphBox]:
+    return [
+        GlyphBox(word.rect, 10.0, 0, word.rect.y1, 0)
+        for word in words
+    ]
+
+
+def test_formula_hole_stays_in_the_sentence():
+    """公式位图拆开的 where 和 is 仍是一句，空洞是公式槽，乱码不进正文。"""
+    prose = [
+        _word("where", 255, 282, 95, 103),
+        _word("is", 343, 355, 95, 103),
+        _word("the", 360, 380, 95, 103),
+    ]
+    debris = [
+        OcrWord("(p,", pymupdf.Rect(100, 94, 112, 106), 20.0),
+        OcrWord("c),", pymupdf.Rect(240, 95, 251, 106), 30.0),
+        OcrWord("Ngyppiier", pymupdf.Rect(286, 95, 340, 108), 17.0),
+    ]
+    lines = _compose_lines(prose, debris, _glyphs_for([*prose, *debris]))
+    assert len(lines) == 1
+    fonts = [span["font"] for span in lines[0]["spans"]]
+    texts = " ".join(span["text"] for span in lines[0]["spans"])
+    assert "CMMI10" in fonts
+    assert "where" in texts and "is" in texts
+    assert "Ngyppiier" not in texts
+    assert lines[0]["bbox"][0] < 120
+
+
+def test_centered_formula_line_is_left_as_glyphs():
+    """居中的 (year) < (month) 是公式行，不送去翻译。"""
+    words = [
+        _word("(year)", 243, 272, 625, 637),
+        _word("<", 277, 284, 626, 635),
+        _word("(month)", 290, 325, 625, 637),
+        _word("=", 330, 337, 626, 635),
+        _word("(day).", 343, 370, 625, 637),
+    ]
+    assert _compose_lines(words, [], _glyphs_for(words)) == []
+
+
+def test_inline_operator_and_paren_digit_become_formula_slots():
+    """行内的 < 和括号之间的 4 是认错的比较符，收成公式槽，句子留下。"""
+    words = [
+        _word("(part)", 73, 102, 591, 603),
+        _word("4", 107, 113, 592, 603),
+        _word("(customer)", 119, 171, 592, 603),
+        _word("and", 176, 193, 592, 603),
+        _word("(part).", 200, 240, 592, 603),
+    ]
+    lines = _compose_lines(words, [], _glyphs_for(words))
+    assert len(lines) == 1
+    slots = [span for span in lines[0]["spans"] if span["font"] == "CMMI10"]
+    assert len(slots) == 1
+    assert "4" not in " ".join(span["text"] for span in lines[0]["spans"] if span["font"] != "CMMI10")
+
+
+def test_bullet_letter_is_not_the_first_word():
+    """项目符号被认成 e。句子从后面的大写词起翻，e 不送出去。"""
+    words = [
+        _word("e", 88, 96, 464, 474),
+        _word("The", 100, 124, 464, 474),
+        _word("cost", 128, 150, 464, 474),
+    ]
+    lines = _compose_lines(words, [], _glyphs_for(words))
+    text = " ".join(span["text"] for span in lines[0]["spans"])
+    assert text.strip().startswith("The")
+    assert not text.strip().startswith("e ")
+
+
+def test_set_builder_bar_is_not_a_table():
+    """集合记号里单独的竖线不是表。同一基线上有等号和大括号就不成区。"""
+    words = [
+        _word("descendant(a)", 239, 306, 215, 226),
+        _word("=", 311, 318, 219, 222),
+        _word("{b", 323, 332, 215, 226),
+        _word("|", 337, 338, 215, 226),
+        _word("a}", 362, 372, 215, 226),
+        _word("nezt(a)", 217, 251, 272, 283),
+        _word("=", 257, 263, 276, 279),
+        _word("{b", 268, 277, 272, 283),
+        _word("|", 282, 283, 272, 283),
+        _word("6}", 385, 394, 272, 283),
+        _word("Note", 72, 94, 236, 243),
+    ]
+    assert _bar_zones(words) == []
+
+
+def test_bar_zone_covers_the_left_column():
+    """竖线在格子中间时，左列和没认出竖线的中间行也留下原字。表注在带外。"""
+    words = [
+        _word("|", 360, 366, 559, 573),
+        _word("Source", 110, 141, 559, 572),
+        _word("Size", 338, 356, 561, 569),
+        _word("|", 427, 431, 576, 588),
+        _word("From", 110, 134, 578, 585),
+        _word("10,000", 327, 356, 591, 601),
+        _word("|", 304, 308, 616, 629),
+        _word("From", 110, 134, 618, 626),
+        _word("Figure 5: Growth", 166, 445, 652, 663),
+    ]
+    zones = _bar_zones(words)
+    assert len(zones) == 1
+    assert _hidden(words[1], zones)
+    assert _hidden(words[5], zones)
+    assert not _hidden(words[-1], zones)
+
+
+def test_bar_glyphs_cover_the_table_not_the_caption():
+    """竖线粘在格子文字里时，整表留下，表注不在带里。"""
+    words = [
+        _word("Size | Time", 300, 420, 559, 570),
+        _word("2.07 | not", 390, 470, 576, 587),
+        _word("customer) | 6,000,000", 110, 357, 615, 626),
+        _word("Source", 110, 150, 559, 570),
+        _word("Figure 5: Growth", 166, 445, 652, 663),
+    ]
+    zones = _bar_zones(words)
+    assert len(zones) == 1
+    assert _hidden(words[3], zones)
+    assert not _hidden(words[4], zones)
+
+
+def test_example_and_footnote_do_not_join_the_paragraph():
+    """EXAMPLE 和脚注各自起段。脚注的下一行仍接在脚注上。"""
+    body = _line("we only need the assumptions that", 72, 646, 343, 657)
+    example = _line("EXAMPLE 2.1 The hypercube of Fig. 1", 72, 374, 540, 386)
+    rest = _line("Section 1.2.", 72, 388, 127, 397)
+    note = _line('"Here we disregard the number of index nodes accessed.', 85, 702, 310, 712)
+    follow = _line("cubes are sparse: only a small fraction", 71, 714, 540, 724)
+    groups = _group_lines([body, example, rest, note, follow])
+    texts = [" ".join(span["text"] for line in group for span in line["spans"]) for group in groups]
+    assert any(text.startswith("EXAMPLE 2.1") and "Section 1.2." in text for text in texts)
+    assert all("assumptions" not in text or "EXAMPLE" not in text for text in texts)
+    assert any(text.startswith('"Here') and "sparse" in text for text in texts)
+    assert all("assumptions" not in text or "sparse" not in text for text in texts)
+
+
+def test_label_just_above_a_figure_stays_a_glyph():
+    """节点名贴在笔画上方几个点，仍留下原字。下面的图注不挡。"""
+    from app.formats.pdf_type3 import _Zone
+
+    zone = _Zone(pymupdf.Rect(263, 154, 362, 239))
+    day = _word("Day", 301, 321, 148, 159)
+    caption = _word("Hierarchy", 263, 309, 264, 275)
+    assert _hidden(day, [zone])
+    assert not _hidden(caption, [zone])
+
+
 def test_close_ink_sizes_in_one_paragraph_snap():
     """同一段墨迹差一号，不能因此在送翻文本里插入字号标记。"""
     groups = _group_lines([
@@ -354,3 +505,29 @@ def test_type3_leaves_figures_tables_and_formula_bitmaps():
     assert any("greedy" in text for text in texts)
     assert all("100 KY" not in text for text in texts)
     assert not any("Selection" in text and "Benefit" in text for text in texts)
+
+
+@pytest.mark.skipif(PAPER is None, reason="样例论文不在仓库里")
+@pytest.mark.skipif(shutil.which("tesseract") is None, reason="本机没有 tesseract")
+def test_type3_keeps_formula_slots_and_glyph_tables():
+    """行内公式空洞留在原句里，居中公式、节点名和字形表不重排。"""
+    assert PAPER is not None
+    src = pymupdf.open(PAPER)
+    doc = pymupdf.open()
+    for pno in (2, 4, 5, 6, 7, 9, 10, 11):
+        doc.insert_pdf(src, from_page=pno, to_page=pno)
+    blocks = extract_blocks(doc)
+    texts = [block.text for block in blocks]
+    suppliers = next(text for text in texts if "number of suppliers" in text)
+    assert "where" in suppliers
+    assert "Ngupplier" not in suppliers
+    assert all("(year) <" not in text and "(month) =" not in text for text in texts)
+    assert all(text.strip() != "Day" for text in texts)
+    assert any(text.startswith("Figure 2") for text in texts)
+    assert any("Figure 5" in text for text in texts)
+    assert all("From cell itself" not in text for text in texts)
+    assert all(not text.strip().startswith("e ") for text in texts)
+    greedy = next(text for text in texts if "space cost is the number of rows" in text)
+    assert "be the cost of view" in greedy
+    assert any(text.strip().startswith("EXAMPLE") for text in texts)
+    assert any(text.strip().startswith("1.3") for text in texts)
