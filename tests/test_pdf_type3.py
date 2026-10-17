@@ -403,6 +403,18 @@ def test_formula_hole_stays_in_the_sentence():
     assert lines[0]["bbox"][0] < 120
 
 
+def test_formula_between_words_spans_the_whole_gap():
+    """点阵字框比墨迹偏右几个点：where 和 is 之间的 N_supplier 只有 supplier 的字框落在空洞里。
+    公式槽取两词之间的整段，N 不能被切掉。"""
+    from app.formats.pdf_type3 import _formula_between
+
+    where = _word("where", 255.0, 282.3, 95.0, 103.0)
+    is_ = _word("is", 343.7, 350.3, 95.3, 103.0)
+    glyphs = [GlyphBox(pymupdf.Rect(295.2, 92.2, 335.2, 107.5), 10.0, 0, 101.0, 0, "H")]
+    piece = _formula_between(where, is_, [], glyphs)
+    assert piece is not None and piece.kind == "formula"
+    assert piece.rect.x0 < 286 and piece.rect.x1 > 340
+
 def test_centered_formula_line_is_left_as_glyphs():
     """居中的 (year) < (month) 是公式行，不送去翻译。"""
     words = [
