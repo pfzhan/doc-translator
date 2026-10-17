@@ -1,97 +1,105 @@
 """Type3 点阵字没有 Unicode 时，按字形把字母认回来。
 
-旧版 Ghostscript 把每个字画成位图，编码名是 /a0、/a1，没有 ToUnicode。
-提取出来的是字符码，不是页面上的字母。整页用 tesseract 认字形，再按词重新组行。
-点阵字的行框和词对不齐，词心会落在碎片之间，所以不能把词填回旧行框。
+旧版 Ghostscript 把每个字画成一张位图，编码名是 /a0、/a1，没有 ToUnicode，提出来的是字符码。
+同一个字符码在整份文档里画的是同一张位图。整份文档先用 tesseract 认一遍，把认出的字母按位置
+对到位图上投票，就知道每张位图是哪个字母。文字层再按位图重建：位置和大小取 d1 给的位图框，
+词距看墨迹间隔。OCR 词框的漂移、漏词、个别认错都不再进译文。
 
-公式位图会被认成乱码。并进下一句后，写入框盖住公式，译文再压到下一段。
-这类词收成行内占位符，原字形贴回去，句子不再从公式处拆开。居中的公式行、
-矢量格子上的节点标签，以及用竖线字形画出的表，留下原字，不重排。
-同一页正文用一个字号。缩进的伪代码不揉进正文。
+数学斜体的 a、v、S 只单独出现，从不进单词；数学符号各次认得不一样。这两类写成数学字体，
+上下标按实际大小和位置写出。后面的公式占位、分段和普通 TeX PDF 走同一套逻辑。
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
+import statistics
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+import numpy as np
 import pymupdf
 
 _CUSTOM_NAME = re.compile(r"^[A-Za-z]\d+$")
-_SECTION_NO = re.compile(r"\d+(?:\.\d+)*\.?")
-_NUMBERED_LINE = re.compile(r"^\d+(?:\.\d+)*[.,]?\s+\S")
-# 编号后面跟着像样的标题词才是编号行。公式行开头的 ≥ 常被认成 2，后面是 RAR 这种碎片
-_NUMBERED_TITLE = re.compile(r"^\d+(?:\.\d+)*[.,]?\s+[A-Z][a-z]{3,}")
-_SQL_LINE = re.compile(r"^(?:SELECT|FROM|WHERE|GROUP|ORDER|HAVING|INSERT|UPDATE|DELETE)\b")
-_PIPE_TEXT = re.compile(r"^[|¦│]+$")
-_GARBAGE_MARK = set("®∑∏√∞≤≥∈≈≠±×÷@#$^~\\¢£¥§")
-# 弯引号和破折号是正文。单独一个破折号不能当成公式乱码丢掉，否则这一句从中间裂开。
-_KEEP_MARK = set("‘’“”–—−‐‑‒")
-# 矢量笔画靠得这么近，就是同一张图，不是页边的一根线。
-_CLUSTER_GAP = 18.0
-_ZONE_PAD_X = 16.0
-_ZONE_PAD_TOP = 6.0
-_ZONE_PAD_BOTTOM = 16.0
-_MIN_CLUSTER = 3
-_MIN_ZONE_AREA = 2000.0
-# 公式位图的词置信度很低。节号偶尔也低，不能一起丢掉。
-_NOISE_CONF = 40.0
-# 低于这个置信度的词基本都是公式字形认出来的乱码（rains、iro、Tag 都在 25 上下），正文词很少这么低
-_JUNK_CONF = 30.0
-# 认得很有把握的词：正文字体靠它们来认
-_CONFIDENT_CONF = 90.0
-# 词底下数学字体占到这个比例才算公式。贴着公式的 to、if 只占一半
-_MATH_FONT_SHARE = 0.8
-# 低于这个置信度、又贴着公式的短词当公式碎片（aj 47、ag 75、Di 46、Say 55）
-_WEAK_CONF = 80.0
-# 单独一个比较符是点阵公式，不是正文里的小于号。
-_OPERATOR = re.compile(r"^[=<>≤≥≠≈∈∉⊂⊃±×÷&]$")
-_BULLET_WORD = re.compile(r"^[eco*•·]$")
-_DISPLAY_MARK = re.compile(r"[=<>≤≥≠≈∈∉]|[{}]")
-_CAPTION_START = re.compile(r"^(?:Figure|Fig\.?|Table|EXAMPLE|Example)\b")
-_FOOTNOTE_START = re.compile(r"""^["“”?]\s*[A-Za-z]""")
-# 例题标题：全大写的 EXAMPLE 2.1，或 Example 2.1 后面紧跟大写开头的句子。
-# 「For instance, in / Example 1.1, we can」是句子换行，不能断开
-_EXAMPLE_START = re.compile(r"^EXAMPLE\b|^Example\s+\d+(?:\.\d+)*\.?\s+[A-Z]")
-_LETTER_ITEM = re.compile(r"^\([a-zA-Z]\)\s")
-# 缩进的伪代码。正文从栏左缘起笔，不在这里。
-_LISTING_LINE = re.compile(
-    r"(?:"
-    r"end;"
-    r"|for\b.+\bdo\b.*\bbegin\b"
-    r"|select that view\b.+"
-    r"|resulting\b.+\bselection;?"
-    r"|[A-Za-z]\s*=\s*\{.+"
-    r"|[A-Za-z]\s*=\s*S\b.+"
-    r")$",
-    re.I,
-)
-_LISTING_X = 95.0
-# 下标被认成 B,,、a;、6;。单个逗号是 S,、is,，不能收成公式。
-_BROKEN_SUB = re.compile(r"^(?:[A-Za-z]{1,2}[,;]{2,}|[A-Za-z]{1,2};|\d;)$")
-_BAR_CHAR = re.compile(r"[|¦│]")
-# 公式槽用数学字体，后面的占位符才会把这块裁成图贴回去。
-_FORMULA_FONT = "CMMI10"
-_FORMULA_MARK = "×"
-# 公式空洞比栏沟窄。再宽就是两栏，不能从中间接上。
-_HOLE_LIMIT = 160.0
-_LEAD_LIMIT = 180.0
-# 坏字体占这一页文字的比例。零星符号字体不整页重认。
+# 坏字体占这一页文字的比例。零星符号字体不整页重建。
 _BROKEN_SHARE = 0.4
 _MIN_BROKEN_CHARS = 20
 _OCR_SCALE = 3.0
-_MIN_CONF = 15.0
-# 词心和点阵字框中心最多差这么多，仍算同一行。正文行距大约 12pt。
-_BAND = 8.0
-_X_SLACK = 2.0
-# 行距内的下一行并进同一块。更大的空隙是标题、署名或新的一节。
-_LINE_GAP = 8.0
+_OCR_TIMEOUT = 90
+# 认得一致的比例。低于它的字形各次认得不一样，是数学符号或数学斜体。
+_SURE = 0.8
+# 一页的字形里有这么多认出了字母，这一页才重建。否则留下原字形。
+_READABLE = 0.8
+# 一个字形有四分之一以上出现在单词里，它就是正文字母
+_IN_WORD = 0.25
+# 词距以 x 高计：0.4 以内是字距，0.6 以上是空格。中间这一档两种都有，
+# 按这一行的字距和词距分，这一行没有明显的词距时听 OCR 分词的
+_TIGHT = 0.4
+_WIDE = 0.6
+# 同一行里最大的横向空隙，以字号计。撑开的词距也不到半个字号，再宽是并排的署名、另一栏或表格的另一列
+_RUN_GAP = 1.6
+# 比本行字号小这么多的是上下标。字号不小、基线却偏开这么多（以字号计）的也是
+_SCRIPT = 0.8
+_SHIFT = 0.18
+# 同一个字母的两张位图像到这个程度，就是同一种字体
+_SAME_SHAPE = 0.85
+_SAME_MARK = 0.5
+# 实心圆点的墨迹占满框的七成以上，字母不到一半
+_FILLED = 0.65
+_SHAPE_DPI = 600
+_SHAPE_GRID = 16
+# 基线距在这么多个字号以内的下一行并进同一块。TeX 的行距是 1.2 个字号，行内公式撑高时再多一点
+_LEADING = 1.6
+_MATH_SYMBOLS = set("<>=+|{}^~*∑∏√∞≤≥≠≈∈∉⊂⊃±×÷→←")
+_SENTENCE_MARKS = set(".,;:")
+_OPERATORS = set("=<>+-−–—≤≥≠×")
+_TRAILING_MARKS = set(",.;:)")
+# 节号、编号、年份这样的数
+_NUMBER = re.compile(r"\(?\d+(?:\.\d+)*[.:,)]?")
+_LIGATURES = {"ﬁ": "fi", "ﬂ": "fl", "ﬀ": "ff", "ﬃ": "ffi", "ﬄ": "ffl"}
+# 等宽字格宽的下限，以字号计。等宽字是 0.525；正文词里字距最匀的（each、latter）不到 0.48
+_MONO_PITCH = 0.5
+# 英文里单独成词的大写字母
+_LETTER_WORDS = {"A", "I"}
+# 正文字体里很窄的字（0.28 个字号上下）。等宽字体里它们也占满一格
+_NARROW = set("iljI.,;:’'!|")
+# 各类字母的墨迹高度占字号的比例（Computer Modern、Times 都差不多）
+_X_LETTERS = set("acemnorsuvwxz")
+_TALL_LETTERS = set("bdhkl") | set("ABCDEFGHIKLMNOPRSTUVWXYZ") | set("0123456789")
+_DESCENDERS = set("gpqy")
+_UNSTEADY = set("fjJQ")
+_HEIGHT_RATIO = {"x": 0.45, "tall": 0.69, "desc": 0.64, "i": 0.67, "t": 0.62}
+# 各类字母的字心在基线以上多高
+_CENTER_RATIO = {"x": 0.225, "tall": 0.345, "desc": 0.13, "i": 0.335, "t": 0.31}
+_QUOTES = set("‘’“”'\"`")
+_DASHES = set("-–—−~")
+# 减号的墨迹宽度（以字号计）。短横 0.5，长破折号 1.0，连字符 0.3
+_MINUS_WIDTH = (0.55, 0.8)
+_TEXT_FONT = "Times-Roman"
+_MONO_FONT = "Courier"
+_MATH_FONT = "CMMI10"
+_SYMBOL_FONT = "CMSY10"
 # PyMuPDF get_text("dict") 的结构。字段随版本变化，只在这层进出。
 PageData = dict[str, Any]
+Key = tuple[int, int]
+# 细线：\_ 的下划线、行内分数线。比 30pt 长的是表格线、脚注线
+_RULE: Key = (-2, 0)
+_RULE_HEIGHT = 1.2
+_RULE_LENGTH = 30.0
+_PAD = 0.6
+
+
+@dataclass(frozen=True)
+class OcrChar:
+    text: str
+    rect: pymupdf.Rect
+    conf: float
 
 
 @dataclass(frozen=True)
@@ -99,101 +107,108 @@ class OcrWord:
     text: str
     rect: pymupdf.Rect
     conf: float
+    chars: tuple[OcrChar, ...] = ()
 
 
 @dataclass(frozen=True)
-class _Zone:
-    """labels_only 只挡短标签。整句正文可以穿过，表和图则整块留下。"""
+class Glyph:
+    """页面上画出来的一个字形。key 是（字体 xref，字符码），rect 是位图的墨迹框。"""
 
+    key: Key
     rect: pymupdf.Rect
-    labels_only: bool = False
+    color: int = 0
 
 
 @dataclass(frozen=True)
-class _Piece:
-    """一行里的一段：正文词，或公式空洞。"""
-
-    kind: str
+class Label:
     text: str
-    rect: pymupdf.Rect
+    agreement: float
 
 
-@dataclass(frozen=True)
-class GlyphBox:
-    """丢弃字符码之前留下的点阵字框，用来对上认出来的词，并取颜色和基线。"""
-
-    rect: pymupdf.Rect
-    em: float
-    color: int
-    origin_y: float
-    flags: int
-    font: str = ""
-
-
-def visual_em(span: dict[str, Any]) -> float:
-    """点阵字报出来的 size 是缩放系数，不是磅值。用字框高度换回一个参考磅值。"""
-    size = float(span.get("size") or 0)
-    ascender = float(span.get("ascender") or 0)
-    descender = float(span.get("descender") or 0)
-    if 0 < size < 1.5 and ascender > 2:
-        box = size * (ascender - descender) if descender < 0 else size * ascender
-        return round(min(max(box * 0.72, 6.0), 36.0), 1)
-    return round(size, 1) if size else 0.0
+@dataclass
+class _Line:
+    glyphs: list[Glyph]
+    tokens: list[list[Glyph]] = field(default_factory=list)
+    baseline: float = 0.0
+    xheight: float = 0.0
+    size: float = 0.0
 
 
 def broken_type3_names(doc: pymupdf.Document, page: pymupdf.Page) -> set[str]:
     """没有 ToUnicode、字形名又是 /a0 这种自造名的 Type3 字体。"""
-    names: set[str] = set()
+    return set(_broken_fonts(doc, page).values())
+
+
+def _broken_fonts(doc: pymupdf.Document, page: pymupdf.Page) -> dict[int, str]:
+    found: dict[int, str] = {}
     for xref, _ext, subtype, name, _ref, _encoding in page.get_fonts():
-        if subtype != "Type3" or not name or not _custom_encoding(doc, xref):
-            continue
-        names.add(name)
-    return names
+        if subtype == "Type3" and name and _custom_encoding(doc, xref):
+            found[xref] = name
+    return found
 
 
-def segment_ocr_words(words: list[OcrWord]) -> list[list[OcrWord]]:
-    """先按基线分成行，行内空隙明显大于词距时再切开。
+class Type3Reader:
+    """一份文档里的点阵字。第一次用到时整份认一遍，之后逐页给出重建好的行。"""
 
-    点阵字的行框和真正的词对不齐，词心会落在碎片之间。按认出来的词重新组行。
-    """
-    if not words:
-        return []
-    ordered = sorted(words, key=lambda word: ((word.rect.y0 + word.rect.y1) / 2, word.rect.x0))
-    lines: list[list[OcrWord]] = []
-    for word in ordered:
-        cy = (word.rect.y0 + word.rect.y1) / 2
-        if lines:
-            last = lines[-1]
-            ly = sum((item.rect.y0 + item.rect.y1) / 2 for item in last) / len(last)
-            limit = max(word.rect.height, last[0].rect.height, 8.0) * 0.55
-            if abs(cy - ly) <= limit:
-                last.append(word)
+    def __init__(self, doc: pymupdf.Document):
+        self.doc = doc
+        self._lines: dict[int, list[_Line]] | None = None
+        self.labels: dict[Key, Label] = {}
+        self.roles: dict[Key, str] = {}
+        self.mono: dict[Key, float] = {}
+        self.doubtful: set[Key] = set()
+
+    def lines(self, pno: int) -> list[_Line] | None:
+        if self._lines is None:
+            self._lines = self._read()
+        return self._lines.get(pno)
+
+    def _read(self) -> dict[int, list[_Line]]:
+        shapes: dict[int, dict[int, tuple[float, float, float, float]]] = {}
+        pages: dict[int, list[tuple[Key, float, float, float, int]]] = {}
+        for page in self.doc:
+            fonts = _broken_fonts(self.doc, page)
+            if not fonts:
                 continue
-        lines.append([word])
-    segments: list[list[OcrWord]] = []
-    for line in lines:
-        line.sort(key=lambda word: word.rect.x0)
-        current = [line[0]]
-        for prev, word in zip(line, line[1:]):
-            gap = word.rect.x0 - prev.rect.x1
-            # 节号和标题之间常空出 15–20pt。署名和栏沟更大，仍切开。
-            if _lone_section_number(current) and gap <= 22.0:
-                current.append(word)
-            elif gap > max(prev.rect.height * 1.1, 12.0):
-                segments.append(current)
-                current = [word]
-            else:
-                current.append(word)
-        segments.append(current)
-    return segments
+            for xref in fonts:
+                if xref not in shapes:
+                    shapes[xref] = _font_shapes(self.doc, xref)
+            placed = _placed_codes(page, {name: xref for xref, name in fonts.items()}, shapes)
+            if len(placed) >= _MIN_BROKEN_CHARS:
+                pages[page.number] = placed
+        if not pages:
+            return {}
+        flip = _y_flip(self.doc, pages, shapes)
+        glyphs = {
+            pno: [_glyph(key, x, y, size, color, shapes, flip) for key, x, y, size, color in placed]
+            for pno, placed in pages.items()
+        }
+        words = _ocr_pages(self.doc, list(glyphs))
+        self.labels = _vote_labels(glyphs, words)
+        # \_ 和行内分数线是细线，老 Ghostscript 画成小图片。它们是这一行的一部分
+        self.labels[_RULE] = Label("_", 1.0)
+        for pno, items in glyphs.items():
+            items.extend(Glyph(_RULE, rect) for rect in _rules(self.doc[pno]))
+        owners = {pno: _word_owners(items, words.get(pno, [])) for pno, items in glyphs.items()}
+        lines = {pno: _build_lines(items, self.labels, owners[pno]) for pno, items in glyphs.items()}
+        self.roles, self.doubtful = _learn_roles(lines, self.labels, lambda keys: _glyph_shapes(self.doc, glyphs, keys))
+        self.mono = _mono_kinds(lines, self.labels)
+        for key in _bullets(lines, self.labels, lambda keys: _ink_share(self.doc, glyphs, keys)):
+            self.labels[key] = Label("•", 1.0)
+            self.roles[key] = "text"
+        bearings = _bearings(lines, self.labels)
+        # 等宽字的空格是一整格空白，字距本身也宽；f 的钩子伸进右边的空白。
+        # 认出等宽字形、量出各字形的边距以后重新分词
+        for pno, page_lines in lines.items():
+            for line in page_lines:
+                line.tokens = _tokens(line, self.labels, owners[pno], self.mono, bearings)
+        return {pno: page_lines for pno, page_lines in lines.items() if _readable(glyphs[pno], self.labels)}
 
 
-def recover_type3_page(page: pymupdf.Page, data: PageData) -> bool:
-    """这一页大部分是自造编码的点阵字时，用认出来的行换掉字符码。
+def recover_type3_page(page: pymupdf.Page, data: PageData, reader: Type3Reader | None = None) -> bool:
+    """这一页大部分是自造编码的点阵字时，用认出来的文字层换掉字符码。
 
-    旧行框盖不住词，所以按字形重新组行。擦除用墨迹框：字框比墨迹高，
-    扩进去会压到下一行。没对上点阵的词留下，避免把正常字体再认一遍。
-    这一页识别超时或认不出正文时，只去掉字符码，点阵字留在原页，不让整本书失败。
+    认不出来的页（识别超时、字形大多没认出字母）只去掉字符码，点阵字留在原页，不让整本书失败。
     """
     doc = page.parent
     if doc is None or "blocks" not in data:
@@ -201,971 +216,1137 @@ def recover_type3_page(page: pymupdf.Page, data: PageData) -> bool:
     names = broken_type3_names(doc, page)
     if not names or _broken_share(data, names) < _BROKEN_SHARE:
         return False
-    try:
-        words = ocr_page(page)
-    except subprocess.TimeoutExpired:
-        _drop_broken_lines(data, names)
-        return False
-    zones = [*_drawing_zones(page), *_pipe_zones(words), *_bar_zones(words)]
-    zones.extend(_label_zones(words, zones))
-    visible = [word for word in words if not _hidden(word, zones)]
-    originals = _broken_lines(data, names)
-    math = _math_font_words(visible, originals, _glyph_origins(page, names))
-    math |= {id(word) for word in visible if _formula_token(word)}
-    prose = _without_noise(visible)
-    kept = {id(word) for word in prose}
-    debris = [word for word in visible if id(word) not in kept]
+    reader = reader or Type3Reader(doc)
+    lines = reader.lines(page.number)
     _drop_broken_lines(data, names)
-    math_rects = {tuple(word.rect) for word in prose if id(word) in math}
-    weak_rects = {tuple(word.rect) for word in prose if _weak_token(word)}
-    rebuilt = _compose_lines(prose, debris, originals, math_rects, weak_rects, _InkMap(page))
-    if not rebuilt:
+    if not lines:
         return False
-    _snap_page_sizes(rebuilt)
-    for group in _group_lines(rebuilt):
+    built = [line for line in (_line_dict(line, reader) for line in lines) if line is not None]
+    if not built:
+        return False
+    for group in _group_lines(built):
         data["blocks"].append({"type": 0, "bbox": _union_bbox(group), "lines": group})
     return True
 
 
-def ocr_page(page: pymupdf.Page, scale: float = _OCR_SCALE) -> list[OcrWord]:
+# ---- 字体和字形位置 ----
+
+
+def _font_shapes(doc: pymupdf.Document, xref: int) -> dict[int, tuple[float, float, float, float]]:
+    """画了东西的字形在字形空间里的框（已乘 FontMatrix）。只推进笔位的空字形不收。"""
+    matrix = _numbers(doc.xref_get_key(xref, "FontMatrix")[1]) or [0.001, 0, 0, 0.001, 0, 0]
+    font_box = _numbers(doc.xref_get_key(xref, "FontBBox")[1]) or [0, 0, 1000, 1000]
+    procs = dict(re.findall(r"/([^\s/<>\[\]()]+)\s+(\d+)\s+0\s+R", doc.xref_get_key(xref, "CharProcs")[1]))
+    shapes: dict[int, tuple[float, float, float, float]] = {}
+    for code, name in _encoding_names(doc, xref).items():
+        proc = procs.get(name)
+        if proc is None:
+            continue
+        stream = doc.xref_stream(int(proc)) or b""
+        found = re.search(rb"\bd([01])\b", stream)
+        if found is None or not stream[found.end():].strip():
+            continue
+        head = _numbers(stream[:found.start()].decode("latin-1"))
+        box = head[2:6] if found.group(1) == b"1" and len(head) >= 6 else font_box[:4]
+        scale_x, scale_y = matrix[0], matrix[3]
+        x0, x1 = sorted((box[0] * scale_x, box[2] * scale_x))
+        y0, y1 = sorted((box[1] * scale_y, box[3] * scale_y))
+        shapes[code] = (x0, y0, x1, y1)
+    return shapes
+
+
+def _encoding_names(doc: pymupdf.Document, xref: int) -> dict[int, str]:
+    kind, value = doc.xref_get_key(xref, "Encoding")
+    source = doc.xref_object(int(value.split()[0])) if kind == "xref" else value
+    found = re.search(r"/Differences\s*\[(.*?)\]", source, re.S)
+    names: dict[int, str] = {}
+    if found is None:
+        return names
+    code = 0
+    # 名字之间可以不留空格：[65/a0/a1]
+    for token in re.findall(r"/[^\s/\[\]<>()]+|\d+", found.group(1)):
+        if token.isdigit():
+            code = int(token)
+        else:
+            names[code] = token[1:]
+            code += 1
+    return names
+
+
+def _numbers(raw: str) -> list[float]:
+    """PDF 的数可以省掉整数部分：.001。"""
+    return [float(item) for item in re.findall(r"[-+]?(?:\d+\.?\d*|\.\d+)", raw)]
+
+
+def _placed_codes(
+    page: pymupdf.Page, fonts: dict[str, int], shapes: dict[int, dict[int, tuple[float, float, float, float]]],
+) -> list[tuple[Key, float, float, float, int]]:
+    """按内容流顺序列出画了东西的字形：(key, 起笔 x, 起笔 y, 字号, 颜色)。
+
+    get_text 会丢掉和前一个字同位置的零宽字形，texttrace 不丢。
+    """
+    placed: list[tuple[Key, float, float, float, int]] = []
+    for span in page.get_texttrace():
+        xref = fonts.get(str(span.get("font")))
+        if xref is None or abs(span["dir"][1]) > 0.01:
+            continue
+        drawn = shapes.get(xref, {})
+        color = _rgb(span.get("color"))
+        for char in span["chars"]:
+            if char[1] in drawn:
+                placed.append(((xref, char[1]), char[2][0], char[2][1], float(span["size"]), color))
+    return placed
+
+
+def _glyph(
+    key: Key, x: float, y: float, size: float, color: int,
+    shapes: dict[int, dict[int, tuple[float, float, float, float]]], flip: bool,
+) -> Glyph:
+    x0, y0, x1, y1 = shapes[key[0]][key[1]]
+    if flip:
+        rect = pymupdf.Rect(x + x0 * size, y + y0 * size, x + x1 * size, y + y1 * size)
+    else:
+        rect = pymupdf.Rect(x + x0 * size, y - y1 * size, x + x1 * size, y - y0 * size)
+    return Glyph(key, rect, color)
+
+
+def _y_flip(
+    doc: pymupdf.Document, pages: dict[int, list[tuple[Key, float, float, float, int]]],
+    shapes: dict[int, dict[int, tuple[float, float, float, float]]],
+) -> bool:
+    """字形空间朝上还是朝下。Ghostscript 的点阵字用倒置的 Tm，字形往起笔点下方画。
+
+    PyMuPDF 不给出文字矩阵，两种都摆一遍，看哪种盖住页面上的墨迹。
+    """
+    pno = max(pages, key=lambda number: len(pages[number]))
+    pix = doc[pno].get_pixmap(dpi=36, colorspace=pymupdf.csGRAY, alpha=False)
+    scale = 36 / 72
+
+    def covered(flip: bool) -> int:
+        mask = bytearray(pix.width * pix.height)
+        for key, x, y, size, color in pages[pno]:
+            rect = _glyph(key, x, y, size, color, shapes, flip).rect
+            left, right = max(int(rect.x0 * scale), 0), min(int(rect.x1 * scale) + 1, pix.width)
+            for row in range(max(int(rect.y0 * scale), 0), min(int(rect.y1 * scale) + 1, pix.height)):
+                mask[row * pix.width + left: row * pix.width + right] = b"\x01" * max(right - left, 0)
+        return sum(1 for hit, value in zip(mask, pix.samples) if hit and value < 128)
+
+    return covered(True) > covered(False)
+
+
+def _rules(page: pymupdf.Page) -> list[pymupdf.Rect]:
+    """行内的短横线，画成图片的和画成矢量的都算。"""
+    rects = [pymupdf.Rect(info["bbox"]) for info in page.get_image_info()]
+    try:
+        rects.extend(pymupdf.Rect(drawing["rect"]) for drawing in page.get_drawings())
+    except Exception:  # noqa: BLE001 - 个别页面的矢量读不出来，当没有
+        pass
+    return [rect for rect in rects if rect.height <= _RULE_HEIGHT and 1.5 <= rect.width <= _RULE_LENGTH]
+
+
+def _rgb(color: object) -> int:
+    if not isinstance(color, (tuple, list)) or len(color) < 3:
+        return 0
+    red, green, blue = (min(max(int(float(part) * 255 + 0.5), 0), 255) for part in color[:3])
+    return (red << 16) | (green << 8) | blue
+
+
+# ---- 认字 ----
+
+
+def _ocr_pages(doc: pymupdf.Document, numbers: list[int]) -> dict[int, list[OcrWord]]:
+    """整份文档一起认。渲染在主线程，tesseract 并行跑。某一页超时就不给这页投票。"""
+    if shutil.which("tesseract") is None:
+        raise ValueError("这份 PDF 的文字是没有 Unicode 的点阵字，需要安装 tesseract 才能读出原文")
+    with tempfile.TemporaryDirectory(prefix="type3-") as tmp:
+        paths: dict[int, Path] = {}
+        for pno in numbers:
+            path = Path(tmp) / f"p{pno}.png"
+            doc[pno].get_pixmap(matrix=pymupdf.Matrix(_OCR_SCALE, _OCR_SCALE), alpha=False).save(path)
+            paths[pno] = path
+
+        def read(pno: int) -> list[OcrWord]:
+            try:
+                return ocr_image(paths[pno])
+            except subprocess.TimeoutExpired:
+                return []
+
+        workers = max(1, min(4, os.cpu_count() or 1, len(numbers)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return dict(zip(numbers, pool.map(read, numbers)))
+
+
+def ocr_image(path: Path, scale: float = _OCR_SCALE) -> list[OcrWord]:
     exe = shutil.which("tesseract")
     if exe is None:
-        raise ValueError("这份 PDF 的文字是没有 Unicode 的点阵字，需要安装 tesseract 才能读出原文")
-    pix = page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False)
-    path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as handle:
-            path = Path(handle.name)
-        pix.save(path)
-        proc = subprocess.run(
-            [exe, str(path), "stdout", "--psm", "3", "-l", "eng", "tsv"],
-            capture_output=True, text=True, timeout=90, check=False,
-        )
-        if not proc.stdout.strip():
-            proc = subprocess.run(
-                [exe, str(path), "stdout", "--psm", "3", "tsv"],
-                capture_output=True, text=True, timeout=90, check=False,
-            )
-    finally:
-        if path is not None:
-            path.unlink(missing_ok=True)
-    if not proc.stdout.strip():
+        return []
+    env = {**os.environ, "OMP_THREAD_LIMIT": "1"}
+    proc = subprocess.run(
+        [exe, str(path), "stdout", "--psm", "3", "-l", "eng", "-c", "hocr_char_boxes=1", "hocr"],
+        capture_output=True, text=True, timeout=_OCR_TIMEOUT, check=False, env=env,
+    )
+    if proc.returncode != 0 and "traineddata" in proc.stderr:
         raise ValueError("点阵字页面没有认出文字。请确认 tesseract 的英文语言包已安装")
-    return _parse_tsv(proc.stdout, scale)
+    parser = _HocrWords(scale)
+    parser.feed(proc.stdout)
+    return parser.words
 
 
-def _without_noise(words: list[OcrWord]) -> list[OcrWord]:
-    """丢掉公式位图认出来的乱码，以及贴在乱码旁边的短标点。正文和节号留下。"""
-    noise = [word for word in words if _is_noise(word)]
-    if not noise:
-        return list(words)
-    kept: list[OcrWord] = []
-    for word in words:
-        if _is_noise(word) or _glued_to_noise(word, noise):
-            continue
-        kept.append(word)
-    return kept
+class _HocrWords(HTMLParser):
+    """hOCR 里的词和逐字框。字框和置信度在 ocrx_cinfo 上。"""
+
+    def __init__(self, scale: float):
+        super().__init__()
+        self.scale = scale
+        self.words: list[OcrWord] = []
+        self._stack: list[str] = []
+        self._word: tuple[pymupdf.Rect, float] | None = None
+        self._chars: list[OcrChar] = []
+        self._char: tuple[pymupdf.Rect, float] | None = None
+        self._text = ""
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag != "span":
+            return
+        info = dict(attrs)
+        kind = info.get("class") or ""
+        title = info.get("title") or ""
+        self._stack.append(kind)
+        if kind == "ocrx_word":
+            box = re.search(r"bbox (\d+) (\d+) (\d+) (\d+)", title)
+            conf = re.search(r"x_wconf ([\d.]+)", title)
+            self._word = (self._rect(box), float(conf.group(1)) if conf else 0.0) if box else None
+            self._chars = []
+        elif kind == "ocrx_cinfo":
+            box = re.search(r"x_bboxes (\d+) (\d+) (\d+) (\d+)", title)
+            conf = re.search(r"x_conf ([\d.]+)", title)
+            self._char = (self._rect(box), float(conf.group(1)) if conf else 0.0) if box else None
+            self._text = ""
+
+    def handle_data(self, data: str) -> None:
+        if self._char is not None:
+            self._text += data
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag != "span" or not self._stack:
+            return
+        kind = self._stack.pop()
+        if kind == "ocrx_cinfo" and self._char is not None:
+            text = _LIGATURES.get(self._text.strip(), self._text.strip())
+            if text:
+                self._chars.append(OcrChar(text, *self._char))
+            self._char = None
+        elif kind == "ocrx_word" and self._word is not None:
+            text = "".join(char.text for char in self._chars)
+            if text:
+                self.words.append(OcrWord(text, self._word[0], self._word[1], tuple(self._chars)))
+            self._word = None
+
+    def _rect(self, box: re.Match[str]) -> pymupdf.Rect:
+        return pymupdf.Rect(*(int(box.group(index)) / self.scale for index in range(1, 5)))
 
 
-def _glyph_origins(page: pymupdf.Page, names: set[str]) -> list[tuple[str, float, float]]:
-    """点阵字逐字的起笔点（字体名, x, y）。
+def _vote_labels(glyphs: dict[int, list[Glyph]], words: dict[int, list[OcrWord]]) -> dict[Key, Label]:
+    """认出的字按位置落到字形上投票。
 
-    字框按字体框算，宽高都和墨迹差好几个点，越往行尾差得越多；起笔点和墨迹对得上。
+    字数和字形数对得上的词逐个配对，先定下大部分字形。对不上的词（连字 ffi 是一个字形、
+    OCR 漏了或多认了一个字）再按已定的字形和位置对齐：认得准的字形吃掉自己那个字，
+    剩下的字归没定的字形。
     """
-    found: list[tuple[str, float, float]] = []
-    for block in page.get_text("rawdict")["blocks"]:
-        if block.get("type") != 0:
-            continue
-        for line in block["lines"]:
-            for span in line["spans"]:
-                if span.get("font") not in names:
+    votes: dict[Key, Counter[str]] = defaultdict(Counter)
+    uneven: list[tuple[list[Glyph], tuple[OcrChar, ...]]] = []
+    for pno, page_words in words.items():
+        items = glyphs.get(pno, [])
+        for word in page_words:
+            box = pymupdf.Rect(word.rect.x0 - 0.7, word.rect.y0 - 0.7, word.rect.x1 + 0.7, word.rect.y1 + 0.7)
+            inside = sorted((glyph for glyph in items if _center_in(glyph.rect, box)), key=lambda glyph: glyph.rect.x0)
+            if not inside or not word.chars:
+                continue
+            # 字数对上时按顺序配：OCR 的字序可靠，逐字框常偏出两三个点
+            if len(inside) == len(word.chars):
+                for glyph, char in zip(inside, word.chars):
+                    votes[glyph.key][char.text] += char.conf
+            else:
+                uneven.append((inside, word.chars))
+    first = _best_labels(votes)
+    for inside, chars in uneven:
+        for glyph, taken in zip(inside, _align(inside, chars, first)):
+            if taken and not _sure(first.get(glyph.key)):
+                votes[glyph.key]["".join(char.text for char in taken)] += min(char.conf for char in taken) / 2
+    return _best_labels(votes)
+
+
+def _best_labels(votes: dict[Key, Counter[str]]) -> dict[Key, Label]:
+    labels: dict[Key, Label] = {}
+    for key, counter in votes.items():
+        total = sum(counter.values())
+        if total > 0:
+            text, weight = counter.most_common(1)[0]
+            labels[key] = Label(text, weight / total)
+    return labels
+
+
+def _sure(label: Label | None) -> bool:
+    return label is not None and label.agreement >= _SURE
+
+
+def _align(
+    glyphs: list[Glyph], chars: tuple[OcrChar, ...], labels: dict[Key, Label],
+) -> list[tuple[OcrChar, ...]]:
+    """把认出的字按顺序分给字形。每个字形分 0 到 3 个字，代价最小的分法。
+
+    已认定的字形要分到它自己的字；分到的字和字形横向不重叠要加代价，
+    OCR 多认出来的一个点不会把后面的字都挤错位。
+    """
+    count, total = len(glyphs), len(chars)
+    inf = float("inf")
+    cost = [[inf] * (total + 1) for _ in range(count + 1)]
+    back = [[0] * (total + 1) for _ in range(count + 1)]
+    cost[0][0] = 0.0
+    for index in range(1, count + 1):
+        label = labels.get(glyphs[index - 1].key)
+        for used in range(total + 1):
+            for take in range(0, min(3, used) + 1):
+                prev = cost[index - 1][used - take]
+                if prev == inf:
                     continue
-                for char in span.get("chars") or []:
-                    x, y = char["origin"]
-                    found.append((str(span["font"]), float(x), float(y)))
+                taken = chars[used - take:used]
+                text = "".join(char.text for char in taken)
+                if _sure(label):
+                    step = 0.0 if text == label.text else 2.0
+                else:
+                    step = 1.5 if take == 0 else 0.3 * (take - 1)
+                # 分给一个字形的字要和它横向重叠
+                step += sum(1.0 for char in taken if _overlap(glyphs[index - 1].rect, char.rect) <= 0)
+                if prev + step < cost[index][used]:
+                    cost[index][used] = prev + step
+                    back[index][used] = take
+    if cost[count][total] == inf:
+        return [() for _ in glyphs]
+    taken: list[tuple[OcrChar, ...]] = []
+    used = total
+    for index in range(count, 0, -1):
+        take = back[index][used]
+        taken.append(tuple(chars[used - take:used]))
+        used -= take
+    return taken[::-1]
+
+
+def _readable(glyphs: list[Glyph], labels: dict[Key, Label]) -> bool:
+    known = sum(1 for glyph in glyphs if glyph.key in labels)
+    return bool(glyphs) and known >= len(glyphs) * _READABLE
+
+
+# ---- 行、词和字形的角色 ----
+
+
+def _build_lines(glyphs: list[Glyph], labels: dict[Key, Label], owners: dict[int, int]) -> list[_Line]:
+    """按基线把字形排成行，和普通 PDF 的文字一样按位置排，不按内容流的先后。
+
+    认得出字母类别的字形各有一条基线，基线相同的是一行。上下标、分数的分子分母
+    字小、基线偏开，自成一小行，再并回它们所在的那一行；认不出类别的符号和标点按高度并进去。
+    都并好以后再按大的横向空隙切开：并排的署名、两栏。内容流里分母会让笔头退回分数左边，
+    按先后接行会把分数后面的半句接到分母上。
+    """
+    placed: list[tuple[Glyph, float, float]] = []
+    loose: list[Glyph] = []
+    for glyph in glyphs:
+        size = _glyph_size(glyph, labels)
+        if size is None:
+            loose.append(glyph)
+        else:
+            placed.append((glyph, size, _own_baseline(glyph, labels, size)))
+    bands: list[list[tuple[Glyph, float, float]]] = []
+    for item in sorted(placed, key=lambda item: item[2]):
+        band = next((band for band in reversed(bands[-6:]) if _same_band(band, item)), None)
+        if band is None:
+            bands.append([item])
+        else:
+            band.append(item)
+    ordered = [[item[0] for item in band] for band in sorted(bands, key=len, reverse=True)]
+    rows: list[_Line] = []
+    for piece in (piece for piece in ordered if len(piece) >= 3):
+        # 整体下沉的正文字（N 下面的 supplier）字数也不少，仍是上一段的下标
+        host = _host_line(rows, piece, labels)
+        if host is None:
+            rows.append(_row(piece, labels))
+        else:
+            host.glyphs.extend(piece)
+    pending = [*(piece for piece in ordered if len(piece) < 3), *([glyph] for glyph in loose)]
+    while pending:
+        pending = _attach(rows, pending, labels)
+        if pending:
+            # 剩下的小段自己成行：先让最大的一段成行，再看别的能不能并进来
+            rows.append(_row(pending.pop(0), labels))
+    lines: list[_Line] = []
+    for row in rows:
+        row.glyphs.sort(key=lambda glyph: glyph.rect.x0)
+        _measure(row, labels)
+        current = [row.glyphs[0]]
+        right = row.glyphs[0].rect.x1
+        for glyph in row.glyphs[1:]:
+            if glyph.rect.x0 - right > row.size * _RUN_GAP:
+                lines.append(_Line(current))
+                current = []
+            current.append(glyph)
+            right = max(right, glyph.rect.x1)
+        lines.append(_Line(current))
+    # 没落进任何一行的细线是图里的线，不是字
+    lines = [line for line in lines if any(glyph.key != _RULE for glyph in line.glyphs)]
+    for line in lines:
+        _measure(line, labels)
+        line.tokens = _tokens(line, labels, owners)
+    return sorted(lines, key=lambda line: (line.baseline, line.glyphs[0].rect.x0))
+
+
+def _row(glyphs: list[Glyph], labels: dict[Key, Label]) -> _Line:
+    row = _Line(list(glyphs))
+    _measure(row, labels)
+    return row
+
+
+def _attach(rows: list[_Line], pending: list[list[Glyph]], labels: dict[Key, Label]) -> list[list[Glyph]]:
+    """小段并进行里，一轮轮并到没有可并的为止：1、.、1 一个挨一个才够得着标题。"""
+    extents = {id(row): _extent(row) for row in rows}
+    while pending:
+        still: list[list[Glyph]] = []
+        for piece in pending:
+            host = _host_line(rows, piece, labels, extents)
+            if host is None:
+                still.append(piece)
+                continue
+            host.glyphs.extend(piece)
+            left, right = extents[id(host)]
+            extents[id(host)] = (min(left, *(glyph.rect.x0 for glyph in piece)),
+                                 max(right, *(glyph.rect.x1 for glyph in piece)))
+        if len(still) == len(pending):
+            return still
+        pending = still
+    return []
+
+
+def _extent(row: _Line) -> tuple[float, float]:
+    return min(glyph.rect.x0 for glyph in row.glyphs), max(glyph.rect.x1 for glyph in row.glyphs)
+
+
+def _own_baseline(glyph: Glyph, labels: dict[Key, Label], size: float) -> float:
+    kind = _letter_class(labels[glyph.key].text)
+    return glyph.rect.y1 - (size * 0.19 if kind == "desc" else 0.0)
+
+
+def _same_band(band: list[tuple[Glyph, float, float]], item: tuple[Glyph, float, float]) -> bool:
+    """基线差不到字号的一成二、字号也差不多，是同一条基线上的字。"""
+    _glyph, size, baseline = item
+    sizes = [entry[1] for entry in band[-8:]]
+    base = statistics.median(entry[2] for entry in band[-8:])
+    ref = statistics.median(sizes)
+    return abs(baseline - base) <= min(size, ref) * 0.12 and max(size, ref) <= min(size, ref) * 1.25
+
+
+def _host_line(
+    lines: list[_Line], piece: list[Glyph], labels: dict[Key, Label],
+    extents: dict[int, tuple[float, float]] | None = None,
+) -> _Line | None:
+    """上下标、分数、标点这样的小段并进哪一行：字心落在那一行 x 高的上下 0.75 个字号以内，
+    横向挨着那一行。字更大的段不并进小字行。"""
+    left = min(glyph.rect.x0 for glyph in piece)
+    right = max(glyph.rect.x1 for glyph in piece)
+    center = statistics.median((glyph.rect.y0 + glyph.rect.y1) / 2 for glyph in piece)
+    sizes = [size for glyph in piece if (size := _glyph_size(glyph, labels))]
+    best: tuple[float, _Line] | None = None
+    for line in lines:
+        if sizes and statistics.median(sizes) > line.size * 1.1:
+            continue
+        offset = abs(center - (line.baseline - line.xheight / 2))
+        if offset > line.size * 0.75 or (best is not None and offset >= best[0]):
+            continue
+        line_left, line_right = extents[id(line)] if extents else _extent(line)
+        reach = line.size * _RUN_GAP
+        if line_left - reach <= right and left <= line_right + reach:
+            best = (offset, line)
+    return best[1] if best is not None else None
+
+
+def _letter_class(text: str) -> str | None:
+    """按墨迹高度分的字母类别。f、j、J、Q 在斜体里会伸到基线以下，高度不定，不归类。"""
+    if len(text) != 1 or text in _UNSTEADY:
+        return None
+    if text in _X_LETTERS:
+        return "x"
+    if text in _DESCENDERS:
+        return "desc"
+    if text in ("i", "t"):
+        return text
+    if text in _TALL_LETTERS:
+        return "tall"
+    return None
+
+
+def _glyph_size(glyph: Glyph, labels: dict[Key, Label]) -> float | None:
+    """按字母类别把墨迹高度换回字号。认不准的字形没有字号。"""
+    label = labels.get(glyph.key)
+    if label is None or label.agreement < _SURE:
+        return None
+    kind = _letter_class(label.text)
+    if kind is None:
+        return None
+    return glyph.rect.height / _HEIGHT_RATIO[kind]
+
+
+def _measure(line: _Line, labels: dict[Key, Label]) -> None:
+    sizes = [size for glyph in line.glyphs if (size := _glyph_size(glyph, labels))]
+    line.size = statistics.median(sizes) if sizes else statistics.median(g.rect.height for g in line.glyphs) / 0.7
+    sitting = [
+        glyph for glyph in line.glyphs
+        if (size := _glyph_size(glyph, labels)) and size >= line.size * _SCRIPT
+        and _letter_class(labels[glyph.key].text) in ("x", "tall", "i", "t")
+    ]
+    line.baseline = statistics.median(glyph.rect.y1 for glyph in (sitting or line.glyphs))
+    line.xheight = line.size * _HEIGHT_RATIO["x"]
+
+
+def _tokens(
+    line: _Line, labels: dict[Key, Label], owners: dict[int, int], mono: dict[Key, float] | None = None,
+    bearings: dict[Key, tuple[float, float]] | None = None,
+) -> list[list[Glyph]]:
+    tokens: list[list[Glyph]] = []
+    mono = mono or {}
+    bearings = bearings or {}
+    gaps = [_gap(left, right, line, bearings) for left, right in zip(line.glyphs, line.glyphs[1:])]
+    split = _space_split(gaps)
+    for index, glyph in enumerate(line.glyphs):
+        prev = tokens[-1][-1] if tokens else None
+        if prev is not None and prev.key in mono and glyph.key in mono:
+            joined = _middle(glyph) - _middle(prev) <= mono[prev.key] * 1.5
+        else:
+            joined = prev is not None and not _space_before(gaps[index - 1], prev, glyph, owners, split)
+        if joined:
+            tokens[-1].append(glyph)
+        else:
+            tokens.append([glyph])
+    # 逗号句号前面不会有空格。等宽字体里逗号在格子中间，墨迹离前一个字远
+    merged: list[list[Glyph]] = []
+    for token in tokens:
+        marks = all((labels.get(glyph.key) or Label("?", 0)).text in _TRAILING_MARKS for glyph in token)
+        if merged and marks and token[0].rect.x0 - merged[-1][-1].rect.x1 <= line.xheight:
+            merged[-1].extend(token)
+        else:
+            merged.append(token)
+    return merged
+
+
+def _gap(left: Glyph, right: Glyph, line: _Line, bearings: dict[Key, tuple[float, float]]) -> float:
+    """两个字形墨迹之间的空白，以 x 高计，减掉两边字形自带的边距。"""
+    raw = (right.rect.x0 - left.rect.x1) / line.xheight
+    return raw - bearings.get(left.key, (0.0, 0.0))[1] - bearings.get(right.key, (0.0, 0.0))[0]
+
+
+def _space_before(gap: float, prev: Glyph, glyph: Glyph, owners: dict[int, int], split: float | None) -> bool:
+    if gap <= _TIGHT:
+        return False
+    if gap >= _WIDE:
+        return True
+    if split is not None:
+        return gap >= split
+    left, right = owners.get(id(prev)), owners.get(id(glyph))
+    if left is None or right is None:
+        return gap > (_TIGHT + _WIDE) / 2
+    return left != right
+
+
+def _space_split(gaps: list[float]) -> float | None:
+    """两端对齐的一行里词距处处一样宽。取这一行字距和词距的中点当分界；
+    这一行没有明显的词距时返回 None，交给 OCR 分词。"""
+    letters = [gap for gap in gaps if gap <= _TIGHT]
+    spaces = [gap for gap in gaps if _WIDE <= gap <= 3.0]
+    if len(letters) < 3 or len(spaces) < 2:
+        return None
+    return (statistics.median(letters) + statistics.median(spaces)) / 2
+
+
+def _bearings(pages: dict[int, list[_Line]], labels: dict[Key, Label]) -> dict[Key, tuple[float, float]]:
+    """各字形左右自带的边距：在认得准的词里，它前后的字距比一般的字距宽多少、窄多少。
+
+    正体 f 的钩子伸到右边，后面的字距总比别的字窄一截，of the 的空格看起来就只剩一半。
+    """
+    after: dict[Key, list[float]] = defaultdict(list)
+    before: dict[Key, list[float]] = defaultdict(list)
+    every: list[float] = []
+    for line in (line for lines in pages.values() for line in lines):
+        for token in line.tokens:
+            if not _sure_word(token, labels):
+                continue
+            for left, right in zip(token, token[1:]):
+                gap = (right.rect.x0 - left.rect.x1) / line.xheight
+                after[left.key].append(gap)
+                before[right.key].append(gap)
+                every.append(gap)
+    if not every:
+        return {}
+    usual = statistics.median(every)
+
+    def shift(values: list[float]) -> float:
+        return max(-0.3, min(0.3, statistics.median(values) - usual)) if len(values) >= 3 else 0.0
+
+    return {key: (shift(before.get(key, [])), shift(after.get(key, []))) for key in {*after, *before}}
+
+
+def _word_owners(glyphs: list[Glyph], words: list[OcrWord]) -> dict[int, int]:
+    """每个字形落在 OCR 的第几个词里。词距拿不准时按它分词。"""
+    owners: dict[int, int] = {}
+    for index, word in enumerate(words):
+        box = pymupdf.Rect(word.rect.x0 - 0.7, word.rect.y0 - 0.7, word.rect.x1 + 0.7, word.rect.y1 + 0.7)
+        for glyph in glyphs:
+            if _center_in(glyph.rect, box):
+                owners[id(glyph)] = index
+    return owners
+
+
+def _learn_roles(
+    pages: dict[int, list[_Line]], labels: dict[Key, Label],
+    shapes: Callable[[set[Key]], dict[Key, np.ndarray]],
+) -> tuple[dict[Key, str], set[Key]]:
+    """整份文档统计每个字形出现在单词里的比例，定它是正文、数学还是数字标点。
+
+    先用四个字母以上、每个字都认得准的词定下一批正文字形（psc、cp 这种视图名是数学斜体，不算）。
+    这样的词里的字母都算在词里。短词再看：同一个词里有别的字母是正文字形，
+    又没有常单独出现的变量字母（等宽的 S 在伪代码里也单独当变量用），它就算在词里。
+    连字 ff、We 的 W、标题里只出现在 The 里的 T 和 h 这样补上。
+    数学斜体的 a、v 几乎从不在词里（v’s 偶尔算一次）。
+    从不进词的字母是变量。英文里单独成词的只有 A 和 I：拿位图和正文里的 A、I 比，
+    像就是正文（摘要里小一号的 A）。斜体正文和数学斜体长得一样，其他字母比不出来。
+    """
+    tokens = [_without_plural(token, labels) for lines in pages.values() for line in lines for token in line.tokens]
+    seen = Counter(glyph.key for token in tokens for glyph in token)
+    seeds = {
+        glyph.key for token in tokens if _sure_word(token, labels)
+        for glyph in token if _letter(labels.get(glyph.key))
+    }
+    alone = Counter(token[0].key for token in tokens if len(token) == 1 and _letter(labels.get(token[0].key)))
+    loner = {key for key, count in alone.items() if count * 3 >= seen[key]}
+    in_word: Counter[Key] = Counter()
+    for token in tokens:
+        if not _alpha_core(token, labels, 2):
+            continue
+        letters = [glyph for glyph in token if _letter(labels.get(glyph.key))]
+        sure = _sure_word(token, labels)
+        for glyph in letters:
+            others = [item for item in letters if item is not glyph]
+            if sure or (any(item.key in seeds for item in others) and not any(item.key in loner for item in others)):
+                in_word[glyph.key] += 1
+    numeral: Counter[Key] = Counter()
+    for token in tokens:
+        text = "".join(_text_of(glyph, labels) for glyph in token)
+        # 至少两位数字：数学斜体的 b 常被认成 6，后面跟着逗号也像个数
+        if sum(ch.isdigit() for ch in text) >= 2 and _NUMBER.fullmatch(text):
+            for glyph in token:
+                numeral[glyph.key] += 1
+    roles = {
+        key: _role(labels.get(key), in_word[key], count, numeral[key] * 2 >= count)
+        for key, count in seen.items()
+    }
+    # 横线按宽窄分：减号 0.6 个字号，连字符、短横、长破折号各有各的宽度；比横线高的是箭头
+    dashes: dict[Key, list[tuple[float, float]]] = defaultdict(list)
+    for line in (line for lines in pages.values() for line in lines):
+        for glyph in line.glyphs:
+            if _text_of(glyph, labels) in _DASHES:
+                dashes[glyph.key].append((glyph.rect.width / line.size, glyph.rect.height / line.size))
+    for key, shapes_seen in dashes.items():
+        width = statistics.median(shape[0] for shape in shapes_seen)
+        height = statistics.median(shape[1] for shape in shapes_seen)
+        if height > 0.15 or _MINUS_WIDTH[0] <= width <= _MINUS_WIDTH[1]:
+            roles[key] = "symbol"
+    # 冠词 A 在句首，变量 A 在句中。句首居多、位图又像正文的 A，才是冠词。
+    # 只出现一两次的标点也拿位图和常见的同名字形比
+    opening = Counter()
+    for lines in pages.values():
+        previous = "."
+        for line in lines:
+            for token in line.tokens:
+                if len(token) == 1:
+                    if previous[-1:] in ".!?:":
+                        opening[token[0].key] += 1
+                previous = "".join(_text_of(glyph, labels) for glyph in token) or previous
+    words = {
+        key for key, role in roles.items()
+        if role == "letter" and labels[key].text in _LETTER_WORDS and opening[key] * 2 >= seen[key]
+    }
+    odd = {
+        key for key, role in roles.items()
+        if role == "neutral" and seen[key] <= 2 and not labels[key].text.isalnum()
+    }
+    names = {labels[key].text for key in words | odd}
+    refs = {
+        key for key, role in roles.items()
+        if key not in odd and labels.get(key) is not None and labels[key].text in names
+        and (role == "text" or (role == "neutral" and seen[key] >= 4))
+    }
+    doubtful: set[Key] = set()
+    if words or odd:
+        images = shapes(words | odd | refs)
+        for key in words:
+            if _looks_like(key, refs, labels, images, _SAME_SHAPE):
+                roles[key] = "text"
+        # 脚注星号被认成引号：和真正的引号长得不像，这个字认得不可信
+        doubtful = {key for key in odd if not _looks_like(key, refs, labels, images, _SAME_MARK)}
+    return {key: "math" if role == "letter" else role for key, role in roles.items()}, doubtful
+
+
+def _without_plural(token: list[Glyph], labels: dict[Key, Label]) -> list[Glyph]:
+    """数学里给变量加复数：the a’s、v’s。去掉 ’s，剩下的单个字母不算单词。"""
+    texts = [_text_of(glyph, labels) for glyph in token]
+    while texts and not texts[-1].isalnum():
+        texts.pop()
+    if len(texts) >= 3 and texts[-1] == "s" and texts[-2] in ("’", "'"):
+        return token[:len(texts) - 2]
+    return token
+
+
+def _letter(label: Label | None) -> bool:
+    return label is not None and label.text.isalpha()
+
+
+def _core(token: list[Glyph], labels: dict[Key, Label]) -> str:
+    """去掉两头的标点、引号和脚注记号（Efficiently* 的星号），剩下中间的字。"""
+    texts = [(labels.get(glyph.key) or Label("?", 0)).text for glyph in token]
+    start, end = 0, len(texts)
+    while start < end and not texts[start].isalpha():
+        start += 1
+    while end > start and not texts[end - 1].isalpha():
+        end -= 1
+    return "".join(texts[start:end])
+
+
+def _alpha_core(token: list[Glyph], labels: dict[Key, Label], length: int) -> bool:
+    core = _core(token, labels)
+    return sum(ch.isalpha() for ch in core) >= length and core.replace("-", "").replace("’", "").isalpha()
+
+
+def _sure_word(token: list[Glyph], labels: dict[Key, Label]) -> bool:
+    if any((label := labels.get(glyph.key)) is None or label.agreement < _SURE for glyph in token):
+        return False
+    return _alpha_core(token, labels, 4)
+
+
+def _role(label: Label | None, in_word: int, count: int, numeral: bool = False) -> str:
+    """数字认得不稳（粗体 1 有时认成 l），但大多出现在 1.1、12 这种数里，仍是数字。"""
+    if label is None:
+        return "symbol"
+    if count and in_word / count >= _IN_WORD:
+        return "text"
+    if any(ch in _MATH_SYMBOLS for ch in label.text):
+        return "symbol"
+    if label.agreement < _SURE and not (numeral and label.text.isdigit()):
+        return "math" if label.text.isalpha() else "symbol"
+    if label.text.isalpha():
+        return "letter"
+    return "neutral"
+
+
+def _text_of(glyph: Glyph, labels: dict[Key, Label]) -> str:
+    label = labels.get(glyph.key)
+    return label.text if label is not None else "?"
+
+
+def _looks_like(
+    key: Key, refs: set[Key], labels: dict[Key, Label], images: dict[Key, np.ndarray], threshold: float,
+) -> bool:
+    image = images.get(key)
+    label = labels.get(key)
+    if image is None or label is None:
+        return False
+    same = [images[other] for other in refs if other in images and labels[other].text == label.text]
+    return any(float(np.dot(image, other)) >= threshold for other in same)
+
+
+def _bullets(
+    pages: dict[int, list[_Line]], labels: dict[Key, Label], density: Callable[[set[Key]], dict[Key, float]],
+) -> set[Key]:
+    """项目符号：总是单独站在行首，方方正正，墨迹填满。OCR 常把实心圆点认成 e。"""
+    lines = [line for page_lines in pages.values() for line in page_lines]
+    seen = Counter(glyph.key for line in lines for glyph in line.glyphs)
+    starts = Counter(line.tokens[0][0].key for line in lines if line.tokens and len(line.tokens[0]) == 1)
+    shapes: dict[Key, pymupdf.Rect] = {}
+    for line in lines:
+        for glyph in line.glyphs:
+            shapes.setdefault(glyph.key, glyph.rect)
+    keys = {
+        key for key, count in starts.items()
+        if count >= 2 and count * 2 >= seen[key] and key != _RULE
+        and 0.8 <= shapes[key].width / max(shapes[key].height, 0.1) <= 1.25
+    }
+    filled = density(keys) if keys else {}
+    return {key for key in keys if filled.get(key, 0.0) >= _FILLED}
+
+
+def _ink_share(doc: pymupdf.Document, glyphs: dict[int, list[Glyph]], keys: set[Key]) -> dict[Key, float]:
+    """字形框里墨迹占多少。"""
+    found: dict[Key, float] = {}
+    for pno, items in glyphs.items():
+        for glyph in items:
+            if glyph.key not in keys or glyph.key in found:
+                continue
+            pix = doc[pno].get_pixmap(dpi=_SHAPE_DPI, clip=glyph.rect, colorspace=pymupdf.csGRAY, alpha=False)
+            ink = 1.0 - np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.stride)[:, :pix.width] / 255
+            found[glyph.key] = float(ink.mean()) if ink.size else 0.0
     return found
 
 
-def _origin_fonts(word: OcrWord, origins: list[tuple[str, float, float]]) -> dict[str, int]:
-    """起笔点落在词里的字各属哪个字体。起笔点在字的顶上一点，竖向放宽几个点。"""
-    hits: dict[str, int] = {}
-    for font, x, y in origins:
-        if word.rect.x0 - 0.8 <= x < word.rect.x1 - 0.5 and word.rect.y0 - 4 <= y <= word.rect.y1 + 4:
-            hits[font] = hits.get(font, 0) + 1
-    return hits
-
-
-def _word_fonts(word: OcrWord, glyphs: list[GlyphBox]) -> tuple[str, float]:
-    """词底下占得最多的点阵字体，以及它占的比例。点阵字框比墨迹高，只按横向重叠算。"""
-    cy = (word.rect.y0 + word.rect.y1) / 2
-    share: dict[str, float] = {}
-    for glyph in glyphs:
-        if not glyph.font or not (glyph.rect.y0 <= cy <= glyph.rect.y1):
+def _glyph_shapes(
+    doc: pymupdf.Document, glyphs: dict[int, list[Glyph]], keys: set[Key],
+) -> dict[Key, np.ndarray]:
+    """每种字形取第一次出现的位图，按原比例放进方格，块平均到 16×16，减均值、归一，点积就是相似度。"""
+    first: dict[Key, tuple[int, Glyph]] = {}
+    for pno, items in glyphs.items():
+        for glyph in items:
+            if glyph.key in keys and glyph.key not in first:
+                first[glyph.key] = (pno, glyph)
+    found: dict[Key, np.ndarray] = {}
+    for key, (pno, glyph) in first.items():
+        pix = doc[pno].get_pixmap(dpi=_SHAPE_DPI, clip=glyph.rect, colorspace=pymupdf.csGRAY, alpha=False)
+        if pix.width < 2 or pix.height < 2:
             continue
-        overlap = min(glyph.rect.x1, word.rect.x1) - max(glyph.rect.x0, word.rect.x0)
-        if overlap > 0:
-            share[glyph.font] = share.get(glyph.font, 0.0) + overlap
-    if not share:
-        return "", 0.0
-    font = max(share, key=lambda name: share[name])
-    return font, share[font] / sum(share.values())
+        ink = 1.0 - np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.stride)[:, :pix.width] / 255
+        side = max(ink.shape)
+        canvas = np.zeros((side, side))
+        top, left = (side - ink.shape[0]) // 2, (side - ink.shape[1]) // 2
+        canvas[top:top + ink.shape[0], left:left + ink.shape[1]] = ink
+        edges = np.linspace(0, side, _SHAPE_GRID + 1).astype(int)[:-1]
+        grid = np.add.reduceat(np.add.reduceat(canvas, edges, axis=0), edges, axis=1).flatten()
+        grid -= grid.mean()
+        norm = float(np.linalg.norm(grid))
+        if norm > 0:
+            found[key] = grid / norm
+    return found
 
 
-def _confident_word(word: OcrWord, length: int) -> bool:
-    core = word.text.strip(".,;:()[]\"'“”‘’")
-    return word.conf >= _CONFIDENT_CONF and core.isalpha() and len(core) >= length
+# ---- 写成 PyMuPDF 的行 ----
 
 
-# 正文里常排成斜体的拉丁缩写，斜体字体在一页上常常只有这一个词
-_LATIN_ABBREV = re.compile(r"^(?:i\.e\.|e\.g\.|cf\.|etc\.|vs\.|viz\.)[,;:]?$", re.I)
-# 节号、列表编号、图号、页码（4.3、1.、Figure 9:、11）。换成公式后标题和编号就认不出了。
-# 单独一个数字不算：数学斜体的 b 常被认成 6
-_NUMBER_TOKEN = re.compile(r"^(?:\d+(?:\.\d+)*[.:]|\d+(?:\.\d+)+|\d{2,})$")
-
-
-def _math_font_words(
-    words: list[OcrWord], glyphs: list[GlyphBox], origins: list[tuple[str, float, float]] | None = None,
-) -> set[int]:
-    """字形几乎全来自数学字体的词。
-
-    点阵字体名是 A、B、C 这种自造名，分不出 cmr 和 cmmi。正文字体会认出大量高置信度的普通单词，
-    数学斜体和符号字体一个也认不出：这一页上没认出过普通单词的字体就当数学字体。
-    tesseract 会把数学字形认成 rains、Tag、6（其实是 b）这类词，送去翻译只会出乱码。
-    本身是高置信度普通单词的不算：标题和正文斜体在一页上常常只出现几个词，of、to 也在里面。
-    单个字母不算普通单词，它们正是 a、b、w 这类变量。
-
-    一两个字的短词（认成 6 的 b、变量 a、x）按逐字起笔点（origins）归属：字框会漂到隔壁的正文上，
-    起笔点不会。b 底下是一个数学斜体的字加一个正文字体的间隔字，数学字体占一半就算。
-    长词仍按字框比例算：几乎每个字都带着别的字体的间隔字，按起笔点会把 TPC-D、GROUP-BY 也算进来。
-    """
-    origins = origins or []
-    attributed = [(word, _origin_fonts(word, origins), *_word_fonts(word, glyphs)) for word in words]
-    # 正文字体仍按字框比例认：按起笔点算，间隔字会把一两个词算到数学字体名下
-    prose_fonts = {font for word, hits, font, share in attributed
-                   if font and share >= 0.5 and _confident_word(word, 4)}
-
-    def from_math_font(word: OcrWord, hits: dict[str, int], font: str, share: float) -> bool:
-        if bool(font) and font not in prose_fonts and share >= _MATH_FONT_SHARE:
-            return True
-        core = word.text.strip(".,;:()[]{}")
-        if hits and len(core) <= 2:
-            math_hits = sum(count for name, count in hits.items() if name not in prose_fonts)
-            # 单个字符时间隔字和逗号会把正文字体的数目抬上去，有一个数学字体的字就算
-            return math_hits * 2 >= sum(hits.values()) or (len(core) == 1 and math_hits > 0)
-        return False
-
-    return {
-        id(word) for word, hits, font, share in attributed
-        if from_math_font(word, hits, font, share)
-        and not _confident_word(word, 2) and not _LATIN_ABBREV.match(word.text.strip())
-        and not _NUMBER_TOKEN.match(word.text.strip())
-    }
-
-
-def _is_noise(word: OcrWord) -> bool:
-    text = word.text.strip()
-    if not text or _SECTION_NO.fullmatch(text):
-        return False
-    if any(ch in _GARBAGE_MARK or (ord(ch) > 127 and ch not in _KEEP_MARK) for ch in text):
-        return True
-    if word.conf < _JUNK_CONF:
-        return True
-    if word.conf < _NOISE_CONF and not _plain_token(text):
-        return True
-    return False
-
-
-def _plain_token(text: str) -> bool:
-    """低置信度里仍可能是正文的：单字母变量、数字、节号、普通单词。"""
-    core = text.strip(".,;:()[]")
-    if not core:
-        return False
-    if _SECTION_NO.fullmatch(core) or core.isdigit():
-        return True
-    if core.isalpha() and len(core) == 1:
-        return True
-    return len(core) >= 3 and core.replace("-", "").isalpha()
-
-
-def _glued_to_noise(word: OcrWord, noise: list[OcrWord]) -> bool:
-    """乱码旁边的 `(p,`、`c),` 仍是公式的一部分。节号和表格竖线不是。"""
-    if not _is_fringe(word):
-        return False
-    cy = (word.rect.y0 + word.rect.y1) / 2
-    for other in noise:
-        oy = (other.rect.y0 + other.rect.y1) / 2
-        band = max(word.rect.height, other.rect.height, 8.0) * 0.6
-        if abs(cy - oy) > band:
-            continue
-        gap = word.rect.x0 - other.rect.x1 if word.rect.x0 >= other.rect.x0 else other.rect.x0 - word.rect.x1
-        if gap <= 8:
-            return True
-    return False
-
-
-def _is_fringe(word: OcrWord) -> bool:
-    text = word.text.strip()
-    if not text or _SECTION_NO.fullmatch(text) or _PIPE_TEXT.fullmatch(text):
-        return False
-    letters = sum(ch.isalpha() for ch in text)
-    return len(text) <= 4 and letters <= 1
-
-
-def _compose_lines(
-    prose: list[OcrWord], debris: list[OcrWord], glyphs: list[GlyphBox],
-    math_rects: set[tuple[float, ...]] | None = None,
-    weak_rects: set[tuple[float, ...]] | None = None,
-    ink: _InkMap | None = None,
-) -> list[dict[str, Any]]:
-    """同一基线上被公式空洞切开的正文仍是一句。空洞收成公式槽，居中的公式行不重排。
-
-    math_rects 是字形来自数学字体的词。公式行、伪代码先按认出来的原词判断，
-    留下来排正文的行再把这些词换成公式槽：先换的话 = 和 S 没了，这两种行就认不出来了。
-    weak_rects 是贴着公式的可疑短词（见 _weak_token），挨着公式槽的并进去。
-    """
-    lines: list[dict[str, Any]] = []
-    for row in _baseline_rows(prose):
-        for pieces in _row_pieces(row, debris, glyphs, ink):
-            pieces = _without_bullet(pieces)
-            if not pieces or _display_formula(pieces) or _listing_line(pieces):
-                continue
-            # 单独的比较符先收成槽，aj < ag. 这样夹着比较符的碎片才能并成一个
-            pieces = _math_as_formula(_peel_operators(pieces), math_rects or set(), weak_rects or set())
-            line = _line_from_pieces(pieces, glyphs)
-            if line is not None:
-                lines.append(line)
-    return lines
-
-
-def _math_as_formula(
-    pieces: list[_Piece], math_rects: set[tuple[float, ...]],
-    weak_rects: set[tuple[float, ...]] | None = None,
-) -> list[_Piece]:
-    """数学字体的词换成公式槽，相邻的槽并成一个。
-
-    夹在两个槽中间、没有一个像样单词的碎片（/(n—、)、,）也并进去，
-    否则 r = j/(n−j) 会切成好几块，译文里各放各的。
-    挨着公式槽的可疑短词（Di、Say、aj）也并进去：它们是公式字形认出来的乱码。
-    """
-    weak_rects = weak_rects or set()
-    marked = [piece.kind == "formula" or tuple(piece.rect) in math_rects for piece in pieces]
-    if not any(marked):
-        return pieces
-    out: list[_Piece] = []
-    for index, piece in enumerate(pieces):
-        is_slot = marked[index]
-        if not is_slot and tuple(piece.rect) in weak_rects:
-            is_slot = bool(out and out[-1].kind == "formula") or any(marked[index + 1:index + 2])
-        if not is_slot and out and out[-1].kind == "formula" and _math_glue(piece.text):
-            is_slot = any(marked[index + 1:index + 3])
-        if not is_slot:
-            out.append(piece)
-            continue
-        if out and out[-1].kind == "formula":
-            out[-1] = _Piece("formula", _FORMULA_MARK, out[-1].rect | piece.rect)
-        else:
-            out.append(_Piece("formula", _FORMULA_MARK, pymupdf.Rect(piece.rect)))
-    return out
-
-
-# 常见的英文短词。公式旁边认得没把握时，它们仍可能是正文
-_COMMON_SHORT = frozenset("""
-a an as at be by do if in is it no of on or so to up us we all and any are but can for has its let may
-not one per the two use via was
-""".split())
-
-
-def _formula_token(word: OcrWord) -> bool:
-    """a;41、v2, 这种字母夹数字、又没有两个连着的字母的碎片，是带下标的变量认出来的。"""
-    token = word.text.strip()
-    return (len(token) <= 6 and word.conf < _WEAK_CONF and not re.search(r"[A-Za-z]{2,}", token)
-            and bool(re.search(r"[A-Za-z]", token)) and bool(re.search(r"\d", token)))
-
-
-def _weak_token(word: OcrWord) -> bool:
-    """可疑的短词：三个字母以内、认得没把握、又不是常见短词。挨着公式时多半是公式字形认出来的。"""
-    core = word.text.strip(".,;:()[]{}\"'“”‘’")
-    return (core.isalpha() and len(core) <= 3 and word.conf < _WEAK_CONF
-            and core.lower() not in _COMMON_SHORT)
-
-
-def _math_glue(text: str) -> bool:
-    """公式中间的碎片：没有两个字母以上的词。"""
-    token = text.strip()
-    return bool(token) and len(token) <= 6 and not re.search(r"[A-Za-z]{2,}", token)
-
-
-def _baseline_rows(words: list[OcrWord]) -> list[list[OcrWord]]:
-    ordered = sorted(words, key=lambda word: ((word.rect.y0 + word.rect.y1) / 2, word.rect.x0))
-    rows: list[list[OcrWord]] = []
-    for word in ordered:
-        cy = (word.rect.y0 + word.rect.y1) / 2
-        if rows:
-            last = rows[-1]
-            ly = sum((item.rect.y0 + item.rect.y1) / 2 for item in last) / len(last)
-            limit = max(word.rect.height, last[0].rect.height, 8.0) * 0.55
-            if abs(cy - ly) <= limit:
-                last.append(word)
-                continue
-        rows.append([word])
-    for row in rows:
-        row.sort(key=lambda word: word.rect.x0)
-    return rows
-
-
-def _row_pieces(
-    row: list[OcrWord], debris: list[OcrWord], glyphs: list[GlyphBox], ink: _InkMap | None = None,
-) -> list[list[_Piece]]:
-    if not row:
-        return []
-    segments: list[list[_Piece]] = []
-    current: list[_Piece] = []
-    lead = _formula_before(row[0], debris, glyphs)
-    if lead is not None:
-        current.append(lead)
-    current.append(_Piece("prose", row[0].text, row[0].rect))
-    for prev, word in zip(row, row[1:]):
-        gap = word.rect.x0 - prev.rect.x1
-        bridge = _formula_between(prev, word, debris, glyphs, ink)
-        section = _section_only(current) and gap <= 22.0
-        if section or (bridge is not None and gap <= _HOLE_LIMIT):
-            if bridge is not None and not section:
-                current.append(bridge)
-            current.append(_Piece("prose", word.text, word.rect))
-            continue
-        if gap > max(prev.rect.height * 1.1, 12.0):
-            segments.append(current)
-            current = [_Piece("prose", word.text, word.rect)]
-            continue
-        current.append(_Piece("prose", word.text, word.rect))
-    trail = _formula_after(row[-1], debris, glyphs)
-    if trail is not None:
-        current.append(trail)
-    segments.append(current)
-    return segments
-
-
-def _section_only(pieces: list[_Piece]) -> bool:
-    prose = [piece for piece in pieces if piece.kind == "prose"]
-    return len(prose) == 1 and bool(_SECTION_NO.fullmatch(prose[0].text.strip()))
-
-
-def _formula_before(
-    word: OcrWord, debris: list[OcrWord], glyphs: list[GlyphBox],
-) -> _Piece | None:
-    box = _evidence_box(
-        debris, glyphs, word.rect.x0 - _LEAD_LIMIT, word.rect.x0, word.rect.y0, word.rect.y1,
-    )
-    if box is None or word.rect.x0 - box.x1 > 24 or box.width < 6:
+def _line_dict(line: _Line, reader: Type3Reader) -> dict[str, Any] | None:
+    styles = _glyph_styles(line, reader)
+    items: list[tuple[str, Glyph]] = []
+    for index, token in enumerate(line.tokens):
+        if index:
+            items.append(("", _SPACE))
+        items.extend((styles[id(glyph)], glyph) for glyph in token)
+    # 词间空格跟着正文走：公式 span 整个换成占位符，空格放在里面会一起丢掉
+    for index, (style, glyph) in enumerate(items):
+        if glyph is _SPACE:
+            before, after = items[index - 1][0], items[index + 1][0]
+            items[index] = (before if before in _PROSE or after not in _PROSE else after, glyph)
+    spans: list[dict[str, Any]] = []
+    run: list[Glyph] = []
+    current = ""
+    for style, glyph in items:
+        if run and style != current:
+            spans.append(_span(run, current, line, reader))
+            run = []
+        run.append(glyph)
+        current = style
+    if run:
+        spans.append(_span(run, current, line, reader))
+    spans = [span for span in spans if span["text"].strip()]
+    if not spans:
         return None
-    return _Piece("formula", _FORMULA_MARK, box)
-
-
-def _formula_after(
-    word: OcrWord, debris: list[OcrWord], glyphs: list[GlyphBox],
-) -> _Piece | None:
-    box = _evidence_box(
-        debris, glyphs, word.rect.x1, word.rect.x1 + 80, word.rect.y0, word.rect.y1,
-    )
-    if box is None or box.x0 - word.rect.x1 > 24 or box.width < 6:
-        return None
-    return _Piece("formula", _FORMULA_MARK, box)
-
-
-def _formula_between(
-    prev: OcrWord, nxt: OcrWord, debris: list[OcrWord], glyphs: list[GlyphBox], ink: _InkMap | None = None,
-) -> _Piece | None:
-    gap = nxt.rect.x0 - prev.rect.x1
-    if gap <= max(prev.rect.height * 1.1, 12.0) or gap > _HOLE_LIMIT:
-        return None
-    y0 = min(prev.rect.y0, nxt.rect.y0)
-    y1 = max(prev.rect.y1, nxt.rect.y1)
-    box = _evidence_box(debris, glyphs, prev.rect.x1, nxt.rect.x0, y0, y1)
-    if box is None and ink is not None:
-        # 有的公式字形连字符码都没有，OCR 也认不出来，只能看渲染出来的墨迹
-        box = ink.glyph_box(pymupdf.Rect(prev.rect.x1 + 1.5, y0 - 2, nxt.rect.x0 - 1.5, y1 + 4))
-    if box is None or box.width < 6:
-        return None
-    # 点阵字框横向和墨迹差出好几个点，N_supplier 的 N 会落到 where 那边被漏掉。
-    # 两词之间整段都算进来，多出的空白排版时会按墨迹收掉
-    return _Piece("formula", _FORMULA_MARK, pymupdf.Rect(prev.rect.x1 + 1.5, box.y0, nxt.rect.x0 - 1.5, box.y1))
-
-
-class _InkMap:
-    """整页渲染一次的灰度图，用来看两个词中间到底有没有墨迹。"""
-
-    DPI = 100
-
-    def __init__(self, page: pymupdf.Page):
-        self.pix = page.get_pixmap(dpi=self.DPI, colorspace=pymupdf.csGRAY, alpha=False)
-        self.scale = self.DPI / 72
-        self.origin = page.rect.tl
-
-    def glyph_box(self, rect: pymupdf.Rect) -> pymupdf.Rect | None:
-        """rect 里像字形的墨迹的外框。
-
-        表格竖线、栏线会从上到下贯穿整个区域，图里的箭头、横线不到 2.5 点高，都不算字形。
-        """
-        pix, scale = self.pix, self.scale
-        x0 = max(0, int((rect.x0 - self.origin.x) * scale))
-        x1 = min(pix.width, int((rect.x1 - self.origin.x) * scale) + 1)
-        y0 = max(0, int((rect.y0 - self.origin.y) * scale))
-        y1 = min(pix.height, int((rect.y1 - self.origin.y) * scale) + 1)
-        if x1 <= x0 or y1 <= y0:
-            return None
-        samples, stride = pix.samples, pix.stride
-        height = y1 - y0
-        cols = []
-        for c in range(x0, x1):
-            dark = sum(1 for r in range(y0, y1) if samples[r * stride + c] < 128)
-            if dark >= height * 0.9:
-                return None  # 竖线
-            if dark:
-                cols.append(c)
-        if not cols:
-            return None
-        rows = [r for r in range(y0, y1) if any(samples[r * stride + c] < 128 for c in cols)]
-        box = pymupdf.Rect(cols[0] / scale, rows[0] / scale, (cols[-1] + 1) / scale, (rows[-1] + 1) / scale)
-        box = box + (self.origin.x, self.origin.y, self.origin.x, self.origin.y)
-        return box if box.width >= 2 and box.height >= 2.5 else None
-
-
-def _evidence_box(
-    debris: list[OcrWord], glyphs: list[GlyphBox],
-    x0: float, x1: float, y0: float, y1: float,
-) -> pymupdf.Rect | None:
-    """空洞里的乱码或没对上正文的点阵，就是公式墨迹。字框比墨迹高，裁到这一行。"""
-    box = pymupdf.Rect()
-    # 下标落在基线下面几个点。上一行的字框中心不能算进这一行的空洞。
-    debris_band = pymupdf.Rect(x0, y0 - 4, x1, y1 + 8)
-    glyph_band = pymupdf.Rect(x0, y0 - 2, x1, y1 + 4)
-    for word in debris:
-        if _center_in(word.rect, debris_band):
-            box |= word.rect
-    if box.is_empty:
-        for glyph in glyphs:
-            if not _center_in(glyph.rect, glyph_band):
-                continue
-            clipped = pymupdf.Rect(
-                glyph.rect.x0, max(glyph.rect.y0, y0 - 2),
-                glyph.rect.x1, min(glyph.rect.y1, y1 + 6),
-            )
-            if clipped.width >= 1 and clipped.height >= 1:
-                box |= clipped
-    if box.is_empty or box.x0 >= x1 or box.x1 <= x0:
-        return None
-    return pymupdf.Rect(max(box.x0, x0), box.y0, min(box.x1, x1), box.y1)
-
-
-def _center_in(rect: pymupdf.Rect, band: pymupdf.Rect) -> bool:
-    cx = (rect.x0 + rect.x1) / 2
-    cy = (rect.y0 + rect.y1) / 2
-    return band.x0 <= cx <= band.x1 and band.y0 <= cy <= band.y1
-
-
-def _without_bullet(pieces: list[_Piece]) -> list[_Piece]:
-    """行首的单字母 e 是项目符号的点阵，不是单词。留下原字，句子从后面起翻。"""
-    if len(pieces) < 2 or pieces[0].kind != "prose":
-        return pieces
-    head, nxt = pieces[0], pieces[1]
-    if nxt.kind != "prose" or not nxt.text[:1].isupper():
-        return pieces
-    if head.rect.width <= 14 and _BULLET_WORD.fullmatch(head.text.strip()):
-        return pieces[1:]
-    return pieces
-
-
-def _display_formula(pieces: list[_Piece]) -> bool:
-    """居中、几乎没有正文词、又带着比较符的一行是公式。认出来的符号是错的，留下原字。"""
-    prose = [piece for piece in pieces if piece.kind == "prose"]
-    if not prose:
-        return True
-    box = pymupdf.Rect()
-    for piece in prose:
-        box |= piece.rect
-    if box.x0 < 160:
-        return False
-    text = " ".join(piece.text for piece in prose)
-    # 比较符本身常被认成数学字体、换成了公式槽，这时剩下的词里已经没有 = 了。
-    # 靠公式槽认的，整行（连同槽）都要缩进：行首是公式的 (p,s,c) where … is 是正文
-    whole = pymupdf.Rect(box)
-    for piece in pieces:
-        whole |= piece.rect
-    has_slot = any(piece.kind == "formula" for piece in pieces) and whole.x0 >= 160
-    if len(text) > 90 or not (_DISPLAY_MARK.search(text) or has_slot):
-        return False
-    if _NUMBERED_TITLE.match(text) or _SQL_LINE.match(text) or _CAPTION_START.match(text):
-        return False
-    outside = re.sub(r"\([^)]*\)", " ", text)
-    long_words = re.findall(r"[A-Za-z]{4,}", outside)
-    return len(long_words) <= 1
-
-
-def _listing_line(pieces: list[_Piece]) -> bool:
-    """缩进的 end;、for … do begin、S = {…} 是伪代码。留下原字，不揉进正文。"""
-    prose = [piece for piece in pieces if piece.kind == "prose"]
-    if not prose:
-        return False
-    box = pymupdf.Rect()
-    for piece in prose:
-        box |= piece.rect
-    if box.x0 < _LISTING_X:
-        return False
-    text = " ".join(piece.text for piece in prose).strip()
-    return bool(_LISTING_LINE.fullmatch(text))
-
-
-def _peel_operators(pieces: list[_Piece]) -> list[_Piece]:
-    """行内单独的比较符、夹在括号组之间的数字，以及认成 B,, 的下标，是公式。"""
-    peeled: list[_Piece] = []
-    for index, piece in enumerate(pieces):
-        token = piece.text.strip()
-        if piece.kind == "formula" or _OPERATOR.fullmatch(token) or _broken_sub(pieces, index):
-            peeled.append(_Piece("formula", _FORMULA_MARK, piece.rect))
-            continue
-        if token.isdigit() and len(token) == 1 and _between_parens(pieces, index):
-            peeled.append(_Piece("formula", _FORMULA_MARK, piece.rect))
-            continue
-        peeled.append(piece)
-    return peeled
-
-
-def _broken_sub(pieces: list[_Piece], index: int) -> bool:
-    """B,,、a;、6; 是下标。后面接大写词的 Q; 是句首，S, 是正文。"""
-    token = pieces[index].text.strip()
-    if not _BROKEN_SUB.fullmatch(token):
-        return False
-    if token.endswith(";") and ",," not in token and ";" not in token[:-1]:
-        nxt = next((piece for piece in pieces[index + 1:] if piece.kind == "prose"), None)
-        if nxt is not None and nxt.text[:1].isupper():
-            return False
-    return True
-
-
-def _between_parens(pieces: list[_Piece], index: int) -> bool:
-    left = next((piece for piece in reversed(pieces[:index]) if piece.kind == "prose"), None)
-    right = next((piece for piece in pieces[index + 1:] if piece.kind == "prose"), None)
-    if left is None or right is None:
-        return False
-    return "(" in left.text and ")" in right.text
-
-
-# 下沿会落到基线以下的字符：降部字母、逗号分号、括号
-_DESCENDER_RE = re.compile(r"[gjpqyQ,;()\[\]{}/|@$_]")
-
-
-def _ocr_baseline(words: list[tuple[str, pymupdf.Rect]], fallback: float) -> float:
-    """按认出来的词的下沿取基线。
-
-    点阵字报出来的 origin 不可信：老 Ghostscript 的 Type3 字体常把它放在字框上部，
-    公式槽按它算下沉，整个公式会往下掉一行。带降部的词下沿偏低，先排除；都带降部时取中位数。
-    """
-    bottoms = sorted(rect.y1 for text, rect in words if text.strip() and not _DESCENDER_RE.search(text))
-    if not bottoms:
-        bottoms = sorted(rect.y1 for text, rect in words if text.strip())
-    if not bottoms:
-        return fallback
-    return bottoms[len(bottoms) // 2]
-
-
-def _line_from_pieces(pieces: list[_Piece], glyphs: list[GlyphBox]) -> dict[str, Any] | None:
-    """正文槽和公式槽合成一行。没盖住点阵字的词不是这页的坏字体，不另起一行。"""
-    spans = _spans_from_pieces(pieces)
-    prose = [span for span in spans if span["font"] != _FORMULA_FONT]
-    if not prose:
-        return None
-    ink = pymupdf.Rect()
-    for span in prose:
-        ink |= pymupdf.Rect(span["bbox"])
-    matched = [glyph for glyph in glyphs if _same_band(glyph.rect, ink) and _x_hits(glyph.rect, ink)]
-    if not matched:
-        return None
-    glyph = max(matched, key=lambda item: _overlap_width(item.rect, ink))
-    text = " ".join(str(span["text"]) for span in prose)
-    size = _line_size(text, ink.height, glyph.em)
-    baseline = _ocr_baseline([(piece.text, piece.rect) for piece in pieces if piece.kind == "prose"],
-                             glyph.origin_y)
-    for span in spans:
-        span["size"] = size
-        span["flags"] = glyph.flags
-        span["color"] = glyph.color
-        span["origin"] = (span["bbox"][0], baseline)
     box = pymupdf.Rect()
     for span in spans:
         box |= pymupdf.Rect(span["bbox"])
-    box = _cover_line_glyphs(box, glyphs)
-    bbox = (box.x0, box.y0, box.x1, box.y1)
-    return {"spans": spans, "wmode": 0, "dir": (1.0, 0.0), "bbox": bbox}
+    return {"spans": spans, "wmode": 0, "dir": (1.0, 0.0), "bbox": (box.x0, box.y0, box.x1, box.y1)}
 
 
-def _cover_line_glyphs(box: pymupdf.Rect, glyphs: list[GlyphBox]) -> pymupdf.Rect:
-    """擦除要盖住这一行的点阵字。字框比墨迹高，只加宽，纵向仍停在这一行。"""
-    covered = pymupdf.Rect(box)
+# 词之间的空格
+_SPACE = Glyph((-1, -1), pymupdf.Rect())
+_PROSE = ("text", "mono")
+
+
+def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
+    """每个字形写成什么：text、mono、math、symbol、script。
+
+    含数学字形的词整个是公式；夹在两个公式词中间的数字、括号也并进去，(p, s, c) 是一个公式。
+    一串公式词末尾的句号逗号是句子的标点，留在正文里。
+    """
+    mono = _mono_tokens(line, reader)
+    kinds: list[str] = []
+    for index, token in enumerate(line.tokens):
+        roles = [_role_of(glyph, line, reader) for glyph in token if not _is_script(glyph, line, reader)]
+        if index in mono:
+            # 等宽字体里没有数学：{venky, anand}@db 的括号、@ 都是原样的字
+            kinds.append("text")
+        elif any(role in ("math", "symbol") for role in roles):
+            kinds.append("math")
+        elif "text" in roles:
+            kinds.append("text")
+        else:
+            kinds.append("neutral")
+    for index, kind in enumerate(kinds):
+        if kind != "neutral":
+            continue
+        before = next((item for item in reversed(kinds[:index]) if item != "neutral"), "")
+        after = next((item for item in kinds[index + 1:] if item != "neutral"), "")
+        # k = 2、1 − (…)：紧挨着运算符的数也是公式
+        operand = (index > 0 and kinds[index - 1] == "math" and _ends_with_operator(line.tokens[index - 1], reader)) or (
+            index + 1 < len(kinds) and kinds[index + 1] == "math" and _starts_with_operator(line.tokens[index + 1], reader)
+        )
+        kinds[index] = "math" if (before == "math" and after == "math") or operand else "text"
+    absorbed = _close_brackets(line.tokens, kinds, reader)
+    styles: dict[int, str] = {}
+    for index, (token, kind) in enumerate(zip(line.tokens, kinds)):
+        tail = len(token)
+        phrase_end = index + 1 == len(kinds) or kinds[index + 1] != "math" or _ends_sentence(token, reader)
+        if kind == "math" and phrase_end:
+            opened = _phrase_depth(line.tokens, kinds, index, reader)
+            while tail > 1:
+                last = token[tail - 1]
+                if _sentence_mark(last, reader):
+                    tail -= 1
+                elif _bracket(last, reader) < 0 and opened < 0:
+                    # (using d) 的右括号是正文开的，留在正文
+                    opened += 1
+                    tail -= 1
+                else:
+                    break
+        for position, glyph in enumerate(token):
+            if _is_script(glyph, line, reader):
+                styles[id(glyph)] = "script"
+            elif (kind == "math" and position < tail) or id(glyph) in absorbed:
+                styles[id(glyph)] = "symbol" if _role_of(glyph, line, reader) == "symbol" else "math"
+            else:
+                styles[id(glyph)] = "mono" if index in mono else "text"
+    return styles
+
+
+def _close_brackets(tokens: list[list[Glyph]], kinds: list[str], reader: Type3Reader) -> set[int]:
+    """公式里开了括号，括号要在公式里合上：(i + 1)st 的 1) 归公式，st 留在正文。"""
+    absorbed: set[int] = set()
+    depth = 0
+    for token, kind in zip(tokens, kinds):
+        if kind == "math":
+            for glyph in token:
+                depth = max(depth + _bracket(glyph, reader), 0)
+            continue
+        if depth <= 0:
+            continue
+        for glyph in token:
+            absorbed.add(id(glyph))
+            depth += _bracket(glyph, reader)
+            if depth <= 0:
+                break
+        depth = max(depth, 0)
+    return absorbed
+
+
+def _phrase_depth(tokens: list[list[Glyph]], kinds: list[str], end: int, reader: Type3Reader) -> int:
+    """以 end 结尾的这串公式词里，左括号比右括号多几个。负数是多出来的右括号。"""
+    start = end
+    while start > 0 and kinds[start - 1] == "math":
+        start -= 1
+    return sum(_bracket(glyph, reader) for token in tokens[start:end + 1] for glyph in token)
+
+
+def _ends_sentence(token: list[Glyph], reader: Type3Reader) -> bool:
+    """size S. c gives：S 后面的句号断开两个公式。省略号 ... 不算。"""
+    if len(token) < 2 or not _sentence_mark(token[-1], reader) or _label_text(token[-1], reader) != ".":
+        return False
+    return _label_text(token[-2], reader) != "."
+
+
+def _starts_with_operator(token: list[Glyph], reader: Type3Reader) -> bool:
+    first = token[0]
+    return reader.roles.get(first.key) == "symbol" and _label_text(first, reader) in _OPERATORS
+
+
+def _ends_with_operator(token: list[Glyph], reader: Type3Reader) -> bool:
+    last = token[-1]
+    return reader.roles.get(last.key) == "symbol" and _label_text(last, reader) in _OPERATORS
+
+
+def _bracket(glyph: Glyph, reader: Type3Reader) -> int:
+    text = _label_text(glyph, reader)
+    return text.count("(") + text.count("[") - text.count(")") - text.count("]")
+
+
+def _sentence_mark(glyph: Glyph, reader: Type3Reader) -> bool:
+    """句子的标点认得准。下标 i 常被认成分号，但认得不稳，不算。"""
+    label = reader.labels.get(glyph.key)
+    return _sure(label) and label is not None and label.text in _SENTENCE_MARKS
+
+
+def _role_of(glyph: Glyph, line: _Line, reader: Type3Reader) -> str:
+    """细线贴着基线是下划线，是字；在基线以上是分数线，归公式。"""
+    if glyph.key == _RULE:
+        center = (glyph.rect.y0 + glyph.rect.y1) / 2
+        return "neutral" if abs(center - line.baseline) <= line.size * 0.12 else "symbol"
+    return reader.roles.get(glyph.key, "symbol")
+
+
+def _is_script(glyph: Glyph, line: _Line, reader: Type3Reader) -> bool:
+    """上下标：字号明显小，或者字号一样、整个字却上下偏开（N 下面正体的 supplier）。
+
+    偏开看字心，不看下沿：斜体的 f 本来就伸到基线以下。
+    认不出字母的符号没有字号，下沿悬在 x 高四分之三以上的（脚注记号）算上标。
+    引号本来就悬着，连字符在 x 高一半上下，都不算。
+    """
+    size = _glyph_size(glyph, reader.labels)
+    if size is None:
+        text = _label_text(glyph, reader)
+        role = reader.roles.get(glyph.key, "symbol")
+        trusted = role != "symbol" and glyph.key not in reader.doubtful
+        if role == "text" or (trusted and (text in _QUOTES or text in _DASHES)):
+            return False
+        return glyph.rect.y1 < line.baseline - line.xheight * 0.75
+    if size < line.size * _SCRIPT:
+        return True
+    kind = _letter_class(reader.labels[glyph.key].text)
+    center = (glyph.rect.y0 + glyph.rect.y1) / 2
+    expected = line.baseline - _CENTER_RATIO.get(kind or "", 0.3) * line.size
+    return abs(center - expected) > line.size * _SHIFT
+
+
+def _mono_tokens(line: _Line, reader: Type3Reader) -> set[int]:
+    """四分之三的字是等宽字形的词。挨着等宽词、字距也是格宽的词（SELECT、AS、FROM）跟着算。"""
+    found: dict[int, float] = {}
+    for index, token in enumerate(line.tokens):
+        glyphs = [glyph for glyph in token if not _label_text(glyph, reader).isdigit()]
+        known = [reader.mono[glyph.key] for glyph in glyphs if glyph.key in reader.mono]
+        if glyphs and len(known) >= len(glyphs) * 0.75:
+            found[index] = statistics.median(known)
+    grown = bool(found)
+    while grown:
+        grown = False
+        for index, token in enumerate(line.tokens):
+            near = [found[other] for other in (index - 1, index + 1) if other in found]
+            if index in found or not near:
+                continue
+            # part p：等宽词旁边的单个变量仍是公式
+            if any(reader.roles.get(glyph.key) in ("math", "symbol") for glyph in token):
+                continue
+            if all(abs(gap - near[0]) <= near[0] * 0.12 for gap in _steps(token)):
+                found[index] = near[0]
+                grown = True
+    return set(found)
+
+
+def _mono_kinds(pages: dict[int, list[_Line]], labels: dict[Key, Label]) -> dict[Key, float]:
+    """等宽字体的字形和它的格宽。
+
+    从长词里找：五个字以上、字心距处处一样、又带着 i、l、逗号这种窄字的词。
+    正文字体里窄字和邻字的字心距短一截，凑不齐；数字在哪种字体里都等宽，不算。
+    等宽字的格宽是 0.525 个字号，each、latter 这种字距也匀的正文词不到 0.48。
+    这样的词至少三个落在同一档格宽（正文和脚注各一档），它们的字形就是等宽字形。
+    """
+    candidates: list[tuple[float, list[Glyph]]] = []
+    for line in (line for lines in pages.values() for line in lines):
+        for token in line.tokens:
+            gaps = _steps(token)
+            if len(token) < 5 or min(gaps) <= 0 or max(gaps) > min(gaps) * 1.15:
+                continue
+            if statistics.median(gaps) < line.size * _MONO_PITCH:
+                continue
+            if any(_text_of(glyph, labels) in _NARROW for glyph in token):
+                candidates.append((statistics.median(gaps), token))
+    clusters: list[list[tuple[float, list[Glyph]]]] = []
+    for value, token in sorted(candidates, key=lambda item: item[0]):
+        if clusters and value <= clusters[-1][0][0] * 1.04:
+            clusters[-1].append((value, token))
+        else:
+            clusters.append([(value, token)])
+    mono: dict[Key, float] = {}
+    for cluster in clusters:
+        if len(cluster) < 3:
+            continue
+        pitch = statistics.median(value for value, _token in cluster)
+        for _value, token in cluster:
+            mono.update((glyph.key, pitch) for glyph in token if not _text_of(glyph, labels).isdigit())
+    return mono
+
+
+def _steps(token: list[Glyph]) -> list[float]:
+    return [_middle(right) - _middle(left) for left, right in zip(token, token[1:])]
+
+
+def _middle(glyph: Glyph) -> float:
+    return (glyph.rect.x0 + glyph.rect.x1) / 2
+
+
+def _label_text(glyph: Glyph, reader: Type3Reader) -> str:
+    return _text_of(glyph, reader.labels)
+
+
+def _span(run: list[Glyph], style: str, line: _Line, reader: Type3Reader) -> dict[str, Any]:
+    glyphs = [glyph for glyph in run if glyph is not _SPACE]
+    text = "".join(" " if glyph is _SPACE else _label_text(glyph, reader) for glyph in run)
+    ink = pymupdf.Rect()
     for glyph in glyphs:
-        cy = (glyph.rect.y0 + glyph.rect.y1) / 2
-        if not (box.y0 - 1 <= cy <= box.y1 + 1):
-            continue
-        if not _x_hits(glyph.rect, box):
-            continue
-        covered.x0 = min(covered.x0, glyph.rect.x0)
-        covered.x1 = max(covered.x1, glyph.rect.x1)
-    return covered
-
-
-def _spans_from_pieces(pieces: list[_Piece]) -> list[dict[str, Any]]:
-    spans: list[dict[str, Any]] = []
-    prose: list[_Piece] = []
-
-    def flush(trailing_formula: bool) -> None:
-        if not prose:
-            return
-        box = pymupdf.Rect()
-        for piece in prose:
-            box |= piece.rect
-        text = " ".join(piece.text for piece in prose)
-        if spans and spans[-1]["font"] == _FORMULA_FONT:
-            text = " " + text
-        if trailing_formula:
-            text += " "
-        spans.append(_span(text, box, "Times-Roman"))
-        prose.clear()
-
-    for index, piece in enumerate(pieces):
-        if piece.kind == "formula":
-            nxt = pieces[index + 1] if index + 1 < len(pieces) else None
-            flush(nxt is not None and nxt.kind == "prose")
-            spans.append(_span(_FORMULA_MARK, piece.rect, _FORMULA_FONT))
-            continue
-        prose.append(piece)
-    flush(False)
-    return spans
-
-
-def _span(text: str, box: pymupdf.Rect, font: str) -> dict[str, Any]:
-    pad = 0.6
-    bbox = (box.x0 - pad, box.y0 - pad, box.x1 + pad, box.y1 + pad)
+        ink |= glyph.rect
+    if style == "script":
+        sizes = [size for glyph in glyphs if (size := _glyph_size(glyph, reader.labels))]
+        size = round(statistics.median(sizes), 1) if sizes else round(line.size * 0.7, 1)
+        baseline = ink.y1
+        box = pymupdf.Rect(ink)
+    else:
+        size = round(line.size, 1)
+        baseline = line.baseline
+        box = ink | pymupdf.Rect(ink.x0, baseline - size * 0.72, ink.x1, baseline + size * 0.22)
+    # 擦除按这个框。MuPDF 判断点阵字在不在框里，看的是贴在墨迹顶上的一条细框，
+    # 最高的字正好压在框边上会擦不掉，四周留一点余量
+    box = pymupdf.Rect(box.x0 - _PAD, box.y0 - _PAD, box.x1 + _PAD, box.y1 + _PAD)
+    font = {
+        "text": _TEXT_FONT, "mono": _MONO_FONT, "math": _MATH_FONT, "symbol": _SYMBOL_FONT, "script": _MATH_FONT,
+    }[style]
     return {
         "text": text,
-        "bbox": bbox,
-        "size": 10.0,
+        "bbox": (box.x0, box.y0, box.x1, box.y1),
+        "size": size,
         "font": font,
         "flags": 0,
-        "color": 0,
-        "origin": (bbox[0], bbox[3]),
-        "ascender": 0.8,
-        "descender": -0.2,
+        "color": glyphs[0].color if glyphs else 0,
+        "origin": (ink.x0, baseline),
+        "ascender": 0.75,
+        "descender": -0.25,
     }
 
 
-def _table_bar(word: OcrWord) -> bool:
-    """格子里的竖线。集合记号 {b | a < b} 里的竖线不是表。"""
-    text = word.text
-    if not _BAR_CHAR.search(text) or any(mark in text for mark in "{}="):
-        return False
-    return len(text) <= 48
+def _group_lines(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    """行距内、横向交叠、字号相近的行并成一块，和 PyMuPDF 对普通字体的分块一样。分段交给后面。
 
-
-def _formula_row(row: list[OcrWord]) -> bool:
-    """同一基线上有大括号，竖线是集合分隔符，不是格子。格子里的等号仍是表。"""
-    return any(any(mark in word.text for mark in "{}") for word in row)
-
-
-def _table_row(row: list[OcrWord]) -> bool:
-    """竖线粘在格子文字里，或单独的竖线旁边还有格子文字。光一根竖线是公式分隔符。"""
-    bars = [word for word in row if _table_bar(word)]
-    if not bars or _formula_row(row):
-        return False
-    if any(len(word.text.strip()) > 1 for word in bars):
-        return True
-    return any(not _table_bar(word) for word in row)
-
-
-def _bar_zones(words: list[OcrWord]) -> list[_Zone]:
-    """竖线写在格子文字里，不是单独的词。这样的几行围出一张字形表，整表留下原字。
-
-    竖线常在格子中间。左列，以及夹在中间、没认出竖线的行，都在这张表的纵带里。
+    行距按基线量。行框会被高括号、下标撑开，两行的框叠在一起不说明什么。
     """
-    table_rows = [row for row in _baseline_rows(words) if _table_row(row)]
-    if len(table_rows) < 2:
-        return []
-    y0 = min(word.rect.y0 for row in table_rows for word in row)
-    y1 = max(word.rect.y1 for row in table_rows for word in row)
-    if y1 - y0 < 24 or y1 - y0 > 220:
-        return []
-    box = pymupdf.Rect()
-    for word in words:
-        cy = (word.rect.y0 + word.rect.y1) / 2
-        if y0 - 4 <= cy <= y1 + 4:
-            box |= word.rect
-    if box.is_empty or box.height > 240:
-        return []
-    return [_Zone(pymupdf.Rect(box.x0 - 6, box.y0 - 4, box.x1 + 8, box.y1 + 4))]
+    ordered = sorted(lines, key=lambda line: (_baseline(line), float(line["bbox"][0])))
+    groups: list[list[dict[str, Any]]] = []
+    for line in ordered:
+        box = pymupdf.Rect(line["bbox"])
+        size = _line_size(line)
+        best: list[dict[str, Any]] | None = None
+        for group in groups:
+            prev = pymupdf.Rect(group[-1]["bbox"])
+            prev_size = _line_size(group[-1])
+            step = _baseline(line) - _baseline(group[-1])
+            if not (0 < step <= max(size, prev_size) * _LEADING):
+                continue
+            if min(box.x1, prev.x1) - max(box.x0, prev.x0) <= 0:
+                continue
+            if max(size, prev_size) > min(size, prev_size) * 1.15:
+                continue
+            best = group
+        if best is None:
+            groups.append([line])
+        else:
+            best.append(line)
+    return groups
 
 
-def _drawing_zones(page: pymupdf.Page) -> list[_Zone]:
-    """细笔画凑成的格子、坐标图。单根下划线不成区，节点标签落在区里就留下原字。"""
-    try:
-        drawings = page.get_drawings()
-    except Exception:  # noqa: BLE001 - 个别页面的矢量读不出来，当没有图
-        return []
-    rects: list[pymupdf.Rect] = []
-    width, height = page.rect.width, page.rect.height
-    for drawing in drawings:
-        if _blank_fill(drawing):
-            continue
-        rect = pymupdf.Rect(drawing.get("rect"))
-        if rect.width < 0.4 and rect.height < 4:
-            continue
-        if rect.height < 0.4 and rect.width < 4:
-            continue
-        if rect.width > width * 0.85 and rect.height > height * 0.85:
-            continue
-        rects.append(rect)
-    return _cluster_drawings(rects, width, height)
+def _baseline(line: dict[str, Any]) -> float:
+    spans = [span for span in line["spans"] if span["font"] in (_TEXT_FONT, _MONO_FONT)] or line["spans"]
+    return float(max(spans, key=lambda span: float(span["size"]))["origin"][1])
 
 
-def _cluster_drawings(
-    rects: list[pymupdf.Rect], page_width: float, page_height: float,
-) -> list[_Zone]:
-    """靠在一起的笔画收成一块。标签贴在笔画外侧几个点，框要稍向外扩。"""
-    if len(rects) < _MIN_CLUSTER:
-        return []
-    parent = list(range(len(rects)))
-
-    def find(index: int) -> int:
-        while parent[index] != index:
-            parent[index] = parent[parent[index]]
-            index = parent[index]
-        return index
-
-    for left, right in _close_pairs(rects):
-        parent[find(left)] = find(right)
-    groups: dict[int, list[pymupdf.Rect]] = {}
-    for index, rect in enumerate(rects):
-        groups.setdefault(find(index), []).append(rect)
-    zones: list[_Zone] = []
-    for items in groups.values():
-        if len(items) < _MIN_CLUSTER:
-            continue
-        box = pymupdf.Rect()
-        for item in items:
-            box |= item
-        if box.width * box.height < _MIN_ZONE_AREA:
-            continue
-        padded = pymupdf.Rect(
-            box.x0 - _ZONE_PAD_X, box.y0 - _ZONE_PAD_TOP,
-            box.x1 + _ZONE_PAD_X, box.y1 + _ZONE_PAD_BOTTOM,
-        )
-        if page_width > 0 and padded.width > page_width * 0.92 and padded.height > page_height * 0.75:
-            continue
-        zones.append(_Zone(padded))
-    return zones
+def _line_size(line: dict[str, Any]) -> float:
+    sizes = [float(span["size"]) for span in line["spans"] if span["font"] in (_TEXT_FONT, _MONO_FONT)]
+    return max(sizes) if sizes else max(float(span["size"]) for span in line["spans"])
 
 
-def _close_pairs(rects: list[pymupdf.Rect]) -> list[tuple[int, int]]:
-    pairs: list[tuple[int, int]] = []
-    for index, rect in enumerate(rects):
-        for other_index in range(index + 1, len(rects)):
-            other = rects[other_index]
-            gap_x = max(0.0, max(rect.x0, other.x0) - min(rect.x1, other.x1))
-            gap_y = max(0.0, max(rect.y0, other.y0) - min(rect.y1, other.y1))
-            if gap_x <= _CLUSTER_GAP and gap_y <= _CLUSTER_GAP:
-                pairs.append((index, other_index))
-    return pairs
-
-
-def _blank_fill(drawing: dict[str, Any]) -> bool:
-    if drawing.get("type") != "f":
-        return False
-    fill = drawing.get("fill")
-    if not isinstance(fill, (tuple, list)) or len(fill) < 3:
-        return False
-    return all(float(channel) >= 0.96 for channel in fill[:3])
-
-
-def _pipe_zones(words: list[OcrWord]) -> list[_Zone]:
-    """竖线字形围出的表。线不是矢量，按格拆不开，整表留下原字。"""
-    pipes = [word for word in words if _PIPE_TEXT.fullmatch(word.text.strip())]
-    columns = _vertical_pipe_columns(pipes, 4, 36.0)
-    if not columns:
-        return []
-    related = [pipe for column in columns for pipe in column]
-    seen = {id(pipe) for pipe in related}
-    baselines = [(pipe.rect.y0 + pipe.rect.y1) / 2 for pipe in related]
-    for pipe in pipes:
-        if id(pipe) in seen:
-            continue
-        cy = (pipe.rect.y0 + pipe.rect.y1) / 2
-        if any(abs(cy - base) <= 6 for base in baselines):
-            related.append(pipe)
-            seen.add(id(pipe))
-    box = pymupdf.Rect()
-    for pipe in related:
-        box |= pipe.rect
-    if box.height > 520:
-        return []
-    xs = sorted({round(pipe.rect.x0, 1) for pipe in related})
-    gaps = [right - left for left, right in zip(xs, xs[1:]) if right - left >= 8]
-    pitch = sorted(gaps)[len(gaps) // 2] if gaps else 64.0
-    rect = pymupdf.Rect(box.x0 - pitch - 8, box.y0 - 4, box.x1 + pitch + 12, box.y1 + 4)
-    return [_Zone(rect)]
-
-
-def _label_zones(words: list[OcrWord], covered: list[_Zone]) -> list[_Zone]:
-    """两三根竖线是格子的边。旁边的短标签留下原字，整句正文不挡。"""
-    pipes = [word for word in words if _PIPE_TEXT.fullmatch(word.text.strip())]
-    zones: list[_Zone] = []
-    for column in _vertical_pipe_columns(pipes, 2, 16.0):
-        box = pymupdf.Rect()
-        for pipe in column:
-            box |= pipe.rect
-        padded = pymupdf.Rect(box.x0 - 14, box.y0 - 8, box.x1 + 14, box.y1 + 14)
-        if any(_mostly_inside(padded, zone.rect) for zone in covered):
-            continue
-        zones.append(_Zone(padded, labels_only=True))
-    return zones
-
-
-def _vertical_pipe_columns(
-    pipes: list[OcrWord], min_count: int, min_span: float,
-) -> list[list[OcrWord]]:
-    columns: list[list[OcrWord]] = []
-    for pipe in sorted(pipes, key=lambda item: item.rect.x0):
-        placed = False
-        for column in columns:
-            anchor = sum(item.rect.x0 for item in column) / len(column)
-            if abs(pipe.rect.x0 - anchor) <= 5:
-                column.append(pipe)
-                placed = True
-                break
-        if not placed:
-            columns.append([pipe])
-    kept: list[list[OcrWord]] = []
-    for column in columns:
-        if len(column) < min_count:
-            continue
-        top = min(pipe.rect.y0 for pipe in column)
-        bottom = max(pipe.rect.y1 for pipe in column)
-        if bottom - top < min_span:
-            continue
-        kept.append(column)
-    return kept
-
-
-def _hidden(word: OcrWord, zones: list[_Zone]) -> bool:
-    if not zones:
-        return False
-    cx = (word.rect.x0 + word.rect.x1) / 2
-    cy = (word.rect.y0 + word.rect.y1) / 2
-    short = word.rect.width <= 48 and len(word.text.strip()) <= 8
-    for zone in zones:
-        inside = zone.rect.x0 <= cx <= zone.rect.x1 and zone.rect.y0 <= cy <= zone.rect.y1
-        if inside and (not zone.labels_only or short):
-            return True
-        # 节点标签贴在笔画上方几个点。整句正文比标签长，不挡。
-        if short and not zone.labels_only and zone.rect.x0 - 8 <= cx <= zone.rect.x1 + 8:
-            if zone.rect.y0 - 14 <= cy < zone.rect.y0:
-                return True
-    return False
-
-
-def _mostly_inside(inner: pymupdf.Rect, outer: pymupdf.Rect) -> bool:
-    hit = inner & outer
-    if hit.is_empty or inner.width < 0.4 or inner.height < 0.4:
-        return False
-    return hit.width * hit.height >= inner.width * inner.height * 0.6
-
-
-def _stands_alone(line: dict[str, Any]) -> bool:
-    """编号标题、列表项、SQL 行不吞下一行，也不被上一行吞掉。"""
-    text = _span_text(line)
-    if not text:
-        return False
-    if _SQL_LINE.match(text):
-        return True
-    return bool(_NUMBERED_LINE.match(text) and len(text) <= 90)
-
-
-def _footnote_start(line: dict[str, Any]) -> bool:
-    """脚注记号被认成引号或问号。它不是上一段的下一行。"""
-    return bool(_FOOTNOTE_START.match(_span_text(line)))
-
-
-def _example_start(line: dict[str, Any]) -> bool:
-    return bool(_EXAMPLE_START.match(_span_text(line)))
-
-
-def _letter_item(line: dict[str, Any]) -> bool:
-    """(a) (b) 各自起条。续行不是这种开头，仍接在这一条上。"""
-    return bool(_LETTER_ITEM.match(_span_text(line)))
-
-
-def _starts_after_hole(prev: pymupdf.Rect, nxt: pymupdf.Rect) -> bool:
-    """从远远的右侧起笔。左边是没认出来的公式，悬挂缩进没有这么宽。
-
-    同一基线上的后半句不是这种情况。破折号后面的列举要留在这一句里。
-    """
-    if _same_baseline(prev, nxt):
-        return False
-    return nxt.x0 > prev.x0 + 40
-
-
-def _returns_past_hole(prev: pymupdf.Rect, nxt: pymupdf.Rect) -> bool:
-    """下一行回到左缘，上一行却从公式右边起笔。并进去会把公式框进写入范围。"""
-    if _same_baseline(prev, nxt):
-        return False
-    return nxt.x0 < prev.x0 - 40
-
-
-def _covers_right_neighbor(
-    prev: pymupdf.Rect, nxt: pymupdf.Rect, pending: list[pymupdf.Rect],
-) -> bool:
-    """上一行只是公式左边的半句，右边还有另一半。下一整行并进来会盖住那一半。"""
-    if prev.width > 160 or nxt.x0 > prev.x0 + 24:
-        return False
-    for other in pending:
-        if other.x0 <= prev.x1 + 4:
-            continue
-        if _same_baseline(prev, other) and other.x0 - prev.x1 <= 80:
-            return True
-    return False
-
-
-def _same_baseline(prev: pymupdf.Rect, nxt: pymupdf.Rect) -> bool:
-    overlap = min(prev.y1, nxt.y1) - max(prev.y0, nxt.y0)
-    height = min(prev.height, nxt.height)
-    return height > 0 and overlap > height * 0.4
-
-
-def _snap_group_size(group: list[dict[str, Any]]) -> None:
-    """同一段里墨迹高低不一，不能因此写出字号标记。差得太多的是另一级标题，不动。"""
-    sizes = [
-        float(span["size"])
-        for line in group
-        for span in line.get("spans") or []
-        if isinstance(span.get("size"), (int, float)) and float(span["size"]) > 0
-    ]
-    if len(sizes) < 2:
-        return
-    low, high = min(sizes), max(sizes)
-    if high > low * 1.35:
-        return
-    median = sorted(sizes)[len(sizes) // 2]
-    for line in group:
-        for span in line.get("spans") or []:
-            if span.get("size"):
-                span["size"] = median
-
-
-def _span_text(line: dict[str, Any]) -> str:
-    return " ".join(str(span.get("text") or "") for span in line.get("spans") or []).strip()
-
-
-def _lone_section_number(words: list[OcrWord]) -> bool:
-    """这一段目前只有一个节号。行尾的年份不是节号，不能把下一栏吸进来。"""
-    if len(words) != 1:
-        return False
-    return bool(_SECTION_NO.fullmatch(words[0].text.strip()))
+# ---- 共用 ----
 
 
 def _custom_encoding(doc: pymupdf.Document, xref: int) -> bool:
@@ -1199,35 +1380,6 @@ def _broken_share(data: PageData, names: set[str]) -> float:
     return broken / total
 
 
-def _broken_lines(data: PageData, names: set[str]) -> list[GlyphBox]:
-    """丢掉字符码之前，留下点阵字框。零宽码没有墨迹，不参与对位。"""
-    found: list[GlyphBox] = []
-    for block in data["blocks"]:
-        if block.get("type") != 0:
-            continue
-        for line in block["lines"]:
-            for span in line["spans"]:
-                if span.get("font") not in names:
-                    continue
-                raw = span.get("bbox")
-                if not raw:
-                    continue
-                box = pymupdf.Rect(raw)
-                if box.is_empty or box.width < 0.4:
-                    continue
-                origin = span.get("origin")
-                origin_y = float(origin[1]) if origin and len(origin) >= 2 else box.y1
-                found.append(GlyphBox(
-                    rect=box,
-                    em=visual_em(span),
-                    color=_as_int(span.get("color")),
-                    origin_y=origin_y,
-                    flags=_as_int(span.get("flags")),
-                    font=str(span.get("font") or ""),
-                ))
-    return found
-
-
 def _drop_broken_lines(data: PageData, names: set[str]) -> None:
     """删掉字符码。图片和正常字体留下。混在同一行里的正常字也留下。"""
     kept: list[dict[str, Any]] = []
@@ -1252,166 +1404,6 @@ def _drop_broken_lines(data: PageData, names: set[str]) -> None:
     data["blocks"] = kept
 
 
-def _line_from_words(segment: list[OcrWord], originals: list[GlyphBox]) -> dict[str, Any] | None:
-    """一组词合成一行。没盖住点阵字框的词不是这页的坏字体，不另起一行。"""
-    words = _dedupe(sorted(segment, key=lambda word: word.rect.x0))
-    if not words:
-        return None
-    text = " ".join(word.text for word in words).strip()
-    if not text:
-        return None
-    ink = pymupdf.Rect()
-    for word in words:
-        ink |= word.rect
-    matched = [glyph for glyph in originals if _same_band(glyph.rect, ink) and _x_hits(glyph.rect, ink)]
-    if not matched:
-        return None
-    pad = 0.6
-    box = pymupdf.Rect(ink.x0 - pad, ink.y0 - pad, ink.x1 + pad, ink.y1 + pad)
-    glyph = max(matched, key=lambda item: _overlap_width(item.rect, ink))
-    size = _line_size(text, ink.height, glyph.em)
-    bbox = (box.x0, box.y0, box.x1, box.y1)
-    span: dict[str, Any] = {
-        "text": text,
-        "bbox": bbox,
-        "size": size,
-        "font": "Times-Roman",
-        "flags": glyph.flags,
-        "color": glyph.color,
-        "origin": (box.x0, _ocr_baseline([(word.text, word.rect) for word in words], glyph.origin_y)),
-        "ascender": 0.8,
-        "descender": -0.2,
-    }
-    return {"spans": [span], "wmode": 0, "dir": (1.0, 0.0), "bbox": bbox}
-
-
-def _group_lines(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """行距内、同一栏的行并成一块，后面的分段才接得上。并排的署名不并。
-
-    编号标题、列表项和 SQL 行各自一块。公式左边没认出来时，右侧半句不能并进
-    上一行：并进去的写入框会盖住公式，再压到下一段。
-    """
-    ordered = sorted(lines, key=lambda line: (float(line["bbox"][1]), float(line["bbox"][0])))
-    groups: list[list[dict[str, Any]]] = []
-    for index, line in enumerate(ordered):
-        box = pymupdf.Rect(line["bbox"])
-        pending = [pymupdf.Rect(item["bbox"]) for item in ordered[index + 1:]]
-        placed = [pymupdf.Rect(item["bbox"]) for group in groups for item in group]
-        neighbors = [*pending, *placed]
-        best: tuple[float, list[dict[str, Any]]] | None = None
-        for group in groups:
-            prev_line = group[-1]
-            prev = pymupdf.Rect(prev_line["bbox"])
-            gap = box.y0 - prev.y1
-            if gap > max(prev.height * 0.9, _LINE_GAP) or not _x_aligned(prev, box):
-                continue
-            if _stands_alone(prev_line) or _stands_alone(line):
-                continue
-            if _example_start(line) and not _example_start(prev_line):
-                continue
-            if _footnote_start(line) and not _footnote_start(prev_line):
-                continue
-            if _letter_item(line):
-                continue
-            if _starts_after_hole(prev, box) or _returns_past_hole(prev, box):
-                continue
-            if _covers_right_neighbor(prev, box, neighbors):
-                continue
-            if best is None or gap < best[0]:
-                best = (gap, group)
-        if best is None:
-            groups.append([line])
-        else:
-            best[1].append(line)
-    for group in groups:
-        _snap_group_size(group)
-    return groups
-
-
-def _ink_size(text: str, height: float) -> float:
-    """墨迹高度就是磅值。有没有下伸字母不再另乘一档，否则同一段写出两种字号。"""
-    del text
-    if height <= 0:
-        return 0.0
-    return round(min(max(height, 6.0), 36.0), 1)
-
-
-def _prose_height(line: dict[str, Any]) -> float:
-    """公式槽的高框不算。一行的字号看正文墨迹。"""
-    height = 0.0
-    for span in line.get("spans") or []:
-        if span.get("font") == _FORMULA_FONT:
-            continue
-        raw = span.get("bbox")
-        if not raw or len(raw) < 4:
-            continue
-        height = max(height, float(raw[3]) - float(raw[1]))
-    return height
-
-
-def _snap_page_sizes(lines: list[dict[str, Any]]) -> None:
-    """同一页正文用一个字号，取正文墨迹高度的中位数。
-
-    字数够成句的行就是正文，墨迹被公式撑高也不另起一档。
-    墨迹明显更高的短行是标题，留下原来的字号。
-    """
-    heights = [
-        height
-        for line in lines
-        if (height := _prose_height(line)) >= 6 and height <= 20
-        and sum(ch.isalpha() for ch in _span_text(line)) >= 12
-    ]
-    if not heights:
-        return
-    median = sorted(heights)[len(heights) // 2]
-    body = round(min(max(median, 8.0), 14.0), 1)
-    limit = median * 1.35
-    for line in lines:
-        height = _prose_height(line)
-        letters = sum(ch.isalpha() for ch in _span_text(line))
-        if height <= 0:
-            continue
-        if letters < 12 and height > limit and letters >= 4:
-            continue
-        for span in line.get("spans") or []:
-            if span.get("size"):
-                span["size"] = body
-
-
-def _line_size(text: str, ink_height: float, em: float) -> float:
-    guessed = _ink_size(text, ink_height)
-    if em > 0 and guessed > em * 1.45:
-        return round(em * 1.45, 1)
-    return guessed
-
-
-def _same_band(glyph: pymupdf.Rect, ink: pymupdf.Rect) -> bool:
-    glyph_y = (glyph.y0 + glyph.y1) / 2
-    ink_y = (ink.y0 + ink.y1) / 2
-    return abs(glyph_y - ink_y) <= _BAND
-
-
-def _x_hits(glyph: pymupdf.Rect, ink: pymupdf.Rect) -> bool:
-    return glyph.x1 >= ink.x0 - _X_SLACK and glyph.x0 <= ink.x1 + _X_SLACK
-
-
-def _overlap_width(glyph: pymupdf.Rect, ink: pymupdf.Rect) -> float:
-    return min(glyph.x1, ink.x1) - max(glyph.x0, ink.x0)
-
-
-def _x_aligned(prev: pymupdf.Rect, nxt: pymupdf.Rect) -> bool:
-    overlap = min(prev.x1, nxt.x1) - max(prev.x0, nxt.x0)
-    if overlap > min(prev.width, nxt.width) * 0.3:
-        return True
-    if abs(nxt.x0 - prev.x0) <= max(prev.height, 12.0) * 2:
-        return True
-    # 同一基线上、空隙不大的后半句。公式空洞比一个破折号宽得多，不从这里接上。
-    if _same_baseline(prev, nxt):
-        gap = nxt.x0 - prev.x1
-        return -2 <= gap <= 24
-    return False
-
-
 def _union_bbox(lines: list[dict[str, Any]]) -> tuple[float, float, float, float]:
     box = pymupdf.Rect()
     for line in lines:
@@ -1421,43 +1413,11 @@ def _union_bbox(lines: list[dict[str, Any]]) -> tuple[float, float, float, float
     return (box.x0, box.y0, box.x1, box.y1)
 
 
-def _as_int(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        return 0
-    return value
+def _center_in(rect: pymupdf.Rect, box: pymupdf.Rect) -> bool:
+    cx = (rect.x0 + rect.x1) / 2
+    cy = (rect.y0 + rect.y1) / 2
+    return box.x0 <= cx <= box.x1 and box.y0 <= cy <= box.y1
 
 
-def _dedupe(words: list[OcrWord]) -> list[OcrWord]:
-    ordered = sorted(words, key=lambda word: (word.rect.x0, -word.conf))
-    kept: list[OcrWord] = []
-    for word in ordered:
-        if kept and word.rect.x0 < kept[-1].rect.x1 - 1:
-            if word.conf > kept[-1].conf:
-                kept[-1] = word
-            continue
-        kept.append(word)
-    return kept
-
-
-def _parse_tsv(raw: str, scale: float) -> list[OcrWord]:
-    words: list[OcrWord] = []
-    for row in raw.splitlines()[1:]:
-        parts = row.split("\t")
-        if len(parts) < 12 or parts[0] != "5":
-            continue
-        text = parts[11].strip()
-        if not text:
-            continue
-        try:
-            conf = float(parts[10])
-            left, top, width, height = (float(parts[index]) for index in (6, 7, 8, 9))
-        except ValueError:
-            continue
-        if conf < _MIN_CONF or width < 1 or height < 1 or scale <= 0:
-            continue
-        words.append(OcrWord(
-            text,
-            pymupdf.Rect(left / scale, top / scale, (left + width) / scale, (top + height) / scale),
-            conf,
-        ))
-    return words
+def _overlap(left: pymupdf.Rect, right: pymupdf.Rect) -> float:
+    return min(left.x1, right.x1) - max(left.x0, right.x0)
