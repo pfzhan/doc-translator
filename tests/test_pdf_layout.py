@@ -459,3 +459,17 @@ def test_repeated_header_and_page_number_stay_untranslated():
     boxed = PageGeometry.from_rects(400, [pymupdf.Rect(40, 80, 200, 94)], height=800, tables=[table])
     number = _block("4", 0, pymupdf.Rect(48, 752, 70, 766), size=9)
     assert margin_skips([number], [boxed]) == [False]
+
+
+def test_rotated_page_geometry_uses_the_unrotated_size():
+    """旋转页的文字坐标没转。页宽页高也按没转的算，和不旋转的同一页一样。"""
+    geos = []
+    for rotation in (0, 90):
+        doc = pymupdf.open()
+        page = doc.new_page(width=600, height=800)
+        page.draw_rect(pymupdf.Rect(60, 560, 300, 760), color=(0, 0, 0))
+        page.set_rotation(rotation)
+        geos.append(PageGeometry.from_page(page, [*_stack(40, 250, 40), *_stack(330, 560, 40)]))
+    plain, rotated = geos
+    assert (rotated.width, rotated.height) == (600, 800)
+    assert rotated == plain

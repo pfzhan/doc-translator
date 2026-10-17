@@ -2803,6 +2803,43 @@ def test_column_tail_drawn_before_its_host_keeps_the_paragraph(tmp_path):
     assert "continues the gamma sentence" in text
 
 
+def test_rotated_pages_lay_out_like_unrotated_ones(tmp_path):
+    """旋转 90 度的页面，跨页段落的译文排法和不旋转时一样：不提前停笔，字号不缩。"""
+    from app.formats.pdf import translate_pdf
+
+    words = ("lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod "
+             "tempor incididunt ut labore et dolore magna aliqua ").split()
+    layouts = []
+    for rotation in (0, 90):
+        doc = pymupdf.open()
+        index = 0
+        for pno in range(2):
+            page = doc.new_page(width=595, height=842)
+            writer = pymupdf.TextWriter(page.rect)
+            for y in range(60, 790, 12):
+                line: list[str] = []
+                while len(" ".join(line)) < 80:
+                    line.append(words[index % len(words)])
+                    index += 1
+                text = " ".join(line)
+                writer.append((50, y), ("The " + text) if pno == 0 and y == 60 else text, fontsize=10)
+            writer.write_text(page)
+            page.set_rotation(rotation)
+        src = tmp_path / f"rot{rotation}.pdf"
+        doc.save(src)
+        [out] = run(translate_pdf(src, tmp_path, runner(), False, "zh-CN"))
+        layouts.append([
+            sorted(
+                (round(span["bbox"][1]), round(span["size"], 1))
+                for blk in page.get_text("dict")["blocks"] if blk.get("type") == 0
+                for ln in blk["lines"] for span in ln["spans"]
+            )
+            for page in pymupdf.open(out)
+        ])
+    plain, rotated = layouts
+    assert rotated == plain
+
+
 def test_capital_continuation_joins_across_columns_only():
     """换栏可以接在专有名词上。同一栏的大写换行仍分开。"""
     from app.formats.pdf import TextBlock, _cross_page_units, _merge_continuations

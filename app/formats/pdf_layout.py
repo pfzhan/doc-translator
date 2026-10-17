@@ -136,11 +136,12 @@ class PageGeometry:
 
     @staticmethod
     def from_page(page: pymupdf.Page, text_rects: list[pymupdf.Rect]) -> PageGeometry:
+        bounds = text_page_rect(page)
         return PageGeometry.from_rects(
-            page.rect.width,
+            bounds.width,
             text_rects,
             _figure_rects(page),
-            page.rect.height,
+            bounds.height,
             page_tables(page),
         )
 
@@ -149,6 +150,11 @@ class _MarginBlock(Protocol):
     page: int
     rect: pymupdf.Rect
     text: str
+
+
+def text_page_rect(page: pymupdf.Page) -> pymupdf.Rect:
+    """文字坐标所在的页面框。旋转页的 page.rect 是转过的，提取出来的坐标没转。"""
+    return pymupdf.Rect(0, 0, page.cropbox.width, page.cropbox.height)
 
 
 def cell_containing(rect: pymupdf.Rect, tables: Sequence[RuledTable]) -> pymupdf.Rect | None:
@@ -342,7 +348,7 @@ def unruled_tables(page: pymupdf.Page, ruled: Sequence[RuledTable] = ()) -> tupl
         while cursor < len(rows) and _continues_grid(run, rows[cursor]):
             run.append(rows[cursor])
             cursor += 1
-        table = _grid_table(run, page.rect.width)
+        table = _grid_table(run, text_page_rect(page).width)
         if table is not None:
             tables.append(table)
             index = cursor
@@ -715,7 +721,8 @@ def _is_blank_fill(drawing: dict) -> bool:
 
 
 def _figure_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
-    width, height = page.rect.width, page.rect.height
+    bounds = text_page_rect(page)
+    width, height = bounds.width, bounds.height
     found: list[pymupdf.Rect] = []
     for info in page.get_image_info():
         rect = pymupdf.Rect(info.get("bbox"))
