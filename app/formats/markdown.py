@@ -6,6 +6,8 @@ from pathlib import Path
 FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 HEADING_RE = re.compile(r"^(\s{0,3}#{1,6}\s+)(.*?)(\s+#+\s*)?$")
 LIST_RE = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?)(.*)$")
+# 列表项正文的起始列：标记加后面的空格，任务框算正文
+LIST_CONTENT_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 QUOTE_RE = re.compile(r"^(\s*(?:>\s?)+)(.*)$")
 TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
 HR_RE = re.compile(r"^\s{0,3}([-*_])(\s*\1){2,}\s*$")
@@ -66,6 +68,8 @@ def split_blocks(text: str) -> list[Block]:
                 break
 
     para: list[str] = []
+    # 最近一个列表项正文的起始列。空行后缩进到这一列的段落还属于这个列表项
+    list_offset: int | None = None
 
     def flush():
         if para:
@@ -89,12 +93,17 @@ def split_blocks(text: str) -> list[Block]:
             blocks.append(Block("raw", [line]))
             i += 1
             continue
+        indent = len(line) - len(line.lstrip(" "))
+        if list_offset is not None and indent < list_offset and not para:
+            list_offset = None
+        # 列表项里的缩进代码块要比正文再多缩进 4 格
+        in_item = list_offset is not None and indent < list_offset + 4
         if para and SETEXT_RE.match(line):
             blocks.append(Block("setext", para + [line]))
             para.clear()
             i += 1
             continue
-        if HR_RE.match(line) or line.startswith("    ") and not para:
+        if HR_RE.match(line) or line.startswith("    ") and not para and not in_item:
             # 分隔线 / 缩进代码块
             flush()
             blocks.append(Block("raw", [line]))
@@ -141,6 +150,8 @@ def split_blocks(text: str) -> list[Block]:
                     break
                 j += 1
             blocks.append(Block("list", lines[i:j]))
+            last_item = _list_items(lines[i:j])[-1][3][0]
+            list_offset = len(LIST_CONTENT_RE.match(last_item).group(0))
             i = j
             continue
         if QUOTE_RE.match(line) and not para:
@@ -172,7 +183,9 @@ def collect_segments(blocks: list[Block]) -> list[str]:
             m = HEADING_RE.match(b.lines[0])
             b.segments = [(0, m.group(1), m.group(2))]
         elif b.kind == "para":
-            b.segments = [(0, "", " ".join(l.strip() for l in b.lines))]
+            # 前缀是首行缩进：列表项里的续段要留在原来的列
+            lead = b.lines[0][: len(b.lines[0]) - len(b.lines[0].lstrip())]
+            b.segments = [(0, lead, " ".join(l.strip() for l in b.lines))]
         elif b.kind == "setext":
             b.segments = [(0, "", " ".join(l.strip() for l in b.lines[:-1]))]
         elif b.kind == "list":
@@ -282,11 +295,11 @@ def render(blocks: list[Block], tr: dict[str, str], bilingual: bool) -> str:
             out.append(t(text))
             out.append(b.lines[-1])
         elif b.kind == "para":
-            text = b.segments[0][2]
+            _, lead, text = b.segments[0]
             if bilingual:
                 out.extend(b.lines)
                 out.append("")
-            out.append(t(text))
+            out.append(lead + t(text))
         elif b.kind == "quote":
             for kind, _, qpre, mpre, text, raw in _quote_units(b.lines):
                 if kind == "raw" or not _translatable(text):
