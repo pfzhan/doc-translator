@@ -240,8 +240,12 @@ def test_words_from_a_math_font_stay_glyphs():
     words = [*body, *math, heading, italic, section]
     found = _math_font_words(words, glyphs)
     assert {w.text for w in words if id(w) in found} == {"6}", "(L,", "a"}
-    kept = [w.text for w in _without_noise(words, found)]
-    assert "6}" not in kept and "of" in kept and "i.e.," in kept and "4.3" in kept
+    # 组行后这三个词并成一个公式槽，其余照常是正文
+    lines = _compose_lines(words, [], glyphs, {tuple(w.rect) for w in words if id(w) in found})
+    texts = " ".join(span["text"] for line in lines for span in line["spans"])
+    assert "6}" not in texts and "(L," not in texts
+    assert "of" in texts and "i.e.," in texts and "4.3" in texts
+    assert sum(span["text"] == "×" for line in lines for span in line["spans"]) == 1
 
 def test_low_confidence_words_from_formulas_are_noise():
     """公式字形认成的 rains、Tag 置信度在 25 上下，当乱码；40 上下的正文词 cell 留下。"""
@@ -269,6 +273,30 @@ def test_centered_line_of_formula_slots_is_a_display_formula():
         _Piece("prose", "are materialized first", pymupdf.Rect(322, 340, 420, 352)),
     ]
     assert not _display_formula(sentence)
+
+def test_listing_with_math_font_symbols_stays_a_listing():
+    """伪代码里 S、= 来自符号字体。先按原词认出伪代码，不能因为它们换成公式槽就当正文翻译。"""
+    listing = [_word("S", 101, 108, 279, 290), _word("=", 113, 120, 282, 288),
+               _word("{top", 124, 148, 278, 290), _word("view};", 152, 185, 278, 290)]
+    math_rects = {tuple(listing[0].rect), tuple(listing[1].rect)}
+    assert _compose_lines(listing, [], _glyphs_for(listing), math_rects) == []
+
+
+def test_formula_slots_and_glue_between_them_merge_into_one():
+    """r = j/(n−j)：r=、j 换成槽，夹在中间的 /(n— 也并进去，整段是一个公式槽。"""
+    words = [
+        _word("where", 72, 100, 300, 310),
+        _word("r=", 105, 118, 300, 310),
+        _word("j/(n—", 120, 148, 300, 312),
+        _word("j),", 150, 162, 300, 312),
+        _word("or", 168, 180, 302, 310),
+        _word("both", 185, 210, 300, 310),
+    ]
+    math_rects = {tuple(words[1].rect), tuple(words[3].rect)}
+    lines = _compose_lines(words, [], _glyphs_for(words), math_rects)
+    spans = [span["text"].strip() for line in lines for span in line["spans"]]
+    assert spans.count("×") == 1
+    assert "j/(n—" not in " ".join(spans) and "where" in " ".join(spans) and "both" in " ".join(spans)
 
 def test_numbered_heading_list_and_sql_stay_apart():
     """节标题不吞正文，相邻列表项不并成一行，SQL 子句各留各的行。"""

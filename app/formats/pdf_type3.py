@@ -208,11 +208,13 @@ def recover_type3_page(page: pymupdf.Page, data: PageData) -> bool:
     zones.extend(_label_zones(words, zones))
     visible = [word for word in words if not _hidden(word, zones)]
     originals = _broken_lines(data, names)
-    prose = _without_noise(visible, _math_font_words(visible, originals))
+    math = _math_font_words(visible, originals)
+    prose = _without_noise(visible)
     kept = {id(word) for word in prose}
     debris = [word for word in visible if id(word) not in kept]
     _drop_broken_lines(data, names)
-    rebuilt = _compose_lines(prose, debris, originals)
+    math_rects = {tuple(word.rect) for word in prose if id(word) in math}
+    rebuilt = _compose_lines(prose, debris, originals, math_rects)
     if not rebuilt:
         return False
     _snap_page_sizes(rebuilt)
@@ -248,18 +250,14 @@ def ocr_page(page: pymupdf.Page, scale: float = _OCR_SCALE) -> list[OcrWord]:
     return _parse_tsv(proc.stdout, scale)
 
 
-def _without_noise(words: list[OcrWord], math: set[int] | None = None) -> list[OcrWord]:
-    """丢掉公式位图认出来的乱码，以及贴在乱码旁边的短标点。正文和节号留下。
-
-    math 是字形来自数学字体的词（见 _math_font_words），同样当公式留原字形。
-    """
-    math = math or set()
-    noise = [word for word in words if _is_noise(word) or id(word) in math]
+def _without_noise(words: list[OcrWord]) -> list[OcrWord]:
+    """丢掉公式位图认出来的乱码，以及贴在乱码旁边的短标点。正文和节号留下。"""
+    noise = [word for word in words if _is_noise(word)]
     if not noise:
         return list(words)
     kept: list[OcrWord] = []
     for word in words:
-        if _is_noise(word) or id(word) in math or _glued_to_noise(word, noise):
+        if _is_noise(word) or _glued_to_noise(word, noise):
             continue
         kept.append(word)
     return kept
@@ -363,18 +361,54 @@ def _is_fringe(word: OcrWord) -> bool:
 
 def _compose_lines(
     prose: list[OcrWord], debris: list[OcrWord], glyphs: list[GlyphBox],
+    math_rects: set[tuple[float, ...]] | None = None,
 ) -> list[dict[str, Any]]:
-    """同一基线上被公式空洞切开的正文仍是一句。空洞收成公式槽，居中的公式行不重排。"""
+    """同一基线上被公式空洞切开的正文仍是一句。空洞收成公式槽，居中的公式行不重排。
+
+    math_rects 是字形来自数学字体的词。公式行、伪代码先按认出来的原词判断，
+    留下来排正文的行再把这些词换成公式槽：先换的话 = 和 S 没了，这两种行就认不出来了。
+    """
     lines: list[dict[str, Any]] = []
     for row in _baseline_rows(prose):
         for pieces in _row_pieces(row, debris, glyphs):
             pieces = _without_bullet(pieces)
             if not pieces or _display_formula(pieces) or _listing_line(pieces):
                 continue
+            pieces = _math_as_formula(pieces, math_rects or set())
             line = _line_from_pieces(_peel_operators(pieces), glyphs)
             if line is not None:
                 lines.append(line)
     return lines
+
+
+def _math_as_formula(pieces: list[_Piece], math_rects: set[tuple[float, ...]]) -> list[_Piece]:
+    """数学字体的词换成公式槽，相邻的槽并成一个。
+
+    夹在两个槽中间、没有一个像样单词的碎片（/(n—、)、,）也并进去，
+    否则 r = j/(n−j) 会切成好几块，译文里各放各的。
+    """
+    if not math_rects:
+        return pieces
+    marked = [piece.kind == "formula" or tuple(piece.rect) in math_rects for piece in pieces]
+    out: list[_Piece] = []
+    for index, piece in enumerate(pieces):
+        is_slot = marked[index]
+        if not is_slot and out and out[-1].kind == "formula" and _math_glue(piece.text):
+            is_slot = any(marked[index + 1:index + 3])
+        if not is_slot:
+            out.append(piece)
+            continue
+        if out and out[-1].kind == "formula":
+            out[-1] = _Piece("formula", _FORMULA_MARK, out[-1].rect | piece.rect)
+        else:
+            out.append(_Piece("formula", _FORMULA_MARK, pymupdf.Rect(piece.rect)))
+    return out
+
+
+def _math_glue(text: str) -> bool:
+    """公式中间的碎片：没有两个字母以上的词。"""
+    token = text.strip()
+    return bool(token) and len(token) <= 6 and not re.search(r"[A-Za-z]{2,}", token)
 
 
 def _baseline_rows(words: list[OcrWord]) -> list[list[OcrWord]]:
