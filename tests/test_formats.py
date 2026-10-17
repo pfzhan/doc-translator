@@ -294,6 +294,18 @@ def test_markdown_long_fence_not_closed_by_inner_fence():
     assert blocks[0].kind == "raw" and blocks[0].lines[-1] == "````"
 
 
+def test_markdown_loose_list_continuation_translated_in_place():
+    """松散列表里缩进的续段属于列表项，照常翻译并保留缩进；多缩进 4 格的才是代码块。"""
+    src = ("- item one\n\n    continued paragraph of item one.\n\n        code_in_item()\n\n"
+           "Outside paragraph.\n\n    real_code()")
+    blocks = split_blocks(src)
+    texts = collect_segments(blocks)
+    assert texts == ["item one", "continued paragraph of item one.", "Outside paragraph."]
+    out = render(blocks, {x: "T:" + x for x in texts}, bilingual=False)
+    assert out == ("- T:item one\n\n    T:continued paragraph of item one.\n\n        code_in_item()\n\n"
+                   "T:Outside paragraph.\n\n    real_code()")
+
+
 def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
     """有序列表只有从 1 开始才能打断段落，正文里换行后的年份不是列表。"""
     blocks = split_blocks("It happened in\n1990. Then more text.")
