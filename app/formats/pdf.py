@@ -4079,6 +4079,9 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
     def exits(block: TextBlock, text: str, start_size: float, prev_numbered: bool) -> bool:
         if not text or len(text) > 120 or smaller_subsection(block, text, start_size):
             return False
+        # 悬挂缩进里单独成行的编号 [ESS]、[12] 是条目的标签，不是下一章
+        if _BIBLIO_LEAD_RE.fullmatch(text + " "):
+            return False
         if block.size + 0.5 < start_size * 0.8:
             return False
         if _biblio_citation_line(block, text, start_size, median):
