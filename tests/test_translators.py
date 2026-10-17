@@ -56,6 +56,31 @@ def test_concurrency_cap_covers_missing_segment_recovery():
     run(tr.aclose())
 
 
+def test_shifted_batch_items_are_retranslated_one_by_one():
+    """模型把两段并成一段、后面整体错一位时标记数量仍对得上。数字对不上的段落单独重翻。"""
+    singles = []
+
+    async def handler(request):
+        user = json.loads(request.content)["messages"][-1]["content"]
+        if "[[source_end]]" in user:
+            content = ("[[p0]]\n特伦布莱，1975 年，麦格劳-希尔。\n[[p1]]\n泽纳基斯，1994 年 4 月。\n"
+                       "[[p2]]\n严和拉森，第 345-357 页，1995 年。")
+        else:
+            singles.append(user)
+            content = "单独重翻，" + ("1994 年" if "1994" in user else "1975 年")
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    tr = make_openai(handler)
+    out = run(tr.translate_batch([
+        "Tremblay and Manohar. Discrete Mathematical Structures with Applications to",
+        "Computer Science. McGraw Hill Book Company, New York, 1975.",
+        "John Xenakis, editor. Multidimensional Databases. April 1994.",
+    ]))
+    # 第 1 段没有数字，照收；第 2、3 段数字对不上，各单独重翻一次
+    assert out == ["特伦布莱，1975 年，麦格劳-希尔。", "单独重翻，1975 年", "单独重翻，1994 年"]
+    assert len(singles) == 2
+    run(tr.aclose())
+
 def test_error_text_tolerates_non_dict_json():
     """中转站的错误响应可能是 JSON 数组 / 纯字符串 / HTML，都不能抛 AttributeError。"""
     resp = httpx.Response(500, json=[{"error": "upstream boom"}])
