@@ -21,6 +21,17 @@ def _translatable(text: str) -> bool:
     return bool(stripped.strip()) and not NO_TEXT_RE.match(stripped.strip())
 
 
+def _interrupts_paragraph(line: str) -> bool:
+    """CommonMark：引用、非空的无序列表项、从 1 开始的有序列表项可以紧跟在段落后面，不用空行隔开。"""
+    if QUOTE_RE.match(line):
+        return True
+    m = LIST_RE.match(line)
+    if not m or not m.group(2).strip():
+        return False
+    number = re.match(r"\s*(\d+)", m.group(1))
+    return number is None or int(number.group(1)) == 1
+
+
 @dataclass
 class Block:
     kind: str  # raw / heading / para / list / quote / table
@@ -91,6 +102,8 @@ def split_blocks(text: str) -> list[Block]:
             blocks.append(Block("table", lines[i:j]))
             i = j
             continue
+        if para and _interrupts_paragraph(line):
+            flush()
         if LIST_RE.match(line) and not para:
             j = i
             while j < len(lines) and lines[j].strip() and not FENCE_RE.match(lines[j]):

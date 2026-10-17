@@ -223,6 +223,22 @@ def test_markdown_list_does_not_swallow_following_blocks():
     assert collect_segments(blocks) == ["item", "Heading", "quote"]
 
 
+def test_markdown_list_and_quote_interrupt_paragraph():
+    """段落后紧跟列表或引用、中间没有空行时，列表和引用是独立的块，不能并进段落。"""
+    blocks = split_blocks("Steps to install:\n- download\n- run setup\n\nSee below:\n> note here")
+    assert [b.kind for b in blocks if b.kind != "raw"] == ["para", "list", "para", "quote"]
+    texts = collect_segments(blocks)
+    assert texts == ["Steps to install:", "download", "run setup", "See below:", "note here"]
+    out = render(blocks, {x: "T:" + x for x in texts}, bilingual=False)
+    assert out == "T:Steps to install:\n- T:download\n- T:run setup\n\nT:See below:\n> T:note here"
+
+
+def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
+    """有序列表只有从 1 开始才能打断段落，正文里换行后的年份不是列表。"""
+    blocks = split_blocks("It happened in\n1990. Then more text.")
+    assert [b.kind for b in blocks] == ["para"]
+
+
 def test_epub_nav_in_spine_parsed_once(tmp_path):
     """EPUB3 的 nav 文档同时在 spine 里：只走 label 翻译路径一次，不重复解析、译文不丢。"""
     nav = (
