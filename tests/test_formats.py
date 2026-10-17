@@ -574,6 +574,18 @@ def test_epub_rich_paragraphs_keep_inline_formatting(tmp_path):
     assert "[zh-CN]" in html
 
 
+
+def test_epub_kbd_text_kept_in_translation_only_mode(tmp_path):
+    """段落里只有 <kbd> 这类行内标签时，按键文字要发给翻译服务，仅译文模式下也不能丢。"""
+    src = tmp_path / "book.epub"
+    _one_epub(src, {"ch1.xhtml": _xhtml("<p>Press <kbd>Ctrl</kbd>+C to copy the selected text.</p>")})
+    [out] = run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))
+    z = zipfile.ZipFile(out)
+    html = z.read("OEBPS/ch1.xhtml").decode()
+    p = BeautifulSoup(html, "lxml").find("p")
+    assert "[zh-CN]" in p.get_text() and "Ctrl+C" in p.get_text()
+    assert "<kbd>Ctrl</kbd>" in html
+
 def test_sanitize_rejects_anchor_only_translation():
     """原文有文字、译文只剩锚点（模型抽风）：判不合格回退，不能清空原段落。"""
     from app.formats import html_blocks as hb
