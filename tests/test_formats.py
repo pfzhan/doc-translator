@@ -233,6 +233,20 @@ def test_markdown_list_and_quote_interrupt_paragraph():
     assert out == "T:Steps to install:\n- T:download\n- T:run setup\n\nT:See below:\n> T:note here"
 
 
+def test_markdown_quote_keeps_paragraphs_alerts_and_lists():
+    """引用里的提示框标记、空行分段、列表、代码块都保留，每段单独翻译。"""
+    src = "> [!NOTE]\n> Useful information\n> on two lines.\n>\n> Second paragraph.\n> - first point\n> ```\n> code here\n> ```"
+    blocks = split_blocks(src)
+    texts = collect_segments(blocks)
+    assert texts == ["Useful information on two lines.", "Second paragraph.", "first point"]
+    out = render(blocks, {x: "T:" + x for x in texts}, bilingual=False)
+    assert out == ("> [!NOTE]\n> T:Useful information on two lines.\n>\n> T:Second paragraph.\n"
+                   "> - T:first point\n> ```\n> code here\n> ```")
+    both = render(blocks, {x: "T:" + x for x in texts}, bilingual=True)
+    assert "> Second paragraph.\n>\n> T:Second paragraph." in both
+    assert "> - first point  \n>   T:first point" in both
+
+
 def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
     """有序列表只有从 1 开始才能打断段落，正文里换行后的年份不是列表。"""
     blocks = split_blocks("It happened in\n1990. Then more text.")

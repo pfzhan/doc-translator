@@ -10,6 +10,8 @@ QUOTE_RE = re.compile(r"^(\s*(?:>\s?)+)(.*)$")
 TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
 HR_RE = re.compile(r"^\s{0,3}([-*_])(\s*\1){2,}\s*$")
 HTML_BLOCK_RE = re.compile(r"^\s*<(/?[a-zA-Z][\w-]*|!--)")
+# GitHub 提示框标记：> [!NOTE]
+ALERT_RE = re.compile(r"^\[![A-Za-z]+\]$")
 # 只有链接 / 图片 / 符号，没有可翻译文字
 NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
 
@@ -150,9 +152,8 @@ def collect_segments(blocks: list[Block]) -> list[str]:
         elif b.kind == "list":
             b.segments = [(idx, pre, text) for idx, pre, text, _ in _list_items(b.lines)]
         elif b.kind == "quote":
-            m = QUOTE_RE.match(b.lines[0])
-            body = " ".join(QUOTE_RE.match(l).group(2).strip() for l in b.lines)
-            b.segments = [(0, m.group(1), body)]
+            b.segments = [(idx, qpre + mpre, text) for kind, idx, qpre, mpre, text, _ in _quote_units(b.lines)
+                          if kind != "raw"]
         elif b.kind == "table":
             for idx, line in enumerate(b.lines):
                 if idx == 1:
@@ -195,6 +196,41 @@ def _list_items(lines: list[str]) -> list[tuple[int, str, str, list[str]]]:
     return items
 
 
+def _quote_units(lines: list[str]) -> list[tuple[str, int, str, str, str, list[str]]]:
+    """把引用块拆成 (类型, 起始行号, 引用前缀, 列表标记, 合并后的文本, 原始行)。
+
+    类型 raw 原样输出：空的引用行、提示框标记、引用里的代码块。para 和 item 要翻译：
+    空引用行之间的每一段、引用里的每个列表项各自成段，引用层级变了也另起一段。
+    """
+    units: list[tuple[str, int, str, str, str, list[str]]] = []
+    fence = ""
+    for idx, line in enumerate(lines):
+        m = QUOTE_RE.match(line)
+        qpre, body = m.group(1), m.group(2)
+        fm = FENCE_RE.match(body)
+        if fence or fm:
+            if fence and body.lstrip().startswith(fence):
+                fence = ""
+            elif not fence:
+                fence = fm.group(1)
+            units.append(("raw", idx, qpre, "", body, [line]))
+            continue
+        if not body.strip() or ALERT_RE.match(body.strip()):
+            units.append(("raw", idx, qpre, "", body, [line]))
+            continue
+        item = LIST_RE.match(body)
+        if item:
+            units.append(("item", idx, qpre, item.group(1), item.group(2), [line]))
+            continue
+        last = units[-1] if units else None
+        if last and last[0] != "raw" and last[2].count(">") == qpre.count(">"):
+            kind, start, lpre, mpre, text, raw = last
+            units[-1] = (kind, start, lpre, mpre, text + " " + body.strip(), raw + [line])
+        else:
+            units.append(("para", idx, qpre, "", body.strip(), [line]))
+    return units
+
+
 def render(blocks: list[Block], tr: dict[str, str], bilingual: bool) -> str:
     out: list[str] = []
 
@@ -217,11 +253,20 @@ def render(blocks: list[Block], tr: dict[str, str], bilingual: bool) -> str:
                 out.append("")
             out.append(t(text))
         elif b.kind == "quote":
-            _, pre, text = b.segments[0]
-            if bilingual:
-                out.extend(b.lines)
-                out.append(pre.rstrip())
-            out.append(pre + t(text))
+            for kind, _, qpre, mpre, text, raw in _quote_units(b.lines):
+                if kind == "raw" or not _translatable(text):
+                    out.extend(raw)
+                elif kind == "item":
+                    if bilingual:
+                        out.append(qpre + mpre + text + "  ")
+                        out.append(qpre + " " * len(mpre) + t(text))
+                    else:
+                        out.append(qpre + mpre + t(text))
+                else:
+                    if bilingual:
+                        out.extend(raw)
+                        out.append(qpre.rstrip())
+                    out.append(qpre + t(text))
         elif b.kind == "list":
             for _, pre, text, raw in _list_items(b.lines):
                 if not _translatable(text):
