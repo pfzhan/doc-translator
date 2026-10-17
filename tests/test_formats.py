@@ -3632,6 +3632,71 @@ def test_affiliation_tails_split_and_stack():
     assert stacked[id(split[1])].y0 != stacked[id(split[2])].y0
 
 
+def test_write_helpers_only_need_the_blocks_on_their_page():
+    """写入只传同页的块。各个版面判断拿整本书的块和只拿本页的块，结果一样。"""
+    import random
+
+    from app.formats.pdf import (
+        TextBlock, _affiliation_write_rects, _beside_body, _body_first_starts, _fit_page_margins, _room_below,
+    )
+
+    rng = random.Random(5)
+    texts = ["∗University of Somewhere", "†Institute of Elsewhere", "Memo.", "(2) Statistics Derivation.",
+             "The body line runs on and on", "and the model keeps going.", "Results are shown here."]
+    blocks = []
+    for _ in range(90):
+        x0 = rng.choice([40.0, 60.0, 120.0, 200.0, 320.0])
+        y0 = rng.choice([30.0, 60.0, 100.0, 300.0, 700.0, 760.0]) + rng.randint(0, 3) * 12
+        lines = [pymupdf.Rect(x0, y0 + i * 12, x0 + rng.choice([60, 140, 240]), y0 + i * 12 + 10)
+                 for i in range(rng.choice([1, 1, 2]))]
+        union = pymupdf.Rect(lines[0])
+        for line in lines[1:]:
+            union |= line
+        blocks.append(TextBlock(page=rng.choice([0, 1, 2]), rect=union, line_rects=lines,
+                                text=rng.choice(texts), size=rng.choice([8.0, 10.0]), color="#000",
+                                bold=rng.random() < 0.4))
+
+    def fixed(pno, text, lines, bold=False):
+        rects = [pymupdf.Rect(*line) for line in lines]
+        union = pymupdf.Rect(rects[0])
+        for rect in rects[1:]:
+            union |= rect
+        return TextBlock(page=pno, rect=union, line_rects=rects, text=text, size=10, color="#000", bold=bold)
+
+    # 每页同一位置放并排单位、侧标和它旁边的正文。判断漏了同页条件时，别页的块会混进来。
+    for pno in range(3):
+        blocks += [
+            fixed(pno, "∗University of Somewhere", [(60, 40, 180, 50)]),
+            fixed(pno, "†Institute of Elsewhere", [(190, 40, 300, 50)]),
+            fixed(pno, "Memo.", [(40, 100, 70, 110)], bold=True),
+            fixed(pno, "This body line sits beside the label.", [(72, 100, 300, 110), (40, 112, 300, 122)]),
+        ]
+    page = pymupdf.open().new_page(width=600, height=800)
+    found = {"stacked": 0, "starts": 0, "beside": 0}
+    for pno in range(3):
+        own = [block for block in blocks if block.page == pno]
+        ids = {id(block) for block in own}
+        whole = _affiliation_write_rects(blocks)
+        stacked = _affiliation_write_rects(own)
+        assert stacked == {key: rect for key, rect in whole.items() if key in ids}
+        found["stacked"] += len(stacked)
+        items = [(block, "译文" + block.text) for block in own]
+        for cjk in (True, False):
+            starts = _body_first_starts(own, items, cjk, None)
+            assert starts == _body_first_starts(blocks, items, cjk, None)
+            found["starts"] += len(starts)
+            for block in own:
+                rect = pymupdf.Rect(block.rect.x0, block.rect.y0, block.rect.x1 + 2, block.rect.y1 + 4)
+                assert _fit_page_margins(block, rect, own, 800, cjk) == _fit_page_margins(block, rect, blocks, 800, cjk)
+        for block in own:
+            beside = _beside_body(block, own)
+            assert beside is _beside_body(block, blocks)
+            found["beside"] += beside is not None
+            args = (page, block, block.rect.y0, block.rect.x0, block.rect.x1)
+            assert _room_below(*args, own) == _room_below(*args, blocks)
+    assert all(found.values())
+
+
 def test_side_label_stays_beside_the_first_line(tmp_path):
     """短标题留在正文第一行左边。正文从标题右侧起写，下一行再回到栏左缘。"""
     from app.formats.pdf import TextBlock, _render_translated
