@@ -59,6 +59,7 @@ _LEADING = 1.6
 _MATH_SYMBOLS = set("<>=+|{}^~*∑∏√∞≤≥≠≈∈∉⊂⊃±×÷→←")
 _SENTENCE_MARKS = set(".,;:")
 _OPERATORS = set("=<>+-−–—≤≥≠×")
+_RELATIONS = set("=<>≤≥≠≺⪯≈∈")
 _TRAILING_MARKS = set(",.;:)")
 # 节号、编号、年份这样的数
 _NUMBER = re.compile(r"\(?\d+(?:\.\d+)*[.:,)]?")
@@ -1102,12 +1103,14 @@ def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
         )
         kinds[index] = "math" if (before == "math" and after == "math") or operand else "text"
     absorbed = _close_brackets(line.tokens, kinds, reader)
+    prose_tails = _hyphen_tails(line, kinds, reader)
+    splits = _clause_splits(line.tokens, kinds, reader)
     styles: dict[int, str] = {}
     for index, (token, kind) in enumerate(zip(line.tokens, kinds)):
         tail = len(token)
         phrase_end = (
             index + 1 == len(kinds) or kinds[index + 1] != "math" or _ends_sentence(token, reader)
-            or _ends_clause(line.tokens, kinds, index, reader)
+            or index in splits
         )
         if index in mono and index + 1 not in mono:
             # 一串等宽词末尾的句号逗号是句子的。C1, C2 中间的逗号仍是代码
@@ -1128,11 +1131,29 @@ def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
         for position, glyph in enumerate(token):
             if _is_script(glyph, line, reader):
                 styles[id(glyph)] = "script"
+            elif id(glyph) in prose_tails:
+                styles[id(glyph)] = "text"
             elif (kind == "math" and position < tail) or id(glyph) in absorbed:
                 styles[id(glyph)] = "symbol" if _role_of(glyph, line, reader) == "symbol" else "math"
             else:
                 styles[id(glyph)] = "mono" if index in mono and position < tail else "text"
     return styles
+
+
+def _hyphen_tails(line: _Line, kinds: list[str], reader: Type3Reader) -> set[int]:
+    """n-dimensional 里连字符后面的正文词留在正文，公式只是 n。不然模型看不到这个词，又把它译一遍。"""
+    tails: set[int] = set()
+    for token, kind in zip(line.tokens, kinds):
+        if kind != "math":
+            continue
+        for position, glyph in enumerate(token):
+            if _label_text(glyph, reader) not in "-‐" or position == 0:
+                continue
+            rest = [item for item in token[position + 1:] if _label_text(item, reader).isalpha()]
+            if len(rest) >= 3 and all(reader.roles.get(item.key) == "text" for item in rest):
+                tails.update(id(item) for item in token[position:])
+            break
+    return tails
 
 
 def _close_brackets(tokens: list[list[Glyph]], kinds: list[str], reader: Type3Reader) -> set[int]:
@@ -1163,12 +1184,46 @@ def _phrase_depth(tokens: list[list[Glyph]], kinds: list[str], end: int, reader:
     return sum(_bracket(glyph, reader) for token in tokens[start:end + 1] for glyph in token)
 
 
-def _ends_clause(tokens: list[list[Glyph]], kinds: list[str], index: int, reader: Type3Reader) -> bool:
-    """括号外的逗号把两个公式隔开：⟨L, ⪯⟩, a ≺ b 是两个。(p, s, c) 里的逗号在括号里，不算。"""
-    token = tokens[index]
-    if not _sentence_mark(token[-1], reader) or _label_text(token[-1], reader) not in ",;":
-        return False
-    return _phrase_depth(tokens, kinds, index, reader) <= 0
+def _clause_splits(tokens: list[list[Glyph]], kinds: list[str], reader: Type3Reader) -> set[int]:
+    """一串公式词里，哪些词末的逗号把公式断开。
+
+    括号里的逗号不断：(p, s, c)。逗号左边这段还没有关系符，是单个变量或一组括号，断开：
+    d, e, g 和 h 各是一个公式，⟨L, ⪯⟩, a ≺ b 是两个。左边已经有关系符（i = 1, 2, …, k），
+    后面只是列举，除非后面又是一个关系式（a = b, c = d）。
+    """
+    splits: set[int] = set()
+    depth = 0
+    related = False
+    for index, (token, kind) in enumerate(zip(tokens, kinds)):
+        if kind != "math":
+            depth, related = 0, False
+            continue
+        depth = max(depth + sum(_bracket(glyph, reader) for glyph in token), 0)
+        related = related or _has_relation(token, reader)
+        last = token[-1]
+        if depth > 0 or not _sentence_mark(last, reader) or _label_text(last, reader) not in ",;":
+            continue
+        if not related or _relation_follows(tokens, kinds, index, reader):
+            splits.add(index)
+            depth, related = 0, False
+    return splits
+
+
+def _has_relation(token: list[Glyph], reader: Type3Reader) -> bool:
+    return any(
+        reader.roles.get(glyph.key) == "symbol" and _label_text(glyph, reader) in _RELATIONS for glyph in token
+    )
+
+
+def _relation_follows(tokens: list[list[Glyph]], kinds: list[str], index: int, reader: Type3Reader) -> bool:
+    for after in range(index + 1, len(tokens)):
+        if kinds[after] != "math":
+            return False
+        if _has_relation(tokens[after], reader):
+            return True
+        if _sentence_mark(tokens[after][-1], reader) and _label_text(tokens[after][-1], reader) in ",;":
+            return False
+    return False
 
 
 def _ends_sentence(token: list[Glyph], reader: Type3Reader) -> bool:
