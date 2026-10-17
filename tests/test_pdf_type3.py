@@ -500,6 +500,23 @@ def test_formula_between_words_spans_the_whole_gap():
     assert piece is not None and piece.kind == "formula"
     assert piece.rect.x0 < 286 and piece.rect.x1 > 340
 
+def test_formula_between_words_seen_only_in_the_rendered_ink():
+    """x_i1 既没有字符码、OCR 也没认出来，只有渲染出来的墨迹：仍是公式槽，这一行不能断成两段。
+    表格竖线、图里的横箭头不是字形。"""
+    from app.formats.pdf_type3 import _InkMap, _formula_between
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=200)
+    page.draw_rect(pymupdf.Rect(130, 54, 142, 62), color=(0, 0, 0), fill=(0, 0, 0))   # 公式墨迹
+    page.draw_line((230, 40), (230, 70), color=(0, 0, 0), width=0.8)                 # 表格竖线
+    page.draw_line((310, 58), (360, 58), color=(0, 0, 0), width=0.6)                 # 横箭头
+    ink = _InkMap(page)
+    left, right = _word("is", 100, 115, 52, 62), _word("The", 160, 180, 52, 62)
+    piece = _formula_between(left, right, [], [], ink)
+    assert piece is not None and piece.kind == "formula"
+    assert _formula_between(_word("cell", 200, 220, 52, 62), _word("cell", 245, 265, 52, 62), [], [], ink) is None
+    assert _formula_between(_word("from", 285, 305, 52, 62), _word("to", 370, 380, 52, 62), [], [], ink) is None
+
 def test_centered_formula_line_is_left_as_glyphs():
     """居中的 (year) < (month) 是公式行，不送去翻译。"""
     words = [
