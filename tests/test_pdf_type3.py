@@ -264,6 +264,22 @@ def test_lowered_full_size_letters_are_a_subscript():
     assert not any(_is_script(glyph, line, reader) for glyph in plain)
 
 
+def test_variable_with_a_typewriter_subscript_stays_a_formula():
+    """N 的下标 supplier 是等宽字。下标不让 N 变成等宽字，也不让 N 像单词。"""
+    labels: dict = {}
+    glyphs = [
+        *_set([("where", ROMAN), ("N", MATH)], labels),
+        *_set([("supplier", TYPE)], labels, x=110, size=7.5, shift=2.0),
+        *_set([("is", ROMAN), ("the", ROMAN)], labels, x=150),
+    ]
+    line = _build_lines(glyphs, labels, {})[0]
+    roles = {key: "text" for key in labels}
+    roles[(MATH, ord("N"))] = "math"
+    mono = {key: 0.525 * 7.5 for key in labels if key[0] == TYPE}
+    styled = _styled(line, _reader(labels, roles, mono))
+    assert styled.startswith("where [N][s][u][p][p][l][i][e][r] is")
+
+
 def test_formula_keeps_inner_commas_and_brackets_and_leaves_the_period():
     labels: dict = {}
     glyphs = _set([("cell", ROMAN), ("(p,", MATH), ("s,", MATH), ("c).", MATH), ("The", ROMAN),
