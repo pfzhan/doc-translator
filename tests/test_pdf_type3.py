@@ -315,6 +315,28 @@ def test_comma_outside_brackets_separates_two_formulas():
     line = _build_lines(glyphs, labels, {})[0]
     styled = _styled(line, _reader(labels, roles))
     assert "[(][L][,] [<][)], [a] [<] [b] means" in styled
+    enumeration = _build_lines(_set([("for", ROMAN), ("a", MATH), ("=", MATH), ("1,", ROMAN), ("2,", ROMAN), ("b.", MATH),
+                                     ("The", ROMAN), ("an", ROMAN), ("b-dimensional", ROMAN)], labels,
+                                    baseline=130), labels, {})[0]
+    roles.update({key: "text" for key in labels if key[0] == ROMAN and labels[key].text.isalpha()})
+    roles.update({key: "neutral" for key in labels if key[0] == ROMAN and not labels[key].text.isalpha()})
+    roles[(MATH, ord("="))] = "symbol"
+    roles[(MATH, ord("b"))] = "math"
+    styled = _styled(enumeration, _reader(labels, roles))
+    assert "for [a] [=] [1][,] [2][,] [b]. The" in styled
+    views = _build_lines(_set([("views", ROMAN), ("d,", MATH), ("e,", MATH), ("and", ROMAN), ("b", MATH)], labels,
+                              baseline=145), labels, {})[0]
+    roles.update({key: "text" for key in labels if key[0] == ROMAN and labels[key].text.isalpha()})
+    roles.update({(MATH, ord(ch)): "math" for ch in "de"})
+    assert _styled(views, _reader(labels, roles)) == "views [d], [e], and [b]"
+    head = _set([("an", ROMAN), ("n", MATH)], labels, baseline=160)
+    tail = _set([("-dimensional", ROMAN)], labels, x=head[-1].rect.x1 + 0.5, baseline=160)
+    cube = _set([("cube", ROMAN)], labels, x=tail[-1].rect.x1 + 4, baseline=160)
+    roles.update({key: "text" for key in labels if key[0] == ROMAN and labels[key].text.isalpha()})
+    roles[(ROMAN, ord("-"))] = "neutral"
+    roles[(MATH, ord("n"))] = "math"
+    line = _build_lines([*head, *tail, *cube], labels, {})[0]
+    assert _styled(line, _reader(labels, roles)) == "an [n]-dimensional cube"
 
 
 def test_typewriter_letters_are_learned_from_even_words_with_narrow_letters():
