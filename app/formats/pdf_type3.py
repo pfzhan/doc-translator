@@ -24,6 +24,8 @@ import pymupdf
 _CUSTOM_NAME = re.compile(r"^[A-Za-z]\d+$")
 _SECTION_NO = re.compile(r"\d+(?:\.\d+)*\.?")
 _NUMBERED_LINE = re.compile(r"^\d+(?:\.\d+)*[.,]?\s+\S")
+# 编号后面跟着像样的标题词才是编号行。公式行开头的 ≥ 常被认成 2，后面是 RAR 这种碎片
+_NUMBERED_TITLE = re.compile(r"^\d+(?:\.\d+)*[.,]?\s+[A-Z][a-z]{3,}")
 _SQL_LINE = re.compile(r"^(?:SELECT|FROM|WHERE|GROUP|ORDER|HAVING|INSERT|UPDATE|DELETE)\b")
 _PIPE_TEXT = re.compile(r"^[|¦│]+$")
 _GARBAGE_MARK = set("®∑∏√∞≤≥∈≈≠±×÷@#$^~\\¢£¥§")
@@ -530,7 +532,7 @@ def _display_formula(pieces: list[_Piece]) -> bool:
     has_slot = any(piece.kind == "formula" for piece in pieces) and whole.x0 >= 160
     if len(text) > 90 or not (_DISPLAY_MARK.search(text) or has_slot):
         return False
-    if _NUMBERED_LINE.match(text) or _SQL_LINE.match(text) or _CAPTION_START.match(text):
+    if _NUMBERED_TITLE.match(text) or _SQL_LINE.match(text) or _CAPTION_START.match(text):
         return False
     outside = re.sub(r"\([^)]*\)", " ", text)
     long_words = re.findall(r"[A-Za-z]{4,}", outside)

@@ -415,6 +415,21 @@ def test_centered_formula_line_is_left_as_glyphs():
     assert _compose_lines(words, [], _glyphs_for(words)) == []
 
 
+def test_formula_line_starting_with_a_misread_digit_is_left_as_glyphs():
+    """居中公式行开头的 ≥ 被认成 2，后面是 RAR、(ERY) 这种碎片：不是编号标题，留原字。
+    居中的「5 Conclusions」仍是编号标题。"""
+    words = [
+        _word("2", 225, 232, 700, 712),
+        _word("RAR", 245, 290, 700, 712),
+        _word("+", 297, 304, 700, 712),
+        _word("AR)", 310, 350, 700, 712),
+        _word("(ERY)", 377, 420, 700, 712),
+    ]
+    debris = [OcrWord("~~", pymupdf.Rect(356, 699, 372, 713), 10.0)]
+    assert _compose_lines(words, debris, _glyphs_for([*words, *debris])) == []
+    heading = [_word("5", 250, 257, 300, 312), _word("Conclusions", 262, 330, 300, 312)]
+    assert len(_compose_lines(heading, [], _glyphs_for(heading))) == 1
+
 def test_inline_operator_and_paren_digit_become_formula_slots():
     """行内的 < 和括号之间的 4 是认错的比较符，收成公式槽，句子留下。"""
     words = [
