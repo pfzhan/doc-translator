@@ -39,7 +39,7 @@ from .pdf_layout import (
 )
 from .pdf_roles import HeuristicLayout, LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
-from .pdf_type3 import recover_type3_page
+from .pdf_type3 import broken_type3_names, recover_type3_page
 from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, typeset_lines
 
 MATH_FONT_RE = re.compile(r"CMMI|CMSY|CMEX|MSBM|Math|Symbol|STIX|Cambria Math", re.I)
@@ -3627,11 +3627,13 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         mid_map = {f["mid"]: f for b, _ in visible for f in (formulas_map or {}).get(id(b), [])
                    if "mid" in f}
         # redact 之前把整页打包成 Form：公式透传从它里面裁剪原 glyph；
-        # 同时收集页面全部 span（检测上标区域被上一行降部侵入的污染）
+        # 同时收集页面全部 span（检测上标区域被上一行降部侵入的污染）。
+        # 没有 Unicode 的点阵字报的是字体框，比墨迹高出半行，拿来挖洞会把公式自己挖掉，不参与
+        bitmap_fonts = broken_type3_names(doc, page) if mid_map else set()
         page_spans = [s for blk in page.get_text("dict")["blocks"] if blk.get("type") == 0
-                      for ln in blk["lines"] for s in ln["spans"]] \
+                      for ln in blk["lines"] for s in ln["spans"] if s.get("font") not in bitmap_fonts] \
             if mid_map else None
-        fmS = _page_form(doc, page) if page_spans else None
+        fmS = _page_form(doc, page) if mid_map else None
         for b, _ in items:
             for r in b.line_rects or [b.rect]:
                 page.add_redact_annot(r, fill=False)

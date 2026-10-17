@@ -2165,6 +2165,70 @@ def test_formula_passthrough_follows_a_shifted_crop_box(tmp_path):
     assert pymupdf.Rect(line.x0 - 10, line.y0 - 10, line.x1 + 10, line.y1 + 10).contains(hits[0])
 
 
+def test_formula_clip_ignores_tall_bitmap_glyph_boxes(tmp_path):
+    """下一行是没有 Unicode 的点阵字时，它报的字体框比墨迹高，会伸进公式的下半截。
+    这种框不能拿来挖洞，否则公式的下半截被裁掉。"""
+    from app.formats.pdf import TextBlock, _marker_png, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    procs = []
+    for _ in range(10):
+        xref = doc.get_new_xref()
+        doc.update_object(xref, "<<>>")
+        doc.update_stream(xref, b"500 0 0 0 400 600 d1 0 0 400 600 re f")
+        procs.append(xref)
+    glyphs = " ".join(f"/a{i}" for i in range(10))
+    charprocs = " ".join(f"/a{i} {xref} 0 R" for i, xref in enumerate(procs))
+    font = doc.get_new_xref()
+    doc.update_object(font, (
+        "<< /Type /Font /Subtype /Type3 /Name /BitmapF /FontBBox [0 -200 500 1800] "
+        f"/FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << {charprocs} >> "
+        f"/Encoding << /Type /Encoding /Differences [65 {glyphs}] >> "
+        f"/FirstChar 65 /LastChar 74 /Widths [{' '.join(['500'] * 10)}] /Resources << >> >>"
+    ))
+    doc.xref_set_key(page.xref, "Resources",
+                     f"<< /Font << /T3 {font} 0 R /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >>")
+    codes = "".join(f"{65 + i % 10:02X}" for i in range(20))
+    content = doc.get_new_xref()
+    doc.update_object(content, "<<>>")
+    doc.update_stream(content, (
+        "BT /F1 10 Tf 50 200 Td (alpha BETA gamma) Tj ET\n"
+        f"BT /T3 12 Tf 50 182 Td <{codes}> Tj ET"
+    ).encode())
+    doc.xref_set_key(page.xref, "Contents", f"{content} 0 R")
+    doc.save(src)
+    doc.close()
+
+    d = pymupdf.open(src)
+    rect = d[0].search_for("BETA")[0]
+    bitmap = next(span for block in d[0].get_text("dict")["blocks"] for line in block.get("lines", [])
+                  for span in line["spans"] if span["font"] == "BitmapF")
+    assert bitmap["bbox"][1] < rect.y1  # 点阵字的框确实伸进了 BETA 的下半截
+    def ink_share(pix):
+        return sum(1 for v in pix.samples if v < 128) / len(pix.samples)
+
+    ink = ink_share(d[0].get_pixmap(dpi=150, clip=rect, colorspace=pymupdf.csGRAY))
+    formula = {"bbox": rect, "name": "a_1.png", "mid": 0,
+               "w": round(rect.width, 1), "h": round(rect.height, 1), "d": 2.0,
+               "text": "x", "has_img": True,
+               "png": d[0].get_pixmap(dpi=150, clip=rect).tobytes("png"),
+               "spans": [{"bbox": tuple(rect), "text": "x", "size": 10,
+                          "origin": (rect.x0, rect.y1 - 2)}]}
+    line = pymupdf.Rect(45, rect.y0 - 2, 200, rect.y1 + 3)
+    d.close()
+    archive = pymupdf.Archive()
+    archive.add(_marker_png(0), "ph_a_1.png")
+    block = TextBlock(page=0, rect=line, line_rects=[line], text="alpha BETA gamma",
+                      size=10, color="#000", bold=False)
+    out = _render_translated(src, [block], ["译文 \x01i\x021\x01/i\x02 甲"], "zh-CN",
+                             {id(block): [formula]}, archive)
+    slot = out[0].search_for("BETA")[0]
+    # 译文行按 0.88 倍字号排，公式跟着缩小，按墨迹占比比较。裁掉下半截时只剩一半左右
+    drawn = ink_share(out[0].get_pixmap(dpi=150, clip=slot, colorspace=pymupdf.csGRAY))
+    assert drawn >= ink * 0.65
+
 def test_body_font_symbols_and_script_bases_become_formulas():
     """Times 里的希腊字母是公式。贴在角标上的单字母并进角标。
     斜体单词、孤立等号、引用上标前的 a 仍留在正文。"""
