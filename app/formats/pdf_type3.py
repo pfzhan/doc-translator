@@ -523,6 +523,24 @@ def _between_parens(pieces: list[_Piece], index: int) -> bool:
     return "(" in left.text and ")" in right.text
 
 
+# 下沿会落到基线以下的字符：降部字母、逗号分号、括号
+_DESCENDER_RE = re.compile(r"[gjpqyQ,;()\[\]{}/|@$_]")
+
+
+def _ocr_baseline(words: list[tuple[str, pymupdf.Rect]], fallback: float) -> float:
+    """按认出来的词的下沿取基线。
+
+    点阵字报出来的 origin 不可信：老 Ghostscript 的 Type3 字体常把它放在字框上部，
+    公式槽按它算下沉，整个公式会往下掉一行。带降部的词下沿偏低，先排除；都带降部时取中位数。
+    """
+    bottoms = sorted(rect.y1 for text, rect in words if text.strip() and not _DESCENDER_RE.search(text))
+    if not bottoms:
+        bottoms = sorted(rect.y1 for text, rect in words if text.strip())
+    if not bottoms:
+        return fallback
+    return bottoms[len(bottoms) // 2]
+
+
 def _line_from_pieces(pieces: list[_Piece], glyphs: list[GlyphBox]) -> dict[str, Any] | None:
     """正文槽和公式槽合成一行。没盖住点阵字的词不是这页的坏字体，不另起一行。"""
     spans = _spans_from_pieces(pieces)
@@ -538,11 +556,13 @@ def _line_from_pieces(pieces: list[_Piece], glyphs: list[GlyphBox]) -> dict[str,
     glyph = max(matched, key=lambda item: _overlap_width(item.rect, ink))
     text = " ".join(str(span["text"]) for span in prose)
     size = _line_size(text, ink.height, glyph.em)
+    baseline = _ocr_baseline([(piece.text, piece.rect) for piece in pieces if piece.kind == "prose"],
+                             glyph.origin_y)
     for span in spans:
         span["size"] = size
         span["flags"] = glyph.flags
         span["color"] = glyph.color
-        span["origin"] = (span["bbox"][0], glyph.origin_y)
+        span["origin"] = (span["bbox"][0], baseline)
     box = pymupdf.Rect()
     for span in spans:
         box |= pymupdf.Rect(span["bbox"])
@@ -1030,7 +1050,7 @@ def _line_from_words(segment: list[OcrWord], originals: list[GlyphBox]) -> dict[
         "font": "Times-Roman",
         "flags": glyph.flags,
         "color": glyph.color,
-        "origin": (box.x0, glyph.origin_y),
+        "origin": (box.x0, _ocr_baseline([(word.text, word.rect) for word in words], glyph.origin_y)),
         "ascender": 0.8,
         "descender": -0.2,
     }
