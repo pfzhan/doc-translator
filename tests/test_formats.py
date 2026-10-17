@@ -1835,6 +1835,73 @@ def test_placeholderize_no_formula_keeps_text_identical():
     assert sent == b.text and formulas == []
 
 
+def _symbol_pdf(path, symbol: str):
+    """正文中间夹一段 Symbol 字体的字形，提取时变成 {v1} 公式占位符。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=500, height=300)
+    head = "For the case where the parameter k "
+    page.insert_text((40, 60), head, fontsize=11)
+    x = 40 + pymupdf.get_text_length(head, fontsize=11)
+    page.insert_text((x, 60), symbol, fontname="symb", fontsize=11)
+    page.insert_text((x + 9 * len(symbol), 60), " is small, the greedy algorithm works well.", fontsize=11)
+    doc.save(path)
+    doc.close()
+
+
+class _PlaceholderDropper(MockTranslator):
+    """批量请求时把 {v1} 写成文字丢掉；keep_on_retry 为真时单段重翻会保留占位符。"""
+
+    def __init__(self, *a, keep_on_retry=False, **kw):
+        super().__init__(*a, **kw)
+        self.keep_on_retry = keep_on_retry
+        self.calls = []
+
+    async def translate_batch(self, texts):
+        self.calls.append(list(texts))
+        retry = len(self.calls) > 1
+        out = []
+        for text in texts:
+            if retry and self.keep_on_retry:
+                out.append("当参数 k{v1} 较小时，贪心算法效果很好。")
+            else:
+                out.append("当参数 k = 2 较小时，贪心算法效果很好。")
+        return out
+
+
+def test_lost_placeholder_is_retried_once(tmp_path):
+    """模型丢了 {v1}：单段再翻一次，补上占位符的译文写进缓存，公式照常贴回。"""
+    src = tmp_path / "sym.pdf"
+    _symbol_pdf(src, "abcd")
+    tr = _PlaceholderDropper("zh-CN", keep_on_retry=True)
+    cache = MemCache()
+    r = Runner(tr, cache=cache, skip_same_lang=False)
+    [out] = run(translate_file(src, tmp_path, r, False, "zh-CN"))
+    assert len(tr.calls) == 2 and tr.calls[1] == tr.calls[0]
+    assert "当参数" in pymupdf.open(out)[0].get_text()
+    assert any("{v1}" in v for v in cache.d.values())
+    assert r.info["failed"] == 0
+
+
+def test_lost_small_placeholder_keeps_the_translation(tmp_path):
+    """丢的只是一个字形的小公式（模型把它写成了文字）：收下译文，不退回原文。"""
+    src = tmp_path / "sym.pdf"
+    _symbol_pdf(src, "a")
+    r = Runner(_PlaceholderDropper("zh-CN"), cache=MemCache(), skip_same_lang=False)
+    [out] = run(translate_file(src, tmp_path, r, False, "zh-CN"))
+    text = pymupdf.open(out)[0].get_text()
+    assert "贪心算法" in text and "greedy" not in text
+    assert r.info["failed"] == 0
+
+
+def test_lost_large_placeholder_falls_back_and_counts_as_failed(tmp_path):
+    """丢的是较长的公式：整段退回原文，并算进失败段数，任务页才会提示。"""
+    src = tmp_path / "sym.pdf"
+    _symbol_pdf(src, "abcd")
+    r = Runner(_PlaceholderDropper("zh-CN"), cache=MemCache(), skip_same_lang=False)
+    [out] = run(translate_file(src, tmp_path, r, False, "zh-CN"))
+    assert "greedy" in pymupdf.open(out)[0].get_text()
+    assert r.info["failed"] == 1
+
 def test_attention_formula_placeholders_end_to_end(tmp_path):
     src = SAMPLES / "attention.pdf"
     if not src.exists():
