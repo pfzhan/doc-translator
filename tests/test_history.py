@@ -343,7 +343,8 @@ def slow_mock(app_env, monkeypatch):
     original = MockTranslator.translate_batch
 
     async def slow(self, texts):
-        await asyncio.sleep(0.05)
+        # 太快的话整本在发出暂停请求前就翻完了，机器负载高时尤其明显
+        await asyncio.sleep(0.2)
         calls.append((getattr(self, "model", ""), len(texts)))
         return await original(self, texts)
 
