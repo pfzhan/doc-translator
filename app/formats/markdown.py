@@ -50,10 +50,11 @@ def split_blocks(text: str) -> list[Block]:
     lines = text.split("\n")
     blocks: list[Block] = []
     i = 0
-    # YAML front matter
-    if lines and lines[0].strip() == "---":
+    # YAML front matter（---）和 Hugo 的 TOML front matter（+++）
+    if lines and lines[0].strip() in ("---", "+++"):
+        ends = ("---", "...") if lines[0].strip() == "---" else ("+++",)
         for j in range(1, len(lines)):
-            if lines[j].strip() in ("---", "..."):
+            if lines[j].strip() in ends:
                 blocks.append(Block("raw", lines[: j + 1]))
                 i = j + 1
                 break
