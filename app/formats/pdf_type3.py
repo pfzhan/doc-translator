@@ -39,6 +39,10 @@ _MIN_ZONE_AREA = 2000.0
 # 公式位图的词置信度很低。节号偶尔也低，不能一起丢掉。
 _NOISE_CONF = 40.0
 _JUNK_CONF = 22.0
+# 认得很有把握的词：正文字体靠它们来认
+_CONFIDENT_CONF = 90.0
+# 词底下数学字体占到这个比例才算公式。贴着公式的 to、if 只占一半
+_MATH_FONT_SHARE = 0.8
 # 单独一个比较符是点阵公式，不是正文里的小于号。
 _OPERATOR = re.compile(r"^[=<>≤≥≠≈∈∉⊂⊃±×÷&]$")
 _BULLET_WORD = re.compile(r"^[eco*•·]$")
@@ -118,6 +122,7 @@ class GlyphBox:
     color: int
     origin_y: float
     flags: int
+    font: str = ""
 
 
 def visual_em(span: dict[str, Any]) -> float:
@@ -199,10 +204,10 @@ def recover_type3_page(page: pymupdf.Page, data: PageData) -> bool:
     zones = [*_drawing_zones(page), *_pipe_zones(words), *_bar_zones(words)]
     zones.extend(_label_zones(words, zones))
     visible = [word for word in words if not _hidden(word, zones)]
-    prose = _without_noise(visible)
+    originals = _broken_lines(data, names)
+    prose = _without_noise(visible, _math_font_words(visible, originals))
     kept = {id(word) for word in prose}
     debris = [word for word in visible if id(word) not in kept]
-    originals = _broken_lines(data, names)
     _drop_broken_lines(data, names)
     rebuilt = _compose_lines(prose, debris, originals)
     if not rebuilt:
@@ -240,17 +245,68 @@ def ocr_page(page: pymupdf.Page, scale: float = _OCR_SCALE) -> list[OcrWord]:
     return _parse_tsv(proc.stdout, scale)
 
 
-def _without_noise(words: list[OcrWord]) -> list[OcrWord]:
-    """丢掉公式位图认出来的乱码，以及贴在乱码旁边的短标点。正文和节号留下。"""
-    noise = [word for word in words if _is_noise(word)]
+def _without_noise(words: list[OcrWord], math: set[int] | None = None) -> list[OcrWord]:
+    """丢掉公式位图认出来的乱码，以及贴在乱码旁边的短标点。正文和节号留下。
+
+    math 是字形来自数学字体的词（见 _math_font_words），同样当公式留原字形。
+    """
+    math = math or set()
+    noise = [word for word in words if _is_noise(word) or id(word) in math]
     if not noise:
         return list(words)
     kept: list[OcrWord] = []
     for word in words:
-        if _is_noise(word) or _glued_to_noise(word, noise):
+        if _is_noise(word) or id(word) in math or _glued_to_noise(word, noise):
             continue
         kept.append(word)
     return kept
+
+
+def _word_fonts(word: OcrWord, glyphs: list[GlyphBox]) -> tuple[str, float]:
+    """词底下占得最多的点阵字体，以及它占的比例。点阵字框比墨迹高，只按横向重叠算。"""
+    cy = (word.rect.y0 + word.rect.y1) / 2
+    share: dict[str, float] = {}
+    for glyph in glyphs:
+        if not glyph.font or not (glyph.rect.y0 <= cy <= glyph.rect.y1):
+            continue
+        overlap = min(glyph.rect.x1, word.rect.x1) - max(glyph.rect.x0, word.rect.x0)
+        if overlap > 0:
+            share[glyph.font] = share.get(glyph.font, 0.0) + overlap
+    if not share:
+        return "", 0.0
+    font = max(share, key=lambda name: share[name])
+    return font, share[font] / sum(share.values())
+
+
+def _confident_word(word: OcrWord, length: int) -> bool:
+    core = word.text.strip(".,;:()[]\"'“”‘’")
+    return word.conf >= _CONFIDENT_CONF and core.isalpha() and len(core) >= length
+
+
+# 正文里常排成斜体的拉丁缩写，斜体字体在一页上常常只有这一个词
+_LATIN_ABBREV = re.compile(r"^(?:i\.e\.|e\.g\.|cf\.|etc\.|vs\.|viz\.)[,;:]?$", re.I)
+# 节号、列表编号、图号（4.3、1.、Figure 9:）。换成公式后标题和编号就认不出了
+_NUMBER_TOKEN = re.compile(r"^[\d.:]+$")
+
+
+def _math_font_words(words: list[OcrWord], glyphs: list[GlyphBox]) -> set[int]:
+    """字形几乎全来自数学字体的词。
+
+    点阵字体名是 A、B、C 这种自造名，分不出 cmr 和 cmmi。正文字体会认出大量高置信度的普通单词，
+    数学斜体和符号字体一个也认不出：这一页上没认出过普通单词的字体就当数学字体。
+    tesseract 会把数学字形认成 rains、Tag、6（其实是 b）这类词，送去翻译只会出乱码。
+    本身是高置信度普通单词的不算：标题和正文斜体在一页上常常只出现几个词，of、to 也在里面。
+    单个字母不算普通单词，它们正是 a、b、w 这类变量。
+    """
+    attributed = [(word, *_word_fonts(word, glyphs)) for word in words]
+    prose_fonts = {font for word, font, share in attributed
+                   if font and share >= 0.5 and _confident_word(word, 4)}
+    return {
+        id(word) for word, font, share in attributed
+        if font and font not in prose_fonts and share >= _MATH_FONT_SHARE
+        and not _confident_word(word, 2) and not _LATIN_ABBREV.match(word.text.strip())
+        and not _NUMBER_TOKEN.match(word.text.strip())
+    }
 
 
 def _is_noise(word: OcrWord) -> bool:
@@ -996,6 +1052,7 @@ def _broken_lines(data: PageData, names: set[str]) -> list[GlyphBox]:
                     color=_as_int(span.get("color")),
                     origin_y=origin_y,
                     flags=_as_int(span.get("flags")),
+                    font=str(span.get("font") or ""),
                 ))
     return found
 
