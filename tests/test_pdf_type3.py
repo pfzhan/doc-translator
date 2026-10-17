@@ -299,6 +299,21 @@ def test_formula_keeps_inner_commas_and_brackets_and_leaves_the_period():
     assert "size [S]. [c] gives" in styled
 
 
+def test_comma_outside_brackets_separates_two_formulas():
+    """⟨L, ⪯⟩, a ≺ b：括号外的逗号是句子的，两边是两个公式。"""
+    labels: dict = {}
+    glyphs = _set([("lattice", ROMAN), ("(L,", MATH), ("<),", MATH), ("a", MATH), ("<", MATH), ("b", MATH),
+                   ("means", ROMAN)], labels)
+    labels[(MATH, ord("<"))] = Label("<", 1.0)
+    roles = {key: "text" for key in labels}
+    roles.update({key: "neutral" for key in labels if not labels[key].text.isalpha()})
+    roles.update({(MATH, ord(ch)): "math" for ch in "Lab"})
+    roles[(MATH, ord("<"))] = "symbol"
+    line = _build_lines(glyphs, labels, {})[0]
+    styled = _styled(line, _reader(labels, roles))
+    assert "[(][L][,] [<][)], [a] [<] [b] means" in styled
+
+
 def test_typewriter_letters_are_learned_from_even_words_with_narrow_letters():
     """等宽词里 l、逗号也占满一格。latter、each 字距也匀，但只有 0.4 个字号，不算。"""
     labels: dict = {}
