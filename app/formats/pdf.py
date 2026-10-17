@@ -3939,7 +3939,8 @@ _BIBLIO_MARK_RE = re.compile(r"\barXiv\b|\bCoRR\b|doi:|https?://", re.I)
 # 题名后的著录位置才算，如 研究[J]. 刊名。句末单独的 [M]。 是正文，不是引文。
 _BIBLIO_TYPE_MARK_RE = re.compile(r"(?<=\S)\[[JMDCNRP]\]\s*[.。]\s*\S")
 # [1]张三 中间常没有空格。1. 仍要空格，避免把 1.2 当成编号。
-_BIBLIO_LEAD_RE = re.compile(r"^(?:\[\d+\]\s*|\d{1,3}[.)]\s+)")
+# 老论文常用作者缩写加年份的标签：[CS94]、[GBLP95]、[TPCD]。点阵字 OCR 常把开头的 [ 认丢，只剩 ESS]。
+_BIBLIO_LEAD_RE = re.compile(r"^(?:\[\d+\]\s*|\d{1,3}[.)]\s+|\[?[A-Z][A-Za-z]{0,8}\+?\d{0,4}[a-z]?\](?:\s+|$))")
 _BIBLIO_WRAP_RE = re.compile(r"^[a-zà-öø-ÿ]")
 # 弱信号：只有编号条目才算。“这项研究发表于某出版社。”是正文。
 _BIBLIO_CN_PUB_RE = re.compile(r"出版社|年版")
@@ -4066,8 +4067,9 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
         # 引文里单独一行 Journal 不是下一章
         if len(text) < 40 and BIBLIO_SHORT_LABEL_RE.match(text) and not _biblio_heading_like(block, text, median):
             return False
-        # 编号条目的换行续行以小写字母开头，不是下一章
-        if prev_numbered and _BIBLIO_WRAP_RE.match(text):
+        # 编号条目的换行续行以小写字母开头，不是下一章。
+        # 句号收尾的短行（Databases. White Paper.）也是条目断开的一截：点阵字 OCR 后字号都统一了，靠字号分不开
+        if prev_numbered and (_BIBLIO_WRAP_RE.match(text) or text.endswith(".")):
             return False
         if _biblio_heading_like(block, text, median):
             return True

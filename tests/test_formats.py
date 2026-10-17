@@ -897,6 +897,32 @@ def test_epub_bibliography_kept_original(tmp_path):
     assert any("Doe, B." in s for s in skipped_srcs)
 
 
+def test_pdf_biblio_skips_alpha_labels_at_uniform_size():
+    """作者缩写标签的参考文献，字号和正文一样（点阵字 OCR 后会统一）：OCR 认丢了 [ 的标签、
+    单独一行的标签、句号收尾的短续行都不能被当成下一章，整节保留原文。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size=10):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=False)
+
+    blocks = [
+        blk("We thank our colleagues for help with the experiments."),
+        blk("References"),
+        blk("[CS94] S. Chaudhuri and K. Shim. Including Group-By in Query Optimization. In VLDB, 1994."),
+        blk("ESS]"),
+        blk("Arbor Software Inc. Multidimensional Analysis: Converting Corporate Data into Strate-"),
+        blk("GBLP95] J. Gray, A. Bosworth, A. Layman, H. Pirahesh Data Cube: A Relational Aggregation"),
+        blk("Operator Generalizing Group-By, Cross-Tab, and Sub-Totals. Microsoft Technical Report"),
+        blk("STG]"),
+        blk("Databases. White Paper."),
+        blk("[YL95] W. P. Yan and P. A. Larson. Eager Aggregation and Lazy Aggregation. In VLDB, 1995."),
+    ]
+    assert biblio_skips(blocks) == [False, False] + [True] * 8
+    # 句号收尾不影响没有句号的下一章标题退出
+    tail = blocks[:3] + [blk("Appendix"), blk("Appendix body text continues here.")]
+    assert biblio_skips(tail) == [False, False, True, False, False]
+
 def test_pdf_biblio_skips_follows_font_size():
     from app.formats.pdf import TextBlock, biblio_skips
 
