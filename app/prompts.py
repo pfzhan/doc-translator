@@ -102,8 +102,10 @@ TITLE_PROMPT = "\n\n## Context Awareness\nDocument Metadata:\nTitle: “{{imt_ti
 TERMS_PROMPT = "\n\n## Glossary\nUse these translations consistently:\n{{glossary}}"
 
 SOURCE_END = "[[source_end]]"
-MARKER_RE = re.compile(r"^\[\[(p\d+)\]\]$")
-CONTROL_RE = re.compile(r"^\[\[(?:p\d+|source_end|terms|term|end)\]\]$")
+MARKER_RE = re.compile(r"^\[\[(p\d+)\]\]$", re.I)
+CONTROL_RE = re.compile(r"^\[\[(?:p\d+|source_end|terms|term|end)\]\]$", re.I)
+# 模型有时把收尾标记写成大写，或者接在译文最后一行后面：……8200。[[END]]
+TAIL_CONTROL_RE = re.compile(r"\s*\[\[(?:source_end|terms|term|end)\]\]\s*$", re.I)
 
 
 def pick_marker(texts: list[str]) -> str:
@@ -196,10 +198,17 @@ def clean_output(content: str) -> str:
     return m.group(1).strip() if m else content
 
 
+def strip_control_marks(text: str) -> str:
+    """去掉漏进译文的协议标记（[[END]]、[[source_end]]）。旧缓存里可能已经带着。"""
+    lines = [line for line in text.split("\n") if not CONTROL_RE.match(line.strip())]
+    return TAIL_CONTROL_RE.sub("", "\n".join(lines)).strip()
+
+
 def parse_markers(content: str, count: int, marker: str = "p") -> dict[int, str]:
     """解析 [[pN]] 格式的回复，返回 {序号: 译文}；缺失的序号不在结果里。marker 需与 build_messages 用的一致。"""
-    marker_re = MARKER_RE if marker == "p" else re.compile(rf"^\[\[({marker}\d+)\]\]$")
-    control_re = CONTROL_RE if marker == "p" else re.compile(rf"^\[\[(?:{marker}\d+|source_end|terms|term|end)\]\]$")
+    marker_re = MARKER_RE if marker == "p" else re.compile(rf"^\[\[({marker}\d+)\]\]$", re.I)
+    control_re = CONTROL_RE if marker == "p" else re.compile(
+        rf"^\[\[(?:{marker}\d+|source_end|terms|term|end)\]\]$", re.I)
     result: dict[int, str] = {}
     current: int | None = None
     buf: list[str] = []
@@ -215,9 +224,15 @@ def parse_markers(content: str, count: int, marker: str = "p") -> dict[int, str]
             m = marker_re.match(stripped)
             current = int(m.group(1)[1:]) if m else None
             buf = []
-            if stripped in ("[[terms]]", "[[end]]"):
+            if stripped.lower() in ("[[terms]]", "[[end]]"):
                 break
         elif current is not None:
+            tail = TAIL_CONTROL_RE.search(line)
+            if tail:
+                buf.append(line[:tail.start()])
+                flush()
+                current = None
+                continue
             buf.append(line)
     flush()
     return {k: v for k, v in result.items() if v}
