@@ -286,6 +286,14 @@ def test_markdown_toml_front_matter_kept():
     assert render(blocks, {"Body text.": "T"}, bilingual=False).startswith('+++\ntitle = "Demo post"\ndraft = false\n+++\n')
 
 
+def test_markdown_long_fence_not_closed_by_inner_fence():
+    """四个反引号的围栏里的 ``` 是内容，不能提前结束代码块。"""
+    src = "````markdown\n```python\nprint(1)\n```\n````\n\nAfter the block."
+    blocks = split_blocks(src)
+    assert collect_segments(blocks) == ["After the block."]
+    assert blocks[0].kind == "raw" and blocks[0].lines[-1] == "````"
+
+
 def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
     """有序列表只有从 1 开始才能打断段落，正文里换行后的年份不是列表。"""
     blocks = split_blocks("It happened in\n1990. Then more text.")
