@@ -34,6 +34,7 @@ from .pdf_flow import (
 )
 from .pdf_layout import (
     PageGeometry, RuledTable, cell_containing, content_floor, margin_skips, page_tables, reading_order,
+    text_page_rect,
 )
 from .pdf_roles import HeuristicLayout, LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
@@ -1574,7 +1575,9 @@ def _tighten_formula_sides(
         if rect.x1 < bbox.x0 - 1 or rect.x0 > bbox.x1 + 1:
             continue
         foreign.append(rect)
-    clip = bbox & page.rect
+    if page.rotation:
+        return  # 转过的页面渲染出来也是转过的，按列找墨迹对不上文字坐标
+    clip = bbox & text_page_rect(page)
     if clip.width < 1 or clip.height < 1:
         return
     bounds = _ink_x_bounds(
@@ -2632,9 +2635,10 @@ def _fit_typeset(
         too_tall = height > box.height + 1
         if not overflows and not too_tall:
             return lines, em, gap, box
-        if not expanded and box.width < page.rect.width * 0.6:
+        page_width = text_page_rect(page).width
+        if not expanded and box.width < page_width * 0.6:
             expanded = True
-            wide = _expand_right(box, page.rect.width, obstacles, right_limit)
+            wide = _expand_right(box, page_width, obstacles, right_limit)
             if wide.x1 > box.x1 + 1:
                 box = wide
                 continue
@@ -3427,11 +3431,12 @@ def _room_below(
     块自己已经在页脚带里时不再下刀，贴底的脚注不会因此被缩掉。
     正文下沿以上的块停在原文正文下沿，不写进下边距。
     """
-    limit = page.rect.y1 - 6
-    floor = content_floor(page.rect.height)
+    bounds = text_page_rect(page)
+    limit = bounds.y1 - 6
+    floor = content_floor(bounds.height)
     if y0 < floor - 4:
         limit = min(limit, floor)
-        bottom = _page_content_bottom(blocks, block.page, page.rect.height)
+        bottom = _page_content_bottom(blocks, block.page, bounds.height)
         if y0 < bottom - 4:
             limit = min(limit, bottom)
     for other in blocks:
@@ -3535,6 +3540,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
 
     for pno, items in by_page.items():
         page = doc[pno]
+        # 旋转页的 page.rect 是转过的，和文字坐标比较要用没转的页面框
+        bounds = text_page_rect(page)
         items = _hosts_first(items, continuations)
         visible = [(b, t) for b, t in items if t != SPILL_TAIL]
         geo = geometries[pno] if geometries and pno < len(geometries) else None
@@ -3572,7 +3579,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             formulas: list[dict] | None = None, justify_last: bool = False,
             x_cap: float | None = None,
         ) -> None:
-            rect = _fit_page_margins(block, rect, blocks, page.rect.height, cjk)
+            rect = _fit_page_margins(block, rect, blocks, bounds.height, cjk)
             bformulas = formulas if formulas is not None else (formulas_map or {}).get(id(block), [])
             weight = "bold" if block.bold else "normal"
             size = block.size * 0.88 if cjk else block.size
@@ -3670,7 +3677,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                         gap = 1.45 if cjk else 1.2
                         lines = placed.count("\n") + 1
                         bottom = min(
-                            rest_box.y0 + lines * size * gap + size * 0.3, room, page.rect.y1,
+                            rest_box.y0 + lines * size * gap + size * 0.3, room, bounds.y1,
                         )
                         placed_rect = pymupdf.Rect(
                             rest_box.x0, rest_box.y0, rest_box.x1, max(bottom, rest_box.y0 + 4),
@@ -3709,7 +3716,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             if head:
                 gap = 1.45 if cjk else 1.2
                 lines = head.count("\n") + 1
-                bottom = min(rect.y0 + lines * size * gap + size * 0.3, room, page.rect.y1)
+                bottom = min(rect.y0 + lines * size * gap + size * 0.3, room, bounds.y1)
                 head_rect = pymupdf.Rect(rect.x0, rect.y0, rect.x1, max(bottom, rect.y0 + 4))
                 write_one(b, head, head_rect, centered, bformulas, bool(rest))
             if rest:
@@ -3794,9 +3801,10 @@ def _insert_fitting(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, 
     """
     if _try_insert(page, rect, html_text, css, 0.9, archive):
         return
+    page_width = text_page_rect(page).width
     wide = (
-        _expand_right(rect, page.rect.width, obstacles, right_limit)
-        if rect.width < page.rect.width * 0.6 else rect
+        _expand_right(rect, page_width, obstacles, right_limit)
+        if rect.width < page_width * 0.6 else rect
     )
     if wide.x1 > rect.x1 + 1 and _try_insert(page, wide, html_text, css, 0.9, archive):
         return
