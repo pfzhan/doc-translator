@@ -3,6 +3,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .html_blocks import BIBLIO_HEADING_RE
+
 FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 HEADING_RE = re.compile(r"^(\s{0,3}#{1,6}\s+)(.*?)(\s+#+\s*)?$")
 LIST_RE = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?)(.*)$")
@@ -243,6 +245,31 @@ def segment_kinds(blocks: list[Block]) -> list[str]:
     return kinds
 
 
+def segment_skips(blocks: list[Block]) -> list[bool]:
+    """和 collect_segments 返回的文本一一对应：参考文献章节里的段落保留原文，和 EPUB、PDF 一样。
+
+    标题本身照常翻译。遇到同级或更高级的标题，章节结束。
+    """
+    skips: list[bool] = []
+    level = 0
+    for b in blocks:
+        if b.kind in ("heading", "setext"):
+            if b.kind == "heading":
+                lv = HEADING_RE.match(b.lines[0]).group(1).count("#")
+                title = HEADING_RE.match(b.lines[0]).group(2).strip()
+            else:
+                lv = 1 if b.lines[-1].strip().startswith("=") else 2
+                title = " ".join(l.strip() for l in b.lines[:-1])
+            if len(title) <= 40 and BIBLIO_HEADING_RE.match(title):
+                level = lv
+            elif level and lv <= level:
+                level = 0
+            skips.extend(False for _, _, text in b.segments if _translatable(text))
+            continue
+        skips.extend(bool(level) for _, _, text in b.segments if _translatable(text))
+    return skips
+
+
 def _list_items(lines: list[str]) -> list[tuple[int, str, str, list[str]]]:
     """把列表块拆成列表项：(起始行号, 标记前缀, 合并后的文本, 原始行)。懒续行并入上一项。"""
     items = []
@@ -374,7 +401,8 @@ async def translate_markdown(src: Path, out_dir: Path, runner, bilingual: bool) 
                if b.segments and (b.kind == "heading" and b.lines[0].lstrip().startswith("# ")
                                   or b.kind == "setext" and b.lines[-1].strip().startswith("="))), "")
     runner.set_title(h1 or src.stem)
-    results = await runner.translate_all(texts, kinds=segment_kinds(blocks), preview=True)
+    results = await runner.translate_all(texts, kinds=segment_kinds(blocks), preview=True,
+                                         skip=segment_skips(blocks))
     tr = dict(zip(texts, results))
     suffix = "bilingual" if bilingual else "translated"
     dst = out_dir / f"{src.stem}.{suffix}{src.suffix}"

@@ -362,6 +362,23 @@ def test_markdown_paragraph_starting_with_inline_tag_is_translated():
     assert collect_segments(blocks) == ["<kbd>Ctrl</kbd> copies the selection.", "<https://example.com> is our site."]
 
 
+def test_markdown_references_kept_original(tmp_path):
+    """参考文献章节保留原文：模型原样返回的引文会被当成回显算失败，条目一多整本书就报错。"""
+    src = tmp_path / "paper.md"
+    src.write_text(
+        "# Paper\n\nBody paragraph here.\n\n## References\n\n"
+        "- Vaswani A. Attention is all you need. 2017.\n- Devlin J. BERT. 2019.\n\n"
+        "### Older works\n\nSmith J. A book. 1990.\n\n## Appendix\n\nAppendix text.\n",
+        encoding="utf-8",
+    )
+    [out] = run(translate_file(src, tmp_path, runner(), False, "zh-CN"))
+    text = out.read_text(encoding="utf-8")
+    assert "## [zh-CN] References" in text and "### [zh-CN] Older works" in text
+    assert "- Vaswani A. Attention is all you need. 2017." in text
+    assert "\nSmith J. A book. 1990.\n" in text
+    assert "[zh-CN] Body paragraph here." in text and "[zh-CN] Appendix text." in text
+
+
 def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
     """有序列表只有从 1 开始才能打断段落，正文里换行后的年份不是列表。"""
     blocks = split_blocks("It happened in\n1990. Then more text.")
