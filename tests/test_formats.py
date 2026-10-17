@@ -278,6 +278,14 @@ def test_markdown_setext_headings():
     assert both.startswith("Main Title\n==========\n\nT:Main Title\n==========\n")
 
 
+def test_markdown_toml_front_matter_kept():
+    """Hugo 的 +++ front matter 和 YAML 一样原样保留，不送去翻译。"""
+    blocks = split_blocks('+++\ntitle = "Demo post"\ndraft = false\n+++\n\nBody text.')
+    texts = collect_segments(blocks)
+    assert texts == ["Body text."]
+    assert render(blocks, {"Body text.": "T"}, bilingual=False).startswith('+++\ntitle = "Demo post"\ndraft = false\n+++\n')
+
+
 def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
     """有序列表只有从 1 开始才能打断段落，正文里换行后的年份不是列表。"""
     blocks = split_blocks("It happened in\n1990. Then more text.")
