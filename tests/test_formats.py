@@ -4479,29 +4479,6 @@ def test_pdf_biblio_bare_label_line_does_not_exit():
     assert biblio_skips(blocks) == [False, False, True, True, True, True]
 
 
-def test_rules_inside_a_rewritten_line_are_erased():
-    """老 Ghostscript 把 \\_ 画成一像素高的小图片。重排的行里的要擦掉，行外的不动。"""
-    from app.formats.pdf import _erase_line_rules
-
-    doc = pymupdf.open()
-    page = doc.new_page(width=300, height=200)
-    bar = pymupdf.Pixmap(pymupdf.csGRAY, pymupdf.IRect(0, 0, 8, 1), False)
-    bar.clear_with(0)
-    inside = pymupdf.Rect(100, 60, 104, 60.5)
-    outside = pymupdf.Rect(100, 150, 104, 150.5)
-    page.insert_image(inside, pixmap=bar)
-    page.insert_image(outside, pixmap=bar)
-
-    def ink(rect):
-        pix = page.get_pixmap(dpi=300, clip=rect, colorspace=pymupdf.csGRAY)
-        return sum(1 for value in pix.samples if value < 128)
-
-    assert ink(inside) > 0 and ink(outside) > 0
-    _erase_line_rules(page, [pymupdf.Rect(80, 50, 200, 62)])
-    assert ink(inside) == 0
-    assert ink(outside) > 0
-
-
 def test_inline_typewriter_words_keep_their_glyphs():
     """句子里的等宽属性名换成占位符，贴回原字。整块都是等宽字的不在这里，那是代码块。"""
     from app.formats.pdf import _placeholderize

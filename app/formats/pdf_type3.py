@@ -113,11 +113,12 @@ class OcrWord:
 
 @dataclass(frozen=True)
 class Glyph:
-    """页面上画出来的一个字形。key 是（字体 xref，字符码），rect 是位图的墨迹框。"""
+    """页面上画出来的一个字形。key 是（字体 xref，字符码），rect 是位图的墨迹框，origin 是起笔点。"""
 
     key: Key
     rect: pymupdf.Rect
     color: int = 0
+    origin: tuple[float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -310,7 +311,7 @@ def _glyph(
         rect = pymupdf.Rect(x + x0 * size, y + y0 * size, x + x1 * size, y + y1 * size)
     else:
         rect = pymupdf.Rect(x + x0 * size, y - y1 * size, x + x1 * size, y - y0 * size)
-    return Glyph(key, rect, color)
+    return Glyph(key, rect, color, (x, y))
 
 
 def _y_flip(
@@ -1420,8 +1421,7 @@ def _span(run: list[Glyph], style: str, line: _Line, reader: Type3Reader) -> dic
         size = round(line.size, 1)
         baseline = line.baseline
         box = ink | pymupdf.Rect(ink.x0, baseline - size * 0.72, ink.x1, baseline + size * 0.22)
-    # 擦除按这个框。MuPDF 判断点阵字在不在框里，看的是贴在墨迹顶上的一条细框，
-    # 最高的字正好压在框边上会擦不掉，四周留一点余量
+    # 公式按这个框从原页裁剪，四周留一点余量，位图边上的像素不被切掉
     box = pymupdf.Rect(box.x0 - _PAD, box.y0 - _PAD, box.x1 + _PAD, box.y1 + _PAD)
     font = {
         "text": _TEXT_FONT, "mono": _MONO_FONT, "math": _MATH_FONT, "symbol": _SYMBOL_FONT, "script": _MATH_FONT,
@@ -1434,6 +1434,8 @@ def _span(run: list[Glyph], style: str, line: _Line, reader: Type3Reader) -> dic
         "flags": 0,
         "color": glyphs[0].color if glyphs else 0,
         "origin": (ink.x0, baseline),
+        # 擦原文按这些起笔点认字。点阵字的字体框比墨迹高出半行，按框认会认到别人的字
+        "origins": [glyph.origin for glyph in glyphs if glyph.origin is not None],
         "ascender": 0.75,
         "descender": -0.25,
     }

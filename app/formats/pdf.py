@@ -33,6 +33,7 @@ from .pdf_flow import (
     strip_style_marks,
     writer_for,
 )
+from .pdf_erase import Erasure, erase
 from .pdf_layout import (
     PageGeometry, RuledTable, cell_containing, content_floor, margin_skips, page_tables, reading_order,
     text_page_rect,
@@ -3617,25 +3618,6 @@ def _split_own_lines(
     return raw[0], "\n".join(line for line in rest if line)
 
 
-def _erase_line_rules(page: pymupdf.Page, line_rects: list[pymupdf.Rect]) -> None:
-    """老 Ghostscript 把 \_ 和行内分数线画成一像素高的小图片。落在要重排的行里的，
-    先单独把这几块像素擦白。只擦这几条线的框，背景图不会被挖洞。"""
-    rules = [
-        pymupdf.Rect(info["bbox"]) for info in page.get_image_info()
-        if pymupdf.Rect(info["bbox"]).height <= 1.5
-    ]
-    rules = [rule for rule in rules if any(rule in rect for rect in line_rects)]
-    if not rules:
-        return
-    for rule in rules:
-        page.add_redact_annot(rule, fill=False)
-    page.apply_redactions(
-        images=pymupdf.PDF_REDACT_IMAGE_PIXELS,
-        graphics=pymupdf.PDF_REDACT_LINE_ART_NONE,
-        text=pymupdf.PDF_REDACT_TEXT_NONE,
-    )
-
-
 def _render_translated(src_path: Path, blocks: list[TextBlock], translations: list[str],
                        target_lang: str = "", formulas_map: dict | None = None,
                        archive=None, orig: "pymupdf.Document | None" = None,
@@ -3682,17 +3664,12 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                       for ln in blk["lines"] for s in ln["spans"] if s.get("font") not in bitmap_fonts] \
             if mid_map else None
         fmS = _page_form(doc, page) if mid_map else None
-        line_rects = [r for b, _ in items for r in (b.line_rects or [b.rect])]
-        _erase_line_rules(page, line_rects)
-        for r in line_rects:
-            page.add_redact_annot(r, fill=False)
-        # 整个落在要重排的行里的线（\_ 的下划线、行内分数线）跟着文字擦掉，
-        # 不然原位留下一截短横。公式贴的是重排前打包的原页，不受影响
-        page.apply_redactions(
-            images=pymupdf.PDF_REDACT_IMAGE_NONE,
-            graphics=pymupdf.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED,
-        )
-        # redaction 会把 /Resources 改写成内联字典；排版器写入后 /XObject 条目上百个，
+        # 公式贴的是擦除前打包的原页，不受影响
+        erasure = Erasure()
+        for b, _ in items:
+            erasure.add_block(b.span_lines, b.line_rects or [b.rect])
+        erase(page, erasure)
+        # 重写内容流会把 /Resources 改写成内联字典；排版器写入后 /XObject 条目上百个，
         # 这么大的内联嵌套字典在保存的 GC（garbage≥3）里会被写坏（第一个表单的条目
         # 指向字体流，内容静默丢失）。规范成间接引用避开这个 MuPDF bug。
         res_v = doc.xref_get_key(page.xref, "Resources")[1]
