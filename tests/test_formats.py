@@ -4523,3 +4523,25 @@ def test_list_number_keeps_its_point():
     assert _list_number("1. x is a partial order, and", "1。x 是一个偏序，并且") == "1. x 是一个偏序，并且"
     assert _list_number("2. There is a top element.", "2. 存在一个顶元素。") == "2. 存在一个顶元素。"
     assert _list_number("Plain sentence.", "1。不动") == "1。不动"
+
+
+
+def test_sentence_around_formulas_is_translated_and_bare_formula_line_is_not():
+    """公式外有 If、then、Otherwise 三个词，是一句话，照翻。For all 加一长串公式仍是公式行。"""
+    from app.formats.pdf import extract_blocks
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=500, height=200)
+
+    def write(y, pieces):
+        x = 40.0
+        for text, font in pieces:
+            page.insert_text((x, y), text, fontsize=10, fontname=font)
+            x += pymupdf.get_text_length(text, fontname=font, fontsize=10)
+
+    write(60, [("(b) If ", "Times-Roman"), ("C(v) < C(u)", "Symbol"), (", then ", "Times-Roman"),
+               ("B = C(v) - C(u)", "Symbol"), (". Otherwise, ", "Times-Roman"), ("B = 0", "Symbol"), (".", "Times-Roman")])
+    write(120, [("For all ", "Times-Roman"), ("i: b - x - x - y < a + a + a + a", "Symbol"), (".", "Times-Roman")])
+    texts = [block.text for block in extract_blocks(doc)]
+    assert any("Otherwise" in text for text in texts)
+    assert not any("For all" in text for text in texts)
