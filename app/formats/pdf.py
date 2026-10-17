@@ -4400,11 +4400,18 @@ def _heading_number_for(kind: str, src_text: str, translation: str) -> str:
 
 
 def _list_number(src_text: str, translation: str) -> str:
-    """列表编号 1. 被译成 1。或 1、，改回原文的写法。"""
+    """列表编号 1. 被译成 1。或 1、，图号 Figure 1 被译成 图一，都改回原文的数字。"""
+    caption = _CAPTION_NUM_RE.match(src_text)
+    if caption:
+        return _CN_CAPTION_RE.sub(rf"\g<1>\g<2> {caption.group(1)}", translation, count=1)
     m = re.match(r"\s*(\d{1,3})([.)])\s", src_text)
     if not m:
         return translation
     return re.sub(rf"^(\s*){m.group(1)}\s*[。．、]\s*", rf"\g<1>{m.group(1)}{m.group(2)} ", translation, count=1)
+
+
+_CAPTION_NUM_RE = re.compile(r"\s*(?:Figure|Fig\.?|Table|Tab\.?)\s*(\d+)\b", re.I)
+_CN_CAPTION_RE = re.compile(r"^(\s*)([图表])\s*[一二三四五六七八九十百零〇两]+")
 
 
 def _strip_boundary_echo(prev_src: str, cur_src: str, prev_t: str, cur_t: str) -> str:

@@ -4523,6 +4523,8 @@ def test_list_number_keeps_its_point():
     assert _list_number("1. x is a partial order, and", "1。x 是一个偏序，并且") == "1. x 是一个偏序，并且"
     assert _list_number("2. There is a top element.", "2. 存在一个顶元素。") == "2. 存在一个顶元素。"
     assert _list_number("Plain sentence.", "1。不动") == "1。不动"
+    assert _list_number("Figure 1: The eight views", "图一: 八个视图") == "图 1: 八个视图"
+    assert _list_number("Figure 12: Bars", "图 12: 条") == "图 12: 条"
 
 
 
