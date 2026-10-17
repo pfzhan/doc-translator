@@ -716,8 +716,11 @@ def _tokens(
     split = _space_split(gaps)
     for index, glyph in enumerate(line.glyphs):
         prev = tokens[-1][-1] if tokens else None
-        if prev is not None and prev.key in mono and glyph.key in mono:
-            joined = _middle(glyph) - _middle(prev) <= mono[prev.key] * 1.5
+        pitch = (mono.get(prev.key) or mono.get(glyph.key)) if prev is not None else None
+        same_word = prev is not None and owners.get(id(prev)) is not None and owners.get(id(prev)) == owners.get(id(glyph))
+        if prev is not None and pitch and (prev.key in mono and glyph.key in mono or same_word):
+            # 一边是等宽字、OCR 也认成同一个词（@db.stanford 里只出现一次的 s），按格宽判断
+            joined = _middle(glyph) - _middle(prev) <= pitch * 1.5
         else:
             joined = prev is not None and not _space_before(gaps[index - 1], prev, glyph, owners, split)
         if joined:
