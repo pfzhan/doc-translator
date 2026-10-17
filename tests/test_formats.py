@@ -265,6 +265,19 @@ def test_markdown_title_skips_heading_without_text(tmp_path):
     assert out.read_text(encoding="utf-8") == "# 2024\n\n[zh-CN] Some body text here.\n"
 
 
+def test_markdown_setext_headings():
+    """Setext 标题的下划线不送去翻译，译文下面保留原来的下划线。"""
+    blocks = split_blocks("Main Title\n==========\n\nSection Name\n---\n\nBody text.")
+    texts = collect_segments(blocks)
+    assert texts == ["Main Title", "Section Name", "Body text."]
+    from app.formats.markdown import segment_kinds
+    assert segment_kinds(blocks) == ["h1", "h2", "p"]
+    out = render(blocks, {x: "T:" + x for x in texts}, bilingual=False)
+    assert out == "T:Main Title\n==========\n\nT:Section Name\n---\n\nT:Body text."
+    both = render(blocks, {x: "T:" + x for x in texts}, bilingual=True)
+    assert both.startswith("Main Title\n==========\n\nT:Main Title\n==========\n")
+
+
 def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
     """有序列表只有从 1 开始才能打断段落，正文里换行后的年份不是列表。"""
     blocks = split_blocks("It happened in\n1990. Then more text.")
