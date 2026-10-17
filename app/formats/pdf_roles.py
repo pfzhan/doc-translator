@@ -24,6 +24,10 @@ _CAPTION_RE = re.compile(
     r"^(?:(?:Figure|Fig\.?|Table|Tab\.?|Scheme|Plate)\s*\d+\s*[:.]|(?:图|表)\s*\d+\s*[:.。])",
     re.I,
 )
+# 图注写在图下面。表注常在表上面，不在这里
+_FIGURE_CAPTION_RE = re.compile(r"^(?:Figure|Fig\.?|图)\s*\d+\s*[:.：]", re.I)
+# 正文段落：从左缘起笔、有一句话长
+_BODY_LEN = 20
 _NUMBERED_TITLE_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+\S")
 _SENT_END = tuple("。！？.!?")
 
@@ -63,9 +67,10 @@ class HeuristicLayout:
         geometries: Sequence[PageGeometry],
         median: float,
     ) -> list[Role]:
+        floats = _float_zones(items, geometries, median)
         roles: list[Role] = []
         for item in items:
-            figures = _figures_of(item.page, geometries)
+            figures = (*_figures_of(item.page, geometries), *floats.get(item.page, ()))
             if _inside_figure(item.rect, figures):
                 roles.append(Role.FIGURE)
             elif _is_caption(item, figures):
@@ -96,6 +101,41 @@ def _is_numbered_title(text: str) -> bool:
         return False
     head = stripped[matched.end() - 1]
     return head.isupper() or "\u4e00" <= head <= "\u9fff"
+
+
+def _float_zones(
+    items: Sequence[LayoutItem], geometries: Sequence[PageGeometry], median: float,
+) -> dict[int, list[pymupdf.Rect]]:
+    """图注上方、到上一段正文为止是图。
+
+    节点标签、表格、伪代码不一定画成矢量（老 TeX 的 picture 环境用字形画线），
+    矢量框圈不住。图注写在图下面，正文从栏左缘或段首缩进起笔，图里的东西缩进或居中。
+    上一张图的图注也是边界：两张图叠在一起时，中间没有正文。
+    """
+    zones: dict[int, list[pymupdf.Rect]] = {}
+    for caption in items:
+        if _FIGURE_CAPTION_RE.match(caption.text.strip()) is None:
+            continue
+        if caption.page < 0 or caption.page >= len(geometries):
+            continue
+        geo = geometries[caption.page]
+        column = geo.column_of(caption.rect) if geo.columns else None
+        left = column.x0 if column is not None else 0.0
+        right = column.x1 if column is not None else geo.width
+        indent = max(median, 8.0) * 2
+        top = 0.0
+        for item in items:
+            if item.page != caption.page or item is caption or item.rect.y1 > caption.rect.y0 + 1:
+                continue
+            if min(item.rect.x1, right) - max(item.rect.x0, left) <= 0:
+                continue
+            body = item.rect.x0 <= left + indent and len(item.text.strip()) >= _BODY_LEN
+            if body or _FIGURE_CAPTION_RE.match(item.text.strip()):
+                top = max(top, item.rect.y1)
+        zone = pymupdf.Rect(left, top + 0.5, right, caption.rect.y0 - 0.5)
+        if zone.height > 2:
+            zones.setdefault(caption.page, []).append(zone)
+    return zones
 
 
 def _figures_of(page: int, geometries: Sequence[PageGeometry]) -> tuple[pymupdf.Rect, ...]:
