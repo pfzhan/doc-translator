@@ -9,6 +9,8 @@ LIST_RE = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?)(.*)$")
 QUOTE_RE = re.compile(r"^(\s*(?:>\s?)+)(.*)$")
 TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
 HR_RE = re.compile(r"^\s{0,3}([-*_])(\s*\1){2,}\s*$")
+# Setext 标题的下划线：段落下面一行 === 是一级标题，--- 是二级标题
+SETEXT_RE = re.compile(r"^\s{0,3}(=+|-+)\s*$")
 HTML_BLOCK_RE = re.compile(r"^\s*<(/?[a-zA-Z][\w-]*|!--)")
 # 链接引用定义：[id]: https://...。脚注 [^1]: 有正文，不算
 LINK_DEF_RE = re.compile(r"^\s{0,3}\[(?!\^)[^\]]+\]:\s*\S")
@@ -38,7 +40,7 @@ def _interrupts_paragraph(line: str) -> bool:
 
 @dataclass
 class Block:
-    kind: str  # raw / heading / para / list / quote / table
+    kind: str  # raw / heading / setext / para / list / quote / table
     lines: list[str]
     # 每个可翻译片段：(行号, 前缀, 文本)
     segments: list[tuple[int, str, str]] = field(default_factory=list)
@@ -78,6 +80,11 @@ def split_blocks(text: str) -> list[Block]:
         if not line.strip():
             flush()
             blocks.append(Block("raw", [line]))
+            i += 1
+            continue
+        if para and SETEXT_RE.match(line):
+            blocks.append(Block("setext", para + [line]))
+            para.clear()
             i += 1
             continue
         if HR_RE.match(line) or line.startswith("    ") and not para:
@@ -159,6 +166,8 @@ def collect_segments(blocks: list[Block]) -> list[str]:
             b.segments = [(0, m.group(1), m.group(2))]
         elif b.kind == "para":
             b.segments = [(0, "", " ".join(l.strip() for l in b.lines))]
+        elif b.kind == "setext":
+            b.segments = [(0, "", " ".join(l.strip() for l in b.lines[:-1]))]
         elif b.kind == "list":
             b.segments = [(idx, pre, text) for idx, pre, text, _ in _list_items(b.lines)]
         elif b.kind == "quote":
@@ -171,7 +180,7 @@ def collect_segments(blocks: list[Block]) -> list[str]:
                 _, cells, _ = _split_cells(line)
                 for c in cells:
                     b.segments.append((idx, "", c))
-        if b.kind in ("heading", "para", "quote"):
+        if b.kind in ("heading", "setext", "para", "quote"):
             # 没有可翻译文字的块（纯图片、纯链接等）当作 raw 原样输出
             b.segments = [s for s in b.segments if _translatable(s[2])]
         texts.extend(s[2] for s in b.segments if _translatable(s[2]))
@@ -187,6 +196,8 @@ def segment_kinds(blocks: list[Block]) -> list[str]:
                 continue
             if b.kind == "heading":
                 kinds.append(f"h{min(pre.count('#'), 6)}")
+            elif b.kind == "setext":
+                kinds.append("h1" if b.lines[-1].strip().startswith("=") else "h2")
             else:
                 kinds.append({"list": "li", "table": "td", "quote": "quote"}.get(b.kind, "p"))
     return kinds
@@ -256,6 +267,13 @@ def render(blocks: list[Block], tr: dict[str, str], bilingual: bool) -> str:
                 out.append(b.lines[0])
                 out.append("")
             out.append(pre + t(text))
+        elif b.kind == "setext":
+            text = b.segments[0][2]
+            if bilingual:
+                out.extend(b.lines)
+                out.append("")
+            out.append(t(text))
+            out.append(b.lines[-1])
         elif b.kind == "para":
             text = b.segments[0][2]
             if bilingual:
@@ -313,7 +331,8 @@ async def translate_markdown(src: Path, out_dir: Path, runner, bilingual: bool) 
     # 标题：第一个一级标题，没有就用文件名
     # 「# 2024」这类没有可翻译文字的标题没有 segments
     h1 = next((b.segments[0][2] for b in blocks
-               if b.kind == "heading" and b.segments and b.lines[0].lstrip().startswith("# ")), "")
+               if b.segments and (b.kind == "heading" and b.lines[0].lstrip().startswith("# ")
+                                  or b.kind == "setext" and b.lines[-1].strip().startswith("="))), "")
     runner.set_title(h1 or src.stem)
     results = await runner.translate_all(texts, kinds=segment_kinds(blocks), preview=True)
     tr = dict(zip(texts, results))
