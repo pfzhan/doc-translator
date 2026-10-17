@@ -682,10 +682,10 @@ def _letter_class(text: str) -> str | None:
     return None
 
 
-def _glyph_size(glyph: Glyph, labels: dict[Key, Label]) -> float | None:
+def _glyph_size(glyph: Glyph, labels: dict[Key, Label], sure: bool = True) -> float | None:
     """按字母类别把墨迹高度换回字号。认不准的字形没有字号。"""
     label = labels.get(glyph.key)
-    if label is None or label.agreement < _SURE:
+    if label is None or (sure and label.agreement < _SURE):
         return None
     kind = _letter_class(label.text)
     if kind is None:
@@ -728,7 +728,7 @@ def _tokens(
     merged: list[list[Glyph]] = []
     for token in tokens:
         marks = all((labels.get(glyph.key) or Label("?", 0)).text in _TRAILING_MARKS for glyph in token)
-        if merged and marks and token[0].rect.x0 - merged[-1][-1].rect.x1 <= line.xheight:
+        if merged and marks and token[0].rect.x0 - max(glyph.rect.x1 for glyph in merged[-1]) <= line.xheight:
             merged[-1].extend(token)
         else:
             merged.append(token)
@@ -816,7 +816,10 @@ def _learn_roles(
     从不进词的字母是变量。英文里单独成词的只有 A 和 I：拿位图和正文里的 A、I 比，
     像就是正文（摘要里小一号的 A）。斜体正文和数学斜体长得一样，其他字母比不出来。
     """
-    tokens = [_without_plural(token, labels) for lines in pages.values() for line in lines for token in line.tokens]
+    tokens = [
+        _without_plural(_main_glyphs(line, token, labels), labels)
+        for lines in pages.values() for line in lines for token in line.tokens
+    ]
     seen = Counter(glyph.key for token in tokens for glyph in token)
     seeds = {
         glyph.key for token in tokens if _sure_word(token, labels)
@@ -1187,7 +1190,8 @@ def _is_script(glyph: Glyph, line: _Line, reader: Type3Reader) -> bool:
     认不出字母的符号没有字号，下沿悬在 x 高四分之三以上的（脚注记号）算上标。
     引号本来就悬着，连字符在 x 高一半上下，都不算。
     """
-    size = _glyph_size(glyph, reader.labels)
+    # 认得不稳的字母（下标 N 有时认成 M）类别多半没错，字号照样能估
+    size = _glyph_size(glyph, reader.labels, sure=False)
     if size is None:
         text = _label_text(glyph, reader)
         role = reader.roles.get(glyph.key, "symbol")
@@ -1195,19 +1199,38 @@ def _is_script(glyph: Glyph, line: _Line, reader: Type3Reader) -> bool:
         if role == "text" or (trusted and (text in _QUOTES or text in _DASHES)):
             return False
         return glyph.rect.y1 < line.baseline - line.xheight * 0.75
+    return _off_size(glyph, line, reader.labels, size)
+
+
+def _off_size(glyph: Glyph, line: _Line, labels: dict[Key, Label], size: float) -> bool:
+    """字号比这一行小一截，或者字心偏离同类字母该在的高度。"""
     if size < line.size * _SCRIPT:
         return True
-    kind = _letter_class(reader.labels[glyph.key].text)
+    kind = _letter_class(labels[glyph.key].text)
     center = (glyph.rect.y0 + glyph.rect.y1) / 2
     expected = line.baseline - _CENTER_RATIO.get(kind or "", 0.3) * line.size
     return abs(center - expected) > line.size * _SHIFT
+
+
+def _main_glyphs(line: _Line, token: list[Glyph], labels: dict[Key, Label]) -> list[Glyph]:
+    """去掉上下标。N 下面的 supplier 和 N 挨在一个词里，不能让 N 看起来像单词的一部分。"""
+    kept = []
+    for glyph in token:
+        size = _glyph_size(glyph, labels, sure=False)
+        if size is None or not _off_size(glyph, line, labels, size):
+            kept.append(glyph)
+    return kept or token
 
 
 def _mono_tokens(line: _Line, reader: Type3Reader) -> set[int]:
     """四分之三的字是等宽字形的词。挨着等宽词、字距也是格宽的词（SELECT、AS、FROM）跟着算。"""
     found: dict[int, float] = {}
     for index, token in enumerate(line.tokens):
-        glyphs = [glyph for glyph in token if not _label_text(glyph, reader).isdigit()]
+        # 下标不算：N 下面等宽字的 supplier 不让 N 变成等宽字
+        glyphs = [
+            glyph for glyph in token
+            if not _label_text(glyph, reader).isdigit() and not _is_script(glyph, line, reader)
+        ]
         known = [reader.mono[glyph.key] for glyph in glyphs if glyph.key in reader.mono]
         if glyphs and len(known) >= len(glyphs) * 0.75:
             found[index] = statistics.median(known)
