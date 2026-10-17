@@ -89,3 +89,20 @@ def test_figure_label_stays_original_and_caption_is_translated(tmp_path: Path):
     assert "axis" in text and "[zh-CN] axis" not in text
     assert "[zh-CN] Figure 1: a plot." in text
     assert "[zh-CN] Body paragraph with enough letters here." in text
+
+
+def test_labels_and_listing_above_a_figure_caption_are_the_figure():
+    """picture 环境用字形画线，没有矢量框。图注上方、到上一段正文为止都是图。
+    两张图叠在一起时，上一张的图注是下一张图的上界，不被吞进去。"""
+    items = [
+        _item("A body paragraph that ends right before the figure starts.", pymupdf.Rect(40, 40, 360, 54)),
+        _item("psc 6M", pymupdf.Rect(170, 70, 210, 80)),
+        _item("S = S union {v};", pymupdf.Rect(80, 90, 200, 100)),
+        _item("Figure 1: The eight views.", pymupdf.Rect(120, 120, 300, 132)),
+        _item("none 1", pymupdf.Rect(170, 150, 210, 160)),
+        _item("Figure 2: Hierarchy of time attributes", pymupdf.Rect(120, 180, 320, 192)),
+        _item("Next body paragraph starts at the left margin again.", pymupdf.Rect(40, 210, 360, 224)),
+    ]
+    geo = PageGeometry.from_rects(400, [item.rect for item in items], [], 500)
+    roles = HeuristicLayout().classify(items, [geo], median=10)
+    assert roles == [Role.BODY, Role.FIGURE, Role.FIGURE, Role.CAPTION, Role.FIGURE, Role.CAPTION, Role.BODY]
