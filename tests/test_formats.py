@@ -2628,6 +2628,92 @@ def test_same_line_sentence_joins_the_paragraph_and_keeps_side_labels():
     assert _with_source_bold(memo, "备忘录。") == "{b}备忘录。{/b}"
 
 
+def _reference_same_line_merge(blocks):
+    """改成按页合并之前的写法。每并一次就从头再找。"""
+    from app.formats.pdf import _absorb_block, _continues_fragment, _sits_on_last_line
+
+    out = list(blocks)
+    changed = True
+    while changed:
+        changed = False
+        for index, host in enumerate(out):
+            for other_index, guest in enumerate(out):
+                if other_index == index or guest.page != host.page:
+                    continue
+                if not _sits_on_last_line(host, guest) and not _continues_fragment(host, guest):
+                    continue
+                _absorb_block(host, guest)
+                del out[other_index]
+                changed = True
+                break
+            if changed:
+                break
+    return out
+
+
+def _random_line_blocks(seed: int):
+    import random
+
+    from app.formats.pdf import TextBlock
+
+    rng = random.Random(seed)
+    texts = ["Alpha beta gamma delta.", "alpha beta gamma delta", "and the model keeps going",
+             "Results are shown here.", "with more words after it"]
+    blocks = []
+    for _ in range(rng.randint(4, 30)):
+        page = rng.choice([0, 1, 2])
+        row = rng.randint(0, 8)
+        start = rng.choice([40.0, 40.0, 130.0, 210.0])
+        count = rng.choice([1, 1, 2, 3])
+        rects = []
+        for line in range(count):
+            y0 = 100 + (row + line) * 10.5
+            x0 = start if line == 0 else 40.0
+            x1 = 300.0 if line < count - 1 else rng.choice([120.0, 200.0, 300.0])
+            rects.append(pymupdf.Rect(x0, y0, max(x1, x0 + 20), y0 + 9))
+        union = pymupdf.Rect(rects[0])
+        for rect in rects[1:]:
+            union |= rect
+        blocks.append(TextBlock(page=page, rect=union, line_rects=rects, text=rng.choice(texts),
+                                size=9, color="#000", bold=False))
+    return blocks
+
+
+def test_same_line_merge_by_page_matches_the_rescan():
+    """按页分开、并完接着找，结果和每次从头重扫一样。"""
+    import copy
+
+    from app.formats.pdf import TextBlock, _merge_same_line_sentences
+
+    def shape(blocks):
+        return [(b.page, b.text, tuple(b.rect), [tuple(r) for r in b.line_rects]) for b in blocks]
+
+    merges = 0
+    for seed in range(300):
+        blocks = _random_line_blocks(seed)
+        expected = _reference_same_line_merge(copy.deepcopy(blocks))
+        assert shape(_merge_same_line_sentences(copy.deepcopy(blocks))) == shape(expected), seed
+        merges += len(blocks) - len(expected)
+    assert merges > 300
+
+    # 中间那块先接上下一行、回到栏边，才能并进前面那段。并完要回头看前面的块。
+    def para(text, boxes):
+        rects = [pymupdf.Rect(*box) for box in boxes]
+        union = pymupdf.Rect(rects[0])
+        for rect in rects[1:]:
+            union |= rect
+        return TextBlock(page=0, rect=union, line_rects=rects, text=text, size=9, color="#000", bold=False)
+
+    chain = [
+        para("Alpha beta gamma delta.", [(40, 100, 300, 109), (40, 110.5, 150, 119.5)]),
+        para("Results are shown here and", [(155, 110.5, 300, 119.5), (200, 121, 300, 130)]),
+        para("with more words after it.", [(40, 131.5, 300, 140.5)]),
+    ]
+    expected = _reference_same_line_merge(copy.deepcopy(chain))
+    assert len(expected) == 1
+    assert shape(_merge_same_line_sentences(copy.deepcopy(chain))) == shape(expected)
+
+
 def test_finished_condition_line_does_not_swallow_the_next_paragraph():
     """公式条件行以句号结束时，不把下面回到栏边的正文接进来。没写完的右半句仍接下一行。"""
     from app.formats.pdf import TextBlock, _continues_fragment, _merge_same_line_sentences
