@@ -6,6 +6,7 @@
 """
 import copy
 import re
+from html.entities import html5
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
@@ -550,7 +551,33 @@ def apply_translation_html(soup, el: Tag, src_html: str, translated_html: str, b
     el.insert_after(clone)
 
 
+# XML 自带的五个实体，其余命名实体要靠 DTD，lxml-xml 不加载外部 DTD
+_XML_ENTITIES = {"amp", "lt", "gt", "quot", "apos"}
+_NAMED_ENTITY_RE = re.compile(r"&([A-Za-z][A-Za-z0-9]*);")
+_NAMED_ENTITY_BYTES_RE = re.compile(rb"&([A-Za-z][A-Za-z0-9]*);")
+
+
+def _numeric_entities(content: bytes | str) -> bytes | str:
+    """&rsquo;、&nbsp; 这类 HTML 命名实体改成数字引用。不认识的实体原样保留。"""
+    def repl(m: re.Match) -> bytes | str:
+        name = m.group(1)
+        if isinstance(name, bytes):
+            name = name.decode("ascii")
+        chars = None if name in _XML_ENTITIES else html5.get(name + ";")
+        if chars is None:
+            return m.group(0)
+        out = "".join(f"&#{ord(c)};" for c in chars)
+        return out.encode("ascii") if isinstance(m.group(0), bytes) else out
+
+    if isinstance(content, bytes):
+        return _NAMED_ENTITY_BYTES_RE.sub(repl, content)
+    return _NAMED_ENTITY_RE.sub(repl, content)
+
+
 def parse(content: bytes | str, xml: bool) -> BeautifulSoup:
+    if xml:
+        # 不换的话这些实体会被静默删掉，原文和译文都缺字
+        content = _numeric_entities(content)
     soup = BeautifulSoup(content, "lxml-xml" if xml else "lxml")
     # lxml-xml 遇到带内部 DTD 子集（<!DOCTYPE html [<!ENTITY nbsp "&#160;">]>）的 XHTML 会静默产出空文档，
     # 原文非空但解析不出任何元素时回退到 HTML 模式重新解析
