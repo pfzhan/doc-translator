@@ -181,6 +181,7 @@ def recover_type3_page(page: pymupdf.Page, data: PageData) -> bool:
 
     旧行框盖不住词，所以按字形重新组行。擦除用墨迹框：字框比墨迹高，
     扩进去会压到下一行。没对上点阵的词留下，避免把正常字体再认一遍。
+    这一页识别超时或认不出正文时，只去掉字符码，点阵字留在原页，不让整本书失败。
     """
     doc = page.parent
     if doc is None or "blocks" not in data:
@@ -188,7 +189,11 @@ def recover_type3_page(page: pymupdf.Page, data: PageData) -> bool:
     names = broken_type3_names(doc, page)
     if not names or _broken_share(data, names) < _BROKEN_SHARE:
         return False
-    words = ocr_page(page)
+    try:
+        words = ocr_page(page)
+    except subprocess.TimeoutExpired:
+        _drop_broken_lines(data, names)
+        return False
     zones = [*_drawing_zones(page), *_pipe_zones(words), *_bar_zones(words)]
     zones.extend(_label_zones(words, zones))
     visible = [word for word in words if not _hidden(word, zones)]
@@ -199,7 +204,7 @@ def recover_type3_page(page: pymupdf.Page, data: PageData) -> bool:
     _drop_broken_lines(data, names)
     rebuilt = _compose_lines(prose, debris, originals)
     if not rebuilt:
-        raise ValueError("点阵字页面没有认出可翻译的文字。请确认 tesseract 的英文语言包已安装")
+        return False
     _snap_page_sizes(rebuilt)
     for group in _group_lines(rebuilt):
         data["blocks"].append({"type": 0, "bbox": _union_bbox(group), "lines": group})
