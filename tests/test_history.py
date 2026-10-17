@@ -438,6 +438,10 @@ def test_runner_released_after_finish(app_env):
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
+        # 状态先变成 done，写完快照才释放 Runner，中间隔着一次线程调度
+        deadline = time.monotonic() + 10
+        while main.jobs.get(job["id"]).runner is not None and time.monotonic() < deadline:
+            time.sleep(0.02)
         assert main.jobs.get(job["id"]).runner is None
         p = client.get(f"/api/jobs/{job['id']}/preview").json()
         assert p["ready"] and p["status"] == "done" and len(p["updates"]) == 3
