@@ -487,3 +487,13 @@ def test_download_rejects_path_traversal(app_env):
         with pytest.raises(HTTPException) as e:
             main.download(job["id"], "../job.json")
         assert e.value.status_code == 404
+
+
+def test_download_url_encodes_hash_and_question_mark(app_env):
+    """文件名带 # 或 ? 时下载链接要编码，否则浏览器只请求到 # 之前的部分。"""
+    main = app_env
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client, name="C# 入门?.md")["id"])
+        [out] = job["outputs"]
+        assert "#" not in out["url"] and "?" not in out["url"]
+        assert client.get(out["url"]).status_code == 200

@@ -12,6 +12,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import quote
 
 from .langdetect import same_language
 
@@ -85,7 +86,8 @@ class Job:
             # 插件的 sameLangCheck：检测到的源语言和目标语言一致时提示
             "same_lang": same_language(self.detected_lang, self.target_lang),
             "preview": self.preview,
-            "outputs": [{"name": n, "url": f"/api/jobs/{self.id}/files/{n}"} for n in self.outputs],
+            # 文件名里的 #、? 不编码会被浏览器当成锚点和查询串
+            "outputs": [{"name": n, "url": f"/api/jobs/{self.id}/files/{quote(n)}"} for n in self.outputs],
         }
 
 
