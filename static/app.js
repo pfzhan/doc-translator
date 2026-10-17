@@ -16,7 +16,11 @@ async function api(url, options = {}) {
   }
   const res = await fetch(url, init);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : `请求失败 (${res.status})`);
+  if (!res.ok) {
+    const err = new Error(typeof data.detail === "string" ? data.detail : `请求失败 (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -1187,6 +1191,8 @@ async function readerTick() {
     if (reader.jobId !== id) return;
     $("reader-notice").hidden = false;
     $("reader-notice").textContent = `无法读取：${err.message}`;
+    // 记录已经被删掉（比如在另一个标签页里），再拉也是 404，停下来
+    if (err.status === 404) return;
     // 出错后也要继续轮询，退避 4 秒，避免一次网络抖动就永久停更
     reader.timer = setTimeout(readerTick, 4000);
   }
