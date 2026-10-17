@@ -455,3 +455,11 @@ def test_all_empty_translations_fail_on_short_doc(tmp_path):
     with pytest.raises(TranslatorError, match="2 / 2"):
         run(runner.translate_all(["one sentence", "two sentence"]))
     assert runner.info["failed"] == 2
+
+
+def test_rejects_requests_for_other_host_names():
+    """DNS 重绑定：恶意网页的域名解析到 127.0.0.1 后，Host 头还是它自己的域名，要拒绝。"""
+    with TestClient(main.app, base_url="http://evil.example") as client:
+        assert client.get("/api/services").status_code == 400
+    with TestClient(main.app, base_url="http://127.0.0.1:8765") as client:
+        assert client.get("/api/services").status_code == 200

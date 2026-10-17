@@ -1,5 +1,6 @@
 """Web 服务：上传文档 → 后台翻译 → 边翻边预览 → 下载结果；翻译记录持久化在 data/jobs/。"""
 import asyncio
+import os
 import shutil
 import time
 import traceback
@@ -10,6 +11,7 @@ from pathlib import Path
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import history
 from .formats import PREVIEW_FORMATS, SUPPORTED, output_variant, translate_file
@@ -76,6 +78,11 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Doc Translator", lifespan=lifespan)
+# 只接受本机地址访问。否则恶意网页把自己的域名解析到 127.0.0.1（DNS 重绑定），就能以同源身份调用这些接口，
+# 比如用已保存的 Key 去测一个它指定的 API 地址。在局域网里用 IP 访问时，把地址加到环境变量 ALLOWED_HOSTS，逗号分隔
+ALLOWED_HOSTS = ["127.0.0.1", "localhost", "[::1]",
+                 *(h.strip() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip())]
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 
 async def _run_job(job: Job, translator, bilingual: bool):

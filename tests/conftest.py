@@ -1,6 +1,11 @@
+import os
+
 import pytest
 
-from app import ccswitch
+# TestClient 的请求地址是 testserver，main 只接受本机地址。要在导入 main 之前设好
+os.environ["ALLOWED_HOSTS"] = "testserver"
+
+from app import ccswitch  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
