@@ -502,3 +502,24 @@ def test_download_url_encodes_hash_and_question_mark(app_env):
         [out] = job["outputs"]
         assert "#" not in out["url"] and "?" not in out["url"]
         assert client.get(out["url"]).status_code == 200
+
+
+def test_oversized_upload_rejected_before_reading_body(app_env, monkeypatch):
+    """Content-Length 超过上限时直接 413，请求进不了 create_job（不用等整个文件写进临时文件）。"""
+    main = app_env
+    monkeypatch.setattr(main, "MAX_UPLOAD", 1000)
+    entered = []
+    real_get = main.store.get
+
+    def get(sid):
+        entered.append(sid)  # create_job 一进来就查翻译服务
+        return real_get(sid)
+
+    monkeypatch.setattr(main.store, "get", get)
+    with TestClient(main.app) as client:
+        r = client.post("/api/jobs", files={"file": ("big.md", b"x" * (2 * 1024 * 1024))},
+                        data={"service_id": "mock", "target_lang": "zh-CN"})
+        assert r.status_code == 413 and "上限" in r.json()["detail"]
+        assert not entered
+        assert client.get("/api/jobs").json()["jobs"] == []
+        assert submit(client)["status"] in ("queued", "running", "done")
