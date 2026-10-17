@@ -650,3 +650,58 @@ def test_type3_keeps_formula_slots_and_glyph_tables():
     assert "be the cost of view" in greedy
     assert any(text.strip().startswith("EXAMPLE") for text in texts)
     assert any(text.strip().startswith("1.3") for text in texts)
+
+
+def _bitmap_font_pdf(path: Path) -> None:
+    """第一页全是自造编码的点阵字（没有 ToUnicode，字形名是 /a0 这种），第二页是普通文字。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    procs = []
+    for _ in range(10):
+        xref = doc.get_new_xref()
+        doc.update_object(xref, "<<>>")
+        doc.update_stream(xref, b"500 0 0 0 400 600 d1 0 0 400 600 re f")
+        procs.append(xref)
+    glyphs = " ".join(f"/a{i}" for i in range(10))
+    charprocs = " ".join(f"/a{i} {xref} 0 R" for i, xref in enumerate(procs))
+    font = doc.get_new_xref()
+    doc.update_object(font, (
+        "<< /Type /Font /Subtype /Type3 /Name /BitmapF /FontBBox [0 0 500 700] "
+        f"/FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << {charprocs} >> "
+        f"/Encoding << /Type /Encoding /Differences [65 {glyphs}] >> "
+        f"/FirstChar 65 /LastChar 74 /Widths [{' '.join(['500'] * 10)}] /Resources << >> >>"
+    ))
+    doc.xref_set_key(page.xref, "Resources", f"<< /Font << /T3 {font} 0 R >> >>")
+    codes = "".join(f"{65 + i % 10:02X}" for i in range(30))
+    content = doc.get_new_xref()
+    doc.update_object(content, "<<>>")
+    doc.update_stream(content, "\n".join(
+        f"BT /T3 12 Tf 40 {250 - row * 16} Td <{codes}> Tj ET" for row in range(6)
+    ).encode())
+    doc.xref_set_key(page.xref, "Contents", f"{content} 0 R")
+    doc.new_page(width=400, height=300).insert_text(
+        (40, 60), "A normal paragraph on the next page is still translated.", fontsize=11,
+    )
+    doc.save(path)
+
+
+@pytest.mark.parametrize("failure", ["no_lines", "timeout"])
+def test_unreadable_bitmap_page_keeps_its_glyphs(tmp_path, monkeypatch, failure):
+    """一页点阵字识别超时或认不出正文时，这一页留原样，其他页照常翻译，不让整本书失败。"""
+    import subprocess
+
+    from app.formats import pdf_type3
+
+    def fake_ocr(page, scale=3.0):
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired("tesseract", 90)
+        return []
+
+    monkeypatch.setattr(pdf_type3, "ocr_page", fake_ocr)
+    src = tmp_path / "bitmap.pdf"
+    _bitmap_font_pdf(src)
+    doc = pymupdf.open(src)
+    assert broken_type3_names(doc, doc[0]) == {"BitmapF"}
+    blocks = extract_blocks(doc)
+    assert [block.page for block in blocks] == [1]
+    assert "normal paragraph" in blocks[0].text
