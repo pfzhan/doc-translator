@@ -498,8 +498,11 @@ def job_preview(job_id: str, since: int = -1):
     snap = jobs.load_preview(job)
     if snap is None:
         return {"ready": False, "version": 0, "status": job.status}
-    if since >= 0:
+    if since >= snap["version"]:
         return {"ready": True, "version": snap["version"], "updates": [], "status": job.status}
+    if since >= 0:
+        # 上次拉取之后到任务结束之间翻好的段落只在快照里。快照不分版本，整份返回，前端会跳过已显示的段落
+        return {"ready": True, "version": snap["version"], "updates": snap["updates"], "status": job.status}
     return {**snap, "status": job.status}
 
 

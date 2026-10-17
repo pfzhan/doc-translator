@@ -473,3 +473,22 @@ def test_stray_placeholders_cleaned_from_formula_free_blocks():
     t = "其中{v1}从{v2}到{v3}进行线性递减"
     assert _STRAY_PLACEHOLDER_RE.sub("", t) == "其中从到进行线性递减"
     assert _STRAY_PLACEHOLDER_RE.sub("", "正常译文") == "正常译文"
+
+
+def test_finished_job_preview_returns_updates_after_last_poll(app_env):
+    """最后一批在两次拉取之间翻完、任务随即结束时，下一次增量拉取要拿到这批译文。"""
+    job = main.Job(id="snap1", filename="a.md", preview=True, status="done")
+    main.jobs.out_dir(job.id).mkdir(parents=True)
+    main.jobs.add(job)
+    runner = Runner(MockTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
+    asyncio.run(runner.translate_all(paras(3), preview=True))
+    job.runner = runner
+    main.jobs.save_preview(job)
+    job.runner = None
+    with TestClient(main.app) as client:
+        snap = client.get("/api/jobs/snap1/preview").json()
+        late = client.get("/api/jobs/snap1/preview?since=1").json()
+        assert late["version"] == snap["version"]
+        assert sorted(u[0] for u in late["updates"]) == [0, 1, 2]
+        assert "segments" not in late
+        assert client.get(f"/api/jobs/snap1/preview?since={snap['version']}").json()["updates"] == []
