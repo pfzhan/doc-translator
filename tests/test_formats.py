@@ -731,6 +731,19 @@ def test_epub_kbd_text_kept_in_translation_only_mode(tmp_path):
     assert "[zh-CN]" in p.get_text() and "Ctrl+C" in p.get_text()
     assert "<kbd>Ctrl</kbd>" in html
 
+def test_epub_bilingual_translation_has_no_duplicate_ids(tmp_path):
+    """双语模式下译文段落不能带原文的 id 和分页锚点，否则 id 重复、页码显示两遍。"""
+    body = ('<p id="para1"><a id="p12"/>Some <b>bold</b> text and <a id="note3" href="#n3">a note</a> here.</p>'
+            '<ul><li><span epub:type="pagebreak" id="p13">13</span>Item with <em>emphasis</em> inside.</li></ul>')
+    src = tmp_path / "book.epub"
+    _one_epub(src, {"ch1.xhtml": _xhtml(body)})
+    [out] = run(translate_epub(src, tmp_path, runner(), True, "zh-CN"))
+    html = zipfile.ZipFile(out).read("OEBPS/ch1.xhtml").decode()
+    for ident in ("para1", "p12", "note3", "p13"):
+        assert html.count(f'id="{ident}"') == 1, ident
+    assert html.count(">13<") == 1
+    assert "[zh-CN]" in html and 'href="#n3"' in html
+
 def test_sanitize_rejects_anchor_only_translation():
     """原文有文字、译文只剩锚点（模型抽风）：判不合格回退，不能清空原段落。"""
     from app.formats import html_blocks as hb
