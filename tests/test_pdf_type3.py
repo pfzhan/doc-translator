@@ -217,6 +217,32 @@ def test_formula_noise_drops_the_bitmap_and_keeps_the_clause():
     assert kept == ["where", "1.2."]
 
 
+def test_words_from_a_math_font_stay_glyphs():
+    """数学斜体和符号字体认出来的「6}」「(L,」「a」留原字形；正文字体、标题里的 of、
+    斜体的 i.e.、节号照常是正文。"""
+    from app.formats.pdf_type3 import _math_font_words
+
+    def word(text, x0, x1, conf):
+        return OcrWord(text, pymupdf.Rect(x0, 100, x1, 110), conf)
+
+    body = [word("lattice", 10, 50, 96), word("elements", 55, 100, 97), word("ordered", 105, 150, 95)]
+    math = [word("6}", 160, 170, 50), word("(L,", 175, 190, 62), word("a", 195, 200, 93)]
+    heading = word("of", 210, 220, 93)
+    italic = word("i.e.,", 225, 245, 87)
+    section = word("4.3", 250, 265, 96)
+    glyphs = [
+        GlyphBox(pymupdf.Rect(10, 96, 150, 114), 10.0, 0, 108.0, 0, "A"),
+        GlyphBox(pymupdf.Rect(160, 96, 200, 114), 10.0, 0, 108.0, 0, "H"),
+        GlyphBox(pymupdf.Rect(210, 96, 220, 114), 10.0, 0, 108.0, 0, "L"),
+        GlyphBox(pymupdf.Rect(225, 96, 245, 114), 10.0, 0, 108.0, 0, "E"),
+        GlyphBox(pymupdf.Rect(250, 96, 265, 114), 10.0, 0, 108.0, 0, "L"),
+    ]
+    words = [*body, *math, heading, italic, section]
+    found = _math_font_words(words, glyphs)
+    assert {w.text for w in words if id(w) in found} == {"6}", "(L,", "a"}
+    kept = [w.text for w in _without_noise(words, found)]
+    assert "6}" not in kept and "of" in kept and "i.e.," in kept and "4.3" in kept
+
 def test_numbered_heading_list_and_sql_stay_apart():
     """节标题不吞正文，相邻列表项不并成一行，SQL 子句各留各的行。"""
     heading = _line("1.2. Motivating Example", 72, 661, 223, 672, 12)
