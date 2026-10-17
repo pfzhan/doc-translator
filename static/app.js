@@ -25,9 +25,10 @@ async function api(url, options = {}) {
 }
 
 // ---------- 视图切换 ----------
-// 页面：translate（翻译）/ history（翻译记录）/ services（翻译服务）；阅读器是覆盖在上面的全屏层
+// 页面：translate（翻译）/ history（翻译记录）/ services（翻译服务）/ layout（版面模型）；
+// 阅读器是覆盖在上面的全屏层
 
-const VIEWS = ["translate", "history", "services"];
+const VIEWS = ["translate", "history", "services", "layout"];
 
 function showView(name) {
   if (!VIEWS.includes(name)) name = "translate";
@@ -37,6 +38,7 @@ function showView(name) {
   for (const v of VIEWS) $(`view-${v}`).hidden = v !== name;
   state.view = name;
   if (name === "history") refreshJobs();
+  if (name === "layout") loadLayoutModel();
   try {
     localStorage.setItem("doc-translator-view", name);
   } catch {
@@ -1537,5 +1539,122 @@ async function init() {
   const m = location.hash.match(/^#read\/(\w+)$/);
   if (m && state.jobs.some((j) => j.id === m[1] && j.preview !== false)) openReader(m[1]);
 }
+
+// ---------- 版面模型 ----------
+
+let layoutPoll;
+
+function formatMB(bytes) {
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function renderLayoutModel(m, { keepForm = false } = {}) {
+  const runtime = $("layout-runtime");
+  runtime.replaceChildren();
+  if (m.runtime) {
+    runtime.textContent = `onnxruntime ${m.runtime}`;
+  } else {
+    const warn = document.createElement("span");
+    warn.className = "warn";
+    warn.textContent = "没有安装 onnxruntime，在项目目录运行 ";
+    const code = document.createElement("code");
+    code.textContent = m.install_hint;
+    runtime.append(warn, code, " 后重启服务");
+  }
+  const file = $("layout-file");
+  file.replaceChildren();
+  const where = document.createElement("code");
+  where.textContent = m.resolved;
+  if (m.file.exists) {
+    file.append(where, `（${formatMB(m.file.size)}）`);
+  } else {
+    const warn = document.createElement("span");
+    warn.className = "warn";
+    warn.textContent = "文件不存在：";
+    file.append(warn, where);
+  }
+  if (!keepForm) {
+    $("layout-enabled").checked = m.enabled;
+    $("layout-path").value = m.path;
+    $("layout-path").placeholder = `留空使用默认位置：${m.default_path}`;
+    const select = $("layout-source");
+    if (!select.options.length) {
+      for (const source of m.sources) select.add(new Option(source.label, source.id));
+    }
+  }
+  const d = m.download;
+  const status = $("layout-download-status");
+  status.classList.toggle("warn", Boolean(d.error));
+  if (d.running) {
+    status.textContent = d.total ? `下载中 ${formatMB(d.done)} / ${formatMB(d.total)}` : `下载中 ${formatMB(d.done)}`;
+  } else if (d.error) {
+    status.textContent = `下载失败：${d.error}`;
+  } else if (d.source && m.file.exists) {
+    status.textContent = "下载完成";
+  } else {
+    status.textContent = "";
+  }
+  $("layout-download").disabled = d.running;
+  clearTimeout(layoutPoll);
+  if (d.running) layoutPoll = setTimeout(() => loadLayoutModel({ keepForm: true }), 1000);
+}
+
+async function loadLayoutModel(options = {}) {
+  try {
+    renderLayoutModel(await api("/api/layout-model"), options);
+  } catch (err) {
+    toast(`读取版面模型设置失败：${err.message}`);
+  }
+}
+
+$("layout-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const status = $("layout-save-status");
+  await busy($("layout-save"), "保存中…", async () => {
+    try {
+      const m = await api("/api/layout-model", {
+        method: "PUT",
+        json: { enabled: $("layout-enabled").checked, path: $("layout-path").value },
+      });
+      renderLayoutModel(m);
+      status.textContent = m.enabled && !(m.runtime && m.file.exists)
+        ? "已保存。缺运行环境或模型文件时，翻译仍只用规则"
+        : "已保存";
+    } catch (err) {
+      status.textContent = `保存失败：${err.message}`;
+    }
+  });
+});
+
+$("layout-download").addEventListener("click", async () => {
+  try {
+    renderLayoutModel(
+      await api("/api/layout-model/download", {
+        json: { source: $("layout-source").value, path: $("layout-path").value },
+      }),
+      { keepForm: true },
+    );
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$("layout-test").addEventListener("click", async (e) => {
+  const box = $("layout-test-result");
+  box.hidden = false;
+  box.className = "test-result";
+  box.textContent = "测试中…";
+  await busy(e.currentTarget, "测试中…", async () => {
+    try {
+      const r = await api("/api/layout-model/test", { json: { path: $("layout-path").value } });
+      box.classList.add("ok");
+      const found = r.labels.length ? r.labels.join("、") : "没有框出东西";
+      box.textContent = `测试成功：加载 ${r.load_ms} ms，一页推理 ${r.page_ms} ms，样例页上框出 ${found}`;
+    } catch (err) {
+      box.classList.add("fail");
+      box.textContent = `测试失败：${err.message}`;
+    }
+  });
+});
 
 init().catch((err) => alert(`初始化失败：${err.message}`));

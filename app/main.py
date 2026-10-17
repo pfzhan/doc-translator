@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import history
+from . import history, layout_model
 from .formats import PREVIEW_FORMATS, SUPPORTED, output_variant, translate_file
 from .history import Job, JobStore
 from .languages import GOOGLE_CODES, LANGUAGES
@@ -38,6 +38,8 @@ variant_tasks: dict[str, asyncio.Future[None]] = {}
 deleting: set[str] = set()
 # 用户点了暂停的任务：取消时据此把状态记成“已暂停”，而不是“已中断”
 pause_requested: set[str] = set()
+# 版面模型的下载（同一时间只有一个）
+layout_downloads = layout_model.Downloader()
 ACTIVE = ("queued", "running")
 PROGRESS_SAVE_INTERVAL = 5
 
@@ -115,7 +117,7 @@ async def _run_job(job: Job, translator, bilingual: bool):
     jobs.save(job)
     try:
         outputs = await translate_file(jobs.source_path(job), jobs.out_dir(job.id), job.runner, bilingual,
-                                       job.target_lang)
+                                       job.target_lang, layout_model=_layout_model_path())
         job.outputs = [p.name for p in outputs]
         job.status = "done"
     except asyncio.CancelledError:
@@ -484,6 +486,7 @@ async def build_variant(job_id: str):
         try:
             outputs = await translate_file(
                 jobs.source_path(job), stage, Runner(translator, cache_only=True), bilingual, job.target_lang,
+                layout_model=_layout_model_path(),
             )
         except (TranslatorError, ValueError) as e:
             raise HTTPException(400, str(e))
@@ -573,6 +576,64 @@ async def update_settings(data: dict = Body(...)):
         raise HTTPException(400, str(e))
     await _cleanup()  # 改短了保留时间，立即清理
     return result
+
+
+# ---------- 版面模型 ----------
+
+def _layout_model_path() -> str:
+    """PDF 翻译用的模型文件。没开时是空串，只用规则。"""
+    conf = settings.layout_model
+    return str(layout_model.resolve(conf["path"])) if conf["enabled"] else ""
+
+
+def _layout_status() -> dict:
+    conf = settings.layout_model
+    path = layout_model.resolve(conf["path"])
+    return {
+        **conf,
+        "resolved": str(path),
+        "default_path": str(layout_model.default_path()),
+        "runtime": layout_model.runtime_version(),
+        "install_hint": layout_model.INSTALL_HINT,
+        "file": layout_model.file_status(path),
+        "download": dict(layout_downloads.state),
+        "sources": [{"id": key, "label": label} for key, (label, _url) in layout_model.SOURCES.items()],
+    }
+
+
+@app.get("/api/layout-model")
+def get_layout_model():
+    return _layout_status()
+
+
+@app.put("/api/layout-model")
+def update_layout_model(data: dict = Body(...)):
+    try:
+        settings.update({"layout_model": {k: data[k] for k in ("enabled", "path") if k in data}})
+    except SettingsError as e:
+        raise HTTPException(400, str(e))
+    return _layout_status()
+
+
+@app.post("/api/layout-model/download")
+async def download_layout_model(data: dict = Body(...)):
+    """下到设置里的路径（留空是默认位置）。页面轮询 GET 看进度。"""
+    target = layout_model.resolve(str(data.get("path", settings.layout_model["path"]) or ""))
+    try:
+        layout_downloads.start(str(data.get("source") or ""), target)
+    except layout_model.LayoutModelError as e:
+        raise HTTPException(400, str(e))
+    return _layout_status()
+
+
+@app.post("/api/layout-model/test")
+async def test_layout_model(data: dict | None = Body(None)):
+    """用表单里的路径（可能还没保存）加载模型，在一张样例页上跑一遍。"""
+    raw = (data or {}).get("path", settings.layout_model["path"])
+    try:
+        return await asyncio.to_thread(layout_model.check, layout_model.resolve(str(raw or "")))
+    except layout_model.LayoutModelError as e:
+        raise HTTPException(400, str(e))
 
 
 class NoCacheStaticFiles(StaticFiles):

@@ -1,7 +1,6 @@
 import numpy as np
 import pymupdf
 
-from app.formats import pdf_vision
 from app.formats.pdf_layout import PageGeometry
 from app.formats.pdf_roles import HeuristicLayout, LayoutItem, Role
 from app.formats.pdf_vision import ModelLayout, layout_detector
@@ -110,8 +109,10 @@ def test_boxes_map_back_through_page_rotation():
     assert all(abs(a - b) < 1 for a, b in zip(region.rect, target))
 
 
-def test_without_a_model_the_rules_are_used(monkeypatch, tmp_path):
-    monkeypatch.delenv(pdf_vision.MODEL_ENV, raising=False)
+def test_without_a_usable_model_the_rules_are_used(tmp_path):
+    """没开、文件不存在、文件不是模型，都退回规则，翻译不因此失败。"""
     assert isinstance(layout_detector(_doc()), HeuristicLayout)
-    monkeypatch.setenv(pdf_vision.MODEL_ENV, str(tmp_path / "missing.onnx"))
-    assert isinstance(layout_detector(_doc()), HeuristicLayout)
+    assert isinstance(layout_detector(_doc(), str(tmp_path / "missing.onnx")), HeuristicLayout)
+    broken = tmp_path / "broken.onnx"
+    broken.write_bytes(b"not a model")
+    assert isinstance(layout_detector(_doc(), str(broken)), HeuristicLayout)

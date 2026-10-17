@@ -98,14 +98,13 @@ Markdown、EPUB、MOBI / AZW3、PDF 提交后留在翻译页，任务出现在�
 
 ### PDF 版面模型（可选）
 
-默认只用规则分版面，不下载模型。想让图表里的图例、没有图注的图、非 TeX 字体排的行间公式也留原样，可以接一个 YOLO 版面模型：
+默认只用规则分版面，不下载模型。想让图表里的图例、没有图注的图、非 TeX 字体排的行间公式也留原样，可以在「版面模型」页接一个 YOLO 版面模型：
 
-```bash
-.venv/bin/pip install onnxruntime
-DOC_LAYOUT_MODEL=/path/to/doclayout_yolo_docstructbench_imgsz1024.onnx .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765
-```
+1. 安装运行环境：`.venv/bin/pip install onnxruntime`，然后重启服务。页面上会显示有没有装好。
+2. 选一个下载来源（Hugging Face、HF-Mirror、ModelScope），点「下载模型」，文件存到 `data/models/`，下完按校验值核对。已经有模型文件的，也可以直接填路径。
+3. 勾选「翻译 PDF 时使用版面模型」并保存，可以先点「测试模型」在样例页上跑一遍。
 
-模型文件可以用 [DocLayout-YOLO DocStructBench 的 ONNX 版](https://huggingface.co/wybxc/DocLayout-YOLO-DocStructBench-onnx)（AGPL-3.0，约 75 MB），类别名按它的 title、figure、isolate_formula 等认。每页在 CPU 上推理一秒多。模型框成图和行间公式的块保留原文；规则当成正文的块，模型框成标题、图注的改成标题、图注。图内文字、编号标题这些规则已经认出来的，不会被模型改掉。没装 onnxruntime 或文件不存在时照常只用规则。
+用的是 [DocLayout-YOLO DocStructBench 的 ONNX 版](https://huggingface.co/wybxc/DocLayout-YOLO-DocStructBench-onnx)（AGPL-3.0，约 75 MB），类别名按它的 title、figure、isolate_formula 等认。每页在 CPU 上推理一秒多。模型框成图和行间公式的块保留原文；规则当成正文的块，模型框成标题、图注的改成标题、图注。图内文字、编号标题这些规则已经认出来的，不会被模型改掉。没装 onnxruntime、文件不存在或加载不了时，翻译照常只用规则。
 
 参考文献章节（Bibliography / References / 参考文献，含带冒号或编号的标题）保留原文不翻译，标题本身仍翻译。跳过的 PDF 条目留在原页上，不因为刊名斜体被擦掉重排，悬挂缩进和行尾断词都保持原样。EPUB 只在文件名主体就是参考文献时整篇跳过，并按标题层级和 `epub:type` 识别；小标题不结束该节，同级或更高的标题、以及平铺文档里的下一章会结束。这一节可以跨 spine 文件延续。PDF 在字号高于正文（或加粗）且后面跟着引文条目时进入。正文里的年份、出版社，以及句子中的 `[J]` 不算。题名后的 `[J].` / `[M].` 要有年份，年份可以在下一行的卷期或出版社行。编号条目带出版社（可以在下一行，`[1]` 后不必有空格）也算引文。遇到下一标题才退出：字号接近，或仍明显高于正文的加粗短标题。以「年版」结尾的短标题也退出。比参考文献标题更小、又像标题的 Books、Articles 留在节内。单独一行 Journal 仍是引文。同字号或更大的 Books、论文会结束这一节。正文里与某条引文完全相同的段落仍会翻译。预览里跳过的段落标注为跳过。
 
@@ -120,6 +119,7 @@ app/
   translators.py   翻译引擎（Google / OpenAI / Claude / Gemini / Grok / 兼容接口）
   services.py      翻译服务配置的增删改查
   glossary.py      术语表：找候选术语、按批筛选
+  layout_model.py  版面模型的状态、下载、测试
   formats/         各格式的解析和回写
 static/            前端页面
 tests/             测试（pytest）
