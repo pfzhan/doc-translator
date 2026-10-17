@@ -99,6 +99,25 @@ def test_rebuilt_line_covers_the_word_not_the_fragment_gap():
     assert abs(line["dir"][1]) < 0.01
 
 
+def test_rebuilt_line_baseline_comes_from_the_words():
+    """点阵字报的基线在字框上部（95.6），按它算公式下沉会掉一行。基线改取不带降部的词的下沿。"""
+    from app.formats.pdf_type3 import _line_from_pieces, _Piece
+
+    pieces = [
+        _Piece("formula", "", pymupdf.Rect(100.1, 94.1, 251.9, 111.6)),
+        _Piece("prose", "where", pymupdf.Rect(256.0, 96.0, 285.0, 105.0)),
+        _Piece("prose", "the", pymupdf.Rect(300.0, 96.2, 315.0, 105.1)),
+        _Piece("prose", "suppliers.", pymupdf.Rect(320.0, 96.0, 370.0, 108.0)),
+    ]
+    glyphs = [GlyphBox(pymupdf.Rect(100.5, 89.1, 535.4, 108.2), 10.0, 0, 95.6, 0)]
+    line = _line_from_pieces(pieces, glyphs)
+    assert line is not None
+    assert all(abs(span["origin"][1] - 105.0) <= 0.2 for span in line["spans"])
+
+    words = [_word("Implementing", 145.0, 264.3, 107.3, 119.0), _word("Data", 270.0, 300.0, 107.3, 119.2)]
+    rebuilt = _line_from_words(words, [GlyphBox(pymupdf.Rect(145.1, 101.2, 300.0, 120.3), 13.8, 0, 104.0, 0)])
+    assert round(rebuilt["spans"][0]["origin"][1], 1) == 119.2
+
 def test_ocr_word_off_the_glyphs_is_not_added():
     words = [_word("Header", 70, 120, 40, 50)]
     glyphs = [GlyphBox(pymupdf.Rect(100, 240, 500, 252), 11.0, 0, 248.0, 0)]
