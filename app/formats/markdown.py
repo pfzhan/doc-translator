@@ -3,7 +3,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-FENCE_RE = re.compile(r"^\s*(```|~~~)")
+FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 HEADING_RE = re.compile(r"^(\s{0,3}#{1,6}\s+)(.*?)(\s+#+\s*)?$")
 LIST_RE = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?)(.*)$")
 QUOTE_RE = re.compile(r"^(\s*(?:>\s?)+)(.*)$")
@@ -25,6 +25,12 @@ def _translatable(text: str) -> bool:
     stripped = re.sub(r"`[^`]*`", "", stripped)  # 去掉行内代码
     stripped = re.sub(r"https?://\S+", "", stripped)
     return bool(stripped.strip()) and not NO_TEXT_RE.match(stripped.strip())
+
+
+def _closes_fence(line: str, fence: str) -> bool:
+    """结束栏用同一种字符、不比开栏短，后面不能带别的字。四个反引号的栏里可以写 ```。"""
+    stripped = line.strip()
+    return len(stripped) >= len(fence) and stripped == fence[0] * len(stripped)
 
 
 def _interrupts_paragraph(line: str) -> bool:
@@ -73,7 +79,7 @@ def split_blocks(text: str) -> list[Block]:
             flush()
             fence = m.group(1)
             j = i + 1
-            while j < len(lines) and not lines[j].lstrip().startswith(fence):
+            while j < len(lines) and not _closes_fence(lines[j], fence):
                 j += 1
             blocks.append(Block("raw", lines[i : j + 1]))
             i = j + 1
@@ -231,7 +237,7 @@ def _quote_units(lines: list[str]) -> list[tuple[str, int, str, str, str, list[s
         qpre, body = m.group(1), m.group(2)
         fm = FENCE_RE.match(body)
         if fence or fm:
-            if fence and body.lstrip().startswith(fence):
+            if fence and _closes_fence(body, fence):
                 fence = ""
             elif not fence:
                 fence = fm.group(1)
