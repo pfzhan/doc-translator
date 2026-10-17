@@ -4397,6 +4397,14 @@ def _heading_number_for(kind: str, src_text: str, translation: str) -> str:
     return _normalize_heading_number(src_text, translation)
 
 
+def _list_number(src_text: str, translation: str) -> str:
+    """列表编号 1. 被译成 1。或 1、，改回原文的写法。"""
+    m = re.match(r"\s*(\d{1,3})([.)])\s", src_text)
+    if not m:
+        return translation
+    return re.sub(rf"^(\s*){m.group(1)}\s*[。．、]\s*", rf"\g<1>{m.group(1)}{m.group(2)} ", translation, count=1)
+
+
 def _strip_boundary_echo(prev_src: str, cur_src: str, prev_t: str, cur_t: str) -> str:
     """去掉模型在段界复读的连接语。
 
@@ -4560,7 +4568,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
                 per_block[id(b)] = SPILL_TAIL
                 block_formulas[id(b)] = []
                 continue
-            per_block[id(b)] = _heading_number_for(block_kind[id(b)], b.text, part)
+            per_block[id(b)] = _list_number(b.text, _heading_number_for(block_kind[id(b)], b.text, part))
             block_formulas[id(b)] = flist
         # 预览里显示恢复后的译文（缓存仍按占位符版本存，重跑照样命中）
         if formulas and getattr(runner, "_done", None) and runner._done.get(sent_text) == t:

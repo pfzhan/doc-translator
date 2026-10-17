@@ -4515,3 +4515,11 @@ def test_inline_typewriter_words_keep_their_glyphs():
     ]], size=10.0)
     sent, formulas = _placeholderize(block)
     assert sent == "the total sales of {v1} that was bought" and len(formulas) == 1
+
+
+def test_list_number_keeps_its_point():
+    from app.formats.pdf import _list_number
+
+    assert _list_number("1. x is a partial order, and", "1。x 是一个偏序，并且") == "1. x 是一个偏序，并且"
+    assert _list_number("2. There is a top element.", "2. 存在一个顶元素。") == "2. 存在一个顶元素。"
+    assert _list_number("Plain sentence.", "1。不动") == "1。不动"
