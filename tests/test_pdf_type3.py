@@ -6,7 +6,7 @@ import pymupdf
 import pytest
 
 from app.formats import pdf_type3
-from app.formats.pdf import _code_block, _numbered_list_item, extract_blocks
+from app.formats.pdf import TextBlock, _code_block, _numbered_list_item, extract_blocks
 from app.formats.pdf_type3 import (
     Glyph,
     Label,
@@ -345,6 +345,27 @@ def test_inserted_text_is_not_treated_as_bitmap_font():
     data = page.get_text("dict")
     assert broken_type3_names(doc, page) == set()
     assert recover_type3_page(page, data) is False
+
+
+def test_centered_author_is_not_a_title_fragment():
+    """标题下面隔开一行的居中署名，左缘也会漂移。不能并进标题。贴着的下一行仍并。"""
+    from app.formats.pdf import _merge_continuations
+
+    def blk(text: str, y: float, x0: float, x1: float, size: float) -> TextBlock:
+        rect = pymupdf.Rect(x0, y, x1, y + size)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
+
+    split = _merge_continuations([
+        blk("Implementing Data Cubes Efficiently*", 106.7, 144.4, 473.3, 16.8),
+        blk("Anand Rajaraman", 140.4, 255.7, 364.6, 11.9),
+    ])
+    assert len(split) == 2
+    joined = _merge_continuations([
+        blk("Learning to Execute with", 80, 120, 400, 16),
+        blk("Recurrent Neural Networks", 98, 150, 430, 16),
+    ])
+    assert len(joined) == 1
+    assert "Recurrent" in joined[0].text
 
 
 def test_short_numbered_list_item_is_not_a_formula_line():
