@@ -10,6 +10,8 @@ QUOTE_RE = re.compile(r"^(\s*(?:>\s?)+)(.*)$")
 TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
 HR_RE = re.compile(r"^\s{0,3}([-*_])(\s*\1){2,}\s*$")
 HTML_BLOCK_RE = re.compile(r"^\s*<(/?[a-zA-Z][\w-]*|!--)")
+# 链接引用定义：[id]: https://...。脚注 [^1]: 有正文，不算
+LINK_DEF_RE = re.compile(r"^\s{0,3}\[(?!\^)[^\]]+\]:\s*\S")
 # GitHub 提示框标记：> [!NOTE]
 ALERT_RE = re.compile(r"^\[![A-Za-z]+\]$")
 # 只有链接 / 图片 / 符号，没有可翻译文字
@@ -92,6 +94,14 @@ def split_blocks(text: str) -> list[Block]:
         if HTML_BLOCK_RE.match(line) and not para:
             j = i
             while j < len(lines) and lines[j].strip():
+                j += 1
+            blocks.append(Block("raw", lines[i:j]))
+            i = j
+            continue
+        if LINK_DEF_RE.match(line) and not para:
+            # 连续几行定义并成一段会让后面的定义失效，原样保留
+            j = i
+            while j < len(lines) and LINK_DEF_RE.match(lines[j]):
                 j += 1
             blocks.append(Block("raw", lines[i:j]))
             i = j

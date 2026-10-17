@@ -247,6 +247,16 @@ def test_markdown_quote_keeps_paragraphs_alerts_and_lists():
     assert "> - first point  \n>   T:first point" in both
 
 
+def test_markdown_link_definitions_kept_verbatim():
+    """链接引用定义原样保留，不能并成一行；脚注定义有正文，照常翻译。"""
+    src = "See [docs][d] and ![ci][c].\n\n[d]: https://example.com/docs\n[c]: https://img.shields.io/ci.svg\n\n[^1]: A footnote here."
+    blocks = split_blocks(src)
+    texts = collect_segments(blocks)
+    assert texts == ["See [docs][d] and ![ci][c].", "[^1]: A footnote here."]
+    out = render(blocks, {x: "T:" + x for x in texts}, bilingual=False)
+    assert "\n[d]: https://example.com/docs\n[c]: https://img.shields.io/ci.svg\n" in out
+
+
 def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
     """有序列表只有从 1 开始才能打断段落，正文里换行后的年份不是列表。"""
     blocks = split_blocks("It happened in\n1990. Then more text.")
