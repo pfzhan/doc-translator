@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from . import glossary as glossary_mod
 from . import prompts
 from .languages import GOOGLE_CODES, LANGUAGES
 
@@ -141,7 +142,7 @@ class LLMTranslator(Translator):
 
     def __init__(self, target_lang, source_lang="auto", *, api_key="", base_url="", model="",
                  concurrency=4, max_items=20, max_chars=3000, temperature=0.0, prompt="", user_prompt="",
-                 api_format="", auth_style="", transport=None, glossary=""):
+                 api_format="", auth_style="", transport=None, glossary="", auto_glossary=True):
         super().__init__(target_lang, source_lang)
         if not model:
             raise TranslatorError("未设置模型")
@@ -161,6 +162,9 @@ class LLMTranslator(Translator):
         self.prompt = prompt.strip()
         self.user_prompt = user_prompt.strip()
         self.glossary = glossary
+        # 翻译前从文档里找术语、定译名（Runner 调 define_terms，结果放进 doc_glossary）
+        self.auto_glossary = auto_glossary
+        self.doc_glossary: list[glossary_mod.Entry] = []
         # 文档标题，作为上下文填进提示词的 {{title_prompt}}
         self.title = ""
         self.client = httpx.AsyncClient(timeout=180, transport=transport)
@@ -170,15 +174,43 @@ class LLMTranslator(Translator):
         # 模型、提示词、术语表进缓存键：换了就自动整本重翻，换回来仍命中该配置自己的缓存。
         # 源语言影响提示词（{{from}}、wyw2zh-CN 这类覆盖），用检测后的实际源语言
         p = hashlib.sha1(f"{self.prompt}\0{self.user_prompt}\0{self.glossary}".encode()).hexdigest()[:8]
-        return (f"{self.service_id}:{self.provider}:{self.model}:{p}:"
-                f"{self.effective_source}:{self.target_lang}")
+        key = (f"{self.service_id}:{self.provider}:{self.model}:{p}:"
+               f"{self.effective_source}:{self.target_lang}")
+        # 文档术语表也影响译文。没有时键不变，以前的缓存照样命中
+        if self.doc_glossary:
+            key += ":g" + hashlib.sha1(glossary_mod.render(self.doc_glossary).encode()).hexdigest()[:8]
+        return key
+
+    def glossary_for(self, texts: list[str]) -> str:
+        """这一批用的术语表：用户填的加文档里找到的，只留原文里出现了的条目。
+
+        用户填的行没写成“原文 = 译文”的，看不出跟哪段有关，每批都带上。
+        """
+        lines = [line.strip() for line in self.glossary.splitlines() if line.strip()]
+        loose = [line for line in lines if not glossary_mod.parse(line)]
+        entries = glossary_mod.merge(glossary_mod.parse(self.glossary), self.doc_glossary)
+        return "\n".join([*loose, glossary_mod.render(glossary_mod.relevant(entries, texts))]).strip()
+
+    async def define_terms(self, terms: list[str], excerpt: str = "") -> list[glossary_mod.Entry]:
+        """一次请求定下候选术语的译名。模型删掉的、改了写法的候选不收。"""
+        system, user = prompts.build_terms_messages(
+            terms, self.target_lang, source_lang=self.effective_source, title=self.title, excerpt=excerpt,
+        )
+        async with self._sem:
+            content = await self._complete(system, user)
+        wanted = {term.casefold(): term for term in terms}
+        return [
+            (wanted[source.casefold()], target)
+            for source, target in glossary_mod.parse(prompts.clean_output(content))
+            if source.casefold() in wanted
+        ]
 
     def build_messages(self, texts: list[str]) -> tuple[str, str]:
         return prompts.build_messages(
             texts, self.target_lang, source_lang=self.effective_source, title=self.title,
             system_template=self.prompt, user_template=self.user_prompt,
             contains_html=any(self.is_html_item(t) for t in texts),
-            glossary=self.glossary,
+            glossary=self.glossary_for(texts),
         )
 
     async def _complete(self, system: str, user: str) -> str:
@@ -535,4 +567,5 @@ def _build_translator(service: dict, target_lang: str, source_lang: str, transpo
         auth_style=service.get("auth_style") or "",
         transport=transport,
         glossary=service.get("glossary") or "",
+        auto_glossary=service.get("auto_glossary", True) is not False,
     )

@@ -322,6 +322,7 @@ function renderDetail() {
   f.prompt.value = s.prompt;
   f.user_prompt.value = s.user_prompt || "";
   f.glossary.value = s.glossary || "";
+  f.auto_glossary.checked = s.auto_glossary !== false;
   showDefaultPromptPlaceholders();
 
   // 获取过模型列表就用获取到的，否则用预置模型
@@ -402,6 +403,7 @@ function formPayload() {
     prompt: f.prompt.value,
     user_prompt: f.user_prompt.value,
     glossary: f.glossary.value,
+    auto_glossary: f.auto_glossary.checked,
     target_lang: $("target_lang").value || "zh-CN",
     source_lang: $("source_lang").value || "auto",
   };
