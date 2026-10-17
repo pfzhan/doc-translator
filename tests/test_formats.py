@@ -189,6 +189,22 @@ def test_epub_chapter_with_internal_dtd_not_dropped(tmp_path):
     assert "[zh-CN] Chapter one text here" in text
 
 
+
+def test_epub_named_entities_survive_xml_parsing(tmp_path):
+    """XHTML 1.1 章节里的 &rsquo;、&nbsp;、&mdash; 不能被 lxml-xml 删掉，原文和译文都要保留这些字符。"""
+    chapter = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>c1</title></head>'
+        "<body><p>Don&rsquo;t stop&nbsp;now &mdash; ok &amp; done</p></body></html>"
+    )
+    src = tmp_path / "book.epub"
+    _one_epub(src, {"ch1.xhtml": chapter})
+    [out] = run(translate_epub(src, tmp_path, runner(), True, "zh-CN"))
+    text = _epub_texts(out)
+    assert "Don\u2019t stop\u00a0now \u2014 ok & done" in text
+    assert "[zh-CN] Don\u2019t stop" in text
+
 def test_mobi7_cp1252_decoding(tmp_path):
     """老 MOBI7 的 book.html 按 cp1252 解码：é 等字符不能变成 U+FFFD。"""
     html_file = tmp_path / "book.html"
