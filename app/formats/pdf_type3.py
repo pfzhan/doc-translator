@@ -218,7 +218,7 @@ def recover_type3_page(page: pymupdf.Page, data: PageData) -> bool:
     _drop_broken_lines(data, names)
     math_rects = {tuple(word.rect) for word in prose if id(word) in math}
     weak_rects = {tuple(word.rect) for word in prose if _weak_token(word)}
-    rebuilt = _compose_lines(prose, debris, originals, math_rects, weak_rects)
+    rebuilt = _compose_lines(prose, debris, originals, math_rects, weak_rects, _InkMap(page))
     if not rebuilt:
         return False
     _snap_page_sizes(rebuilt)
@@ -415,6 +415,7 @@ def _compose_lines(
     prose: list[OcrWord], debris: list[OcrWord], glyphs: list[GlyphBox],
     math_rects: set[tuple[float, ...]] | None = None,
     weak_rects: set[tuple[float, ...]] | None = None,
+    ink: _InkMap | None = None,
 ) -> list[dict[str, Any]]:
     """同一基线上被公式空洞切开的正文仍是一句。空洞收成公式槽，居中的公式行不重排。
 
@@ -424,7 +425,7 @@ def _compose_lines(
     """
     lines: list[dict[str, Any]] = []
     for row in _baseline_rows(prose):
-        for pieces in _row_pieces(row, debris, glyphs):
+        for pieces in _row_pieces(row, debris, glyphs, ink):
             pieces = _without_bullet(pieces)
             if not pieces or _display_formula(pieces) or _listing_line(pieces):
                 continue
@@ -513,7 +514,7 @@ def _baseline_rows(words: list[OcrWord]) -> list[list[OcrWord]]:
 
 
 def _row_pieces(
-    row: list[OcrWord], debris: list[OcrWord], glyphs: list[GlyphBox],
+    row: list[OcrWord], debris: list[OcrWord], glyphs: list[GlyphBox], ink: _InkMap | None = None,
 ) -> list[list[_Piece]]:
     if not row:
         return []
@@ -525,7 +526,7 @@ def _row_pieces(
     current.append(_Piece("prose", row[0].text, row[0].rect))
     for prev, word in zip(row, row[1:]):
         gap = word.rect.x0 - prev.rect.x1
-        bridge = _formula_between(prev, word, debris, glyphs)
+        bridge = _formula_between(prev, word, debris, glyphs, ink)
         section = _section_only(current) and gap <= 22.0
         if section or (bridge is not None and gap <= _HOLE_LIMIT):
             if bridge is not None and not section:
@@ -572,7 +573,7 @@ def _formula_after(
 
 
 def _formula_between(
-    prev: OcrWord, nxt: OcrWord, debris: list[OcrWord], glyphs: list[GlyphBox],
+    prev: OcrWord, nxt: OcrWord, debris: list[OcrWord], glyphs: list[GlyphBox], ink: _InkMap | None = None,
 ) -> _Piece | None:
     gap = nxt.rect.x0 - prev.rect.x1
     if gap <= max(prev.rect.height * 1.1, 12.0) or gap > _HOLE_LIMIT:
@@ -580,11 +581,53 @@ def _formula_between(
     y0 = min(prev.rect.y0, nxt.rect.y0)
     y1 = max(prev.rect.y1, nxt.rect.y1)
     box = _evidence_box(debris, glyphs, prev.rect.x1, nxt.rect.x0, y0, y1)
+    if box is None and ink is not None:
+        # 有的公式字形连字符码都没有，OCR 也认不出来，只能看渲染出来的墨迹
+        box = ink.glyph_box(pymupdf.Rect(prev.rect.x1 + 1.5, y0 - 2, nxt.rect.x0 - 1.5, y1 + 4))
     if box is None or box.width < 6:
         return None
     # 点阵字框横向和墨迹差出好几个点，N_supplier 的 N 会落到 where 那边被漏掉。
     # 两词之间整段都算进来，多出的空白排版时会按墨迹收掉
     return _Piece("formula", _FORMULA_MARK, pymupdf.Rect(prev.rect.x1 + 1.5, box.y0, nxt.rect.x0 - 1.5, box.y1))
+
+
+class _InkMap:
+    """整页渲染一次的灰度图，用来看两个词中间到底有没有墨迹。"""
+
+    DPI = 100
+
+    def __init__(self, page: pymupdf.Page):
+        self.pix = page.get_pixmap(dpi=self.DPI, colorspace=pymupdf.csGRAY, alpha=False)
+        self.scale = self.DPI / 72
+        self.origin = page.rect.tl
+
+    def glyph_box(self, rect: pymupdf.Rect) -> pymupdf.Rect | None:
+        """rect 里像字形的墨迹的外框。
+
+        表格竖线、栏线会从上到下贯穿整个区域，图里的箭头、横线不到 2.5 点高，都不算字形。
+        """
+        pix, scale = self.pix, self.scale
+        x0 = max(0, int((rect.x0 - self.origin.x) * scale))
+        x1 = min(pix.width, int((rect.x1 - self.origin.x) * scale) + 1)
+        y0 = max(0, int((rect.y0 - self.origin.y) * scale))
+        y1 = min(pix.height, int((rect.y1 - self.origin.y) * scale) + 1)
+        if x1 <= x0 or y1 <= y0:
+            return None
+        samples, stride = pix.samples, pix.stride
+        height = y1 - y0
+        cols = []
+        for c in range(x0, x1):
+            dark = sum(1 for r in range(y0, y1) if samples[r * stride + c] < 128)
+            if dark >= height * 0.9:
+                return None  # 竖线
+            if dark:
+                cols.append(c)
+        if not cols:
+            return None
+        rows = [r for r in range(y0, y1) if any(samples[r * stride + c] < 128 for c in cols)]
+        box = pymupdf.Rect(cols[0] / scale, rows[0] / scale, (cols[-1] + 1) / scale, (rows[-1] + 1) / scale)
+        box = box + (self.origin.x, self.origin.y, self.origin.x, self.origin.y)
+        return box if box.width >= 2 and box.height >= 2.5 else None
 
 
 def _evidence_box(
