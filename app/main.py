@@ -8,8 +8,8 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
@@ -83,6 +83,20 @@ app = FastAPI(title="Doc Translator", lifespan=lifespan)
 ALLOWED_HOSTS = ["127.0.0.1", "localhost", "[::1]",
                  *(h.strip() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip())]
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+
+
+@app.middleware("http")
+async def limit_upload_size(request: Request, call_next):
+    """上传超过上限时，在读请求体之前就拒绝。否则 Starlette 会先把整个文件写进临时文件，create_job 里的检查才轮到。"""
+    if request.method == "POST" and request.url.path == "/api/jobs":
+        try:
+            length = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            length = 0
+        # 留 1MB 给 multipart 的分隔符和表单字段
+        if length > MAX_UPLOAD + 1024 * 1024:
+            return JSONResponse({"detail": "文件太大（上限 200MB）"}, status_code=413)
+    return await call_next(request)
 
 
 async def _run_job(job: Job, translator, bilingual: bool):
