@@ -222,6 +222,14 @@ def justify_extras(text: str, slack: float, em: float) -> list[float]:
     return extras
 
 
+def page_origin(page: pymupdf.Page) -> tuple[float, float]:
+    """页面坐标原点在 PDF 坐标里的位置，即裁剪框的左上角。
+
+    裁剪框或媒体框不从 0 起时，页面坐标要加上这段偏移才是 PDF 坐标。
+    """
+    return float(page.cropbox.x0), float(page.mediabox.y1 - page.cropbox.y0)
+
+
 def draw_cjk_lines(
     page: pymupdf.Page,
     doc: pymupdf.Document,
@@ -239,10 +247,10 @@ def draw_cjk_lines(
 
     段落还要接到下一页时，这一页的末行也是满行，同样两端对齐。
     """
+    left, top = page_origin(page)
     placed = _place_lines(
-        # 页顶是 mediabox 的上沿。向下加长页面时页高变了，页顶不变，不能用 page.rect.height。
-        lines, box, em, gap, color, centered, image_indexes, fallback_text, page.mediabox.y1,
-        justify_last,
+        lines, box, em, gap, color, centered, image_indexes, fallback_text, top,
+        justify_last, left,
     )
     if placed is None:
         return None
@@ -263,12 +271,15 @@ def _place_lines(
     centered: bool,
     image_indexes: frozenset[int],
     fallback_text: dict[int, str],
-    page_height: float,
+    page_top: float,
     justify_last: bool = False,
+    page_left: float = 0.0,
 ) -> tuple[str, list[FormulaSlot], dict[str, pymupdf.Font]] | None:
     red, green, blue = _rgb(color)
-    chunks: list[str] = [
-        "q",
+    chunks: list[str] = ["q"]
+    if page_left:
+        chunks.append(f"1 0 0 1 {page_left:.2f} 0 cm")
+    chunks += [
         "BT",
         f"{red:.4f} {green:.4f} {blue:.4f} rg",
         f"{red:.4f} {green:.4f} {blue:.4f} RG",
@@ -292,7 +303,7 @@ def _place_lines(
         fonts.update(line_fonts)
         if ops:
             wrote = True
-            pdf_y = page_height - baseline
+            pdf_y = page_top - baseline
             chunks.extend(op.replace("{Y}", f"{pdf_y:.2f}") for op in ops)
         for slot_index, slot_x in line_slots:
             slots.append(FormulaSlot(slot_index, slot_x, baseline))
