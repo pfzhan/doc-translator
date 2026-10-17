@@ -216,6 +216,54 @@ def test_mobi7_cp1252_decoding(tmp_path):
     assert "café et naïve" in _xhtml_from_mobi7(text).decode("utf-8")
 
 
+def test_mobi_temp_dir_removed_when_unpack_fails(tmp_path, monkeypatch):
+    """解包失败（DRM、坏文件）时临时目录也要删掉。"""
+    from app.formats import mobi as mobi_format
+
+    work = tmp_path / "mobiex-fail"
+    monkeypatch.setattr(mobi_format.tempfile, "mkdtemp", lambda prefix="": (work.mkdir(), str(work))[1])
+
+    def broken(*a, **kw):
+        (work / "partial.bin").write_bytes(b"x")
+        raise ValueError("DRM")
+
+    monkeypatch.setattr(mobi_format, "unpackBook", broken)
+    src = tmp_path / "book.azw3"
+    src.write_bytes(b"not a real book")
+    with pytest.raises(ValueError):
+        run(mobi_format.translate_mobi(src, tmp_path, runner(), False, "zh-CN"))
+    assert not work.exists()
+
+
+def test_mobi_temp_dir_removed_after_cancelled_unpack(tmp_path, monkeypatch):
+    """解包中途任务被取消：等解包线程写完再删目录，不能留下线程后来写的文件。"""
+    import time
+
+    from app.formats import mobi as mobi_format
+
+    work = tmp_path / "mobiex-cancel"
+    monkeypatch.setattr(mobi_format.tempfile, "mkdtemp", lambda prefix="": (work.mkdir(), str(work))[1])
+
+    def slow(src, out, **kw):
+        time.sleep(0.3)
+        (Path(out) / "mobi7").mkdir()
+        (Path(out) / "mobi7" / "book.html").write_text("<html></html>")
+
+    monkeypatch.setattr(mobi_format, "unpackBook", slow)
+    src = tmp_path / "book.mobi"
+    src.write_bytes(b"not a real book")
+
+    async def scenario():
+        task = asyncio.create_task(mobi_format.translate_mobi(src, tmp_path, runner(), False, "zh-CN"))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.sleep(0.6)
+
+    run(scenario())
+    assert not work.exists()
+
 def test_markdown_list_does_not_swallow_following_blocks():
     """列表后没有空行时，紧跟的标题 / 引用是独立的块，不能并进最后一个列表项。"""
     blocks = split_blocks("- item\n# Heading\n> quote")
