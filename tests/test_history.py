@@ -72,6 +72,33 @@ def test_interrupted_job_after_restart_can_resume(tmp_path):
     assert json.loads((root / "abc" / "job.json").read_text())["status"] == "interrupted"
 
 
+def test_concurrent_saves_of_one_job_do_not_collide(tmp_path):
+    """翻译线程更新进度和接口请求同时保存同一条记录，不能因为临时文件撞名而报错。"""
+    import threading
+
+    store = JobStore(tmp_path / "jobs")
+    job = Job(id="abc123def456", filename="book.md")
+    store.dir(job.id).mkdir(parents=True)
+    store.add(job)
+    errors: list[Exception] = []
+
+    def hammer():
+        for _ in range(200):
+            try:
+                store.save(job)
+            except Exception as exc:  # noqa: BLE001 - 收集起来断言
+                errors.append(exc)
+
+    threads = [threading.Thread(target=hammer) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    assert json.loads((store.dir(job.id) / "job.json").read_text(encoding="utf-8"))["id"] == job.id
+    assert not list(store.dir(job.id).glob("*.tmp"))
+
+
 def test_retry_reuses_cache_and_can_switch_service(app_env):
     main = app_env
     calls = []

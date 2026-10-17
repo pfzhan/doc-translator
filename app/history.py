@@ -10,11 +10,26 @@ import json
 import shutil
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
 
 from .langdetect import same_language
+
+
+def _write_atomic(path: Path, text: str) -> None:
+    """先写临时文件再替换，避免写到一半被读到。
+
+    临时文件名每次不同：翻译线程更新进度和接口请求可能同时保存同一条记录，
+    共用一个 job.tmp 时，先换过去的那个会让另一个找不到文件。记录刚被删掉时什么也不写。
+    """
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(path)
+    except FileNotFoundError:
+        tmp.unlink(missing_ok=True)
 
 ROOT = Path(__file__).resolve().parent.parent
 JOBS_DIR = ROOT / "data" / "jobs"
@@ -136,10 +151,7 @@ class JobStore:
         path = self.dir(job.id) / "job.json"
         if not path.parent.exists():
             return  # 记录已删除
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps({k: getattr(job, k) for k in _PERSISTED}, ensure_ascii=False, indent=1),
-                       encoding="utf-8")
-        tmp.replace(path)
+        _write_atomic(path, json.dumps({k: getattr(job, k) for k in _PERSISTED}, ensure_ascii=False, indent=1))
 
     def add(self, job: Job):
         with self.lock:
@@ -191,10 +203,7 @@ class JobStore:
             return
         path = self.dir(job.id) / "preview.json"
         if path.parent.exists():
-            # 原子写：先写临时文件再替换，避免写到一半被读到
-            tmp = path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(path)
+            _write_atomic(path, json.dumps(data, ensure_ascii=False))
 
     def load_preview(self, job: Job) -> dict | None:
         path = self.dir(job.id) / "preview.json"
