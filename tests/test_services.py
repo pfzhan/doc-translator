@@ -135,6 +135,9 @@ def test_marker_parse_missing_item_is_retranslated():
     from app.prompts import parse_markers
 
     assert parse_markers("```\n[[p1]]\nB\n[[p0]]\nA\nmore\n[[end]]\nignored\n```", 2) == {0: "A\nmore", 1: "B"}
+    # 收尾标记写成大写、或者接在最后一行后面，都不能留在译文里
+    assert parse_markers("[[p0]]\n甲\n[[p1]]\n乙。\n[[END]]", 2) == {0: "甲", 1: "乙。"}
+    assert parse_markers("[[p0]]\n甲\n[[p1]]\n乙。[[END]]\n多余", 2) == {0: "甲", 1: "乙。"}
 
     calls = []
 
@@ -335,6 +338,33 @@ def test_cache_reused_only_for_same_service_id():
     # 第二次同一服务命中缓存；换了服务 id 就重新翻译
     assert len(calls) == 2
     assert {k[0].split(":")[0] for k in cache.d} == {"svc-a", "svc-b"}
+
+
+def test_leaked_end_marker_is_cleaned_from_cached_translations():
+    """旧缓存里的译文带着模型多写的 [[END]]。命中缓存时去掉，并写回缓存。"""
+    from app.runner import Runner
+
+    class Cache:
+        def __init__(self):
+            self.d = {}
+
+        def get_many(self, prefix, texts):
+            return {t: self.d[(prefix, t)] for t in texts if (prefix, t) in self.d}
+
+        def put_many(self, prefix, pairs):
+            self.d.update({(prefix, s): t for s, t in pairs.items()})
+
+    def handler(request):
+        raise AssertionError("命中缓存，不该请求")
+
+    svc = {"id": "svc-a", "provider": "openai", "api_key": "k", "model": "m", "base_url": "https://r.example.com/v1"}
+    tr = create_translator(svc, "zh-CN", "en", transport=httpx.MockTransport(handler))
+    cache = Cache()
+    text = "Thus, the optimal solution has a benefit of 8200."
+    cache.d[(tr.cache_key, text)] = "因此，最优解的收益为 8200。\n[[END]]"
+    out = run(Runner(tr, cache=cache).translate_all([text]))
+    assert out == ["因此, 最优解的收益为 8200。"]
+    assert cache.d[(tr.cache_key, text)] == out[0]
 
 
 def test_store_crud(tmp_path):

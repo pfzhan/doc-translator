@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import langdetect
+from .prompts import strip_control_marks
 from .translators import Translator, TranslatorError
 
 CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "cache.sqlite3"
@@ -220,12 +221,13 @@ class Runner:
         html_sources = self.translator.html_texts
 
         def fixed(src: str, dst: str) -> str:
-            dst = normalize_punctuation(dst, tl)
+            dst = normalize_punctuation(strip_control_marks(dst), tl)
             if src not in headings:
                 return dst
             return fix_numbered_unit(dst, tl, html=src in html_sources)
 
-        # 标题和目录的旧缓存可能还是「第2卷」、译文可能还带全角括号/逗号：命中时改写，预览不用重翻
+        # 标题和目录的旧缓存可能还是「第2卷」、译文可能还带全角括号/逗号或漏进来的 [[END]]：
+        # 命中时改写，预览不用重翻
         rewrites = {t: d2 for t, d in done_map.items() if (d2 := fixed(t, d)) != d}
         if rewrites:
             self.cache.put_many(prefix, rewrites)
