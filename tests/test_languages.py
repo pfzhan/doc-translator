@@ -62,6 +62,15 @@ def test_from_and_to_placeholders():
     assert user == "Auto Detect|x"
 
 
+def test_formula_placeholders_get_their_own_rule():
+    """带 {vN} 的段落要单独说明公式占位符，模型才不会把它猜成「=」写出来。"""
+    system, _ = build_messages(["the case k {v1} 2 is the worst"], "zh-CN")
+    assert "## Formula placeholders" in system
+    system, _ = build_messages(["the case k {v1} 2", "another item"], "zh-CN")
+    assert "## Formula placeholders" in system
+    system, _ = build_messages(["plain text"], "zh-CN")
+    assert "## Formula placeholders" not in system
+
 def test_detect():
     assert langdetect.detect("Alice was beginning to get very tired of sitting by her sister on the bank") == "en"
     assert langdetect.detect("Die Katze sitzt auf der Matte und schläft den ganzen Tag lang ruhig") == "de"
