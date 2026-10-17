@@ -12,9 +12,9 @@ import zipfile
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-import mobi
 from bs4 import BeautifulSoup
 from lxml import etree, html as lxml_html
+from mobi.kindleunpack import unpackBook
 
 from .epub import translate_epub
 
@@ -87,11 +87,22 @@ async def _calibre_convert(src: Path, dst: Path) -> bool:
     return await proc.wait() == 0 and dst.exists()
 
 
+def _extract(src: Path, tmpdir: Path) -> Path:
+    """解包到 tmpdir，返回其中的 EPUB、book.html 或 PDF。和 mobi.extract 一样，只是临时目录由调用方建、调用方删：
+    mobi.extract 自己建目录，解包失败时目录没人删。"""
+    unpackBook(str(src), str(tmpdir), epubver="A")
+    for path in (tmpdir / "mobi8" / f"{src.stem}.epub", tmpdir / "mobi7" / "book.html", tmpdir / f"{src.stem}.001.pdf"):
+        if path.exists():
+            return path
+    raise ValueError("无法解包这本电子书，可能有 DRM 保护或文件已损坏")
+
+
 async def translate_mobi(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "") -> list[Path]:
-    tmpdir, extracted = await asyncio.to_thread(mobi.extract, str(src))
-    tmpdir = Path(tmpdir)
+    tmpdir = Path(tempfile.mkdtemp(prefix="mobiex"))
+    # 暂停或删除时协程被取消，解包线程还在往目录里写。shield 让它跑完，目录等它结束再删
+    extract = asyncio.ensure_future(asyncio.to_thread(_extract, src, tmpdir))
     try:
-        extracted = Path(extracted)
+        extracted = await asyncio.shield(extract)
         if extracted.suffix == ".epub":
             epub_src = extracted
         elif extracted.suffix == ".html":
@@ -109,4 +120,13 @@ async def translate_mobi(src: Path, out_dir: Path, runner, bilingual: bool, targ
             outputs.append(native)
         return outputs
     finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        if extract.done():
+            shutil.rmtree(tmpdir, ignore_errors=True)
+        else:
+            extract.add_done_callback(lambda task: _remove_after(task, tmpdir))
+
+
+def _remove_after(task: asyncio.Future, tmpdir: Path):
+    if not task.cancelled():
+        task.exception()  # 取走异常，不然事件循环会报 exception was never retrieved
+    shutil.rmtree(tmpdir, ignore_errors=True)
