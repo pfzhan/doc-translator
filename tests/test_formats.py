@@ -4458,3 +4458,22 @@ def test_lone_relation_symbol_from_a_symbol_font_stays_a_formula():
     ]], size=10.0)
     sent, formulas = _placeholderize(block)
     assert sent == "Thus (part) {v1} (part, customer)." and len(formulas) == 1
+
+
+def test_pdf_biblio_bare_label_line_does_not_exit():
+    """悬挂缩进的标签和条目隔得远，[ESS] 单独成一块。它是条目的标签，后面的引文仍跳过。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size=10.7):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=False)
+
+    blocks = [
+        blk("We thank the reviewers for help with the experiments."),
+        blk("References", 14.3),
+        blk("S. Chaudhuri and K. Shim. Including Group-By in Query Optimization. In VLDB, pages 354-366, 1994."),
+        blk("[ESS]"),
+        blk("Goetz Graefe. Query Evaluation Techniques for Large Databases. ACM Computing Surveys, 1993."),
+        blk("[GBLP95] J. Gray, A. Bosworth. Data Cube: A Relational Aggregation Operator. MSR-TR-95-22, 1995."),
+    ]
+    assert biblio_skips(blocks) == [False, False, True, True, True, True]
