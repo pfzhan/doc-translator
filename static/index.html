@@ -14,6 +14,7 @@
     <button role="tab" class="tab" data-view="translate" aria-selected="true">翻译</button>
     <button role="tab" class="tab" data-view="history" aria-selected="false">记录<span class="tab-badge" id="running-badge" hidden></span></button>
     <button role="tab" class="tab" data-view="services" aria-selected="false">翻译服务</button>
+    <button role="tab" class="tab" data-view="layout" aria-selected="false">版面模型</button>
   </nav>
 </header>
 
@@ -247,6 +248,49 @@
       </div>
     </form>
   </div>
+</main>
+
+<!-- ============ 版面模型 ============ -->
+<main id="view-layout" class="page narrow" hidden>
+  <div class="page-head">
+    <h1>版面模型</h1>
+    <p class="hint">可选。翻译 PDF 时用模型从页面图像里框出图、行间公式、标题和图注，和规则一起判断哪些文字保留原文。不开启时只用规则。</p>
+  </div>
+
+  <form id="layout-form" class="card svc-detail" autocomplete="off">
+    <div class="svc-title">
+      <h3>DocLayout-YOLO</h3>
+      <button type="button" class="btn sm" id="layout-test">测试模型</button>
+    </div>
+    <p class="desc">模型框成图和行间公式的文字保留原文：图表里的图例、没有图注的图、Word 排的公式不会再被翻译。每页在 CPU 上推理一秒多。模型使用 AGPL-3.0 许可，约 75 MB。</p>
+    <div id="layout-test-result" class="test-result" hidden></div>
+
+    <dl class="layout-status">
+      <dt>运行环境</dt>
+      <dd id="layout-runtime">—</dd>
+      <dt>模型文件</dt>
+      <dd id="layout-file">—</dd>
+    </dl>
+
+    <label class="check"><input type="checkbox" name="enabled" id="layout-enabled"> 翻译 PDF 时使用版面模型</label>
+
+    <label class="field">模型文件路径
+      <input name="path" id="layout-path" spellcheck="false">
+    </label>
+
+    <div class="field-row layout-download">
+      <label class="field">下载来源
+        <select id="layout-source"></select>
+      </label>
+      <button type="button" class="btn" id="layout-download">下载模型</button>
+    </div>
+    <p class="hint" id="layout-download-status" aria-live="polite"></p>
+
+    <div class="actions">
+      <button type="submit" class="btn primary" id="layout-save">保存</button>
+      <span id="layout-save-status" class="hint" aria-live="polite"></span>
+    </div>
+  </form>
 </main>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>

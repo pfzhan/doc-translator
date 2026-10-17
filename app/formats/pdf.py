@@ -4430,7 +4430,9 @@ def _sync_unit_preview(
             overrides[ui] = shown
 
 
-async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "") -> list[Path]:
+async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "",
+                        layout_model: str = "") -> list[Path]:
+    """layout_model 是版面模型文件的路径，空串表示只用规则。"""
     src_doc = pymupdf.open(src)
     if src_doc.needs_pass:
         raise ValueError("PDF 有密码保护，暂不支持")
@@ -4454,7 +4456,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     ]
     # 配了版面模型时要逐页跑推理，放到线程里
     roles = await asyncio.to_thread(
-        layout_detector(src_doc).classify,
+        layout_detector(src_doc, layout_model).classify,
         [LayoutItem(b.page, pymupdf.Rect(b.rect), b.text, b.size, b.bold) for b in blocks],
         geometries,
         median,

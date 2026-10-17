@@ -270,7 +270,9 @@ def test_variant_rejects_second_request_and_discards_partial(app_env, monkeypatc
         assert busy.status_code == 409
         main.variant_tasks.pop(job["id"])
 
-        async def boom(src: object, out_dir: object, runner: object, bilingual: bool, target_lang: str) -> list[object]:
+        async def boom(
+            src: object, out_dir: object, runner: object, bilingual: bool, target_lang: str, layout_model: str = "",
+        ) -> list[object]:
             from pathlib import Path
 
             (Path(str(out_dir)) / "partial.md").write_text("x", encoding="utf-8")

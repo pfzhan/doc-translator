@@ -1,13 +1,16 @@
 """应用设置，保存在 data/settings.json。
 
-目前只有翻译记录的保留时间：retention_days，0 表示永久保留。可以在页面上改，也可以直接改这个文件后重启服务。
+- retention_days：翻译记录的保留时间，0 表示永久保留。
+- layout_model：PDF 版面模型，{"enabled": 是否使用, "path": 模型文件，空串表示默认位置}。
+
+可以在页面上改，也可以直接改这个文件后重启服务。
 """
 import json
 import threading
 from pathlib import Path
 
 PATH = Path(__file__).resolve().parent.parent / "data" / "settings.json"
-DEFAULTS = {"retention_days": 30}
+DEFAULTS = {"retention_days": 30, "layout_model": {"enabled": False, "path": ""}}
 MAX_RETENTION_DAYS = 3650
 
 
@@ -35,7 +38,15 @@ class Settings:
         except (TypeError, ValueError):
             return DEFAULTS["retention_days"]
 
+    @property
+    def layout_model(self) -> dict:
+        value = self.data.get("layout_model")
+        if not isinstance(value, dict):
+            value = {}
+        return {"enabled": bool(value.get("enabled", False)), "path": str(value.get("path") or "")}
+
     def public(self) -> dict:
+        # 版面模型有自己的页面和接口（/api/layout-model），这里不带
         return {"retention_days": self.retention_days}
 
     def update(self, changes: dict) -> dict:
@@ -48,6 +59,17 @@ class Settings:
                 raise SettingsError(f"保留天数需要在 0 到 {MAX_RETENTION_DAYS} 之间（0 表示永久保留）")
             with self.lock:
                 self.data["retention_days"] = days
+                self._save()
+        if "layout_model" in changes:
+            value = changes["layout_model"]
+            if not isinstance(value, dict):
+                raise SettingsError("版面模型设置格式不对")
+            merged = {**self.layout_model, **value}
+            with self.lock:
+                self.data["layout_model"] = {
+                    "enabled": bool(merged.get("enabled")),
+                    "path": str(merged.get("path") or "").strip(),
+                }
                 self._save()
         return self.public()
 

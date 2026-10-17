@@ -1,8 +1,8 @@
 """可选的版面模型：图、行间公式、标题、图注由模型从页面图像里框出来，再和规则的结论合并。
 
-不是必需的。环境变量 DOC_LAYOUT_MODEL 指向一个 YOLO 版面模型的 ONNX 文件
+不是必需的。在「版面模型」页面里开启、给出 YOLO 版面模型的 ONNX 文件
 （如 DocLayout-YOLO DocStructBench），并且装了 onnxruntime 时才启用；
-少了哪一样都只用规则（HeuristicLayout），翻译照常进行。
+少了哪一样、或者模型加载不了，都只用规则（HeuristicLayout），翻译照常进行。
 
 模型只在它擅长的地方说了算：框成图和行间公式的块原样保留，规则当成正文的块
 可以改成标题、图注。框成正文的块、表格和页眉页脚仍按规则，规则已经认出来的
@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import ast
 import functools
-import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,7 +23,6 @@ import pymupdf
 from .pdf_layout import PageGeometry
 from .pdf_roles import HeuristicLayout, LayoutDetector, LayoutItem, Role
 
-MODEL_ENV = "DOC_LAYOUT_MODEL"
 _INPUT = 1024
 _PAD_GRAY = 114
 _MIN_SCORE = 0.4
@@ -49,20 +47,27 @@ class Region:
     score: float
 
 
-def layout_detector(doc: pymupdf.Document) -> LayoutDetector:
-    session = _session(os.environ.get(MODEL_ENV, "").strip())
+def layout_detector(doc: pymupdf.Document, model_path: str = "") -> LayoutDetector:
+    """model_path 为空表示没开模型。"""
+    session = _usable_session(model_path)
     return HeuristicLayout() if session is None else ModelLayout(doc, session)
 
 
 @functools.lru_cache(maxsize=2)
-def _session(path: str) -> Any | None:
+def load_session(path: str) -> Any:
+    """加载模型。没装 onnxruntime 时抛 ImportError，文件不对时抛 onnxruntime 的异常。"""
+    import onnxruntime
+
+    return onnxruntime.InferenceSession(path, providers=["CPUExecutionProvider"])
+
+
+def _usable_session(path: str) -> Any | None:
     if not path or not Path(path).is_file():
         return None
     try:
-        import onnxruntime
-    except ImportError:
+        return load_session(path)
+    except Exception:  # noqa: BLE001  翻译不因为模型出问题而失败，退回规则
         return None
-    return onnxruntime.InferenceSession(path, providers=["CPUExecutionProvider"])
 
 
 class ModelLayout:

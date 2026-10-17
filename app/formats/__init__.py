@@ -21,7 +21,9 @@ def output_variant(name: str) -> str | None:
     return None
 
 
-async def translate_file(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str) -> list[Path]:
+async def translate_file(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str,
+                         layout_model: str = "") -> list[Path]:
+    """layout_model 只对 PDF 有用：版面模型文件的路径，空串表示只用规则。"""
     ext = src.suffix.lower()
     if ext in (".md", ".markdown"):
         return await translate_markdown(src, out_dir, runner, bilingual)
@@ -30,5 +32,5 @@ async def translate_file(src: Path, out_dir: Path, runner, bilingual: bool, targ
     if ext in (".mobi", ".azw3", ".azw"):
         return await translate_mobi(src, out_dir, runner, bilingual, target_lang)
     if ext == ".pdf":
-        return await translate_pdf(src, out_dir, runner, bilingual, target_lang)
+        return await translate_pdf(src, out_dir, runner, bilingual, target_lang, layout_model)
     raise ValueError(f"不支持的格式: {ext}")
