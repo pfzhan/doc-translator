@@ -722,13 +722,15 @@ def _cross_page_units(
                 units.append([b])
                 used.add(id(b))
                 continue
+            # 已经和同页另一块成对的块，不能再接到上一页页末，否则它那一半不在任何单元里
             same = bool(
                 end is not None and b is end and first is not None and id(first) not in used
+                and id(first) not in extra
                 and id(b) not in skip_ids and id(first) not in skip_ids
                 and _can_continue(b, first, median, halt_ids)
                 and not _different_columns(geometries, b, first)
             )
-            cross_target = head if head is not None and id(head) not in used else None
+            cross_target = head if head is not None and id(head) not in used and id(head) not in extra else None
             cross = bool(
                 not same and cross_target is not None and geometries is not None
                 and pno < len(geometries)

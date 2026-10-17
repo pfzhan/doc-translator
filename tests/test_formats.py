@@ -2926,6 +2926,28 @@ def test_rotated_pages_lay_out_like_unrotated_ones(tmp_path):
     assert rotated == plain
 
 
+def test_page_end_does_not_take_a_block_already_paired_to_the_next_column():
+    """下一页左栏的块已经接到右栏顶时，上一页页末不能再把它拿走。否则右栏那块不在任何单元里。"""
+    from app.formats.pdf import TextBlock, _cross_page_units
+    from app.formats.pdf_layout import Column, PageGeometry
+
+    def blk(text, x0, y, page, size=9.0):
+        rect = pymupdf.Rect(x0, y, x0 + 180, y + 12)
+        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text,
+                         size=size, color="#000", bold=False)
+
+    wide = PageGeometry(600, (Column(40, 560),), ())
+    end = blk("The optimizer then rewrites the", 40, 700, 0)
+    host = blk("query into a plan and it keeps the", 40, 300, 1)
+    tail = blk("cheapest alternative for each group.", 300, 60, 1)
+    later = blk("Each group holds equivalent expressions.", 300, 200, 1)
+    small = blk("Notes about the memo structure here", 40, 600, 1, size=8.0)
+    blocks = [end, host, tail, later, small]
+    units = _cross_page_units(blocks, 9.0, geometries=[wide, wide], halt_ids=set())
+    assert sorted(id(block) for unit in units for block in unit) == sorted(id(block) for block in blocks)
+    assert [host, tail] in units
+
+
 def test_capital_continuation_joins_across_columns_only():
     """换栏可以接在专有名词上。同一栏的大写换行仍分开。"""
     from app.formats.pdf import TextBlock, _cross_page_units, _merge_continuations
