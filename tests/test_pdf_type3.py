@@ -297,6 +297,9 @@ def test_formula_keeps_inner_commas_and_brackets_and_leaves_the_period():
     assert "(using [d])" in styled
     assert "[k] [=] [2]." in styled
     assert "size [S]. [c] gives" in styled
+    item = _build_lines(_set([("1.", ROMAN), ("<", MATH), ("is", ROMAN), ("a", ROMAN), ("partial", ROMAN)], labels,
+                             baseline=130), labels, {})[0]
+    assert _styled(item, _reader(labels, roles)).startswith("1. [<] is")
 
 
 def test_comma_outside_brackets_separates_two_formulas():

@@ -1094,8 +1094,11 @@ def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
         before = next((item for item in reversed(kinds[:index]) if item != "neutral"), "")
         after = next((item for item in kinds[index + 1:] if item != "neutral"), "")
         # k = 2、1 − (…)：紧挨着运算符的数也是公式
+        # 列表编号 1. 后面跟着 ≺ 也不是被减数：带句号的不算
         operand = (index > 0 and kinds[index - 1] == "math" and _ends_with_operator(line.tokens[index - 1], reader)) or (
-            index + 1 < len(kinds) and kinds[index + 1] == "math" and _starts_with_operator(line.tokens[index + 1], reader)
+            index + 1 < len(kinds) and kinds[index + 1] == "math"
+            and _starts_with_operator(line.tokens[index + 1], reader)
+            and not _sentence_mark(line.tokens[index][-1], reader)
         )
         kinds[index] = "math" if (before == "math" and after == "math") or operand else "text"
     absorbed = _close_brackets(line.tokens, kinds, reader)
