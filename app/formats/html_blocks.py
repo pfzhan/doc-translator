@@ -20,6 +20,8 @@ BLOCK_TAGS = {
 }
 # 这些元素内部的内容不翻译
 SKIP_TAGS = {"pre", "code", "script", "style", "svg", "math", "head", "title", "kbd", "samp", "var"}
+# 行内的代码、按键、变量：文字原样留在段落里，跟着一起发给翻译服务
+VERBATIM_TAGS = {"code", "kbd", "samp", "var"}
 # 在元素内部追加译文：插入兄弟元素会破坏列表序号 / 表格结构，标题复制一份会让目录出现重复项
 INNER_TAGS = {"li", "td", "th", "dt", "dd", "caption", "span", "h1", "h2", "h3", "h4", "h5", "h6"}
 
@@ -31,7 +33,7 @@ WS_RE = re.compile(r"\s+")
 # 需要在翻译中保留的行内格式元素；只有 <span>、<br> 的段落不算富文本
 RICH_TAGS = {
     "a", "b", "strong", "em", "i", "u", "s", "strike", "del", "ins",
-    "sup", "sub", "code", "mark", "small", "abbr", "q", "cite", "font",
+    "sup", "sub", "code", "kbd", "samp", "var", "mark", "small", "abbr", "q", "cite", "font",
 }
 # 译文片段里出现直接删除（不保留文字）的标签
 DANGER_TAGS = {"script", "style", "iframe", "object", "embed", "form", "input", "button", "select", "textarea"}
@@ -59,7 +61,7 @@ def _text_of(el: Tag) -> str:
         if isinstance(node, Tag) and _local(node.name) == "br":
             parts.append("\n")
         elif type(node) is NavigableString:  # 排除注释、CDATA 等子类
-            if not any(_local(p.name) in SKIP_TAGS - {"code"} for p in node.parents if isinstance(p, Tag)):
+            if not any(_local(p.name) in SKIP_TAGS - VERBATIM_TAGS for p in node.parents if isinstance(p, Tag)):
                 parts.append(str(node))
     text = "".join(parts)
     lines = [WS_RE.sub(" ", l).strip() for l in text.split("\n")]
@@ -455,7 +457,7 @@ def _prose_of(el: Tag) -> str:
             parents = [p for p in node.parents if isinstance(p, Tag)]
             if any(_is_page_anchor(p) for p in parents):
                 continue
-            if any(_local(p.name) in SKIP_TAGS - {"code"} for p in parents):
+            if any(_local(p.name) in SKIP_TAGS - VERBATIM_TAGS for p in parents):
                 continue
             parts.append(str(node))
     text = "".join(parts)
