@@ -440,6 +440,17 @@ def test_example_and_footnote_do_not_join_the_paragraph():
     assert all("assumptions" not in text or "sparse" not in text for text in texts)
 
 
+def test_example_reference_inside_a_sentence_stays_in_the_paragraph():
+    """句中换行碰到「Example 1.1, we」不是例题标题，要和上一行连成一段；Example 2.1 Consider 仍单独起段。"""
+    first = _line("function of the values of other cells. For instance, in", 98, 67, 540, 79)
+    second = _line("Example 1.1, we can compute the value of cell", 99, 80, 540, 93)
+    third = _line("where N is the number of suppliers.", 99, 94, 400, 106)
+    heading = _line("Example 2.1 Consider the lattice of Fig. 7.", 99, 107, 540, 119)
+    groups = _group_lines([first, second, third, heading])
+    texts = [" ".join(span["text"] for line in group for span in line["spans"]) for group in groups]
+    assert any("For instance, in Example 1.1, we can" in text and "suppliers." in text for text in texts)
+    assert any(text.startswith("Example 2.1 Consider") for text in texts)
+
 def test_label_just_above_a_figure_stays_a_glyph():
     """节点名贴在笔画上方几个点，仍留下原字。下面的图注不挡。"""
     from app.formats.pdf_type3 import _Zone

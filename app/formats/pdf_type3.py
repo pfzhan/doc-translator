@@ -45,7 +45,9 @@ _BULLET_WORD = re.compile(r"^[eco*•·]$")
 _DISPLAY_MARK = re.compile(r"[=<>≤≥≠≈∈∉]|[{}]")
 _CAPTION_START = re.compile(r"^(?:Figure|Fig\.?|Table|EXAMPLE|Example)\b")
 _FOOTNOTE_START = re.compile(r"""^["“”?]\s*[A-Za-z]""")
-_EXAMPLE_START = re.compile(r"^EXAMPLE\b", re.I)
+# 例题标题：全大写的 EXAMPLE 2.1，或 Example 2.1 后面紧跟大写开头的句子。
+# 「For instance, in / Example 1.1, we can」是句子换行，不能断开
+_EXAMPLE_START = re.compile(r"^EXAMPLE\b|^Example\s+\d+(?:\.\d+)*\.?\s+[A-Z]")
 _LETTER_ITEM = re.compile(r"^\([a-zA-Z]\)\s")
 # 缩进的伪代码。正文从栏左缘起笔，不在这里。
 _LISTING_LINE = re.compile(
