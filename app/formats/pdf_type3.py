@@ -156,6 +156,7 @@ class Type3Reader:
         self.labels: dict[Key, Label] = {}
         self.roles: dict[Key, str] = {}
         self.mono: dict[Key, float] = {}
+        self.proportional: set[Key] = set()
         self.doubtful: set[Key] = set()
 
     def lines(self, pno: int) -> list[_Line] | None:
@@ -193,6 +194,7 @@ class Type3Reader:
         lines = {pno: _build_lines(items, self.labels, owners[pno]) for pno, items in glyphs.items()}
         self.roles, self.doubtful = _learn_roles(lines, self.labels, lambda keys: _glyph_shapes(self.doc, glyphs, keys))
         self.mono = _mono_kinds(lines, self.labels)
+        self.proportional = _proportional_kinds(lines, self.mono)
         for key in _bullets(lines, self.labels, lambda keys: _ink_share(self.doc, glyphs, keys)):
             self.labels[key] = Label("•", 1.0)
             self.roles[key] = "text"
@@ -1063,7 +1065,8 @@ def _line_dict(line: _Line, reader: Type3Reader) -> dict[str, Any] | None:
 
 # 词之间的空格
 _SPACE = Glyph((-1, -1), pymupdf.Rect())
-_PROSE = ("text", "mono")
+# 空格只跟着普通正文走：等宽词和公式一样会换成占位符
+_PROSE = ("text",)
 
 
 def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
@@ -1099,7 +1102,14 @@ def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
     styles: dict[int, str] = {}
     for index, (token, kind) in enumerate(zip(line.tokens, kinds)):
         tail = len(token)
-        phrase_end = index + 1 == len(kinds) or kinds[index + 1] != "math" or _ends_sentence(token, reader)
+        phrase_end = (
+            index + 1 == len(kinds) or kinds[index + 1] != "math" or _ends_sentence(token, reader)
+            or _ends_clause(line.tokens, kinds, index, reader)
+        )
+        if index in mono and index + 1 not in mono:
+            # 一串等宽词末尾的句号逗号是句子的。C1, C2 中间的逗号仍是代码
+            while tail > 1 and _sentence_mark(token[tail - 1], reader):
+                tail -= 1
         if kind == "math" and phrase_end:
             opened = _phrase_depth(line.tokens, kinds, index, reader)
             while tail > 1:
@@ -1118,7 +1128,7 @@ def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
             elif (kind == "math" and position < tail) or id(glyph) in absorbed:
                 styles[id(glyph)] = "symbol" if _role_of(glyph, line, reader) == "symbol" else "math"
             else:
-                styles[id(glyph)] = "mono" if index in mono else "text"
+                styles[id(glyph)] = "mono" if index in mono and position < tail else "text"
     return styles
 
 
@@ -1148,6 +1158,14 @@ def _phrase_depth(tokens: list[list[Glyph]], kinds: list[str], end: int, reader:
     while start > 0 and kinds[start - 1] == "math":
         start -= 1
     return sum(_bracket(glyph, reader) for token in tokens[start:end + 1] for glyph in token)
+
+
+def _ends_clause(tokens: list[list[Glyph]], kinds: list[str], index: int, reader: Type3Reader) -> bool:
+    """括号外的逗号把两个公式隔开：⟨L, ⪯⟩, a ≺ b 是两个。(p, s, c) 里的逗号在括号里，不算。"""
+    token = tokens[index]
+    if not _sentence_mark(token[-1], reader) or _label_text(token[-1], reader) not in ",;":
+        return False
+    return _phrase_depth(tokens, kinds, index, reader) <= 0
 
 
 def _ends_sentence(token: list[Glyph], reader: Type3Reader) -> bool:
@@ -1226,17 +1244,30 @@ def _main_glyphs(line: _Line, token: list[Glyph], labels: dict[Key, Label]) -> l
 
 
 def _mono_tokens(line: _Line, reader: Type3Reader) -> set[int]:
-    """四分之三的字是等宽字形的词。挨着等宽词、字距也是格宽的词（SELECT、AS、FROM）跟着算。"""
+    """一半以上的字母是等宽字形的词。挨着等宽词、字距也是格宽的词（SELECT、AS、FROM）跟着算。"""
     found: dict[int, float] = {}
     for index, token in enumerate(line.tokens):
-        # 下标不算：N 下面等宽字的 supplier 不让 N 变成等宽字
-        glyphs = [
+        # 只看字母：(year) 的括号是正体。下标也不算：N 下面等宽字的 supplier 不让 N 变成等宽字
+        letters = [
             glyph for glyph in token
-            if not _label_text(glyph, reader).isdigit() and not _is_script(glyph, line, reader)
+            if _label_text(glyph, reader).isalpha() and not _is_script(glyph, line, reader)
         ]
-        known = [reader.mono[glyph.key] for glyph in glyphs if glyph.key in reader.mono]
-        if glyphs and len(known) >= len(glyphs) * 0.75:
+        known = [reader.mono[glyph.key] for glyph in letters if glyph.key in reader.mono]
+        # 等宽字和正文是两套位图，词里一半字母是等宽字形就是等宽词（(day) 的 y 只出现过一次）
+        if letters and len(known) * 2 >= len(letters):
             found[index] = statistics.median(known)
+    # 字距正好是等宽格宽、字形又从没出现在比例字体的词里（FROM 这一行没有别的等宽词）
+    pitches = set(reader.mono.values())
+    for index, token in enumerate(line.tokens):
+        gaps = _steps(token)
+        if index in found or not gaps or min(gaps) <= 0:
+            continue
+        if any(reader.roles.get(glyph.key) in ("math", "symbol") or glyph.key in reader.proportional
+               for glyph in token):
+            continue
+        pitch = next((value for value in pitches if all(abs(gap - value) <= value * 0.12 for gap in gaps)), None)
+        if pitch is not None:
+            found[index] = pitch
     grown = bool(found)
     while grown:
         grown = False
@@ -1244,8 +1275,9 @@ def _mono_tokens(line: _Line, reader: Type3Reader) -> set[int]:
             near = [found[other] for other in (index - 1, index + 1) if other in found]
             if index in found or not near:
                 continue
-            # part p：等宽词旁边的单个变量仍是公式
-            if any(reader.roles.get(glyph.key) in ("math", "symbol") for glyph in token):
+            # part p：等宽词旁边的单个变量仍是公式。So、the 这种在正文里出现过的字形也不跟着走
+            if any(reader.roles.get(glyph.key) in ("math", "symbol") or glyph.key in reader.proportional
+                   for glyph in token):
                 continue
             if all(abs(gap - near[0]) <= near[0] * 0.12 for gap in _steps(token)):
                 found[index] = near[0]
@@ -1285,6 +1317,22 @@ def _mono_kinds(pages: dict[int, list[_Line]], labels: dict[Key, Label]) -> dict
         for _value, token in cluster:
             mono.update((glyph.key, pitch) for glyph in token if not _text_of(glyph, labels).isdigit())
     return mono
+
+
+def _proportional_kinds(pages: dict[int, list[_Line]], mono: dict[Key, float]) -> set[Key]:
+    """出现在字距不匀的词里的字形：比例字体。等宽字体的词字距处处一样。
+
+    (year) 这种正体括号包着等宽字的词字距也不匀，词里有等宽字形的不算。
+    """
+    found: set[Key] = set()
+    for line in (line for lines in pages.values() for line in lines):
+        for token in line.tokens:
+            gaps = _steps(token)
+            if len(token) < 3 or min(gaps) <= 0 or max(gaps) <= min(gaps) * 1.3:
+                continue
+            if not any(glyph.key in mono for glyph in token):
+                found.update(glyph.key for glyph in token)
+    return found
 
 
 def _steps(token: list[Glyph]) -> list[float]:
