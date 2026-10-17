@@ -499,8 +499,10 @@ async def build_variant(job_id: str):
 def job_preview(job_id: str, since: int = -1):
     """边翻边预览。since=-1 返回全部段落和已完成译文；之后用返回的 version 增量拉取。"""
     job = _job_or_404(job_id)
-    if job.runner is not None:
-        return {**job.runner.preview(since), "status": job.status}
+    # 这个接口在线程池里跑，任务结束时事件循环会把 job.runner 置空，先取到局部变量再用
+    runner = job.runner
+    if runner is not None:
+        return {**runner.preview(since), "status": job.status}
     # 已结束的任务（包括重启前的）从快照读
     snap = jobs.load_preview(job)
     if snap is None:
@@ -521,10 +523,11 @@ def job_focus(job_id: str, data: dict = Body(...)):
         index = int(data.get("index", 0))
     except (TypeError, ValueError):
         raise HTTPException(400, "index 必须是整数")
-    if job.runner is None:
+    runner = job.runner
+    if runner is None:
         # 任务已结束（Runner 已释放）：聚焦没有意义，直接视为成功；还没开始的保持失败
         return {"ok": job.status not in ACTIVE}
-    job.runner.focus(index)
+    runner.focus(index)
     return {"ok": True}
 
 
