@@ -17,7 +17,7 @@ from pathlib import Path
 import pymupdf
 
 from ..languages import RTL_LANGUAGES
-from .pdf_align import draw_cjk_lines
+from .pdf_align import draw_cjk_lines, page_origin
 from .pdf_flow import (
     STYLE_MARK_RE,
     Emphasis,
@@ -2339,18 +2339,19 @@ def _white_pixmap(doc) -> "pymupdf.Pixmap":
     return pix
 
 
-def _page_top(page: "pymupdf.Page") -> float:
-    """PDF 坐标的页顶。向下加长页面时页高变了，页顶不变。"""
-    return float(page.mediabox.y1)
+def _pdf_rect(page: "pymupdf.Page", rect: "pymupdf.Rect") -> "pymupdf.Rect":
+    """页面坐标的矩形换成 PDF 坐标（y 向上）。裁剪框不从原点起时要加上偏移。"""
+    left, top = page_origin(page)
+    return pymupdf.Rect(rect.x0 + left, top - rect.y1, rect.x1 + left, top - rect.y0)
 
 
 def _page_form(doc: "pymupdf.Document", page: "pymupdf.Page") -> int:
     """把页面内容打包成 Form XObject（在 redact 之前调用），返回 xref。
     供公式透传引用：资源沿用页面自己的，BBox 为整页。"""
-    mb = page.rect
+    mb = page.mediabox
     fm = doc.get_new_xref()
     doc.update_object(fm, (
-        f"<< /Type /XObject /Subtype /Form /BBox [0 0 {mb.width} {mb.height}] "
+        f"<< /Type /XObject /Subtype /Form /BBox [{mb.x0} {mb.y0} {mb.x1} {mb.y1}] "
         f"/Matrix [1 0 0 1 0 0] /Resources {doc.xref_get_key(page.xref, 'Resources')[1]} >>"
     ))
     doc.update_stream(fm, page.read_contents())
@@ -2369,9 +2370,8 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
     排版 bbox——Y 的右臂能越出 1.2pt，扩展以不碰到邻居为限），再减去外来 span
     的矩形孔（上一行降部等），既不削自己的字，也不沾别人的。
     """
-    top = _page_top(page)
     bbox = f["bbox"]
-    clip_outer = pymupdf.Rect(bbox.x0, top - bbox.y1, bbox.x1, top - bbox.y0)  # PDF 坐标 y 向上
+    clip_outer = _pdf_rect(page, bbox)
     fmT = doc.get_new_xref()
     doc.update_object(fmT, (
         f"<< /Type /XObject /Subtype /Form /BBox [{clip_outer.x0:.2f} {clip_outer.y0:.2f} "
@@ -2426,7 +2426,7 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
                                           b.x1 + lim["r"], b.y1 + lim["b"]) for b in base])
     ours, holes = [], []
     for b in our_rects:
-        r = pymupdf.Rect(b.x0, top - b.y1, b.x1, top - b.y0)
+        r = _pdf_rect(page, b)
         if r.width > 0.2 and r.height > 0.2:
             ours.append(f"{r.x0:.2f} {r.y0:.2f} {r.width:.2f} {r.height:.2f} re")
     if page_spans and our_rects:
@@ -2461,7 +2461,7 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
             else:
                 merged.append(hb)
         for hb in merged:
-            hr = pymupdf.Rect(hb.x0, top - hb.y1, hb.x1, top - hb.y0)
+            hr = _pdf_rect(page, hb)
             holes.append(f"{hr.x0:.2f} {hr.y0:.2f} {hr.width:.2f} {hr.height:.2f} re")
     doc.update_stream(fmT, f"q {' '.join(ours + holes)} W* n /FmS Do Q".encode())
     res_v = doc.xref_get_key(page.xref, "Resources")[1]
@@ -2577,9 +2577,10 @@ def _paint_formula(
             sx = target.width / bbox.width
             sy = target.height / bbox.height
             # 带缩放的仿射：平移量必须吸收缩放，否则公式整体往下漂 (1-sy)*H
-            top = _page_top(page)
-            tx = target.x0 - sx * bbox.x0
-            ty = (top - target.y1) - sy * (top - bbox.y1)
+            source = _pdf_rect(page, bbox)
+            placed = _pdf_rect(page, target)
+            tx = placed.x0 - sx * source.x0
+            ty = placed.y0 - sy * source.y0
             draws.append(f"q {sx:.4f} 0 0 {sy:.4f} {tx:.2f} {ty:.2f} cm /{f_name} Do Q")
             return
         except Exception:  # noqa: BLE001 - 矢量透传失败回退位图

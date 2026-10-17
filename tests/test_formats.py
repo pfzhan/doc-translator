@@ -2013,6 +2013,65 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
     assert pymupdf.Rect(30, 80, 210, 125).contains(hit2)
 
 
+@pytest.mark.parametrize("box", ["CropBox", "MediaBox"])
+def test_cjk_lines_follow_a_shifted_page_box(tmp_path, box):
+    """裁剪框或媒体框不从原点起时，逐字写出的中文仍落在原文的位置上。"""
+    from app.formats.pdf import _render_translated, extract_blocks
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=600, height=800)
+    for i in range(4):
+        page.insert_text((120, 150 + i * 14), "The model computes the value for each input token here.", fontsize=10)
+    if box == "CropBox":
+        page.set_cropbox(pymupdf.Rect(80, 80, 520, 720))
+    else:
+        doc.xref_set_key(page.xref, "MediaBox", "[50 50 650 850]")
+    src = tmp_path / "shifted.pdf"
+    doc.save(src)
+    source = pymupdf.open(src)[0].search_for("The model")[0]
+    blocks = extract_blocks(pymupdf.open(src))
+    assert len(blocks) == 1
+
+    out = _render_translated(src, blocks, ["模型为每个输入词元计算这个值。"], "zh-CN")
+    chars = _cjk_chars(out[0])
+    assert chars
+    assert abs(min(c[1] for c in chars) - source.x0) < 2
+    assert abs(min(c[3] for c in chars) - (source.y1 - 2)) < 4
+
+
+def test_formula_passthrough_follows_a_shifted_crop_box(tmp_path):
+    """裁剪框偏移时，公式仍从原位裁出、贴回自己的槽位。"""
+    from app.formats.pdf import TextBlock, _marker_png, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=500, height=400)
+    page.insert_text((130, 150), "alpha BETA gamma", fontsize=10)
+    page.set_cropbox(pymupdf.Rect(80, 100, 420, 360))
+    doc.save(src)
+    doc.close()
+
+    d = pymupdf.open(src)
+    rect = d[0].search_for("BETA")[0]
+    formula = {"bbox": rect, "name": "a_1.png", "mid": 0,
+               "w": round(rect.width, 1), "h": round(rect.height, 1), "d": 2.0,
+               "text": "x", "has_img": True,
+               "png": d[0].get_pixmap(dpi=150, clip=rect).tobytes("png"),
+               "spans": [{"bbox": tuple(rect), "text": "x", "size": 10,
+                          "origin": (rect.x0, rect.y1 - 2)}]}
+    line = pymupdf.Rect(rect.x0 - 45, rect.y0 - 2, rect.x1 + 60, rect.y1 + 3)
+    d.close()
+    archive = pymupdf.Archive()
+    archive.add(_marker_png(0), "ph_a_1.png")
+    block = TextBlock(page=0, rect=line, line_rects=[line], text="alpha BETA gamma",
+                      size=10, color="#000", bold=False)
+    out = _render_translated(src, [block], ["译文 \x01i\x021\x01/i\x02 甲"], "zh-CN",
+                             {id(block): [formula]}, archive)
+    hits = out[0].search_for("BETA")
+    assert len(hits) == 1
+    assert pymupdf.Rect(line.x0 - 10, line.y0 - 10, line.x1 + 10, line.y1 + 10).contains(hits[0])
+
+
 def test_body_font_symbols_and_script_bases_become_formulas():
     """Times 里的希腊字母是公式。贴在角标上的单字母并进角标。
     斜体单词、孤立等号、引用上标前的 a 仍留在正文。"""
