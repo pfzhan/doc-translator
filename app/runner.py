@@ -11,11 +11,13 @@ import threading
 from pathlib import Path
 from typing import Callable
 
-from . import langdetect
+from . import glossary, langdetect
 from .prompts import strip_control_marks
 from .translators import Translator, TranslatorError
 
 CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "cache.sqlite3"
+# 候选术语少于这么多条的文档（短文、对话）不值得多一次请求
+_MIN_TERMS = 3
 
 
 class Cache:
@@ -175,6 +177,36 @@ class Runner:
             return set()
         return {t for t in unique if langdetect.same_language(langdetect.detect(t), tr.target_lang)}
 
+    async def _prepare_glossary(self, texts: list[str]) -> None:
+        """在全文里找术语，请模型一次定好译名，之后每一批都按它翻。
+
+        结果按候选清单进缓存：同一份文档续翻、重试、补生成另一种版本时用的是同一张表，
+        段落缓存才对得上。只排版的时候不请求，缓存里没有就不用术语表。
+        定译名失败不影响翻译，只是这次没有术语表。
+        """
+        tr = self.translator
+        if not getattr(tr, "auto_glossary", False) or not hasattr(tr, "define_terms"):
+            return
+        tr.doc_glossary = []
+        terms = glossary.candidates(texts)
+        if len(terms) < _MIN_TERMS:
+            return
+        listing = "\n".join(terms)
+        prefix = tr.cache_key + ":terms"
+        found = self.cache.get_many(prefix, [listing]).get(listing)
+        if found is None:
+            if self.cache_only:
+                return
+            excerpt = glossary.excerpt(texts)
+            try:
+                found = glossary.render(await tr.define_terms(terms, excerpt))
+            except TranslatorError:
+                # 服务本身出了问题的话，接下来的翻译请求会报出来
+                return
+            self.cache.put_many(prefix, {listing: found})
+        tr.doc_glossary = glossary.parse(found)
+        self.info["terms"] = len(tr.doc_glossary)
+
     async def translate_all(self, texts: list[str], kinds: list[str] | None = None,
                             preview: bool = False, html: list[bool] | None = None,
                             skip: list[bool] | None = None) -> list[str]:
@@ -207,6 +239,8 @@ class Runner:
             texts[i] for i in range(n) if html_flags[i] and texts[i].strip() and not kept(i)
         }
         need = list(dict.fromkeys(texts[i] for i in range(n) if texts[i].strip() and not kept(i)))
+        # 术语表要在算缓存键之前定下来：它是键的一部分
+        await self._prepare_glossary(need)
         prefix = self.translator.cache_key
         tl = self.translator.target_lang
         done_map = self.cache.get_many(prefix, need)

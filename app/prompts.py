@@ -101,6 +101,20 @@ TITLE_PROMPT = "\n\n## Context Awareness\nDocument Metadata:\nTitle: “{{imt_ti
 # 术语表：每行“原文 = 译文”，翻译时保持一致
 TERMS_PROMPT = "\n\n## Glossary\nUse these translations consistently:\n{{glossary}}"
 
+# 翻译前定术语译名：候选是本地从全文数出来的，普通词让模型删掉
+TERMS_SYSTEM_PROMPT = """You are preparing the terminology list for translating a document into {{to}}.{{title_prompt}}
+
+The user lists candidate terms that recur in the document. For each candidate that names a
+concept, method, object, or proper noun of the document's field, give the single {{to}}
+rendering a specialist would use, so that every occurrence is translated the same way.
+Keep acronyms, product names, and code identifiers unchanged when that is the usual practice.
+Leave out ordinary words and phrases that need no fixed translation.
+
+Write one line per kept term: the term exactly as given, " = ", then the translation.
+Output nothing else."""
+
+TERMS_USER_PROMPT = "Document excerpt:\n{{excerpt}}\n\nCandidate terms:\n{{terms}}"
+
 SOURCE_END = "[[source_end]]"
 MARKER_RE = re.compile(r"^\[\[(p\d+)\]\]$", re.I)
 CONTROL_RE = re.compile(r"^\[\[(?:p\d+|source_end|terms|term|end)\]\]$", re.I)
@@ -188,6 +202,20 @@ def build_messages(texts: list[str], target_lang: str, *, source_lang: str = "au
         system += STYLE_SUFFIX
     # {{text}} 最后替换，避免原文里恰好有 {{xxx}} 被当成占位符
     user = fill(user_t.replace("{{text}}", "\0TEXT\0"), values).replace("\0TEXT\0", body)
+    return system, user
+
+
+def build_terms_messages(terms: list[str], target_lang: str, *, source_lang: str = "auto", title: str = "",
+                         excerpt: str = "") -> tuple[str, str]:
+    """定术语译名的 (system, user)。"""
+    values = {
+        "to": lang_name(target_lang),
+        "from": lang_name(source_lang or "auto"),
+        "title_prompt": TITLE_PROMPT if title else "",
+        "imt_title": title,
+    }
+    system = fill(TERMS_SYSTEM_PROMPT, values)
+    user = TERMS_USER_PROMPT.replace("{{terms}}", "\n".join(terms)).replace("{{excerpt}}", excerpt.strip() or "(none)")
     return system, user
 
 
