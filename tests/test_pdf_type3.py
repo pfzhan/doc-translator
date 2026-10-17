@@ -293,6 +293,43 @@ def test_short_token_follows_the_glyph_origins():
     origins += [("H", 120.5, 100.5), ("A", 120.5, 100.5)]
     found = _math_font_words(words, glyphs, origins)
     assert {w.text for w in words if id(w) in found} == {"6"}
+    # 带逗号时间隔字和逗号压过了一半，单个字符有一个数学字体的字仍算
+    comma = word("6,", 120, 128, 95)
+    origins += [("A", 126.0, 100.5), ("A", 127.0, 100.5)]
+    assert id(comma) in _math_font_words([*body, comma], glyphs, origins)
+
+def test_weak_tokens_next_to_formula_slots_join_the_slot():
+    """For all i: b − x − … ≤ aj. 里认成 vig、aj 的碎片挨着公式槽，并进槽里；
+    认得没把握的常见短词 is 和远离公式的词留下。"""
+    words = [
+        _word("For", 100, 115, 300, 310), _word("all", 119, 130, 300, 310),
+        _word("vig", 160, 175, 300, 310), _word("<", 180, 186, 300, 310),
+        _word("aj.", 190, 202, 300, 312), _word("is", 210, 218, 300, 310),
+        _word("then", 224, 245, 300, 310),
+    ]
+    words = [OcrWord(w.text, w.rect, conf) for w, conf in zip(words, (96, 96, 63, 90, 69, 78, 97))]
+    math_rects = {tuple(pymupdf.Rect(135, 300, 155, 310))}
+    slot = _word("6;", 135, 155, 300, 310)
+    words.insert(2, slot)
+    from app.formats.pdf_type3 import _weak_token
+
+    weak = {tuple(w.rect) for w in words if _weak_token(w)}
+    assert {w.text for w in words if _weak_token(w)} == {"vig", "aj."}
+    lines = _compose_lines(words, [], _glyphs_for(words), math_rects, weak)
+    spans = [span["text"].strip() for line in lines for span in line["spans"]]
+    assert spans.count("×") == 1
+    text = " ".join(spans)
+    assert "vig" not in text and "aj." not in text and "is" in text and "For all" in text
+
+
+def test_subscripted_variable_fragment_is_a_formula_token():
+    """a;41、v2, 这种字母夹数字的碎片是带下标的变量；1st、Q4 认得有把握的不算。"""
+    from app.formats.pdf_type3 import _formula_token
+
+    assert _formula_token(OcrWord("a;41,", pymupdf.Rect(0, 0, 10, 10), 49))
+    assert _formula_token(OcrWord("v2,", pymupdf.Rect(0, 0, 10, 10), 66))
+    assert not _formula_token(OcrWord("1st", pymupdf.Rect(0, 0, 10, 10), 60))
+    assert not _formula_token(OcrWord("Q4", pymupdf.Rect(0, 0, 10, 10), 95))
 
 def test_listing_with_math_font_symbols_stays_a_listing():
     """伪代码里 S、= 来自符号字体。先按原词认出伪代码，不能因为它们换成公式槽就当正文翻译。"""
