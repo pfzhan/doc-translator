@@ -4444,3 +4444,17 @@ def test_block_of_typewriter_lines_is_code_and_inline_names_are_not():
         span("part, supplier, ", "Courier"), span("and customer.", "Times-Roman"),
     ]])
     assert not _code_block(prose)
+
+
+def test_lone_relation_symbol_from_a_symbol_font_stays_a_formula():
+    """CMSY 里的 ≺ 被 OCR 认成 <。单独一个也是公式，不能当成正文里的小于号。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text, font, x0):
+        return {"text": text, "font": font, "size": 10.0, "bbox": (x0, 0, x0 + 20, 10), "origin": (x0, 8)}
+
+    block = _block_with_spans([[
+        span("Thus (part) ", "Times-Roman", 0), span("<", "CMSY10", 60), span(" (part, customer).", "Times-Roman", 70),
+    ]], size=10.0)
+    sent, formulas = _placeholderize(block)
+    assert sent == "Thus (part) {v1} (part, customer)." and len(formulas) == 1
