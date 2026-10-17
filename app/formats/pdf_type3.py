@@ -465,7 +465,9 @@ def _formula_between(
     box = _evidence_box(debris, glyphs, prev.rect.x1, nxt.rect.x0, y0, y1)
     if box is None or box.width < 6:
         return None
-    return _Piece("formula", _FORMULA_MARK, box)
+    # 点阵字框横向和墨迹差出好几个点，N_supplier 的 N 会落到 where 那边被漏掉。
+    # 两词之间整段都算进来，多出的空白排版时会按墨迹收掉
+    return _Piece("formula", _FORMULA_MARK, pymupdf.Rect(prev.rect.x1 + 1.5, box.y0, nxt.rect.x0 - 1.5, box.y1))
 
 
 def _evidence_box(
