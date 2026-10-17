@@ -6,6 +6,7 @@
 """
 import asyncio
 import hashlib
+import re
 from urllib.parse import urlparse
 
 import httpx
@@ -79,6 +80,17 @@ def _error_text(resp: httpx.Response) -> str:
     err = data.get("error", data)
     msg = err.get("message") if isinstance(err, dict) else err
     return str(msg or resp.text)[:300]
+
+
+# 年份、页码、编号这类三位以上的数字，翻译前后应该原样都在
+_NUMBER_RE = re.compile(r"\d{3,}")
+
+
+def _numbers_mismatch(source: str, translation: str) -> bool:
+    """原文的数字译文里一个都没有，却有别的数字：多半是模型把两段并成一段，后面的译文整体错了位。"""
+    src = set(_NUMBER_RE.findall(source))
+    dst = set(_NUMBER_RE.findall(translation))
+    return bool(src) and bool(dst) and not (src & dst)
 
 
 # 这些状态码说明是我们这边的配置有问题（Key 错、没权限、地址错），重试也不会好，立即报错
@@ -237,8 +249,10 @@ class LLMTranslator(Translator):
         if len(texts) == 1:
             return [prompts.clean_output(content)]
         found = prompts.parse_markers(content, len(texts), marker=prompts.pick_marker(texts))
-        # 模型漏掉的段落补翻（和插件的 recovery 思路一样，只补缺失的），并行发出
-        missing = [i for i in range(len(texts)) if i not in found]
+        # 模型漏掉的段落补翻（和插件的 recovery 思路一样，只补缺失的），并行发出。
+        # 数字对不上的也单独重翻：标记数量对得上，内容却可能整体错了一位
+        missing = [i for i in range(len(texts))
+                   if i not in found or _numbers_mismatch(texts[i], found[i])]
         if missing:
             redone = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in missing))
             for i, [text] in zip(missing, redone):
