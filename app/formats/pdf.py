@@ -38,10 +38,11 @@ from .pdf_layout import (
     PageGeometry, RuledTable, cell_containing, content_floor, margin_skips, page_tables, reading_order,
     text_page_rect,
 )
-from .pdf_roles import HeuristicLayout, LayoutItem, Role, is_size_heading
+from .pdf_roles import LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
 from .pdf_type3 import Type3Reader, broken_type3_names, recover_type3_page
 from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, typeset_lines
+from .pdf_vision import layout_detector
 
 MATH_FONT_RE = re.compile(r"CMMI|CMSY|CMEX|MSBM|Math|Symbol|STIX|Cambria Math", re.I)
 # 精确的数学字体白名单（直接判公式）
@@ -4451,7 +4452,9 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         PageGeometry.from_page(src_doc[i], [b.rect for b in blocks if b.page == i])
         for i in range(src_doc.page_count)
     ]
-    roles = HeuristicLayout().classify(
+    # 配了版面模型时要逐页跑推理，放到线程里
+    roles = await asyncio.to_thread(
+        layout_detector(src_doc).classify,
         [LayoutItem(b.page, pymupdf.Rect(b.rect), b.text, b.size, b.bold) for b in blocks],
         geometries,
         median,
