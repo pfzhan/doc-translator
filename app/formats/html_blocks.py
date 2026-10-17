@@ -498,6 +498,18 @@ def _sanitize_translation(src_html: str, translated_html: str) -> list | None:
     return list(frag.children)
 
 
+def _strip_ids(target: Tag) -> None:
+    """双语译文里去掉 id 和分页锚点：原文段落还留着它们，再出现一次 id 就重复了，页码也会显示两遍。"""
+    anchors = [t for t in target.find_all(True) if _is_page_anchor(t)]
+    for t in anchors:
+        if not any(p in anchors for p in t.parents):
+            t.decompose()
+    for t in target.find_all(True):
+        for attr in ("id", "name"):
+            if t.has_attr(attr):
+                del t[attr]
+
+
 def apply_translation_html(soup, el: Tag, src_html: str, translated_html: str, bilingual: bool, lang: str = ""):
     """富文本段落回写：译文保留行内标签（加粗、链接等）。不合格时回退纯文本路径。"""
     if translated_html.strip() == src_html.strip():
@@ -509,7 +521,8 @@ def apply_translation_html(soup, el: Tag, src_html: str, translated_html: str, b
         plain = _prose_of(frag) if frag is not None else translated_html
         target = apply_translation(soup, el, _text_of(el), plain, bilingual, lang)
         src = _parse_fragment(src_html)
-        if target is not None and src is not None:
+        # 双语时分页锚点还在原文段落里，不用补
+        if target is not None and src is not None and not bilingual:
             _restore_page_anchors(src, target)
         return
     name = _local(el.name)
@@ -536,6 +549,7 @@ def apply_translation_html(soup, el: Tag, src_html: str, translated_html: str, b
     if name in INNER_TAGS:
         span = soup.new_tag("span", attrs={"class": TRANSLATION_CLASS, **attrs})
         fill(span)
+        _strip_ids(span)
         el.append(soup.new_tag("br"))
         el.append(span)
         return
@@ -548,6 +562,7 @@ def apply_translation_html(soup, el: Tag, src_html: str, translated_html: str, b
         classes = classes.split()
     clone["class"] = [*classes, TRANSLATION_CLASS]
     fill(clone)
+    _strip_ids(clone)
     for k, v in attrs.items():
         clone[k] = v
     el.insert_after(clone)
