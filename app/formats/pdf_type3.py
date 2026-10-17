@@ -522,7 +522,13 @@ def _display_formula(pieces: list[_Piece]) -> bool:
     if box.x0 < 160:
         return False
     text = " ".join(piece.text for piece in prose)
-    if len(text) > 90 or not _DISPLAY_MARK.search(text):
+    # 比较符本身常被认成数学字体、换成了公式槽，这时剩下的词里已经没有 = 了。
+    # 靠公式槽认的，整行（连同槽）都要缩进：行首是公式的 (p,s,c) where … is 是正文
+    whole = pymupdf.Rect(box)
+    for piece in pieces:
+        whole |= piece.rect
+    has_slot = any(piece.kind == "formula" for piece in pieces) and whole.x0 >= 160
+    if len(text) > 90 or not (_DISPLAY_MARK.search(text) or has_slot):
         return False
     if _NUMBERED_LINE.match(text) or _SQL_LINE.match(text) or _CAPTION_START.match(text):
         return False
