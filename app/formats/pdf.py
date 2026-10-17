@@ -39,7 +39,7 @@ from .pdf_layout import (
 )
 from .pdf_roles import HeuristicLayout, LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
-from .pdf_type3 import broken_type3_names, recover_type3_page
+from .pdf_type3 import Type3Reader, broken_type3_names, recover_type3_page
 from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, typeset_lines
 
 MATH_FONT_RE = re.compile(r"CMMI|CMSY|CMEX|MSBM|Math|Symbol|STIX|Cambria Math", re.I)
@@ -1911,11 +1911,12 @@ def _numbered_list_item(text: str) -> bool:
 def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     blocks = []
     tables_by_page: list[tuple[RuledTable, ...]] = []
+    type3 = Type3Reader(doc)
     for pno, page in enumerate(doc):
         tables_by_page.append(page_tables(page))
         data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
         # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
-        recover_type3_page(page, data)
+        recover_type3_page(page, data, type3)
         for b in data["blocks"]:
             if b.get("type") != 0:
                 continue
