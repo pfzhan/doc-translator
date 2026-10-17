@@ -2776,6 +2776,33 @@ def test_column_wrap_joins_when_geometry_misses_the_gutter():
     assert [unit for unit in joined if len(unit) == 2] == [[cus, prose]]
 
 
+def test_column_tail_drawn_before_its_host_keeps_the_paragraph(tmp_path):
+    """内容流先画右栏时，右栏顶的续块排在左栏宿主前面。整段译文仍要写出来。"""
+    from app.formats.pdf import translate_pdf
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=600, height=800)
+
+    def para(x, y, lines):
+        for i, line in enumerate(lines):
+            page.insert_text((x, y + i * 12), line, fontsize=10)
+
+    para(320, 80, ["continues the gamma sentence on the right side", "with more words that end with a stop."])
+    para(320, 200, ["Delta paragraph in the right column is here", "and finishes with a final stop."])
+    para(50, 80, ["Alpha paragraph text that fills the left column", "and keeps going for a few more words here.",
+                  "It ends with a full stop at the end."])
+    para(50, 200, ["Beta paragraph text that also fills the column", "and keeps going for several more words.",
+                   "It also ends properly with a stop."])
+    para(50, 320, ["Gamma begins and we write a short line"])
+    src = tmp_path / "right_first.pdf"
+    doc.save(src)
+
+    [out] = run(translate_pdf(src, tmp_path, runner(), False, "zh-CN"))
+    text = " ".join(pymupdf.open(out)[0].get_text().split())
+    assert "Gamma begins" in text
+    assert "continues the gamma sentence" in text
+
+
 def test_capital_continuation_joins_across_columns_only():
     """换栏可以接在专有名词上。同一栏的大写换行仍分开。"""
     from app.formats.pdf import TextBlock, _cross_page_units, _merge_continuations
