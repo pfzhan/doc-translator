@@ -923,6 +923,8 @@ def _formula_markup(run_spans: list[dict], main_size: float) -> str:
 
 # 孤立标点不当公式：<EOS> 这类 token 的尖括号是数学字体，单独抽出来会把 token 拆散、
 # 还把上下行的括号粘成跨行怪图。括号/标点留在正文里排版（正文字体本来就画得出）。
+# 符号字体里没有正文标点：CMSY 的 < 是 ≺ 这类关系符，单独一个也是公式
+_SYMBOL_FONT_RE = re.compile(r"^CMSY|^MSAM|^MSBM", re.I)
 _LONE_PUNCT_RE = re.compile(r"^[\s<>[\]{}()|/\\=+\-_.,;:'\"~·，。；：！？（）【】]+$")
 # 贴在角标上的正体变量。两个字母会把 of/to 吸进上标，只收一个字母。
 _VARIABLE_BASE_RE = re.compile(r"^[A-Za-z]['′]?$")
@@ -1183,7 +1185,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 if run_spans and any(s["text"].strip() for s in run_spans):
                     # 孤立标点 run 不当公式（<EOS> 的尖括号、括号、等号），留在正文里
                     joined = "".join(s["text"] for s in run_spans).strip()
-                    if not _LONE_PUNCT_RE.match(joined):
+                    if not _LONE_PUNCT_RE.match(joined) or any(_SYMBOL_FONT_RE.search(s["font"]) for s in run_spans):
                         bbox = pymupdf.Rect(run_spans[0]["bbox"])
                         for s in run_spans[1:]:
                             bbox |= pymupdf.Rect(s["bbox"])
