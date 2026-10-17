@@ -76,6 +76,17 @@ Some items contain a {|} placeholder. It marks where one paragraph crosses a
 page. Keep {|} and every {vN} unchanged, in the same order. Do not translate,
 drop, or move the braces."""
 
+# PDF 行内公式的占位符。模型常按上下文把 {v1} 猜成「=」写出来，占位符一丢，整段只能回退原文。
+FORMULA_SUFFIX = """
+
+## Formula placeholders
+Some items contain {v1}, {v2}, ... placeholders. Each stands for a formula or symbol
+that is drawn back as an image after translation. Keep every {vN} exactly once, in
+the matching place of the translation. Do not replace it with your guess of what it
+contains, and do not drop or renumber it."""
+
+_FORMULA_IN_TEXT = re.compile(r"\{v\d+\}")
+
 # 批次里含 HTML 片段（电子书富文本段落）时附加：保留行内格式（加粗、链接）
 HTML_SUFFIX = """
 
@@ -169,6 +180,8 @@ def build_messages(texts: list[str], target_lang: str, *, source_lang: str = "au
         system += HTML_SUFFIX
     if any("{|}" in text for text in texts):
         system += BOUNDARY_SUFFIX
+    if any(_FORMULA_IN_TEXT.search(text) for text in texts):
+        system += FORMULA_SUFFIX
     if any(_STYLE_IN_TEXT.search(text) for text in texts):
         system += STYLE_SUFFIX
     # {{text}} 最后替换，避免原文里恰好有 {{xxx}} 被当成占位符
