@@ -3535,6 +3535,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
 
     for pno, items in by_page.items():
         page = doc[pno]
+        items = _hosts_first(items, continuations)
         visible = [(b, t) for b, t in items if t != SPILL_TAIL]
         geo = geometries[pno] if geometries and pno < len(geometries) else None
         mid_map = {f["mid"]: f for b, _ in visible for f in (formulas_map or {}).get(id(b), [])
@@ -3717,6 +3718,28 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         if mid_map:
             _place_formula_images(page, doc, images_before, mid_map, fmS, page_spans)
     return doc
+
+
+def _hosts_first(
+    items: list[tuple[TextBlock, str]], continuations: dict[int, TextBlock],
+) -> list[tuple[TextBlock, str]]:
+    """同页的续块挪到宿主后面。
+
+    内容流先画右栏时，右栏顶的续块会排在左栏宿主前面。轮到它时还没有接续的译文，
+    原文已经擦掉，这一段就整段没了。
+    """
+    host_of = {id(tail): host_id for host_id, tail in continuations.items()}
+    position = {id(b): index for index, (b, _t) in enumerate(items)}
+    waiting: dict[int, list[tuple[TextBlock, str]]] = {}
+    ordered: list[tuple[TextBlock, str]] = []
+    for b, t in items:
+        host_id = host_of.get(id(b))
+        if host_id is not None and position.get(host_id, -1) > position[id(b)]:
+            waiting.setdefault(host_id, []).append((b, t))
+            continue
+        ordered.append((b, t))
+        ordered.extend(waiting.pop(id(b), []))
+    return ordered
 
 
 def _expand_right(
