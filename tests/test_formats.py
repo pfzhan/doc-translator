@@ -306,6 +306,14 @@ def test_markdown_loose_list_continuation_translated_in_place():
                    "T:Outside paragraph.\n\n    real_code()")
 
 
+def test_markdown_paragraph_starting_with_inline_tag_is_translated():
+    """行首是行内标签或自动链接的段落照常翻译；块级标签和整行单个标签仍按 HTML 块原样保留。"""
+    src = ("<kbd>Ctrl</kbd> copies the selection.\n\n<https://example.com> is our site.\n\n"
+           '<div align="center">\nCentered text\n</div>\n\n<img src="logo.png">\n\n<!-- note -->')
+    blocks = split_blocks(src)
+    assert collect_segments(blocks) == ["<kbd>Ctrl</kbd> copies the selection.", "<https://example.com> is our site."]
+
+
 def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
     """有序列表只有从 1 开始才能打断段落，正文里换行后的年份不是列表。"""
     blocks = split_blocks("It happened in\n1990. Then more text.")

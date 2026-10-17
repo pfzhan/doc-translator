@@ -13,7 +13,16 @@ TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
 HR_RE = re.compile(r"^\s{0,3}([-*_])(\s*\1){2,}\s*$")
 # Setext 标题的下划线：段落下面一行 === 是一级标题，--- 是二级标题
 SETEXT_RE = re.compile(r"^\s{0,3}(=+|-+)\s*$")
-HTML_BLOCK_RE = re.compile(r"^\s*<(/?[a-zA-Z][\w-]*|!--)")
+HTML_TAG_RE = re.compile(r"^\s{0,3}</?([a-zA-Z][a-zA-Z0-9-]*)(?=[\s/>]|$)")
+# 整行只有一个完整的开始或结束标签，后面没有文字
+LONE_TAG_RE = re.compile(r"^\s{0,3}</?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^<>]*)?/?>\s*$")
+# CommonMark 里能开启 HTML 块的块级标签。<kbd>、<a> 这类行内标签开头的是普通段落
+HTML_BLOCK_TAGS = frozenset("""
+address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl
+dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend
+li link main menu menuitem nav noframes ol optgroup option p param search section summary table tbody td
+tfoot th thead title tr track ul pre script style textarea
+""".split())
 # 链接引用定义：[id]: https://...。脚注 [^1]: 有正文，不算
 LINK_DEF_RE = re.compile(r"^\s{0,3}\[(?!\^)[^\]]+\]:\s*\S")
 # GitHub 提示框标记：> [!NOTE]
@@ -27,6 +36,17 @@ def _translatable(text: str) -> bool:
     stripped = re.sub(r"`[^`]*`", "", stripped)  # 去掉行内代码
     stripped = re.sub(r"https?://\S+", "", stripped)
     return bool(stripped.strip()) and not NO_TEXT_RE.match(stripped.strip())
+
+
+def _starts_html_block(line: str) -> bool:
+    """注释、<!DOCTYPE>、块级标签，或整行只有一个标签时是 HTML 块；自动链接 <https://...> 不是。"""
+    stripped = line.lstrip()
+    if stripped.startswith(("<!--", "<?", "<!")):
+        return True
+    m = HTML_TAG_RE.match(line)
+    if not m:
+        return False
+    return m.group(1).lower() in HTML_BLOCK_TAGS or bool(LONE_TAG_RE.match(line))
 
 
 def _closes_fence(line: str, fence: str) -> bool:
@@ -114,7 +134,7 @@ def split_blocks(text: str) -> list[Block]:
             blocks.append(Block("heading", [line]))
             i += 1
             continue
-        if HTML_BLOCK_RE.match(line) and not para:
+        if _starts_html_block(line) and not para:
             j = i
             while j < len(lines) and lines[j].strip():
                 j += 1
@@ -145,7 +165,7 @@ def split_blocks(text: str) -> list[Block]:
                 # 列表后紧跟的标题 / 引用 / HTML 块 / 分隔线是新的块级结构，不能并进最后一个列表项
                 if j > i and not LIST_RE.match(lines[j]) and (
                     HEADING_RE.match(lines[j]) or QUOTE_RE.match(lines[j])
-                    or HTML_BLOCK_RE.match(lines[j]) or HR_RE.match(lines[j])
+                    or _starts_html_block(lines[j]) or HR_RE.match(lines[j])
                 ):
                     break
                 j += 1
