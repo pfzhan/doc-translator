@@ -4500,3 +4500,18 @@ def test_rules_inside_a_rewritten_line_are_erased():
     _erase_line_rules(page, [pymupdf.Rect(80, 50, 200, 62)])
     assert ink(inside) == 0
     assert ink(outside) > 0
+
+
+def test_inline_typewriter_words_keep_their_glyphs():
+    """句子里的等宽属性名换成占位符，贴回原字。整块都是等宽字的不在这里，那是代码块。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text, font, x0):
+        return {"text": text, "font": font, "size": 10.0, "bbox": (x0, 0, x0 + 40, 10), "origin": (x0, 8)}
+
+    block = _block_with_spans([[
+        span("the total sales of ", "Times-Roman", 0), span("part", "Courier", 90),
+        span(" that was bought", "Times-Roman", 120),
+    ]], size=10.0)
+    sent, formulas = _placeholderize(block)
+    assert sent == "the total sales of {v1} that was bought" and len(formulas) == 1

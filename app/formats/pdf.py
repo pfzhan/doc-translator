@@ -873,12 +873,15 @@ def _smaller_prose_line(spans: list[dict], main_size: float) -> bool:
     return _prose_units("".join(str(span.get("text") or "") for span in visible)) >= 4
 
 
-def _is_formula_span(span: dict, main_size: float, *, prose_line: bool = False) -> bool:
+def _is_formula_span(span: dict, main_size: float, *, prose_line: bool = False, code: bool = False) -> bool:
     """行内公式：数学字体的 span，或明显小于正文的角标 span（引用编号等）。
     粗体 CM（CMBX 等）的一两个字符按 mathbf 单字母算公式；粗体单词仍是正文。
     正文字体里的希腊字母和数学符号也是公式。单个拉丁字母不是，除非贴在角标上。
     prose_line 为真时，整行都是比标题小的正文，不能单凭字号收成公式。"""
     if _font_is_math(span["font"]):
+        return True
+    # 句子里的等宽词是属性名、函数名，照原样贴回，不让模型有的译有的不译
+    if code and MONO_FONT_RE.search(span["font"]) and re.search(r"[A-Za-z]", span["text"]):
         return True
     if span["size"] < main_size * 0.79 and not prose_line:
         return True
@@ -1167,16 +1170,17 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
 
     # 1) 按 dict 行收集公式 run，并记录在块 span 流里的位置（供阅读序邻接判断）
     runs: list[dict] = []
+    code = not _code_block(block)
     for line_no, spans in enumerate(block.span_lines):
         prose_line = _smaller_prose_line(spans, block.size)
         i, n = 0, len(spans)
         while i < n:
-            if _is_formula_span(spans[i], block.size, prose_line=prose_line):
+            if _is_formula_span(spans[i], block.size, prose_line=prose_line, code=code):
                 run_spans = [spans[i]]
                 j = i + 1
                 while j < n and (
                     not spans[j]["text"].strip()
-                    or _is_formula_span(spans[j], block.size, prose_line=prose_line)
+                    or _is_formula_span(spans[j], block.size, prose_line=prose_line, code=code)
                 ):
                     run_spans.append(spans[j])
                     j += 1
@@ -1985,17 +1989,22 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
 _AFFIL_MARK_RE = re.compile(r"^[∗*†‡§¶]")
 
 
+def _mono_share(block: TextBlock) -> float:
+    """块里正文字（公式除外）有多少是等宽字体。"""
+    spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
+    prose = [span for span in spans if not _font_is_math(str(span.get("font") or ""))]
+    total = sum(len(str(span["text"]).strip()) for span in prose)
+    mono = sum(len(str(span["text"]).strip()) for span in prose if MONO_FONT_RE.search(str(span.get("font") or "")))
+    return mono / total if total else 0.0
+
+
 def _code_block(block: TextBlock) -> bool:
     """整块正文几乎都是等宽字体：程序、SQL、命令行。译了会把关键字也换掉，留下原字。
 
     句子里夹着的等宽单词（属性名、函数名）不在这里。块里八成以上是等宽字才算，
     FROM R 这种短行认不出等宽也不影响整块。
     """
-    spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
-    prose = [span for span in spans if not _font_is_math(str(span.get("font") or ""))]
-    total = sum(len(str(span["text"]).strip()) for span in prose)
-    mono = sum(len(str(span["text"]).strip()) for span in prose if MONO_FONT_RE.search(str(span.get("font") or "")))
-    return total > 0 and mono >= total * 0.8
+    return _mono_share(block) >= 0.8
 
 
 def _garbled_label(text: str) -> bool:
