@@ -34,6 +34,13 @@ def test_cjk_wraps_by_character():
     assert break_lines("甲乙丙丁戊", em=10, max_width=25, formula_widths={}) == ["甲乙", "丙丁", "戊"]
 
 
+def test_decimal_number_is_not_split_at_its_point():
+    """2.07 秒：断行不能落在小数点后面。"""
+    lines = break_lines("甲乙丙丁戊 2.07 秒", em=10, max_width=70, formula_widths={})
+    assert any("2.07" in line for line in lines)
+    assert not any(line.rstrip().endswith("2.") for line in lines)
+
+
 def test_punctuation_does_not_start_a_line():
     lines = break_lines("甲乙丙丁。", em=10, max_width=40, formula_widths={})
     assert lines == ["甲乙丙", "丁。"]

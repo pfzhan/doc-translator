@@ -431,6 +431,15 @@ def _wants_formula_space(char: str) -> bool:
     return unicodedata.east_asian_width(char) in ("W", "F")
 
 
+def _inside_number(text: str, index: int) -> bool:
+    return (
+        text[index] in ".,"
+        and 0 < index < len(text) - 1
+        and text[index - 1].isdigit()
+        and text[index + 1].isdigit()
+    )
+
+
 def _tokenize(text: str) -> list[str]:
     tokens: list[str] = []
     index = 0
@@ -451,7 +460,8 @@ def _tokenize(text: str) -> list[str]:
             continue
         if _is_word_char(char):
             end = index + 1
-            while end < length and _is_word_char(text[end]):
+            # 2.07、10,000 里夹在数字中间的点和逗号属于这个数，不能从这里断行
+            while end < length and (_is_word_char(text[end]) or _inside_number(text, end)):
                 end += 1
             tokens.append(text[index:end])
             index = end
