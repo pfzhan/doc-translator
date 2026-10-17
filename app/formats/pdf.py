@@ -3562,8 +3562,14 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             shown = t if t == SPILL_TAIL else _with_source_bold(b, t)
             by_page.setdefault(b.page, []).append((b, shown))
 
+    # 写入时只和同页的块比较。每块都扫一遍整本书，几百页就很慢。
+    page_blocks: dict[int, list[TextBlock]] = {}
+    for b in blocks:
+        page_blocks.setdefault(b.page, []).append(b)
+
     for pno, items in by_page.items():
         page = doc[pno]
+        same_page = page_blocks.get(pno, [])
         # 旋转页的 page.rect 是转过的，和文字坐标比较要用没转的页面框
         bounds = text_page_rect(page)
         items = _hosts_first(items, continuations)
@@ -3595,19 +3601,19 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         images_before = {img[0] for img in page.get_images(full=True)}
         draws: list[str] = []
         deferred_png: list[tuple[pymupdf.Rect, bytes]] = []
-        stacked = _affiliation_write_rects(blocks)
-        starts = _body_first_starts(blocks, items, cjk, formulas_map)
+        stacked = _affiliation_write_rects(same_page)
+        starts = _body_first_starts(same_page, items, cjk, formulas_map)
 
         def write_one(
             block: TextBlock, text: str, rect: pymupdf.Rect, centered: bool,
             formulas: list[dict] | None = None, justify_last: bool = False,
             x_cap: float | None = None,
         ) -> None:
-            rect = _fit_page_margins(block, rect, blocks, bounds.height, cjk)
+            rect = _fit_page_margins(block, rect, same_page, bounds.height, cjk)
             bformulas = formulas if formulas is not None else (formulas_map or {}).get(id(block), [])
             weight = "bold" if block.bold else "normal"
             size = block.size * 0.88 if cjk else block.size
-            obstacles = [ob.rect for ob in blocks if ob.page == pno and ob is not block]
+            obstacles = [ob.rect for ob in same_page if ob is not block]
             if geo is not None:
                 obstacles = [*obstacles, *geo.figures]
             limit = _write_limit(block, rect, geo, obstacles)
@@ -3664,7 +3670,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     write_one(b, carry.text, box, False, carry.formulas, False, box.x1)
                     continue
                 rect, centered = _write_rect(b, visible or [(b, carry.text)], cjk, rtl, geo)
-                room = _room_below(page, b, rect.y0, rect.x0, rect.x0 + carry.width, blocks)
+                room = _room_below(page, b, rect.y0, rect.x0, rect.x0 + carry.width, same_page)
                 placed = pymupdf.Rect(rect.x0, rect.y0, rect.x0 + carry.width, max(room, rect.y0 + 4))
                 write_one(b, carry.text, placed, centered, carry.formulas, False)
                 continue
@@ -3693,7 +3699,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 if rest.strip() and tail is None:
                     write_one(b, rest, rest_box, False, bformulas, False, rest_box.x1)
                 elif rest.strip() and tail is not None:
-                    room = _room_below(page, b, rest_box.y0, rest_box.x0, rest_box.x1, blocks)
+                    room = _room_below(page, b, rest_box.y0, rest_box.x0, rest_box.x1, same_page)
                     placed, spill = _split_filled_lines(
                         rest, bformulas, size, b.size, rest_box.width, cjk, rest_box.y0, room,
                     )
@@ -3715,7 +3721,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             rect, centered = _write_rect(b, visible, cjk, rtl, geo)
             if id(b) in stacked:
                 rect, centered = stacked[id(b)], False
-            beside = _beside_body(b, blocks)
+            beside = _beside_body(b, same_page)
             if beside is not None and id(b) not in stacked:
                 cap = beside.line_rects[0].x0 - 2
                 moved = starts.get(id(beside))
@@ -3735,7 +3741,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 carried[id(tail)] = _Carry(t, bformulas, tail.rect.width)
                 continue
             size = b.size * 0.88 if cjk else b.size
-            room = _room_below(page, b, rect.y0, rect.x0, rect.x1, blocks)
+            room = _room_below(page, b, rect.y0, rect.x0, rect.x1, same_page)
             head, rest = _split_filled_lines(t, bformulas, size, b.size, rect.width, cjk, rect.y0, room)
             if head:
                 gap = 1.45 if cjk else 1.2
