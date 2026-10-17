@@ -57,6 +57,8 @@ TEXT_FONT_RE = re.compile(
     r"PingFang|SimSun|SimHei|Songti|Heiti|Kaiti|FangSong|SourceHan|WenQuanYi|YaHei|YouYuan|LiSu|"
     r"STFangsong|STHeiti|STKaiti|STSong|STXihei|Yuanti|Hiragino|Ryumin|GothicBBB|Kozuka|IPA|"
     r"Takao|Sazanami|Motoya|Yomogi|BIZ |M PLUS|GenShin|GenRyu|NotoSansCJK|NotoSerifCJK", re.I)
+MONO_FONT_RE = re.compile(
+    r"Courier|Mono|Consolas|Menlo|Monaco|CMTT|Typewriter|Inconsolata|Fira ?Code|Lucida ?Console|Source ?Code", re.I)
 CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
 # 单个字母加句点，像 "a. " 也像换行后的 "Q. The cost"。后者不是列表项。
@@ -1978,6 +1980,19 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
 
 
 _AFFIL_MARK_RE = re.compile(r"^[∗*†‡§¶]")
+
+
+def _code_block(block: TextBlock) -> bool:
+    """整块正文几乎都是等宽字体：程序、SQL、命令行。译了会把关键字也换掉，留下原字。
+
+    句子里夹着的等宽单词（属性名、函数名）不在这里。块里八成以上是等宽字才算，
+    FROM R 这种短行认不出等宽也不影响整块。
+    """
+    spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
+    prose = [span for span in spans if not _font_is_math(str(span.get("font") or ""))]
+    total = sum(len(str(span["text"]).strip()) for span in prose)
+    mono = sum(len(str(span["text"]).strip()) for span in prose if MONO_FONT_RE.search(str(span.get("font") or "")))
+    return total > 0 and mono >= total * 0.8
 
 
 def _garbled_label(text: str) -> bool:
@@ -4413,7 +4428,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     kinds = ["h2" if role is Role.HEADING else "p" for role in roles]
     edges = margin_skips(blocks, geometries)
     skips = [
-        bib or role is Role.FIGURE or edge or _garbled_label(block.text)
+        bib or role is Role.FIGURE or edge or _garbled_label(block.text) or _code_block(block)
         for bib, role, edge, block in zip(biblio_skips(blocks), roles, edges, blocks)
     ]
     skip_ids = {id(b) for b, s in zip(blocks, skips) if s}

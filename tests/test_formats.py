@@ -4425,3 +4425,22 @@ def _group_chars(
         else:
             grouped[-1].append(item)
     return grouped
+
+
+def test_block_of_typewriter_lines_is_code_and_inline_names_are_not():
+    """整块几乎都是等宽字（SQL）留原样。句子里夹着几个等宽属性名的照翻。"""
+    from app.formats.pdf import _code_block
+
+    def span(text, font):
+        return {"text": text, "font": font, "size": 10.0, "bbox": (0, 0, 10, 10), "origin": (0, 8)}
+
+    sql = _block_with_spans([
+        [span("SELECT Part, Customer, SUM(SP) ", "Courier"), span("AS ", "Times-Roman"), span("TotalSales", "Courier")],
+        [span("FROM R", "Times-Roman")],
+    ])
+    assert _code_block(sql)
+    prose = _block_with_spans([[
+        span("There are three dimensions we are interested in: ", "Times-Roman"),
+        span("part, supplier, ", "Courier"), span("and customer.", "Times-Roman"),
+    ]])
+    assert not _code_block(prose)
