@@ -4,6 +4,8 @@
 - 服务重启后从磁盘恢复记录；重启前没跑完的任务标记为“已中断”，可以重新翻译（已翻好的段落在缓存里）。
 - 预览：运行中的任务从 Runner 实时读取；已完成的任务把预览快照存成 preview.json，之后随时能打开。
 """
+from __future__ import annotations
+
 import json
 import shutil
 import threading
