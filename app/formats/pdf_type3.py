@@ -208,7 +208,7 @@ def recover_type3_page(page: pymupdf.Page, data: PageData) -> bool:
     zones.extend(_label_zones(words, zones))
     visible = [word for word in words if not _hidden(word, zones)]
     originals = _broken_lines(data, names)
-    math = _math_font_words(visible, originals)
+    math = _math_font_words(visible, originals, _glyph_origins(page, names))
     prose = _without_noise(visible)
     kept = {id(word) for word in prose}
     debris = [word for word in visible if id(word) not in kept]
@@ -263,6 +263,34 @@ def _without_noise(words: list[OcrWord]) -> list[OcrWord]:
     return kept
 
 
+def _glyph_origins(page: pymupdf.Page, names: set[str]) -> list[tuple[str, float, float]]:
+    """点阵字逐字的起笔点（字体名, x, y）。
+
+    字框按字体框算，宽高都和墨迹差好几个点，越往行尾差得越多；起笔点和墨迹对得上。
+    """
+    found: list[tuple[str, float, float]] = []
+    for block in page.get_text("rawdict")["blocks"]:
+        if block.get("type") != 0:
+            continue
+        for line in block["lines"]:
+            for span in line["spans"]:
+                if span.get("font") not in names:
+                    continue
+                for char in span.get("chars") or []:
+                    x, y = char["origin"]
+                    found.append((str(span["font"]), float(x), float(y)))
+    return found
+
+
+def _origin_fonts(word: OcrWord, origins: list[tuple[str, float, float]]) -> dict[str, int]:
+    """起笔点落在词里的字各属哪个字体。起笔点在字的顶上一点，竖向放宽几个点。"""
+    hits: dict[str, int] = {}
+    for font, x, y in origins:
+        if word.rect.x0 - 0.8 <= x < word.rect.x1 - 0.5 and word.rect.y0 - 4 <= y <= word.rect.y1 + 4:
+            hits[font] = hits.get(font, 0) + 1
+    return hits
+
+
 def _word_fonts(word: OcrWord, glyphs: list[GlyphBox]) -> tuple[str, float]:
     """词底下占得最多的点阵字体，以及它占的比例。点阵字框比墨迹高，只按横向重叠算。"""
     cy = (word.rect.y0 + word.rect.y1) / 2
@@ -286,11 +314,14 @@ def _confident_word(word: OcrWord, length: int) -> bool:
 
 # 正文里常排成斜体的拉丁缩写，斜体字体在一页上常常只有这一个词
 _LATIN_ABBREV = re.compile(r"^(?:i\.e\.|e\.g\.|cf\.|etc\.|vs\.|viz\.)[,;:]?$", re.I)
-# 节号、列表编号、图号（4.3、1.、Figure 9:）。换成公式后标题和编号就认不出了
-_NUMBER_TOKEN = re.compile(r"^[\d.:]+$")
+# 节号、列表编号、图号、页码（4.3、1.、Figure 9:、11）。换成公式后标题和编号就认不出了。
+# 单独一个数字不算：数学斜体的 b 常被认成 6
+_NUMBER_TOKEN = re.compile(r"^(?:\d+(?:\.\d+)*[.:]|\d+(?:\.\d+)+|\d{2,})$")
 
 
-def _math_font_words(words: list[OcrWord], glyphs: list[GlyphBox]) -> set[int]:
+def _math_font_words(
+    words: list[OcrWord], glyphs: list[GlyphBox], origins: list[tuple[str, float, float]] | None = None,
+) -> set[int]:
     """字形几乎全来自数学字体的词。
 
     点阵字体名是 A、B、C 这种自造名，分不出 cmr 和 cmmi。正文字体会认出大量高置信度的普通单词，
@@ -298,13 +329,28 @@ def _math_font_words(words: list[OcrWord], glyphs: list[GlyphBox]) -> set[int]:
     tesseract 会把数学字形认成 rains、Tag、6（其实是 b）这类词，送去翻译只会出乱码。
     本身是高置信度普通单词的不算：标题和正文斜体在一页上常常只出现几个词，of、to 也在里面。
     单个字母不算普通单词，它们正是 a、b、w 这类变量。
+
+    一两个字的短词（认成 6 的 b、变量 a、x）按逐字起笔点（origins）归属：字框会漂到隔壁的正文上，
+    起笔点不会。b 底下是一个数学斜体的字加一个正文字体的间隔字，数学字体占一半就算。
+    长词仍按字框比例算：几乎每个字都带着别的字体的间隔字，按起笔点会把 TPC-D、GROUP-BY 也算进来。
     """
-    attributed = [(word, *_word_fonts(word, glyphs)) for word in words]
-    prose_fonts = {font for word, font, share in attributed
+    origins = origins or []
+    attributed = [(word, _origin_fonts(word, origins), *_word_fonts(word, glyphs)) for word in words]
+    # 正文字体仍按字框比例认：按起笔点算，间隔字会把一两个词算到数学字体名下
+    prose_fonts = {font for word, hits, font, share in attributed
                    if font and share >= 0.5 and _confident_word(word, 4)}
+
+    def from_math_font(word: OcrWord, hits: dict[str, int], font: str, share: float) -> bool:
+        if bool(font) and font not in prose_fonts and share >= _MATH_FONT_SHARE:
+            return True
+        if hits and len(word.text.strip(".,;:()[]{}")) <= 2:
+            math_hits = sum(count for name, count in hits.items() if name not in prose_fonts)
+            return math_hits * 2 >= sum(hits.values())
+        return False
+
     return {
-        id(word) for word, font, share in attributed
-        if font and font not in prose_fonts and share >= _MATH_FONT_SHARE
+        id(word) for word, hits, font, share in attributed
+        if from_math_font(word, hits, font, share)
         and not _confident_word(word, 2) and not _LATIN_ABBREV.match(word.text.strip())
         and not _NUMBER_TOKEN.match(word.text.strip())
     }

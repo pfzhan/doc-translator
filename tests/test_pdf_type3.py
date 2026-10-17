@@ -274,6 +274,26 @@ def test_centered_line_of_formula_slots_is_a_display_formula():
     ]
     assert not _display_formula(sentence)
 
+def test_short_token_follows_the_glyph_origins():
+    """数学斜体的 b 被认成 6。字框漂到了隔壁的正文上，按字框它属于正文字体；
+    起笔点上一半是数学斜体，算公式。英文冠词 a 底下全是正文字体，仍是正文。"""
+    from app.formats.pdf_type3 import _math_font_words
+
+    def word(text, x0, x1, conf):
+        return OcrWord(text, pymupdf.Rect(x0, 100, x1, 110), conf)
+
+    body = [word("either", 10, 40, 96), word("benefit", 45, 80, 97), word("choice", 85, 115, 95)]
+    misread = word("6", 120, 126, 93)
+    article = word("a", 140, 146, 96)
+    section = word("4.3", 160, 175, 96)
+    words = [*body, misread, article, section]
+    # 字框只有正文字体一条，横跨整行
+    glyphs = [GlyphBox(pymupdf.Rect(10, 96, 180, 114), 10.0, 0, 101.0, 0, "A")]
+    origins = [("A", x, 100.5) for x in (10, 20, 45, 60, 85, 100, 141, 143, 161, 166)]
+    origins += [("H", 120.5, 100.5), ("A", 120.5, 100.5)]
+    found = _math_font_words(words, glyphs, origins)
+    assert {w.text for w in words if id(w) in found} == {"6"}
+
 def test_listing_with_math_font_symbols_stays_a_listing():
     """伪代码里 S、= 来自符号字体。先按原词认出伪代码，不能因为它们换成公式槽就当正文翻译。"""
     listing = [_word("S", 101, 108, 279, 290), _word("=", 113, 120, 282, 288),
