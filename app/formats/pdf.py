@@ -17,6 +17,7 @@ from pathlib import Path
 import pymupdf
 
 from ..languages import RTL_LANGUAGES
+from ..runner import normalize_punctuation
 from .pdf_align import draw_cjk_lines, page_origin
 from .pdf_flow import (
     STYLE_MARK_RE,
@@ -1725,16 +1726,62 @@ def _formula_record(run: FormulaRun, spans: list[dict]) -> dict:
 _STRAY_PLACEHOLDER_RE = re.compile(r"\{\s*v\s*\d+\s*\}")
 
 
-def _restore_placeholders(translation: str, formulas: list[dict]) -> str | None:
+def _restore_placeholders(translation: str, formulas: list[dict], lenient: bool = False) -> str | None:
     """译后恢复 {vN}（容忍模型在占位符里塞的空格）；有占位符丢失时返回 None（回退原文）。
     恢复出来的是图片哨兵（\\x01i\\x02N\\x01/i\\x02），渲染层换成对应公式的 <img>。
-    译文里多出来的幻觉占位符直接删掉。"""
-    for n, _f in enumerate(formulas, 1):
+    译文里多出来的幻觉占位符直接删掉。
+
+    lenient=True 时，丢的只是一两个字形的小公式（等号、单个变量、点阵字的公式洞）也收下译文：
+    模型多半按上下文把它写成了文字，比整段退回原文好。
+    """
+    for n, f in enumerate(formulas, 1):
         pattern = re.compile(rf"\{{\s*v\s*{n}\s*\}}")
         if not pattern.search(translation):
+            if lenient and _small_formula(f):
+                continue
             return None
         translation = pattern.sub(lambda _: f"\x01i\x02{n}\x01/i\x02", translation, count=1)
     return re.sub(r"\{\s*v\s*\d+\s*\}", "", translation)
+
+
+def _small_formula(formula: dict) -> bool:
+    return len((formula.get("text") or "").strip()) <= 2
+
+
+async def _retry_lost_placeholders(
+    runner: object, sent_texts: list[str], sent_formulas: list[list[dict]], raw: list[str],
+) -> None:
+    """译文丢了 {vN} 的单元单独再翻一次，补上占位符的结果替换 raw 并写进缓存。
+
+    只排版（cache_only）时不请求翻译服务。
+    """
+    translator = getattr(runner, "translator", None)
+    if translator is None or getattr(runner, "cache_only", False):
+        return
+    lost = [
+        i for i, (t, formulas) in enumerate(zip(raw, sent_formulas))
+        if formulas and _restore_placeholders(t, formulas) is None
+    ]
+    if not lost:
+        return
+    results = await asyncio.gather(
+        *(translator.translate_batch([sent_texts[i]]) for i in lost), return_exceptions=True,
+    )
+    fixed: dict[str, str] = {}
+    for i, result in zip(lost, results):
+        if not isinstance(result, list) or not result or not (result[0] or "").strip():
+            continue
+        text = normalize_punctuation(result[0], translator.target_lang)
+        if _restore_placeholders(text, sent_formulas[i]) is not None:
+            # 预览按 _done 显示，换成新译文，后面恢复占位符时才对得上
+            done = getattr(runner, "_done", None)
+            if isinstance(done, dict) and done.get(sent_texts[i]) == raw[i]:
+                done[sent_texts[i]] = text
+            raw[i] = text
+            fixed[sent_texts[i]] = text
+    cache = getattr(runner, "cache", None)
+    if fixed and cache is not None:
+        cache.put_many(translator.cache_key, fixed)
 
 
 def _prose_units(text: str) -> int:
@@ -4395,6 +4442,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         sent_skips.append(False)
 
     raw = await runner.translate_all(sent_texts, kinds=sent_kinds, preview=True, skip=sent_skips)
+    await _retry_lost_placeholders(runner, sent_texts, sent_formulas, raw)
 
     # 公式从它所在的原页裁图。不能用单元最后一块的页码，跨页时会裁错页。
     # 框内相交的曲线并进裁剪，根号、分式线才不会被切掉。
@@ -4437,11 +4485,14 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
 
     per_block: dict[int, str] = {}
     block_formulas: dict[int, list] = {}
+    fallbacks = 0
     for unit, t, sent_text, formulas in zip(flat_units, raw, sent_texts, sent_formulas):
-        restored = _restore_placeholders(t, formulas) if formulas else _STRAY_PLACEHOLDER_RE.sub("", t)
+        restored = (_restore_placeholders(t, formulas, lenient=True) if formulas
+                    else _STRAY_PLACEHOLDER_RE.sub("", t))
         if restored is not None:
             restored = separate_after_formula(restored)
         if restored is None:
+            fallbacks += 1
             parts = [b.text for b in unit]  # 模型弄丢占位符：整单元回退原文，不产出坏文档
             formula_lists: list[list[dict]] = [[] for _ in unit]
             shown = _join_lines(parts)
@@ -4458,6 +4509,10 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         # 预览里显示恢复后的译文（缓存仍按占位符版本存，重跑照样命中）
         if formulas and getattr(runner, "_done", None) and runner._done.get(sent_text) == t:
             runner._done[sent_text] = shown
+    # 退回原文的单元算进失败段数，任务页才会提示，不会显示成全部翻完
+    info = getattr(runner, "info", None)
+    if fallbacks and isinstance(info, dict):
+        info["failed"] = int(info.get("failed") or 0) + fallbacks
     translations = [per_block[id(b)] for b in blocks]
     for i in range(1, len(blocks)):
         if translations[i] == SPILL_TAIL or translations[i - 1] == SPILL_TAIL:
