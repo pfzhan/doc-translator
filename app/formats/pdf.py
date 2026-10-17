@@ -2275,28 +2275,52 @@ def _merge_same_line_sentences(blocks: list[TextBlock]) -> list[TextBlock]:
 
     短粗体侧标和图内标签不并。续行即使和后一句共基线，也先接上，后一句再并进来。
     阅读顺序会把左半行排到右半行后面，所以不能只看相邻块。
+    只在同一页里找。整本书一起两两比较，几百页的书要算很久。
+    """
+    by_page: dict[int, list[TextBlock]] = {}
+    for block in blocks:
+        by_page.setdefault(block.page, []).append(block)
+    absorbed: set[int] = set()
+    for page_blocks in by_page.values():
+        absorbed |= _merge_page_line_sentences(page_blocks)
+    return [block for block in blocks if id(block) not in absorbed]
+
+
+def _same_line_sentence(host: TextBlock, guest: TextBlock) -> bool:
+    return _sits_on_last_line(host, guest) or _continues_fragment(host, guest)
+
+
+def _merge_page_line_sentences(blocks: list[TextBlock]) -> set[int]:
+    """一页里按顺序找宿主，各取第一个能并进来的块。返回被并掉的块。
+
+    并完不从头找。前面的宿主原来都没有可并的块，只有刚变过的这一块可能接到它们后面。
     """
     out = list(blocks)
-    guard = 0
-    changed = True
-    while changed and guard <= len(blocks):
-        guard += 1
-        changed = False
-        for index, host in enumerate(out):
-            for other_index, guest in enumerate(out):
-                if other_index == index:
-                    continue
-                if guest.page != host.page:
-                    continue
-                if not _sits_on_last_line(host, guest) and not _continues_fragment(host, guest):
-                    continue
-                _absorb_block(host, guest)
-                del out[other_index]
-                changed = True
+    absorbed: set[int] = set()
+    index = 0
+    while index < len(out):
+        host = out[index]
+        guest_index = next(
+            (other for other, guest in enumerate(out) if other != index and _same_line_sentence(host, guest)),
+            None,
+        )
+        if guest_index is None:
+            index += 1
+            continue
+        absorbed.add(id(out[guest_index]))
+        _absorb_block(host, out[guest_index])
+        del out[guest_index]
+        if guest_index < index:
+            index -= 1
+        while True:
+            earlier = next((other for other in range(index) if _same_line_sentence(out[other], out[index])), None)
+            if earlier is None:
                 break
-            if changed:
-                break
-    return out
+            absorbed.add(id(out[index]))
+            _absorb_block(out[earlier], out[index])
+            del out[index]
+            index = earlier
+    return absorbed
 
 
 def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
