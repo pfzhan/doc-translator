@@ -1943,8 +1943,10 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                 total = sum(len(s["text"]) for s in spans)
                 letters = sum(c.isalpha() for c in text)
                 # 只跳过"纯公式行"：数学字符多且几乎没有正文词。
-                # 含公式的正常句子（正文词 ≥4）照翻，公式走占位符，不再整句留成英文
-                is_equation = _math_chars(spans) > total * 0.3 and _prose_units(text) < 4
+                # 公式外面有三个正文词就是一句话（If … then … Otherwise …），照翻，公式走占位符。
+                # 公式里的字母不算词：点阵字的数学符号认出来的字母是乱的
+                prose_text = "".join(span["text"] for span in spans if not _font_is_math(span["font"]))
+                is_equation = _math_chars(spans) > total * 0.3 and _prose_units(prose_text) < 3
                 low_letter = letters < 2 or letters < len(text) * 0.4
                 if NO_TEXT_RE.match(text) or is_equation or (low_letter and not _numbered_list_item(text)):
                     # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
