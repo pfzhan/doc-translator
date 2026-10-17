@@ -243,6 +243,15 @@ def test_words_from_a_math_font_stay_glyphs():
     kept = [w.text for w in _without_noise(words, found)]
     assert "6}" not in kept and "of" in kept and "i.e.," in kept and "4.3" in kept
 
+def test_low_confidence_words_from_formulas_are_noise():
+    """公式字形认成的 rains、Tag 置信度在 25 上下，当乱码；40 上下的正文词 cell 留下。"""
+    words = [
+        OcrWord("rains.", pymupdf.Rect(10, 100, 40, 110), 26.0),
+        OcrWord("Tag.", pymupdf.Rect(45, 100, 70, 110), 25.0),
+        OcrWord("cell", pymupdf.Rect(75, 100, 95, 110), 37.0),
+    ]
+    assert [word.text for word in _without_noise(words)] == ["cell"]
+
 def test_numbered_heading_list_and_sql_stay_apart():
     """节标题不吞正文，相邻列表项不并成一行，SQL 子句各留各的行。"""
     heading = _line("1.2. Motivating Example", 72, 661, 223, 672, 12)
