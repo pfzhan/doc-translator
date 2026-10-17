@@ -252,6 +252,24 @@ def test_low_confidence_words_from_formulas_are_noise():
     ]
     assert [word.text for word in _without_noise(words)] == ["cell"]
 
+def test_centered_line_of_formula_slots_is_a_display_formula():
+    """next(a) = {b | a < b, ...}：= 和 < 都成了公式槽，剩下的 nezt(a)、Ac,a 仍是一行公式，不能当正文去接下一页。"""
+    from app.formats.pdf_type3 import _Piece, _display_formula
+
+    line = [
+        _Piece("prose", "nezt(a)", pymupdf.Rect(230, 340, 262, 352)),
+        _Piece("formula", "×", pymupdf.Rect(264, 340, 330, 352)),
+        _Piece("prose", "Ac,a", pymupdf.Rect(332, 340, 352, 352)),
+        _Piece("formula", "×", pymupdf.Rect(354, 340, 390, 352)),
+    ]
+    assert _display_formula(line)
+    sentence = [
+        _Piece("prose", "where the views", pymupdf.Rect(230, 340, 300, 352)),
+        _Piece("formula", "×", pymupdf.Rect(302, 340, 320, 352)),
+        _Piece("prose", "are materialized first", pymupdf.Rect(322, 340, 420, 352)),
+    ]
+    assert not _display_formula(sentence)
+
 def test_numbered_heading_list_and_sql_stay_apart():
     """节标题不吞正文，相邻列表项不并成一行，SQL 子句各留各的行。"""
     heading = _line("1.2. Motivating Example", 72, 661, 223, 672, 12)
