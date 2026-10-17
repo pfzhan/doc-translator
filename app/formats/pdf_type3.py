@@ -46,6 +46,8 @@ _JUNK_CONF = 30.0
 _CONFIDENT_CONF = 90.0
 # 词底下数学字体占到这个比例才算公式。贴着公式的 to、if 只占一半
 _MATH_FONT_SHARE = 0.8
+# 低于这个置信度、又贴着公式的短词当公式碎片（aj 47、ag 75、Di 46、Say 55）
+_WEAK_CONF = 80.0
 # 单独一个比较符是点阵公式，不是正文里的小于号。
 _OPERATOR = re.compile(r"^[=<>≤≥≠≈∈∉⊂⊃±×÷&]$")
 _BULLET_WORD = re.compile(r"^[eco*•·]$")
@@ -209,12 +211,14 @@ def recover_type3_page(page: pymupdf.Page, data: PageData) -> bool:
     visible = [word for word in words if not _hidden(word, zones)]
     originals = _broken_lines(data, names)
     math = _math_font_words(visible, originals, _glyph_origins(page, names))
+    math |= {id(word) for word in visible if _formula_token(word)}
     prose = _without_noise(visible)
     kept = {id(word) for word in prose}
     debris = [word for word in visible if id(word) not in kept]
     _drop_broken_lines(data, names)
     math_rects = {tuple(word.rect) for word in prose if id(word) in math}
-    rebuilt = _compose_lines(prose, debris, originals, math_rects)
+    weak_rects = {tuple(word.rect) for word in prose if _weak_token(word)}
+    rebuilt = _compose_lines(prose, debris, originals, math_rects, weak_rects)
     if not rebuilt:
         return False
     _snap_page_sizes(rebuilt)
@@ -343,9 +347,11 @@ def _math_font_words(
     def from_math_font(word: OcrWord, hits: dict[str, int], font: str, share: float) -> bool:
         if bool(font) and font not in prose_fonts and share >= _MATH_FONT_SHARE:
             return True
-        if hits and len(word.text.strip(".,;:()[]{}")) <= 2:
+        core = word.text.strip(".,;:()[]{}")
+        if hits and len(core) <= 2:
             math_hits = sum(count for name, count in hits.items() if name not in prose_fonts)
-            return math_hits * 2 >= sum(hits.values())
+            # 单个字符时间隔字和逗号会把正文字体的数目抬上去，有一个数学字体的字就算
+            return math_hits * 2 >= sum(hits.values()) or (len(core) == 1 and math_hits > 0)
         return False
 
     return {
@@ -408,11 +414,13 @@ def _is_fringe(word: OcrWord) -> bool:
 def _compose_lines(
     prose: list[OcrWord], debris: list[OcrWord], glyphs: list[GlyphBox],
     math_rects: set[tuple[float, ...]] | None = None,
+    weak_rects: set[tuple[float, ...]] | None = None,
 ) -> list[dict[str, Any]]:
     """同一基线上被公式空洞切开的正文仍是一句。空洞收成公式槽，居中的公式行不重排。
 
     math_rects 是字形来自数学字体的词。公式行、伪代码先按认出来的原词判断，
     留下来排正文的行再把这些词换成公式槽：先换的话 = 和 S 没了，这两种行就认不出来了。
+    weak_rects 是贴着公式的可疑短词（见 _weak_token），挨着公式槽的并进去。
     """
     lines: list[dict[str, Any]] = []
     for row in _baseline_rows(prose):
@@ -420,25 +428,33 @@ def _compose_lines(
             pieces = _without_bullet(pieces)
             if not pieces or _display_formula(pieces) or _listing_line(pieces):
                 continue
-            pieces = _math_as_formula(pieces, math_rects or set())
-            line = _line_from_pieces(_peel_operators(pieces), glyphs)
+            # 单独的比较符先收成槽，aj < ag. 这样夹着比较符的碎片才能并成一个
+            pieces = _math_as_formula(_peel_operators(pieces), math_rects or set(), weak_rects or set())
+            line = _line_from_pieces(pieces, glyphs)
             if line is not None:
                 lines.append(line)
     return lines
 
 
-def _math_as_formula(pieces: list[_Piece], math_rects: set[tuple[float, ...]]) -> list[_Piece]:
+def _math_as_formula(
+    pieces: list[_Piece], math_rects: set[tuple[float, ...]],
+    weak_rects: set[tuple[float, ...]] | None = None,
+) -> list[_Piece]:
     """数学字体的词换成公式槽，相邻的槽并成一个。
 
     夹在两个槽中间、没有一个像样单词的碎片（/(n—、)、,）也并进去，
     否则 r = j/(n−j) 会切成好几块，译文里各放各的。
+    挨着公式槽的可疑短词（Di、Say、aj）也并进去：它们是公式字形认出来的乱码。
     """
-    if not math_rects:
-        return pieces
+    weak_rects = weak_rects or set()
     marked = [piece.kind == "formula" or tuple(piece.rect) in math_rects for piece in pieces]
+    if not any(marked):
+        return pieces
     out: list[_Piece] = []
     for index, piece in enumerate(pieces):
         is_slot = marked[index]
+        if not is_slot and tuple(piece.rect) in weak_rects:
+            is_slot = bool(out and out[-1].kind == "formula") or any(marked[index + 1:index + 2])
         if not is_slot and out and out[-1].kind == "formula" and _math_glue(piece.text):
             is_slot = any(marked[index + 1:index + 3])
         if not is_slot:
@@ -449,6 +465,27 @@ def _math_as_formula(pieces: list[_Piece], math_rects: set[tuple[float, ...]]) -
         else:
             out.append(_Piece("formula", _FORMULA_MARK, pymupdf.Rect(piece.rect)))
     return out
+
+
+# 常见的英文短词。公式旁边认得没把握时，它们仍可能是正文
+_COMMON_SHORT = frozenset("""
+a an as at be by do if in is it no of on or so to up us we all and any are but can for has its let may
+not one per the two use via was
+""".split())
+
+
+def _formula_token(word: OcrWord) -> bool:
+    """a;41、v2, 这种字母夹数字、又没有两个连着的字母的碎片，是带下标的变量认出来的。"""
+    token = word.text.strip()
+    return (len(token) <= 6 and word.conf < _WEAK_CONF and not re.search(r"[A-Za-z]{2,}", token)
+            and bool(re.search(r"[A-Za-z]", token)) and bool(re.search(r"\d", token)))
+
+
+def _weak_token(word: OcrWord) -> bool:
+    """可疑的短词：三个字母以内、认得没把握、又不是常见短词。挨着公式时多半是公式字形认出来的。"""
+    core = word.text.strip(".,;:()[]{}\"'“”‘’")
+    return (core.isalpha() and len(core) <= 3 and word.conf < _WEAK_CONF
+            and core.lower() not in _COMMON_SHORT)
 
 
 def _math_glue(text: str) -> bool:
