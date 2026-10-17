@@ -257,6 +257,14 @@ def test_markdown_link_definitions_kept_verbatim():
     assert "\n[d]: https://example.com/docs\n[c]: https://img.shields.io/ci.svg\n" in out
 
 
+def test_markdown_title_skips_heading_without_text(tmp_path):
+    """第一个一级标题只有数字时没有可翻译片段，取标题不能越界。"""
+    src = tmp_path / "notes.md"
+    src.write_text("# 2024\n\nSome body text here.\n", encoding="utf-8")
+    [out] = run(translate_file(src, tmp_path, runner(), False, "zh-CN"))
+    assert out.read_text(encoding="utf-8") == "# 2024\n\n[zh-CN] Some body text here.\n"
+
+
 def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
     """有序列表只有从 1 开始才能打断段落，正文里换行后的年份不是列表。"""
     blocks = split_blocks("It happened in\n1990. Then more text.")

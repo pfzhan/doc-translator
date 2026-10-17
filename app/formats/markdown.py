@@ -311,7 +311,9 @@ async def translate_markdown(src: Path, out_dir: Path, runner, bilingual: bool) 
     blocks = split_blocks(text)
     texts = collect_segments(blocks)
     # 标题：第一个一级标题，没有就用文件名
-    h1 = next((b.segments[0][2] for b in blocks if b.kind == "heading" and b.lines[0].lstrip().startswith("# ")), "")
+    # 「# 2024」这类没有可翻译文字的标题没有 segments
+    h1 = next((b.segments[0][2] for b in blocks
+               if b.kind == "heading" and b.segments and b.lines[0].lstrip().startswith("# ")), "")
     runner.set_title(h1 or src.stem)
     results = await runner.translate_all(texts, kinds=segment_kinds(blocks), preview=True)
     tr = dict(zip(texts, results))
