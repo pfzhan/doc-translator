@@ -5498,6 +5498,26 @@ def test_formula_holes_follow_the_neighbours_ink_not_their_font_box():
     assert hole_bottom({**brace, "ink": (328.0, 445.6, 332.9, 457.4)}) <= 457.5
 
 
+def test_list_item_near_the_page_middle_stays_left_aligned():
+    """列表项的中线碰巧对上最宽一块的中线，仍是左对齐，不按居中写回。子图下面的 (a) 小标题照旧居中。"""
+    from app.formats.pdf import TextBlock, _write_rect
+
+    def blk(text, x0, y0, x1):
+        rect = pymupdf.Rect(x0, y0, x1, y0 + 23.7)
+        return TextBlock(page=17, rect=rect, line_rects=[rect], text=text, size=20.4, color="#000", bold=False)
+
+    widest = blk("• Apache top-level project since October, 2015", 35.2, 101.8, 477.8)
+    sibling = blk("– Optional SQL parser, JDBC server", 71.2, 317.8, 400.0)
+    item = blk("– Community-authored rules, adapters", 71.2, 341.8, 431.0)
+    rect, centered = _write_rect(item, [(widest, ""), (sibling, ""), (item, "")], True, False, None)
+    assert not centered
+    assert rect.x0 == item.rect.x0
+
+    caption = blk("(a) Pixel space nearest neighbors", 197.0, 367.0, 317.0)
+    _, centered = _write_rect(caption, [(widest, ""), (sibling, ""), (caption, "")], True, False, None)
+    assert centered
+
+
 def test_slide_title_and_a_box_label_below_stay_apart():
     """幻灯片大标题下面图里的小字框不是图注续行，标题旁边的星形里的字也不是标题的下一行。"""
     from app.formats.pdf import TextBlock, _merge_caption_fragments, _merge_continuations

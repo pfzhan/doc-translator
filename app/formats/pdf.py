@@ -69,6 +69,7 @@ _PAREN_ITEM_RE = re.compile(r"^\([a-zA-Z]\)\s+")
 _LIST_INTRO_END = (".", "?", "!", "。", "！", "？", ":", ";", "：", "；")
 # 行首列表标记：符号弹点（可不带空格）、短横线类（须带空格，避免误伤连字符单词）、数字/字母编号
 BULLET_RE = re.compile(r"^\s*(?:[•◦▪‣·○■□►»]\s*|[-–—*]\s+|\d{1,3}[.)]\s+|[a-zA-Z][.)]\s+)")
+_MARK_ITEM_RE = re.compile(r"^\s*(?:[•◦▪‣·○■□►»]|[-–—*]\s)")
 # 新段落的开头：大写字母、数字、引号/括号（小写字母开头多半是自动换行的续行）。
 # CJK 不在其中：CJK 行首无法区分新句子和续行，只有上行以句末标点结尾才算新段落（见下）
 SEG_START_RE = re.compile(r"^[A-Z0-9À-Þ(\"'“‘\[（【]")
@@ -4220,9 +4221,12 @@ def _write_rect(
         widest = max((other.rect for other, _ in items), key=lambda rect: rect.width, default=block.rect)
         col_x0, col_x1 = widest.x0, widest.x1
         col_width = widest.width
+    # 弹点、短横线起头的列表项是靠左排的，中线碰巧对上栏中线也不算居中。
+    # (a) 子图小标题和 1. 引言这种居中的标题不在其内
     centered = (
         not rtl and len(block.text) < 100 and block.rect.width < col_width * 0.85
         and abs((block.rect.x0 + block.rect.x1) / 2 - (col_x0 + col_x1) / 2) < 15
+        and not _MARK_ITEM_RE.match(block.text)
     )
     if centered:
         rect = pymupdf.Rect(col_x0, y0, col_x1, block.rect.y1 + pad)
