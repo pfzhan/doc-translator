@@ -903,6 +903,22 @@ def test_literal_placeholder_text_is_not_a_slot():
     assert _order(p) == ["img", "模板里用 {v1}。"]
 
 
+def test_source_line_wraps_are_spaces_not_line_breaks(tmp_path):
+    """排版过的 XHTML 段落里文字跨行写，换行只是空白；只有 <br> 才是换行。"""
+    body = ("<p>Alice was beginning to get very tired of sitting\n    by her sister on the bank,<br/>\n    and of having nothing to do.</p>"
+            "<p>\n<br/>First stanza line,<br/>\nsecond line.<br/>\n<br/>\nNext stanza here.<br/>\n</p>")
+    src = tmp_path / "book.epub"
+    _one_epub(src, {"ch1.xhtml": _xhtml(body)})
+    r = runner()
+    [out] = run(translate_epub(src, tmp_path, r, False, "zh-CN"))
+    p, poem = BeautifulSoup(zipfile.ZipFile(out).read("OEBPS/ch1.xhtml"), "lxml-xml").find_all("p")
+    assert len(p.find_all("br")) == 1
+    assert p.get_text("|") == "[zh-CN] Alice was beginning to get very tired of sitting by her sister on the bank,|and of having nothing to do."
+    # 诗节之间连着两个 <br>，空行要留着；段首段尾的 <br> 不算
+    assert poem.get_text("|") == "[zh-CN] First stanza line,|second line.|Next stanza here."
+    assert [c.name for c in poem.contents if c.name] == ["br", "br", "br"]
+
+
 def test_paragraph_with_only_a_formula_is_not_sent():
     """只有一个公式、没有文字的段落不送去翻译。"""
     from app.formats import html_blocks as hb
