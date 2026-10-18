@@ -55,7 +55,7 @@ def _in_skip(el: Tag) -> bool:
 
 
 def _text_of(el: Tag, slots: bool = True) -> str:
-    """取段落纯文本；<br> 变成换行，script/style 等忽略，行内 code 保留原样参与翻译。
+    """取段落纯文本；<br> 变成换行，文字里的换行和空格一样，script/style 等忽略，行内 code 保留原样参与翻译。
 
     段落里的公式、图片换成 {v1}、{v2}，译完按编号放回原处（见 _uses_slots）。
     """
@@ -72,10 +72,14 @@ def _text_of(el: Tag, slots: bool = True) -> str:
             if any(id(p) in slot_of for p in parents):
                 continue
             if not any(_local(p.name) in SKIP_TAGS - VERBATIM_TAGS for p in parents):
-                parts.append(str(node))
-    text = "".join(parts)
-    lines = [WS_RE.sub(" ", l).strip() for l in text.split("\n")]
-    return "\n".join(l for l in lines if l)
+                # 源文件里折行写的段落，换行和空格一样是空白；只有 <br> 才是换行
+                parts.append(WS_RE.sub(" ", str(node)))
+    return _join_lines("".join(parts))
+
+
+def _join_lines(text: str) -> str:
+    """每行收紧空白。连着两个 <br> 留下的空行是诗的分节，中间的保留，头尾的去掉。"""
+    return "\n".join(WS_RE.sub(" ", line).strip() for line in text.split("\n")).strip("\n")
 
 
 MEDIA_TAGS = {"img", "image", "svg", "math", "video", "audio", "object"}
@@ -541,10 +545,8 @@ def _prose_of(el: Tag) -> str:
                 continue
             if any(_local(p.name) in SKIP_TAGS - VERBATIM_TAGS for p in parents):
                 continue
-            parts.append(str(node))
-    text = "".join(parts)
-    lines = [WS_RE.sub(" ", line).strip() for line in text.split("\n")]
-    return "\n".join(line for line in lines if line)
+            parts.append(WS_RE.sub(" ", str(node)))
+    return _join_lines("".join(parts))
 
 
 def _sanitize_translation(src_html: str, translated_html: str) -> list | None:
