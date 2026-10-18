@@ -2194,6 +2194,41 @@ def _symbol_pdf(path, symbol: str):
     doc.close()
 
 
+def test_a_display_formula_set_in_text_italic_is_left_as_it_is(tmp_path):
+    """Times-Italic 写变量、Symbol 写算子的独立公式行：占位以后没有字可译，整行留原样，
+    不送翻、不擦掉重排（两行的式子重排时会被当成一个高公式缩小）。"""
+    src = tmp_path / "italic_math.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    page.insert_text((40, 60), "The implication test can be split into three separate tests:", fontsize=10)
+    x, y = 60.0, 90.0
+    for text, font, size, dy in [
+        ("(PE", "tiit", 10, 0), ("q", "tiit", 6.5, 1.6), (" \u2227 ", "symb", 10, 0), ("PR", "tiit", 10, 0),
+        ("q", "tiit", 6.5, 1.6), (" \u21d2 ", "symb", 10, 0), ("PE", "tiit", 10, 0), ("v", "tiit", 6.5, 1.6),
+        (")", "tiit", 10, 0),
+    ]:
+        page.insert_text((x, y + dy), text, fontname=font, fontsize=size)
+        x += pymupdf.get_text_length(text, fontname=font, fontsize=size)
+    page.insert_text((40, 120), "The first test is called the equijoin subsumption test.", fontsize=10)
+    doc.save(src)
+    doc.close()
+
+    tr = MockTranslator("zh-CN")
+    sent: list[str] = []
+    original = tr.translate_batch
+
+    async def record(texts):
+        sent.extend(texts)
+        return await original(texts)
+
+    tr.translate_batch = record
+    [out] = run(translate_file(src, tmp_path, Runner(tr, cache=MemCache(), skip_same_lang=False), False, "zh-CN"))
+    assert not any("PE" in text or "{v" in text for text in sent), sent
+    words = [w[4] for w in pymupdf.open(out)[0].get_text("words") if 80 <= w[1] <= 95]
+    # 原字还在原处（取词时角标并进前面的词）
+    assert words[0].startswith("(PE") and not any("[zh-CN]" in w for w in words)
+
+
 class _PlaceholderDropper(MockTranslator):
     """批量请求时把 {v1} 写成文字丢掉；keep_on_retry 为真时单段重翻会保留占位符。"""
 

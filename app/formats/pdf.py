@@ -5054,6 +5054,14 @@ def _compose_accents(text: str) -> str:
     return _CEDILLA_RE.sub(lambda m: unicodedata.normalize("NFC", (m.group(1) or m.group(2)) + "\u0327"), text)
 
 
+_MARKUP_RE = re.compile(r"\{v\d+\}|\{\|\}|\{/?[bi]\}|\{z\d+\}|\{/z\}")
+
+
+def _only_formulas(sent: str) -> bool:
+    """送翻文本里除了公式占位符、样式标记，只剩标点和空白。"""
+    return not re.search(r"[^\W\d_]", _MARKUP_RE.sub("", sent))
+
+
 def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dict], int]:
     """一个翻译单元的送翻文本和公式记录。公式名按块递增，避免跨页两块撞名。
 
@@ -5298,9 +5306,16 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             continue
         sent, formulas, name_i = _prepare_unit(unit, name_i)
         flat_units.append(unit)
+        sent_kinds.append(block_kind[id(unit[0])])
+        if formulas and _only_formulas(sent):
+            # 占位以后没有字可译：正文斜体写变量的独立公式行。和跳过的块一样留原字，
+            # 擦掉重排会把两行的式子当成一个高公式缩小
+            sent_texts.append(_join_lines(b.text for b in unit))
+            sent_formulas.append([])
+            sent_skips.append(True)
+            continue
         sent_texts.append(sent)
         sent_formulas.append(formulas)
-        sent_kinds.append(block_kind[id(unit[0])])
         sent_skips.append(False)
 
     raw = await runner.translate_all(sent_texts, kinds=sent_kinds, preview=True, skip=sent_skips)
