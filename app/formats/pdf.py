@@ -4148,6 +4148,15 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         erasure = Erasure()
         for b, _ in items:
             erasure.add_block(b.span_lines, b.line_rects or [b.rect])
+            # 公式收进来的分数线、根号横线随公式图贴到新位置，原处的要擦掉。
+            # 行框按墨迹收紧以后，分数线常落在行框外面
+            erasure.lines.extend(
+                pymupdf.Rect(curve) + (-0.5, -0.5, 0.5, 0.5)
+                for f in (formulas_map or {}).get(id(b), [])
+                for part in _formula_parts(f)
+                for curve in part.get("curves") or []
+                if curve is not None and int(part.get("page", f.get("page", pno))) == pno
+            )
         erase(page, erasure)
         # 重写内容流会把 /Resources 改写成内联字典；排版器写入后 /XObject 条目上百个，
         # 这么大的内联嵌套字典在保存的 GC（garbage≥3）里会被写坏（第一个表单的条目
