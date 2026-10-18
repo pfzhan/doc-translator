@@ -607,7 +607,7 @@ $("swap-lang").addEventListener("click", () => {
   const lastDetected = (state.jobs || []).find((j) => j.detected_lang)?.detected_lang;
   const from = src.value === "auto" ? lastDetected : src.value;
   if (!from) {
-    alert("源语言是自动检测，先翻译一次或手动选择源语言后再交换");
+    toast("源语言是自动检测，先翻译一次或手动选择源语言后再交换");
     return;
   }
   src.value = dst.value;
@@ -850,7 +850,8 @@ function jobRow(job, selectable = false) {
   const main = el("div", "job-main");
   const name = el("button", "job-name", job.filename);
   name.type = "button";
-  name.title = job.preview ? "打开阅读" : job.filename;
+  // 文件名常被截断，悬停要能看到全名
+  name.title = job.filename;
   name.disabled = !job.preview;
   name.addEventListener("click", () => openReader(job.id));
   main.append(name);
@@ -886,7 +887,7 @@ function jobRow(job, selectable = false) {
     bar.append(fill);
     status.append(bar, el("span", "hint", job.total ? `${job.done} / ${job.total} 段 · ${pct}%` : "解析文档…"));
   } else if (job.status === "error" || job.status === "interrupted") {
-    const err = el("span", "job-error", explainError(job.error));
+    const err = el("span", `job-error ${job.status}`, explainError(job.error));
     err.title = job.error; // 鼠标悬停看原始错误
     status.append(err);
   } else {
@@ -915,7 +916,7 @@ function jobRow(job, selectable = false) {
   for (const [i, o] of job.outputs.entries()) {
     // 当前模式对应的版本是主按钮；另一种版本已生成时降为普通按钮，和“生成X版”占位一致
     const primary = outputVariant(o.name) === curVariant;
-    const a = el("a", primary ? "btn sm primary" : "btn sm", downloadLabels(job.outputs)[i]);
+    const a = el("a", primary ? "btn sm soft" : "btn sm", downloadLabels(job.outputs)[i]);
     a.href = o.url;
     a.download = o.name;
     a.title = o.name;
@@ -971,17 +972,26 @@ function renderJobs() {
   renderSelection();
 }
 
-// 勾选了记录才出现：全选、取消选择、删除选中
+// 列表上方的勾选栏：没勾选时显示全部暂停/继续，勾选后换成取消选择、删除选中
 function renderSelection() {
   const n = state.selected.size;
   $("history-select").hidden = n === 0;
-  $("history-select-text").textContent = `已选 ${n} 条`;
-  $("select-all").hidden = n === state.jobs.length;
+  const total = state.jobs.length;
+  const all = $("select-all");
+  $("history-bar").hidden = total === 0;
+  all.checked = n > 0 && n === total;
+  all.indeterminate = n > 0 && n < total;
+  $("history-select-text").textContent = n ? `已选 ${n} 条` : "全选";
+  $("history-bulk").hidden = n > 0;
+  $("history-bulk-text").hidden = n > 0;
   $("delete-selected").textContent = `删除选中（${n}）`;
 }
 
-$("select-all").addEventListener("click", () => {
-  for (const job of state.jobs) state.selected.add(job.id);
+$("select-all").addEventListener("change", () => {
+  // 已经全选时点一下是全部取消，否则（含部分选中）全选
+  const allSelected = state.selected.size === state.jobs.length;
+  state.selected.clear();
+  if (!allSelected) for (const job of state.jobs) state.selected.add(job.id);
   renderJobs();
 });
 
@@ -1036,7 +1046,6 @@ function renderBulk(all) {
   const parts = [];
   if (active) parts.push(`${active} 本正在翻译`);
   if (resumable) parts.push(`${resumable} 本已暂停或中断`);
-  $("history-bulk").hidden = !parts.length;
   $("history-bulk-text").textContent = parts.join("，");
 }
 

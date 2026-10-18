@@ -107,14 +107,14 @@
     </div>
   </div>
 
-  <div class="bulk-bar" id="history-bulk" hidden>
-    <span class="hint" id="history-bulk-text"></span>
-    <span class="bulk-actions" data-bulk></span>
-  </div>
-  <div class="bulk-bar" id="history-select" hidden>
-    <span class="hint" id="history-select-text"></span>
-    <span class="bulk-actions">
-      <button type="button" class="btn sm" id="select-all">全选</button>
+  <!-- 有记录就一直显示：勾选时只换内容，不把下面的列表往下推 -->
+  <div class="bulk-bar" id="history-bar" hidden>
+    <span class="bulk-info">
+      <label class="check"><input type="checkbox" id="select-all"><span id="history-select-text">全选</span></label>
+      <span class="hint" id="history-bulk-text"></span>
+    </span>
+    <span class="bulk-actions" id="history-bulk" data-bulk></span>
+    <span class="bulk-actions" id="history-select" hidden>
       <button type="button" class="btn sm" id="select-none">取消选择</button>
       <button type="button" class="btn sm danger-ghost" id="delete-selected">删除选中</button>
     </span>

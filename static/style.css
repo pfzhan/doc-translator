@@ -5,20 +5,29 @@
   --surface-2: #f1f1ee;
   --text: #1c1d1f;
   --text-2: #55585e;
-  --muted: #8a8d93;
+  /* 次要文字（元数据、提示）在白底和页面底色上都要过 4.5:1 */
+  --muted: #6c6f75;
   --border: #e3e3df;
   --border-strong: #cfcfca;
   --accent: #d6336c;
   --accent-soft: #fbe9ef;
+  /* 浅粉底上的强调色文字，--accent 直接放在浅粉底上对比度不够 */
+  --accent-strong: #c2255c;
   --accent-text: #ffffff;
   --link: #2459d6;
-  --ok: #1f8a4c;
+  --ok: #1a7a43;
   --ok-soft: #e6f4ec;
-  --warn: #b25d00;
+  --warn: #a15300;
   --warn-soft: #fdf1e2;
   --error: #c42b2b;
   --error-soft: #fbe8e8;
   --focus: #2459d6;
+  --fmt-pdf: #b5372b;
+  --fmt-epub: #2b7a4b;
+  --fmt-md: #3b5bb5;
+  --fmt-mobi: #a3610f;
+  /* 分段选择器选中项的底色 */
+  --seg-on: #ffffff;
   --radius: 10px;
   --radius-sm: 7px;
   --shadow: 0 1px 2px rgba(20, 20, 20, 0.04), 0 4px 16px rgba(20, 20, 20, 0.04);
@@ -38,6 +47,7 @@
     --border-strong: #3c3e44;
     --accent: #f06595;
     --accent-soft: #3a1f2a;
+    --accent-strong: #f783ac;
     --accent-text: #1b1c1f;
     --link: #7aa2ff;
     --ok: #4cc283;
@@ -47,6 +57,11 @@
     --error: #ff7b7b;
     --error-soft: #3a1d1d;
     --focus: #7aa2ff;
+    --fmt-pdf: #ef6a5e;
+    --fmt-epub: #4fb37a;
+    --fmt-md: #7f9cf0;
+    --fmt-mobi: #e09a3e;
+    --seg-on: #3a3c42;
     --shadow: none;
     color-scheme: dark;
   }
@@ -84,11 +99,12 @@ code { font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-r
   display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px;
   background: var(--accent); color: var(--accent-text); font-size: 15px; font-weight: 700;
 }
-.nav { display: flex; gap: 2px; }
+/* 窄屏放不下时横向滚动，不把标签文字折成竖排 */
+.nav { display: flex; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .tab {
   position: relative; display: inline-flex; align-items: center; gap: 6px;
   height: 34px; padding: 0 12px; border: 0; border-radius: var(--radius-sm);
-  background: none; color: var(--text-2); font: inherit; font-size: 14px; cursor: pointer;
+  background: none; color: var(--text-2); font: inherit; font-size: 14px; cursor: pointer; white-space: nowrap; flex: none;
 }
 .tab:hover { background: var(--surface-2); color: var(--text); }
 .tab[aria-selected="true"] { color: var(--text); font-weight: 600; background: var(--surface-2); }
@@ -104,7 +120,8 @@ code { font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-r
 .page-head { margin-bottom: 20px; }
 .page-head .hint { margin: 6px 0 0; }
 .row-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-end; gap: 16px; }
-.section-head { display: flex; align-items: center; justify-content: space-between; margin: 32px 0 12px; }
+.section-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin: 32px 0 12px; }
+.section-head h2 { white-space: nowrap; }
 .card {
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
   box-shadow: var(--shadow);
@@ -122,18 +139,23 @@ select, input, textarea {
 select:hover, input:hover, textarea:hover { border-color: var(--muted); }
 textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.5; }
 input[readonly] { background: var(--surface-2); color: var(--text-2); }
-label.check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); cursor: pointer; }
-label.check input { width: 16px; height: 16px; min-height: 0; margin: 0; accent-color: var(--accent); }
+/* 文字折行时勾选框对齐第一行，不跑到两行中间 */
+label.check { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--text-2); cursor: pointer; }
+label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin: 2px 0 0; accent-color: var(--accent); }
 
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   height: 36px; padding: 0 14px; border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
   font: inherit; font-size: 14px; font-weight: 500; cursor: pointer; white-space: nowrap; text-decoration: none;
+  transition: background-color 0.12s, border-color 0.12s, color 0.12s;
 }
 .btn:hover { background: var(--surface-2); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .btn.primary:hover { filter: brightness(0.95); }
+/* 次一级的推荐操作：列表里每行都有一个，用实心粉色会和页面主按钮抢 */
+.btn.soft { background: var(--accent-soft); border-color: transparent; color: var(--accent-strong); font-weight: 600; }
+.btn.soft:hover { background: color-mix(in srgb, var(--accent) 18%, var(--surface)); }
 .btn.lg { height: 42px; padding: 0 22px; font-size: 15px; }
 .btn.sm { height: 30px; padding: 0 10px; font-size: 13px; }
 .btn.ghost { border-color: transparent; background: none; color: var(--text-2); }
@@ -158,16 +180,20 @@ label.check input { width: 16px; height: 16px; min-height: 0; margin: 0; accent-
   display: block; padding: 6px 14px; border-radius: 5px; font-size: 13px; font-weight: 500;
   color: var(--text-2); white-space: nowrap; transition: background 0.12s, color 0.12s;
 }
-.segmented input:checked + span { background: var(--surface); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+.segmented input:checked + span { background: var(--seg-on); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
 .segmented input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 1px; }
 .segmented.compact span { padding: 4px 10px; }
+/* 放在表单字段里时撑满整行、和旁边的下拉框等高 */
+.field > .segmented { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; min-height: 38px; }
+.field > .segmented span { display: flex; align-items: center; justify-content: center; height: 100%; padding: 4px 14px; }
 
 .inline-msg { margin: 10px 0 0; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; }
 .inline-msg.warn { background: var(--warn-soft); color: var(--warn); }
 .inline-msg.error { background: var(--error-soft); color: var(--error); }
 
 /* ============ 翻译页 ============ */
-.form-card { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 24px; padding: 24px; }
+/* 上传区不需要太宽，多给右边：目标语言“简体中文 Simplified Chinese”在 1024 宽时也能显示完整 */
+.form-card { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 7fr); gap: 24px; padding: 24px; }
 .form-side { min-width: 0; }
 .drop {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
@@ -175,10 +201,15 @@ label.check input { width: 16px; height: 16px; min-height: 0; margin: 0; accent-
   background: var(--surface-2); cursor: pointer; text-align: center;
   transition: border-color 0.15s, background 0.15s;
 }
+/* 选好文件后换成实线白底；放在悬停规则前面，悬停和拖入时仍有反馈 */
+.drop.has-file { border-style: solid; border-color: var(--accent); background: var(--surface); }
 .drop:hover, .drop.over, .drop:focus-within { border-color: var(--accent); background: var(--accent-soft); }
-.drop.has-file { border-style: solid; }
 .drop input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.drop-icon { font-size: 22px; color: var(--accent); line-height: 1; }
+.drop-icon {
+  display: grid; place-items: center; width: 44px; height: 44px; margin-bottom: 8px; border-radius: 50%;
+  background: var(--surface); border: 1px solid var(--border); color: var(--accent); font-size: 20px; line-height: 1;
+}
+.drop.has-file .drop-icon { background: var(--accent-soft); border-color: transparent; }
 .drop-title { font-weight: 600; word-break: break-all; }
 .drop-sub { font-size: 12px; color: var(--muted); }
 .lang-row { display: flex; align-items: flex-end; gap: 10px; }
@@ -201,6 +232,7 @@ label.check input { width: 16px; height: 16px; min-height: 0; margin: 0; accent-
   padding: 12px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
 }
 .job:hover { border-color: var(--border-strong); }
+.job:has(> .job-check:checked) { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface)); }
 .job.selectable { grid-template-columns: 16px 40px minmax(0, 1.4fr) minmax(200px, 1fr) minmax(310px, max-content); grid-template-areas: "check fmt main status actions"; }
 .job-check { grid-area: check; width: 16px; height: 16px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent); cursor: pointer; }
 .job-fmt {
@@ -208,8 +240,8 @@ label.check input { width: 16px; height: 16px; min-height: 0; margin: 0; accent-
   background: var(--surface-2); border: 1px solid var(--border);
   font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: var(--text-2);
 }
-.job-fmt.epub { color: #2b7a4b; } .job-fmt.pdf { color: #b5372b; }
-.job-fmt.md { color: #3b5bb5; } .job-fmt.mobi, .job-fmt.azw3, .job-fmt.azw { color: #a3610f; }
+.job-fmt.epub { color: var(--fmt-epub); } .job-fmt.pdf { color: var(--fmt-pdf); }
+.job-fmt.md { color: var(--fmt-md); } .job-fmt.mobi, .job-fmt.azw3, .job-fmt.azw { color: var(--fmt-mobi); }
 .job-main { grid-area: main; min-width: 0; }
 .job-name {
   font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -234,13 +266,19 @@ label.check input { width: 16px; height: 16px; min-height: 0; margin: 0; accent-
 .badge.paused { color: var(--text-2); background: var(--surface-2); }
 .job-progress.paused > div { background: var(--muted); }
 .section-actions, .bulk-actions { display: flex; align-items: center; gap: 8px; }
-.bulk-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 2px 12px; }
+/* 左边距和记录行的勾选框对齐（行内边距 16 + 边框 1） */
+.bulk-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; min-height: 30px; margin: 0 0 10px; padding: 0 17px; }
 .bulk-bar .hint { margin: 0; }
+.bulk-info { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; min-width: 0; }
+.bulk-info label.check { align-items: center; color: var(--text); font-weight: 500; }
+.bulk-info label.check input { margin: 0; }
 .badge.running::before { animation: pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.3; } }
 .job-progress { flex: none; width: 100%; max-width: 240px; height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
 .job-progress > div { height: 100%; background: var(--link); border-radius: 2px; transition: width 0.4s; }
 .job-error { max-width: 100%; color: var(--error); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 中断不是出错（多半是服务重启），说明文字不用红色 */
+.job-error.interrupted { color: var(--text-2); }
 .job-actions { grid-area: actions; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .job-actions .btn.ghost { color: var(--text-2); }
 .empty { text-align: center; padding: 56px 16px; color: var(--muted); }
@@ -381,13 +419,15 @@ body.reading .topbar { display: none; }
   border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text);
 }
 .dialog::backdrop { background: rgb(0 0 0 / 0.35); }
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
 .dialog h3 { margin: 0 0 8px; font-size: 16px; }
 .dialog-text { margin: 0 0 14px; color: var(--text-2); font-size: 13px; line-height: 1.6; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
 
 .toast {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 50;
-  max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: var(--radius-sm);
+/* width: max-content：left: 50% 时默认按半屏宽度折行，手机上短句也会被折成两行 */
+  width: max-content; max-width: min(520px, calc(100vw - 32px)); padding: 10px 16px; border-radius: var(--radius-sm);
   background: var(--text); color: var(--bg); font-size: 13.5px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
 }
 
@@ -503,6 +543,7 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-
   .reader-actions .btn span { display: none; }
   .reader-content { padding: 20px 16px 120px; }
   .reader-notice { width: calc(100% - 32px); margin-top: 16px; }
+  .tab { padding: 0 9px; }
   .notice-actions { width: 100%; }
   .notice-actions select { flex: 1; max-width: none; }
   .seg { font-size: 16px; }
@@ -514,3 +555,6 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-
 @media (max-width: 520px) {
   .reader-bar .segmented { display: none; }
 }
+  /* 行在手机上有三四行高，图标和勾选框放顶部，不悬在中间 */
+  .job-fmt, .job-check { align-self: start; }
+  .job-check { margin-top: 12px; }
