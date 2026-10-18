@@ -556,3 +556,20 @@ def test_algorithm_lines_are_translated_one_by_one():
         "Require: a step size", "while not converged do", "update the parameters", "end while",
     ]
     assert all(block.clip is not None for block in blocks)
+
+
+def test_side_by_side_algorithm_boxes_are_both_found():
+    """两个算法框并排时，图注在 PyMuPDF 的同一行里；另一个框的线在旁边，不算。"""
+    from app.formats.pdf_layout import algorithm_tables
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=600, height=300)
+    for x0, x1, name in ((50, 290, "Algorithm 1 Training"), (310, 550, "Algorithm 2 Sampling")):
+        for y in (50, 66, 130):
+            page.draw_line((x0, y), (x1, y), width=0.5)
+        page.insert_text((x0 + 2, 62), name, fontsize=10)
+        for i in range(3):
+            page.insert_text((x0 + 10, 80 + i * 13), f"{i + 1}: step number {i + 1}", fontsize=10)
+    tables = algorithm_tables(page)
+    assert sorted(round(table.rect.x0) for table in tables) == [50, 310]
+    assert all(len(table.cells) == 3 for table in tables)
