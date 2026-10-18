@@ -160,9 +160,12 @@ def find_blocks(soup: BeautifulSoup) -> list[tuple[Tag, str, str | None]]:
         text = _text_of(el)
         if translatable(_without_slots(text)):
             result.append((el, text, _inner_html(el)))
-    # 块级容器里直接挂着的“裸文本”（常见于 MOBI 转出来的 HTML），包成 span 再翻译
+    # 块级容器里直接挂着的“裸文本”（常见于 MOBI 转出来的 HTML），包成 span 再翻译。
+    # 别的容器没有块级子元素时整个就是上面找到的叶子块；<body> 不在上面的范围里，一个块都没有时也要包
     for container in [body, *body.find_all(lambda t: _is_block(t))]:
-        if _in_skip(container) or not any(_is_block(c) for c in container.children):
+        if _in_skip(container):
+            continue
+        if not any(_is_block(c) for c in container.children) and not (container is body and _local(body.name) == "body"):
             continue
         for run in _inline_runs(container, soup):
             if run.find(_is_block):

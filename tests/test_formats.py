@@ -992,6 +992,15 @@ def test_source_line_wraps_are_spaces_not_line_breaks(tmp_path):
     assert [c.name for c in poem.contents if c.name] == ["br", "br", "br"]
 
 
+def test_body_with_only_bare_text_is_translated(tmp_path):
+    """<body> 里直接是文字、没有任何块级元素（MOBI 转出来的章节常见）：照样翻译。"""
+    src = tmp_path / "book.epub"
+    _one_epub(src, {"ch1.xhtml": _xhtml("Some chapter text.<br/>More <i>text</i>.")})
+    [out] = run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))
+    body = BeautifulSoup(zipfile.ZipFile(out).read("OEBPS/ch1.xhtml"), "lxml-xml").find("body")
+    assert "[zh-CN] Some chapter text." in body.get_text() and body.find("i") is not None
+
+
 def test_paragraph_with_only_a_formula_is_not_sent():
     """只有一个公式、没有文字的段落不送去翻译。"""
     from app.formats import html_blocks as hb
