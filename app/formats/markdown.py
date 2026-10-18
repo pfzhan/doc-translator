@@ -13,7 +13,8 @@ LIST_RE = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?)(.*)$")
 # 列表项正文的起始列：标记加后面的空格，任务框算正文
 LIST_CONTENT_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 QUOTE_RE = re.compile(r"^(\s*(?:>\s?)+)(.*)$")
-TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
+# GFM 表格分隔行：每格至少一个 -，可以带冒号对齐
+TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
 HR_RE = re.compile(r"^\s{0,3}([-*_])(\s*\1){2,}\s*$")
 # Setext 标题的下划线：段落下面一行 === 是一级标题，--- 是二级标题
 SETEXT_RE = re.compile(r"^\s{0,3}(=+|-+)\s*$")
@@ -174,7 +175,7 @@ def split_blocks(text: str) -> list[Block]:
             blocks.append(Block("raw", lines[i:j]))
             i = j
             continue
-        if "|" in line and i + 1 < len(lines) and TABLE_SEP_RE.match(lines[i + 1]):
+        if i + 1 < len(lines) and _starts_table(line, lines[i + 1]):
             flush()
             j = i + 2
             while j < len(lines) and "|" in lines[j] and lines[j].strip():
@@ -210,6 +211,13 @@ def split_blocks(text: str) -> list[Block]:
         i += 1
     flush()
     return blocks
+
+
+def _starts_table(header: str, separator: str) -> bool:
+    """GFM：表头有 |，下一行是分隔行，两行列数一样。列数不同时 --- 是 Setext 标题的下划线。"""
+    if "|" not in header or not TABLE_SEP_RE.match(separator):
+        return False
+    return len(_split_cells(header)[1]) == len(_split_cells(separator)[1])
 
 
 def _split_cells(line: str) -> tuple[str, list[str], str]:
