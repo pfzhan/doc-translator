@@ -1347,11 +1347,50 @@ _MATH_GLUE_RE = re.compile(rf"^(?:{_GLUE_ATOM})(?:\s+{_GLUE_ATOM})*$")
 _ORDINAL_SUFFIXES = {"st", "nd", "rd", "th"}
 
 
+def _absorb_inner_blanks(runs: list[dict], span_lines: list[list[dict]]) -> None:
+    """同一行上夹在一个公式两个成员之间的空白 span 并进公式。几段并成一个以后，
+    中间的空格不属于哪一段，留在正文里就成了占位符后面多出来的一个空格。"""
+    owner = {id(span): index for index, run in enumerate(runs) for span in run["spans"]}
+    for line in span_lines:
+        shown = [index for index, span in enumerate(line) if str(span.get("text") or "").strip()]
+        for left, right in zip(shown, shown[1:]):
+            # 两边最近的字都在同一个公式里，中间夹着的空白才是它的
+            run = owner.get(id(line[left]))
+            if run is None or owner.get(id(line[right])) != run:
+                continue
+            for span in line[left + 1:right]:
+                if id(span) not in owner:
+                    runs[run]["spans"].append(span)
+                    owner[id(span)] = run
+
+
+# 不用数学字体排的式子（老论文用 Times-Italic 写变量、Symbol 写算子）：正文斜体的变量、括号、算子。
+# 变量是单个字母或两个大写字母（PE）。If、op 这样的两字母词要和括号、算子在一起（op c)）才算，
+# 定理正文整段是斜体，If、In 贴着公式也是正文
+_ITALIC_FONT_RE = re.compile(r"Italic|Oblique", re.I)
+_ITALIC_GLUE_RE = re.compile(r"^[\s()\[\]{}.,=<>+\-*/'A-Za-z0-9]+$")
+_ITALIC_OPERATOR_RE = re.compile(r"[()\[\]{}=<>+\-*/]")
+
+
 def _is_math_glue(span: dict) -> bool:
-    """CMR 上的数字、括号或算子名。正文字体里的同形字不收。"""
-    if not _CM_ROMAN_RE.search(str(span.get("font") or "")):
+    """CMR 上的数字、括号或算子名；正文斜体写的变量、括号、算子。正文正体里的同形字不收。
+    数学字体的 span 不在这里收：没进公式的是有意放回正文的（序数 t-th 的 t）。"""
+    font = str(span.get("font") or "")
+    text = str(span.get("text") or "").strip()
+    if _CM_ROMAN_RE.search(font):
+        return bool(_MATH_GLUE_RE.match(text))
+    if _span_is_math(span) or not (_ITALIC_FONT_RE.search(font) or int(span.get("flags") or 0) & 2):
         return False
-    return bool(_MATH_GLUE_RE.match(str(span.get("text") or "").strip()))
+    if not text or not _ITALIC_GLUE_RE.match(text):
+        return False
+    operator = bool(_ITALIC_OPERATOR_RE.search(text))
+    for word in re.findall(r"[A-Za-z]+", text):
+        if len(word) == 1 or (len(word) == 2 and word.isupper()):
+            continue
+        if len(word) == 2 and operator:
+            continue
+        return False
+    return operator or bool(re.search(r"[A-Za-z0-9]", text))
 
 
 def _attach_span(run: dict, span: dict, line_no: int, index: int) -> None:
@@ -1628,6 +1667,8 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         if m_line == r_line:
             target["pos"] = (m_line, min(m_start, r_start), max(m_end, r_end))
         recent = target
+
+    _absorb_inner_blanks(merged, block.span_lines)
 
     # 2.5) 吸收落在公式 bbox 上的重音符 span（ŷ 的 ^、x̄ 的 ¯ 等）：
     # 它们常是不被判定为公式的独立 span，留在正文里会在公式图边上多出一个孤符号；
