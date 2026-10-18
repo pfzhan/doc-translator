@@ -234,11 +234,6 @@ def _attach_ink(page: pymupdf.Page, data: dict) -> None:
                     span["ink"] = ink
 
 
-def _mathy(item: tuple) -> bool:
-    """这一截是式子的一部分：有数学字体的字，或者全是符号。"""
-    return bool(NO_TEXT_RE.match(item[0].strip())) or any(_span_is_math(span) for span in item[2] if "font" in span)
-
-
 def _rejoin_split_lines(data: dict) -> None:
     """PyMuPDF 有时把一行字从中间切开，后半截分进另一个块（常在上下标处）。
     把后半截挪回前半截所在的块、紧跟在那一行后面。
@@ -250,17 +245,13 @@ def _rejoin_split_lines(data: dict) -> None:
     blocks = [block for block in data.get("blocks", []) if block.get("type") == 0]
     if len(blocks) < 2:
         return
-    touched: set[int] = set()
     # 挪走一截以后，留在原块里的分子才没了同伴，下一轮才找得到去处
     for _ in range(3):
-        if not _rejoin_pass(blocks, touched):
+        if not _rejoin_pass(blocks):
             break
-    for block in blocks:
-        if id(block) in touched:
-            block["lines"] = _left_to_right(block["lines"])
 
 
-def _rejoin_pass(blocks: list[dict], touched: set[int]) -> bool:
+def _rejoin_pass(blocks: list[dict]) -> bool:
     moved = False
     for block in blocks:
         for line in list(block["lines"]):
@@ -277,22 +268,25 @@ def _rejoin_pass(blocks: list[dict], touched: set[int]) -> bool:
                 index += 1
             host_block["lines"].insert(index, line)
             host_block["bbox"] = tuple(pymupdf.Rect(host_block["bbox"]) | pymupdf.Rect(line["bbox"]))
-            touched.add(id(host_block))
             moved = True
     return moved
 
 
-def _left_to_right(lines: list[dict]) -> list[dict]:
-    """同一可视行的几截按从左到右排。分子排在分母前面时，分母接不上前面的等号。"""
-    out: list[dict] = []
-    run: list[dict] = []
-    for line in lines:
-        if run and _same_band(run[0], line):
-            run.append(line)
-            continue
-        out.extend(sorted(run, key=lambda item: item["bbox"][0]))
-        run = [line]
-    out.extend(sorted(run, key=lambda item: item["bbox"][0]))
+def _left_to_right(items: list[tuple]) -> list[tuple]:
+    """同一可视行的几截按从左到右排。分式的分子常排在分母前面，分母就接不上前面的等号。
+    行框用的是墨迹框，上下两行交叠很少，不会被当成一行。"""
+    out: list[tuple] = []
+    run: list[tuple] = []
+    for item in items:
+        if run:
+            first, rect = run[0][1], item[1]
+            overlap = min(first.y1, rect.y1) - max(first.y0, rect.y0)
+            if overlap >= min(first.height, rect.height) * 0.5:
+                run.append(item)
+                continue
+        out.extend(sorted(run, key=lambda piece: piece[1].x0))
+        run = [item]
+    out.extend(sorted(run, key=lambda piece: piece[1].x0))
     return out
 
 
@@ -313,7 +307,7 @@ def _line_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] |
             gap = box.x0 - left.x1
             if gap < -size:
                 continue
-            if gap <= size * 0.6 or (gap <= size and (_line_is_math(line) or _line_is_math(other))):
+            if gap <= size * 0.6 or (gap <= size and _math_seam(other["spans"], line["spans"])):
                 return block, other
     return None
 
@@ -348,9 +342,16 @@ def _stack_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] 
     return None
 
 
-def _line_is_math(line: dict) -> bool:
-    spans = [span for span in line["spans"] if span["text"].strip()]
-    return bool(spans) and (_span_is_math(spans[0]) or _span_is_math(spans[-1]))
+def _math_seam(left: list[dict], right: list[dict]) -> bool:
+    """接口处是式子：左边以公式收尾，或右边以公式起头，或有一边全是符号。
+    只看接口：左栏一行以公式开头、以正文收尾，接不到右栏去。"""
+    left = [span for span in left if str(span.get("text") or "").strip()]
+    right = [span for span in right if str(span.get("text") or "").strip()]
+    if not left or not right:
+        return False
+    if any(NO_TEXT_RE.match("".join(str(span["text"]) for span in side)) for side in (left, right)):
+        return True
+    return _span_is_math(left[-1]) or _span_is_math(right[0])
 
 
 def _same_band(a: dict, b: dict) -> bool:
@@ -437,9 +438,9 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         # 大括号和分母各自的框只擦到一点边。两截都是正文的，仍按上面的句末规则拆。
         row_overlap = min(row_rect.y1, rect.y1) - max(row_rect.y0, rect.y0)
         touching = (
-            (_mathy(items[i - 1]) or _mathy(items[i]))
+            _math_seam(items[i - 1][2], items[i][2])
             and row_overlap > min(row_rect.height, rect.height) * 0.35
-            and -psize <= rect.x0 - qrect.x1 <= psize
+            and -psize <= rect.x0 - row_rect.x1 <= psize
         )
         same_visual_line = (
             (h_overlap > 0 and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5)
@@ -2296,6 +2297,7 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                 spans = [s for s in ln["spans"] if s["text"].strip()]
                 if spans:
                     items.append((text, _line_box(ln), spans, ln["spans"]))
+            items = _left_to_right(items)
             for group in _split_lines(items):
                 texts = [items[i][0] for i in group]
                 line_rects = [items[i][1] for i in group]

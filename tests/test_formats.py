@@ -4742,7 +4742,19 @@ def test_an_inline_fraction_rejoins_its_line_in_reading_order():
     data = {"blocks": [{"type": 0, "bbox": (72, 136, 247, 149), "lines": [host, numerator]},
                        {"type": 0, "bbox": (225, 136, 301, 152), "lines": [denominator]}]}
     _rejoin_split_lines(data)
-    assert data["blocks"][0]["lines"] == [host, denominator, numerator]
+    assert sorted(map(id, data["blocks"][0]["lines"])) == sorted(map(id, [host, numerator, denominator]))
+
+
+def test_pieces_of_one_row_are_read_left_to_right():
+    """分子排在分母前面时，按从左到右重排；上下两行不当成一行。"""
+    from app.formats.pdf import _left_to_right
+
+    def item(text, x0, y0, x1, y1):
+        return (text, pymupdf.Rect(x0, y0, x1, y1), [])
+
+    host, numerator, denominator = item("g(x) =", 72, 136, 219, 149), item("1", 243, 137, 247, 143), item("1+exp(−x)", 225, 136, 301, 151)
+    nxt = item("increases, g′(x) tends to zero", 72, 149.7, 301, 163)
+    assert _left_to_right([host, numerator, denominator, nxt]) == [host, denominator, numerator, nxt]
 
 
 def test_plain_words_a_wide_gap_apart_are_not_rejoined():
@@ -4795,5 +4807,5 @@ def test_a_lone_numerator_goes_back_to_its_fraction():
                        {"type": 0, "bbox": (243, 256, 251, 263), "lines": [numerator]}]}
     _rejoin_split_lines(data)
     together = [block["lines"] for block in data["blocks"] if numerator in block["lines"]]
-    assert together == [[denominator, numerator]]
+    assert len(together) == 1 and sorted(map(id, together[0])) == sorted(map(id, [denominator, numerator]))
     assert data["blocks"][0]["lines"] == [above]
