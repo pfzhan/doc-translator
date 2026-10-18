@@ -4689,3 +4689,23 @@ def test_math_line_box_follows_glyph_ink():
     assert _text_box(word) == pymupdf.Rect(147.4, 217.3, 194.8, 229.0)
     line = {"bbox": (130.2, 217.3, 194.8, 235.6), "spans": [arrow, word]}
     assert [round(v, 1) for v in _line_box(line)] == [130.2, 217.3, 194.8, 229.0]
+
+
+def test_formula_pieces_touching_on_one_line_stay_one_paragraph():
+    """分式、大括号把一行式子拆成几截。纯符号的那一截不能把句子切开。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, x0, x1, y0, y1, *spans):
+        spans = spans or ((text, "CMMI10", 10.0),)
+        return (text, pymupdf.Rect(x0, y0, x1, y1), [{"text": t, "font": f, "size": z} for t, f, z in spans])
+
+    items = [
+        item("to compute x =", 108, 184, 258, 268, ("to compute", "NimbusRomNo9L-Regu", 9.9), (" x =", "CMMI10", 10.0)),
+        item("1", 193.4, 197.4, 256.4, 262.2, ("1", "CMR7", 7.0)),
+        item("√αt", 187.9, 202.4, 263.5, 271.1, ("√αt", "CMSY7", 7.0)),
+        item("(", 205.8, 211.7, 253.9, 263.8, ("(", "CMEX10", 10.0)),
+        item("xt −", 211.8, 231.3, 260.5, 267.7),
+        item("+σz, where the sampling", 303, 504, 258, 268,
+             ("+σz", "CMMI10", 10.0), (", where the sampling", "NimbusRomNo9L-Regu", 9.9)),
+    ]
+    assert _split_lines(items) == [[0, 1, 2, 3, 4, 5]]
