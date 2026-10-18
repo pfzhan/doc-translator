@@ -4629,3 +4629,10 @@ def test_tex_spacing_accents_are_composed_before_translation():
     assert _compose_accents("Fr´ed´eric, na¨ıve, ˆetre") == "Frédéric, naïve, être"
     assert _compose_accents("Fran¸cois, gar c¸on") == "François, gar çon"
     assert _compose_accents("f(x)´ and x¸") == "f(x)´ and x¸"
+
+
+def test_caption_number_is_restored_inside_style_marks():
+    from app.formats.pdf import _list_number
+
+    assert _list_number("Figure 2: Samples", "{z110}图二:{/z} 模型样本") == "{z110}图 2:{/z} 模型样本"
+    assert _list_number("Table 1: Parzen", "{z110}{b}表一：{/b}{/z} 基于") == "{z110}{b}表 1：{/b}{/z} 基于"

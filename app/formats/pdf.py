@@ -4619,7 +4619,8 @@ def _list_number(src_text: str, translation: str) -> str:
 
 
 _CAPTION_NUM_RE = re.compile(r"\s*(?:Figure|Fig\.?|Table|Tab\.?)\s*(\d+)\b", re.I)
-_CN_CAPTION_RE = re.compile(r"^(\s*)([图表])\s*[一二三四五六七八九十百零〇两]+")
+# 图注标签常带字号或粗体标记：{z110}图一:{/z}
+_CN_CAPTION_RE = re.compile(r"^(\s*(?:\{/?[biz]\d*\}\s*)*)([图表])\s*[一二三四五六七八九十百零〇两]+")
 
 
 def _strip_boundary_echo(prev_src: str, cur_src: str, prev_t: str, cur_t: str) -> str:
