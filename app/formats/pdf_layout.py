@@ -510,6 +510,35 @@ def _box_above(caption: pymupdf.Rect, size: float, horizontal: list[pymupdf.Rect
     return pymupdf.Rect(bottom.x0, top.y1, bottom.x1, bottom.y0)
 
 
+_LINE_LABEL_RE = re.compile(r"^\s*\d+\s*[:.]")
+
+
+def _join_wrapped_rows(
+    rows: list[pymupdf.Rect], baselines: list[float], spans: list[dict], main: float,
+) -> list[pymupdf.Rect]:
+    """行首有行号（1: 2: …）的算法里，行号之后没有行号的行是上一句折下来的，并进上一格。
+
+    折开的两半各自送翻，半句里正文词太少，会被当成公式留下英文。
+    第一个行号之前的 Input:、Output: 各是一格。"""
+    labeled: list[bool] = []
+    for baseline in baselines:
+        row = sorted(
+            (span for span in spans if abs(span["origin"][1] - baseline) <= main * 0.4),
+            key=lambda span: span["origin"][0],
+        )
+        labeled.append(bool(_LINE_LABEL_RE.match("".join(span["text"] for span in row))))
+    if sum(labeled) < 2:
+        return rows
+    first = labeled.index(True)
+    out: list[pymupdf.Rect] = []
+    for index, (row, has_label) in enumerate(zip(rows, labeled)):
+        if index > first and not has_label:
+            out[-1] = out[-1] | row
+        else:
+            out.append(row)
+    return out
+
+
 def _under(rule: pymupdf.Rect, caption: pymupdf.Rect, size: float) -> bool:
     """线从图注左缘起、盖过图注开头。并排的另一个算法框的线在旁边，不算。"""
     return rule.x0 <= caption.x0 + _NEAR and rule.x1 >= min(caption.x1, caption.x0 + size * 4)
@@ -545,7 +574,8 @@ def _code_rows(lines: list[dict], body: pymupdf.Rect) -> tuple[pymupdf.Rect, ...
     # 分界放在偏上一行基线的地方：下标和降部只比基线低一点，上标（1st 的 st）却抬得很高，
     # 放在正中会被划进上一行
     cuts = [body.y0, *(a + (b - a) * _ROW_CUT for a, b in zip(baselines, baselines[1:])), body.y1]
-    return tuple(pymupdf.Rect(body.x0, top, body.x1, bottom) for top, bottom in zip(cuts, cuts[1:]))
+    rows = [pymupdf.Rect(body.x0, top, body.x1, bottom) for top, bottom in zip(cuts, cuts[1:])]
+    return tuple(_join_wrapped_rows(rows, baselines, spans, main))
 
 
 @dataclass(frozen=True)

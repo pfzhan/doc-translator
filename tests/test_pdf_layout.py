@@ -585,3 +585,24 @@ def test_algorithm_rows_ignore_radical_origins():
     lines = [line(300, ("x ← y", "CMMI10", 0)), line(311, ("z ←", "CMMI10", 0), ("√", "CMSY10", -7))]
     rows = _code_rows(lines, pymupdf.Rect(100, 290, 400, 320))
     assert len(rows) == 2
+
+
+def test_a_numbered_algorithm_statement_is_one_unit():
+    """行号小一号、句子折成两行时，一格还是一句话；两行各自送翻会剩下半句英文。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    for y in (50, 66, 150):
+        page.draw_line((50, y), (350, y), width=0.5)
+    page.insert_text((52, 62), "Algorithm 2 Training a network", fontsize=10)
+    rows = [("1:", "Initialize the network weights", 80), ("2:", "Add the transformation y = f(x) to the", 93),
+            ("", "network and train it", 106), ("3:", "Return the trained network", 119)]
+    for label, text, y in rows:
+        if label:
+            page.insert_text((54, y), label, fontsize=8)
+        page.insert_text((70, y), text, fontsize=10)
+    texts = [block.text for block in extract_blocks(doc) if block.clip is not None]
+    assert texts == [
+        "1: Initialize the network weights",
+        "2: Add the transformation y = f(x) to the network and train it",
+        "3: Return the trained network",
+    ]
