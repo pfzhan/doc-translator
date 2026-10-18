@@ -4221,14 +4221,32 @@ def _write_rect(
         widest = max((other.rect for other, _ in items), key=lambda rect: rect.width, default=block.rect)
         col_x0, col_x1 = widest.x0, widest.x1
         col_width = widest.width
+    mid = (block.rect.x0 + block.rect.x1) / 2
+    # 字比本页多数大、每行都正对页面中线的是居中的标题：幻灯片最宽的一块是靠左的列表项，
+    # 中线不在页面正中；标题本身是最宽的一块时，跟页宽比。论文正文左右边距对称，
+    # 整行也正对页面中线，字号不大，不算。
+    page_mid = geo.width / 2 if geo is not None and column is None and geo.width > 0 else None
+    sizes = sorted(other.size for other, _ in items)
+    on_page_mid = (
+        page_mid is not None
+        and block.size > sizes[len(sizes) // 2] * 1.15
+        and block.rect.width < geo.width * 0.85
+        and all(abs((line.x0 + line.x1) / 2 - page_mid) < 4 for line in block.line_rects or [block.rect])
+    )
     # 弹点、短横线起头的列表项是靠左排的，中线碰巧对上栏中线也不算居中。
     # (a) 子图小标题和 1. 引言这种居中的标题不在其内
     centered = (
-        not rtl and len(block.text) < 100 and block.rect.width < col_width * 0.85
-        and abs((block.rect.x0 + block.rect.x1) / 2 - (col_x0 + col_x1) / 2) < 15
+        not rtl and len(block.text) < 100
+        and (
+            (block.rect.width < col_width * 0.85 and abs(mid - (col_x0 + col_x1) / 2) < 15)
+            or on_page_mid
+        )
         and not _MARK_ITEM_RE.match(block.text)
     )
-    if centered:
+    if centered and on_page_mid:
+        half = max(block.rect.width / 2, min(page_mid - col_x0, col_x1 - page_mid))
+        rect = pymupdf.Rect(page_mid - half, y0, page_mid + half, block.rect.y1 + pad)
+    elif centered:
         rect = pymupdf.Rect(col_x0, y0, col_x1, block.rect.y1 + pad)
     else:
         rect = pymupdf.Rect(block.rect.x0, y0, block.rect.x1 + 2, block.rect.y1 + pad)
