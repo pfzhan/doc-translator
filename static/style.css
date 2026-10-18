@@ -95,10 +95,7 @@ code { font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-r
   border-bottom: 1px solid var(--border);
 }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 15px; white-space: nowrap; }
-.brand-mark {
-  display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px;
-  background: var(--accent); color: var(--accent-text); font-size: 15px; font-weight: 700;
-}
+.brand-mark { display: block; flex: none; width: 28px; height: 28px; }
 /* 窄屏放不下时横向滚动，不把标签文字折成竖排 */
 .nav { display: flex; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .tab {
