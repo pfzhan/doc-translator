@@ -3655,6 +3655,24 @@ def test_same_page_continuations_merge():
     assert len(_merge_continuations(ended)) == 2
 
 
+def test_slide_sub_item_is_not_a_title_fragment():
+    """幻灯片上一级列表项后面的下一级项字号大、左缘也不同，不是标题的第二行。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, x0, y0, y1, size):
+        rect = pymupdf.Rect(x0, y0, 682, y1)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
+
+    blocks = [
+        blk("• Pushes as much work as possible onto the cluster for parallel execution", 115.2, 176.1, 214.0, 18),
+        blk("– Metadata repository", 79.2, 215.3, 240.9, 22),
+    ]
+    assert [b.text for b in _merge_continuations(blocks)] == [
+        "• Pushes as much work as possible onto the cluster for parallel execution",
+        "– Metadata repository",
+    ]
+
+
 def test_smaller_body_under_a_heading_splits():
     """12pt 标题和 9pt 导语常在同一 dict 块。导语左缘只让出节号，不能当成缩进留在标题里。"""
     from app.formats.pdf import _split_lines
