@@ -101,7 +101,7 @@ async def limit_upload_size(request: Request, call_next):
     return await call_next(request)
 
 
-async def _run_job(job: Job, translator, bilingual: bool):
+async def _run_job(job: Job, translator, bilingual: bool, fresh: bool = False):
     last_save = 0.0
 
     def progress(done, total):
@@ -113,7 +113,7 @@ async def _run_job(job: Job, translator, bilingual: bool):
             jobs.save(job)
 
     job.status = "running"
-    job.runner = Runner(translator, progress)
+    job.runner = Runner(translator, progress, fresh=fresh)
     jobs.save(job)
     try:
         outputs = await translate_file(jobs.source_path(job), jobs.out_dir(job.id), job.runner, bilingual,
@@ -158,10 +158,11 @@ def _make_translator(job: Job, service: dict):
         raise HTTPException(400, str(e))
 
 
-def _start(job: Job, translator):
-    """开始（或继续）翻译。每次都按服务当前的配置创建引擎，所以继续翻译时用的是服务现在选中的模型。"""
+def _start(job: Job, translator, fresh: bool = False):
+    """开始（或继续）翻译。每次都按服务当前的配置创建引擎，所以继续翻译时用的是服务现在选中的模型。
+    fresh 为真时不用已有译文，每一段都重新请求。"""
     job.model = getattr(translator, "model", "")
-    running[job.id] = asyncio.create_task(_run_job(job, translator, job.mode == "bilingual"))
+    running[job.id] = asyncio.create_task(_run_job(job, translator, job.mode == "bilingual", fresh))
 
 
 async def _cancel(job_id: str):
@@ -186,8 +187,8 @@ async def _pause(job: Job) -> bool:
     return True
 
 
-def _resume(job: Job, service_id: str | None = None) -> Job:
-    """继续（或重新）翻译同一个文件。已翻好的段落在缓存里，不会重复请求。"""
+def _resume(job: Job, service_id: str | None = None, fresh: bool = False) -> Job:
+    """继续（或重新）翻译同一个文件。已翻好的段落在缓存里，不会重复请求；fresh 为真时全部重新请求。"""
     if job.status in ACTIVE:
         raise HTTPException(400, "这个任务还在翻译中")
     if not jobs.source_path(job).exists():
@@ -204,7 +205,7 @@ def _resume(job: Job, service_id: str | None = None) -> Job:
     for old in jobs.out_dir(job.id).glob("*"):
         old.unlink()
     (jobs.dir(job.id) / "preview.json").unlink(missing_ok=True)
-    _start(job, translator)
+    _start(job, translator, fresh)
     jobs.save(job)
     return job
 
@@ -434,13 +435,15 @@ async def pause_job(job_id: str):
 
 @app.post("/api/jobs/{job_id}/retry")
 async def retry_job(job_id: str, data: dict | None = Body(None)):
-    """继续翻译（暂停、中断、失败后）。已翻好的段落在缓存里，不会重复请求。
+    """继续翻译（暂停、中断、失败后），或重译已完成的记录。已翻好的段落在缓存里，不会重复请求。
 
     用的是服务当前的配置：在服务里换了模型，后面的段落就用新模型。
     可以传 service_id 换一个服务；换了服务 id 就会按新服务重新翻译。
+    传 fresh=true 时不用已有译文，每一段都重新请求。
     必须是 async：_start 会创建后台任务，需要在事件循环里调用。
     """
-    return _resume(_job_or_404(job_id), (data or {}).get("service_id")).to_dict()
+    data = data or {}
+    return _resume(_job_or_404(job_id), data.get("service_id"), fresh=bool(data.get("fresh"))).to_dict()
 
 
 def _variant_service(job: Job, service: dict) -> dict:

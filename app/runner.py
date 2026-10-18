@@ -85,7 +85,7 @@ class Runner:
     first_batch_items = 4
 
     def __init__(self, translator: Translator, progress: Callable[[int, int], None] | None = None, cache=None,
-                 skip_same_lang: bool = True, cache_only: bool = False):
+                 skip_same_lang: bool = True, cache_only: bool = False, fresh: bool = False):
         self.translator = translator
         self.progress = progress or (lambda done, total: None)
         self.cache = cache if cache is not None else get_cache()
@@ -93,6 +93,8 @@ class Runner:
         self.skip_same_lang = skip_same_lang
         # 只排版、不请求翻译服务：缺缓存时直接失败，避免用另一套配置悄悄重译
         self.cache_only = cache_only
+        # 重译时选了全部重新翻译：术语表和译文都不读缓存，新结果照常写回
+        self.fresh = fresh
         # 给任务页展示：检测到的文档语言、跳过的段落数
         self.info = {"detected_lang": "", "skipped": 0}
         # 文件内容的摘要（set_document），术语表按它缓存
@@ -201,7 +203,7 @@ class Runner:
         listing = "\n".join(terms)
         prefix = tr.cache_key + ":terms"
         keys = ([f"file:{self.document}"] if self.document else []) + [listing]
-        cached = self.cache.get_many(prefix, keys)
+        cached = {} if self.fresh else self.cache.get_many(prefix, keys)
         found = next((cached[key] for key in keys if key in cached), None)
         if found is None:
             if self.cache_only:
@@ -254,7 +256,7 @@ class Runner:
         await self._prepare_glossary(need)
         prefix = self.translator.cache_key
         tl = self.translator.target_lang
-        done_map = self.cache.get_many(prefix, need)
+        done_map = {} if self.fresh else self.cache.get_many(prefix, need)
         # 整句英文回显进过缓存的话，下次重排仍是英文。丢掉，让这次重新翻译。
         echoed = [src for src, dst in done_map.items() if _is_prose_echo(src, dst)]
         if echoed:

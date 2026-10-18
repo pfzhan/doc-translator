@@ -143,6 +143,16 @@ def test_translate_file_names_the_document(tmp_path):
     assert runner.document and len(runner.document) == 40
 
 
+def test_a_fresh_run_defines_terms_and_translates_again(tmp_path):
+    """全部重新翻译：术语表和段落都不读缓存，重新请求，新结果写回缓存。"""
+    cache = Cache(tmp_path / "c.sqlite3")
+    asyncio.run(Runner(_translator([]), cache=cache, skip_same_lang=False).translate_all(DOC))
+    requests = []
+    asyncio.run(Runner(_translator(requests), cache=cache, skip_same_lang=False, fresh=True).translate_all(DOC))
+    assert any("terminology list" in system for system, _user in requests)
+    assert sum(user.count("[[p") for system, user in requests if "terminology list" not in system) == len(DOC)
+
+
 def test_relayout_only_never_asks_for_terms(tmp_path):
     """只排版时缺术语表不去请求，按没有术语表的缓存键找，旧记录照样能补生成。"""
     cache = Cache(tmp_path / "c.sqlite3")

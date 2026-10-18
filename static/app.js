@@ -914,6 +914,11 @@ function jobRow(job) {
     retry.type = "button";
     retry.addEventListener("click", () => retryJob(job.id));
     actions.append(retry);
+  } else if (job.status === "done") {
+    const redo = el("button", "btn sm", "重译");
+    redo.type = "button";
+    redo.addEventListener("click", () => redoJob(job));
+    actions.append(redo);
   }
   const del = el("button", "btn sm ghost", "删除");
   del.type = "button";
@@ -1055,14 +1060,30 @@ async function deleteJob(job) {
   }
 }
 
-async function retryJob(id) {
+async function retryJob(id, options = {}) {
   try {
-    const job = await api(`/api/jobs/${id}/retry`, { method: "POST", json: {} });
+    const job = await api(`/api/jobs/${id}/retry`, { method: "POST", json: options });
     upsertJob(job);
     toast("已重新开始翻译");
   } catch (err) {
     toast(`无法重新翻译：${err.message}`);
   }
+}
+
+// 已完成的记录按服务现在的设置重新生成。默认复用已有译文，只请求没有译文的段落
+function redoJob(job) {
+  const dialog = $("redo-dialog");
+  // 重译用的是服务现在选中的模型，不写当初的模型名
+  const service = job.service_name;
+  $("redo-text").textContent =
+    `用${service ? `「${service}」` : "原来的翻译服务"}当前的设置重新生成「${job.filename}」。` +
+    "已有译文的段落直接复用，只请求有变化的段落。开始后现有的译文文件会先删除。";
+  $("redo-fresh").checked = false;
+  dialog.returnValue = "";
+  dialog.addEventListener("close", () => {
+    if (dialog.returnValue === "ok") retryJob(job.id, { fresh: $("redo-fresh").checked });
+  }, { once: true });
+  dialog.showModal();
 }
 
 // 保留时间

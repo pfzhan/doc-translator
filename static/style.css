@@ -372,6 +372,15 @@ body.reading .topbar { display: none; }
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
 }
 
+.dialog {
+  width: min(440px, calc(100% - 32px)); padding: 20px 22px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text);
+}
+.dialog::backdrop { background: rgb(0 0 0 / 0.35); }
+.dialog h3 { margin: 0 0 8px; font-size: 16px; }
+.dialog-text { margin: 0 0 14px; color: var(--text-2); font-size: 13px; line-height: 1.6; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
 .toast {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 50;
   max-width: calc(100vw - 32px); padding: 10px 16px; border-radius: var(--radius-sm);
