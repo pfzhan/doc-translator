@@ -52,6 +52,10 @@ class EmphasisWriter:
         if not text or not self.mixed:
             return text
         percent = size_percent(size, self.base_size) if size and self.base_size else 100
+        # 只有标点的一截不换字号：句号排成角标字号时，{z65}.{/z} 会被模型套到半句话上。
+        # 纯空白照旧，标签后面的空格还在字号标记外面
+        if text.strip() and not re.search(r"[^\W_]", text):
+            percent = self._size
         return self._marks(emphasis, percent) + text
 
     def atom(self, text: str) -> str:
