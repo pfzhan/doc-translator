@@ -4661,3 +4661,18 @@ def test_bare_chinese_section_number_is_restored():
     assert _normalize_heading_number("2.1 Update rule", "二点一 更新规则") == "2.1 更新规则"
     assert _normalize_heading_number("3 Method", "{z125}三{/z} 方法") == "{z125}3{/z} 方法"
     assert _normalize_heading_number("1 A new idea", "一种新想法") == "一种新想法"
+
+
+def test_fraction_pieces_rejoin_their_line_with_less_overlap():
+    """分母、大括号把框往下拉，同一行的两截上下只交叠三四成。"""
+    from app.formats.pdf import _rejoin_split_lines
+
+    def line(x0, x1, y0, y1, text):
+        return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
+
+    root = line(188, 202.4, 259.0, 271.2, "√αt")
+    paren = line(205.8, 211.7, 253.9, 263.8, "(")
+    data = {"blocks": [{"type": 0, "bbox": (108, 258, 202, 274), "lines": [line(108, 184, 258, 274, "to compute x ="), root]},
+                       {"type": 0, "bbox": (205, 253, 212, 264), "lines": [paren]}]}
+    _rejoin_split_lines(data)
+    assert data["blocks"][0]["lines"][-1] is paren
