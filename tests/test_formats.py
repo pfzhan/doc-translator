@@ -2331,6 +2331,27 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
     assert formulas_w[0]["parts"][0]["bbox"].x0 >= 130
     assert formulas_w[0]["parts"][1]["bbox"].x0 <= 40
 
+    # 行末的 ∪ 按 CMSY 的字体框伸到下一行，和下一行行首的 {γ} 交叠：仍是折行的两片
+    def ink(item, top, bottom):
+        item["ink"] = (item["bbox"][0], top, item["bbox"][2], bottom)
+        return item
+
+    union = _block_with_spans([
+        [span("the parameters ", "NimbusRomNo9L-Regu", 10, 40, 430.4, 510, 443.7),
+         ink(span("Θ", "CMR10", 10, 518.8, 433.4, 526.5, 443.4), 433.8, 440.9),
+         span(" ", "CMSY10", 10, 526.5, 433.4, 533.4, 450.4),
+         ink(span("∪", "CMSY10", 10, 533.4, 433.4, 540, 450.4), 434.2, 440.9)],
+        [ink(span("{", "CMSY10", 10, 40, 443.9, 45, 460.9), 445.3, 455.3),
+         ink(span("γ", "CMMI10", 10, 45, 445.3, 51, 455.3), 448.0, 455.3),
+         ink(span("}", "CMSY10", 10, 51, 443.9, 56, 460.9), 445.3, 455.3),
+         span(" to train", "NimbusRomNo9L-Regu", 10, 58, 442.4, 100, 455.7)],
+    ], size=10.0)
+    sent_u, formulas_u = _placeholderize(union)
+    assert sent_u.count("{v") == 1
+    assert len(formulas_u[0]["parts"]) == 2
+    assert formulas_u[0]["parts"][0]["bbox"].x0 >= 518
+    assert formulas_u[0]["parts"][1]["bbox"].x1 <= 56
+
     ordinal = _block_with_spans([[
         span("of the ", "NimbusRomNo9L-Regu", 10, 0, 50, 40),
         span("i", "CMMI10", 10, 40, 50, 44),
