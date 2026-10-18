@@ -6,6 +6,8 @@ from pathlib import Path
 from .html_blocks import BIBLIO_HEADING_RE
 
 FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+# $$ 开头的行起一个公式块，到以 $$ 结尾的行为止
+MATH_OPEN_RE = re.compile(r"^\s{0,3}\$\$")
 HEADING_RE = re.compile(r"^(\s{0,3}#{1,6}\s+)(.*?)(\s+#+\s*)?$")
 LIST_RE = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?)(.*)$")
 # 列表项正文的起始列：标记加后面的空格，任务框算正文
@@ -55,6 +57,20 @@ def _closes_fence(line: str, fence: str) -> bool:
     """结束栏用同一种字符、不比开栏短，后面不能带别的字。四个反引号的栏里可以写 ```。"""
     stripped = line.strip()
     return len(stripped) >= len(fence) and stripped == fence[0] * len(stripped)
+
+
+def _math_end(lines: list[str], start: int) -> int | None:
+    """lines[start] 起的 $$ 公式块的最后一行。$$x$$ 后面还有字的是行内公式；
+    空行前还没闭合的不算公式块，免得一个漏写的 $$ 吞掉后面整篇。"""
+    rest = lines[start].strip()[2:]
+    if "$$" in rest:
+        return start if rest.rstrip().endswith("$$") and rest.count("$$") == 1 else None
+    for j in range(start + 1, len(lines)):
+        if not lines[j].strip():
+            return None
+        if lines[j].rstrip().endswith("$$"):
+            return j
+    return None
 
 
 def _interrupts_paragraph(line: str) -> bool:
@@ -114,6 +130,13 @@ def split_blocks(text: str) -> list[Block]:
             flush()
             blocks.append(Block("raw", [line]))
             i += 1
+            continue
+        end = _math_end(lines, i) if MATH_OPEN_RE.match(line) else None
+        if end is not None:
+            # 公式原样保留：块里 + b、- c 这样的行不能当成列表项
+            flush()
+            blocks.append(Block("raw", lines[i : end + 1]))
+            i = end + 1
             continue
         indent = len(line) - len(line.lstrip(" "))
         if list_offset is not None and indent < list_offset and not para:
