@@ -857,19 +857,19 @@ function jobRow(job, selectable = false) {
   const meta = el("div", "job-meta");
   // 两行固定布局：第一行语言/模式/服务，第二行大小/时间。
   // 单行 flex-wrap 的换行点会随按钮宽度漂移，不同卡片换行位置不一致，还会把“·”甩到行首
-  for (const [i, part] of [
+  for (const part of [
     langPair(job),
     job.mode === "translated" ? "仅译文" : "双语对照",
     serviceLabel(job),
-  ].filter(Boolean).entries()) {
-    meta.append(el("span", i ? "sep" : "", part));
+  ].filter(Boolean)) {
+    meta.append(el("span", "", part));
   }
   const meta2 = el("div", "job-meta");
-  for (const [i, part] of [formatSize(job.size), timeAgo(job.created)].filter(Boolean).entries()) {
-    meta2.append(el("span", i ? "sep" : "", part));
+  for (const part of [formatSize(job.size), timeAgo(job.created)].filter(Boolean)) {
+    meta2.append(el("span", "", part));
   }
   // 记录 id：排查问题时对应 data/jobs/<id>/。点一下整串选中，方便复制
-  const jobId = el("span", meta2.childElementCount ? "sep job-id" : "job-id", job.id);
+  const jobId = el("span", "job-id", job.id);
   jobId.title = "记录 ID";
   meta2.append(jobId);
   main.append(meta, meta2);
