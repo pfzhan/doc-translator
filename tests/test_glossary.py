@@ -82,6 +82,10 @@ def test_terms_are_defined_once_and_sent_only_where_they_appear(tmp_path):
     asyncio.run(runner.translate_all(DOC))
     term_requests = [user for system, user in requests if "terminology list" in system]
     assert len(term_requests) == 1 and "data cube" in term_requests[0]
+    # 候选是按词频数出来的：提示词要让模型删掉截出来的片段、公式变量和宽泛的普通词
+    term_system = next(system for system, _user in requests if "terminology list" in system)
+    assert "cut out of a longer phrase" in term_system and "variable names" in term_system
+    assert "everyday words" in term_system
     # 模型多给的、不在候选里的条目不收
     assert tr.doc_glossary == [("data cube", "数据立方体"), ("greedy algorithm", "贪心算法"), ("OLAP", "OLAP")]
     assert runner.info["terms"] == 3
