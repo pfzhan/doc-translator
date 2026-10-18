@@ -900,8 +900,8 @@ function jobRow(job, selectable = false) {
     if (tokens) hint.title = tokensTitle(job);  // 悬停看输入/输出拆分
     status.append(hint);
   }
-  main.append(status);
-  li.append(main);
+  // 状态单独一列，宽屏时放在信息和按钮中间，窄了再落到信息下面
+  li.append(main, status);
 
   const actions = el("div", "job-actions");
   if (job.preview && (job.status !== "error" || job.done)) {
