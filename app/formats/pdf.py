@@ -262,6 +262,42 @@ def _font_is_math(font: str) -> bool:
     return bool(MATH_FONT_RE.search(font))
 
 
+# Computer Modern 的正体。正文是 CM 时它们是正文；正文用 Times 之类时只出现在公式里
+# （\mathrm、\log、括号、等号、\mathbf）。
+_CM_UPRIGHT_RE = re.compile(r"^(?:[A-Z]{6}\+)?(?:CMR|CMBX|CMSS|CMSL)\d", re.I)
+
+
+def _span_is_math(span: dict) -> bool:
+    """按字体判公式。math 是提取时按全文字体定下的（见 _mark_math_roman）。"""
+    return bool(span.get("math")) or _font_is_math(str(span.get("font") or ""))
+
+
+def _mark_math_roman(pages: list[dict]) -> None:
+    """正文不是 Computer Modern 的文档里，CM 正体的 span 都是公式，标上 math。
+
+    字体名单只能管到“这种字体通常是什么”。CMR 在一篇 CM 排的论文里是正文，在 Times 排的
+    论文里只用来写 log、min、括号和等号，要看这份文档的正文用的是什么。
+    """
+    counts: dict[str, int] = {}
+    for data in pages:
+        for block in data.get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line["spans"]:
+                    font = str(span.get("font") or "").split("+")[-1]
+                    counts[font] = counts.get(font, 0) + len(span["text"].strip())
+    if not counts:
+        return
+    body = max(counts, key=counts.__getitem__)
+    if _CM_UPRIGHT_RE.match(body) or _font_is_math(body):
+        return
+    for data in pages:
+        for block in data.get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line["spans"]:
+                    if _CM_UPRIGHT_RE.match(str(span.get("font") or "")):
+                        span["math"] = True
+
+
 def _is_formula_char(c: str) -> bool:
     """字符级公式判定：希腊字母、数学符号/修饰符、私用区。"""
     if 0x370 <= ord(c) <= 0x3FF:
@@ -281,7 +317,7 @@ def _math_chars(spans: list[dict]) -> int:
     """块里公式字符数：公式字体的全部字符 + 正文字体里的公式字符。"""
     n = 0
     for s in spans:
-        if _font_is_math(s["font"]):
+        if _span_is_math(s):
             n += len(s["text"])
         else:
             n += sum(1 for c in s["text"] if _is_formula_char(c))
@@ -880,7 +916,7 @@ def _is_formula_span(span: dict, main_size: float, *, prose_line: bool = False, 
     粗体 CM（CMBX 等）的一两个字符按 mathbf 单字母算公式；粗体单词仍是正文。
     正文字体里的希腊字母和数学符号也是公式。单个拉丁字母不是，除非贴在角标上。
     prose_line 为真时，整行都是比标题小的正文，不能单凭字号收成公式。"""
-    if _font_is_math(span["font"]):
+    if _span_is_math(span):
         return True
     # 句子里的等宽词是属性名、函数名，照原样贴回，不让模型有的译有的不译
     if code and MONO_FONT_RE.search(span["font"]) and re.search(r"[A-Za-z]", span["text"]):
@@ -1918,11 +1954,15 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     blocks = []
     tables_by_page: list[tuple[RuledTable, ...]] = []
     type3 = Type3Reader(doc)
-    for pno, page in enumerate(doc):
+    pages: list[dict] = []
+    for page in doc:
         tables_by_page.append(page_tables(page))
         data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
         # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
         recover_type3_page(page, data, type3)
+        pages.append(data)
+    _mark_math_roman(pages)
+    for pno, data in enumerate(pages):
         for b in data["blocks"]:
             if b.get("type") != 0:
                 continue
@@ -1947,12 +1987,12 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                 # 只跳过"纯公式行"：数学字符多且几乎没有正文词。
                 # 公式外面有三个正文词就是一句话（If … then … Otherwise …），照翻，公式走占位符。
                 # 公式里的字母不算词：点阵字的数学符号认出来的字母是乱的
-                prose_text = "".join(span["text"] for span in spans if not _font_is_math(span["font"]))
+                prose_text = "".join(span["text"] for span in spans if not _span_is_math(span))
                 is_equation = _math_chars(spans) > total * 0.3 and _prose_units(prose_text) < 3
                 low_letter = letters < 2 or letters < len(text) * 0.4
                 if NO_TEXT_RE.match(text) or is_equation or (low_letter and not _numbered_list_item(text)):
                     # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
-                    # 捐了会被 redact，而这些行没有占位符、不会重画。
+                    # 捐了会被擦掉，而这些行没有占位符、不会重画。
                     if NO_TEXT_RE.match(text) and blocks and blocks[-1].page == pno:
                         _donate_punct_rects(blocks[-1], line_rects)
                     continue
@@ -1996,7 +2036,7 @@ _AFFIL_MARK_RE = re.compile(r"^[∗*†‡§¶]")
 def _mono_share(block: TextBlock) -> float:
     """块里正文字（公式除外）有多少是等宽字体。"""
     spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
-    prose = [span for span in spans if not _font_is_math(str(span.get("font") or ""))]
+    prose = [span for span in spans if not _span_is_math(span)]
     total = sum(len(str(span["text"]).strip()) for span in prose)
     mono = sum(len(str(span["text"]).strip()) for span in prose if MONO_FONT_RE.search(str(span.get("font") or "")))
     return mono / total if total else 0.0

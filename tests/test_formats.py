@@ -4524,3 +4524,25 @@ def test_sentence_around_formulas_is_translated_and_bare_formula_line_is_not():
     texts = [block.text for block in extract_blocks(doc)]
     assert any("Otherwise" in text for text in texts)
     assert not any("For all" in text for text in texts)
+
+
+def _page_data(*lines):
+    """get_text("dict") 的最小结构：每个参数是一行的 span 列表 (字体, 文字)。"""
+    return {"blocks": [{"type": 0, "lines": [
+        {"spans": [{"font": font, "text": text, "size": 10.0} for font, text in spans]} for spans in lines
+    ]}]}
+
+
+def test_computer_modern_upright_is_math_when_the_body_is_times():
+    """Times 排的论文里，CMR 只写 log、min、括号和等号，是公式。CM 排的论文里它是正文。"""
+    from app.formats.pdf import _is_formula_span, _mark_math_roman
+
+    times = _page_data([("NimbusRomNo9L-Regu", "We train the model to minimize " * 20), ("ABCDEF+CMR10", "log(1")])
+    _mark_math_roman([times])
+    log_span = times["blocks"][0]["lines"][0]["spans"][1]
+    assert log_span.get("math") is True
+    assert _is_formula_span({**log_span, "size": 10.0, "origin": (0, 0)}, 10.0)
+
+    modern = _page_data([("CMR10", "We train the model to minimize " * 20), ("CMMI10", "x")])
+    _mark_math_roman([modern])
+    assert "math" not in modern["blocks"][0]["lines"][0]["spans"][0]
