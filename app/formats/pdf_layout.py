@@ -31,6 +31,11 @@ _CELL_MIN_W = 18.0
 _CELL_MIN_H = 8.0
 _CELL_NARROW = 16.0
 _MAX_TABLE_COLS = 12
+# 表格线：不超过这么粗、至少这么长
+_RULE_THICK = 1.5
+_RULE_MIN = 5.0
+# 线和格子边算对齐的距离
+_NEAR = 2.0
 _TEXT_JOIN = 8.0
 _COL_ALIGN = 5.0
 _MIN_TEXT_ROWS = 3
@@ -288,11 +293,131 @@ def ruled_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
     except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有表
         return ()
     tables: list[RuledTable] = []
+    rules: tuple[list[pymupdf.Rect], list[pymupdf.Rect]] | None = None
     for table in found.tables:
         cells = tuple(pymupdf.Rect(cell) for cell in table.cells if cell)
-        if _usable_table(cells):
-            tables.append(RuledTable(pymupdf.Rect(table.bbox), cells))
+        if not _usable_table(cells):
+            continue
+        if rules is None:
+            rules = _rule_segments(page)
+        tables.append(_with_open_edges(RuledTable(pymupdf.Rect(table.bbox), cells), *rules))
     return tuple(tables)
+
+
+def _rule_segments(page: pymupdf.Page) -> tuple[list[pymupdf.Rect], list[pymupdf.Rect]]:
+    """页面上的细横线和细竖线。
+
+    线段、细长的矩形、描边矩形的四条边都算；老 TeX 和一些转换器把框线画成一像素宽的
+    图片，也算。"""
+    rects: list[pymupdf.Rect] = []
+    try:
+        drawings = page.get_drawings()
+    except Exception:  # noqa: BLE001 - 读不出来就当没有线
+        drawings = []
+    for drawing in drawings:
+        stroked = "s" in str(drawing.get("type") or "")
+        for item in drawing.get("items", ()):
+            if item[0] == "l":
+                rects.append(pymupdf.Rect(item[1], item[2]).normalize())
+            elif item[0] == "re":
+                rect = pymupdf.Rect(item[1]).normalize()
+                rects.append(rect)
+                if stroked:
+                    rects.extend(_edges_of(rect))
+    try:
+        rects.extend(pymupdf.Rect(info["bbox"]) for info in page.get_image_info())
+    except Exception:  # noqa: BLE001
+        pass
+    horizontal = [rect for rect in rects if rect.height <= _RULE_THICK and rect.width >= _RULE_MIN]
+    vertical = [rect for rect in rects if rect.width <= _RULE_THICK and rect.height >= _RULE_MIN]
+    return horizontal, vertical
+
+
+def _edges_of(rect: pymupdf.Rect) -> list[pymupdf.Rect]:
+    return [
+        pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y0), pymupdf.Rect(rect.x0, rect.y1, rect.x1, rect.y1),
+        pymupdf.Rect(rect.x0, rect.y0, rect.x0, rect.y1), pymupdf.Rect(rect.x1, rect.y0, rect.x1, rect.y1),
+    ]
+
+
+def _with_open_edges(
+    table: RuledTable, horizontal: list[pymupdf.Rect], vertical: list[pymupdf.Rect],
+) -> RuledTable:
+    """补上没有外框的边行、边列。
+
+    很多论文的表只画格子之间的线：横线伸出最外一条竖线，竖线伸过最上、最下一条横线。
+    find_tables 只认四面都有线的格子，表头、首列、末列、末行就漏了。按线伸出去的范围
+    把网格补全；相邻两格之间没有线隔开的（跨列的表头）并成一格。
+    """
+    box = pymupdf.Rect(table.rect)
+    for _ in range(3):
+        ys = [v for v in vertical if box.x0 - _NEAR <= v.x0 <= box.x1 + _NEAR
+              and v.y1 >= box.y0 - _NEAR and v.y0 <= box.y1 + _NEAR]
+        xs = [h for h in horizontal if box.y0 - _NEAR <= h.y0 <= box.y1 + _NEAR
+              and h.x1 >= box.x0 - _NEAR and h.x0 <= box.x1 + _NEAR]
+        grown = pymupdf.Rect(
+            min([box.x0, *(h.x0 for h in xs)]), min([box.y0, *(v.y0 for v in ys)]),
+            max([box.x1, *(h.x1 for h in xs)]), max([box.y1, *(v.y1 for v in ys)]),
+        )
+        if all(abs(a - b) < 0.5 for a, b in zip(grown, box)):
+            break
+        box = grown
+    if all(abs(a - b) < 0.5 for a, b in zip(box, table.rect)):
+        return table
+    col_edges = _edges([box.x0, box.x1, *(v.x0 for v in ys)])
+    row_edges = _edges([box.y0, box.y1, *(h.y0 for h in xs)])
+    found: list[pymupdf.Rect] = []
+    for top, bottom in zip(row_edges, row_edges[1:]):
+        row: list[pymupdf.Rect] = []
+        for left, right in zip(col_edges, col_edges[1:]):
+            center = pymupdf.Point((left + right) / 2, (top + bottom) / 2)
+            if any(old.contains(center) for old in table.cells):
+                found.extend(row)
+                row = []
+                continue
+            cell = pymupdf.Rect(left, top, right, bottom)
+            if row and abs(row[-1].x1 - left) < _NEAR and not _ruled(vertical, left, top, bottom, upright=True):
+                row[-1] = row[-1] | cell
+            else:
+                row.append(cell)
+        found.extend(row)
+    added = _merge_rows(found, horizontal)
+    return RuledTable(box, (*table.cells, *added))
+
+
+def _edges(values: list[float]) -> list[float]:
+    out: list[float] = []
+    for value in sorted(values):
+        if not out or value - out[-1] > _NEAR:
+            out.append(value)
+    return out
+
+
+def _ruled(segments: list[pymupdf.Rect], at: float, start: float, end: float, *, upright: bool) -> bool:
+    """at 处有线盖住 start 到 end 的大半。upright 为真时找竖线，否则找横线。"""
+    covered = 0.0
+    for seg in segments:
+        pos = seg.x0 if upright else seg.y0
+        if abs(pos - at) > _NEAR:
+            continue
+        lo, hi = (seg.y0, seg.y1) if upright else (seg.x0, seg.x1)
+        covered += max(0.0, min(hi, end) - max(lo, start))
+    return covered >= (end - start) * 0.6
+
+
+def _merge_rows(cells: list[pymupdf.Rect], horizontal: list[pymupdf.Rect]) -> list[pymupdf.Rect]:
+    """上下相邻、左右对齐、中间没有横线的边格并成一格（跨行的行名）。"""
+    out: list[pymupdf.Rect] = []
+    for cell in sorted(cells, key=lambda c: (c.x0, c.y0)):
+        prev = out[-1] if out else None
+        if (
+            prev is not None and abs(prev.x0 - cell.x0) < _NEAR and abs(prev.x1 - cell.x1) < _NEAR
+            and abs(prev.y1 - cell.y0) < _NEAR and not _ruled(horizontal, cell.y0, cell.x0, cell.x1, upright=False)
+        ):
+            out[-1] = prev | cell
+            continue
+        out.append(cell)
+    return out
 
 
 def page_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
