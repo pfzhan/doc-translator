@@ -36,6 +36,8 @@ _RULE_THICK = 1.5
 _RULE_MIN = 5.0
 # 线和格子边算对齐的距离
 _NEAR = 2.0
+# 算法框相邻两行的分界，从上一行基线往下占行距的比例
+_ROW_CUT = 0.35
 _TEXT_JOIN = 8.0
 _COL_ALIGN = 5.0
 _MIN_TEXT_ROWS = 3
@@ -421,9 +423,107 @@ def _merge_rows(cells: list[pymupdf.Rect], horizontal: list[pymupdf.Rect]) -> li
 
 
 def page_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
-    """有线表，再加上列缘对齐的短格子表。两栏正文和整段文字不在这里。"""
+    """有线表，再加上列缘对齐的短格子表和算法框。两栏正文和整段文字不在这里。"""
     ruled = ruled_tables(page)
-    return (*ruled, *unruled_tables(page, ruled))
+    algorithms = algorithm_tables(page)
+    return (*ruled, *unruled_tables(page, (*ruled, *algorithms)), *algorithms)
+
+
+_ALGORITHM_RE = re.compile(r"^\s*(?:Algorithm|Procedure|算法)\s*\d+", re.I)
+
+
+def algorithm_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
+    """算法框里的伪代码当成一列的表，每一行是一格。
+
+    伪代码一行一句，缩进是结构，行和行不是一段话。PyMuPDF 常把几行收进同一块，
+    后面的合并又会把它们接成段落重排。做成格子以后，每行单独翻译、写回原行，
+    不和别的行合并。算法框的范围按框线定：图注下面那条横线到再下面一条横线。
+    """
+    try:
+        data = page.get_text("dict")
+    except Exception:  # noqa: BLE001
+        return ()
+    lines = [
+        line for block in data.get("blocks", []) if block.get("type") == 0
+        for line in block["lines"] if abs(line["dir"][1]) <= 0.01
+    ]
+    captions = [line for line in lines if _ALGORITHM_RE.match("".join(s["text"] for s in line["spans"]))]
+    if not captions:
+        return ()
+    horizontal, _vertical = _rule_segments(page)
+    tables: list[RuledTable] = []
+    for caption in captions:
+        box = pymupdf.Rect(caption["bbox"])
+        size = max((span["size"] for span in caption["spans"]), default=10.0)
+        body = _box_below(box, size, horizontal) or _box_above(box, size, horizontal)
+        if body is None:
+            continue
+        rows = _code_rows(lines, body)
+        if len(rows) >= 2:
+            tables.append(RuledTable(body, rows))
+    return tuple(tables)
+
+
+def _box_below(caption: pymupdf.Rect, size: float, horizontal: list[pymupdf.Rect]) -> pymupdf.Rect | None:
+    """图注在上：图注下面的第一条线是框顶，再下面一条是框底。图注可能有好几行。"""
+    rules = sorted(
+        (rule for rule in horizontal
+         if rule.y0 >= caption.y1 - _NEAR and rule.x0 <= caption.x0 + _NEAR and rule.width >= caption.width * 0.5),
+        key=lambda rule: rule.y0,
+    )
+    rules = _distinct_rules(rules)
+    if len(rules) < 2 or rules[0].y0 - caption.y1 > size * 8:
+        return None
+    top, bottom = rules[0], rules[1]
+    return pymupdf.Rect(top.x0, top.y0, top.x1, bottom.y0)
+
+
+def _box_above(caption: pymupdf.Rect, size: float, horizontal: list[pymupdf.Rect]) -> pymupdf.Rect | None:
+    """图注在下：紧挨图注上方的线是框底，再往上一条同宽的线是框顶。"""
+    rules = sorted(
+        (rule for rule in horizontal
+         if rule.y1 <= caption.y0 + _NEAR and rule.x0 <= caption.x0 + _NEAR and rule.x1 >= caption.x0 + size),
+        key=lambda rule: -rule.y0,
+    )
+    rules = _distinct_rules(rules)
+    if len(rules) < 2 or caption.y0 - rules[0].y1 > size * 2:
+        return None
+    bottom = rules[0]
+    top = next((rule for rule in rules[1:] if abs(rule.x0 - bottom.x0) < _NEAR and abs(rule.x1 - bottom.x1) < _NEAR), None)
+    if top is None:
+        return None
+    return pymupdf.Rect(bottom.x0, top.y1, bottom.x1, bottom.y0)
+
+
+def _distinct_rules(rules: list[pymupdf.Rect]) -> list[pymupdf.Rect]:
+    """同一条线可能既是线段又是框的一边，叠在一起的只留一条。"""
+    out: list[pymupdf.Rect] = []
+    for rule in rules:
+        if out and abs(rule.y0 - out[-1].y0) < _NEAR and abs(rule.x0 - out[-1].x0) < _NEAR:
+            continue
+        out.append(rule)
+    return out
+
+
+def _code_rows(lines: list[dict], body: pymupdf.Rect) -> tuple[pymupdf.Rect, ...]:
+    """框里每一行一格。行按正文字号的基线分，上下标落在它们所属的行里。"""
+    spans = [
+        span for line in lines for span in line["spans"]
+        if span["text"].strip() and body.contains(pymupdf.Point(span["origin"]))
+    ]
+    if not spans:
+        return ()
+    main = max(span["size"] for span in spans)
+    baselines: list[float] = []
+    for y in sorted(span["origin"][1] for span in spans if span["size"] >= main * 0.85):
+        if not baselines or y - baselines[-1] > main * 0.4:
+            baselines.append(y)
+    if len(baselines) < 2:
+        return ()
+    # 分界放在偏上一行基线的地方：下标和降部只比基线低一点，上标（1st 的 st）却抬得很高，
+    # 放在正中会被划进上一行
+    cuts = [body.y0, *(a + (b - a) * _ROW_CUT for a, b in zip(baselines, baselines[1:])), body.y1]
+    return tuple(pymupdf.Rect(body.x0, top, body.x1, bottom) for top, bottom in zip(cuts, cuts[1:]))
 
 
 @dataclass(frozen=True)
