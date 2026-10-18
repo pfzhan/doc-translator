@@ -1558,8 +1558,14 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
             # b) 同一可视行上、阅读序邻接、x 间距小于一个字号。跨行折行的两半
             #    纵向不相交，不在这里并成一个大框。
             y_overlap = min(m["bbox"].y1, r["bbox"].y1) - max(m["bbox"].y0, r["bbox"].y0)
+            # 前一段收住一行，后一段整个在它左下方：折到了下一行行首。
+            # 分子右边还有式子，分母的根号也在左下方，不算折行
+            wrapped = (r["bbox"].x1 <= m["bbox"].x0
+                       and _run_text_box(r).y0 >= _run_text_box(m).y1
+                       and _ends_row(m, block.span_lines))
             adjacent = (flow_adjacent(m, r)
                         and r["bbox"].x0 - m["bbox"].x1 < block.size
+                        and not wrapped
                         and y_overlap > 0.3 * min(m["bbox"].height, r["bbox"].height))
             if geometric or adjacent:
                 m["spans"].extend(r["spans"])
@@ -2073,8 +2079,32 @@ def _continues_wrapped_formula(
         return False
     if nxt["bbox"].x0 - _line_edge(span_lines, next_line, "x0") > block_size * 1.2:
         return False
-    y_gap = nxt["bbox"].y0 - last["bbox"].y1
+    # 按字高量行距：CMSY 的字体框伸到下一行，两行看着像交叠
+    y_gap = _run_text_box(nxt).y0 - _run_text_box(last).y1
     return -block_size * 0.5 <= y_gap < block_size * 1.8
+
+
+def _ends_row(run: dict, span_lines: list[list[dict]]) -> bool:
+    """run 右边、同一行高上没有别的字。"""
+    box = _run_text_box(run)
+    own = {id(span) for span in run["spans"]}
+    for spans in span_lines:
+        for span in spans:
+            if id(span) in own or not str(span.get("text") or "").strip() or "bbox" not in span:
+                continue
+            other = _text_box(span)
+            overlap = min(box.y1, other.y1) - max(box.y0, other.y0)
+            if other.x0 >= box.x1 - 1 and overlap > min(box.height, other.height) * 0.5:
+                return False
+    return True
+
+
+def _run_text_box(run: dict) -> pymupdf.Rect:
+    box = pymupdf.Rect()
+    for span in run["spans"]:
+        if str(span.get("text") or "").strip() and "bbox" in span:
+            box |= _text_box(span)
+    return box if not box.is_empty else pymupdf.Rect(run["bbox"])
 
 
 def _join_line_wrapped_formulas(
