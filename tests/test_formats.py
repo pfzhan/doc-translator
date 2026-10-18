@@ -4663,6 +4663,59 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
     assert data["blocks"][1]["lines"] == heading
 
 
+def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line():
+    """ϵ 的字体框伸到下一行，按字体框算和下一行同一行高，分母就被接到下一行后面，分子跟过去。"""
+    from app.formats.pdf import _rejoin_split_lines
+
+    def span(text, font, size, box, ink=None):
+        item = {"text": text, "font": font, "size": size, "bbox": box, "origin": (box[0], box[3] - 2)}
+        if ink is not None:
+            item["ink"] = ink
+        return item
+
+    def line(*spans):
+        box = pymupdf.Rect(spans[0]["bbox"])
+        for item in spans[1:]:
+            box |= pymupdf.Rect(item["bbox"])
+        return {"bbox": tuple(box), "dir": (1, 0), "spans": list(spans)}
+
+    lead = line(span("Equation (10) reveals that we must predict (", "Times-Roman", 10.0, (108, 187.2, 305, 199.9)))
+    minus = line(span("x", "CMBX10", 10.0, (307.6, 187.3, 314, 206.1), (307.6, 190.5, 314, 197.2)),
+                 span(" −", "CMSY10", 10.0, (314, 187.3, 327.1, 206.1), (318, 192.8, 327.1, 193.6)))
+    numerator = line(span("β", "CMMI7", 7.0, (339.2, 185.3, 344, 192.8), (339.2, 185.6, 344, 191.9)))
+    denominator = line(span("√", "CMSY7", 7.0, (330.5, 187.2, 337, 205.7), (330.5, 193.3, 337, 200.0)),
+                       span("α", "CMMI7", 7.0, (337, 187.2, 341, 205.7), (337, 195.4, 341, 199.8)),
+                       span(" ϵ", "CMMIB10", 10.0, (355.2, 187.2, 361.7, 205.7), (355.2, 194.0, 361.7, 198.4)))
+    given = line(span("given x. Since x is available as", "Times-Roman", 10.0, (370.2, 187.4, 504, 198.9)))
+    nxt = line(span("input to the model, we may choose the parameterization", "Times-Roman", 10.0, (108, 201.7, 331.3, 211.7)))
+    data = {"blocks": [{"type": 0, "bbox": (108, 187.2, 305, 199.9), "lines": [lead]},
+                       {"type": 0, "bbox": (307.6, 185.3, 361.7, 206.1), "lines": [minus, numerator, denominator]},
+                       {"type": 0, "bbox": (108, 187.4, 504, 211.7), "lines": [given, nxt]}]}
+    _rejoin_split_lines(data)
+    host = next(block for block in data["blocks"] if lead in block["lines"])
+    assert denominator in host["lines"] and numerator in host["lines"]
+    assert nxt not in host["lines"]
+
+
+def test_a_split_line_goes_to_its_nearest_left_neighbour():
+    """两个块里都有能接上的左半截：接到挨得最近的那个，不在两个块之间来回挪。"""
+    from app.formats.pdf import _rejoin_split_lines
+
+    def line(x0, x1, y0, text, font="CMMI10"):
+        box = (x0, y0, x1, y0 + 10)
+        return {"bbox": box, "dir": (1, 0), "spans": [{"text": text, "font": font, "size": 10.0, "bbox": box}]}
+
+    # 两个左半截上下错开，各自和右半截同一行高，彼此不是同一行
+    far = line(72, 262, 96, "the rule is", "Times-Roman")
+    near = line(250, 264, 104, "c =")
+    piece = line(265, 300, 100, "d − e")
+    data = {"blocks": [{"type": 0, "bbox": (72, 96, 262, 106), "lines": [far]},
+                       {"type": 0, "bbox": (250, 104, 264, 114), "lines": [near]},
+                       {"type": 0, "bbox": (265, 100, 300, 110), "lines": [piece]}]}
+    _rejoin_split_lines(data)
+    assert data["blocks"][1]["lines"] == [near, piece]
+
+
 def test_a_justified_heading_split_word_by_word_stays_one_paragraph():
     """窄栏标题两端对齐，词距拉到两个字宽，PyMuPDF 一词一行。按整行认回一段。"""
     from app.formats.pdf import _split_lines
