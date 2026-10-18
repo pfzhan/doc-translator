@@ -73,7 +73,7 @@ def test_markdown_translated_only():
     assert "item two continued" in texts
     assert not any("keep me" in t for t in texts)
     assert not any("title" in t for t in texts)
-    out = render(blocks, {t: "T:" + t for t in texts}, bilingual=False)
+    out = render(blocks, ["T:" + t for t in texts], bilingual=False)
     assert "# T:Hello World" in out
     assert 'print("keep me")' in out
     assert "- T:item two continued" in out
@@ -86,7 +86,7 @@ def test_markdown_translated_only():
 def test_markdown_bilingual_keeps_original():
     blocks = split_blocks(MD)
     texts = collect_segments(blocks)
-    out = render(blocks, {t: "T:" + t for t in texts}, bilingual=True)
+    out = render(blocks, ["T:" + t for t in texts], bilingual=True)
     assert "# Hello World" in out and "# T:Hello World" in out
     assert "This is a paragraph\nspanning two lines.\n\nT:This is a paragraph" in out
     assert "foo<br>T:foo" in out
@@ -299,7 +299,7 @@ def test_markdown_list_and_quote_interrupt_paragraph():
     assert [b.kind for b in blocks if b.kind != "raw"] == ["para", "list", "para", "quote"]
     texts = collect_segments(blocks)
     assert texts == ["Steps to install:", "download", "run setup", "See below:", "note here"]
-    out = render(blocks, {x: "T:" + x for x in texts}, bilingual=False)
+    out = render(blocks, ["T:" + x for x in texts], bilingual=False)
     assert out == "T:Steps to install:\n- T:download\n- T:run setup\n\nT:See below:\n> T:note here"
 
 
@@ -309,10 +309,10 @@ def test_markdown_quote_keeps_paragraphs_alerts_and_lists():
     blocks = split_blocks(src)
     texts = collect_segments(blocks)
     assert texts == ["Useful information on two lines.", "Second paragraph.", "first point"]
-    out = render(blocks, {x: "T:" + x for x in texts}, bilingual=False)
+    out = render(blocks, ["T:" + x for x in texts], bilingual=False)
     assert out == ("> [!NOTE]\n> T:Useful information on two lines.\n>\n> T:Second paragraph.\n"
                    "> - T:first point\n> ```\n> code here\n> ```")
-    both = render(blocks, {x: "T:" + x for x in texts}, bilingual=True)
+    both = render(blocks, ["T:" + x for x in texts], bilingual=True)
     assert "> Second paragraph.\n>\n> T:Second paragraph." in both
     assert "> - first point  \n>   T:first point" in both
 
@@ -323,7 +323,7 @@ def test_markdown_link_definitions_kept_verbatim():
     blocks = split_blocks(src)
     texts = collect_segments(blocks)
     assert texts == ["See [docs][d] and ![ci][c].", "[^1]: A footnote here."]
-    out = render(blocks, {x: "T:" + x for x in texts}, bilingual=False)
+    out = render(blocks, ["T:" + x for x in texts], bilingual=False)
     assert "\n[d]: https://example.com/docs\n[c]: https://img.shields.io/ci.svg\n" in out
 
 
@@ -342,9 +342,9 @@ def test_markdown_setext_headings():
     assert texts == ["Main Title", "Section Name", "Body text."]
     from app.formats.markdown import segment_kinds
     assert segment_kinds(blocks) == ["h1", "h2", "p"]
-    out = render(blocks, {x: "T:" + x for x in texts}, bilingual=False)
+    out = render(blocks, ["T:" + x for x in texts], bilingual=False)
     assert out == "T:Main Title\n==========\n\nT:Section Name\n---\n\nT:Body text."
-    both = render(blocks, {x: "T:" + x for x in texts}, bilingual=True)
+    both = render(blocks, ["T:" + x for x in texts], bilingual=True)
     assert both.startswith("Main Title\n==========\n\nT:Main Title\n==========\n")
 
 
@@ -353,7 +353,7 @@ def test_markdown_toml_front_matter_kept():
     blocks = split_blocks('+++\ntitle = "Demo post"\ndraft = false\n+++\n\nBody text.')
     texts = collect_segments(blocks)
     assert texts == ["Body text."]
-    assert render(blocks, {"Body text.": "T"}, bilingual=False).startswith('+++\ntitle = "Demo post"\ndraft = false\n+++\n')
+    assert render(blocks, ["T"], bilingual=False).startswith('+++\ntitle = "Demo post"\ndraft = false\n+++\n')
 
 
 def test_markdown_long_fence_not_closed_by_inner_fence():
@@ -371,7 +371,7 @@ def test_markdown_loose_list_continuation_translated_in_place():
     blocks = split_blocks(src)
     texts = collect_segments(blocks)
     assert texts == ["item one", "continued paragraph of item one.", "Outside paragraph."]
-    out = render(blocks, {x: "T:" + x for x in texts}, bilingual=False)
+    out = render(blocks, ["T:" + x for x in texts], bilingual=False)
     assert out == ("- T:item one\n\n    T:continued paragraph of item one.\n\n        code_in_item()\n\n"
                    "T:Outside paragraph.\n\n    real_code()")
 
@@ -401,6 +401,17 @@ def test_markdown_references_kept_original(tmp_path):
     assert "[zh-CN] Body paragraph here." in text and "[zh-CN] Appendix text." in text
 
 
+def test_markdown_repeated_text_in_body_and_references(tmp_path):
+    """同一句在正文和参考文献里都有：按位置写回，正文那处照常翻译，参考文献那处保留原文。"""
+    src = tmp_path / "paper.md"
+    src.write_text("# Intro\n\nDeep learning. MIT Press, 2016.\n\n## References\n\nDeep learning. MIT Press, 2016.\n",
+                   encoding="utf-8")
+    [out] = run(translate_file(src, tmp_path, runner(), False, "zh-CN"))
+    assert out.read_text(encoding="utf-8") == (
+        "# [zh-CN] Intro\n\n[zh-CN] Deep learning. MIT Press, 2016.\n\n"
+        "## [zh-CN] References\n\nDeep learning. MIT Press, 2016.\n")
+
+
 def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
     """有序列表只有从 1 开始才能打断段落，正文里换行后的年份不是列表。"""
     blocks = split_blocks("It happened in\n1990. Then more text.")
@@ -414,7 +425,7 @@ def test_markdown_display_math_kept_verbatim():
     blocks = split_blocks(src)
     texts = collect_segments(blocks)
     assert texts == ["Energy is given by", "where m is mass.", "$$x$$ alone is not a block here.", "Costs $$5 today."]
-    out = render(blocks, {x: "T:" + x for x in texts}, bilingual=True)
+    out = render(blocks, ["T:" + x for x in texts], bilingual=True)
     assert "$$\nL = a\n+ b\n- c\n$$" in out and out.count("E = mc^2") == 1
 
 
@@ -431,7 +442,7 @@ def test_markdown_tables_with_short_or_aligned_separators():
         assert [b.kind for b in blocks] == ["table"], sep
         texts = collect_segments(blocks)
         assert texts == ["Name", "Value", "alpha", "one"]
-        out = render(blocks, {x: "T:" + x for x in texts}, bilingual=False)
+        out = render(blocks, ["T:" + x for x in texts], bilingual=False)
         assert out == f"| T:Name | T:Value |\n{sep}\n| T:alpha | T:one |"
     # 表头两列、分隔行一列：是 Setext 二级标题
     blocks = split_blocks("Name | Value\n---")

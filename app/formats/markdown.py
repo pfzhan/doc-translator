@@ -350,11 +350,14 @@ def _quote_units(lines: list[str]) -> list[tuple[str, int, str, str, str, list[s
     return units
 
 
-def render(blocks: list[Block], tr: dict[str, str], bilingual: bool) -> str:
+def render(blocks: list[Block], translations: list[str], bilingual: bool) -> str:
+    """translations 和 collect_segments 返回的文本按位置一一对应。不按原文查：
+    同一句在正文和参考文献里各出现一次时，一处翻译、一处保留原文。"""
     out: list[str] = []
+    pending = iter(translations)
 
-    def t(s: str) -> str:
-        return tr.get(s, s)
+    def t(_s: str) -> str:
+        return next(pending)
 
     for b in blocks:
         if b.kind == "raw" or not b.segments:
@@ -434,8 +437,7 @@ async def translate_markdown(src: Path, out_dir: Path, runner, bilingual: bool) 
     runner.set_title(h1 or src.stem)
     results = await runner.translate_all(texts, kinds=segment_kinds(blocks), preview=True,
                                          skip=segment_skips(blocks))
-    tr = dict(zip(texts, results))
     suffix = "bilingual" if bilingual else "translated"
     dst = out_dir / f"{src.stem}.{suffix}{src.suffix}"
-    dst.write_text(render(blocks, tr, bilingual), encoding="utf-8")
+    dst.write_text(render(blocks, results, bilingual), encoding="utf-8")
     return [dst]
