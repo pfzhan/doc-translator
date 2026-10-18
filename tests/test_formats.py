@@ -4962,9 +4962,50 @@ def test_fraction_bars_drawn_as_one_pixel_images_are_formula_curves():
     photo = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 20, 20), False)
     photo.clear_with(128)
     page.insert_image(pymupdf.Rect(100, 100, 300, 300), pixmap=photo)
+    # 描边的横线：路径框高为零，画出来有线宽那么粗
+    page.draw_line((234.7, 263.1), (259.9, 263.1), width=0.4)
     rects = _page_curve_rects(page)
     assert any(abs(r.x0 - bar.x0) < 0.1 and abs(r.y1 - bar.y1) < 0.1 for r in rects)
     assert not any(r.width > 150 and r.height > 150 for r in rects)
+    stroke = next(r for r in rects if abs(r.x1 - 259.9) < 0.5)
+    assert stroke.y0 < 263.1 < stroke.y1 and stroke.height >= 0.39
+
+    from app.formats.pdf_runs import intersecting_curves
+    assert intersecting_curves(pymupdf.Rect(234.7, 255.9, 295.8, 276.6), rects)
+
+
+def test_a_formula_only_takes_the_rules_its_glyphs_touch():
+    """|m/√v| < 1 的字体框伸到下一行，盖住了下一行 √E[g²] 的根号横线。按墨迹认，横线归下一行的式子。"""
+    from app.formats.pdf import _absorb_one_box
+
+    def formula(bbox, inks):
+        spans = [{"text": "x", "ink": ink} for ink in inks]
+        return {"bbox": pymupdf.Rect(bbox), "d": 3.0, "spans": spans}
+
+    above = formula((334.3, 131.1, 395.7, 175.0), [(334.3, 133.6, 364.0, 145.2), (364.7, 133.9, 373.2, 145.6), (380.0, 135.9, 395.7, 141.2)])
+    below = formula((355.1, 143.0, 433.7, 179.1), [(355.1, 145.6, 390.0, 157.7), (391.5, 150.6, 413.0, 158.4), (414.0, 148.9, 433.7, 155.1)])
+    own_radical = pymupdf.Rect(364.7, 138.2, 373.2, 138.6)
+    next_radical = pymupdf.Rect(391.5, 150.0, 413.0, 150.4)
+    _absorb_one_box(above, [own_radical, next_radical])
+    _absorb_one_box(below, [own_radical, next_radical])
+    assert above["curves"] == [own_radical]
+    assert below["curves"] == [next_radical]
+    assert abs(above["bbox"].x1 - 395.7) < 0.01
+
+
+def test_a_fraction_bar_stays_when_its_numerator_stays():
+    """分子在另一块里留在原处时，分数线也留着：跟分母挪走，分子就悬在半空。"""
+    from app.formats.pdf import _absorb_one_box
+
+    denominator = {"text": "1−α", "origin": (164.2, 500.0), "ink": (164.2, 496.4, 187.5, 502.0)}
+    numerator = {"text": "1−α", "origin": (159.7, 492.5), "ink": (159.7, 487.4, 187.5, 494.2)}
+    bar = pymupdf.Rect(159.7, 494.9, 187.5, 495.3)
+    alone = {"bbox": pymupdf.Rect(164.2, 490.1, 197.2, 507.6), "d": 3.0, "spans": [denominator]}
+    _absorb_one_box(alone, [bar], [numerator, denominator])
+    assert alone["curves"] == []
+    whole = {"bbox": pymupdf.Rect(159.7, 487.0, 197.2, 507.6), "d": 3.0, "spans": [numerator, denominator]}
+    _absorb_one_box(whole, [bar], [numerator, denominator])
+    assert whole["curves"] == [bar]
 
 
 def test_formula_holes_follow_the_neighbours_ink_not_their_font_box():
