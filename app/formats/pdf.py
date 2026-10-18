@@ -1780,7 +1780,8 @@ def _extend_text_run(pending: TextRun | None, span: dict, emphasis: Emphasis, li
 
 
 def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
-    """矢量线条，加上拉长成细线的一像素图片：老 TeX 的分式线、根号横线是这样画的。"""
+    """矢量线条，加上拉长成细线的一像素图片：老 TeX 的分式线、根号横线是这样画的。
+    描边的线按画出来的范围算：路径框不含线宽，一条横线的框高为零。"""
     try:
         drawings = page.get_drawings()
     except Exception:  # noqa: BLE001 - 个别页面的矢量表读不出来，当没有曲线
@@ -1791,6 +1792,9 @@ def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
         if raw is None:
             continue
         rect = pymupdf.Rect(raw)
+        half = float(drawing.get("width") or 0) / 2 if "s" in str(drawing.get("type") or "") else 0.0
+        if half > 0:
+            rect = rect + (-half, -half, half, half)
         if not rect.is_empty:
             rects.append(rect)
     try:
@@ -1804,9 +1808,14 @@ def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
     return rects
 
 
-def _absorb_one_box(formula: dict, drawings: list[pymupdf.Rect]) -> None:
+def _absorb_one_box(formula: dict, drawings: list[pymupdf.Rect], glyphs: list[dict] = ()) -> None:
+    """glyphs 是页面上的 span（带墨迹），用来认出别人也贴着的横线。"""
     old = pymupdf.Rect(formula["bbox"])
-    curves = intersecting_curves(old, drawings)
+    # 按字形墨迹找：数学字体的字体框伸到上下行，会碰到别的式子的分数线、根号横线
+    ink = _spans_ink(formula.get("spans") or [])
+    probe = old if ink is None or ink.is_empty else ink + (-_INK_PAD, -_INK_PAD, _INK_PAD, _INK_PAD)
+    own = {_origin_key(span) for span in formula.get("spans") or [] if span.get("origin")}
+    curves = [curve for curve in intersecting_curves(probe, drawings) if not _rests_on(curve, glyphs, own)]
     formula["curves"] = list(curves)
     if not curves:
         return
@@ -1836,6 +1845,13 @@ def _page_text_spans(page: pymupdf.Page) -> list[dict]:
         for line in block["lines"]
         for span in line["spans"]
     ]
+
+
+def _page_glyphs(page: pymupdf.Page) -> list[dict]:
+    """页面上的 span，带字形墨迹。"""
+    data = page.get_text("dict", flags=_TEXT_FLAGS)
+    _attach_ink(page, data)
+    return [span for block in data["blocks"] if block.get("type") == 0 for line in block["lines"] for span in line["spans"]]
 
 
 def _page_char_index(
@@ -2012,16 +2028,9 @@ def _tighten_formula_height(part: dict) -> None:
     if raw is None:
         return
     bbox = pymupdf.Rect(raw)
-    ink = pymupdf.Rect()
-    for span in part.get("spans") or []:
-        if not str(span.get("text") or "").strip():
-            continue
-        found = span.get("ink")
-        if found is None:
-            return
-        found = pymupdf.Rect(found)
-        if not found.is_empty:
-            ink |= found
+    ink = _spans_ink(part.get("spans") or [])
+    if ink is None:
+        return
     for curve in part.get("curves") or []:
         if curve is not None:
             ink |= pymupdf.Rect(curve)
@@ -2036,12 +2045,53 @@ def _tighten_formula_height(part: dict) -> None:
     part["d"] = round(max(0.0, float(part.get("d") or 0) - (bbox.y1 - bottom)), 1)
 
 
-def _absorb_curves(formula: dict, drawings: list[pymupdf.Rect], block: TextBlock) -> None:
+def _origin_key(span: dict) -> tuple[float, float]:
+    return round(span["origin"][0], 1), round(span["origin"][1], 1)
+
+
+# 字形墨迹离横线这么近算贴着：分子分母和分数线之间只隔一两磅
+_RESTING_GAP = 2.0
+
+
+def _rests_on(curve: pymupdf.Rect, glyphs: list[dict], own: set[tuple[float, float]]) -> bool:
+    """横线上下贴着公式以外的字：分子在另一块里留在原处时，分数线是它们共用的，不能跟着公式挪走。"""
+    if curve.height > _RULE_IMAGE_THICK:
+        return False
+    for span in glyphs:
+        found = span.get("ink")
+        if found is None or not span.get("origin") or _origin_key(span) in own or not str(span.get("text") or "").strip():
+            continue
+        ink = pymupdf.Rect(found)
+        if min(ink.x1, curve.x1) - max(ink.x0, curve.x0) < 1:
+            continue
+        if -0.5 <= curve.y0 - ink.y1 <= _RESTING_GAP or -0.5 <= ink.y0 - curve.y1 <= _RESTING_GAP:
+            return True
+    return False
+
+
+def _spans_ink(spans: list[dict]) -> pymupdf.Rect | None:
+    """几个 span 的字形墨迹并起来。有一个量不出墨迹（点阵字）就不算，返回 None。"""
+    ink = pymupdf.Rect()
+    for span in spans:
+        if not str(span.get("text") or "").strip():
+            continue
+        found = span.get("ink")
+        if found is None:
+            return None
+        found = pymupdf.Rect(found)
+        if not found.is_empty:
+            ink |= found
+    return ink
+
+
+def _absorb_curves(
+    formula: dict, drawings: list[pymupdf.Rect], block: TextBlock, glyphs: list[dict] = (),
+) -> None:
     """把相交曲线并进公式框，并写回对应的 FormulaRun。换行续片各自收自己的框。"""
-    _absorb_one_box(formula, drawings)
+    _absorb_one_box(formula, drawings, glyphs)
     for part in formula.get("parts") or []:
         if part is not formula:
-            _absorb_one_box(part, drawings)
+            _absorb_one_box(part, drawings, glyphs)
     block.runs = [
         replace(
             run,
@@ -5142,9 +5192,13 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     # 框内相交的曲线并进裁剪，根号、分式线才不会被切掉。
     archive = pymupdf.Archive()
     curve_rects = [_page_curve_rects(page) for page in src_doc]
+    glyphs: dict[int, list[dict]] = {}
     for unit, formulas in zip(flat_units, sent_formulas):
         for f in formulas:
-            _absorb_curves(f, curve_rects[int(f["page"])], unit[int(f.get("owner") or 0)])
+            page_no = int(f["page"])
+            if page_no not in glyphs:
+                glyphs[page_no] = _page_glyphs(src_doc[page_no])
+            _absorb_curves(f, curve_rects[page_no], unit[int(f.get("owner") or 0)], glyphs[page_no])
     span_cache: dict[int, list[dict]] = {}
     char_cache: dict[int, list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]]] = {}
     for formulas in sent_formulas:
