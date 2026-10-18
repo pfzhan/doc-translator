@@ -231,9 +231,10 @@ def _line_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] |
 
 
 def _same_band(a: dict, b: dict) -> bool:
+    """纵向交叠够多。分式的分母、大括号把框往下拉，同一行的两截交叠不到一半。"""
     ra, rb = pymupdf.Rect(a["bbox"]), pymupdf.Rect(b["bbox"])
     overlap = min(ra.y1, rb.y1) - max(ra.y0, rb.y0)
-    return overlap >= min(ra.height, rb.height) * 0.5
+    return overlap >= min(ra.height, rb.height) * 0.35
 
 
 def _split_lines(items: list[tuple]) -> list[list[int]]:
