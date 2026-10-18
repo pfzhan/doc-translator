@@ -2170,6 +2170,21 @@ def test_formulas_set_in_text_italic_stay_whole():
     assert "t-th" in sent
 
 
+def test_punctuation_alone_does_not_switch_the_font_size():
+    """“in PE.” 的句号排成了角标字号。单个标点换字号没有意义，标出来模型会把 {z65} 套到半句话上。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text, size=9.0, font="Times-Roman", x0=0.0):
+        return {"text": text, "font": font, "size": size, "flags": 2 if "Italic" in font else 0,
+                "bbox": (x0, 0, x0 + 10, size + 2), "origin": (x0, size)}
+
+    line = [span("predicates in", x0=0), span(" PE", font="Times-Italic", x0=60), span(".", size=6.0, x0=72),
+            span(" An equivalence class is a set of", x0=75), span(" small", size=7.5, x0=200), span(" words.", x0=230)]
+    sent, _ = _placeholderize(_block_with_spans([line], size=9.0))
+    assert "{z" not in sent.split("An equivalence")[0]
+    assert "{z" in sent.split("An equivalence")[1]
+
+
 def test_placeholderize_no_formula_keeps_text_identical():
     from app.formats.pdf import _placeholderize
 
