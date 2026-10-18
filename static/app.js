@@ -868,6 +868,10 @@ function jobRow(job, selectable = false) {
   for (const [i, part] of [formatSize(job.size), timeAgo(job.created)].filter(Boolean).entries()) {
     meta2.append(el("span", i ? "sep" : "", part));
   }
+  // 记录 id：排查问题时对应 data/jobs/<id>/。点一下整串选中，方便复制
+  const jobId = el("span", meta2.childElementCount ? "sep job-id" : "job-id", job.id);
+  jobId.title = "记录 ID";
+  meta2.append(jobId);
   main.append(meta, meta2);
 
   const status = el("div", "job-status");

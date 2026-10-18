@@ -217,6 +217,7 @@ label.check input { width: 16px; height: 16px; min-height: 0; margin: 0; accent-
 .job-name:disabled { cursor: default; color: var(--text); }
 .job-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 2px; font-size: 12.5px; color: var(--muted); }
 .job-meta .sep::before { content: "·"; margin-right: 10px; }
+.job-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; opacity: 0.75; user-select: all; }
 .job-status { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12.5px; }
 .badge {
   display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 11px;
