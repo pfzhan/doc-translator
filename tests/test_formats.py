@@ -386,6 +386,23 @@ def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
     assert [b.kind for b in blocks] == ["para"]
 
 
+def test_markdown_display_math_kept_verbatim():
+    """$$ 公式块原样保留：不送去翻译，块里 + / - 开头的行也不是列表项。"""
+    src = ("Energy is given by\n$$\nL = a\n+ b\n- c\n$$\nwhere m is mass.\n\n"
+           "$$ E = mc^2 $$\n\n$$x$$ alone is not a block here.\n\nCosts $$5 today.")
+    blocks = split_blocks(src)
+    texts = collect_segments(blocks)
+    assert texts == ["Energy is given by", "where m is mass.", "$$x$$ alone is not a block here.", "Costs $$5 today."]
+    out = render(blocks, {x: "T:" + x for x in texts}, bilingual=True)
+    assert "$$\nL = a\n+ b\n- c\n$$" in out and out.count("E = mc^2") == 1
+
+
+def test_markdown_unclosed_display_math_is_text():
+    """没闭合的 $$ 遇到空行就不算公式，后面的段落照常翻译。"""
+    blocks = split_blocks("$$ broken formula\n\nNext paragraph.")
+    assert collect_segments(blocks) == ["$$ broken formula", "Next paragraph."]
+
+
 def test_epub_nav_in_spine_parsed_once(tmp_path):
     """EPUB3 的 nav 文档同时在 spine 里：只走 label 翻译路径一次，不重复解析、译文不丢。"""
     nav = (
