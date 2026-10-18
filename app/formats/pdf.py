@@ -510,6 +510,15 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             (h_overlap > 0 and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5)
             or same_word or touching
         )
+        # 同一行上隔开三个字宽以上、又不是两端对齐拉开的词距：并排的标签（图注和图里的节点）。
+        # 接口是式子的不算，分式的几截可能分在别的块里，留下一段空。
+        side_by_side = (
+            not same_visual_line
+            and i not in justified
+            and not _math_seam(items[i - 1][2], items[i][2])
+            and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5
+            and rect.x0 - qrect.x1 > 3 * psize
+        )
         # 章节号和标题是同一行的整体（'2.2 Training'）：纯数字的上行不当符号行，
         # 也不按硬换行拆开，否则数字被过滤不遮罩、标题单独翻，基线对不齐
         sec_label = (bool(re.fullmatch(r"\d+(?:\.\d+)*\.?", ptext.strip()))
@@ -530,7 +539,7 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         bullet = _list_item(text) and not wrapped_letter
         if not same_visual_line and not sec_label and (
             bullet or NO_TEXT_RE.match(stripped) or prev_symbol
-            or hard_break or left_jump or size_drop
+            or hard_break or left_jump or size_drop or side_by_side
         ):
             groups.append(cur)
             cur = [i]
