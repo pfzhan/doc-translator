@@ -191,7 +191,7 @@ def _line_box(line: dict) -> pymupdf.Rect:
     一个箭头就能把行框撑到两行高。行框偏高，译文就从上一行的位置写起。"""
     box = pymupdf.Rect()
     for span in line["spans"]:
-        if not span["text"].strip():
+        if not span["text"].strip() or "bbox" not in span:
             continue
         rect = _text_box(span)
         if not rect.is_empty:
@@ -263,8 +263,8 @@ def _rejoin_pass(blocks: list[dict]) -> bool:
             host_block, host_line = host
             block["lines"].remove(line)
             index = host_block["lines"].index(host_line) + 1
-            # 同一行已经挪过来几截时，接在它们后面
-            while index < len(host_block["lines"]) and _same_band(host_block["lines"][index], host_line):
+            # 同一行已经挪过来几截时，接在它们后面。按字体框比，分子分母和标点都算这一行的
+            while index < len(host_block["lines"]) and _same_band(host_block["lines"][index], host_line, _font_box):
                 index += 1
             host_block["lines"].insert(index, line)
             host_block["bbox"] = tuple(pymupdf.Rect(host_block["bbox"]) | pymupdf.Rect(line["bbox"]))
@@ -291,13 +291,14 @@ def _left_to_right(items: list[tuple]) -> list[tuple]:
 
 
 def _line_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] | None:
+    """紧挨在 line 左边的那一截。它本来就在 line 的块里时不挪：
+    取第一个找到的，两个块里各有一截能接时，line 每一轮都会挪到另一个块去。"""
     box = pymupdf.Rect(line["bbox"])
     size = max((span["size"] for span in line["spans"]), default=10.0)
+    best: tuple[float, dict, dict] | None = None
     for block in blocks:
-        if block is own:
-            continue
         for other in block["lines"]:
-            if abs(other["dir"][1]) > 0.01 or not _same_band(other, line):
+            if other is line or abs(other["dir"][1]) > 0.01 or not _same_band(other, line):
                 continue
             left = pymupdf.Rect(other["bbox"])
             if left.x0 >= box.x0:
@@ -308,8 +309,15 @@ def _line_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] |
             if gap < -size or _past_column(block, other, box.x0, size) or _larger_text(line, other):
                 continue
             if gap <= size * 0.6 or (gap <= size and _math_seam(other["spans"], line["spans"])):
-                return block, other
-    return None
+                if best is None or abs(gap) < abs(best[0]):
+                    best = (gap, block, other)
+    if best is None or best[1] is own:
+        return None
+    return best[1], best[2]
+
+
+def _font_box(line: dict) -> pymupdf.Rect:
+    return pymupdf.Rect(line["bbox"])
 
 
 def _past_column(block: dict, line: dict, x: float, size: float) -> bool:
@@ -347,7 +355,7 @@ def _stack_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] 
     spans = [span for span in line["spans"] if span["text"].strip()]
     if not spans or not all(_span_is_math(span) for span in spans):
         return None
-    box = pymupdf.Rect(line["bbox"])
+    box = _line_box(line)
     size = max(float(span["size"]) for span in spans)
     for block in blocks:
         if block is own:
@@ -379,9 +387,11 @@ def _math_seam(left: list[dict], right: list[dict]) -> bool:
     return _span_is_math(left[-1]) or _span_is_math(right[0])
 
 
-def _same_band(a: dict, b: dict) -> bool:
-    """纵向交叠够多。分式的分母、大括号把框往下拉，同一行的两截交叠不到一半。"""
-    ra, rb = pymupdf.Rect(a["bbox"]), pymupdf.Rect(b["bbox"])
+def _same_band(a: dict, b: dict, box=None) -> bool:
+    """纵向交叠够多。分式的分母、大括号把框往下拉，同一行的两截交叠不到一半。
+    默认按字高比：数学字体的字体框伸到下一行，会和下一行交叠，一截字在两行之间来回挪。"""
+    box = box or _line_box
+    ra, rb = box(a), box(b)
     overlap = min(ra.y1, rb.y1) - max(ra.y0, rb.y0)
     return overlap >= min(ra.height, rb.height) * 0.35
 
