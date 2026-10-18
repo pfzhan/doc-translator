@@ -4709,3 +4709,18 @@ def test_formula_pieces_touching_on_one_line_stay_one_paragraph():
              ("+σz", "CMMI10", 10.0), (", where the sampling", "NimbusRomNo9L-Regu", 9.9)),
     ]
     assert _split_lines(items) == [[0, 1, 2, 3, 4, 5]]
+
+
+def test_a_line_with_three_words_among_formulas_is_translated():
+    """Therefore, ∫… = ∫… It follows：公式多、字母占比低，但有三个正文词，是句子。"""
+    from app.formats.pdf import _untranslatable
+
+    def span(text, font):
+        return {"text": text, "font": font}
+
+    spans = [span("p(ϵ)", "CMMI10"), span("Therefore", "Times-Roman"), span(",", "Times-Roman"),
+             span("∫q(z|x)f(z)dz = ∫p(ϵ)f(z)dϵ = ∫p(ϵ)f(g(ϵ,x))dϵ", "CMMI10"), span(".", "Times-Roman"),
+             span("It", "Times-Roman"), span("follows", "Times-Roman")]
+    text = "p(ϵ) Therefore, ∫q(z|x)f(z)dz = ∫p(ϵ)f(z)dϵ = ∫p(ϵ)f(g(ϵ,x))dϵ. It follows"
+    assert not _untranslatable(spans, text)
+    assert _untranslatable(spans[:4], "p(ϵ) Therefore, ∫q(z|x)f(z)dz = ∫p(ϵ)f(z)dϵ")

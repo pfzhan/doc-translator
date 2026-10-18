@@ -2292,9 +2292,14 @@ def _untranslatable(spans: list[dict], text: str, min_prose: int = 3) -> bool:
     if NO_TEXT_RE.match(text):
         return True
     total = sum(len(span["text"]) for span in spans)
-    prose_text = "".join(span["text"] for span in spans if not _span_is_math(span))
-    if _math_chars(spans) > total * 0.3 and _prose_units(prose_text) < min_prose:
+    # 空白 span 已经滤掉，拼的时候补上空格，不然 It、follows 会拼成一个词
+    prose = _prose_units(" ".join(span["text"] for span in spans if not _span_is_math(span)))
+    if _math_chars(spans) > total * 0.3 and prose < min_prose:
         return True
+    # 三个正文词以上就是句子（Therefore, … It follows），公式再多、字母占比再低也照翻。
+    # 字母少的规则是给标签、数字行用的
+    if prose >= 3:
+        return False
     letters = sum(c.isalpha() for c in text)
     return (letters < 2 or letters < len(text) * 0.4) and not _numbered_list_item(text)
 
