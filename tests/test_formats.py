@@ -4620,3 +4620,12 @@ def test_formula_box_height_follows_the_glyph_ink():
     unknown = {"bbox": pymupdf.Rect(0, 0, 10, 20), "h": 20, "d": 5, "spans": [{"text": "x", "origin": (0, 15)}]}
     _tighten_formula_height(unknown, ink)
     assert unknown["h"] == 20
+
+
+def test_tex_spacing_accents_are_composed_before_translation():
+    from app.formats.pdf import _compose_accents
+
+    assert _compose_accents("Universit´e de Montr´eal") == "Université de Montréal"
+    assert _compose_accents("Fr´ed´eric, na¨ıve, ˆetre") == "Frédéric, naïve, être"
+    assert _compose_accents("Fran¸cois, gar c¸on") == "François, gar çon"
+    assert _compose_accents("f(x)´ and x¸") == "f(x)´ and x¸"

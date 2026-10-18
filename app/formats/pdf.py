@@ -4463,6 +4463,26 @@ def _bridge_hyphen(left: str, right: str) -> tuple[str, str]:
     return stripped[:-1] + head, tail if sep else ""
 
 
+# TeX 的 \' \` \^ \" \~ 把重音画成单独的字形，提出来是“Montr´eal”“Fr´ed´eric”。
+# 送翻前合成 é：模型认得出人名地名，写回的译文里也不再出现散开的重音。
+_SPACING_ACCENTS = {
+    "´": "\u0301", "`": "\u0300", "ˆ": "\u0302", "¨": "\u0308", "˜": "\u0303",
+    "ˇ": "\u030c", "˘": "\u0306", "˙": "\u0307", "˚": "\u030a",
+}
+_ACCENT_BEFORE_RE = re.compile("([" + "".join(_SPACING_ACCENTS) + r"])([A-Za-zıȷ])")
+# 软音符只挂在 c、s、t 下面，提出来可能在字母前，也可能在后：c¸、¸c → ç
+_CEDILLA_RE = re.compile(r"([cCsStT])\s?¸|¸\s?([cCsStT])")
+
+
+def _compose_accents(text: str) -> str:
+    def before(m: re.Match[str]) -> str:
+        letter = {"ı": "i", "ȷ": "j"}.get(m.group(2), m.group(2))
+        return unicodedata.normalize("NFC", letter + _SPACING_ACCENTS[m.group(1)])
+
+    text = _ACCENT_BEFORE_RE.sub(before, text)
+    return _CEDILLA_RE.sub(lambda m: unicodedata.normalize("NFC", (m.group(1) or m.group(2)) + "\u0327"), text)
+
+
 def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dict], int]:
     """一个翻译单元的送翻文本和公式记录。公式名按块递增，避免跨页两块撞名。
 
@@ -4492,12 +4512,12 @@ def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dic
         left, right = _bridge_hyphen(texts[0], texts[1])
         # 同一页的半句已经是一句。换栏和跨页仍留分界，写回再按满行接。
         if _same_page_line_pair(unit[0], unit[1]):
-            return _join_lines([left, right] if right else [left]), formulas, name_i
+            return _compose_accents(_join_lines([left, right] if right else [left])), formulas, name_i
         parts = [left, BOUNDARY]
         if right:
             parts.append(right)
-        return _join_lines(parts), formulas, name_i
-    return _join_lines(texts), formulas, name_i
+        return _compose_accents(_join_lines(parts)), formulas, name_i
+    return _compose_accents(_join_lines(texts)), formulas, name_i
 
 
 def _take_owner(text: str, formulas: list[dict], owner: int) -> tuple[str, list[str]]:
