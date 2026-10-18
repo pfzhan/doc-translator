@@ -155,6 +155,19 @@ def test_redo_can_ignore_cached_translations(app_env):
         MockTranslator.translate_batch = original
 
 
+def test_delete_several_records_at_once(app_env):
+    """批量删除：选中的几条连同文件一起删掉，没选的留着；已经不存在的 id 报出来，不影响其他的。"""
+    main = app_env
+    with TestClient(main.app) as client:
+        ids = [wait_done(client, submit(client, name=f"b{i}.md")["id"])["id"] for i in range(3)]
+        r = client.post("/api/jobs/delete", json={"ids": [ids[0], ids[2], "nosuchjob"]})
+        assert r.status_code == 200, r.text
+        assert r.json() == {"deleted": 2, "missing": ["nosuchjob"]}
+        left = [j["id"] for j in client.get("/api/jobs").json()["jobs"]]
+        assert left == [ids[1]]
+        assert not main.jobs.dir(ids[0]).exists() and main.jobs.dir(ids[1]).exists()
+
+
 def test_retry_recomputes_preview_flag_for_legacy_jobs(app_env):
     """加预览功能之前创建的记录存的是 preview=False，重新翻译时应按格式重新计算。"""
     main = app_env

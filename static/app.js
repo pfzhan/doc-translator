@@ -4,6 +4,7 @@ const SETTINGS_KEY = "doc-translator-settings";
 const state = {
   providers: {}, services: [], defaultId: "google", selectedId: null,
   jobs: [], diskUsage: 0, retentionDays: 30, readerView: "both", view: "translate",
+  selected: new Set(),  // 记录页勾选的记录 id，批量删除用
 };
 
 async function api(url, options = {}) {
@@ -826,9 +827,22 @@ function el(tag, cls, text) {
   return e;
 }
 
-function jobRow(job) {
-  const li = el("li", "job");
+// selectable：记录页的行，左边有勾选框；翻译页的最近记录不带
+function jobRow(job, selectable = false) {
+  const li = el("li", selectable ? "job selectable" : "job");
   li.dataset.id = job.id;
+  if (selectable) {
+    const box = el("input", "job-check");
+    box.type = "checkbox";
+    box.checked = state.selected.has(job.id);
+    box.setAttribute("aria-label", `选择「${job.filename}」`);
+    box.addEventListener("change", () => {
+      if (box.checked) state.selected.add(job.id);
+      else state.selected.delete(job.id);
+      renderSelection();
+    });
+    li.append(box);
+  }
   const fmt = fmtOf(job.filename);
   li.append(el("div", `job-fmt ${fmt}`, fmt.toUpperCase()));
 
@@ -937,16 +951,63 @@ function serviceLabel(job) {
 function renderJobs() {
   const all = state.jobs;
   const list = $("history-list");
-  list.replaceChildren(...all.map(jobRow));
+  // 已经不在列表里的（删掉了、过期了）不再算选中
+  const ids = new Set(all.map((j) => j.id));
+  for (const id of state.selected) if (!ids.has(id)) state.selected.delete(id);
+  list.replaceChildren(...all.map((job) => jobRow(job, true)));
   $("history-empty").hidden = all.length > 0;
   $("recent").hidden = all.length === 0;
-  $("recent-list").replaceChildren(...all.slice(0, 3).map(jobRow));
+  $("recent-list").replaceChildren(...all.slice(0, 3).map((job) => jobRow(job)));
   const running = all.filter((j) => ACTIVE.has(j.status)).length;
   $("running-badge").hidden = !running;
   $("running-badge").textContent = running;
   $("usage").textContent = `${all.length} 条记录 · 占用 ${formatSize(state.diskUsage) || "0 KB"}`;
   renderBulk(all);
+  renderSelection();
 }
+
+// 勾选了记录才出现：全选、取消选择、删除选中
+function renderSelection() {
+  const n = state.selected.size;
+  $("history-select").hidden = n === 0;
+  $("history-select-text").textContent = `已选 ${n} 条`;
+  $("select-all").hidden = n === state.jobs.length;
+  $("delete-selected").textContent = `删除选中（${n}）`;
+}
+
+$("select-all").addEventListener("click", () => {
+  for (const job of state.jobs) state.selected.add(job.id);
+  renderJobs();
+});
+
+$("select-none").addEventListener("click", () => {
+  state.selected.clear();
+  renderJobs();
+});
+
+$("delete-selected").addEventListener("click", async (e) => {
+  const chosen = state.jobs.filter((j) => state.selected.has(j.id));
+  if (!chosen.length) return;
+  const running = chosen.filter((j) => ACTIVE.has(j.status)).length;
+  const msg = `删除选中的 ${chosen.length} 条翻译记录？原文件和译文都会被删除，无法恢复。` +
+    (running ? `\n其中 ${running} 本还在翻译，会先停止。` : "");
+  if (!confirm(msg)) return;
+  await busy(e.currentTarget, "删除中…", async () => {
+    try {
+      const ids = chosen.map((j) => j.id);
+      const result = await api("/api/jobs/delete", { json: { ids } });
+      const gone = new Set(ids);
+      state.jobs = state.jobs.filter((j) => !gone.has(j.id));
+      state.selected.clear();
+      if (gone.has(reader.jobId)) closeReader();
+      renderJobs();
+      toast(`已删除 ${result.deleted} 条`);
+    } catch (err) {
+      toast(`删除失败：${err.message}`);
+      refreshJobs();
+    }
+  });
+});
 
 // 全部暂停 / 全部继续：只在有需要的时候出现
 function renderBulk(all) {

@@ -386,16 +386,36 @@ def get_job(job_id: str):
     return _job_or_404(job_id).to_dict()
 
 
-@app.delete("/api/jobs/{job_id}")
-async def delete_job(job_id: str):
+async def _delete(job_id: str) -> None:
     """删除记录，连同原文件、译文和预览。正在翻译的会先停止；正在补生成的等它写完再删。"""
-    _job_or_404(job_id)
     await _cancel(job_id)
     task = variant_tasks.get(job_id)
     if task is not None and task is not asyncio.current_task() and not task.done():
         await asyncio.gather(task, return_exceptions=True)
     jobs.delete(job_id)
+
+
+@app.delete("/api/jobs/{job_id}")
+async def delete_job(job_id: str):
+    _job_or_404(job_id)
+    await _delete(job_id)
     return {"ok": True}
+
+
+@app.post("/api/jobs/delete")
+async def delete_jobs(data: dict = Body(...)):
+    """批量删除选中的记录。已经不存在的 id 放进 missing 返回，不影响其他的。"""
+    ids = data.get("ids")
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+        raise HTTPException(400, "ids 必须是记录 id 列表")
+    deleted, missing = 0, []
+    for job_id in dict.fromkeys(ids):
+        if jobs.get(job_id) is None:
+            missing.append(job_id)
+            continue
+        await _delete(job_id)
+        deleted += 1
+    return {"deleted": deleted, "missing": missing}
 
 
 @app.post("/api/jobs/pause-all")

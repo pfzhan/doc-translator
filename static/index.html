@@ -107,6 +107,14 @@
     <span class="hint" id="history-bulk-text"></span>
     <span class="bulk-actions" data-bulk></span>
   </div>
+  <div class="bulk-bar" id="history-select" hidden>
+    <span class="hint" id="history-select-text"></span>
+    <span class="bulk-actions">
+      <button type="button" class="btn sm" id="select-all">全选</button>
+      <button type="button" class="btn sm" id="select-none">取消选择</button>
+      <button type="button" class="btn sm danger-ghost" id="delete-selected">删除选中</button>
+    </span>
+  </div>
   <ul class="job-list" id="history-list"></ul>
   <div class="empty" id="history-empty" hidden>
     <div class="empty-mark" aria-hidden="true">译</div>
