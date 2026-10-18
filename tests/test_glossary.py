@@ -37,6 +37,12 @@ def test_possessives_do_not_leave_word_fragments():
     assert not any(term.split()[0] in ("s", "t") for term in found), found
 
 
+def test_a_word_repeated_across_table_cells_is_not_a_phrase():
+    """表格里相邻两格都是 semi-supervised，拼成的 “semi-supervised semi-supervised” 不是术语。"""
+    rows = ["Vinyals & Kaiser el al. (2014) semi-supervised semi-supervised 92.1"] * 4
+    assert not any(len(set(term.casefold().split())) < len(term.split()) for term in candidates(rows))
+
+
 def test_candidates_skip_text_without_spaces_between_words():
     assert candidates(["数据立方体的实现。数据立方体很大。"] * 10) == []
 

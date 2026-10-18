@@ -147,6 +147,9 @@ def candidates(texts: Sequence[str]) -> list[str]:
                     continue
                 if size > 1 and any(_is_acronym(word) for word in gram):
                     continue
+                # 表格相邻两格写着同一个词时会连成 “semi-supervised semi-supervised”
+                if len({word.casefold() for word in gram}) < size:
+                    continue
                 surface = " ".join(gram)
                 key = _key(surface)
                 forms[key][surface] += 1
