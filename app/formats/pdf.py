@@ -4475,6 +4475,7 @@ _TRANS_HEAD_NUM_RE = re.compile(
     r"|" + _CN_DOT + r"(?:[.．]" + _CN_DOT + r")+\.?"
     r"|" + _CN_NUM + r"\s*[,，、]"
     r"|\d+(?:\.\d+)*\.?[章节]?"
+    r"|" + _CN_DOT + r"(?=\s|\{/)"
     r")\s*"
 )
 
@@ -4629,10 +4630,15 @@ def _normalize_heading_number(src_text: str, translation: str) -> str:
     m = _SRC_HEAD_NUM_RE.match(src_text.strip())
     if not m or len(src_text) > 60 or src_text.rstrip().endswith(tuple(SENT_ENDS)):
         return translation
-    if not _TRANS_HEAD_NUM_RE.match(translation.strip()):
+    # 编号可能包在字号、粗体标记里：{z125}二{/z} 算法
+    lead = re.match(r"^\s*((?:\{[biz]\d*\})*)", translation)
+    body = translation[lead.end():]
+    if not _TRANS_HEAD_NUM_RE.match(body):
         return translation
-    t = _TRANS_HEAD_NUM_RE.sub("", translation.strip(), count=1)
-    return f"{m.group(1)} {t}" if t else translation
+    rest = _TRANS_HEAD_NUM_RE.sub("", body, count=1)
+    close = re.match(r"^((?:\{/[biz]\})*)\s*", rest)
+    rest = rest[close.end():]
+    return f"{lead.group(1)}{m.group(1)}{close.group(1)} {rest}" if rest else translation
 
 
 def _heading_number_for(kind: str, src_text: str, translation: str) -> str:
