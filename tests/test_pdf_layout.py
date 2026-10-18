@@ -606,3 +606,26 @@ def test_a_numbered_algorithm_statement_is_one_unit():
         "2: Add the transformation y = f(x) to the network and train it",
         "3: Return the trained network",
     ]
+
+
+def test_a_displayed_formula_inside_an_algorithm_step_keeps_its_glyphs():
+    """一步下面单独居中一行式子：句子照翻，式子留原字，不并进句子里当词翻。
+    紧接句子写、不缩进的式子行仍是句子的一部分。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    for y in (50, 66, 170):
+        page.draw_line((50, y), (350, y), width=0.5)
+    page.insert_text((52, 62), "Algorithm 2 Training a network", fontsize=10)
+    rows = [("1:", "Average the statistics over them:", 70, 80), ("", "u = v + 1", 160, 93),
+            ("2:", "Optimize the parameters of the set", 70, 110), ("", "{a, b} = c", 70, 123),
+            ("3:", "Return the trained network", 70, 140)]
+    for label, text, x, y in rows:
+        if label:
+            page.insert_text((54, y), label, fontsize=8)
+        page.insert_text((x, y), text, fontsize=10)
+    texts = [block.text for block in extract_blocks(doc) if block.clip is not None]
+    assert texts == [
+        "1: Average the statistics over them:",
+        "2: Optimize the parameters of the set {a, b} = c",
+        "3: Return the trained network",
+    ]
