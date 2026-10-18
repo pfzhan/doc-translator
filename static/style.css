@@ -1,27 +1,27 @@
 /* ============ 设计变量 ============ */
 :root {
-  --bg: #f6f6f4;
+  --bg: #f5f6f8;
   --surface: #ffffff;
-  --surface-2: #f1f1ee;
-  --text: #1c1d1f;
-  --text-2: #55585e;
+  --surface-2: #eef0f3;
+  --text: #1b1f27;
+  --text-2: #4a5160;
   /* 次要文字（元数据、提示）在白底和页面底色上都要过 4.5:1 */
-  --muted: #6c6f75;
-  --border: #e3e3df;
-  --border-strong: #cfcfca;
-  --accent: #d6336c;
-  --accent-soft: #fbe9ef;
-  /* 浅粉底上的强调色文字，--accent 直接放在浅粉底上对比度不够 */
-  --accent-strong: #c2255c;
+  --muted: #667085;
+  --border: #e2e5ea;
+  --border-strong: #c9ced6;
+  --accent: #3a55d6;
+  --accent-soft: #eceffd;
+  /* 浅色强调底上的文字，比 --accent 再深一档 */
+  --accent-strong: #2c45b8;
   --accent-text: #ffffff;
-  --link: #2459d6;
-  --ok: #1a7a43;
-  --ok-soft: #e6f4ec;
-  --warn: #a15300;
-  --warn-soft: #fdf1e2;
+  --link: #3a55d6;
+  --ok: #12733a;
+  --ok-soft: #e8f5ec;
+  --warn: #a14f00;
+  --warn-soft: #fdf3e3;
   --error: #c42b2b;
-  --error-soft: #fbe8e8;
-  --focus: #2459d6;
+  --error-soft: #fdecec;
+  --focus: #3a55d6;
   --fmt-pdf: #b5372b;
   --fmt-epub: #2b7a4b;
   --fmt-md: #3b5bb5;
@@ -30,38 +30,38 @@
   --seg-on: #ffffff;
   --radius: 10px;
   --radius-sm: 7px;
-  --shadow: 0 1px 2px rgba(20, 20, 20, 0.04), 0 4px 16px rgba(20, 20, 20, 0.04);
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 16px rgba(16, 24, 40, 0.05);
   --read-font: "Iowan Old Style", "Palatino Linotype", Georgia, "Songti SC", "Noto Serif CJK SC", serif;
   --ui-font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #131416;
-    --surface: #1b1c1f;
-    --surface-2: #232428;
-    --text: #e8e8e6;
-    --text-2: #b4b5b8;
-    --muted: #85878c;
-    --border: #2d2e33;
-    --border-strong: #3c3e44;
-    --accent: #f06595;
-    --accent-soft: #3a1f2a;
-    --accent-strong: #f783ac;
-    --accent-text: #1b1c1f;
-    --link: #7aa2ff;
+    --bg: #0f1115;
+    --surface: #171a20;
+    --surface-2: #1f232b;
+    --text: #e7e9ee;
+    --text-2: #b3b9c4;
+    --muted: #8b93a1;
+    --border: #2a2f38;
+    --border-strong: #3a404c;
+    --accent: #8197ff;
+    --accent-soft: #1e2745;
+    --accent-strong: #aebcff;
+    --accent-text: #0f1115;
+    --link: #8fa5ff;
     --ok: #4cc283;
-    --ok-soft: #1a3226;
+    --ok-soft: #16291f;
     --warn: #f0a24a;
-    --warn-soft: #3a2a17;
+    --warn-soft: #33261a;
     --error: #ff7b7b;
-    --error-soft: #3a1d1d;
-    --focus: #7aa2ff;
+    --error-soft: #371d1f;
+    --focus: #8fa5ff;
     --fmt-pdf: #ef6a5e;
     --fmt-epub: #4fb37a;
     --fmt-md: #7f9cf0;
     --fmt-mobi: #e09a3e;
-    --seg-on: #3a3c42;
+    --seg-on: #323845;
     --shadow: none;
     color-scheme: dark;
   }
@@ -153,7 +153,7 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 .btn:hover { background: var(--surface-2); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .btn.primary:hover { filter: brightness(0.95); }
-/* 次一级的推荐操作：列表里每行都有一个，用实心粉色会和页面主按钮抢 */
+/* 次一级的推荐操作：列表里每行都有一个，用实心主色会和页面主按钮抢 */
 .btn.soft { background: var(--accent-soft); border-color: transparent; color: var(--accent-strong); font-weight: 600; }
 .btn.soft:hover { background: color-mix(in srgb, var(--accent) 18%, var(--surface)); }
 .btn.lg { height: 42px; padding: 0 22px; font-size: 15px; }
