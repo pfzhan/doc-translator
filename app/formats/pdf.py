@@ -2240,6 +2240,7 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     for data in pages:
         _rejoin_split_lines(data)
     for pno, data in enumerate(pages):
+        margins = _left_margins(data)
         for b in data["blocks"]:
             if b.get("type") != 0:
                 continue
@@ -2264,7 +2265,10 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                     rect |= r
                 # 落在格子里的碎片先留着：一格的几截并起来以后再看是不是公式
                 in_cell = cell_containing(rect, tables_by_page[pno]) is not None
-                if not in_cell and _untranslatable(spans, text):
+                # 居中的单行式子（定义、if and only if）里的几个连接词不成句，留原字：
+                # 模型重排这种行常把数学意思改掉
+                displayed = len(group) == 1 and _displayed(rect, spans, margins)
+                if not in_cell and _untranslatable(spans, text, _DISPLAY_PROSE if displayed else 3):
                     # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
                     # 捐了会被擦掉，而这些行没有占位符、不会重画。
                     if NO_TEXT_RE.match(text) and blocks and blocks[-1].page == pno:
@@ -2308,6 +2312,32 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     return _split_affiliation_tails(_merge_same_line_sentences(_merge_line_tails(merged)))
 
 
+_DISPLAY_PROSE = 8
+
+
+def _left_margins(data: dict) -> list[float]:
+    """这一页正文行的左缘（每栏一个）：至少三行长句从这里起笔。"""
+    starts: list[float] = []
+    for block in data.get("blocks", []):
+        for line in block.get("lines", []):
+            if len("".join(span["text"] for span in line["spans"]).strip()) >= 40:
+                starts.append(round(line["bbox"][0]))
+    margins: list[float] = []
+    for x in sorted(set(starts)):
+        if sum(1 for start in starts if abs(start - x) <= 2) >= 3 and all(abs(x - m) > 2 for m in margins):
+            margins.append(x)
+    return margins
+
+
+def _displayed(rect: pymupdf.Rect, spans: list[dict], margins: list[float]) -> bool:
+    """离开本栏左缘两个多字宽单独成行的式子。段落里接着上一行写的式子从左缘起笔。"""
+    left = [m for m in margins if m <= rect.x0 + 2]
+    if not left:
+        return False
+    size = max((float(span.get("size") or 0) for span in spans), default=10.0)
+    return rect.x0 - max(left) > size * 2.5
+
+
 def _untranslatable(spans: list[dict], text: str, min_prose: int = 3) -> bool:
     """纯符号、纯公式、几乎没有字母的行不送翻，留原字。
 
@@ -2322,9 +2352,9 @@ def _untranslatable(spans: list[dict], text: str, min_prose: int = 3) -> bool:
     prose = _prose_units(" ".join(span["text"] for span in spans if not _span_is_math(span)))
     if _math_chars(spans) > total * 0.3 and prose < min_prose:
         return True
-    # 三个正文词以上就是句子（Therefore, … It follows），公式再多、字母占比再低也照翻。
+    # 正文词够数就是句子（Therefore, … It follows），公式再多、字母占比再低也照翻。
     # 字母少的规则是给标签、数字行用的
-    if prose >= 3:
+    if prose >= max(min_prose, 3):
         return False
     letters = sum(c.isalpha() for c in text)
     return (letters < 2 or letters < len(text) * 0.4) and not _numbered_list_item(text)
