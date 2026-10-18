@@ -2697,13 +2697,35 @@ def _merge_cells(blocks: list[TextBlock], unchecked: set[int]) -> list[TextBlock
             part for part in _reading_sorted(cells[key])
             if not (id(part) in unchecked and _displayed_in_cell(part, cells[key]))
         ]
-        if not parts:
-            continue
-        merged = parts[0] if len(parts) == 1 else _joined_cell(parts)
-        if any(id(part) in unchecked for part in parts) and _untranslatable(_block_spans(merged), merged.text, 1):
-            continue
-        out.append(merged)
+        for group in _cell_groups(parts):
+            merged = group[0] if len(group) == 1 else _joined_cell(group)
+            if any(id(part) in unchecked for part in group) and _untranslatable(_block_spans(merged), merged.text, 1):
+                continue
+            out.append(merged)
     return out
+
+
+def _cell_groups(parts: list[TextBlock]) -> list[list[TextBlock]]:
+    """格子里挨着的几截是一句话。隔开两个字宽、或空出一行的是另一句：
+    流程图的框被认成格子时，框里的几个节点标签不能并成一句。"""
+    groups: list[list[TextBlock]] = []
+    for part in parts:
+        near = [group for group in groups if any(_close_in_cell(part, other) for other in group)]
+        if not near:
+            groups.append([part])
+            continue
+        near[0].append(part)
+        for group in near[1:]:
+            near[0].extend(group)
+            groups.remove(group)
+    return [_reading_sorted(group) if len(group) > 1 else group for group in groups]
+
+
+def _close_in_cell(a: TextBlock, b: TextBlock) -> bool:
+    size = max(a.size, b.size)
+    dx = max(a.rect.x0 - b.rect.x1, b.rect.x0 - a.rect.x1, 0)
+    dy = max(a.rect.y0 - b.rect.y1, b.rect.y0 - a.rect.y1, 0)
+    return dx <= size * 2 and dy <= size
 
 
 def _displayed_in_cell(part: TextBlock, parts: list[TextBlock]) -> bool:
