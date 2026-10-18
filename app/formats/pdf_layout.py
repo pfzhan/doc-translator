@@ -429,6 +429,7 @@ def page_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
     return (*ruled, *unruled_tables(page, (*ruled, *algorithms)), *algorithms)
 
 
+_SYMBOL_FONT_RE = re.compile(r"(?:^|\+)(?:CMSY|CMEX|MSAM|MSBM)", re.I)
 _ALGORITHM_RE = re.compile(r"^\s*(?:Algorithm|Procedure|算法)\s*\d+", re.I)
 
 
@@ -534,7 +535,9 @@ def _code_rows(lines: list[dict], body: pymupdf.Rect) -> tuple[pymupdf.Rect, ...
         return ()
     main = max(span["size"] for span in spans)
     baselines: list[float] = []
-    for y in sorted(span["origin"][1] for span in spans if span["size"] >= main * 0.85):
+    # 根号、大括号这类符号字体的起笔点不在基线上，不拿它们分行
+    steady = [span for span in spans if span["size"] >= main * 0.85 and not _SYMBOL_FONT_RE.search(span["font"])]
+    for y in sorted(span["origin"][1] for span in steady):
         if not baselines or y - baselines[-1] > main * 0.4:
             baselines.append(y)
     if len(baselines) < 2:

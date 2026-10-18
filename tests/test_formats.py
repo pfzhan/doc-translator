@@ -4609,16 +4609,15 @@ def test_formula_box_height_follows_the_glyph_ink():
     """CMSY 的字体伸量将近两行高。框按字体算会把公式压小，还会裁进上下两行的字。"""
     from app.formats.pdf import _tighten_formula_height
 
-    arrow = {"text": "←", "origin": (130.2, 226.3)}
-    zero = {"text": "0", "origin": (142.6, 226.3)}
+    arrow = {"text": "←", "ink": (130.2, 221.3, 139.9, 226.4)}
+    zero = {"text": "0", "ink": (142.6, 219.8, 147.4, 226.5)}
     part = {"bbox": pymupdf.Rect(114.7, 218.8, 147.4, 237.1), "h": 18.3, "d": 10.8, "spans": [arrow, zero]}
-    ink = {("←", 130.2, 226.3): pymupdf.Rect(130.2, 221.3, 139.9, 226.4),
-           ("0", 142.6, 226.3): pymupdf.Rect(142.6, 219.8, 147.4, 226.5)}
-    _tighten_formula_height(part, ink)
+    _tighten_formula_height(part)
     assert [round(v, 1) for v in part["bbox"]] == [114.7, 219.2, 147.4, 227.1]
     assert part["h"] == 7.9 and part["d"] == 0.8
-    unknown = {"bbox": pymupdf.Rect(0, 0, 10, 20), "h": 20, "d": 5, "spans": [{"text": "x", "origin": (0, 15)}]}
-    _tighten_formula_height(unknown, ink)
+    # 点阵字没有墨迹框，照旧用原来的框
+    unknown = {"bbox": pymupdf.Rect(0, 0, 10, 20), "h": 20, "d": 5, "spans": [{"text": "x"}]}
+    _tighten_formula_height(unknown)
     assert unknown["h"] == 20
 
 
@@ -4676,3 +4675,17 @@ def test_fraction_pieces_rejoin_their_line_with_less_overlap():
                        {"type": 0, "bbox": (205, 253, 212, 264), "lines": [paren]}]}
     _rejoin_split_lines(data)
     assert data["blocks"][0]["lines"][-1] is paren
+
+
+def test_math_line_box_follows_glyph_ink():
+    """CMSY 的框按字体伸量能有两行高。行框、格子都按墨迹算；根号的起笔点在顶上，也按墨迹。"""
+    from app.formats.pdf import _line_box, _text_box
+
+    arrow = {"text": "←", "font": "CMSY10", "size": 9.7, "bbox": (130.2, 218.8, 139.9, 235.6),
+             "origin": (130.2, 226.3), "ink": (130.2, 221.3, 139.9, 226.4)}
+    word = {"text": "(Initialize", "font": "NimbusRomNo9L-Regu", "size": 9.7, "bbox": (147.4, 217.3, 194.8, 229.0),
+            "origin": (147.4, 226.3), "ink": (147.4, 219.7, 194.8, 228.0)}
+    assert [round(v, 1) for v in _text_box(arrow)] == [130.2, 220.7, 139.9, 227.0]
+    assert _text_box(word) == pymupdf.Rect(147.4, 217.3, 194.8, 229.0)
+    line = {"bbox": (130.2, 217.3, 194.8, 235.6), "spans": [arrow, word]}
+    assert [round(v, 1) for v in _line_box(line)] == [130.2, 217.3, 194.8, 229.0]
