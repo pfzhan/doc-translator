@@ -4652,3 +4652,12 @@ def test_small_caps_heading_is_sent_without_size_marks():
     block = TextBlock(0, rect, [rect], "2.1 ADAM’S UPDATE", 10.0, "#000", False, span_lines=[spans])
     sent, _ = _placeholderize(block, 0)
     assert sent == "2.1 ADAM’S UPDATE"
+
+
+def test_bare_chinese_section_number_is_restored():
+    from app.formats.pdf import _normalize_heading_number
+
+    assert _normalize_heading_number("2 ALGORITHM", "二 算法") == "2 算法"
+    assert _normalize_heading_number("2.1 Update rule", "二点一 更新规则") == "2.1 更新规则"
+    assert _normalize_heading_number("3 Method", "{z125}三{/z} 方法") == "{z125}3{/z} 方法"
+    assert _normalize_heading_number("1 A new idea", "一种新想法") == "一种新想法"
