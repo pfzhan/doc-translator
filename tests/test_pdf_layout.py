@@ -687,3 +687,21 @@ def test_an_algorithm_formula_beside_a_distant_comment_keeps_its_glyphs():
     near = part("Set the parameters", "Times-Roman", 425.0, 540.2)
     merged = _merge_cells([formula, near], {id(formula), id(near)})
     assert [block.text for block in merged] == ["σ ← (x − µ) Set the parameters"]
+
+
+def test_far_apart_labels_in_one_box_stay_separate():
+    """框里隔开的几个节点标签不是一句话，各翻各的、各写回各的位置。挨着的换行仍并成一句。"""
+    from app.formats.pdf import _merge_cells
+
+    clip = (388.0, 163.0, 687.0, 373.0)
+
+    def part(text, x0, y0, x1):
+        rect = pymupdf.Rect(x0, y0, x1, y0 + 13.4)
+        return TextBlock(23, rect, [rect], text, 12.0, "#000", False, clip=clip)
+
+    labels = [part("Scan [Emps]", 430, 287.1, 498), part("Aggregate [manager]", 554, 287.1, 666.7),
+              part("Scan [Emps]", 579, 341.1, 647)]
+    assert [block.text for block in _merge_cells(labels, set())] == ["Scan [Emps]", "Aggregate [manager]", "Scan [Emps]"]
+
+    wrapped = [part("A long sentence in the box that", 400, 200, 660), part("wraps onto the next line", 400, 214, 600)]
+    assert [block.text for block in _merge_cells(wrapped, set())] == ["A long sentence in the box that wraps onto the next line"]
