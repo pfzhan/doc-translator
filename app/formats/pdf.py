@@ -641,7 +641,7 @@ def _math_chars(spans: list[dict]) -> int:
 # 句末标点：判断页面末尾的块是不是被页边界切断的段落
 _SENT_END_PUNCT = tuple(".!?:;…。！？；：\"'”’)]}》")
 # '1 Introduction'、'3.1 Encoder' 是章节标题，不能当成跨页续段
-_SRC_HEAD_NUM_RE = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+\S")
+_SRC_HEAD_NUM_RE = re.compile(r"^(\d+(?:\.\d+)*\.?)\s+\S")
 
 
 def _different_columns(
