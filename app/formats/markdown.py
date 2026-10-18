@@ -203,9 +203,7 @@ def split_blocks(text: str) -> list[Block]:
             i = j
             continue
         if QUOTE_RE.match(line) and not para:
-            j = i
-            while j < len(lines) and QUOTE_RE.match(lines[j]):
-                j += 1
+            j = _quote_end(lines, i)
             blocks.append(Block("quote", lines[i:j]))
             i = j
             continue
@@ -220,6 +218,36 @@ def _starts_table(header: str, separator: str) -> bool:
     if "|" not in header or not TABLE_SEP_RE.match(separator):
         return False
     return len(_split_cells(header)[1]) == len(_split_cells(separator)[1])
+
+
+def _quote_end(lines: list[str], start: int) -> int:
+    """引用块到哪一行为止（不含）。不带 > 的行紧跟在引用里的段落文字后面、又不开新块时，
+    是这一段的懒续行（CommonMark），还算引用。标题、提示框标记、代码块后面不能懒续。"""
+    j = start
+    fence = ""
+    in_text = False
+    while j < len(lines):
+        m = QUOTE_RE.match(lines[j])
+        if m:
+            body = m.group(2)
+            fm = FENCE_RE.match(body)
+            if fence or fm:
+                fence = "" if fence and _closes_fence(body, fence) else (fence or fm.group(1))
+                in_text = False
+            else:
+                in_text = bool(body.strip()) and not (
+                    ALERT_RE.match(body.strip()) or HEADING_RE.match(body) or HR_RE.match(body))
+        elif not (in_text and _continues_paragraph(lines[j])):
+            break
+        j += 1
+    return j
+
+
+def _continues_paragraph(line: str) -> bool:
+    """非空、又不是标题、代码栏、分隔线、列表项、HTML 块、公式块的开头。"""
+    return bool(line.strip()) and not (
+        HEADING_RE.match(line) or FENCE_RE.match(line) or HR_RE.match(line) or LIST_RE.match(line)
+        or _starts_html_block(line) or MATH_OPEN_RE.match(line))
 
 
 def _split_cells(line: str) -> tuple[str, list[str], str]:
@@ -320,13 +348,21 @@ def _list_items(lines: list[str]) -> list[tuple[int, str, str, list[str]]]:
 def _quote_units(lines: list[str]) -> list[tuple[str, int, str, str, str, list[str]]]:
     """把引用块拆成 (类型, 起始行号, 引用前缀, 列表标记, 合并后的文本, 原始行)。
 
-    类型 raw 原样输出：空的引用行、提示框标记、引用里的代码块。para 和 item 要翻译：
-    空引用行之间的每一段、引用里的每个列表项各自成段，引用层级变了也另起一段。
+    类型 raw 原样输出：空的引用行、提示框标记、引用里的代码块。para、item、heading 要翻译：
+    空引用行之间的每一段、引用里的每个列表项、每个标题各自成段，引用层级变了也另起一段。
     """
     units: list[tuple[str, int, str, str, str, list[str]]] = []
     fence = ""
     for idx, line in enumerate(lines):
         m = QUOTE_RE.match(line)
+        if m is None:
+            # 懒续行：_quote_end 只在段落文字后面放它进来
+            if units and units[-1][0] in ("para", "item"):
+                kind, start, lpre, mpre, text, raw = units[-1]
+                units[-1] = (kind, start, lpre, mpre, text + " " + line.strip(), raw + [line])
+            else:
+                units.append(("raw", idx, "", "", line, [line]))
+            continue
         qpre, body = m.group(1), m.group(2)
         fm = FENCE_RE.match(body)
         if fence or fm:
@@ -339,12 +375,16 @@ def _quote_units(lines: list[str]) -> list[tuple[str, int, str, str, str, list[s
         if not body.strip() or ALERT_RE.match(body.strip()):
             units.append(("raw", idx, qpre, "", body, [line]))
             continue
+        heading = HEADING_RE.match(body)
+        if heading:
+            units.append(("heading", idx, qpre, heading.group(1), heading.group(2), [line]))
+            continue
         item = LIST_RE.match(body)
         if item:
             units.append(("item", idx, qpre, item.group(1), item.group(2), [line]))
             continue
         last = units[-1] if units else None
-        if last and last[0] != "raw" and last[2].count(">") == qpre.count(">"):
+        if last and last[0] in ("para", "item") and last[2].count(">") == qpre.count(">"):
             kind, start, lpre, mpre, text, raw = last
             units[-1] = (kind, start, lpre, mpre, text + " " + body.strip(), raw + [line])
         else:
@@ -387,6 +427,10 @@ def render(blocks: list[Block], translations: list[str], bilingual: bool) -> str
             for kind, _, qpre, mpre, text, raw in _quote_units(b.lines):
                 if kind == "raw" or not _translatable(text):
                     out.extend(raw)
+                elif kind == "heading":
+                    if bilingual:
+                        out.extend(raw)
+                    out.append(qpre + mpre + t(text))
                 elif kind == "item":
                     if bilingual:
                         out.append(qpre + mpre + text + "  ")

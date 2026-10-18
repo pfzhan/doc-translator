@@ -354,6 +354,22 @@ def test_markdown_quote_keeps_paragraphs_alerts_and_lists():
     assert "> - first point  \n>   T:first point" in both
 
 
+def test_markdown_lazy_quote_continuation_stays_in_the_quote():
+    """引用段落后面不带 > 的续行还属于这一段（CommonMark 懒续行），一句话不能拆成两段翻译。
+    标题、列表、引用里的代码块后面的行不是续行。"""
+    src = ("> This is a quote that\ncontinues lazily here.\n> - point one\nstill point one\n\nAfter.\n\n"
+           "> quote\n# Heading\n\n> ```\n> code\nnot code\n\n> # Title\nplain")
+    blocks = split_blocks(src)
+    texts = collect_segments(blocks)
+    assert texts == ["This is a quote that continues lazily here.", "point one still point one", "After.",
+                     "quote", "Heading", "not code", "Title", "plain"]
+    out = render(blocks, ["T:" + x for x in texts], bilingual=False)
+    assert out.startswith("> T:This is a quote that continues lazily here.\n> - T:point one still point one\n\nT:After.")
+    both = render(blocks, ["T:" + x for x in texts], bilingual=True)
+    assert both.startswith("> This is a quote that\ncontinues lazily here.\n>\n> T:This is a quote that continues lazily here.")
+    assert out.endswith("> # T:Title\nT:plain") and "> # Title\n> # T:Title\n" in both
+
+
 def test_markdown_link_definitions_kept_verbatim():
     """链接引用定义原样保留，不能并成一行；脚注定义有正文，照常翻译。"""
     src = "See [docs][d] and ![ci][c].\n\n[d]: https://example.com/docs\n[c]: https://img.shields.io/ci.svg\n\n[^1]: A footnote here."
