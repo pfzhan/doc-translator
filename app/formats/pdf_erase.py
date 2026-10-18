@@ -11,6 +11,7 @@ span 的基线上、宽度范围内，就是这个 span 的字。点阵字这类
 from __future__ import annotations
 
 import math
+import statistics
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
@@ -64,10 +65,17 @@ class Erasure:
 
 
 class _Owners:
-    def __init__(self, erasure: Erasure):
+    """chars 是页面上每个 span 里各个字的起笔点，按 span 的框查。
+
+    span 自己的 origin 只是第一个字的起笔点。第一个字是空格时，它可能落在前面下标的
+    基线上，和这一行的字差一点多，拿它当基线会漏擦整段。查得到逐字起笔点的 span 按点认。
+    """
+
+    def __init__(self, erasure: Erasure, chars: dict[tuple[float, ...], list[tuple[float, float]]] | None = None):
         self.points: set[tuple[float, float]] = set()
         self.lines: list[_Line] = []
         self.boxes: list[pymupdf.Rect] = []
+        chars = chars or {}
         for span in erasure.spans:
             origins = span.get("origins")
             if origins is not None:
@@ -78,7 +86,14 @@ class _Owners:
             if abs(direction[1]) > 0.01:
                 self.boxes.append(bbox)
                 continue
-            self.lines.append(_Line(span["origin"][1], float(span.get("size") or bbox.height), bbox.x0, bbox.x1))
+            size = float(span.get("size") or bbox.height)
+            found = chars.get(_box_key(bbox))
+            baseline = span["origin"][1]
+            if found:
+                self.points.update(_key(x, y) for x, y in found)
+                baseline = statistics.median(y for _x, y in found)
+            # 按基线认仍然要：粗体模拟错开一点再画一遍的字，起笔点和 PyMuPDF 报的不一样
+            self.lines.append(_Line(baseline, size, bbox.x0, bbox.x1))
         self.boxes.extend(erasure.spanless)
 
     def owns(self, x: float, y: float) -> bool:
@@ -98,6 +113,25 @@ def _key(x: float, y: float) -> tuple[float, float]:
     return round(x, _ORIGIN_DIGITS), round(y, _ORIGIN_DIGITS)
 
 
+def _box_key(box: pymupdf.Rect) -> tuple[float, ...]:
+    return tuple(round(value, 1) for value in box)
+
+
+def _char_origins(page: pymupdf.Page) -> dict[tuple[float, ...], list[tuple[float, float]]]:
+    """页面上每个 span 的逐字起笔点（空白不算），按 span 框查。和提取时用同一组参数。"""
+    data = page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
+    out: dict[tuple[float, ...], list[tuple[float, float]]] = {}
+    for block in data["blocks"]:
+        if block.get("type") != 0:
+            continue
+        for line in block["lines"]:
+            for span in line["spans"]:
+                points = [tuple(char["origin"]) for char in span.get("chars") or [] if str(char.get("c") or "").strip()]
+                if points:
+                    out.setdefault(_box_key(pymupdf.Rect(span["bbox"])), []).extend(points)
+    return out
+
+
 def _matrix(m) -> pymupdf.Matrix:
     return pymupdf.Matrix(m.a, m.b, m.c, m.d, m.e, m.f)
 
@@ -115,7 +149,7 @@ class _Sanitizer(mupdf.PdfSanitizeFilterOptions2):
         self.use_virtual_image_filter()
         self.use_virtual_after_text_object(False)
         self.to_page = page.transformation_matrix
-        self.owners = _Owners(erasure)
+        self.owners = _Owners(erasure, _char_origins(page))
         self.lines = erasure.lines
         self.removed = 0
         # 回调里的异常 MuPDF 只当成「保留」，记下来再抛
