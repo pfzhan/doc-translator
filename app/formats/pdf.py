@@ -240,7 +240,7 @@ def _rejoin_split_lines(data: dict) -> None:
 
     不挪的话，行尾“and β₂ᵗ”这样的半截单看像公式行，会被当成公式跳过：
     句子少了几个词，原文也留在页面上。两截要在同一行上首尾相接；
-    段落的各行都止于栏沟前时，右边是隔壁栏，窄栏沟也不接。
+    段落的各行都止于栏沟前时，右边是隔壁栏，窄栏沟也不接；字号大一截的也不接。
     """
     blocks = [block for block in data.get("blocks", []) if block.get("type") == 0]
     if len(blocks) < 2:
@@ -305,7 +305,7 @@ def _line_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] |
             # 上下标会让两截在接口处叠上一个字宽；词距以外的空档是栏沟。
             # 等号、分式两边的空比词距宽，有一边是式子时放到一个字宽
             gap = box.x0 - left.x1
-            if gap < -size or _past_column(block, other, box.x0, size):
+            if gap < -size or _past_column(block, other, box.x0, size) or _larger_text(line, other):
                 continue
             if gap <= size * 0.6 or (gap <= size and _math_seam(other["spans"], line["spans"])):
                 return block, other
@@ -328,6 +328,13 @@ def _past_column(block: dict, line: dict, x: float, size: float) -> bool:
         bool(rows) and all(row.x1 < x for row in rows)
         and any(abs(row.x1 - box.x1) <= size * 0.5 for row in rows)
     )
+
+
+def _larger_text(line: dict, host: dict) -> bool:
+    """line 里的正文字号比 host 大一截：是隔壁栏和它同一基线的标题，切开的后半截字号不变。"""
+    sizes = [float(span["size"]) for span in line["spans"] if span["text"].strip() and not _span_is_math(span)]
+    host_size = max((float(span["size"]) for span in host["spans"] if span["text"].strip()), default=0.0)
+    return bool(sizes) and host_size > 0 and max(sizes) > host_size * 1.2
 
 
 def _stack_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] | None:

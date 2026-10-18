@@ -4631,6 +4631,16 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
     _rejoin_split_lines(data)
     assert total in data["blocks"][0]["lines"]
 
+    # 栏顶的大号标题和左栏段落同一基线，左栏只剩一整行可比：字号大一截，不是那一行的后半截
+    top = line(72, 301.1, 35.5, "not have to readjust to compensate for the change in the")
+    tail = line(72, 138.8, 47.5, "distribution of x.")
+    heading = [line(311, 318.2, 31, "2", "Times-Bold", 14.3, 50.9),
+               line(332.5, 385.3, 31, "Towards", "Times-Bold", 14.3, 50.9)]
+    data = {"blocks": [{"type": 0, "bbox": (72, 35.5, 301.1, 60.8), "lines": [top, tail]},
+                       {"type": 0, "bbox": (311, 31, 385.3, 50.9), "lines": list(heading)}]}
+    _rejoin_split_lines(data)
+    assert data["blocks"][1]["lines"] == heading
+
 
 def test_a_justified_heading_split_word_by_word_stays_one_paragraph():
     """窄栏标题两端对齐，词距拉到两个字宽，PyMuPDF 一词一行。按整行认回一段。"""
