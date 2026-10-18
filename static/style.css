@@ -199,6 +199,8 @@ label.check input { width: 16px; height: 16px; min-height: 0; margin: 0; accent-
   padding: 14px 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
 }
 .job:hover { border-color: var(--border-strong); }
+.job.selectable { grid-template-columns: 16px 40px minmax(0, 1fr) auto; }
+.job-check { width: 16px; height: 16px; min-height: 0; margin: 0; padding: 0; accent-color: var(--accent); cursor: pointer; }
 .job-fmt {
   display: grid; place-items: center; width: 40px; height: 48px; border-radius: 6px;
   background: var(--surface-2); border: 1px solid var(--border);
@@ -476,6 +478,7 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-
   .form-foot { flex-direction: column-reverse; align-items: stretch; }
   .form-foot .btn { width: 100%; }
   .job { grid-template-columns: 32px minmax(0, 1fr); }
+  .job.selectable { grid-template-columns: 16px 32px minmax(0, 1fr); }
   .job-fmt { width: 32px; height: 40px; font-size: 9px; }
   .job-actions { grid-column: 1 / -1; justify-content: flex-end; flex-wrap: wrap; }
   .reader-bar { gap: 8px; padding: 0 8px; }
