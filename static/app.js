@@ -703,7 +703,8 @@ function isEbookJob(job) {
 function previewText(job, s) {
   if (isEbookJob(job)) return htmlToText(s);
   if (/\.pdf$/i.test(job?.filename || "")) {
-    return s.replace(/\{\s*v\s*\d+\s*\}/g, "").replace(/\x01i\x02\d+\x01\/i\x02/g, "").replace(/\x01\/?[sb]\x02/g, "");
+    // 还有送翻时的粗体、斜体、字号标记和跨页分界 {|}
+    return s.replace(/\s*\{\|\}\s*/g, " ").replace(/\{\/?[bi]\}|\{z\d+\}|\{\/z\}/g, "").replace(/\{\s*v\s*\d+\s*\}/g, "").replace(/\x01i\x02\d+\x01\/i\x02/g, "").replace(/\x01\/?[sb]\x02/g, "");
   }
   return s;
 }
