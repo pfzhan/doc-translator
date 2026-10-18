@@ -4138,6 +4138,26 @@ def test_justify_extras_skip_punctuation_and_short_lines():
     assert extras[names.index(" ")] > 0
 
 
+def test_snake_case_identifiers_are_one_word():
+    """l_partkey 这样的标识符是一个词：不从下划线处折行，两端对齐也不在下划线两边拉开。"""
+    from app.formats.pdf_align import can_stretch
+    from app.formats.pdf_flow import tokenize
+
+    assert tokenize("{l_partkey, o_custkey}") == ["{", "l_partkey", ",", " ", "o_custkey", "}"]
+    assert not can_stretch("l", "_") and not can_stretch("_", "p")
+    assert can_stretch(",", "o")
+
+
+def test_an_opening_bracket_does_not_end_a_line():
+    """左括号不留在行尾，跟下一个词一起折到下一行（“{” 单独挂在行尾、“o_custkey}” 在下一行）。"""
+    from app.formats.pdf_flow import break_lines
+
+    lines = break_lines("视图范围: {l_partkey}, {o_custkey}", 10.0, 64.0, {})
+    assert len(lines) > 1
+    assert all(not line.rstrip().endswith(("{", "(", "[", "（")) for line in lines), lines
+    assert "".join(lines).replace(" ", "") == "视图范围:{l_partkey},{o_custkey}"
+
+
 def test_caption_word_in_bold_cm_is_not_a_formula():
     from app.formats.pdf import _is_formula_span
 

@@ -25,6 +25,8 @@ _PAREN_CLOSE = {"（": "）", "(": ")"}
 _PAREN_LIMIT = 10
 # 这些标点不能出现在行首。放不下时把前一个字带到下一行，标点跟在它后面。
 _NO_LINE_START = frozenset("。，、；：？！）】」』〉》％%.,;:?!)]}>")
+# 左括号不能留在行尾，跟后面的字一起折到下一行。
+_NO_LINE_END = frozenset("（【「『《〈([{")
 # 半角标点在行尾时，后面的空格是标点自带的间隔，不留在这一行。
 _HALF_PUNCT = frozenset(".,;:?!)]}%")
 
@@ -235,7 +237,11 @@ def break_lines(
                         index += 1
                         continue
             else:
+                carried = _detach_opener(buf)
                 flush()
+                if carried:
+                    buf.extend(carried)
+                    width = sum(_token_width(item, em, formula_widths) for _, item in carried)
                 if token.isspace():
                     index += 1
                     continue
@@ -267,6 +273,21 @@ def _detach_char(chunk: str) -> tuple[str, str] | None:
     if len(chunk) < 2 or chunk[-1] in _NO_LINE_START:
         return None
     return chunk[:-1], chunk[-1]
+
+
+def _detach_opener(buf: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    """行尾的左括号（连同贴着它的样式标记）摘下来，放到下一行开头。整行只有括号时不动。"""
+    start = len(buf)
+    while start > 0 and STYLE_MARK_RE.fullmatch(buf[start - 1][1]):
+        start -= 1
+    if start == 0 or buf[start - 1][1] not in _NO_LINE_END:
+        return []
+    start -= 1
+    if not any(not item.isspace() and not STYLE_MARK_RE.fullmatch(item) for _, item in buf[:start]):
+        return []
+    detached = buf[start:]
+    del buf[start:]
+    return detached
 
 
 def _detach_for_punct(buf: list[tuple[int, str]]) -> list[tuple[int, str]] | None:
@@ -474,7 +495,8 @@ def _tokenize(text: str) -> list[str]:
 def _is_word_char(char: str) -> bool:
     if _CJK_RE.match(char):
         return False
-    return char.isalnum() or char in "-'"
+    # l_partkey 这样的标识符不能从下划线处折行
+    return char.isalnum() or char in "-'_"
 
 
 _drawing_fonts: tuple[pymupdf.Font, ...] | None = None

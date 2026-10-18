@@ -193,8 +193,8 @@ def _segments(text: str, em: float) -> list[_Segment] | None:
 
 
 def _latin_unit(ch: str) -> bool:
-    """词内的拉丁字母、数字和连字符。两端对齐不能从这里拉开。"""
-    return ch.isascii() and (ch.isalnum() or ch in "-'’")
+    """词内的拉丁字母、数字、连字符和下划线（l_partkey）。两端对齐不能从这里拉开。"""
+    return ch.isascii() and (ch.isalnum() or ch in "-'’_")
 
 
 def can_stretch(left: str, right: str) -> bool:
