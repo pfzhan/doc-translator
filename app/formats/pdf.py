@@ -142,6 +142,58 @@ def _list_item(text: str) -> bool:
     return bool(BULLET_RE.match(text) or _PAREN_ITEM_RE.match(stripped))
 
 
+def _rejoin_split_lines(data: dict) -> None:
+    """PyMuPDF 有时把一行字从中间切开，后半截分进另一个块（常在上下标处）。
+    把后半截挪回前半截所在的块、紧跟在那一行后面。
+
+    不挪的话，行尾“and β₂ᵗ”这样的半截单看像公式行，会被当成公式跳过：
+    句子少了几个词，原文也留在页面上。两截要在同一基线上首尾相接，
+    栏沟比这宽得多，左右两栏不会接在一起。
+    """
+    blocks = [block for block in data.get("blocks", []) if block.get("type") == 0]
+    if len(blocks) < 2:
+        return
+    for block in blocks:
+        for line in list(block["lines"]):
+            if abs(line["dir"][1]) > 0.01 or not "".join(s["text"] for s in line["spans"]).strip():
+                continue
+            host = _line_host(line, block, blocks)
+            if host is None:
+                continue
+            host_block, host_line = host
+            block["lines"].remove(line)
+            index = host_block["lines"].index(host_line) + 1
+            # 同一行已经挪过来几截时，接在它们后面
+            while index < len(host_block["lines"]) and _same_band(host_block["lines"][index], host_line):
+                index += 1
+            host_block["lines"].insert(index, line)
+            host_block["bbox"] = tuple(pymupdf.Rect(host_block["bbox"]) | pymupdf.Rect(line["bbox"]))
+
+
+def _line_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] | None:
+    box = pymupdf.Rect(line["bbox"])
+    size = max((span["size"] for span in line["spans"]), default=10.0)
+    for block in blocks:
+        if block is own:
+            continue
+        for other in block["lines"]:
+            if abs(other["dir"][1]) > 0.01 or not _same_band(other, line):
+                continue
+            left = pymupdf.Rect(other["bbox"])
+            if left.x0 >= box.x0:
+                continue
+            # 上下标会让两截在接口处叠上一个字宽；词距以外的空档是栏沟
+            if -size <= box.x0 - left.x1 <= size * 0.6:
+                return block, other
+    return None
+
+
+def _same_band(a: dict, b: dict) -> bool:
+    ra, rb = pymupdf.Rect(a["bbox"]), pymupdf.Rect(b["bbox"])
+    overlap = min(ra.y1, rb.y1) - max(ra.y0, rb.y0)
+    return overlap >= min(ra.height, rb.height) * 0.5
+
+
 def _split_lines(items: list[tuple]) -> list[list[int]]:
     """把一个文本块里的行分成独立段落（返回每组的行下标）。
 
@@ -1965,6 +2017,8 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
         recover_type3_page(page, data, type3)
         pages.append(data)
     _mark_math_roman(pages)
+    for data in pages:
+        _rejoin_split_lines(data)
     for pno, data in enumerate(pages):
         for b in data["blocks"]:
             if b.get("type") != 0:

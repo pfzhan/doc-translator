@@ -4546,3 +4546,34 @@ def test_computer_modern_upright_is_math_when_the_body_is_times():
     modern = _page_data([("CMR10", "We train the model to minimize " * 20), ("CMMI10", "x")])
     _mark_math_roman([modern])
     assert "math" not in modern["blocks"][0]["lines"][0]["spans"][0]
+
+
+def test_a_line_split_into_two_blocks_is_put_back_together():
+    """PyMuPDF 把一行从上标处切开、后半截分进别的块时，挪回前半截后面。"""
+    from app.formats.pdf import _rejoin_split_lines
+
+    def line(x0, x1, y0, y1, text):
+        return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
+
+    head = line(100, 400, 150, 162, "All operations are element-wise. With β")
+    tail = line(398, 440, 150, 163, "1 and β")
+    nxt = line(100, 300, 162, 174, "we denote the power t.")
+    other = line(100, 400, 200, 212, "Require: a step size")
+    data = {"blocks": [{"type": 0, "bbox": (100, 150, 400, 162), "lines": [head]},
+                       {"type": 0, "bbox": (100, 150, 440, 212), "lines": [tail, nxt, other]}]}
+    _rejoin_split_lines(data)
+    assert data["blocks"][0]["lines"] == [head, tail]
+    assert data["blocks"][1]["lines"] == [nxt, other]
+
+
+def test_a_two_column_gutter_is_not_a_split_line():
+    from app.formats.pdf import _rejoin_split_lines
+
+    def line(x0, x1, text):
+        return {"bbox": (x0, 150, x1, 162), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
+
+    left, right = line(60, 290, "left column text"), line(305, 540, "right column text")
+    data = {"blocks": [{"type": 0, "bbox": (60, 150, 290, 162), "lines": [left]},
+                       {"type": 0, "bbox": (305, 150, 540, 162), "lines": [right]}]}
+    _rejoin_split_lines(data)
+    assert data["blocks"][0]["lines"] == [left] and data["blocks"][1]["lines"] == [right]
