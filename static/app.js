@@ -93,12 +93,20 @@ async function loadServices() {
   renderDetail();
 }
 
-const ICONS = { google: "G", openai: "⌬", claude: "✳", gemini: "✦", grok: "𝕏", custom: "⚙" };
+// 24x24 的矢量图标，颜色跟随 currentColor
+const ICONS = {
+  google: '<path fill="currentColor" d="M21.6 12.23c0-.68-.06-1.33-.17-1.96H12v3.7h5.38a4.6 4.6 0 0 1-2 3.02v2.5h3.23c1.89-1.74 2.99-4.3 2.99-7.26z"/><path fill="currentColor" opacity=".75" d="M12 22c2.7 0 4.96-.9 6.61-2.43l-3.23-2.5c-.9.6-2.04.96-3.38.96-2.6 0-4.8-1.76-5.59-4.12H3.07v2.58A10 10 0 0 0 12 22z"/><path fill="currentColor" opacity=".55" d="M6.41 13.91a6 6 0 0 1 0-3.82V7.51H3.07a10 10 0 0 0 0 8.98z"/><path fill="currentColor" opacity=".9" d="M12 5.96c1.47 0 2.79.5 3.83 1.5l2.87-2.87A9.6 9.6 0 0 0 12 2 10 10 0 0 0 3.07 7.51l3.34 2.58C7.2 7.72 9.4 5.96 12 5.96z"/>',
+  openai: '<path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M12 3.2l6.4 3.7v7.4L12 18l-6.4-3.7V6.9zM12 3.2v7.4m0 0l6.4-3.7M12 10.6L5.6 6.9m6.4 3.7v7.4m0-7.4l6.4 3.7M12 10.6l-6.4 3.7"/>',
+  claude: '<path fill="currentColor" d="M12 2.5l1.5 6.2 4.9-4.1-2.6 5.8 6.2-1.4-5.4 3.4 5.4 3.4-6.2-1.4 2.6 5.8-4.9-4.1L12 21.5l-1.5-6.2-4.9 4.1 2.6-5.8-6.2 1.4 5.4-3.4-5.4-3.4 6.2 1.4-2.6-5.8 4.9 4.1z"/>',
+  gemini: '<path fill="currentColor" d="M12 2c.6 5.4 4.6 9.4 10 10-5.4.6-9.4 4.6-10 10-.6-5.4-4.6-9.4-10-10 5.4-.6 9.4-4.6 10-10z"/>',
+  grok: '<circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M6.2 19.2L18.4 5.6"/>',
+  custom: '<circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1M18.4 5.6l-2.1 2.1m-8.6 8.6l-2.1 2.1"/>',
+};
 
 function iconFor(provider) {
   const span = document.createElement("span");
   span.className = `icon icon-${provider}`;
-  span.textContent = ICONS[provider] || "?";
+  span.innerHTML = `<svg viewBox="0 0 24 24" width="60%" height="60%">${ICONS[provider] || ICONS.custom}</svg>`;
   span.setAttribute("aria-hidden", "true");
   return span;
 }
