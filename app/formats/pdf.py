@@ -2924,9 +2924,11 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             # 往往大写开头、也不带句读。仅当两行左边界明显漂移（居中对齐的标题行）
             # 才并：左对齐的大字号块（小标题、署名行）各自独立。
             # 署名在标题下面隔开将近一行，左缘也会漂移，不能当成标题的下一行。
+            # 带列表标记的是幻灯片的下一项，左缘随层级变，也不是标题的下一行。
             title_frag = (p.size >= 12 and b.size >= p.size * 0.7
                           and 0 <= b.rect.y0 - p.rect.y1 < 0.75 * p.size
                           and abs(b.rect.x0 - p.rect.x0) > p.size * 0.5
+                          and not _list_item(b.text)
                           and not p.text.rstrip().endswith(tuple(SENT_ENDS))
                           and not b.text.rstrip().endswith(tuple(SENT_ENDS)))
             y_close = -0.8 * p.size <= b.rect.y0 - p.rect.y1 < 1.5 * p.size
