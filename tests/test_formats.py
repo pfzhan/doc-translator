@@ -720,6 +720,17 @@ def test_pdf_left_jump_splits_stacked_labels():
     assert _split_lines(items) == [[0], [1]]
 
 
+def test_pdf_far_apart_labels_on_one_row_split():
+    """同一行上隔开好几个字宽的两截是并排的标签（幻灯片的图注和图里的节点），要拆开。"""
+    from app.formats.pdf import _split_lines
+
+    items = [
+        _line("Candidate 1:", 61, 154, 119, size=12),
+        _line("project", 516, 553, 118, size=12),
+    ]
+    assert _split_lines(items) == [[0], [1]]
+
+
 def test_pdf_wrapped_body_on_attention_sample():
     """论文正文的首行缩进不能把句子从中间切开。"""
     src = SAMPLES / "attention.pdf"
