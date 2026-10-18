@@ -424,6 +424,20 @@ def test_markdown_unclosed_display_math_is_text():
     assert collect_segments(blocks) == ["$$ broken formula", "Next paragraph."]
 
 
+def test_markdown_tables_with_short_or_aligned_separators():
+    """GFM 分隔行每格一个 - 就够，可以带冒号对齐；列数和表头不一样的不是表格。"""
+    for sep in ("|-|-|", "| :-: | -: |", ":--|--:"):
+        blocks = split_blocks(f"| Name | Value |\n{sep}\n| alpha | one |")
+        assert [b.kind for b in blocks] == ["table"], sep
+        texts = collect_segments(blocks)
+        assert texts == ["Name", "Value", "alpha", "one"]
+        out = render(blocks, {x: "T:" + x for x in texts}, bilingual=False)
+        assert out == f"| T:Name | T:Value |\n{sep}\n| T:alpha | T:one |"
+    # 表头两列、分隔行一列：是 Setext 二级标题
+    blocks = split_blocks("Name | Value\n---")
+    assert [b.kind for b in blocks] == ["setext"]
+
+
 def test_epub_nav_in_spine_parsed_once(tmp_path):
     """EPUB3 的 nav 文档同时在 spine 里：只走 label 翻译路径一次，不重复解析、译文不丢。"""
     nav = (
