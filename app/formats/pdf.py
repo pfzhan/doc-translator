@@ -245,19 +245,29 @@ def _rejoin_split_lines(data: dict) -> None:
     blocks = [block for block in data.get("blocks", []) if block.get("type") == 0]
     if len(blocks) < 2:
         return
+    # 每一行都要和整页的行比一遍，行框每次现算要几十秒。行只换块、内容不变，框算一次
+    boxes: dict[int, pymupdf.Rect] = {}
+
+    def line_box(line: dict) -> pymupdf.Rect:
+        box = boxes.get(id(line))
+        if box is None:
+            box = boxes[id(line)] = _line_box(line)
+        return box
+
     # 挪走一截以后，留在原块里的分子才没了同伴，下一轮才找得到去处
     for _ in range(3):
-        if not _rejoin_pass(blocks):
+        if not _rejoin_pass(blocks, line_box):
             break
 
 
-def _rejoin_pass(blocks: list[dict]) -> bool:
+def _rejoin_pass(blocks: list[dict], line_box=None) -> bool:
+    line_box = line_box or _line_box
     moved = False
     for block in blocks:
         for line in list(block["lines"]):
             if abs(line["dir"][1]) > 0.01 or not "".join(s["text"] for s in line["spans"]).strip():
                 continue
-            host = _line_host(line, block, blocks) or _stack_host(line, block, blocks)
+            host = _line_host(line, block, blocks, line_box) or _stack_host(line, block, blocks)
             if host is None:
                 continue
             host_block, host_line = host
@@ -290,23 +300,27 @@ def _left_to_right(items: list[tuple]) -> list[tuple]:
     return out
 
 
-def _line_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] | None:
+def _line_host(line: dict, own: dict, blocks: list[dict], line_box=None) -> tuple[dict, dict] | None:
     """紧挨在 line 左边的那一截。它本来就在 line 的块里时不挪：
     取第一个找到的，两个块里各有一截能接时，line 每一轮都会挪到另一个块去。"""
+    line_box = line_box or _line_box
     box = pymupdf.Rect(line["bbox"])
     size = max((span["size"] for span in line["spans"]), default=10.0)
     best: tuple[float, dict, dict] | None = None
     for block in blocks:
         for other in block["lines"]:
-            if other is line or abs(other["dir"][1]) > 0.01 or not _same_band(other, line):
+            if other is line or abs(other["dir"][1]) > 0.01:
                 continue
+            # 先按横向位置筛，纵向交叠要算行框，慢
             left = pymupdf.Rect(other["bbox"])
-            if left.x0 >= box.x0:
+            gap = box.x0 - left.x1
+            if left.x0 >= box.x0 or gap < -size or gap > size:
+                continue
+            if not _same_band(other, line, line_box):
                 continue
             # 上下标会让两截在接口处叠上一个字宽；词距以外的空档是栏沟。
             # 等号、分式两边的空比词距宽，有一边是式子时放到一个字宽
-            gap = box.x0 - left.x1
-            if gap < -size or _past_column(block, other, box.x0, size) or _larger_text(line, other):
+            if _past_column(block, other, box.x0, size, line_box) or _larger_text(line, other):
                 continue
             if gap <= size * 0.6 or (gap <= size and _math_seam(other["spans"], line["spans"])):
                 if best is None or abs(gap) < abs(best[0]):
@@ -320,7 +334,7 @@ def _font_box(line: dict) -> pymupdf.Rect:
     return pymupdf.Rect(line["bbox"])
 
 
-def _past_column(block: dict, line: dict, x: float, size: float) -> bool:
+def _past_column(block: dict, line: dict, x: float, size: float, line_box=None) -> bool:
     """line 所在段落的其他行都止于 x 之前，并且有一行和 line 止于同一右缘（两端对齐的栏）：
     x 在栏外，是隔壁栏的字。行内切开的地方在栏中间，上下行会越过去。
     只看和 line 同一左缘起笔、够宽的整行：分子分母那样的小行不算；段落的短末行
@@ -328,7 +342,7 @@ def _past_column(block: dict, line: dict, x: float, size: float) -> bool:
     box = pymupdf.Rect(line["bbox"])
     rows = [
         pymupdf.Rect(other["bbox"]) for other in block["lines"]
-        if other is not line and not _same_band(other, line)
+        if other is not line and not _same_band(other, line, line_box)
         and abs(pymupdf.Rect(other["bbox"]).x0 - box.x0) <= size
         and pymupdf.Rect(other["bbox"]).width >= size * 8
     ]
