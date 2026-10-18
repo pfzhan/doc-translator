@@ -15,8 +15,12 @@ Entry = tuple[str, str]
 
 # 送翻文本里的占位符（{v1}、{b}、{|}）和电子书片段的标签，数词时去掉
 _MARKUP_RE = re.compile(r"\{[^{}\s]{1,8}\}|<[^<>]+>")
-# 句内的停顿处断开，术语不跨标点
-_CLAUSE_RE = re.compile(r"[.,;:!?()\[\]{}\"“”‘’'/|=+*<>…—–]+|\s-\s|\n")
+# 句内的停顿处断开，术语不跨标点。撇号只在词边上才是引号，夹在字母中间是词的一部分（don't）
+_CLAUSE_RE = re.compile(
+    r"[.,;:!?()\[\]{}\"“”‘/|=+*<>…—–]+|(?<![^\W\d_])['’]|['’](?![^\W\d_])|\s-\s|\n"
+)
+# 所有格 view's set：在这里断开，不让 s 和后面的词连成一条
+_POSSESSIVE_RE = re.compile(r"(?<=[^\W\d_])['’]s\b")
 _WORD_RE = re.compile(r"[^\W\d_][\w’'-]*[^\W_]|[^\W\d_]")
 # 汉字、假名、谚文。这类文字词间没有空格，按空格数词数不出东西
 _CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
@@ -118,7 +122,7 @@ def excerpt(texts: Sequence[str]) -> str:
 
 def candidates(texts: Sequence[str]) -> list[str]:
     """在本地找候选术语，按重要程度排好。中日韩为主的文档返回空。"""
-    clean = [_MARKUP_RE.sub(" ", text) for text in texts if text.strip()]
+    clean = [_POSSESSIVE_RE.sub("\n", _MARKUP_RE.sub(" ", text)) for text in texts if text.strip()]
     if not clean:
         return []
     joined = "".join(clean)

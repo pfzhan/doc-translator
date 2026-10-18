@@ -29,6 +29,14 @@ def test_candidates_keep_repeated_phrases_and_acronyms():
     assert "Summary statistics" not in found and "summary statistics" not in found
 
 
+def test_possessives_do_not_leave_word_fragments():
+    """撇号不是断句标点：view's set 不能切出 “s set”，don't 也不能切出 “t …”。"""
+    text = ["The view's set of output columns must cover the query's set of output columns, and we don't drop columns."] * 4
+    found = candidates(text)
+    assert "output column" in found or "output columns" in found
+    assert not any(term.split()[0] in ("s", "t") for term in found), found
+
+
 def test_candidates_skip_text_without_spaces_between_words():
     assert candidates(["数据立方体的实现。数据立方体很大。"] * 10) == []
 
