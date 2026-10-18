@@ -515,3 +515,44 @@ def test_table_cells_never_continue_into_each_other():
     head = cell("deep undirected graphical models", 150, 80, (150, 80, 250, 100))
     assert not _can_continue(left, head, 10, set(), allow_capital=True)
     assert _can_continue(replace(left, clip=None), replace(head, clip=None), 10, set(), allow_capital=True)
+
+
+def _algorithm_page(caption_below: bool) -> pymupdf.Page:
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    code = ["Require: a step size", "while not converged do", "update the parameters", "end while"]
+    if caption_below:
+        page.draw_rect(pymupdf.Rect(50, 60, 350, 130), width=0.4)
+        caption_y = 145
+        top = 75
+    else:
+        page.draw_line((50, 50), (350, 50), width=0.8)
+        page.draw_line((50, 66), (350, 66), width=0.4)
+        page.draw_line((50, 130), (350, 130), width=0.8)
+        caption_y = 62
+        top = 80
+    page.insert_text((52, caption_y), "Algorithm 1 Gradient descent", fontsize=10)
+    for i, line in enumerate(code):
+        page.insert_text((60 + 10 * (i in (1, 2)), top + i * 13), line, fontsize=10)
+    return page
+
+
+def test_algorithm_box_lines_become_cells():
+    """伪代码一行一格，图注在框上方、在框下方都认。"""
+    from app.formats.pdf_layout import algorithm_tables
+
+    for below in (False, True):
+        [table] = algorithm_tables(_algorithm_page(below))
+        assert len(table.cells) == 4
+        assert table.rect.x0 == 50 and table.rect.x1 == 350
+        bands = sorted(table.cells, key=lambda cell: cell.y0)
+        assert all(a.y1 == b.y0 for a, b in zip(bands, bands[1:]))
+
+
+def test_algorithm_lines_are_translated_one_by_one():
+    page = _algorithm_page(False)
+    blocks = [block for block in extract_blocks(page.parent) if not block.text.startswith("Algorithm")]
+    assert [block.text for block in blocks] == [
+        "Require: a step size", "while not converged do", "update the parameters", "end while",
+    ]
+    assert all(block.clip is not None for block in blocks)
