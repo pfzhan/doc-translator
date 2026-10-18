@@ -958,6 +958,13 @@ def _group_y_overlap(left: Sequence[pymupdf.Rect], right: Sequence[pymupdf.Rect]
 def _usable_table(cells: tuple[pymupdf.Rect, ...]) -> bool:
     if len(cells) < 2:
         return False
+    # 表的格子互不重叠。框套框的是流程图，当表的话框里的字全并成一格
+    for index, cell in enumerate(cells):
+        for other in cells[index + 1:]:
+            hit = cell & other
+            smaller = min(cell.width * cell.height, other.width * other.height)
+            if not hit.is_empty and hit.width * hit.height > smaller * 0.25:
+                return False
     widths = sorted(cell.width for cell in cells)
     heights = sorted(cell.height for cell in cells)
     if widths[len(widths) // 2] < _CELL_MIN_W or heights[len(heights) // 2] < _CELL_MIN_H:
