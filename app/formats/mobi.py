@@ -84,7 +84,12 @@ async def _calibre_convert(src: Path, dst: Path) -> bool:
     proc = await asyncio.create_subprocess_exec(
         exe, str(src), str(dst), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL
     )
-    return await proc.wait() == 0 and dst.exists()
+    try:
+        return await proc.wait() == 0 and dst.exists()
+    except asyncio.CancelledError:
+        # 暂停或删除任务时子进程不会自己停，留着会在后台接着写输出文件
+        proc.kill()
+        raise
 
 
 def _extract(src: Path, tmpdir: Path) -> Path:
