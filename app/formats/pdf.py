@@ -239,8 +239,8 @@ def _rejoin_split_lines(data: dict) -> None:
     把后半截挪回前半截所在的块、紧跟在那一行后面。
 
     不挪的话，行尾“and β₂ᵗ”这样的半截单看像公式行，会被当成公式跳过：
-    句子少了几个词，原文也留在页面上。两截要在同一基线上首尾相接，
-    栏沟比这宽得多，左右两栏不会接在一起。
+    句子少了几个词，原文也留在页面上。两截要在同一行上首尾相接；
+    段落的各行都止于栏沟前时，右边是隔壁栏，窄栏沟也不接。
     """
     blocks = [block for block in data.get("blocks", []) if block.get("type") == 0]
     if len(blocks) < 2:
@@ -305,11 +305,29 @@ def _line_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] |
             # 上下标会让两截在接口处叠上一个字宽；词距以外的空档是栏沟。
             # 等号、分式两边的空比词距宽，有一边是式子时放到一个字宽
             gap = box.x0 - left.x1
-            if gap < -size:
+            if gap < -size or _past_column(block, other, box.x0, size):
                 continue
             if gap <= size * 0.6 or (gap <= size and _math_seam(other["spans"], line["spans"])):
                 return block, other
     return None
+
+
+def _past_column(block: dict, line: dict, x: float, size: float) -> bool:
+    """line 所在段落的其他行都止于 x 之前，并且有一行和 line 止于同一右缘（两端对齐的栏）：
+    x 在栏外，是隔壁栏的字。行内切开的地方在栏中间，上下行会越过去。
+    只看和 line 同一左缘起笔、够宽的整行：分子分母那样的小行不算；段落的短末行
+    对不上右缘，单靠它不算。"""
+    box = pymupdf.Rect(line["bbox"])
+    rows = [
+        pymupdf.Rect(other["bbox"]) for other in block["lines"]
+        if other is not line and not _same_band(other, line)
+        and abs(pymupdf.Rect(other["bbox"]).x0 - box.x0) <= size
+        and pymupdf.Rect(other["bbox"]).width >= size * 8
+    ]
+    return (
+        bool(rows) and all(row.x1 < x for row in rows)
+        and any(abs(row.x1 - box.x1) <= size * 0.5 for row in rows)
+    )
 
 
 def _stack_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] | None:

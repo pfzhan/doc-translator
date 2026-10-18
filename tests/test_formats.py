@@ -4579,6 +4579,46 @@ def test_a_two_column_gutter_is_not_a_split_line():
     assert data["blocks"][0]["lines"] == [left] and data["blocks"][1]["lines"] == [right]
 
 
+def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
+    """栏沟不到一个字宽，右栏一行以公式起头、或是节号时，也不接到左栏的段落后面。"""
+    from app.formats.pdf import _rejoin_split_lines
+
+    def line(x0, x1, y0, text, font="Times-Roman", size=10.0, y1=None):
+        box = (x0, y0, x1, y1 if y1 is not None else y0 + 13)
+        return {"bbox": box, "dir": (1, 0), "spans": [{"text": text, "font": font, "size": size, "bbox": box}]}
+
+    para = [line(72, 301.3, 638 + 12 * i, "ducing internal covariate shift, and in doing so dramati-")
+            for i in range(4)]
+    formula = line(311, 540, 650, "x = u + b", "CMMI10")
+    rest = line(311, 540, 662, "the training set, and E[x] is the mean")
+    number = line(311, 326, 659, "3.2", "Times-Bold", 14.3)
+    title = line(337.9, 540, 659, "Batch-Normalized Convolutional Net-", "Times-Bold", 14.3)
+    data = {"blocks": [{"type": 0, "bbox": (72, 638, 301.3, 687), "lines": list(para)},
+                       {"type": 0, "bbox": (311, 650, 540, 675), "lines": [formula, rest]},
+                       {"type": 0, "bbox": (311, 659, 540, 672), "lines": [number, title]}]}
+    _rejoin_split_lines(data)
+    assert [block["lines"] for block in data["blocks"]] == [para, [formula, rest], [number, title]]
+
+    # 右栏一行很高，同时压着左栏段落的两行，左栏只剩一行可比：仍是两栏
+    first = line(72, 301.0, 325.6, "where the BN transform is applied independently to each")
+    second = line(72, 301.1, 337.5, "dimension of x = Wu, with a separate pair of learned")
+    last = line(72, 219.2, 345.9, "parameters per dimension.", y1=362.8)
+    tall = line(311, 539.0, 329.1, "JJT . Thus, JJT = I, and so all singular values of J", "CMMI10", y1=346.0)
+    data = {"blocks": [{"type": 0, "bbox": (72, 325.6, 301.1, 362.8), "lines": [first, second, last]},
+                       {"type": 0, "bbox": (311, 329.1, 539, 346.0), "lines": [tall]}]}
+    _rejoin_split_lines(data)
+    assert data["blocks"][1]["lines"] == [tall]
+
+    # 分子分母上下对齐、都止于求和号前，不是一栏
+    numerator = line(414.3, 418.2, 82.5, "1", "CMR7", 7.0, 89.4)
+    denominator = line(413.5, 419.0, 89.8, "L", "CMMI7", 7.0, 96.8)
+    total = line(421.8, 437.8, 81.4, "PL", "CMEX10")
+    data = {"blocks": [{"type": 0, "bbox": (413.5, 82.5, 419.0, 102.8), "lines": [numerator, denominator]},
+                       {"type": 0, "bbox": (421.8, 81.4, 437.8, 94.4), "lines": [total]}]}
+    _rejoin_split_lines(data)
+    assert total in data["blocks"][0]["lines"]
+
+
 def test_a_justified_heading_split_word_by_word_stays_one_paragraph():
     """窄栏标题两端对齐，词距拉到两个字宽，PyMuPDF 一词一行。按整行认回一段。"""
     from app.formats.pdf import _split_lines
