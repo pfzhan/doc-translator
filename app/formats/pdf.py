@@ -1532,7 +1532,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
     ordinal_at, ordinal_skip = _release_ordinals(runs, block.size)
     _absorb_math_glue(runs, block.span_lines, block.size)
 
-    # 2) 归并 run，两种情形：
+    # 2) 归并 run，三种情形：
     # a) 上下标拆到不同 dict 行：x 交叠够深（≥30% 较窄 run 的宽）且必有一方是小字号
     #    （<0.79 正文）；两个正文字号 run 即使 x 深度交叠也是相邻文本行上碰巧对齐
     #    的两个公式（如行末 (X,Y) 和下一行的 y_1,…,y_T）。
@@ -1540,6 +1540,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
     #    （同一可视行）：同一数学表达式被拆成的连续片段（y^i_1, y^i_2, … 的元素），
     #    并回一个公式，否则下标会被占位符间的空格推到离基底很远的位置。
     #    行间隔着正文的不并（(X,Y) vs y_1,…,y_T）。跨行折行的两半不在这里并 bbox。
+    # c) 行内分式的分子分母：上下贴着、左右居中（见 _fraction_pair），阅读序上不必相邻。
     member_ids = {id(s) for r in runs for s in r["spans"]}
 
     def flow_adjacent(a: dict, b: dict) -> bool:
@@ -1555,38 +1556,49 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         return True
 
     runs.sort(key=lambda r: r["pos"])
+
+    def geometric(m: dict, r: dict) -> bool:
+        x_overlap = min(m["bbox"].x1, r["bbox"].x1) - max(m["bbox"].x0, r["bbox"].x0)
+        y_gap = max(m["bbox"].y0, r["bbox"].y0) - min(m["bbox"].y1, r["bbox"].y1)
+        min_w = min(m["bbox"].width, r["bbox"].width)
+        lo, hi = sorted([m["max_size"], r["max_size"]])
+        return x_overlap > max(1.0, 0.3 * min_w) and y_gap < block.size and lo < hi * 0.79
+
+    def adjacent(m: dict, r: dict) -> bool:
+        # b) 同一可视行上、阅读序邻接、x 间距小于一个字号。跨行折行的两半
+        #    纵向不相交，不在这里并成一个大框。
+        y_overlap = min(m["bbox"].y1, r["bbox"].y1) - max(m["bbox"].y0, r["bbox"].y0)
+        # 前一段收住一行，后一段整个在它左下方：折到了下一行行首。
+        # 分子右边还有式子，分母的根号也在左下方，不算折行
+        wrapped = (r["bbox"].x1 <= m["bbox"].x0
+                   and _run_text_box(r).y0 >= _run_text_box(m).y1
+                   and _ends_row(m, block.span_lines))
+        return (flow_adjacent(m, r)
+                and r["bbox"].x0 - m["bbox"].x1 < block.size
+                and not wrapped
+                and y_overlap > 0.3 * min(m["bbox"].height, r["bbox"].height))
+
     merged: list[dict] = []
+    # 刚收过一段的 run。分子并进前面的分母以后，分子的下标要接着找到它
+    recent: dict | None = None
     for r in runs:
-        if merged:
-            m = merged[-1]
-            x_overlap = min(m["bbox"].x1, r["bbox"].x1) - max(m["bbox"].x0, r["bbox"].x0)
-            y_gap = max(m["bbox"].y0, r["bbox"].y0) - min(m["bbox"].y1, r["bbox"].y1)
-            min_w = min(m["bbox"].width, r["bbox"].width)
-            lo, hi = sorted([m["max_size"], r["max_size"]])
-            geometric = (x_overlap > max(1.0, 0.3 * min_w) and y_gap < block.size
-                         and lo < hi * 0.79)
-            # b) 同一可视行上、阅读序邻接、x 间距小于一个字号。跨行折行的两半
-            #    纵向不相交，不在这里并成一个大框。
-            y_overlap = min(m["bbox"].y1, r["bbox"].y1) - max(m["bbox"].y0, r["bbox"].y0)
-            # 前一段收住一行，后一段整个在它左下方：折到了下一行行首。
-            # 分子右边还有式子，分母的根号也在左下方，不算折行
-            wrapped = (r["bbox"].x1 <= m["bbox"].x0
-                       and _run_text_box(r).y0 >= _run_text_box(m).y1
-                       and _ends_row(m, block.span_lines))
-            adjacent = (flow_adjacent(m, r)
-                        and r["bbox"].x0 - m["bbox"].x1 < block.size
-                        and not wrapped
-                        and y_overlap > 0.3 * min(m["bbox"].height, r["bbox"].height))
-            if geometric or adjacent:
-                m["spans"].extend(r["spans"])
-                m["bbox"] |= r["bbox"]
-                m["max_size"] = hi
-                m_line, m_start, m_end = m["pos"]
-                r_line, r_start, r_end = r["pos"]
-                if m_line == r_line:
-                    m["pos"] = (m_line, min(m_start, r_start), max(m_end, r_end))
-                continue
-        merged.append(r)
+        target = next((m for m in (recent, merged[-1] if merged else None) if m is not None and geometric(m, r)), None)
+        if target is None:
+            target = next((m for m in reversed(merged) if _fraction_pair(m, r, block.size)), None)
+        if target is None and merged and adjacent(merged[-1], r):
+            target = merged[-1]
+        if target is None:
+            merged.append(r)
+            recent = r
+            continue
+        target["spans"].extend(r["spans"])
+        target["bbox"] |= r["bbox"]
+        target["max_size"] = max(target["max_size"], r["max_size"])
+        m_line, m_start, m_end = target["pos"]
+        r_line, r_start, r_end = r["pos"]
+        if m_line == r_line:
+            target["pos"] = (m_line, min(m_start, r_start), max(m_end, r_end))
+        recent = target
 
     # 2.5) 吸收落在公式 bbox 上的重音符 span（ŷ 的 ^、x̄ 的 ¯ 等）：
     # 它们常是不被判定为公式的独立 span，留在正文里会在公式图边上多出一个孤符号；
@@ -2165,6 +2177,42 @@ def _run_text_box(run: dict) -> pymupdf.Rect:
         if str(span.get("text") or "").strip() and "bbox" in span:
             box |= _text_box(span)
     return box if not box.is_empty else pymupdf.Rect(run["bbox"])
+
+
+def _fraction_pair(a: dict, b: dict, block_size: float) -> bool:
+    """一段全是小字号，和另一段里的一截小字号上下贴着、左右居中：是同一个行内分式的分子分母。
+    相邻两行行首的脚注记号也上下对齐，但隔着一行，不贴着。"""
+    small = block_size * 0.79
+    for whole, other in ((a, b), (b, a)):
+        if whole["max_size"] >= small:
+            continue
+        piece = _small_band(other, whole["bbox"], small)
+        if piece is None:
+            continue
+        box = whole["bbox"]
+        lo = min(whole["max_size"], max(float(span["size"]) for span in other["spans"]))
+        overlap = min(box.x1, piece.x1) - max(box.x0, piece.x0)
+        gap = max(box.y0, piece.y0) - min(box.y1, piece.y1)
+        centered = abs((box.x0 + box.x1) - (piece.x0 + piece.x1)) / 2 <= max(1.0, 0.15 * min(box.width, piece.width))
+        if overlap > max(1.0, 0.3 * min(box.width, piece.width)) and gap < lo * 0.3 and centered:
+            return True
+    return False
+
+
+def _small_band(run: dict, over: pymupdf.Rect, small: float) -> pymupdf.Rect | None:
+    """run 里横向落在 over 下面或上面的那一截小字号（分母、分子），整截取出来。"""
+    spans = [span for span in run["spans"] if str(span.get("text") or "").strip() and float(span["size"]) < small]
+    seeds = [pymupdf.Rect(span["bbox"]) for span in spans
+             if min(over.x1, span["bbox"][2]) - max(over.x0, span["bbox"][0]) > 0]
+    if not seeds:
+        return None
+    top, bottom = min(seed.y0 for seed in seeds), max(seed.y1 for seed in seeds)
+    band = pymupdf.Rect()
+    for span in spans:
+        box = pymupdf.Rect(span["bbox"])
+        if top <= (box.y0 + box.y1) / 2 <= bottom:
+            band |= box
+    return band
 
 
 def _join_line_wrapped_formulas(
