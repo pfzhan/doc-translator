@@ -189,7 +189,7 @@ function serviceItem(s) {
   } else if (s.enabled) {
     const setDefault = document.createElement("button");
     setDefault.type = "button";
-    setDefault.className = "link small";
+    setDefault.className = "link small set-default";
     setDefault.textContent = "设为默认";
     setDefault.addEventListener("click", async () => {
       try {
@@ -208,6 +208,7 @@ function serviceItem(s) {
   toggle.checked = s.enabled;
   toggle.disabled = s.id === state.defaultId || s.available === false;
   if (s.available === false) li.title = s.unavailable_reason;
+  else if (s.id === state.defaultId) toggle.title = "默认服务不能关闭";
   toggle.setAttribute("aria-label", `启用 ${s.name}`);
   toggle.addEventListener("change", async () => {
     try {
@@ -975,13 +976,13 @@ function renderJobs() {
 // 列表上方的勾选栏：没勾选时显示全部暂停/继续，勾选后换成取消选择、删除选中
 function renderSelection() {
   const n = state.selected.size;
-  $("history-select").hidden = n === 0;
   const total = state.jobs.length;
   const all = $("select-all");
   $("history-bar").hidden = total === 0;
   all.checked = n > 0 && n === total;
   all.indeterminate = n > 0 && n < total;
   $("history-select-text").textContent = n ? `已选 ${n} 条` : "全选";
+  $("history-select").hidden = n === 0;
   $("history-bulk").hidden = n > 0;
   $("history-bulk-text").hidden = n > 0;
   $("delete-selected").textContent = `删除选中（${n}）`;
@@ -1317,6 +1318,8 @@ function renderReaderBar(job) {
 
   const actions = $("reader-actions");
   actions.replaceChildren();
+  const downloads = $("reader-downloads");
+  downloads.replaceChildren();
   const outlineBtn = el("button", "btn ghost icon-btn", "☰");
   outlineBtn.type = "button";
   outlineBtn.id = "outline-toggle";
@@ -1336,11 +1339,12 @@ function renderReaderBar(job) {
     const a = el("a", primary ? "btn primary sm" : "btn sm");
     a.href = o.url;
     a.download = o.name;
-    a.append("↓ ", el("span", "", downloadLabels(job.outputs)[i]));
-    actions.append(a);
+    a.textContent = downloadLabels(job.outputs)[i];
+    a.title = o.name;
+    downloads.append(a);
   }
   const variant = variantButton(job);
-  if (variant) actions.append(variant);
+  if (variant) downloads.append(variant);
 }
 
 // 把接口返回的原始错误整理成一句人话；原文放在“详细信息”里，排查时还能看到
@@ -1384,7 +1388,8 @@ function renderNotice(job) {
     pick.setAttribute("aria-label", "用哪个服务重新翻译");
     for (const s of services) pick.add(new Option(s.name, s.id));
     pick.value = services.some((s) => s.id === job.service_id) ? job.service_id : state.defaultId;
-    const retry = el("button", "btn primary sm", job.status === "error" ? "重新翻译" : "继续翻译");
+    // 和记录页同一个操作用同一个词；“重新翻译”容易和“重译”里的全部重新翻译混淆
+    const retry = el("button", "btn primary sm", job.status === "error" ? "重试" : "继续翻译");
     retry.type = "button";
     retry.addEventListener("click", async () => {
       retry.disabled = true;
@@ -1657,8 +1662,10 @@ function renderLayoutModel(m, { keepForm = false } = {}) {
     code.textContent = m.install_hint;
     runtime.append(warn, code, " 后重启服务");
   }
+  runtime.classList.toggle("is-ok", Boolean(m.runtime));
   const file = $("layout-file");
   file.replaceChildren();
+  file.classList.toggle("is-ok", m.file.exists);
   const where = document.createElement("code");
   where.textContent = m.resolved;
   if (m.file.exists) {
@@ -1691,6 +1698,7 @@ function renderLayoutModel(m, { keepForm = false } = {}) {
     status.textContent = "";
   }
   $("layout-download").disabled = d.running;
+  $("layout-download").textContent = m.file.exists ? "重新下载" : "下载模型";
   clearTimeout(layoutPoll);
   if (d.running) layoutPoll = setTimeout(() => loadLayoutModel({ keepForm: true }), 1000);
 }
