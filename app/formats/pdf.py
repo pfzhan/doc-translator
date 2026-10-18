@@ -3086,6 +3086,8 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
                    and abs(fr.x1 - rr.x1) < 0.5 and abs(fr.y1 - rr.y1) < 0.5
                    for rr in run_rects):
                 continue
+            # 挖不挖按字体框判断，孔按墨迹挖：括号、箭头的字体框比字形高出一截，会伸到下一行的字上
+            ink = pymupdf.Rect(fb["ink"]) if fb.get("ink") is not None else fr
             # 孔 = 外来 span 与我们的每个矩形的交。必须完全落在我们的矩形内：
             # even-odd 裁剪下越出并集的孔会反开，把正要排除的外来笔画整个画出来。
             # 只挖纵向不共线的 span（降部、邻公式的角标等）：同行邻字的 bbox 常常
@@ -3095,7 +3097,7 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
                 y_ov = min(fr.y1, rr.y1) - max(fr.y0, rr.y0)
                 if y_ov > 0.7 * (rr.y1 - rr.y0):
                     continue
-                hb = fr & rr
+                hb = ink & rr
                 if not hb.is_empty and hb.width >= 0.3 and hb.height >= 0.3:
                     hole_rects.append(hb)
         # 相交的孔合并成一个：两个孔相交处在 even-odd 下会反开
@@ -4201,9 +4203,12 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         # 同时收集页面全部 span（检测上标区域被上一行降部侵入的污染）。
         # 没有 Unicode 的点阵字报的是字体框，比墨迹高出半行，拿来挖洞会把公式自己挖掉，不参与
         bitmap_fonts = broken_type3_names(doc, page) if mid_map else set()
-        page_spans = [s for blk in page.get_text("dict")["blocks"] if blk.get("type") == 0
-                      for ln in blk["lines"] for s in ln["spans"] if s.get("font") not in bitmap_fonts] \
-            if mid_map else None
+        page_spans = None
+        if mid_map:
+            page_data = page.get_text("dict")
+            _attach_ink(page, page_data)
+            page_spans = [s for blk in page_data["blocks"] if blk.get("type") == 0
+                          for ln in blk["lines"] for s in ln["spans"] if s.get("font") not in bitmap_fonts]
         fmS = _page_form(doc, page) if mid_map else None
         # 公式贴的是擦除前打包的原页，不受影响
         erasure = Erasure()

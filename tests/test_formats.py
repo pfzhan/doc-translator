@@ -1,4 +1,5 @@
 import asyncio
+import re
 import zipfile
 from pathlib import Path
 
@@ -4880,3 +4881,26 @@ def test_fraction_bars_drawn_as_one_pixel_images_are_formula_curves():
     rects = _page_curve_rects(page)
     assert any(abs(r.x0 - bar.x0) < 0.1 and abs(r.y1 - bar.y1) < 0.1 for r in rects)
     assert not any(r.width > 150 and r.height > 150 for r in rects)
+
+
+def test_formula_holes_follow_the_neighbours_ink_not_their_font_box():
+    """上一行的大括号字体框伸到下一行的 N 上，墨迹没有。按墨迹挖洞，N 不被削掉一角。"""
+    from app.formats.pdf import _formula_form, _page_form
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    fms = _page_form(doc, page)
+    base = {"text": "N", "bbox": (327.5, 456.4, 336.9, 469.7)}
+    formula = {"bbox": pymupdf.Rect(base["bbox"]), "spans": [base]}
+    brace = {"text": "{", "bbox": (328.0, 445.3, 332.9, 462.3)}
+
+    def hole_bottom(neighbour):
+        """孔的下沿（页面坐标）。第一个 re 是公式自己的裁剪框，后面的是孔。"""
+        xref = _formula_form(doc, page, fms, formula, "/Fx", [dict(base), neighbour])
+        rects = re.findall(r"([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) re", doc.xref_stream(xref).decode())
+        [(_, y, _, _)] = rects[1:]
+        return page.rect.height - float(y)
+
+    # N 的墨迹从 460.3 起
+    assert hole_bottom(brace) > 460.3
+    assert hole_bottom({**brace, "ink": (328.0, 445.6, 332.9, 457.4)}) <= 457.5
