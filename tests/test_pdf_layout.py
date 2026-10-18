@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pymupdf
 
 from app.formats.pdf import (
@@ -473,3 +475,43 @@ def test_rotated_page_geometry_uses_the_unrotated_size():
     plain, rotated = geos
     assert (rotated.width, rotated.height) == (600, 800)
     assert rotated == plain
+
+
+def _rule_page() -> pymupdf.Page:
+    """格子之间有线、没有外框的表：横线伸出竖线，竖线伸过上下两条横线。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    for y in (100, 130, 160):
+        page.draw_line((50, y), (370, y), width=0.4)
+    for x in (130, 210, 290):
+        page.draw_line((x, 80), (x, 180), width=0.4)
+    for row, y in enumerate((94, 118, 148, 174)):
+        for col, x in enumerate((55, 135, 215, 295)):
+            page.insert_text((x, y), f"cell {row}{col}", fontsize=9)
+    return page
+
+
+def test_open_edged_table_gets_its_header_row_and_outer_columns():
+    from app.formats.pdf_layout import ruled_tables
+
+    [table] = ruled_tables(_rule_page())
+    assert table.rect == pymupdf.Rect(50, 80, 370, 180)
+    rows = sorted({(round(cell.y0), round(cell.y1)) for cell in table.cells})
+    cols = sorted({(round(cell.x0), round(cell.x1)) for cell in table.cells})
+    assert rows == [(80, 100), (100, 130), (130, 160), (160, 180)]
+    assert cols == [(50, 130), (130, 210), (210, 290), (290, 370)]
+    assert len(table.cells) == 16
+
+
+def test_table_cells_never_continue_into_each_other():
+    """格子的列看起来像栏，上一列的末格不能接到下一列的表头上。"""
+    from app.formats.pdf import _can_continue
+
+    def cell(text, x0, y0, clip):
+        rect = pymupdf.Rect(x0, y0, x0 + 80, y0 + 12)
+        return TextBlock(0, rect, [rect], text, 10, "#000", False, clip=clip)
+
+    left = cell("Nearly all models incur extreme difficulty", 50, 160, (50, 130, 150, 180))
+    head = cell("deep undirected graphical models", 150, 80, (150, 80, 250, 100))
+    assert not _can_continue(left, head, 10, set(), allow_capital=True)
+    assert _can_continue(replace(left, clip=None), replace(head, clip=None), 10, set(), allow_capital=True)

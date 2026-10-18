@@ -378,7 +378,10 @@ def _can_continue(
 
     换栏时允许大写开头：没写完的句子常常断在 SQL 这种专有名词上。
     同一栏里的普通换行仍不放开，那和下一句分不开。
+    表格的格子各是各的：格子的列看起来也像栏，上一列的末格不能接到下一列的表头。
     """
+    if prev.clip is not None or nxt.clip is not None:
+        return False
     head = nxt.text.lstrip()[:1]
     numbered_heading = bool(_SRC_HEAD_NUM_RE.match(nxt.text.lstrip()))
     if halt_ids is None:
