@@ -2469,12 +2469,31 @@ def _merge_cells(blocks: list[TextBlock], unchecked: set[int]) -> list[TextBlock
         if key in done:
             continue
         done.add(key)
-        parts = _reading_sorted(cells[key])
+        parts = [
+            part for part in _reading_sorted(cells[key])
+            if not (id(part) in unchecked and _displayed_in_cell(part, cells[key]))
+        ]
+        if not parts:
+            continue
         merged = parts[0] if len(parts) == 1 else _joined_cell(parts)
         if any(id(part) in unchecked for part in parts) and _untranslatable(_block_spans(merged), merged.text, 1):
             continue
         out.append(merged)
     return out
+
+
+def _displayed_in_cell(part: TextBlock, parts: list[TextBlock]) -> bool:
+    """格子里单独占一行、比格子里的字缩进两个多字宽的式子（算法一步下面居中的公式）。
+    留原字，不并进句子里：并进去以后 E、Var 这些字母被当成词翻。"""
+    others = [other for other in parts if other is not part]
+    if not others or any(
+        min(other.rect.y1, part.rect.y1) - max(other.rect.y0, part.rect.y0)
+        > min(other.rect.height, part.rect.height) * 0.35
+        for other in others
+    ):
+        return False
+    left = min(other.rect.x0 for other in others)
+    return part.rect.x0 - left > part.size * 2.5 and _untranslatable(_block_spans(part), part.text)
 
 
 def _reading_sorted(parts: list[TextBlock]) -> list[TextBlock]:
