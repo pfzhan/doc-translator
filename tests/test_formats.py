@@ -4577,3 +4577,29 @@ def test_a_two_column_gutter_is_not_a_split_line():
                        {"type": 0, "bbox": (305, 150, 540, 162), "lines": [right]}]}
     _rejoin_split_lines(data)
     assert data["blocks"][0]["lines"] == [left] and data["blocks"][1]["lines"] == [right]
+
+
+def test_a_justified_heading_split_word_by_word_stays_one_paragraph():
+    """窄栏标题两端对齐，词距拉到两个字宽，PyMuPDF 一词一行。按整行认回一段。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, x0, x1, y0):
+        span = {"text": text, "font": "Times-Bold", "size": 14.3}
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 20), [span])
+
+    items = [
+        item("2", 311, 318, 31), item("Towards", 333, 385, 31), item("Reducing", 408, 466, 31),
+        item("Internal", 490, 540, 31), item("Covariate Shift", 333, 426, 49),
+    ]
+    assert _split_lines(items) == [[0, 1, 2, 3, 4]]
+
+
+def test_table_cells_on_one_baseline_stay_apart():
+    from app.formats.pdf import _split_lines
+
+    def item(text, x0, x1):
+        span = {"text": text, "font": "Times-Roman", "size": 9.0}
+        return (text, pymupdf.Rect(x0, 100, x1, 110), [span])
+
+    items = [item("Training", 128, 158), item("Inference needed", 184, 246), item("No difficulties", 437, 489)]
+    assert len(_split_lines(items)) == 3
