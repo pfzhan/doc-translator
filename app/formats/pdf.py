@@ -142,6 +142,48 @@ def _list_item(text: str) -> bool:
     return bool(BULLET_RE.match(text) or _PAREN_ITEM_RE.match(stripped))
 
 
+def _justified_joins(items: list[tuple], max_x1: float) -> set[int]:
+    """两端对齐的一行被 PyMuPDF 按词拆开时，后面几个词的下标。
+
+    窄栏里的标题两端对齐，词距能拉到两个字宽，按词距拆就成了一词一段。
+    认法：同一基线、同一字体字号，最后一词顶到块的右缘，词距差不多一样大。
+    并排的格子、侧标不是这样：格子之间的空档大小不一，也不会恰好铺满一行。
+    """
+    joins: set[int] = set()
+    start = 0
+    while start < len(items):
+        end = start + 1
+        while end < len(items) and _same_row(items[end - 1], items[end]):
+            end += 1
+        row = items[start:end]
+        if len(row) >= 3 and _spread_evenly(row, max_x1):
+            joins.update(range(start + 1, end))
+        start = end
+    return joins
+
+
+def _same_row(left: tuple, right: tuple) -> bool:
+    a, b = left[1], right[1]
+    overlap = min(a.y1, b.y1) - max(a.y0, b.y0)
+    if overlap < min(a.height, b.height) * 0.7 or b.x0 <= a.x1:
+        return False
+    fonts = {(s.get("font"), round(float(s.get("size") or 0), 1)) for s in (*left[2], *right[2]) if str(s.get("text") or "").strip()}
+    return len(fonts) == 1
+
+
+def _spread_evenly(row: list[tuple], max_x1: float) -> bool:
+    size = max((float(s.get("size") or 0) for s in row[0][2]), default=10.0)
+    if row[-1][1].x1 < max_x1 - 1:
+        return False
+    gaps = [b[1].x0 - a[1].x1 for a, b in zip(row, row[1:])]
+    # 节号后面的空档另算：“2  Towards”的距离是排版定的，不随两端对齐拉伸
+    if re.fullmatch(r"\d+(?:\.\d+)*\.?", row[0][0].strip()):
+        gaps = gaps[1:]
+    if not gaps or max(gaps) > size * 3:
+        return False
+    return max(gaps) <= min(gaps) * 1.5 + size * 0.2
+
+
 def _rejoin_split_lines(data: dict) -> None:
     """PyMuPDF 有时把一行字从中间切开，后半截分进另一个块（常在上下标处）。
     把后半截挪回前半截所在的块、紧跟在那一行后面。
@@ -214,13 +256,23 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
     if not items:
         return []
     max_x1 = max(it[1].x1 for it in items)
+    justified = _justified_joins(items, max_x1)
+    # 拆开的一行按整行比较左跳和右缘，不按行尾那个词
+    row_box: dict[int, pymupdf.Rect] = {}
+    for index in sorted(justified):
+        head = index - 1
+        while head in justified:
+            head -= 1
+        box = row_box.get(head, pymupdf.Rect(items[head][1])) | items[index][1]
+        for member in range(head, index + 1):
+            row_box[member] = box
     groups, cur = [], [0]
     ref = 0  # 参考行：上一条正文字号的行。上下标拆出的 dict 小行不能当参考，
     # 否则左跳量相对小行算，段落会在公式处被切碎（"(like a | sequence)"）
     ref_size = max((s["size"] for s in items[0][2]), default=10)
     for i in range(1, len(items)):
         text, rect = items[i][0], items[i][1]
-        ptext, prect, pspans = items[ref][0], items[ref][1], items[ref][2]
+        ptext, prect, pspans = items[ref][0], row_box.get(ref, items[ref][1]), items[ref][2]
         psize = max((s["size"] for s in pspans), default=10)
         stripped = text.lstrip()
         prev_symbol = bool(NO_TEXT_RE.match(ptext.strip()))  # 纯符号行独立成段，后面的内容不和它拼
@@ -254,7 +306,7 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         h_overlap = min(qrect.x1, rect.x1) - max(qrect.x0, rect.x0)
         # 同一基线上、词距内的下一个词。按词拆行时，行内大写词（DXL）不是新段落。
         # 句末、标记语言和图内标签仍拆开，避免把侧标或格子并进正文。
-        same_word = _same_line_word(items[i - 1][0], text, qrect, rect, psize)
+        same_word = _same_line_word(items[i - 1][0], text, qrect, rect, psize) or i in justified
         same_visual_line = (
             (h_overlap > 0 and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5)
             or same_word
