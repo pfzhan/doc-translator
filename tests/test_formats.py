@@ -376,6 +376,16 @@ def test_markdown_loose_list_continuation_translated_in_place():
                    "T:Outside paragraph.\n\n    real_code()")
 
 
+def test_markdown_tab_indented_code_kept_verbatim():
+    """Tab 缩进和四个空格一样是代码块；列表项里 Tab 缩进的续段还是正文。"""
+    src = "Run this:\n\n\tpip install foo\n\tfoo --help\n\nDone.\n\n- item one\n\n\tcontinued paragraph."
+    blocks = split_blocks(src)
+    texts = collect_segments(blocks)
+    assert texts == ["Run this:", "Done.", "item one", "continued paragraph."]
+    out = render(blocks, ["T:" + x for x in texts], bilingual=False)
+    assert "\n\tpip install foo\n\tfoo --help\n" in out and "\n\tT:continued paragraph." in out
+
+
 def test_markdown_paragraph_starting_with_inline_tag_is_translated():
     """行首是行内标签或自动链接的段落照常翻译；块级标签和整行单个标签仍按 HTML 块原样保留。"""
     src = ("<kbd>Ctrl</kbd> copies the selection.\n\n<https://example.com> is our site.\n\n"

@@ -139,7 +139,9 @@ def split_blocks(text: str) -> list[Block]:
             blocks.append(Block("raw", lines[i : end + 1]))
             i = end + 1
             continue
-        indent = len(line) - len(line.lstrip(" "))
+        # Tab 按 CommonMark 算到下一个 4 的倍数列
+        expanded = line.expandtabs(4)
+        indent = len(expanded) - len(expanded.lstrip(" "))
         if list_offset is not None and indent < list_offset and not para:
             list_offset = None
         # 列表项里的缩进代码块要比正文再多缩进 4 格
@@ -149,7 +151,7 @@ def split_blocks(text: str) -> list[Block]:
             para.clear()
             i += 1
             continue
-        if HR_RE.match(line) or line.startswith("    ") and not para and not in_item:
+        if HR_RE.match(line) or indent >= 4 and not para and not in_item:
             # 分隔线 / 缩进代码块
             flush()
             blocks.append(Block("raw", [line]))
