@@ -286,6 +286,43 @@ def test_mobi_temp_dir_removed_after_cancelled_unpack(tmp_path, monkeypatch):
     run(scenario())
     assert not work.exists()
 
+def test_cancelled_calibre_conversion_is_killed(tmp_path, monkeypatch):
+    """转 MOBI 时任务被暂停或删除：ebook-convert 要跟着停，不能在后台接着往输出目录写。"""
+    import os
+
+    from app.formats import mobi as mobi_format
+
+    pid_file = tmp_path / "pid"
+    exe = tmp_path / "ebook-convert"
+    exe.write_text(f"#!/bin/sh\necho $$ > {pid_file}\nexec sleep 30\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(mobi_format.shutil, "which", lambda name: str(exe))
+
+    def alive(pid: int) -> bool:
+        try:
+            state = Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0]
+        except FileNotFoundError:
+            return False
+        return state != "Z"
+
+    async def scenario():
+        task = asyncio.create_task(mobi_format._calibre_convert(tmp_path / "a.epub", tmp_path / "a.mobi"))
+        while not pid_file.exists() or not pid_file.read_text().strip():
+            await asyncio.sleep(0.02)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        pid = int(pid_file.read_text())
+        for _ in range(50):
+            if not alive(pid):
+                return pid
+            await asyncio.sleep(0.02)
+        os.kill(pid, 9)
+        raise AssertionError("ebook-convert still running")
+
+    run(scenario())
+
+
 def test_markdown_list_does_not_swallow_following_blocks():
     """列表后没有空行时，紧跟的标题 / 引用是独立的块，不能并进最后一个列表项。"""
     blocks = split_blocks("- item\n# Heading\n> quote")
