@@ -1762,6 +1762,67 @@ def _tighten_formula_sides(
         part["dx"] = round(float(part.get("dx") or 0) + (new_x0 - bbox.x0), 1)
 
 
+_FORMULA_TOP_PAD = 0.6
+
+
+def _page_ink_index(page: pymupdf.Page) -> dict[tuple[str, float, float], pymupdf.Rect]:
+    """每个 span 按字形轮廓量出来的墨迹框，按（文字，起笔点）找。
+
+    get_text 默认的框按字体的上下伸量算，和字形无关。CMSY 的伸量将近两行高，
+    一个箭头的框会盖住上下两行。"""
+    data = page.get_text("rawdict", flags=_TEXT_FLAGS | pymupdf.TEXT_ACCURATE_BBOXES)
+    index: dict[tuple[str, float, float], pymupdf.Rect] = {}
+    for block in data["blocks"]:
+        if block.get("type") != 0:
+            continue
+        for line in block["lines"]:
+            for span in line["spans"]:
+                chars = span.get("chars") or []
+                text = "".join(str(char.get("c") or "") for char in chars)
+                ink = pymupdf.Rect()
+                for char in chars:
+                    if str(char.get("c") or "").strip():
+                        ink |= pymupdf.Rect(char["bbox"])
+                key = (text, round(span["origin"][0], 1), round(span["origin"][1], 1))
+                index[key] = ink
+    return index
+
+
+def _tighten_formula_height(part: dict, ink_index: dict[tuple[str, float, float], pymupdf.Rect]) -> None:
+    """公式框上下收到字形墨迹外一条窄边。
+
+    按字体伸量算的框比字高得多，排版时按框高缩放公式，箭头、求和号所在的公式会被压得很小；
+    从原页裁剪时还会把上下两行的字一起裁进来。认不出的 span（点阵字）照旧用原来的框。
+    """
+    raw = part.get("bbox")
+    if raw is None:
+        return
+    bbox = pymupdf.Rect(raw)
+    ink = pymupdf.Rect()
+    for span in part.get("spans") or []:
+        text = str(span.get("text") or "")
+        if not text.strip():
+            continue
+        origin = span.get("origin")
+        found = ink_index.get((text, round(origin[0], 1), round(origin[1], 1))) if origin else None
+        if found is None:
+            return
+        if not found.is_empty:
+            ink |= found
+    for curve in part.get("curves") or []:
+        if curve is not None:
+            ink |= pymupdf.Rect(curve)
+    if ink.is_empty:
+        return
+    top = max(bbox.y0, ink.y0 - _FORMULA_TOP_PAD)
+    bottom = min(bbox.y1, ink.y1 + _FORMULA_TOP_PAD)
+    if bottom - top < 1 or (top <= bbox.y0 + 0.3 and bottom >= bbox.y1 - 0.3):
+        return
+    part["bbox"] = pymupdf.Rect(bbox.x0, top, bbox.x1, bottom)
+    part["h"] = round(bottom - top, 1)
+    part["d"] = round(max(0.0, float(part.get("d") or 0) - (bbox.y1 - bottom)), 1)
+
+
 def _absorb_curves(formula: dict, drawings: list[pymupdf.Rect], block: TextBlock) -> None:
     """把相交曲线并进公式框，并写回对应的 FormulaRun。换行续片各自收自己的框。"""
     _absorb_one_box(formula, drawings)
@@ -4657,6 +4718,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             _absorb_curves(f, curve_rects[int(f["page"])], unit[int(f.get("owner") or 0)])
     span_cache: dict[int, list[dict]] = {}
     char_cache: dict[int, list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]]] = {}
+    ink_cache: dict[int, dict[tuple[str, float, float], pymupdf.Rect]] = {}
     for formulas in sent_formulas:
         for f in formulas:
             pieces = _formula_parts(f)
@@ -4667,6 +4729,8 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
                 if part_page not in span_cache:
                     span_cache[part_page] = _page_text_spans(src_doc[part_page])
                     char_cache[part_page] = _page_char_index(src_doc[part_page])
+                    ink_cache[part_page] = _page_ink_index(src_doc[part_page])
+                _tighten_formula_height(part, ink_cache[part_page])
                 _tighten_formula_sides(
                     part, src_doc[part_page], span_cache[part_page], char_cache[part_page],
                 )

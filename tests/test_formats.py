@@ -4603,3 +4603,20 @@ def test_table_cells_on_one_baseline_stay_apart():
 
     items = [item("Training", 128, 158), item("Inference needed", 184, 246), item("No difficulties", 437, 489)]
     assert len(_split_lines(items)) == 3
+
+
+def test_formula_box_height_follows_the_glyph_ink():
+    """CMSY 的字体伸量将近两行高。框按字体算会把公式压小，还会裁进上下两行的字。"""
+    from app.formats.pdf import _tighten_formula_height
+
+    arrow = {"text": "←", "origin": (130.2, 226.3)}
+    zero = {"text": "0", "origin": (142.6, 226.3)}
+    part = {"bbox": pymupdf.Rect(114.7, 218.8, 147.4, 237.1), "h": 18.3, "d": 10.8, "spans": [arrow, zero]}
+    ink = {("←", 130.2, 226.3): pymupdf.Rect(130.2, 221.3, 139.9, 226.4),
+           ("0", 142.6, 226.3): pymupdf.Rect(142.6, 219.8, 147.4, 226.5)}
+    _tighten_formula_height(part, ink)
+    assert [round(v, 1) for v in part["bbox"]] == [114.7, 219.2, 147.4, 227.1]
+    assert part["h"] == 7.9 and part["d"] == 0.8
+    unknown = {"bbox": pymupdf.Rect(0, 0, 10, 20), "h": 20, "d": 5, "spans": [{"text": "x", "origin": (0, 15)}]}
+    _tighten_formula_height(unknown, ink)
+    assert unknown["h"] == 20
