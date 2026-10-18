@@ -806,15 +806,16 @@ def test_sanitize_rejects_numbered_pagebreak_as_only_text():
 def test_sanitize_keeps_raster_data_image_but_strips_script_url():
     from app.formats import html_blocks as hb
 
-    src = '<p>Text <img src="data:image/png;base64,AAAA"/> with <a href="https://x">link</a></p>'
-    soup = hb.parse(f"<html><body>{src}</body></html>", xml=False)
-    el, _, html = hb.find_blocks(soup)[0]
-    hb.apply_translation_html(
-        soup, el, html,
-        '文字 <img src="data:image/png;base64,AAAA" onerror="alert(1)"/>'
+    # 图片平时换成占位符不发给模型；原文自带 {vN} 时才跟着 HTML 走，这里直接查清洗
+    src = 'Text {v1} <img src="data:image/png;base64,AAAA"/> with <a href="https://x">link</a>'
+    nodes = hb._sanitize_translation(
+        src,
+        '文字 {v1} <img src="data:image/png;base64,AAAA" onerror="alert(1)"/>'
         '<img src="data:image/svg+xml;base64,PHN2Zw=="/> 和 '
-        '<a href="javascript:alert(1)">坏链接</a><a href="https://x">链接</a>',
-        False, "zh-CN")
+        '<a href="javascript:alert(1)">坏链接</a><a href="https://x">链接</a>')
+    soup = BeautifulSoup("<p></p>", "lxml")
+    for n in nodes:
+        soup.p.append(n)
     raster, svg = soup.find_all("img")
     assert raster["src"].startswith("data:image/png") and not raster.has_attr("onerror")
     assert not svg.has_attr("src")
@@ -822,6 +823,92 @@ def test_sanitize_keeps_raster_data_image_but_strips_script_url():
     assert not bad.has_attr("href") and good["href"] == "https://x"
     assert hb._unsafe_url("data:image/jpeg;base64,AAAA", "image") is False
     assert hb._unsafe_url("data:image/svg+xml,<svg></svg>", "image") is True
+
+
+MATH_PARA = ('<p>Let <math xmlns="http://www.w3.org/1998/Math/MathML"><mi>x</mi></math> be a variable '
+             'and <img src="eq1.png" alt="y=2x"/> holds.</p>')
+
+
+def _order(p) -> list[str]:
+    """段落里文字和媒体元素的先后：文字取原样，媒体元素取标签名。"""
+    return [c.name if getattr(c, "name", None) else str(c) for c in p.contents]
+
+
+def test_epub_inline_math_and_images_stay_in_place(tmp_path):
+    """段落里的 MathML 和图片换成 {vN} 发给模型，译完放回原来的位置；双语译文里也有。"""
+    from app.formats import html_blocks as hb
+
+    soup = hb.parse(_xhtml(MATH_PARA), xml=True)
+    [(_, text, html)] = hb.find_blocks(soup)
+    assert text == "Let {v1} be a variable and {v2} holds." and html is None
+
+    src = tmp_path / "book.epub"
+    _one_epub(src, {"ch1.xhtml": _xhtml(MATH_PARA)})
+    [out] = run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))
+    p = BeautifulSoup(zipfile.ZipFile(out).read("OEBPS/ch1.xhtml"), "lxml-xml").find("p")
+    assert _order(p) == ["[zh-CN] Let ", "math", " be a variable and ", "img", " holds."]
+
+    [out] = run(translate_epub(src, tmp_path, runner(), True, "zh-CN"))
+    original, translated = BeautifulSoup(zipfile.ZipFile(out).read("OEBPS/ch1.xhtml"), "lxml-xml").find_all("p")
+    assert _order(original) == ["Let ", "math", " be a variable and ", "img", " holds."]
+    assert _order(translated) == ["[zh-CN] Let ", "math", " be a variable and ", "img", " holds."]
+
+
+def test_rich_paragraph_sends_placeholders_instead_of_mathml():
+    """富文本段落里的 MathML 不发给模型（<mtext> 会被翻掉），和纯文本路径一样换成占位符。"""
+    from app.formats import html_blocks as hb
+
+    body = ('<p>Let <em>f</em> be <math xmlns="http://www.w3.org/1998/Math/MathML">'
+            '<mrow><mi>x</mi><mtext>for all</mtext></mrow></math> here.</p>')
+    soup = hb.parse(_xhtml(body), xml=True)
+    [(el, text, html)] = hb.find_blocks(soup)
+    assert html == "Let <em>f</em> be {v1} here." and text == "Let f be {v1} here."
+    hb.apply_translation_html(soup, el, html, "设 <em>f</em> 为 {v1}。", False, "zh-CN")
+    p = soup.find("p")
+    assert _order(p) == ["设 ", "em", " 为 ", "math", "。"]
+    assert p.find("mtext").get_text() == "for all"
+
+
+def test_lost_or_repeated_placeholders_keep_every_formula():
+    """模型漏掉、重复或编错占位符：多余的删掉，没放回去的公式按原顺序补在段尾，一个都不丢。"""
+    from app.formats import html_blocks as hb
+
+    soup = hb.parse(_xhtml(MATH_PARA), xml=True)
+    [(el, text, _)] = hb.find_blocks(soup)
+    hb.apply_translation(soup, el, text, "设 {v2} 和 {v2} 以及 {v7}。", False, "zh-CN")
+    p = soup.find("p")
+    assert _order(p) == ["设 ", "img", " 和 ", " 以及 ", "。", "math"]
+
+
+def test_identical_images_get_their_own_placeholders():
+    """两张一样的图各占一个编号：bs4 的 Tag 相等比的是内容，不能按相等找。"""
+    from app.formats import html_blocks as hb
+
+    soup = hb.parse(_xhtml('<p>A <img src="x.png"/> and B <img src="x.png"/> end.</p>'), xml=True)
+    [(el, text, _)] = hb.find_blocks(soup)
+    assert text == "A {v1} and B {v2} end."
+    hb.apply_translation(soup, el, text, "乙 {v2} 甲 {v1} 完。", True, "zh-CN")
+    assert len(soup.find_all("img")) == 4
+
+
+def test_literal_placeholder_text_is_not_a_slot():
+    """原文本来就写着 {v1}（模板语法）时不用占位符，原文的 {v1} 原样翻译。"""
+    from app.formats import html_blocks as hb
+
+    soup = hb.parse(_xhtml('<p>Use {v1} in the template <img src="x.png"/> here.</p>'), xml=True)
+    [(el, text, _)] = hb.find_blocks(soup)
+    assert text == "Use {v1} in the template here."
+    hb.apply_translation(soup, el, text, "模板里用 {v1}。", False, "zh-CN")
+    p = soup.find("p")
+    assert _order(p) == ["img", "模板里用 {v1}。"]
+
+
+def test_paragraph_with_only_a_formula_is_not_sent():
+    """只有一个公式、没有文字的段落不送去翻译。"""
+    from app.formats import html_blocks as hb
+
+    soup = hb.parse(_xhtml('<p><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>x</mi></math></p>'), xml=True)
+    assert hb.find_blocks(soup) == []
 
 
 def test_pdf_list_continuation_must_be_indented():
