@@ -2925,9 +2925,11 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             # 才并：左对齐的大字号块（小标题、署名行）各自独立。
             # 署名在标题下面隔开将近一行，左缘也会漂移，不能当成标题的下一行。
             # 带列表标记的是幻灯片的下一项，左缘随层级变，也不是标题的下一行。
+            # 标题换行的两行左右总有交叠，横向错开的是旁边的标签。
             title_frag = (p.size >= 12 and b.size >= p.size * 0.7
                           and 0 <= b.rect.y0 - p.rect.y1 < 0.75 * p.size
                           and abs(b.rect.x0 - p.rect.x0) > p.size * 0.5
+                          and min(p.rect.x1, b.rect.x1) > max(p.rect.x0, b.rect.x0)
                           and not _list_item(b.text)
                           and not p.text.rstrip().endswith(tuple(SENT_ENDS))
                           and not b.text.rstrip().endswith(tuple(SENT_ENDS)))
@@ -2940,6 +2942,7 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                 y_close
                 and x_close
                 and len(p.text.split()) >= 3  # 一两个词的无标点短块是标题/标签，不是段落
+                and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
                 and not p.text.rstrip().endswith(tuple(SENT_ENDS))
                 and (first.islower() or first in "),;%,；，")
             )
@@ -3216,8 +3219,10 @@ def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
                 y_ov = min(p.rect.y1, b.rect.y1) - max(p.rect.y0, b.rect.y0)
                 same_line = y_ov > 0.5 * min(p.rect.y1 - p.rect.y0, b.rect.y1 - b.rect.y0)
                 gap = b.rect.x0 - p.rect.x1
+                # 注记和续行与图注同字号。大标题下面的小字是图里的框
                 below = (0 <= b.rect.y0 - p.rect.y1 < 1.2 * p.size
-                         and abs(b.rect.x0 - p.rect.x0) < p.size)
+                         and abs(b.rect.x0 - p.rect.x0) < p.size
+                         and abs(b.size - p.size) <= p.size * 0.2)
                 label = (p.text.rstrip().endswith((":", "：")) and len(p.text) < 30) or _caption_label(p.text)
                 head = b.text.lstrip()[:1]
                 note = bool(head and (head.islower() or CJK_RE.search(head)) and not _caption_label(b.text))

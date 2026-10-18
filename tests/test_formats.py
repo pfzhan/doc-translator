@@ -5496,3 +5496,19 @@ def test_formula_holes_follow_the_neighbours_ink_not_their_font_box():
     # N 的墨迹从 460.3 起
     assert hole_bottom(brace) > 460.3
     assert hole_bottom({**brace, "ink": (328.0, 445.6, 332.9, 457.4)}) <= 457.5
+
+
+def test_slide_title_and_a_box_label_below_stay_apart():
+    """幻灯片大标题下面图里的小字框不是图注续行，标题旁边的星形里的字也不是标题的下一行。"""
+    from app.formats.pdf import TextBlock, _merge_caption_fragments, _merge_continuations
+
+    def blk(text, x0, y0, x1, y1, size):
+        rect = pymupdf.Rect(x0, y0, x1, y1)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
+
+    title = [blk("Example 3: Improved Plan", 141, 27, 597, 73, 39), blk("scan ‘depts’", 132, 115, 209, 131, 14)]
+    assert len(_merge_caption_fragments(title)) == 2
+    assert len(_merge_continuations(title)) == 2
+
+    star = [blk("Win", 404, 186, 433, 205, 17), blk("SortRemoveRule sorted on [deptno]", 595, 213, 695, 239, 12)]
+    assert len(_merge_continuations(star)) == 2
