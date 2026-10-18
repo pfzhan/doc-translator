@@ -4861,3 +4861,22 @@ def test_a_lone_numerator_goes_back_to_its_fraction():
     together = [block["lines"] for block in data["blocks"] if numerator in block["lines"]]
     assert len(together) == 1 and sorted(map(id, together[0])) == sorted(map(id, [denominator, numerator]))
     assert data["blocks"][0]["lines"] == [above]
+
+
+def test_fraction_bars_drawn_as_one_pixel_images_are_formula_curves():
+    """老 TeX 把分式线、根号上的横线画成拉长的一像素图片。和矢量线一样算公式的曲线，
+    公式挪走时原处的线才会擦掉；插图不算。"""
+    from app.formats.pdf import _page_curve_rects
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    dot = pymupdf.Pixmap(pymupdf.csGRAY, pymupdf.IRect(0, 0, 1, 1), False)
+    dot.clear_with(0)
+    bar = pymupdf.Rect(357.6, 598.8, 394.1, 599.3)
+    page.insert_image(bar, pixmap=dot, keep_proportion=False)
+    photo = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 20, 20), False)
+    photo.clear_with(128)
+    page.insert_image(pymupdf.Rect(100, 100, 300, 300), pixmap=photo)
+    rects = _page_curve_rects(page)
+    assert any(abs(r.x0 - bar.x0) < 0.1 and abs(r.y1 - bar.y1) < 0.1 for r in rects)
+    assert not any(r.width > 150 and r.height > 150 for r in rects)

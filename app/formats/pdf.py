@@ -1757,10 +1757,11 @@ def _extend_text_run(pending: TextRun | None, span: dict, emphasis: Emphasis, li
 
 
 def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
+    """矢量线条，加上拉长成细线的一像素图片：老 TeX 的分式线、根号横线是这样画的。"""
     try:
         drawings = page.get_drawings()
     except Exception:  # noqa: BLE001 - 个别页面的矢量表读不出来，当没有曲线
-        return []
+        drawings = []
     rects: list[pymupdf.Rect] = []
     for drawing in drawings:
         raw = drawing.get("rect")
@@ -1768,6 +1769,14 @@ def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
             continue
         rect = pymupdf.Rect(raw)
         if not rect.is_empty:
+            rects.append(rect)
+    try:
+        images = page.get_image_info()
+    except Exception:  # noqa: BLE001
+        images = []
+    for info in images:
+        rect = pymupdf.Rect(info["bbox"])
+        if not rect.is_empty and min(rect.width, rect.height) <= _RULE_IMAGE_THICK:
             rects.append(rect)
     return rects
 
@@ -1787,6 +1796,8 @@ def _absorb_one_box(formula: dict, drawings: list[pymupdf.Rect]) -> None:
     formula["dx"] = round(float(formula.get("dx") or 0) + (box.x0 - old.x0), 1)
 
 
+# 比这细的图片是线，不是插图
+_RULE_IMAGE_THICK = 1.5
 _TEXT_FLAGS = pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES
 # 墨迹外再留这一条，避免抗锯齿和斜体笔尖被切掉。左右用同一个数。
 _FORMULA_SIDE_PAD = 0.45
