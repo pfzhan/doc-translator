@@ -124,3 +124,15 @@ def _erasure_for(page):
     erasure = Erasure()
     erasure.add_block([_spans(page)], [pymupdf.Rect(0, 0, 300, 200)])
     return erasure
+
+
+def test_a_span_starting_with_a_space_is_found_by_its_glyphs():
+    """span 的 origin 是第一个字的起笔点。开头的空格落在前面下标的基线上时，
+    和这一行差一点多，按它认基线会漏掉整段。按逐字起笔点认。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=300, height=200)
+    page.insert_text((100, 80), "not converged", fontsize=10)
+    [span] = _spans(page)
+    span = {**span, "origin": (span["origin"][0], span["origin"][1] + 1.6)}
+    assert _erase_spans(page, [span]) == 13
+    assert _words(page) == []
