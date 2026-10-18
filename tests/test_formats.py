@@ -2108,6 +2108,68 @@ def test_placeholderize_marks_mixed_emphasis_only():
     assert "{b}" not in _placeholderize(uniform)[0]
 
 
+def test_formulas_set_in_text_italic_stay_whole():
+    """老论文用 Times-Italic 写变量、Symbol 写算子，只有小号角标和 Symbol 字形算公式。
+    贴着公式的斜体变量、括号、等号也是式子：(T_i.C_p = T_j.C_r) 整个是一个公式，不能拆成
+    一半图一半字。离公式远的斜体字母、小写的斜体词（is）仍是正文。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text, x0, x1, font="Times-Italic", size=9.0, y0=652.5):
+        y1 = y0 + (11.2 if size > 8 else 7.7)
+        return {"text": text, "font": font, "size": size, "flags": 2 if "Italic" in font else 0,
+                "bbox": (x0, y0, x1, y1), "origin": (x0, y0 + (8.5 if size > 8 else 5.7))}
+
+    def sub(text, x0, x1, y0=656.9):
+        return span(text, x0, x1, size=6.0, y0=y0)
+
+    roman = "Times-Roman"
+    line = [
+        span("form ", 30.0, 54.0, roman),
+        span("(T", 54.0, 61.9), sub("i", 62.0, 63.6), span(".C", 63.6, 71.9), sub("p", 71.9, 74.9),
+        span(" ", 74.9, 77.8), span("=", 77.8, 83.9), span(" ", 83.9, 86.8),
+        span("T", 86.8, 91.8), sub("j", 91.8, 93.5), span(".C", 93.5, 101.8), sub("r", 101.8, 104.1),
+        span(")", 104.1, 107.1),
+        span(", where ", 107.1, 134.1, roman),
+        span("C", 136.9, 143.0), sub("p", 142.9, 145.9),
+        span(" ", 145.9, 148.0, roman), span("is", 148.0, 154.0), span(" a column, and ", 154.0, 230.0, roman),
+        span("c", 230.0, 234.0), span(" is a constant.", 234.0, 290.0, roman),
+    ]
+    sent, formulas = _placeholderize(_block_with_spans([line], size=9.0))
+    assert sent == "form {v1}, where {v2} {i}is{/i} a column, and {i}c{/i} is a constant."
+    assert formulas[0]["bbox"].x0 == pytest.approx(54.0) and formulas[0]["bbox"].x1 == pytest.approx(107.1)
+
+    y = 697.5
+    display = [
+        span("(PE", 54.0, 69.5, y0=y), sub("q", 69.5, 72.5, y0=y + 4.4),
+        span(" \u2227", 71.8, 83.9, "Symbol", y0=y), span("PR", 83.0, 95.2, y0=y), sub("q", 95.2, 98.2, y0=y + 4.4),
+        span(" \u21d2", 121.9, 137.6, "Symbol", y0=y), span("PE", 136.7, 148.9, y0=y), sub("v", 148.9, 151.8, y0=y + 4.4),
+        span(" )", 151.8, 156.8, y0=y), span(" \u2227", 155.8, 168.7, "Symbol", y0=y),
+    ]
+    sent, formulas = _placeholderize(_block_with_spans([display], size=9.0))
+    assert re.sub(r"\{v\d+\}|\s", "", sent) == ""
+
+    # 定理正文整段斜体：贴着公式的 If 是词，不是变量
+    theorem = [
+        span("If", 54.0, 60.0), span(" ", 60.0, 62.5), span("G", 62.5, 69.0, "CMMI10"),
+        span(" and D have capacity", 69.0, 150.0),
+    ]
+    sent, _ = _placeholderize(_block_with_spans([theorem], size=9.0))
+    assert sent.startswith("If {v1}")
+
+    # 序数 t-th 的 t 是数学字体，PyMuPDF 也标斜体。放回正文的序数不能再被收进旁边的公式
+    ordinal = [
+        span("and to predict the", 108.0, 176.3, "NimbusRomNo9L-Regu", 9.9, 206.5),
+        {**span(" t", 176.3, 182.4, "CMMI10", 10.0, 206.5), "flags": 2},
+        span("th", 182.4, 187.8, "NimbusRomNo9L-Regu", 7.0, 205.0),
+        span(" ", 187.8, 190.8, "NimbusRomNo9L-Regu", 9.9, 202.8),
+        span("coordinate given", 190.8, 255.9, "NimbusRomNo9L-Regu", 9.9, 206.5),
+        {**span(" t", 255.9, 262.0, "CMMI10", 10.0, 206.5), "flags": 2},
+        span(" + 1", 262.0, 279.1, "CMR10", 10.0, 206.5),
+    ]
+    sent, _ = _placeholderize(_block_with_spans([ordinal], size=9.9))
+    assert "t-th" in sent
+
+
 def test_placeholderize_no_formula_keeps_text_identical():
     from app.formats.pdf import _placeholderize
 
