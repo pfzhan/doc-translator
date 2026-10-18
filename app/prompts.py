@@ -76,12 +76,12 @@ Some items contain a {|} placeholder. It marks where one paragraph crosses a
 page. Keep {|} and every {vN} unchanged, in the same order. Do not translate,
 drop, or move the braces."""
 
-# PDF 行内公式的占位符。模型常按上下文把 {v1} 猜成「=」写出来，占位符一丢，整段只能回退原文。
+# 行内公式的占位符（PDF 的公式，电子书段落里的 MathML 和图片）。模型常按上下文把 {v1} 猜成「=」写出来，占位符一丢，整段只能回退原文。
 FORMULA_SUFFIX = """
 
 ## Formula placeholders
-Some items contain {v1}, {v2}, ... placeholders. Each stands for a formula or symbol
-that is drawn back as an image after translation. Keep every {vN} exactly once, in
+Some items contain {v1}, {v2}, ... placeholders. Each stands for a formula, symbol,
+or image that is put back in place after translation. Keep every {vN} exactly once, in
 the matching place of the translation. Do not replace it with your guess of what it
 contains, and do not drop or renumber it."""
 

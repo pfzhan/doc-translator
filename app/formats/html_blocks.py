@@ -54,18 +54,53 @@ def _in_skip(el: Tag) -> bool:
     return False
 
 
-def _text_of(el: Tag) -> str:
-    """取段落纯文本；<br> 变成换行，script/style 等忽略，行内 code 保留原样参与翻译。"""
+def _text_of(el: Tag, slots: bool = True) -> str:
+    """取段落纯文本；<br> 变成换行，script/style 等忽略，行内 code 保留原样参与翻译。
+
+    段落里的公式、图片换成 {v1}、{v2}，译完按编号放回原处（见 _uses_slots）。
+    """
+    # 按 id 认：bs4 的 Tag 相等比的是内容，两张同样的图会被当成一个
+    slot_of = {id(m): i for i, m in enumerate(_media_of(el), 1)} if slots and _uses_slots(el) else {}
     parts = []
     for node in el.descendants:
-        if isinstance(node, Tag) and _local(node.name) == "br":
+        if id(node) in slot_of:
+            parts.append(f"{{v{slot_of[id(node)]}}}")
+        elif isinstance(node, Tag) and _local(node.name) == "br":
             parts.append("\n")
         elif type(node) is NavigableString:  # 排除注释、CDATA 等子类
-            if not any(_local(p.name) in SKIP_TAGS - VERBATIM_TAGS for p in node.parents if isinstance(p, Tag)):
+            parents = [p for p in node.parents if isinstance(p, Tag)]
+            if any(id(p) in slot_of for p in parents):
+                continue
+            if not any(_local(p.name) in SKIP_TAGS - VERBATIM_TAGS for p in parents):
                 parts.append(str(node))
     text = "".join(parts)
     lines = [WS_RE.sub(" ", l).strip() for l in text.split("\n")]
     return "\n".join(l for l in lines if l)
+
+
+MEDIA_TAGS = {"img", "image", "svg", "math", "video", "audio", "object"}
+# 行内公式、图片在译文里的占位符，和 PDF 的公式占位符同一个写法，提示词里有对应的说明
+SLOT_RE = re.compile(r"\{v(\d+)\}")
+
+
+def _media_of(el: Tag) -> list[Tag]:
+    """el 里的媒体元素，按文档顺序；嵌在别的媒体里的（svg 里的 image）不单算。"""
+    media: list[Tag] = []
+    seen: set[int] = set()
+    for m in el.find_all(lambda t: _local(t.name) in MEDIA_TAGS):
+        if not any(id(p) in seen for p in m.parents):
+            media.append(m)
+            seen.add(id(m))
+    return media
+
+
+def _uses_slots(el: Tag) -> bool:
+    """有媒体元素、原文里又没有现成的 {vN} 时才用占位符，不然分不清哪个是原文。"""
+    return bool(_media_of(el)) and not SLOT_RE.search(el.get_text())
+
+
+def _without_slots(text: str) -> str:
+    return SLOT_RE.sub("", text)
 
 
 def translatable(text: str) -> bool:
@@ -96,10 +131,16 @@ def _has_kept_structure(el: Tag) -> bool:
 
 
 def _inner_html(el: Tag) -> str | None:
-    """块内有需要保留的行内格式或分页锚点时返回 inner HTML；否则 None（纯文本路径）。"""
+    """块内有需要保留的行内格式或分页锚点时返回 inner HTML；否则 None（纯文本路径）。
+    媒体元素和纯文本路径一样换成 {vN}，MathML 不发给模型。"""
     if not _has_kept_structure(el):
         return None
-    return "".join(str(c) for c in el.children)
+    if not _uses_slots(el):
+        return "".join(str(c) for c in el.children)
+    copied = copy.copy(el)
+    for i, m in enumerate(_media_of(copied), 1):
+        m.replace_with(NavigableString(f"{{v{i}}}"))
+    return "".join(str(c) for c in copied.children)
 
 
 def find_blocks(soup: BeautifulSoup) -> list[tuple[Tag, str, str | None]]:
@@ -112,7 +153,7 @@ def find_blocks(soup: BeautifulSoup) -> list[tuple[Tag, str, str | None]]:
         if any(_is_block(d) for d in el.find_all(True)):
             continue
         text = _text_of(el)
-        if translatable(text):
+        if translatable(_without_slots(text)):
             result.append((el, text, _inner_html(el)))
     # 块级容器里直接挂着的“裸文本”（常见于 MOBI 转出来的 HTML），包成 span 再翻译
     for container in [body, *body.find_all(lambda t: _is_block(t))]:
@@ -122,7 +163,7 @@ def find_blocks(soup: BeautifulSoup) -> list[tuple[Tag, str, str | None]]:
             if run.find(_is_block):
                 continue  # 行内元素里包着块级元素，块级部分已在上面处理
             text = _text_of(run)
-            if translatable(text):
+            if translatable(_without_slots(text)):
                 result.append((run, text, _inner_html(run)))
     # 按文档顺序排列（裸文本是第二遍才找到的），这样预览和翻译顺序都和阅读顺序一致
     order = {id(el): i for i, el in enumerate(body.find_all(True))}
@@ -324,24 +365,57 @@ def _inline_runs(container: Tag, soup) -> list[Tag]:
     return runs
 
 
-MEDIA_TAGS = {"img", "image", "svg", "math", "video", "audio", "object"}
-
-
-def _set_text(soup, el: Tag, text: str, keep_media: bool = True):
-    # 图片等媒体元素在清空文字后放回去，避免段落内的插图丢失
-    media = []
-    if keep_media:
-        for m in el.find_all(lambda t: _local(t.name) in MEDIA_TAGS):
-            if not any(m in p.descendants for p in media):
-                media.append(m)
-        media = [m.extract() for m in media]
+def _set_text(soup, el: Tag, text: str, media: list[Tag] | None = None):
+    """清空 el 写入 text。media 是原段落的媒体元素：text 里的 {vN} 换成对应的那个，
+    译文漏掉的补在末尾。media 为 None 时（原文本来就有 {vN}）不认占位符。"""
     el.clear()
-    for m in media:
-        el.append(m)
     for i, line in enumerate(text.split("\n")):
         if i:
             el.append(soup.new_tag("br"))
         el.append(NavigableString(line))
+    if media is not None:
+        _place_media(el, media)
+
+
+def _slot_media(el: Tag, copies: bool) -> list[Tag] | None:
+    """el 的媒体元素，准备放进译文。双语时原段落还要用，放副本，去掉 id 免得重复。"""
+    if not _uses_slots(el):
+        return None
+    if not copies:
+        return [m.extract() for m in _media_of(el)]
+    out = []
+    for m in _media_of(el):
+        clone = copy.copy(m)
+        for t in [clone, *clone.find_all(True)]:
+            if t.has_attr("id"):
+                del t["id"]
+        out.append(clone)
+    return out
+
+
+def _place_media(target: Tag, media: list[Tag]) -> None:
+    """把 target 文字里的 {vN} 换成 media 里第 N 个元素。重复的、编号越界的占位符删掉，
+    没用上的元素按原顺序补在末尾：模型漏掉占位符时公式不能跟着丢。"""
+    used: set[int] = set()
+    for node in list(target.descendants):
+        if type(node) is not NavigableString or not SLOT_RE.search(node):
+            continue
+        pieces: list = []
+        pos = 0
+        for m in SLOT_RE.finditer(node):
+            pieces.append(NavigableString(node[pos:m.start()]))
+            index = int(m.group(1)) - 1
+            if 0 <= index < len(media) and index not in used:
+                used.add(index)
+                pieces.append(media[index])
+            pos = m.end()
+        pieces.append(NavigableString(node[pos:]))
+        for piece in pieces:
+            node.insert_before(piece)
+        node.extract()
+    for index, m in enumerate(media):
+        if index not in used:
+            target.append(m)
 
 
 def lang_attrs(lang: str) -> dict:
@@ -361,13 +435,21 @@ def apply_translation(soup, el: Tag, text: str, translated: str, bilingual: bool
     name = _local(el.name)
     attrs = lang_attrs(lang)
     if not bilingual:
-        _set_text(soup, el, translated)
+        media = _slot_media(el, copies=False)
+        if media is None:
+            # 原文自带 {vN}：媒体元素按原来的办法放在段首
+            media_kept = [m.extract() for m in _media_of(el)]
+            _set_text(soup, el, translated)
+            for m in reversed(media_kept):
+                el.insert(0, m)
+        else:
+            _set_text(soup, el, translated, media)
         for k, v in attrs.items():
             el[k] = v
         return el
     if name in INNER_TAGS:
         span = soup.new_tag("span", attrs={"class": TRANSLATION_CLASS, **attrs})
-        _set_text(soup, span, translated)
+        _set_text(soup, span, translated, _slot_media(el, copies=True))
         el.append(soup.new_tag("br"))
         el.append(span)
         return span
@@ -381,7 +463,7 @@ def apply_translation(soup, el: Tag, text: str, translated: str, bilingual: bool
     clone["class"] = [*classes, TRANSLATION_CLASS]
     for k, v in attrs.items():
         clone[k] = v
-    _set_text(soup, clone, translated, keep_media=False)
+    _set_text(soup, clone, translated, _slot_media(el, copies=True))
     el.insert_after(clone)
     return clone
 
@@ -527,28 +609,30 @@ def apply_translation_html(soup, el: Tag, src_html: str, translated_html: str, b
         return
     name = _local(el.name)
     attrs = lang_attrs(lang)
-    # 译文里媒体元素全丢时，把原文的补在末尾（img 在富文本段落里很少见，位置不苛求）
+    # 原文自带 {vN} 时媒体元素跟着 HTML 发给了模型，译文里全丢了就把原文的补在末尾
     src_frag = _parse_fragment(src_html)
     src_media = src_frag.find_all(lambda t: _local(t.name) in MEDIA_TAGS) if src_frag else []
     has_media = any(_local(getattr(n, "name", None)) in MEDIA_TAGS
                     or (isinstance(n, Tag) and n.find(lambda t: _local(t.name) in MEDIA_TAGS)) for n in nodes)
 
-    def fill(target: Tag):
+    def fill(target: Tag, media: list[Tag] | None):
         target.clear()
         for n in nodes:
             target.append(n)
-        if src_media and not has_media:
+        if media is not None:
+            _place_media(target, media)
+        elif src_media and not has_media:
             for m in src_media:
                 target.append(m)
 
     if not bilingual:
-        fill(el)
+        fill(el, _slot_media(el, copies=False))
         for k, v in attrs.items():
             el[k] = v
         return
     if name in INNER_TAGS:
         span = soup.new_tag("span", attrs={"class": TRANSLATION_CLASS, **attrs})
-        fill(span)
+        fill(span, _slot_media(el, copies=True))
         _strip_ids(span)
         el.append(soup.new_tag("br"))
         el.append(span)
@@ -561,7 +645,7 @@ def apply_translation_html(soup, el: Tag, src_html: str, translated_html: str, b
     if isinstance(classes, str):
         classes = classes.split()
     clone["class"] = [*classes, TRANSLATION_CLASS]
-    fill(clone)
+    fill(clone, _slot_media(el, copies=True))
     _strip_ids(clone)
     for k, v in attrs.items():
         clone[k] = v
@@ -618,7 +702,7 @@ def translate_nav_links(soup) -> list[tuple[Tag, str]]:
     for el in soup.find_all(lambda t: _local(t.name) in ("a", "span")):
         if el.find(lambda t: _local(t.name) in ("a", "span")):
             continue
-        text = _text_of(el)
+        text = _text_of(el, slots=False)
         if translatable(text):
             out.append((el, text))
     return out
