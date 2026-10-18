@@ -457,7 +457,7 @@ def algorithm_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
         body = _box_below(box, size, horizontal) or _box_above(box, size, horizontal)
         if body is None:
             continue
-        rows = _code_rows(lines, body)
+        rows = _code_rows(lines, body, horizontal)
         if len(rows) >= 2:
             tables.append(RuledTable(body, rows))
     return tuple(tables)
@@ -554,8 +554,11 @@ def _distinct_rules(rules: list[pymupdf.Rect]) -> list[pymupdf.Rect]:
     return out
 
 
-def _code_rows(lines: list[dict], body: pymupdf.Rect) -> tuple[pymupdf.Rect, ...]:
-    """框里每一行一格。行按正文字号的基线分，上下标落在它们所属的行里。"""
+def _code_rows(
+    lines: list[dict], body: pymupdf.Rect, rules: Sequence[pymupdf.Rect] = (),
+) -> tuple[pymupdf.Rect, ...]:
+    """框里每一行一格。行按正文字号的基线分，上下标落在它们所属的行里。
+    rules 是框里的横线：分数线、根号上的横线短，框线和分隔线横贯整个框。"""
     spans = [
         span for line in lines for span in line["spans"]
         if span["text"].strip() and body.contains(pymupdf.Point(span["origin"]))
@@ -563,9 +566,15 @@ def _code_rows(lines: list[dict], body: pymupdf.Rect) -> tuple[pymupdf.Rect, ...
     if not spans:
         return ()
     main = max(span["size"] for span in spans)
+    bars = [rule for rule in rules if rule.width < body.width * 0.5 and body.intersects(rule)]
     baselines: list[float] = []
-    # 根号、大括号这类符号字体的起笔点不在基线上，不拿它们分行
-    steady = [span for span in spans if span["size"] >= main * 0.85 and not _SYMBOL_FONT_RE.search(span["font"])]
+    # 根号、大括号这类符号字体的起笔点不在基线上，不拿它们分行；
+    # 行间公式的分子分母和正文一样大，贴着分数线，也不拿它们分行
+    steady = [
+        span for span in spans
+        if span["size"] >= main * 0.85 and not _SYMBOL_FONT_RE.search(span["font"])
+        and not _on_bar(span, bars, main)
+    ]
     for y in sorted(span["origin"][1] for span in steady):
         if not baselines or y - baselines[-1] > main * 0.4:
             baselines.append(y)
@@ -576,6 +585,19 @@ def _code_rows(lines: list[dict], body: pymupdf.Rect) -> tuple[pymupdf.Rect, ...
     cuts = [body.y0, *(a + (b - a) * _ROW_CUT for a, b in zip(baselines, baselines[1:])), body.y1]
     rows = [pymupdf.Rect(body.x0, top, body.x1, bottom) for top, bottom in zip(cuts, cuts[1:])]
     return tuple(_join_wrapped_rows(rows, baselines, spans, main))
+
+
+def _on_bar(span: dict, bars: Sequence[pymupdf.Rect], size: float) -> bool:
+    """span 紧贴在一条短横线的上面或下面，横向落在线的范围里：分子、分母、根号里的字。"""
+    if not bars:
+        return False
+    box = pymupdf.Rect(span["bbox"])
+    for bar in bars:
+        if bar.x0 - 1 > box.x0 or box.x1 > bar.x1 + 1:
+            continue
+        if -1 <= bar.y0 - box.y1 <= size * 0.3 or -1 <= box.y0 - bar.y1 <= size * 0.3:
+            return True
+    return False
 
 
 @dataclass(frozen=True)

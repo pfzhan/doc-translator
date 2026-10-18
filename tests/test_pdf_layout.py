@@ -587,6 +587,25 @@ def test_algorithm_rows_ignore_radical_origins():
     assert len(rows) == 2
 
 
+def test_algorithm_rows_ignore_fraction_numerators_and_denominators():
+    """行间公式的分子分母和正文一样大，起笔点在基线上下大半个字高。贴着分数线的不另切一格。"""
+    from app.formats.pdf_layout import _code_rows
+
+    def span(text, font, x0, x1, y):
+        return {"text": text, "font": font, "size": 10.0, "origin": (x0, y), "bbox": (x0, y - 7.5, x1, y + 2.5)}
+
+    def row(y, numerator, denominator, comment):
+        return [{"spans": [span("µ ←", "CMMI10", 321, 345, y), span(comment, "Times-Roman", 460, 540, y)]},
+                {"spans": [span(numerator, "CMR10", 351, 356, y - 6.7)]},
+                {"spans": [span(denominator, "CMMI10", 350, 358, y + 6.8)]}]
+
+    lines = [*row(562.7, "1", "m", "// mini-batch mean"), *row(595.9, "1", "m", "// mini-batch variance")]
+    bars = [pymupdf.Rect(349.5, 559.9, 358.3, 560.4), pymupdf.Rect(349.5, 593.1, 358.3, 593.5)]
+    body = pymupdf.Rect(307, 541, 543, 610)
+    assert len(_code_rows(lines, body, bars)) == 2
+    assert len(_code_rows(lines, body)) == 6
+
+
 def test_a_numbered_algorithm_statement_is_one_unit():
     """行号小一号、句子折成两行时，一格还是一句话；两行各自送翻会剩下半句英文。"""
     doc = pymupdf.open()
