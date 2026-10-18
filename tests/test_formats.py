@@ -4794,5 +4794,6 @@ def test_a_lone_numerator_goes_back_to_its_fraction():
                        {"type": 0, "bbox": (235, 258, 296, 276), "lines": [denominator]},
                        {"type": 0, "bbox": (243, 256, 251, 263), "lines": [numerator]}]}
     _rejoin_split_lines(data)
-    assert data["blocks"][1]["lines"] == [denominator, numerator]
+    together = [block["lines"] for block in data["blocks"] if numerator in block["lines"]]
+    assert together == [[denominator, numerator]]
     assert data["blocks"][0]["lines"] == [above]
