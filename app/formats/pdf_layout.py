@@ -447,14 +447,12 @@ def algorithm_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
         line for block in data.get("blocks", []) if block.get("type") == 0
         for line in block["lines"] if abs(line["dir"][1]) <= 0.01
     ]
-    captions = [line for line in lines if _ALGORITHM_RE.match("".join(s["text"] for s in line["spans"]))]
+    captions = [caption for line in lines for caption in _algorithm_captions(line)]
     if not captions:
         return ()
     horizontal, _vertical = _rule_segments(page)
     tables: list[RuledTable] = []
-    for caption in captions:
-        box = pymupdf.Rect(caption["bbox"])
-        size = max((span["size"] for span in caption["spans"]), default=10.0)
+    for box, size in captions:
         body = _box_below(box, size, horizontal) or _box_above(box, size, horizontal)
         if body is None:
             continue
@@ -464,11 +462,28 @@ def algorithm_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
     return tuple(tables)
 
 
+def _algorithm_captions(line: dict) -> list[tuple[pymupdf.Rect, float]]:
+    """一行里的算法图注（框、字号）。并排的两个算法框，图注常在同一行里，中间隔着栏沟。"""
+    spans = [span for span in line["spans"] if span["text"].strip()]
+    starts: list[int] = []
+    for index, span in enumerate(spans):
+        if index and pymupdf.Rect(span["bbox"]).x0 - pymupdf.Rect(spans[index - 1]["bbox"]).x1 < span["size"] * 2:
+            continue
+        if _ALGORITHM_RE.match("".join(item["text"] for item in spans[index:])):
+            starts.append(index)
+    found: list[tuple[pymupdf.Rect, float]] = []
+    for begin, end in zip(starts, [*starts[1:], len(spans)]):
+        box = pymupdf.Rect()
+        for span in spans[begin:end]:
+            box |= pymupdf.Rect(span["bbox"])
+        found.append((box, max(span["size"] for span in spans[begin:end])))
+    return found
+
+
 def _box_below(caption: pymupdf.Rect, size: float, horizontal: list[pymupdf.Rect]) -> pymupdf.Rect | None:
     """图注在上：图注下面的第一条线是框顶，再下面一条是框底。图注可能有好几行。"""
     rules = sorted(
-        (rule for rule in horizontal
-         if rule.y0 >= caption.y1 - _NEAR and rule.x0 <= caption.x0 + _NEAR and rule.width >= caption.width * 0.5),
+        (rule for rule in horizontal if rule.y0 >= caption.y1 - _NEAR and _under(rule, caption, size)),
         key=lambda rule: rule.y0,
     )
     rules = _distinct_rules(rules)
@@ -481,8 +496,7 @@ def _box_below(caption: pymupdf.Rect, size: float, horizontal: list[pymupdf.Rect
 def _box_above(caption: pymupdf.Rect, size: float, horizontal: list[pymupdf.Rect]) -> pymupdf.Rect | None:
     """图注在下：紧挨图注上方的线是框底，再往上一条同宽的线是框顶。"""
     rules = sorted(
-        (rule for rule in horizontal
-         if rule.y1 <= caption.y0 + _NEAR and rule.x0 <= caption.x0 + _NEAR and rule.x1 >= caption.x0 + size),
+        (rule for rule in horizontal if rule.y1 <= caption.y0 + _NEAR and _under(rule, caption, size)),
         key=lambda rule: -rule.y0,
     )
     rules = _distinct_rules(rules)
@@ -493,6 +507,11 @@ def _box_above(caption: pymupdf.Rect, size: float, horizontal: list[pymupdf.Rect
     if top is None:
         return None
     return pymupdf.Rect(bottom.x0, top.y1, bottom.x1, bottom.y0)
+
+
+def _under(rule: pymupdf.Rect, caption: pymupdf.Rect, size: float) -> bool:
+    """线从图注左缘起、盖过图注开头。并排的另一个算法框的线在旁边，不算。"""
+    return rule.x0 <= caption.x0 + _NEAR and rule.x1 >= min(caption.x1, caption.x0 + size * 4)
 
 
 def _distinct_rules(rules: list[pymupdf.Rect]) -> list[pymupdf.Rect]:
