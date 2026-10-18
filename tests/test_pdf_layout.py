@@ -573,3 +573,15 @@ def test_side_by_side_algorithm_boxes_are_both_found():
     tables = algorithm_tables(page)
     assert sorted(round(table.rect.x0) for table in tables) == [50, 310]
     assert all(len(table.cells) == 3 for table in tables)
+
+
+def test_algorithm_rows_ignore_radical_origins():
+    """根号的起笔点在字形顶上，不能当成一行的基线另切出一格。"""
+    from app.formats.pdf_layout import _code_rows
+
+    def line(y, *spans):
+        return {"spans": [{"text": text, "font": font, "size": 10.0, "origin": (120, y + dy)} for text, font, dy in spans]}
+
+    lines = [line(300, ("x ← y", "CMMI10", 0)), line(311, ("z ←", "CMMI10", 0), ("√", "CMSY10", -7))]
+    rows = _code_rows(lines, pymupdf.Rect(100, 290, 400, 320))
+    assert len(rows) == 2
