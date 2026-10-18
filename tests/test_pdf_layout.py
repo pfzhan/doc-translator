@@ -648,3 +648,25 @@ def test_a_displayed_formula_inside_an_algorithm_step_keeps_its_glyphs():
         "2: Optimize the parameters of the set {a, b} = c",
         "3: Return the trained network",
     ]
+
+
+def test_an_algorithm_formula_beside_a_distant_comment_keeps_its_glyphs():
+    """算法一步的行间公式和右边远处的注释在同一格：注释照翻，公式留原字，不压成一行高塞进注释里。
+    紧挨着正文的式子仍是句子的一部分。"""
+    from app.formats.pdf import _merge_cells
+
+    clip = (307.7, 576.4, 543.5, 608.1)
+
+    def part(text, font, x0, x1):
+        rect = pymupdf.Rect(x0, 585.0, x1, 607.0)
+        span = {"text": text, "font": font, "size": 10.0, "bbox": tuple(rect), "origin": (x0, 597.0)}
+        return TextBlock(2, rect, [rect], text, 10.0, "#000", False, span_lines=[[span]], clip=clip)
+
+    formula = part("σ ← (x − µ)", "CMMI10", 321.2, 420.0)
+    comment = part("// mini-batch variance", "Times-Roman", 452.8, 540.2)
+    merged = _merge_cells([formula, comment], {id(formula), id(comment)})
+    assert [block.text for block in merged] == ["// mini-batch variance"]
+
+    near = part("Set the parameters", "Times-Roman", 425.0, 540.2)
+    merged = _merge_cells([formula, near], {id(formula), id(near)})
+    assert [block.text for block in merged] == ["σ ← (x − µ) Set the parameters"]
