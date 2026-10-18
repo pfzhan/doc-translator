@@ -9,6 +9,7 @@ import re
 from html.entities import html5
 
 from bs4 import BeautifulSoup, NavigableString, Tag
+from lxml import etree
 
 from ..languages import RTL_LANGUAGES
 
@@ -677,10 +678,48 @@ def _numeric_entities(content: bytes | str) -> bytes | str:
     return _NAMED_ENTITY_RE.sub(repl, content)
 
 
+# HTML 写法的空元素：<br>、<img ...> 不闭合，在 XML 里不合法
+_VOID_TAGS = "area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr"
+_OPEN_VOID = rf"""<({_VOID_TAGS})\b((?:[^<>"']|"[^"]*"|'[^']*')*?)\s*(?<!/)>"""
+_VOID_END = rf"</(?:{_VOID_TAGS})\s*>"
+# 后面不是实体引用的 &（AT&T）
+_BARE_AMP = r"&(?!#\d+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]*;)"
+
+
+def _sub(pattern: str, repl: str, content: bytes | str) -> bytes | str:
+    if isinstance(content, bytes):
+        return re.sub(pattern.encode(), repl.encode(), content, flags=re.I)
+    return re.sub(pattern, repl, content, flags=re.I)
+
+
+def _well_formed(content: bytes | str) -> bool:
+    data = content.encode("utf-8") if isinstance(content, str) else content
+    parser = etree.XMLParser(resolve_entities=False, no_network=True, load_dtd=False, huge_tree=True)
+    try:
+        etree.fromstring(data, parser)
+    except etree.XMLSyntaxError:
+        return False
+    return True
+
+
+def _close_html_tags(content: bytes | str) -> bytes | str:
+    """把 HTML 写法补成 XML：空元素自闭合、去掉它们的结束标签，裸 & 转义。"""
+    content = _sub(_OPEN_VOID, r"<\1\2/>", content)
+    content = _sub(_VOID_END, "", content)
+    return _sub(_BARE_AMP, "&amp;", content)
+
+
 def parse(content: bytes | str, xml: bool) -> BeautifulSoup:
     if xml:
         # 不换的话这些实体会被静默删掉，原文和译文都缺字
         content = _numeric_entities(content)
+        # 不良构时 lxml-xml 的容错解析从出错处起丢掉 &amp;、&lt; 的字，块还会互相嵌套，
+        # 而整篇是按解析结果写回的。先补 HTML 写法；还不行就按 HTML 解析，SVG 属性的大小写会丢
+        if not _well_formed(content):
+            repaired = _close_html_tags(content)
+            if not _well_formed(repaired):
+                return BeautifulSoup(content, "lxml")
+            content = repaired
     soup = BeautifulSoup(content, "lxml-xml" if xml else "lxml")
     # lxml-xml 遇到带内部 DTD 子集（<!DOCTYPE html [<!ENTITY nbsp "&#160;">]>）的 XHTML 会静默产出空文档，
     # 原文非空但解析不出任何元素时回退到 HTML 模式重新解析
