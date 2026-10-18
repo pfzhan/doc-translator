@@ -234,6 +234,11 @@ def _attach_ink(page: pymupdf.Page, data: dict) -> None:
                     span["ink"] = ink
 
 
+def _mathy(item: tuple) -> bool:
+    """这一截是式子的一部分：有数学字体的字，或者全是符号。"""
+    return bool(NO_TEXT_RE.match(item[0].strip())) or any(_span_is_math(span) for span in item[2] if "font" in span)
+
+
 def _rejoin_split_lines(data: dict) -> None:
     """PyMuPDF 有时把一行字从中间切开，后半截分进另一个块（常在上下标处）。
     把后半截挪回前半截所在的块、紧跟在那一行后面。
@@ -318,6 +323,7 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         for member in range(head, index + 1):
             row_box[member] = box
     groups, cur = [], [0]
+    row_rect = pymupdf.Rect(items[0][1])  # 当前可视行已经接上的部分
     ref = 0  # 参考行：上一条正文字号的行。上下标拆出的 dict 小行不能当参考，
     # 否则左跳量相对小行算，段落会在公式处被切碎（"(like a | sequence)"）
     ref_size = max((s["size"] for s in items[0][2]), default=10)
@@ -358,9 +364,18 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         # 同一基线上、词距内的下一个词。按词拆行时，行内大写词（DXL）不是新段落。
         # 句末、标记语言和图内标签仍拆开，避免把侧标或格子并进正文。
         same_word = _same_line_word(items[i - 1][0], text, qrect, rect, psize) or i in justified
+        # 式子被拆成几截（分式、大括号、根号）时，首尾相接的几截是同一可视行，
+        # 纯符号的那一截不能把行切开。上下交叠按这一行已经接上的部分算：
+        # 大括号和分母各自的框只擦到一点边。两截都是正文的，仍按上面的句末规则拆。
+        row_overlap = min(row_rect.y1, rect.y1) - max(row_rect.y0, rect.y0)
+        touching = (
+            (_mathy(items[i - 1]) or _mathy(items[i]))
+            and row_overlap > min(row_rect.height, rect.height) * 0.35
+            and -psize <= rect.x0 - qrect.x1 <= psize
+        )
         same_visual_line = (
             (h_overlap > 0 and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5)
-            or same_word
+            or same_word or touching
         )
         # 章节号和标题是同一行的整体（'2.2 Training'）：纯数字的上行不当符号行，
         # 也不按硬换行拆开，否则数字被过滤不遮罩、标题单独翻，基线对不齐
@@ -389,6 +404,7 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         else:
             cur.append(i)
             size_drop = False
+        row_rect = row_rect | rect if same_visual_line else pymupdf.Rect(rect)
         isize = max((s["size"] for s in items[i][2]), default=10)
         # 字号落下拆出的新段，基准改成这一行。否则后面的同字号续行仍对着标题拆。
         # 角标短行不在这里更新，避免左跳量相对小行算飞。
