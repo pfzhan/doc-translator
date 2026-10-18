@@ -4724,3 +4724,35 @@ def test_a_line_with_three_words_among_formulas_is_translated():
     text = "p(ϵ) Therefore, ∫q(z|x)f(z)dz = ∫p(ϵ)f(z)dϵ = ∫p(ϵ)f(g(ϵ,x))dϵ. It follows"
     assert not _untranslatable(spans, text)
     assert _untranslatable(spans[:4], "p(ϵ) Therefore, ∫q(z|x)f(z)dz = ∫p(ϵ)f(z)dϵ")
+
+
+def test_an_inline_fraction_rejoins_its_line_in_reading_order():
+    """g(x) = 1/(1+exp(−x))：分母在另一块里，离等号比词距宽；分子排在分母前面。
+    挪回来以后按从左到右排，分母才接得上等号。"""
+    from app.formats.pdf import _rejoin_split_lines
+
+    def line(x0, x1, y0, y1, *spans):
+        # Times 正文里的 CMR 提取时已经标成公式
+        return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [
+            {"text": text, "font": font, "size": 10.0, "math": font.startswith("CM")} for text, font in spans]}
+
+    host = line(72, 219.4, 136, 149.3, ("rameters to be learned, and", "Times-Roman"), ("g(x) =", "CMR10"))
+    numerator = line(243.2, 247.2, 137.3, 143.2, ("1", "CMR7"))
+    denominator = line(225.6, 301, 136, 151.7, ("1+exp(−x)", "CMR10"), (". As", "Times-Roman"))
+    data = {"blocks": [{"type": 0, "bbox": (72, 136, 247, 149), "lines": [host, numerator]},
+                       {"type": 0, "bbox": (225, 136, 301, 152), "lines": [denominator]}]}
+    _rejoin_split_lines(data)
+    assert data["blocks"][0]["lines"] == [host, denominator, numerator]
+
+
+def test_plain_words_a_wide_gap_apart_are_not_rejoined():
+    from app.formats.pdf import _rejoin_split_lines
+
+    def line(x0, x1, text):
+        return {"bbox": (x0, 136, x1, 149), "dir": (1, 0), "spans": [{"text": text, "font": "Times-Roman", "size": 10.0}]}
+
+    left, right = line(72, 219, "learned, and the"), line(227, 301, "output of the layer")
+    data = {"blocks": [{"type": 0, "bbox": (72, 136, 219, 149), "lines": [left]},
+                       {"type": 0, "bbox": (227, 136, 301, 149), "lines": [right]}]}
+    _rejoin_split_lines(data)
+    assert data["blocks"][1]["lines"] == [right]
