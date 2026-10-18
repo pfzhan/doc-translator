@@ -2265,6 +2265,18 @@ def test_body_font_symbols_and_script_bases_become_formulas():
     sent_c, _ = _placeholderize(cite)
     assert sent_c.startswith("a") and "{v1}" in sent_c
 
+    # 角标后面接着箭头，同一个 run 里有正常大小的字：字母仍是角标的底
+    arrow = _block_with_spans([[
+        span("Set ", "Times-Roman", 10, 300, 456.4, x1=322.4, y1=466.9),
+        span("N", "Times-Roman", 10, 327.5, 456.4, x1=335.2, y1=466.9),
+        {**span("inf", "CMR7", 7, 335.2, 457.5, x1=344.6, y1=462.7), "math": True},
+        {**span("BN", "CMR7", 7, 335.2, 464.2, x1=345.6, y1=469.4), "math": True},
+        span(" ←", "CMSY10", 10, 346.6, 459.4, x1=359.2, y1=469.4),
+        span(" N now", "Times-Roman", 10, 359.2, 456.4, x1=390, y1=466.9),
+    ]], size=10.0)
+    sent_a, formulas_a = _placeholderize(arrow)
+    assert sent_a.startswith("Set {v1}") and len(formulas_a) == 1
+
     equals = _block_with_spans([[
         span("E ", "TimesNewRomanPSMT", 10, 0, 50),
         span("=", "TimesNewRomanPSMT", 10, 14, 50, x1=22),

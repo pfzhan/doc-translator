@@ -1237,8 +1237,9 @@ _CAPTION_LABEL_RE = re.compile(
 )
 
 
-def _script_base(span: dict, bbox: pymupdf.Rect, block_size: float) -> bool:
-    """单字母贴在较小角标上，才并进公式。引用上标在字母右侧，中心出了字框，不收。"""
+def _script_base(span: dict, bbox: pymupdf.Rect, block_size: float, math: bool = False) -> bool:
+    """单字母贴在较小角标上，才并进公式。引用上标在字母右侧，中心出了字框，不收；
+    数学字体的角标（inf、tr 这样宽的）不是引用，只要紧贴字母右缘。"""
     if not _VARIABLE_BASE_RE.match(str(span.get("text") or "").strip()):
         return False
     if float(span.get("size") or 0) < block_size * 0.79:
@@ -1250,14 +1251,26 @@ def _script_base(span: dict, bbox: pymupdf.Rect, block_size: float) -> bool:
     y_gap = max(base.y0, bbox.y0) - min(base.y1, bbox.y1)
     center = (bbox.x0 + bbox.x1) / 2
     # 角标可以略伸出字母右缘。再往右就是引用上标，中心已经离开字框。
-    return y_gap < block_size and bbox.x0 <= base.x1 + 0.4 and base.x0 - 1 <= center <= base.x1 + 2.0
+    if y_gap >= block_size or bbox.x0 > base.x1 + 0.4:
+        return False
+    return math or base.x0 - 1 <= center <= base.x1 + 2.0
 
 
 def _absorb_script_bases(runs: list[dict], span_lines: list[list[dict]], block_size: float) -> None:
-    """把贴在角标上的正体变量并进该角标。单词和引用编号留在正文。"""
+    """把贴在角标上的正体变量并进该角标。单词和引用编号留在正文。
+    只看 run 开头的角标：N 的上下标后面接着箭头、等号时，字母仍是它们的底。"""
     taken = {id(span) for run in runs for span in run["spans"]}
     for run in runs:
-        if float(run["max_size"]) >= block_size * 0.79:
+        scripts = pymupdf.Rect()
+        math = False
+        for span in run["spans"]:
+            if not str(span.get("text") or "").strip():
+                continue
+            if float(span.get("size") or 0) >= block_size * 0.79:
+                break
+            scripts |= pymupdf.Rect(span["bbox"])
+            math = math or _span_is_math(span)
+        if scripts.is_empty:
             continue
         line_no, start, end = run["pos"]
         candidates: list[tuple[int, int, dict]] = []
@@ -1267,7 +1280,7 @@ def _absorb_script_bases(runs: list[dict], span_lines: list[list[dict]], block_s
             for index, span in enumerate(span_lines[line_no - 1]):
                 candidates.append((line_no - 1, index, span))
         for other_no, index, span in candidates:
-            if id(span) in taken or not _script_base(span, run["bbox"], block_size):
+            if id(span) in taken or not _script_base(span, scripts, block_size, math):
                 continue
             run["spans"].insert(0, span)
             run["bbox"] |= pymupdf.Rect(span["bbox"])
