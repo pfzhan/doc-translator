@@ -411,6 +411,23 @@ def test_text_alignment_is_not_a_table():
     assert all(block.clip is None for block in extract_blocks(doc))
 
 
+def test_nested_boxes_of_a_diagram_are_not_a_table():
+    """流程图的框套框：find_tables 认出的格子互相包含，这不是表。当表的话框里的字全并成一格。"""
+    from app.formats.pdf_layout import ruled_tables
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=720, height=405)
+    page.draw_rect(pymupdf.Rect(192, 123, 687, 349), color=(0.5, 0.5, 0.5), fill=(0.9, 0.9, 0.9))
+    page.draw_rect(pymupdf.Rect(541, 74, 715, 159), color=(0.3, 0.4, 0.8), fill=(1, 1, 1))
+    page.insert_text((210, 200), "Node for each node in Input", fontsize=10)
+    page.insert_text((360, 200), "Rule: specifies an Operator", fontsize=10)
+    page.insert_text((550, 90), "Add Rule matches to Queue", fontsize=10)
+    assert ruled_tables(page) == ()
+    texts = [block.text for block in extract_blocks(doc)]
+    assert "Add Rule matches to Queue" in texts
+    assert "Node for each node in Input" in texts
+
+
 def test_unruled_short_cells_stay_inside_and_do_not_vote_as_columns(tmp_path):
     """没有线的短格子按列缘对齐认成表，译文不越出格子，也不把页面拆成分栏。"""
     doc = pymupdf.open()
