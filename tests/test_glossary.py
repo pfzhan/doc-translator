@@ -112,6 +112,37 @@ def test_resuming_reuses_the_same_glossary_and_cache(tmp_path):
     assert tr.doc_glossary and set(out) == {"译文"}
 
 
+def test_the_same_file_keeps_its_glossary_when_extraction_changes(tmp_path):
+    """同一份文件，提取规则改了以后候选清单跟着变：仍用第一次定下的术语表，
+    没变的段落照样命中缓存，不会整篇重翻。"""
+    cache = Cache(tmp_path / "c.sqlite3")
+    first = Runner(_translator([]), cache=cache, skip_same_lang=False)
+    first.set_document("sha-of-file")
+    asyncio.run(first.translate_all(DOC))
+
+    changed = DOC + ["A new paragraph mentions the lattice and the lattice again, the lattice."]
+    requests = []
+    tr = _translator(requests)
+    again = Runner(tr, cache=cache, skip_same_lang=False)
+    again.set_document("sha-of-file")
+    asyncio.run(again.translate_all(changed))
+    assert not any("terminology list" in system for system, _user in requests)
+    assert tr.doc_glossary == first.translator.doc_glossary
+    # 只有新加的那一段去请求翻译
+    sent = [user for system, user in requests]
+    assert len(sent) == 1 and "A new paragraph" in sent[0]
+
+
+def test_translate_file_names_the_document(tmp_path):
+    from app.formats import translate_file
+
+    src = tmp_path / "a.md"
+    src.write_text("\n\n".join(DOC), encoding="utf-8")
+    runner = Runner(_translator([]), cache=Cache(tmp_path / "c.sqlite3"), skip_same_lang=False)
+    asyncio.run(translate_file(src, tmp_path, runner, False, "zh-CN"))
+    assert runner.document and len(runner.document) == 40
+
+
 def test_relayout_only_never_asks_for_terms(tmp_path):
     """只排版时缺术语表不去请求，按没有术语表的缓存键找，旧记录照样能补生成。"""
     cache = Cache(tmp_path / "c.sqlite3")
