@@ -2530,17 +2530,28 @@ def _merge_cells(blocks: list[TextBlock], unchecked: set[int]) -> list[TextBlock
 
 
 def _displayed_in_cell(part: TextBlock, parts: list[TextBlock]) -> bool:
-    """格子里单独占一行、比格子里的字缩进两个多字宽的式子（算法一步下面居中的公式）。
-    留原字，不并进句子里：并进去以后 E、Var 这些字母被当成词翻。"""
+    """格子里自成一体的式子：单独占一行、比格子里的字缩进两个多字宽（算法一步下面居中的公式），
+    或者和同一行的字隔着两个字宽以上（算法一步的式子和右边的注释）。
+    留原字，不并进句子里：并进去以后 E、Var 这些字母被当成词翻，行间公式也被压成一行高。"""
     others = [other for other in parts if other is not part]
-    if not others or any(
-        min(other.rect.y1, part.rect.y1) - max(other.rect.y0, part.rect.y0)
-        > min(other.rect.height, part.rect.height) * 0.35
-        for other in others
-    ):
+    if not others or not _untranslatable(_block_spans(part), part.text):
         return False
+    beside = [
+        other for other in others
+        if min(other.rect.y1, part.rect.y1) - max(other.rect.y0, part.rect.y0)
+        > min(other.rect.height, part.rect.height) * 0.35
+    ]
+    if beside:
+        # 行号也不成句，但不是式子，留在这一步里
+        if not any(_span_is_math(span) for span in _block_spans(part)):
+            return False
+        texts = [other for other in beside if not _untranslatable(_block_spans(other), other.text)]
+        return bool(texts) and all(
+            max(other.rect.x0 - part.rect.x1, part.rect.x0 - other.rect.x1) > part.size * 2
+            for other in texts
+        )
     left = min(other.rect.x0 for other in others)
-    return part.rect.x0 - left > part.size * 2.5 and _untranslatable(_block_spans(part), part.text)
+    return part.rect.x0 - left > part.size * 2.5
 
 
 def _reading_sorted(parts: list[TextBlock]) -> list[TextBlock]:
