@@ -4636,3 +4636,19 @@ def test_caption_number_is_restored_inside_style_marks():
 
     assert _list_number("Figure 2: Samples", "{z110}图二:{/z} 模型样本") == "{z110}图 2:{/z} 模型样本"
     assert _list_number("Table 1: Parzen", "{z110}{b}表一：{/b}{/z} 基于") == "{z110}{b}表 1：{/b}{/z} 基于"
+
+
+def test_small_caps_heading_is_sent_without_size_marks():
+    """小型大写的标题首字母大一号、其余小一号，是一种字，不在词中间插字号标记。"""
+    from app.formats.pdf import TextBlock, _placeholderize
+
+    def span(text, size, x0):
+        return {"text": text, "font": "NimbusRomNo9L-Regu", "size": size, "flags": 0,
+                "bbox": (x0, 100, x0 + 8 * len(text), 112), "origin": (x0, 110)}
+
+    spans = [span("2.1", 12.5, 100), span(" ", 12.5, 120), span("A", 12.5, 125), span("DAM", 10.0, 133),
+             span("’", 12.5, 157), span("S", 10.0, 161), span(" ", 10.0, 169), span("UPDATE", 10.0, 173)]
+    rect = pymupdf.Rect(100, 100, 230, 112)
+    block = TextBlock(0, rect, [rect], "2.1 ADAM’S UPDATE", 10.0, "#000", False, span_lines=[spans])
+    sent, _ = _placeholderize(block, 0)
+    assert sent == "2.1 ADAM’S UPDATE"
