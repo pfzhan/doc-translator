@@ -250,6 +250,7 @@ def _rejoin_split_lines(data: dict) -> None:
     blocks = [block for block in data.get("blocks", []) if block.get("type") == 0]
     if len(blocks) < 2:
         return
+    touched: set[int] = set()
     for block in blocks:
         for line in list(block["lines"]):
             if abs(line["dir"][1]) > 0.01 or not "".join(s["text"] for s in line["spans"]).strip():
@@ -265,6 +266,24 @@ def _rejoin_split_lines(data: dict) -> None:
                 index += 1
             host_block["lines"].insert(index, line)
             host_block["bbox"] = tuple(pymupdf.Rect(host_block["bbox"]) | pymupdf.Rect(line["bbox"]))
+            touched.add(id(host_block))
+    for block in blocks:
+        if id(block) in touched:
+            block["lines"] = _left_to_right(block["lines"])
+
+
+def _left_to_right(lines: list[dict]) -> list[dict]:
+    """同一可视行的几截按从左到右排。分子排在分母前面时，分母接不上前面的等号。"""
+    out: list[dict] = []
+    run: list[dict] = []
+    for line in lines:
+        if run and _same_band(run[0], line):
+            run.append(line)
+            continue
+        out.extend(sorted(run, key=lambda item: item["bbox"][0]))
+        run = [line]
+    out.extend(sorted(run, key=lambda item: item["bbox"][0]))
+    return out
 
 
 def _line_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] | None:
@@ -279,10 +298,17 @@ def _line_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] |
             left = pymupdf.Rect(other["bbox"])
             if left.x0 >= box.x0:
                 continue
-            # 上下标会让两截在接口处叠上一个字宽；词距以外的空档是栏沟
-            if -size <= box.x0 - left.x1 <= size * 0.6:
+            # 上下标会让两截在接口处叠上一个字宽；词距以外的空档是栏沟。
+            # 等号、分式两边的空比词距宽，有一边是式子时放到一个字宽
+            gap = box.x0 - left.x1
+            if -size <= gap <= size * 0.6 or (gap <= size and (_line_is_math(line) or _line_is_math(other))):
                 return block, other
     return None
+
+
+def _line_is_math(line: dict) -> bool:
+    spans = [span for span in line["spans"] if span["text"].strip()]
+    return bool(spans) and (_span_is_math(spans[0]) or _span_is_math(spans[-1]))
 
 
 def _same_band(a: dict, b: dict) -> bool:
