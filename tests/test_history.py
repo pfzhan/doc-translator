@@ -128,6 +128,33 @@ def test_retry_reuses_cache_and_can_switch_service(app_env):
         MockTranslator.translate_batch = original
 
 
+def test_redo_can_ignore_cached_translations(app_env):
+    """重译时选了“全部重新翻译”：已有的译文不用，每一段都重新请求；不选时照常复用。"""
+    main = app_env
+    calls = []
+    from app.translators import MockTranslator
+
+    original = MockTranslator.translate_batch
+
+    async def counting(self, texts):
+        calls.extend(texts)
+        return await original(self, texts)
+
+    MockTranslator.translate_batch = counting
+    try:
+        with TestClient(main.app) as client:
+            job = wait_done(client, submit(client)["id"])
+            first = len(calls)
+            assert first == 3
+            again = wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={"fresh": True}).json()["id"])
+            assert again["status"] == "done" and again["outputs"]
+            assert len(calls) == first * 2
+            wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={}).json()["id"])
+            assert len(calls) == first * 2
+    finally:
+        MockTranslator.translate_batch = original
+
+
 def test_retry_recomputes_preview_flag_for_legacy_jobs(app_env):
     """加预览功能之前创建的记录存的是 preview=False，重新翻译时应按格式重新计算。"""
     main = app_env
