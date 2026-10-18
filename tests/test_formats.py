@@ -3753,6 +3753,8 @@ def test_heading_number_kept_in_source_form():
     assert norm("2.5 hours later", "两个半小时后") == "两个半小时后"
     assert norm("2. Smith 2019", "2. Smith 2019") == "2. Smith 2019"
     assert norm("2 Smith 2019", "2. Smith 2019") == "2 Smith 2019"
+    # 原文编号带点的，点也留着
+    assert norm("1. Exploited the sortedness of join input", "1. 利用了连接输入的有序性") == "1. 利用了连接输入的有序性"
 
 
 def test_heading_number_skips_body_blocks():
@@ -3768,9 +3770,9 @@ def test_heading_number_skips_body_blocks():
     assert _heading_number_for("h2", "2 Proposed Approach", "第二节 所提方法") == "2 所提方法"
     assert _heading_number_for("h2", "2.1 Massively Parallel Processing", "第二点一节 大规模并行处理") == "2.1 大规模并行处理"
     assert _heading_number_for("h2", "4.2 Parallel Query Optimization", "四点二 并行查询优化") == "4.2 并行查询优化"
-    assert _heading_number_for("h2", "8. RELATED WORK", "八, 相关工作") == "8 相关工作"
-    assert _heading_number_for("h2", "9. SUMMARY", "九, 总结") == "9 总结"
-    assert _heading_number_for("h2", "10. REFERENCES", "十, 参考文献") == "10 参考文献"
+    assert _heading_number_for("h2", "8. RELATED WORK", "八, 相关工作") == "8. 相关工作"
+    assert _heading_number_for("h2", "9. SUMMARY", "九, 总结") == "9. 总结"
+    assert _heading_number_for("h2", "10. REFERENCES", "十, 参考文献") == "10. 参考文献"
     assert _heading_number_for("h2", "8.1 Query Optimization Foundations", "八点一 查询优化基础") == "8.1 查询优化基础"
     assert _heading_number_for("h2", "2.2 SQL on Hadoop", "第2.2节 Hadoop 上的 SQL") == "2.2 Hadoop 上的 SQL"
     assert _heading_number_for("h2", "1.3 Related Work", "一.三. 相关工作") == "1.3 相关工作"
