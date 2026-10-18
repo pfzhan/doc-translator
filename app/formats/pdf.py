@@ -1467,10 +1467,16 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
     # 同行同风格的文字并成一个 TextRun。和底色不同的强调、字号才写标记。
     formula_ids = {id(s) for m in merged for s in m["spans"]}
     formula_ids |= {id(s) for m in merged for extra in m.get("extras") or [] for s in extra["spans"]}
-    writer = writer_for(
-        [s for line in block.span_lines for s in line if id(s) not in formula_ids],
-        block.size,
-    )
+    caps = _small_caps_sizes(block.span_lines)
+
+    def size_of(span: dict) -> float:
+        return caps.get(id(span), float(span.get("size") or 0))
+
+    text_spans = [s for line in block.span_lines for s in line if id(s) not in formula_ids]
+    sizes = {round(size_of(s), 1) for s in text_spans if str(s.get("text") or "").strip()}
+    # 整块小型大写：大小写各一个字号，其实是一种字，不写字号标记
+    base_size = sizes.pop() if caps and len(sizes) == 1 else block.size
+    writer = writer_for([{**s, "size": size_of(s)} for s in text_spans], base_size)
     runs: list[Run] = []
     out_lines: list[str] = []
     pending: TextRun | None = None
@@ -1494,7 +1500,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
             elif id(s) in ordinal_at:
                 reading = ordinal_at[id(s)]
                 emphasis = emphasis_of(s.get("font") or "", int(s.get("flags") or 0))
-                parts.append(writer.text(reading, emphasis, float(s.get("size") or 0)))
+                parts.append(writer.text(reading, emphasis, size_of(s)))
                 shown = dict(s)
                 shown["text"] = reading
                 if pending is not None and not _same_text_style(pending, s, emphasis):
@@ -1502,7 +1508,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 pending = _extend_text_run(pending, shown, emphasis, line_no)
             else:
                 emphasis = emphasis_of(s.get("font") or "", int(s.get("flags") or 0))
-                parts.append(writer.text(s["text"], emphasis, float(s.get("size") or 0)))
+                parts.append(writer.text(s["text"], emphasis, size_of(s)))
                 if pending is not None and not _same_text_style(pending, s, emphasis):
                     flush()
                 pending = _extend_text_run(pending, s, emphasis, line_no)
@@ -1511,6 +1517,39 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         out_lines.append("".join(parts))
     block.runs = runs
     return _join_lines(out_lines), formulas
+
+
+def _small_caps_sizes(span_lines: list[list[dict]]) -> dict[int, float]:
+    """小型大写（INTRODUCTION 首字母大一号、其余小一号）里小的那部分，按大写字号算。
+
+    同一个词里大写接着小一号的大写，中间没有空格，是同一种字的两个字号，
+    不是强调。按原样写字号标记会把词从中间切开：{z125}I{/z}NTRODUCTION。
+    """
+    out: dict[int, float] = {}
+    for line in span_lines:
+        pairs: dict[float, float] = {}
+        for prev, cur in zip(line, line[1:]):
+            left, right = str(prev.get("text") or ""), str(cur.get("text") or "")
+            if not left or not right or left[-1].isspace() or right[0].isspace():
+                continue
+            if not (left[-1].isupper() or left[-1] in "’'") or not _all_caps(right):
+                continue
+            big = out.get(id(prev), float(prev.get("size") or 0))
+            small = float(cur.get("size") or 0)
+            if big > 0 and 0.6 <= small / big < 0.92:
+                out[id(cur)] = big
+                pairs[round(small, 1)] = big
+        # 原文小写开头的词整个是小号大写（UPDATE RULE），同一行按同样的对应算
+        for span in line:
+            big = pairs.get(round(float(span.get("size") or 0), 1))
+            if big and id(span) not in out and _all_caps(str(span.get("text") or "")):
+                out[id(span)] = big
+    return out
+
+
+def _all_caps(text: str) -> bool:
+    letters = [c for c in text if c.isalpha()]
+    return bool(letters) and all(c.isupper() for c in letters)
 
 
 def _line_x0(spans: list[dict]) -> float:
