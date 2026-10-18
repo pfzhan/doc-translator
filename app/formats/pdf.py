@@ -147,6 +147,7 @@ def _justified_joins(items: list[tuple], max_x1: float) -> set[int]:
 
     窄栏里的标题两端对齐，词距能拉到两个字宽，按词距拆就成了一词一段。
     认法：同一基线、同一字体字号，最后一词顶到块的右缘，词距差不多一样大。
+    只拆成两截的另看 _full_row。
     并排的格子、侧标不是这样：格子之间的空档大小不一，也不会恰好铺满一行。
     """
     joins: set[int] = set()
@@ -156,10 +157,24 @@ def _justified_joins(items: list[tuple], max_x1: float) -> set[int]:
         while end < len(items) and _same_row(items[end - 1], items[end]):
             end += 1
         row = items[start:end]
-        if len(row) >= 3 and _spread_evenly(row, max_x1):
+        if len(row) >= 3 and _spread_evenly(row, max_x1) or len(row) == 2 and _full_row(row, items, max_x1):
             joins.update(range(start + 1, end))
         start = end
     return joins
+
+
+def _full_row(row: list[tuple], items: list[tuple], max_x1: float) -> bool:
+    """两截拼起来是段落里的一整行：前一截从段落左缘起，后一截顶到右缘，中间只隔一个宽空格，
+    块里还有从同一左缘铺到同一右缘的整行。两端对齐时句号后的空格拉得宽，PyMuPDF 会在那里拆开。
+    单独一行的两截可能是侧标和正文，不算。"""
+    left, right = row[0][1], row[1][1]
+    size = max((float(s.get("size") or 0) for s in row[0][2]), default=10.0)
+    if right.x1 < max_x1 - 1 or not 0 < right.x0 - left.x1 <= size * 1.5:
+        return False
+    return any(
+        abs(item[1].x0 - left.x0) <= 1 and item[1].x1 >= max_x1 - 1
+        for item in items if item is not row[0] and item is not row[1]
+    )
 
 
 def _same_row(left: tuple, right: tuple) -> bool:
