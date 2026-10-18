@@ -604,6 +604,25 @@ def test_mid_line_capital_stays_in_the_sentence():
     assert _split_lines(markup) == [[0], [1]]
 
 
+def test_a_full_row_split_after_a_sentence_stays_in_the_paragraph():
+    """两端对齐的段落里，句号后的宽空格让 PyMuPDF 把一整行拆成两截：前一截从段落左缘起，
+    后一截顶到右缘，上下都是整行。这是同一行，不是新段落（摘要第三行 “bles.  To realize”）。"""
+    from app.formats.pdf import _split_lines
+
+    def line(text, x0, x1, y0):
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 10), [{"size": 9.0, "font": "Times-Roman", "text": text}])
+
+    items = [
+        line("processing time, especially for aggregation queries over large ta-", 54.0, 293.8, 190.6),
+        line("bles.", 54.0, 70.8, 200.6),
+        line("To realize this potential, the query optimizer must know", 78.5, 293.7, 200.6),
+        line("how and when to exploit materialized views. This paper presents a", 54.0, 293.8, 210.6),
+    ]
+    assert _split_lines(items) == [[0, 1, 2, 3]]
+    # 单独一行的两截可能是侧标和正文，照旧按句末拆开
+    assert _split_lines(items[1:3]) == [[0], [1]]
+
+
 def test_pdf_hard_break_splits_lines():
     """无项目符号的硬换行（上行远短于块最宽行、下行大写开头、左对齐）也拆成两段。"""
     from app.formats.pdf import extract_blocks
