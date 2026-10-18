@@ -5532,3 +5532,29 @@ def test_slide_title_and_a_box_label_below_stay_apart():
 
     star = [blk("Win", 404, 186, 433, 205, 17), blk("SortRemoveRule sorted on [deptno]", 595, 213, 695, 239, 12)]
     assert len(_merge_continuations(star)) == 2
+
+
+def test_two_line_title_centered_on_the_page_is_written_centered():
+    """幻灯片标题在页面正中。最宽一块是靠左的列表项，中线偏右，标题仍按页面居中写回。"""
+    from app.formats.pdf import TextBlock, _write_rect
+    from app.formats.pdf_layout import PageGeometry
+
+    def blk(text, x0, y0, x1, y1, size):
+        rect = pymupdf.Rect(x0, y0, x1, y1)
+        return TextBlock(page=29, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
+
+    title = blk("Beyond Phoenix 4.8 with Apache Calcite", 202, 18, 518, 100, 35.5)
+    widest = blk("– To allow other forms of indices (maybe defined as external), e.g., a", 68, 210, 709, 256, 20)
+    item = blk("• Get the missing SQL support", 31, 119, 367, 147, 24)
+    geo = PageGeometry.from_rects(720, [title.rect, widest.rect, item.rect], height=405)
+    rect, centered = _write_rect(title, [(title, ""), (widest, ""), (item, "")], True, False, geo)
+    assert centered
+    assert abs((rect.x0 + rect.x1) / 2 - 360) < 1
+
+    widest_title = blk("Calcite Planning Process", 122, 25, 599, 76, 44)
+    labels = [blk("Planner", 198, 104, 235, 115, 10), blk("Logical Plan", 97, 213, 151, 224, 10),
+              blk("Best RelNode Graph", 451, 356, 543, 367, 10)]
+    geo = PageGeometry.from_rects(720, [widest_title.rect, *(label.rect for label in labels)], height=405)
+    items = [(widest_title, ""), *((label, "") for label in labels)]
+    _, centered = _write_rect(widest_title, items, True, False, geo)
+    assert centered
