@@ -2352,6 +2352,26 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
     assert formulas_u[0]["parts"][0]["bbox"].x0 >= 518
     assert formulas_u[0]["parts"][1]["bbox"].x1 <= 56
 
+    # 行内分式 1/√dk：分子分母都是小字号，分子那一行排在块的最后，仍是同一个式子
+    fraction = _block_with_spans([
+        [span("we scale the dot products by ", "Times-Roman", 10, 300, 606, 438, 616),
+         span("√", "CMSY7", 7, 440.7, 606.2, 447, 619.3),
+         span("dk", "CMMI7", 7, 447, 606.2, 455.2, 619.3),
+         span(".", "Times-Roman", 10, 456, 606, 459, 616)],
+        [span("1", "CMR7", 7, 446.3, 603.6, 450.2, 610.6)],
+    ], size=10.0)
+    sent_f, formulas_f = _placeholderize(fraction)
+    assert sent_f.count("{v") == 1 and sent_f.endswith("{v1}.")
+    assert formulas_f[0]["bbox"].y0 < 604
+
+    # 相邻两行行首的脚注记号也是小字号、上下对齐，隔着一行，各是各的
+    notes = _block_with_spans([
+        [span("†", "CMSY6", 6, 108, 680, 112, 686), span("Work performed at A.", "Times-Roman", 9, 113, 679, 220, 689)],
+        [span("‡", "CMSY6", 6, 108, 691, 112, 697), span("Work performed at B.", "Times-Roman", 9, 113, 690, 220, 700)],
+    ], size=9.0)
+    sent_n, _ = _placeholderize(notes)
+    assert sent_n.count("{v") == 2
+
     ordinal = _block_with_spans([[
         span("of the ", "NimbusRomNo9L-Regu", 10, 0, 50, 40),
         span("i", "CMMI10", 10, 40, 50, 44),
