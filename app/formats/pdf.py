@@ -4721,6 +4721,8 @@ def _render_side_by_side(src: pymupdf.Document, translated: pymupdf.Document) ->
 _BIBLIO_CITE_RE = re.compile(r"\((?:19|20)\d{2}\)|et al\.|doi:|https?://", re.I)
 # 行尾 “, 2016.” 在正文里太常见。确认进入时必须同时是编号条目，或带 arXiv/CoRR/doi。
 _BIBLIO_YEAR_END_RE = re.compile(r",\s*(?:19|20)\d{2}\s*[.]?\s*$")
+# 老数据库论文收在页码：ICDE 1995, 190-200. / VLDB 2000: 496-505。同样只认编号条目。
+_BIBLIO_PAGES_END_RE = re.compile(r"(?:19|20)\d{2}\s*[,:]\s*(?:pp?\.\s*)?\d+\s*[-–]\s*\d+\s*[.]?\s*$")
 _BIBLIO_TRAIL_YEAR_RE = re.compile(r"(?:19|20)\d{2}\s*[.]?\s*$|年版\s*[.。]?\s*$")
 _BIBLIO_YEAR_RE = re.compile(r"(?:19|20)\d{2}")
 # 卷期续行：2020, 3(2) / Vol. 3 / Volume 3 / pp. 1-10 / 第3期。
@@ -4774,7 +4776,7 @@ def _biblio_entry_citation(text: str) -> bool:
         return True
     lead = bool(_BIBLIO_LEAD_RE.match(text))
     mark = bool(_BIBLIO_MARK_RE.search(text))
-    if _BIBLIO_YEAR_END_RE.search(text) and (lead or mark):
+    if (_BIBLIO_YEAR_END_RE.search(text) or _BIBLIO_PAGES_END_RE.search(text)) and (lead or mark):
         return True
     return lead and (mark or bool(_BIBLIO_CN_PUB_RE.search(text)))
 

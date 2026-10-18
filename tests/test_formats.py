@@ -1261,6 +1261,35 @@ def test_pdf_biblio_entry_needs_a_citation_not_a_year_in_prose():
     assert biblio_skips(toc) == [False] * 5
 
 
+def test_pdf_biblio_numbered_entry_ending_with_pages():
+    """老数据库论文的条目是 会议 年份, 页码。，行尾是页码不是年份，也要进入。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    blocks = [
+        blk("Body text of the conclusion.", 9),
+        blk("8. References", 12, bold=True),
+        blk("[1] S. Agrawal, S. Chaudhuri, V. R. Narasayya: Automated Selection of "
+            "Materialized Views and Indexes in SQL Databases. VLDB 2000: 496-505", 8),
+        blk("[4] S. Chaudhuri, S. Krishnamurthy, S. Potamianos, K. Shim, Optimizing "
+            "Queries with Materialized Views, ICDE 1995, 190-200.", 8),
+        blk("[6] G. Graefe, The Cascades Framework for Query Optimization, Data "
+            "Engineering Bulletin, 18(3), 1995, 19-29.", 8),
+    ]
+    assert biblio_skips(blocks) == [False, False, True, True, True]
+    # 不带编号的正文即使以 年份, 页码 收尾也不算
+    prose = [
+        blk("Body text.", 9),
+        blk("References", 12, bold=True),
+        blk("The workshop ran in 2001, 10-12.", 9),
+        blk("More body text.", 9),
+    ]
+    assert biblio_skips(prose) == [False] * 4
+
+
 def test_pdf_biblio_same_size_citations_do_not_exit():
     """行尾裸年份、CoRR、编号条目和换行续行都不是下一章；正文字号的加粗标题要退出。"""
     from app.formats.pdf import TextBlock, biblio_skips
