@@ -4756,3 +4756,23 @@ def test_plain_words_a_wide_gap_apart_are_not_rejoined():
                        {"type": 0, "bbox": (227, 136, 301, 149), "lines": [right]}]}
     _rejoin_split_lines(data)
     assert data["blocks"][1]["lines"] == [right]
+
+
+def test_a_centred_definition_line_keeps_its_glyphs():
+    """居中单独成行的式子里只有几个连接词（if and only if、for all），不当成句子翻。
+    从栏左缘起笔、接着上一行写的式子行仍按句子翻。"""
+    from app.formats.pdf import _displayed, _left_margins, _untranslatable
+
+    body = {"bbox": (72, 0, 540, 12), "spans": [{"text": "A body line long enough to count as the column margin."}]}
+    data = {"blocks": [{"type": 0, "lines": [body] * 4}]}
+    margins = _left_margins(data)
+    assert margins == [72]
+    spans = [{"text": "(a1, …, an) ⪯ (b1, …, bn)", "font": "CMMI10", "size": 10.0},
+             {"text": "if and only if", "font": "Times-Roman", "size": 10.0},
+             {"text": "ai ⪯ bi", "font": "CMMI10", "size": 10.0},
+             {"text": "for all", "font": "Times-Roman", "size": 10.0}, {"text": "i", "font": "CMMI10", "size": 10.0}]
+    text = "(a1, …, an) ⪯ (b1, …, bn) if and only if ai ⪯ bi for all i"
+    assert _displayed(pymupdf.Rect(215, 100, 400, 112), spans, margins)
+    assert not _displayed(pymupdf.Rect(72, 100, 400, 112), spans, margins)
+    assert _untranslatable(spans, text, 8)
+    assert not _untranslatable(spans, text)
