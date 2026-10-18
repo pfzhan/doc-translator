@@ -104,11 +104,18 @@ TERMS_PROMPT = "\n\n## Glossary\nUse these translations consistently:\n{{glossar
 # 翻译前定术语译名：候选是本地从全文数出来的，普通词让模型删掉
 TERMS_SYSTEM_PROMPT = """You are preparing the terminology list for translating a document into {{to}}.{{title_prompt}}
 
-The user lists candidate terms that recur in the document. For each candidate that names a
-concept, method, object, or proper noun of the document's field, give the single {{to}}
-rendering a specialist would use, so that every occurrence is translated the same way.
-Keep acronyms, product names, and code identifiers unchanged when that is the usual practice.
-Leave out ordinary words and phrases that need no fixed translation.
+The user lists candidate terms that recur in the document. They were counted mechanically, so
+many are not terms. For each candidate that names a concept, method, object, or proper noun of
+the document's field, give the single {{to}} rendering a specialist would use, so that every
+occurrence is translated the same way. Keep acronyms, product names, and code identifiers
+unchanged when that is the usual practice.
+
+Leave out:
+- everyday words and phrases that need no fixed translation (result, value, step, large models),
+  including single words of the field that are translated the obvious way in every context;
+- pieces cut out of a longer phrase, idiom, or sentence ("account the cost" from "take into
+  account the cost", "results suggest");
+- variable names and symbols from formulas.
 
 Write one line per kept term: the term exactly as given, " = ", then the translation.
 Output nothing else."""
