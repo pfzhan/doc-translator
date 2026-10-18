@@ -251,11 +251,22 @@ def _rejoin_split_lines(data: dict) -> None:
     if len(blocks) < 2:
         return
     touched: set[int] = set()
+    # 挪走一截以后，留在原块里的分子才没了同伴，下一轮才找得到去处
+    for _ in range(3):
+        if not _rejoin_pass(blocks, touched):
+            break
+    for block in blocks:
+        if id(block) in touched:
+            block["lines"] = _left_to_right(block["lines"])
+
+
+def _rejoin_pass(blocks: list[dict], touched: set[int]) -> bool:
+    moved = False
     for block in blocks:
         for line in list(block["lines"]):
             if abs(line["dir"][1]) > 0.01 or not "".join(s["text"] for s in line["spans"]).strip():
                 continue
-            host = _line_host(line, block, blocks)
+            host = _line_host(line, block, blocks) or _stack_host(line, block, blocks)
             if host is None:
                 continue
             host_block, host_line = host
@@ -267,9 +278,8 @@ def _rejoin_split_lines(data: dict) -> None:
             host_block["lines"].insert(index, line)
             host_block["bbox"] = tuple(pymupdf.Rect(host_block["bbox"]) | pymupdf.Rect(line["bbox"]))
             touched.add(id(host_block))
-    for block in blocks:
-        if id(block) in touched:
-            block["lines"] = _left_to_right(block["lines"])
+            moved = True
+    return moved
 
 
 def _left_to_right(lines: list[dict]) -> list[dict]:
@@ -301,8 +311,40 @@ def _line_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] |
             # 上下标会让两截在接口处叠上一个字宽；词距以外的空档是栏沟。
             # 等号、分式两边的空比词距宽，有一边是式子时放到一个字宽
             gap = box.x0 - left.x1
-            if -size <= gap <= size * 0.6 or (gap <= size and (_line_is_math(line) or _line_is_math(other))):
+            if gap < -size:
+                continue
+            if gap <= size * 0.6 or (gap <= size and (_line_is_math(line) or _line_is_math(other))):
                 return block, other
+    return None
+
+
+def _stack_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] | None:
+    """分子、分母、求和上下限这类叠在式子上下的小块：整块都是公式，横向落在某个式子行
+    的范围里，上下贴着它。上一行、下一行的正文横向也盖得住，但那里不是式子。
+
+    只收单独剩在一个块里的小块。和别的行在一起的上下标有自己的行，不去抢。"""
+    if len(own["lines"]) > 1:
+        return None
+    spans = [span for span in line["spans"] if span["text"].strip()]
+    if not spans or not all(_span_is_math(span) for span in spans):
+        return None
+    box = pymupdf.Rect(line["bbox"])
+    size = max(float(span["size"]) for span in spans)
+    for block in blocks:
+        if block is own:
+            continue
+        for other in block["lines"]:
+            if abs(other["dir"][1]) > 0.01:
+                continue
+            # 正上方或正下方要有式子里的字，不能只是行的范围盖得住
+            for span in other["spans"]:
+                if not span["text"].strip() or not _span_is_math(span):
+                    continue
+                under = _text_box(span)
+                if min(under.x1, box.x1) - max(under.x0, box.x0) <= 0:
+                    continue
+                if max(under.y0 - box.y1, box.y0 - under.y1) <= size * 0.5:
+                    return block, other
     return None
 
 

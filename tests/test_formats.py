@@ -4776,3 +4776,23 @@ def test_a_centred_definition_line_keeps_its_glyphs():
     assert not _displayed(pymupdf.Rect(72, 100, 400, 112), spans, margins)
     assert _untranslatable(spans, text, 8)
     assert not _untranslatable(spans, text)
+
+
+def test_a_lone_numerator_goes_back_to_its_fraction():
+    """分子单独剩在一个块里时，挪到正下方那段式子的行旁边。上一行的正文横向也盖得住它，不算。"""
+    from app.formats.pdf import _rejoin_split_lines
+
+    def line(x0, x1, y0, y1, *spans):
+        return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [
+            {"text": text, "font": font, "size": size, "bbox": box, "ink": box}
+            for text, font, size, box in spans]}
+
+    above = line(108, 504, 243, 262, ("where the model predicts noise", "Times-Roman", 9.9, (108, 243, 504, 262)))
+    denominator = line(235, 296, 258, 276, ("√1−αt", "CMSY7", 7.0, (235, 264.4, 260, 270.2)))
+    numerator = line(243, 251, 256, 263, ("βt", "CMMI7", 7.0, (243.4, 256.2, 250.7, 262.5)))
+    data = {"blocks": [{"type": 0, "bbox": (108, 243, 504, 262), "lines": [above]},
+                       {"type": 0, "bbox": (235, 258, 296, 276), "lines": [denominator]},
+                       {"type": 0, "bbox": (243, 256, 251, 263), "lines": [numerator]}]}
+    _rejoin_split_lines(data)
+    assert data["blocks"][1]["lines"] == [denominator, numerator]
+    assert data["blocks"][0]["lines"] == [above]
