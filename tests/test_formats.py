@@ -206,6 +206,27 @@ def test_epub_named_entities_survive_xml_parsing(tmp_path):
     assert "Don\u2019t stop\u00a0now \u2014 ok & done" in text
     assert "[zh-CN] Don\u2019t stop" in text
 
+def test_epub_html_style_void_tags_and_bare_ampersands_keep_text(tmp_path):
+    """EPUB2 里常见 <br>、<img ...> 不闭合和裸 &。lxml-xml 容错解析会从出错处起删掉 &amp;、&lt;，
+    段落还会互相嵌套；这里先补成良构 XML 再解析，SVG 的 viewBox 这种大小写敏感的属性也不受影响。"""
+    from lxml import etree
+
+    body = ('<p>First line<br>second &amp; line &lt;tag&gt;</p>'
+            '<p>AT&T bought <img src="a.png" alt="logo"> it.</p>'
+            '<p>Third paragraph.</p>'
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>')
+    src = tmp_path / "book.epub"
+    _one_epub(src, {"ch1.xhtml": _xhtml(body)})
+    [out] = run(translate_epub(src, tmp_path, runner(), True, "zh-CN"))
+    data = zipfile.ZipFile(out).read("OEBPS/ch1.xhtml")
+    root = etree.fromstring(data)
+    texts = ["".join(p.itertext()) for p in root.iter("{http://www.w3.org/1999/xhtml}p")]
+    assert texts[:2] == ["First linesecond & line <tag>", "[zh-CN] First line\nsecond & line <tag>".replace("\n", "")]
+    assert "AT&T bought  it." in texts and "Third paragraph." in texts
+    assert not any(p.find("{http://www.w3.org/1999/xhtml}p") is not None for p in root.iter("{http://www.w3.org/1999/xhtml}p"))
+    assert b'viewBox="0 0 10 10"' in data
+
+
 def test_mobi7_cp1252_decoding(tmp_path):
     """老 MOBI7 的 book.html 按 cp1252 解码：é 等字符不能变成 U+FFFD。"""
     html_file = tmp_path / "book.html"
