@@ -2202,6 +2202,7 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     tables_by_page: list[tuple[RuledTable, ...]] = []
     type3 = Type3Reader(doc)
     pages: list[dict] = []
+    pending_cells: set[int] = set()
     for page in doc:
         tables_by_page.append(page_tables(page))
         data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
@@ -2232,15 +2233,12 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                 spans = [s for i in group for s in items[i][2]]
                 span_lines = [items[i][3] for i in group]
                 text = _join_lines(texts)
-                total = sum(len(s["text"]) for s in spans)
-                letters = sum(c.isalpha() for c in text)
-                # 只跳过"纯公式行"：数学字符多且几乎没有正文词。
-                # 公式外面有三个正文词就是一句话（If … then … Otherwise …），照翻，公式走占位符。
-                # 公式里的字母不算词：点阵字的数学符号认出来的字母是乱的
-                prose_text = "".join(span["text"] for span in spans if not _span_is_math(span))
-                is_equation = _math_chars(spans) > total * 0.3 and _prose_units(prose_text) < 3
-                low_letter = letters < 2 or letters < len(text) * 0.4
-                if NO_TEXT_RE.match(text) or is_equation or (low_letter and not _numbered_list_item(text)):
+                rect = pymupdf.Rect()
+                for r in line_rects:
+                    rect |= r
+                # 落在格子里的碎片先留着：一格的几截并起来以后再看是不是公式
+                in_cell = cell_containing(rect, tables_by_page[pno]) is not None
+                if not in_cell and _untranslatable(spans, text):
                     # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
                     # 捐了会被擦掉，而这些行没有占位符、不会重画。
                     if NO_TEXT_RE.match(text) and blocks and blocks[-1].page == pno:
@@ -2248,9 +2246,8 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                     continue
                 # 字号、颜色取占比最多的 span
                 main = max(spans, key=lambda s: len(s["text"]))
-                rect = pymupdf.Rect()
-                for r in line_rects:
-                    rect |= r
+                if in_cell:
+                    pending_cells.add(len(blocks))
                 blocks.append(TextBlock(
                     page=pno,
                     rect=rect,
@@ -2262,9 +2259,14 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                     span_lines=span_lines,
                 ))
     split: list[TextBlock] = []
-    for block in blocks:
+    unchecked: set[int] = set()
+    for index, block in enumerate(blocks):
         tables = tables_by_page[block.page] if block.page < len(tables_by_page) else ()
-        split.extend(_split_table_blocks([block], tables))
+        parts = _split_table_blocks([block], tables)
+        if index in pending_cells:
+            unchecked.update(id(part) for part in parts)
+        split.extend(parts)
+    split = _merge_cells(split, unchecked)
     # 栏沟明确时先排成阅读顺序。同页续段只看相邻块，另一栏插在中间就接不上本栏的下一行。
     ordered: list[TextBlock] = []
     by_page: dict[int, list[TextBlock]] = {}
@@ -2278,6 +2280,88 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
         ordered.extend(reading_order(page_blocks, geo))
     merged = _merge_continuations(_merge_caption_fragments(_merge_visual_lines(ordered, geometries)))
     return _split_affiliation_tails(_merge_same_line_sentences(_merge_line_tails(merged)))
+
+
+def _untranslatable(spans: list[dict], text: str, min_prose: int = 3) -> bool:
+    """纯符号、纯公式、几乎没有字母的行不送翻，留原字。
+
+    只跳过"纯公式行"：数学字符多且几乎没有正文词。公式外面有三个正文词就是一句话
+    （If … then … Otherwise …），照翻，公式走占位符。公式里的字母不算词：
+    点阵字的数学符号认出来的字母是乱的。
+    """
+    if NO_TEXT_RE.match(text):
+        return True
+    total = sum(len(span["text"]) for span in spans)
+    prose_text = "".join(span["text"] for span in spans if not _span_is_math(span))
+    if _math_chars(spans) > total * 0.3 and _prose_units(prose_text) < min_prose:
+        return True
+    letters = sum(c.isalpha() for c in text)
+    return (letters < 2 or letters < len(text) * 0.4) and not _numbered_list_item(text)
+
+
+def _merge_cells(blocks: list[TextBlock], unchecked: set[int]) -> list[TextBlock]:
+    """同一格里的几块并成一块，按从上到下、从左到右排。格子是一个翻译单元。
+
+    PyMuPDF 会把一格里的字分进几个块（行号小一号、公式另成一块）。分开送翻时半句里
+    正文词太少，被当成公式留下英文。unchecked 里的块还没判断过是不是公式，并完再判断。
+    一格是一句完整的话，有一个正文词就翻（for k = 1 … K do），纯公式、纯数字的格子留原字。
+    """
+    cells: dict[tuple, list[TextBlock]] = {}
+    for block in blocks:
+        if block.clip is not None:
+            cells.setdefault((block.page, block.clip), []).append(block)
+    out: list[TextBlock] = []
+    done: set[tuple] = set()
+    for block in blocks:
+        key = (block.page, block.clip)
+        if block.clip is None:
+            if id(block) in unchecked and _untranslatable(_block_spans(block), block.text):
+                continue
+            out.append(block)
+            continue
+        if key in done:
+            continue
+        done.add(key)
+        parts = _reading_sorted(cells[key])
+        merged = parts[0] if len(parts) == 1 else _joined_cell(parts)
+        if any(id(part) in unchecked for part in parts) and _untranslatable(_block_spans(merged), merged.text, 1):
+            continue
+        out.append(merged)
+    return out
+
+
+def _reading_sorted(parts: list[TextBlock]) -> list[TextBlock]:
+    """同一行的几截按左右排，不同行按上下排。小一号的行号框顶低一点，不能按框顶排。"""
+    rows: list[list[TextBlock]] = []
+    for part in sorted(parts, key=lambda item: (item.rect.y0 + item.rect.y1) / 2):
+        center = (part.rect.y0 + part.rect.y1) / 2
+        if rows:
+            last = rows[-1][-1]
+            if abs(center - (last.rect.y0 + last.rect.y1) / 2) <= max(part.size, last.size) * 0.5:
+                rows[-1].append(part)
+                continue
+        rows.append([part])
+    return [part for row in rows for part in sorted(row, key=lambda item: item.rect.x0)]
+
+
+def _joined_cell(parts: list[TextBlock]) -> TextBlock:
+    main = max(parts, key=lambda part: len(part.text))
+    rect = pymupdf.Rect()
+    for part in parts:
+        rect |= part.rect
+    has_spans = all(part.span_lines for part in parts)
+    return replace(
+        main,
+        rect=rect,
+        line_rects=[line for part in parts for line in part.line_rects],
+        text=_join_lines([part.text for part in parts]),
+        span_lines=[line for part in parts for line in part.span_lines] if has_spans else None,
+        runs=[],
+    )
+
+
+def _block_spans(block: TextBlock) -> list[dict]:
+    return [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
 
 
 _AFFIL_MARK_RE = re.compile(r"^[∗*†‡§¶]")
