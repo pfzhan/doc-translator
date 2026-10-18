@@ -95,6 +95,8 @@ class Runner:
         self.cache_only = cache_only
         # 给任务页展示：检测到的文档语言、跳过的段落数
         self.info = {"detected_lang": "", "skipped": 0}
+        # 文件内容的摘要（set_document），术语表按它缓存
+        self.document = ""
         # 按段落序号覆盖预览译文（标题改写、段界去重），同一句在不同位置可以不同
         self._index_overrides: dict[int, str] = {}
 
@@ -109,6 +111,10 @@ class Runner:
         self._log: list[str] = []
         # 用户正在看的位置（段落序号），优先翻译它后面的内容
         self._focus: int | None = None
+
+    def set_document(self, digest: str):
+        """正在翻译的文件（内容摘要）。同一份文件沿用第一次定下的术语表。"""
+        self.document = digest
 
     def set_title(self, title: str):
         """文档标题作为翻译上下文（只有大模型引擎用得上）。"""
@@ -180,9 +186,10 @@ class Runner:
     async def _prepare_glossary(self, texts: list[str]) -> None:
         """在全文里找术语，请模型一次定好译名，之后每一批都按它翻。
 
-        结果按候选清单进缓存：同一份文档续翻、重试、补生成另一种版本时用的是同一张表，
-        段落缓存才对得上。只排版的时候不请求，缓存里没有就不用术语表。
-        定译名失败不影响翻译，只是这次没有术语表。
+        结果进缓存：同一份文档续翻、重试、补生成另一种版本时用的是同一张表，段落缓存才对得上。
+        知道是哪个文件时按文件内容找，提取规则改了、候选清单跟着变也沿用原来那张表，
+        不然术语表一变，整篇的段落缓存都对不上。不知道文件、或者是改成这样之前存的，按候选清单找。
+        只排版的时候不请求，缓存里没有就不用术语表。定译名失败不影响翻译，只是这次没有术语表。
         """
         tr = self.translator
         if not getattr(tr, "auto_glossary", False) or not hasattr(tr, "define_terms"):
@@ -193,7 +200,9 @@ class Runner:
             return
         listing = "\n".join(terms)
         prefix = tr.cache_key + ":terms"
-        found = self.cache.get_many(prefix, [listing]).get(listing)
+        keys = ([f"file:{self.document}"] if self.document else []) + [listing]
+        cached = self.cache.get_many(prefix, keys)
+        found = next((cached[key] for key in keys if key in cached), None)
         if found is None:
             if self.cache_only:
                 return
@@ -203,7 +212,9 @@ class Runner:
             except TranslatorError:
                 # 服务本身出了问题的话，接下来的翻译请求会报出来
                 return
-            self.cache.put_many(prefix, {listing: found})
+            self.cache.put_many(prefix, {key: found for key in keys})
+        elif keys[0] not in cached:
+            self.cache.put_many(prefix, {keys[0]: found})
         tr.doc_glossary = glossary.parse(found)
         self.info["terms"] = len(tr.doc_glossary)
 
