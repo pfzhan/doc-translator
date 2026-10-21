@@ -889,12 +889,12 @@ function jobRow(job, selectable = false) {
   status.append(el("span", `badge ${job.status}`, STATUS_TEXT[job.status] || job.status));
   if (ACTIVE.has(job.status) || (job.status === "paused" && job.total)) {
     // 向下取整：没翻完不显示 100%（1184/1188 四舍五入会显示 100%，看起来像卡住了）
-    const pct = job.total ? Math.floor((job.done / job.total) * 100) : 0;
+    const pct = job.total ? Math.floor((job.done / job.total) * 100) : stagePct(job);
     const bar = el("div", `job-progress${job.status === "paused" ? " paused" : ""}`);
     const fill = el("div");
     fill.style.width = `${pct}%`;
     bar.append(fill);
-    status.append(bar, el("span", "hint", job.total ? `${job.done} / ${job.total} 段 · ${pct}%` : "解析文档…"));
+    status.append(bar, el("span", "hint", job.total ? `${job.done} / ${job.total} 段 · ${pct}%` : stageText(job)));
   } else if (job.status === "error" || job.status === "interrupted") {
     const err = el("span", `job-error ${job.status}`, explainError(job.error));
     err.title = job.error; // 鼠标悬停看原始错误
@@ -1307,11 +1307,23 @@ async function readerTick() {
   }
 }
 
+// 开始翻译前的准备阶段：整本书的版面分析要一两分钟，显示做到哪一页
+function stageText(job) {
+  const stage = job.stage;
+  if (!stage || !stage.name) return "解析文档…";
+  return stage.total ? `${stage.name} ${stage.done} / ${stage.total} ${stage.unit}` : `${stage.name}…`;
+}
+
+function stagePct(job) {
+  const stage = job.stage;
+  return stage && stage.total ? Math.floor((stage.done / stage.total) * 100) : 0;
+}
+
 function renderReaderBar(job) {
   $("reader-name").textContent = job.filename;
   const meta = [langPair(job), serviceLabel(job)];
   if (ACTIVE.has(job.status)) {
-    meta.push(job.total ? `翻译中 ${job.done} / ${job.total} 段` : "正在解析文档…");
+    meta.push(job.total ? `翻译中 ${job.done} / ${job.total} 段` : stageText(job));
   } else {
     meta.push(STATUS_TEXT[job.status]);
   }
@@ -1320,7 +1332,7 @@ function renderReaderBar(job) {
   const metaEl = $("reader-meta");
   metaEl.textContent = meta.filter(Boolean).join(" · ");
   metaEl.title = tokens ? tokensTitle(job) : "";
-  const pct = job.status === "done" ? 100 : job.total ? (job.done / job.total) * 100 : 0;
+  const pct = job.status === "done" ? 100 : job.total ? (job.done / job.total) * 100 : stagePct(job);
   $("reader-progress-bar").style.width = `${pct}%`;
   $("reader-progress-bar").parentElement.hidden = job.status === "done";
 

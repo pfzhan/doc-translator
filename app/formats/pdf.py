@@ -13,6 +13,7 @@ import html
 import re
 import struct
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -2687,9 +2688,9 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
 
 
 def _extract(
-    doc: pymupdf.Document,
+    doc: pymupdf.Document, on_page: Callable[[int, int], None] | None = None,
 ) -> tuple[list[TextBlock], list[TextFrame | None], list[PageScan]]:
-    """文本块，以及每页的版心和表格、图、词。"""
+    """文本块，以及每页的版心和表格、图、词。on_page(已读页数, 总页数) 在逐页读完一页后调用。"""
     blocks = []
     scans: list[PageScan] = []
     tables_by_page: list[tuple[RuledTable, ...]] = []
@@ -2704,6 +2705,8 @@ def _extract(
         # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
         recover_type3_page(page, data, type3)
         pages.append(data)
+        if on_page is not None:
+            on_page(len(pages), doc.page_count)
     _mark_math_roman(pages)
     for data in pages:
         _rejoin_split_lines(data)
@@ -5651,13 +5654,20 @@ def _label_styled(block: TextBlock) -> bool:
     )
 
 
+_YIELD_UNITS = 200
+
+
 async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "",
                         layout_model: str = "") -> list[Path]:
     """layout_model 是版面模型文件的路径，空串表示只用规则。"""
     src_doc = pymupdf.open(src)
     if src_doc.needs_pass:
         raise ValueError("PDF 有密码保护，暂不支持")
-    blocks, frames, scans = await asyncio.to_thread(_extract, src_doc)
+    # 逐页读线、表、字占准备时间的大半，按页报进度
+    blocks, frames, scans = await asyncio.to_thread(
+        _extract, src_doc, lambda done, total: runner.report_stage("分析版面", done, total, "页"),
+    )
+    runner.report_stage("整理段落")
     glosses = {
         pno: interlinear_glosses(src_doc[pno], scans[pno].words) for pno in sorted({block.page for block in blocks})
     }
@@ -5714,7 +5724,11 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     sent_skips: list[bool] = []
     flat_units: list[list[TextBlock]] = []
     name_i = 0
-    for unit in units:
+    for unit_no, unit in enumerate(units):
+        # 一本书有上万个单元，在事件循环里要算好几秒：报进度，隔一阵让出循环，任务页的轮询才有响应
+        if unit_no % _YIELD_UNITS == 0:
+            runner.report_stage("准备译文", unit_no, len(units), "段")
+            await asyncio.sleep(0)
         # 整单元都跳过时不打占位符、也不标斜体。标记后的字符串和原文不同，
         # 写回会把原字擦掉重排，参考文献的悬挂缩进和行尾断词就没了。
         if all(id(b) in skip_ids for b in unit):

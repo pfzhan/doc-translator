@@ -5710,3 +5710,27 @@ def test_union_box_matches_rect_union():
     for a in rects:
         for b in rects:
             assert tuple(_union_box(a, b)) == tuple(a | b)
+
+
+def test_pdf_reports_its_preparation_stages(tmp_path):
+    """整本书的版面分析要一两分钟。逐页报读到哪一页，再报准备译文，任务页才不像卡住。"""
+    from app.formats.pdf import translate_pdf
+
+    doc = pymupdf.open()
+    for _ in range(3):
+        page = doc.new_page(width=420, height=240)
+        page.insert_text((40, 60), "A body paragraph long enough to be translated here.", fontsize=10)
+    src = tmp_path / "pages.pdf"
+    doc.save(src)
+    stages: list[tuple] = []
+    r = runner()
+    original = r.report_stage
+
+    def record(name, done=0, total=0, unit=""):
+        stages.append((name, done, total, unit))
+        original(name, done, total, unit)
+
+    r.report_stage = record
+    run(translate_pdf(src, tmp_path, r, False, "zh-CN"))
+    assert stages[:4] == [("分析版面", n, 3, "页") for n in (1, 2, 3)] + [("整理段落", 0, 0, "")]
+    assert stages[4][0] == "准备译文" and stages[4][1] == 0 and stages[4][3] == "段"
