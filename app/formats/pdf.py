@@ -512,7 +512,9 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         h_overlap = min(qrect.x1, rect.x1) - max(qrect.x0, rect.x0)
         # 同一基线上、词距内的下一个词。按词拆行时，行内大写词（DXL）不是新段落。
         # 句末、标记语言和图内标签仍拆开，避免把侧标或格子并进正文。
-        same_word = _same_line_word(items[i - 1][0], text, qrect, rect, psize) or i in justified
+        # 词距和接口空档按两截里较小的字号算：章首的大号数字离标题一个大字宽，中间还隔着竖线
+        seam_gap = min(psize, max((s["size"] for s in items[i][2]), default=psize))
+        same_word = _same_line_word(items[i - 1][0], text, qrect, rect, seam_gap) or i in justified
         # 式子被拆成几截（分式、大括号、根号）时，首尾相接的几截是同一可视行，
         # 纯符号的那一截不能把行切开。上下交叠按这一行已经接上的部分算：
         # 大括号和分母各自的框只擦到一点边。两截都是正文的，仍按上面的句末规则拆。
@@ -520,7 +522,7 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         touching = (
             _math_seam(items[i - 1][2], items[i][2])
             and row_overlap > min(row_rect.height, rect.height) * 0.35
-            and -psize <= rect.x0 - row_rect.x1 <= psize
+            and -seam_gap <= rect.x0 - row_rect.x1 <= seam_gap
         )
         same_visual_line = (
             (h_overlap > 0 and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5)
@@ -537,9 +539,11 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         )
         # 章节号和标题是同一行的整体（'2.2 Training'）：纯数字的上行不当符号行，
         # 也不按硬换行拆开，否则数字被过滤不遮罩、标题单独翻，基线对不齐
-        sec_label = (bool(re.fullmatch(r"\d+(?:\.\d+)*\.?", ptext.strip()))
-                     and overlap > min(prect.y1 - prect.y0, rect.y1 - rect.y0) * 0.5)
+        # 章首比标题大一倍多的数字是单独的装饰，标题按原位写，不跟着数字挪
         line_size = max((s["size"] for s in items[i][2]), default=10)
+        sec_label = (bool(re.fullmatch(r"\d+(?:\.\d+)*\.?", ptext.strip()))
+                     and overlap > min(prect.y1 - prect.y0, rect.y1 - rect.y0) * 0.5
+                     and psize <= line_size * 1.6)
         # 12pt 标题下的 9pt 导语左缘只差一截节号，看起来像缩进。字号落下才是新段。
         size_drop = (
             not same_visual_line
