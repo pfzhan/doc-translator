@@ -5582,3 +5582,25 @@ def test_two_line_title_centered_on_the_page_is_written_centered():
     items = [(widest_title, ""), *((label, "") for label in labels)]
     _, centered = _write_rect(widest_title, items, True, False, geo)
     assert centered
+
+
+def test_white_label_on_a_black_box_is_pasted_back_as_is(tmp_path):
+    """黑底白字的 Figure 标签不重写成正文颜色，原样贴回，后面的图注照译。"""
+    src = tmp_path / "label.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    page.draw_rect(pymupdf.Rect(40, 92, 92, 104), color=None, fill=(0, 0, 0))
+    page.insert_text((42, 102), "Figure 2.4", fontsize=9, fontname="hebo", color=(1, 1, 1))
+    page.insert_text((98, 102), "Some selected ASCII codes for English letters.", fontsize=9)
+    doc.save(src)
+    doc.close()
+
+    [out] = run(translate_file(src, tmp_path, runner(), False, "zh-CN"))
+    spans = [
+        span for block in pymupdf.open(out)[0].get_text("dict")["blocks"] if block.get("type") == 0
+        for line in block["lines"] for span in line["spans"] if span["text"].strip()
+    ]
+    text = "".join(span["text"] for span in spans)
+    assert "[zh-CN]" in text and "Some selected ASCII codes" in text
+    label = [span for span in spans if "Figure" in span["text"]]
+    assert label and all(span["color"] == 0xFFFFFF for span in label)
