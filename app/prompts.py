@@ -107,7 +107,9 @@ TERMS_SYSTEM_PROMPT = """You are preparing the terminology list for translating 
 The user lists candidate terms that recur in the document. They were counted mechanically, so
 many are not terms. For each candidate that names a concept, method, object, or proper noun of
 the document's field, give the single {{to}} rendering a specialist would use, so that every
-occurrence is translated the same way. Keep acronyms, product names, and code identifiers
+occurrence is translated the same way. A longer term that contains a shorter kept term reuses
+the shorter term's rendering (if "tokenization" is kept, "word tokenization" builds on the same
+translation). Keep acronyms, product names, and code identifiers
 unchanged when that is the usual practice.
 
 Leave out:
