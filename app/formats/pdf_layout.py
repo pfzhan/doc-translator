@@ -44,6 +44,10 @@ _TEXT_JOIN = 8.0
 _COL_ALIGN = 5.0
 _MIN_TEXT_ROWS = 3
 _MIN_PITCH = 8.0
+# 逐词对译：左缘对齐的容差、至少几个词、两行各有多少比例的词对得上
+_GLOSS_ALIGN = 1.0
+_GLOSS_MIN = 4
+_GLOSS_SHARE = 0.75
 _MAX_PITCH = 36.0
 _SHORT_WORDS = 3
 _SHORT_WIDTH = 80.0
@@ -665,6 +669,48 @@ def unruled_tables(page: pymupdf.Page, ruled: Sequence[RuledTable] = ()) -> tupl
         else:
             index += 1
     return tuple(tables)
+
+
+def interlinear_glosses(page: pymupdf.Page) -> tuple[pymupdf.Rect, ...]:
+    """语言学例句的逐词对译：原文一行、对译一行，下一行每个词都和上一行的某个词左缘对齐。
+    逐词翻译对译行没有意义，词序一变也对不上，两行都留原文。
+
+    正文相邻两行碰巧对齐的词只有零星几个，要求两行各有七成五以上的词对得上。
+    表格一连好几行都这样对齐，对译只有孤零零的两行。
+    """
+    words = [
+        _TextWord(float(item[0]), float(item[1]), float(item[2]), float(item[3]), str(item[4]))
+        for item in page.get_text("words") if str(item[4]).strip()
+    ]
+    rows = _word_rows(words)
+    pairs = [_glossed(upper, lower) for upper, lower in zip(rows, rows[1:])]
+    found: list[pymupdf.Rect] = []
+    for index, paired in enumerate(pairs):
+        if not paired or (index > 0 and pairs[index - 1]) or (index + 1 < len(pairs) and pairs[index + 1]):
+            continue
+        rect = pymupdf.Rect()
+        for word in (*rows[index], *rows[index + 1]):
+            rect |= pymupdf.Rect(word.x0, word.y0, word.x1, word.y1)
+        found.append(rect)
+    return tuple(found)
+
+
+def _glossed(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
+    height = max(word.y1 - word.y0 for word in upper)
+    if lower[0].y0 - upper[0].y0 > height * 1.6:
+        return False
+    starts = [word.x0 for word in upper]
+    # 对译行是词，不是数字表的一行
+    aligned = [
+        word for word in lower
+        if any(abs(word.x0 - x) <= _GLOSS_ALIGN for x in starts) and any(ch.isalpha() for ch in word.text)
+    ]
+    hit = [x for x in starts if any(abs(word.x0 - x) <= _GLOSS_ALIGN for word in lower)]
+    return (
+        len(aligned) >= _GLOSS_MIN
+        and len(aligned) >= len(lower) * _GLOSS_SHARE
+        and len(hit) >= len(upper) * _GLOSS_SHARE
+    )
 
 
 def _word_rows(words: Sequence[_TextWord]) -> list[list[_TextWord]]:

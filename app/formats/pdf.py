@@ -36,8 +36,8 @@ from .pdf_flow import (
 from .pdf_erase import Erasure, erase
 from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, text_frames
 from .pdf_layout import (
-    PageGeometry, RuledTable, cell_containing, content_floor, margin_skips, page_tables, reading_order,
-    text_page_rect,
+    PageGeometry, RuledTable, cell_containing, content_floor, interlinear_glosses, margin_skips, page_tables,
+    reading_order, text_page_rect,
 )
 from .pdf_roles import LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
@@ -2973,6 +2973,20 @@ def _display_formula_ids(blocks: list[TextBlock], geometries: list[PageGeometry]
     return ids
 
 
+def _gloss_ids(blocks: list[TextBlock], doc: pymupdf.Document) -> set[int]:
+    """落在逐词对译两行里的块。"""
+    glosses = {pno: interlinear_glosses(doc[pno]) for pno in sorted({block.page for block in blocks})}
+    ids: set[int] = set()
+    for block in blocks:
+        area = block.rect.width * block.rect.height
+        for gloss in glosses.get(block.page, ()):
+            hit = block.rect & (gloss + (-1, -1, 1, 1))
+            if area >= 1 and not hit.is_empty and hit.width * hit.height >= area * 0.7:
+                ids.add(id(block))
+                break
+    return ids
+
+
 def _garbled_label(text: str) -> bool:
     """图内标签用符号字体时，$ 顶替了空格。重排会把乱码译出来，留下原字。"""
     compact = re.sub(r"\s+", "", text)
@@ -5532,7 +5546,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         median,
     )
     edges = margin_skips(blocks, geometries)
-    displayed = _display_formula_ids(blocks, geometries)
+    displayed = _display_formula_ids(blocks, geometries) | _gloss_ids(blocks, src_doc)
     # 页眉不进大纲，旁注不是标题
     kinds = [
         "h2" if role is Role.HEADING and not edge and not block.side_note else "p"

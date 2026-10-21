@@ -723,3 +723,22 @@ def test_book_headers_above_the_text_frame_are_margins():
         _block("2.3 Unicode", 4, pymupdf.Rect(95, 118, 192, 135), size=17),
     ]
     assert margin_skips(blocks, geos) == [True, True, True, True, False]
+
+
+def test_word_by_word_gloss_is_found_but_a_table_is_not():
+    from app.formats.pdf_layout import interlinear_glosses
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    source = ["keoi5", "waa6", "cyun4", "gwok3", "zeoi3", "daai6"]
+    gloss = ["he", "say", "entire", "country", "most", "big"]
+    for index, (word, under) in enumerate(zip(source, gloss)):
+        x = 174 + index * 40
+        page.insert_text((x, 290), word, fontsize=10)
+        page.insert_text((x, 302), under, fontsize=10)
+    page.insert_text((174, 316), "He said the biggest house in the country was this one", fontsize=10)
+    for row in range(4):
+        for col, word in enumerate(("alpha", "beta", "gamma", "delta")):
+            page.insert_text((174 + col * 60, 420 + row * 12), f"{word}{row}", fontsize=10)
+    [gloss_rect] = interlinear_glosses(page)
+    assert 275 < gloss_rect.y0 and gloss_rect.y1 < 306
