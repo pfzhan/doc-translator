@@ -176,3 +176,14 @@ def test_loose_user_lines_go_with_every_batch():
     tr.glossary = "Keep product names in English\nview = 视图"
     assert tr.glossary_for(["a lattice"]) == "Keep product names in English"
     assert tr.glossary_for(["each view"]) == "Keep product names in English\nview = 视图"
+
+
+def test_covered_terms_are_found_anywhere_inside_longer_ones():
+    from collections import Counter
+
+    from app.glossary import _drop_covered
+
+    counts = Counter({"large language model": 10, "language model": 11, "language": 30, "model": 12})
+    terms = ["language", "model", "language model", "large language model"]
+    # language model、model 多半出现在 large language model 里；language 单独出现得多，留下
+    assert _drop_covered(terms, counts) == ["language", "large language model"]
