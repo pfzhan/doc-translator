@@ -132,8 +132,12 @@ def _char_origins(page: pymupdf.Page) -> dict[tuple[float, ...], list[tuple[floa
     return out
 
 
-def _matrix(m) -> pymupdf.Matrix:
-    return pymupdf.Matrix(m.a, m.b, m.c, m.d, m.e, m.f)
+def _page_point(x: float, y: float, ctm, to_page: mupdf.FzMatrix) -> tuple[float, float]:
+    """内容流里的点换成页面坐标。和 Point * Matrix 调同一个 MuPDF 函数、结果相同，
+    但每个字形都要换一次，省掉 PyMuPDF 包装的那几层参数处理。"""
+    point = mupdf.fz_transform_point(mupdf.FzPoint(x, y), mupdf.FzMatrix(ctm.a, ctm.b, ctm.c, ctm.d, ctm.e, ctm.f))
+    point = mupdf.fz_transform_point(point, to_page)
+    return point.x, point.y
 
 
 def _rect(r) -> pymupdf.Rect:
@@ -149,6 +153,7 @@ class _Sanitizer(mupdf.PdfSanitizeFilterOptions2):
         self.use_virtual_image_filter()
         self.use_virtual_after_text_object(False)
         self.to_page = page.transformation_matrix
+        self.to_page_fz = mupdf.FzMatrix(*self.to_page)
         self.owners = _Owners(erasure, _char_origins(page))
         self.lines = erasure.lines
         self.removed = 0
@@ -157,8 +162,7 @@ class _Sanitizer(mupdf.PdfSanitizeFilterOptions2):
 
     def text_filter(self, ctx, ucsbuf, ucslen, trm, ctm, bbox, *_rest):
         try:
-            origin = pymupdf.Point(trm.e, trm.f) * _matrix(ctm) * self.to_page
-            if self.owners.owns(origin.x, origin.y):
+            if self.owners.owns(*_page_point(trm.e, trm.f, ctm, self.to_page_fz)):
                 self.removed += 1
                 return 1
         except BaseException as exc:  # noqa: BLE001
