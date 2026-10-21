@@ -5696,3 +5696,17 @@ def test_pdf_page_lines_and_tables_are_read_once_per_page(tmp_path, monkeypatch)
     _extract(doc)
     assert {key: sorted(pages) for key, pages in calls.items()} == {key: [0, 1, 2] for key in calls}
 
+
+def test_union_box_matches_rect_union():
+    from app.formats.pdf import _union_box
+
+    rects = [
+        pymupdf.Rect(378.9772014701512, 294.40010658, 391.92303898, 300.53540323),
+        pymupdf.Rect(391.8992945173863, 212.31890825, 415.72914222, 219.31949272),
+        pymupdf.Rect(5, 5, 5, 9),  # 零宽的空框不算
+        pymupdf.Rect(9, 9, 3, 3),
+        pymupdf.Rect(pymupdf.INFINITE_RECT()),
+    ]
+    for a in rects:
+        for b in rects:
+            assert tuple(_union_box(a, b)) == tuple(a | b)
