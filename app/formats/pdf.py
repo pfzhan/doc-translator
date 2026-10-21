@@ -3271,10 +3271,11 @@ def _merge_line_tails(blocks: list[TextBlock]) -> list[TextBlock]:
     """同一行右侧的半句，和下一行回到栏边的续写，接成一段。不并进左边那句。"""
     used: set[int] = set()
     out: list[TextBlock] = []
+    earlier = _earlier_on_page(blocks)
     for index, block in enumerate(blocks):
         if id(block) in used:
             continue
-        if _is_line_tail(block, blocks[:index]):
+        if _is_line_tail(block, earlier[index]):
             nxt = _line_tail_continuation(block, blocks[index + 1:], blocks)
             if nxt is not None and id(nxt) not in used:
                 _absorb_block(block, nxt)
@@ -3327,8 +3328,7 @@ def _sits_on_last_line(host: TextBlock, guest: TextBlock) -> bool:
         return False
     if abs(host.size - guest.size) > host.size * 0.2:
         return False
-    if _is_side_label(host) or _diagramish(host) or _diagramish(guest):
-        return False
+    # 先比位置再看文字：一页里两两比较，大多数块对在这里就排除了
     last = host.line_rects[-1]
     first = guest.line_rects[0]
     height = min(last.height, first.height) or 1.0
@@ -3339,6 +3339,8 @@ def _sits_on_last_line(host: TextBlock, guest: TextBlock) -> bool:
     if not (-2 <= gap < 16):
         return False
     if first.x0 <= last.x0 + max(host.size * 3, 24):
+        return False
+    if _is_side_label(host) or _diagramish(host) or _diagramish(guest):
         return False
     return _returns_to_margin(host, guest)
 
