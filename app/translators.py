@@ -268,6 +268,9 @@ class LLMTranslator(Translator):
             # 实际发请求的唯一入口，递归拆批 / 补翻最终也回到这里，都受同一个信号量限制
             async with self._sem:
                 content = await self._complete(system, user)
+                # 回空多是上游偶发故障，原样再问一次。仍是空的，批量时下面逐段补翻，单段时 Runner 回填原文
+                if not content.strip():
+                    content = await self._complete(system, user)
         except TranslatorError as e:
             # 中转站会稳定拒绝某些段落组合（实测同一批 8 段每次都 400，拆开后每一部分都能翻），
             # 原样重试没用，拆成两半各自翻。只对 400 这样做：配置错误（401/403/404）拆了也没用，
@@ -316,9 +319,11 @@ class OpenAITranslator(LLMTranslator):
         usage = data.get("usage") or {}
         self._record_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
         try:
-            return data["choices"][0]["message"]["content"] or ""
+            message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as e:
             raise TranslatorError(f"返回格式异常: {str(data)[:200]}") from e
+        # 中转站偶尔回一条没有 content 的消息，和其他接口回空一样当空回复
+        return (message.get("content") if isinstance(message, dict) else "") or ""
 
     async def _complete_responses(self, system, user):
         """OpenAI Responses API（Codex / Grok Build 默认用这个）。"""
