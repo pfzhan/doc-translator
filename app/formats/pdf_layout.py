@@ -166,18 +166,44 @@ class PageGeometry:
     @staticmethod
     def from_page(
         page: pymupdf.Page, text_rects: list[pymupdf.Rect], frame: TextFrame | None = None,
-        tables: tuple[RuledTable, ...] | None = None,
+        scan: PageScan | None = None,
     ) -> PageGeometry:
-        """tables 是这一页已经找出的表格。找表要逐页解析线和字，已有就不重找。"""
+        """scan 是这一页已经读出的表格和图。没给时现读。"""
+        scan = scan or scan_page(page)
         bounds = text_page_rect(page)
         return PageGeometry.from_rects(
             bounds.width,
             text_rects,
-            _figure_rects(page),
+            list(scan.figures),
             bounds.height,
-            page_tables(page) if tables is None else tables,
+            scan.tables,
             frame,
         )
+
+
+@dataclass(frozen=True)
+class PageScan:
+    """一页的表格、图和词。提取、阅读顺序、角色判断、逐词对译都要用；
+    找表要逐页解析线和字，线、图片框、词每读一次都要几毫秒到几十毫秒，所以每页只读一次。"""
+    tables: tuple[RuledTable, ...]
+    figures: tuple[pymupdf.Rect, ...]
+    words: tuple[_TextWord, ...]
+
+
+def scan_page(page: pymupdf.Page) -> PageScan:
+    try:
+        drawings = page.get_drawings()
+    except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有线
+        drawings = []
+    words = page_words(page)
+    return PageScan(page_tables(page, drawings, words), tuple(_figure_rects(page, drawings)), words)
+
+
+def page_words(page: pymupdf.Page) -> tuple[_TextWord, ...]:
+    return tuple(
+        _TextWord(float(item[0]), float(item[1]), float(item[2]), float(item[3]), str(item[4]))
+        for item in page.get_text("words") if str(item[4]).strip()
+    )
 
 
 class _MarginBlock(Protocol):
@@ -314,15 +340,16 @@ def _spanning_table_index(block: _OrderedBlock, tables: Sequence[RuledTable]) ->
     return None
 
 
-def ruled_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
-    """只认横竖线围出的格子。文字对齐出来的假表、公式笔画网格不要。
+def ruled_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> tuple[RuledTable, ...]:
+    """只认横竖线围出的格子。文字对齐出来的假表、公式笔画网格不要。drawings 是本页的矢量图，没给时现读。
 
     find_tables 每次先把整页的字逐个转成字典，一页要几十毫秒。页面上凑不出两横两竖的线，
     就围不出格子，不必调用。"""
-    try:
-        drawings = page.get_drawings()
-    except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有表
-        return ()
+    if drawings is None:
+        try:
+            drawings = page.get_drawings()
+        except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有表
+            return ()
     if not _grid_possible(drawings):
         return ()
     pymupdf.no_recommend_layout()
@@ -339,7 +366,7 @@ def ruled_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
         if not _usable_table(cells):
             continue
         if rules is None:
-            rules = _rule_segments(page)
+            rules = _rule_segments(page, drawings)
         tables.append(_with_open_edges(RuledTable(pymupdf.Rect(table.bbox), cells), *rules))
     return tuple(tables)
 
@@ -374,16 +401,19 @@ def _grid_possible(drawings: Sequence[dict]) -> bool:
     return False
 
 
-def _rule_segments(page: pymupdf.Page) -> tuple[list[pymupdf.Rect], list[pymupdf.Rect]]:
-    """页面上的细横线和细竖线。
+def _rule_segments(
+    page: pymupdf.Page, drawings: list[dict] | None = None,
+) -> tuple[list[pymupdf.Rect], list[pymupdf.Rect]]:
+    """页面上的细横线和细竖线。drawings 是本页的矢量图，没给时现读。
 
     线段、细长的矩形、描边矩形的四条边都算；老 TeX 和一些转换器把框线画成一像素宽的
     图片，也算。"""
     rects: list[pymupdf.Rect] = []
-    try:
-        drawings = page.get_drawings()
-    except Exception:  # noqa: BLE001 - 读不出来就当没有线
-        drawings = []
+    if drawings is None:
+        try:
+            drawings = page.get_drawings()
+        except Exception:  # noqa: BLE001 - 读不出来就当没有线
+            drawings = []
     for drawing in drawings:
         stroked = "s" in str(drawing.get("type") or "")
         for item in drawing.get("items", ()):
@@ -490,18 +520,21 @@ def _merge_rows(cells: list[pymupdf.Rect], horizontal: list[pymupdf.Rect]) -> li
     return out
 
 
-def page_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
-    """有线表，再加上列缘对齐的短格子表和算法框。两栏正文和整段文字不在这里。"""
-    ruled = ruled_tables(page)
-    algorithms = algorithm_tables(page)
-    return (*ruled, *unruled_tables(page, (*ruled, *algorithms)), *algorithms)
+def page_tables(
+    page: pymupdf.Page, drawings: list[dict] | None = None, words: Sequence[_TextWord] | None = None,
+) -> tuple[RuledTable, ...]:
+    """有线表，再加上列缘对齐的短格子表和算法框。两栏正文和整段文字不在这里。
+    drawings、words 是本页已读出的矢量图和词，没给时现读。"""
+    ruled = ruled_tables(page, drawings)
+    algorithms = algorithm_tables(page, drawings)
+    return (*ruled, *unruled_tables(page, (*ruled, *algorithms), words), *algorithms)
 
 
 _SYMBOL_FONT_RE = re.compile(r"(?:^|\+)(?:CMSY|CMEX|MSAM|MSBM)", re.I)
 _ALGORITHM_RE = re.compile(r"^\s*(?:Algorithm|Procedure|算法)\s*\d+", re.I)
 
 
-def algorithm_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
+def algorithm_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> tuple[RuledTable, ...]:
     """算法框里的伪代码当成一列的表，每一行是一格。
 
     伪代码一行一句，缩进是结构，行和行不是一段话。PyMuPDF 常把几行收进同一块，
@@ -519,7 +552,7 @@ def algorithm_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
     captions = [caption for line in lines for caption in _algorithm_captions(line)]
     if not captions:
         return ()
-    horizontal, _vertical = _rule_segments(page)
+    horizontal, _vertical = _rule_segments(page, drawings)
     tables: list[RuledTable] = []
     for box, size in captions:
         body = _box_below(box, size, horizontal) or _box_above(box, size, horizontal)
@@ -694,17 +727,17 @@ class _TextCell:
         return self.x1 - self.x0
 
 
-def unruled_tables(page: pymupdf.Page, ruled: Sequence[RuledTable] = ()) -> tuple[RuledTable, ...]:
-    """没有线时，只认短格子组成的网格：列的左缘或右缘对齐，行高重复。
+def unruled_tables(
+    page: pymupdf.Page, ruled: Sequence[RuledTable] = (), words: Sequence[_TextWord] | None = None,
+) -> tuple[RuledTable, ...]:
+    """没有线时，只认短格子组成的网格：列的左缘或右缘对齐，行高重复。words 是本页的词，没给时现读。
 
     词间距并成一格。栏间大空档上的长行是正文，不是表。
     """
     zones = [table.rect for table in ruled]
     words = [
-        _TextWord(float(item[0]), float(item[1]), float(item[2]), float(item[3]), str(item[4]))
-        for item in page.get_text("words")
-        if str(item[4]).strip()
-        and not _mostly_inside(pymupdf.Rect(item[:4]), zones)
+        word for word in (page_words(page) if words is None else words)
+        if not _mostly_inside(pymupdf.Rect(word.x0, word.y0, word.x1, word.y1), zones)
     ]
     rows = [_row_cells(row) for row in _word_rows(words)]
     tables: list[RuledTable] = []
@@ -724,7 +757,9 @@ def unruled_tables(page: pymupdf.Page, ruled: Sequence[RuledTable] = ()) -> tupl
     return tuple(tables)
 
 
-def interlinear_glosses(page: pymupdf.Page) -> tuple[pymupdf.Rect, ...]:
+def interlinear_glosses(
+    page: pymupdf.Page, words: Sequence[_TextWord] | None = None,
+) -> tuple[pymupdf.Rect, ...]:
     """语言学例句的逐词对译：原文一行、对译一行。逐词翻译对译行没有意义，
     词序一变也对不上，两行都留原文。认两种排法：
 
@@ -734,12 +769,9 @@ def interlinear_glosses(page: pymupdf.Page) -> tuple[pymupdf.Rect, ...]:
     - 逐语素对译：两行从同一处起笔，都是连字符串起来的语素，对译行里有 1SG、PFV
       这样的语法标注缩写（莱比锡标注规则）。
 
-    表格一连好几行都这样对齐，对译只有孤零零的两行。
+    表格一连好几行都这样对齐，对译只有孤零零的两行。words 是本页的词，没给时现读。
     """
-    words = [
-        _TextWord(float(item[0]), float(item[1]), float(item[2]), float(item[3]), str(item[4]))
-        for item in page.get_text("words") if str(item[4]).strip()
-    ]
+    words = list(page_words(page) if words is None else words)
     rows = _word_rows(words)
     pairs = [_glossed(upper, lower) for upper, lower in zip(rows, rows[1:])]
     found: list[pymupdf.Rect] = []
@@ -1177,7 +1209,7 @@ def _is_blank_fill(drawing: dict) -> bool:
     )
 
 
-def _figure_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
+def _figure_rects(page: pymupdf.Page, drawings: list[dict] | None = None) -> list[pymupdf.Rect]:
     bounds = text_page_rect(page)
     width, height = bounds.width, bounds.height
     found: list[pymupdf.Rect] = []
@@ -1185,10 +1217,11 @@ def _figure_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
         rect = pymupdf.Rect(info.get("bbox"))
         if rect.width > _FIGURE_MIN and rect.height > _FIGURE_MIN:
             found.append(rect)
-    try:
-        drawings = page.get_drawings()
-    except Exception:  # noqa: BLE001 - 个别页面的矢量表读不出来，当没有图
-        drawings = []
+    if drawings is None:
+        try:
+            drawings = page.get_drawings()
+        except Exception:  # noqa: BLE001 - 个别页面的矢量表读不出来，当没有图
+            drawings = []
     for drawing in drawings:
         if _is_blank_fill(drawing):
             continue

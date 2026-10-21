@@ -37,7 +37,7 @@ from .pdf_flow import (
 from .pdf_erase import Erasure, erase
 from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, text_frames
 from .pdf_layout import (
-    PageGeometry, RuledTable, cell_containing, content_floor, interlinear_glosses, margin_skips, page_tables,
+    PageGeometry, PageScan, RuledTable, cell_containing, content_floor, interlinear_glosses, margin_skips, scan_page,
     reading_order, text_page_rect,
 )
 from .pdf_roles import LayoutItem, Role, is_size_heading
@@ -2674,15 +2674,17 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
 
 def _extract(
     doc: pymupdf.Document,
-) -> tuple[list[TextBlock], list[TextFrame | None], list[tuple[RuledTable, ...]]]:
-    """文本块，以及每页的版心和表格。"""
+) -> tuple[list[TextBlock], list[TextFrame | None], list[PageScan]]:
+    """文本块，以及每页的版心和表格、图、词。"""
     blocks = []
+    scans: list[PageScan] = []
     tables_by_page: list[tuple[RuledTable, ...]] = []
     type3 = Type3Reader(doc)
     pages: list[dict] = []
     pending_cells: set[int] = set()
     for page in doc:
-        tables_by_page.append(page_tables(page))
+        scans.append(scan_page(page))
+        tables_by_page.append(scans[-1].tables)
         data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
         _attach_ink(page, data)
         # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
@@ -2767,11 +2769,11 @@ def _extract(
         by_page.setdefault(block.page, []).append(block)
     for pno in sorted(by_page):
         page_blocks = by_page[pno]
-        geo = PageGeometry.from_page(doc[pno], [block.rect for block in page_blocks], tables=tables_by_page[pno])
+        geo = PageGeometry.from_page(doc[pno], [block.rect for block in page_blocks], scan=scans[pno])
         geometries[pno] = geo
         ordered.extend(reading_order(page_blocks, geo))
     merged = _merge_continuations(_merge_caption_fragments(_merge_visual_lines(ordered, geometries)))
-    return _split_affiliation_tails(_merge_same_line_sentences(_merge_line_tails(merged))), frames, tables_by_page
+    return _split_affiliation_tails(_merge_same_line_sentences(_merge_line_tails(merged))), frames, scans
 
 
 _DISPLAY_PROSE = 8
@@ -5641,12 +5643,15 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     src_doc = pymupdf.open(src)
     if src_doc.needs_pass:
         raise ValueError("PDF 有密码保护，暂不支持")
-    if _scan_status(src_doc) == "scanned":
+    blocks, frames, scans = await asyncio.to_thread(_extract, src_doc)
+    glosses = {
+        pno: interlinear_glosses(src_doc[pno], scans[pno].words) for pno in sorted({block.page for block in blocks})
+    }
+    blocks = _split_gloss_lines(blocks, glosses)
+    # 纯扫描件提不出块。有块的文件不必再逐页查文本层
+    if not blocks and _scan_status(src_doc) == "scanned":
         raise ValueError("这是没有文本层的扫描版 PDF：请先用 Acrobat、ABBYY 或 WPS 的 OCR 功能识别文字，"
                          "再上传识别后的文件")
-    blocks, frames, tables = await asyncio.to_thread(_extract, src_doc)
-    glosses = {pno: interlinear_glosses(src_doc[pno]) for pno in sorted({block.page for block in blocks})}
-    blocks = _split_gloss_lines(blocks, glosses)
     if not blocks:
         raise ValueError("没有提取到可用的文字：可能是图片型页面或 OCR 文本层质量太差")
     toc = src_doc.get_toc()  # 输出文件带上原书签
@@ -5661,7 +5666,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     for b in blocks:
         rects_by_page.setdefault(b.page, []).append(b.rect)
     geometries = [
-        PageGeometry.from_page(src_doc[i], rects_by_page.get(i, []), frames[i], tables[i])
+        PageGeometry.from_page(src_doc[i], rects_by_page.get(i, []), frames[i], scans[i])
         for i in range(src_doc.page_count)
     ]
     # 配了版面模型时要逐页跑推理，放到线程里
