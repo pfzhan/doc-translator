@@ -2575,15 +2575,18 @@ def _detach_margin_notes(
     if not notes:
         return
     picked = sorted(notes)
+    touched: set[int] = set()
     for group in note_groups([lines[index] for index in picked]):
         members = [refs[picked[index]] for index in group]
         rect = pymupdf.Rect()
         for block, line in members:
             block["lines"].remove(line)
+            touched.add(id(block))
             rect |= pymupdf.Rect(line["bbox"])
         data["blocks"].append({
             "type": 0, "bbox": tuple(rect), "lines": [line for _, line in members], "side_note": True,
         })
+    _rejoin_note_cuts(data, touched)
     kept = []
     for block in data["blocks"]:
         if block.get("type") == 0:
@@ -2595,6 +2598,43 @@ def _detach_margin_notes(
             block["bbox"] = tuple(box)
         kept.append(block)
     data["blocks"] = kept
+
+
+def _rejoin_note_cuts(data: dict, touched: set[int]) -> None:
+    """PyMuPDF 常在旁注所在的行把一段正文切成两块。旁注拿走以后，上下紧挨、
+    切在句子中间的两块接回一块：大写开头的换行（Standard / Code for ...）
+    按块合并认不出来。上一块以句末收尾，或下一块缩进起笔的，是两段。"""
+    blocks = [block for block in data["blocks"] if block.get("type") == 0 and not block.get("side_note")]
+    index = 0
+    while index < len(blocks) - 1:
+        upper, lower = blocks[index], blocks[index + 1]
+        if (id(upper) in touched or id(lower) in touched) and _note_cut(upper, lower):
+            upper["lines"].extend(lower["lines"])
+            lower["lines"] = []
+            touched.add(id(upper))
+            del blocks[index + 1]
+            continue
+        index += 1
+
+
+def _note_cut(upper: dict, lower: dict) -> bool:
+    above = [line for line in upper["lines"] if abs(line["dir"][1]) <= 0.01]
+    below = [line for line in lower["lines"] if abs(line["dir"][1]) <= 0.01]
+    if not above or not below:
+        return False
+    last = pymupdf.Rect(max(above, key=lambda line: line["bbox"][3])["bbox"])
+    first = pymupdf.Rect(min(below, key=lambda line: line["bbox"][1])["bbox"])
+    size = max((span["size"] for line in above for span in line["spans"] if span["text"].strip()), default=0)
+    lower_size = max((span["size"] for line in below for span in line["spans"] if span["text"].strip()), default=0)
+    if size <= 0 or abs(lower_size - size) > size * 0.15:
+        return False
+    if not -size * 0.3 <= first.y0 - last.y1 <= size * 0.6:
+        return False
+    # 下一块往右缩进是新段；往左回到栏边可以是首行缩进的那一行接着写
+    if not last.x0 - size * 3 <= first.x0 <= last.x0 + 2:
+        return False
+    tail = "".join(span["text"] for line in above if pymupdf.Rect(line["bbox"]) == last for span in line["spans"])
+    return not tail.rstrip().endswith(tuple(SENT_ENDS))
 
 
 def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
