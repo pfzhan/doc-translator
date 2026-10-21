@@ -20,16 +20,20 @@ _HEADING_BOLD = 1.15
 _CAPTION_LEN = 400
 _PAGE_FILL = 0.7
 _INSIDE = 0.7
+# 编号可以带节号（Figure 2.13）。标签后面跟冒号或句点，才一定是图注
 _CAPTION_RE = re.compile(
-    r"^(?:(?:Figure|Fig\.?|Table|Tab\.?|Scheme|Plate)\s*\d+\s*[:.]|(?:图|表)\s*\d+\s*[:.。])",
+    r"^(?:Figure|Fig\.?|Table|Tab\.?|Scheme|Plate|图|表)\s*\d+(?:[.\-]\d+)*(\s*[:.。：])?",
     re.I,
 )
 # 图注写在图下面。表注常在表上面，不在这里
-_FIGURE_CAPTION_RE = re.compile(r"^(?:Figure|Fig\.?|图)\s*\d+\s*[:.：]", re.I)
+_FIGURE_CAPTION_RE = re.compile(r"^(?:Figure|Fig\.?|图)\s*\d+(?:[.\-]\d+)*(\s*[:.。：])?", re.I)
+# 没有冒号的图注比正文小一号，或者标签另用粗体
+_CAPTION_SMALL = 0.95
 # 正文段落：从左缘起笔、有一句话长
 _BODY_LEN = 20
 _NUMBERED_TITLE_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+\S")
 _SENT_END = tuple("。！？.!?")
+_BODY_END = tuple("。！？：.!?:")
 
 
 class Role(Enum):
@@ -46,6 +50,8 @@ class LayoutItem:
     text: str
     size: float
     bold: bool
+    # 开头的 Figure、Table 标签用了和后文不同的字体（粗体）
+    label_styled: bool = False
 
 
 class LayoutDetector(Protocol):
@@ -73,7 +79,7 @@ class HeuristicLayout:
             figures = (*_figures_of(item.page, geometries), *floats.get(item.page, ()))
             if _inside_figure(item.rect, figures):
                 roles.append(Role.FIGURE)
-            elif _is_caption(item, figures):
+            elif _is_caption(item, figures, median):
                 roles.append(Role.CAPTION)
             elif is_size_heading(item.text, item.size, item.bold, median) or _is_numbered_title(item.text):
                 roles.append(Role.HEADING)
@@ -114,7 +120,7 @@ def _float_zones(
     """
     zones: dict[int, list[pymupdf.Rect]] = {}
     for caption in items:
-        if _FIGURE_CAPTION_RE.match(caption.text.strip()) is None:
+        if not _caption_start(caption, _FIGURE_CAPTION_RE, median):
             continue
         if caption.page < 0 or caption.page >= len(geometries):
             continue
@@ -122,6 +128,10 @@ def _float_zones(
         column = geo.column_of(caption.rect) if geo.columns else None
         left = column.x0 if column is not None else 0.0
         right = column.x1 if column is not None else geo.width
+        # 单栏时正文从版心左缘起笔。栏左缘取的是本页最左的块，可能是页眉或外凸的节号
+        framed = geo.frame is not None and len(geo.columns) < 2
+        start = geo.frame.x0 if framed else left
+        end = geo.frame.x1 if framed else right
         indent = max(median, 8.0) * 2
         top = 0.0
         for item in items:
@@ -129,13 +139,39 @@ def _float_zones(
                 continue
             if min(item.rect.x1, right) - max(item.rect.x0, left) <= 0:
                 continue
-            body = item.rect.x0 <= left + indent and len(item.text.strip()) >= _BODY_LEN
-            if body or _FIGURE_CAPTION_RE.match(item.text.strip()):
+            if _float_bound(item, start, end, indent, median):
                 top = max(top, item.rect.y1)
-        zone = pymupdf.Rect(left, top + 0.5, right, caption.rect.y0 - 0.5)
+        zone = pymupdf.Rect(min(start, caption.rect.x0), top + 0.5, right, caption.rect.y0 - 0.5)
         if zone.height > 2:
             zones.setdefault(caption.page, []).append(zone)
     return zones
+
+
+def _float_bound(item: LayoutItem, start: float, end: float, indent: float, median: float) -> bool:
+    """图区的上界：正文段落、小节标题，或上一张图的图注。
+
+    正文从左缘起笔、有一句话长，字号不比正文小：框里的伪代码、图里的小字缩进不多，但小一号。
+    还要像一段话：两端对齐写到右缘，或者以句末标点收尾。表格首列的格子写不到右缘，
+    也不收句；格子里折成两行的也一样。
+    """
+    if _caption_start(item, _FIGURE_CAPTION_RE, median):
+        return True
+    if item.rect.x0 > start + indent or item.size < median * _CAPTION_SMALL:
+        return False
+    if is_size_heading(item.text, item.size, item.bold, median):
+        return True
+    text = item.text.strip()
+    if len(text) < _BODY_LEN:
+        return False
+    return item.rect.x1 >= end - item.size * 0.5 or text.endswith(_BODY_END)
+
+
+def _caption_start(item: LayoutItem, pattern: re.Pattern[str], median: float) -> bool:
+    """以图表标签起头的图注。正文里的 Figure 2.13 shows ... 和正文一样大，标签也不另用字体。"""
+    matched = pattern.match(item.text.strip())
+    if matched is None:
+        return False
+    return bool(matched.group(1)) or item.label_styled or item.size < median * _CAPTION_SMALL
 
 
 def _figures_of(page: int, geometries: Sequence[PageGeometry]) -> tuple[pymupdf.Rect, ...]:
@@ -165,9 +201,9 @@ def _inside_figure(rect: pymupdf.Rect, figures: Sequence[pymupdf.Rect]) -> bool:
     return False
 
 
-def _is_caption(item: LayoutItem, figures: Sequence[pymupdf.Rect]) -> bool:
+def _is_caption(item: LayoutItem, figures: Sequence[pymupdf.Rect], median: float) -> bool:
     text = item.text.strip()
-    if len(text) >= _CAPTION_LEN or _CAPTION_RE.match(text) is None:
+    if len(text) >= _CAPTION_LEN or not _caption_start(item, _CAPTION_RE, median):
         return False
     return any(_attached(item.rect, figure, item.size) for figure in figures)
 
