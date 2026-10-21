@@ -5224,7 +5224,55 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
             pass  # 引文单词不是标题，编号条目的续行还没结束
         else:
             prev_numbered = False
+    for index in _headless_bibliography(prepared):
+        skips[index] = True
     return skips
+
+
+# 作者-年份体的著录条目开头：Ahia, O.,  /  Arkadiev, P. M. 2020.  /  Clark, H. H. and  /  Smith, J. (2020)
+_AUTHOR_LEAD_RE = re.compile(
+    r"^[A-Z][^\s,.;:()]{1,30}(?:[\s-][A-Za-z][^\s,.;:()]{1,30}){0,3},\s"
+    r"(?:[A-Z]\.(?:\s?-?[A-Z]\.)*|[A-Z][a-z]+)"
+    r"(?:,|\s(?:and|&)\s|\s\(?(?:19|20)\d{2})"
+)
+_ENTRY_WINDOW = 8   # 往后看几块
+_ENTRY_LEADS = 4    # 其中至少几块是条目开头
+_ENTRY_GAP = 4      # 连续这么多块没有新条目，参考文献就结束了
+
+
+def _headless_bibliography(prepared: list[tuple[TextBlock, str]]) -> set[int]:
+    """没有标题的参考文献：书的章末常紧接着习题排，不写 References。
+
+    一连串同字号、以「姓, 名缩写.」起头的条目就是。正文里偶尔有一句这样开头，凑不够数。
+    中间夹着的页眉、条目断开的续行一并算进去。字号明显变大的块是下一节，到此为止。
+    """
+    leads = [bool(_AUTHOR_LEAD_RE.match(text)) for _, text in prepared]
+    found: set[int] = set()
+    index = 0
+    while index < len(prepared):
+        size = prepared[index][0].size
+
+        # 条目都是同一个字号。正文里这样开头的一句话字号不同，不和后面的条目凑数
+        def entry(at: int) -> bool:
+            return leads[at] and abs(prepared[at][0].size - size) <= 0.5
+
+        window = range(index, min(index + _ENTRY_WINDOW, len(prepared)))
+        if not leads[index] or sum(entry(at) for at in window) < _ENTRY_LEADS:
+            index += 1
+            continue
+        last = index
+        cursor = index + 1
+        while cursor < len(prepared) and cursor - last <= _ENTRY_GAP:
+            if entry(cursor):
+                last = cursor
+            cursor += 1
+        end = last + 1
+        # 最后一条的续行：字号不变大
+        while end < cursor and prepared[end][0].size <= size + 0.5 and not leads[end]:
+            end += 1
+        found.update(range(index, end))
+        index = max(end, index + 1)
+    return found
 
 
 def _scan_status(doc: pymupdf.Document) -> str:
