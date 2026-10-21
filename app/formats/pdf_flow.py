@@ -163,11 +163,63 @@ def break_lines(
     max_width: float,
     formula_widths: dict[int, float],
 ) -> list[str]:
-    """按估算宽度断行。哨兵、超宽公式、放得下的短括号组都不拆开。"""
+    """按估算宽度断行。哨兵、超宽公式、放得下的短括号组都不拆开。
+    每行自带样式标记：跨行的粗体、字号在下一行开头重开，在本行末尾收起。
+    各行是分开写的（HTML 每行一个不折行的盒子，中文逐片画），不补的话下一行就丢了样式。"""
+    return balance_lines(_break_lines(text, em, max_width, formula_widths))
+
+
+def balance_lines(lines: list[str]) -> list[str]:
+    out: list[str] = []
+    opened: list[str] = []
+    for line in lines:
+        if not STYLE_MARK_RE.sub("", line):
+            out.append(line)
+            opened = open_marks(line, opened)
+            continue
+        text = "".join(opened) + line
+        opened = open_marks(text)
+        out.append(text + _closing(opened))
+    return out
+
+
+def open_marks(text: str, opened: list[str] | None = None) -> list[str]:
+    """读完 text 后还开着的样式标记，由外到内。opened 是 text 之前已经开着的。"""
+    stack = list(opened or ())
+    for matched in STYLE_MARK_RE.finditer(text):
+        token = matched.group(0)
+        if not token.startswith("{/"):
+            stack.append(token)
+            continue
+        for index in range(len(stack) - 1, -1, -1):
+            if stack[index][1] == token[2]:
+                del stack[index]
+                break
+    return stack
+
+
+def _closing(opened: list[str]) -> str:
+    return "".join("{/" + token[1] + "}" for token in reversed(opened))
+
+
+def balance_marks(left: str, right: str) -> tuple[str, str]:
+    """切开处补上仍开着的样式标记。字号不嵌套，必须重开还开着的那一个，不能重开更早已经闭合的。"""
+    opened = open_marks(left)
+    if not opened:
+        return left, right
+    return left + _closing(opened), "".join(opened) + right
+
+
+def _break_lines(
+    text: str,
+    em: float,
+    max_width: float,
+    formula_widths: dict[int, float],
+) -> list[str]:
     if "\n" in text:
         lines: list[str] = []
         for part in text.split("\n"):
-            lines.extend(break_lines(part, em, max_width, formula_widths))
+            lines.extend(_break_lines(part, em, max_width, formula_widths))
         return lines
     if not text or max_width <= 0:
         return [text]
