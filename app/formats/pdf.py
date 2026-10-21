@@ -11,6 +11,7 @@ import asyncio
 import functools
 import html
 import re
+import struct
 import unicodedata
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -1888,6 +1889,19 @@ def _span_box(span: dict) -> pymupdf.Rect:
     return pymupdf.Rect(raw) if raw is not None else pymupdf.Rect(0, 0, 0, 0)
 
 
+def _union_box(a: pymupdf.Rect, b: pymupdf.Rect) -> pymupdf.Rect:
+    """和 a | b 一样：空框不算，结果按 MuPDF 存成单精度。
+    每个 span 都要并一次，Rect 的 | 要先复制再逐项检查参数，慢。"""
+    if a.is_infinite or b.is_infinite:
+        return a | b
+    if b.is_empty:
+        return pymupdf.Rect(a)
+    if a.is_empty:
+        return pymupdf.Rect(b)
+    box = (min(a.x0, b.x0), min(a.y0, b.y0), max(a.x1, b.x1), max(a.y1, b.y1))
+    return pymupdf.Rect(struct.unpack("4f", struct.pack("4f", *box)))
+
+
 def _same_text_style(pending: TextRun, span: dict, emphasis: Emphasis) -> bool:
     return (
         pending.emphasis == emphasis
@@ -1903,7 +1917,7 @@ def _extend_text_run(pending: TextRun | None, span: dict, emphasis: Emphasis, li
     font = str(span.get("font") or "")
     size = float(span.get("size") or 0)
     if pending is not None and _same_text_style(pending, span, emphasis):
-        return replace(pending, text=pending.text + str(span.get("text") or ""), bbox=pending.bbox | bbox)
+        return replace(pending, text=pending.text + str(span.get("text") or ""), bbox=_union_box(pending.bbox, bbox))
     return TextRun(
         text=str(span.get("text") or ""),
         font=font,
