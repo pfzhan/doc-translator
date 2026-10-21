@@ -5919,7 +5919,16 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     per_block: dict[int, str] = {}
     block_formulas: dict[int, list] = {}
     fallbacks = 0
+    kept_ids = set(skip_ids)
     for unit, t, sent_text, formulas in zip(flat_units, raw, sent_texts, sent_formulas):
+        if t == sent_text:
+            # 模型原样返回（编号、代码、专名）。送翻的文字规整过（TeX 的 `u 合成 ù），
+            # 和块里的原字不同，按译文写回会擦掉原字重排。留原字，和跳过的块一样
+            kept_ids.update(id(b) for b in unit)
+            for b in unit:
+                per_block[id(b)] = b.text
+                block_formulas[id(b)] = []
+            continue
         restored = (_restore_placeholders(t, formulas, lenient=True) if formulas
                     else _STRAY_PLACEHOLDER_RE.sub("", t))
         if restored is not None:
@@ -5956,7 +5965,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         per_block[id(blocks[i])] = translations[i]
     # 段界去重也可能改到跳过的块。写回只认和原文逐字相同的字符串，才会把原字留下。
     for b in blocks:
-        if id(b) in skip_ids:
+        if id(b) in kept_ids:
             per_block[id(b)] = b.text
             block_formulas[id(b)] = []
     translations = [per_block[id(b)] for b in blocks]

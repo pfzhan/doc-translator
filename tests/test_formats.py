@@ -5812,6 +5812,26 @@ def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monk
     assert [pymupdf.open(out)[0].get_text() for [out] in outs] == [pymupdf.open(outs[0][0])[0].get_text()] * 2
 
 
+def test_pdf_keeps_lines_the_model_returns_unchanged(tmp_path):
+    """送翻时 TeX 的 `u 合成了 ù。模型原样返回时这行不算译过，留原字，不按合成后的文字重排。"""
+    from app.formats.pdf import translate_pdf
+
+    class Echo(MockTranslator):
+        async def translate_batch(self, texts):
+            return list(texts)
+
+    src = tmp_path / "codes.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=200)
+    page.insert_text((40, 60), "U+00F9 `u LATIN SMALL LETTER U WITH GRAVE", fontsize=10)
+    doc.save(src)
+    before = pymupdf.open(src)[0].get_text()
+    assert "`u" in before
+
+    [out] = run(translate_pdf(src, tmp_path, Runner(Echo("zh-CN"), cache=MemCache()), False, "zh-CN"))
+    assert pymupdf.open(out)[0].get_text() == before
+
+
 def test_light_cell_shading_is_not_a_formula_stroke():
     """浅色格子底色压在字下面，不并进公式框；图注标签的黑底和分式线照收。"""
     from app.formats.pdf import _page_curve_rects
