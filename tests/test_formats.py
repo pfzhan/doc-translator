@@ -5810,3 +5810,16 @@ def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monk
     assert longest_gap < 0.6
     assert most == 1
     assert [pymupdf.open(out)[0].get_text() for [out] in outs] == [pymupdf.open(outs[0][0])[0].get_text()] * 2
+
+
+def test_light_cell_shading_is_not_a_formula_stroke():
+    """浅色格子底色压在字下面，不并进公式框；图注标签的黑底和分式线照收。"""
+    from app.formats.pdf import _page_curve_rects
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=300, height=200)
+    page.draw_rect(pymupdf.Rect(20, 20, 60, 35), color=None, fill=(0.77, 0.86, 0.99))
+    page.draw_rect(pymupdf.Rect(80, 20, 120, 35), color=None, fill=(0, 0, 0))
+    page.draw_rect(pymupdf.Rect(140, 30, 180, 30.6), color=None, fill=(0, 0, 0))
+    rects = _page_curve_rects(page)
+    assert [round(r.x0) for r in rects] == [80, 140]

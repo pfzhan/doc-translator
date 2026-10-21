@@ -1934,6 +1934,20 @@ def _extend_text_run(pending: TextRun | None, span: dict, emphasis: Emphasis, li
     )
 
 
+def _shading(drawing: dict) -> bool:
+    """只填色、由矩形拼成、两边都比线粗的浅色块：表格格子、文本框的底色。深色的字压在上面，
+    不是公式的笔画；并进公式框会把上下格的字一起裁进图里，写回时底色也跟着擦掉。
+    深色块不算：图注标签是黑底白字，白字整个贴回时要带着黑底。"""
+    rect = pymupdf.Rect(drawing["rect"])
+    items = drawing.get("items") or []
+    fill = drawing.get("fill")
+    return (
+        drawing.get("type") == "f" and bool(items) and all(item[0] in ("re", "qu") for item in items)
+        and min(rect.width, rect.height) > _RULE_IMAGE_THICK
+        and fill is not None and len(fill) == 3 and 0.299 * fill[0] + 0.587 * fill[1] + 0.114 * fill[2] > 0.6
+    )
+
+
 def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
     """矢量线条，加上拉长成细线的一像素图片：老 TeX 的分式线、根号横线是这样画的。
     描边的线按画出来的范围算：路径框不含线宽，一条横线的框高为零。"""
@@ -1944,7 +1958,7 @@ def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
     rects: list[pymupdf.Rect] = []
     for drawing in drawings:
         raw = drawing.get("rect")
-        if raw is None:
+        if raw is None or _shading(drawing):
             continue
         rect = pymupdf.Rect(raw)
         half = float(drawing.get("width") or 0) / 2 if "s" in str(drawing.get("type") or "") else 0.0
