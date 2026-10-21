@@ -106,3 +106,49 @@ def test_labels_and_listing_above_a_figure_caption_are_the_figure():
     geo = PageGeometry.from_rects(400, [item.rect for item in items], [], 500)
     roles = HeuristicLayout().classify(items, [geo], median=10)
     assert roles == [Role.BODY, Role.FIGURE, Role.FIGURE, Role.CAPTION, Role.FIGURE, Role.CAPTION, Role.BODY]
+
+
+def test_body_starting_right_of_outdented_headings_bounds_the_figure():
+    """版心左缘在 160：页眉和外凸的节标题更靠左，正文段落仍是图区的上界。"""
+    from app.formats.pdf_frame import TextFrame
+
+    items = [
+        _item("2.3 • UNICODE", pymupdf.Rect(398, 84, 476, 94), size=8),
+        _item("2.3 Unicode", pymupdf.Rect(95, 218, 192, 235), size=17),
+        _item("Another option we could consider is the level of the individual character.",
+              pymupdf.Rect(160, 257, 493, 315)),
+        _item("Ch Hex Dec", pymupdf.Rect(163, 438, 221, 448)),
+        _item("Figure 2.4 Some selected ASCII codes for some English letters.",
+              pymupdf.Rect(160, 499, 493, 519), size=9),
+        _item("But ASCII is of course insufficient since there are lots of other characters.",
+              pymupdf.Rect(160, 533, 493, 579)),
+    ]
+    frame = TextFrame(160, 493, 111, 719, 10)
+    geo = PageGeometry.from_rects(612, [item.rect for item in items], [], 792, frame=frame)
+    roles = HeuristicLayout().classify(items, [geo], median=10)
+    assert roles[2] is Role.BODY and roles[3] is Role.FIGURE and roles[4] is Role.CAPTION
+
+
+def test_a_sentence_that_names_a_figure_is_not_its_caption():
+    items = [
+        _item("We'll come back to precision and recall in Chapter 4.", pymupdf.Rect(160, 277, 491, 287)),
+        _item("2.6.6 More Operators", pymupdf.Rect(160, 304, 279, 316), size=12),
+        _item("Figure 2.13 shows some useful aliases for common ranges:", pymupdf.Rect(160, 324, 395, 334)),
+        _item("any digit", pymupdf.Rect(293, 360, 328, 370)),
+        _item("Figure 2.13 Aliases for common sets of characters.", pymupdf.Rect(161, 433, 353, 442), size=9),
+    ]
+    geo = PageGeometry.from_rects(612, [item.rect for item in items], [], 792)
+    roles = HeuristicLayout().classify(items, [geo], median=10)
+    assert roles == [Role.BODY, Role.HEADING, Role.BODY, Role.FIGURE, Role.CAPTION]
+
+
+def test_smaller_pseudocode_above_a_caption_is_the_figure():
+    items = [
+        _item("A body paragraph that ends right before the algorithm box starts.", pymupdf.Rect(160, 60, 493, 100)),
+        _item("V ← all unique characters in C # initial set of tokens is characters",
+              pymupdf.Rect(170, 144, 427, 164), size=9),
+        _item("Figure 2.6 The training part of the BPE algorithm.", pymupdf.Rect(160, 234, 493, 265), size=9),
+    ]
+    geo = PageGeometry.from_rects(612, [item.rect for item in items], [], 792)
+    roles = HeuristicLayout().classify(items, [geo], median=10)
+    assert roles == [Role.BODY, Role.FIGURE, Role.CAPTION]

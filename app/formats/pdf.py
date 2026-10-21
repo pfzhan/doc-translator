@@ -5386,6 +5386,18 @@ def _sync_unit_preview(
             overrides[ui] = shown
 
 
+def _label_styled(block: TextBlock) -> bool:
+    """开头一段（图注的 Figure 2.4）和正文主体的字体不同。颜色不算：正文里的图号常是蓝色链接。"""
+    spans = [span for line in block.span_lines or [] for span in line if span["text"].strip()]
+    if len(spans) < 2:
+        return False
+    main = max(spans, key=lambda span: len(span["text"]))
+    first = spans[0]
+    return first is not main and (
+        first["font"] != main["font"] or bool(first["flags"] & 16) != bool(main["flags"] & 16)
+    )
+
+
 async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "",
                         layout_model: str = "") -> list[Path]:
     """layout_model 是版面模型文件的路径，空串表示只用规则。"""
@@ -5413,7 +5425,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     # 配了版面模型时要逐页跑推理，放到线程里
     roles = await asyncio.to_thread(
         layout_detector(src_doc, layout_model).classify,
-        [LayoutItem(b.page, pymupdf.Rect(b.rect), b.text, b.size, b.bold) for b in blocks],
+        [LayoutItem(b.page, pymupdf.Rect(b.rect), b.text, b.size, b.bold, _label_styled(b)) for b in blocks],
         geometries,
         median,
     )
