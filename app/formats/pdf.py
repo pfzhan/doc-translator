@@ -4731,7 +4731,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                        target_lang: str = "", formulas_map: dict | None = None,
                        archive=None, orig: "pymupdf.Document | None" = None,
                        geometries: list[PageGeometry] | None = None,
-                       continuations: dict[int, TextBlock] | None = None) -> pymupdf.Document:
+                       continuations: dict[int, TextBlock] | None = None,
+                       on_page: Callable[[int, int], None] | None = None) -> pymupdf.Document:
+    """on_page(已写页数, 要写的页数) 在每写一页之前调用。"""
     rtl = target_lang.split("-")[0] in RTL_LANGUAGES
     # CJK 字体的行框比拉丁高（约 1.31em vs 1.16em），且字形顶部会越出给定区域：
     # 按原字号写入会和下一行叠在一起，字号缩小并下移补偿
@@ -4755,7 +4757,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
     for b in blocks:
         page_blocks.setdefault(b.page, []).append(b)
 
-    for pno, items in by_page.items():
+    for written, (pno, items) in enumerate(by_page.items()):
+        if on_page is not None:
+            on_page(written, len(by_page))
         page = doc[pno]
         same_page = page_blocks.get(pno, [])
         # 旋转页的 page.rect 是转过的，和文字坐标比较要用没转的页面框
@@ -5850,10 +5854,13 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     }
 
     def build():
+        # 一本书要写好几分钟，这时译文已经全部到齐，进度条停在满格，按页报写到哪里
         translated = _render_translated(
             src, blocks, translations, target_lang, block_formulas, archive,
             orig=src_doc, geometries=geometries, continuations=continuations,
+            on_page=lambda done, total: runner.report_stage("写回译文", done, total, "页"),
         )
+        runner.report_stage("生成文件")
         # insert_htmlbox 每次都会嵌入完整的 CJK 字体（十几 MB），必须做子集化；失败则用未子集化版本
         translated = _subset_fonts_safe(translated)
         if bilingual:
