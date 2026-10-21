@@ -5920,3 +5920,36 @@ def test_resumed_pdf_job_reads_back_its_layout_analysis(tmp_path, monkeypatch):
     doc.save(src)
     translate(tmp_path / "c")
     assert len(calls) == 2
+
+
+def test_styles_carry_over_line_breaks():
+    """断开的每一行自带标记：跨行的粗体、字号在下一行开头重开，本行末尾收起。"""
+    from app.formats.pdf_flow import break_lines
+
+    lines = break_lines("前面的字{z80}{b}这一段很长的小字号粗体文字要跨过换行{/b}{/z}后面", 10, 100, {})
+    assert len(lines) >= 2
+    assert all(line.count("{b}") == line.count("{/b}") == 1 for line in lines[:-1])
+    assert lines[1].startswith("{z80}{b}")
+
+
+def test_cjk_line_keeps_bold_across_a_formula():
+    """公式把一行切成几片，公式后面那片接着用前面开着的粗体，收尾以后回到常规。"""
+    import pymupdf
+
+    from app.formats.pdf_align import _place_lines
+    from app.formats.pdf_typeset import FormulaMetric, typeset_lines
+
+    text = "前面{b}粗体\x01i\x021\x01/i\x02还是粗体{/b}后面"
+    lines = typeset_lines(text, 10, 400, {1: FormulaMetric(10, 10, 8, 2)})
+    commands, _slots, _fonts = _place_lines(
+        lines, pymupdf.Rect(0, 0, 400, 100), 10, 1.4, "#000000", False, frozenset({1}), {}, 800,
+    )
+    stroked, bold = [], False
+    for op in commands.splitlines():
+        if op == "2 Tr":
+            bold = True
+        elif op == "0 Tr":
+            bold = False
+        elif op.endswith("TJ") or op.endswith("Tj"):
+            stroked.append(bold)
+    assert stroked == [False, True, True, False]

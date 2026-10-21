@@ -32,6 +32,7 @@ from .pdf_align import draw_cjk_lines, page_origin
 from .pdf_flow import (
     STYLE_MARK_RE,
     Emphasis,
+    balance_marks,
     break_lines,
     emphasis_of,
     measure_width,
@@ -1175,34 +1176,14 @@ def _split_translation(t: str, ratio: float) -> tuple[str, str]:
             best = m.end()
     if best is not None and abs(best - target) <= len(t) * 0.3:
         cut = _snap_cut(t, best)
-        return _balance_marks(t[:cut], t[cut:])
+        return balance_marks(t[:cut], t[cut:])
     # 拉丁文本按空格切
     spaces = [m.start() for m in re.finditer(r"\s", t)]
     if spaces:
         cut = _snap_cut(t, min(spaces, key=lambda s: abs(s - target)))
-        return _balance_marks(t[:cut], t[cut:])
+        return balance_marks(t[:cut], t[cut:])
     cut = _snap_cut(t, round(target))
-    return _balance_marks(t[:cut], t[cut:])
-
-
-def _balance_marks(left: str, right: str) -> tuple[str, str]:
-    """切开处补上仍开着的样式标记。字号不嵌套，必须重开还开着的那一个，不能重开更早已经闭合的。"""
-    open_stack: list[str] = []
-    for matched in STYLE_MARK_RE.finditer(left):
-        token = matched.group(0)
-        if token.startswith("{/"):
-            kind = token[2:-1]
-            for index in range(len(open_stack) - 1, -1, -1):
-                opened = open_stack[index]
-                if (kind == "z" and opened.startswith("{z")) or opened == "{" + kind + "}":
-                    del open_stack[index]
-                    break
-            continue
-        open_stack.append(token)
-    if not open_stack:
-        return left, right
-    closes = ["{/z}" if token.startswith("{z") else "{/" + token[1:] for token in reversed(open_stack)]
-    return left + "".join(closes), "".join(open_stack) + right
+    return balance_marks(t[:cut], t[cut:])
 
 
 def _blocks_share_column(

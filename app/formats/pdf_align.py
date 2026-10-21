@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 import pymupdf
 
+from .pdf_flow import open_marks
 from .pdf_typeset import FormulaPiece, TextPiece, TypesetLine
 
 # htmlbox 首行 origin 相对盒子顶的比例。和它对齐，换写法后行高不变。
@@ -288,6 +289,8 @@ def _place_lines(
     fonts: dict[str, pymupdf.Font] = {}
     last = len(lines) - 1
     wrote = False
+    # 公式把一行切成几片，每片从头读标记。前一片还开着的粗体、字号带到下一片
+    opened: list[str] = []
     for index, line in enumerate(lines):
         baseline = box.y0 + em * FIRST_BASELINE + index * em * gap
         row = _place_line(
@@ -296,6 +299,7 @@ def _place_lines(
             centered=centered,
             image_indexes=image_indexes,
             fallback_text=fallback_text,
+            opened=opened,
         )
         if row is None:
             return None
@@ -323,12 +327,18 @@ def _place_line(
     centered: bool,
     image_indexes: frozenset[int],
     fallback_text: dict[int, str],
+    opened: list[str] | None = None,
 ) -> tuple[list[str], list[tuple[int, float]], dict[str, pymupdf.Font]] | None:
-    """一行的文本操作（基线 y 先写成 {Y}）和公式槽的横坐标。"""
+    """一行的文本操作（基线 y 先写成 {Y}）和公式槽的横坐标。
+    opened 是前面还开着的样式标记，读完这一行就地更新。"""
     pieces: list[tuple[list[_Segment], int | None, float, str]] = []
     fonts: dict[str, pymupdf.Font] = {}
+    carried = opened if opened is not None else []
     for piece in line.pieces:
-        drawn = _draw_piece(piece, em, image_indexes, fallback_text)
+        prefix = "".join(carried)
+        if isinstance(piece, TextPiece):
+            carried[:] = open_marks(piece.text, carried)
+        drawn = _draw_piece(piece, em, image_indexes, fallback_text, prefix)
         if drawn is None:
             return None
         segments, slot = drawn
@@ -388,11 +398,12 @@ def _draw_piece(
     em: float,
     image_indexes: frozenset[int],
     fallback_text: dict[int, str],
+    opened: str = "",
 ) -> tuple[list[_Segment], int | None] | None:
-    """文字片返回片段。公式图返回空片段和占位符序号。缺字返回 None。"""
+    """文字片返回片段。公式图返回空片段和占位符序号。缺字返回 None。opened 是前面还开着的标记。"""
     if isinstance(piece, FormulaPiece) and piece.index in image_indexes:
         return [], piece.index
-    text = piece.text if isinstance(piece, TextPiece) else fallback_text.get(piece.index, "")
+    text = opened + piece.text if isinstance(piece, TextPiece) else fallback_text.get(piece.index, "")
     segments = _segments(text, em)
     if segments is None:
         return None
