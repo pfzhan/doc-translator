@@ -2982,18 +2982,41 @@ def _display_formula_ids(blocks: list[TextBlock], geometries: list[PageGeometry]
     return ids
 
 
-def _gloss_ids(blocks: list[TextBlock], doc: pymupdf.Document) -> set[int]:
-    """落在逐词对译两行里的块。"""
-    glosses = {pno: interlinear_glosses(doc[pno]) for pno in sorted({block.page for block in blocks})}
-    ids: set[int] = set()
+def _in_gloss(rect: pymupdf.Rect, glosses: tuple[pymupdf.Rect, ...]) -> bool:
+    area = rect.width * rect.height
+    for gloss in glosses:
+        hit = rect & (gloss + (-1, -1, 1, 1))
+        if area >= 1 and not hit.is_empty and hit.width * hit.height >= area * 0.7:
+            return True
+    return False
+
+
+def _split_gloss_lines(
+    blocks: list[TextBlock], glosses: dict[int, tuple[pymupdf.Rect, ...]],
+) -> list[TextBlock]:
+    """对译行和下面的意译常分在同一块里。按行拆开，对译留原文，意译照翻。"""
+    out: list[TextBlock] = []
     for block in blocks:
-        area = block.rect.width * block.rect.height
-        for gloss in glosses.get(block.page, ()):
-            hit = block.rect & (gloss + (-1, -1, 1, 1))
-            if area >= 1 and not hit.is_empty and hit.width * hit.height >= area * 0.7:
-                ids.add(id(block))
-                break
-    return ids
+        rects = glosses.get(block.page, ())
+        lines = block.line_rects
+        if not rects or len(lines) < 2 or not block.span_lines or len(block.span_lines) != len(lines):
+            out.append(block)
+            continue
+        flags = [_in_gloss(line, rects) for line in lines]
+        if all(flags) or not any(flags):
+            out.append(block)
+            continue
+        start = 0
+        for index in range(1, len(lines) + 1):
+            if index == len(lines) or flags[index] != flags[start]:
+                out.append(_block_slice(block, start, index))
+                start = index
+    return out
+
+
+def _gloss_ids(blocks: list[TextBlock], glosses: dict[int, tuple[pymupdf.Rect, ...]]) -> set[int]:
+    """落在逐词对译两行里的块。"""
+    return {id(block) for block in blocks if _in_gloss(block.rect, glosses.get(block.page, ()))}
 
 
 def _garbled_label(text: str) -> bool:
@@ -5533,6 +5556,8 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         raise ValueError("这是没有文本层的扫描版 PDF：请先用 Acrobat、ABBYY 或 WPS 的 OCR 功能识别文字，"
                          "再上传识别后的文件")
     blocks, frames = await asyncio.to_thread(_extract, src_doc)
+    glosses = {pno: interlinear_glosses(src_doc[pno]) for pno in sorted({block.page for block in blocks})}
+    blocks = _split_gloss_lines(blocks, glosses)
     if not blocks:
         raise ValueError("没有提取到可用的文字：可能是图片型页面或 OCR 文本层质量太差")
     toc = src_doc.get_toc()  # 输出文件带上原书签
@@ -5555,7 +5580,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         median,
     )
     edges = margin_skips(blocks, geometries)
-    displayed = _display_formula_ids(blocks, geometries) | _gloss_ids(blocks, src_doc)
+    displayed = _display_formula_ids(blocks, geometries) | _gloss_ids(blocks, glosses)
     # 页眉不进大纲，旁注不是标题
     kinds = [
         "h2" if role is Role.HEADING and not edge and not block.side_note else "p"

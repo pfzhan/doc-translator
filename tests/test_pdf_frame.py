@@ -126,3 +126,17 @@ def test_typewriter_dialogue_keeps_one_line_per_turn():
         item("looked at the stars.", 209, 211, 300),
     ]
     assert _split_lines(wrapped) == [[0, 1]]
+
+
+def test_gloss_line_is_split_from_its_free_translation():
+    from app.formats.pdf import TextBlock, _gloss_ids, _split_gloss_lines
+
+    lines = [pymupdf.Rect(174, 400, 399, 410), pymupdf.Rect(174, 414, 389, 424)]
+    spans = [[{"text": "1SG.S-E-midnight-big-E-sew-1SG.S[PFV]", "size": 10.0}],
+             [{"text": "“I sewed a lot of yurt covers.”", "size": 10.0}]]
+    block = TextBlock(page=0, rect=lines[0] | lines[1], line_rects=lines, text="", size=10,
+                      color="#000000", bold=False, span_lines=spans)
+    glosses = {0: (pymupdf.Rect(174, 388, 399, 410),)}
+    gloss, free = _split_gloss_lines([block], glosses)
+    assert gloss.text.startswith("1SG.S") and free.text.startswith("“I sewed")
+    assert _gloss_ids([gloss, free], glosses) == {id(gloss)}
