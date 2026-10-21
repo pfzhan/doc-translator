@@ -8,6 +8,7 @@
 4. 双语版：原页面和译文页面左右并排放在同一页上，方便对照阅读。
 """
 import asyncio
+import functools
 import html
 import re
 import unicodedata
@@ -587,9 +588,12 @@ def _preview_kind(block: TextBlock, median: float) -> str:
     return "h2" if is_size_heading(block.text, block.size, block.bold, median) else "p"
 
 
+@functools.lru_cache(maxsize=1024)
 def _font_is_math(font: str) -> bool:
     """字体三层判定（BabelDOC 思路）：精确白名单 → 是公式；正文黑名单 → 不是；宽泛启发式 → 是。
-    黑名单优先，避免 Times/Arial 里的数学段落被误判。"""
+    黑名单优先，避免 Times/Arial 里的数学段落被误判。
+
+    每个 span 都要问一次，一本书却只有几十种字体，按字体名记下结果。"""
     if MATH_FONT_PRECISE_RE.search(font):
         return True
     if TEXT_FONT_RE.search(font):
