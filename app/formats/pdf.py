@@ -330,10 +330,10 @@ def _line_host(line: dict, own: dict, blocks: list[dict], line_box=None) -> tupl
         for other in block["lines"]:
             if other is line or abs(other["dir"][1]) > 0.01:
                 continue
-            # 先按横向位置筛，纵向交叠要算行框，慢
-            left = pymupdf.Rect(other["bbox"])
-            gap = box.x0 - left.x1
-            if left.x0 >= box.x0 or gap < -size or gap > size:
+            # 先按横向位置筛，纵向交叠要算行框，慢。每行都和整页的行比，直接读坐标，不建 Rect
+            left_x0, _, left_x1, _ = other["bbox"]
+            gap = box.x0 - left_x1
+            if left_x0 >= box.x0 or gap < -size or gap > size:
                 continue
             if not _same_band(other, line, line_box):
                 continue
