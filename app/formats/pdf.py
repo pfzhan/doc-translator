@@ -3192,6 +3192,17 @@ def _is_line_tail(block: TextBlock, earlier: list[TextBlock]) -> bool:
     return False
 
 
+def _earlier_on_page(blocks: list[TextBlock]) -> list[list[TextBlock]]:
+    """每一块之前、同一页的块。半句只和本页的行比；整本一起切片，几百页的书要算很久。"""
+    seen: dict[int, list[TextBlock]] = {}
+    out: list[list[TextBlock]] = []
+    for block in blocks:
+        same = seen.setdefault(block.page, [])
+        out.append(list(same))
+        same.append(block)
+    return out
+
+
 def _line_tail_blocked(nxt: TextBlock, fragment: TextBlock, blocks: list[TextBlock]) -> bool:
     """续写这一行还挨着另一块时不并。并进去写回会盖住那一块。"""
     for other in blocks:
@@ -3238,8 +3249,9 @@ def _shared_line_pairs(blocks: list[TextBlock]) -> dict[int, TextBlock]:
     """
     pairs: dict[int, TextBlock] = {}
     claimed: set[int] = set()
+    earlier = _earlier_on_page(blocks)
     for index, block in enumerate(blocks):
-        if id(block) in claimed or not _is_line_tail(block, blocks[:index]):
+        if id(block) in claimed or not _is_line_tail(block, earlier[index]):
             continue
         for nxt in blocks[index + 1:]:
             if nxt.page != block.page:
@@ -3358,8 +3370,6 @@ def _continues_fragment(host: TextBlock, guest: TextBlock) -> bool:
         return False
     if abs(host.size - guest.size) > host.size * 0.2:
         return False
-    if _diagramish(guest) or _is_side_label(guest):
-        return False
     last = host.line_rects[-1]
     left = min(line.x0 for line in host.line_rects)
     if last.x0 <= left + max(host.size * 3, 24):
@@ -3371,7 +3381,9 @@ def _continues_fragment(host: TextBlock, guest: TextBlock) -> bool:
     if not (-0.4 * host.size <= gap < 1.6 * host.size):
         return False
     head = guest.text.lstrip()[:1]
-    return bool(head and (head.islower() or head in "),;%,；，"))
+    if not (head and (head.islower() or head in "),;%,；，")):
+        return False
+    return not (_diagramish(guest) or _is_side_label(guest))
 
 
 def _merge_same_line_sentences(blocks: list[TextBlock]) -> list[TextBlock]:
