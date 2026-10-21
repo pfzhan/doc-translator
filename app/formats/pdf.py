@@ -13,7 +13,7 @@ import html
 import re
 import struct
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -43,6 +43,7 @@ from .pdf_layout import (
     PageGeometry, PageScan, RuledTable, cell_containing, content_floor, interlinear_glosses, margin_skips, scan_page,
     reading_order, text_page_rect,
 )
+from .pdf_parts import plan_parts, render_in_parts, worker_count
 from .pdf_roles import LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
 from .pdf_type3 import Type3Reader, broken_type3_names, recover_type3_page
@@ -4733,8 +4734,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                        archive=None, orig: "pymupdf.Document | None" = None,
                        geometries: list[PageGeometry] | None = None,
                        continuations: dict[int, TextBlock] | None = None,
-                       on_page: Callable[[int, int], None] | None = None) -> pymupdf.Document:
-    """on_page(已写页数, 要写的页数) 在每写一页之前调用。"""
+                       on_page: Callable[[int, int], None] | None = None,
+                       pages: Collection[int] | None = None) -> pymupdf.Document:
+    """on_page(已写页数, 要写的页数) 在每写一页之前调用。pages 给出时只写这些页。"""
     rtl = target_lang.split("-")[0] in RTL_LANGUAGES
     # CJK 字体的行框比拉丁高（约 1.31em vs 1.16em），且字形顶部会越出给定区域：
     # 按原字号写入会和下一行叠在一起，字号缩小并下移补偿
@@ -4747,11 +4749,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
     continuations = continuations or {}
     carried: dict[int, _Carry] = {}
     doc = pymupdf.open(src_path)
-    by_page: dict[int, list[tuple[TextBlock, str]]] = {}
-    for b, t in zip(blocks, translations):
-        if t == SPILL_TAIL or (t and t.strip() and t.strip() != b.text.strip()):
-            shown = t if t == SPILL_TAIL else _with_source_bold(b, t)
-            by_page.setdefault(b.page, []).append((b, shown))
+    by_page = _pages_to_write(blocks, translations)
+    if pages is not None:
+        by_page = {pno: items for pno, items in by_page.items() if pno in pages}
 
     # 写入时只和同页的块比较。每块都扫一遍整本书，几百页就很慢。
     page_blocks: dict[int, list[TextBlock]] = {}
@@ -4967,6 +4967,28 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         if mid_map:
             _place_formula_images(page, doc, images_before, mid_map, fmS, page_spans)
     return doc
+
+
+def _render_by_parts(
+    src_doc: pymupdf.Document, blocks: list[TextBlock], translations: list[str],
+    continuations: dict[int, TextBlock], render, on_page: Callable[[int, int], None],
+) -> pymupdf.Document:
+    """分几段并行写回。跨页段落的宿主和续块分在同一段；有旋转页、页太少时整本一起写。"""
+    weights = {pno: len(items) for pno, items in _pages_to_write(blocks, translations).items()}
+    page_of = {id(b): b.page for b in blocks}
+    links = [(page_of[host], tail.page) for host, tail in continuations.items() if host in page_of]
+    parts = [list(weights)] if any(page.rotation for page in src_doc) else plan_parts(weights, links, worker_count())
+    return render_in_parts(render, parts, on_page) or render(None, on_page)
+
+
+def _pages_to_write(blocks: list[TextBlock], translations: list[str]) -> dict[int, list[tuple[TextBlock, str]]]:
+    """每页要写回的块和写成的样子。译文和原文一样的块不动。"""
+    by_page: dict[int, list[tuple[TextBlock, str]]] = {}
+    for b, t in zip(blocks, translations):
+        if t == SPILL_TAIL or (t and t.strip() and t.strip() != b.text.strip()):
+            shown = t if t == SPILL_TAIL else _with_source_bold(b, t)
+            by_page.setdefault(b.page, []).append((b, shown))
+    return by_page
 
 
 def _hosts_first(
@@ -5866,11 +5888,17 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     }
 
     def build():
+        def render(pages, on_page):
+            return _render_translated(
+                src, blocks, translations, target_lang, block_formulas, archive,
+                orig=src_doc, geometries=geometries, continuations=continuations,
+                on_page=on_page, pages=pages,
+            )
+
         # 一本书要写好几分钟，这时译文已经全部到齐，进度条停在满格，按页报写到哪里
-        translated = _render_translated(
-            src, blocks, translations, target_lang, block_formulas, archive,
-            orig=src_doc, geometries=geometries, continuations=continuations,
-            on_page=lambda done, total: runner.report_stage("写回译文", done, total, "页"),
+        translated = _render_by_parts(
+            src_doc, blocks, translations, continuations, render,
+            lambda done, total: runner.report_stage("写回译文", done, total, "页"),
         )
         runner.report_stage("生成文件")
         if bilingual:
