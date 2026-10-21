@@ -429,6 +429,15 @@ def _same_band(a: dict, b: dict, box=None) -> bool:
     return overlap >= min(ra.height, rb.height) * 0.35
 
 
+def _typewriter_line(spans: list[dict]) -> bool:
+    """整行都是等宽的拉丁字。中日文字体也常标成等宽，不算。"""
+    visible = [span for span in spans if str(span.get("text") or "").strip()]
+    if not visible or any(CJK_RE.search(str(span["text"])) for span in visible):
+        return False
+    return all(int(span.get("flags") or 0) & 8 or MONO_FONT_RE.search(str(span.get("font") or ""))
+               for span in visible)
+
+
 def _split_lines(items: list[tuple]) -> list[list[int]]:
     """把一个文本块里的行分成独立段落（返回每组的行下标）。
 
@@ -482,8 +491,11 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         seg_start = bool(SEG_START_RE.match(stripped)) or (
             bool(CJK_START_RE.match(stripped)) and ptext.rstrip().endswith(SENT_ENDS)
         )
+        # 打字机字体排的是逐行照录的文字（对话、示例），右缘参差，没到右边距不说明是硬换行。
+        # 下一行像新句子开头就是新的一行
+        verbatim = _typewriter_line(pspans) and _typewriter_line(items[i][2])
         hard_break = (
-            max_x1 - prect.x1 > 3 * psize
+            (max_x1 - prect.x1 > 3 * psize or verbatim)
             and seg_start
             and not prev_symbol
             and not indent

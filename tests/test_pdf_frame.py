@@ -107,3 +107,22 @@ def test_body_cut_at_a_margin_note_is_joined_back():
     _rejoin_note_cuts(data, {id(upper)})
     assert len(upper["lines"]) == 3 and lower["lines"] == []
     assert after["lines"]  # 上一行以句末收尾、下一块缩进：新的一段
+
+
+def test_typewriter_dialogue_keeps_one_line_per_turn():
+    from app.formats.pdf import _split_lines
+
+    def item(text, x0, y0, x1, font="txtt", flags=8):
+        span = {"text": text, "size": 9.0, "font": font, "flags": flags}
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 9), [span])
+
+    turns = [
+        item("ELIZA: WHAT WOULD IT MEAN TO YOU IF YOU GOT SOME HELP", 221, 200, 471),
+        item("User: Perhaps I could learn to get along with my mother.", 221, 211, 490),
+    ]
+    assert _split_lines(turns) == [[0], [1]]
+    wrapped = [
+        item("They picnicked by the pool, then lay back on the grass and", 209, 200, 471),
+        item("looked at the stars.", 209, 211, 300),
+    ]
+    assert _split_lines(wrapped) == [[0, 1]]
