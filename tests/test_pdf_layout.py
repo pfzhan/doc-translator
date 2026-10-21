@@ -763,3 +763,22 @@ def test_indented_examples_are_not_a_column_that_ends_the_page():
     geo = PageGeometry.from_rects(612, [block.rect for block in page0], height=792)
     units = _cross_page_units([*page0, *page1], 10.0, geometries=[geo, geo])
     assert all(len(unit) == 1 for unit in units)
+
+
+def test_short_and_morpheme_glosses_are_found():
+    """三个词的汉字对译，和逐语素对译（带 1SG、PFV 这样的缩写）。两行英文短句碰巧对齐不算。"""
+    from app.formats.pdf_layout import interlinear_glosses
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    for x, word, under in ((192, "姚明", "YaoMing"), (232, "进入", "reaches"), (264, "总决赛", "finals")):
+        page.insert_text((x, 455), word, fontsize=10, fontname="china-s")
+        page.insert_text((x, 468), under, fontsize=10)
+    page.insert_text((174, 397), "t-@-nk'e-mejN-@-jetem@-nni-k", fontsize=10)
+    page.insert_text((174, 409), "1SG.S-E-midnight-big-E-yurt.cover-E-sew-1SG.S[PFV]", fontsize=10)
+    for x, word, under in ((192, "Alice", "Smith"), (260, "Bob", "Jones"), (330, "Carol", "White")):
+        page.insert_text((x, 600), word, fontsize=10)
+        page.insert_text((x, 613), under, fontsize=10)
+    found = sorted(interlinear_glosses(page), key=lambda rect: rect.y0)
+    assert len(found) == 2
+    assert found[0].y0 < 400 < found[0].y1 and found[1].y0 < 460 < found[1].y1

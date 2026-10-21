@@ -48,6 +48,14 @@ _MIN_PITCH = 8.0
 _GLOSS_ALIGN = 1.0
 _GLOSS_MIN = 4
 _GLOSS_SHARE = 0.75
+# 莱比锡标注规则里常用的语法缩写。单个字母（S、A、P）在别处太常见，不算
+_LEIPZIG = frozenset(
+    "SG PL DU NOM ACC GEN DAT ERG ABS LOC ABL ALL INS INSTR COM VOC PST PRS FUT PFV IPFV PRF IMPF "
+    "PROG NEG DEF INDF CLF COP AUX POSS REFL RECP CAUS PASS APPL TOP FOC DECL IMP SBJ OBJ OBL DEM "
+    "PTCP INF NMLZ COMP REL".split()
+)
+_PERSON_RE = re.compile(r"[123](?:SG|PL|DU)")
+_MORPHEME_SPLIT_RE = re.compile(r"[-.=\[\]<>:~()\s]+")
 _MAX_PITCH = 36.0
 _SHORT_WORDS = 3
 _SHORT_WIDTH = 80.0
@@ -672,10 +680,15 @@ def unruled_tables(page: pymupdf.Page, ruled: Sequence[RuledTable] = ()) -> tupl
 
 
 def interlinear_glosses(page: pymupdf.Page) -> tuple[pymupdf.Rect, ...]:
-    """语言学例句的逐词对译：原文一行、对译一行，下一行每个词都和上一行的某个词左缘对齐。
-    逐词翻译对译行没有意义，词序一变也对不上，两行都留原文。
+    """语言学例句的逐词对译：原文一行、对译一行。逐词翻译对译行没有意义，
+    词序一变也对不上，两行都留原文。认两种排法：
 
-    正文相邻两行碰巧对齐的词只有零星几个，要求两行各有七成五以上的词对得上。
+    - 逐词对齐：下一行每个词都和上一行的某个词左缘对齐。正文相邻两行碰巧对齐的词
+      只有零星几个，要求两行各有七成五以上的词对得上。只有两三个词时，还要上一行
+      是汉字、假名这类非拉丁文字，下一行是拉丁字母。
+    - 逐语素对译：两行从同一处起笔，都是连字符串起来的语素，对译行里有 1SG、PFV
+      这样的语法标注缩写（莱比锡标注规则）。
+
     表格一连好几行都这样对齐，对译只有孤零零的两行。
     """
     words = [
@@ -706,11 +719,35 @@ def _glossed(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
         if any(abs(word.x0 - x) <= _GLOSS_ALIGN for x in starts) and any(ch.isalpha() for ch in word.text)
     ]
     hit = [x for x in starts if any(abs(word.x0 - x) <= _GLOSS_ALIGN for word in lower)]
-    return (
-        len(aligned) >= _GLOSS_MIN
-        and len(aligned) >= len(lower) * _GLOSS_SHARE
-        and len(hit) >= len(upper) * _GLOSS_SHARE
-    )
+    if len(aligned) >= len(lower) * _GLOSS_SHARE and len(hit) >= len(upper) * _GLOSS_SHARE:
+        if len(aligned) >= _GLOSS_MIN:
+            return True
+        if len(aligned) >= 2 and _script_share(upper, latin=False) >= 0.5 and _script_share(lower, latin=True) == 1:
+            return True
+    return _morpheme_gloss(upper, lower)
+
+
+def _script_share(row: Sequence[_TextWord], latin: bool) -> float:
+    """这一行带字母的词里，拉丁字母词（latin=True）或非拉丁文字词所占的比例。"""
+    lettered = [word for word in row if any(ch.isalpha() for ch in word.text)]
+    if not lettered:
+        return 0.0
+    matched = [
+        word for word in lettered
+        if all(ord(ch) <= 0x24F for ch in word.text if ch.isalpha()) == latin
+    ]
+    return len(matched) / len(lettered)
+
+
+def _morpheme_gloss(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
+    chains = [word for word in lower if word.text.count("-") >= 2]
+    if not chains or sum(len(word.text) for word in chains) < sum(len(word.text) for word in lower) * 0.6:
+        return False
+    first = min(chains, key=lambda word: word.x0)
+    if not any(abs(word.x0 - first.x0) <= _GLOSS_ALIGN and word.text.count("-") >= 2 for word in upper):
+        return False
+    tokens = _MORPHEME_SPLIT_RE.split(" ".join(word.text for word in chains))
+    return any(token in _LEIPZIG or _PERSON_RE.fullmatch(token) for token in tokens)
 
 
 def _word_rows(words: Sequence[_TextWord]) -> list[list[_TextWord]]:
