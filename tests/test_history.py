@@ -155,6 +155,29 @@ def test_redo_can_ignore_cached_translations(app_env):
         MockTranslator.translate_batch = original
 
 
+def test_redo_from_scratch_analyses_the_pdf_again(app_env, monkeypatch):
+    """PDF 的版面分析存在任务目录里，继续、重译时读回；选了“全部重新翻译”就重新分析。"""
+    import pymupdf
+
+    from app.formats import pdf
+
+    main = app_env
+    calls = []
+    real_extract = pdf._extract
+    monkeypatch.setattr(pdf, "_extract", lambda *a, **k: calls.append(1) or real_extract(*a, **k))
+    doc = pymupdf.open()
+    doc.new_page(width=420, height=240).insert_text(
+        (40, 60), "A body paragraph long enough to be translated here.", fontsize=10,
+    )
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client, name="paper.pdf", data=doc.tobytes())["id"])
+        assert job["status"] == "done" and main.jobs.plan_path(job["id"]).exists() and len(calls) == 1
+        wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={}).json()["id"])
+        assert len(calls) == 1
+        again = wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={"fresh": True}).json()["id"])
+        assert again["status"] == "done" and len(calls) == 2
+
+
 def test_delete_several_records_at_once(app_env):
     """批量删除：选中的几条连同文件一起删掉，没选的留着；已经不存在的 id 报出来，不影响其他的。"""
     main = app_env
