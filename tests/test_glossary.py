@@ -54,6 +54,11 @@ def test_relevant_entries_follow_the_batch_text():
     assert relevant(entries, ["no sql in this review"]) == []
 
 
+def test_relevant_entries_see_through_style_marks():
+    entries = [("word types", "词型")]
+    assert relevant(entries, ["to be the same word{b} type{/b}?"]) == [("word types", "词型")]
+
+
 def test_user_entries_win_over_found_ones():
     user = parse("Data Cube = 数据立方\nnot an entry\n = empty")
     assert user == [("Data Cube", "数据立方")]

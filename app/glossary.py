@@ -80,10 +80,13 @@ def merge(user: Sequence[Entry], found: Sequence[Entry]) -> list[Entry]:
 
 
 def relevant(entries: Sequence[Entry], texts: Sequence[str]) -> list[Entry]:
-    """只留这一批原文里出现了的条目。英文复数（-s、-es）也算出现。"""
+    """只留这一批原文里出现了的条目。英文复数（-s、-es）也算出现。
+
+    样式标记常落在术语中间（word{b} type{/b}），先去掉再找。
+    """
     if not entries:
         return []
-    haystack = "\n".join(texts)
+    haystack = _MARKUP_RE.sub(" ", "\n".join(texts))
     return [entry for entry in entries if _mentions(haystack, entry[0])]
 
 
