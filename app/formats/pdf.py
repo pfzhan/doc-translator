@@ -4407,6 +4407,20 @@ def _affiliation_write_rects(blocks: list[TextBlock]) -> dict[int, pymupdf.Rect]
     return out
 
 
+def _left_aligned_stack(block: TextBlock, others: list[TextBlock]) -> bool:
+    """上下紧挨的一块和它左缘对齐、右缘不齐：是左对齐排的一组行（对话、例句），
+    某一行的中线碰巧落在栏中线附近也不是居中。宽度相同的两块居中行左右都齐，不在其内。"""
+    for other in others:
+        if other is block or other.page != block.page:
+            continue
+        if abs(other.rect.x0 - block.rect.x0) > 1 or abs(other.rect.x1 - block.rect.x1) <= 2:
+            continue
+        gap = max(other.rect.y0 - block.rect.y1, block.rect.y0 - other.rect.y1)
+        if gap < block.size * 2:
+            return True
+    return False
+
+
 def _write_rect(
     block: TextBlock,
     items: list[tuple[TextBlock, str]],
@@ -4456,6 +4470,7 @@ def _write_rect(
     # (a) 子图小标题和 1. 引言这种居中的标题不在其内
     centered = (
         not rtl and len(block.text) < 100
+        and not _left_aligned_stack(block, [other for other, _ in items])
         and (
             (block.rect.width < col_width * 0.85 and abs(mid - (col_x0 + col_x1) / 2) < 15
              and block.rect.x0 > col_x0 + 2)

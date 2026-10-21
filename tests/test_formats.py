@@ -5630,3 +5630,22 @@ def test_bibliography_without_a_heading_stays_original():
         blk("From Judgement to Calculation. W.H. Freeman & Co.", 8, 1),
     ]
     assert biblio_skips(blocks) == [False, False, *([True] * 10)]
+
+
+def test_left_aligned_dialogue_lines_are_not_centered():
+    """对话各行左缘对齐。中线碰巧落在版心中线附近的那几行也按左对齐写回。"""
+    from app.formats.pdf import TextBlock, _write_rect
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import PageGeometry
+
+    def blk(text, y0, x1):
+        rect = pymupdf.Rect(221, y0, x1, y0 + 9)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=9, color="#000", bold=False)
+
+    first = blk("User: I need some help, that much seems certain.", 189, 453)
+    second = blk("ELIZA: WHAT WOULD IT MEAN TO YOU IF YOU GOT SOME HELP", 200, 471)
+    geo = PageGeometry.from_rects(612, [first.rect, second.rect], height=792,
+                                  frame=TextFrame(160, 493, 111, 719, 10))
+    rect, centered = _write_rect(first, [(first, ""), (second, "")], True, False, geo)
+    assert not centered and rect.x0 == first.rect.x0
+
