@@ -15,6 +15,8 @@ from typing import Generic, Protocol, Sequence, TypeVar
 
 import pymupdf
 
+from .pdf_frame import TextFrame
+
 _GUTTER_MIN = 12.0
 _SPAN_MAX = 0.60
 _MIN_SIDE = 3
@@ -83,6 +85,8 @@ class PageGeometry:
     tables: tuple[RuledTable, ...] = ()
     # 图缘可以挡住写入，但一侧文字不够三块时不能据此重排。
     reads_in_columns: bool = False
+    # 整份文档投出来的版心。栏左缘是本页最左的块，版心左缘是正文起笔的地方
+    frame: TextFrame | None = None
 
     def index_of(self, rect: pymupdf.Rect) -> int:
         """块中心落在哪一栏。落在栏间空白时取最近的一栏。"""
@@ -125,6 +129,7 @@ class PageGeometry:
         figures: list[pymupdf.Rect] | None = None,
         height: float = 0.0,
         tables: Sequence[RuledTable] | None = None,
+        frame: TextFrame | None = None,
     ) -> PageGeometry:
         table_tuple = tuple(tables or ())
         table_zones = [table.rect for table in table_tuple]
@@ -138,11 +143,13 @@ class PageGeometry:
         columns = _columns_of(page_width, usable, _cutting_figures(figure_tuple, page_width, height))
         return PageGeometry(
             page_width, columns, figure_tuple, height, table_tuple,
-            reads_in_columns=bool(_find_gutters(body)),
+            reads_in_columns=bool(_find_gutters(body)), frame=frame,
         )
 
     @staticmethod
-    def from_page(page: pymupdf.Page, text_rects: list[pymupdf.Rect]) -> PageGeometry:
+    def from_page(
+        page: pymupdf.Page, text_rects: list[pymupdf.Rect], frame: TextFrame | None = None,
+    ) -> PageGeometry:
         bounds = text_page_rect(page)
         return PageGeometry.from_rects(
             bounds.width,
@@ -150,6 +157,7 @@ class PageGeometry:
             _figure_rects(page),
             bounds.height,
             page_tables(page),
+            frame,
         )
 
 

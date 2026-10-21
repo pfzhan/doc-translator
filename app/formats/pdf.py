@@ -34,6 +34,7 @@ from .pdf_flow import (
     writer_for,
 )
 from .pdf_erase import Erasure, erase
+from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, text_frames
 from .pdf_layout import (
     PageGeometry, RuledTable, cell_containing, content_floor, margin_skips, page_tables, reading_order,
     text_page_rect,
@@ -93,6 +94,8 @@ class TextBlock:
     runs: list[Run] = field(default_factory=list)
     # 有线表格的格子。写入不得越出；不同格子的块不能并成一段。
     clip: tuple[float, float, float, float] | None = None
+    # 版心外的页边旁注。单独翻译，不和正文并段
+    side_note: bool = False
 
 
 def _join_lines(lines: list[str]) -> str:
@@ -1205,7 +1208,8 @@ def _merge_visual_lines(
     for b in blocks:
         if out:
             p = out[-1]
-            if p.page == b.page and p.clip == b.clip and _shares_visual_row(p, b, geometries):
+            if (p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note)
+                    and _shares_visual_row(p, b, geometries)):
                 p.line_rects.extend(b.line_rects)
                 if p.span_lines and b.span_lines:
                     p.span_lines.extend(b.span_lines)
@@ -2533,7 +2537,63 @@ def _numbered_list_item(text: str) -> bool:
     return any(len(word) >= 3 and word.isalpha() for word in re.findall(r"[A-Za-z]+", stripped))
 
 
+def _frame_lines(data: dict) -> tuple[list[FrameLine], list[tuple[dict, dict]]]:
+    """版心投票用的行，以及每行所在的块和行字典。"""
+    lines: list[FrameLine] = []
+    refs: list[tuple[dict, dict]] = []
+    for block in data.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block["lines"]:
+            if abs(line["dir"][1]) > 0.01:
+                continue
+            spans = [span for span in line["spans"] if span["text"].strip()]
+            if not spans:
+                continue
+            text = "".join(span["text"] for span in line["spans"])
+            lines.append(FrameLine(pymupdf.Rect(line["bbox"]), text, max(span["size"] for span in spans)))
+            refs.append((block, line))
+    return lines, refs
+
+
+def _detach_margin_notes(
+    data: dict, lines: list[FrameLine], refs: list[tuple[dict, dict]], notes: set[int],
+) -> None:
+    """旁注行移出原来的块，每条旁注自成一块，排在本页最后。
+
+    排在原处会把被它隔开的两截正文分开，两截就接不回一段。
+    """
+    if not notes:
+        return
+    picked = sorted(notes)
+    for group in note_groups([lines[index] for index in picked]):
+        members = [refs[picked[index]] for index in group]
+        rect = pymupdf.Rect()
+        for block, line in members:
+            block["lines"].remove(line)
+            rect |= pymupdf.Rect(line["bbox"])
+        data["blocks"].append({
+            "type": 0, "bbox": tuple(rect), "lines": [line for _, line in members], "side_note": True,
+        })
+    kept = []
+    for block in data["blocks"]:
+        if block.get("type") == 0:
+            if not block["lines"]:
+                continue
+            box = pymupdf.Rect()
+            for line in block["lines"]:
+                box |= pymupdf.Rect(line["bbox"])
+            block["bbox"] = tuple(box)
+        kept.append(block)
+    data["blocks"] = kept
+
+
 def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
+    return _extract(doc)[0]
+
+
+def _extract(doc: pymupdf.Document) -> tuple[list[TextBlock], list[TextFrame | None]]:
+    """文本块，以及每页的版心。"""
     blocks = []
     tables_by_page: list[tuple[RuledTable, ...]] = []
     type3 = Type3Reader(doc)
@@ -2549,6 +2609,11 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     _mark_math_roman(pages)
     for data in pages:
         _rejoin_split_lines(data)
+    page_lines = [_frame_lines(data) for data in pages]
+    frames = text_frames([lines for lines, _refs in page_lines])
+    notes = margin_notes([lines for lines, _refs in page_lines], frames)
+    for data, (lines, refs), found in zip(pages, page_lines, notes):
+        _detach_margin_notes(data, lines, refs, found)
     for pno, data in enumerate(pages):
         margins = _left_margins(data)
         for b in data["blocks"]:
@@ -2565,7 +2630,10 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                 if spans:
                     items.append((text, _line_box(ln), spans, ln["spans"]))
             items = _left_to_right(items)
-            for group in _split_lines(items):
+            side_note = bool(b.get("side_note"))
+            # 一条旁注就是一块，不按正文的规则拆
+            groups = [list(range(len(items)))] if side_note and items else _split_lines(items)
+            for group in groups:
                 texts = [items[i][0] for i in group]
                 line_rects = [items[i][1] for i in group]
                 spans = [s for i in group for s in items[i][2]]
@@ -2598,6 +2666,7 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
                     color=f"#{main['color']:06x}",
                     bold=bool(main["flags"] & 16) or "Bold" in main["font"],
                     span_lines=span_lines,
+                    side_note=side_note,
                 ))
     split: list[TextBlock] = []
     unchecked: set[int] = set()
@@ -2620,7 +2689,7 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
         geometries[pno] = geo
         ordered.extend(reading_order(page_blocks, geo))
     merged = _merge_continuations(_merge_caption_fragments(_merge_visual_lines(ordered, geometries)))
-    return _split_affiliation_tails(_merge_same_line_sentences(_merge_line_tails(merged)))
+    return _split_affiliation_tails(_merge_same_line_sentences(_merge_line_tails(merged))), frames
 
 
 _DISPLAY_PROSE = 8
@@ -2947,7 +3016,8 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                 and not p.text.rstrip().endswith(tuple(SENT_ENDS))
                 and (first.islower() or first in "),;%,；，")
             )
-            if p.page == b.page and p.clip == b.clip and (title_frag or latin or (y_close and _cjk_wrap(p, b))):
+            if (p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note)
+                    and (title_frag or latin or (y_close and _cjk_wrap(p, b)))):
                 _absorb_block(p, b)
                 continue
         out.append(b)
@@ -2956,10 +3026,10 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
 
 def _is_line_tail(block: TextBlock, earlier: list[TextBlock]) -> bool:
     """这一行贴在左边某块的行尾右侧，是半句，不是新起的一段。"""
-    if len(block.line_rects) > 1 or block.text.rstrip().endswith(tuple(SENT_ENDS)):
+    if len(block.line_rects) > 1 or block.text.rstrip().endswith(tuple(SENT_ENDS)) or block.side_note:
         return False
     for other in earlier:
-        if other.page != block.page or other.clip != block.clip:
+        if other.page != block.page or other.clip != block.clip or other.side_note:
             continue
         lines = other.line_rects or [other.rect]
         height = block.rect.height or block.size
@@ -2987,7 +3057,7 @@ def _line_tail_blocked(nxt: TextBlock, fragment: TextBlock, blocks: list[TextBlo
 
 def _line_tail_match(block: TextBlock, nxt: TextBlock) -> bool:
     """下一行回到栏边、小写开头，才是这半句的续写。"""
-    if nxt.page != block.page or nxt.clip != block.clip:
+    if nxt.page != block.page or nxt.clip != block.clip or nxt.side_note:
         return False
     if abs(nxt.size - block.size) > block.size * 0.2:
         return False
@@ -3170,6 +3240,8 @@ def _merge_same_line_sentences(blocks: list[TextBlock]) -> list[TextBlock]:
 
 
 def _same_line_sentence(host: TextBlock, guest: TextBlock) -> bool:
+    if host.side_note or guest.side_note:
+        return False
     return _sits_on_last_line(host, guest) or _continues_fragment(host, guest)
 
 
@@ -3216,7 +3288,7 @@ def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
     for b in blocks:
         if out:
             p = out[-1]
-            if p.page == b.page and p.clip == b.clip:
+            if p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note):
                 y_ov = min(p.rect.y1, b.rect.y1) - max(p.rect.y0, b.rect.y0)
                 same_line = y_ov > 0.5 * min(p.rect.y1 - p.rect.y0, b.rect.y1 - b.rect.y0)
                 gap = b.rect.x0 - p.rect.x1
@@ -4641,6 +4713,13 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             rect, centered = _write_rect(b, visible, cjk, rtl, geo)
             if id(b) in stacked:
                 rect, centered = stacked[id(b)], False
+            if b.side_note and geo is not None and geo.frame is not None and b.rect.x1 <= geo.frame.x0:
+                # 左侧的旁注靠右对齐，贴着正文。放不下一行时照常从左起笔
+                width = measure_width(t, b.size * 0.88 if cjk else b.size)
+                if width < rect.width:
+                    rect = pymupdf.Rect(b.rect.x1 - width - 1, rect.y0, b.rect.x1 + 1, rect.y1)
+                write_one(b, t, rect, False, None, False, rect.x1)
+                continue
             beside = _beside_body(b, same_page)
             if beside is not None and id(b) not in stacked:
                 cap = beside.line_rects[0].x0 - 2
@@ -5316,7 +5395,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     if _scan_status(src_doc) == "scanned":
         raise ValueError("这是没有文本层的扫描版 PDF：请先用 Acrobat、ABBYY 或 WPS 的 OCR 功能识别文字，"
                          "再上传识别后的文件")
-    blocks = await asyncio.to_thread(extract_blocks, src_doc)
+    blocks, frames = await asyncio.to_thread(_extract, src_doc)
     if not blocks:
         raise ValueError("没有提取到可用的文字：可能是图片型页面或 OCR 文本层质量太差")
     toc = src_doc.get_toc()  # 输出文件带上原书签
@@ -5328,7 +5407,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     median = sorted(b.size for b in blocks)[len(blocks) // 2]
     # 栏和障碍先于角色、也先于跨页合并：图内文字和图注靠这些框来认
     geometries = [
-        PageGeometry.from_page(src_doc[i], [b.rect for b in blocks if b.page == i])
+        PageGeometry.from_page(src_doc[i], [b.rect for b in blocks if b.page == i], frames[i])
         for i in range(src_doc.page_count)
     ]
     # 配了版面模型时要逐页跑推理，放到线程里
@@ -5338,15 +5417,19 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         geometries,
         median,
     )
-    kinds = ["h2" if role is Role.HEADING else "p" for role in roles]
     edges = margin_skips(blocks, geometries)
+    # 页眉不进大纲，旁注不是标题
+    kinds = [
+        "h2" if role is Role.HEADING and not edge and not block.side_note else "p"
+        for role, edge, block in zip(roles, edges, blocks)
+    ]
     skips = [
         bib or role is Role.FIGURE or edge or _garbled_label(block.text) or _code_block(block)
         for bib, role, edge, block in zip(biblio_skips(blocks), roles, edges, blocks)
     ]
     skip_ids = {id(b) for b, s in zip(blocks, skips) if s}
     margin_ids = {id(b) for b, edge in zip(blocks, edges) if edge}
-    halt_ids = {id(b) for b, role in zip(blocks, roles) if role is not Role.BODY} | margin_ids
+    halt_ids = {id(b) for b, role in zip(blocks, roles) if role is not Role.BODY or b.side_note} | margin_ids
     units = _cross_page_units(blocks, median, skip_ids, geometries, halt_ids, margin_ids)
     block_kind = {id(b): k for b, k in zip(blocks, kinds)}
 
