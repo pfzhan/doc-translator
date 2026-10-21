@@ -5649,3 +5649,17 @@ def test_left_aligned_dialogue_lines_are_not_centered():
     rect, centered = _write_rect(first, [(first, ""), (second, "")], True, False, geo)
     assert not centered and rect.x0 == first.rect.x0
 
+
+def test_large_chapter_number_stays_apart_from_the_title():
+    """章首 60pt 的数字和 25pt 的标题之间隔着一个大字宽：数字原样留着，标题单独写回原位。
+    同字号的 2.2 Training 仍是一行。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, rect, size):
+        span = {"text": text, "size": size, "font": "Times", "flags": 0}
+        return (text, pymupdf.Rect(rect), [span])
+
+    chapter = [item("2", (98, 142, 128, 202), 59.8), item("Words and Tokens", (167, 142, 364, 166), 24.8)]
+    assert _split_lines(chapter) == [[0], [1]]
+    section = [item("2.2", (40, 100, 60, 112), 12), item("Training", (70, 100, 130, 112), 12)]
+    assert _split_lines(section) == [[0, 1]]
