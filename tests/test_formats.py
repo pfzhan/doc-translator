@@ -5843,3 +5843,38 @@ def test_light_cell_shading_is_not_a_formula_stroke():
     page.draw_rect(pymupdf.Rect(140, 30, 180, 30.6), color=None, fill=(0, 0, 0))
     rects = _page_curve_rects(page)
     assert [round(r.x0) for r in rects] == [80, 140]
+
+
+def test_shaded_panel_of_monospace_text_is_kept_whole():
+    """底色上全是等宽字的一片（码位表、代码）留原字。txtt 名字里没有 Mono，靠等宽标志认。
+    没有底色、或者底色上夹着正文字体的，照翻；汉字也带等宽标志，不算。"""
+    from app.formats.pdf import TextBlock, _code_panel_ids
+    from app.formats.pdf_layout import PageScan
+
+    def block(y, *spans):
+        rect = pymupdf.Rect(160, y, 380, y + 10)
+        span_lines = [[{"text": text, "font": font, "flags": flags, "size": 10.0, "bbox": tuple(rect)}
+                       for text, font, flags in spans]]
+        return TextBlock(0, rect, [rect], "".join(text for text, _f, _g in spans), 10.0, "#000000", False, span_lines)
+
+    table = [block(372, ("U+0061 a LATIN SMALL LETTER A", "txtt", 8)),
+             block(384, ("GRINNING FACE", "txtt", 8))]
+    plain = block(600, ("Men are all alike.", "txtt", 8))
+    mixed = [block(452, ("/woodchuck/", "txtt", 8)), block(464, ("interesting links to woodchucks", "NimbusRomNo9L-Regu", 4))]
+    chinese = block(532, ("进远违连", "gbsnu8f", 8))
+    shades = (pymupdf.Rect(157, 370, 411, 396), pymupdf.Rect(157, 450, 411, 476), pymupdf.Rect(157, 530, 411, 544))
+    found = _code_panel_ids([*table, plain, *mixed, chinese], [PageScan((), (), (), shades)])
+    assert found == {id(b) for b in table}
+
+
+def test_shaded_areas_join_cells_and_leave_out_page_background():
+    """一格一块底色、格间留缝的表并成一片；铺满整页的纸张底色不算。"""
+    from app.formats.pdf_layout import scan_page
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=300, height=200)
+    page.draw_rect(page.rect, color=None, fill=(0.98, 0.96, 0.9))
+    for row in range(3):
+        for x0, x1 in ((20, 60), (60.5, 150)):
+            page.draw_rect(pymupdf.Rect(x0, 40 + row * 12.5, x1, 52 + row * 12.5), color=None, fill=(0.77, 0.86, 0.99))
+    assert [tuple(round(v) for v in area) for area in scan_page(page).shades] == [(20, 40, 150, 77)]
