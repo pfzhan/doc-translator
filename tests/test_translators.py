@@ -247,3 +247,31 @@ def test_gemini_token_usage_mapping():
     assert run(tr.translate_batch(["one"])) == ["译"]
     assert tr.usage == {"prompt": 50, "completion": 40}
     run(tr.aclose())
+
+
+def test_reply_without_content_is_asked_again():
+    """中转站偶尔回一条没有 content 的消息（finish_reason 仍是 stop）。原样再问一次，不让整本书失败。"""
+    calls = 0
+
+    async def handler(request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(200, json={"choices": [{"index": 0, "message": {"role": "assistant"},
+                                                          "finish_reason": "stop"}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "译文"}}]})
+
+    tr = make_openai(handler)
+    assert run(tr.translate_batch(["source"])) == ["译文"]
+    assert calls == 2
+    run(tr.aclose())
+
+
+def test_reply_that_stays_empty_is_an_empty_translation():
+    """一直回空时返回空译文：Runner 回填原文，空的段落多了才判整本失败。"""
+    async def handler(request):
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant"}}]})
+
+    tr = make_openai(handler)
+    assert run(tr.translate_batch(["source"])) == [""]
+    run(tr.aclose())
