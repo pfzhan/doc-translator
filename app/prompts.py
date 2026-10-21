@@ -58,15 +58,16 @@ Return only the processed text, without source text, markers, titles,
 explanations, or an enclosing Markdown fence. Preserve fenced code blocks that
 belong to the processed content."""
 
-# 块内和正文不同的粗体、斜体、字号。模型必须带着标记走，译完才写得回原样式。
+# 块内和正文不同的粗体、斜体、字号、颜色。模型必须带着标记走，译完才写得回原样式。
 STYLE_SUFFIX = """
 
 ## Style placeholders
-Some items contain {b} {/b}, {i} {/i}, or {zN} {/z}. They mark bold, italic, or a
-different font size. Keep every marker unchanged, and move it with the words it
-wraps. Do not translate, drop, or invent markers."""
+Some items contain {b} {/b}, {i} {/i}, {zN} {/z}, or {cRRGGBB} {/c}. They mark bold,
+italic, a different font size, or a text color (links and citations are often colored).
+Keep every marker unchanged, and move it with the words it wraps. Do not translate,
+drop, or invent markers."""
 
-_STYLE_IN_TEXT = re.compile(r"\{/?[bi]\}|\{z\d+\}")
+_STYLE_IN_TEXT = re.compile(r"\{/?[bi]\}|\{z\d+\}|\{c[0-9a-f]{6}\}")
 
 # 跨页段落的 run 分界。模型原样保留，写回时收成一段，不再切回两页。
 BOUNDARY_SUFFIX = """
