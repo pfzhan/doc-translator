@@ -5604,3 +5604,29 @@ def test_white_label_on_a_black_box_is_pasted_back_as_is(tmp_path):
     assert "[zh-CN]" in text and "Some selected ASCII codes" in text
     label = [span for span in spans if "Figure" in span["text"]]
     assert label and all(span["color"] == 0xFFFFFF for span in label)
+
+
+def test_bibliography_without_a_heading_stays_original():
+    """章末参考文献紧接着习题排，没有 References 标题。一连串「姓, 名缩写.」起头的条目保留原文；
+    正文里一句这样开头的话不算。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size=10.0, page=0):
+        rect = pymupdf.Rect(40, 40, 300, 50)
+        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
+
+    blocks = [
+        blk("Smith, J. 2020 showed that this works, and we follow that approach here."),
+        blk("2.10 Augment the minimum edit distance algorithm to output an alignment."),
+        blk("Ahia, O., S. Kumar, H. Gonen, J. Kasai, D. Mortensen,", 8, 1),
+        blk("N. Smith, and Y. Tsvetkov. 2023. Do all languages cost the same? EMNLP.", 8, 1),
+        blk("Arkadiev, P. M. 2020. Morphology in typology. Oxford.", 8, 1),
+        blk("Baayen, R. H. 2001. Word frequency distributions. Springer.", 8, 1),
+        blk("Exercises", 10, 1),
+        blk("Bellman, R. 1984. Eye of the Hurricane: an autobiography.", 8, 1),
+        blk("World Scientific Singapore.", 8, 1),
+        blk("Clark, H. H. and J. E. Fox Tree. 2002. Using uh and um in spontaneous speaking.", 8, 1),
+        blk("Weizenbaum, J. 1976. Computer Power and Human Reason.", 8, 1),
+        blk("From Judgement to Calculation. W.H. Freeman & Co.", 8, 1),
+    ]
+    assert biblio_skips(blocks) == [False, False, *([True] * 10)]
