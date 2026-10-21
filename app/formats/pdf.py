@@ -8,11 +8,13 @@
 4. 双语版：原页面和译文页面左右并排放在同一页上，方便对照阅读。
 """
 import asyncio
+import contextlib
 import functools
 import html
 import re
 import struct
 import unicodedata
+import weakref
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -5695,6 +5697,31 @@ def _label_styled(block: TextBlock) -> bool:
 _REPORT_UNITS = 200
 
 
+# PyMuPDF 不支持在几个线程里同时调 MuPDF。它的 find_tables 临时打开进程全局的
+# small_glyph_heights，另一个任务这时提取出的字框就变矮；两边的开、关交错时开关还会一直
+# 开着，之后进程里的每个任务都按矮字框分段，重启服务才恢复
+_MUPDF_TURNS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
+
+
+def mupdf_turn() -> asyncio.Lock:
+    """用 MuPDF 前先 async with 拿到它，同一时刻只有一个任务在用。"""
+    loop = asyncio.get_running_loop()
+    turn = _MUPDF_TURNS.get(loop)
+    if turn is None:
+        turn = _MUPDF_TURNS[loop] = asyncio.Lock()
+    return turn
+
+
+@contextlib.asynccontextmanager
+async def _job_turn(runner):
+    """轮到这个任务用 MuPDF。别的任务在读写一本大书时要等几分钟，任务页上显示在等。"""
+    turn = mupdf_turn()
+    if turn.locked():
+        runner.report_stage("等候其他任务")
+    async with turn:
+        yield
+
+
 @dataclass
 class _PdfPlan:
     """送翻前准备好的东西：原书、块、每页的几何，和按单元整理好的送翻文本。"""
@@ -5862,15 +5889,18 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     """layout_model 是版面模型文件的路径，空串表示只用规则。
 
     读版面、裁公式图、写回都用 MuPDF，一本书要算几分钟，放在线程里做，事件循环还能响应
-    任务页的轮询。"""
-    plan = await asyncio.to_thread(_plan_pdf, src, runner, layout_model)
+    任务页的轮询。这几步轮到才做（见 mupdf_turn），等翻译接口时放开，别的任务可以接着
+    做它的准备。"""
+    async with _job_turn(runner):
+        plan = await asyncio.to_thread(_plan_pdf, src, runner, layout_model)
     src_doc, blocks, geometries, toc = plan.src_doc, plan.blocks, plan.geometries, plan.toc
     flat_units, sent_texts, sent_formulas = plan.units, plan.texts, plan.formulas
     skip_ids, block_kind = plan.skip_ids, plan.block_kind
     raw = await runner.translate_all(sent_texts, kinds=plan.kinds, preview=True, skip=plan.skips)
     await _retry_lost_placeholders(runner, sent_texts, sent_formulas, raw)
 
-    archive = await asyncio.to_thread(_crop_formulas, src_doc, flat_units, sent_formulas)
+    async with _job_turn(runner):
+        archive = await asyncio.to_thread(_crop_formulas, src_doc, flat_units, sent_formulas)
 
     per_block: dict[int, str] = {}
     block_formulas: dict[int, list] = {}
@@ -5948,4 +5978,5 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         dst.write_bytes(_compact(output))
         return dst
 
-    return [await asyncio.to_thread(build)]
+    async with _job_turn(runner):
+        return [await asyncio.to_thread(build)]
