@@ -118,7 +118,8 @@ async def _run_job(job: Job, translator, bilingual: bool, fresh: bool = False):
     jobs.save(job)
     try:
         outputs = await translate_file(jobs.source_path(job), jobs.out_dir(job.id), job.runner, bilingual,
-                                       job.target_lang, layout_model=_layout_model_path())
+                                       job.target_lang, layout_model=_layout_model_path(),
+                                       plan_path=jobs.plan_path(job.id))
         job.outputs = [p.name for p in outputs]
         job.status = "done"
     except asyncio.CancelledError:
@@ -510,7 +511,7 @@ async def build_variant(job_id: str):
         try:
             outputs = await translate_file(
                 jobs.source_path(job), stage, Runner(translator, cache_only=True), bilingual, job.target_lang,
-                layout_model=_layout_model_path(),
+                layout_model=_layout_model_path(), plan_path=jobs.plan_path(job.id),
             )
         except (TranslatorError, ValueError) as e:
             raise HTTPException(400, str(e))

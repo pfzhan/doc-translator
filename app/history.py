@@ -130,6 +130,10 @@ class JobStore:
     def source_path(self, job: Job) -> Path:
         return self.dir(job.id) / job.filename
 
+    def plan_path(self, job_id: str) -> Path:
+        """PDF 的版面分析结果。继续翻译、生成另一种版本时读回，不用再逐页分析。"""
+        return self.dir(job_id) / "plan.pickle"
+
     # ---------- 读写 ----------
 
     def _load(self):
