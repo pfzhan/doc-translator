@@ -2038,7 +2038,7 @@ def test_subset_fonts_safe_returns_valid_doc():
     from app.formats.pdf import _subset_fonts_safe
 
     doc = _pdf_with_text("Some text for subsetting.")
-    out = _subset_fonts_safe(doc)
+    out = pymupdf.open("pdf", _subset_fonts_safe(doc.tobytes()))
     assert out.page_count == doc.page_count and "Some text" in out[0].get_text()
 
 

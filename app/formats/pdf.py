@@ -36,6 +36,7 @@ from .pdf_flow import (
     strip_style_marks,
     writer_for,
 )
+from .pdf_dedupe import merge_duplicates
 from .pdf_erase import Erasure, erase
 from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, text_frames
 from .pdf_layout import (
@@ -5363,10 +5364,10 @@ def _scan_status(doc: pymupdf.Document) -> str:
 def _subset_worker(data: bytes, queue):
     doc = pymupdf.open("pdf", data)
     doc.subset_fonts()
-    queue.put(doc.tobytes(garbage=4, deflate=True))
+    queue.put(doc.tobytes(garbage=1, deflate=True))
 
 
-def _subset_fonts_safe(doc: pymupdf.Document) -> pymupdf.Document:
+def _subset_fonts_safe(data: bytes) -> bytes:
     """子集化放到子进程里跑（BabelDOC 同款）：PyMuPDF 子集化偶尔崩溃或卡死，
     60 秒没结果就放弃，用未子集化的版本——文件大一些，但能看。
     用 fork 上下文：spawn 会重新 import 主模块，在 stdin/REPL 里直接失败。
@@ -5377,21 +5378,32 @@ def _subset_fonts_safe(doc: pymupdf.Document) -> pymupdf.Document:
         ctx = multiprocessing.get_context("fork")
     except ValueError:
         try:
+            doc = pymupdf.open("pdf", data)
             doc.subset_fonts()
+            return doc.tobytes(garbage=1, deflate=True)
         except Exception:  # noqa: BLE001
-            pass
-        return doc
-    data = doc.tobytes(garbage=4, deflate=True)
+            return data
     queue = ctx.Queue()
     proc = ctx.Process(target=_subset_worker, args=(data, queue))
     proc.start()
     try:
         out = queue.get(timeout=60)
         proc.join(timeout=5)
-        return pymupdf.open("pdf", out)
+        return out
     except Exception:  # noqa: BLE001 - 超时或子进程崩溃都回退
         proc.kill()
-        return pymupdf.open("pdf", data)
+        return data
+
+
+def _compact(doc: pymupdf.Document) -> bytes:
+    """合并内容相同的对象，再子集化字体，返回要写出的文件内容。
+
+    insert_htmlbox 每次都嵌入整套字体，双语版里原书的图片、字体左右各一份。
+    MuPDF 的 garbage=4 也能合并，但它两两比较所有对象，一本几百页的书要十几分钟。
+    """
+    doc = pymupdf.open("pdf", doc.tobytes(garbage=2, deflate=True))
+    merge_duplicates(doc)
+    return _subset_fonts_safe(doc.tobytes(garbage=1, deflate=True))
 
 
 _CN_NUM = r"[0-9零〇一二三四五六七八九十百]+"
@@ -5861,21 +5873,16 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             on_page=lambda done, total: runner.report_stage("写回译文", done, total, "页"),
         )
         runner.report_stage("生成文件")
-        # insert_htmlbox 每次都会嵌入完整的 CJK 字体（十几 MB），必须做子集化；失败则用未子集化版本
-        translated = _subset_fonts_safe(translated)
         if bilingual:
             dst = out_dir / f"{src.stem}.bilingual.pdf"
-            # 先落盘再读回，并排页面引用的是已经子集化的字体
-            tmp = pymupdf.open("pdf", translated.tobytes(garbage=4, deflate=True))
-            side = _render_side_by_side(src_doc, tmp)
-            if toc:
-                side.set_toc(toc)  # 并排页和原页一一对应，书签页码不用映射
-            side.save(dst, garbage=4, deflate=True)
+            # 先落盘再读回，并排页从读回的文档里取页面
+            output = _render_side_by_side(src_doc, pymupdf.open("pdf", translated.tobytes()))
         else:
             dst = out_dir / f"{src.stem}.translated.pdf"
-            if toc:
-                translated.set_toc(toc)
-            translated.save(dst, garbage=4, deflate=True)
+            output = translated
+        if toc:
+            output.set_toc(toc)  # 并排页和原页一一对应，书签页码不用映射
+        dst.write_bytes(_compact(output))
         return dst
 
     return [await asyncio.to_thread(build)]
