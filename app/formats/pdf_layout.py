@@ -53,6 +53,9 @@ _MARGIN_BAND = 0.07
 _MARGIN_MIN = 42.0
 _MARGIN_HEIGHT = 22.0
 _MARGIN_LEN = 80
+# 和这么多条重复页眉落在同一高度（容差内）的短行也是页眉
+_MARGIN_ROW = 1.5
+_MARGIN_ROWS = 3
 _PAGE_NO_RE = re.compile(
     r"^(?:[-–—]\s*)?(?:(?:page|p\.)\s*)?\d{1,4}(?:\s*/\s*\d{1,4})?(?:\s*页)?(?:\s*[-–—])?$"
     r"|^第\s*\d{1,4}\s*页$",
@@ -757,7 +760,9 @@ def _grid_cells(rows: Sequence[Sequence[_TextCell]]) -> tuple[pymupdf.Rect, ...]
 def margin_skips(blocks: Sequence[_MarginBlock], geometries: Sequence[PageGeometry]) -> list[bool]:
     """页边重复的短行，以及页码，保留原文。
 
-    只看页顶和页底一条窄带。同一侧、同一文本出现在两页以上才算页眉页脚。
+    只看页顶和页底：固定的一条窄带，或者版心以外。同一侧、同一文本出现在两页以上
+    才算页眉页脚，文本里的数字不算（页眉常带着页码和章号）。书的页眉随小节变，
+    只出现一次的那条和别页的页眉落在同一高度，也算。
     页码每页不同，单独认。格子里的数字不是页码。
     """
     zones: list[str | None] = []
@@ -772,13 +777,21 @@ def margin_skips(blocks: Sequence[_MarginBlock], geometries: Sequence[PageGeomet
             continue
         seen.setdefault(key, set()).add(block.page)
     repeated = {key for key, pages in seen.items() if len(pages) >= 2}
+    rows: dict[str, list[float]] = {}
+    for block, zone in zip(blocks, zones):
+        if zone is not None and (zone, _norm_margin(block.text)) in repeated:
+            rows.setdefault(zone, []).append(block.rect.y0)
     skips: list[bool] = []
     for block, zone in zip(blocks, zones):
         if zone is None:
             skips.append(False)
             continue
         key = (zone, _norm_margin(block.text))
-        skips.append(key in repeated or _is_page_number(block.text))
+        same_row = (
+            0 < len(key[1]) <= _MARGIN_LEN
+            and sum(1 for y in rows.get(zone, ()) if abs(y - block.rect.y0) <= _MARGIN_ROW) >= _MARGIN_ROWS
+        )
+        skips.append(key in repeated or same_row or _is_page_number(block.text))
     return skips
 
 
@@ -999,15 +1012,17 @@ def _margin_zone(block: _MarginBlock, geometries: Sequence[PageGeometry]) -> str
     if geo.cell_of(block.rect) is not None:
         return None
     band = max(_MARGIN_MIN, geo.height * _MARGIN_BAND)
-    if block.rect.y1 <= band:
+    frame = geo.frame
+    if block.rect.y1 <= band or (frame is not None and frame.y0 is not None and block.rect.y1 <= frame.y0 - 1):
         return "header"
-    if block.rect.y0 >= content_floor(geo.height):
+    floor = content_floor(geo.height)
+    if block.rect.y0 >= floor or (frame is not None and frame.y1 is not None and block.rect.y0 >= frame.y1 + 1):
         return "footer"
     return None
 
 
 def _norm_margin(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip().casefold()
+    return re.sub(r"\d+", "#", re.sub(r"\s+", " ", text).strip().casefold())
 
 
 def _is_page_number(text: str) -> bool:
