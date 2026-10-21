@@ -166,14 +166,16 @@ class PageGeometry:
     @staticmethod
     def from_page(
         page: pymupdf.Page, text_rects: list[pymupdf.Rect], frame: TextFrame | None = None,
+        tables: tuple[RuledTable, ...] | None = None,
     ) -> PageGeometry:
+        """tables 是这一页已经找出的表格。找表要逐页解析线和字，已有就不重找。"""
         bounds = text_page_rect(page)
         return PageGeometry.from_rects(
             bounds.width,
             text_rects,
             _figure_rects(page),
             bounds.height,
-            page_tables(page),
+            page_tables(page) if tables is None else tables,
             frame,
         )
 
