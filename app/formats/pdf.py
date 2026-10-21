@@ -10,9 +10,13 @@
 import asyncio
 import contextlib
 import functools
+import hashlib
 import html
+import os
+import pickle
 import re
 import struct
+import tempfile
 import unicodedata
 import weakref
 from collections.abc import Callable, Collection
@@ -5765,6 +5769,7 @@ class _PdfPlan:
     skips: list[bool]
     skip_ids: set[int]
     block_kind: dict[int, str]
+    title: str = ""
 
 
 def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
@@ -5792,7 +5797,8 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
     meta_title = ((src_doc.metadata or {}).get("title") or "").strip()
     if re.search(r"\.(docx?|pdf|tex|indd)$|^untitled$", meta_title, re.I):
         meta_title = ""
-    runner.set_title(meta_title or src.stem)
+    title = meta_title or src.stem
+    runner.set_title(title)
     median = sorted(b.size for b in blocks)[len(blocks) // 2]
     # 栏和障碍先于角色、也先于跨页合并：图内文字和图注靠这些框来认
     rects_by_page: dict[int, list[pymupdf.Rect]] = {}
@@ -5860,8 +5866,76 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
 
     return _PdfPlan(
         src_doc, blocks, geometries, toc, flat_units, sent_texts, sent_formulas, sent_kinds, sent_skips,
-        skip_ids, block_kind,
+        skip_ids, block_kind, title,
     )
+
+
+def _saved_plan(src: Path, runner, layout_model: str, path: Path | None) -> _PdfPlan:
+    """暂停、中断后继续，或生成另一种版本时，原文件、版面模型和代码都没变，就读回上次的分析结果。
+    一本几百页的书逐页读版面要一分多钟，读回只要一两秒。path 为 None 时不存。"""
+    if path is None:
+        return _plan_pdf(src, runner, layout_model)
+    key = _plan_key(src, layout_model)
+    plan = _load_plan(path, key, src, runner)
+    if plan is not None:
+        runner.set_title(plan.title)
+        return plan
+    plan = _plan_pdf(src, runner, layout_model)
+    _save_plan(path, key, plan)
+    return plan
+
+
+def _plan_key(src: Path, layout_model: str) -> str:
+    digest = hashlib.sha1(src.read_bytes())
+    digest.update(_code_version().encode())
+    model = Path(layout_model) if layout_model else None
+    if model is not None and model.is_file():
+        stat = model.stat()
+        digest.update(f"{model.resolve()}:{stat.st_size}:{stat.st_mtime_ns}".encode())
+    return digest.hexdigest()
+
+
+@functools.cache
+def _code_version() -> str:
+    """程序代码和 PyMuPDF 的版本。改了代码，旧的分析结果就作废。"""
+    digest = hashlib.sha1(str(pymupdf.VersionBind).encode())
+    for path in sorted(Path(__file__).resolve().parents[1].rglob("*.py")):
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _save_plan(path: Path, key: str, plan: _PdfPlan) -> None:
+    """块按 id 记的两张表存成序号，读回后块是新对象。先写临时文件再改名，写到一半退出不留坏文件。"""
+    blocks = plan.blocks
+    skipped = [index for index, block in enumerate(blocks) if id(block) in plan.skip_ids]
+    kinds = [plan.block_kind[id(block)] for block in blocks]
+    handle, name = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+    tmp = Path(name)
+    try:
+        with os.fdopen(handle, "wb") as out:
+            pickle.dump(key, out)
+            pickle.dump(
+                (replace(plan, src_doc=None, skip_ids=set(), block_kind={}), skipped, kinds), out,
+                protocol=pickle.HIGHEST_PROTOCOL,
+            )
+        tmp.replace(path)
+    except Exception:  # noqa: BLE001 - 存不下只是下次要重新分析
+        tmp.unlink(missing_ok=True)
+
+
+def _load_plan(path: Path, key: str, src: Path, runner) -> _PdfPlan | None:
+    try:
+        with path.open("rb") as saved:
+            if pickle.load(saved) != key:
+                return None
+            runner.report_stage("读取上次的版面分析")
+            plan, skipped, kinds = pickle.load(saved)
+    except Exception:  # noqa: BLE001 - 没有、读不出或格式旧了都重新分析
+        return None
+    plan.src_doc = pymupdf.open(src)
+    plan.skip_ids = {id(plan.blocks[index]) for index in skipped}
+    plan.block_kind = {id(block): kind for block, kind in zip(plan.blocks, kinds)}
+    return plan
 
 
 def _crop_formulas(
@@ -5914,14 +5988,14 @@ def _crop_formulas(
 
 
 async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "",
-                        layout_model: str = "") -> list[Path]:
-    """layout_model 是版面模型文件的路径，空串表示只用规则。
+                        layout_model: str = "", plan_path: Path | None = None) -> list[Path]:
+    """layout_model 是版面模型文件的路径，空串表示只用规则。plan_path 是存分析结果的文件，见 _saved_plan。
 
     读版面、裁公式图、写回都用 MuPDF，一本书要算几分钟，放在线程里做，事件循环还能响应
     任务页的轮询。这几步轮到才做（见 mupdf_turn），等翻译接口时放开，别的任务可以接着
     做它的准备。"""
     async with _job_turn(runner):
-        plan = await asyncio.to_thread(_plan_pdf, src, runner, layout_model)
+        plan = await asyncio.to_thread(_saved_plan, src, runner, layout_model, plan_path)
     src_doc, blocks, geometries, toc = plan.src_doc, plan.blocks, plan.geometries, plan.toc
     flat_units, sent_texts, sent_formulas = plan.units, plan.texts, plan.formulas
     skip_ids, block_kind = plan.skip_ids, plan.block_kind

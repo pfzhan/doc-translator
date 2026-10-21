@@ -5878,3 +5878,45 @@ def test_shaded_areas_join_cells_and_leave_out_page_background():
         for x0, x1 in ((20, 60), (60.5, 150)):
             page.draw_rect(pymupdf.Rect(x0, 40 + row * 12.5, x1, 52 + row * 12.5), color=None, fill=(0.77, 0.86, 0.99))
     assert [tuple(round(v) for v in area) for area in scan_page(page).shades] == [(20, 40, 150, 77)]
+
+
+def test_resumed_pdf_job_reads_back_its_layout_analysis(tmp_path, monkeypatch):
+    """继续翻译时原文件和代码都没变，读回上次的版面分析，不再逐页分析；写出来的和第一次一样。
+    原文件变了就重新分析。"""
+    from app.formats import pdf
+    from app.formats.pdf import translate_pdf
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=420, height=300)
+    page.insert_text((40, 50), "Saved Analysis", fontsize=16)
+    page.insert_text((40, 90), "A body paragraph long enough to be translated here.", fontsize=10)
+    page.insert_text((40, 130), "for i in range(10): print(i)", fontsize=10, fontname="cour")
+    src = tmp_path / "book.pdf"
+    doc.save(src)
+    saved = tmp_path / "plan.pickle"
+    calls = []
+    real_extract = pdf._extract
+    monkeypatch.setattr(pdf, "_extract", lambda *a, **k: calls.append(1) or real_extract(*a, **k))
+
+    def translate(out):
+        out.mkdir()
+        r = runner()
+        r.translator.title = ""
+        stages = []
+        r.report_stage = lambda name, *a: stages.append(name)
+        [path] = run(translate_pdf(src, out, r, False, "zh-CN", plan_path=saved))
+        return pymupdf.open(path), r.translator.title, stages
+
+    first, title, _ = translate(tmp_path / "a")
+    assert saved.exists() and len(calls) == 1
+    again, title_again, stages = translate(tmp_path / "b")
+    assert len(calls) == 1 and "分析版面" not in stages and "读取上次的版面分析" in stages
+    assert title_again == title == "book"
+    assert again[0].get_text() == first[0].get_text()
+    assert "for i in range(10)" in again[0].get_text()
+    assert again[0].get_pixmap(dpi=72).samples == first[0].get_pixmap(dpi=72).samples
+
+    doc[0].insert_text((40, 170), "Another paragraph added to the source file.", fontsize=10)
+    doc.save(src)
+    translate(tmp_path / "c")
+    assert len(calls) == 2
