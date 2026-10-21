@@ -212,14 +212,20 @@ def _surface(forms: Counter[str]) -> str:
 def _drop_covered(terms: list[str], counts: Counter[str]) -> list[str]:
     """data 和 cube 几乎只出现在 data cube 里时，只留 data cube。"""
     keys = {term: _key(term) for term in terms}
+    # 词组里连续的几个词 → 含有它们的更长词组。整本书的候选有几万个，不能两两比
+    holders: dict[str, list[str]] = defaultdict(list)
+    for other in terms:
+        words = keys[other].split()
+        for size in range(1, len(words)):
+            for start in range(len(words) - size + 1):
+                holders[" ".join(words[start:start + size])].append(other)
     out: list[str] = []
     for term in terms:
         key = keys[term]
-        inside = [
-            other for other in terms
-            if other is not term and len(other) > len(term) and f" {key} " in f" {keys[other]} "
-        ]
-        if any(counts[keys[other]] >= counts[key] * 0.8 for other in inside):
+        if any(
+            len(other) > len(term) and counts[keys[other]] >= counts[key] * 0.8
+            for other in holders.get(key, ())
+        ):
             continue
         out.append(term)
     return out
