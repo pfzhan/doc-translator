@@ -742,3 +742,24 @@ def test_word_by_word_gloss_is_found_but_a_table_is_not():
             page.insert_text((174 + col * 60, 420 + row * 12), f"{word}{row}", fontsize=10)
     [gloss_rect] = interlinear_glosses(page)
     assert 275 < gloss_rect.y0 and gloss_rect.y1 < 306
+
+
+def test_indented_examples_are_not_a_column_that_ends_the_page():
+    """缩进的例句落在正文栏中间，不是另一栏。它没有句末标点，也不能接下一页的段首。"""
+    def body(text: str, page: int, y0: float, x0: float = 160, x1: float = 493) -> TextBlock:
+        return _block(text, page, pymupdf.Rect(x0, y0, x1, y0 + 30))
+
+    page0 = [
+        body("The distinctions get even harder to make once we think about other languages.", 0, 100),
+        body("YaoMing reaches finals", 0, 150, 192, 286),
+        body("But the same sentence could be treated as five words in another standard.", 0, 200),
+        body("Yao Ming reaches overall finals", 0, 250, 192, 318),
+        body("How many words are there in English? We call them word types.", 0, 600),
+    ]
+    page1 = [
+        body("You will notice that the larger the corpora we look at, the more types we find!", 1, 112, 142, 475),
+        body("The value of beta depends on the corpus size and the genre of the text.", 1, 231, 142, 475),
+    ]
+    geo = PageGeometry.from_rects(612, [block.rect for block in page0], height=792)
+    units = _cross_page_units([*page0, *page1], 10.0, geometries=[geo, geo])
+    assert all(len(unit) == 1 for unit in units)
