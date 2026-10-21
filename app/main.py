@@ -190,7 +190,7 @@ async def _pause(job: Job) -> bool:
 
 
 def _resume(job: Job, service_id: str | None = None, fresh: bool = False) -> Job:
-    """继续（或重新）翻译同一个文件。已翻好的段落在缓存里，不会重复请求；fresh 为真时全部重新请求。"""
+    """继续（或重新）翻译同一个文件。已翻好的段落在缓存里，不会重复请求；fresh 为真时重新分析版面、全部重新请求。"""
     if job.status in ACTIVE:
         raise HTTPException(400, "这个任务还在翻译中")
     if not jobs.source_path(job).exists():
@@ -207,6 +207,9 @@ def _resume(job: Job, service_id: str | None = None, fresh: bool = False) -> Job
     for old in jobs.out_dir(job.id).glob("*"):
         old.unlink()
     (jobs.dir(job.id) / "preview.json").unlink(missing_ok=True)
+    if fresh:
+        # 全部重新翻译从版面分析做起
+        jobs.plan_path(job.id).unlink(missing_ok=True)
     _start(job, translator, fresh)
     jobs.save(job)
     return job

@@ -944,7 +944,8 @@ function jobRow(job, selectable = false) {
     retry.type = "button";
     retry.addEventListener("click", () => retryJob(job.id));
     actions.append(retry);
-  } else if (job.status === "done") {
+  }
+  if (!ACTIVE.has(job.status)) {
     const redo = el("button", "btn sm", "重译");
     redo.type = "button";
     redo.addEventListener("click", () => redoJob(job));
