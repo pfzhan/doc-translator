@@ -782,3 +782,43 @@ def test_short_and_morpheme_glosses_are_found():
     found = sorted(interlinear_glosses(page), key=lambda rect: rect.y0)
     assert len(found) == 2
     assert found[0].y0 < 400 < found[0].y1 and found[1].y0 < 460 < found[1].y1
+
+
+def test_page_without_two_ruled_lines_each_way_skips_the_table_search(monkeypatch):
+    """凑不出两横两竖的线就围不出格子：脚注线、色块背景不值得逐字解析一遍整页。"""
+    from app.formats.pdf_layout import ruled_tables
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    page.draw_line((50, 250), (150, 250), width=0.4)
+    page.draw_rect(pymupdf.Rect(50, 60, 350, 120), color=None, fill=(0.9, 0.9, 0.9))
+    page.insert_text((60, 90), "A shaded box of body text", fontsize=10)
+
+    searched: list[int] = []
+    original = pymupdf.Page.find_tables
+
+    def counted(self, *args, **kwargs):
+        searched.append(self.number)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(pymupdf.Page, "find_tables", counted)
+    assert ruled_tables(page) == ()
+    assert searched == []
+
+
+def test_table_drawn_with_dashed_rules_is_still_found():
+    from app.formats.pdf_layout import ruled_tables
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    for y in (80, 100, 130, 160, 180):
+        for x in range(50, 370, 4):
+            page.draw_line((x, y), (min(x + 3, 370), y), width=0.4)
+    for x in (50, 130, 210, 290, 370):
+        for y in range(80, 180, 4):
+            page.draw_line((x, y), (x, min(y + 3, 180)), width=0.4)
+    for row, y in enumerate((94, 118, 148, 174)):
+        for col, x in enumerate((55, 135, 215, 295)):
+            page.insert_text((x, y), f"cell {row}{col}", fontsize=9)
+    [table] = ruled_tables(page)
+    assert len(table.cells) == 16

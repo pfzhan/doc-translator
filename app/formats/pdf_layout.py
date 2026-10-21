@@ -36,6 +36,8 @@ _MAX_TABLE_COLS = 12
 # 表格线：不超过这么粗、至少这么长
 _RULE_THICK = 1.5
 _RULE_MIN = 5.0
+# find_tables 的吸附距离：比它细的填充块也当线
+_SNAP = 3.0
 # 线和格子边算对齐的距离
 _NEAR = 2.0
 # 算法框相邻两行的分界，从上一行基线往下占行距的比例
@@ -311,10 +313,21 @@ def _spanning_table_index(block: _OrderedBlock, tables: Sequence[RuledTable]) ->
 
 
 def ruled_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
-    """只认横竖线围出的格子。文字对齐出来的假表、公式笔画网格不要。"""
+    """只认横竖线围出的格子。文字对齐出来的假表、公式笔画网格不要。
+
+    find_tables 每次先把整页的字逐个转成字典，一页要几十毫秒。页面上凑不出两横两竖的线，
+    就围不出格子，不必调用。"""
+    try:
+        drawings = page.get_drawings()
+    except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有表
+        return ()
+    if not _grid_possible(drawings):
+        return ()
     pymupdf.no_recommend_layout()
     try:
-        found = page.find_tables(vertical_strategy="lines_strict", horizontal_strategy="lines_strict")
+        found = page.find_tables(
+            vertical_strategy="lines_strict", horizontal_strategy="lines_strict", paths=drawings,
+        )
     except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有表
         return ()
     tables: list[RuledTable] = []
@@ -327,6 +340,36 @@ def ruled_tables(page: pymupdf.Page) -> tuple[RuledTable, ...]:
             rules = _rule_segments(page)
         tables.append(_with_open_edges(RuledTable(pymupdf.Rect(table.bbox), cells), *rules))
     return tuple(tables)
+
+
+def _grid_possible(drawings: Sequence[dict]) -> bool:
+    """横线、竖线各至少两条。
+
+    按 lines_strict 取边的口径数：线段、矩形和四边形的边都算，不分长短（短线会接成长线）；
+    只填充不描边、两个方向都比吸附距离宽的块不当线。"""
+    horizontal = vertical = 0
+    for drawing in drawings:
+        rect = pymupdf.Rect(drawing.get("rect"))
+        if drawing.get("type") == "f" and rect.width > _SNAP and rect.height > _SNAP:
+            continue
+        for item in drawing.get("items", ()):
+            if item[0] == "l":
+                box = pymupdf.Rect(item[1], item[2]).normalize()
+            elif item[0] == "re":
+                box = pymupdf.Rect(item[1]).normalize()
+            elif item[0] == "qu":
+                box = pymupdf.Quad(item[1]).rect
+            else:
+                continue
+            thin_h, thin_v = box.height <= _SNAP, box.width <= _SNAP
+            if item[0] != "l" and not (thin_h or thin_v):
+                horizontal, vertical = horizontal + 2, vertical + 2
+            else:
+                horizontal += thin_h
+                vertical += thin_v
+            if horizontal >= 2 and vertical >= 2:
+                return True
+    return False
 
 
 def _rule_segments(page: pymupdf.Page) -> tuple[list[pymupdf.Rect], list[pymupdf.Rect]]:
