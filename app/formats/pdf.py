@@ -2878,6 +2878,40 @@ def _code_block(block: TextBlock) -> bool:
     return _mono_share(block) >= 0.8
 
 
+# 可伸长的大括号、大求和号这类定界符的字体。行内公式也会用到，所以只认离开左缘的块
+_BIG_DELIMITER_FONT_RE = re.compile(r"CMEX|cmex|LMMathExtension", re.I)
+
+
+def _display_formula_ids(blocks: list[TextBlock], geometries: list[PageGeometry]) -> set[int]:
+    """用正文字体排的行间公式：分段函数的大括号把几行式子并成一组，式子里的
+    min、ins-cost(target[j]) 看起来像词，按词数认不出来。带伸长定界符、又不从版心左缘
+    起笔的块是公式；落在它框里的块（大括号右边的条件行）也是。"""
+    found: list[TextBlock] = []
+    for block in blocks:
+        geo = geometries[block.page] if block.page < len(geometries) else None
+        frame = geo.frame if geo is not None else None
+        if frame is None or block.rect.x0 <= frame.x0 + block.size * 2:
+            continue
+        if any(
+            _BIG_DELIMITER_FONT_RE.search(str(span.get("font") or "")) and str(span.get("text") or "").strip()
+            for line in block.span_lines or [] for span in line
+        ):
+            found.append(block)
+    ids = {id(block) for block in found}
+    for block in blocks:
+        area = block.rect.width * block.rect.height
+        if id(block) in ids or area < 1:
+            continue
+        for formula in found:
+            if formula.page != block.page:
+                continue
+            hit = block.rect & (formula.rect + (-2, -2, 2, 2))
+            if not hit.is_empty and hit.width * hit.height >= area * 0.7:
+                ids.add(id(block))
+                break
+    return ids
+
+
 def _garbled_label(text: str) -> bool:
     """图内标签用符号字体时，$ 顶替了空格。重排会把乱码译出来，留下原字。"""
     compact = re.sub(r"\s+", "", text)
@@ -5430,6 +5464,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         median,
     )
     edges = margin_skips(blocks, geometries)
+    displayed = _display_formula_ids(blocks, geometries)
     # 页眉不进大纲，旁注不是标题
     kinds = [
         "h2" if role is Role.HEADING and not edge and not block.side_note else "p"
@@ -5437,6 +5472,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     ]
     skips = [
         bib or role is Role.FIGURE or edge or _garbled_label(block.text) or _code_block(block)
+        or id(block) in displayed
         for bib, role, edge, block in zip(biblio_skips(blocks), roles, edges, blocks)
     ]
     skip_ids = {id(b) for b, s in zip(blocks, skips) if s}
