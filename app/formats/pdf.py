@@ -4307,8 +4307,9 @@ def _write_rect(
     rtl: bool,
     geo: PageGeometry | None,
 ) -> tuple[pymupdf.Rect, bool]:
-    """写入框。多栏且块落在某一栏内时，居中参照该栏；单栏仍用本页最宽块。
-    格子里原本居中的文字，改以格子中线居中。"""
+    """写入框。多栏且块落在某一栏内时，居中参照该栏；单栏有版心时参照版心，
+    没有时用本页最宽块。格子里原本居中的文字，改以格子中线居中。
+    从栏左缘起笔的块是左对齐的，中线碰巧对上也不算居中。"""
     y0 = _flow_y0(block, cjk)
     pad = block.size * 0.5 if cjk else block.size * 0.3
     if _centered_in_cell(block) and block.clip is not None:
@@ -4322,6 +4323,11 @@ def _write_rect(
             column = candidate
     if column is not None:
         col_x0, col_x1 = column.x0, column.x1
+        col_width = col_x1 - col_x0
+    elif geo is not None and geo.frame is not None and (
+        geo.frame.x0 - 2 <= block.rect.x0 and block.rect.x1 <= geo.frame.x1 + 2
+    ):
+        col_x0, col_x1 = geo.frame.x0, geo.frame.x1
         col_width = col_x1 - col_x0
     else:
         widest = max((other.rect for other, _ in items), key=lambda rect: rect.width, default=block.rect)
@@ -4344,7 +4350,8 @@ def _write_rect(
     centered = (
         not rtl and len(block.text) < 100
         and (
-            (block.rect.width < col_width * 0.85 and abs(mid - (col_x0 + col_x1) / 2) < 15)
+            (block.rect.width < col_width * 0.85 and abs(mid - (col_x0 + col_x1) / 2) < 15
+             and block.rect.x0 > col_x0 + 2)
             or on_page_mid
         )
         and not _MARK_ITEM_RE.match(block.text)
