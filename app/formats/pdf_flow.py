@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import functools
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -532,6 +533,8 @@ def measure_width(text: str, em: float, formula_widths: dict[int, float] | None 
     return total
 
 
+# 断行时每个字都要量一次，一本书要量上百万次；字宽只看字和字号，量过的记下来
+@functools.lru_cache(maxsize=65536)
 def _char_width(char: str, em: float) -> float:
     if _CJK_RE.match(char) or unicodedata.east_asian_width(char) in ("W", "F"):
         estimate = em
