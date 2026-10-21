@@ -97,6 +97,8 @@ class Runner:
         self.fresh = fresh
         # 给任务页展示：检测到的文档语言、跳过的段落数
         self.info = {"detected_lang": "", "skipped": 0}
+        # 开始翻译前的准备阶段（见 report_stage）
+        self.stage = {"name": "", "done": 0, "total": 0, "unit": ""}
         # 文件内容的摘要（set_document），术语表按它缓存
         self.document = ""
         # 按段落序号覆盖预览译文（标题改写、段界去重），同一句在不同位置可以不同
@@ -145,6 +147,11 @@ class Runner:
 
     def _record(self, texts: list[str]):
         self._log.extend(texts)
+
+    def report_stage(self, name: str, done: int = 0, total: int = 0, unit: str = "") -> None:
+        """翻译前的准备阶段做到哪里，unit 是计数的单位（页、段）。整本书的版面分析要一两分钟，
+        任务页据此显示进度。可以在线程里调用：只整体替换一个字典。"""
+        self.stage = {"name": name, "done": done, "total": total, "unit": unit}
 
     def preview(self, since: int = -1) -> dict:
         """since < 0 时返回全部段落和所有已完成的译文；否则只返回版本 since 之后完成的。"""

@@ -592,3 +592,14 @@ def test_oversized_upload_rejected_before_reading_body(app_env, monkeypatch):
         assert not entered
         assert client.get("/api/jobs").json()["jobs"] == []
         assert submit(client)["status"] in ("queued", "running", "done")
+
+
+def test_running_job_shows_its_preparation_stage():
+    from app.runner import Runner
+    from app.translators import MockTranslator
+
+    job = Job(id="x", filename="a.pdf")
+    assert job.to_dict()["stage"] is None
+    job.runner = Runner(MockTranslator("zh-CN"), cache=object())
+    job.runner.report_stage("分析版面", 120, 646, "页")
+    assert job.to_dict()["stage"] == {"name": "分析版面", "done": 120, "total": 646, "unit": "页"}
