@@ -5738,3 +5738,51 @@ def test_pdf_reports_its_preparation_and_writing_stages(tmp_path):
     after = stages[stages.index(("", 0, 0, "")):]
     assert [stage for stage in after if stage[0] == "写回译文"] == [("写回译文", n, 3, "页") for n in (0, 1, 2)]
     assert after[-1] == ("生成文件", 0, 0, "")
+
+
+def test_pdf_job_keeps_the_event_loop_running(tmp_path, monkeypatch):
+    """用 MuPDF 的部分在线程里做，同时跑两个任务时事件循环也一直能响应别的请求。"""
+    import time
+
+    from app.formats import pdf
+
+    src = tmp_path / "a.pdf"
+    doc = pymupdf.open()
+    doc.new_page().insert_text((72, 72), "A sentence to translate.", fontsize=11)
+    doc.save(src)
+
+    real_geometry = pdf.PageGeometry
+
+    # 以前在事件循环里逐页算
+    class SlowGeometry(real_geometry):
+        @classmethod
+        def from_page(cls, *args, **kwargs):
+            time.sleep(1.0)
+            return real_geometry.from_page(*args, **kwargs)
+
+    monkeypatch.setattr(pdf, "PageGeometry", SlowGeometry)
+
+    async def scenario():
+        gaps: list[float] = []
+
+        async def poll():
+            last = time.monotonic()
+            while True:
+                await asyncio.sleep(0.01)
+                now = time.monotonic()
+                gaps.append(now - last)
+                last = now
+
+        poller = asyncio.create_task(poll())
+        for name in "ab":
+            (tmp_path / name).mkdir()
+        outs = await asyncio.gather(*(
+            pdf.translate_pdf(src, tmp_path / name, runner(), False, "zh-CN") for name in "ab"
+        ))
+        poller.cancel()
+        return outs, max(gaps)
+
+    outs, longest_gap = run(scenario())
+    # 线程里的 MuPDF 调用不放 GIL，循环偶尔停零点几秒；在循环里算的话一停就是一秒
+    assert longest_gap < 0.6
+    assert [pymupdf.open(out)[0].get_text() for [out] in outs] == [pymupdf.open(outs[0][0])[0].get_text()] * 2

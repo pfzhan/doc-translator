@@ -5692,18 +5692,33 @@ def _label_styled(block: TextBlock) -> bool:
     )
 
 
-_YIELD_UNITS = 200
+_REPORT_UNITS = 200
 
 
-async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "",
-                        layout_model: str = "") -> list[Path]:
-    """layout_model 是版面模型文件的路径，空串表示只用规则。"""
+@dataclass
+class _PdfPlan:
+    """送翻前准备好的东西：原书、块、每页的几何，和按单元整理好的送翻文本。"""
+    src_doc: pymupdf.Document
+    blocks: list[TextBlock]
+    geometries: list[PageGeometry]
+    toc: list
+    units: list[list[TextBlock]]
+    texts: list[str]
+    formulas: list[list[dict]]
+    kinds: list[str]
+    skips: list[bool]
+    skip_ids: set[int]
+    block_kind: dict[int, str]
+
+
+def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
+    """送翻前的部分：读版面、定角色、并跨页段落，给每个单元打好占位符。"""
     src_doc = pymupdf.open(src)
     if src_doc.needs_pass:
         raise ValueError("PDF 有密码保护，暂不支持")
     # 逐页读线、表、字占准备时间的大半，按页报进度
-    blocks, frames, scans = await asyncio.to_thread(
-        _extract, src_doc, lambda done, total: runner.report_stage("分析版面", done, total, "页"),
+    blocks, frames, scans = _extract(
+        src_doc, lambda done, total: runner.report_stage("分析版面", done, total, "页"),
     )
     runner.report_stage("整理段落")
     glosses = {
@@ -5731,9 +5746,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         PageGeometry.from_page(src_doc[i], rects_by_page.get(i, []), frames[i], scans[i])
         for i in range(src_doc.page_count)
     ]
-    # 配了版面模型时要逐页跑推理，放到线程里
-    roles = await asyncio.to_thread(
-        layout_detector(src_doc, layout_model).classify,
+    roles = layout_detector(src_doc, layout_model).classify(
         [LayoutItem(b.page, pymupdf.Rect(b.rect), b.text, b.size, b.bold, _label_styled(b)) for b in blocks],
         geometries,
         median,
@@ -5763,10 +5776,9 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     flat_units: list[list[TextBlock]] = []
     name_i = 0
     for unit_no, unit in enumerate(units):
-        # 一本书有上万个单元，在事件循环里要算好几秒：报进度，隔一阵让出循环，任务页的轮询才有响应
-        if unit_no % _YIELD_UNITS == 0:
+        # 一本书有上万个单元，要算好几秒
+        if unit_no % _REPORT_UNITS == 0:
             runner.report_stage("准备译文", unit_no, len(units), "段")
-            await asyncio.sleep(0)
         # 整单元都跳过时不打占位符、也不标斜体。标记后的字符串和原文不同，
         # 写回会把原字擦掉重排，参考文献的悬挂缩进和行尾断词就没了。
         if all(id(b) in skip_ids for b in unit):
@@ -5790,9 +5802,15 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         sent_formulas.append(formulas)
         sent_skips.append(False)
 
-    raw = await runner.translate_all(sent_texts, kinds=sent_kinds, preview=True, skip=sent_skips)
-    await _retry_lost_placeholders(runner, sent_texts, sent_formulas, raw)
+    return _PdfPlan(
+        src_doc, blocks, geometries, toc, flat_units, sent_texts, sent_formulas, sent_kinds, sent_skips,
+        skip_ids, block_kind,
+    )
 
+
+def _crop_formulas(
+    src_doc: pymupdf.Document, flat_units: list[list[TextBlock]], sent_formulas: list[list[dict]],
+) -> pymupdf.Archive:
     # 公式从它所在的原页裁图。不能用单元最后一块的页码，跨页时会裁错页。
     # 框内相交的曲线并进裁剪，根号、分式线才不会被切掉。
     archive = pymupdf.Archive()
@@ -5836,6 +5854,23 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
                 f["mid"] = marker_idx
                 archive.add(_marker_png(marker_idx), f"ph_{f['name']}")
                 marker_idx += 1
+    return archive
+
+
+async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "",
+                        layout_model: str = "") -> list[Path]:
+    """layout_model 是版面模型文件的路径，空串表示只用规则。
+
+    读版面、裁公式图、写回都用 MuPDF，一本书要算几分钟，放在线程里做，事件循环还能响应
+    任务页的轮询。"""
+    plan = await asyncio.to_thread(_plan_pdf, src, runner, layout_model)
+    src_doc, blocks, geometries, toc = plan.src_doc, plan.blocks, plan.geometries, plan.toc
+    flat_units, sent_texts, sent_formulas = plan.units, plan.texts, plan.formulas
+    skip_ids, block_kind = plan.skip_ids, plan.block_kind
+    raw = await runner.translate_all(sent_texts, kinds=plan.kinds, preview=True, skip=plan.skips)
+    await _retry_lost_placeholders(runner, sent_texts, sent_formulas, raw)
+
+    archive = await asyncio.to_thread(_crop_formulas, src_doc, flat_units, sent_formulas)
 
     per_block: dict[int, str] = {}
     block_formulas: dict[int, list] = {}
