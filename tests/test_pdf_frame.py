@@ -1,0 +1,73 @@
+import pymupdf
+
+from app.formats.pdf import extract_blocks
+from app.formats.pdf_frame import FrameLine, margin_notes, note_groups, text_frames
+
+_LINE = "a body line of running text that is long enough to vote"
+
+
+def _lines(x0: float, x1: float, count: int = 14, top: float = 100) -> list[FrameLine]:
+    return [FrameLine(pymupdf.Rect(x0, top + 12 * i, x1, top + 12 * i + 10), _LINE, 10) for i in range(count)]
+
+
+def test_frame_follows_body_lines_not_the_leftmost_block():
+    header = FrameLine(pymupdf.Rect(77, 84, 143, 94), "4 CHAPTER 2 • WORDS AND TOKENS ...........", 8)
+    even = [header, *_lines(142, 475)]
+    odd = _lines(160, 493)
+    frames = text_frames([odd, even, odd, even])
+    assert (frames[0].x0, frames[0].x1) == (160, 493)
+    assert (frames[1].x0, frames[1].x1) == (142, 475)
+    assert frames[1].y0 == 100
+
+
+def test_two_columns_span_both_columns():
+    page = [*_lines(40, 290), *_lines(316, 560)]
+    [frame] = text_frames([page])
+    assert (frame.x0, frame.x1) == (40, 560)
+
+
+def test_small_terms_on_a_lane_beside_the_frame_are_notes():
+    body = _lines(142, 475)
+    notes = [
+        FrameLine(pymupdf.Rect(84, 161, 128, 169), "Herdan's Law", 7.2),
+        FrameLine(pymupdf.Rect(91, 173, 128, 180), "Heaps' Law", 7.2),
+        FrameLine(pymupdf.Rect(82, 281, 128, 288), "function words", 7.2),
+        # 页码、外凸的节号和正文一样大，不是旁注
+        FrameLine(pymupdf.Rect(77, 84, 82, 94), "4", 10),
+        FrameLine(pymupdf.Rect(77, 300, 99, 315), "2.1", 17),
+    ]
+    page = [*body, *notes]
+    frames = text_frames([page])
+    found = margin_notes([page], frames)[0]
+    assert found == {len(body), len(body) + 1, len(body) + 2}
+
+
+def test_two_line_note_is_one_note_and_neighbours_stay_apart():
+    lines = [
+        FrameLine(pymupdf.Rect(123, 623, 146, 630), "regular", 7.2),
+        FrameLine(pymupdf.Rect(111, 630, 146, 637), "expressions", 7.2),
+        FrameLine(pymupdf.Rect(84, 661, 146, 669), "Herdan's Law", 7.2),
+        FrameLine(pymupdf.Rect(91, 673, 146, 680), "Heaps' Law", 7.2),
+    ]
+    assert note_groups(lines) == [[0, 1], [2], [3]]
+
+
+def test_margin_note_on_a_body_line_is_split_off():
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    words = ("The body of this paragraph keeps going across many lines so that the "
+             "frame has enough long lines to vote on where the text starts ").split()
+    y = 120
+    lines = []
+    for i in range(16):
+        lines.append(" ".join(words[(i * 3) % 20:(i * 3) % 20 + 9]))
+    for i, line in enumerate(lines):
+        page.insert_text((160, y + 12 * i), line, fontsize=10)
+    for row, note in ((2, "tokenization"), (6, "regular"), (10, "edit distance")):
+        width = pymupdf.get_text_length(note, fontsize=7)
+        page.insert_text((146 - width, y + 12 * row), note, fontsize=7)
+    blocks = extract_blocks(doc)
+    notes = [block.text for block in blocks if block.side_note]
+    assert notes == ["tokenization", "regular", "edit distance"]
+    body = " ".join(block.text for block in blocks if not block.side_note)
+    assert "tokenization" not in body and "regular" not in body and "edit distance" not in body
