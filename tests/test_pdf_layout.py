@@ -705,3 +705,21 @@ def test_far_apart_labels_in_one_box_stay_separate():
 
     wrapped = [part("A long sentence in the box that", 400, 200, 660), part("wraps onto the next line", 400, 214, 600)]
     assert [block.text for block in _merge_cells(wrapped, set())] == ["A long sentence in the box that wraps onto the next line"]
+
+
+def test_book_headers_above_the_text_frame_are_margins():
+    """页眉在 y=84，比固定的页顶窄带低。页码和章号每页不同；只出现一次的小节页眉
+    和其他页眉落在同一高度。版心里的标题不算。"""
+    from app.formats.pdf_frame import TextFrame
+
+    frame = TextFrame(142, 475, 111, 719, 10)
+    geos = [PageGeometry.from_rects(612, [pymupdf.Rect(142, 112, 475, 700)], height=792, frame=frame)
+            for _ in range(5)]
+    blocks = [
+        _block("2 CHAPTER 2", 0, pymupdf.Rect(77, 84, 143, 94), size=8),
+        _block("4 CHAPTER 2", 1, pymupdf.Rect(77, 84, 143, 94), size=8),
+        _block("6 CHAPTER 2", 2, pymupdf.Rect(77, 84, 143, 94), size=8),
+        _block("2.3 • UNICODE", 3, pymupdf.Rect(398, 84, 476, 94), size=8),
+        _block("2.3 Unicode", 4, pymupdf.Rect(95, 118, 192, 135), size=17),
+    ]
+    assert margin_skips(blocks, geos) == [True, True, True, True, False]
