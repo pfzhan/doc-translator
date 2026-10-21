@@ -5663,3 +5663,27 @@ def test_large_chapter_number_stays_apart_from_the_title():
     assert _split_lines(chapter) == [[0], [1]]
     section = [item("2.2", (40, 100, 60, 112), 12), item("Training", (70, 100, 130, 112), 12)]
     assert _split_lines(section) == [[0, 1]]
+
+
+def test_pdf_tables_are_searched_once_per_page(tmp_path, monkeypatch):
+    """找表要把整页的字解析一遍。提取、阅读顺序、角色判断共用一次结果。"""
+    from app.formats import pdf, pdf_layout
+    from app.formats.pdf import translate_pdf
+
+    calls: list[int] = []
+    original = pdf_layout.page_tables
+
+    def counted(page):
+        calls.append(page.number)
+        return original(page)
+
+    monkeypatch.setattr(pdf, "page_tables", counted)
+    monkeypatch.setattr(pdf_layout, "page_tables", counted)
+    doc = pymupdf.open()
+    for _ in range(3):
+        page = doc.new_page(width=420, height=240)
+        page.insert_text((40, 60), "A body paragraph long enough to be translated here.", fontsize=10)
+    src = tmp_path / "pages.pdf"
+    doc.save(src)
+    run(translate_pdf(src, tmp_path, runner(), False, "zh-CN"))
+    assert sorted(calls) == [0, 1, 2]

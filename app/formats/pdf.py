@@ -2668,8 +2668,10 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
     return _extract(doc)[0]
 
 
-def _extract(doc: pymupdf.Document) -> tuple[list[TextBlock], list[TextFrame | None]]:
-    """文本块，以及每页的版心。"""
+def _extract(
+    doc: pymupdf.Document,
+) -> tuple[list[TextBlock], list[TextFrame | None], list[tuple[RuledTable, ...]]]:
+    """文本块，以及每页的版心和表格。"""
     blocks = []
     tables_by_page: list[tuple[RuledTable, ...]] = []
     type3 = Type3Reader(doc)
@@ -2761,11 +2763,11 @@ def _extract(doc: pymupdf.Document) -> tuple[list[TextBlock], list[TextFrame | N
         by_page.setdefault(block.page, []).append(block)
     for pno in sorted(by_page):
         page_blocks = by_page[pno]
-        geo = PageGeometry.from_page(doc[pno], [block.rect for block in page_blocks])
+        geo = PageGeometry.from_page(doc[pno], [block.rect for block in page_blocks], tables=tables_by_page[pno])
         geometries[pno] = geo
         ordered.extend(reading_order(page_blocks, geo))
     merged = _merge_continuations(_merge_caption_fragments(_merge_visual_lines(ordered, geometries)))
-    return _split_affiliation_tails(_merge_same_line_sentences(_merge_line_tails(merged))), frames
+    return _split_affiliation_tails(_merge_same_line_sentences(_merge_line_tails(merged))), frames, tables_by_page
 
 
 _DISPLAY_PROSE = 8
@@ -5624,7 +5626,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     if _scan_status(src_doc) == "scanned":
         raise ValueError("这是没有文本层的扫描版 PDF：请先用 Acrobat、ABBYY 或 WPS 的 OCR 功能识别文字，"
                          "再上传识别后的文件")
-    blocks, frames = await asyncio.to_thread(_extract, src_doc)
+    blocks, frames, tables = await asyncio.to_thread(_extract, src_doc)
     glosses = {pno: interlinear_glosses(src_doc[pno]) for pno in sorted({block.page for block in blocks})}
     blocks = _split_gloss_lines(blocks, glosses)
     if not blocks:
@@ -5637,8 +5639,11 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     runner.set_title(meta_title or src.stem)
     median = sorted(b.size for b in blocks)[len(blocks) // 2]
     # 栏和障碍先于角色、也先于跨页合并：图内文字和图注靠这些框来认
+    rects_by_page: dict[int, list[pymupdf.Rect]] = {}
+    for b in blocks:
+        rects_by_page.setdefault(b.page, []).append(b.rect)
     geometries = [
-        PageGeometry.from_page(src_doc[i], [b.rect for b in blocks if b.page == i], frames[i])
+        PageGeometry.from_page(src_doc[i], rects_by_page.get(i, []), frames[i], tables[i])
         for i in range(src_doc.page_count)
     ]
     # 配了版面模型时要逐页跑推理，放到线程里
