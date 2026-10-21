@@ -372,6 +372,8 @@ class Runner:
                     failed.extend(empty)
                     done += len(empty)
                 self.progress(done, total)
+                # 接口立即返回时（mock、本地模型）这个循环不会交出事件循环，整段翻译期间服务不响应
+                await asyncio.sleep(0)
 
         workers = min(self.translator.concurrency, len(pending))
         await asyncio.gather(*(worker() for _ in range(workers)))
