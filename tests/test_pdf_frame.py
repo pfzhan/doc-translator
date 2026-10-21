@@ -90,3 +90,20 @@ def test_displayed_formula_with_a_big_brace_keeps_its_rows():
     geo = PageGeometry.from_rects(612, [], [], 792, frame=TextFrame(142, 475, 111, 719, 10))
     ids = _display_formula_ids([brace, condition, body, inline], [geo])
     assert ids == {id(brace), id(condition)}
+
+
+def test_body_cut_at_a_margin_note_is_joined_back():
+    from app.formats.pdf import _rejoin_note_cuts
+
+    def line(text, x0, y0, x1, size=10.0):
+        return {"dir": (1, 0), "bbox": (x0, y0, x1, y0 + size),
+                "spans": [{"text": text, "size": size, "font": "Times", "flags": 0, "color": 0}]}
+
+    upper = {"type": 0, "lines": [line("Starting in the 1960s, the characters (like the ones used", 160, 341, 493),
+                                  line("in this sentence), were represented with ASCII (American Standard", 160, 353, 493)]}
+    lower = {"type": 0, "lines": [line("Code for Information Interchange). ASCII used one byte.", 160, 365, 493)]}
+    after = {"type": 0, "lines": [line("Chinese has about 100,000 characters in Unicode.", 175, 377, 493)]}
+    data = {"blocks": [upper, lower, after]}
+    _rejoin_note_cuts(data, {id(upper)})
+    assert len(upper["lines"]) == 3 and lower["lines"] == []
+    assert after["lines"]  # 上一行以句末收尾、下一块缩进：新的一段
