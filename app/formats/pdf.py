@@ -42,8 +42,8 @@ from .pdf_dedupe import merge_duplicates
 from .pdf_erase import Erasure, erase
 from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, text_frames
 from .pdf_layout import (
-    PageGeometry, PageScan, RuledTable, cell_containing, content_floor, interlinear_glosses, margin_skips, scan_page,
-    reading_order, text_page_rect,
+    PageGeometry, PageScan, RuledTable, cell_containing, content_floor, interlinear_glosses, light_fill, margin_skips,
+    scan_page, reading_order, text_page_rect,
 )
 from .pdf_parts import plan_parts, render_in_parts, worker_count
 from .pdf_roles import LayoutItem, Role, is_size_heading
@@ -1934,20 +1934,6 @@ def _extend_text_run(pending: TextRun | None, span: dict, emphasis: Emphasis, li
     )
 
 
-def _shading(drawing: dict) -> bool:
-    """只填色、由矩形拼成、两边都比线粗的浅色块：表格格子、文本框的底色。深色的字压在上面，
-    不是公式的笔画；并进公式框会把上下格的字一起裁进图里，写回时底色也跟着擦掉。
-    深色块不算：图注标签是黑底白字，白字整个贴回时要带着黑底。"""
-    rect = pymupdf.Rect(drawing["rect"])
-    items = drawing.get("items") or []
-    fill = drawing.get("fill")
-    return (
-        drawing.get("type") == "f" and bool(items) and all(item[0] in ("re", "qu") for item in items)
-        and min(rect.width, rect.height) > _RULE_IMAGE_THICK
-        and fill is not None and len(fill) == 3 and 0.299 * fill[0] + 0.587 * fill[1] + 0.114 * fill[2] > 0.6
-    )
-
-
 def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
     """矢量线条，加上拉长成细线的一像素图片：老 TeX 的分式线、根号横线是这样画的。
     描边的线按画出来的范围算：路径框不含线宽，一条横线的框高为零。"""
@@ -1958,7 +1944,8 @@ def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
     rects: list[pymupdf.Rect] = []
     for drawing in drawings:
         raw = drawing.get("rect")
-        if raw is None or _shading(drawing):
+        # 浅色底不是笔画，字压在上面。并进公式框会把上下格的字一起裁进图里，写回时底色也跟着擦掉
+        if raw is None or light_fill(drawing):
             continue
         rect = pymupdf.Rect(raw)
         half = float(drawing.get("width") or 0) / 2 if "s" in str(drawing.get("type") or "") else 0.0
@@ -2995,6 +2982,34 @@ def _code_block(block: TextBlock) -> bool:
     FROM R 这种短行认不出等宽也不影响整块。
     """
     return _mono_share(block) >= 0.8
+
+
+def _code_panel_ids(blocks: list[TextBlock], scans: list[PageScan]) -> set[int]:
+    """一片底色上的字八成以上是等宽字：程序、码位表、命令行输出。整片留原字。
+
+    这里的等宽字也认 PDF 里的等宽标志（txtt 这类名字不带 Mono 的字体）。书里用这种字体排的
+    对话、例句没有底色，或者底色上还有正文字体，不受影响。汉字、假名也带等宽标志，不计数。
+    """
+    by_page: dict[int, list[TextBlock]] = {}
+    for block in blocks:
+        by_page.setdefault(block.page, []).append(block)
+    found: set[int] = set()
+    for pno, page_blocks in by_page.items():
+        for area in scans[pno].shades:
+            inside = [
+                block for block in page_blocks
+                if (block.rect & area).get_area() > block.rect.get_area() * 0.6
+            ]
+            spans = [span for block in inside for span in _block_spans(block) if not _span_is_math(span)]
+            total = mono = 0
+            for span in spans:
+                count = sum(1 for ch in str(span["text"]) if not ch.isspace() and not CJK_RE.match(ch))
+                total += count
+                if MONO_FONT_RE.search(str(span.get("font") or "")) or int(span.get("flags") or 0) & 8:
+                    mono += count
+            if total and mono >= total * 0.8:
+                found.update(id(block) for block in inside)
+    return found
 
 
 # 可伸长的大括号、大求和号这类定界符的字体。行内公式也会用到，所以只认离开左缘的块
@@ -5793,7 +5808,7 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
         median,
     )
     edges = margin_skips(blocks, geometries)
-    displayed = _display_formula_ids(blocks, geometries) | _gloss_ids(blocks, glosses)
+    displayed = _display_formula_ids(blocks, geometries) | _gloss_ids(blocks, glosses) | _code_panel_ids(blocks, scans)
     # 页眉不进大纲，旁注不是标题
     kinds = [
         "h2" if role is Role.HEADING and not edge and not block.side_note else "p"

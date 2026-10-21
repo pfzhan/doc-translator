@@ -188,6 +188,8 @@ class PageScan:
     tables: tuple[RuledTable, ...]
     figures: tuple[pymupdf.Rect, ...]
     words: tuple[_TextWord, ...]
+    # 相连的浅色底并成的一片：一张表、一个文本框的底色
+    shades: tuple[pymupdf.Rect, ...] = ()
 
 
 def scan_page(page: pymupdf.Page) -> PageScan:
@@ -196,7 +198,44 @@ def scan_page(page: pymupdf.Page) -> PageScan:
     except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有线
         drawings = []
     words = page_words(page)
-    return PageScan(page_tables(page, drawings, words), tuple(_figure_rects(page, drawings)), words)
+    return PageScan(
+        page_tables(page, drawings, words), tuple(_figure_rects(page, drawings)), words,
+        _shaded_areas(drawings, text_page_rect(page)),
+    )
+
+
+def light_fill(drawing: dict) -> bool:
+    """只填色、由矩形拼成、两边都比线粗的浅色块：表格格子、文本框的底色。
+    深色块不算：图注标签是黑底白字。"""
+    rect = pymupdf.Rect(drawing["rect"])
+    items = drawing.get("items") or []
+    fill = drawing.get("fill")
+    return (
+        drawing.get("type") == "f" and bool(items) and all(item[0] in ("re", "qu") for item in items)
+        and min(rect.width, rect.height) > _RULE_THICK
+        and fill is not None and len(fill) == 3 and 0.299 * fill[0] + 0.587 * fill[1] + 0.114 * fill[2] > 0.6
+    )
+
+
+def _shaded_areas(drawings: list[dict], bounds: pymupdf.Rect) -> tuple[pymupdf.Rect, ...]:
+    """挨着的浅色块并成一片。一张表常是每格一块底色，格子之间留一道细缝。
+    铺满整页的是纸张底色，不算。"""
+    areas: list[pymupdf.Rect] = []
+    for drawing in drawings:
+        area = pymupdf.Rect(drawing["rect"])
+        if not light_fill(drawing) or (
+            area.width > bounds.width * _PAGE_FILL and area.height > bounds.height * _PAGE_FILL
+        ):
+            continue
+        while True:
+            near = [other for other in areas if (area + (-_NEAR, -_NEAR, _NEAR, _NEAR)).intersects(other)]
+            if not near:
+                break
+            for other in near:
+                areas.remove(other)
+                area |= other
+        areas.append(area)
+    return tuple(areas)
 
 
 def page_words(page: pymupdf.Page) -> tuple[_TextWord, ...]:
