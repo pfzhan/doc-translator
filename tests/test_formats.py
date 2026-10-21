@@ -5520,6 +5520,28 @@ def test_list_item_near_the_page_middle_stays_left_aligned():
     assert centered
 
 
+def test_heading_at_the_frame_edge_stays_left_aligned():
+    """2.6.1 小标题从版心左缘起笔。最宽一块是并进旁注、更靠左的段落，中线碰巧对上，仍按左对齐写回。"""
+    from app.formats.pdf import TextBlock, _write_rect
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import PageGeometry
+
+    def blk(text, x0, y0, x1, y1, size=10.0):
+        rect = pymupdf.Rect(x0, y0, x1, y1)
+        return TextBlock(page=16, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
+
+    heading = blk("2.6.1 Character Disjunction: The Square Bracket", 160, 173, 421, 185, 12)
+    widest = blk("Figure 2.10 The caret for negation or just to mean the caret.", 96, 695, 490, 705, 9)
+    title = blk("Exercises", 280, 300, 373, 312, 12)
+    frame = TextFrame(160, 493, 111, 719, 10)
+    geo = PageGeometry.from_rects(612, [heading.rect, widest.rect], height=792, frame=frame)
+    items = [(heading, ""), (widest, ""), (title, "")]
+    rect, centered = _write_rect(heading, items, True, False, geo)
+    assert not centered and rect.x0 == heading.rect.x0
+    _, centered = _write_rect(title, items, True, False, geo)
+    assert centered
+
+
 def test_slide_title_and_a_box_label_below_stay_apart():
     """幻灯片大标题下面图里的小字框不是图注续行，标题旁边的星形里的字也不是标题的下一行。"""
     from app.formats.pdf import TextBlock, _merge_caption_fragments, _merge_continuations
