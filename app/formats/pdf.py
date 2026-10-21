@@ -849,21 +849,30 @@ def _continuation_prose(
 
 
 def _column_anchors(blocks: list[TextBlock]) -> list[float]:
-    """正文左缘。至少两块落在同一左缘才算一栏，单行右半句不另起栏。"""
+    """正文左缘。至少两块落在同一左缘才算一栏，单行右半句不另起栏。
+
+    下一栏从上一栏的右缘以外起笔。缩进排的例句、引文落在上一栏中间，不另起栏：
+    不然它的最后一块会被当成页末，把下一页的段首接过来。
+    """
     if not blocks:
         return []
-    groups: list[list[float]] = []
-    for x in sorted(block.rect.x0 for block in blocks):
-        if groups and x - groups[-1][0] < 8:
-            groups[-1].append(x)
+    groups: list[list[TextBlock]] = []
+    for block in sorted(blocks, key=lambda block: block.rect.x0):
+        if groups and block.rect.x0 - groups[-1][0].rect.x0 < 8:
+            groups[-1].append(block)
         else:
-            groups.append([x])
-    anchors = [sum(group) / len(group) for group in groups if len(group) >= 2]
+            groups.append([block])
     merged: list[float] = []
-    for anchor in anchors:
-        if merged and anchor - merged[-1] < _CLUSTER_GAP:
+    right = None
+    for group in groups:
+        if len(group) < 2:
+            continue
+        anchor = sum(block.rect.x0 for block in group) / len(group)
+        if merged and (anchor - merged[-1] < _CLUSTER_GAP or (right is not None and anchor < right - 4)):
             continue
         merged.append(anchor)
+        edges = sorted(block.rect.x1 for block in group)
+        right = edges[len(edges) // 2]
     return merged
 
 
