@@ -5953,3 +5953,101 @@ def test_cjk_line_keeps_bold_across_a_formula():
         elif op.endswith("TJ") or op.endswith("Tj"):
             stroked.append(bold)
     assert stroked == [False, True, True, False]
+
+
+def test_inline_colors_are_marked_relative_to_the_block():
+    """和块同色的不写标记；别的颜色写 {cRRGGBB}，同色的几个词中间的空格不断开；白字（图注标签）不写。
+    颜色在字号里面、强调外面，标记成对嵌套。"""
+    from app.formats.pdf_flow import Emphasis, writer_for
+
+    plain = Emphasis(False, False)
+    spans = [
+        {"text": "We cite ", "color": 0, "size": 10},
+        {"text": "Clark", "color": 0x0000FF, "size": 10},
+        {"text": " ", "color": 0, "size": 10},
+        {"text": "2002", "color": 0x0000FF, "size": 10},
+        {"text": " here.", "color": 0, "size": 10},
+        {"text": "Figure 2.1", "color": 0xFFFFFF, "size": 10},
+    ]
+    writer = writer_for(spans, 10, 0)
+    text = "".join(writer.text(s["text"], plain, s["size"], s["color"]) for s in spans) + writer.close()
+    assert text == "We cite {c0000ff}Clark 2002{/c} here.Figure 2.1"
+
+    same = [{"text": "All black text.", "color": 0, "size": 10}]
+    writer = writer_for(same, 10, 0)
+    assert writer.text("All black text.", plain, 10, 0) + writer.close() == "All black text."
+
+    writer = writer_for([{"text": "abc", "color": 0, "size": 10}, {"text": "x", "color": 0xFF0000, "size": 6}], 10, 0)
+    out = writer.text("abc ", Emphasis(True, False), 10, 0) + writer.text("x", Emphasis(True, False), 6, 0xFF0000)
+    assert out + writer.close() == "{b}abc {/b}{z60}{cff0000}{b}x{/b}{/c}{/z}"
+
+
+def test_colors_carry_over_line_breaks():
+    """断开的每一行自带标记：跨行的颜色和里面的粗体在下一行开头重开，本行末尾收起。"""
+    from app.formats.pdf_flow import break_lines
+
+    lines = break_lines("前面的字{c0000ff}{b}这一段很长的蓝色粗体链接文字要跨过换行{/b}{/c}后面", 10, 100, {})
+    assert len(lines) >= 2
+    assert all(line.count("{c0000ff}") == line.count("{/c}") == 1 for line in lines[:-1])
+    assert lines[1].startswith("{c0000ff}{b}")
+
+
+def test_pdf_keeps_inline_colors_in_the_translation(tmp_path):
+    """正文里的蓝色引文、红色字串译过去还是原来的颜色，跨行的部分也是；其余的字是块的颜色。
+    模型弄乱了颜色标记（少了收尾）时整段按块的颜色写，不把后半段染色。"""
+    from app.formats.pdf import translate_pdf
+
+    long_blue = "这是一段很长很长的蓝色链接文字需要跨过换行才能写完" * 3
+
+    class Colored(MockTranslator):
+        async def translate_batch(self, texts):
+            out = []
+            for text in texts:
+                if "{c0000ff}" not in text:
+                    out.append(text)
+                elif "broken" in text:
+                    out.append("前面的字{c0000ff}没有收尾的蓝色，后面的字也会被染成蓝色吗")
+                else:
+                    out.append("开头的一些普通文字，" + "{c0000ff}" + long_blue + "{/c}" + "，以及{cff0000}红字{/c}结尾。")
+            return out
+
+    src = tmp_path / "colors.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=300, height=300)
+    for y, middle in ((60, "Weizenbaum (1966)"), (140, "broken link")):
+        x = 40
+        for text, color in (("We cite ", (0, 0, 0)), (middle, (0, 0, 1)), (" and ", (0, 0, 0)),
+                            ("xxxxxx", (1, 0, 0)), (" in this body text.", (0, 0, 0))):
+            page.insert_text((x, y), text, fontsize=10, color=color)
+            x += pymupdf.get_text_length(text, fontsize=10)
+    doc.save(src)
+
+    [out] = run(translate_pdf(src, tmp_path, Runner(Colored("zh-CN"), cache=MemCache()), False, "zh-CN"))
+    spans = [s for b in pymupdf.open(out)[0].get_text("dict")["blocks"] for l in b.get("lines", []) for s in l["spans"]]
+    blue = "".join(s["text"] for s in spans if s["color"] == 0x0000FF)
+    red = "".join(s["text"] for s in spans if s["color"] == 0xFF0000)
+    assert blue.replace(" ", "") == long_blue
+    assert red == "红字"
+    assert "没有收尾的蓝色" in "".join(s["text"] for s in spans if s["color"] == 0)
+
+
+def test_cjk_line_keeps_colors_across_a_formula():
+    """公式把一行切成几片，公式后面那片接着用前面开着的颜色，收尾以后回到块的颜色。"""
+    import pymupdf
+
+    from app.formats.pdf_align import _place_lines
+    from app.formats.pdf_typeset import FormulaMetric, typeset_lines
+
+    text = "前面{c0000ff}蓝色\x01i\x021\x01/i\x02还是蓝色{/c}后面"
+    lines = typeset_lines(text, 10, 400, {1: FormulaMetric(10, 10, 8, 2)})
+    commands, _slots, _fonts = _place_lines(
+        lines, pymupdf.Rect(0, 0, 400, 100), 10, 1.4, "#000000", False, frozenset({1}), {}, 800,
+    )
+    painted, now = [], None
+    for op in commands.splitlines():
+        if op.endswith(" rg"):
+            now = op
+        elif op.endswith("TJ") or op.endswith("Tj"):
+            painted.append(now)
+    blue, black = "0.0000 0.0000 1.0000 rg", "0.0000 0.0000 0.0000 rg"
+    assert painted == [black, blue, blue, black]

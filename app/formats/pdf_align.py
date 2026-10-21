@@ -26,7 +26,7 @@ _MAX_GAP_EM = 0.35
 _NO_GAP_BEFORE = frozenset("。，、；：？！）】」』〉》％%.,;:?!)]}>")
 _NO_GAP_AFTER = frozenset("（【「『《〈([{")
 
-_MARK_RE = re.compile(r"\{i\}|\{/i\}|\{b\}|\{/b\}|\{/z\}|\{z(\d+)\}")
+_MARK_RE = re.compile(r"\{i\}|\{/i\}|\{b\}|\{/b\}|\{/z\}|\{z(\d+)\}|\{/c\}|\{c([0-9a-f]{6})\}")
 _LATIN_FONTS = {
     (True, False): ("DocIT", "heit"),
     (False, True): ("DocBO", "hebo"),
@@ -50,6 +50,8 @@ class _Run:
     italic: bool
     bold: bool
     size_pct: int
+    # #rrggbb。空串是块的颜色
+    color: str = ""
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,7 @@ class _Segment:
     font: pymupdf.Font
     size: float
     bold: bool = False
+    color: str = ""
 
     @property
     def width(self) -> float:
@@ -82,16 +85,17 @@ def _latin_font(italic: bool, bold: bool) -> tuple[str, pymupdf.Font]:
 
 
 def _styled_runs(text: str) -> list[_Run]:
-    """按 {i} {b} {zN} 切开。标记本身不占字。"""
+    """按 {i} {b} {zN} {cRRGGBB} 切开。标记本身不占字。"""
     italic = False
     bold = False
     size = 100
+    color = ""
     runs: list[_Run] = []
     buf: list[str] = []
 
     def flush() -> None:
         if buf:
-            runs.append(_Run("".join(buf), italic, bold, size))
+            runs.append(_Run("".join(buf), italic, bold, size, color))
             buf.clear()
 
     index = 0
@@ -113,6 +117,10 @@ def _styled_runs(text: str) -> list[_Run]:
             bold = False
         elif token == "{/z}":
             size = 100
+        elif token == "{/c}":
+            color = ""
+        elif mark.group(2):
+            color = "#" + mark.group(2)
         else:
             size = int(mark.group(1))
         index = mark.end()
@@ -149,6 +157,7 @@ def _append_segment(
     face: tuple[str, pymupdf.Font] | None,
     size: float,
     bold: bool,
+    color: str = "",
 ) -> None:
     if not buf or face is None:
         return
@@ -160,11 +169,12 @@ def _append_segment(
         and segments[-1].font_name == name
         and segments[-1].size == size
         and segments[-1].bold == bold
+        and segments[-1].color == color
     ):
         prev = segments[-1]
-        segments[-1] = _Segment(prev.text + text, name, font, size, bold)
+        segments[-1] = _Segment(prev.text + text, name, font, size, bold, color)
     else:
-        segments.append(_Segment(text, name, font, size, bold))
+        segments.append(_Segment(text, name, font, size, bold, color))
     buf.clear()
 
 
@@ -185,11 +195,11 @@ def _segments(text: str, em: float) -> list[_Segment] | None:
             if picked is None:
                 return None
             if face is not None and picked != face:
-                _append_segment(segments, buf, face, size, stroke and face[0] == _FONT_NAME)
+                _append_segment(segments, buf, face, size, stroke and face[0] == _FONT_NAME, run.color)
             face = picked
             buf.append(char)
         if face is not None:
-            _append_segment(segments, buf, face, size, stroke and face[0] == _FONT_NAME)
+            _append_segment(segments, buf, face, size, stroke and face[0] == _FONT_NAME, run.color)
     return segments
 
 
@@ -289,7 +299,7 @@ def _place_lines(
     fonts: dict[str, pymupdf.Font] = {}
     last = len(lines) - 1
     wrote = False
-    # 公式把一行切成几片，每片从头读标记。前一片还开着的粗体、字号带到下一片
+    # 公式把一行切成几片，每片从头读标记。前一片还开着的粗体、颜色带到下一片
     opened: list[str] = []
     for index, line in enumerate(lines):
         baseline = box.y0 + em * FIRST_BASELINE + index * em * gap
@@ -300,6 +310,7 @@ def _place_lines(
             image_indexes=image_indexes,
             fallback_text=fallback_text,
             opened=opened,
+            color=color,
         )
         if row is None:
             return None
@@ -328,9 +339,10 @@ def _place_line(
     image_indexes: frozenset[int],
     fallback_text: dict[int, str],
     opened: list[str] | None = None,
+    color: str = "#000000",
 ) -> tuple[list[str], list[tuple[int, float]], dict[str, pymupdf.Font]] | None:
     """一行的文本操作（基线 y 先写成 {Y}）和公式槽的横坐标。
-    opened 是前面还开着的样式标记，读完这一行就地更新。"""
+    opened 是前面还开着的样式标记，读完这一行就地更新。color 是块的颜色，片段没有颜色时用它。"""
     pieces: list[tuple[list[_Segment], int | None, float, str]] = []
     fonts: dict[str, pymupdf.Font] = {}
     carried = opened if opened is not None else []
@@ -359,6 +371,7 @@ def _place_line(
     slots: list[tuple[int, float]] = []
     extra_at = 0
     face_now: tuple[str, float] | None = None
+    paint_now = ""
     for segments, slot, piece_width, visible in pieces:
         if slot is not None:
             slots.append((slot, cursor))
@@ -377,6 +390,11 @@ def _place_line(
             if (seg.font_name, seg.size) != face_now:
                 ops.append(f"/{seg.font_name} {seg.size:.2f} Tf")
                 face_now = (seg.font_name, seg.size)
+            if seg.color != paint_now:
+                red, green, blue = _rgb(seg.color or color)
+                ops.append(f"{red:.4f} {green:.4f} {blue:.4f} rg")
+                ops.append(f"{red:.4f} {green:.4f} {blue:.4f} RG")
+                paint_now = seg.color
             # 正文字体没有汉字粗体。填充再描边，字还是一个，复制出来不会变两个。
             if seg.bold:
                 ops.append("2 Tr")
@@ -390,6 +408,11 @@ def _place_line(
             if pos < len(visible) and pos - 1 < len(piece_extras):
                 advance += piece_extras[pos - 1]
             cursor += advance
+    if paint_now:
+        # 下一行从块的颜色开始
+        red, green, blue = _rgb(color)
+        ops.append(f"{red:.4f} {green:.4f} {blue:.4f} rg")
+        ops.append(f"{red:.4f} {green:.4f} {blue:.4f} RG")
     return ops, slots, fonts
 
 

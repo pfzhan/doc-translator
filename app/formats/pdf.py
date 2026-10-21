@@ -30,6 +30,7 @@ from ..languages import RTL_LANGUAGES
 from ..runner import normalize_punctuation
 from .pdf_align import draw_cjk_lines, page_origin
 from .pdf_flow import (
+    COLOR_MARK_RE,
     STYLE_MARK_RE,
     Emphasis,
     balance_marks,
@@ -1794,7 +1795,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
     sizes = {round(size_of(s), 1) for s in text_spans if str(s.get("text") or "").strip()}
     # 整块小型大写：大小写各一个字号，其实是一种字，不写字号标记
     base_size = sizes.pop() if caps and len(sizes) == 1 else block.size
-    writer = writer_for([{**s, "size": size_of(s)} for s in text_spans], base_size)
+    writer = writer_for([{**s, "size": size_of(s)} for s in text_spans], base_size, _color_value(block.color))
     runs: list[Run] = []
     out_lines: list[str] = []
     pending: TextRun | None = None
@@ -1818,7 +1819,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
             elif id(s) in ordinal_at:
                 reading = ordinal_at[id(s)]
                 emphasis = emphasis_of(s.get("font") or "", int(s.get("flags") or 0))
-                parts.append(writer.text(reading, emphasis, size_of(s)))
+                parts.append(writer.text(reading, emphasis, size_of(s), s.get("color")))
                 shown = dict(s)
                 shown["text"] = reading
                 if pending is not None and not _same_text_style(pending, s, emphasis):
@@ -1826,7 +1827,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 pending = _extend_text_run(pending, shown, emphasis, line_no)
             else:
                 emphasis = emphasis_of(s.get("font") or "", int(s.get("flags") or 0))
-                parts.append(writer.text(s["text"], emphasis, size_of(s)))
+                parts.append(writer.text(s["text"], emphasis, size_of(s), s.get("color")))
                 if pending is not None and not _same_text_style(pending, s, emphasis):
                     flush()
                 pending = _extend_text_run(pending, s, emphasis, line_no)
@@ -1835,6 +1836,11 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         out_lines.append("".join(parts))
     block.runs = runs
     return _join_lines(out_lines), formulas
+
+
+def _color_value(color: str) -> int | None:
+    """#rrggbb 换成整数，和 span 里的颜色同一种写法。"""
+    return int(color[1:], 16) if re.fullmatch(r"#[0-9a-fA-F]{6}", color or "") else None
 
 
 def _small_caps_sizes(span_lines: list[list[dict]]) -> dict[int, float]:
@@ -5922,6 +5928,21 @@ def _load_plan(path: Path, key: str, src: Path, runner) -> _PdfPlan | None:
     return plan
 
 
+def _sound_colors(translation: str, sent: str) -> str:
+    """模型弄乱的颜色标记整段去掉，字按块的颜色写：开收对不上，或者用了原文里没有的颜色。
+    少一个 {/c}，后半段都会染上色。"""
+    marks = COLOR_MARK_RE.findall(translation)
+    if not marks:
+        return translation
+    allowed = set(COLOR_MARK_RE.findall(sent))
+    depth = 0
+    for mark in marks:
+        depth += -1 if mark == "{/c}" else 1
+        if depth not in (0, 1) or mark not in allowed:
+            return COLOR_MARK_RE.sub("", translation)
+    return translation if depth == 0 else COLOR_MARK_RE.sub("", translation)
+
+
 def _crop_formulas(
     src_doc: pymupdf.Document, flat_units: list[list[TextBlock]], sent_formulas: list[list[dict]],
 ) -> pymupdf.Archive:
@@ -6002,6 +6023,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
                 per_block[id(b)] = b.text
                 block_formulas[id(b)] = []
             continue
+        t = _sound_colors(t, sent_text)
         restored = (_restore_placeholders(t, formulas, lenient=True) if formulas
                     else _STRAY_PLACEHOLDER_RE.sub("", t))
         if restored is not None:

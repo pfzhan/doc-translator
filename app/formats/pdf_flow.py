@@ -1,4 +1,4 @@
-"""译文断行，以及块内粗体、斜体、字号差的占位符。
+"""译文断行，以及块内粗体、斜体、字号、颜色差的占位符。
 
 公式哨兵是不可拆的原子。短括号组放得下时也不从中间切开。
 样式标记不占宽，只在和块的底色不同时写出。
@@ -15,9 +15,11 @@ from dataclasses import dataclass
 import pymupdf
 
 _SENTINEL_RE = re.compile(r"\x01i\x02(\d+)\x01/i\x02")
-STYLE_MARK_RE = re.compile(r"\{z\d+\}|\{/z\}|\{/?[bi]\}")
+STYLE_MARK_RE = re.compile(r"\{z\d+\}|\{/z\}|\{c[0-9a-f]{6}\}|\{/c\}|\{/?[bi]\}")
 _ATOM_RE = re.compile(rf"\x01i\x02\d+\x01/i\x02|{STYLE_MARK_RE.pattern}")
 _SIZE_OPEN_RE = re.compile(r"\{z(\d+)\}")
+COLOR_MARK_RE = re.compile(r"\{c[0-9a-f]{6}\}|\{/c\}")
+_COLOR_OPEN_RE = re.compile(r"\{c([0-9a-f]{6})\}")
 _CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 
 _BOLD_FLAG = 16
@@ -39,17 +41,20 @@ class Emphasis:
 
 
 class EmphasisWriter:
-    """相对块的底色写出 {b} {i} {zN}。公式占位符是原子，不进强调，也不进字号。"""
+    """相对块的底色写出 {b} {i} {zN} {cRRGGBB}。公式占位符是原子，不进强调、字号和颜色。"""
 
-    def __init__(self, base: Emphasis, mixed: bool, base_size: float = 0) -> None:
+    def __init__(self, base: Emphasis, mixed: bool, base_size: float = 0, base_color: int | None = None) -> None:
         self.base = base
         self.mixed = mixed
         self.base_size = base_size
+        self.base_color = base_color
         self._bold = False
         self._italic = False
         self._size = 100
+        # 当前写着的颜色。None 是块的颜色
+        self._color: int | None = None
 
-    def text(self, text: str, emphasis: Emphasis, size: float = 0) -> str:
+    def text(self, text: str, emphasis: Emphasis, size: float = 0, color: int | None = None) -> str:
         if not text or not self.mixed:
             return text
         percent = size_percent(size, self.base_size) if size and self.base_size else 100
@@ -57,7 +62,9 @@ class EmphasisWriter:
         # 纯空白照旧，标签后面的空格还在字号标记外面
         if text.strip() and not re.search(r"[^\W_]", text):
             percent = self._size
-        return self._marks(emphasis, percent) + text
+        # 纯空白不换颜色：同色的两个词中间不断开
+        shade = self._color if not text.strip() else marked_color(color, self.base_color)
+        return self._marks(emphasis, percent, shade) + text
 
     def atom(self, text: str) -> str:
         if not self.mixed:
@@ -69,11 +76,28 @@ class EmphasisWriter:
             return ""
         return self._marks(self.base, 100)
 
-    def _marks(self, emphasis: Emphasis, size_pct: int) -> str:
-        """字号是外层。换字号时先收起强调，换完再按目标强调打开，标记始终成对。"""
-        if size_pct == self._size:
+    def _marks(self, emphasis: Emphasis, size_pct: int, color: int | None = None) -> str:
+        """由外到内是字号、颜色、强调。换外层时先收起里面的，换完再打开，标记始终成对嵌套。"""
+        if size_pct == self._size and color == self._color:
             return self._emphasis_marks(emphasis)
-        return self._emphasis_marks(self.base) + self._switch_size(size_pct) + self._emphasis_marks(emphasis)
+        parts = [self._emphasis_marks(self.base)]
+        if size_pct != self._size:
+            parts.append(self._switch_color(None))
+            parts.append(self._switch_size(size_pct))
+        parts.append(self._switch_color(color))
+        parts.append(self._emphasis_marks(emphasis))
+        return "".join(parts)
+
+    def _switch_color(self, color: int | None) -> str:
+        if color == self._color:
+            return ""
+        parts: list[str] = []
+        if self._color is not None:
+            parts.append("{/c}")
+        if color is not None:
+            parts.append(f"{{c{color:06x}}}")
+        self._color = color
+        return "".join(parts)
 
     def _switch_size(self, size_pct: int) -> str:
         parts: list[str] = []
@@ -120,10 +144,13 @@ def emphasis_of(font: str, flags: int) -> Emphasis:
     return Emphasis(bold, italic)
 
 
-def writer_for(spans: list[dict[str, object]], base_size: float = 0) -> EmphasisWriter:
-    """底色取最长的非公式 span。只有别的 span 在强调或字号上和它不同时才写标记。"""
+def writer_for(
+    spans: list[dict[str, object]], base_size: float = 0, base_color: int | None = None,
+) -> EmphasisWriter:
+    """底色取最长的非公式 span。只有别的 span 在强调、字号或颜色上和它不同时才写标记。
+    base_color 是块的颜色，写回时整块用它；和它不同的字才写颜色标记。"""
     weighted: list[tuple[Emphasis, int]] = []
-    size_mixed = False
+    other_mixed = False
     for span in spans:
         text = str(span.get("text") or "")
         if not text.strip():
@@ -131,12 +158,29 @@ def writer_for(spans: list[dict[str, object]], base_size: float = 0) -> Emphasis
         mark = emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0))
         weighted.append((mark, len(text)))
         if base_size and size_percent(float(span.get("size") or 0), base_size) != 100:
-            size_mixed = True
+            other_mixed = True
+        if marked_color(span.get("color"), base_color) is not None:
+            other_mixed = True
     if not weighted:
-        return EmphasisWriter(Emphasis(False, False), False, base_size)
+        return EmphasisWriter(Emphasis(False, False), False, base_size, base_color)
     base = max(weighted, key=lambda item: item[1])[0]
-    mixed = size_mixed or any(mark != base for mark, _length in weighted)
-    return EmphasisWriter(base, mixed, base_size)
+    mixed = other_mixed or any(mark != base for mark, _length in weighted)
+    return EmphasisWriter(base, mixed, base_size, base_color)
+
+
+def marked_color(color: object, base_color: int | None) -> int | None:
+    """要写颜色标记的颜色。和块同色的不写；很浅的不写：黑底白字的图注标签整个贴回，
+    白字写成译文会落在白底上看不见。块本身是浅色字时也不写。"""
+    if base_color is None or not isinstance(color, int) or color == base_color:
+        return None
+    if _light(color) or _light(base_color):
+        return None
+    return color
+
+
+def _light(color: int) -> bool:
+    red, green, blue = (color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF
+    return 0.299 * red + 0.587 * green + 0.114 * blue > 0.8 * 255
 
 
 def restore_emphasis(escaped_html: str) -> str:
@@ -148,7 +192,9 @@ def restore_emphasis(escaped_html: str) -> str:
         .replace("{i}", "<i>")
         .replace("{/i}", "</i>")
         .replace("{/z}", "</span>")
+        .replace("{/c}", "</span>")
     )
+    tagged = _COLOR_OPEN_RE.sub(r'<span style="color:#\1">', tagged)
     return _SIZE_OPEN_RE.sub(r'<span style="font-size:\1%">', tagged)
 
 
@@ -164,7 +210,7 @@ def break_lines(
     formula_widths: dict[int, float],
 ) -> list[str]:
     """按估算宽度断行。哨兵、超宽公式、放得下的短括号组都不拆开。
-    每行自带样式标记：跨行的粗体、字号在下一行开头重开，在本行末尾收起。
+    每行自带样式标记：跨行的粗体、颜色在下一行开头重开，在本行末尾收起。
     各行是分开写的（HTML 每行一个不折行的盒子，中文逐片画），不补的话下一行就丢了样式。"""
     return balance_lines(_break_lines(text, em, max_width, formula_widths))
 
@@ -203,7 +249,7 @@ def _closing(opened: list[str]) -> str:
 
 
 def balance_marks(left: str, right: str) -> tuple[str, str]:
-    """切开处补上仍开着的样式标记。字号不嵌套，必须重开还开着的那一个，不能重开更早已经闭合的。"""
+    """切开处补上仍开着的样式标记。字号、颜色不嵌套，必须重开还开着的那一个，不能重开更早已经闭合的。"""
     opened = open_marks(left)
     if not opened:
         return left, right
