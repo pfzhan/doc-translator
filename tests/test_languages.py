@@ -162,3 +162,31 @@ def test_glossary_injected_into_messages_and_cache_key():
     c = OpenAITranslator("zh-CN", api_key="x", base_url="http://localhost", model="m",
                          glossary="Book = 卷")
     assert a.cache_key != b.cache_key and a.cache_key == c.cache_key
+
+
+def test_instant_translator_still_lets_other_requests_run():
+    """接口立即返回时，每批之间也要交出事件循环，任务页的轮询才有响应。"""
+    ticks = 0
+    seen: list[int] = []  # 每次报进度时轮询跑过几次
+
+    async def scenario():
+        nonlocal ticks
+        translator = MockTranslator("zh-CN")
+        translator.concurrency = 1
+        runner = Runner(translator, progress=lambda done, total: seen.append(ticks),
+                        cache=MemCache(), skip_same_lang=False)
+
+        async def poll():
+            nonlocal ticks
+            while True:
+                ticks += 1
+                await asyncio.sleep(0)
+
+        poller = asyncio.create_task(poll())
+        await runner.translate_all([f"Sentence number {n} to translate." for n in range(200)])
+        poller.cancel()
+
+    run(scenario())
+    assert len(seen) > 3
+    # 第一次是开始前报的，之后每批之间轮询都要跑到
+    assert len(set(seen[1:])) == len(seen[1:])
