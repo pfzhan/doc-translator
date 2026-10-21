@@ -101,7 +101,7 @@ class Job:
             # 插件的 sameLangCheck：检测到的源语言和目标语言一致时提示
             "same_lang": same_language(self.detected_lang, self.target_lang),
             "preview": self.preview,
-            # 开始翻译前的准备阶段，只在运行中有
+            # 翻译前的准备、翻译后的写回阶段，只在运行中有
             "stage": dict(self.runner.stage) if self.runner is not None else None,
             # 文件名里的 #、? 不编码会被浏览器当成锚点和查询串
             "outputs": [{"name": n, "url": f"/api/jobs/{self.id}/files/{quote(n)}"} for n in self.outputs],

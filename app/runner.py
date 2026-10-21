@@ -97,7 +97,7 @@ class Runner:
         self.fresh = fresh
         # 给任务页展示：检测到的文档语言、跳过的段落数
         self.info = {"detected_lang": "", "skipped": 0}
-        # 开始翻译前的准备阶段（见 report_stage）
+        # 翻译前的准备、翻译后的写回做到哪一步（见 report_stage）
         self.stage = {"name": "", "done": 0, "total": 0, "unit": ""}
         # 文件内容的摘要（set_document），术语表按它缓存
         self.document = ""
@@ -149,8 +149,8 @@ class Runner:
         self._log.extend(texts)
 
     def report_stage(self, name: str, done: int = 0, total: int = 0, unit: str = "") -> None:
-        """翻译前的准备阶段做到哪里，unit 是计数的单位（页、段）。整本书的版面分析要一两分钟，
-        任务页据此显示进度。可以在线程里调用：只整体替换一个字典。"""
+        """翻译前的准备、翻译后的写回做到哪里，unit 是计数的单位（页、段）。整本书的版面分析、
+        写回各要几分钟，任务页据此显示进度。可以在线程里调用：只整体替换一个字典。"""
         self.stage = {"name": name, "done": done, "total": total, "unit": unit}
 
     def preview(self, since: int = -1) -> dict:
@@ -238,6 +238,8 @@ class Runner:
         这个标记按位置生效：同一句在正文里出现时仍会翻译。
         """
         n = len(texts)
+        # 准备阶段到此结束。之后的进度看已译段数，格式自己再报写回的阶段
+        self.report_stage("")
         skip_flags = list(skip or [])
         if len(skip_flags) < n:
             skip_flags.extend([False] * (n - len(skip_flags)))
