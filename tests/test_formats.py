@@ -5740,8 +5740,9 @@ def test_pdf_reports_its_preparation_and_writing_stages(tmp_path):
     assert after[-1] == ("生成文件", 0, 0, "")
 
 
-def test_pdf_job_keeps_the_event_loop_running(tmp_path, monkeypatch):
-    """用 MuPDF 的部分在线程里做，同时跑两个任务时事件循环也一直能响应别的请求。"""
+def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monkeypatch):
+    """同时跑的两个任务不能一起用 MuPDF（find_tables 会改进程全局的字框开关）；
+    用 MuPDF 的部分在线程里做，事件循环一直能响应别的请求。"""
     import time
 
     from app.formats import pdf
@@ -5750,6 +5751,21 @@ def test_pdf_job_keeps_the_event_loop_running(tmp_path, monkeypatch):
     doc = pymupdf.open()
     doc.new_page().insert_text((72, 72), "A sentence to translate.", fontsize=11)
     doc.save(src)
+
+    inside = most = 0
+    stages: list[tuple] = []
+
+    def counted(real):
+        def wrapper(*args, **kwargs):
+            nonlocal inside, most
+            inside += 1
+            most = max(most, inside)
+            try:
+                time.sleep(0.2)
+                return real(*args, **kwargs)
+            finally:
+                inside -= 1
+        return wrapper
 
     real_geometry = pdf.PageGeometry
 
@@ -5760,6 +5776,8 @@ def test_pdf_job_keeps_the_event_loop_running(tmp_path, monkeypatch):
             time.sleep(1.0)
             return real_geometry.from_page(*args, **kwargs)
 
+    monkeypatch.setattr(pdf, "_extract", counted(pdf._extract))
+    monkeypatch.setattr(pdf, "_render_by_parts", counted(pdf._render_by_parts))
     monkeypatch.setattr(pdf, "PageGeometry", SlowGeometry)
 
     async def scenario():
@@ -5776,13 +5794,19 @@ def test_pdf_job_keeps_the_event_loop_running(tmp_path, monkeypatch):
         poller = asyncio.create_task(poll())
         for name in "ab":
             (tmp_path / name).mkdir()
+        runners = [runner() for _ in "ab"]
+        for r in runners:
+            r.report_stage = lambda name, done=0, total=0, unit="": stages.append((name, done, total, unit))
         outs = await asyncio.gather(*(
-            pdf.translate_pdf(src, tmp_path / name, runner(), False, "zh-CN") for name in "ab"
+            pdf.translate_pdf(src, tmp_path / name, r, False, "zh-CN") for name, r in zip("ab", runners)
         ))
         poller.cancel()
         return outs, max(gaps)
 
     outs, longest_gap = run(scenario())
+    # 后到的任务等的时候任务页上显示在等
+    assert ("等候其他任务", 0, 0, "") in stages
     # 线程里的 MuPDF 调用不放 GIL，循环偶尔停零点几秒；在循环里算的话一停就是一秒
     assert longest_gap < 0.6
+    assert most == 1
     assert [pymupdf.open(out)[0].get_text() for [out] in outs] == [pymupdf.open(outs[0][0])[0].get_text()] * 2

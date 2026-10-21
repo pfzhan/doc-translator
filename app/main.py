@@ -15,6 +15,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import history, layout_model
 from .formats import PREVIEW_FORMATS, SUPPORTED, output_variant, translate_file
+from .formats.pdf import mupdf_turn
 from .history import Job, JobStore
 from .languages import GOOGLE_CODES, LANGUAGES
 from .prompts import default_prompts
@@ -654,7 +655,8 @@ async def test_layout_model(data: dict | None = Body(None)):
     """用表单里的路径（可能还没保存）加载模型，在一张样例页上跑一遍。"""
     raw = (data or {}).get("path", settings.layout_model["path"])
     try:
-        return await asyncio.to_thread(layout_model.check, layout_model.resolve(str(raw or "")))
+        async with mupdf_turn():  # 样例页用 MuPDF 画，和正在跑的任务错开
+            return await asyncio.to_thread(layout_model.check, layout_model.resolve(str(raw or "")))
     except layout_model.LayoutModelError as e:
         raise HTTPException(400, str(e))
 
