@@ -512,8 +512,10 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         h_overlap = min(qrect.x1, rect.x1) - max(qrect.x0, rect.x0)
         # 同一基线上、词距内的下一个词。按词拆行时，行内大写词（DXL）不是新段落。
         # 句末、标记语言和图内标签仍拆开，避免把侧标或格子并进正文。
-        # 词距和接口空档按两截里较小的字号算：章首的大号数字离标题一个大字宽，中间还隔着竖线
-        seam_gap = min(psize, max((s["size"] for s in items[i][2]), default=psize))
+        # 词距和接口空档按上一截的字号算。上一截比这一截大一倍多时（章首的大号数字，
+        # 离标题一个大字宽，中间还隔着竖线）按这一截算。分式里的小号上下标仍按正文字号
+        piece_size = max((s["size"] for s in items[i][2]), default=psize)
+        seam_gap = piece_size if psize > piece_size * 1.6 else psize
         same_word = _same_line_word(items[i - 1][0], text, qrect, rect, seam_gap) or i in justified
         # 式子被拆成几截（分式、大括号、根号）时，首尾相接的几截是同一可视行，
         # 纯符号的那一截不能把行切开。上下交叠按这一行已经接上的部分算：
