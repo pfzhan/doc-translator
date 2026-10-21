@@ -1232,12 +1232,21 @@ def _smaller_prose_line(spans: list[dict], main_size: float) -> bool:
     return _prose_units("".join(str(span.get("text") or "") for span in visible)) >= 4
 
 
+def _light_text(span: dict) -> bool:
+    color = int(span.get("color") or 0)
+    red, green, blue = (color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF
+    return bool(span["text"].strip()) and 0.299 * red + 0.587 * green + 0.114 * blue >= 220
+
+
 def _is_formula_span(span: dict, main_size: float, *, prose_line: bool = False, code: bool = False) -> bool:
     """行内公式：数学字体的 span，或明显小于正文的角标 span（引用编号等）。
     粗体 CM（CMBX 等）的一两个字符按 mathbf 单字母算公式；粗体单词仍是正文。
     正文字体里的希腊字母和数学符号也是公式。单个拉丁字母不是，除非贴在角标上。
     prose_line 为真时，整行都是比标题小的正文，不能单凭字号收成公式。"""
     if _span_is_math(span):
+        return True
+    # 近白的字压在深色底上（黑底白字的图注标签）。重写会用正文的颜色，和底色混成一片，原样贴回
+    if _light_text(span):
         return True
     # 句子里的等宽词是属性名、函数名，照原样贴回，不让模型有的译有的不译
     if code and MONO_FONT_RE.search(span["font"]) and re.search(r"[A-Za-z]", span["text"]):
