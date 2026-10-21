@@ -71,3 +71,22 @@ def test_margin_note_on_a_body_line_is_split_off():
     assert notes == ["tokenization", "regular", "edit distance"]
     body = " ".join(block.text for block in blocks if not block.side_note)
     assert "tokenization" not in body and "regular" not in body and "edit distance" not in body
+
+
+def test_displayed_formula_with_a_big_brace_keeps_its_rows():
+    from app.formats.pdf import TextBlock, _display_formula_ids
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import PageGeometry
+
+    def block(text, rect, font="NimbusRomNo9L-Regu"):
+        span = {"text": text, "font": font, "size": 10.0}
+        return TextBlock(page=0, rect=pymupdf.Rect(rect), line_rects=[pymupdf.Rect(rect)], text=text,
+                         size=10, color="#000000", bold=False, span_lines=[[span]])
+
+    brace = block("D[i−1, j −1]+ 2; if source[i] ≠ target[j]", (237, 408, 432, 432), "CMEX10")
+    condition = block("0; if source[i] = target[j]", (325, 420, 432, 430))
+    body = block("Under this version of Levenshtein, the computation for D[i, j] becomes:", (142, 380, 475, 390))
+    inline = block("a sum written inline uses the extension font too", (142, 440, 475, 450), "CMEX10")
+    geo = PageGeometry.from_rects(612, [], [], 792, frame=TextFrame(142, 475, 111, 719, 10))
+    ids = _display_formula_ids([brace, condition, body, inline], [geo])
+    assert ids == {id(brace), id(condition)}
