@@ -5665,25 +5665,34 @@ def test_large_chapter_number_stays_apart_from_the_title():
     assert _split_lines(section) == [[0, 1]]
 
 
-def test_pdf_tables_are_searched_once_per_page(tmp_path, monkeypatch):
-    """找表要把整页的字解析一遍。提取、阅读顺序、角色判断共用一次结果。"""
-    from app.formats import pdf, pdf_layout
-    from app.formats.pdf import translate_pdf
+def test_pdf_page_lines_and_tables_are_read_once_per_page(tmp_path, monkeypatch):
+    """找表要把整页的字解析一遍，矢量图、图片框每读一次也要几毫秒。
+    提取、阅读顺序、角色判断共用一次结果。写回译文时另读，不在这里数。"""
+    from app.formats import pdf_layout
+    from app.formats.pdf import _extract
 
-    calls: list[int] = []
-    original = pdf_layout.page_tables
+    calls: dict[str, list[int]] = {"tables": [], "drawings": [], "images": []}
+    tables, drawings, images = pdf_layout.page_tables, pymupdf.Page.get_drawings, pymupdf.Page.get_image_info
 
-    def counted(page):
-        calls.append(page.number)
-        return original(page)
+    def counted_tables(page, *args):
+        calls["tables"].append(page.number)
+        return tables(page, *args)
 
-    monkeypatch.setattr(pdf, "page_tables", counted)
-    monkeypatch.setattr(pdf_layout, "page_tables", counted)
+    def counted_drawings(self, *args, **kwargs):
+        calls["drawings"].append(self.number)
+        return drawings(self, *args, **kwargs)
+
+    def counted_images(self, *args, **kwargs):
+        calls["images"].append(self.number)
+        return images(self, *args, **kwargs)
+
+    monkeypatch.setattr(pdf_layout, "page_tables", counted_tables)
+    monkeypatch.setattr(pymupdf.Page, "get_drawings", counted_drawings)
+    monkeypatch.setattr(pymupdf.Page, "get_image_info", counted_images)
     doc = pymupdf.open()
     for _ in range(3):
         page = doc.new_page(width=420, height=240)
         page.insert_text((40, 60), "A body paragraph long enough to be translated here.", fontsize=10)
-    src = tmp_path / "pages.pdf"
-    doc.save(src)
-    run(translate_pdf(src, tmp_path, runner(), False, "zh-CN"))
-    assert sorted(calls) == [0, 1, 2]
+    _extract(doc)
+    assert {key: sorted(pages) for key, pages in calls.items()} == {key: [0, 1, 2] for key in calls}
+
