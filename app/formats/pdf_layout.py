@@ -94,6 +94,8 @@ class Column:
 class RuledTable:
     rect: pymupdf.Rect
     cells: tuple[pymupdf.Rect, ...]
+    # 算法框里的伪代码也按一列的表切格子，但要逐行翻译。别的表格留原文
+    algorithm: bool = False
 
 
 @dataclass(frozen=True)
@@ -602,7 +604,7 @@ def algorithm_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> 
             continue
         rows = _code_rows(lines, body, horizontal)
         if len(rows) >= 2:
-            tables.append(RuledTable(body, rows))
+            tables.append(RuledTable(body, rows, algorithm=True))
     return tuple(tables)
 
 
