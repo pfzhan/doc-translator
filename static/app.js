@@ -741,6 +741,20 @@ function downloadLabels(outputs) {
   return outputs.map((o) => downloadLabel(o.name, dup));
 }
 
+// PDF 在新标签页里用浏览器自带的阅读器打开。两种版本都有时按钮带上版本名
+function previewLinks(job) {
+  const pdfs = job.outputs.filter((o) => fmtOf(o.name) === "pdf");
+  return pdfs.map((o) => {
+    const variant = outputVariant(o.name) === "bilingual" ? "双语" : outputVariant(o.name) === "translated" ? "译文" : "";
+    const a = el("a", "btn sm", `预览${pdfs.length > 1 ? variant : ""}`);
+    a.href = `${o.url}?inline=1`;
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.title = `在新标签页打开 ${o.name}`;
+    return a;
+  });
+}
+
 // 另一种版本的按钮：文案和已有文件的下载按钮完全一致（“下载译文/下载双语”），
 // 文件还没生成时点击就在后台现生成（服务端按缓存重新排版，几秒）然后直接开始下载
 const variantInflight = new Set();
@@ -922,6 +936,7 @@ function jobRow(job, selectable = false) {
     read.addEventListener("click", () => openReader(job.id));
     actions.append(read);
   }
+  actions.append(...previewLinks(job));
   const curVariant = job.mode === "bilingual" ? "bilingual" : "translated";
   for (const [i, o] of job.outputs.entries()) {
     // 当前模式对应的版本是主按钮；另一种版本已生成时降为普通按钮，和“生成X版”占位一致
@@ -1359,6 +1374,7 @@ function renderReaderBar(job) {
     pause.addEventListener("click", () => pauseJob(job.id, pause));
     actions.append(pause);
   }
+  downloads.append(...previewLinks(job));
   const curVariant = job.mode === "bilingual" ? "bilingual" : "translated";
   for (const [i, o] of job.outputs.entries()) {
     const primary = outputVariant(o.name) === curVariant;

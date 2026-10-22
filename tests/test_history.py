@@ -597,6 +597,18 @@ def test_download_url_encodes_hash_and_question_mark(app_env):
         assert client.get(out["url"]).status_code == 200
 
 
+def test_inline_file_opens_in_the_browser(app_env):
+    """inline=1 时响应头是 inline，浏览器直接打开；默认仍是附件下载。"""
+    main = app_env
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        [out] = job["outputs"]
+        assert client.get(out["url"]).headers["content-disposition"].startswith("attachment")
+        inline = client.get(out["url"] + "?inline=1")
+        assert inline.status_code == 200
+        assert inline.headers["content-disposition"].startswith("inline")
+
+
 def test_oversized_upload_rejected_before_reading_body(app_env, monkeypatch):
     """Content-Length 超过上限时直接 413，请求进不了 create_job（不用等整个文件写进临时文件）。"""
     main = app_env
