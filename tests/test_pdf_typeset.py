@@ -27,6 +27,23 @@ def test_wide_formula_is_its_own_line():
     )
 
 
+def test_a_tall_inline_formula_opens_up_its_line():
+    """根号下带求和上下限的行内公式比一行字高，这一行的行距撑开，后面各行跟着下移。一行高的公式不撑。"""
+    from app.formats.pdf_typeset import line_offsets
+
+    tall = {1: FormulaMetric(slot_width=40, body_width=36, height=24, below=7)}
+    lines = typeset_lines(f"甲乙{_SENTINEL}丙丁", em=10, max_width=200, metrics=tall)
+    plain = typeset_lines("戊己庚辛", em=10, max_width=200, metrics={})
+    offsets, extra = line_offsets([*plain, *lines, *plain], em=10, gap=1.45)
+    assert offsets[0] == 0 and offsets[1] > 0 and offsets[2] > offsets[1]
+    assert extra == offsets[2]
+    # 第一行就是高公式的，上面借原文留的地方，不往下挪
+    first, _ = line_offsets([*lines, *plain], em=10, gap=1.45)
+    assert first[0] == 0 and first[1] > 0
+    short = {1: FormulaMetric(slot_width=20, body_width=16, height=12, below=2)}
+    assert line_offsets(typeset_lines(f"甲{_SENTINEL}乙", em=10, max_width=200, metrics=short), em=10, gap=1.45) == ([0.0], 0.0)
+
+
 def test_style_marks_are_written_back(tmp_path):
     """粗体、斜体、较小字号按标记写回，不留在页面文字里。"""
     from app.formats.pdf import TextBlock, _render_translated

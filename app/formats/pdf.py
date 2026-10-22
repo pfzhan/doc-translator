@@ -58,7 +58,7 @@ from .pdf_parts import plan_parts, render_in_parts, worker_count
 from .pdf_roles import LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
 from .pdf_type3 import Type3Reader, broken_type3_names, recover_type3_page
-from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, typeset_lines
+from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, line_offsets, typeset_lines
 from .pdf_vision import layout_detector
 
 MATH_FONT_RE = re.compile(r"CMMI|CMSY|CMEX|MSBM|Math|Symbol|STIX|Cambria Math", re.I)
@@ -82,6 +82,13 @@ CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
 # 单个字母加句点，像 "a. " 也像换行后的 "Q. The cost"。后者不是列表项。
 _LETTER_BULLET_RE = re.compile(r"^[a-zA-Z][.)]\s+")
+# 行内公式最高几个字高。根号、求和带上下限的式子在这以内按原大写，行距跟着撑开
+_INLINE_FORMULA_EM = 2.6
+# 盒子放不下撑开的行距时，公式压到的高度：正好在一行里
+_LINE_FORMULA_EM = 1.35
+# 分式、根号下求和，基线以上一般不到一个半字高，以下不到一个字高
+_FORMULA_ASCENT_EM = 1.8
+_FORMULA_DESCENT_EM = 1.3
 _PAREN_ITEM_RE = re.compile(r"^\([a-zA-Z]\)\s+")
 # 书里按章编号的例句：(1.2) It was difficult ...
 _EXAMPLE_NUMBER_RE = re.compile(r"^\(\d+\.\d+[a-z]?\)\s+\S")
@@ -4644,6 +4651,9 @@ def _fit_typeset(
     box = rect
     expanded = False
     tightened = False
+    capped = False
+    for formula in formulas:
+        formula.pop("cap", None)
     lines: list[TypesetLine] = []
     lanes: list[tuple[float, float]] = []
     for _ in range(24):
@@ -4654,7 +4664,8 @@ def _fit_typeset(
         )
         # 首行字形顶部还有 0.3em 的出头（实测 MuPDF 盒子内容高 = 行数×行距 + ~0.25em），
         # 只算行距会让临界盒子在写入时被静默缩到 0.93 倍
-        height = max(len(lines), 1) * em * gap + em * 0.3
+        extra = line_offsets(lines, em, gap)[1]
+        height = max(len(lines), 1) * em * gap + em * 0.3 + extra
         overflows = any(
             line.width > (lanes[index][1] if index < len(lanes) else box.width) + 1
             for index, line in enumerate(lines)
@@ -4672,6 +4683,12 @@ def _fit_typeset(
         if not tightened:
             gap = 1.1 if gap <= 1.25 else gap - 0.25
             tightened = True
+            continue
+        # 压了行距，高公式撑开的那几行还是放不下，就把公式压回一行高，字号不动
+        if too_tall and extra > 0 and not capped:
+            capped = True
+            for formula in formulas:
+                formula["cap"] = _LINE_FORMULA_EM
             continue
         if em <= 1.5:
             break
@@ -5027,8 +5044,9 @@ def _place_typeset(
     )
     line_h = em * gap
     pending: list[tuple[FormulaPiece, float, float]] = []
-    y = box.y0
+    offsets, _extra = line_offsets(lines, em, gap)
     for index, line in enumerate(lines):
+        y = box.y0 + index * line_h + offsets[index]
         indent, width = lanes[index] if index < len(lanes) else (0.0, box.width)
         origin_x = box.x0 + indent
         if centered and line.width < width:
@@ -5062,7 +5080,6 @@ def _place_typeset(
                 pending.append((piece, cursor, y))
                 cursor += piece.slot_width
                 after_formula = True
-        y += line_h
     if not pending:
         return
     spans = [
@@ -5116,14 +5133,21 @@ def _nowrap_parens(body: str) -> str:
 
 
 def _formula_slot(formula: dict, block_size: float, render_size: float) -> tuple[float, float, float]:
-    """行内公式槽位 (缩放, 宽, 高)。高超过 1.35em 时压到 1.35em，避免行框被图片撑开。
+    """行内公式槽位 (缩放, 宽, 高)。高超过 _INLINE_FORMULA_EM 时压下来，再高的那一行撑开行距（见 line_offsets）。
+    盒子放不下时 _fit_typeset 在公式上记 cap，压到一行高。
     换行切开的几片按阅读顺序横排，宽度相加，不把两行空白裁进同一个框。"""
     parts = _formula_parts(formula)
     height = max(float(part.get("h") or 0) for part in parts)
     if not formula.get("has_img") or height <= 0 or block_size <= 0:
         text = str(formula.get("text") or "")
         return 1.0, len(text) * render_size * 0.5, render_size
-    scale = min(render_size / block_size, 1.35 * render_size / height)
+    cap = float(formula.get("cap") or _INLINE_FORMULA_EM)
+    # 基线上下伸出一大截的，多半把相邻一行的字也框了进来，基线也认错了。放大只会盖住别的行，仍压到一行高
+    ascent = max(float(part.get("h") or 0) - float(part.get("d") or 0) for part in parts)
+    descent = max(float(part.get("d") or 0) for part in parts)
+    if ascent > _FORMULA_ASCENT_EM * block_size or descent > _FORMULA_DESCENT_EM * block_size:
+        cap = min(cap, _LINE_FORMULA_EM)
+    scale = min(render_size / block_size, cap * render_size / height)
     gaps = 1.5 * (len(parts) - 1)
     width = sum(float(part["w"]) * scale for part in parts) + gaps + 4.0
     return scale, width, height * scale

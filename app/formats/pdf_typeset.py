@@ -37,6 +37,8 @@ class FormulaPiece:
 
 
 Piece = TextPiece | FormulaPiece
+# 公式可以伸进上下行距的部分（em）。原来压到 1.35em 的公式都在这个范围里
+_FORMULA_SPILL = 0.2
 
 
 @dataclass(frozen=True)
@@ -100,6 +102,30 @@ def _line_of(
     flush()
     width = pieces[-1].x + _piece_width(pieces[-1]) if pieces else 0.0
     return TypesetLine(tuple(pieces), width)
+
+
+def line_offsets(lines: Sequence[TypesetLine], em: float, gap: float) -> tuple[list[float], float]:
+    """每行顶部比按行距排的位置多往下挪多少，以及整段多出的高度。
+
+    根号、求和带上下限的行内公式比一行字高。按行距排会压到上下行，缩到一行高又看不清，
+    和原文一样把这一行的行距撑开。正常行距里本来容得下的公式不撑。
+    第一行不往下挪：原文这一行上面本来留着公式的地方，往下挪反倒压到下面另写的一块。"""
+    half = (gap - 1) / 2
+    room_above = em * (0.88 + half + _FORMULA_SPILL)
+    room_below = em * (0.12 + half + _FORMULA_SPILL)
+    offsets: list[float] = []
+    extra = 0.0
+    for index, line in enumerate(lines):
+        above = below = 0.0
+        for piece in line.pieces:
+            if isinstance(piece, FormulaPiece):
+                above = max(above, piece.height - piece.below - room_above)
+                below = max(below, piece.below - room_below)
+        if index:
+            extra += above
+        offsets.append(extra)
+        extra += below
+    return offsets, extra
 
 
 def _piece_width(piece: Piece) -> float:
