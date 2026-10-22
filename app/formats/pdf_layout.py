@@ -577,7 +577,7 @@ def page_tables(
             drawings = []
     if words is None:
         words = page_words(page)
-    ruled = ruled_tables(page, drawings)
+    ruled = tuple(_with_text_rows(table, words) for table in ruled_tables(page, drawings))
     ruled = (*ruled, *filled_tables(page, drawings, words, ruled))
     algorithms = algorithm_tables(page, drawings)
     # 无线的格子表本来就是按对齐的行找的，表头对齐的话已经在里面，不再往上找
@@ -614,6 +614,55 @@ def _with_header_rows(tables: Sequence[RuledTable], words: Sequence[_TextWord]) 
         else:
             out.append(table)
     return tuple(out)
+
+
+def _with_text_rows(table: RuledTable, words: Sequence[_TextWord]) -> RuledTable:
+    """只画了列线、行与行之间没有横线的表，一格里叠着好几行。同一排的几格里，字一行行
+    左右对齐、每行跨两格以上、行名每行都有、多是短格的，是没画线的行，按行间空档切开。
+    折了行的表头常有只占一行的格，句子折行只在一格里，长句也不算短格。"""
+    bands: dict[tuple[int, int], list[pymupdf.Rect]] = {}
+    for cell in table.cells:
+        bands.setdefault((round(cell.y0), round(cell.y1)), []).append(cell)
+    cells: list[pymupdf.Rect] = []
+    for band in bands.values():
+        cells.extend(_split_band(band, words) if len(band) >= 2 else band)
+    if len(cells) == len(table.cells):
+        return table
+    return RuledTable(table.rect, tuple(cells), table.algorithm)
+
+
+def _split_band(band: Sequence[pymupdf.Rect], words: Sequence[_TextWord]) -> list[pymupdf.Rect]:
+    def holder(word: _TextWord) -> int | None:
+        center = pymupdf.Point((word.x0 + word.x1) / 2, (word.y0 + word.y1) / 2)
+        return next((i for i, cell in enumerate(band) if cell.contains(center)), None)
+
+    inside = [word for word in words if holder(word) is not None]
+    rows = _word_rows(inside)
+    if len(rows) < 2:
+        return list(band)
+    # 最左边有字的一列是行名
+    names = min({i for i in map(holder, inside) if i is not None}, key=lambda i: band[i].x0)
+    pieces: list[_TextCell] = []
+    for row in rows:
+        by_cell: dict[int | None, list[_TextWord]] = {}
+        for word in row:
+            by_cell.setdefault(holder(word), []).append(word)
+        if len(by_cell) < 2 or names not in by_cell:
+            return list(band)
+        for part in by_cell.values():
+            pieces.extend(_row_cells(part))
+    short = sum(1 for piece in pieces if piece.words <= _SHORT_WORDS and piece.width <= _SHORT_WIDTH)
+    if short < len(pieces) * _SHORT_SHARE:
+        return list(band)
+    cuts = [
+        (max(word.y1 for word in upper) + min(word.y0 for word in lower)) / 2
+        for upper, lower in zip(rows, rows[1:])
+    ]
+    out: list[pymupdf.Rect] = []
+    for cell in band:
+        edges = [cell.y0, *(y for y in cuts if cell.y0 < y < cell.y1), cell.y1]
+        out.extend(pymupdf.Rect(cell.x0, top, cell.x1, bottom) for top, bottom in zip(edges, edges[1:]))
+    return out
 
 
 def _header_row(row: Sequence[_TextWord], lines: Sequence[float]) -> bool:
