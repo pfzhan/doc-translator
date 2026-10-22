@@ -609,6 +609,61 @@ def test_inline_file_opens_in_the_browser(app_env):
         assert inline.headers["content-disposition"].startswith("inline")
 
 
+def _small_epub() -> bytes:
+    import io
+    import zipfile
+
+    opf = (
+        '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0">'
+        '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Small Book</dc:title></metadata>'
+        '<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
+        '<item id="c1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>'
+        '<item id="c2" href="text/ch2.xhtml" media-type="application/xhtml+xml"/></manifest>'
+        '<spine><itemref idref="c1"/><itemref idref="c2"/></spine></package>'
+    )
+    nav = (
+        '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>'
+        '<nav epub:type="toc"><ol><li><a href="text/ch1.xhtml">One</a>'
+        '<ol><li><a href="text/ch1.xhtml#part">Part</a></li></ol></li>'
+        '<li><a href="text/ch2.xhtml">Two</a></li></ol></nav></body></html>'
+    )
+    page = '<html xmlns="http://www.w3.org/1999/xhtml"><body><p>{}</p><script>alert(1)</script></body></html>'
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("mimetype", "application/epub+zip")
+        z.writestr("META-INF/container.xml",
+                   '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+                   '<rootfile full-path="OEBPS/content.opf"/></rootfiles></container>')
+        z.writestr("OEBPS/content.opf", opf)
+        z.writestr("OEBPS/nav.xhtml", nav)
+        z.writestr("OEBPS/text/ch1.xhtml", page.format("The first chapter of the book."))
+        z.writestr("OEBPS/text/ch2.xhtml", page.format("The second chapter of the book."))
+    return buf.getvalue()
+
+
+def test_epub_output_is_previewed_chapter_by_chapter(app_env):
+    """EPUB 预览：目录和阅读顺序从书里读，章节按 zip 里的路径取，书里的脚本不让跑。"""
+    main = app_env
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client, name="small.epub", data=_small_epub())["id"])
+        [out] = [o for o in job["outputs"] if o["name"].endswith(".epub")]
+        base = f"/api/jobs/{job['id']}/epub/{out['name']}"
+        outline = client.get(base).json()
+        assert outline["title"] == "Small Book"
+        assert outline["spine"] == ["OEBPS/text/ch1.xhtml", "OEBPS/text/ch2.xhtml"]
+        assert [(e["label"].split()[-1], e["path"], e["anchor"], e["depth"]) for e in outline["toc"]] == [
+            ("One", "OEBPS/text/ch1.xhtml", "", 0),
+            ("Part", "OEBPS/text/ch1.xhtml", "part", 1),
+            ("Two", "OEBPS/text/ch2.xhtml", "", 0),
+        ]
+        page = client.get(f"{base}/OEBPS/text/ch2.xhtml")
+        assert page.status_code == 200 and "second chapter" in page.text
+        assert page.headers["content-type"].startswith("application/xhtml+xml")
+        assert "script-src 'none'" in page.headers["content-security-policy"]
+        assert client.get(f"{base}/OEBPS/text/missing.xhtml").status_code == 404
+        assert client.get(f"/api/jobs/{job['id']}/epub/small.epub").status_code == 404
+
+
 def test_oversized_upload_rejected_before_reading_body(app_env, monkeypatch):
     """Content-Length 超过上限时直接 413，请求进不了 create_job（不用等整个文件写进临时文件）。"""
     main = app_env
