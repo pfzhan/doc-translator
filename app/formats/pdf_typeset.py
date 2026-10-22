@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from .pdf_flow import break_lines, formula_index, measure_token, tokenize
@@ -49,10 +50,12 @@ def typeset_lines(
     em: float,
     max_width: float,
     metrics: dict[int, FormulaMetric],
+    first_widths: Sequence[float] = (),
 ) -> list[TypesetLine]:
-    """按槽位宽度断行，再把每一行拆成文字块和公式槽。"""
+    """按槽位宽度断行，再把每一行拆成文字块和公式槽。first_widths 见 break_lines。"""
     widths = {index: metric.slot_width for index, metric in metrics.items()}
-    return [_line_of(raw, em, widths, metrics) for raw in break_lines(text, em, max_width, widths)]
+    raw_lines = break_lines(text, em, max_width, widths, first_widths)
+    return [_line_of(raw, em, widths, metrics) for raw in raw_lines]
 
 
 def _line_of(

@@ -34,6 +34,18 @@ def test_cjk_wraps_by_character():
     assert break_lines("甲乙丙丁戊", em=10, max_width=25, formula_widths={}) == ["甲乙", "丙丁", "戊"]
 
 
+def test_first_lines_take_their_own_widths():
+    """让开图的开头几行按各自的宽度断，其余各行按整宽。"""
+    lines = break_lines("甲" * 12, em=10, max_width=50, formula_widths={}, first_widths=[20, 30])
+    assert lines == ["甲甲", "甲甲甲", "甲甲甲甲甲", "甲甲"]
+
+
+def test_a_paren_group_wider_than_a_narrow_line_still_breaks():
+    """括号组按最窄的一行锁。整宽放得下、窄行放不下的组不能来回回滚。"""
+    lines = break_lines("甲（乙丙）丁", em=10, max_width=60, formula_widths={}, first_widths=[30])
+    assert "".join(lines) == "甲（乙丙）丁"
+
+
 def test_decimal_number_is_not_split_at_its_point():
     """2.07 秒：断行不能落在小数点后面。"""
     lines = break_lines("甲乙丙丁戊 2.07 秒", em=10, max_width=70, formula_widths={})

@@ -29,7 +29,7 @@ import pymupdf
 
 from ..languages import RTL_LANGUAGES
 from ..runner import normalize_punctuation
-from .pdf_align import draw_cjk_lines, page_origin
+from .pdf_align import FIRST_BASELINE, draw_cjk_lines, page_origin
 from .pdf_flow import (
     COLOR_MARK_RE,
     STYLE_MARK_RE,
@@ -3382,11 +3382,15 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
     """合并同页内被公式/碎片拆断的段落续行：上行无句末标点、下行小写（或闭括号）
     开头、同左 margin、行距正常，就是同一段被拆开的两行。各翻各的会产出半截译文，
     渲染时在断点强制换行（'（如 | 序列）'）。中文换行左缘对齐、上行够长时同样接上。
-    英文大写开头的换行仍分开，那和下一句分不开。"""
+    英文大写开头的换行仍分开，那和下一句分不开。
+    段落绕着图排时，图注在阅读顺序里会夹在两半中间。夹着的这块在上一半下面、
+    下一半旁边时，跳过它和再前面一块比。"""
     out: list[TextBlock] = []
     for b in blocks:
-        if out:
-            p = out[-1]
+        hosts = out[-1:]
+        if len(out) >= 2 and _beside_wrap(out[-1], out[-2], b):
+            hosts.append(out[-2])
+        for p in hosts:
             first = b.text[:1]
             # 大字号标题碎片（'…with' + 'Recurrent Neural Networks'）：换行的第二行
             # 往往大写开头、也不带句读。仅当两行左边界明显漂移（居中对齐的标题行）
@@ -3419,9 +3423,22 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                     and p.leader is None and b.leader is None
                     and (title_frag or latin or (y_close and _cjk_wrap(p, b)))):
                 _absorb_block(p, b)
-                continue
-        out.append(b)
+                break
+        else:
+            out.append(b)
     return out
+
+
+def _beside_wrap(other: TextBlock, head: TextBlock, tail: TextBlock) -> bool:
+    """other 在段落上一半 head 的下面、下一半 tail 的旁边，横向落在 head 的宽度里，
+    是段落让开的那块地方（图注）。表格里同一行右边的格子和 head 并排，不算。"""
+    if other.page != tail.page or other.rect.y0 < head.rect.y1 - 1:
+        return False
+    if other.rect.x0 >= tail.rect.x1:
+        return head.rect.x1 > other.rect.x0
+    if other.rect.x1 <= tail.rect.x0:
+        return head.rect.x0 < other.rect.x1
+    return False
 
 
 def _is_line_tail(block: TextBlock, earlier: list[TextBlock]) -> bool:
@@ -4016,22 +4033,32 @@ def _fit_typeset(
     page: "pymupdf.Page",
     obstacles: list["pymupdf.Rect"],
     right_limit: float | None,
-) -> tuple[list[TypesetLine], float, float, "pymupdf.Rect"]:
-    """放得下就按原字号排。放不下先在本栏右扩，再压行距，最后才缩字号。"""
+    holes: list["pymupdf.Rect"] = (),
+) -> tuple[list[TypesetLine], float, float, "pymupdf.Rect", list[tuple[float, float]]]:
+    """放得下就按原字号排。放不下先在本栏右扩，再压行距，最后才缩字号。
+    holes 是原文绕开的图，碰到它的行让到一边，另外返回这几行的缩进和宽度。"""
     gap = 1.45 if cjk else 1.2
     box = rect
     expanded = False
     tightened = False
     lines: list[TypesetLine] = []
+    lanes: list[tuple[float, float]] = []
     for _ in range(24):
-        lines = typeset_lines(text, em, max(box.width, 1.0), _formula_metrics(formulas, block_size, em))
+        lanes = _hole_lanes(box, holes, em, gap)
+        lines = typeset_lines(
+            text, em, max(box.width, 1.0), _formula_metrics(formulas, block_size, em),
+            [width for _, width in lanes],
+        )
         # 首行字形顶部还有 0.3em 的出头（实测 MuPDF 盒子内容高 = 行数×行距 + ~0.25em），
         # 只算行距会让临界盒子在写入时被静默缩到 0.93 倍
         height = max(len(lines), 1) * em * gap + em * 0.3
-        overflows = any(line.width > box.width + 1 for line in lines)
+        overflows = any(
+            line.width > (lanes[index][1] if index < len(lanes) else box.width) + 1
+            for index, line in enumerate(lines)
+        )
         too_tall = height > box.height + 1
         if not overflows and not too_tall:
-            return lines, em, gap, box
+            return lines, em, gap, box, lanes
         page_width = text_page_rect(page).width
         if not expanded and box.width < page_width * 0.6:
             expanded = True
@@ -4046,7 +4073,71 @@ def _fit_typeset(
         if em <= 1.5:
             break
         em = max(1.5, em * 0.9)
-    return lines, em, gap, box
+    return lines, em, gap, box, lanes
+
+
+def _wrap_holes(
+    block: TextBlock, obstacles: list["pymupdf.Rect"], area: "pymupdf.Rect | None" = None,
+) -> list["pymupdf.Rect"]:
+    """原文绕着排开的图和图注。它们落在要写的范围里（默认是块的框）、贴着左缘或右缘，
+    块里没有一行压上去，旁边至少有两行让开了。整块按一个框写，译文会盖到图上。"""
+    lines = block.line_rects
+    if len(lines) < 3:
+        return []
+    area = area or block.rect
+    found: list["pymupdf.Rect"] = []
+    beside: set[int] = set()
+    for obstacle in obstacles:
+        cut = pymupdf.Rect(obstacle) & area
+        if cut.is_empty or cut.height < block.size * 0.8:
+            continue
+        # 另一侧要留出三成宽，横贯整块的公式、表格不算
+        right = obstacle.x1 >= area.x1 - block.size and obstacle.x0 > area.x0 + area.width * 0.3
+        left = obstacle.x0 <= area.x0 + block.size and obstacle.x1 < area.x1 - area.width * 0.3
+        if not (right or left):
+            continue
+        rows: set[int] = set()
+        for index, line in enumerate(lines):
+            if min(line.y1, obstacle.y1) - max(line.y0, obstacle.y0) < line.height * 0.5:
+                continue
+            if (right and line.x1 > obstacle.x0 + 1) or (left and line.x0 < obstacle.x1 - 1):
+                break
+            rows.add(index)
+        else:
+            found.append(obstacle)
+            beside |= rows
+    return found if len(beside) >= 2 else []
+
+
+def _hole_lanes(
+    box: "pymupdf.Rect", holes: list["pymupdf.Rect"], em: float, gap: float,
+) -> list[tuple[float, float]]:
+    """开头几行相对盒子左缘的缩进和宽度。字形落在图的高度里的行让到图的另一侧，
+    和图隔半个字。图以下的行不列出，按整个盒子宽。"""
+    if not holes:
+        return []
+    pitch = em * gap
+    bottom = max(hole.y1 for hole in holes)
+    lanes: list[tuple[float, float]] = []
+    keep = 0
+    top = box.y0
+    while top < bottom:
+        # 字形大约占基线上 0.88em、下 0.12em
+        glyph_top = top + em * (FIRST_BASELINE - 0.88)
+        glyph_bottom = top + em * (FIRST_BASELINE + 0.12)
+        x0, x1 = box.x0, box.x1
+        for hole in holes:
+            if min(hole.y1, glyph_bottom) - max(hole.y0, glyph_top) <= 0 or hole.x0 >= x1 or hole.x1 <= x0:
+                continue
+            if hole.x0 - box.x0 > box.x1 - hole.x1:
+                x1 = min(x1, hole.x0 - em * 0.5)
+            else:
+                x0 = max(x0, hole.x1 + em * 0.5)
+        lanes.append((x0 - box.x0, max(x1 - x0, em)))
+        if x0 > box.x0 or x1 < box.x1:
+            keep = len(lanes)
+        top += pitch
+    return lanes[:keep]
 
 
 def _line_baseline(
@@ -4142,11 +4233,12 @@ def _draw_cjk(
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
     justify_last: bool = False,
+    lanes: list[tuple[float, float]] = (),
 ) -> bool:
     """中文行按字形两端对齐。缺字时返回 False。"""
     images, fallback = _formula_draw_args(formulas)
     slots = draw_cjk_lines(
-        page, doc, lines, box, em, gap, color, centered, images, fallback, justify_last,
+        page, doc, lines, box, em, gap, color, centered, images, fallback, justify_last, lanes,
     )
     if slots is None:
         return False
@@ -4176,24 +4268,34 @@ def _place_plain(
     right_limit: float | None,
     archive: pymupdf.Archive | None,
     justify_last: bool = False,
+    holes: list["pymupdf.Rect"] = (),
 ) -> None:
     """排版器断行，再写入。中文按字形两端对齐；缺字时退回一个 HTML 盒子。"""
     text = space_around_latin(separate_after_formula(text))
-    lines, em, gap, box = _fit_typeset(
-        text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit,
+    lines, em, gap, box, lanes = _fit_typeset(
+        text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit, holes,
     )
     if cjk and _draw_cjk(
         page, page.parent, lines, formulas, box, em, gap, color, centered,
-        None, None, [], [], justify_last,
+        None, None, [], [], justify_last, lanes,
     ):
         return
     rendered = [_typeset_line_html(line, formulas) for line in lines]
-    parts = [
-        f'<span style="white-space:nowrap">{line_html}</span>'
-        for line_html in rendered
-        if line_html
-    ]
-    body = "<br>".join(parts)
+    if any(indent for indent, _ in lanes):
+        # 图在左边时，旁边几行各自缩进。行内的 margin、padding MuPDF 不认，每行写成一个块
+        parts = [
+            f'<div style="margin-left:{lanes[index][0] if index < len(lanes) else 0:.2f}px">'
+            f'<span style="white-space:nowrap">{line_html}</span></div>'
+            for index, line_html in enumerate(rendered)
+        ]
+        body = "".join(parts) if any(rendered) else ""
+    else:
+        parts = [
+            f'<span style="white-space:nowrap">{line_html}</span>'
+            for line_html in rendered
+            if line_html
+        ]
+        body = "<br>".join(parts)
     if not body:
         return
     align = "center" if centered else "left"
@@ -4276,15 +4378,16 @@ def _place_typeset(
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
     justify_last: bool = False,
+    holes: list["pymupdf.Rect"] = (),
 ) -> None:
     """按行写入文字，公式槽用记录的下沿贴到该行基线。"""
     text = space_around_latin(separate_after_formula(text))
-    lines, em, gap, box = _fit_typeset(
-        text, formulas, rect, em, block.size, cjk, page, obstacles, right_limit,
+    lines, em, gap, box, lanes = _fit_typeset(
+        text, formulas, rect, em, block.size, cjk, page, obstacles, right_limit, holes,
     )
     if cjk and _draw_cjk(
         page, doc, lines, formulas, box, em, gap, color, centered,
-        fmS, page_spans, draws, deferred_png, justify_last,
+        fmS, page_spans, draws, deferred_png, justify_last, lanes,
     ):
         return
     css = (
@@ -4294,10 +4397,11 @@ def _place_typeset(
     line_h = em * gap
     pending: list[tuple[FormulaPiece, float, float]] = []
     y = box.y0
-    for line in lines:
-        origin_x = box.x0
-        if centered and line.width < box.width:
-            origin_x += (box.width - line.width) / 2
+    for index, line in enumerate(lines):
+        indent, width = lanes[index] if index < len(lanes) else (0.0, box.width)
+        origin_x = box.x0 + indent
+        if centered and line.width < width:
+            origin_x += (width - line.width) / 2
         # 拉丁字母按 0.5em 估算，i-th 这种窄词会偏宽。公式若跟估算走，就会被推开。
         # 文字按实际写出的右缘接着排，两侧只留公式槽自己的 2pt。
         cursor = origin_x
@@ -5006,12 +5110,13 @@ def _after_first_line(source: str, head: str) -> str:
 
 def _split_own_lines(
     text: str, formulas: list[dict], em: float, block_size: float,
-    host_width: float, tail_width: float,
+    host_width: float,
 ) -> tuple[str, str]:
-    """第一行按半句的宽度断，剩下的按续行自己的宽度再断。
+    """第一行按半句的宽度断，剩下的不断行，写入时按续行自己的框再断。
 
     按窄宽断好的换行不能留在后半里。break_lines 把换行当成硬断，
     短行再送进更宽的框也不会并回去，侧标旁边的正文就会一直只有第一行那么窄。
+    按整宽预先断好也不行：续行旁边有图时，写入还要让开图，预断的换行会留下半截短行。
     """
     prepared = space_around_latin(separate_after_formula(text))
     metrics = _formula_metrics(formulas, block_size, em)
@@ -5021,9 +5126,7 @@ def _split_own_lines(
         return "", ""
     if len(raw) == 1:
         return raw[0], ""
-    rest_src = _after_first_line(prepared, raw[0])
-    rest = break_lines(rest_src, em, max(tail_width, 1.0), widths)
-    return raw[0], "\n".join(line for line in rest if line)
+    return raw[0], _after_first_line(prepared, raw[0]).strip()
 
 
 def _render_translated(src_path: Path, blocks: list[TextBlock], translations: list[str],
@@ -5126,6 +5229,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             limit = _write_limit(block, rect, geo, obstacles)
             if x_cap is not None:
                 limit = x_cap if limit is None else min(limit, x_cap)
+            # 跨页接过来的半段按上一页的栏宽写，要让开的图可能在块的框外面
+            holes = _wrap_holes(block, obstacles, rect | block.rect)
             # 从右往左仍交给 HTML 盒子。其余段落由排版器断行：有公式图时按行落位，
             # 没有公式图时写进一个锁住换行的盒子，避免一行嵌一次整套字体。
             if rtl:
@@ -5141,12 +5246,12 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 _place_typeset(
                     page, doc, block, text, bformulas, rect, size, cjk, centered, div_attrs,
                     block.color, weight, obstacles, limit, fmS, page_spans, draws, deferred_png,
-                    justify_last,
+                    justify_last, holes,
                 )
             else:
                 _place_plain(
                     page, text, bformulas, rect, size, block.size, cjk, centered, div_attrs,
-                    block.color, weight, obstacles, limit, archive, justify_last,
+                    block.color, weight, obstacles, limit, archive, justify_last, holes,
                 )
             if block.leader is not None and not page.rotation:
                 _extend_leader(page, block, block.leader)
@@ -5164,7 +5269,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             host_box = _own_line_box(b, cjk)
             tail_box = _own_line_box(tail, cjk)
             head, rest = _split_own_lines(
-                t, bformulas, size, b.size, host_box.width, tail_box.width,
+                t, bformulas, size, b.size, host_box.width,
             )
             shared_head[id(b)] = (head, host_box, bformulas, bool(rest.strip()))
             carried[id(tail)] = _Carry(rest, bformulas, tail_box.width, True)
@@ -5200,7 +5305,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 bformulas = (formulas_map or {}).get(id(b), [])
                 size = b.size * 0.88 if cjk else b.size
                 head, rest = _split_own_lines(
-                    t, bformulas, size, b.size, first_box.width, rest_box.width,
+                    t, bformulas, size, b.size, first_box.width,
                 )
                 if head:
                     write_one(b, head, first_box, False, bformulas, bool(rest.strip()), first_box.x1)
