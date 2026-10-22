@@ -136,6 +136,8 @@ class TextBlock:
     leader: Leader | None = None
     # 这份文档正文紧排两行之间的空（见 _line_gap）。判断下一行是不是续行，行距按多出它的部分算
     line_gap: float = _LINE_GAP
+    # 这份文档的正文字号（见 _body_size）。0 是没量
+    body_size: float = 0.0
 
 
 def _join_lines(lines: list[str]) -> str:
@@ -3064,6 +3066,7 @@ def _extract(
     for data in pages:
         _rejoin_split_lines(data)
     line_gap = _line_gap(pages)
+    body_size = _body_size(_sized_lines(pages))
     page_lines = [_frame_lines(data) for data in pages]
     frames = text_frames([lines for lines, _refs in page_lines])
     notes = margin_notes([lines for lines, _refs in page_lines], frames)
@@ -3131,6 +3134,7 @@ def _extract(
                     side_note=side_note,
                     leader=leaders.get(group[-1]),
                     line_gap=line_gap,
+                    body_size=body_size,
                 ))
     split: list[TextBlock] = []
     unchecked: set[int] = set()
@@ -3180,14 +3184,11 @@ def _by_chars(spans: list[dict], key: Callable[[dict], object]) -> object:
 _LINE_GAP_PAIRS = 20
 
 
-def _line_gap(pages: list[dict]) -> float:
-    """全文正文相邻两行之间的空，以字号计，取众数。行框高随字体的升部、降部变，
-    同样紧排的两行，有的字体量出来差 0.2 个字，有的叠上 0.2 个字。
-    判断下一行是不是紧接着排的，先扣掉这一份。"""
-    rows: list[list[tuple[pymupdf.Rect, float]]] = []
-    chars: dict[float, int] = {}
+def _sized_lines(pages: list[dict]) -> list[list[tuple[pymupdf.Rect, float, int]]]:
+    """每页的横排文字行、按字数占多数的字号和字数，自上而下。"""
+    rows: list[list[tuple[pymupdf.Rect, float, int]]] = []
     for data in pages:
-        row: list[tuple[pymupdf.Rect, float]] = []
+        row: list[tuple[pymupdf.Rect, float, int]] = []
         for block in data.get("blocks", []):
             if block.get("type") != 0:
                 continue
@@ -3196,15 +3197,31 @@ def _line_gap(pages: list[dict]) -> float:
                 if abs(line["dir"][1]) > 0.01 or not spans:
                     continue
                 size = round(float(_by_chars(spans, lambda span: span["size"])), 1)
-                chars[size] = chars.get(size, 0) + sum(len(span["text"].strip()) for span in spans)
-                row.append((pymupdf.Rect(line["bbox"]), size))
+                row.append((pymupdf.Rect(line["bbox"]), size, sum(len(span["text"].strip()) for span in spans)))
         rows.append(sorted(row, key=lambda item: (item[0].y0, item[0].x0)))
-    body = max(chars, key=chars.__getitem__, default=0.0)
+    return rows
+
+
+def _body_size(rows: list[list[tuple[pymupdf.Rect, float, int]]]) -> float:
+    """正文字号：字数最多的字号。没有字时是 0。"""
+    chars: dict[float, int] = {}
+    for row in rows:
+        for _box, size, count in row:
+            chars[size] = chars.get(size, 0) + count
+    return max(chars, key=chars.__getitem__, default=0.0)
+
+
+def _line_gap(pages: list[dict]) -> float:
+    """全文正文相邻两行之间的空，以字号计，取众数。行框高随字体的升部、降部变，
+    同样紧排的两行，有的字体量出来差 0.2 个字，有的叠上 0.2 个字。
+    判断下一行是不是紧接着排的，先扣掉这一份。"""
+    rows = _sized_lines(pages)
+    body = _body_size(rows)
     if body <= 0:
         return _LINE_GAP
     counts: dict[float, int] = {}
     for row in rows:
-        lines = [box for box, size in row if abs(size - body) <= 0.3]
+        lines = [box for box, size, _count in row if abs(size - body) <= 0.3]
         for index, box in enumerate(lines):
             # 同一栏紧挨着的下一行：横向交叠过半，不和这一行同排
             for below in lines[index + 1:]:
@@ -3609,6 +3626,7 @@ def _block_slice(block: TextBlock, start: int, end: int) -> TextBlock:
         span_lines=list(spans) if spans is not None else None,
         clip=block.clip,
         line_gap=block.line_gap,
+        body_size=block.body_size,
     )
 
 
@@ -3702,7 +3720,8 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             # 署名在标题下面隔开将近一行，左缘也会漂移，不能当成标题的下一行。
             # 带列表标记的是幻灯片的下一项，左缘随层级变，也不是标题的下一行。
             # 标题换行的两行左右总有交叠，横向错开的是旁边的标签。
-            title_frag = (p.size >= 12 and b.size >= p.size * 0.7
+            # 大字号比这份文档的正文字号算：幻灯片的正文就有三十来磅，子项缩进排，不是标题换行。
+            title_frag = (p.size >= max(12, p.body_size * 1.1) and b.size >= p.size * 0.7
                           and 0 <= b.rect.y0 - p.rect.y1 < 0.75 * p.size
                           and abs(b.rect.x0 - p.rect.x0) > p.size * 0.5
                           and min(p.rect.x1, b.rect.x1) > max(p.rect.x0, b.rect.x0)
