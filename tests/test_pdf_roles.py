@@ -48,6 +48,17 @@ def test_text_inside_a_figure_is_a_figure_and_a_caption_is_not():
     assert roles == [Role.FIGURE, Role.CAPTION, Role.BODY, Role.BODY]
 
 
+def test_a_caption_on_the_figure_ground_stays_a_caption():
+    """画图程序的白底连图注一起包住时，以图注标签起头的仍是图注，标签后面可以是竖线。"""
+    ground = pymupdf.Rect(60, 60, 340, 260)
+    items = [
+        _item("Rollout", pymupdf.Rect(100, 100, 140, 110), size=7),
+        _item("Figure 5 | Overview of our RL framework.", pymupdf.Rect(120, 240, 300, 252)),
+    ]
+    roles = HeuristicLayout().classify(items, [_geo([ground])], median=10)
+    assert roles == [Role.FIGURE, Role.CAPTION]
+
+
 def test_page_filling_image_does_not_swallow_the_text_layer():
     page = pymupdf.Rect(0, 0, 400, 500)
     items = [_item("Recognized line of the scanned page.", pymupdf.Rect(40, 80, 300, 94))]
