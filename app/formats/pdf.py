@@ -3045,8 +3045,11 @@ def _extract(
                     if NO_TEXT_RE.match(text) and blocks and blocks[-1].page == pno:
                         _donate_punct_rects(blocks[-1], line_rects)
                     continue
-                # 字号、颜色取占比最多的 span
+                # 字号取最长的 span。颜色、粗细按字数取占多数的：逐词一个 span 的书里，
+                # 最长的一截常是黑底白字的图注标签 Figure 10.3，整条图注会写成白字
                 main = max(spans, key=lambda s: len(s["text"]))
+                color = _by_chars(spans, lambda s: s["color"])
+                bold = _by_chars(spans, lambda s: bool(s["flags"] & 16) or "Bold" in s["font"])
                 if in_cell:
                     pending_cells.add(len(blocks))
                 blocks.append(TextBlock(
@@ -3055,8 +3058,8 @@ def _extract(
                     line_rects=line_rects,
                     text=text,
                     size=round(main["size"], 1),
-                    color=f"#{main['color']:06x}",
-                    bold=bool(main["flags"] & 16) or "Bold" in main["font"],
+                    color=f"#{color:06x}",
+                    bold=bold,
                     span_lines=span_lines,
                     side_note=side_note,
                     leader=leaders.get(group[-1]),
@@ -3087,6 +3090,14 @@ def _extract(
 
 _DISPLAY_PROSE = 8
 
+
+def _by_chars(spans: list[dict], key: Callable[[dict], object]) -> object:
+    """按字数占多数的取值。"""
+    counts: dict[object, int] = {}
+    for span in spans:
+        value = key(span)
+        counts[value] = counts.get(value, 0) + len(span["text"].strip())
+    return max(counts, key=counts.__getitem__)
 
 
 def _left_margins(data: dict) -> list[float]:
