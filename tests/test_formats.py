@@ -6575,12 +6575,30 @@ def test_a_line_far_below_by_the_documents_own_spacing_is_not_a_continuation():
     按固定的 1.5 个字算还在行距里，扣掉这份文档的行距就是另起的一块。"""
     from app.formats.pdf import TextBlock, _merge_continuations
 
-    def blk(text, y0, y1, size):
+    def blk(text, y0, y1, size, line_gap):
         rect = pymupdf.Rect(114, y0, 1122, y1)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False,
+                         line_gap=line_gap)
 
-    def slide():
-        return [blk("Out of 9222 sentences", 150, 205, 45.0), blk("i want to eat chinese food lunch spend", 263, 304, 31.9)]
+    def slide(line_gap):
+        return [blk("Out of 9222 sentences", 150, 205, 45.0, line_gap),
+                blk("i want to eat chinese food lunch spend", 263, 304, 31.9, line_gap)]
 
-    assert len(_merge_continuations(slide())) == 1
-    assert len(_merge_continuations(slide(), line_gap=-0.15)) == 2
+    assert len(_merge_continuations(slide(0.1))) == 1
+    assert len(_merge_continuations(slide(-0.15))) == 2
+
+
+def test_a_line_tail_pair_measures_its_gap_against_the_documents_line_gap():
+    """行尾半句和下一行回到栏边的续写，行距也扣掉这份文档紧排两行之间的空。
+    提取时配对、写回时再认，两边都看块上带的同一个值。"""
+    from app.formats.pdf import TextBlock, _same_page_line_pair
+
+    def pair(line_gap):
+        def blk(text, rect):
+            return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False,
+                             line_gap=line_gap)
+        return (blk("which we call the", pymupdf.Rect(300, 100, 480, 112)),
+                blk("unigram model of the text", pymupdf.Rect(72, 127, 480, 139)))
+
+    assert _same_page_line_pair(*pair(0.1))
+    assert not _same_page_line_pair(*pair(-0.2))
