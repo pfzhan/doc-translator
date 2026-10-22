@@ -199,15 +199,29 @@ class PageScan:
 
 
 def scan_page(page: pymupdf.Page) -> PageScan:
+    images = _image_infos(page)
+    drawings = _page_drawings(page, images)
+    words = page_words(page)
+    return PageScan(
+        page_tables(page, drawings, words), tuple(_figure_rects(page, drawings, images)), words,
+        _shaded_areas(drawings, text_page_rect(page)),
+    )
+
+
+def _image_infos(page: pymupdf.Page) -> list[dict]:
+    try:
+        return page.get_image_info()
+    except Exception:  # noqa: BLE001 - 读不出来就当没有图片
+        return []
+
+
+def _page_drawings(page: pymupdf.Page, images: list[dict] | None = None) -> list[dict]:
+    """本页的矢量图，加上图片画的细线。images 是本页的图片框，没给时现读。"""
     try:
         drawings = page.get_drawings()
     except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有线
         drawings = []
-    words = page_words(page)
-    return PageScan(
-        page_tables(page, drawings, words), tuple(_figure_rects(page, drawings)), words,
-        _shaded_areas(drawings, text_page_rect(page)),
-    )
+    return [*drawings, *_image_rules(_image_infos(page) if images is None else images)]
 
 
 def light_fill(drawing: dict) -> bool:
@@ -386,15 +400,13 @@ def _spanning_table_index(block: _OrderedBlock, tables: Sequence[RuledTable]) ->
 
 
 def ruled_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> tuple[RuledTable, ...]:
-    """只认横竖线围出的格子。文字对齐出来的假表、公式笔画网格不要。drawings 是本页的矢量图，没给时现读。
+    """只认横竖线围出的格子。文字对齐出来的假表、公式笔画网格不要。drawings 是本页的矢量图
+    （含图片画的线，见 _page_drawings），没给时现读。
 
     find_tables 每次先把整页的字逐个转成字典，一页要几十毫秒。页面上凑不出两横两竖的线，
     就围不出格子，不必调用。"""
     if drawings is None:
-        try:
-            drawings = page.get_drawings()
-        except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有表
-            return ()
+        drawings = _page_drawings(page)
     if not _grid_possible(drawings):
         return ()
     pymupdf.no_recommend_layout()
@@ -414,6 +426,21 @@ def ruled_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> tupl
             rules = _rule_segments(page, drawings)
         tables.append(_with_open_edges(RuledTable(pymupdf.Rect(table.bbox), cells), *rules))
     return tuple(tables)
+
+
+def _image_rules(images: Sequence[dict]) -> list[dict]:
+    """一像素宽的图片拉成的细条，按 get_drawings 的格式写成填充矩形。
+
+    老 TeX 和一些转换器用图片画框线，get_drawings 读不到，find_tables 也就看不见。"""
+    out: list[dict] = []
+    for info in images:
+        rect = pymupdf.Rect(info["bbox"])
+        if min(rect.width, rect.height) <= _RULE_THICK and max(rect.width, rect.height) >= _RULE_MIN:
+            out.append({
+                "type": "f", "rect": rect, "items": [("re", rect, 1)], "closePath": False,
+                "fill": (0.0, 0.0, 0.0), "color": None, "width": 0.0,
+            })
+    return out
 
 
 def _grid_possible(drawings: Sequence[dict]) -> bool:
@@ -449,16 +476,12 @@ def _grid_possible(drawings: Sequence[dict]) -> bool:
 def _rule_segments(
     page: pymupdf.Page, drawings: list[dict] | None = None,
 ) -> tuple[list[pymupdf.Rect], list[pymupdf.Rect]]:
-    """页面上的细横线和细竖线。drawings 是本页的矢量图，没给时现读。
+    """页面上的细横线和细竖线。drawings 是本页的矢量图（含图片画的线），没给时现读。
 
-    线段、细长的矩形、描边矩形的四条边都算；老 TeX 和一些转换器把框线画成一像素宽的
-    图片，也算。"""
+    线段、细长的矩形、描边矩形的四条边都算。"""
     rects: list[pymupdf.Rect] = []
     if drawings is None:
-        try:
-            drawings = page.get_drawings()
-        except Exception:  # noqa: BLE001 - 读不出来就当没有线
-            drawings = []
+        drawings = _page_drawings(page)
     for drawing in drawings:
         stroked = "s" in str(drawing.get("type") or "")
         for item in drawing.get("items", ()):
@@ -469,10 +492,6 @@ def _rule_segments(
                 rects.append(rect)
                 if stroked:
                     rects.extend(_edges_of(rect))
-    try:
-        rects.extend(pymupdf.Rect(info["bbox"]) for info in page.get_image_info())
-    except Exception:  # noqa: BLE001
-        pass
     horizontal = [rect for rect in rects if rect.height <= _RULE_THICK and rect.width >= _RULE_MIN]
     vertical = [rect for rect in rects if rect.width <= _RULE_THICK and rect.height >= _RULE_MIN]
     return horizontal, vertical
@@ -571,10 +590,7 @@ def page_tables(
     """有线表、底色格子拼成的表，再加上列缘对齐的短格子表和算法框。两栏正文和整段文字不在这里。
     drawings、words 是本页已读出的矢量图和词，没给时现读。"""
     if drawings is None:
-        try:
-            drawings = page.get_drawings()
-        except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有线
-            drawings = []
+        drawings = _page_drawings(page)
     if words is None:
         words = page_words(page)
     ruled = tuple(_with_text_rows(table, words) for table in ruled_tables(page, drawings))
@@ -1426,11 +1442,13 @@ def _is_blank_fill(drawing: dict) -> bool:
     )
 
 
-def _figure_rects(page: pymupdf.Page, drawings: list[dict] | None = None) -> list[pymupdf.Rect]:
+def _figure_rects(
+    page: pymupdf.Page, drawings: list[dict] | None = None, images: list[dict] | None = None,
+) -> list[pymupdf.Rect]:
     bounds = text_page_rect(page)
     width, height = bounds.width, bounds.height
     found: list[pymupdf.Rect] = []
-    for info in page.get_image_info():
+    for info in page.get_image_info() if images is None else images:
         rect = pymupdf.Rect(info.get("bbox"))
         if rect.width > _FIGURE_MIN and rect.height > _FIGURE_MIN:
             found.append(rect)
