@@ -6051,3 +6051,54 @@ def test_cjk_line_keeps_colors_across_a_formula():
             painted.append(now)
     blue, black = "0.0000 0.0000 1.0000 rg", "0.0000 0.0000 0.0000 rg"
     assert painted == [black, blue, blue, black]
+
+
+def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path):
+    """目录条目只送标题：点线和页码不送翻，页码留在原处靠右对齐，点线补到译文末尾。
+    点和标题排在同一个 span 里的、没有点线只有页码的（卷名一行）也一样；每条单独成段。"""
+    from app.formats.pdf import translate_pdf
+
+    sent: list[str] = []
+
+    class Short(MockTranslator):
+        async def translate_batch(self, texts):
+            sent.extend(texts)
+            return ["标题" + str(index) for index, _ in enumerate(texts)]
+
+    src = tmp_path / "toc.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=420, height=300)
+    page.insert_text((40, 50), "Part One: Foundations of Language", fontsize=12)
+    page.insert_text((360, 50), "1", fontsize=12)
+    rows = (("1.1 What is a Large Language Model", "5"), ("1.2 Tokens", "8"), ("Historical Notes", "12"))
+    for row, (title, number) in enumerate(rows):
+        y = 70 + row * 14
+        page.insert_text((50, y), title, fontsize=10)
+        x = 50 + pymupdf.get_text_length(title, fontsize=10) + 6
+        while x < 345:
+            page.insert_text((x, y), ".", fontsize=10)
+            x += 5
+        page.insert_text((360, y), number, fontsize=10)
+    # 点和标题在同一个 span 里
+    page.insert_text((50, 112), "Exercises" + " ." * 45, fontsize=10)
+    page.insert_text((360, 112), "13", fontsize=10)
+    doc.save(src)
+    before = {w[4]: (round(w[0], 1), round(w[1], 1)) for w in pymupdf.open(src)[0].get_text("words") if w[4].isdigit()}
+
+    [out] = run(translate_pdf(src, tmp_path, Runner(Short("zh-CN"), cache=MemCache()), False, "zh-CN"))
+    assert sorted(sent) == sorted([
+        "Part One: Foundations of Language", "1.1 What is a Large Language Model", "1.2 Tokens",
+        "Historical Notes", "Exercises",
+    ])
+    result = pymupdf.open(out)[0]
+    words = result.get_text("words")
+    after = {w[4]: (round(w[0], 1), round(w[1], 1)) for w in words if w[4].isdigit()}
+    assert after == before
+    assert not any(w[4] in ("Exercises", "Notes", "Tokens") for w in words)
+    # 每条的点线从译文末尾接到页码前，中间不空出一截
+    for line in [l for b in result.get_text("dict")["blocks"] for l in b.get("lines", [])]:
+        text = "".join(s["text"] for s in line["spans"])
+        if text.startswith("标题") and "." in text:
+            title = next(s for s in line["spans"] if s["text"].startswith("标题"))
+            dots = [s for s in line["spans"] if s["text"].strip(" .") == "" and "." in s["text"]]
+            assert dots and dots[0]["bbox"][0] - title["bbox"][2] < 8

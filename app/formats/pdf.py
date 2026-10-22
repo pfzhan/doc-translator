@@ -93,6 +93,20 @@ CJK_START_RE = re.compile(r"^[぀-ヿ㐀-鿿가-힯]")
 SENT_ENDS = ("。", "！", "？", "：", "…", ".", "!", "?", ":", '"', "'", "”", "’", "」", "』", ")", "）")
 
 
+@dataclass(frozen=True)
+class Leader:
+    """目录条目的点线和页码。点线和标题一起擦掉，页码留在原处；写回时从 dot_x（页码前最右一个点）
+    按点距 pitch 往左补点，接到译文末尾。dots 是要擦的点（连同和标题排在一起的那个 span）。
+    没有点线、只有页码时 pitch 为 0，不补点。"""
+    number: pymupdf.Rect
+    dot_x: float
+    pitch: float
+    baseline: float
+    size: float
+    color: int
+    dots: tuple[dict, ...] = ()
+
+
 @dataclass
 class TextBlock:
     page: int
@@ -110,6 +124,8 @@ class TextBlock:
     clip: tuple[float, float, float, float] | None = None
     # 版心外的页边旁注。单独翻译，不和正文并段
     side_note: bool = False
+    # 目录条目行尾的点线和页码（见 _cut_leaders）。块里只有标题，点线和页码留在原页上
+    leader: Leader | None = None
 
 
 def _join_lines(lines: list[str]) -> str:
@@ -331,6 +347,173 @@ def _left_to_right(items: list[tuple]) -> list[tuple]:
         run = [item]
     out.extend(sorted(run, key=lambda piece: piece[1].x0))
     return out
+
+
+# 行尾的点线和页码：至少四个点（点之间可以有空格），后面是阿拉伯数字或罗马数字页码
+_LEADER_RE = re.compile(r"(?:[.·…]\s*){4,}([0-9]{1,4}|[ivxlcdm]{1,7})\s*$", re.I)
+_PAGE_NUMBER_RE = re.compile(r"\s*([0-9]{1,4}|[ivxlcdm]{1,7})\s*", re.I)
+_LEADER_DOTS_RE = re.compile(r"[\s.·…]*[.·…][\s.·…]*")
+
+
+def _has_leader_line(data: dict) -> bool:
+    return any(
+        _LEADER_RE.search("".join(span["text"] for span in line["spans"]))
+        for block in data.get("blocks", []) for line in block.get("lines", [])
+    )
+
+
+def _cut_leaders(items: list[tuple], toc_page: bool = False) -> tuple[list[tuple], dict[int, Leader]]:
+    """目录条目的点线和页码从行里拿掉，只留标题送翻。返回新的行和 {行下标: 点线}。
+    toc_page 时（这一页有点线条目），没有点线、页码隔着两个字宽以上靠右排的（卷名一行）也算，
+    只是不补点。别的页上这样的行是表格和图里的数值，不动。
+
+    点线和页码整段送翻时，模型连点带页码一起重排，页码不再靠右对齐；标题短、点多的条目
+    字母占比太低，整条被当成符号行留下原文，同一页有译有不译。拿掉以后它们留在原页上不动。
+    同一可视行可能被拆成几截（标题一截，点线和页码一截），按整行找。"""
+    rows: list[list[int]] = []
+    for index, item in enumerate(items):
+        if rows:
+            first = items[rows[-1][0]][1]
+            overlap = min(first.y1, item[1].y1) - max(first.y0, item[1].y0)
+            if overlap >= min(first.height, item[1].height) * 0.5:
+                rows[-1].append(index)
+                continue
+        rows.append([index])
+    replaced: dict[int, tuple | None] = {}
+    marked: dict[int, Leader] = {}
+    for row in rows:
+        pieces = [(index, span) for index in row for span in items[index][3]]
+        text = "".join(str(span["text"]) for _, span in pieces)
+        cut = _leader_start(pieces, text, toc_page)
+        if cut is None or not re.search(r"[^\W\d_]", text[:cut]):
+            continue
+        kept: dict[int, list[dict]] = {index: [] for index in row}
+        dropped: list[dict] = []
+        shared: list[dict] = []
+        offset = 0
+        for index, span in pieces:
+            body = str(span["text"])
+            if offset + len(body) <= cut:
+                kept[index].append(span)
+            elif offset >= cut:
+                dropped.append(span)
+            else:
+                left, right = _split_span(span, cut - offset)
+                kept[index].append(left)
+                dropped.append(right)
+                # 切开的框是按字数估的，擦的时候按原来整个 span 认字
+                shared.append(span)
+            offset += len(body)
+        leader = _leader_of(dropped, shared)
+        if leader is None:
+            continue
+        last = None
+        for index in row:
+            spans = kept[index]
+            if not any(str(span["text"]).strip() for span in spans):
+                replaced[index] = None
+                continue
+            line = {"spans": spans, "bbox": items[index][1]}
+            replaced[index] = (
+                "".join(str(span["text"]) for span in spans), _line_box(line),
+                [span for span in spans if str(span["text"]).strip()], spans,
+            )
+            last = index
+        if last is not None:
+            marked[last] = leader
+    out: list[tuple] = []
+    leaders: dict[int, Leader] = {}
+    for index, item in enumerate(items):
+        item = replaced[index] if index in replaced else item
+        if item is None:
+            continue
+        if index in marked:
+            leaders[len(out)] = marked[index]
+        out.append(item)
+    return out, leaders
+
+
+def _leader_start(pieces: list[tuple[int, dict]], text: str, toc_page: bool) -> int | None:
+    """点线开始的字位置。目录页上没有点线时，看最后一截是不是隔得很远的页码。"""
+    found = _LEADER_RE.search(text)
+    if found is not None:
+        return found.start()
+    if not toc_page:
+        return None
+    visible = [(offset, span) for offset, span in _span_offsets(pieces) if str(span["text"]).strip()]
+    if len(visible) < 2:
+        return None
+    (offset, last), (_, before) = visible[-1], visible[-2]
+    size = float(last.get("size") or 10.0)
+    gap = pymupdf.Rect(last["bbox"]).x0 - pymupdf.Rect(before["bbox"]).x1
+    if _PAGE_NUMBER_RE.fullmatch(str(last["text"])) and gap > size * 2:
+        return offset
+    return None
+
+
+def _span_offsets(pieces: list[tuple[int, dict]]) -> list[tuple[int, dict]]:
+    out: list[tuple[int, dict]] = []
+    offset = 0
+    for _, span in pieces:
+        out.append((offset, span))
+        offset += len(str(span["text"]))
+    return out
+
+
+def _split_span(span: dict, at: int) -> tuple[dict, dict]:
+    """span 在第 at 个字处切成两截，框按字数比例分。点线和标题排在同一个 span 里时用。"""
+    body = str(span["text"])
+    box = pymupdf.Rect(span["bbox"])
+    middle = box.x0 + box.width * at / max(len(body), 1)
+    left = {**span, "text": body[:at], "bbox": (box.x0, box.y0, middle, box.y1)}
+    right = {**span, "text": body[at:], "bbox": (middle, box.y0, box.x1, box.y1)}
+    return left, right
+
+
+def _leader_of(spans: list[dict], shared: list[dict]) -> Leader | None:
+    """spans 是切下来的点线和页码，shared 是和标题排在同一个 span 里、被切开的原 span。"""
+    visible = [span for span in spans if str(span["text"]).strip()]
+    if not visible:
+        return None
+    is_dots = [bool(_LEADER_DOTS_RE.fullmatch(str(span["text"]))) for span in visible]
+    numbers = [span for span, dot in zip(visible, is_dots) if not dot]
+    dotted = [span for span, dot in zip(visible, is_dots) if dot]
+    if not numbers:
+        return None
+    number = pymupdf.Rect()
+    for span in numbers:
+        number |= pymupdf.Rect(span["bbox"])
+    first = numbers[0]
+    size = float(first.get("size") or 10.0)
+    xs = sorted(pymupdf.Rect(span["bbox"]).x0 for span in dotted if len(str(span["text"]).strip()) == 1)
+    gaps = sorted(right - left for left, right in zip(xs, xs[1:]) if right - left > 0.5)
+    if gaps:
+        pitch, dot_x = gaps[len(gaps) // 2], xs[-1]
+    elif dotted:
+        # 点排在一个 span 里：按框宽和点数算点距，最右一个点在框的末尾
+        run = max(dotted, key=lambda span: len(str(span["text"])))
+        box = pymupdf.Rect(run["bbox"])
+        count = max(1, sum(str(run["text"]).count(mark) for mark in ".·…"))
+        pitch = box.width / count
+        dot_x = box.x1 - pitch
+    else:
+        pitch, dot_x = 0.0, number.x0
+    origin = first.get("origin") or (number.x0, number.y1)
+    # 页码常是蓝色链接，点按点线自己的颜色
+    color = int((dotted[0] if dotted else first).get("color") or 0)
+    return Leader(
+        number, dot_x, pitch, float(origin[1]), size, color,
+        tuple(span for span in [*dotted, *shared] if "origin" in span),
+    )
+
+
+def _cut_after(group: list[int], ends: dict[int, Leader]) -> list[list[int]]:
+    parts: list[list[int]] = [[]]
+    for index in group:
+        parts[-1].append(index)
+        if index in ends:
+            parts.append([])
+    return [part for part in parts if part]
 
 
 def _line_host(line: dict, own: dict, blocks: list[dict], line_box=None) -> tuple[dict, dict] | None:
@@ -2714,6 +2897,7 @@ def _extract(
         _detach_margin_notes(data, lines, refs, found)
     for pno, data in enumerate(pages):
         margins = _left_margins(data)
+        toc_page = _has_leader_line(data)
         for b in data["blocks"]:
             if b.get("type") != 0:
                 continue
@@ -2728,9 +2912,12 @@ def _extract(
                 if spans:
                     items.append((text, _line_box(ln), spans, ln["spans"]))
             items = _left_to_right(items)
+            items, leaders = _cut_leaders(items, toc_page)
             side_note = bool(b.get("side_note"))
             # 一条旁注就是一块，不按正文的规则拆
             groups = [list(range(len(items)))] if side_note and items else _split_lines(items)
+            # 带点线的一行是一个目录条目的末行，下一行是另一条
+            groups = [part for group in groups for part in _cut_after(group, leaders)]
             for group in groups:
                 texts = [items[i][0] for i in group]
                 line_rects = [items[i][1] for i in group]
@@ -2765,6 +2952,7 @@ def _extract(
                     bold=bool(main["flags"] & 16) or "Bold" in main["font"],
                     span_lines=span_lines,
                     side_note=side_note,
+                    leader=leaders.get(group[-1]),
                 ))
     split: list[TextBlock] = []
     unchecked: set[int] = set()
@@ -3213,7 +3401,9 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                 and not p.text.rstrip().endswith(tuple(SENT_ENDS))
                 and (first.islower() or first in "),;%,；，")
             )
+            # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
             if (p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note)
+                    and p.leader is None and b.leader is None
                     and (title_frag or latin or (y_close and _cjk_wrap(p, b)))):
                 _absorb_block(p, b)
                 continue
@@ -4002,6 +4192,35 @@ def _place_plain(
     if _try_insert(page, box, html_text, css, 0.9, archive):
         return
     _insert_fitting(page, box, html_text, css, obstacles, archive, right_limit)
+
+
+def _extend_leader(page: "pymupdf.Page", block: TextBlock, leader: Leader) -> None:
+    """点线和标题一起擦掉了。按原来的点距、基线从页码前往左补点，接到译文末尾。"""
+    if leader.pitch <= 0:
+        return
+    band = pymupdf.Rect(block.rect.x0 - 1, block.rect.y0 - 1, leader.number.x0 - 0.5, block.rect.y1 + 1)
+    right = band.x0
+    for item in page.get_text("dict", clip=band)["blocks"]:
+        for line in item.get("lines", []):
+            for span in line["spans"]:
+                # 上下两条挨得近，框会探进这一行。只认基线在这一行的字
+                if str(span.get("text") or "").strip() and abs(span["origin"][1] - leader.baseline) < leader.size * 0.6:
+                    right = max(right, float(span["bbox"][2]))
+    if right <= band.x0:
+        return
+    dots: list[float] = []
+    x = leader.dot_x
+    while x > right + leader.pitch * 0.5:
+        dots.append(x)
+        x -= leader.pitch
+    if not dots:
+        return
+    font = pymupdf.Font("tiro")
+    writer = pymupdf.TextWriter(page.rect)
+    for x in dots:
+        writer.append((x, leader.baseline), ".", font=font, fontsize=leader.size)
+    color = ((leader.color >> 16 & 0xFF) / 255, (leader.color >> 8 & 0xFF) / 255, (leader.color & 0xFF) / 255)
+    writer.write_text(page, color=color)
 
 
 def _written_right(page: "pymupdf.Page", x0: float, y0: float, y1: float) -> float:
@@ -4808,6 +5027,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         erasure = Erasure()
         for b, _ in items:
             erasure.add_block(b.span_lines, b.line_rects or [b.rect])
+            # 目录条目的点线一起擦掉，写完译文再从页码前补到译文末尾
+            if b.leader is not None:
+                erasure.spans.extend(b.leader.dots)
             # 公式收进来的分数线、根号横线随公式图贴到新位置，原处的要擦掉。
             # 行框按墨迹收紧以后，分数线常落在行框外面
             erasure.lines.extend(
@@ -4842,6 +5064,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             weight = "bold" if block.bold else "normal"
             size = block.size * 0.88 if cjk else block.size
             obstacles = [ob.rect for ob in same_page if ob is not block]
+            # 目录的页码留在原页上，译文不能写过去
+            obstacles += [ob.leader.number for ob in same_page if ob.leader is not None]
             if geo is not None:
                 obstacles = [*obstacles, *geo.figures]
             limit = _write_limit(block, rect, geo, obstacles)
@@ -4869,6 +5093,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     page, text, bformulas, rect, size, block.size, cjk, centered, div_attrs,
                     block.color, weight, obstacles, limit, archive, justify_last,
                 )
+            if block.leader is not None and not page.rotation:
+                _extend_leader(page, block, block.leader)
 
         # 续行可能排在半句前面。先把后半放进 carry，写的时候才不会丢掉。
         shared_head: dict[int, tuple[str, pymupdf.Rect, list[dict], bool]] = {}
@@ -5803,9 +6029,9 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
     )
     edges = margin_skips(blocks, geometries)
     displayed = _display_formula_ids(blocks, geometries) | _gloss_ids(blocks, glosses) | _code_panel_ids(blocks, scans)
-    # 页眉不进大纲，旁注不是标题
+    # 页眉不进大纲，旁注、目录条目不是标题
     kinds = [
-        "h2" if role is Role.HEADING and not edge and not block.side_note else "p"
+        "h2" if role is Role.HEADING and not edge and not block.side_note and block.leader is None else "p"
         for role, edge, block in zip(roles, edges, blocks)
     ]
     skips = [
@@ -5815,7 +6041,10 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
     ]
     skip_ids = {id(b) for b, s in zip(blocks, skips) if s}
     margin_ids = {id(b) for b, edge in zip(blocks, edges) if edge}
-    halt_ids = {id(b) for b, role in zip(blocks, roles) if role is not Role.BODY or b.side_note} | margin_ids
+    # 目录条目到点线就完了，不和下一页的条目并段
+    halt_ids = {
+        id(b) for b, role in zip(blocks, roles) if role is not Role.BODY or b.side_note or b.leader is not None
+    } | margin_ids
     units = _cross_page_units(blocks, median, skip_ids, geometries, halt_ids, margin_ids)
     block_kind = {id(b): k for b, k in zip(blocks, kinds)}
 
