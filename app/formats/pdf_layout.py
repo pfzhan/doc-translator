@@ -57,6 +57,9 @@ _LEIPZIG = frozenset(
     "PTCP INF NMLZ COMP REL".split()
 )
 _PERSON_RE = re.compile(r"[123](?:SG|PL|DU)")
+_HANZI_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
+# 注音行里的音节按空格和标点分开。抽出来的声调符号是单独的字符（z`ai、zh¯u），不算分隔
+_SYLLABLE_SPLIT_RE = re.compile(r"[\s,.;:!?，。；：！？、()（）\[\]“”\"'‘’]+")
 _MORPHEME_SPLIT_RE = re.compile(r"[-.=\[\]<>:~()\s]+")
 _MAX_PITCH = 36.0
 _SHORT_WORDS = 3
@@ -807,6 +810,8 @@ def interlinear_glosses(
       是汉字、假名这类非拉丁文字，下一行是拉丁字母。
     - 逐语素对译：两行从同一处起笔，都是连字符串起来的语素，对译行里有 1SG、PFV
       这样的语法标注缩写（莱比锡标注规则）。
+    - 逐字注音：上一行是汉字，下一行从同一处起笔，全是拉丁字母，音节数和汉字数一样。
+      汉字之间不空格，没法一个词一个词地对齐。
 
     表格一连好几行都这样对齐，对译只有孤零零的两行。words 是本页的词，没给时现读。
     """
@@ -840,17 +845,29 @@ def _glossed(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
             return True
         if len(aligned) >= 2 and _script_share(upper, latin=False) >= 0.5 and _script_share(lower, latin=True) == 1:
             return True
-    return _morpheme_gloss(upper, lower)
+    return _morpheme_gloss(upper, lower) or _romanized(upper, lower)
+
+
+def _romanized(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
+    if abs(lower[0].x0 - upper[0].x0) > _GLOSS_ALIGN or _script_share(lower, latin=True) < 1:
+        return False
+    text = "".join(word.text for word in upper)
+    hanzi = len(_HANZI_RE.findall(text))
+    if hanzi < _GLOSS_MIN or hanzi < len(re.sub(r"[\s\W\d_]", "", text)) * 0.9:
+        return False
+    syllables = [token for token in _SYLLABLE_SPLIT_RE.split(" ".join(word.text for word in lower)) if token]
+    return len(syllables) == hanzi
 
 
 def _script_share(row: Sequence[_TextWord], latin: bool) -> float:
-    """这一行带字母的词里，拉丁字母词（latin=True）或非拉丁文字词所占的比例。"""
+    """这一行带字母的词里，拉丁字母词（latin=True）或非拉丁文字词所占的比例。
+    PDF 里拼音的声调常抽成单独的修饰字母（wˇo），这一段字符也算拉丁字母。"""
     lettered = [word for word in row if any(ch.isalpha() for ch in word.text)]
     if not lettered:
         return 0.0
     matched = [
         word for word in lettered
-        if all(ord(ch) <= 0x24F for ch in word.text if ch.isalpha()) == latin
+        if all(ord(ch) <= 0x24F or 0x2B0 <= ord(ch) <= 0x2FF for ch in word.text if ch.isalpha()) == latin
     ]
     return len(matched) / len(lettered)
 
