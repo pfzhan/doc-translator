@@ -68,6 +68,9 @@ _SHORT_WIDTH = 80.0
 _SHORT_SHARE = 0.8
 # 三线表顶线到中线之间最多几行字高
 _HEAD_ROWS = 4.0
+# 三线表的横线至少这么长。正文里给词加的下划线、分式线都短得多
+_BAND_MIN_W = 120.0
+_BAND_SHORT_SHARE = 0.6
 _INSIDE = 0.6
 _MARGIN_BAND = 0.07
 _MARGIN_MIN = 42.0
@@ -599,6 +602,8 @@ def page_tables(
     ruled = (*ruled, *filled_tables(page, drawings, words, ruled))
     ruled = (*ruled, *column_ruled_tables(_rule_segments(page, drawings)[1], words, ruled))
     algorithms = algorithm_tables(page, drawings)
+    banded = banded_tables(_rule_segments(page, drawings)[0], words, (*ruled, *algorithms))
+    ruled = (*(table for table in ruled if not _mostly_inside(table.rect, [band.rect for band in banded])), *banded)
     # 无线的格子表本来就是按对齐的行找的，表头对齐的话已经在里面，不再往上找
     ruled = _with_header_rows(ruled, words)
     unruled = unruled_tables(page, (*ruled, *algorithms), words)
@@ -676,6 +681,62 @@ def column_ruled_tables(
         cols = [left, *xs, right]
         cells = tuple(pymupdf.Rect(x0, y0, x1, y1) for y0, y1 in zip(edges, edges[1:]) for x0, x1 in zip(cols, cols[1:]))
         tables.append(RuledTable(area, cells))
+    return tuple(tables)
+
+
+def banded_tables(
+    horizontal: Sequence[pymupdf.Rect], words: Sequence[_TextWord], known: Sequence[RuledTable] = (),
+) -> tuple[RuledTable, ...]:
+    """三线表：顶线、表头下的中线、底线一样长，中间没有竖线。表头常折行、居中，
+    几组数据之间还隔着横线，行距不齐，按对齐找只找得到其中一段。
+    三条以上首尾对齐的横线，线间的字多是短格，就按线分段、段里按字分行分格。
+    已经找到的表落在里面的，换成这一张；这一片落在已有的表里的，不另算。"""
+    rules = sorted((rule for rule in horizontal if rule.width >= _BAND_MIN_W), key=lambda rule: rule.y0)
+    tables: list[RuledTable] = []
+    used: set[int] = set()
+    for index, rule in enumerate(rules):
+        if index in used:
+            continue
+        group: list[pymupdf.Rect] = []
+        for other_index, other in enumerate(rules):
+            if abs(other.x0 - rule.x0) <= _NEAR and abs(other.x1 - rule.x1) <= _NEAR:
+                used.add(other_index)
+                if not group or other.y0 - group[-1].y0 > _NEAR:
+                    group.append(other)
+        if len(group) < 3:
+            continue
+        left, right = rule.x0, rule.x1
+        bands: list[list[list[_TextWord]]] = []
+        for upper, lower in zip(group, group[1:]):
+            inside = [
+                word for word in words
+                if upper.y1 < (word.y0 + word.y1) / 2 < lower.y0
+                and word.x0 >= left - _NEAR and word.x1 <= right + _NEAR
+            ]
+            bands.append(_word_rows(inside))
+        rows = [row for band in bands for row in band]
+        if len(rows) < _MIN_TEXT_ROWS or any(not band for band in bands):
+            continue
+        # 有三条线撑着，短格占得少一些也算：表头的列名、O(k·n·d) 这样的式子比数据格长。
+        # 正文、伪代码一行连成一格，跨过半张表
+        pieces = [cell for row in rows for cell in _row_cells(row)]
+        short = sum(1 for cell in pieces if cell.words <= _SHORT_WORDS and cell.width <= _SHORT_WIDTH)
+        split = sum(1 for row in rows if len(_row_cells(row)) >= 2)
+        if (short < len(pieces) * _BAND_SHORT_SHARE or split < len(rows) * 0.8
+                or any(cell.width > (right - left) / 2 for cell in pieces)):
+            continue
+        area = pymupdf.Rect(left, group[0].y0, right, group[-1].y1)
+        if any(_mostly_inside(area, [table.rect]) for table in known):
+            continue
+        cells: list[pymupdf.Rect] = []
+        for (upper, lower), band in zip(zip(group, group[1:]), bands):
+            tops = [min(w.y0 for w in row) for row in band]
+            edges = [upper.y1, *((max(w.y1 for w in row) + top) / 2 for row, top in zip(band, tops[1:])), lower.y0]
+            for row, y0, y1 in zip(band, edges, edges[1:]):
+                boxes = _row_cells(row)
+                cuts = [left, *((a.x1 + b.x0) / 2 for a, b in zip(boxes, boxes[1:])), right]
+                cells.extend(pymupdf.Rect(x0, y0, x1, y1) for x0, x1 in zip(cuts, cuts[1:]))
+        tables.append(RuledTable(area, tuple(cells)))
     return tuple(tables)
 
 
