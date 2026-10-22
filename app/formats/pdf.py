@@ -111,6 +111,10 @@ class Leader:
     dots: tuple[dict, ...] = ()
 
 
+# 正常行距下上一行行框底到下一行行框顶的空，以字号计。正文太少、量不出来时用这个
+_LINE_GAP = 0.1
+
+
 @dataclass
 class TextBlock:
     page: int
@@ -130,6 +134,8 @@ class TextBlock:
     side_note: bool = False
     # 目录条目行尾的点线和页码（见 _cut_leaders）。块里只有标题，点线和页码留在原页上
     leader: Leader | None = None
+    # 这份文档正文紧排两行之间的空（见 _line_gap）。判断下一行是不是续行，行距按多出它的部分算
+    line_gap: float = _LINE_GAP
 
 
 def _join_lines(lines: list[str]) -> str:
@@ -3057,6 +3063,7 @@ def _extract(
         scans[pno] = replace(scans[pno], tables=())
     for data in pages:
         _rejoin_split_lines(data)
+    line_gap = _line_gap(pages)
     page_lines = [_frame_lines(data) for data in pages]
     frames = text_frames([lines for lines, _refs in page_lines])
     notes = margin_notes([lines for lines, _refs in page_lines], frames)
@@ -3123,6 +3130,7 @@ def _extract(
                     span_lines=span_lines,
                     side_note=side_note,
                     leader=leaders.get(group[-1]),
+                    line_gap=line_gap,
                 ))
     split: list[TextBlock] = []
     unchecked: set[int] = set()
@@ -3144,10 +3152,7 @@ def _extract(
         geo = PageGeometry.from_page(doc[pno], [block.rect for block in page_blocks], scan=scans[pno])
         geometries[pno] = geo
         ordered.extend(reading_order(page_blocks, geo))
-    line_gap = _line_gap(pages)
-    merged = _merge_continuations(
-        _merge_caption_fragments(_merge_visual_lines(ordered, geometries), line_gap), line_gap,
-    )
+    merged = _merge_continuations(_merge_caption_fragments(_merge_visual_lines(ordered, geometries)))
     return _split_affiliation_tails(_merge_same_line_sentences(_merge_line_tails(merged))), frames, scans
 
 
@@ -3163,8 +3168,6 @@ def _by_chars(spans: list[dict], key: Callable[[dict], object]) -> object:
     return max(counts, key=counts.__getitem__)
 
 
-# 正常行距下上一行行框底到下一行行框顶的空，以字号计。正文太少、量不出来时用这个
-_LINE_GAP = 0.1
 # 量行距至少要这么多对相邻的正文行
 _LINE_GAP_PAIRS = 20
 
@@ -3597,6 +3600,7 @@ def _block_slice(block: TextBlock, start: int, end: int) -> TextBlock:
         bold=block.bold,
         span_lines=list(spans) if spans is not None else None,
         clip=block.clip,
+        line_gap=block.line_gap,
     )
 
 
@@ -3670,14 +3674,13 @@ def _cjk_wrap(prev: TextBlock, nxt: TextBlock) -> bool:
     return len(CJK_RE.findall(prev.text)) >= 8 or prev.rect.width >= prev.size * 12
 
 
-def _merge_continuations(blocks: list[TextBlock], line_gap: float = _LINE_GAP) -> list[TextBlock]:
+def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
     """合并同页内被公式/碎片拆断的段落续行：上行无句末标点、下行小写（或闭括号）
     开头、同左 margin、行距正常，就是同一段被拆开的两行。各翻各的会产出半截译文，
     渲染时在断点强制换行（'（如 | 序列）'）。中文换行左缘对齐、上行够长时同样接上。
     英文大写开头的换行仍分开，那和下一句分不开。
     段落绕着图排时，图注在阅读顺序里会夹在两半中间。夹着的这块在上一半下面、
-    下一半旁边时，跳过它和再前面一块比。
-    line_gap 是这份文档正文紧排两行之间的空（见 _line_gap），行距按多出它的部分算。"""
+    下一半旁边时，跳过它和再前面一块比。"""
     out: list[TextBlock] = []
     for b in blocks:
         hosts = out[-1:]
@@ -3698,7 +3701,7 @@ def _merge_continuations(blocks: list[TextBlock], line_gap: float = _LINE_GAP) -
                           and not _list_item(b.text)
                           and not p.text.rstrip().endswith(tuple(SENT_ENDS))
                           and not b.text.rstrip().endswith(tuple(SENT_ENDS)))
-            y_close = -0.9 * p.size <= b.rect.y0 - p.rect.y1 - line_gap * p.size < 1.4 * p.size
+            y_close = -0.9 * p.size <= b.rect.y0 - p.rect.y1 - p.line_gap * p.size < 1.4 * p.size
             # 悬挂缩进大约 2–3em。2em 卡太紧时，特征列表的续行拆成两段，
             # 短行再被单独缩小。向左跳仍用 2em，避免把另一栏接进来。
             x_jump = b.rect.x0 - p.rect.x0
@@ -3708,7 +3711,7 @@ def _merge_continuations(blocks: list[TextBlock], line_gap: float = _LINE_GAP) -
             last_y1 = p.line_rects[-1].y1 if p.line_rects else p.rect.y1
             centered_tail = (
                 len(_visual_lines(b)) == 1
-                and b.rect.y0 - last_y1 - line_gap * p.size <= 0.3 * p.size
+                and b.rect.y0 - last_y1 - p.line_gap * p.size <= 0.3 * p.size
                 and b.rect.width < p.rect.width
                 and abs((b.rect.x0 + b.rect.x1) - (p.rect.x0 + p.rect.x1)) / 2 <= p.size
                 and _prose_units(b.text) >= 3
@@ -3817,8 +3820,8 @@ def _line_tail_match(block: TextBlock, nxt: TextBlock) -> bool:
         return False
     if nxt.rect.x0 > block.rect.x0 - max(block.size * 3.5, 28):
         return False
-    gap = nxt.rect.y0 - block.rect.y1
-    if not (-0.4 * block.size <= gap < 1.6 * block.size):
+    gap = nxt.rect.y0 - block.rect.y1 - block.line_gap * block.size
+    if not (-0.5 * block.size <= gap < 1.5 * block.size):
         return False
     return bool(nxt.text.lstrip()[:1].islower())
 
@@ -3869,8 +3872,8 @@ def _same_page_line_pair(host: TextBlock, tail: TextBlock) -> bool:
         return False
     if tail.rect.x0 > host.rect.x0 - max(host.size * 3.5, 28):
         return False
-    gap = tail.rect.y0 - host.rect.y1
-    return -0.4 * host.size <= gap < 1.6 * host.size
+    gap = tail.rect.y0 - host.rect.y1 - host.line_gap * host.size
+    return -0.5 * host.size <= gap < 1.5 * host.size
 
 
 def _merge_line_tails(blocks: list[TextBlock]) -> list[TextBlock]:
@@ -3971,8 +3974,8 @@ def _continues_fragment(host: TextBlock, guest: TextBlock) -> bool:
     first = guest.line_rects[0]
     if first.x0 > last.x0 - max(host.size * 3.5, 28):
         return False
-    gap = first.y0 - last.y1
-    if not (-0.4 * host.size <= gap < 1.6 * host.size):
+    gap = first.y0 - last.y1 - host.line_gap * host.size
+    if not (-0.5 * host.size <= gap < 1.5 * host.size):
         return False
     head = guest.text.lstrip()[:1]
     if not (head and (head.islower() or head in "),;%,；，")):
@@ -4035,7 +4038,7 @@ def _merge_page_line_sentences(blocks: list[TextBlock]) -> set[int]:
     return absorbed
 
 
-def _merge_caption_fragments(blocks: list[TextBlock], line_gap: float = _LINE_GAP) -> list[TextBlock]:
+def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
     """合并被拆碎的图注/表注：'Figure 2:'、'Examples of decay'、'schedules.' 三个
     碎片各翻各的，再塞回各自小框里换行丑陋。拼回一个块后整句翻译、一行排下。
     规则保守，只拼三类：a) 同一视觉行上短标签后紧跟的片段，标签可以是冒号，
@@ -4050,7 +4053,7 @@ def _merge_caption_fragments(blocks: list[TextBlock], line_gap: float = _LINE_GA
                 same_line = y_ov > 0.5 * min(p.rect.y1 - p.rect.y0, b.rect.y1 - b.rect.y0)
                 gap = b.rect.x0 - p.rect.x1
                 # 注记和续行与图注同字号。大标题下面的小字是图里的框
-                below = (-0.1 * p.size <= b.rect.y0 - p.rect.y1 - line_gap * p.size < 1.1 * p.size
+                below = (-0.1 * p.size <= b.rect.y0 - p.rect.y1 - p.line_gap * p.size < 1.1 * p.size
                          and abs(b.rect.x0 - p.rect.x0) < p.size
                          and abs(b.size - p.size) <= p.size * 0.2)
                 label = (p.text.rstrip().endswith((":", "：")) and len(p.text) < 30) or _caption_label(p.text)
