@@ -6396,7 +6396,8 @@ def test_a_formula_at_a_line_start_keeps_its_opening_glue():
 
 def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
     """count(w)/N 的分母 N 被分进下一行那个块。整块都是 Times 斜体，按字体认不出是式子，
-    要按小一号的斜体叠在正文行的小斜体上认出来，挪回分子那一行。上面是正文字号的斜体时不挪。"""
+    要按小一号的斜体居中叠在正文行的小斜体上认出来，挪回分子那一行。上面是正文字号的斜体、
+    或者只是左缘对齐的上下标时不挪。"""
     from app.formats.pdf import _rejoin_split_lines
 
     reg, ital, cmr = "NimbusRomNo9L-Regu", "NimbusRomNo9L-ReguItal", "CMR10"
@@ -6415,6 +6416,8 @@ def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
             _glyph(") =", cmr, 10.0, 4, (395.8, 308.8, 409.2, 318.7), (395.8, 308.8, 409.2, 318.7), math=True),
             _glyph("count", ital, numerator, 7, (412.2, 304.5, 428.4, 313.3), (412.2, 307.3, 428.4, 311.4)),
             _glyph("(", cmr, numerator, 5, (428.9, 305.8, 431.8, 313.2), (428.9, 305.8, 431.8, 313.2), math=True),
+            _glyph("w", ital, numerator, 7, (431.8, 304.5, 436.7, 313.3), (431.8, 308.1, 436.7, 311.5)),
+            _glyph(")", cmr, numerator, 5, (436.7, 305.8, 439.6, 313.2), (436.7, 305.8, 439.6, 313.2), math=True),
         )
         denominator = line(_glyph("N", ital, 7.4, 6, (423.2, 312.9, 428.1, 321.7), (423.2, 314.9, 428.1, 319.8)))
         tail = line(_glyph(". Brants et al.", reg, 10.0, 4, (440.7, 307.0, 493.2, 319.1), (440.7, 309.4, 493.2, 316.4)))
@@ -6434,6 +6437,14 @@ def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
     small = words["blocks"][1]["lines"][0]
     _rejoin_split_lines(words)
     assert small in words["blocks"][1]["lines"]
+
+    # w^i_{i-k+1} 的上标和下标左缘对齐，不是分式：不挪
+    script = data(7.4)
+    sup = script["blocks"][1]["lines"][0]
+    sup["spans"][0]["bbox"], sup["spans"][0]["ink"] = (412.2, 312.9, 417.1, 321.7), (412.2, 314.9, 417.1, 319.8)
+    sup["bbox"] = sup["spans"][0]["bbox"]
+    _rejoin_split_lines(script)
+    assert sup in script["blocks"][1]["lines"]
 
 
 def test_a_citation_year_after_et_al_continues_the_sentence():
@@ -6457,3 +6468,4 @@ def test_a_citation_year_after_et_al_continues_the_sentence():
     ended = [blk("This algorithm does not produce a probability distribution.", 307),
              blk("(Unlike interpolation, the weights are fixed.)", 319, x1=380)]
     assert len(_merge_continuations(ended)) == 2
+
