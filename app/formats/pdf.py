@@ -61,10 +61,12 @@ from .pdf_type3 import Type3Reader, broken_type3_names, recover_type3_page
 from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, line_offsets, typeset_lines
 from .pdf_vision import layout_detector
 
-MATH_FONT_RE = re.compile(r"CMMI|CMSY|CMEX|MSBM|Math|Symbol|STIX|Cambria Math", re.I)
+MATH_FONT_RE = re.compile(r"CMMI|CMB?SY|CMEX|MSBM|MSAM|Math|Symbol|STIX|Cambria Math", re.I)
 # 精确的数学字体白名单（直接判公式）
+# 正文字体配套的数学字体名里带 Math（XCharterMath、CambriaMath），newtx、pxfonts 的数学字体是 txmi、txsy 这样的短名
 MATH_FONT_PRECISE_RE = re.compile(
-    r"Asana|FiraMath|STIX|TeXGyre.*Math|XITSMath|LibertinusMath|MathJax|Cambria Math|LatinModern.*Math", re.I)
+    r"Asana|FiraMath|STIX|TeXGyre.*Math|XITSMath|LibertinusMath|MathJax|Cambria Math|LatinModern.*Math"
+    r"|(?-i:Math(?![a-z]))|(?:^|\+)n?[tp]x(?:mi|sy|ex)", re.I)
 # 常见正文字体黑名单（优先于启发式，里面的希腊字母/符号靠字符级规则识别）
 TEXT_FONT_RE = re.compile(
     r"Times|Arial|Calibri|Minion|Palatino|\bCMR|Charter|Georgia|Helvetica|Verdana|Roboto|Lato|"

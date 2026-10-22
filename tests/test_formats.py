@@ -2125,6 +2125,9 @@ def test_formula_font_and_char_rules():
 
     assert _font_is_math("CMMI10") and _font_is_math("STIXTwoMath")
     assert _font_is_math("LibertinusMath-Regular")
+    # 正文字体配套的数学字体、newtx 的数学字体
+    assert _font_is_math("XCharterMathMI") and _font_is_math("txmiaX") and _font_is_math("ABCDEF+txsys")
+    assert not _font_is_math("XCharter-Roman") and not _font_is_math("txtt")
     assert not _font_is_math("TimesNewRomanPSMT") and not _font_is_math("ArialMT")
     assert not _font_is_math("NotoSansCJK-Regular")
     # 黑名单优先：Noto 系正文字体不匹配宽泛 *Sans* 启发式
