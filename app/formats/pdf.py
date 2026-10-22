@@ -3509,6 +3509,55 @@ def _margin_term(block: TextBlock) -> bool:
 _FOREIGN_LETTERS = 40
 
 
+def _colored_examples(blocks: list[TextBlock], geometries: list[PageGeometry]) -> set[int]:
+    """正文中间单独排开的一句彩色例句（讲指代、句法时举的句子）。下文拿原句里的英文词来讲，留原文。
+
+    整块一种鲜明的颜色、正体不加粗、正文字号，左边缩进一两个字宽，说完一句。
+    章首题词也这样排，但后面跟着出处，照常翻译。"""
+    by_page: dict[int, list[TextBlock]] = {}
+    for block in blocks:
+        if not block.side_note:
+            by_page.setdefault(block.page, []).append(block)
+    found: set[int] = set()
+    for page_blocks in by_page.values():
+        page_blocks.sort(key=lambda block: block.rect.y0)
+        for index, block in enumerate(page_blocks):
+            frame = geometries[block.page].frame
+            if frame is None or not _colored_example(block, frame):
+                continue
+            below = page_blocks[index + 1] if index + 1 < len(page_blocks) else None
+            if below is None or not _attribution(block, below):
+                found.add(id(block))
+    return found
+
+
+def _attribution(quote: TextBlock, below: TextBlock) -> bool:
+    """题词的出处：紧跟在下面，小一号，或者是靠右排的短行（可以和末行同一行）。"""
+    if below.rect.y0 - quote.rect.y1 >= quote.size * 1.5:
+        return False
+    flush_right = below.rect.width < quote.rect.width * 0.5 and abs(below.rect.x1 - quote.rect.x1) < quote.size
+    return below.size < quote.size * 0.95 or flush_right
+
+
+def _colored_example(block: TextBlock, frame: TextFrame) -> bool:
+    spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
+    if not spans or block.bold or len(block.text.split()) < 4 or not _ends_sentence(block.text):
+        return False
+    if block.body_size and abs(block.size - block.body_size) > 0.5:
+        return False
+    colors = {int(span.get("color") or 0) for span in spans}
+    if len(colors) != 1:
+        return False
+    color = colors.pop()
+    rgb = [(color >> shift) & 0xFF for shift in (16, 8, 0)]
+    if max(rgb) - min(rgb) < 0x60:
+        return False
+    if sum(len(span["text"]) for span in spans if int(span.get("flags") or 0) & 2) * 2 > sum(len(span["text"]) for span in spans):
+        return False
+    indent = block.rect.x0 - frame.x0
+    return block.size * 1.5 <= indent <= block.size * 4 and block.rect.x1 <= frame.x1 + 2
+
+
 def _foreign_ids(blocks: list[TextBlock]) -> set[int]:
     """和全文不是同一种语言的段落：英文书里的西班牙文题记、德文引文、巴斯克语例句。
     作者有意留着原文，旁边多半已经给了译文，留原文。
@@ -6752,7 +6801,7 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
     edges = margin_skips(blocks, geometries)
     displayed = (
         _display_formula_ids(blocks, geometries) | _gloss_ids(blocks, glosses) | _code_panel_ids(blocks, scans)
-        | _foreign_ids(blocks)
+        | _foreign_ids(blocks) | _colored_examples(blocks, geometries)
     )
     # 页眉不进大纲，旁注、目录条目不是标题
     kinds = [

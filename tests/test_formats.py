@@ -6746,6 +6746,28 @@ def test_a_paragraph_after_a_hanging_list_line_is_split_off():
     assert _split_lines(paragraph) == [[0, 1]]
 
 
+def test_a_colored_example_sentence_stays_original_but_an_epigraph_does_not():
+    """正文中间缩进排开的一句彩色例句留原文，下文要拿原句里的词来讲。章首题词也这样排，后面跟着出处，照常翻。"""
+    from app.formats.pdf import TextBlock, _attribution, _colored_example
+    from app.formats.pdf_frame import TextFrame
+
+    frame = TextFrame(142.2, 475.2, 82.0, 719.0, 10.0)
+
+    def blk(text, rect, color=0x0000FF, size=10.0, flags=0):
+        rect = pymupdf.Rect(rect)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#0000ff", bold=False,
+                         body_size=10.0, span_lines=[[{"text": text, "size": size, "color": color, "flags": flags}]])
+
+    example = blk("Victoria Chen, CFO of Megabucks Banking, saw her pay jump to $2.3 million.", (167, 456, 475, 480))
+    assert _colored_example(example, frame)
+    assert not _colored_example(blk(example.text, (167, 456, 475, 480), color=0x404040), frame)
+    assert not _colored_example(blk(example.text, (167, 456, 475, 480), flags=2), frame)
+    assert not _colored_example(blk(example.text, (142.2, 456, 475, 480)), frame)
+    quote = blk("On two occasions I have been asked, will the right answers come out?", (167, 210, 475, 258))
+    assert _attribution(quote, blk("Babbage (1864)", (411, 246, 475, 258)))
+    assert not _attribution(example, blk("Here Victoria is referred to by many different phrases", (142, 484, 475, 520)))
+
+
 def test_a_verbatim_line_does_not_run_into_the_prose_below():
     """等宽字照录的问答 Q: ... A: Charles 没有句末标点，下一行回到栏边、小写开头的正文不是它的续行。"""
     from app.formats.pdf import TextBlock, _line_tail_match
