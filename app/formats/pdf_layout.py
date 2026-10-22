@@ -66,6 +66,8 @@ _MAX_PITCH = 36.0
 _SHORT_WORDS = 3
 _SHORT_WIDTH = 80.0
 _SHORT_SHARE = 0.8
+# 三线表顶线到中线之间最多几行字高
+_HEAD_ROWS = 4.0
 _INSIDE = 0.6
 _MARGIN_BAND = 0.07
 _MARGIN_MIN = 42.0
@@ -598,7 +600,10 @@ def page_tables(
     algorithms = algorithm_tables(page, drawings)
     # 无线的格子表本来就是按对齐的行找的，表头对齐的话已经在里面，不再往上找
     ruled = _with_header_rows(ruled, words)
-    return (*ruled, *unruled_tables(page, (*ruled, *algorithms), words), *algorithms)
+    unruled = unruled_tables(page, (*ruled, *algorithms), words)
+    if unruled:
+        unruled = _with_ruled_heads(unruled, words, _rule_segments(page, drawings)[0])
+    return (*ruled, *unruled, *algorithms)
 
 
 def _with_header_rows(tables: Sequence[RuledTable], words: Sequence[_TextWord]) -> tuple[RuledTable, ...]:
@@ -679,6 +684,72 @@ def _split_band(band: Sequence[pymupdf.Rect], words: Sequence[_TextWord]) -> lis
         edges = [cell.y0, *(y for y in cuts if cell.y0 < y < cell.y1), cell.y1]
         out.extend(pymupdf.Rect(cell.x0, top, cell.x1, bottom) for top, bottom in zip(edges, edges[1:]))
     return out
+
+
+def _with_ruled_heads(
+    tables: Sequence[RuledTable], words: Sequence[_TextWord], horizontal: Sequence[pymupdf.Rect],
+) -> tuple[RuledTable, ...]:
+    """三线表的表头夹在顶线和中线之间。表头的字常比数据列宽、居中排，左右缘和表身对不上，
+    按对齐找出来的表只有表身。表身上方紧贴一条横贯全表的中线，再往上有一条一样长的顶线，
+    两线之间的字就是表头，按列间空档分格并进表里。"""
+    out: list[RuledTable] = []
+    for table in tables:
+        rect = table.rect
+        row_height = min(cell.height for cell in table.cells)
+        spans = [h for h in horizontal if h.x0 <= rect.x0 + _NEAR and h.x1 >= rect.x1 - _NEAR]
+        mids = [h for h in spans if h.y1 <= rect.y0 + _NEAR and rect.y0 - h.y0 <= row_height]
+        if not mids:
+            out.append(table)
+            continue
+        mid = max(mids, key=lambda h: h.y0)
+        tops = [
+            h for h in spans if abs(h.x0 - mid.x0) <= _NEAR and abs(h.x1 - mid.x1) <= _NEAR
+            and row_height * 0.5 < mid.y0 - h.y0 <= row_height * _HEAD_ROWS
+        ]
+        if not tops:
+            out.append(table)
+            continue
+        top = max(tops, key=lambda h: h.y0)
+        band = [
+            word for word in words
+            if top.y1 < (word.y0 + word.y1) / 2 < mid.y0
+            and word.x0 >= mid.x0 - _NEAR and word.x1 <= mid.x1 + _NEAR
+        ]
+        heads = _head_cells([_row_cells(row) for row in _word_rows(band)], mid.x0, mid.x1, top.y1, mid.y0)
+        if len(heads) < 2:
+            out.append(table)
+            continue
+        grown = pymupdf.Rect(min(rect.x0, mid.x0), top.y0, max(rect.x1, mid.x1), rect.y1)
+        out.append(RuledTable(grown, (*heads, *table.cells), table.algorithm))
+    return tuple(out)
+
+
+def _head_cells(
+    rows: Sequence[Sequence[_TextCell]], left: float, right: float, top: float, bottom: float,
+) -> list[pymupdf.Rect]:
+    """表头的字按列分格。一行字接在正上方最近的那格下面，那格又只和这一个字相交的，
+    是同一格折了行；跨在两列上面的组名单独一格。格子左右伸到和邻格的空档中线，
+    上下伸到所在的那段表头。"""
+    groups: list[pymupdf.Rect] = []
+    for row in rows:
+        boxes = [pymupdf.Rect(cell.x0, cell.y0, cell.x1, cell.y1) for cell in row]
+        start = len(groups)
+        for box in boxes:
+            hits = [g for g in groups[:start] if g.x0 < box.x1 and box.x0 < g.x1]
+            near = max(hits, key=lambda g: g.y1, default=None)
+            if near is not None and sum(near.x0 < b.x1 and b.x0 < near.x1 for b in boxes) == 1:
+                near |= box
+            else:
+                groups.append(box)
+    cells: list[pymupdf.Rect] = []
+    for box in groups:
+        side = [g for g in groups if g is not box and g.y0 < box.y1 and box.y0 < g.y1]
+        x0 = max([left, *((g.x1 + box.x0) / 2 for g in side if g.x1 <= box.x0)])
+        x1 = min([right, *((box.x1 + g.x0) / 2 for g in side if g.x0 >= box.x1)])
+        y0 = max([top, *((g.y1 + box.y0) / 2 for g in groups if g.y1 <= box.y0 and g.x0 < box.x1 and box.x0 < g.x1)])
+        y1 = min([bottom, *((box.y1 + g.y0) / 2 for g in groups if g.y0 >= box.y1 and g.x0 < box.x1 and box.x0 < g.x1)])
+        cells.append(pymupdf.Rect(x0, y0, x1, y1))
+    return cells
 
 
 def _header_row(row: Sequence[_TextWord], lines: Sequence[float]) -> bool:
