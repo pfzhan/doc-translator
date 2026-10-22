@@ -4442,6 +4442,9 @@ def test_an_opening_bracket_does_not_end_a_line():
     assert len(lines) > 1
     assert all(not line.rstrip().endswith(("{", "(", "[", "（")) for line in lines), lines
     assert "".join(lines).replace(" ", "") == "视图范围:{l_partkey},{o_custkey}"
+    # 左引号同样跟着下一个词走，右引号不起行
+    quoted = break_lines("这里, Victoria 有多种不同的指称方式: “Victoria Chen”“Megabucks Banking 的首席财务官”", 9.5, 300.0, {})
+    assert all(not line.rstrip().endswith("“") and not line.startswith("”") for line in quoted), quoted
 
 
 def test_caption_word_in_bold_cm_is_not_a_formula():
