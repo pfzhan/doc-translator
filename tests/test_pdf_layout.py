@@ -920,6 +920,29 @@ def test_rows_without_rules_between_them_are_split_into_cells():
     assert len(body) == 9
 
 
+def test_header_between_top_and_mid_rules_joins_the_unruled_table():
+    """三线表的表头比数据列宽，左右缘对不上。顶线和中线之间的字按列分格并进表里。"""
+    from app.formats.pdf_layout import page_tables
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=600, height=400)
+    for y in (100, 116, 200):
+        page.draw_line((80, y), (500, y), width=0.4)
+    page.insert_text((85, 111), "Reverse process time (T - t + 1)", fontsize=10)
+    page.insert_text((255, 111), "Rate (bits/dim)", fontsize=10)
+    page.insert_text((370, 111), "Distortion (RMSE)", fontsize=10)
+    for row, y in enumerate((130, 142, 154, 166, 178, 190)):
+        page.insert_text((150, y), str(1000 - row * 100), fontsize=10)
+        page.insert_text((270, y), f"0.{row}1507", fontsize=10)
+        page.insert_text((390, y), f"{row}0.80948", fontsize=10)
+    [table] = page_tables(page)
+    assert round(table.rect.y0) == 100
+    heads = [cell for cell in table.cells if cell.y1 <= 117]
+    assert len(heads) == 3
+    assert (round(heads[0].x0), round(heads[-1].x1)) == (80, 500)
+    assert 225 < heads[0].x1 < 255 and 330 < heads[1].x1 < 370
+
+
 def test_table_of_abutting_filled_cells_is_found():
     """每格一块底色、只有上下横线的表。一整块底色的文本框、白底的图、压着跨格图注的格子都不是表。"""
     from app.formats.pdf_layout import filled_tables, page_words
