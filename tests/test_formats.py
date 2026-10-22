@@ -6711,6 +6711,20 @@ def test_an_example_number_stays_apart_from_its_sentence():
                                pymupdf.Rect(142.2, 556.9, 166.3, 568.9), pymupdf.Rect(179.1, 556.6, 458.9, 569.5), 10.0)
 
 
+def test_numbered_examples_in_one_block_are_split_apart():
+    """一块里两行例句 (1.2)、(1.3)，第一行最长，按右缘看不出是硬换行。上一句说完、下一行以例句编号起头，拆开。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, bbox):
+        return (text, pymupdf.Rect(bbox), [{"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}])
+
+    items = [item("(1.2) It was difficult to make it up the steep hill.", (142.2, 595.0, 335.0, 607.0)),
+             item("(1.3) What a difficult decision!", (142.2, 609.0, 268.0, 621.0))]
+    assert _split_lines(items) == [[0], [1]]
+    wrapped = [item("as derived in the two equations", (142.2, 595.0, 335.0, 607.0)), item("(2.3) we see", (142.2, 609.0, 268.0, 621.0))]
+    assert _split_lines(wrapped) == [[0, 1]]
+
+
 def test_a_line_in_a_column_of_its_own_font_stays_in_its_block():
     """幻灯片右边一栏等宽字排的示例和左边正文同高，横向还叠上一点。它在自己的块里和上一行
     左缘对齐、字体相同，是这一栏的一行，不当左边正文切下来的后半截挪过去。"""

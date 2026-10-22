@@ -83,6 +83,8 @@ NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
 # 单个字母加句点，像 "a. " 也像换行后的 "Q. The cost"。后者不是列表项。
 _LETTER_BULLET_RE = re.compile(r"^[a-zA-Z][.)]\s+")
 _PAREN_ITEM_RE = re.compile(r"^\([a-zA-Z]\)\s+")
+# 书里按章编号的例句：(1.2) It was difficult ...
+_EXAMPLE_NUMBER_RE = re.compile(r"^\(\d+\.\d+[a-z]?\)\s+\S")
 # 单独一截的编号：例句、式子的 (25.4)、(3)，列表的 (a)
 _PAREN_LABEL_RE = re.compile(r"\((?:[a-zA-Z]|\d+(?:\.\d+)*)\)")
 _LIST_INTRO_END = (".", "?", "!", "。", "！", "？", ":", ";", "：", "；")
@@ -920,8 +922,10 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             and not ptext.rstrip().endswith(_LIST_INTRO_END)
         )
         bullet = _list_item(text) and not wrapped_letter
+        # 上一句说完，下一行以例句编号开头：一行一个例句
+        example = bool(_EXAMPLE_NUMBER_RE.match(stripped)) and _ends_sentence(ptext)
         if not same_visual_line and not sec_label and (
-            bullet or NO_TEXT_RE.match(stripped) or prev_symbol
+            bullet or example or NO_TEXT_RE.match(stripped) or prev_symbol
             or hard_break or left_jump or size_drop or side_by_side or leaves_verbatim
             or _caption_opens(items[i][2], pspans)
         ):
