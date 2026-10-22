@@ -6503,3 +6503,37 @@ def test_a_contents_page_without_leader_dots_is_found_by_its_page_numbers():
     counts = page("", [("Romeo", 1), ("salad", 2), ("Falstaff", 4), ("forest", 12), ("battle", 21)])
     assert _toc_pages([counts, contents, following]) == {1, 2}
 
+
+def test_the_short_centered_last_line_of_a_caption_continues_it():
+    """居中排的表格说明末行短，两边都缩进。中线对齐、小写起头，接在上一行后面。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, x0, x1, y):
+        rect = pymupdf.Rect(x0, y, x1, y + 12)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.9, color="#000", bold=False)
+
+    caption = [blk("Table 3 | Experimental results at each stage of DeepSeek-R1. Numbers in bold denote the", 84.0, 510.9, 85.5),
+               blk("performance is statistically significant (t-test with p < 0.01).", 153.5, 441.5, 98.2)]
+    assert len(_merge_continuations(caption)) == 1
+    # 中线不对齐的缩进行是别的东西
+    offset = [caption[0], blk("performance is statistically significant (t-test with p < 0.01).", 200.0, 488.0, 98.2)]
+    assert len(_merge_continuations(offset)) == 2
+
+
+def test_a_centered_formula_line_is_not_a_caption_tail():
+    """段落下面居中的公式行不是居中段落的末行。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, x0, x1, y, lines=None):
+        rects = lines or [pymupdf.Rect(x0, y, x1, y + 12)]
+        rect = pymupdf.Rect(rects[0])
+        for r in rects[1:]:
+            rect |= r
+        return TextBlock(page=0, rect=rect, line_rects=rects, text=text, size=10.0, color="#000", bold=False)
+
+    formula = [blk("states that if the language is regular in certain ways (to be exact, if it is both stationary and", 160, 493, 300),
+               blk("lim -1/n log p(w1:n)", 270, 383, 318)]
+    assert len(_merge_continuations(formula)) == 2
+    # 成句的公式行也上下空着：rel(A,B) = log(max(|in(A)|,|in(B)|)) ...
+    spaced = [formula[0], blk("rel(A,B) = log(max(in(A), in(B))) - log(in(A) and in(B))", 215, 438, 318)]
+    assert len(_merge_continuations(spaced)) == 2
