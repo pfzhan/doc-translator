@@ -3669,6 +3669,15 @@ def _code_panel_ids(blocks: list[TextBlock], scans: list[PageScan]) -> set[int]:
 
 # 可伸长的大括号、大求和号这类定界符的字体。行内公式也会用到，所以只认离开左缘的块
 _BIG_DELIMITER_FONT_RE = re.compile(r"CMEX|cmex|LMMathExtension", re.I)
+# 公式外的词数到这个数就是成段的句子。行内积分号也用这种字体，右栏、列表续行又都离开版心左缘
+_DISPLAY_FORMULA_MAX_WORDS = 24
+
+
+def _plain_words(block: TextBlock) -> int:
+    """公式外的正文词数。"""
+    return _prose_units(" ".join(
+        str(span.get("text") or "") for line in block.span_lines or [] for span in line if not _span_is_math(span)
+    ))
 
 
 def _display_formula_ids(blocks: list[TextBlock], geometries: list[PageGeometry]) -> set[int]:
@@ -3684,7 +3693,7 @@ def _display_formula_ids(blocks: list[TextBlock], geometries: list[PageGeometry]
         if any(
             _BIG_DELIMITER_FONT_RE.search(str(span.get("font") or "")) and str(span.get("text") or "").strip()
             for line in block.span_lines or [] for span in line
-        ):
+        ) and _plain_words(block) < _DISPLAY_FORMULA_MAX_WORDS:
             found.append(block)
     ids = {id(block) for block in found}
     for block in blocks:

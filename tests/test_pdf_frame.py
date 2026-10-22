@@ -108,7 +108,17 @@ def test_displayed_formula_with_a_big_brace_keeps_its_rows():
     body = block("Under this version of Levenshtein, the computation for D[i, j] becomes:", (142, 380, 475, 390))
     inline = block("a sum written inline uses the extension font too", (142, 440, 475, 450), "CMEX10")
     geo = PageGeometry.from_rects(612, [], [], 792, frame=TextFrame(142, 475, 111, 719, 10))
-    ids = _display_formula_ids([brace, condition, body, inline], [geo])
+    # 列表续行、右栏的段落也离开左缘，句中的积分号用同一种字体，按词数认成句子
+    item = TextBlock(
+        page=0, rect=pymupdf.Rect(170, 460, 475, 500), line_rects=[pymupdf.Rect(170, 460, 475, 500)],
+        text="", size=10, color="#000000", bold=False,
+        span_lines=[[{"text": "R", "font": "CMEX10", "size": 10.0},
+                     {"text": "pθ(z)pθ(x|z) dz is intractable (so we cannot evaluate or differentiate the marginal "
+                              "likelihood), where the true posterior density is intractable (so the EM algorithm "
+                              "cannot be used), and where the required integrals",
+                      "font": "NimbusRomNo9L-Regu", "size": 10.0}]],
+    )
+    ids = _display_formula_ids([brace, condition, body, inline, item], [geo])
     assert ids == {id(brace), id(condition)}
 
 
