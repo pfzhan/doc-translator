@@ -799,6 +799,9 @@ def filled_tables(
             continue
         rows = _edges([cell.y0 for cell in cells])
         cols = _edges([cell.x0 for cell in cells])
+        if len(cols) == 1 and _spaced_rows(cells, words):
+            tables.append(RuledTable(area, tuple(sorted(cells, key=lambda c: c.y0))))
+            continue
         if len(rows) < 2 or len(cols) < 2:
             continue
         # 格子互不交叠、合起来铺满整片：嵌套的底色（框里再套一块）面积会多出来
@@ -812,6 +815,19 @@ def filled_tables(
         if len({id(found[0]) for found in holders}) >= 2:
             tables.append(RuledTable(area, tuple(sorted(cells, key=lambda c: (c.y0, c.x0)))))
     return tuple(tables)
+
+
+def _spaced_rows(cells: Sequence[pymupdf.Rect], words: Sequence[_TextWord]) -> bool:
+    """一列逐行底色的表（\\rowcolor）：三行以上，每行一行字，都隔着大空档分成几段
+    （例句、填空的横线、答案）。代码框的底纹也是一行一块，但一行是连着的一句。"""
+    if len(cells) < _MIN_TEXT_ROWS:
+        return False
+    for cell in cells:
+        inside = [word for word in words if _holds(cell, pymupdf.Rect(word.x0, word.y0, word.x1, word.y1))]
+        rows = _word_rows(inside)
+        if len(rows) != 1 or len(_row_cells(rows[0])) < 2:
+            return False
+    return True
 
 
 def _holds(cell: pymupdf.Rect, box: pymupdf.Rect) -> bool:
