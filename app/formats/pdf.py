@@ -3668,8 +3668,15 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             colon_wrap = (p.text.rstrip().endswith(":") and abs(last_x1 - next_x1) <= p.size
                           and last_x1 >= max(p.rect.x1, b.rect.x1) - p.size)
             # 句中的缩写（Brants et al. | (2007)）不是句末。左括号起头的续行是引文年份、插入语，
-            # (a) 这样的编号是下一项，(2.11) 是例句、公式的编号
-            open_paren = first == "(" and not _list_item(b.text) and not _EQUATION_TAG_RE.match(b.text)
+            # 不比上一段最左的一行靠右（首行缩进的段落），或者和其中一行同一左缘（悬挂缩进的条目续行），
+            # 或者居中接在居中段落后面。
+            # (a) 这样的编号是下一项，(2.11) 是例句、公式的编号；
+            # 缩进的是单独排的式子（LUNAR 的逻辑式），往右错开的是表头一列列的 (Acc)
+            open_paren = (
+                first == "(" and not _list_item(b.text) and not _EQUATION_TAG_RE.match(b.text)
+                and (centered_tail or b.rect.x0 <= p.rect.x0 + p.size * 0.5
+                     or any(abs(b.rect.x0 - rect.x0) <= p.size * 0.5 for rect in p.line_rects))
+            )
             latin = (
                 y_close
                 and (x_close or centered_tail)
