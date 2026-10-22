@@ -3692,6 +3692,29 @@ def test_smaller_body_under_a_heading_splits():
     assert _split_lines(script) == [[0, 1]]
 
 
+def test_affiliation_under_an_author_name_splits():
+    """题名页上作者名下面小一号的单位自成一行，只有两个词也单独成段。
+    行首星号比后面的字大一号时，按多数字的字号比，下一行的同字号续行不拆。"""
+    from app.formats.pdf import _split_lines
+
+    author = [
+        _line("Daniel Jurafsky", 247, 355, 333.4, size=17.2),
+        _line("Stanford University", 245, 357, 353.6, size=14.3),
+    ]
+    assert _split_lines(author) == [[0], [1]]
+
+    def item(spans, x0, x1, y0):
+        text = "".join(text for text, _ in spans)
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 14), [{"text": text, "size": size} for text, size in spans])
+
+    note = [
+        item([("*", 15), ("also what standalone", 12), (" ", 15)], 61, 186, 155),
+        item([("Phoenix compiler ", 12)], 61, 157, 173),
+        item([("would generate.", 12)], 61, 148, 187),
+    ]
+    assert _split_lines(note) == [[0, 1, 2]]
+
+
 def test_heading_does_not_turn_the_following_sentence_into_a_formula():
     """就算标题和导语还在一块里，9pt 正文也不能因为小于 12pt 就被裁成公式图。"""
     from app.formats.pdf import _placeholderize
@@ -5582,6 +5605,52 @@ def test_two_line_title_centered_on_the_page_is_written_centered():
     items = [(widest_title, ""), *((label, "") for label in labels)]
     _, centered = _write_rect(widest_title, items, True, False, geo)
     assert centered
+
+
+def test_title_page_centered_off_the_page_middle_is_written_centered():
+    """题名页各行共用一条中线，但这条线不在页面正中（左右边距不对称），也不在全书版心的中线上。
+    每一块都按这条中线居中写回，最宽的书名也一样。"""
+    from app.formats.pdf import TextBlock, _write_rect
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import PageGeometry
+
+    def blk(text, x0, y0, x1, y1, size):
+        rect = pymupdf.Rect(x0, y0, x1, y1)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
+
+    blocks = [
+        blk("Speech and Language Processing", 108.2, 112.9, 494.1, 147.7, 28.9),
+        blk("with Language Models", 227.7, 198.4, 374.6, 217.6, 15.9),
+        blk("Third Edition draft", 236.1, 242.2, 366.2, 263.0, 17.2),
+        blk("James H. Martin", 244.0, 395.4, 358.3, 416.1, 17.2),
+        blk("University of Colorado at Boulder", 202.5, 416.0, 399.8, 433.1, 14.3),
+        blk("Draft of August 19, 2026. Comments and typos welcome!", 100.2, 644.4, 501.0, 665.2, 17.2),
+    ]
+    geo = PageGeometry.from_rects(612, [b.rect for b in blocks], height=792,
+                                  frame=TextFrame(203, 493, 110, 719, 10))
+    items = [(b, "") for b in blocks]
+    for block in blocks:
+        rect, centered = _write_rect(block, items, True, False, geo)
+        assert centered, block.text
+        assert abs((rect.x0 + rect.x1) / 2 - 301) < 1, block.text
+
+
+def test_body_lines_beside_margin_notes_do_not_make_a_centered_page():
+    """页边旁注把本页文字的左右范围撑宽，正文整行也不能算成短行。正文行都在版心中线上，
+    缩进的例句中线碰巧挨着它，不算整页居中排。"""
+    from app.formats.pdf import TextBlock, _centered_axis
+
+    def blk(text, x0, y0, x1, size=10.0):
+        rect = pymupdf.Rect(x0, y0, x1, y0 + 12)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
+
+    body = [blk("Words don't appear out of nowhere. Any particular piece of text", 160, 253 + 12 * i, 493)
+            for i in range(6)]
+    note = blk("code switching", 101, 530, 146, size=8)
+    example = blk("[he was and will remain a friend ... don't worry ... but have faith]", 192, 619, 465)
+    title = blk("Corpora", 134, 213, 191, size=14)
+    blocks = [*body, note, example, title]
+    assert _centered_axis(example, blocks) is None
 
 
 def test_white_label_on_a_black_box_is_pasted_back_as_is(tmp_path):
