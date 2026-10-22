@@ -741,13 +741,16 @@ function downloadLabels(outputs) {
   return outputs.map((o) => downloadLabel(o.name, dup));
 }
 
-// PDF 在新标签页里用浏览器自带的阅读器打开。两种版本都有时按钮带上版本名
+// 在新标签页里打开生成的文件：PDF 用浏览器自带的阅读器，EPUB 用 epub.html 逐章显示。
+// 两种版本都有时按钮带上版本名
 function previewLinks(job) {
-  const pdfs = job.outputs.filter((o) => fmtOf(o.name) === "pdf");
-  return pdfs.map((o) => {
+  const books = job.outputs.filter((o) => ["pdf", "epub"].includes(fmtOf(o.name)));
+  return books.map((o) => {
     const variant = outputVariant(o.name) === "bilingual" ? "双语" : outputVariant(o.name) === "translated" ? "译文" : "";
-    const a = el("a", "btn sm", `预览${pdfs.length > 1 ? variant : ""}`);
-    a.href = `${o.url}?inline=1`;
+    const a = el("a", "btn sm", `预览${books.length > 1 ? variant : ""}`);
+    a.href = fmtOf(o.name) === "pdf"
+      ? `${o.url}?inline=1`
+      : `epub.html?${new URLSearchParams({ job: job.id, file: o.name })}`;
     a.target = "_blank";
     a.rel = "noopener";
     a.title = `在新标签页打开 ${o.name}`;

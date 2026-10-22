@@ -169,6 +169,32 @@ def _write_epub(path, manifest: str, spine: str, docs: dict[str, str]):
             z.writestr(f"OEBPS/{name}", data)
 
 
+def test_epub2_outline_reads_the_ncx(tmp_path):
+    """没有 nav 文档的 EPUB2 按 toc.ncx 列目录，层级跟着 navPoint 嵌套。"""
+    from app.formats.epub import book_outline
+
+    ncx = (
+        '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/"><navMap>'
+        '<navPoint id="a"><navLabel><text>Chapter One</text></navLabel><content src="ch1.xhtml"/>'
+        '<navPoint id="b"><navLabel><text>A Section</text></navLabel><content src="ch1.xhtml#s1"/></navPoint>'
+        "</navPoint></navMap></ncx>"
+    )
+    src = tmp_path / "old.epub"
+    _write_epub(
+        src,
+        '<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>'
+        '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>',
+        '<itemref idref="ch1"/>',
+        {"ch1.xhtml": "<html xmlns='http://www.w3.org/1999/xhtml'><body><p>x</p></body></html>", "toc.ncx": ncx},
+    )
+    with zipfile.ZipFile(src) as z:
+        outline = book_outline(z)
+    assert outline["title"] == "Test Book" and outline["spine"] == ["OEBPS/ch1.xhtml"]
+    assert [(e["label"], e["anchor"], e["depth"]) for e in outline["toc"]] == [
+        ("Chapter One", "", 0), ("A Section", "s1", 1),
+    ]
+
+
 def test_epub_chapter_with_internal_dtd_not_dropped(tmp_path):
     """带内部 DTD 子集的 XHTML 章节：lxml-xml 解析会静默产出空文档，回退后内容必须保留。"""
     chapter = (

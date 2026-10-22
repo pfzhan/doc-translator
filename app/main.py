@@ -1,20 +1,23 @@
 """Web 服务：上传文档 → 后台翻译 → 边翻边预览 → 下载结果；翻译记录持久化在 data/jobs/。"""
 import asyncio
+import mimetypes
 import os
 import shutil
 import time
 import traceback
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import history, layout_model
 from .formats import PREVIEW_FORMATS, SUPPORTED, output_variant, translate_file
+from .formats.epub import book_outline
 from .formats.pdf import mupdf_turn
 from .history import Job, JobStore
 from .languages import GOOGLE_CODES, LANGUAGES
@@ -588,6 +591,46 @@ def download(job_id: str, name: str, inline: bool = False):
         if path.exists():
             return FileResponse(path, filename=name, content_disposition_type="inline" if inline else "attachment")
     raise HTTPException(404, "文件不存在")
+
+
+# 书里的页面直接从 zip 里取出来给浏览器。书里的脚本一律不跑，免得它在本站的源下调接口；
+# 保留同源，书里的字体、样式照常加载，预览页也能跟上读者点进去的章节
+_BOOK_PAGE_HEADERS = {
+    "Content-Security-Policy": "sandbox allow-same-origin allow-popups; script-src 'none'; object-src 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-cache",
+}
+
+
+def _epub_output(job_id: str, name: str) -> Path:
+    job = _job_or_404(job_id)
+    path = jobs.out_dir(job.id) / name
+    if Path(name).name != name or name not in job.outputs or not name.lower().endswith(".epub") or not path.exists():
+        raise HTTPException(404, "文件不存在")
+    return path
+
+
+@app.get("/api/jobs/{job_id}/epub/{name}")
+def epub_outline(job_id: str, name: str):
+    """在线预览 EPUB：书名、按 spine 排好的章节和目录。章节内容从下面的接口按成员名取。"""
+    path = _epub_output(job_id, name)
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return book_outline(zf)
+    except (zipfile.BadZipFile, KeyError, ValueError) as e:
+        raise HTTPException(422, f"EPUB 读不出来：{e}") from e
+
+
+@app.get("/api/jobs/{job_id}/epub/{name}/{member:path}")
+def epub_member(job_id: str, name: str, member: str):
+    path = _epub_output(job_id, name)
+    try:
+        with zipfile.ZipFile(path) as zf:
+            data = zf.read(member)
+    except (zipfile.BadZipFile, KeyError):
+        raise HTTPException(404, "文件不存在") from None
+    media = mimetypes.guess_type(member)[0] or "application/octet-stream"
+    return Response(data, media_type=media, headers=_BOOK_PAGE_HEADERS)
 
 
 # ---------- 设置 ----------

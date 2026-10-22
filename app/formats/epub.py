@@ -59,6 +59,67 @@ def _content_docs(zf: zipfile.ZipFile, opf_path: str):
     return docs, nav, ncx, opf
 
 
+def book_outline(zf: zipfile.ZipFile) -> dict:
+    """在线预览用：书名、阅读顺序和目录。路径都是 zip 里的成员名，目录项带上 # 后面的锚点。"""
+    docs, nav, ncx, opf = _content_docs(zf, _opf_path(zf))
+    names = set(zf.namelist())
+    title = opf.find("title")
+    toc = _nav_toc(zf, nav) if nav in names else []
+    if not toc and ncx in names:
+        toc = _ncx_toc(zf, ncx)
+    return {
+        "title": title.get_text(strip=True) if title is not None else "",
+        "spine": [doc for doc in docs if doc in names],
+        "toc": toc,
+    }
+
+
+def _toc_entry(base: str, href: str, label: str, depth: int) -> dict:
+    path, _, anchor = href.partition("#")
+    member = posixpath.normpath(posixpath.join(posixpath.dirname(base), unquote(path))) if path else base
+    return {"label": label, "path": member, "anchor": anchor, "depth": depth}
+
+
+def _nav_toc(zf: zipfile.ZipFile, nav: str) -> list[dict]:
+    soup = BeautifulSoup(zf.read(nav), "lxml-xml")
+    navs = soup.find_all("nav")
+    root = next((el for el in navs if "toc" in (el.get("epub:type") or el.get("type") or "").split()), None)
+    root = root or (navs[0] if navs else None)
+    entries: list[dict] = []
+
+    def walk(ol, depth: int) -> None:
+        for li in ol.find_all("li", recursive=False):
+            link = li.find("a", recursive=False)
+            if link is not None and link.get("href"):
+                entries.append(_toc_entry(nav, link["href"], link.get_text(" ", strip=True), depth))
+            sub = li.find("ol", recursive=False)
+            if sub is not None:
+                walk(sub, depth + 1)
+
+    top = root.find("ol") if root is not None else None
+    if top is not None:
+        walk(top, 0)
+    return entries
+
+
+def _ncx_toc(zf: zipfile.ZipFile, ncx: str) -> list[dict]:
+    soup = BeautifulSoup(zf.read(ncx), "lxml-xml")
+    entries: list[dict] = []
+
+    def walk(parent, depth: int) -> None:
+        for point in parent.find_all("navPoint", recursive=False):
+            label, content = point.find("navLabel"), point.find("content")
+            if content is not None and content.get("src"):
+                text = label.get_text(" ", strip=True) if label is not None else ""
+                entries.append(_toc_entry(ncx, content["src"], text, depth))
+            walk(point, depth + 1)
+
+    nav_map = soup.find("navMap")
+    if nav_map is not None:
+        walk(nav_map, 0)
+    return entries
+
+
 def _is_biblio_doc(name: str) -> bool:
     stem = name.rsplit("/", 1)[-1].rsplit(".", 1)[0].casefold().replace("_", "-")
     stem = re.sub(r"-split-\d+$", "", stem)
