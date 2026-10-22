@@ -996,6 +996,40 @@ def test_a_table_ruled_only_between_columns_is_found():
     assert page_tables(prose) == ()
 
 
+def test_a_three_rule_table_is_found_whole():
+    """顶线、中线、底线一样长的三线表：表头折行，几组数据之间还隔着横线，整张表都认出来。
+    三条线之间排的是正文、伪代码的，不是表。"""
+    from app.formats.pdf_layout import page_tables
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=600, height=400)
+    for y in (100, 126, 170, 196):
+        page.draw_line((120, y), (490, y), width=0.4)
+    page.insert_text((130, 110), "Layer Type", fontsize=8)
+    page.insert_text((230, 110), "Complexity per Layer", fontsize=8)
+    page.insert_text((340, 110), "Sequential", fontsize=8)
+    page.insert_text((340, 120), "Operations", fontsize=8)
+    page.insert_text((410, 110), "Maximum Path Length", fontsize=8)
+    rows = [("Self-Attention", "O(n2 d)", "O(1)", "O(1)"), ("Recurrent", "O(n d2)", "O(n)", "O(n)"),
+            ("Convolutional", "O(k n d2)", "O(1)", "O(logk(n))"), ("Restricted", "O(r n d)", "O(1)", "O(n/r)"),
+            ("Big", "O(n)", "O(1)", "O(1)")]
+    for row, cells in enumerate(rows):
+        y = 136 + row * 10 + (6 if row == 4 else 0)
+        for x, text in zip((130, 240, 345, 420), cells):
+            page.insert_text((x, y), text, fontsize=8)
+    [table] = page_tables(page)
+    assert table.rect.y0 <= 100 and table.rect.y1 >= 196
+    assert len(table.cells) == 4 + 1 + 5 * 4
+
+    prose = pymupdf.open().new_page(width=600, height=400)
+    for y in (60, 76, 160):
+        prose.draw_line((100, y), (500, y), width=0.4)
+    prose.insert_text((110, 70), "Notes on the training run", fontsize=9)
+    for row in range(6):
+        prose.insert_text((110, 88 + row * 12), "for each step compute the gradient and update the weights", fontsize=9)
+    assert page_tables(prose) == ()
+
+
 def test_table_of_abutting_filled_cells_is_found():
     """每格一块底色、只有上下横线的表。一整块底色的文本框、白底的图、压着跨格图注的格子都不是表。"""
     from app.formats.pdf_layout import filled_tables, page_words
