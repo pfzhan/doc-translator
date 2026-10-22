@@ -937,3 +937,27 @@ def test_an_epigraph_in_another_language_stays_original():
     found = _foreign_ids([*body, *epigraph])
     assert all(id(block) in found for block in epigraph)
     assert not any(id(block) in found for block in body)
+
+
+def test_header_rows_above_a_three_line_table_join_it():
+    """三线表的表头和表身隔着横线，按线只找得到表身。紧贴在上面、词都落在表的列里的行是表头；
+    再往上的说明是连着排的句子，会跨过列线，不算。"""
+    from app.formats.pdf_layout import RuledTable, _TextWord, _with_header_rows
+
+    columns = [(115, 213), (213, 266), (266, 320), (320, 373), (373, 426), (426, 480)]
+    body = RuledTable(pymupdf.Rect(115, 227, 480, 273), tuple(pymupdf.Rect(x0, 227, x1, 273) for x0, x1 in columns))
+
+    def row(y, *items):
+        return [_TextWord(x0, y, x1, y + 9, text) for text, x0, x1 in items]
+
+    words = [
+        *row(154, ("DeepSeek-R1,", 115, 170), ("we", 173, 184), ("report", 187, 214), ("results", 217, 248),
+             ("under", 251, 276), ("two", 279, 294), ("configurations:", 297, 360)),
+        *row(195, ("Discrimi.", 221, 259), ("Illegal", 281, 306), ("Harmful", 328, 365), ("Ethical", 382, 413),
+             ("Overall", 437, 469)),
+        *row(211, ("Ratio(%)", 117, 153), ("Unsafe", 215, 245), ("Rej.", 249, 264), ("Unsafe", 268, 298),
+             ("Rej.", 302, 318), ("Unsafe", 322, 352), ("Rej.", 356, 371)),
+    ]
+    (table,) = _with_header_rows([body], words)
+    assert table.rect.y0 < 195 and table.rect.y0 > 165
+    assert len(table.cells) == len(body.cells) + 2
