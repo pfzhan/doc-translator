@@ -6723,6 +6723,37 @@ def _assign_restored_parts(
     return [_join_boundary(restored), SPILL_TAIL], [formulas, []]
 
 
+# 节号、条目号：4、4.1、3.2.1.、B.3.2.、1.、(a)、a)、(1)。编号外面可能包着字号、粗体标记
+_NUMBER_LABEL_RE = re.compile(
+    r"^((?:\{[biz]\d*\})*)"
+    r"(\d{1,3}(?:\.\d{1,3})*\.?|[A-Z](?:\.\d{1,3})+\.?|[A-Z]\.|[IVX]{1,4}\.|\(?[a-z]\)|\(\d{1,2}\))"
+    r"((?:\{/[biz]\})*)(?=\s|\{[biz]\d*\}\s)"
+)
+
+
+def _peel_number(sent: str, kind: str) -> tuple[str, str]:
+    """摘下单元开头的节号、条目号，只送后面的文字，写回时原样接回去（见 _with_label）。
+    连编号一起送，模型会把 4 Experiments 译成「第四 实验」，把 B.3.2 写成 B.三.二、1. 写成「一，」。
+    不以点收尾的数（2 samples、1.5 times）、单个大写字母、罗马数字也可能是正文句首
+    （I. Goodfellow），只在标题和不成句的短行上摘。"""
+    m = _NUMBER_LABEL_RE.match(sent)
+    if not m:
+        return "", sent
+    number = m.group(2)
+    rest = sent[m.end():]
+    if not re.search(r"[^\W\d_]", strip_style_marks(rest)):
+        return "", sent
+    sure = bool(re.fullmatch(r"\d{1,3}\.|\d{1,3}(?:\.\d{1,3})+\.|[A-Z](?:\.\d{1,3})+\.?|\(?[a-z]\)|\(\d{1,2}\)", number))
+    if not sure and kind == "p" and (len(sent) > 80 or _ends_sentence(sent)):
+        return "", sent
+    return m.group(0), rest.lstrip()
+
+
+def _with_label(label: str, translation: str) -> str:
+    """把摘下的编号接回译文开头。"""
+    return f"{label} {translation.lstrip()}" if label else translation
+
+
 def _normalize_heading_number(src_text: str, translation: str) -> str:
     """标题译文开头已有章节号时改回原文编号（'第二章' → '2'）。
 
@@ -6864,6 +6895,7 @@ class _PdfPlan:
     skip_ids: set[int]
     block_kind: dict[int, str]
     title: str = ""
+    labels: list[str] = field(default_factory=list)  # 每个单元开头摘下的编号，见 _peel_number
 
 
 def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
@@ -6937,6 +6969,7 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
     sent_formulas: list[list[dict]] = []
     sent_kinds: list[str] = []
     sent_skips: list[bool] = []
+    sent_labels: list[str] = []
     flat_units: list[list[TextBlock]] = []
     name_i = 0
     for unit_no, unit in enumerate(units):
@@ -6951,6 +6984,7 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
             sent_formulas.append([])
             sent_kinds.append(block_kind[id(unit[0])])
             sent_skips.append(True)
+            sent_labels.append("")
             continue
         sent, formulas, name_i = _prepare_unit(unit, name_i)
         flat_units.append(unit)
@@ -6961,14 +6995,17 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
             sent_texts.append(_join_lines(b.text for b in unit))
             sent_formulas.append([])
             sent_skips.append(True)
+            sent_labels.append("")
             continue
+        label, sent = _peel_number(sent, sent_kinds[-1])
+        sent_labels.append(label)
         sent_texts.append(sent)
         sent_formulas.append(formulas)
         sent_skips.append(False)
 
     return _PdfPlan(
         src_doc, blocks, geometries, toc, flat_units, sent_texts, sent_formulas, sent_kinds, sent_skips,
-        skip_ids, block_kind, title,
+        skip_ids, block_kind, title, sent_labels,
     )
 
 
@@ -7128,7 +7165,8 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     block_formulas: dict[int, list] = {}
     fallbacks = 0
     kept_ids = set(skip_ids)
-    for unit, t, sent_text, formulas in zip(flat_units, raw, sent_texts, sent_formulas):
+    labels = plan.labels or [""] * len(flat_units)
+    for unit, t, sent_text, formulas, label in zip(flat_units, raw, sent_texts, sent_formulas, labels):
         if t == sent_text:
             # 模型原样返回（编号、代码、专名）。送翻的文字规整过（TeX 的 `u 合成 ù），
             # 和块里的原字不同，按译文写回会擦掉原字重排。留原字，和跳过的块一样
@@ -7149,6 +7187,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             shown = _join_lines(parts)
         else:
             parts, formula_lists = _assign_restored_parts(restored, unit, formulas)
+            parts[0] = _with_label(label, parts[0])
             shown = strip_style_marks(parts[0])
         for b, part, flist in zip(unit, parts, formula_lists):
             if part == SPILL_TAIL:
