@@ -492,3 +492,31 @@ def test_finished_job_preview_returns_updates_after_last_poll(app_env):
         assert sorted(u[0] for u in late["updates"]) == [0, 1, 2]
         assert "segments" not in late
         assert client.get(f"/api/jobs/snap1/preview?since={snap['version']}").json()["updates"] == []
+
+
+def test_dotted_section_numbers_stay_in_digits():
+    """原文以 7.4、1.2.3 开头，模型照着「章节号写中文数字」写成了「七点四」「四.11」，或给没写
+    Chapter 的裸章号加上「第十二章」：改回原样，缓存里的旧译文命中时也改写。原文写了单位的、
+    读法对不上的不动。"""
+    from app.runner import Runner, keep_section_number as keep
+
+    assert keep("7.4 The input", "七点四 输入", "zh-CN") == "7.4 输入"
+    assert keep("{b}7.4{/b} Prove that", "{b}七点四{/b} 证明", "zh-CN") == "{b}7.4{/b} 证明"
+    assert keep("1.7.1 Inference", "第一点七点一 推理", "zh-CN") == "1.7.1 推理"
+    assert keep("24.7.1 Linking", "二十四点七点一 链接", "zh-CN") == "24.7.1 链接"
+    assert keep("4.11 Statistical Testing", "四.11 统计检验", "zh-CN") == "4.11 统计检验"
+    assert keep("12 Agents", "第十二章 智能体", "zh-CN") == "12 智能体"
+    assert keep("CHAPTER 5 Embeddings", "第五章 嵌入", "zh-CN") == "第五章 嵌入"
+    assert keep("2 words were found", "找到了两个词", "zh-CN") == "找到了两个词"
+    assert keep("1.1 What", "一点十一 什么", "zh-CN") == "一点十一 什么"
+    assert keep("7.4 The input", "七点四 输入", "en") == "七点四 输入"
+
+    class NeverCalled(MockTranslator):
+        async def translate_batch(self, texts):
+            raise AssertionError("全部命中缓存，不该发请求")
+
+    cache = MemCache({"17.2.3 Residual vector quantization": "十七点二点三 残差向量量化"})
+    runner = Runner(NeverCalled("zh-CN"), cache=cache, skip_same_lang=False)
+    out = asyncio.run(runner.translate_all(["17.2.3 Residual vector quantization"], kinds=["h2"]))
+    assert out == ["17.2.3 残差向量量化"]
+    assert cache.d["17.2.3 Residual vector quantization"] == "17.2.3 残差向量量化"
