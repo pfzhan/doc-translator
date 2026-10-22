@@ -6550,3 +6550,37 @@ def test_a_centered_formula_or_a_hanging_item_line_keeps_its_place():
                 [pymupdf.Rect(142, 300, 475, 312), pymupdf.Rect(157, 312, 475, 324)]),
             blk("(like Hong Kong, Marie Curie, or the New York Times.", 157, 380, 324)]
     assert len(_merge_continuations(item)) == 1
+
+
+def test_the_line_gap_is_measured_from_the_documents_body_lines():
+    """行框高的字体紧排的两行叠上一点，量出来是负的。正文太少量不出来时用常见值。"""
+    from app.formats.pdf import _LINE_GAP, _line_gap
+
+    def page(count, top=100.0, height=13.3, pitch=11.0, size=10.0):
+        lines = [
+            {"dir": (1, 0), "bbox": (72, top + pitch * k, 520, top + pitch * k + height),
+             "spans": [{"text": "words of the body text", "size": size}]}
+            for k in range(count)
+        ]
+        return {"blocks": [{"type": 0, "lines": lines}]}
+
+    assert _line_gap([page(30)]) == -0.25
+    # 量的是正文字号的行，标题不算
+    assert _line_gap([page(30), page(5, top=40, height=20, pitch=30, size=20)]) == -0.25
+    assert _line_gap([page(5)]) == _LINE_GAP
+
+
+def test_a_line_far_below_by_the_documents_own_spacing_is_not_a_continuation():
+    """幻灯片字体行框高，紧排的两行量出来叠着。副标题下面隔开 1.3 个字的表头
+    按固定的 1.5 个字算还在行距里，扣掉这份文档的行距就是另起的一块。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, y0, y1, size):
+        rect = pymupdf.Rect(114, y0, 1122, y1)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
+
+    def slide():
+        return [blk("Out of 9222 sentences", 150, 205, 45.0), blk("i want to eat chinese food lunch spend", 263, 304, 31.9)]
+
+    assert len(_merge_continuations(slide())) == 1
+    assert len(_merge_continuations(slide(), line_gap=-0.15)) == 2
