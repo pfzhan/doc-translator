@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pymupdf
@@ -253,15 +254,17 @@ def draw_cjk_lines(
     image_indexes: frozenset[int],
     fallback_text: dict[int, str],
     justify_last: bool = False,
+    lanes: Sequence[tuple[float, float]] = (),
 ) -> list[FormulaSlot] | None:
     """写成两端对齐的行。缺字时返回 None，调用方改走 HTML 盒子。
 
     段落还要接到下一页时，这一页的末行也是满行，同样两端对齐。
+    lanes 是开头几行相对盒子左缘的缩进和宽度（让开图的那几行），其余各行占满盒子。
     """
     left, top = page_origin(page)
     placed = _place_lines(
         lines, box, em, gap, color, centered, image_indexes, fallback_text, top,
-        justify_last, left,
+        justify_last, left, lanes,
     )
     if placed is None:
         return None
@@ -285,6 +288,7 @@ def _place_lines(
     page_top: float,
     justify_last: bool = False,
     page_left: float = 0.0,
+    lanes: Sequence[tuple[float, float]] = (),
 ) -> tuple[str, list[FormulaSlot], dict[str, pymupdf.Font]] | None:
     red, green, blue = _rgb(color)
     chunks: list[str] = ["q"]
@@ -303,8 +307,9 @@ def _place_lines(
     opened: list[str] = []
     for index, line in enumerate(lines):
         baseline = box.y0 + em * FIRST_BASELINE + index * em * gap
+        indent, width = lanes[index] if index < len(lanes) else (0.0, box.width)
         row = _place_line(
-            line, box.x0, box.width, em,
+            line, box.x0 + indent, width, em,
             justify=not centered and (justify_last or index != last),
             centered=centered,
             image_indexes=image_indexes,

@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import re
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import pymupdf
@@ -208,11 +209,13 @@ def break_lines(
     em: float,
     max_width: float,
     formula_widths: dict[int, float],
+    first_widths: Sequence[float] = (),
 ) -> list[str]:
     """按估算宽度断行。哨兵、超宽公式、放得下的短括号组都不拆开。
     每行自带样式标记：跨行的粗体、颜色在下一行开头重开，在本行末尾收起。
-    各行是分开写的（HTML 每行一个不折行的盒子，中文逐片画），不补的话下一行就丢了样式。"""
-    return balance_lines(_break_lines(text, em, max_width, formula_widths))
+    各行是分开写的（HTML 每行一个不折行的盒子，中文逐片画），不补的话下一行就丢了样式。
+    first_widths 是开头几行各自的宽度（让开图的那几行），其余各行按 max_width。"""
+    return balance_lines(_break_lines(text, em, max_width, formula_widths, first_widths))
 
 
 def balance_lines(lines: list[str]) -> list[str]:
@@ -261,19 +264,24 @@ def _break_lines(
     em: float,
     max_width: float,
     formula_widths: dict[int, float],
+    first_widths: Sequence[float] = (),
 ) -> list[str]:
     if "\n" in text:
         lines: list[str] = []
         for part in text.split("\n"):
-            lines.extend(_break_lines(part, em, max_width, formula_widths))
+            lines.extend(_break_lines(part, em, max_width, formula_widths, first_widths[len(lines):]))
         return lines
     if not text or max_width <= 0:
         return [text]
     tokens = _tokenize(text)
-    group_of = _paren_groups(tokens, em, formula_widths, max_width)
+    # 括号组按最窄的一行锁，否则组在窄行放不下，回滚后又回到同一处
+    group_of = _paren_groups(tokens, em, formula_widths, min((max_width, *first_widths)))
     lines: list[str] = []
     buf: list[tuple[int, str]] = []
     width = 0.0
+
+    def room() -> float:
+        return first_widths[len(lines)] if len(lines) < len(first_widths) else max_width
 
     def flush() -> None:
         nonlocal width
@@ -286,7 +294,7 @@ def _break_lines(
     while index < len(tokens):
         token = tokens[index]
         token_width = _token_width(token, em, formula_widths)
-        if not token.isspace() and token_width > max_width:
+        if not token.isspace() and token_width > room():
             flush()
             if _SENTINEL_RE.fullmatch(token):
                 lines.append(token)  # 公式超宽：独占一行（调用方会缩它）
@@ -295,7 +303,7 @@ def _break_lines(
                 chunk, cw = "", 0.0
                 for ch in token:
                     chw = _token_width(ch, em, formula_widths)
-                    if chunk and cw + chw > max_width:
+                    if chunk and cw + chw > room():
                         moved = _detach_char(chunk) if ch in _NO_LINE_START else None
                         if moved is not None:
                             head, tail = moved
@@ -312,7 +320,7 @@ def _break_lines(
                     width += cw
             index += 1
             continue
-        if buf and width + token_width > max_width:
+        if buf and width + token_width > room():
             start = group_of.get(index)
             if start is not None and any(token_index >= start for token_index, _ in buf):
                 buf[:] = [(token_index, item) for token_index, item in buf if token_index < start]
@@ -324,7 +332,7 @@ def _break_lines(
                 detached = _detach_for_punct(buf)
                 if detached is not None:
                     detached_width = sum(_token_width(item, em, formula_widths) for _, item in detached)
-                    if detached_width + token_width <= max_width:
+                    if detached_width + token_width <= room():
                         flush()
                         buf.extend(detached)
                         width = detached_width

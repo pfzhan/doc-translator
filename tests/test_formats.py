@@ -3031,6 +3031,69 @@ def test_same_line_gap_stays_inside_one_column():
     assert len(split) == 2
 
 
+def test_paragraph_split_by_a_caption_beside_it_is_joined():
+    """段落绕着图排，图注在阅读顺序里夹在两半中间。图注在上一半下面、下一半旁边，
+    两半接成一段。表格同一行右边的格子和上一格并排，下一行的格子不接上去。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, x0, y0, x1, y1):
+        rect = pymupdf.Rect(x0, y0, x1, y1)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000", bold=False)
+
+    head = blk("From the myth about Pygmalion and the statue he fell in love", 160, 241, 493, 265)
+    caption = blk("Michelangelo's Moses (1515)", 380, 432, 486, 443)
+    tail = blk("with, to Mary Shelley's Gothic novel about Frankenstein", 160, 265, 370, 337)
+    merged = _merge_continuations([head, caption, tail])
+    assert [b.text[:4] for b in merged] == ["From", "Mich"]
+    assert merged[0].text.endswith("Frankenstein")
+
+    left = blk("a claim made by the speaker", 160, 100, 300, 112)
+    right = blk("a question by the speaker", 320, 100, 460, 112)
+    below = blk("a weak suggestion or listing", 160, 114, 300, 126)
+    assert len(_merge_continuations([left, right, below])) == 3
+
+
+def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
+    """原文段落前几行在图左边让开、图下面恢复整宽。译文碰到图高度的行同样让开，图下面的行写满。
+    只有一行在旁边的不算绕排（引文最后一行旁边的出处）。"""
+    from app.formats.pdf import TextBlock, _place_plain, _wrap_holes
+
+    image = pymupdf.Rect(380, 268, 493, 428)
+    caption = pymupdf.Rect(380, 432, 486, 443)
+    narrow = [pymupdf.Rect(160, y, 370, y + 12) for y in range(385, 445, 12)]
+    wide = [pymupdf.Rect(160, y, 493, y + 12) for y in range(445, 517, 12)]
+    lines = narrow + wide
+    block = TextBlock(page=0, rect=pymupdf.Rect(160, 385, 493, 517), line_rects=lines,
+                      text="x", size=10, color="#000000", bold=False)
+    holes = _wrap_holes(block, [image, caption, pymupdf.Rect(131, 471, 146, 480)])
+    assert sorted(map(tuple, holes)) == sorted([tuple(image), tuple(caption)])
+
+    quote = [pymupdf.Rect(167, y, 475, y + 12) for y in (210, 222, 234)] + [pymupdf.Rect(167, 246, 203, 258)]
+    quoted = TextBlock(page=0, rect=pymupdf.Rect(167, 210, 475, 258), line_rects=quote,
+                       text="x", size=10, color="#000000", bold=False)
+    assert _wrap_holes(quoted, [pymupdf.Rect(411, 246, 475, 258)]) == []
+
+    # 跨页接过来的半段按上一页的栏宽写。图在块的框外、写入范围以内，同样让开
+    figure = pymupdf.Rect(347, 103, 493, 253)
+    tail_lines = [pymupdf.Rect(160, y, 337, y + 12) for y in range(110, 170, 12)]
+    tail = TextBlock(page=0, rect=pymupdf.Rect(160, 110, 337, 170), line_rects=tail_lines,
+                     text="x", size=10, color="#000000", bold=False)
+    assert _wrap_holes(tail, [figure]) == []
+    assert _wrap_holes(tail, [figure], pymupdf.Rect(160, 110, 493, 168)) == [figure]
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    _place_plain(page, "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 8, [], pymupdf.Rect(160, 386, 495, 521),
+                 8.8, 10, True, False, "", "#000000", "normal", [], None, None, False, holes)
+    spans = [span for block in page.get_text("dict")["blocks"] for line in block.get("lines", [])
+             for span in line["spans"] if span["text"].strip()]
+    assert spans
+    for span in spans:
+        box = pymupdf.Rect(span["bbox"])
+        assert not box.intersects(image) and not box.intersects(caption), span["text"]
+    assert any(pymupdf.Rect(span["bbox"]).x1 > 450 and span["bbox"][1] > 443 for span in spans)
+
+
 def test_cjk_wrap_merges_and_short_labels_stay():
     """左缘对齐、上行够长的中文换行接回一段。短标签和缩进的新段不接。"""
     from app.formats.pdf import TextBlock, _cross_page_units, _merge_continuations
@@ -4446,17 +4509,16 @@ def test_side_label_stays_beside_the_first_line(tmp_path):
 
 
 def test_inset_rest_reflows_at_the_column_width():
-    """侧标让出的第一行按窄宽断完后，剩下的按整栏宽重排，不把窄行的换行留住。"""
+    """侧标让出的第一行按窄宽断完后，剩下的不带换行，写入时按续行的框重排。
+    预先断好的换行会在续行让开图时留下半截短行。"""
     from app.formats.pdf import _split_own_lines
 
     text = (
         "Orca 包含一个可扩展框架, 用于基于形式化的属性规范描述查询需求和计划特征。"
         "属性有不同类型, 包括逻辑属性。"
     )
-    head, rest = _split_own_lines(text, [], 7.92, 9.0, 120.0, 240.0)
-    rest_lines = [line for line in rest.split("\n") if line]
-    assert head and rest_lines
-    assert max(len(line) for line in rest_lines) > len(head)
+    head, rest = _split_own_lines(text, [], 7.92, 9.0, 120.0)
+    assert head and rest and "\n" not in rest
     assert "框架用于" not in head + rest
     glued = (head + rest.replace("\n", "")).replace(" ", "")
     assert glued == text.replace(" ", "")
