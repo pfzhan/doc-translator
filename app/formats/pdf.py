@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pymupdf
 
+from .. import langdetect
 from ..languages import RTL_LANGUAGES
 from ..runner import normalize_punctuation
 from .pdf_align import FIRST_BASELINE, draw_cjk_lines, page_origin
@@ -634,8 +635,7 @@ def _typewriter_line(spans: list[dict]) -> bool:
     visible = [span for span in spans if str(span.get("text") or "").strip()]
     if not visible or any(CJK_RE.search(str(span["text"])) for span in visible):
         return False
-    return all(int(span.get("flags") or 0) & 8 or MONO_FONT_RE.search(str(span.get("font") or ""))
-               for span in visible)
+    return all(_mono_span(span) for span in visible)
 
 
 def _split_lines(items: list[tuple]) -> list[list[int]]:
@@ -754,6 +754,13 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             (line_size < ref_size * 0.85 and _prose_units(stripped) >= 4)
             or (own_row and line_size < _text_size(items[i - 1][2]) * 0.85 and _prose_units(stripped) >= 2)
         )
+        # 照录的等宽行后面换回正文字体、像新句子开头的一行：照录的文字到此为止，正文另起一段。
+        # 正文首行缩进和等宽行的左缘只差一点，按缩进算会并进去
+        leaves_verbatim = (
+            own_row and seg_start
+            and _typewriter_line(pspans) and not _typewriter_line(items[i][2])
+            and _prose_units(stripped) >= 4
+        )
         # 撑满的上一行没有句末，下一行的 "Q. " 是换行，不是 "a. " 这种列表项。
         wrapped_letter = (
             bool(_LETTER_BULLET_RE.match(stripped))
@@ -763,7 +770,7 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         bullet = _list_item(text) and not wrapped_letter
         if not same_visual_line and not sec_label and (
             bullet or NO_TEXT_RE.match(stripped) or prev_symbol
-            or hard_break or left_jump or size_drop or side_by_side
+            or hard_break or left_jump or size_drop or side_by_side or leaves_verbatim
             or _caption_opens(items[i][2], pspans)
         ):
             groups.append(cur)
@@ -3202,17 +3209,85 @@ def _block_spans(block: TextBlock) -> list[dict]:
 _AFFIL_MARK_RE = re.compile(r"^[∗*†‡§¶]")
 
 
+def _margin_term(block: TextBlock) -> bool:
+    """页边的术语注（perplexity、log probability）：几个词、不成句。留原文。
+    译文比原文宽，挤在窄窄的页边要换好几行，还会顶到上下的注；原文的术语也正是读者要对照的。
+    成句的旁注照常翻译。"""
+    text = block.text.strip()
+    return block.side_note and len(text.split()) <= 4 and not text.endswith((".", "?", "!", "。", "？", "！"))
+
+
+# 认外文段落时一段至少要有的字母数。题记里的一个小项只有一两个词，要和旁边的合起来认
+_FOREIGN_LETTERS = 40
+
+
+def _foreign_ids(blocks: list[TextBlock]) -> set[int]:
+    """和全文不是同一种语言的段落：英文书里的西班牙文题记、德文引文、巴斯克语例句。
+    作者有意留着原文，旁边多半已经给了译文，留原文。
+
+    题记分两列排，一项只有一两个词，单独认不准。同一页上字号、颜色相同、挨在一起的块
+    合起来认，整组是外文就整组留原文；正文里夹着的一段外文按自己认。
+    字母不够、置信度不够的不算，正文语言认不出来时不做判断。
+    """
+    doc_lang = langdetect.detect_document([block.text for block in blocks])
+    if not doc_lang:
+        return set()
+
+    def foreign(text: str) -> bool:
+        lang = langdetect.detect(text, min_letters=_FOREIGN_LETTERS)
+        return bool(lang) and lang.split("-")[0] != doc_lang.split("-")[0]
+
+    found = {id(block) for block in blocks if foreign(block.text)}
+    by_page: dict[int, list[TextBlock]] = {}
+    for block in blocks:
+        if not block.side_note:
+            by_page.setdefault(block.page, []).append(block)
+    for page_blocks in by_page.values():
+        groups: list[list[TextBlock]] = []
+        for block in page_blocks:
+            reach = block.rect + (-block.size, -block.size * 0.6, block.size, block.size * 0.6)
+            near = [
+                group for group in groups
+                if any(abs(other.size - block.size) < 0.3 and other.color == block.color
+                       and reach.intersects(other.rect) for other in group)
+            ]
+            merged = [block]
+            for group in near:
+                groups.remove(group)
+                merged.extend(group)
+            groups.append(merged)
+        for group in groups:
+            if len(group) > 1 and foreign("\n".join(block.text for block in group)):
+                found.update(id(block) for block in group)
+    return found
+
+
+def _latin_chars(text: str) -> int:
+    """数等宽字时只数拉丁字母和数字。汉字、假名和全角标点也带等宽标志，不计数。"""
+    return sum(1 for ch in text if ch.isalnum() and not CJK_RE.match(ch))
+
+
+def _mono_span(span: dict) -> bool:
+    """等宽字体：按字体名认，也认 PDF 里的等宽标志（txtt 这类名字不带 Mono 的字体）。"""
+    return bool(MONO_FONT_RE.search(str(span.get("font") or "")) or int(span.get("flags") or 0) & 8)
+
+
 def _mono_share(block: TextBlock) -> float:
     """块里正文字（公式除外）有多少是等宽字体。"""
-    spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
-    prose = [span for span in spans if not _span_is_math(span)]
-    total = sum(len(str(span["text"]).strip()) for span in prose)
-    mono = sum(len(str(span["text"]).strip()) for span in prose if MONO_FONT_RE.search(str(span.get("font") or "")))
+    total = mono = 0
+    for span in _block_spans(block):
+        if _span_is_math(span):
+            continue
+        count = _latin_chars(str(span["text"]))
+        total += count
+        if _mono_span(span):
+            mono += count
     return mono / total if total else 0.0
 
 
 def _code_block(block: TextBlock) -> bool:
-    """整块正文几乎都是等宽字体：程序、SQL、命令行。译了会把关键字也换掉，留下原字。
+    """整块正文几乎都是等宽字体：程序、SQL、命令行，还有照录的提示词、对话。
+    译了会把关键字也换掉，照录的文字也不再是原样，留下原字。
 
     句子里夹着的等宽单词（属性名、函数名）不在这里。块里八成以上是等宽字才算，
     FROM R 这种短行认不出等宽也不影响整块。
@@ -3223,8 +3298,8 @@ def _code_block(block: TextBlock) -> bool:
 def _code_panel_ids(blocks: list[TextBlock], scans: list[PageScan]) -> set[int]:
     """一片底色上的字八成以上是等宽字：程序、码位表、命令行输出。整片留原字。
 
-    这里的等宽字也认 PDF 里的等宽标志（txtt 这类名字不带 Mono 的字体）。书里用这种字体排的
-    对话、例句没有底色，或者底色上还有正文字体，不受影响。汉字、假名也带等宽标志，不计数。
+    按整片算：片里夹着的注释行、行号单独看不够八成，跟着整片留原字。
+    底色上还有不少正文字体的不受影响。
     """
     by_page: dict[int, list[TextBlock]] = {}
     for block in blocks:
@@ -3239,9 +3314,9 @@ def _code_panel_ids(blocks: list[TextBlock], scans: list[PageScan]) -> set[int]:
             spans = [span for block in inside for span in _block_spans(block) if not _span_is_math(span)]
             total = mono = 0
             for span in spans:
-                count = sum(1 for ch in str(span["text"]) if not ch.isspace() and not CJK_RE.match(ch))
+                count = _latin_chars(str(span["text"]))
                 total += count
-                if MONO_FONT_RE.search(str(span.get("font") or "")) or int(span.get("flags") or 0) & 8:
+                if _mono_span(span):
                     mono += count
             if total and mono >= total * 0.8:
                 found.update(id(block) for block in inside)
@@ -5117,14 +5192,18 @@ def _split_filled_lines(
     text: str, formulas: list[dict], em: float, block_size: float, width: float, cjk: bool,
     y0: float, limit: float,
 ) -> tuple[str, str]:
-    """按满行切开。这一页放得下几行整行，就留几行；剩下的从下一页继续。"""
+    """按满行切开。这一页放得下几行整行，就留几行；剩下的从下一页继续。
+
+    译文的行距比原文大，页底原文的两行按原行距放不下两行译文，余下的挤到下一页
+    只能缩小字号。这里和 _fit_typeset 一样先压行距再数行数；末行下面的行距是空白，
+    也可以伸过 limit（见 _filled_bottom）。"""
     prepared = space_around_latin(separate_after_formula(text))
-    gap = 1.45 if cjk else 1.2
+    gap = 1.2 if cjk else 1.1
     metrics = _formula_metrics(formulas, block_size, em)
     widths = {index: metric.slot_width for index, metric in metrics.items()}
     raw = break_lines(prepared, em, max(width, 1.0), widths)
     line_h = em * gap
-    room = limit - y0
+    room = limit - y0 + (gap - 1) * em
     count = 0
     for index in range(len(raw)):
         if (index + 1) * line_h + em * 0.3 > room + 1:
@@ -5137,6 +5216,13 @@ def _split_filled_lines(
     if count <= 0:
         return "", prepared
     return "\n".join(raw[:count]), "\n".join(raw[count:])
+
+
+def _filled_bottom(y0: float, lines: int, em: float, cjk: bool, room: float, page_bottom: float) -> float:
+    """_split_filled_lines 留在本页的几行，写入框的下沿。框要有整行距高，末行字形下面
+    还有一截空白，大致是行距超出字号的那部分。这截空白可以伸过 room，字仍在 room 以内。"""
+    gap = 1.45 if cjk else 1.2
+    return min(y0 + lines * em * gap + em * 0.3, room + (gap - 1) * em, page_bottom)
 
 
 def _own_line_box(block: TextBlock, cjk: bool) -> pymupdf.Rect:
@@ -5368,11 +5454,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                         rest, bformulas, size, b.size, rest_box.width, cjk, rest_box.y0, room,
                     )
                     if placed:
-                        gap = 1.45 if cjk else 1.2
                         lines = placed.count("\n") + 1
-                        bottom = min(
-                            rest_box.y0 + lines * size * gap + size * 0.3, room, bounds.y1,
-                        )
+                        bottom = _filled_bottom(rest_box.y0, lines, size, cjk, room, bounds.y1)
                         placed_rect = pymupdf.Rect(
                             rest_box.x0, rest_box.y0, rest_box.x1, max(bottom, rest_box.y0 + 4),
                         )
@@ -5415,9 +5498,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             room = _room_below(page, b, rect.y0, rect.x0, rect.x1, same_page)
             head, rest = _split_filled_lines(t, bformulas, size, b.size, rect.width, cjk, rect.y0, room)
             if head:
-                gap = 1.45 if cjk else 1.2
                 lines = head.count("\n") + 1
-                bottom = min(rect.y0 + lines * size * gap + size * 0.3, room, bounds.y1)
+                bottom = _filled_bottom(rect.y0, lines, size, cjk, room, bounds.y1)
                 head_rect = pymupdf.Rect(rect.x0, rect.y0, rect.x1, max(bottom, rect.y0 + 4))
                 write_one(b, head, head_rect, centered, bformulas, bool(rest))
             if rest:
@@ -6239,7 +6321,10 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
         median,
     )
     edges = margin_skips(blocks, geometries)
-    displayed = _display_formula_ids(blocks, geometries) | _gloss_ids(blocks, glosses) | _code_panel_ids(blocks, scans)
+    displayed = (
+        _display_formula_ids(blocks, geometries) | _gloss_ids(blocks, glosses) | _code_panel_ids(blocks, scans)
+        | _foreign_ids(blocks)
+    )
     # 页眉不进大纲，旁注、目录条目不是标题
     kinds = [
         "h2" if role is Role.HEADING and not edge and not block.side_note and block.leader is None else "p"
@@ -6248,7 +6333,7 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
     cell_ids = {id(block) for block in blocks if _table_cell(block, geometries[block.page])}
     skips = [
         bib or role is Role.FIGURE or edge or _garbled_label(block.text) or _code_block(block)
-        or id(block) in displayed or id(block) in cell_ids
+        or _margin_term(block) or id(block) in displayed or id(block) in cell_ids
         for bib, role, edge, block in zip(biblio_skips(blocks), roles, edges, blocks)
     ]
     skip_ids = {id(b) for b, s in zip(blocks, skips) if s}

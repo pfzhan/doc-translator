@@ -871,3 +871,69 @@ def test_table_drawn_with_dashed_rules_is_still_found():
             page.insert_text((x, y), f"cell {row}{col}", fontsize=9)
     [table] = ruled_tables(page)
     assert len(table.cells) == 16
+
+
+def test_table_of_abutting_filled_cells_is_found():
+    """每格一块底色、只有上下横线的表。一整块底色的文本框、白底的图、压着跨格图注的格子都不是表。"""
+    from app.formats.pdf_layout import filled_tables, page_words
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=600, height=400)
+    blue = (0.77, 0.86, 0.99)
+    for row, y0 in enumerate((60, 72)):
+        for col, (x0, x1) in enumerate(((240, 289), (289, 334), (334, 372), (372, 413))):
+            page.draw_rect(pymupdf.Rect(x0, y0, x1, y0 + 12), color=None, fill=blue)
+            page.insert_text((x0 + 3, y0 + 9), ("Unigram", "962", "170", "109")[col] if row else "N", fontsize=8)
+    page.draw_rect(pymupdf.Rect(60, 150, 540, 200), color=None, fill=blue)
+    page.insert_text((70, 170), "A shaded box of running text is a frame, not a table.", fontsize=10)
+    for col in range(4):
+        page.draw_rect(pymupdf.Rect(60 + col * 30, 260, 90 + col * 30, 290), color=None, fill=(1, 1, 1))
+        page.draw_rect(pymupdf.Rect(60 + col * 30, 290, 90 + col * 30, 320), color=None, fill=(1, 1, 1))
+    for col in range(4):
+        page.draw_rect(pymupdf.Rect(300 + col * 20, 260, 320 + col * 20, 280), color=None, fill=blue)
+        page.draw_rect(pymupdf.Rect(300 + col * 20, 280, 320 + col * 20, 300), color=None, fill=blue)
+    page.insert_text((302, 272), "a", fontsize=8)
+    page.insert_text((322, 272), "b", fontsize=8)
+    page.insert_text((302, 292), "Figure 4: attention across the heads", fontsize=8)
+    [table] = filled_tables(page, page.get_drawings(), page_words(page))
+    assert (round(table.rect.x0), round(table.rect.y0), round(table.rect.x1), round(table.rect.y1)) == (240, 60, 413, 84)
+    assert len(table.cells) == 8
+
+
+def test_short_margin_terms_stay_original():
+    """页边的术语留原文；成句的旁注照常翻译。"""
+    from app.formats.pdf import _margin_term
+
+    def note(text):
+        return replace(_block(text, 0, pymupdf.Rect(80, 100, 128, 110), 7.2), side_note=True)
+
+    assert _margin_term(note("perplexity"))
+    assert _margin_term(note("log probability"))
+    assert not _margin_term(note("This note explains why the counts are smoothed."))
+    assert not _margin_term(_block("perplexity", 0, pymupdf.Rect(80, 100, 128, 110)))
+
+
+def test_an_epigraph_in_another_language_stays_original():
+    """英文书里的西班牙文题记分两列排，一项只有一两个词。合起来认出是外文，整组留原文。"""
+    from app.formats.pdf import _foreign_ids
+
+    body = [
+        _block("Classification lies at the heart of language processing and intelligence. Recognizing a "
+               "letter, a word, or a face, sorting mail, assigning grades to homeworks are all examples.",
+               0, pymupdf.Rect(142, 342, 475, 402)),
+        _block("Luckily, the classes we use for language processing are easier to define than those of "
+               "Borges. In this chapter we introduce the logistic regression algorithm for classification.",
+               0, pymupdf.Rect(142, 480, 475, 540)),
+    ]
+    epigraph = [_block("En sus remotas páginas está escrito que los animales se dividen en:", 0,
+                       pymupdf.Rect(152, 220, 392, 230), 9)]
+    rows = [("c. amaestrados", "j. innumerables"), ("d. lechones", "k. dibujados con un pincel finísimo"),
+            ("e. sirenas", "l. etcétera"), ("f. fabulosos", "m. que acaban de romper el jarrón"),
+            ("g. perros sueltos", "n. que de lejos parecen moscas")]
+    for i, (left, right) in enumerate(rows):
+        y0 = 231 + 11 * i
+        epigraph.append(_block(left, 0, pymupdf.Rect(170, y0, 225, y0 + 10), 9))
+        epigraph.append(_block(right, 0, pymupdf.Rect(291, y0, 410, y0 + 10), 9))
+    found = _foreign_ids([*body, *epigraph])
+    assert all(id(block) in found for block in epigraph)
+    assert not any(id(block) in found for block in body)

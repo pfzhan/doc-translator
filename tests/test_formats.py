@@ -4010,6 +4010,22 @@ def test_split_filled_lines_keeps_breaks_when_the_page_has_room():
     assert rest == ""
 
 
+def test_split_filled_lines_fills_the_last_lines_of_the_page():
+    """页底剩原文一两行的高度。译文按原行距放不下，压紧行距、末行的行距伸出去，仍留在本页。"""
+    from app.formats.pdf import _filled_bottom, _split_filled_lines
+
+    text = "人工智能领域的一项名为发展的研究计划的成员，并发表了一篇论文。" * 3
+    head, rest = _split_filled_lines(text, [], em=8.8, block_size=10, width=300, cjk=True, y0=700, limit=712)
+    assert head and "\n" not in head
+    assert rest
+    head, rest = _split_filled_lines(text, [], em=8.8, block_size=10, width=300, cjk=True, y0=696.5, limit=719.5)
+    assert head.count("\n") == 1
+    assert rest
+    bottom = _filled_bottom(700, 1, 8.8, True, 712, 792)
+    assert bottom - 700 >= 8.8 * 1.45 + 8.8 * 0.3 - 0.1
+    assert bottom <= 712 + 0.45 * 8.8 + 0.01
+
+
 def test_hyphen_bridge_keeps_the_page_boundary():
     from app.formats.pdf import TextBlock, _prepare_unit
 
