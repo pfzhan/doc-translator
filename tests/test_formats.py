@@ -6725,6 +6725,28 @@ def test_numbered_examples_in_one_block_are_split_apart():
     assert _split_lines(wrapped) == [[0, 1]]
 
 
+def test_a_verbatim_line_does_not_run_into_the_prose_below():
+    """等宽字照录的问答 Q: ... A: Charles 没有句末标点，下一行回到栏边、小写开头的正文不是它的续行。"""
+    from app.formats.pdf import TextBlock, _line_tail_match
+
+    def blk(text, rect, font):
+        rect = pymupdf.Rect(rect)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False,
+                         span_lines=[[{"text": text, "size": 10.0, "font": font, "flags": 8 if font == "txtt" else 0}]])
+
+    answer = blk("A: Charles", (376, 111, 429, 121), "txtt")
+    prose = blk("then the same kinds of training data would lead the language model to", (142, 126, 475, 138),
+                "NimbusRomNo9L-Regu")
+    assert not _line_tail_match(answer, prose)
+    tail = blk("A: Charles", (376, 111, 429, 121), "NimbusRomNo9L-Regu")
+    assert _line_tail_match(tail, prose)
+    # 正文里夹的等宽字折到下一行，两边都是等宽，照常接上
+    mixed = blk("1. The prompt is assembled, including", (376, 111, 429, 121), "NimbusRomNo9L-Regu")
+    mixed.span_lines.append([{"text": "<user> Who wrote ‘‘The Origin", "size": 10.0, "font": "txtt", "flags": 8}])
+    rest = blk('of Species"?', (142, 126, 220, 138), "txtt")
+    assert _line_tail_match(mixed, rest)
+
+
 def test_a_line_in_a_column_of_its_own_font_stays_in_its_block():
     """幻灯片右边一栏等宽字排的示例和左边正文同高，横向还叠上一点。它在自己的块里和上一行
     左缘对齐、字体相同，是这一栏的一行，不当左边正文切下来的后半截挪过去。"""
