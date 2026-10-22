@@ -792,6 +792,22 @@ def _typewriter_line(spans: list[dict]) -> bool:
     return all(_mono_span(span) for span in visible)
 
 
+def _verbatim_block(block: TextBlock) -> bool:
+    """整块都是等宽字照录的文字（示例对话、代码），单独排成几行。"""
+    return bool(block.span_lines) and all(_typewriter_line(spans) for spans in block.span_lines)
+
+
+def _verbatim_seam(host: TextBlock, guest: TextBlock) -> bool:
+    """一边是单独排的等宽照录文字，一边贴着它的一行是正文。照录的一行没有句末标点，
+    下面接着的小写正文也不是它的续行。正文里夹的代码碰巧落在行首行尾的，照常接上。"""
+    if not host.span_lines or not guest.span_lines:
+        return False
+    return (
+        _verbatim_block(host) and not _typewriter_line(guest.span_lines[0])
+        or _verbatim_block(guest) and not _typewriter_line(host.span_lines[-1])
+    )
+
+
 def _split_lines(items: list[tuple]) -> list[list[int]]:
     """把一个文本块里的行分成独立段落（返回每组的行下标）。
 
@@ -3831,6 +3847,7 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                 and (colon_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
                      or not _ends_sentence(p.text))
                 and (first.islower() or first in "),;%,；，" or open_paren)
+                and not _verbatim_seam(p, b)
             )
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
             if (p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note)
@@ -3914,7 +3931,7 @@ def _line_tail_match(block: TextBlock, nxt: TextBlock) -> bool:
     gap = nxt.rect.y0 - block.rect.y1 - block.line_gap * block.size
     if not (-0.5 * block.size <= gap < 1.5 * block.size):
         return False
-    return bool(nxt.text.lstrip()[:1].islower())
+    return bool(nxt.text.lstrip()[:1].islower()) and not _verbatim_seam(block, nxt)
 
 
 def _line_tail_continuation(
@@ -4073,7 +4090,7 @@ def _continues_fragment(host: TextBlock, guest: TextBlock) -> bool:
     head = guest.text.lstrip()[:1]
     if not (head and (head.islower() or head in "),;%,；，")):
         return False
-    return not (_diagramish(guest) or _is_side_label(guest))
+    return not (_diagramish(guest) or _is_side_label(guest) or _verbatim_seam(host, guest))
 
 
 def _merge_same_line_sentences(blocks: list[TextBlock], edges: Collection[int] = ()) -> list[TextBlock]:
