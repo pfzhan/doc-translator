@@ -20,13 +20,13 @@ _HEADING_BOLD = 1.15
 _CAPTION_LEN = 400
 _PAGE_FILL = 0.7
 _INSIDE = 0.7
-# 编号可以带节号（Figure 2.13）。标签后面跟冒号或句点，才一定是图注
+# 编号可以带节号（Figure 2.13）。标签后面跟冒号、句点或竖线，才一定是图注
 _CAPTION_RE = re.compile(
-    r"^(?:Figure|Fig\.?|Table|Tab\.?|Scheme|Plate|图|表)\s*\d+(?:[.\-]\d+)*(\s*[:.。：])?",
+    r"^(?:Figure|Fig\.?|Table|Tab\.?|Scheme|Plate|图|表)\s*\d+(?:[.\-]\d+)*(\s*[:.。：|])?",
     re.I,
 )
 # 图注写在图下面。表注常在表上面，不在这里
-_FIGURE_CAPTION_RE = re.compile(r"^(?:Figure|Fig\.?|图)\s*\d+(?:[.\-]\d+)*(\s*[:.。：])?", re.I)
+_FIGURE_CAPTION_RE = re.compile(r"^(?:Figure|Fig\.?|图)\s*\d+(?:[.\-]\d+)*(\s*[:.。：|])?", re.I)
 # 没有冒号的图注比正文小一号，或者标签另用粗体
 _CAPTION_SMALL = 0.95
 # 正文段落：从左缘起笔、有一句话长
@@ -77,9 +77,11 @@ class HeuristicLayout:
         roles: list[Role] = []
         for item in items:
             figures = (*_figures_of(item.page, geometries), *floats.get(item.page, ()))
-            if _inside_figure(item.rect, figures):
+            # 画图程序铺的白底常连图注一起包住，图注标签起头的仍是图注
+            labeled = len(item.text.strip()) < _CAPTION_LEN and _caption_start(item, _CAPTION_RE, median)
+            if _inside_figure(item.rect, figures) and not labeled:
                 roles.append(Role.FIGURE)
-            elif _is_caption(item, figures, median):
+            elif labeled and _inside_figure(item.rect, figures) or _is_caption(item, figures, median):
                 roles.append(Role.CAPTION)
             elif is_size_heading(item.text, item.size, item.bold, median) or _is_numbered_title(item.text):
                 roles.append(Role.HEADING)

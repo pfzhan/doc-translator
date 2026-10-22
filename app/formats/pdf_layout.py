@@ -28,6 +28,8 @@ _FIGURE_MIN = 8.0
 _DRAW_MIN = 24.0
 _DRAW_AREA = 800.0
 _PAGE_FILL = 0.85
+_GROUND_SHARE = 2.0  # 图的白底最多是里面曲线、图片所占范围的几倍
+_GROUND_REACH = 24.0  # 标题、坐标轴名离曲线最远多少
 _WALL_MIN_H = 48.0
 _WALL_MIN_W = 36.0
 _CELL_MIN_W = 18.0
@@ -161,9 +163,14 @@ class PageGeometry:
     ) -> PageGeometry:
         table_tuple = tuple(tables or ())
         table_zones = [table.rect for table in table_tuple]
-        # 表格外框也是一块大矢量，不能再当成图，否则格子里的字会被整段跳过
+        # 表格外框也是一块大矢量，不能再当成图，否则格子里的字会被整段跳过。
+        # 比表大出一圈的是图：带网格的坐标图，网格认成了表，标题、坐标轴名在网格外面
         figure_tuple = tuple(
-            figure for figure in (figures or ()) if not _mostly_inside(figure, table_zones)
+            figure for figure in (figures or ())
+            if not any(
+                _mostly_inside(figure, [zone]) and figure.width * figure.height <= zone.width * zone.height * 1.2
+                for zone in table_zones
+            )
         )
         voting = _voting_rects(rects, figure_tuple, table_tuple, page_width, height)
         usable = [rect for rect in voting if rect.width >= _USABLE_W and rect.height >= _USABLE_H]
@@ -1664,9 +1671,8 @@ def _figure_rects(
             drawings = page.get_drawings()
         except Exception:  # noqa: BLE001 - 个别页面的矢量表读不出来，当没有图
             drawings = []
+    grounds: list[pymupdf.Rect] = []
     for drawing in drawings:
-        if _is_blank_fill(drawing):
-            continue
         rect = pymupdf.Rect(drawing.get("rect"))
         if rect.width < _DRAW_MIN or rect.height < _DRAW_MIN:
             continue
@@ -1674,5 +1680,25 @@ def _figure_rects(
             continue
         if rect.width > width * _PAGE_FILL and rect.height > height * _PAGE_FILL:
             continue
+        if _is_blank_fill(drawing):
+            grounds.append(rect)
+            continue
         found.append(rect)
-    return found
+    return [*found, *_figure_grounds(grounds, found)]
+
+
+def _figure_grounds(grounds: Sequence[pymupdf.Rect], figures: Sequence[pymupdf.Rect]) -> list[pymupdf.Rect]:
+    """画图程序（matplotlib）先铺一块白底，标题、坐标轴名、图例都写在白底上，曲线只占中间一块。
+    白底里装着曲线、图片，又不比它们大出一倍的，是图。铺在正文和图下面的白底比图大得多。
+    标题、坐标轴名紧挨着曲线，白底只算到曲线外面一圈：有的白底往下一直铺到正文里。"""
+    kept: list[pymupdf.Rect] = []
+    for ground in grounds:
+        inside = [figure for figure in figures if _mostly_inside(figure, [ground])]
+        if not inside:
+            continue
+        drawn = pymupdf.Rect(inside[0])
+        for figure in inside[1:]:
+            drawn |= figure
+        if ground.width * ground.height <= drawn.width * drawn.height * _GROUND_SHARE:
+            kept.append(ground & (drawn + (-_GROUND_REACH, -_GROUND_REACH, _GROUND_REACH, _GROUND_REACH)))
+    return kept

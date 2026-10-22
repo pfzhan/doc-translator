@@ -18,6 +18,33 @@ def _two_columns() -> PageGeometry:
     return PageGeometry.from_rects(400, left + right)
 
 
+def test_a_plot_on_a_white_ground_covers_its_title_and_axis_labels():
+    """matplotlib 的图先铺白底，标题、坐标轴名写在曲线外面的白底上。白底装着曲线、又不比曲线大出一倍的是图，
+    只算到曲线外面一圈。比里面的图大得多的白底不是图；网格认成表时，比表大一圈的白底仍是图。"""
+    from app.formats.pdf_layout import PageGeometry, RuledTable, _figure_rects
+
+    page = pymupdf.open().new_page(width=400, height=500)
+    page.draw_rect(pymupdf.Rect(40, 30, 260, 200), fill=(1, 1, 1), color=None, width=0)
+    page.draw_polyline([(70, 170), (120, 120), (170, 140), (240, 60)], color=(0, 0, 1), width=1)
+    rects = _figure_rects(page)
+    assert pymupdf.Rect(46, 36, 260, 194) in rects
+
+    # 白底一直铺到下面的正文里，只算到曲线外面 24pt
+    tall = pymupdf.open().new_page(width=400, height=500)
+    tall.draw_rect(pymupdf.Rect(40, 30, 260, 230), fill=(1, 1, 1), color=None, width=0)
+    tall.draw_polyline([(70, 170), (120, 120), (170, 140), (240, 60)], color=(0, 0, 1), width=1)
+    assert all(rect.y1 <= 195 for rect in _figure_rects(tall))
+
+    wide = pymupdf.open().new_page(width=400, height=500)
+    wide.draw_rect(pymupdf.Rect(20, 20, 380, 400), fill=(1, 1, 1), color=None, width=0)
+    wide.draw_polyline([(70, 170), (120, 120), (170, 140), (240, 60)], color=(0, 0, 1), width=1)
+    assert all(rect.width < 200 for rect in _figure_rects(wide))
+
+    grid = RuledTable(pymupdf.Rect(70, 60, 240, 170), ())
+    geo = PageGeometry.from_rects(400, [], [pymupdf.Rect(40, 30, 260, 200), pymupdf.Rect(70, 60, 240, 170)], 500, [grid])
+    assert geo.figures == (pymupdf.Rect(40, 30, 260, 200),)
+
+
 def test_white_rectangle_fill_is_not_a_figure():
     """近白矩形是底色。盖住它的正文不能被当成图内文字跳过。描边框和图片仍是图。"""
     from app.formats.pdf_layout import _figure_rects
