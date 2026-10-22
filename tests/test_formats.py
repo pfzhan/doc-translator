@@ -6663,6 +6663,11 @@ def test_a_block_cut_by_a_margin_note_does_not_take_an_indented_new_paragraph():
         ("word may have very many morphemes", (142.2, 335.1, 400.0, 347.1)),
     )
     assert _note_cut(upper, lower)
+    # 列表项悬挂缩进的续行下面，比续行靠左起笔的一行是列表完了以后的正文
+    item = block(("2. embeddings, vectors that represent the meanings of tokens and concepts in-", (173.0, 234.0, 493.0, 247.0)),
+                 ("side the network", (185.0, 247.0, 251.0, 259.0)))
+    after = block(("Neural networks are the fundamental computational tool for language pro-", (175.0, 262.0, 493.0, 275.0)))
+    assert not _note_cut(item, after)
 
 
 def test_a_bracket_or_quote_closes_a_sentence_only_after_its_end_mark():
@@ -6723,6 +6728,22 @@ def test_numbered_examples_in_one_block_are_split_apart():
     assert _split_lines(items) == [[0], [1]]
     wrapped = [item("as derived in the two equations", (142.2, 595.0, 335.0, 607.0)), item("(2.3) we see", (142.2, 609.0, 268.0, 621.0))]
     assert _split_lines(wrapped) == [[0, 1]]
+
+
+def test_a_paragraph_after_a_hanging_list_line_is_split_off():
+    """列表项折行悬挂缩进，下一段首行缩进比续行靠左，是列表完了。首行缩进的段落第二行回到栏边照常接着。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, bbox):
+        return (text, pymupdf.Rect(bbox), [{"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}])
+
+    items = [item("4. If one word in the question is changed, the human-preferred answer changes", (155, 202, 475, 214)),
+             item("to the other party", (167, 214, 235, 226)),
+             item("The kind of world knowledge that might be needed to solve the problems", (157, 229, 475, 241))]
+    assert _split_lines(items) == [[0, 1], [2]]
+    paragraph = [item("Short first line of a paragraph.", (157, 202, 300, 214)),
+                 item("The second line goes back to the margin", (142, 214, 475, 226))]
+    assert _split_lines(paragraph) == [[0, 1]]
 
 
 def test_a_verbatim_line_does_not_run_into_the_prose_below():

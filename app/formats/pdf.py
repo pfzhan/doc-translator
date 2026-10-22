@@ -840,6 +840,8 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             row_box[member] = box
     groups, cur = [], [0]
     row_rect = pymupdf.Rect(items[0][1])  # 当前可视行已经接上的部分
+    # 这一段第一行的左缘、已有几行。一行常被拆成几截，按行比，不按截比
+    group_x0, group_rows = row_rect.x0, 1
     ref = 0  # 参考行：上一条正文字号的行。上下标拆出的 dict 小行不能当参考，
     # 否则左跳量相对小行算，段落会在公式处被切碎（"(like a | sequence)"）
     ref_size = max((s["size"] for s in items[0][2]), default=10)
@@ -850,7 +852,13 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         stripped = text.lstrip()
         prev_symbol = bool(NO_TEXT_RE.match(ptext.strip()))  # 纯符号行独立成段，后面的内容不和它拼
         jump = prect.x0 - rect.x0
-        indent = 0 < jump <= 3 * psize  # 1–2em 左跳是首行缩进，不是新段落
+        # 1–2em 左跳是首行缩进，不是新段落。上一行比这一段的第一行还靠右的是列表项、例句的悬挂续行，
+        # 再往左起笔是条目完了。只看成句的文字行，公式拆出来的几截不算行
+        hanging_end = (
+            group_rows >= 2 and row_rect.x0 > group_x0 + 0.5 * psize and rect.x0 < row_rect.x0 - 0.5 * psize
+            and _prose_units(stripped) >= 3 and _prose_units(items[i - 1][0]) >= 2
+        )
+        indent = 0 < jump <= 3 * psize and not hanging_end
         # 列表项的续行：缩进在弹点之后的悬挂对齐。同 x0 或左跳的不是续行，可能是下一段
         continuing_list = (
             _list_item(ptext)
@@ -947,9 +955,14 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         ):
             groups.append(cur)
             cur = [i]
+            group_x0, group_rows = rect.x0, 1
         else:
             cur.append(i)
             size_drop = False
+            if not same_visual_line:
+                group_rows += 1
+            elif group_rows == 1:
+                group_x0 = min(group_x0, rect.x0)
         row_rect = row_rect | rect if same_visual_line else pymupdf.Rect(rect)
         isize = max((s["size"] for s in items[i][2]), default=10)
         # 字号落下拆出的新段，基准改成这一行。否则后面的同字号续行仍对着标题拆。
@@ -3100,6 +3113,10 @@ def _note_cut(upper: dict, lower: dict) -> bool:
         return False
     # 下一块往右缩进是新段；往左回到栏边可以是首行缩进的那一行接着写
     if not last.x0 - size * 3 <= first.x0 <= last.x0 + 2:
+        return False
+    # 列表项的续行和条目文字对齐，下一块比它靠左起笔，是列表完了以后的正文
+    head = min(above, key=lambda line: line["bbox"][1])
+    if _list_item("".join(span["text"] for span in head["spans"])) and first.x0 < last.x0 - size * 0.5:
         return False
     # 下一块自己首行缩进（第一行比下面几行靠右）是另起的一段：例句的译文下面接着新段落
     rest = [line["bbox"][0] for line in below if line["bbox"][1] >= first.y1 - 1 and line["bbox"][2] > first.x0]
