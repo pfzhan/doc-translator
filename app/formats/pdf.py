@@ -83,6 +83,8 @@ NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
 # 单个字母加句点，像 "a. " 也像换行后的 "Q. The cost"。后者不是列表项。
 _LETTER_BULLET_RE = re.compile(r"^[a-zA-Z][.)]\s+")
 _PAREN_ITEM_RE = re.compile(r"^\([a-zA-Z]\)\s+")
+# 单独一截的编号：例句、式子的 (25.4)、(3)，列表的 (a)
+_PAREN_LABEL_RE = re.compile(r"\((?:[a-zA-Z]|\d+(?:\.\d+)*)\)")
 _LIST_INTRO_END = (".", "?", "!", "。", "！", "？", ":", ";", "：", "；")
 # 行首列表标记：符号弹点（可不带空格）、短横线类（须带空格，避免误伤连字符单词）、数字/字母编号
 BULLET_RE = re.compile(r"^\s*(?:[•◦▪‣·○■□►»]\s*|[-–—*]\s+|\d{1,3}[.)]\s+|[a-zA-Z][.)]\s+)")
@@ -94,7 +96,32 @@ _AXIS_TOL = 2.0
 SEG_START_RE = re.compile(r"^[A-Z0-9À-Þ(\"'“‘\[（【]")
 CJK_START_RE = re.compile(r"^[぀-ヿ㐀-鿿가-힯]")
 # 不含分号：分号在下面的连接标点里，硬换行不会因此拆段
-SENT_ENDS = ("。", "！", "？", "：", "…", ".", "!", "?", ":", '"', "'", "”", "’", "」", "』", ")", "）")
+SENT_ENDS = ("。", "！", "？", "：", "…", ".", "!", "?", ":")
+# 句末标点后面收尾的引号、括号（found it.)、he said."）。前面不是句末标点的，
+# 像引文年份 (Vilain et al., 1995)、代码 r"cat|dog"，句子还没完
+_SENT_CLOSERS = "\"'”’」』)）"
+
+
+def _ends_sentence(text: str) -> bool:
+    """以句末标点收尾，或者以式子收尾。"""
+    text = text.rstrip()
+    return text.rstrip(_SENT_CLOSERS).endswith(SENT_ENDS) or _ends_in_call(text)
+
+
+def _ends_in_call(text: str) -> bool:
+    """末尾的右括号配对的左括号紧跟在字母、数字后面：softmax(hW)、P(B|A)、count(... doc)。
+    这是式子收尾，单独排的式子下面的 where、with 不接上来。正文里的括号前面隔着空格。"""
+    if not text.endswith(")"):
+        return False
+    depth = 0
+    for index in range(len(text) - 1, -1, -1):
+        if text[index] == ")":
+            depth += 1
+        elif text[index] == "(":
+            depth -= 1
+            if depth == 0:
+                return index > 0 and text[index - 1].isascii() and text[index - 1].isalnum()
+    return False
 
 
 @dataclass(frozen=True)
@@ -170,7 +197,8 @@ def _same_line_word(
     gap = rect.x0 - prev_rect.x1
     if not (-1 <= gap < max(size * 1.4, 12)):
         return False
-    if prev.rstrip().endswith(tuple(SENT_ENDS)):
+    # 编号是标签，不连进右边的句子：连上以后块的左缘退到编号上，例句的悬挂缩进就接不上了
+    if _ends_sentence(prev) or _PAREN_LABEL_RE.fullmatch(prev.strip()):
         return False
     head = nxt.lstrip()[:1]
     if not head.isalpha():
@@ -813,7 +841,7 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         )
         # CJK 行首分不出新句子和续行，要求上行以句末标点结尾才算新段落
         seg_start = bool(SEG_START_RE.match(stripped)) or (
-            bool(CJK_START_RE.match(stripped)) and ptext.rstrip().endswith(SENT_ENDS)
+            bool(CJK_START_RE.match(stripped)) and _ends_sentence(ptext)
         )
         # 打字机字体排的是逐行照录的文字（对话、示例），右缘参差，没到右边距不说明是硬换行。
         # 下一行像新句子开头就是新的一行
@@ -1287,13 +1315,13 @@ def _fragment_host(tail: TextBlock, orphans: list[TextBlock]) -> TextBlock:
 
     用行框而不是块的并集。并集会盖住右侧那半句，半句就不算贴在行尾了。
     """
-    if not tail.text.rstrip().endswith(tuple(SENT_ENDS)):
+    if not _ends_sentence(tail.text):
         return tail
     lines = tail.line_rects or [tail.rect]
     for orphan in orphans:
         if orphan.page != tail.page or len(orphan.line_rects) > 1:
             continue
-        if orphan.text.rstrip().endswith(tuple(SENT_ENDS)):
+        if _ends_sentence(orphan.text):
             continue
         height = orphan.rect.height or orphan.size
         for line in lines:
@@ -3058,7 +3086,7 @@ def _note_cut(upper: dict, lower: dict) -> bool:
     if rest and first.x0 > min(rest) + size * 0.5:
         return False
     tail = "".join(span["text"] for line in above if pymupdf.Rect(line["bbox"]) == last for span in line["spans"])
-    return not tail.rstrip().endswith(tuple(SENT_ENDS))
+    return not _ends_sentence(tail)
 
 
 def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
@@ -3719,7 +3747,7 @@ def _cjk_wrap(prev: TextBlock, nxt: TextBlock) -> bool:
     head = nxt.text.lstrip()[:1]
     if not head or CJK_RE.search(head) is None:
         return False
-    if prev.text.rstrip().endswith(tuple(SENT_ENDS)):
+    if _ends_sentence(prev.text):
         return False
     if abs(nxt.size - prev.size) > prev.size * 0.2:
         return False
@@ -3754,8 +3782,8 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                           and abs(b.rect.x0 - p.rect.x0) > p.size * 0.5
                           and min(p.rect.x1, b.rect.x1) > max(p.rect.x0, b.rect.x0)
                           and not _list_item(b.text)
-                          and not p.text.rstrip().endswith(tuple(SENT_ENDS))
-                          and not b.text.rstrip().endswith(tuple(SENT_ENDS)))
+                          and not _ends_sentence(p.text)
+                          and not _ends_sentence(b.text))
             y_close = -0.9 * p.size <= b.rect.y0 - p.rect.y1 - p.line_gap * p.size < 1.4 * p.size
             # 悬挂缩进大约 2–3em。2em 卡太紧时，特征列表的续行拆成两段，
             # 短行再被单独缩小。向左跳仍用 2em，避免把另一栏接进来。
@@ -3787,13 +3815,17 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                 and (centered_tail or b.rect.x0 <= p.rect.x0 + p.size * 0.5
                      or any(abs(b.rect.x0 - rect.x0) <= p.size * 0.5 for rect in p.line_rects))
             )
+            # 列表项后面第一行比它还靠左起笔的是列表完了以后的正文。续行和条目文字对齐或者悬挂缩进，不会往左
+            first_x0 = b.line_rects[0].x0 if b.line_rects else b.rect.x0
+            list_end = _list_item(p.text) and first_x0 < p.rect.x0 - p.size * 0.5
             latin = (
                 y_close
                 and (x_close or centered_tail)
+                and not list_end
                 and len(p.text.split()) >= 3  # 一两个词的无标点短块是标题/标签，不是段落
                 and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
                 and (colon_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
-                     or not p.text.rstrip().endswith(tuple(SENT_ENDS)))
+                     or not _ends_sentence(p.text))
                 and (first.islower() or first in "),;%,；，" or open_paren)
             )
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
@@ -3827,7 +3859,7 @@ def _beside_wrap(other: TextBlock, head: TextBlock, tail: TextBlock) -> bool:
 
 def _is_line_tail(block: TextBlock, earlier: list[TextBlock]) -> bool:
     """这一行贴在左边某块的行尾右侧，是半句，不是新起的一段。"""
-    if len(block.line_rects) > 1 or block.text.rstrip().endswith(tuple(SENT_ENDS)) or block.side_note:
+    if len(block.line_rects) > 1 or _ends_sentence(block.text) or block.side_note:
         return False
     for other in earlier:
         if other.page != block.page or other.clip != block.clip or other.side_note:
@@ -4020,7 +4052,7 @@ def _continues_fragment(host: TextBlock, guest: TextBlock) -> bool:
         return False
     if not host.line_rects or not guest.line_rects or host.size <= 0:
         return False
-    if host.text.rstrip().endswith(tuple(SENT_ENDS)):
+    if _ends_sentence(host.text):
         return False
     if abs(host.size - guest.size) > host.size * 0.2:
         return False
@@ -4120,7 +4152,7 @@ def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
                 note = bool(head and (head.islower() or CJK_RE.search(head)) and not _caption_label(b.text))
                 continuation = (len(p.text) < 60 and b.text[:1].islower()
                                 and (":" in p.text or "：" in p.text)
-                                and not p.text.rstrip().endswith(tuple(SENT_ENDS)))
+                                and not _ends_sentence(p.text))
                 if (same_line and -1 <= gap < 3 * p.size and label) or (below and (continuation or (label and note))):
                     _absorb_block(p, b)
                     continue
@@ -6503,7 +6535,7 @@ def _normalize_heading_number(src_text: str, translation: str) -> str:
     if translation.strip() == src_text.strip():
         return translation
     m = _SRC_HEAD_NUM_RE.match(src_text.strip())
-    if not m or len(src_text) > 60 or src_text.rstrip().endswith(tuple(SENT_ENDS)):
+    if not m or len(src_text) > 60 or _ends_sentence(src_text):
         return translation
     # 编号可能包在字号、粗体标记里：{z125}二{/z} 算法
     lead = re.match(r"^\s*((?:\{[biz]\d*\})*)", translation)
