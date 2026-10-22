@@ -6665,6 +6665,52 @@ def test_a_block_cut_by_a_margin_note_does_not_take_an_indented_new_paragraph():
     assert _note_cut(upper, lower)
 
 
+def test_a_bracket_or_quote_closes_a_sentence_only_after_its_end_mark():
+    """右括号、引号收尾的行，前面有句末标点才算一句完了。引文年份 (Vilain et al., 1995)、
+    代码 r"cat|dog" 后面接着的是同一句。括号紧跟着函数名、变量的是式子收尾，下面的式子、where 不接。"""
+    from app.formats.pdf import TextBlock, _ends_sentence, _merge_continuations
+
+    assert _ends_sentence("found it.)") and _ends_sentence('he said."')
+    assert not _ends_sentence("The MUC F-measure (Vilain et al., 1995)")
+    assert not _ends_sentence('The pattern r"cat|dog"')
+    assert _ends_sentence("yi = softmax(hL i WK)")
+
+    def blk(text, y, x0=142.2):
+        rect = pymupdf.Rect(x0, y, 475.2, y + 12)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False)
+
+    citation = [blk("Let’s just explore two of the metrics. The MUC F-measure (Vilain et al., 1995)", 484),
+                blk("is based on the number of coreference links (pairs of mentions) common to H and R.", 496)]
+    assert len(_merge_continuations(citation)) == 1
+    formula = [blk("yi = softmax(hL i WK)", 179, x0=262), blk("ti = argmaxk(yi)", 194, x0=263)]
+    assert len(_merge_continuations(formula)) == 2
+
+
+def test_a_list_ends_where_the_next_block_starts_left_of_the_item():
+    """列表项后面第一行比它还靠左起笔的是列表完了以后的正文；悬挂缩进的续行照样接上。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, x0, y0, x1, y1):
+        rect = pymupdf.Rect(x0, y0, x1, y1)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False)
+
+    after = [blk("8. none (1)", 85, 264, 139, 276),
+             blk("none indicates that there are no attributes in the GROUP BY clause.", 71, 289, 540, 301)]
+    assert len(_merge_continuations(after)) == 2
+    item = [blk("2. fluency: how fluent the translation is in the target language (is it grammatical,",
+                172.7, 267.9, 493.2, 280.9),
+            blk("clear, readable, natural).", 185.1, 280.2, 281.2, 292.2)]
+    assert len(_merge_continuations(item)) == 1
+
+
+def test_an_example_number_stays_apart_from_its_sentence():
+    """例句编号 (25.4) 是标签，不连进右边的句子：连上以后块的左缘退到编号上，悬挂缩进的第三行就接不上了。"""
+    from app.formats.pdf import _same_line_word
+
+    assert not _same_line_word("(25.4)", "Before winter I built a chimney",
+                               pymupdf.Rect(142.2, 556.9, 166.3, 568.9), pymupdf.Rect(179.1, 556.6, 458.9, 569.5), 10.0)
+
+
 def test_a_line_in_a_column_of_its_own_font_stays_in_its_block():
     """幻灯片右边一栏等宽字排的示例和左边正文同高，横向还叠上一点。它在自己的块里和上一行
     左缘对齐、字体相同，是这一栏的一行，不当左边正文切下来的后半截挪过去。"""
