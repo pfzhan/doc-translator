@@ -6624,3 +6624,20 @@ def test_a_running_head_does_not_take_the_first_line_below_it():
     assert len(_merge_same_line_sentences(blocks())) == 1
     head, body = blocks()
     assert len(_merge_same_line_sentences([head, body], {id(head)})) == 2
+
+
+def test_a_slide_sub_point_is_not_a_wrapped_title():
+    """幻灯片正文就有三十来磅，缩进排的子项不是大标题换行的第二行。
+    大字号比这份文档的正文字号算；没量出正文字号时照旧按 12 磅。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def slide(body_size):
+        def blk(text, x0, y0, x1, y1):
+            rect = pymupdf.Rect(x0, y0, x1, y1)
+            return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=27.0, color="#000", bold=False,
+                             body_size=body_size)
+        return [blk("Example: Deterministic language L = {red,blue, green}", 77, 229, 672, 262),
+                blk("Branching factor = 3, any word can be followed by red, blue, green", 163, 272, 903, 305)]
+
+    assert len(_merge_continuations(slide(38.0))) == 2
+    assert len(_merge_continuations(slide(0.0))) == 1
