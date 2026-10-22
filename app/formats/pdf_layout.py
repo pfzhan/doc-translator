@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import bisect
 import re
 from dataclasses import dataclass
 from typing import Generic, Protocol, Sequence, TypeVar
@@ -579,7 +580,53 @@ def page_tables(
     ruled = ruled_tables(page, drawings)
     ruled = (*ruled, *filled_tables(page, drawings, words, ruled))
     algorithms = algorithm_tables(page, drawings)
+    # 无线的格子表本来就是按对齐的行找的，表头对齐的话已经在里面，不再往上找
+    ruled = _with_header_rows(ruled, words)
     return (*ruled, *unruled_tables(page, (*ruled, *algorithms), words), *algorithms)
+
+
+def _with_header_rows(tables: Sequence[RuledTable], words: Sequence[_TextWord]) -> tuple[RuledTable, ...]:
+    """三线表的表头和表身隔着横线，按线只找得到表身。紧贴在表上面、横向落在表的范围里、
+    每个词都落在表的某一列里（不跨列线）、占三列以上、每列不过三个词的行是表头，
+    一行一格并进这张表。表上面的说明、正文是连着排的句子，会跨过列线，到那里为止。"""
+    zones = [table.rect for table in tables]
+    out: list[RuledTable] = []
+    for table in tables:
+        rect = table.rect
+        lines = sorted({x for cell in table.cells for x in (cell.x0, cell.x1) if rect.x0 + 2 < x < rect.x1 - 2})
+        above = [
+            word for word in words
+            if word.x0 >= rect.x0 - 2 and word.x1 <= rect.x1 + 2 and word.y1 <= rect.y0 + 1
+            and not _mostly_inside(pymupdf.Rect(word.x0, word.y0, word.x1, word.y1), zones)
+        ]
+        top = rect.y0
+        headers: list[pymupdf.Rect] = []
+        for row in reversed(_word_rows(above)):
+            box = pymupdf.Rect(min(w.x0 for w in row), min(w.y0 for w in row),
+                               max(w.x1 for w in row), max(w.y1 for w in row))
+            if top - box.y1 > box.height or not _header_row(row, lines):
+                break
+            headers.append(pymupdf.Rect(rect.x0, box.y0 - 1, rect.x1, min(box.y1 + 1, top)))
+            top = box.y0
+        if headers:
+            grown = pymupdf.Rect(rect.x0, top - 1, rect.x1, rect.y1)
+            out.append(RuledTable(grown, (*reversed(headers), *table.cells), table.algorithm))
+        else:
+            out.append(table)
+    return tuple(out)
+
+
+def _header_row(row: Sequence[_TextWord], lines: Sequence[float]) -> bool:
+    """按词距连成一片的是一句话（段落末行 Levenshtein in Eq. 2.20.），表头各列之间隔着空档。"""
+    if len(_row_cells(row)) < 2:
+        return False
+    if any(word.x0 < x - 1 and word.x1 > x + 1 for word in row for x in lines):
+        return False
+    columns: dict[int, int] = {}
+    for word in row:
+        column = bisect.bisect(lines, (word.x0 + word.x1) / 2)
+        columns[column] = columns.get(column, 0) + 1
+    return len(columns) >= 3 and max(columns.values()) <= _SHORT_WORDS
 
 
 def filled_tables(
