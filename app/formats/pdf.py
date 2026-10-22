@@ -366,6 +366,61 @@ def _has_leader_line(data: dict) -> bool:
     )
 
 
+# 目录页的标题
+_TOC_TITLE_RE = re.compile(r"(?:(?:table|summary) of )?contents|list of (?:figures|tables)|目\s*录", re.I)
+# 页码一列至少这么多条才算目录
+_TOC_MIN_ENTRIES = 5
+
+
+def _toc_pages(pages: list[dict]) -> set[int]:
+    """没有点线的目录页：标题行和每行行尾隔得很远、右缘对齐、往下递增的页码。
+    目录跨页时，后面几页没有标题，接在目录页后面、页码一列照样排的也算。
+    只认页码一列容易把整数列的表格当成目录，所以要有标题或者接在目录页后面。"""
+    found: set[int] = set()
+    previous = False
+    for pno, data in enumerate(pages):
+        lines = [
+            line for block in data.get("blocks", []) if block.get("type") == 0
+            for line in block.get("lines", []) if abs(line["dir"][1]) <= 0.01
+        ]
+        titled = any(
+            _TOC_TITLE_RE.fullmatch("".join(span["text"] for span in line["spans"]).strip()) for line in lines
+        )
+        if _page_number_column(lines) and (titled or previous):
+            found.add(pno)
+            previous = True
+        else:
+            previous = _has_leader_line(data)
+    return found
+
+
+def _page_number_column(lines: list[dict]) -> bool:
+    """行尾的页码：一行只有一个数，同一行左边隔着两个字宽以上有别的字。
+    这样的页码有一列右缘对齐、自上而下大体不减。目录后面接着表目录时页码从头再来，允许少数几次回落。"""
+    found: list[tuple[float, float, int]] = []
+    for line in lines:
+        text = "".join(span["text"] for span in line["spans"]).strip()
+        if not re.fullmatch(r"\d{1,4}", text):
+            continue
+        box = pymupdf.Rect(line["bbox"])
+        size = max((float(span["size"]) for span in line["spans"]), default=10.0)
+        for other in lines:
+            if other is line:
+                continue
+            left = pymupdf.Rect(other["bbox"])
+            overlap = min(left.y1, box.y1) - max(left.y0, box.y0)
+            if overlap >= min(left.height, box.height) * 0.5 and box.x0 - left.x1 > size * 2:
+                found.append((box.x1, box.y0, int(text)))
+                break
+    best = max(
+        ([(y0, number) for x1, y0, number in found if abs(x1 - edge) <= 1.5] for edge in {x for x, _, _ in found}),
+        key=len, default=[],
+    )
+    numbers = [number for _, number in sorted(best)]
+    drops = sum(1 for a, b in zip(numbers, numbers[1:]) if b < a)
+    return len(numbers) >= _TOC_MIN_ENTRIES and drops <= len(numbers) // 5
+
+
 def _cut_leaders(items: list[tuple], toc_page: bool = False) -> tuple[list[tuple], dict[int, Leader]]:
     """目录条目的点线和页码从行里拿掉，只留标题送翻。返回新的行和 {行下标: 点线}。
     toc_page 时（这一页有点线条目），没有点线、页码隔着两个字宽以上靠右排的（卷名一行）也算，
@@ -2995,6 +3050,11 @@ def _extract(
         if on_page is not None:
             on_page(len(pages), doc.page_count)
     _mark_math_roman(pages)
+    # 目录页上不找表：页码一列和节号一列对齐，短条目会被认成格子表，格子不翻
+    toc_pages = _toc_pages(pages)
+    for pno in toc_pages:
+        tables_by_page[pno] = ()
+        scans[pno] = replace(scans[pno], tables=())
     for data in pages:
         _rejoin_split_lines(data)
     page_lines = [_frame_lines(data) for data in pages]
@@ -3004,7 +3064,7 @@ def _extract(
         _detach_margin_notes(data, lines, refs, found - _wide_block_lines(lines, refs, found, frame))
     for pno, data in enumerate(pages):
         margins = _left_margins(data)
-        toc_page = _has_leader_line(data)
+        toc_page = _has_leader_line(data) or pno in toc_pages
         for b in data["blocks"]:
             if b.get("type") != 0:
                 continue

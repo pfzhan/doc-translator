@@ -6478,3 +6478,28 @@ def test_block_color_follows_most_characters_not_the_longest_span():
         {"text": word, "color": 0} for word in ("The", "all-words", "WSD", "task,", "mapping", "from", "input")
     ]
     assert _by_chars(spans, lambda span: span["color"]) == 0
+
+
+def test_a_contents_page_without_leader_dots_is_found_by_its_page_numbers():
+    """没有点线的目录：标题 Table of Contents，行尾隔得很远、右缘对齐、往下递增的页码。
+    表目录页码从头再来、接在目录页后面没有标题的续页也算。不在目录旁边、没有标题的整数列表格不算。"""
+    from app.formats.pdf import _toc_pages
+
+    def line(text, x0, x1, y):
+        return {"dir": (1, 0), "bbox": (x0, y, x1, y + 12), "spans": [{"text": text, "size": 12.0}]}
+
+    def page(title, rows):
+        lines = [line(title, 241, 371, 70)] if title else []
+        for k, (entry, number) in enumerate(rows):
+            y = 100 + 14.5 * k
+            lines += [line(entry, 90, 90 + 6 * len(entry), y), line(str(number), 522 - 6 * len(str(number)), 522, y)]
+        return {"blocks": [{"type": 0, "lines": lines}]}
+
+    entries = [("Executive Summary", 1), ("1 Framing Risk", 4), ("1.1 Understanding Risks", 4), ("1.2 Challenges", 5),
+               ("2 Audience", 9), ("3 AI Risks", 12), ("Appendix D", 42), ("Table 1 GOVERN", 22), ("Table 2 MAP", 26)]
+    contents = page("Table of Contents", entries)
+    following = page("", [("Figure 1 Harms", 5), ("Figure 2 Lifecycle", 10), ("Figure 3 Actors", 11),
+                          ("Figure 4 Characteristics", 12), ("Figure 5 Functions", 20)])
+    counts = page("", [("Romeo", 1), ("salad", 2), ("Falstaff", 4), ("forest", 12), ("battle", 21)])
+    assert _toc_pages([counts, contents, following]) == {1, 2}
+
