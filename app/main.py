@@ -577,7 +577,8 @@ def job_focus(job_id: str, data: dict = Body(...)):
 
 
 @app.get("/api/jobs/{job_id}/files/{name}")
-def download(job_id: str, name: str):
+def download(job_id: str, name: str, inline: bool = False):
+    """inline=1 时让浏览器直接打开（PDF 用自带的阅读器看），不弹下载。"""
     job = _job_or_404(job_id)
     # job.json 可能被篡改过，挡住带路径分隔符的文件名
     if Path(name).name != name:
@@ -585,7 +586,7 @@ def download(job_id: str, name: str):
     if name in job.outputs:
         path = jobs.out_dir(job.id) / name
         if path.exists():
-            return FileResponse(path, filename=name)
+            return FileResponse(path, filename=name, content_disposition_type="inline" if inline else "attachment")
     raise HTTPException(404, "文件不存在")
 
 
