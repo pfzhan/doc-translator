@@ -3153,7 +3153,15 @@ def _extract(
         geometries[pno] = geo
         ordered.extend(reading_order(page_blocks, geo))
     merged = _merge_continuations(_merge_caption_fragments(_merge_visual_lines(ordered, geometries)))
-    return _split_affiliation_tails(_merge_same_line_sentences(_merge_line_tails(merged))), frames, scans
+    # 页眉页脚不和正文的半句相接：书的页眉靠右排、不带句号，像一行的后半句。
+    # 页眉常在页顶窄带以下、版心以上，要带上版心才认得出
+    margin_geometries = [
+        PageGeometry.from_page(doc[pno], [block.rect for block in by_page.get(pno, [])], frames[pno], scans[pno])
+        for pno in range(doc.page_count)
+    ]
+    edges = {id(block) for block, edge in zip(merged, margin_skips(merged, margin_geometries)) if edge}
+    merged = _merge_same_line_sentences(_merge_line_tails(merged, edges), edges)
+    return _split_affiliation_tails(merged), frames, scans
 
 
 _DISPLAY_PROSE = 8
@@ -3876,16 +3884,18 @@ def _same_page_line_pair(host: TextBlock, tail: TextBlock) -> bool:
     return -0.5 * host.size <= gap < 1.5 * host.size
 
 
-def _merge_line_tails(blocks: list[TextBlock]) -> list[TextBlock]:
-    """同一行右侧的半句，和下一行回到栏边的续写，接成一段。不并进左边那句。"""
+def _merge_line_tails(blocks: list[TextBlock], edges: Collection[int] = ()) -> list[TextBlock]:
+    """同一行右侧的半句，和下一行回到栏边的续写，接成一段。不并进左边那句。
+    edges 是页眉页脚，不当半句，也不当续写。"""
     used: set[int] = set()
     out: list[TextBlock] = []
     earlier = _earlier_on_page(blocks)
     for index, block in enumerate(blocks):
         if id(block) in used:
             continue
-        if _is_line_tail(block, earlier[index]):
-            nxt = _line_tail_continuation(block, blocks[index + 1:], blocks)
+        if id(block) not in edges and _is_line_tail(block, earlier[index]):
+            later = [other for other in blocks[index + 1:] if id(other) not in edges]
+            nxt = _line_tail_continuation(block, later, blocks)
             if nxt is not None and id(nxt) not in used:
                 _absorb_block(block, nxt)
                 used.add(id(nxt))
@@ -3983,16 +3993,18 @@ def _continues_fragment(host: TextBlock, guest: TextBlock) -> bool:
     return not (_diagramish(guest) or _is_side_label(guest))
 
 
-def _merge_same_line_sentences(blocks: list[TextBlock]) -> list[TextBlock]:
+def _merge_same_line_sentences(blocks: list[TextBlock], edges: Collection[int] = ()) -> list[TextBlock]:
     """上一句在行中结束、下一句从这一行右侧起写时，并成一段，按栏宽排开。
 
     短粗体侧标和图内标签不并。续行即使和后一句共基线，也先接上，后一句再并进来。
     阅读顺序会把左半行排到右半行后面，所以不能只看相邻块。
     只在同一页里找。整本书一起两两比较，几百页的书要算很久。
+    edges 是页眉页脚，不参与。
     """
     by_page: dict[int, list[TextBlock]] = {}
     for block in blocks:
-        by_page.setdefault(block.page, []).append(block)
+        if id(block) not in edges:
+            by_page.setdefault(block.page, []).append(block)
     absorbed: set[int] = set()
     for page_blocks in by_page.values():
         absorbed |= _merge_page_line_sentences(page_blocks)

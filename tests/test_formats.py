@@ -6602,3 +6602,25 @@ def test_a_line_tail_pair_measures_its_gap_against_the_documents_line_gap():
 
     assert _same_page_line_pair(*pair(0.1))
     assert not _same_page_line_pair(*pair(-0.2))
+
+
+def test_a_running_head_does_not_take_the_first_line_below_it():
+    """书的页眉靠右排、不带句号，几截排开像一行的后半句，下一行回到栏边、小写起头。
+    认出是页眉就不接，行距卡在哪里都一样。"""
+    from app.formats.pdf import TextBlock, _merge_same_line_sentences
+
+    def blocks():
+        head = [pymupdf.Rect(378, 82.8, 391.6, 94.8), pymupdf.Rect(401.8, 82.8, 405.3, 94.8),
+                pymupdf.Rect(415.5, 82.8, 466.1, 94.8)]
+        body = [pymupdf.Rect(160, 104, 493, 116), pymupdf.Rect(160, 116, 493, 128)]
+        return [
+            TextBlock(page=0, rect=pymupdf.Rect(378, 82.8, 466.1, 94.8), line_rects=head, text="5.5 • WORD2VEC",
+                      size=10.0, color="#000", bold=False),
+            TextBlock(page=0, rect=pymupdf.Rect(160, 104, 493, 128), line_rects=body,
+                      text="automobile are distinct and unrelated; sparse vectors may thus fail to capture",
+                      size=10.0, color="#000", bold=False),
+        ]
+
+    assert len(_merge_same_line_sentences(blocks())) == 1
+    head, body = blocks()
+    assert len(_merge_same_line_sentences([head, body], {id(head)})) == 2
