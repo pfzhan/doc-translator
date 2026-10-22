@@ -8,6 +8,7 @@
 4. 双语版：原页面和译文页面左右并排放在同一页上，方便对照阅读。
 """
 import asyncio
+import bisect
 import contextlib
 import functools
 import hashlib
@@ -85,6 +86,8 @@ _LIST_INTRO_END = (".", "?", "!", "。", "！", "？", ":", ";", "：", "；")
 # 行首列表标记：符号弹点（可不带空格）、短横线类（须带空格，避免误伤连字符单词）、数字/字母编号
 BULLET_RE = re.compile(r"^\s*(?:[•◦▪‣·○■□►»]\s*|[-–—*]\s+|\d{1,3}[.)]\s+|[a-zA-Z][.)]\s+)")
 _MARK_ITEM_RE = re.compile(r"^\s*(?:[•◦▪‣·○■□►»]|[-–—*]\s)")
+# 整页居中排时，各行中线的偏差。行尾的逗号、斜体的外伸会让中线偏一两点
+_AXIS_TOL = 2.0
 # 新段落的开头：大写字母、数字、引号/括号（小写字母开头多半是自动换行的续行）。
 # CJK 不在其中：CJK 行首无法区分新句子和续行，只有上行以句末标点结尾才算新段落（见下）
 SEG_START_RE = re.compile(r"^[A-Z0-9À-Þ(\"'“‘\[（【]")
@@ -744,10 +747,12 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
                      and overlap > min(prect.y1 - prect.y0, rect.y1 - rect.y0) * 0.5
                      and psize <= line_size * 1.6)
         # 12pt 标题下的 9pt 导语左缘只差一截节号，看起来像缩进。字号落下才是新段。
-        size_drop = (
-            not same_visual_line
-            and line_size < ref_size * 0.85
-            and _prose_units(stripped) >= 4
+        # 上下标拆出的短行和上一行上下交叠；自成一行的两个词也算（作者名下面的单位），
+        # 比的是上一行多数字的字号，行首的大号星号不算
+        own_row = row_overlap <= min(row_rect.height, rect.height) * 0.2
+        size_drop = not same_visual_line and (
+            (line_size < ref_size * 0.85 and _prose_units(stripped) >= 4)
+            or (own_row and line_size < _text_size(items[i - 1][2]) * 0.85 and _prose_units(stripped) >= 2)
         )
         # 撑满的上一行没有句末，下一行的 "Q. " 是换行，不是 "a. " 这种列表项。
         wrapped_letter = (
@@ -2650,6 +2655,14 @@ async def _retry_lost_placeholders(
     cache = getattr(runner, "cache", None)
     if fixed and cache is not None:
         cache.put_many(translator.cache_key, fixed)
+
+
+def _text_size(spans: list[dict]) -> float:
+    """一行里字数最多的字号。"""
+    count: dict[float, int] = {}
+    for span in spans:
+        count[span["size"]] = count.get(span["size"], 0) + len(span.get("text", "").strip())
+    return max(count, key=count.get, default=10)
 
 
 def _prose_units(text: str) -> int:
@@ -4710,6 +4723,38 @@ def _left_aligned_stack(block: TextBlock, others: list[TextBlock]) -> bool:
     return False
 
 
+def _centered_axis(block: TextBlock, others: list[TextBlock]) -> float | None:
+    """封面、题名页整页居中排，本页宽窄不一的行大多共用一条中线。块的每一行都在这条中线上
+    就是居中的，返回这条中线。
+    和最宽一行差不多宽的行不计数，版心里的正文行都在同一条中线上；页边旁注会把本页文字的左右范围撑宽，
+    所以拿最宽的行比。左缘也相同的行是一列等宽的数，不是居中。"""
+    page = [other for other in others if other.page == block.page]
+    lines = [line for other in page for line in (other.line_rects or [other.rect])]
+    if not lines:
+        return None
+    widest = max(line.width for line in lines)
+    short = sorted(
+        (line for line in lines if line.width < widest * 0.85), key=lambda line: (line.x0 + line.x1) / 2,
+    )
+    if len(short) < 3:
+        return None
+    mids = [(line.x0 + line.x1) / 2 for line in short]
+    group: list[pymupdf.Rect] = []
+    for i, mid in enumerate(mids):
+        hi = bisect.bisect_right(mids, mid + 2 * _AXIS_TOL)
+        if hi - i > len(group):
+            group = short[i:hi]
+    if len(group) < max(3, len(short) * 0.6):
+        return None
+    if max(line.x0 for line in group) - min(line.x0 for line in group) < block.size:
+        return None
+    axis = sum((line.x0 + line.x1) / 2 for line in group) / len(group)
+    own = block.line_rects or [block.rect]
+    if any(abs((line.x0 + line.x1) / 2 - axis) > _AXIS_TOL for line in own):
+        return None
+    return axis
+
+
 def _write_rect(
     block: TextBlock,
     items: list[tuple[TextBlock, str]],
@@ -4767,6 +4812,16 @@ def _write_rect(
         )
         and not _MARK_ITEM_RE.match(block.text)
     )
+    axis = None
+    if not centered and not rtl and len(block.text) < 100 and not _MARK_ITEM_RE.match(block.text):
+        axis = _centered_axis(block, [other for other, _ in items])
+    if axis is not None:
+        # 页面左右边距不对称时版心和最宽块都不在这条中线上，按中线到本页文字两侧的距离留宽
+        left = min(other.rect.x0 for other, _ in items if other.page == block.page)
+        right = max(other.rect.x1 for other, _ in items if other.page == block.page)
+        half = max(block.rect.width / 2, min(axis - left, right - axis))
+        rect = pymupdf.Rect(axis - half, y0, axis + half, block.rect.y1 + pad)
+        return _clip_write_rect(rect, block.clip), True
     if centered and on_page_mid:
         half = max(block.rect.width / 2, min(page_mid - col_x0, col_x1 - page_mid))
         rect = pymupdf.Rect(page_mid - half, y0, page_mid + half, block.rect.y1 + pad)
