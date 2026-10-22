@@ -567,11 +567,74 @@ def _merge_rows(cells: list[pymupdf.Rect], horizontal: list[pymupdf.Rect]) -> li
 def page_tables(
     page: pymupdf.Page, drawings: list[dict] | None = None, words: Sequence[_TextWord] | None = None,
 ) -> tuple[RuledTable, ...]:
-    """有线表，再加上列缘对齐的短格子表和算法框。两栏正文和整段文字不在这里。
+    """有线表、底色格子拼成的表，再加上列缘对齐的短格子表和算法框。两栏正文和整段文字不在这里。
     drawings、words 是本页已读出的矢量图和词，没给时现读。"""
+    if drawings is None:
+        try:
+            drawings = page.get_drawings()
+        except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有线
+            drawings = []
+    if words is None:
+        words = page_words(page)
     ruled = ruled_tables(page, drawings)
+    ruled = (*ruled, *filled_tables(page, drawings, words, ruled))
     algorithms = algorithm_tables(page, drawings)
     return (*ruled, *unruled_tables(page, (*ruled, *algorithms), words), *algorithms)
+
+
+def filled_tables(
+    page: pymupdf.Page, drawings: list[dict], words: Sequence[_TextWord], ruled: Sequence[RuledTable] = (),
+) -> tuple[RuledTable, ...]:
+    """每格一块底色、格子挨着格子铺满一片的表（LaTeX 的 \\rowcolor、\\cellcolor）。
+    这种表常常只有上下几条横线，没有竖线，按线找不出格子，各格的字会被并成一段去翻译。
+
+    底色块要拼成至少两行两列、铺满这一片，有两格以上有字，片里的字都落在某一格里。
+    一整块底色是文本框，一行一块的是代码框的底纹，都不算；图里铺的白底格子
+    压着跨好几格的图注，也不算。已经按线找到的表不再算一遍。
+    """
+    bounds = text_page_rect(page)
+    fills = [
+        pymupdf.Rect(drawing["rect"]) for drawing in drawings
+        if light_fill(drawing) and min(drawing["fill"]) < 0.97 and not (
+            drawing["rect"].width > bounds.width * _PAGE_FILL and drawing["rect"].height > bounds.height * _PAGE_FILL
+        )
+    ]
+    groups: list[list[pymupdf.Rect]] = []
+    for fill in fills:
+        near = [group for group in groups if any((fill + (-_NEAR, -_NEAR, _NEAR, _NEAR)).intersects(r) for r in group)]
+        merged = [fill]
+        for group in near:
+            groups.remove(group)
+            merged.extend(group)
+        groups.append(merged)
+    tables: list[RuledTable] = []
+    for cells in groups:
+        area = pymupdf.Rect(cells[0])
+        for cell in cells[1:]:
+            area |= cell
+        if any(_mostly_inside(area, [table.rect]) for table in ruled):
+            continue
+        rows = _edges([cell.y0 for cell in cells])
+        cols = _edges([cell.x0 for cell in cells])
+        if len(rows) < 2 or len(cols) < 2:
+            continue
+        # 格子互不交叠、合起来铺满整片：嵌套的底色（框里再套一块）面积会多出来
+        if abs(sum(cell.get_area() for cell in cells) - area.get_area()) > area.get_area() * 0.05:
+            continue
+        boxes = [pymupdf.Rect(w.x0, w.y0, w.x1, w.y1) for w in words]
+        boxes = [box for box in boxes if _mostly_inside(box, [area])]
+        holders = [[cell for cell in cells if _holds(cell, box)] for box in boxes]
+        if not all(holders):
+            continue
+        if len({id(found[0]) for found in holders}) >= 2:
+            tables.append(RuledTable(area, tuple(sorted(cells, key=lambda c: (c.y0, c.x0)))))
+    return tuple(tables)
+
+
+def _holds(cell: pymupdf.Rect, box: pymupdf.Rect) -> bool:
+    """词整个落在格子里，左右只许出头一点。跨两格的词说明这片底色不是按格子铺的。"""
+    middle = (box.y0 + box.y1) / 2
+    return cell.x0 - _NEAR <= box.x0 and box.x1 <= cell.x1 + _NEAR and cell.y0 <= middle <= cell.y1
 
 
 _SYMBOL_FONT_RE = re.compile(r"(?:^|\+)(?:CMSY|CMEX|MSAM|MSBM)", re.I)

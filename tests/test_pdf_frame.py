@@ -173,6 +173,43 @@ def test_typewriter_dialogue_keeps_one_line_per_turn():
     assert _split_lines(wrapped) == [[0, 1]]
 
 
+def test_prose_after_typewriter_lines_starts_a_new_paragraph():
+    """等宽字排的小号列表项后面紧跟正文首行。首行缩进和列表项的左缘只差一点，也要拆开。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, x0, y0, x1, size, font, flags):
+        span = {"text": text, "size": size, "font": font, "flags": flags}
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + size), [span])
+
+    items = [
+        item("illustrate its explanations with examples, thought experiments", 167, 577, 489, 8.0, "txtt", 12),
+        item("self-destructive behavior", 167, 600, 272, 8.0, "txtt", 12),
+        item("Prompts can also be used in more sophisticated ways in a method", 157, 611, 475, 10.0,
+             "NimbusRomNo9L-Regu", 4),
+        item("time compute. One representative example is chain-of-thought", 142, 623, 475, 10.0,
+             "NimbusRomNo9L-Regu", 4),
+    ]
+    assert _split_lines(items) == [[0, 1], [2, 3]]
+
+
+def test_blocks_in_a_flagged_monospace_font_are_code():
+    """txtt 这类字体名字里没有 Mono，只有 PDF 的等宽标志。整块是这种字就留原文。"""
+    from app.formats.pdf import TextBlock, _code_block
+
+    def block(*spans):
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 100, 10), line_rects=[], text="".join(t for t, _, _ in spans),
+            size=10, color="#000", bold=False,
+            span_lines=[[{"text": t, "font": f, "flags": flags, "size": 10} for t, f, flags in spans]],
+        )
+
+    assert _code_block(block(("<system> You are a helpful assistant.", "txtt", 12)))
+    assert not _code_block(block(("The prompt ", "NimbusRomNo9L-Regu", 4), ("<system>", "txtt", 12),
+                                 (" comes first in the context window.", "NimbusRomNo9L-Regu", 4)))
+    # 汉字字体也常带等宽标志，不算代码
+    assert not _code_block(block(("系统提示词放在上下文的最前面。", "SimSun", 8)))
+
+
 def test_gloss_line_is_split_from_its_free_translation():
     from app.formats.pdf import TextBlock, _gloss_ids, _split_gloss_lines
 
