@@ -3953,6 +3953,23 @@ def test_heading_number_kept_in_source_form():
     assert norm("1. Exploited the sortedness of join input", "1. 利用了连接输入的有序性") == "1. 利用了连接输入的有序性"
 
 
+def test_section_and_item_numbers_are_not_sent_for_translation():
+    """节号、条目号摘下来不送翻，写回时原样接回去。正文句首的数不摘。"""
+    from app.formats.pdf import _peel_number, _with_label
+
+    assert _peel_number("B.3.2. DeepSeek-R1 Cold Start", "p") == ("B.3.2.", "DeepSeek-R1 Cold Start")
+    assert _peel_number("4 Experiments", "h2") == ("4", "Experiments")
+    assert _peel_number("{b}3{/b} {b}Method{/b}", "h2") == ("{b}3{/b}", "{b}Method{/b}")
+    assert _peel_number("1.{i} Intractability{/i}: the case where", "p") == ("1.", "{i} Intractability{/i}: the case where")
+    assert _peel_number("(a) Let u be the view of least cost.", "p") == ("(a)", "Let u be the view of least cost.")
+    assert _peel_number("2 samples were drawn from each model and we report the mean.", "p")[0] == ""
+    assert _peel_number("1.5 times faster than the baseline, a large gain.", "p")[0] == ""
+    assert _peel_number("I. Goodfellow proposed adversarial nets in 2014.", "p")[0] == ""
+    assert _peel_number("3.17", "p")[0] == ""
+    assert _with_label("B.3.2.", "DeepSeek-R1 冷启动") == "B.3.2. DeepSeek-R1 冷启动"
+    assert _with_label("", "实验") == "实验"
+
+
 def test_heading_number_skips_body_blocks():
     from app.formats.pdf import _heading_number_for
 
@@ -6336,7 +6353,7 @@ def test_cjk_line_keeps_colors_across_a_formula():
 
 
 def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path):
-    """目录条目只送标题：点线和页码不送翻，页码留在原处靠右对齐，点线补到译文末尾。
+    """目录条目只送标题：节号、点线和页码不送翻，页码留在原处靠右对齐，点线补到译文末尾。
     点和标题排在同一个 span 里的、没有点线只有页码的（卷名一行）也一样；每条单独成段。"""
     from app.formats.pdf import translate_pdf
 
@@ -6369,7 +6386,7 @@ def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path):
 
     [out] = run(translate_pdf(src, tmp_path, Runner(Short("zh-CN"), cache=MemCache()), False, "zh-CN"))
     assert sorted(sent) == sorted([
-        "Part One: Foundations of Language", "1.1 What is a Large Language Model", "1.2 Tokens",
+        "Part One: Foundations of Language", "What is a Large Language Model", "Tokens",
         "Historical Notes", "Exercises",
     ])
     result = pymupdf.open(out)[0]
