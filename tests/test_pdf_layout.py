@@ -873,6 +873,26 @@ def test_table_drawn_with_dashed_rules_is_still_found():
     assert len(table.cells) == 16
 
 
+def test_table_ruled_with_one_pixel_images_is_found():
+    """老 TeX 用拉伸的一像素图片画表格线，页面上没有矢量线。"""
+    from app.formats.pdf_layout import ruled_tables
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    dot = pymupdf.Pixmap(pymupdf.csGRAY, pymupdf.IRect(0, 0, 1, 1), False)
+    dot.clear_with(0)
+    for y in (80, 100, 120, 140):
+        page.insert_image(pymupdf.Rect(50, y, 290, y + 0.5), pixmap=dot, keep_proportion=False)
+    for x in (50, 130, 210, 290):
+        page.insert_image(pymupdf.Rect(x, 80, x + 0.5, 140), pixmap=dot, keep_proportion=False)
+    for row, y in enumerate((94, 114, 134)):
+        for col, x in enumerate((55, 135, 215)):
+            page.insert_text((x, y), f"cell {row}{col}", fontsize=9)
+    assert page.get_drawings() == []
+    [table] = ruled_tables(page)
+    assert len(table.cells) == 9
+
+
 def test_rows_without_rules_between_them_are_split_into_cells():
     """只画了列线的表，表身几行叠在一格里，按对齐的行切开。折行的表头有的格只有一行，不切。"""
     from app.formats.pdf_layout import page_tables
