@@ -575,6 +575,31 @@ def test_algorithm_lines_are_translated_one_by_one():
     assert all(block.clip is not None for block in blocks)
 
 
+def test_table_cells_stay_original_but_algorithm_lines_are_translated(tmp_path):
+    """表格里的字一律留原文，图注照翻。算法框的伪代码也切成格子，仍逐行翻译。"""
+    from app.formats.pdf import _plan_pdf
+
+    class Runner:
+        def report_stage(self, *args, **kwargs):
+            pass
+
+        def set_title(self, title):
+            pass
+
+    page = _algorithm_page(False)
+    for x0, x1, word in ((50, 200, "Shakespeare corpus"), (200, 350, "Brown corpus")):
+        page.draw_rect(pymupdf.Rect(x0, 170, x1, 200), color=(0, 0, 0), width=0.8)
+        page.insert_text((x0 + 8, 189), word, fontsize=10)
+    page.insert_text((50, 220), "Table 1 Rough numbers of types for some English corpora.", fontsize=10)
+    src = tmp_path / "tables.pdf"
+    page.parent.save(src)
+    plan = _plan_pdf(src, Runner(), "")
+    skipped = {text: skip for text, skip in zip(plan.texts, plan.skips)}
+    assert skipped["Shakespeare corpus"] and skipped["Brown corpus"]
+    assert not skipped["while not converged do"] and not skipped["update the parameters"]
+    assert not any(skip for text, skip in skipped.items() if "Rough numbers" in text)
+
+
 def test_side_by_side_algorithm_boxes_are_both_found():
     """两个算法框并排时，图注在 PyMuPDF 的同一行里；另一个框的线在旁边，不算。"""
     from app.formats.pdf_layout import algorithm_tables

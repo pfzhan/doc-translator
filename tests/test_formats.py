@@ -3863,6 +3863,9 @@ def test_heading_number_skips_body_blocks():
     assert _heading_number_for("h2", "2.2 SQL on Hadoop", "第2.2节 Hadoop 上的 SQL") == "2.2 Hadoop 上的 SQL"
     assert _heading_number_for("h2", "1.3 Related Work", "一.三. 相关工作") == "1.3 相关工作"
     assert _heading_number_for("h2", "2.5 Composite Lattices", "二．五 复合格") == "2.5 复合格"
+    # 三级节号，各级之间可能空一格
+    assert _heading_number_for("h2", "3.1.3 Dealing with scale", "第三章第一节第三小节 处理规模问题") == "3.1.3 处理规模问题"
+    assert _heading_number_for("h2", "10.1.2 Contextual Embeddings", "第十章 第一节 第二小节 上下文嵌入") == "10.1.2 上下文嵌入"
 
 
 def test_punct_fragment_uses_line_end_not_union():

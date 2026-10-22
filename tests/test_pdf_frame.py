@@ -73,6 +73,26 @@ def test_margin_note_on_a_body_line_is_split_off():
     assert "tokenization" not in body and "regular" not in body and "edit distance" not in body
 
 
+def test_label_of_a_caption_wider_than_the_body_is_not_a_margin_note():
+    """宽表的图注从页边起笔，标签落在旁注的位置。下一行图注从同一处起笔、写进版心，
+    标签留在图注里。真正的旁注照旧拆出来。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    words = ("The body of this paragraph keeps going across many lines so that the "
+             "frame has enough long lines to vote on where the text starts ").split()
+    for i in range(16):
+        page.insert_text((160, 120 + 12 * i), " ".join(words[(i * 3) % 20:(i * 3) % 20 + 9]), fontsize=10)
+    for row, note in ((2, "tokenization"), (6, "regular"), (10, "edit distance")):
+        page.insert_text((96, 120 + 12 * row), note, fontsize=7)
+    page.insert_text((96, 330), "Figure 3.7", fontsize=9, fontname="hebo")
+    page.insert_text((150, 330), "Add-one smoothed bigram probabilities for eight of the words in the", fontsize=9)
+    page.insert_text((96, 341), "corpus of 9332 sentences. Previously-zero probabilities are in gray.", fontsize=9)
+    blocks = extract_blocks(doc)
+    assert [block.text for block in blocks if block.side_note] == ["tokenization", "regular", "edit distance"]
+    [caption] = [block for block in blocks if "Add-one" in block.text]
+    assert caption.text.startswith("Figure 3.7") and "corpus of 9332" in caption.text
+
+
 def test_displayed_formula_with_a_big_brace_keeps_its_rows():
     from app.formats.pdf import TextBlock, _display_formula_ids
     from app.formats.pdf_frame import TextFrame
@@ -107,6 +127,31 @@ def test_body_cut_at_a_margin_note_is_joined_back():
     _rejoin_note_cuts(data, {id(upper)})
     assert len(upper["lines"]) == 3 and lower["lines"] == []
     assert after["lines"]  # 上一行以句末收尾、下一块缩进：新的一段
+
+
+def test_a_bold_caption_label_starts_its_own_paragraph():
+    """宽图的图注比图里的字靠左不到三个字宽，像缩进。标签单独排成粗体，是图注的第一行。
+    正文里以 Figure 3.8 开头的句子字体不变，不拆。"""
+    from app.formats.pdf import _split_lines
+
+    def item(*spans, x0, y0):
+        parts = [{"text": text, "size": 9.0 if font.endswith("Medi") else 8.0, "font": font, "flags": 0}
+                 for text, font in spans]
+        width = sum(len(text) for text, _font in spans) * 4.5
+        return ("".join(text for text, _font in spans), pymupdf.Rect(x0, y0, x0 + width, y0 + 9), parts)
+
+    figure = [
+        item(("anchorTimeID=” t1 ”> the weekend </TIMEX3>, marking", "Courier"), x0=98, y0=147),
+        item(("weeks </TIMEX3>.", "Courier"), x0=98, y0=166),
+        item(("Figure 21.17", "Times-Medi"), (" TimeML markup including normalized values.", "Times-Roman"),
+             x0=78, y0=176),
+    ]
+    assert _split_lines(figure) == [[0, 1], [2]]
+    body = [
+        item(("We can see the counts of all bigrams in the corpus", "Times-Roman"), x0=98, y0=147),
+        item(("Figure 3.8 shows the reconstructed counts.", "Times-Roman"), x0=78, y0=158),
+    ]
+    assert _split_lines(body) == [[0, 1]]
 
 
 def test_typewriter_dialogue_keeps_one_line_per_turn():
