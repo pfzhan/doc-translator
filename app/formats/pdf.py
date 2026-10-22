@@ -3651,6 +3651,16 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             # 短行再被单独缩小。向左跳仍用 2em，避免把另一栏接进来。
             x_jump = b.rect.x0 - p.rect.x0
             x_close = abs(x_jump) < 2 * p.size or 0 < x_jump <= max(4 * p.size, 36)
+            # 居中排的段落（表格说明）末行短，两边都缩进，和上一行中线对齐，按正常行距紧贴着上一行。
+            # 段落下面居中的公式行上下空得多，也不止一行或者不成句
+            last_y1 = p.line_rects[-1].y1 if p.line_rects else p.rect.y1
+            centered_tail = (
+                len(_visual_lines(b)) == 1
+                and b.rect.y0 - last_y1 <= p.size * 0.4
+                and b.rect.width < p.rect.width
+                and abs((b.rect.x0 + b.rect.x1) - (p.rect.x0 + p.rect.x1)) / 2 <= p.size
+                and _prose_units(b.text) >= 3
+            )
             # 行尾冒号的上下两行都撑到右缘，是句中换行（"is called interpolation: | computing ..."）。
             # 下一行没撑满的是冒号引出的例句、列表
             last_x1 = p.line_rects[-1].x1 if p.line_rects else p.rect.x1
@@ -3662,7 +3672,7 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             open_paren = first == "(" and not _list_item(b.text) and not _EQUATION_TAG_RE.match(b.text)
             latin = (
                 y_close
-                and x_close
+                and (x_close or centered_tail)
                 and len(p.text.split()) >= 3  # 一两个词的无标点短块是标题/标签，不是段落
                 and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
                 and (colon_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
