@@ -6831,3 +6831,40 @@ def test_a_line_in_a_column_of_its_own_font_stays_in_its_block():
     data = page(False)
     _rejoin_split_lines(data)
     assert [len(block["lines"]) for block in data["blocks"]] == [2, 0]
+
+
+def test_a_small_fraction_after_a_relation_joins_the_line():
+    """≃ 后面的 1/L 比正文小一号，和 ≃ 隔着正文的一个字宽。按小字的字宽算接不上，
+    分子分母连同后面的求和留在另一块里，被当成公式行跳过，译文里少了右半个式子。"""
+    from app.formats.pdf import _rejoin_split_lines
+
+    def line(x0, x1, y0, y1, text, font, size):
+        return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "font": font, "size": size}]}
+
+    head = line(108, 315, 84, 94, "that a differentiable estimator can be constructed:", "NimbusRomNo9L-Regu", 10.0)
+    rel = line(330, 406, 84, 95, "q(z|x)f(z) dz ≃", "CMSY10", 10.0)
+    numerator = line(414, 418, 82, 89, "1", "CMR7", 7.0)
+    numerator["spans"][0]["math"] = True  # _mark_math_roman 给式子里的正体数字打的标
+    denominator = line(414, 419, 90, 97, "L", "CMMI7", 7.0)
+    data = {"blocks": [{"type": 0, "bbox": (108, 84, 406, 95), "lines": [head, rel]},
+                       {"type": 0, "bbox": (414, 82, 419, 97), "lines": [numerator, denominator]}]}
+    _rejoin_split_lines(data)
+    assert data["blocks"][0]["lines"] == [head, rel, numerator, denominator]
+
+
+def test_a_full_line_ending_in_a_call_runs_on_into_the_next_line():
+    """行尾的 f(g(x)) 算句末，单独排的式子下面的 where 不接。排满一整行、下一行是正文词起头的照样接；
+    下一行是另一个式子的不接。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, y, font="NimbusRomNo9L-Regu"):
+        rect = pymupdf.Rect(108, y, 504, y + 11)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000", bold=False,
+                         span_lines=[[{"text": text, "font": font, "size": 10.0}]])
+
+    head = blk("that a differentiable estimator can be constructed: q(z|x)f(z) dz ≃ f(g(x, e))", 84)
+    tail = blk("where e ∼ p(e). In section 2.3 we applied this trick.", 96)
+    assert len(_merge_continuations([head, tail])) == 1
+    formula = blk("we write the next sublayer as t4 = LayerNorm(t3)", 84)
+    after = blk("hi = t5 + t3", 96)
+    assert len(_merge_continuations([formula, after])) == 2

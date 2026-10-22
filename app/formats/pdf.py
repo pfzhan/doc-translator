@@ -627,6 +627,8 @@ def _line_host(line: dict, own: dict, blocks: list[dict], line_box=None) -> tupl
     box = pymupdf.Rect(line["bbox"])
     size = max((span["size"] for span in line["spans"]), default=10.0)
     column_font = _column_font(line, own, size)
+    pieces = [span for span in line["spans"] if span["text"].strip()]
+    all_math = bool(pieces) and all(_span_is_math(span) for span in pieces)
     best: tuple[float, dict, dict] | None = None
     for block in blocks:
         for other in block["lines"]:
@@ -635,7 +637,9 @@ def _line_host(line: dict, own: dict, blocks: list[dict], line_box=None) -> tupl
             # 先按横向位置筛，纵向交叠要算行框，慢。每行都和整页的行比，直接读坐标，不建 Rect
             left_x0, _, left_x1, _ = other["bbox"]
             gap = box.x0 - left_x1
-            if left_x0 >= box.x0 or gap < -size or gap > size:
+            # 整截是式子的小分式、上下限比正文小一号，和左边式子的空按两边大的字号算
+            reach = max(size, max((span["size"] for span in other["spans"]), default=size)) if all_math else size
+            if left_x0 >= box.x0 or gap < -size or gap > reach:
                 continue
             if not _same_band(other, line, line_box):
                 continue
@@ -645,7 +649,10 @@ def _line_host(line: dict, own: dict, blocks: list[dict], line_box=None) -> tupl
                 continue
             if column_font and _main_font(other) != column_font:
                 continue
-            if gap <= size * 0.6 or (gap <= size and _math_seam(other["spans"], line["spans"])):
+            left = [span for span in other["spans"] if span["text"].strip()]
+            if gap <= size * 0.6 or (gap <= size and _math_seam(other["spans"], line["spans"])) or (
+                gap <= reach and bool(left) and _span_is_math(left[-1])
+            ):
                 if best is None or abs(gap) < abs(best[0]):
                     best = (gap, block, other)
     if best is None or best[1] is own:
@@ -3907,6 +3914,9 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             next_x1 = b.line_rects[0].x1 if b.line_rects else b.rect.x1
             colon_wrap = (p.text.rstrip().endswith(":") and abs(last_x1 - next_x1) <= p.size
                           and last_x1 >= max(p.rect.x1, b.rect.x1) - p.size)
+            # 以 f(x) 收尾算句末，是为了单独排的式子下面的 where 不接上来。
+            # 末行从下一行的左缘一直排到右缘、下一行又是正文词起头的，是句中折行，式子只是落在行尾
+            call_wrap = _ends_in_call(p.text.rstrip()) and _opens_with_word(b) and _wraps_into(p, b)
             # 句中的缩写（Brants et al. | (2007)）不是句末。左括号起头的续行是引文年份、插入语，
             # 不比上一段最左的一行靠右（首行缩进的段落），或者和其中一行同一左缘（悬挂缩进的条目续行），
             # 或者居中接在居中段落后面。
@@ -3926,7 +3936,7 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                 and not list_end
                 and len(p.text.split()) >= 3  # 一两个词的无标点短块是标题/标签，不是段落
                 and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
-                and (colon_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
+                and (colon_wrap or call_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
                      or not _ends_sentence(p.text))
                 and (first.islower() or first in "),;%,；，" or open_paren)
                 and not _verbatim_seam(p, b)
@@ -3940,6 +3950,27 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
         else:
             out.append(b)
     return out
+
+
+def _opens_with_word(block: TextBlock) -> bool:
+    """第一截不是公式字体，以小写单词起头。下一行的式子（t3 = t2 + x、hi = t5 + t3）不算。"""
+    spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
+    return bool(spans) and not _span_is_math(spans[0]) and bool(re.match(r"[a-z]{2,}\b(?!\s*[\[(←=∈<>≤≥+])", block.text))
+
+
+def _wraps_into(block: TextBlock, nxt: TextBlock) -> bool:
+    """block 的末行（连同同一行的分子分母、上下限）和 nxt 的首行同一左缘，并且排到两块的右缘。"""
+    lines = block.line_rects or [block.rect]
+    tail = lines[-1]
+    row = [
+        rect for rect in lines
+        if min(rect.y1, tail.y1) - max(rect.y0, tail.y0) >= min(rect.height, tail.height) * 0.5
+    ]
+    first = nxt.line_rects[0] if nxt.line_rects else nxt.rect
+    return (
+        abs(min(rect.x0 for rect in row) - first.x0) <= block.size * 0.5
+        and max(rect.x1 for rect in row) >= max(block.rect.x1, nxt.rect.x1) - block.size * 0.5
+    )
 
 
 # 几乎只在句中出现的缩写。etc. 常在句末，不算
@@ -5829,6 +5860,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
     if rtl:
         div_attrs += ' dir="rtl" style="text-align: right"'
     continuations = continuations or {}
+    # 跨页段落的公式记在上一页那块名下，续写到这一页时原处的分数线要按续块擦
+    spill_hosts = {id(tail): host for host, tail in continuations.items()}
     carried: dict[int, _Carry] = {}
     doc = pymupdf.open(src_path)
     by_page = _pages_to_write(blocks, translations)
@@ -5874,7 +5907,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             # 行框按墨迹收紧以后，分数线常落在行框外面
             erasure.lines.extend(
                 pymupdf.Rect(curve) + (-0.5, -0.5, 0.5, 0.5)
-                for f in (formulas_map or {}).get(id(b), [])
+                for key in (id(b), spill_hosts.get(id(b)))
+                for f in (formulas_map or {}).get(key, [])
                 for part in _formula_parts(f)
                 for curve in part.get("curves") or []
                 if curve is not None and int(part.get("page", f.get("page", pno))) == pno
