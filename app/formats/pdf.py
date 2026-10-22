@@ -3029,6 +3029,10 @@ def _note_cut(upper: dict, lower: dict) -> bool:
     # 下一块往右缩进是新段；往左回到栏边可以是首行缩进的那一行接着写
     if not last.x0 - size * 3 <= first.x0 <= last.x0 + 2:
         return False
+    # 下一块自己首行缩进（第一行比下面几行靠右）是另起的一段：例句的译文下面接着新段落
+    rest = [line["bbox"][0] for line in below if line["bbox"][1] >= first.y1 - 1 and line["bbox"][2] > first.x0]
+    if rest and first.x0 > min(rest) + size * 0.5:
+        return False
     tail = "".join(span["text"] for line in above if pymupdf.Rect(line["bbox"]) == last for span in line["spans"])
     return not tail.rstrip().endswith(tuple(SENT_ENDS))
 

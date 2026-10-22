@@ -6641,3 +6641,25 @@ def test_a_slide_sub_point_is_not_a_wrapped_title():
 
     assert len(_merge_continuations(slide(38.0))) == 2
     assert len(_merge_continuations(slide(0.0))) == 1
+
+
+def test_a_block_cut_by_a_margin_note_does_not_take_an_indented_new_paragraph():
+    """旁注把一段正文切成上下两块，拿掉旁注后接回。下一块自己首行缩进的是另起的一段：
+    例句的译文下面接着新段落。不缩进的下一块才是被切开的同一句。"""
+    from app.formats.pdf import _note_cut
+
+    def block(*lines):
+        return {"lines": [{"dir": (1, 0), "bbox": bbox, "spans": [{"text": text, "size": 10.0}]} for text, bbox in lines]}
+
+    gloss = block(("He said the biggest house in the country was this one", (174.1, 307.2, 396.9, 319.1)))
+    paragraph = block(
+        ("Alternatively, in languages like Koryak, a Chukotko-Kamchatkan language", (157.1, 323.1, 475.2, 335.1)),
+        ("spoken in the northern part of the Kamchatka peninsula in Russia, a single", (142.2, 335.1, 475.2, 347.1)),
+    )
+    assert not _note_cut(gloss, paragraph)
+    upper = block(("Alternatively, in languages like Koryak, a Chukotko-Kamchatkan language", (142.2, 307.2, 475.2, 319.1)))
+    lower = block(
+        ("spoken in the northern part of the Kamchatka peninsula in Russia, a single", (142.2, 323.1, 475.2, 335.1)),
+        ("word may have very many morphemes", (142.2, 335.1, 400.0, 347.1)),
+    )
+    assert _note_cut(upper, lower)
