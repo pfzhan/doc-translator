@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import pymupdf
 
 from .pdf_flow import open_marks
-from .pdf_typeset import FormulaPiece, TextPiece, TypesetLine
+from .pdf_typeset import FormulaPiece, TextPiece, TypesetLine, line_offsets
 
 # htmlbox 首行 origin 相对盒子顶的比例。和它对齐，换写法后行高不变。
 FIRST_BASELINE = 1.108
@@ -302,11 +302,12 @@ def _place_lines(
     slots: list[FormulaSlot] = []
     fonts: dict[str, pymupdf.Font] = {}
     last = len(lines) - 1
+    offsets, _extra = line_offsets(lines, em, gap)
     wrote = False
     # 公式把一行切成几片，每片从头读标记。前一片还开着的粗体、颜色带到下一片
     opened: list[str] = []
     for index, line in enumerate(lines):
-        baseline = box.y0 + em * FIRST_BASELINE + index * em * gap
+        baseline = box.y0 + em * FIRST_BASELINE + index * em * gap + offsets[index]
         indent, width = lanes[index] if index < len(lanes) else (0.0, box.width)
         row = _place_line(
             line, box.x0 + indent, width, em,
