@@ -873,6 +873,33 @@ def test_table_drawn_with_dashed_rules_is_still_found():
     assert len(table.cells) == 16
 
 
+def test_rows_without_rules_between_them_are_split_into_cells():
+    """只画了列线的表，表身几行叠在一格里，按对齐的行切开。折行的表头有的格只有一行，不切。"""
+    from app.formats.pdf_layout import page_tables
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    for y in (40, 70, 140):
+        page.draw_line((50, y), (350, y), width=0.4)
+    for x in (50, 150, 250, 350):
+        page.draw_line((x, 40), (x, 140), width=0.4)
+    page.insert_text((55, 58), "Model", fontsize=9)
+    page.insert_text((155, 52), "Steps to", fontsize=9)
+    page.insert_text((155, 64), "72.2%", fontsize=9)
+    page.insert_text((255, 58), "Accuracy", fontsize=9)
+    for row, (name, steps, top) in enumerate((("Inception", "31.0e6", "72.2%"), ("BN-x5", "2.1e6", "73.0%"),
+                                              ("BN-x30", "2.7e6", "74.8%"))):
+        y = 85 + row * 15
+        page.insert_text((55, y), name, fontsize=9)
+        page.insert_text((155, y), steps, fontsize=9)
+        page.insert_text((255, y), top, fontsize=9)
+    [table] = page_tables(page)
+    heads = [cell for cell in table.cells if cell.y1 <= 71]
+    body = [cell for cell in table.cells if cell.y0 >= 69]
+    assert len(heads) == 3
+    assert len(body) == 9
+
+
 def test_table_of_abutting_filled_cells_is_found():
     """每格一块底色、只有上下横线的表。一整块底色的文本框、白底的图、压着跨格图注的格子都不是表。"""
     from app.formats.pdf_layout import filled_tables, page_words
