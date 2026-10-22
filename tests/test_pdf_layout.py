@@ -969,6 +969,33 @@ def test_rows_of_one_shaded_column_split_by_blanks_are_a_table():
     assert filled_tables(code, code.get_drawings(), page_words(code)) == ()
 
 
+def test_a_table_ruled_only_between_columns_is_found():
+    """没有外框、只有列间竖线的表，数字居中排。两栏正文中间的竖线两边是长句，不是表。"""
+    from app.formats.pdf_layout import page_tables
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=600, height=400)
+    for x in (290, 343):
+        page.draw_line((x, 82), (x, 137), width=0.4)
+    page.draw_line((210, 93), (402, 93), width=0.4)
+    rows = [("Model", "MNIST", "TFD"), ("DBN [3]", "138 ± 2", "1909 ± 66"), ("Stacked CAE [3]", "121 ± 1.6", "2110 ± 50"),
+            ("Deep GSN [6]", "214 ± 1.1", "1890 ± 29"), ("Adversarial nets", "225 ± 2", "2057 ± 26")]
+    for row, cells in enumerate(rows):
+        y = 90 + row * 11
+        for x, text in zip((220, 300, 352), cells):
+            page.insert_text((x, y), text, fontsize=8)
+    [table] = page_tables(page)
+    assert len(table.cells) == 15
+
+    prose = pymupdf.open().new_page(width=600, height=400)
+    prose.draw_line((300, 60), (300, 200), width=0.4)
+    for row in range(10):
+        y = 70 + row * 12
+        prose.insert_text((60, y), "a long line of running text in the left column here", fontsize=9)
+        prose.insert_text((310, y), "and another long line of text in the right column", fontsize=9)
+    assert page_tables(prose) == ()
+
+
 def test_table_of_abutting_filled_cells_is_found():
     """每格一块底色、只有上下横线的表。一整块底色的文本框、白底的图、压着跨格图注的格子都不是表。"""
     from app.formats.pdf_layout import filled_tables, page_words

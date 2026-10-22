@@ -597,6 +597,7 @@ def page_tables(
         words = page_words(page)
     ruled = tuple(_with_text_rows(table, words) for table in ruled_tables(page, drawings))
     ruled = (*ruled, *filled_tables(page, drawings, words, ruled))
+    ruled = (*ruled, *column_ruled_tables(_rule_segments(page, drawings)[1], words, ruled))
     algorithms = algorithm_tables(page, drawings)
     # 无线的格子表本来就是按对齐的行找的，表头对齐的话已经在里面，不再往上找
     ruled = _with_header_rows(ruled, words)
@@ -635,6 +636,59 @@ def _with_header_rows(tables: Sequence[RuledTable], words: Sequence[_TextWord]) 
         else:
             out.append(table)
     return tuple(out)
+
+
+def column_ruled_tables(
+    vertical: Sequence[pymupdf.Rect], words: Sequence[_TextWord], known: Sequence[RuledTable] = (),
+) -> tuple[RuledTable, ...]:
+    """只画了列线的表：没有外框，横线也只有表头下面一条，find_tables 围不出格子；
+    数字居中排，按左右缘对齐也认不出。几条竖线上下一样长，竖线范围里每行字在每条竖线
+    两边都有，多是短格，就按竖线分列、按字分行。两栏正文中间的分隔线两边是长句，不算。"""
+    lines = _joined_verticals(vertical)
+    tables: list[RuledTable] = []
+    used: set[int] = set()
+    for index, line in enumerate(lines):
+        if index in used:
+            continue
+        group = [other for other in lines if other.height > 0
+                 and min(line.y1, other.y1) - max(line.y0, other.y0) >= 0.8 * min(line.height, other.height)]
+        used.update(lines.index(other) for other in group)
+        xs = sorted(other.x0 for other in group)
+        top, bottom = min(other.y0 for other in group), max(other.y1 for other in group)
+        inside = [word for word in words if top < (word.y0 + word.y1) / 2 < bottom]
+        rows = _word_rows(inside)
+        if len(rows) < _MIN_TEXT_ROWS:
+            continue
+        sided = [row for row in rows
+                 if all(any(w.x1 <= x for w in row) and any(w.x0 >= x for w in row) for x in xs)]
+        if len(sided) < len(rows) * 0.8:
+            continue
+        pieces = [cell for row in rows for cell in _row_cells(row)]
+        if sum(1 for cell in pieces if cell.words <= _SHORT_WORDS and cell.width <= _SHORT_WIDTH) < len(pieces) * _SHORT_SHARE:
+            continue
+        left = min(w.x0 for w in inside) - 2
+        right = max(w.x1 for w in inside) + 2
+        area = pymupdf.Rect(left, top, right, bottom)
+        if any(_mostly_inside(area, [table.rect]) or _mostly_inside(table.rect, [area]) for table in known):
+            continue
+        tops = [min(w.y0 for w in row) for row in rows]
+        edges = [top, *((max(w.y1 for w in upper) + lower_top) / 2 for upper, lower_top in zip(rows, tops[1:])), bottom]
+        cols = [left, *xs, right]
+        cells = tuple(pymupdf.Rect(x0, y0, x1, y1) for y0, y1 in zip(edges, edges[1:]) for x0, x1 in zip(cols, cols[1:]))
+        tables.append(RuledTable(area, cells))
+    return tuple(tables)
+
+
+def _joined_verticals(vertical: Sequence[pymupdf.Rect]) -> list[pymupdf.Rect]:
+    """同一横坐标上首尾相接的竖线段接成一条。逐行画的表格线是一格一段。"""
+    out: list[pymupdf.Rect] = []
+    for seg in sorted(vertical, key=lambda r: (round(r.x0), r.y0)):
+        last = out[-1] if out else None
+        if last is not None and abs(last.x0 - seg.x0) < 1 and seg.y0 - last.y1 <= _SNAP:
+            out[-1] = pymupdf.Rect(last.x0, last.y0, last.x1, max(last.y1, seg.y1))
+        else:
+            out.append(pymupdf.Rect(seg))
+    return out
 
 
 def _with_text_rows(table: RuledTable, words: Sequence[_TextWord]) -> RuledTable:
