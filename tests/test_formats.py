@@ -686,6 +686,29 @@ def test_wrapped_letter_period_stays_in_the_paragraph():
     assert _split_lines(paren) == [[0], [1, 2], [3]]
 
 
+def test_an_equals_sign_at_the_end_of_a_list_item_line_keeps_the_item_whole():
+    """两端对齐把行尾等号前的空拉到一个字宽以上，等号仍接在这一行，下一行缩在条目号右边的是条目的续行。"""
+    from app.formats.pdf import _split_lines
+
+    def piece(text, x0, x1, y0, font="Times-Roman"):
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 10), [{"size": 10.0, "font": font, "text": text}])
+
+    items = [
+        piece("1. Intractability:", 131.4, 199.1, 474.5),
+        ("the case where the integral of the marginal likelihood p(x)", pymupdf.Rect(210.4, 474.5, 485.9, 485.3), [
+            {"size": 10.0, "font": "Times-Roman", "text": "the case where the integral of the marginal likelihood"},
+            {"size": 10.0, "font": "CMR10", "text": "p(x)"},
+        ]),
+        piece("=", 496.3, 504.0, 474.5, font="CMR10"),
+        piece("R", 143.9, 148.6, 484.6, font="CMEX10"),
+        piece("p(z)p(x|z) dz is intractable (so we cannot evaluate or differentiate the marginal like-", 152.2, 504.0, 485.3),
+    ]
+    assert _split_lines(items) == [[0, 1, 2, 3, 4]]
+    # 等号没顶到右缘，这一行没排满，隔一个字宽以上的不接
+    loose = [items[1], items[2], piece("where the prior is fixed and the posterior is not", 131.4, 540.0, 500.0)]
+    assert _split_lines(loose)[0] == [0]
+
+
 def test_pdf_left_jump_keeps_full_width_wrap():
     """首行缩进、两行都撑到右边距，是自动换行，不能拆成两段。"""
     from app.formats.pdf import _split_lines

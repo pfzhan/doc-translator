@@ -80,6 +80,8 @@ MONO_FONT_RE = re.compile(
     r"Courier|Mono|Consolas|Menlo|Monaco|CMTT|Typewriter|Inconsolata|Fira ?Code|Lucida ?Console|Source ?Code", re.I)
 CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
+# 式子折行时留在行尾的运算符、关系符。表里当空值的连字符、数字不算
+_OPERATOR_RE = re.compile(r"[=+−±×·<>≤≥≈≃≅∼≡≠→←⇒⇔∈∉⊂⊆∝]+")
 # 单个字母加句点，像 "a. " 也像换行后的 "Q. The cost"。后者不是列表项。
 _LETTER_BULLET_RE = re.compile(r"^[a-zA-Z][.)]\s+")
 # 行内公式最高几个字高。根号、求和带上下限的式子在这以内按原大写，行距跟着撑开
@@ -895,7 +897,9 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             and not ptext.rstrip().endswith((",", "，", "、", ";", "；", "(", "+", "*", "/", "=", "<", ">"))
         )
         both_full = max_x1 - prect.x1 <= 3 * psize and max_x1 - rect.x1 <= 3 * psize
-        left_jump = jump > 3 * psize and not both_full
+        # 列表项的折行缩在条目号右边、比第一行的正文靠左：条目号后面隔着宽空档时，正文另成一截
+        hanging_wrap = _list_item(items[cur[0]][0]) and group_x0 < rect.x0 <= group_x0 + 3 * psize
+        left_jump = jump > 3 * psize and not both_full and not hanging_wrap
         # 两行纵向交叠超过一半、且横向区间相交：是同一可视行被上下标/公式拆出来的
         # （y_1^T 的 1 和 T 各算一行，x 区间是交错咬合的），不能在这里拆段。
         # 并排标签横向是分开的（无横向交叠），left_jump 照常拆开。
@@ -913,10 +917,13 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         # 纯符号的那一截不能把行切开。上下交叠按这一行已经接上的部分算：
         # 大括号和分母各自的框只擦到一点边。两截都是正文的，仍按上面的句末规则拆。
         row_overlap = min(row_rect.y1, rect.y1) - max(row_rect.y0, rect.y0)
+        # 顶到右缘的运算符所在的行是排满、两端对齐拉开的，等号两边的空比词距拉得更多
+        operator = bool(_OPERATOR_RE.fullmatch(stripped.rstrip()))
+        seam_reach = seam_gap * 1.5 if operator and rect.x1 >= max_x1 - 1 else seam_gap
         touching = (
             _math_seam(items[i - 1][2], items[i][2])
             and row_overlap > min(row_rect.height, rect.height) * 0.35
-            and -seam_gap <= rect.x0 - row_rect.x1 <= seam_gap
+            and -seam_gap <= rect.x0 - row_rect.x1 <= seam_reach
         )
         same_visual_line = (
             (h_overlap > 0 and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5)
@@ -980,8 +987,8 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         row_rect = row_rect | rect if same_visual_line else pymupdf.Rect(rect)
         isize = max((s["size"] for s in items[i][2]), default=10)
         # 字号落下拆出的新段，基准改成这一行。否则后面的同字号续行仍对着标题拆。
-        # 角标短行不在这里更新，避免左跳量相对小行算飞。
-        if size_drop or isize >= ref_size * 0.79:
+        # 角标短行不在这里更新，避免左跳量相对小行算飞。接在行尾的等号也不当参考行
+        if size_drop or isize >= ref_size * 0.79 and not (same_visual_line and operator):
             ref, ref_size = i, isize
     groups.append(cur)
     return groups
