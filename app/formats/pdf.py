@@ -583,29 +583,58 @@ def _stack_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] 
     """分子、分母、求和上下限这类叠在式子上下的小块：整块都是公式，横向落在某个式子行
     的范围里，上下贴着它。上一行、下一行的正文横向也盖得住，但那里不是式子。
 
-    只收单独剩在一个块里的小块。和别的行在一起的上下标有自己的行，不去抢。"""
-    if len(own["lines"]) > 1:
-        return None
+    单独剩在一个块里的小块照这样收。和别的行在一起的，块里有贴着它的式子就是自己的上下标，
+    不去抢；块里没有、又比宿主行小一号的，是被分到下一行那个块里的分母（count(w)/N 的 N）。
+    正文用 Times 的书，变量是正文斜体，按字体认不出是式子。小一号的斜体叠在正文字号行里的
+    小一号斜体上，也是分子分母。"""
     spans = [span for span in line["spans"] if span["text"].strip()]
-    if not spans or not all(_span_is_math(span) for span in spans):
+    if not spans or not all(_span_is_math(span) or _italic_span(span) for span in spans):
         return None
+    italic = not all(_span_is_math(span) for span in spans)
     box = _line_box(line)
     size = max(float(span["size"]) for span in spans)
+    shared = len(own["lines"]) > 1
+    if shared and _stacked_on(own, line, box, size, italic) is not None:
+        return None
     for block in blocks:
         if block is own:
             continue
-        for other in block["lines"]:
-            if abs(other["dir"][1]) > 0.01:
+        other = _stacked_on(block, line, box, size, italic)
+        if other is None:
+            continue
+        if (shared or italic) and size >= _line_size(other) * 0.79:
+            return None
+        return block, other
+    return None
+
+
+def _italic_span(span: dict) -> bool:
+    return bool(_ITALIC_FONT_RE.search(str(span.get("font") or "")) or int(span.get("flags") or 0) & 2)
+
+
+def _line_size(line: dict) -> float:
+    return max((float(span["size"]) for span in line["spans"] if span["text"].strip()), default=0.0)
+
+
+def _stacked_on(block: dict, line: dict, box: pymupdf.Rect, size: float, italic: bool) -> dict | None:
+    """block 里正上方或正下方贴着 line 的式子行。要有式子里的字，不能只是行的范围盖得住。"""
+    for other in block["lines"]:
+        if other is line or abs(other["dir"][1]) > 0.01:
+            continue
+        small = _line_size(other) * 0.79
+        for span in other["spans"]:
+            if not span["text"].strip() or "bbox" not in span:
                 continue
-            # 正上方或正下方要有式子里的字，不能只是行的范围盖得住
-            for span in other["spans"]:
-                if not span["text"].strip() or not _span_is_math(span):
-                    continue
-                under = _text_box(span)
-                if min(under.x1, box.x1) - max(under.x0, box.x0) <= 0:
-                    continue
-                if max(under.y0 - box.y1, box.y0 - under.y1) <= size * 0.5:
-                    return block, other
+            # 斜体的一行只认小一号的分子分母，求和号这样的大算子上下的 K、n 不挪
+            if italic and not (float(span["size"]) < small and (_span_is_math(span) or _italic_span(span))):
+                continue
+            if not italic and not _span_is_math(span):
+                continue
+            under = _text_box(span)
+            if min(under.x1, box.x1) - max(under.x0, box.x0) <= 0:
+                continue
+            if max(under.y0 - box.y1, box.y0 - under.y1) <= size * 0.5:
+                return other
     return None
 
 
@@ -1554,7 +1583,8 @@ def _script_base(span: dict, bbox: pymupdf.Rect, block_size: float, math: bool =
     y_gap = max(base.y0, bbox.y0) - min(base.y1, bbox.y1)
     center = (bbox.x0 + bbox.x1) / 2
     # 角标可以略伸出字母右缘。再往右就是引用上标，中心已经离开字框。
-    if y_gap >= block_size or bbox.x0 > base.x1 + 0.4:
+    # 同一行上的底和角标字框叠着或贴着；上下隔开几磅的是上一行的字母（w_end 的 w 不是下一行 mention 的底）
+    if y_gap >= block_size * 0.3 or bbox.x0 > base.x1 + 0.4:
         return False
     return math or base.x0 - 1 <= center <= base.x1 + 2.0
 
@@ -1587,6 +1617,8 @@ def _absorb_script_bases(runs: list[dict], span_lines: list[list[dict]], block_s
                 continue
             run["spans"].insert(0, span)
             run["bbox"] |= pymupdf.Rect(span["bbox"])
+            # 有了正文字号的底就不再是单独的角标，不能再按拆开的上下标并到别的式子上
+            run["max_size"] = max(float(run["max_size"]), float(span.get("size") or 0))
             if other_no == line_no:
                 run["pos"] = (line_no, index, end)
             taken.add(id(span))
@@ -1689,11 +1721,14 @@ def _glue_host(
     block_size: float, taken: set[int],
 ) -> dict | None:
     box = pymupdf.Rect(span["bbox"])
+    # 纵向按字高比：CMSY 的减号、竖线的字体框伸到下一行，下一行行首的 P( 会挂到上一行的式子上
+    text = _text_box(span)
     best: tuple[float, dict] | None = None
     for run in runs:
         other = run["bbox"]
-        y_overlap = min(box.y1, other.y1) - max(box.y0, other.y0)
-        if y_overlap <= 0.3 * min(box.height, other.height):
+        ink = _run_text_box(run)
+        y_overlap = min(text.y1, ink.y1) - max(text.y0, ink.y0)
+        if y_overlap <= 0.3 * min(text.height, ink.height):
             continue
         gap = box.x0 - other.x1 if box.x0 >= other.x0 else other.x0 - box.x1
         if gap < 0:
@@ -2698,6 +2733,7 @@ def _donate_punct_rects(prev: TextBlock, line_rects: list[pymupdf.Rect]) -> None
     """标点碎片贴在上一块某一行的行尾时，把矩形并进那一行去遮罩。
 
     间隙相对该行的 x1，不用整块并集：并集会把右侧公式擦掉，而公式行不会重画。
+    碎片要在行尾附近：隔壁栏图上和这一行同高的刻度数字不是这一行的，并进来写入框会伸到隔壁栏。
     """
     if not line_rects or not prev.line_rects:
         return
@@ -2707,7 +2743,7 @@ def _donate_punct_rects(prev: TextBlock, line_rects: list[pymupdf.Rect]) -> None
         return
     for tail in prev.line_rects:
         overlap = min(tail.y1, fragment.y1) - max(tail.y0, fragment.y0)
-        if overlap > 0.5 * height and fragment.x0 - tail.x1 < 2:
+        if overlap > 0.5 * height and -height < fragment.x0 - tail.x1 < 2:
             prev.line_rects.extend(line_rects)
             return
 
@@ -3541,13 +3577,17 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             next_x1 = b.line_rects[0].x1 if b.line_rects else b.rect.x1
             colon_wrap = (p.text.rstrip().endswith(":") and abs(last_x1 - next_x1) <= p.size
                           and last_x1 >= max(p.rect.x1, b.rect.x1) - p.size)
+            # 句中的缩写（Brants et al. | (2007)）不是句末。左括号起头的续行是引文年份、插入语，
+            # (a) 这样的编号是下一项，(2.11) 是例句、公式的编号
+            open_paren = first == "(" and not _list_item(b.text) and not _EQUATION_TAG_RE.match(b.text)
             latin = (
                 y_close
                 and x_close
                 and len(p.text.split()) >= 3  # 一两个词的无标点短块是标题/标签，不是段落
                 and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
-                and (colon_wrap or not p.text.rstrip().endswith(tuple(SENT_ENDS)))
-                and (first.islower() or first in "),;%,；，")
+                and (colon_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
+                     or not p.text.rstrip().endswith(tuple(SENT_ENDS)))
+                and (first.islower() or first in "),;%,；，" or open_paren)
             )
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
             if (p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note)
@@ -3558,6 +3598,12 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
         else:
             out.append(b)
     return out
+
+
+# 几乎只在句中出现的缩写。etc. 常在句末，不算
+_MID_ABBREV_RE = re.compile(r"(?:\bet al|\be\.g|\bi\.e|\bcf|\bvs)\.$")
+# 行首的编号 (2.11)、(3)。四位数的 (2007) 是年份
+_EQUATION_TAG_RE = re.compile(r"\((?:\d+\.)+\d+\)|\(\d{1,3}\)")
 
 
 def _beside_wrap(other: TextBlock, head: TextBlock, tail: TextBlock) -> bool:

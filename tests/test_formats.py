@@ -3966,6 +3966,10 @@ def test_punct_fragment_uses_line_end_not_union():
     far = pymupdf.Rect(210, 96, 240, 108)
     _donate_punct_rects(prev, [far])
     assert len(prev.line_rects) == 2
+    # 隔壁栏图上和这一行同高的刻度数字在行尾左边很远，也不是这一行的
+    tick = pymupdf.Rect(20, 96, 28, 106)
+    _donate_punct_rects(prev, [tick])
+    assert len(prev.line_rects) == 2
     close = pymupdf.Rect(201, 96, 210, 108)
     _donate_punct_rects(prev, [close])
     assert prev.line_rects[-1] == close
@@ -6339,3 +6343,117 @@ def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path):
             title = next(s for s in line["spans"] if s["text"].startswith("标题"))
             dots = [s for s in line["spans"] if s["text"].strip(" .") == "" and "." in s["text"]]
             assert dots and dots[0]["bbox"][0] - title["bbox"][2] < 8
+
+
+def _glyph(text, font, size, flags, bbox, ink, math=False):
+    span = {"text": text, "font": font, "size": size, "flags": flags, "bbox": bbox, "ink": ink,
+            "origin": (bbox[0], ink[3])}
+    if math:
+        span["math"] = True
+    return span
+
+
+def test_a_formula_at_a_line_start_keeps_its_opening_glue():
+    """下一行行首的 P( 是这一行式子的开头。上一行式子里 CMSY 减号的字体框伸到这一行，
+    按字体框比会把 P( 挂到上一行的 w_{n-2}w_{n-1}w_n 上，两个式子各缺一截。"""
+    from app.formats.pdf import _placeholderize
+
+    reg, ital, cmsy, cmr = "NimbusRomNo9L-Regu", "NimbusRomNo9L-ReguItal", "CMSY10", "CMR10"
+    above = [
+        _glyph("examples of a particular trigram ", reg, 10.0, 4, (142.2, 191.2, 306.7, 203.2), (142.2, 193.6, 306.7, 200.6)),
+        _glyph("w", ital, 10.0, 6, (309.7, 191.2, 316.3, 203.1), (309.7, 196.0, 316.3, 200.6)),
+        _glyph("n", ital, 7.4, 6, (316.3, 195.1, 320.0, 203.9), (316.3, 198.7, 320.0, 202.0)),
+        _glyph("−", cmsy, 7.4, 6, (320.0, 196.2, 325.8, 209.0), (320.0, 200.0, 325.8, 200.3)),
+        _glyph("2", reg, 7.4, 4, (325.8, 195.1, 329.4, 204.0), (325.8, 197.0, 329.4, 201.9)),
+        _glyph("w", ital, 10.0, 6, (329.9, 191.2, 336.6, 203.1), (329.9, 196.0, 336.6, 200.6)),
+        _glyph("n", ital, 7.4, 6, (336.6, 195.1, 340.3, 203.9), (336.6, 198.7, 340.3, 202.0)),
+        _glyph("−", cmsy, 7.4, 6, (340.3, 196.2, 346.0, 209.0), (340.3, 200.0, 346.0, 200.3)),
+        _glyph("1", reg, 7.4, 4, (346.0, 195.1, 349.7, 204.0), (346.0, 197.0, 349.7, 201.9)),
+        _glyph("w", ital, 10.0, 6, (350.2, 191.2, 356.8, 203.1), (350.2, 196.0, 356.8, 200.6)),
+        _glyph("n", ital, 7.4, 6, (356.8, 195.1, 360.5, 203.9), (356.8, 198.7, 360.5, 202.0)),
+        _glyph(", we can instead estimate its", reg, 10.0, 4, (361.0, 191.2, 475.2, 203.2), (361.0, 193.6, 475.2, 201.8)),
+    ]
+    below = [
+        _glyph("probability by using the bigram probability", reg, 10.0, 4, (142.2, 203.2, 313.8, 215.2), (142.2, 205.6, 313.8, 214.6)),
+        _glyph(" P", ital, 10.0, 6, (313.8, 203.2, 322.3, 215.1), (313.8, 205.9, 322.3, 212.4)),
+        _glyph("(", cmr, 10.0, 4, (322.3, 204.9, 326.2, 214.9), (322.3, 204.9, 326.2, 214.9), math=True),
+        _glyph("w", ital, 10.0, 6, (326.2, 203.2, 332.9, 215.1), (326.2, 208.0, 332.9, 212.6)),
+        _glyph("n", ital, 7.4, 6, (332.9, 207.1, 336.5, 215.9), (332.9, 210.6, 336.5, 214.0)),
+        _glyph("|", cmsy, 10.0, 6, (337.0, 204.7, 339.8, 222.0), (337.0, 204.9, 339.8, 214.9)),
+        _glyph("w", ital, 10.0, 6, (339.8, 203.2, 346.4, 215.1), (339.8, 208.0, 346.4, 212.6)),
+        _glyph("n", ital, 7.4, 6, (346.4, 207.1, 350.1, 215.9), (346.4, 210.7, 350.1, 214.0)),
+        _glyph("−", cmsy, 7.4, 6, (350.1, 208.2, 355.9, 221.0), (350.1, 211.9, 355.9, 212.2)),
+        _glyph("1", reg, 7.4, 4, (355.9, 207.1, 359.5, 216.0), (355.9, 208.9, 359.5, 213.9)),
+        _glyph(")", cmr, 10.0, 4, (360.0, 204.9, 363.9, 214.9), (360.0, 204.9, 363.9, 214.9), math=True),
+        _glyph(". Similarly, if we don’t have", reg, 10.0, 4, (363.9, 203.2, 475.2, 215.2), (363.9, 205.6, 475.2, 214.6)),
+    ]
+    sent, formulas = _placeholderize(_block_with_spans([above, below], size=10.0))
+    assert len(formulas) == 2
+    assert "P" not in formulas[0]["text"]
+    assert formulas[1]["text"].startswith("P(")
+    assert "bigram probability" in sent and sent.endswith("{v2}. Similarly, if we don’t have")
+
+
+def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
+    """count(w)/N 的分母 N 被分进下一行那个块。整块都是 Times 斜体，按字体认不出是式子，
+    要按小一号的斜体叠在正文行的小斜体上认出来，挪回分子那一行。上面是正文字号的斜体时不挪。"""
+    from app.formats.pdf import _rejoin_split_lines
+
+    reg, ital, cmr = "NimbusRomNo9L-Regu", "NimbusRomNo9L-ReguItal", "CMR10"
+
+    def line(*spans):
+        box = pymupdf.Rect(spans[0]["bbox"])
+        for span in spans[1:]:
+            box |= pymupdf.Rect(span["bbox"])
+        return {"bbox": tuple(box), "dir": (1, 0), "spans": list(spans)}
+
+    def data(numerator):
+        score = line(
+            _glyph("The backoff terminates in the unigram, which has score", reg, 10.0, 4,
+                   (160.2, 307.0, 378.1, 319.1), (160.2, 309.4, 378.1, 316.4)),
+            _glyph(" S", ital, 10.0, 6, (378.1, 307.0, 385.2, 318.9), (378.1, 309.6, 385.2, 316.4)),
+            _glyph(") =", cmr, 10.0, 4, (395.8, 308.8, 409.2, 318.7), (395.8, 308.8, 409.2, 318.7), math=True),
+            _glyph("count", ital, numerator, 7, (412.2, 304.5, 428.4, 313.3), (412.2, 307.3, 428.4, 311.4)),
+            _glyph("(", cmr, numerator, 5, (428.9, 305.8, 431.8, 313.2), (428.9, 305.8, 431.8, 313.2), math=True),
+        )
+        denominator = line(_glyph("N", ital, 7.4, 6, (423.2, 312.9, 428.1, 321.7), (423.2, 314.9, 428.1, 319.8)))
+        tail = line(_glyph(". Brants et al.", reg, 10.0, 4, (440.7, 307.0, 493.2, 319.1), (440.7, 309.4, 493.2, 316.4)))
+        rest = line(_glyph("(2007) find that a value of 0.4 worked well", reg, 10.0, 4,
+                           (160.2, 319.0, 344.6, 331.0), (160.2, 321.4, 344.6, 328.4)))
+        return {"blocks": [{"type": 0, "bbox": score["bbox"], "lines": [score]},
+                           {"type": 0, "bbox": (160.2, 307.0, 493.2, 331.0), "lines": [denominator, tail, rest]}]}
+
+    split = data(7.4)
+    score, (denominator, tail, rest) = split["blocks"][0]["lines"][0], split["blocks"][1]["lines"]
+    _rejoin_split_lines(split)
+    assert split["blocks"][0]["lines"] == [score, denominator, tail]
+    assert split["blocks"][1]["lines"] == [rest]
+
+    # 上面是正文字号的斜体单词，不是分子：小字不挪
+    words = data(10.0)
+    small = words["blocks"][1]["lines"][0]
+    _rejoin_split_lines(words)
+    assert small in words["blocks"][1]["lines"]
+
+
+def test_a_citation_year_after_et_al_continues_the_sentence():
+    """Brants et al. | (2007) find that… 是同一句：et al. 的点不是句末，左括号起头的是引文年份。
+    (a) 这样的编号是下一项，(2.11) 是例句的编号，句号收住的上一行也不接。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, y, x1=493.0):
+        rect = pymupdf.Rect(160, y, x1, y + 12)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False)
+
+    cite = [blk("The backoff terminates in the unigram, which has score S(w). Brants et al.", 307),
+            blk("(2007) find that a value of 0.4 worked well for λ.", 319, x1=356)]
+    assert len(_merge_continuations(cite)) == 1
+    item = [blk("the model is trained in two stages, described below", 307),
+            blk("(a) pretraining on unlabeled text", 319, x1=320)]
+    assert len(_merge_continuations(item)) == 2
+    tag = [blk("where we’ve explicitly marked the spaces between words: _", 307),
+           blk("(2.11) set new new renew reset renew", 319, x1=330)]
+    assert len(_merge_continuations(tag)) == 2
+    ended = [blk("This algorithm does not produce a probability distribution.", 307),
+             blk("(Unlike interpolation, the weights are fixed.)", 319, x1=380)]
+    assert len(_merge_continuations(ended)) == 2
