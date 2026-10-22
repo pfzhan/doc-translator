@@ -6449,7 +6449,7 @@ def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
 
 def test_a_citation_year_after_et_al_continues_the_sentence():
     """Brants et al. | (2007) find that… 是同一句：et al. 的点不是句末，左括号起头的是引文年份。
-    (a) 这样的编号是下一项，(2.11) 是例句的编号，句号收住的上一行也不接。"""
+    (a) 这样的编号是下一项，(2.11) 是例句的编号，缩进排的是单独的式子，句号收住的上一行也不接。"""
     from app.formats.pdf import TextBlock, _merge_continuations
 
     def blk(text, y, x1=493.0):
@@ -6462,6 +6462,12 @@ def test_a_citation_year_after_et_al_continues_the_sentence():
     item = [blk("the model is trained in two stages, described below", 307),
             blk("(a) pretraining on unlabeled text", 319, x1=320)]
     assert len(_merge_continuations(item)) == 2
+    indented = [blk("It could answer questions by parsing them into a logical form", 307),
+                TextBlock(page=0, rect=pymupdf.Rect(182, 319, 470, 343),
+                          line_rects=[pymupdf.Rect(182, 319, 470, 331), pymupdf.Rect(196, 331, 440, 343)],
+                          text="(TEST (FOR SOME X16 / (SEQ SAMPLES) : T ; (CONTAIN’ X16 (NPR* X17 / (QUOTE AL203))",
+                          size=10.0, color="#000", bold=False)]
+    assert len(_merge_continuations(indented)) == 2
     tag = [blk("where we’ve explicitly marked the spaces between words: _", 307),
            blk("(2.11) set new new renew reset renew", 319, x1=330)]
     assert len(_merge_continuations(tag)) == 2
@@ -6520,8 +6526,8 @@ def test_the_short_centered_last_line_of_a_caption_continues_it():
     assert len(_merge_continuations(offset)) == 2
 
 
-def test_a_centered_formula_line_is_not_a_caption_tail():
-    """段落下面居中的公式行不是居中段落的末行。"""
+def test_a_centered_formula_or_a_hanging_item_line_keeps_its_place():
+    """段落下面居中的公式行不是居中段落的末行；悬挂缩进条目的续行以左括号起头也接上。"""
     from app.formats.pdf import TextBlock, _merge_continuations
 
     def blk(text, x0, x1, y, lines=None):
@@ -6537,3 +6543,10 @@ def test_a_centered_formula_line_is_not_a_caption_tail():
     # 成句的公式行也上下空着：rel(A,B) = log(max(|in(A)|,|in(B)|)) ...
     spaced = [formula[0], blk("rel(A,B) = log(max(in(A), in(B))) - log(in(A) and in(B))", 215, 438, 318)]
     assert len(_merge_continuations(spaced)) == 2
+    indent = [blk("A hidden Markov model (HMM) allows us to talk about both observed events", 157, 475, 300),
+              blk("(like words that we see in the input) and hidden events", 142, 475, 312)]
+    assert len(_merge_continuations(indent)) == 1
+    item = [blk("brand new NPs: these introduce entities that are discourse-new and hearer-old", 142, 475, 300,
+                [pymupdf.Rect(142, 300, 475, 312), pymupdf.Rect(157, 312, 475, 324)]),
+            blk("(like Hong Kong, Marie Curie, or the New York Times.", 157, 380, 324)]
+    assert len(_merge_continuations(item)) == 1
