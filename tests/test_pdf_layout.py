@@ -943,6 +943,32 @@ def test_header_between_top_and_mid_rules_joins_the_unruled_table():
     assert 225 < heads[0].x1 < 255 and 330 < heads[1].x1 < 370
 
 
+def test_rows_of_one_shaded_column_split_by_blanks_are_a_table():
+    """逐行底色的一列表：每行是例句、填空横线和答案，隔着大空档。每行一句连着排的底纹不是表。"""
+    from app.formats.pdf_layout import filled_tables, page_words
+
+    blue = (0.77, 0.86, 0.99)
+
+    def page_of(rows):
+        doc = pymupdf.open()
+        page = doc.new_page(width=600, height=400)
+        for row, (left, right) in enumerate(rows):
+            y0 = 60 + row * 12
+            page.draw_rect(pymupdf.Rect(170, y0, 470, y0 + 12), color=None, fill=blue)
+            page.insert_text((175, y0 + 9), left, fontsize=9)
+            if right:
+                page.draw_line((330, y0 + 8), (360, y0 + 8), width=0.4)
+                page.insert_text((370, y0 + 9), right, fontsize=9)
+        return page
+
+    blanks = page_of([("With roses, dahlias, and peonies, I was", "[flowers]"), ("The room was not just big it was", "[enormous]"),
+                      ("The square root of 4 is", "[2]"), ("The professor said that", "[he]")])
+    [table] = filled_tables(blanks, blanks.get_drawings(), page_words(blanks))
+    assert len(table.cells) == 4
+    code = page_of([("for word in words:", ""), ("    counts[word] += 1", ""), ("print(counts)", "")])
+    assert filled_tables(code, code.get_drawings(), page_words(code)) == ()
+
+
 def test_table_of_abutting_filled_cells_is_found():
     """每格一块底色、只有上下横线的表。一整块底色的文本框、白底的图、压着跨格图注的格子都不是表。"""
     from app.formats.pdf_layout import filled_tables, page_words
