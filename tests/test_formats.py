@@ -4419,6 +4419,21 @@ def test_snake_case_identifiers_are_one_word():
     assert can_stretch(",", "o")
 
 
+def test_a_centered_title_breaks_after_a_clause_mark():
+    """居中的副标题放不下一行时在逗号后面断开，不留“识别”两个字单独一行；一行放得下就不断。"""
+    from app.formats.pdf import _clause_lines
+    from app.formats.pdf_typeset import typeset_lines
+
+    text = "借助语言模型介绍自然语言处理, 计算语言学和语音识别"
+
+    def broken(width):
+        lines = _clause_lines(text, [], 10.0, 10.0, width, typeset_lines(text, 10.0, width, {}))
+        return ["".join(piece.text for piece in line.pieces) for line in lines]
+
+    assert broken(230.0) == ["借助语言模型介绍自然语言处理,", "计算语言学和语音识别"]
+    assert broken(260.0) == [text]
+
+
 def test_an_opening_bracket_does_not_end_a_line():
     """左括号不留在行尾，跟下一个词一起折到下一行（“{” 单独挂在行尾、“o_custkey}” 在下一行）。"""
     from app.formats.pdf_flow import break_lines

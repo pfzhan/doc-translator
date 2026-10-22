@@ -4679,6 +4679,32 @@ def _fit_typeset(
     return lines, em, gap, box, lanes
 
 
+# 居中的题名折行时可以断开的小句标点
+_CLAUSE_MARKS = "，、；：,;:"
+
+
+def _clause_lines(
+    text: str, formulas: list[dict], em: float, block_size: float, width: float, lines: list[TypesetLine],
+) -> list[TypesetLine]:
+    """居中排的题名、副标题折成几行时，在小句标点后面断开，不留一两个字单独一行。
+    行数不能比按宽度断的多；几处标点都行的，取各行最宽的那行最窄的断法。"""
+    metrics = _formula_metrics(formulas, block_size, em)
+    best, best_width = lines, None
+    for index, char in enumerate(text[:-1]):
+        if char not in _CLAUSE_MARKS:
+            continue
+        head, tail = text[:index + 1].rstrip(), text[index + 1:].strip()
+        if not head or not tail:
+            continue
+        parts = typeset_lines(head, em, width, metrics) + typeset_lines(tail, em, width, metrics)
+        widest = max(line.width for line in parts)
+        if len(parts) > len(lines) or widest > width + 1:
+            continue
+        if best_width is None or widest < best_width:
+            best, best_width = parts, widest
+    return best
+
+
 def _wrap_holes(
     block: TextBlock, obstacles: list["pymupdf.Rect"], area: "pymupdf.Rect | None" = None,
 ) -> list["pymupdf.Rect"]:
@@ -4878,6 +4904,8 @@ def _place_plain(
     lines, em, gap, box, lanes = _fit_typeset(
         text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit, holes,
     )
+    if centered and len(lines) > 1 and not any(indent for indent, _ in lanes):
+        lines = _clause_lines(text, formulas, em, block_size, box.width, lines)
     if cjk and _draw_cjk(
         page, page.parent, lines, formulas, box, em, gap, color, centered,
         None, None, [], [], justify_last, lanes,
@@ -5520,7 +5548,14 @@ def _write_rect(
         and not _MARK_ITEM_RE.match(block.text)
     )
     axis = None
-    if not centered and not rtl and len(block.text) < 100 and not _MARK_ITEM_RE.match(block.text):
+    # 几行都对着本页中线、字号一样的长副标题也是居中排的。正文段的末行短，对不上中线；
+    # 作者名下面接着小一号的单位，各行另有排法
+    long_title = len(block.line_rects) >= 2 and len({
+        round(span.get("size", block.size))
+        for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()
+    }) == 1
+    if (not centered and not rtl and (len(block.text) < 100 or long_title)
+            and not _MARK_ITEM_RE.match(block.text)):
         axis = _centered_axis(block, [other for other, _ in items])
     if axis is not None:
         # 页面左右边距不对称时版心和最宽块都不在这条中线上，按中线到本页文字两侧的距离留宽
