@@ -784,6 +784,30 @@ def test_short_and_morpheme_glosses_are_found():
     assert found[0].y0 < 400 < found[0].y1 and found[1].y0 < 460 < found[1].y1
 
 
+def test_pinyin_under_a_line_of_hanzi_is_a_gloss():
+    """汉字一行、拼音一行，一字一音节，声调抽成单独的修饰字母。下面的英文意译照翻。
+    汉字下面接一句音节数对不上的英文不算。"""
+    from app.formats.pdf_layout import _TextWord, interlinear_glosses
+
+    def row(y: float, *texts: str) -> list[_TextWord]:
+        words, x = [], 164.0
+        for text in texts:
+            words.append(_TextWord(x, y, x + 6 * len(text), y + 10, text))
+            x += 6 * len(text) + 4
+        return words
+
+    words = [
+        *row(412, "在我的后园，可以看见墙外"),
+        *row(424, "z`ai", "wˇo", "de", "h`ou", "yu´an，kˇe", "yˇı", "k`an", "ji`an", "qi´ang", "w`ai"),
+        *row(436, "In", "my", "backyard,", "you", "can", "see", "beyond", "the", "fence"),
+        *row(590, "我们在后园里看见了两株树"),
+        *row(602, "We", "saw", "two", "trees", "in", "the", "garden", "behind", "the", "house"),
+    ]
+    page = pymupdf.open().new_page(width=612, height=792)
+    [gloss] = interlinear_glosses(page, words)
+    assert (gloss.y0, gloss.y1) == (412, 434)
+
+
 def test_page_without_two_ruled_lines_each_way_skips_the_table_search(monkeypatch):
     """凑不出两横两竖的线就围不出格子：脚注线、色块背景不值得逐字解析一遍整页。"""
     from app.formats.pdf_layout import ruled_tables
