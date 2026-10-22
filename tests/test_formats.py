@@ -6663,3 +6663,28 @@ def test_a_block_cut_by_a_margin_note_does_not_take_an_indented_new_paragraph():
         ("word may have very many morphemes", (142.2, 335.1, 400.0, 347.1)),
     )
     assert _note_cut(upper, lower)
+
+
+def test_a_line_in_a_column_of_its_own_font_stays_in_its_block():
+    """幻灯片右边一栏等宽字排的示例和左边正文同高，横向还叠上一点。它在自己的块里和上一行
+    左缘对齐、字体相同，是这一栏的一行，不当左边正文切下来的后半截挪过去。"""
+    from app.formats.pdf import _rejoin_split_lines
+
+    def line(text, bbox, font):
+        return {"dir": (1, 0), "bbox": bbox,
+                "spans": [{"text": text, "bbox": bbox, "size": 29.0, "font": font, "flags": 0, "color": 0,
+                           "origin": (bbox[0], bbox[3] - 7)}]}
+
+    def page(with_mate):
+        prose = line("according to its probability p(w|<s>)", (38, 221, 523, 256), "Calibri")
+        sample = line("I want", (520, 232, 693, 265), "CourierNewPSMT")
+        column = [line("<s> I", (520, 194, 607, 227), "CourierNewPSMT")] if with_mate else []
+        return {"blocks": [{"type": 0, "bbox": (38, 221, 523, 256), "lines": [prose]},
+                           {"type": 0, "bbox": (520, 194, 693, 265), "lines": [*column, sample]}]}
+
+    data = page(True)
+    _rejoin_split_lines(data)
+    assert [len(block["lines"]) for block in data["blocks"]] == [1, 2]
+    data = page(False)
+    _rejoin_split_lines(data)
+    assert [len(block["lines"]) for block in data["blocks"]] == [2, 0]

@@ -589,6 +589,7 @@ def _line_host(line: dict, own: dict, blocks: list[dict], line_box=None) -> tupl
     line_box = line_box or _line_box
     box = pymupdf.Rect(line["bbox"])
     size = max((span["size"] for span in line["spans"]), default=10.0)
+    column_font = _column_font(line, own, size)
     best: tuple[float, dict, dict] | None = None
     for block in blocks:
         for other in block["lines"]:
@@ -605,12 +606,35 @@ def _line_host(line: dict, own: dict, blocks: list[dict], line_box=None) -> tupl
             # 等号、分式两边的空比词距宽，有一边是式子时放到一个字宽
             if _past_column(block, other, box.x0, size, line_box) or _larger_text(line, other):
                 continue
+            if column_font and _main_font(other) != column_font:
+                continue
             if gap <= size * 0.6 or (gap <= size and _math_seam(other["spans"], line["spans"])):
                 if best is None or abs(gap) < abs(best[0]):
                     best = (gap, block, other)
     if best is None or best[1] is own:
         return None
     return best[1], best[2]
+
+
+def _column_font(line: dict, own: dict, size: float) -> str:
+    """块里上一行或下一行和它左缘对齐、上下紧挨、字体相同时，这一栏的字体。
+    换了字体的左边那行不是它的前半截：幻灯片右边一栏等宽字排的示例，和左边正文同高。
+    逐词对照的例句上下两行字体不同，不算。"""
+    x0, y0, _, y1 = line["bbox"]
+    font = _main_font(line)
+    for other in own["lines"]:
+        if other is line or abs(other["dir"][1]) > 0.01:
+            continue
+        ox0, oy0, _, oy1 = other["bbox"]
+        if (abs(ox0 - x0) <= 1 and (0 <= y0 - oy1 < size * 0.6 or 0 <= oy0 - y1 < size * 0.6)
+                and _main_font(other) == font):
+            return font
+    return ""
+
+
+def _main_font(line: dict) -> str:
+    spans = [span for span in line["spans"] if span["text"].strip()]
+    return str(_by_chars(spans, lambda span: span.get("font") or "")) if spans else ""
 
 
 def _font_box(line: dict) -> pymupdf.Rect:
