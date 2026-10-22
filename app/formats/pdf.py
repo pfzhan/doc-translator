@@ -1455,7 +1455,10 @@ def _column_continuations(
         columns = columns_of.get(pno) or []
         for index in range(len(columns) - 1):
             host = host_of(pno, columns[index])
-            head = head_of(columns[index + 1])
+            # 续句不比上半句的字大。右栏顶上比正文大的是两栏上面的标题、署名，续句在它们下面
+            head = head_of([
+                block for block in columns[index + 1] if host is None or block.size <= host.size * 1.1
+            ])
             # 左栏写到底、再跳到右栏顶，才是换栏续句。并排开头不接。
             if host is None or head is None or host.rect.y0 <= head.rect.y0 + host.size:
                 continue

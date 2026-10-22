@@ -159,6 +159,22 @@ def test_cross_page_joins_the_right_column_end_to_the_next_left_column():
     assert all(len(unit) == 1 for unit in stopped)
 
 
+def test_the_left_column_end_skips_the_author_name_over_the_right_column():
+    """右栏顶上是比正文大的署名，左栏末句接到署名下面的右栏正文，不接署名。"""
+    geo = _two_columns()
+    left = [
+        _block("Training deep networks is hard because the inputs change.", 0, pymupdf.Rect(40, 200, 150, 240)),
+        _block("The mini-batch approximates the gradient by computing", 0, pymupdf.Rect(40, 660, 150, 712)),
+    ]
+    name = _block("Christian Szegedy", 0, pymupdf.Rect(270, 60, 340, 74), size=12)
+    right = [
+        _block("Using mini-batches of examples is helpful in several ways.", 0, pymupdf.Rect(250, 150, 360, 190)),
+        _block("Second, computation over a batch can be much more efficient.", 0, pymupdf.Rect(250, 200, 360, 240)),
+    ]
+    units = _cross_page_units([*left, name, *right], 10.0, geometries=[geo])
+    assert [unit for unit in units if len(unit) == 2] == [[left[1], right[0]]]
+
+
 def test_spanning_footer_does_not_steal_the_next_page_join():
     """跨栏页脚排在页末时，右栏末行仍接到下一页左栏，不被页脚抢走。"""
     geo = _two_columns()
