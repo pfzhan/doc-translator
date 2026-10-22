@@ -721,7 +721,12 @@ def banded_tables(
         # 正文、伪代码一行连成一格，跨过半张表
         pieces = [cell for row in rows for cell in _row_cells(row)]
         short = sum(1 for cell in pieces if cell.words <= _SHORT_WORDS and cell.width <= _SHORT_WIDTH)
-        split = sum(1 for row in rows if len(_row_cells(row)) >= 2)
+        # 横线下第一行只有一个短格的是分组名（Conditional、μ prediction），不算没分格的行
+        split = sum(
+            1 for band in bands for index, row in enumerate(band)
+            if len(cells := _row_cells(row)) >= 2
+            or (index == 0 and cells[0].words <= _SHORT_WORDS and cells[0].width <= _SHORT_WIDTH)
+        )
         if (short < len(pieces) * _BAND_SHORT_SHARE or split < len(rows) * 0.8
                 or any(cell.width > (right - left) / 2 for cell in pieces)):
             continue

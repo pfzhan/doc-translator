@@ -1030,6 +1030,25 @@ def test_a_three_rule_table_is_found_whole():
     assert page_tables(prose) == ()
 
 
+def test_a_three_rule_table_with_group_names_is_found():
+    """几组数据各有一行组名、组名下面是横线隔开的数据，组名只占一格，整张仍是表。"""
+    from app.formats.pdf_layout import page_tables
+
+    page = pymupdf.open().new_page(width=600, height=400)
+    for y in (100, 113, 126, 152, 165, 191):
+        page.draw_line((340, y), (500, y), width=0.4)
+    for x, text in zip((345, 440, 480), ("Objective", "IS", "FID")):
+        page.insert_text((x, 110), text, fontsize=7)
+    for top, name in ((123, "mu prediction (baseline)"), (162, "eps prediction (ours)")):
+        page.insert_text((345, top), name, fontsize=7)
+        for row, cells in enumerate((("L, learned diagonal", "7.28", "23.69"), ("L, fixed isotropic", "8.06", "13.22"))):
+            for x, text in zip((345, 435, 478), cells):
+                page.insert_text((x, top + 13 + row * 9), text, fontsize=7)
+    [table] = page_tables(page)
+    assert table.rect.y0 <= 100 and table.rect.y1 >= 191
+    assert len(table.cells) == 3 + 2 * (1 + 2 * 3)
+
+
 def test_table_of_abutting_filled_cells_is_found():
     """每格一块底色、只有上下横线的表。一整块底色的文本框、白底的图、压着跨格图注的格子都不是表。"""
     from app.formats.pdf_layout import filled_tables, page_words
