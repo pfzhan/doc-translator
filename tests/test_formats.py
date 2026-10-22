@@ -2540,6 +2540,42 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
     # 各落各的槽位（块 rect 附近）：带缩放的 cm 平移量算错会让公式整体往下漂
     assert pymupdf.Rect(30, 30, 210, 75).contains(hit1)
     assert pymupdf.Rect(30, 80, 210, 125).contains(hit2)
+    # 透传只带公式自己的字。整页原文叠在每个公式底下（哪怕在页面外），浏览器拖选会选中一大片
+    words = [w[4] for w in page.get_text("words", flags=pymupdf.TEXTFLAGS_WORDS & ~pymupdf.TEXT_MEDIABOX_CLIP)]
+    assert not set(words) & {"alpha", "gamma", "delta", "zeta"}
+    assert words.count("BETA") == 1 and words.count("EPSILON") == 1
+
+
+def test_formula_glyphs_stay_in_place_after_a_size_change_on_their_line():
+    """同一行中途换过字号（小型大写），MuPDF 删掉前面的字后会把公式算偏。
+    偏了就整行留下，别的行照样删掉。"""
+    from app.formats.pdf import _keep_marks, _page_form, _pdf_rect
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=200)
+    font = doc.get_new_xref()
+    doc.update_object(font, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    doc.xref_set_key(page.xref, "Resources", f"<< /Font << /F1 {font} 0 R >> >>")
+    stream = doc.get_new_xref()
+    doc.update_object(stream, "<<>>")
+    doc.update_stream(stream, (
+        b"BT /F1 10 Tf 40 150 Td [(see the)]TJ /F1 6 Tf [(SMALL CAPITALS)]TJ /F1 10 Tf [( here )]TJ [(X)]TJ ET "
+        b"BT /F1 10 Tf 40 130 Td [(next line)]TJ ET"
+    ))
+    doc.xref_set_key(page.xref, "Contents", f"{stream} 0 R")
+    target = page.search_for("X")[0]
+    form = _keep_marks(doc, _page_form(doc, page), [_pdf_rect(page, target + (-1, -1, 1, 1))])
+
+    shown = doc.new_page(width=400, height=200)
+    draw = doc.get_new_xref()
+    doc.update_object(draw, "<<>>")
+    doc.update_stream(draw, b"q /Fm Do Q")
+    doc.xref_set_key(shown.xref, "Contents", f"{draw} 0 R")
+    doc.xref_set_key(shown.xref, "Resources", f"<< /XObject << /Fm {form} 0 R >> >>")
+    words = doc[-1].get_text("words")
+    assert [w[4] for w in words if w[4] == "X"] == ["X"]
+    assert abs(next(w[0] for w in words if w[4] == "X") - target.x0) < 0.2
+    assert not any(w[4] in ("next", "line") for w in words)
 
 
 @pytest.mark.parametrize("box", ["CropBox", "MediaBox"])
@@ -3742,6 +3778,31 @@ def test_same_page_continuations_merge():
         blk("data and system description stay together.", 112, x0=62),
     ]
     assert len(_merge_continuations(ended)) == 2
+
+
+def test_line_end_colon_inside_a_sentence_merges():
+    """行尾冒号上下两行都撑满是句中换行，要并成一段；下一行是短的例句、表头就不并。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, y, x0=142.0, x1=475.0):
+        rect = pymupdf.Rect(x0, y, x1, y + 11)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False)
+
+    wrapped = [
+        blk("The most common way to use this n-gram hierarchy is called interpolation:", 250, x0=157),
+        blk("computing a new probability by interpolating (weighting and combining) the tri-", 262),
+    ]
+    assert len(_merge_continuations(wrapped)) == 1
+    example = [
+        blk("Consider the language of certain sheep, which consists of strings like:", 250),
+        blk("baa! baaa! baaaa!", 262, x0=200, x1=280),
+    ]
+    assert len(_merge_continuations(example)) == 2
+    intro = [
+        blk("the steps are:", 250, x1=210),
+        blk("compute the counts and normalize them so that they sum to one over the", 262),
+    ]
+    assert len(_merge_continuations(intro)) == 2
 
 
 def test_slide_sub_item_is_not_a_title_fragment():

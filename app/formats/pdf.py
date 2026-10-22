@@ -3535,12 +3535,18 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             # 短行再被单独缩小。向左跳仍用 2em，避免把另一栏接进来。
             x_jump = b.rect.x0 - p.rect.x0
             x_close = abs(x_jump) < 2 * p.size or 0 < x_jump <= max(4 * p.size, 36)
+            # 行尾冒号的上下两行都撑到右缘，是句中换行（"is called interpolation: | computing ..."）。
+            # 下一行没撑满的是冒号引出的例句、列表
+            last_x1 = p.line_rects[-1].x1 if p.line_rects else p.rect.x1
+            next_x1 = b.line_rects[0].x1 if b.line_rects else b.rect.x1
+            colon_wrap = (p.text.rstrip().endswith(":") and abs(last_x1 - next_x1) <= p.size
+                          and last_x1 >= max(p.rect.x1, b.rect.x1) - p.size)
             latin = (
                 y_close
                 and x_close
                 and len(p.text.split()) >= 3  # 一两个词的无标点短块是标题/标签，不是段落
                 and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
-                and not p.text.rstrip().endswith(tuple(SENT_ENDS))
+                and (colon_wrap or not p.text.rstrip().endswith(tuple(SENT_ENDS)))
                 and (first.islower() or first in "),;%,；，")
             )
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
@@ -3898,6 +3904,100 @@ def _page_form(doc: "pymupdf.Document", page: "pymupdf.Page") -> int:
     return fm
 
 
+class _GlyphKeeper(pymupdf.mupdf.PdfSanitizeFilterOptions2):
+    """只删字形：中心落在 keep 外的删掉，留下的记下位置，过滤后拿来核对。
+    路径和图片不删，裁剪路径挡得住。按位置删路径会把 Type3 字形过程里的笔画也删掉
+    （𝟙 这种点阵字就没了）。每个字形回调一次，写得越简单越快。"""
+
+    def __init__(self, keep: list[tuple[float, float, float, float]]):
+        super().__init__()
+        self.keep = keep
+        self.kept: list[tuple[float, float]] = []
+        self.use_virtual_text_filter()
+        # 有图片时过滤器还要调这个回调，不实现会报错
+        self.use_virtual_image_filter()
+
+    def image_filter(self, ctx, ctm, name, image, scissor):
+        # 返回的图片用完会被释放一次，原样留下要先加一次引用
+        return pymupdf.mupdf.ll_fz_keep_image(image)
+
+    def text_filter(self, ctx, ucs, length, trm, ctm, bbox, *rest):
+        # 字形中心按这个字自己的框算，整套字体的框比括号宽，中心会落到括号外面。返回 1 是删掉
+        gx, gy = (bbox.x0 + bbox.x1) / 2, (bbox.y0 + bbox.y1) / 2
+        x, y = gx * trm.a + gy * trm.c + trm.e, gx * trm.b + gy * trm.d + trm.f
+        x, y = x * ctm.a + y * ctm.c + ctm.e, x * ctm.b + y * ctm.d + ctm.f
+        for x0, y0, x1, y1 in self.keep:
+            if x0 <= x <= x1 and y0 <= y <= y1:
+                self.kept.append((x, y))
+                return 0
+        return 1
+
+
+class _SanitizeFactory(pymupdf.mupdf.PdfFilterFactory2):
+    # 属性不能叫 options：那是底层结构体的字段名，赋值会写进 C 结构体
+    def __init__(self, sanitize: pymupdf.mupdf.PdfSanitizeFilterOptions2):
+        super().__init__()
+        self.sanitize = sanitize
+        self.use_virtual_filter()
+
+    def filter(self, ctx, doc, chain, struct_parents, transform, options):
+        return pymupdf.mupdf.ll_pdf_new_sanitize_filter(
+            doc, chain, struct_parents, transform, options, self.sanitize.internal(),
+        )
+
+
+def _filter_form(doc: "pymupdf.Document", form: int,
+                 keep: list[tuple[float, float, float, float]]) -> tuple[int, list[tuple[float, float]]]:
+    """过滤一遍 Form，返回新 Form 的 xref 和留下的字的位置。"""
+    mupdf = pymupdf.mupdf
+    keeper = _GlyphKeeper(keep)
+    factory = _SanitizeFactory(keeper)
+    options = mupdf.PdfFilterOptions()
+    # 页里套的 Form（图）也要过滤。过滤结果另存新对象，原对象页面自己还在用，直接改会把图删掉
+    options.recurse = 1
+    options.instance_forms = 1
+    options.add_factory(factory.internal())
+    pdoc = doc.this if isinstance(doc.this, mupdf.PdfDocument) else mupdf.PdfDocument(doc.this)
+    ref = mupdf.pdf_new_indirect(pdoc, form, 0)
+    res = mupdf.pdf_dict_gets(ref, "Resources")
+    out = mupdf.pdf_filter_xobject_instance(ref, res, mupdf.FzMatrix(), options, mupdf.PdfCycleList())
+    return mupdf.pdf_to_num(out), keeper.kept
+
+
+_EVERYWHERE = [(-1e9, -1e9, 1e9, 1e9)]
+
+
+def _keeps_places(doc: "pymupdf.Document", xref: int, kept: list[tuple[float, float]]) -> bool:
+    """过滤后的 Form 里每个字还在原来的位置上。"""
+    if not xref:
+        return False
+    _same, now = _filter_form(doc, xref, _EVERYWHERE)
+    return len(now) == len(kept) and all(
+        abs(a[0] - b[0]) < 0.1 and abs(a[1] - b[1]) < 0.1 for a, b in zip(sorted(kept), sorted(now))
+    )
+
+
+def _keep_marks(doc: "pymupdf.Document", form: int, keep: list["pymupdf.Rect"]) -> int:
+    """复制 Form，只留 keep 里的字形，返回新 Form 的 xref。keep 是 PDF 坐标（y 向上）。
+
+    公式透传引用的是整页原文，裁剪路径只挡得住笔画，挡不住文字层：浏览器里拖选、
+    复制时，每个公式底下都叠着一整页隐形原文，一拖就选中一大片。
+    MuPDF 删掉同一行前面的字时，中途换过字号的行（小型大写的 THEME）会把后面的字
+    算偏几个点，落到裁剪框外。所以过滤后核对位置：偏了就整行留下（删别的行不影响
+    本行），还偏就退回原 Form。
+    """
+    boxes = [(k.x0, k.y0, k.x1, k.y1) for k in keep]
+    rows = [(-1e9, y0, 1e9, y1) for _x0, y0, _x1, y1 in boxes]
+    try:
+        for area in (boxes, rows):
+            xref, kept = _filter_form(doc, form, area)
+            if _keeps_places(doc, xref, kept):
+                return xref
+    except Exception:
+        pass
+    return form
+
+
 def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
                   f: dict, f_name: str, page_spans: list[dict] | None = None) -> int:
     """给单个公式造紧致 BBox 的包裹 Form（按 span 逐个裁剪后引用源页 Form），返回 xref。
@@ -3909,15 +4009,10 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
     裁剪用 even-odd：run 的 span 矩形按侧扩展后取并集（斜体笔画会越出 span 的
     排版 bbox——Y 的右臂能越出 1.2pt，扩展以不碰到邻居为限），再减去外来 span
     的矩形孔（上一行降部等），既不削自己的字，也不沾别人的。
+    裁剪挡不住文字层，引用的源页 Form 先去掉裁剪区外的字形，只留本公式的。
     """
     bbox = f["bbox"]
     clip_outer = _pdf_rect(page, bbox)
-    fmT = doc.get_new_xref()
-    doc.update_object(fmT, (
-        f"<< /Type /XObject /Subtype /Form /BBox [{clip_outer.x0:.2f} {clip_outer.y0:.2f} "
-        f"{clip_outer.x1:.2f} {clip_outer.y1:.2f}] "
-        f"/Matrix [1 0 0 1 0 0] /Resources << /XObject << /FmS {fmS} 0 R >> >> >>"
-    ))
     # run 的 span 来自 extract_blocks 的另一次 get_text 调用，和 page_spans 是不同
     # 对象，只能按 bbox 相等判断是不是 run 成员，否则兄弟 span（本公式的上标）会被
     # 当成外来 span 被挖洞挖掉
@@ -4005,6 +4100,13 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
         for hb in merged:
             hr = _pdf_rect(page, hb)
             holes.append(f"{hr.x0:.2f} {hr.y0:.2f} {hr.width:.2f} {hr.height:.2f} re")
+    source = _keep_marks(doc, fmS, [_pdf_rect(page, r) for r in our_rects]) if our_rects else fmS
+    fmT = doc.get_new_xref()
+    doc.update_object(fmT, (
+        f"<< /Type /XObject /Subtype /Form /BBox [{clip_outer.x0:.2f} {clip_outer.y0:.2f} "
+        f"{clip_outer.x1:.2f} {clip_outer.y1:.2f}] "
+        f"/Matrix [1 0 0 1 0 0] /Resources << /XObject << /FmS {source} 0 R >> >> >>"
+    ))
     doc.update_stream(fmT, f"q {' '.join(ours + holes)} W* n /FmS Do Q".encode())
     res_v = doc.xref_get_key(page.xref, "Resources")[1]
     # redact 后 /Resources 会变成直接字典（键要带 Resources/ 前缀）；
