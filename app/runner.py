@@ -277,7 +277,7 @@ class Runner:
         html_sources = self.translator.html_texts
 
         def fixed(src: str, dst: str) -> str:
-            dst = normalize_punctuation(strip_control_marks(dst), tl)
+            dst = keep_section_number(src, normalize_punctuation(strip_control_marks(dst), tl), tl)
             if src not in headings:
                 return dst
             return fix_numbered_unit(dst, tl, html=src in html_sources)
@@ -570,6 +570,33 @@ def _fix_html_unit(dst: str) -> str:
         text = str(node)
         node.replace_with(NavigableString(text[:a] + text[b:]))
     return "".join(str(child) for child in frag.children)
+
+
+# 段首的编号：带点的小节号（7.4、1.2.3），或者后面直接跟着词的章号（12 Agents）。前面可以有样式标记或标签
+_LEADING_MARKS = r"\s*(?:\{[^{}\s]{1,8}\}|<[^<>]+>)*\s*"
+_SECTION_NUMBER_RE = re.compile(_LEADING_MARKS + r"(\d{1,3}(?:\.\d{1,3})+)(?![\d.])")
+_BARE_NUMBER_RE = re.compile(_LEADING_MARKS + r"(\d{1,3})\s+(?=[^\W\d_])")
+
+
+def keep_section_number(src: str, dst: str, target_lang: str) -> str:
+    """原文编号是阿拉伯数字，译文却写成「七点四」「四.11」「第一点七点一」，或给裸章号加上
+    「第十二章」时改回原样。提示词以前让目录、标题里的章节号一律写中文数字，模型连带点的
+    小节号、没写 Chapter 的章号也改了，同一页有的改有的不改。缓存里的旧译文命中时也走这里。"""
+    if not target_lang.startswith("zh"):
+        return dst
+    dotted = _SECTION_NUMBER_RE.match(src)
+    if dotted is not None:
+        number = dotted.group(1)
+        parts = number.split(".")
+        spelled = r"(?:点|\.)".join(f"(?:{part}|{_cn_number(int(part))})" for part in parts)
+        pattern = re.compile(f"^({_LEADING_MARKS})第?{spelled}(?![点.\\d一二三四五六七八九十零])")
+        return pattern.sub(lambda found: found.group(1) + number, dst, count=1)
+    bare = _BARE_NUMBER_RE.match(src)
+    if bare is not None:
+        number = bare.group(1)
+        pattern = re.compile(f"^({_LEADING_MARKS})第{_cn_number(int(number))}(?:章|部分|卷|篇)\\s*")
+        return pattern.sub(lambda found: found.group(1) + number + " ", dst, count=1)
+    return dst
 
 
 def normalize_numbered_units(texts: list[str], results: list[str], target_lang: str) -> dict[str, str]:
