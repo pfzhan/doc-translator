@@ -633,8 +633,16 @@ def _stacked_on(block: dict, line: dict, box: pymupdf.Rect, size: float, italic:
             under = _text_box(span)
             if min(under.x1, box.x1) - max(under.x0, box.x0) <= 0:
                 continue
-            if max(under.y0 - box.y1, box.y0 - under.y1) <= size * 0.5:
-                return other
+            if max(under.y0 - box.y1, box.y0 - under.y1) > size * 0.5:
+                continue
+            # 斜体的分子分母上下左右居中。w^i_{i-k+1} 的上标和下标左缘对齐，不是分式
+            if italic:
+                band = _small_band({"spans": other["spans"]}, box, small)
+                if band is None or abs((box.x0 + box.x1) - (band.x0 + band.x1)) / 2 > max(
+                    1.0, 0.15 * min(box.width, band.width)
+                ):
+                    continue
+            return other
     return None
 
 
@@ -3078,6 +3086,7 @@ def _extract(
 
 
 _DISPLAY_PROSE = 8
+
 
 
 def _left_margins(data: dict) -> list[float]:
