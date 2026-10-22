@@ -6469,3 +6469,12 @@ def test_a_citation_year_after_et_al_continues_the_sentence():
              blk("(Unlike interpolation, the weights are fixed.)", 319, x1=380)]
     assert len(_merge_continuations(ended)) == 2
 
+
+def test_block_color_follows_most_characters_not_the_longest_span():
+    """逐词一个 span 的书里，最长的一截是黑底白字的图注标签。按它取颜色，整条图注的译文写成白字。"""
+    from app.formats.pdf import _by_chars
+
+    spans = [{"text": "Figure 10.3", "color": 0xFFFFFF}] + [
+        {"text": word, "color": 0} for word in ("The", "all-words", "WSD", "task,", "mapping", "from", "input")
+    ]
+    assert _by_chars(spans, lambda span: span["color"]) == 0
