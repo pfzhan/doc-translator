@@ -197,7 +197,9 @@ def _join_lines(lines: list[str]) -> str:
             continue
         if not out:
             out = line
-        elif out.endswith("-") and re.match(r"[a-zA-ZÀ-ÿ]", line):
+            continue
+        out, line = _carry_marks(out, line)
+        if out.endswith("-") and re.match(r"[a-zA-ZÀ-ÿ]", line):
             out = out[:-1] + line  # 行尾连字符断词（德语等断词后首字母可能大写）
         elif CJK_RE.search(out[-1]) or CJK_RE.search(line[0]):
             out += line
@@ -208,6 +210,29 @@ def _join_lines(lines: list[str]) -> str:
         else:
             out += " " + line
     return out
+
+
+def _carry_marks(out: str, line: str) -> tuple[str, str]:
+    """上一行末尾收起的标记，下一行开头原样打开的，两边都去掉，标记接着上一行：
+    {i}confer-{/i} | {i}ence{/i} 接成 {i}conference{/i}，断词的连字符才认得出来。"""
+    closers = re.search(r"(?:\{/[a-z]\})+$", out)
+    openers = re.match(rf"(?:{STYLE_MARK_RE.pattern})+", line)
+    if not closers or not openers or closers.start() == 0 or openers.end() == len(line):
+        return out, line
+    stack: list[str] = []
+    for tag in STYLE_MARK_RE.findall(out[:closers.start()]):
+        if tag.startswith("{/"):
+            if stack and stack[-1][1] == tag[2]:
+                stack.pop()
+        else:
+            stack.append(tag)
+    closed = re.findall(r"\{/([a-z])\}", closers.group())
+    if len(closed) > len(stack):
+        return out, line
+    reopened = stack[len(stack) - len(closed):]
+    if [tag[1] for tag in reversed(reopened)] != closed or "".join(reopened) != openers.group():
+        return out, line
+    return out[:closers.start()], line[openers.end():]
 
 
 # 行尾停在网址的分隔符上；下一行开头的一截里面还有网址的分隔符，是网址的后半
