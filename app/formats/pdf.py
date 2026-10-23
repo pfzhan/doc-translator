@@ -1157,7 +1157,9 @@ def _can_continue(
     else:
         is_heading = id(nxt) in halt_ids
     continues = head.islower() or head.isdigit() or _cjk_page_continue(prev, nxt)
-    if allow_capital and head.isalpha() and head.isupper() and len(prev.text.split()) >= 3:
+    # 行尾断开的词（fine-）后半截是小写，换栏也不放开大写：右栏顶上大写起头的是表头、标题
+    broken_word = bool(re.search(r"[a-z]-$", prev.text.rstrip()))
+    if allow_capital and not broken_word and head.isalpha() and head.isupper() and len(prev.text.split()) >= 3:
         continues = True
     return bool(not numbered_heading and not is_heading and continues
                 and not prev.text.rstrip().endswith(_SENT_END_PUNCT)
