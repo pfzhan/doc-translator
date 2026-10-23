@@ -580,9 +580,9 @@ def test_a_glyph_is_measured_by_drawing_it_alone():
     from app.formats.pdf import _measure_glyph
 
     buffer = pymupdf.Font("tiro").buffer
-    top, bottom = _measure_glyph(buffer, "g")
+    top, bottom, _width = _measure_glyph(buffer, "g")
     assert -0.6 < top < 0 < bottom < 0.4
-    top, bottom = _measure_glyph(buffer, "x")
+    top, bottom, _width = _measure_glyph(buffer, "x")
     assert -0.6 < top < 0 and abs(bottom) < 0.03
     assert _measure_glyph(buffer, "\u4e2d") is None
 
