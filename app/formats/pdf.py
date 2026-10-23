@@ -883,7 +883,13 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             group_rows >= 2 and row_rect.x0 > group_x0 + 0.5 * psize and rect.x0 < row_rect.x0 - 0.5 * psize
             and _prose_units(stripped) >= 3 and _prose_units(items[i - 1][0]) >= 2
         )
-        indent = 0 < jump <= 3 * psize and not hanging_end
+        # 首行缩进的第一行排到右缘。块里第一行没排满、以句号收尾，下一行又是新句子起头的，
+        # 是上一段（例句的悬挂续行）的末行
+        closed = (
+            group_rows == 1 and max_x1 - prect.x1 > 3 * psize and ptext.rstrip().endswith((".", "?", "!"))
+            and _ends_sentence(ptext) and bool(SEG_START_RE.match(stripped))
+        )
+        indent = 0 < jump <= 3 * psize and not hanging_end and not closed
         # 列表项的续行：缩进在弹点之后的悬挂对齐。同 x0 或左跳的不是续行，可能是下一段
         continuing_list = (
             _list_item(ptext)
