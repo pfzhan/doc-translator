@@ -4640,6 +4640,11 @@ def test_a_centered_title_breaks_after_a_clause_mark():
 
     assert broken(230.0) == ["借助语言模型介绍自然语言处理,", "计算语言学和语音识别"]
     assert broken(260.0) == [text]
+    # 整段粗体的作者名单在逗号后面断开，后一行仍是粗体
+    names = "{b}Pierre Stock, Teven Le Scao, Thibaut Lavril, Thomas Wang, Timothée Lacroix, William El Sayed{/b}"
+    lines = _clause_lines(names, [], 10.0, 10.0, 300.0, typeset_lines(names, 10.0, 300.0, {}))
+    texts = ["".join(piece.text for piece in line.pieces) for line in lines]
+    assert len(texts) == 2 and all(line.startswith("{b}") and line.endswith("{/b}") for line in texts), texts
 
 
 def test_an_opening_bracket_does_not_end_a_line():
