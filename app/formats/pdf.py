@@ -2393,6 +2393,7 @@ def _absorb_one_box(formula: dict, drawings: list[pymupdf.Rect], glyphs: list[di
     probe = old if ink is None or ink.is_empty else ink + (-_INK_PAD, -_INK_PAD, _INK_PAD, _INK_PAD)
     own = {_origin_key(span) for span in formula.get("spans") or [] if span.get("origin")}
     curves = [curve for curve in intersecting_curves(probe, drawings) if not _rests_on(curve, glyphs, own)]
+    curves = [curve for curve in curves if not _joins_outer_shape(curve, curves, drawings, probe)]
     formula["curves"] = list(curves)
     if not curves:
         return
@@ -2628,6 +2629,23 @@ def _origin_key(span: dict) -> tuple[float, float]:
 
 # 字形墨迹离横线这么近算贴着：分子分母和分数线之间只隔一两磅
 _RESTING_GAP = 2.0
+
+
+def _joins_outer_shape(
+    curve: pymupdf.Rect, curves: list[pymupdf.Rect], drawings: list[pymupdf.Rect], probe: pymupdf.Rect,
+) -> bool:
+    """横线和公式外的另一条线首尾相接：是证毕方框、表格线这类图形的一边，不是分数线。
+    挪走一边，原处的方框就缺了口，公式下面多出一道杠。实心的底块（图注标签的黑底）不算。"""
+    if min(curve.width, curve.height) > _RULE_IMAGE_THICK:
+        return False
+    reach = curve + (-_INK_PAD, -_INK_PAD, _INK_PAD, _INK_PAD)
+    room = probe + (-1, -1, 1, 1)
+    for other in drawings:
+        if other == curve or any(other == own for own in curves) or room.contains(other):
+            continue
+        if not (other & reach).is_empty:
+            return True
+    return False
 
 
 def _rests_on(curve: pymupdf.Rect, glyphs: list[dict], own: set[tuple[float, float]]) -> bool:

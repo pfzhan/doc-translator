@@ -5790,6 +5790,24 @@ def test_a_fraction_bar_stays_when_its_numerator_stays():
     assert whole["curves"] == [bar]
 
 
+def test_a_formula_leaves_the_edge_of_a_proof_box():
+    """证毕方框紧贴在行尾公式下面。方框的上边和两条竖边相接，是方框的一边，不跟公式挪走。"""
+    from app.formats.pdf import _absorb_one_box
+
+    g = {"text": "g", "origin": (493.0, 571.0), "ink": (493.0, 566.5, 496.9, 574.6)}
+    paren = {"text": ")", "origin": (497.6, 569.5), "ink": (497.6, 562.5, 501.5, 572.0)}
+    top = pymupdf.Rect(496.9, 575.2, 503.3, 575.6)
+    sides = [pymupdf.Rect(496.7, 575.0, 497.1, 582.1), pymupdf.Rect(503.1, 575.0, 503.5, 582.1),
+             pymupdf.Rect(496.9, 581.5, 503.3, 581.9)]
+    formula = {"bbox": pymupdf.Rect(461.7, 561.9, 501.5, 573.0), "d": 3.0, "spans": [g, paren]}
+    _absorb_one_box(formula, [top, *sides], [g, paren])
+    assert formula["curves"] == []
+    bar = pymupdf.Rect(493.0, 575.2, 501.5, 575.6)
+    lone = {"bbox": pymupdf.Rect(461.7, 561.9, 501.5, 573.0), "d": 3.0, "spans": [g, paren]}
+    _absorb_one_box(lone, [bar], [g, paren])
+    assert lone["curves"] == [bar]
+
+
 def test_formula_holes_follow_the_neighbours_ink_not_their_font_box():
     """上一行的大括号字体框伸到下一行的 N 上，墨迹没有。按墨迹挖洞，N 不被削掉一角。"""
     from app.formats.pdf import _formula_form, _page_form
