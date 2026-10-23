@@ -4368,8 +4368,15 @@ class _GlyphKeeper(pymupdf.mupdf.PdfSanitizeFilterOptions2):
         gx, gy = (bbox.x0 + bbox.x1) / 2, (bbox.y0 + bbox.y1) / 2
         x, y = gx * trm.a + gy * trm.c + trm.e, gx * trm.b + gy * trm.d + trm.f
         x, y = x * ctm.a + y * ctm.c + ctm.e, x * ctm.b + y * ctm.d + ctm.f
+        # 点阵字常不报自己的框（宽为 0），只有整套字体的上下界，算出的中心离墨迹半行。
+        # 这时横向看起笔点，纵向只要上下界和保留框交叠就留下：笔画有裁剪路径挡着
+        reach = None
+        if bbox.x0 == bbox.x1:
+            ends = [gy_ * trm.d + trm.f for gy_ in (bbox.y0, bbox.y1)]
+            ends = [x * ctm.b + y_ * ctm.d + ctm.f for y_ in ends]
+            reach = (min(ends), max(ends))
         for x0, y0, x1, y1 in self.keep:
-            if x0 <= x <= x1 and y0 <= y <= y1:
+            if x0 <= x <= x1 and (y0 <= y <= y1 or reach is not None and reach[0] < y1 and reach[1] > y0):
                 self.kept.append((x, y))
                 return 0
         return 1
