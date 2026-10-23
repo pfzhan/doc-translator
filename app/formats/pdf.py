@@ -435,6 +435,23 @@ def _rejoin_pass(blocks: list[dict], line_box=None, starts: Sequence[float] = ()
     return moved
 
 
+def _stacked_rows(upper: list[dict], lower: list[dict]) -> bool:
+    """两截都是同字号的正文字、基线错开小半个字号以上：是挨得很近的上下两行，不是同一行
+    （图里的操作行压在图注上，墨迹框交叠过半）。上下标字号小，公式拆出的几截用公式字体，都不算。"""
+    pieces = [[span for span in spans if str(span.get("text") or "").strip()] for spans in (upper, lower)]
+    if not all(pieces) or any("origin" not in span or _span_is_math(span) for part in pieces for span in part):
+        return False
+    size = max(span["size"] for span in pieces[0])
+    if abs(max(span["size"] for span in pieces[1]) - size) > size * 0.1:
+        return False
+    # 基线按这一截主字号的字算，行内分式的小号分子分母在别的基线上
+    baselines = [
+        float(_by_chars([span for span in part if span["size"] >= size * 0.9], lambda span: span["origin"][1]))
+        for part in pieces
+    ]
+    return abs(baselines[0] - baselines[1]) > size * 0.3
+
+
 def _left_to_right(items: list[tuple]) -> list[tuple]:
     """同一可视行的几截按从左到右排。分式的分子常排在分母前面，分母就接不上前面的等号。
     行框用的是墨迹框，上下两行交叠很少，不会被当成一行。"""
@@ -444,7 +461,7 @@ def _left_to_right(items: list[tuple]) -> list[tuple]:
         if run:
             first, rect = run[0][1], item[1]
             overlap = min(first.y1, rect.y1) - max(first.y0, rect.y0)
-            if overlap >= min(first.height, rect.height) * 0.5:
+            if overlap >= min(first.height, rect.height) * 0.5 and not _stacked_rows(run[0][2], item[2]):
                 run.append(item)
                 continue
         out.extend(sorted(run, key=lambda piece: piece[1].x0))
@@ -1097,7 +1114,8 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             and -seam_gap <= rect.x0 - row_rect.x1 <= seam_reach
         )
         same_visual_line = (
-            (h_overlap > 0 and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5)
+            (h_overlap > 0 and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5
+             and not _stacked_rows(items[i - 1][2], items[i][2]))
             or same_word or touching
         )
         # 同一行上隔开三个字宽以上、又不是两端对齐拉开的词距：并排的标签（图注和图里的节点）。
@@ -1819,6 +1837,14 @@ def _blocks_share_column(
     return geo.index_of(left.rect) == geo.index_of(right.rect) and not geo.spans_columns(left.rect | right.rect)
 
 
+def _line_spans(block: TextBlock) -> list[list[dict]]:
+    """逐行的 span，和 line_rects 一一对应。对不上时每行给空表，不按 span 判断。"""
+    rows = len(block.line_rects) or 1
+    if block.span_lines and len(block.span_lines) == rows:
+        return [list(line) for line in block.span_lines]
+    return [[] for _ in range(rows)]
+
+
 def _shares_visual_row(
     left: TextBlock, right: TextBlock, geometries: dict[int, PageGeometry] | None,
 ) -> bool:
@@ -1827,12 +1853,12 @@ def _shares_visual_row(
     用行框，不用块的并集。左边的短标题只和正文第一行并排，并集会盖住它，
     整段就会把标题吞进去。栏沟至少 12pt，6pt 的间隙接不上另一栏。
     """
-    left_lines = left.line_rects or [left.rect]
-    right_lines = right.line_rects or [right.rect]
-    for a in left_lines:
-        for b in right_lines:
+    left_lines = list(zip(left.line_rects or [left.rect], _line_spans(left)))
+    right_lines = list(zip(right.line_rects or [right.rect], _line_spans(right)))
+    for a, a_spans in left_lines:
+        for b, b_spans in right_lines:
             overlap = min(a.y1, b.y1) - max(a.y0, b.y0)
-            if overlap <= min(a.height, b.height) * 0.5:
+            if overlap <= min(a.height, b.height) * 0.5 or _stacked_rows(a_spans, b_spans):
                 continue
             horizontal = min(a.x1, b.x1) - max(a.x0, b.x0)
             gap = b.x0 - a.x1 if b.x0 >= a.x0 else a.x0 - b.x1

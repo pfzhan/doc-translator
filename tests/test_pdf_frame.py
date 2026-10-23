@@ -481,3 +481,47 @@ def test_a_line_opening_with_a_closing_bracket_continues_the_row():
         piece(160.2, 408.8, 316, ("]", mono), (") need to be backslashed when we mean to use them literally.", roman)),
     ]
     assert _split_lines(items) == [list(range(len(items)))]
+
+
+def test_a_figure_row_pressed_onto_the_caption_is_its_own_row():
+    """图里的操作行压在图注第一行上，墨迹框交叠过半，同字号、基线差四磅，是上下两行，不和图注并成一行。
+    行内分式的小号分子分母在别的基线上，那一行照样是一行。"""
+    from app.formats.pdf import _left_to_right, _split_lines
+
+    def item(text, x0, y0, x1, y1, base, font="NimbusRomNo9L-Regu", size=9.0):
+        span = {"text": text, "size": size, "font": font, "flags": 0, "origin": (x0, base)}
+        return (text, pymupdf.Rect(x0, y0, x1, y1), [span])
+
+    items = _left_to_right([
+        item("d s s", 264, 600, 288, 609, 607.3, font="txtt"),
+        item("i s", 301, 600, 315, 609, 607.3, font="txtt"),
+        item("Figure 2.17", 143, 604, 186, 613, 611.3, font="NimbusRomNo9L-Medi"),
+        item("Representing the minimum edit distance between two strings as an alignment.", 196, 604, 475, 613, 611.3),
+        item("The final row gives the operation list for converting the top string into the bottom string: d for",
+             142, 615, 475, 624, 622.2),
+    ])
+    assert [text for text, *_ in items][:2] == ["d s s", "i s"]
+    assert _split_lines(items) == [[0, 1], [2, 3, 4]]
+
+    def fraction_line(x0, y0, x1, y1, pieces):
+        spans = [{"text": text, "size": size, "font": "NimbusRomNo9L-Regu", "flags": 0, "origin": (x0, base)}
+                 for text, size, base in pieces]
+        return ("".join(text for text, _, _ in pieces), pymupdf.Rect(x0, y0, x1, y1), spans)
+
+    row = [
+        fraction_line(142, 175, 332, 189, [("word follows each other with equal probability", 10.0, 185.9),
+                                           ("1", 7.4, 182.0)]),
+        fraction_line(329, 177, 475, 192, [("3", 7.4, 189.4), (" (it was trained on a training set with", 10.0, 185.9)]),
+    ]
+    assert _split_lines(_left_to_right(row)) == [[0, 1]]
+    # 两行分进了两块，块之间也不按同一行并
+    from app.formats.pdf import TextBlock, _merge_visual_lines
+
+    def blk(entry):
+        text, rect, spans = entry
+        return TextBlock(page=0, rect=pymupdf.Rect(rect), line_rects=[pymupdf.Rect(rect)], text=text, size=9.0,
+                         color="#000", bold=False, span_lines=[spans])
+
+    ops = item("d s s i s", 264, 600, 315, 609, 607.3, font="txtt")
+    caption = item("Representing the minimum edit distance between two strings as an alignment.", 196, 604, 475, 613, 611.3)
+    assert len(_merge_visual_lines([blk(ops), blk(caption)])) == 2
