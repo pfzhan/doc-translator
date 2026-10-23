@@ -211,6 +211,28 @@ def test_prose_after_typewriter_lines_starts_a_new_paragraph():
     assert _split_lines(items) == [[0, 1], [2, 3]]
 
 
+def test_a_larger_line_below_a_slide_formula_starts_a_new_paragraph():
+    """幻灯片里缩进的式子下面接着大一号的小标题，左缘只差一个多字宽，像首行缩进，要拆开。
+    小型大写的词后面回到正文字号、接着写的半句不拆。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, x0, y0, x1, size, font="TimesNewRomanPSMT"):
+        span = {"text": text, "size": size, "font": font, "flags": 0}
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + size * 1.2), [span])
+
+    slide = [
+        item(" P(A,B,C,D) = P(A) P(B|A) P(C|A,B) P(D|A,B,C)", 161, 380, 865, 35.0),
+        item("The Chain Rule in General", 113, 433, 547, 42.0, "Calibri"),
+        item("  P(x1,x2,x3,…,xn) = P(x1)P(x2|x1)P(x3|x1,x2)…P(xn|x1,…,xn-1)", 104, 499, 1118, 42.0),
+    ]
+    assert _split_lines(slide) == [[0], [1, 2]]
+    reference = [
+        item("The KNOWREF", 359, 297, 475, 6.4),
+        item("coreference corpus: Removing gen-", 359, 305, 475, 8.0),
+    ]
+    assert _split_lines(reference) == [[0, 1]]
+
+
 def test_blocks_in_a_flagged_monospace_font_are_code():
     """txtt 这类字体名字里没有 Mono，只有 PDF 的等宽标志。整块是这种字就留原文。"""
     from app.formats.pdf import TextBlock, _code_block

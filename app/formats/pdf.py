@@ -826,6 +826,11 @@ def _verbatim_seam(host: TextBlock, guest: TextBlock) -> bool:
     )
 
 
+# 下一行的字号比这一段大这么多倍，是另一段。一行至少这么多字才算这一段的字号
+_SIZE_RISE = 1.15
+_SIZE_ROW_CHARS = 6
+
+
 def _split_lines(items: list[tuple]) -> list[list[int]]:
     """把一个文本块里的行分成独立段落（返回每组的行下标）。
 
@@ -838,7 +843,8 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
     - 上行明显没到右边距（硬换行而非自动换行）且下行像新句子开头；上行以逗号等
       连接标点结尾、左跳只是缩进、或仍是同一条列表项的续行，都不算硬换行。
     自动换行的续行（小写开头、上行撑满）仍并入上一段。
-    标题行下面字号明显更小、又是完整句子的正文单独成段。角标拆出的短行字数不够，不拆。
+    标题行下面字号明显更小、又是完整句子的正文单独成段；字号明显变大的一行也单独成段。
+    角标拆出的短行字数不够，不拆。
     左跳/硬换行的比较基准是"上一条正文字号的行"（参考行）：上下标拆出的 dict
     小行会把左跳量算飞，让段落在公式处被切碎。
     items 的元素是 (行文本, 行 rect, 行 span, ...) 的元组，只用前三个。
@@ -863,6 +869,7 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
     ref = 0  # 参考行：上一条正文字号的行。上下标拆出的 dict 小行不能当参考，
     # 否则左跳量相对小行算，段落会在公式处被切碎（"(like a | sequence)"）
     ref_size = max((s["size"] for s in items[0][2]), default=10)
+    group_size = ref_size if len("".join(items[0][0].split())) >= _SIZE_ROW_CHARS else 0
     for i in range(1, len(items)):
         text, rect = items[i][0], items[i][1]
         ptext, prect, pspans = items[ref][0], row_box.get(ref, items[ref][1]), items[ref][2]
@@ -955,6 +962,14 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             (line_size < ref_size * 0.85 and _prose_units(stripped) >= 4)
             or (own_row and line_size < _text_size(items[i - 1][2]) * 0.85 and _prose_units(stripped) >= 2)
         )
+        # 比这一段已有各行的字号都明显大的一行自成一段：幻灯片里式子下面的小标题，左缘比缩进的
+        # 式子靠左一点，按首行缩进算会并进去。小型大写的词（KNOWREF、GOVERN 1:）后面回到正文字号不算；
+        # 上下标拆出的小行、几个字的碎片（块从角标 u 起头）不计入这一段的字号。小写起头的是接着写的半句
+        size_rise = (
+            not same_visual_line and own_row and seg_start and 0 < group_size * _SIZE_RISE < line_size
+            and _prose_units(stripped) >= 2
+        )
+        body_line = line_size >= ref_size * 0.79 and len("".join(stripped.split())) >= _SIZE_ROW_CHARS
         # 照录的等宽行后面换回正文字体、像新句子开头的一行：照录的文字到此为止，正文另起一段。
         # 正文首行缩进和等宽行的左缘只差一点，按缩进算会并进去
         leaves_verbatim = (
@@ -973,14 +988,16 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         example = bool(_EXAMPLE_NUMBER_RE.match(stripped)) and _ends_sentence(ptext)
         if not same_visual_line and not sec_label and (
             bullet or example or NO_TEXT_RE.match(stripped) or prev_symbol
-            or hard_break or left_jump or size_drop or side_by_side or leaves_verbatim
+            or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim
             or _caption_opens(items[i][2], pspans)
         ):
             groups.append(cur)
             cur = [i]
-            group_x0, group_rows = rect.x0, 1
+            group_x0, group_rows, group_size = rect.x0, 1, line_size if body_line else 0
         else:
             cur.append(i)
+            if body_line:
+                group_size = max(group_size, line_size)
             size_drop = False
             if not same_visual_line:
                 group_rows += 1
