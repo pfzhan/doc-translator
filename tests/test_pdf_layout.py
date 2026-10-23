@@ -691,6 +691,29 @@ def test_algorithm_rows_ignore_fraction_numerators_and_denominators():
     assert len(_code_rows(lines, body)) == 6
 
 
+def test_unnumbered_algorithm_rows_join_full_width_wraps():
+    """没有行号的算法里，排到框右缘、句子没完的行折到下一行，两行是一格。"""
+    from app.formats.pdf_layout import _code_rows
+
+    def line(y, text, x1):
+        return {"spans": [{"text": text, "font": "Times-Roman", "size": 10.0,
+                           "origin": (140, y), "bbox": (140, y - 8, x1, y + 2)}]}
+
+    body = pymupdf.Rect(108, 115, 504, 200)
+    lines = [
+        line(125, "• Sample noise samples from noise prior.", 400),
+        line(137, "• Sample minibatch of examples from data generating distribution", 504),
+        line(149, "pdata(x).", 172),
+        line(161, "The updates can use any learning rule. We used momen-", 504),
+        line(173, "tum in our experiments.", 213),
+        line(185, "end for", 160),
+    ]
+    rows = _code_rows(lines, body)
+    assert len(rows) == 4
+    assert rows[1].y0 < 137 < 149 < rows[1].y1
+    assert rows[2].y0 < 161 < 173 < rows[2].y1
+
+
 def test_a_numbered_algorithm_statement_is_one_unit():
     """行号小一号、句子折成两行时，一格还是一句话；两行各自送翻会剩下半句英文。"""
     doc = pymupdf.open()

@@ -1050,24 +1050,43 @@ def _box_above(caption: pymupdf.Rect, size: float, horizontal: list[pymupdf.Rect
 
 
 _LINE_LABEL_RE = re.compile(r"^\s*\d+\s*[:.]")
+# 句子没完的行尾：小写字母、逗号、断词的连字符
+_OPEN_END_RE = re.compile(r"[a-z,]$|[a-z]-$")
 
 
 def _join_wrapped_rows(
     rows: list[pymupdf.Rect], baselines: list[float], spans: list[dict], main: float,
 ) -> list[pymupdf.Rect]:
     """行首有行号（1: 2: …）的算法里，行号之后没有行号的行是上一句折下来的，并进上一格。
+    没有行号的算法里，上一行排到框的右缘、句子没完，下一行是它折下来的。
 
     折开的两半各自送翻，半句里正文词太少，会被当成公式留下英文。
     第一个行号之前的 Input:、Output: 各是一格。"""
     labeled: list[bool] = []
+    full: list[bool] = []
     for baseline in baselines:
         row = sorted(
             (span for span in spans if abs(span["origin"][1] - baseline) <= main * 0.4),
             key=lambda span: span["origin"][0],
         )
-        labeled.append(bool(_LINE_LABEL_RE.match("".join(span["text"] for span in row))))
+        text = "".join(span["text"] for span in row).rstrip()
+        labeled.append(bool(_LINE_LABEL_RE.match(text)))
+        # 排满的一行字距均匀；右对齐的注释（// mean）也到右缘，但和语句隔着一大段空
+        boxes = [span["bbox"] for span in row if "bbox" in span and span["text"].strip()]
+        right = max((box[2] for box in boxes), default=0.0)
+        gaps = [b[0] - a[2] for a, b in zip(boxes, boxes[1:])]
+        full.append(
+            bool(rows) and right >= rows[0].x1 - main * 0.5 and max(gaps, default=0.0) < main * 1.5
+            and bool(_OPEN_END_RE.search(text))
+        )
     if sum(labeled) < 2:
-        return rows
+        out = []
+        for index, row in enumerate(rows):
+            if index and full[index - 1]:
+                out[-1] = out[-1] | row
+            else:
+                out.append(row)
+        return out
     first = labeled.index(True)
     out: list[pymupdf.Rect] = []
     for index, (row, has_label) in enumerate(zip(rows, labeled)):
