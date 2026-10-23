@@ -1014,10 +1014,11 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         stripped = text.lstrip()
         prev_symbol = bool(NO_TEXT_RE.match(ptext.strip()))  # 纯符号行独立成段，后面的内容不和它拼
         jump = prect.x0 - rect.x0
-        # 1–2em 左跳是首行缩进，不是新段落。上一行比这一段的第一行还靠右的是列表项、例句的悬挂续行，
-        # 再往左起笔是条目完了。只看成句的文字行，公式拆出来的几截不算行
+        # 1–2em 左跳是首行缩进，不是新段落。首行缩进只缩一行：这一段已有两行以上、上一行不是第一行，
+        # 再往左起笔是列表项、例句的悬挂续行完了。块从续行起头时第一行也是缩着的（datasheet 的条目）。
+        # 只看成句的文字行，公式拆出来的几截不算行
         hanging_end = (
-            group_rows >= 2 and row_rect.x0 > group_x0 + 0.5 * psize and rect.x0 < row_rect.x0 - 0.5 * psize
+            group_rows >= 2 and rect.x0 < row_rect.x0 - 0.5 * psize
             and _prose_units(stripped) >= 3 and _prose_units(items[i - 1][0]) >= 2
         )
         # 首行缩进的第一行排到右缘。块里第一行没排满、以句号收尾，下一行又是新句子起头的，

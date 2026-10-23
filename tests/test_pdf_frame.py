@@ -266,6 +266,13 @@ def test_the_short_last_line_of_an_example_does_not_open_the_next_paragraph():
         item("can be verbal as well as nominal.", 160, 543, 300),
     ]
     assert _split_lines(indented) == [[0, 1]]
+    # 块从上一条的续行起头，第一行也缩着。两行缩进之后回到栏边的是下一条
+    mid_item = [
+        item("was there a task? Was the language originally spoken conversation, edited", 167, 335, 475),
+        item("text, social media communication, monologue vs. dialogue?", 167, 347, 407),
+        item("Language variety: What language (including dialect/region) was the corpus in?", 147, 362, 468),
+    ]
+    assert _split_lines(mid_item) == [[0, 1], [2]]
 
 
 def test_a_heading_across_a_narrow_gutter_is_not_joined_to_the_left_line():
