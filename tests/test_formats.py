@@ -594,6 +594,17 @@ def test_a_url_broken_across_lines_is_joined_without_a_space():
     assert _join_lines(["the ratio a:", "b holds"]) == "the ratio a: b holds"
 
 
+def test_a_mark_closed_at_a_line_end_and_reopened_continues():
+    """每行各自收起标记。下一行原样打开的接着上一行，断词的连字符才认得出来。"""
+    assert _join_lines(["In {i}Proceedings of the 2006 confer-{/i}", "{i}ence on methods{/i}, pages"]) == (
+        "In {i}Proceedings of the 2006 conference on methods{/i}, pages"
+    )
+    assert _join_lines(["{c0000ff}Supervised{/c}", "{c0000ff}learning{/c} of"]) == "{c0000ff}Supervised learning{/c} of"
+    # 换了字号、换了强调的不接
+    assert _join_lines(["{z80}{b}A{/b}{/z}", "{z90}{b}B{/b}{/z}"]) == "{z80}{b}A{/b}{/z} {z90}{b}B{/b}{/z}"
+    assert _join_lines(["a {b}x{/b}", "{i}y{/i}"]) == "a {b}x{/b} {i}y{/i}"
+
+
 def _pdf_with_text(text: str, fontname: str = "helv") -> "pymupdf.Document":
     doc = pymupdf.open()
     doc.new_page(width=400, height=300).insert_textbox(
