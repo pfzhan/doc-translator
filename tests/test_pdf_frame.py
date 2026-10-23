@@ -525,3 +525,48 @@ def test_a_figure_row_pressed_onto_the_caption_is_its_own_row():
     ops = item("d s s i s", 264, 600, 315, 609, 607.3, font="txtt")
     caption = item("Representing the minimum edit distance between two strings as an alignment.", 196, 604, 475, 613, 611.3)
     assert len(_merge_visual_lines([blk(ops), blk(caption)])) == 2
+
+
+def test_underlined_letters_are_marked_and_a_fraction_bar_is_not():
+    """字下面画的线（例 6 里标出的列）认成下划线，只标线下面那几个字；行内小分数的分数线下面紧挨着分母，
+    不算下划线。"""
+    from app.formats.pdf import _attach_ink, _mark_underlines
+    from app.formats.pdf_layout import scan_page
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    page.insert_text((72, 100), "outputs {A, D} and more", fontsize=10, fontname="tiro")
+    left = 72 + pymupdf.get_text_length("outputs {", fontname="tiro", fontsize=10)
+    width = pymupdf.get_text_length("A", fontname="tiro", fontsize=10)
+    page.draw_line((left, 101.1), (left + width, 101.1), width=0.5)
+    page.insert_text((72, 160), "a half", fontsize=10, fontname="tiro")
+    page.insert_text((110, 157), "1", fontsize=7, fontname="tiro")
+    page.draw_line((110, 158.2), (113.9, 158.2), width=0.4)
+    page.insert_text((110, 164.5), "2", fontsize=7, fontname="tiro")
+    data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
+    _attach_ink(page, data)
+    _mark_underlines(page, data, scan_page(page).strokes)
+    spans = [span for block in data["blocks"] for line in block["lines"] for span in line["spans"]]
+    assert [span["text"] for span in spans if span.get("underline")] == ["A"]
+    assert "".join(span["text"] for span in spans).startswith("outputs {A, D} and more")
+
+
+def test_an_underline_is_written_as_a_mark_and_drawn_under_the_words():
+    """下划线送翻时写成 {u}，整块都画了线也照写；写回中文时字下面画一条线。"""
+    from app.formats.pdf_align import _place_line
+    from app.formats.pdf_flow import span_emphasis, writer_for
+    from app.formats.pdf_typeset import typeset_lines
+
+    plain = {"text": "Now consider ", "font": "Times-Roman", "flags": 0}
+    marked = {"text": "A", "font": "Times-Roman", "flags": 0, "underline": True}
+    writer = writer_for([plain, marked])
+    text = writer.text(plain["text"], span_emphasis(plain)) + writer.text("A", span_emphasis(marked)) + writer.close()
+    assert text == "Now consider {u}A{/u}"
+    whole = writer_for([{**marked, "text": "Step 1:"}])
+    assert whole.text("Step 1:", span_emphasis(marked)) + whole.close() == "{u}Step 1:{/u}"
+
+    line = typeset_lines("步骤 {u}A{/u} 列", 10.0, 200.0, {})[0]
+    placed = _place_line(line, 0.0, 200.0, 10.0, False, False, frozenset(), {})
+    assert placed is not None
+    rules = placed[3]
+    assert len(rules) == 1 and 0 < rules[0][1] - rules[0][0] < 10

@@ -62,12 +62,13 @@ belong to the processed content."""
 STYLE_SUFFIX = """
 
 ## Style placeholders
-Some items contain {b} {/b}, {i} {/i}, {zN} {/z}, or {cRRGGBB} {/c}. They mark bold,
-italic, a different font size, or a text color (links and citations are often colored).
+Some items contain {b} {/b}, {i} {/i}, {u} {/u}, {zN} {/z}, or {cRRGGBB} {/c}. They mark
+bold, italic, underlined text, a different font size, or a text color (links and citations
+are often colored).
 Keep every marker unchanged, and move it with the words it wraps. Do not translate,
 drop, or invent markers."""
 
-_STYLE_IN_TEXT = re.compile(r"\{/?[bi]\}|\{z\d+\}|\{c[0-9a-f]{6}\}")
+_STYLE_IN_TEXT = re.compile(r"\{/?[biu]\}|\{z\d+\}|\{c[0-9a-f]{6}\}")
 
 # 跨页段落的 run 分界。模型原样保留，写回时收成一段，不再切回两页。
 BOUNDARY_SUFFIX = """

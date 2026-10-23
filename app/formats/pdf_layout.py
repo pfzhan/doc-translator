@@ -211,6 +211,8 @@ class PageScan:
     shades: tuple[pymupdf.Rect, ...] = ()
     # 细横线：表格线、分数线、下划线
     rules: tuple[pymupdf.Rect, ...] = ()
+    # 所有细横线，连一个字母宽的短线也在（单个字母的下划线比 rules 的下限还短）
+    strokes: tuple[pymupdf.Rect, ...] = ()
 
 
 def scan_page(page: pymupdf.Page) -> PageScan:
@@ -220,7 +222,41 @@ def scan_page(page: pymupdf.Page) -> PageScan:
     return PageScan(
         page_tables(page, drawings, words), tuple(_figure_rects(page, drawings, images)), words,
         _shaded_areas(drawings, text_page_rect(page)), tuple(_rule_segments(page, drawings)[0]),
+        tuple(_thin_strokes(drawings)),
     )
+
+
+# 下划线至少这么宽（点）。再短的是字里的笔画、标记
+_STROKE_MIN = 1.0
+
+
+# 画成一个扁多边形的下划线（幻灯片里的链接），整个轮廓不超过这么高
+_STROKE_SHAPE_THICK = 3.0
+
+
+def _thin_strokes(drawings: list[dict]) -> list[pymupdf.Rect]:
+    """细横线，不限长短：直线段和扁的填充矩形，各算一条。别的路径整个轮廓是一条扁带的
+    （填充的细长多边形）算一条；轮廓高的是图形的边（梯形、圆角框、虚线框），不算。"""
+    found: list[pymupdf.Rect] = []
+    for drawing in drawings:
+        pieces: list[pymupdf.Rect] | None = []
+        for item in drawing.get("items", ()):
+            if item[0] == "l":
+                rect = pymupdf.Rect(item[1], item[2]).normalize()
+            elif item[0] == "re":
+                rect = pymupdf.Rect(item[1]).normalize()
+            else:
+                pieces = None
+                break
+            if rect.height > _RULE_THICK or rect.width < rect.height:
+                pieces = None
+                break
+            pieces.append(rect)
+        if pieces is None:
+            outline = pymupdf.Rect(drawing.get("rect") or ())
+            pieces = [outline] if 0 < outline.height <= _STROKE_SHAPE_THICK or outline.height == 0 else []
+        found.extend(rect for rect in pieces if rect.width >= _STROKE_MIN)
+    return found
 
 
 def _image_infos(page: pymupdf.Page) -> list[dict]:

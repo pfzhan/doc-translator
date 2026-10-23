@@ -16,7 +16,7 @@ from dataclasses import dataclass
 import pymupdf
 
 _SENTINEL_RE = re.compile(r"\x01i\x02(\d+)\x01/i\x02")
-STYLE_MARK_RE = re.compile(r"\{z\d+\}|\{/z\}|\{c[0-9a-f]{6}\}|\{/c\}|\{/?[bi]\}")
+STYLE_MARK_RE = re.compile(r"\{z\d+\}|\{/z\}|\{c[0-9a-f]{6}\}|\{/c\}|\{/?[biu]\}")
 _ATOM_RE = re.compile(rf"\x01i\x02\d+\x01/i\x02|{STYLE_MARK_RE.pattern}")
 # 网址、邮箱整个不折行。结尾的句号、括号、逗号是句子的，不算在里面
 _LINK_RE = re.compile(r"(?:https?://|www\.)[!-~]*[A-Za-z0-9/#=_-]|[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", re.A)
@@ -41,10 +41,13 @@ _HALF_PUNCT = frozenset(".,;:?!)]}%")
 class Emphasis:
     bold: bool
     italic: bool
+    # 原文字下面画了线。线不在字体里，提取时按字下面的细横线认出来（span["underline"]）
+    underline: bool = False
 
 
 class EmphasisWriter:
-    """相对块的底色写出 {b} {i} {zN} {cRRGGBB}。公式占位符是原子，不进强调、字号和颜色。"""
+    """相对块的底色写出 {b} {i} {u} {zN} {cRRGGBB}。公式占位符是原子，不进强调、字号和颜色。
+    写回时块级只有字号和粗细，下划线总按标记写，整块都有下划线也一样。"""
 
     def __init__(self, base: Emphasis, mixed: bool, base_size: float = 0, base_color: int | None = None) -> None:
         self.base = base
@@ -53,6 +56,7 @@ class EmphasisWriter:
         self.base_color = base_color
         self._bold = False
         self._italic = False
+        self._underline = False
         self._size = 100
         # 当前写着的颜色。None 是块的颜色
         self._color: int | None = None
@@ -114,7 +118,11 @@ class EmphasisWriter:
     def _emphasis_marks(self, emphasis: Emphasis) -> str:
         want_bold = emphasis.bold and not self.base.bold
         want_italic = emphasis.italic and not self.base.italic
+        want_underline = emphasis.underline
         parts: list[str] = []
+        if self._underline and not want_underline:
+            parts.append("{/u}")
+            self._underline = False
         if self._italic and not want_italic:
             parts.append("{/i}")
             self._italic = False
@@ -127,6 +135,9 @@ class EmphasisWriter:
         if want_italic and not self._italic:
             parts.append("{i}")
             self._italic = True
+        if want_underline and not self._underline:
+            parts.append("{u}")
+            self._underline = True
         return "".join(parts)
 
 
@@ -147,6 +158,12 @@ def emphasis_of(font: str, flags: int) -> Emphasis:
     return Emphasis(bold, italic)
 
 
+def span_emphasis(span: dict[str, object]) -> Emphasis:
+    """span 的粗细、斜体，加上提取时认出的下划线。"""
+    mark = emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0))  # type: ignore[arg-type]
+    return Emphasis(mark.bold, mark.italic, bool(span.get("underline")))
+
+
 def writer_for(
     spans: list[dict[str, object]], base_size: float = 0, base_color: int | None = None,
 ) -> EmphasisWriter:
@@ -158,7 +175,7 @@ def writer_for(
         text = str(span.get("text") or "")
         if not text.strip():
             continue
-        mark = emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0))
+        mark = span_emphasis(span)
         weighted.append((mark, len(text)))
         if base_size and size_percent(float(span.get("size") or 0), base_size) != 100:
             other_mixed = True
@@ -166,7 +183,8 @@ def writer_for(
             other_mixed = True
     if not weighted:
         return EmphasisWriter(Emphasis(False, False), False, base_size, base_color)
-    base = max(weighted, key=lambda item: item[1])[0]
+    longest = max(weighted, key=lambda item: item[1])[0]
+    base = Emphasis(longest.bold, longest.italic)
     mixed = other_mixed or any(mark != base for mark, _length in weighted)
     return EmphasisWriter(base, mixed, base_size, base_color)
 
@@ -194,6 +212,8 @@ def restore_emphasis(escaped_html: str) -> str:
         .replace("{/b}", "</b>")
         .replace("{i}", "<i>")
         .replace("{/i}", "</i>")
+        .replace("{u}", "<u>")
+        .replace("{/u}", "</u>")
         .replace("{/z}", "</span>")
         .replace("{/c}", "</span>")
     )
@@ -370,7 +390,7 @@ def _trim_line_end(line: str) -> str:
     body = line
     marks = ""
     while True:
-        matched = re.search(r"(\{/?[bi]\}|\{/z\}|\{z\d+\})$", body)
+        matched = re.search(r"(\{/?[biu]\}|\{/z\}|\{z\d+\})$", body)
         if matched is None:
             break
         marks = matched.group(0) + marks
@@ -490,7 +510,7 @@ def formula_index(token: str) -> int | None:
 _NO_FORMULA_SPACE = frozenset("。，、；：？！）】」』〉》％%.,;:?!)]}>（【「『《〈([{")
 
 
-_MARK_RUN = r"(?:\{/?[bi]\}|\{z\d+\}|\{/z\})*"
+_MARK_RUN = r"(?:\{/?[biu]\}|\{z\d+\}|\{/z\})*"
 _CJK_CHAR = r"[぀-ヿ㐀-鿿가-힯]"
 _LATIN_CHAR = r"[A-Za-z]"
 
@@ -503,8 +523,8 @@ def space_around_latin(text: str) -> str:
     """
     if not text or not _CJK_RE.search(text):
         return text
-    text = re.sub(r"(\{(?:[bi]|z\d+)\})\s+", r" \1", text)
-    text = re.sub(r"\s+(\{/(?:[bi]|z)\})", r"\1 ", text)
+    text = re.sub(r"(\{(?:[biu]|z\d+)\})\s+", r" \1", text)
+    text = re.sub(r"\s+(\{/(?:[biu]|z)\})", r"\1 ", text)
     text = re.sub(
         rf"({_CJK_CHAR})[ \t]*({_MARK_RUN})[ \t]*({_LATIN_CHAR})",
         r"\1 \2\3",
