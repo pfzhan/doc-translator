@@ -404,3 +404,26 @@ def test_a_formula_wrapping_after_an_operator_keeps_its_tail():
     assert _split_lines(display) == [[0], [1]]
     marker = [item("===Instructions===", 72, 100, 160), item("1. Carefully compare the answers.", 72, 111, 300)]
     assert _split_lines(marker) == [[0], [1]]
+
+
+def test_a_justified_row_with_an_italic_variable_stays_one_row():
+    """两端对齐的一行被 PyMuPDF 按词拆开，其中一截夹着斜体的变量 AVG(E)。仍是同一行，不从中间拆段。"""
+    from app.formats.pdf import _split_lines
+
+    def piece(x0, x1, y, *spans):
+        text = "".join(t for t, _ in spans)
+        return (text, pymupdf.Rect(x0, y, x1, y + 12),
+                [{"text": t, "font": f, "size": 10.0, "flags": 0} for t, f in spans])
+
+    roman = "Times-Roman"
+    items = [
+        piece(54.0, 293.9, 560.5, ("tain an output column that matches exactly (taking into account", roman)),
+        piece(54.0, 81.0, 570.6, ("column", roman)),
+        piece(97.4, 149.1, 570.6, ("equivalences).", roman)),
+        piece(165.4, 196.3, 570.6, ("AVG(", roman), ("E", "Times-Italic"), (")", roman)),
+        piece(212.7, 218.7, 570.6, ("is", roman)),
+        piece(235.0, 270.4, 570.6, ("converted", roman)),
+        piece(286.8, 293.8, 570.6, ("to", roman)),
+        piece(54.0, 136.2, 580.5, ("SUM(", roman), ("E", "Times-Italic"), (")/count_big(*).", roman)),
+    ]
+    assert _split_lines(items) == [list(range(len(items)))]

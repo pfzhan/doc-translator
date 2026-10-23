@@ -272,8 +272,15 @@ def _same_row(left: tuple, right: tuple) -> bool:
     overlap = min(a.y1, b.y1) - max(a.y0, b.y0)
     if overlap < min(a.height, b.height) * 0.7 or b.x0 <= a.x1:
         return False
-    fonts = {(s.get("font"), round(float(s.get("size") or 0), 1)) for s in (*left[2], *right[2]) if str(s.get("text") or "").strip()}
-    return len(fonts) == 1
+    # 同一字号、用着同一种字体。一截里夹着斜体的变量（AVG(E)）也算，并排格子的字体字号常整个不同
+    def styles(item: tuple) -> set[tuple]:
+        return {
+            (s.get("font"), round(float(s.get("size") or 0), 1))
+            for s in item[2] if str(s.get("text") or "").strip()
+        }
+
+    ours, theirs = styles(left), styles(right)
+    return len({size for _, size in ours | theirs}) == 1 and bool(ours & theirs)
 
 
 def _spread_evenly(row: list[tuple], max_x1: float) -> bool:
