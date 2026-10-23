@@ -21,6 +21,7 @@ import tempfile
 import unicodedata
 import weakref
 import zlib
+from collections import Counter
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -338,6 +339,11 @@ def _attach_ink(page: pymupdf.Page, data: dict) -> None:
                     span["ink"] = ink
 
 
+# 栏边：至少这么多条、每条至少这么多字宽的行从同一处起笔
+_COLUMN_LINES = 3
+_COLUMN_LINE_EMS = 15
+
+
 def _rejoin_split_lines(data: dict) -> None:
     """PyMuPDF 有时把一行字从中间切开，后半截分进另一个块（常在上下标处）。
     把后半截挪回前半截所在的块、紧跟在那一行后面。
@@ -358,20 +364,33 @@ def _rejoin_split_lines(data: dict) -> None:
             box = boxes[id(line)] = _line_box(line)
         return box
 
+    starts = _column_starts(blocks)
     # 挪走一截以后，留在原块里的分子才没了同伴，下一轮才找得到去处
     for _ in range(3):
-        if not _rejoin_pass(blocks, line_box):
+        if not _rejoin_pass(blocks, line_box, starts):
             break
 
 
-def _rejoin_pass(blocks: list[dict], line_box=None) -> bool:
+def _column_starts(blocks: list[dict]) -> list[float]:
+    """好几条长行一齐起笔的左缘：各栏的栏边。"""
+    counter: Counter[int] = Counter()
+    for block in blocks:
+        for line in block["lines"]:
+            x0, _, x1, _ = line["bbox"]
+            size = max((span["size"] for span in line["spans"]), default=10.0)
+            if abs(line["dir"][1]) <= 0.01 and x1 - x0 >= size * _COLUMN_LINE_EMS:
+                counter[round(x0)] += 1
+    return [x for x in counter if sum(n for other, n in counter.items() if abs(other - x) <= 1) >= _COLUMN_LINES]
+
+
+def _rejoin_pass(blocks: list[dict], line_box=None, starts: Sequence[float] = ()) -> bool:
     line_box = line_box or _line_box
     moved = False
     for block in blocks:
         for line in list(block["lines"]):
             if abs(line["dir"][1]) > 0.01 or not "".join(s["text"] for s in line["spans"]).strip():
                 continue
-            host = _line_host(line, block, blocks, line_box) or _stack_host(line, block, blocks)
+            host = _line_host(line, block, blocks, line_box, starts) or _stack_host(line, block, blocks)
             if host is None:
                 continue
             host_block, host_line = host
@@ -626,12 +645,17 @@ def _cut_after(group: list[int], ends: dict[int, Leader]) -> list[list[int]]:
     return [part for part in parts if part]
 
 
-def _line_host(line: dict, own: dict, blocks: list[dict], line_box=None) -> tuple[dict, dict] | None:
+def _line_host(
+    line: dict, own: dict, blocks: list[dict], line_box=None, starts: Sequence[float] = (),
+) -> tuple[dict, dict] | None:
     """紧挨在 line 左边的那一截。它本来就在 line 的块里时不挪：
-    取第一个找到的，两个块里各有一截能接时，line 每一轮都会挪到另一个块去。"""
+    取第一个找到的，两个块里各有一截能接时，line 每一轮都会挪到另一个块去。
+    line 从某一栏的栏边起笔、和左边隔着半个字宽以上时，是隔壁栏的字（4.2.3 节号），
+    行内切开的后半截不会正好落在栏边上。"""
     line_box = line_box or _line_box
     box = pymupdf.Rect(line["bbox"])
     size = max((span["size"] for span in line["spans"]), default=10.0)
+    column_edge = any(abs(box.x0 - x) <= 1 for x in starts)
     column_font = _column_font(line, own, size)
     pieces = [span for span in line["spans"] if span["text"].strip()]
     all_math = bool(pieces) and all(_span_is_math(span) for span in pieces)
@@ -652,6 +676,8 @@ def _line_host(line: dict, own: dict, blocks: list[dict], line_box=None) -> tupl
             # 上下标会让两截在接口处叠上一个字宽；词距以外的空档是栏沟。
             # 等号、分式两边的空比词距宽，有一边是式子时放到一个字宽
             if _past_column(block, other, box.x0, size, line_box) or _larger_text(line, other):
+                continue
+            if column_edge and gap > size * 0.5:
                 continue
             if column_font and _main_font(other) != column_font:
                 continue
