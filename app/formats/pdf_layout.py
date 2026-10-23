@@ -73,6 +73,7 @@ _HEAD_ROWS = 4.0
 # 三线表的横线至少这么长。正文里给词加的下划线、分式线都短得多
 _BAND_MIN_W = 120.0
 _BAND_SHORT_SHARE = 0.6
+_LABEL_RE = re.compile(r"(?:Figure|Fig\.|Table|Tab\.)\s*\d+(?:\.\d+)*\b")
 _INSIDE = 0.6
 _MARGIN_BAND = 0.07
 _MARGIN_MIN = 42.0
@@ -724,6 +725,9 @@ def banded_tables(
         rows = [row for band in bands for row in band]
         if len(rows) < _MIN_TEXT_ROWS or any(not band for band in bands):
             continue
+        # 线间排着图注的是图（文法规则、例句框），图注要照常翻
+        if any(_LABEL_RE.match(" ".join(word.text for word in row)) for row in rows):
+            continue
         # 有三条线撑着，短格占得少一些也算：表头的列名、O(k·n·d) 这样的式子比数据格长。
         # 正文、伪代码一行连成一格，跨过半张表
         pieces = [cell for row in rows for cell in _row_cells(row)]
@@ -734,8 +738,9 @@ def banded_tables(
             if len(cells := _row_cells(row)) >= 2
             or (index == 0 and cells[0].words <= _SHORT_WORDS and cells[0].width <= _SHORT_WIDTH)
         )
+        # 跨过半张表的格子只在一行一格时才说明是正文；两列表的行名本来就占大半
         if (short < len(pieces) * _BAND_SHORT_SHARE or split < len(rows) * 0.8
-                or any(cell.width > (right - left) / 2 for cell in pieces)):
+                or any(len(cells := _row_cells(row)) == 1 and cells[0].width > (right - left) / 2 for row in rows)):
             continue
         area = pymupdf.Rect(left, group[0].y0, right, group[-1].y1)
         if any(_mostly_inside(area, [table.rect]) for table in known):
