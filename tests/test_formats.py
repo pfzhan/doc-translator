@@ -4283,6 +4283,14 @@ def test_split_filled_lines_fills_the_last_lines_of_the_page():
     bottom = _filled_bottom(700, 1, 8.8, True, 712, 792)
     assert bottom - 700 >= 8.8 * 1.45 + 8.8 * 0.3 - 0.1
     assert bottom <= 712 + 0.45 * 8.8 + 0.01
+    # 写入框裁在原文正文下沿，limit 就是这条线时，末行的行距伸不出去：少留一行，不让整段缩小
+    text = "上界不匹配，因此必须强制执行谓词，这可以简化为一个等值谓词。" * 8
+    roomy, _ = _split_filled_lines(text, [], em=7.92, block_size=9, width=240, cjk=True, y0=664.1, limit=722.5)
+    capped, _ = _split_filled_lines(
+        text, [], em=7.92, block_size=9, width=240, cjk=True, y0=664.1, limit=722.5, page_bottom=722.5,
+    )
+    assert roomy.count("\n") == 5
+    assert capped.count("\n") == 4
 
 
 def test_hyphen_bridge_keeps_the_page_boundary():
