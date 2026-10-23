@@ -243,6 +243,39 @@ def strip_control_marks(text: str) -> str:
     return TAIL_CONTROL_RE.sub("", "\n".join(lines)).strip()
 
 
+# 送翻文本里的标记：强调、字号、颜色的开关，公式占位符，跨页分界
+_MARK_TOKEN_RE = re.compile(r"\{(?:/?[biuzc]|z\d+|c[0-9a-f]{6}|v\d+|\|)\}")
+
+
+def _braces_at_marks(text: str) -> tuple[list[int], list[int]]:
+    """紧贴标记的字面 {、} 的位置。标记本身的花括号不算。"""
+    marks = [(m.start(), m.end()) for m in _MARK_TOKEN_RE.finditer(text)]
+    starts = {start for start, _end in marks}
+    ends = {end for _start, end in marks}
+    inside = {i for start, end in marks for i in range(start, end)}
+    before = [i for i, ch in enumerate(text) if ch == "{" and i not in inside and i + 1 in starts]
+    after = [i for i, ch in enumerate(text) if ch == "}" and i not in inside and i in ends]
+    return before, after
+
+
+def drop_added_braces(src: str, dst: str) -> str:
+    """去掉模型套在标记外面的花括号：{{b}填充词{/b}}、{/b}}、{{c0000ff}Chen{/c}}。
+    原文正文里有 {n,m} 这类花括号时，模型会把标记也照着写一层。只去紧贴标记的，
+    而且原文同样位置上一个都没有才去；集合 {{i}o{/i}{v1}, …} 原文就有，留着。"""
+    if "{" not in dst:
+        return dst
+    src_before, src_after = _braces_at_marks(src)
+    before, after = _braces_at_marks(dst)
+    drop = set()
+    if before and not src_before:
+        drop.update(before)
+    if after and not src_after:
+        drop.update(after)
+    if not drop:
+        return dst
+    return "".join(ch for i, ch in enumerate(dst) if i not in drop)
+
+
 def parse_markers(content: str, count: int, marker: str = "p") -> dict[int, str]:
     """解析 [[pN]] 格式的回复，返回 {序号: 译文}；缺失的序号不在结果里。marker 需与 build_messages 用的一致。"""
     marker_re = MARKER_RE if marker == "p" else re.compile(rf"^\[\[({marker}\d+)\]\]$", re.I)
