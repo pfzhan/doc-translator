@@ -209,6 +209,8 @@ class PageScan:
     words: tuple[_TextWord, ...]
     # 相连的浅色底并成的一片：一张表、一个文本框的底色
     shades: tuple[pymupdf.Rect, ...] = ()
+    # 细横线：表格线、分数线、下划线
+    rules: tuple[pymupdf.Rect, ...] = ()
 
 
 def scan_page(page: pymupdf.Page) -> PageScan:
@@ -217,7 +219,7 @@ def scan_page(page: pymupdf.Page) -> PageScan:
     words = page_words(page)
     return PageScan(
         page_tables(page, drawings, words), tuple(_figure_rects(page, drawings, images)), words,
-        _shaded_areas(drawings, text_page_rect(page)),
+        _shaded_areas(drawings, text_page_rect(page)), tuple(_rule_segments(page, drawings)[0]),
     )
 
 

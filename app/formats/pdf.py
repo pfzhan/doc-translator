@@ -21,7 +21,7 @@ import tempfile
 import unicodedata
 import weakref
 import zlib
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -3217,6 +3217,7 @@ def _extract(
         _detach_margin_notes(data, lines, refs, found - _wide_block_lines(lines, refs, found, frame))
     for pno, data in enumerate(pages):
         margins = _left_margins(data)
+        fractions = _fraction_parts(data, scans[pno].rules)
         toc_page = _has_leader_line(data) or pno in toc_pages
         for b in data["blocks"]:
             if b.get("type") != 0:
@@ -3238,6 +3239,9 @@ def _extract(
             groups = [list(range(len(items)))] if side_note and items else _split_lines(items)
             # 带点线的一行是一个目录条目的末行，下一行是另一条
             groups = [part for group in groups for part in _cut_after(group, leaders)]
+            # 文字分式所在的行自成一组，留原字，不和上下的正文连成一段
+            formula_rows = {i for i, item in enumerate(items) if any(id(span) in fractions for span in item[2])}
+            groups = [part for group in groups for part in _cut_runs(group, formula_rows)]
             for group in groups:
                 texts = [items[i][0] for i in group]
                 line_rects = [items[i][1] for i in group]
@@ -3252,7 +3256,8 @@ def _extract(
                 # 居中的单行式子（定义、if and only if）里的几个连接词不成句，留原字：
                 # 模型重排这种行常把数学意思改掉
                 displayed = len(group) == 1 and _displayed(rect, spans, margins)
-                if not in_cell and _untranslatable(spans, text, _DISPLAY_PROSE if displayed else 3):
+                fraction = group[0] in formula_rows
+                if not in_cell and (fraction or _untranslatable(spans, text, _DISPLAY_PROSE if displayed else 3)):
                     # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
                     # 捐了会被擦掉，而这些行没有占位符、不会重画。
                     if NO_TEXT_RE.match(text) and blocks and blocks[-1].page == pno:
@@ -3403,6 +3408,110 @@ def _displayed(rect: pymupdf.Rect, spans: list[dict], margins: list[float]) -> b
         return False
     size = max((float(span.get("size") or 0) for span in spans), default=10.0)
     return rect.x0 - max(left) > size * 2.5
+
+
+# 行间公式的关系符。加减乘号要是公式字体：正文字体的常是 Phoenix + Calcite 这种标题。
+# 箭头不算，幻灯片常用箭头连几个词
+_RELATION_RE = re.compile(r"[=≤≥≈≡≠∝∈∉⊂⊆⊇≜]|(?:^|\s)[<>](?=\s|$)")
+_OPERATOR_CHARS = "+−×±"
+# 式子里的正文词不到这个数：argmax、Precision 这种名字
+_EQUATION_PROSE = 3
+
+
+def _equation_block(block: TextBlock) -> bool:
+    """带关系符或公式字体的运算符、式子外几乎没有正文词的块：T̂ = argmax s(T)、
+    Precision = |R|、对齐的第二行 + max[…]。并完块再判断：一个式子常被拆成好几截，
+    逐截判断会把剩下的截断开。图注带编号，不算；算法框里的一行有一个词也照翻（Output: …）。"""
+    if block.clip is not None:
+        return False
+    spans = [span for line in block.span_lines or [] for span in line if span["text"].strip()]
+    text = " ".join(span["text"] for span in spans)
+    if _CAPTION_NUM_RE.match(text) or _plain_units(spans) >= _EQUATION_PROSE:
+        return False
+    return bool(_RELATION_RE.search(text)) or any(
+        _span_is_math(span) and any(c in _OPERATOR_CHARS for c in span["text"]) for span in spans
+    )
+
+
+# 分子的基线在分数线上方、分母的基线在下方多远（字号的比例）。分数线在数学轴上，
+# 旁边的等号、标签的基线比它低一点
+_NUMERATOR_RISE = (0.1, 0.75)
+_DENOMINATOR_DROP = (0.4, 1.3)
+_FRACTION_AXIS = 0.5
+# 分子、分母居中的容差（线长的比例），旁边的字离线端多远以内算挨着（字号的比例）
+_FRACTION_CENTER = 0.1
+_FRACTION_NEIGHBOR = 1.5
+
+
+def _fraction_parts(data: dict, rules: Sequence[pymupdf.Rect]) -> set[int]:
+    """分子或分母里有正文词的分式（labeled recall = # of correct … / # of total …）上下的字。
+
+    分数线是一条细横线，分子、分母各成一行，都落在线的长度以内、在线上居中，同一行里
+    再没有挨着线端的字；线端外面在数学轴上有等号、标签之类。链接下划线下一行是接着写的
+    正文，表格线两端外面没有字，都不是。纯数学的分式不在这里认：段落里的行内分式把一行
+    拆成几截，按截数词认不准。
+    """
+    spans = [
+        span for block in data.get("blocks", []) if block.get("type") == 0
+        for line in block["lines"] if abs(line["dir"][1]) <= 0.01
+        for span in line["spans"] if span["text"].strip()
+    ]
+    found: set[int] = set()
+    for bar in rules:
+        axis = (bar.y0 + bar.y1) / 2
+        inside = [span for span in spans if bar.x0 - 1 <= span["bbox"][0] and span["bbox"][2] <= bar.x1 + 1]
+        over = [span for span in inside if _within(axis - span["origin"][1], span["size"], _NUMERATOR_RISE)]
+        under = [span for span in inside if _within(span["origin"][1] - axis, span["size"], _DENOMINATOR_DROP)]
+        if not over or not under or max(_plain_units(over), _plain_units(under)) < 2:
+            continue
+        inner = {id(span) for span in inside}
+        if not all(_centered_alone(row, spans, inner, bar) for row in (over, under)):
+            continue
+        if any(_beside_bar(span, bar, axis) for span in spans if id(span) not in inner):
+            found.update(id(span) for span in (*over, *under))
+    return found
+
+
+def _plain_units(spans: list[dict]) -> int:
+    return _prose_units(" ".join(span["text"] for span in spans if not _span_is_math(span)))
+
+
+def _within(offset: float, size: float, bounds: tuple[float, float]) -> bool:
+    return bounds[0] * size <= offset <= bounds[1] * size
+
+
+def _centered_alone(row: list[dict], spans: list[dict], inner: set[int], bar: pymupdf.Rect) -> bool:
+    x0 = min(span["bbox"][0] for span in row)
+    x1 = max(span["bbox"][2] for span in row)
+    if abs((x0 + x1) / 2 - (bar.x0 + bar.x1) / 2) > max(1.5, bar.width * _FRACTION_CENTER):
+        return False
+    baselines = {round(span["origin"][1]) for span in row}
+    for span in spans:
+        if id(span) in inner or not any(abs(span["origin"][1] - y) <= 1 for y in baselines):
+            continue
+        reach = span["size"] * _FRACTION_NEIGHBOR
+        if span["bbox"][2] > bar.x0 - reach and span["bbox"][0] < bar.x1 + reach:
+            return False
+    return True
+
+
+def _beside_bar(span: dict, bar: pymupdf.Rect, axis: float) -> bool:
+    """线端外面、数学轴附近的字：分式前的等号、标签，后面的运算符。"""
+    if not 0 <= span["origin"][1] - axis <= span["size"] * _FRACTION_AXIS:
+        return False
+    reach = span["size"] * _FRACTION_NEIGHBOR
+    return bar.x0 - reach <= span["bbox"][2] <= bar.x0 + 1 or bar.x1 - 1 <= span["bbox"][0] <= bar.x1 + reach
+
+
+def _cut_runs(group: list[int], marked: set[int]) -> list[list[int]]:
+    """按是否在 marked 里切成连续的几段。"""
+    runs: list[list[int]] = []
+    for index in group:
+        if runs and (runs[-1][-1] in marked) == (index in marked):
+            runs[-1].append(index)
+        else:
+            runs.append([index])
+    return runs
 
 
 def _untranslatable(spans: list[dict], text: str, min_prose: int = 3) -> bool:
@@ -6999,7 +7108,7 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
     cell_ids = {id(block) for block in blocks if _table_cell(block, geometries[block.page])}
     skips = [
         bib or role is Role.FIGURE or edge or _garbled_label(block.text) or _code_block(block)
-        or _margin_term(block) or id(block) in displayed or id(block) in cell_ids
+        or _margin_term(block) or id(block) in displayed or id(block) in cell_ids or _equation_block(block)
         for bib, role, edge, block in zip(biblio_skips(blocks), roles, edges, blocks)
     ]
     skip_ids = {id(b) for b, s in zip(blocks, skips) if s}
