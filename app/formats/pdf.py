@@ -4557,6 +4557,8 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             )
             # 列表项后面第一行比它还靠左起笔的是列表完了以后的正文。续行和条目文字对齐或者悬挂缩进，不会往左
             list_end = _list_item(p.text) and first_x0 < p.rect.x0 - p.size * 0.5
+            # 上一块停在没收口的代码围栏里（```sql 开了还没关），下一行是代码的接续，大写起头也接上
+            in_fence = len(_FENCE_RE.findall(p.text)) % 2 == 1 and same_size
             latin = (
                 y_close
                 and (x_close or centered_tail or math_wrap or centered_comma)
@@ -4566,7 +4568,7 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                 and (colon_wrap or call_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
                      or not _ends_sentence(p.text))
                 and (first.islower() or first in ".),;%,；，" or open_paren or math_wrap or centered_end
-                     or dangling or centered_comma)
+                     or dangling or centered_comma or in_fence)
                 and not _verbatim_seam(p, b)
             )
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
@@ -4583,6 +4585,8 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
 
 # 以式子起头的续行里至少这么多正文词
 _MATH_WRAP_WORDS = 3
+# Markdown 代码围栏。LaTeX 把 ``` 排成弯引号 “‘
+_FENCE_RE = re.compile(r"```|“‘|‘‘‘")
 # 句子不会停在这些词上：行尾是它们，下一行哪怕大写起头（专名）也是接着写的
 _DANGLING_WORDS = frozenset(
     "a an the and or of to in for with by from on at as that which whose than its their our his her".split()

@@ -6883,6 +6883,22 @@ def test_a_centered_formula_or_a_hanging_item_line_keeps_its_place():
     assert len(_merge_continuations(single)) == 1
 
 
+def test_a_block_inside_an_open_code_fence_continues_with_a_capital():
+    """上一块停在没收口的代码围栏里（“‘sql 开了还没关），下一块的 JOIN 是代码的接续；围栏关上以后大写起头照常分开。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, y):
+        return TextBlock(page=0, rect=pymupdf.Rect(82, y, 514, y + 10), line_rects=[pymupdf.Rect(82, y, 514, y + 10)],
+                         text=text, size=10.0, color="#000", bold=False)
+
+    fenced = [blk("the query would look like this: “‘sql SELECT * FROM table1 AS t1 JOIN table2 ON t1.code = table2.code", 332),
+              blk("JOIN table3 ON t1.code = table3.code; “‘ This query first selects the top 10 rows", 344)]
+    assert len(_merge_continuations(fenced)) == 1
+    closed = [blk("Extract the code wrapped by “‘python“‘ in the response and run the test cases", 332),
+              blk("Judge whether the answer passes the test cases from the problem statement", 344)]
+    assert len(_merge_continuations(closed)) == 2
+
+
 def test_a_line_opening_with_an_inline_formula_continues_the_sentence():
     """以行内式子起头、从栏边起笔、后面接着正文的一行是上一句的折行；缩进单独排的式子不是。"""
     from app.formats.pdf import TextBlock, _merge_continuations
