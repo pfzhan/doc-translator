@@ -4132,12 +4132,17 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             # 以 f(x) 收尾算句末，是为了单独排的式子下面的 where 不接上来。
             # 末行从下一行的左缘一直排到右缘、下一行又是正文词起头的，是句中折行，式子只是落在行尾
             call_wrap = _ends_in_call(p.text.rstrip()) and _opens_with_word(b) and _wraps_into(p, b)
-            # 以行内式子起头、从栏边起笔、后面接着正文的一行（Adam with | 1/√t decay on its stepsize）
-            # 是句中折行。单独排的式子缩进，也没有几个正文词
+            # 以行内式子起头、后面接着正文的一行（Adam with | 1/√t decay on its stepsize）是句中折行：
+            # 从栏边起笔，或者行首的式子碎片另成了块，剩下的排到右缘、下一行回到栏边。
+            # 单独排的式子缩进、不到右缘，也没有几个正文词；上标编号起头的脚注字号小一号
             first_x0 = b.line_rects[0].x0 if b.line_rects else b.rect.x0
+            rows = sorted(_visual_lines(b), key=lambda row: row[0].y0) if b.line_rects else []
             math_wrap = (
-                _opens_with_math(b) and abs(first_x0 - p.rect.x0) <= p.size * 0.5
-                and _plain_words(b) >= _MATH_WRAP_WORDS
+                _opens_with_math(b) and _plain_words(b) >= _MATH_WRAP_WORDS and abs(b.size - p.size) <= p.size * 0.1
+                and (abs(first_x0 - p.rect.x0) <= p.size * 0.5 or (
+                    len(rows) >= 2 and abs(max(rect.x1 for rect in rows[0]) - p.rect.x1) <= p.size * 0.5
+                    and abs(min(rect.x0 for rect in rows[1]) - p.rect.x0) <= p.size * 0.5
+                ))
             )
             # 句中的缩写（Brants et al. | (2007)）不是句末。左括号起头的续行是引文年份、插入语，
             # 不比上一段最左的一行靠右（首行缩进的段落），或者和其中一行同一左缘（悬挂缩进的条目续行），
@@ -4153,7 +4158,7 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             list_end = _list_item(p.text) and first_x0 < p.rect.x0 - p.size * 0.5
             latin = (
                 y_close
-                and (x_close or centered_tail)
+                and (x_close or centered_tail or math_wrap)
                 and not list_end
                 and len(p.text.split()) >= 3  # 一两个词的无标点短块是标题/标签，不是段落
                 and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
