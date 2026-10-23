@@ -74,12 +74,16 @@ class HeuristicLayout:
         median: float,
     ) -> list[Role]:
         floats = _float_zones(items, geometries, median)
+        captions = [
+            item for item in items
+            if len(item.text.strip()) < _CAPTION_LEN and _caption_start(item, _CAPTION_RE, median)
+        ]
         roles: list[Role] = []
         for item in items:
             figures = (*_figures_of(item.page, geometries), *floats.get(item.page, ()))
             # 画图程序铺的白底常连图注一起包住，图注标签起头的仍是图注
             labeled = len(item.text.strip()) < _CAPTION_LEN and _caption_start(item, _CAPTION_RE, median)
-            if _inside_figure(item.rect, figures) and not labeled and not _framed_prose(item):
+            if _inside_figure(item.rect, figures) and not labeled and not _boxed_text(item, figures, captions):
                 roles.append(Role.FIGURE)
             elif labeled and _inside_figure(item.rect, figures) or _is_caption(item, figures, median):
                 roles.append(Role.CAPTION)
@@ -95,9 +99,28 @@ _PROSE_WORDS = 40
 _PROSE_SENTENCES = 2
 
 
+def _boxed_text(item: LayoutItem, figures: Sequence[pymupdf.Rect], captions: Sequence[LayoutItem]) -> bool:
+    """框起来的一段正文（带底色、圆角框的提示段），不是图。矢量框按图算，框里的字不能都当图里的标签。
+    带图注的框是图：教材图里排的英文例句、提示词是讲解的对象，留原文。"""
+    if not _framed_prose(item):
+        return False
+    holders = [figure for figure in figures if _inside_figure(item.rect, [figure])]
+    return not any(
+        caption.page == item.page and _captions(caption.rect, figure, caption.size)
+        for figure in holders for caption in captions
+    )
+
+
+def _captions(caption: pymupdf.Rect, figure: pymupdf.Rect, size: float) -> bool:
+    """图注挨着这个框：在下面、旁边（_attached），或者在上面（表注）。"""
+    if _attached(caption, figure, size):
+        return True
+    overlap_x = min(caption.x1, figure.x1) - max(caption.x0, figure.x0)
+    return -2 <= figure.y0 - caption.y1 <= max(8.0, size * 1.6) and overlap_x > min(caption.width, figure.width) * 0.3
+
+
 def _framed_prose(item: LayoutItem) -> bool:
-    """框起来的一段正文（带底色、圆角框的提示段）。矢量框按图算，框里的字不能都当图里的标签：
-    图里的标签是几个词，不会是几句话的整段。"""
+    """成段的几句话。图里的标签是几个词，不会是几句话的整段。"""
     text = item.text.strip()
     if len(text.split()) < _PROSE_WORDS or not text.endswith(_SENT_END):
         return False
