@@ -6968,3 +6968,24 @@ def test_a_full_line_ending_in_a_call_runs_on_into_the_next_line():
     formula = blk("we write the next sublayer as t4 = LayerNorm(t3)", 84)
     after = blk("hi = t5 + t3", 96)
     assert len(_merge_continuations([formula, after])) == 2
+
+
+def test_table_split_keeps_space_spans():
+    """两端对齐的行，词间空格是单独的 span。按格子重拼文字时要带上，词才不会粘在一起。"""
+    from app.formats.pdf import TextBlock, _split_table_blocks
+    from app.formats.pdf_layout import RuledTable
+
+    def span(text, x0, x1):
+        return {"text": text, "bbox": (x0, 100, x1, 110), "origin": (x0, 108), "font": "Times", "size": 10.0}
+
+    first = [span("Sample", 140, 170), span(" ", 170, 176), span("minibatch", 176, 220),
+             span(" ", 220, 226), span("rule.", 226, 250)]
+    second = [{**item, "bbox": (item["bbox"][0], 112, item["bbox"][2], 122),
+               "origin": (item["origin"][0], 120)} for item in (span("We", 140, 152), span(" ", 152, 158), span("used", 158, 180))]
+    rects = [pymupdf.Rect(140, 100, 250, 110), pymupdf.Rect(140, 112, 180, 122)]
+    block = TextBlock(page=0, rect=rects[0] | rects[1], line_rects=rects, text="",
+                      size=10, color="#000", bold=False, span_lines=[first, second])
+    table = RuledTable(pymupdf.Rect(100, 98, 300, 124),
+                       (pymupdf.Rect(100, 98, 300, 111), pymupdf.Rect(100, 111, 300, 124)), algorithm=True)
+    parts = _split_table_blocks([block], (table,))
+    assert [part.text for part in parts] == ["Sample minibatch rule.", "We used"]
