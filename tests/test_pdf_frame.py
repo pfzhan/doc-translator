@@ -324,6 +324,8 @@ def test_blocks_in_a_flagged_monospace_font_are_code():
     assert not _code_block(block(("系统提示词放在上下文的最前面。", "SimSun", 8)))
     # LaTeX times 宏包的等宽字是 URW 的 NimbusMonL，名字里没有 Mono，也不一定带等宽标志
     assert _code_block(block(("dpkingma@gmail.com", "NimbusMonL-Regu", 4)))
+    # 语料表一行：行首的计数用正文字体，后面是等宽字的词。数字不算正文
+    assert _code_block(block(("2", "NimbusRomNo9L-Regu", 4), ("n", "txtt", 12), (" e w", "txtt", 12)))
 
 
 def test_gloss_line_is_split_from_its_free_translation():
