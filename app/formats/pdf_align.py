@@ -20,6 +20,9 @@ from .pdf_typeset import FormulaPiece, TextPiece, TypesetLine, line_offsets
 # htmlbox 首行 origin 相对盒子顶的比例。和它对齐，换写法后行高不变。
 FIRST_BASELINE = 1.108
 _FONT_NAME = "DocCJK"
+# 汉字字形大约占基线上 0.88em、下 0.12em
+_GLYPH_ASCENT = 0.88
+_GLYPH_DESCENT = 0.12
 _MIN_SLOTS = 6
 _MIN_SLACK_EM = 0.15
 _MAX_GAP_EM = 0.35
@@ -247,6 +250,16 @@ def page_origin(page: pymupdf.Page) -> tuple[float, float]:
     return float(page.cropbox.x0), float(page.mediabox.y1 - page.cropbox.y0)
 
 
+def _lift(em: float, first_room: float | None) -> float:
+    """整段往上提多少。按 htmlbox 的首行基线写，汉字的下沿常比原文第一行的行框低，
+    压到紧贴在下面的线（代码框的上沿）。字形下沿超出原文行框时往上提，最多提到字形
+    上沿和盒子顶齐平，不越过上面的东西。"""
+    if first_room is None:
+        return 0.0
+    over = em * (FIRST_BASELINE + _GLYPH_DESCENT) - first_room
+    return min(max(over, 0.0), em * (FIRST_BASELINE - _GLYPH_ASCENT))
+
+
 def draw_cjk_lines(
     page: pymupdf.Page,
     doc: pymupdf.Document,
@@ -260,16 +273,18 @@ def draw_cjk_lines(
     fallback_text: dict[int, str],
     justify_last: bool = False,
     lanes: Sequence[tuple[float, float]] = (),
+    first_room: float | None = None,
 ) -> list[FormulaSlot] | None:
     """写成两端对齐的行。缺字时返回 None，调用方改走 HTML 盒子。
 
     段落还要接到下一页时，这一页的末行也是满行，同样两端对齐。
     lanes 是开头几行相对盒子左缘的缩进和宽度（让开图的那几行），其余各行占满盒子。
+    first_room 是原文第一行从盒子顶到下沿的高度，见 _lift。
     """
     left, top = page_origin(page)
     placed = _place_lines(
         lines, box, em, gap, color, centered, image_indexes, fallback_text, top,
-        justify_last, left, lanes,
+        justify_last, left, lanes, first_room,
     )
     if placed is None:
         return None
@@ -294,6 +309,7 @@ def _place_lines(
     justify_last: bool = False,
     page_left: float = 0.0,
     lanes: Sequence[tuple[float, float]] = (),
+    first_room: float | None = None,
 ) -> tuple[str, list[FormulaSlot], dict[str, pymupdf.Font]] | None:
     red, green, blue = _rgb(color)
     chunks: list[str] = ["q"]
@@ -311,8 +327,9 @@ def _place_lines(
     wrote = False
     # 公式把一行切成几片，每片从头读标记。前一片还开着的粗体、颜色带到下一片
     opened: list[str] = []
+    lift = _lift(em, first_room)
     for index, line in enumerate(lines):
-        baseline = box.y0 + em * FIRST_BASELINE + index * em * gap + offsets[index]
+        baseline = box.y0 + em * FIRST_BASELINE - lift + index * em * gap + offsets[index]
         indent, width = lanes[index] if index < len(lanes) else (0.0, box.width)
         row = _place_line(
             line, box.x0 + indent, width, em,

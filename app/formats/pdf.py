@@ -5085,6 +5085,17 @@ def _wrap_holes(
     return found if len(beside) >= 2 else []
 
 
+def _first_row_room(block: TextBlock, rect: "pymupdf.Rect") -> float | None:
+    """写的盒子顶到原文第一行行框下沿的高度。盒子不从第一行起（跨页接过来的半段）时不算。"""
+    if not block.line_rects:
+        return None
+    rows = sorted(_visual_lines(block), key=lambda row: row[0].y0)
+    bottom = max(r.y1 for r in rows[0])
+    if not block.rect.y0 - block.size <= rect.y0 < bottom:
+        return None
+    return bottom - rect.y0
+
+
 def _hole_lanes(
     box: "pymupdf.Rect", holes: list["pymupdf.Rect"], em: float, gap: float,
 ) -> list[tuple[float, float]]:
@@ -5210,11 +5221,12 @@ def _draw_cjk(
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
     justify_last: bool = False,
     lanes: list[tuple[float, float]] = (),
+    first_room: float | None = None,
 ) -> bool:
     """中文行按字形两端对齐。缺字时返回 False。"""
     images, fallback = _formula_draw_args(formulas)
     slots = draw_cjk_lines(
-        page, doc, lines, box, em, gap, color, centered, images, fallback, justify_last, lanes,
+        page, doc, lines, box, em, gap, color, centered, images, fallback, justify_last, lanes, first_room,
     )
     if slots is None:
         return False
@@ -5245,6 +5257,7 @@ def _place_plain(
     archive: pymupdf.Archive | None,
     justify_last: bool = False,
     holes: list["pymupdf.Rect"] = (),
+    first_room: float | None = None,
 ) -> None:
     """排版器断行，再写入。中文按字形两端对齐；缺字时退回一个 HTML 盒子。"""
     text = space_around_latin(separate_after_formula(text))
@@ -5255,7 +5268,7 @@ def _place_plain(
         lines = _clause_lines(text, formulas, em, block_size, box.width, lines)
     if cjk and _draw_cjk(
         page, page.parent, lines, formulas, box, em, gap, color, centered,
-        None, None, [], [], justify_last, lanes,
+        None, None, [], [], justify_last, lanes, first_room,
     ):
         return
     rendered = [_typeset_line_html(line, formulas) for line in lines]
@@ -5357,6 +5370,7 @@ def _place_typeset(
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
     justify_last: bool = False,
     holes: list["pymupdf.Rect"] = (),
+    first_room: float | None = None,
 ) -> None:
     """按行写入文字，公式槽用记录的下沿贴到该行基线。"""
     text = space_around_latin(separate_after_formula(text))
@@ -5365,7 +5379,7 @@ def _place_typeset(
     )
     if cjk and _draw_cjk(
         page, doc, lines, formulas, box, em, gap, color, centered,
-        fmS, page_spans, draws, deferred_png, justify_last, lanes,
+        fmS, page_spans, draws, deferred_png, justify_last, lanes, first_room,
     ):
         return
     css = (
@@ -6239,6 +6253,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 limit = x_cap if limit is None else min(limit, x_cap)
             # 跨页接过来的半段按上一页的栏宽写，要让开的图可能在块的框外面
             holes = _wrap_holes(block, obstacles, rect | block.rect)
+            first_room = _first_row_room(block, rect)
             # 从右往左仍交给 HTML 盒子。其余段落由排版器断行：有公式图时按行落位，
             # 没有公式图时写进一个锁住换行的盒子，避免一行嵌一次整套字体。
             if rtl:
@@ -6254,12 +6269,12 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 _place_typeset(
                     page, doc, block, text, bformulas, rect, size, cjk, centered, div_attrs,
                     block.color, weight, obstacles, limit, fmS, page_spans, draws, deferred_png,
-                    justify_last, holes,
+                    justify_last, holes, first_room,
                 )
             else:
                 _place_plain(
                     page, text, bformulas, rect, size, block.size, cjk, centered, div_attrs,
-                    block.color, weight, obstacles, limit, archive, justify_last, holes,
+                    block.color, weight, obstacles, limit, archive, justify_last, holes, first_room,
                 )
             if block.leader is not None and not page.rotation:
                 _extend_leader(page, block, block.leader)
