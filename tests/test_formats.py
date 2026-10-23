@@ -2336,6 +2336,58 @@ def test_a_display_formula_set_in_text_italic_is_left_as_it_is(tmp_path):
     assert words[0].startswith("(PE") and not any("[zh-CN]" in w for w in words)
 
 
+def test_display_equations_and_text_fractions_are_left_as_they_are(tmp_path):
+    """分子分母是文字的分式、只有关系符和一两个名字的式子留原样不送翻。
+    链接下划线下面接着写的正文、带等号的图注照翻。"""
+    src = tmp_path / "equations.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=400)
+    page.insert_text((40, 40), "We measure the parser with labeled recall and labeled precision.", fontsize=10)
+    page.insert_text((127 - pymupdf.get_text_length("labeled recall: =", fontsize=10), 78), "labeled recall: =", fontsize=10)
+    numerator, denominator = "# of correct constituents in the parse", "# of total constituents in the parse"
+    width = pymupdf.get_text_length(numerator, fontsize=10)
+    page.insert_text((130, 73), numerator, fontsize=10)
+    page.insert_text((130 + (width - pymupdf.get_text_length(denominator, fontsize=10)) / 2, 86), denominator, fontsize=10)
+    page.draw_line((130, 76), (130 + width, 76), width=0.4)
+    page.insert_text((150, 120), "T = argmax s(T)", fontsize=10)
+    page.insert_text((40, 160), "The scores are listed in the appendix of the paper, see the", fontsize=10)
+    page.draw_line((260, 162), (300, 162), width=0.4)
+    page.insert_text((40, 172), "online tables for the full results of every model we trained.", fontsize=10)
+    page.insert_text((40, 210), "Figure 2: Accuracy with alpha = 0.5.", fontsize=10)
+    doc.save(src)
+    doc.close()
+
+    tr = MockTranslator("zh-CN")
+    sent: list[str] = []
+    original = tr.translate_batch
+
+    async def record(texts):
+        sent.extend(texts)
+        return await original(texts)
+
+    tr.translate_batch = record
+    run(translate_file(src, tmp_path, Runner(tr, cache=MemCache(), skip_same_lang=False), False, "zh-CN"))
+    assert not any("constituents" in text or "argmax" in text for text in sent), sent
+    assert any("see the online tables" in text for text in sent), sent
+    assert any(text.startswith("Figure 2") for text in sent), sent
+
+
+def test_an_equation_in_an_algorithm_box_or_a_caption_is_translated():
+    """算法框里的一行有一个词也照翻；图注带编号，等号再多也是图注。"""
+    from app.formats.pdf import _equation_block
+
+    def spans(*texts):
+        return [[{"text": text, "font": "Times-Roman", "size": 10.0} for text in texts]]
+
+    assert _equation_block(_block_with_spans(spans("T = argmax s(T)")))
+    assert _equation_block(_block_with_spans([[{"text": "+ max", "font": "CMSY10", "size": 10.0}]]))
+    assert not _equation_block(_block_with_spans(spans("Phoenix + Calcite")))
+    assert not _equation_block(_block_with_spans(spans("Figure 2: ", "α = 0.5")))
+    cell = _block_with_spans(spans("Output: ", "y = BN(x)"))
+    cell.clip = (0, 0, 1, 1)
+    assert not _equation_block(cell)
+
+
 class _PlaceholderDropper(MockTranslator):
     """批量请求时把 {v1} 写成文字丢掉；keep_on_retry 为真时单段重翻会保留占位符。"""
 
