@@ -287,6 +287,25 @@ def test_a_heading_across_a_narrow_gutter_is_not_joined_to_the_left_line():
     assert ["".join(span["text"] for span in line["spans"]) for line in left_block["lines"]] == left
 
 
+def test_an_inline_enumeration_wrapping_onto_a_new_line_is_not_a_list():
+    """图注里 (a) 写在行中间，(b) 碰巧落到行首、上一行排满：是同一段的折行。各项都在行首的是列表。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, y, x1=504):
+        span = {"text": text, "size": 9.0, "font": "Times-Roman", "flags": 0}
+        return (text, pymupdf.Rect(108, y, x1, y + 10), [span])
+
+    caption = [
+        item("transformed samples. G contracts in regions of high density and expands in regions of low. (a)", 524),
+        item("Consider an adversarial pair near convergence: pg is similar to pdata and D is a partially accurate.", 534),
+        item("(b) In the inner loop of the algorithm D is trained to discriminate samples from data, converging", 544),
+    ]
+    assert _split_lines(caption) == [[0, 1, 2]]
+    listed = [item("(a) Consider an adversarial pair near convergence.", 524, 330),
+              item("(b) In the inner loop of the algorithm D is trained.", 534, 330)]
+    assert _split_lines(listed) == [[0], [1]]
+
+
 def test_blocks_in_a_flagged_monospace_font_are_code():
     """txtt 这类字体名字里没有 Mono，只有 PDF 的等宽标志。整块是这种字就留原文。"""
     from app.formats.pdf import TextBlock, _code_block
