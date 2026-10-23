@@ -4634,6 +4634,22 @@ def test_justify_extras_skip_punctuation_and_short_lines():
     assert extras[names.index(" ")] > 0
 
 
+def test_a_loose_mixed_line_stretches_word_spaces_before_the_chinese():
+    """中英混排的行余量大时，先拉开词间空格，汉字之间只稍微拉开，不拉成「常 识 推 理」。"""
+    from app.formats.pdf_align import justify_extras
+
+    text = "常识推理(0-shot): Hellaswag [28], Winogrande [21], PIQA [4],"
+    extras = justify_extras(text, 60.0, 10.0)
+    inside = extras[text.index("识")]
+    space = extras[text.index(" ")]
+    assert 0 < inside <= 1.0 + 1e-9
+    assert space > inside * 3 and space <= 5.0
+    # 没有空格的中文行照旧平均摊
+    plain = "我们在此提出一种采样机制已经写完了"
+    extras = justify_extras(plain, 16.0, 10.0)
+    assert len({round(extra, 6) for extra in extras}) == 1
+
+
 def test_snake_case_identifiers_are_one_word():
     """l_partkey 这样的标识符是一个词：不从下划线处折行，两端对齐也不在下划线两边拉开。"""
     from app.formats.pdf_align import can_stretch

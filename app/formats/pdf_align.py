@@ -26,6 +26,10 @@ _GLYPH_DESCENT = 0.12
 _MIN_SLOTS = 6
 _MIN_SLACK_EM = 0.15
 _MAX_GAP_EM = 0.35
+# 词间空格每处最多再拉开多少（em）。一处空格算前后两个缝
+_MAX_SPACE_EM = 0.5
+# 有词间空格的行里，字与字之间最多拉开多少（em）
+_MAX_MIXED_GAP_EM = 0.1
 # 句读贴着前一个字，开括号贴着后一个字。空格可以拉开，公式后的分界就靠它。
 _NO_GAP_BEFORE = frozenset("。，、；：？！）】」』〉》％%.,;:?!)]}>")
 _NO_GAP_AFTER = frozenset("（【「『《〈([{")
@@ -242,16 +246,29 @@ def justify_extras(text: str, slack: float, em: float) -> list[float]:
     """每个字后面摊多少点。长度是 len(text)-1。不该拉的行返回空列表。"""
     if em <= 0 or slack < em * _MIN_SLACK_EM or len(text) < 2:
         return []
-    slots = [i for i in range(len(text) - 1) if can_stretch(text[i], text[i + 1])]
-    if len(slots) < _MIN_SLOTS:
+    return _spread([(text[i], text[i + 1]) for i in range(len(text) - 1)], slack, em)
+
+
+def _spread(pairs: list[tuple[str, str]], slack: float, em: float) -> list[float]:
+    """余量摊到相邻两字之间。词间空格旁的缝按两份摊，字与字之间按一份：中英混排的行里
+    拉丁词长、拉不开，平均摊会把汉字拉成「常 识 推 理」。一种缝拉到上限，剩下的给另一种，
+    两种都到上限，余下的留在行尾。"""
+    stretch = [can_stretch(left, right) for left, right in pairs]
+    if sum(stretch) < _MIN_SLOTS:
         return []
-    each = min(slack / len(slots), em * _MAX_GAP_EM)
-    if each < 0.05:
+    spaces = [ok and (left.isspace() or right.isspace()) for ok, (left, right) in zip(stretch, pairs)]
+    n_space = sum(spaces)
+    n_char = sum(stretch) - n_space
+    unit = slack / (2 * n_space + n_char)
+    space_each = min(2 * unit, em * _MAX_SPACE_EM) if n_space else 0.0
+    # 有词间空格的行，字与字之间只稍微拉开，再多的余量留在行尾
+    char_cap = _MAX_MIXED_GAP_EM if n_space else _MAX_GAP_EM
+    char_each = min((slack - space_each * n_space) / n_char, em * char_cap) if n_char else 0.0
+    if n_space:
+        space_each = min((slack - char_each * n_char) / n_space, em * _MAX_SPACE_EM)
+    if max(space_each, char_each) < 0.05:
         return []
-    extras = [0.0] * (len(text) - 1)
-    for index in slots:
-        extras[index] = each
-    return extras
+    return [space_each if spaced else char_each if ok else 0.0 for ok, spaced in zip(stretch, spaces)]
 
 
 def page_origin(page: pymupdf.Page) -> tuple[float, float]:
@@ -492,23 +509,10 @@ def _draw_piece(
 
 def _line_extras(texts: list[str | None], slack: float, em: float) -> list[float]:
     """把整行的余量摊进各段文字。公式槽是原子，不在这里拆。"""
-    slots = 0
-    for text in texts:
-        if not text:
-            continue
-        slots += sum(1 for i in range(len(text) - 1) if can_stretch(text[i], text[i + 1]))
-    if em <= 0 or slack < em * _MIN_SLACK_EM or slots < _MIN_SLOTS:
+    if em <= 0 or slack < em * _MIN_SLACK_EM:
         return []
-    each = min(slack / slots, em * _MAX_GAP_EM)
-    if each < 0.05:
-        return []
-    extras: list[float] = []
-    for text in texts:
-        if not text or len(text) < 2:
-            continue
-        for index in range(len(text) - 1):
-            extras.append(each if can_stretch(text[index], text[index + 1]) else 0.0)
-    return extras
+    pairs = [(text[i], text[i + 1]) for text in texts if text and len(text) >= 2 for i in range(len(text) - 1)]
+    return _spread(pairs, slack, em)
 
 
 def _glyphs(font: pymupdf.Font, text: str) -> list[int] | None:
