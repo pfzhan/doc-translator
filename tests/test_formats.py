@@ -582,6 +582,18 @@ def test_pdf_hyphen_joins_uppercase_word():
     assert _join_lines(["end", ", next"]) == "end, next"
 
 
+def test_a_url_broken_across_lines_is_joined_without_a_space():
+    """网址在 / 处、协议名后面折行，接回来中间没有空格；网址写完了、下一行是普通词的照常加空格。"""
+    assert _join_lines(["available at https://github.com/", "tensorflow/tensor2tensor."]) == (
+        "available at https://github.com/tensorflow/tensor2tensor."
+    )
+    assert _join_lines(["University, http:", "//www.ling.ohio-state.edu/", "research/phonetics/E_ToBI/."]) == (
+        "University, http://www.ling.ohio-state.edu/research/phonetics/E_ToBI/."
+    )
+    assert _join_lines(["visit https://site.com/", "for details"]) == "visit https://site.com/ for details"
+    assert _join_lines(["the ratio a:", "b holds"]) == "the ratio a: b holds"
+
+
 def _pdf_with_text(text: str, fontname: str = "helv") -> "pymupdf.Document":
     doc = pymupdf.open()
     doc.new_page(width=400, height=300).insert_textbox(
