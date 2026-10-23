@@ -6259,20 +6259,24 @@ def _room_below(
 
 def _split_filled_lines(
     text: str, formulas: list[dict], em: float, block_size: float, width: float, cjk: bool,
-    y0: float, limit: float,
+    y0: float, limit: float, page_bottom: float | None = None,
 ) -> tuple[str, str]:
     """按满行切开。这一页放得下几行整行，就留几行；剩下的从下一页继续。
 
     译文的行距比原文大，页底原文的两行按原行距放不下两行译文，余下的挤到下一页
     只能缩小字号。这里和 _fit_typeset 一样先压行距再数行数；末行下面的行距是空白，
-    也可以伸过 limit（见 _filled_bottom）。"""
+    也可以伸过 limit（见 _filled_bottom），但写入框到 page_bottom 为止：limit 就是原文正文下沿时，
+    框在那里被裁掉，多算的这截放不下，这几行会被整体缩小。"""
     prepared = space_around_latin(separate_after_formula(text))
     gap = 1.2 if cjk else 1.1
     metrics = _formula_metrics(formulas, block_size, em)
     widths = {index: metric.slot_width for index, metric in metrics.items()}
     raw = break_lines(prepared, em, max(width, 1.0), widths)
     line_h = em * gap
-    room = limit - y0 + (gap - 1) * em
+    bottom = limit + (gap - 1) * em
+    if page_bottom is not None:
+        bottom = min(bottom, page_bottom)
+    room = bottom - y0
     count = 0
     for index in range(len(raw)):
         if (index + 1) * line_h + em * 0.3 > room + 1:
@@ -6422,6 +6426,11 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         stacked = _affiliation_write_rects(same_page)
         starts = _body_first_starts(same_page, items, cjk, formulas_map)
 
+        def write_floor(block: TextBlock, rect: pymupdf.Rect) -> float:
+            """写入框最低能到哪里：写的时候 _fit_page_margins 会把框裁在原文正文下沿。"""
+            box = pymupdf.Rect(rect.x0, rect.y0, rect.x1, bounds.y1)
+            return _fit_page_margins(block, box, same_page, bounds.height, cjk).y1
+
         def write_one(
             block: TextBlock, text: str, rect: pymupdf.Rect, centered: bool,
             formulas: list[dict] | None = None, justify_last: bool = False,
@@ -6525,12 +6534,13 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     write_one(b, rest, rest_box, False, bformulas, False, rest_box.x1)
                 elif rest.strip() and tail is not None:
                     room = _room_below(page, b, rest_box.y0, rest_box.x0, rest_box.x1, same_page)
+                    floor = write_floor(b, rest_box)
                     placed, spill = _split_filled_lines(
-                        rest, bformulas, size, b.size, rest_box.width, cjk, rest_box.y0, room,
+                        rest, bformulas, size, b.size, rest_box.width, cjk, rest_box.y0, room, floor,
                     )
                     if placed:
                         lines = placed.count("\n") + 1
-                        bottom = _filled_bottom(rest_box.y0, lines, size, cjk, room, bounds.y1)
+                        bottom = _filled_bottom(rest_box.y0, lines, size, cjk, room, floor)
                         placed_rect = pymupdf.Rect(
                             rest_box.x0, rest_box.y0, rest_box.x1, max(bottom, rest_box.y0 + 4),
                         )
@@ -6571,10 +6581,11 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 continue
             size = b.size * 0.88 if cjk else b.size
             room = _room_below(page, b, rect.y0, rect.x0, rect.x1, same_page)
-            head, rest = _split_filled_lines(t, bformulas, size, b.size, rect.width, cjk, rect.y0, room)
+            floor = write_floor(b, rect)
+            head, rest = _split_filled_lines(t, bformulas, size, b.size, rect.width, cjk, rect.y0, room, floor)
             if head:
                 lines = head.count("\n") + 1
-                bottom = _filled_bottom(rect.y0, lines, size, cjk, room, bounds.y1)
+                bottom = _filled_bottom(rect.y0, lines, size, cjk, room, floor)
                 head_rect = pymupdf.Rect(rect.x0, rect.y0, rect.x1, max(bottom, rect.y0 + 4))
                 write_one(b, head, head_rect, centered, bformulas, bool(rest))
             if rest:
