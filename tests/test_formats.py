@@ -6757,11 +6757,23 @@ def test_a_line_opening_with_an_inline_formula_continues_the_sentence():
                                       for text, font in spans]])
 
     # 正文是 Times，CMR 的 1/ 是公式（提取时标上 math）
-    head = blk([("whereas SGD is low at learning rare features. Adam with", "Times-Roman")], 105, 490, 682)
+    def head():
+        return blk([("whereas SGD is low at learning rare features. Adam with", "Times-Roman")], 105, 490, 682)
+
     wrap = blk([("1/", "CMR10"), ("t decay on its stepsize should theoretically match", "Times-Roman")], 105, 490, 694)
-    assert len(_merge_continuations([head, wrap])) == 1
+    assert len(_merge_continuations([head(), wrap])) == 1
     display = blk([("x", "CMMI10"), (" = y + z for all inputs", "Times-Roman")], 160, 300, 694)
-    assert len(_merge_continuations([head, display])) == 2
+    assert len(_merge_continuations([head(), display])) == 2
+    # 行首的分式碎片另成了块，剩下的从分母起头、排到右缘，下一行回到栏边
+    rest = blk([("1−α", "CMR7"), (" had similar results. The first choice is optimal for", "Times-Roman")], 164, 490, 694)
+    rest.line_rects = [pymupdf.Rect(164, 694, 490, 706), pymupdf.Rect(105, 706, 490, 718)]
+    rest.rect = pymupdf.Rect(105, 694, 490, 718)
+    assert len(_merge_continuations([head(), rest])) == 1
+    # 上标编号起头的脚注字号小一号，不是折行
+    note = blk([("2", "CMR6"), ("The analysis assumes that every possible cell of the data cube exists.", "Times-Roman")],
+               164, 490, 694)
+    note.line_rects, note.rect, note.size = rest.line_rects, rest.rect, 8.0
+    assert len(_merge_continuations([head(), note])) == 2
 
 
 def test_the_line_gap_is_measured_from_the_documents_body_lines():
