@@ -5,15 +5,15 @@
 span 的基线上、宽度范围内，就是这个 span 的字。点阵字这类没有可靠字体框的，span 直接
 带上每个字形的起笔点（origins），按点认。
 
-线和图不归哪个 span。整个落在要重排的行里的线（\\_ 的下划线、行内分数线）和
-一像素高的细图跟着删，背景、表格线、插图都不动。
+线和图不归哪个 span。整个落在要重排的行里的线（\\_ 的下划线、行内分数线）、
+紧贴在行基线下的下划线和一像素高的细图跟着删，背景、表格线、插图都不动。
 """
 from __future__ import annotations
 
 import math
 import re
 import statistics
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 
 import pymupdf
@@ -28,6 +28,11 @@ _X_TOLERANCE = 0.5
 _ORIGIN_DIGITS = 1
 # 细图：老 Ghostscript 把 \_ 和行内分数线画成一像素高的图片
 _RULE_IMAGE_HEIGHT = 1.5
+# 下划线在基线下多深以内（字号的比例），左右可以比字多出多少（点）
+_UNDERLINE_DEPTH = 0.45
+_UNDERLINE_REACH = 1.0
+# 同一串正文词之间的空档上限（字号的比例）。两端对齐拉宽的空格也在这以内
+_WORD_GAP = 0.8
 
 _PAINTED_PATHS = {mupdf.FZ_CULL_PATH_FILL, mupdf.FZ_CULL_PATH_STROKE, mupdf.FZ_CULL_PATH_FILL_STROKE}
 
@@ -47,6 +52,8 @@ class Erasure:
     spans: list[dict] = field(default_factory=list)
     lines: list[pymupdf.Rect] = field(default_factory=list)
     spanless: list[pymupdf.Rect] = field(default_factory=list)
+    # 判断一个 span 是不是公式字。公式字下面的横线不当下划线擦
+    math: Callable[[dict], bool] = lambda span: False
 
     def add_block(self, span_lines: Sequence[Sequence[dict]] | None, line_rects: Iterable[pymupdf.Rect]) -> None:
         rects = [pymupdf.Rect(rect) for rect in line_rects]
@@ -77,6 +84,7 @@ class _Owners:
         self.lines: list[_Line] = []
         self.boxes: list[pymupdf.Rect] = []
         chars = chars or {}
+        lined: list[dict] = []
         for span in erasure.spans:
             origins = span.get("origins")
             if origins is not None:
@@ -95,7 +103,23 @@ class _Owners:
                 baseline = statistics.median(y for _x, y in found)
             # 按基线认仍然要：粗体模拟错开一点再画一遍的字，起笔点和 PyMuPDF 报的不一样
             self.lines.append(_Line(baseline, size, bbox.x0, bbox.x1))
+            lined.append(span)
         self.boxes.extend(erasure.spanless)
+        self.runs = _prose_runs(
+            [line for line, span in zip(self.lines, lined) if not erasure.math(span)]
+        )
+
+    def underlines(self, rect: pymupdf.Rect) -> bool:
+        """细横线在一串正文词的基线下、降部以内，横向不出这串词：是这些字的下划线（链接常这样画），
+        字擦了线也要擦。字体框的下沿常比下划线高一点，按行框认不到。
+        公式字下面的横线是分数线、根号线，分母还在原处时擦了分式就断了，不算。"""
+        if rect.height > _RULE_IMAGE_HEIGHT:
+            return False
+        return any(
+            run.x0 - _UNDERLINE_REACH <= rect.x0 and rect.x1 <= run.x1 + _UNDERLINE_REACH
+            and run.baseline <= rect.y0 and rect.y1 <= run.baseline + run.size * _UNDERLINE_DEPTH
+            for run in self.runs
+        )
 
     def owns(self, x: float, y: float) -> bool:
         if _key(x, y) in self.points:
@@ -108,6 +132,22 @@ class _Owners:
                 return True
         point = pymupdf.Point(x, y)
         return any(box.contains(point) for box in self.boxes)
+
+
+def _prose_runs(lines: list[_Line]) -> list[_Line]:
+    """同一基线上挨着的正文 span 连成一串：下划线在词间的空格下面也有一段。
+    中间隔着公式（空出一大段）就断开。"""
+    runs: list[_Line] = []
+    for line in sorted(lines, key=lambda item: (round(item.baseline, 1), item.x0)):
+        last = runs[-1] if runs else None
+        if (
+            last is not None and round(last.baseline, 1) == round(line.baseline, 1)
+            and line.x0 - last.x1 <= max(last.size, line.size) * _WORD_GAP
+        ):
+            runs[-1] = _Line(last.baseline, max(last.size, line.size), last.x0, max(last.x1, line.x1))
+        else:
+            runs.append(line)
+    return runs
 
 
 def _key(x: float, y: float) -> tuple[float, float]:
@@ -181,7 +221,7 @@ class _Sanitizer(mupdf.PdfSanitizeFilterOptions2):
             rect = _rect(bbox) * self.to_page
             if kind == mupdf.FZ_CULL_IMAGE and rect.height > _RULE_IMAGE_HEIGHT:
                 return 0
-            if any(_covers(line, rect) for line in self.lines):
+            if any(_covers(line, rect) for line in self.lines) or self.owners.underlines(rect):
                 return 1
         except BaseException as exc:  # noqa: BLE001
             self.error = self.error or exc

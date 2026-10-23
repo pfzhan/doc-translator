@@ -108,6 +108,33 @@ def test_only_lines_wholly_inside_the_line_box_are_erased():
     assert len(drawn) == 1 and drawn[0].x0 == 60
 
 
+def test_an_underline_below_the_line_box_goes_with_its_words():
+    """链接的下划线在基线下面，比字体框的下沿还低一点，按行框认不到。字擦了，线也要擦；
+    再往下的表格线不动。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=300, height=200)
+    page.insert_text((50, 80), "Long Papers", fontsize=10)
+    page.insert_text((150, 80), "kept", fontsize=10)
+    page.insert_text((200, 80), "dNorm", fontsize=10)
+    spans = _spans(page)
+    box = pymupdf.Rect(spans[0]["bbox"])
+    under = box.y1 + 0.3
+    page.draw_line((50, under), (75, under), width=0.4)
+    page.draw_line((77, under), (105, under), width=0.4)
+    page.draw_line((150, under), (170, under), width=0.4)
+    page.draw_line((200, under), (228, under), width=0.4)
+    page.draw_line((50, 90), (110, 90), width=0.4)
+    page = doc.reload_page(page)
+    spans = _spans(page)
+    # 分子是公式字，下面那条是分数线，分母留在原处，线不擦
+    erasure = Erasure(math=lambda span: span["text"] == "dNorm")
+    numerator = [span for span in spans if span["text"] == "dNorm"]
+    erasure.add_block([spans[:1], numerator], [pymupdf.Rect(spans[0]["bbox"]), pymupdf.Rect(numerator[0]["bbox"])])
+    erase(page, erasure)
+    drawn = sorted((round(d["rect"].x0), round(d["rect"].y0)) for d in page.get_drawings())
+    assert drawn == [(50, 90), (150, round(under)), (200, round(under))]
+
+
 def test_a_form_shared_with_another_page_is_left_alone():
     """两页共用的表单（页眉、模板）在这一页擦，另一页还是原样。"""
     src = pymupdf.open()
