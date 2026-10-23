@@ -398,7 +398,8 @@ def _attach_ink(page: pymupdf.Page, data: dict) -> None:
             for span in line["spans"]:
                 key = (span["text"], round(span["origin"][0], 1), round(span["origin"][1], 1))
                 found[key] = tuple(span["bbox"])
-    fonts: dict[str, list[bytes]] | None = None
+    fonts: dict[str, list[tuple[bytes, bytes]]] | None = None
+    glyphs: dict[tuple[str, float, float], list[tuple[str, float, float]]] | None = None
     for block in data.get("blocks", []):
         for line in block.get("lines", []):
             for span in line["spans"]:
@@ -410,7 +411,9 @@ def _attach_ink(page: pymupdf.Page, data: dict) -> None:
                 if ink == tuple(span["bbox"]) and span["text"].strip() and _font_is_math(str(span.get("font") or "")):
                     if fonts is None:
                         fonts = _embedded_fonts(page)
-                    drawn = _drawn_ink(span, fonts.get(str(span.get("font") or ""), []))
+                        glyphs = _char_origins(page)
+                    key = (span["text"], round(span["origin"][0], 1), round(span["origin"][1], 1))
+                    drawn = _drawn_ink(span, fonts.get(str(span.get("font") or ""), []), (glyphs or {}).get(key, []))
                     if drawn is not None and (drawn[1] < ink[1] - _INK_PAD or drawn[3] > ink[3] + _INK_PAD):
                         ink = drawn
                         span["ink_drawn"] = True
@@ -430,37 +433,63 @@ def _embedded_fonts(page: pymupdf.Page) -> dict[str, list[tuple[bytes, bytes]]]:
     return out
 
 
-def _drawn_ink(span: dict, fonts: list[tuple[bytes, bytes]]) -> tuple[float, float, float, float] | None:
-    """按字形单画出来的墨迹算 span 的上下沿，左右照原框。"""
-    chars = [char for char in span["text"] if not char.isspace()]
+def _char_origins(page: pymupdf.Page) -> dict[tuple[str, float, float], list[tuple[str, float, float]]]:
+    """每个 span 逐字的字、基线和字宽，按 span 的文字和起笔点对上。
+    span 的起笔点是第一个字的：「 √」的空格和根号不在一条基线上。"""
+    found: dict[tuple[str, float, float], list[tuple[str, float, float]]] = {}
+    for block in page.get_text("rawdict", flags=_TEXT_FLAGS).get("blocks", []):
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                chars = span.get("chars") or []
+                text = "".join(char["c"] for char in chars)
+                key = (text, round(span["origin"][0], 1), round(span["origin"][1], 1))
+                found[key] = [(char["c"], char["origin"][1], char["bbox"][2] - char["bbox"][0]) for char in chars]
+    return found
+
+
+def _drawn_ink(
+    span: dict, fonts: list[tuple[bytes, bytes]], chars: list[tuple[str, float, float]],
+) -> tuple[float, float, float, float] | None:
+    """按字形单画出来的墨迹算 span 的上下沿，左右照原框。每个字按自己的基线放。
+    按 Unicode 在字体里找到的字形和页上用的不一定是同一个（大号定界符有好几档），
+    字宽对不上的不认。"""
     size = float(span.get("size") or 0)
+    glyphs = [(char, base, width) for char, base, width in chars if not char.isspace()]
+    if size <= 0 or not glyphs:
+        return None
     for digest, buffer in fonts:
-        extents = [_glyph_extent(digest, buffer, char) for char in chars]
-        if size <= 0 or not all(extents):
-            continue
-        baseline = span["origin"][1]
-        x0, _y0, x1, _y1 = span["bbox"]
-        return (x0, baseline + min(top for top, _ in extents) * size,
-                x1, baseline + max(bottom for _, bottom in extents) * size)
+        tops: list[float] = []
+        bottoms: list[float] = []
+        for char, base, width in glyphs:
+            extent = _glyph_extent(digest, buffer, char)
+            if extent is None or abs(extent[2] * size - width) > max(0.3, width * 0.08):
+                break
+            tops.append(base + extent[0] * size)
+            bottoms.append(base + extent[1] * size)
+        else:
+            x0, _y0, x1, _y1 = span["bbox"]
+            return (x0, min(tops), x1, max(bottoms))
     return None
 
 
 # 字形墨迹的上下沿，键是字体文件的散列和字
-_GLYPH_EXTENTS: dict[tuple[bytes, str], tuple[float, float] | None] = {}
+_GLYPH_EXTENTS: dict[tuple[bytes, str], tuple[float, float, float] | None] = {}
 
 
-def _glyph_extent(digest: bytes, buffer: bytes, char: str) -> tuple[float, float] | None:
-    """字形墨迹的上下沿，基线往下为正，单位是字号。字体里没有这个字、或画不出墨迹时为 None。"""
+def _glyph_extent(digest: bytes, buffer: bytes, char: str) -> tuple[float, float, float] | None:
+    """字形墨迹的上下沿（基线往下为正）和字宽，单位是字号。字体里没有这个字、或画不出墨迹时为 None。"""
     key = (digest, char)
     if key not in _GLYPH_EXTENTS:
         _GLYPH_EXTENTS[key] = _measure_glyph(buffer, char)
     return _GLYPH_EXTENTS[key]
 
 
-def _measure_glyph(buffer: bytes, char: str) -> tuple[float, float] | None:
+def _measure_glyph(buffer: bytes, char: str) -> tuple[float, float, float] | None:
     try:
-        if not pymupdf.Font(fontbuffer=buffer).has_glyph(ord(char)):
+        font = pymupdf.Font(fontbuffer=buffer)
+        if not font.has_glyph(ord(char)):
             return None
+        advance = font.glyph_advance(ord(char))
         page = pymupdf.open().new_page(width=300, height=300)
         page.insert_font(fontname="G", fontbuffer=buffer)
         page.insert_text((100, 150), char, fontname="G", fontsize=100)
@@ -472,7 +501,7 @@ def _measure_glyph(buffer: bytes, char: str) -> tuple[float, float] | None:
     rows = [y for y in range(pix.height) if min(samples[y * width:(y + 1) * width]) < 128]
     if not rows:
         return None
-    return (rows[0] - 150) / 100, (rows[-1] + 1 - 150) / 100
+    return (rows[0] - 150) / 100, (rows[-1] + 1 - 150) / 100, advance
 
 
 # 下划线在基线下多深（字号的比例）。语料里的下划线在 0.11–0.3 之间；贴着基线的是删除线、
