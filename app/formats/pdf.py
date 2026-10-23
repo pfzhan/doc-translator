@@ -3688,6 +3688,9 @@ def _code_panel_ids(blocks: list[TextBlock], scans: list[PageScan]) -> set[int]:
 
 # 可伸长的大括号、大求和号这类定界符的字体。行内公式也会用到，所以只认离开左缘的块
 _BIG_DELIMITER_FONT_RE = re.compile(r"CMEX|cmex|LMMathExtension", re.I)
+# 大号字体里正文行内也用的字形：宽帽子、宽波浪（b–g），最小的两号根号（p、q）。
+# 伸长括号、求和积分号才说明是单独排的式子。文中号的求和号也算：单独排的分式里分母用的就是它
+_BIG_GLYPH_RE = re.compile(r"[^\sb-gpq]")
 # 公式外的词数到这个数就是成段的句子。行内积分号也用这种字体，右栏、列表续行又都离开版心左缘
 _DISPLAY_FORMULA_MAX_WORDS = 24
 
@@ -3710,7 +3713,7 @@ def _display_formula_ids(blocks: list[TextBlock], geometries: list[PageGeometry]
         if frame is None or block.rect.x0 <= frame.x0 + block.size * 2:
             continue
         if any(
-            _BIG_DELIMITER_FONT_RE.search(str(span.get("font") or "")) and str(span.get("text") or "").strip()
+            _BIG_DELIMITER_FONT_RE.search(str(span.get("font") or "")) and _BIG_GLYPH_RE.search(str(span.get("text") or ""))
             for line in block.span_lines or [] for span in line
         ) and _plain_words(block) < _DISPLAY_FORMULA_MAX_WORDS:
             found.append(block)
