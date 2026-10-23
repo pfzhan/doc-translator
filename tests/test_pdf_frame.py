@@ -118,7 +118,16 @@ def test_displayed_formula_with_a_big_brace_keeps_its_rows():
                               "cannot be used), and where the required integrals",
                       "font": "NimbusRomNo9L-Regu", "size": 10.0}]],
     )
-    ids = _display_formula_ids([brace, condition, body, inline, item], [geo])
+    # 行内的宽帽子、小根号也是这种字体，不说明是单独排的式子
+    accent = TextBlock(
+        page=0, rect=pymupdf.Rect(300, 520, 475, 540), line_rects=[pymupdf.Rect(300, 520, 475, 540)],
+        text="", size=10, color="#000000", bold=False,
+        span_lines=[[{"text": "Let the normalized values be x", "font": "NimbusRomNo9L-Regu", "size": 10.0},
+                     {"text": "b", "font": "CMEX10", "size": 10.0},
+                     {"text": ", and their transformations be y. We refer to the transform", "font": "NimbusRomNo9L-Regu",
+                      "size": 10.0}]],
+    )
+    ids = _display_formula_ids([brace, condition, body, inline, item, accent], [geo])
     assert ids == {id(brace), id(condition)}
 
 
