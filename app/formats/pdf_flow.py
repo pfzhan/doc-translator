@@ -65,13 +65,30 @@ class EmphasisWriter:
         if not text or not self.mixed:
             return text
         percent = size_percent(size, self.base_size) if size and self.base_size else 100
-        # 只有标点的一截不换字号：句号排成角标字号时，{z65}.{/z} 会被模型套到半句话上。
-        # 纯空白照旧，标签后面的空格还在字号标记外面
-        if text.strip() and not re.search(r"[^\W_]", text):
+        stripped = text.lstrip()
+        if not stripped:
+            # 单独的空白不换颜色：同色的两个词中间不断开
+            return self._space(text, emphasis, percent, self._color)
+        # 只有标点的一截不换字号：句号排成角标字号时，{z65}.{/z} 会被模型套到半句话上
+        if not re.search(r"[^\W_]", stripped):
             percent = self._size
-        # 纯空白不换颜色：同色的两个词中间不断开
-        shade = self._color if not text.strip() else marked_color(color, self.base_color)
-        return self._marks(emphasis, percent, shade) + text
+        shade = marked_color(color, self.base_color)
+        lead = ""
+        if stripped != text:
+            # 开头的空格按空白写，标记在空格后面打开：• {b}Math:，不是 •{b} Math:。
+            # 后面的字换颜色时空格前就收起
+            lead = self._space(text[:len(text) - len(stripped)], emphasis, percent, shade if shade == self._color else None)
+        return lead + self._marks(emphasis, percent, shade) + stripped
+
+    def _space(self, text: str, emphasis: Emphasis, percent: int, shade: int | None) -> str:
+        """空白的字号和强调只留和正写着的共有的：空格不打开标记，
+        后文不用的标记在空格前收起（{z110}Figure 1:{/z} Gen…）。"""
+        kept = Emphasis(
+            emphasis.bold and (self._bold or self.base.bold),
+            emphasis.italic and (self._italic or self.base.italic),
+            emphasis.underline and self._underline,
+        )
+        return self._marks(kept, percent if percent == self._size else 100, shade) + text
 
     def atom(self, text: str) -> str:
         if not self.mixed:
@@ -167,7 +184,11 @@ def span_emphasis(span: dict[str, object]) -> Emphasis:
 def writer_for(
     spans: list[dict[str, object]], base_size: float = 0, base_color: int | None = None,
 ) -> EmphasisWriter:
-    """底色取最长的非公式 span。只有别的 span 在强调、字号或颜色上和它不同时才写标记。
+    """定底色的强调，只有别的 span 在强调、字号或颜色上和底色不同时才写标记。
+    粗体：整块都是粗体才以粗体为底。中文写回时粗体只认 {b}，整块粗体另由写回补上；
+    底色是粗体时块里的粗体不写标记，混排的块（• 粗体标签后接正文）粗体就丢了。
+    斜体：按字数占多数的取，一样多时取正体。汉字没有斜体，斜体的定理正文逐段标 {i} 只会添乱。
+    没有字母的 span（标点、数字）不参与。
     base_color 是块的颜色，写回时整块用它；和它不同的字才写颜色标记。"""
     weighted: list[tuple[Emphasis, int]] = []
     other_mixed = False
@@ -176,15 +197,16 @@ def writer_for(
         if not text.strip():
             continue
         mark = span_emphasis(span)
-        weighted.append((mark, len(text)))
+        weighted.append((mark, len(text) if re.search(r"[^\W\d_]", text) else 0))
         if base_size and size_percent(float(span.get("size") or 0), base_size) != 100:
             other_mixed = True
         if marked_color(span.get("color"), base_color) is not None:
             other_mixed = True
     if not weighted:
         return EmphasisWriter(Emphasis(False, False), False, base_size, base_color)
-    longest = max(weighted, key=lambda item: item[1])[0]
-    base = Emphasis(longest.bold, longest.italic)
+    worded = [item for item in weighted if item[1]] or [(mark, 1) for mark, _length in weighted]
+    italic = sum(length for mark, length in worded if mark.italic)
+    base = Emphasis(all(mark.bold for mark, _length in worded), italic * 2 > sum(length for _mark, length in worded))
     mixed = other_mixed or any(mark != base for mark, _length in weighted)
     return EmphasisWriter(base, mixed, base_size, base_color)
 

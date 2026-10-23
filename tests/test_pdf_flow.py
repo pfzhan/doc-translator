@@ -128,7 +128,7 @@ def test_writer_marks_size_outside_emphasis():
     assert size_percent(10, 12) == 85
 
 
-def test_writer_for_uses_the_longest_span_as_base():
+def test_writer_for_marks_the_differing_span():
     spans = [
         {"text": "See ", "font": "TimesNewRomanPSMT", "flags": 0},
         {"text": "this", "font": "TimesNewRomanPS-BoldMT", "flags": 16},
@@ -141,6 +141,43 @@ def test_writer_for_uses_the_longest_span_as_base():
     uniform = writer_for([{"text": "All regular words", "font": "Times", "flags": 0}])
     assert not uniform.mixed
     assert uniform.text("All regular words", Emphasis(False, False)) == "All regular words"
+
+
+def _span(text: str, bold: bool = False, italic: bool = False) -> dict:
+    font = "Times-" + ("Bold" if bold else "") + ("Italic" if italic else "") if bold or italic else "Times-Roman"
+    return {"text": text, "font": font, "flags": (16 if bold else 0) | (2 if italic else 0)}
+
+
+def _write(spans: list[dict]) -> str:
+    writer = writer_for(spans)
+    return "".join(writer.text(s["text"], emphasis_of(s["font"], s["flags"])) for s in spans) + writer.close()
+
+
+def test_a_bold_label_before_body_split_into_short_spans_keeps_its_mark():
+    """正文按引用切成许多小段时，最长的一段是粗体标签。粗体只靠 {b} 写回，底色不能取粗体。"""
+    spans = [
+        _span("•"), _span(" ", bold=True), _span("Commonsense Reasoning (0-shot):", bold=True),
+        _span(" Hellaswag ["), _span("28"), _span("], Winogrande ["), _span("21"), _span("]"),
+    ]
+    assert _write(spans) == "• {b}Commonsense Reasoning (0-shot):{/b} Hellaswag [28], Winogrande [21]"
+    # 粗体比正文多一个字也照样标出来
+    spans = [_span("• N-gram"), _span(" language models", bold=True), _span(" can be evaluated on a"),
+             _span(" test set", bold=True), _span(" using"), _span(" perplexity.", bold=True)]
+    assert _write(spans) == "• N-gram {b}language models{/b} can be evaluated on a {b}test set{/b} using {b}perplexity.{/b}"
+    # 整块粗体以粗体为底，不写标记
+    assert _write([_span("Bold title", bold=True), _span(" 3")]) == "Bold title 3"
+
+
+def test_spaces_do_not_open_a_mark_and_close_the_one_that_ends():
+    spans = [_span("Theorem 1.", bold=True), _span(" ", bold=False), _span("The minimum is"), _span(" ", italic=True),
+             _span("unique", italic=True)]
+    assert _write(spans) == "{b}Theorem 1.{/b} The minimum is {i}unique{/i}"
+
+
+def test_a_mostly_italic_statement_keeps_italic_as_base():
+    """斜体的定理正文以斜体为底，不逐段标 {i}。"""
+    writer = writer_for([_span("Theorem 1.", bold=True), _span(" Assume that the function has bounded gradients", italic=True)])
+    assert writer.base == Emphasis(False, True)
 
 
 def test_paren_group_at_width_edge_terminates():
