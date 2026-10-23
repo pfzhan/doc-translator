@@ -6,7 +6,7 @@ import re
 import httpx
 import pytest
 
-from app.prompts import pick_marker
+from app.prompts import drop_added_braces, pick_marker
 from app.translators import (
     GoogleTranslator,
     OpenAITranslator,
@@ -275,3 +275,18 @@ def test_reply_that_stays_empty_is_an_empty_translation():
     tr = make_openai(handler)
     assert run(tr.translate_batch(["source"])) == [""]
     run(tr.aclose())
+
+
+def test_braces_the_model_added_around_marks_are_dropped():
+    """原文有 {n,m} 时，模型把标记也套上花括号。原文同样位置没有的才去掉。"""
+    src = "include {b}disjunction{/b} of symbols, {b}counters{/b} (*, +, and {n,m})"
+    assert drop_added_braces(src, "包括{{b}析取{/b}}, {{b}计数器{/b}}(*, + 和 {n,m})") == (
+        "包括{b}析取{/b}, {b}计数器{/b}(*, + 和 {n,m})"
+    )
+    assert drop_added_braces("a {b}x{/b} b", "叫做{b}断裂{/b}}和{{/b}") == "叫做{b}断裂{/b}和{/b}"
+    assert drop_added_braces("as {c0000ff}Chen{/c} notes", "正如{{c0000ff}Chen{/c}}所说") == "正如{c0000ff}Chen{/c}所说"
+    # 原文就有的集合括号留着
+    src = "samples a group {{i}o{/i}{v1}, {i}o{/i}{v2}}"
+    assert drop_added_braces(src, "采样一组 {{i}o{/i}{v1}, {i}o{/i}{v2}}") == "采样一组 {{i}o{/i}{v1}, {i}o{/i}{v2}}"
+    # 不贴着标记的花括号不动
+    assert drop_added_braces("{b}x{/b}", "{b}x{/b} 和 {n,m}") == "{b}x{/b} 和 {n,m}"
