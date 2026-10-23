@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import re
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -47,8 +48,15 @@ class TextFrame:
 
 
 def text_frames(pages: Sequence[Sequence[FrameLine]]) -> list[TextFrame | None]:
-    """每页的版心。长行太少、投不出来的页为 None。"""
-    prose = [[line for line in page if len(line.text.strip()) >= _PROSE_CHARS] for page in pages]
+    """每页的版心。长行太少、投不出来的页为 None。
+
+    好几页同一高度、同一句话的长行是页眉页脚（Published as a conference paper at ICLR 2015），
+    字号和正文一样，也不投票，不然版心的上缘落在页眉上。"""
+    running = _running_lines(pages)
+    prose = [
+        [line for line in page if len(line.text.strip()) >= _PROSE_CHARS and _line_key(line) not in running]
+        for page in pages
+    ]
     whole = _frame_of(prose)
     shared: dict[int, TextFrame | None] = {}
     for parity in (0, 1):
@@ -69,6 +77,18 @@ def text_frames(pages: Sequence[Sequence[FrameLine]]) -> list[TextFrame | None]:
             )
         frames.append(frame)
     return frames
+
+
+def _line_key(line: FrameLine) -> tuple[int, str]:
+    return round(line.rect.y0), re.sub(r"\d+", "#", " ".join(line.text.split()))
+
+
+def _running_lines(pages: Sequence[Sequence[FrameLine]]) -> set[tuple[int, str]]:
+    """在两页以上同一高度出现的同一行字（数字不算，页眉常带页码）。"""
+    seen: Counter[tuple[int, str]] = Counter()
+    for page in pages:
+        seen.update({_line_key(line) for line in page if line.text.strip()})
+    return {key for key, count in seen.items() if count >= 2}
 
 
 def margin_notes(pages: Sequence[Sequence[FrameLine]], frames: Sequence[TextFrame | None]) -> list[set[int]]:
