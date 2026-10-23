@@ -336,6 +336,11 @@ def test_normalize_punctuation():
     assert normalize_punctuation("（保持），不变", "en") == "（保持），不变"
     assert normalize_punctuation("我们将在第二点一节介绍", "zh-CN") == "我们将在第2.1节介绍"
     assert normalize_punctuation("第二点二节 Hadoop", "zh-CN") == "第2.2节 Hadoop"
+    # 夹在列表分隔符、运算符中间的是数学省略号，只写一个；句尾、话尾的「……」不动
+    assert normalize_punctuation("引用表{v1}{i}, {/i}{v2}{i}, ……, {/i}{v3}", "zh-CN") == "引用表{v1}{i}, {/i}{v2}{i}, …, {/i}{v3}"
+    assert normalize_punctuation("x{v1} + …… + x{v2}", "zh-CN") == "x{v1} + … + x{v2}"
+    assert normalize_punctuation("我不知道……", "zh-CN") == "我不知道……"
+    assert normalize_punctuation("苹果、香蕉……等水果", "zh-CN") == "苹果, 香蕉……等水果"
 
     class FullwidthTranslator(MockTranslator):
         async def translate_batch(self, texts):

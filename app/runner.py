@@ -429,6 +429,13 @@ def _dot_section(match: re.Match[str]) -> str:
     return f"第{major}.{minor}节"
 
 
+# 两边都是列表分隔符、运算符的省略号是数学里的省略（T1, T2, …, Tn；x1 + … + xn），
+# 只写一个。中文的「……」收在句尾、话尾，不会夹在两个逗号中间。中间可以隔着样式标记、占位符
+_MARKS = r"(?:\{[^{}\s]{1,10}\}|\x01[^\x02]{0,8}\x02)*"
+_LIST_SEP = r"[,，、;；+\-=<>≤≥×·]"
+_LIST_ELLIPSIS_RE = re.compile(rf"({_LIST_SEP}[ \t]*{_MARKS}[ \t]*)(?:……|⋯⋯|\.{{6}})({_MARKS}[ \t]*{_LIST_SEP})")
+
+
 def normalize_punctuation(dst: str, target_lang: str) -> str:
     """中文译文的全角标点统一半角：括号直接换，逗号/顿号/分号/冒号/问号/叹号
     换成半角并补一个空格。句号、书名号、引号保持全角——它们是中文排版的一部分，
@@ -437,6 +444,7 @@ def normalize_punctuation(dst: str, target_lang: str) -> str:
     if not target_lang.startswith("zh"):
         return dst
     out = _PUNCT_RE.sub(lambda m: _PUNCT_HALF[m.group(1)] + " ", dst.translate(_PARENS))
+    out = _LIST_ELLIPSIS_RE.sub(r"\1…\2", out)
     out = _DOT_SECTION_RE.sub(_dot_section, out)
     return out.rstrip() if out.endswith(" ") else out
 
