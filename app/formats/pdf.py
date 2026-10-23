@@ -6798,6 +6798,15 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 for curve in part.get("curves") or []
                 if curve is not None and int(part.get("page", f.get("page", pno))) == pno
             )
+            # 公式图按框整块裁下来贴到新位置，框里起笔的字形原处都要擦。没有 Unicode 的字形
+            # （CMEX 的大号范数线提出来是 \r）当成空白，不在 span 里，按 span 擦不到
+            erasure.spanless.extend(
+                pymupdf.Rect(part["bbox"])
+                for key in (id(b), spill_hosts.get(id(b)))
+                for f in (formulas_map or {}).get(key, [])
+                for part in _formula_parts(f)
+                if part.get("bbox") is not None and int(part.get("page", f.get("page", pno))) == pno
+            )
         erase(page, erasure)
         # 重写内容流会把 /Resources 改写成内联字典；排版器写入后 /XObject 条目上百个，
         # 这么大的内联嵌套字典在保存的 GC（garbage≥3）里会被写坏（第一个表单的条目

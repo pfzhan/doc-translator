@@ -158,6 +158,9 @@ def _box_key(box: pymupdf.Rect) -> tuple[float, ...]:
     return tuple(round(value, 1) for value in box)
 
 
+_BLANKS = frozenset(" \t\n\u00a0\u2002\u2003\u2009\u3000")
+
+
 def _char_origins(page: pymupdf.Page) -> dict[tuple[float, ...], list[tuple[float, float]]]:
     """页面上每个 span 的逐字起笔点（空白不算），按 span 框查。和提取时用同一组参数。"""
     data = page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
@@ -167,7 +170,8 @@ def _char_origins(page: pymupdf.Page) -> dict[tuple[float, ...], list[tuple[floa
             continue
         for line in block["lines"]:
             for span in line["spans"]:
-                points = [tuple(char["origin"]) for char in span.get("chars") or [] if str(char.get("c") or "").strip()]
+                # 只跳过真的空格。\r 这类控制字符是没有 Unicode 的字形（CMEX 的大号范数线），照样要擦
+                points = [tuple(char["origin"]) for char in span.get("chars") or [] if str(char.get("c") or " ") not in _BLANKS]
                 if points:
                     out.setdefault(_box_key(pymupdf.Rect(span["bbox"])), []).extend(points)
     return out
