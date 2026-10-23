@@ -202,9 +202,17 @@ def _join_lines(lines: list[str]) -> str:
             out += line
         elif line[:1] in ")]}>，。；：、）】」.,":
             out += line  # 换行后的右括号、句号贴回公式，不在标点前加空格
+        elif _URL_TAIL_RE.search(out) and _URL_PART_RE.match(line):
+            out += line  # 网址在 / 处折行（https://github.com/ | tensorflow/tensor2tensor），中间没有空格
         else:
             out += " " + line
     return out
+
+
+# 行尾停在网址的分隔符上；下一行开头的一截里面还有网址的分隔符，是网址的后半
+# 也可能折在协议名后面（http: | //www.ling.ohio-state.edu/）
+_URL_TAIL_RE = re.compile(r"(?:(?:https?://|www\.)\S*[/._\-#?=&~]|\bhttps?:)$")
+_URL_PART_RE = re.compile(r"//\w|[\w%~-]+(?:/|[/._#?=&][\w%~/._#?=&-]*[\w/])")
 
 
 def _same_line_word(
