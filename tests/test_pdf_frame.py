@@ -338,3 +338,25 @@ def test_gloss_line_is_split_from_its_free_translation():
     gloss, free = _split_gloss_lines([block], glosses)
     assert gloss.text.startswith("1SG.S") and free.text.startswith("“I sewed")
     assert _gloss_ids([gloss, free], glosses) == {id(gloss)}
+
+
+def test_centered_author_rows_stay_one_item_per_row():
+    """作者栏居中排：粗体名字、常规字体的单位、等宽字的邮箱各占一行。换了字体的下一行是另一项，
+    不和上一行并成一段。同一字体折成两行的单位仍是一项。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+
+    def centered(text, axis, y, font):
+        width = pymupdf.get_text_length(text, fontname=font, fontsize=10)
+        page.insert_text((axis - width / 2, y), text, fontsize=10, fontname=font)
+
+    for axis, name, mail in ((215, "Diederik P. Kingma", "dpkingma@gmail.com"),
+                             (390, "Max Welling", "welling.max@gmail.com")):
+        centered(name, axis, 180, "hebo")
+        centered("Machine Learning Group", axis, 191, "helv")
+        centered("Universiteit van Amsterdam", axis, 202, "helv")
+        centered(mail, axis, 213, "cour")
+    texts = [block.text for block in extract_blocks(doc)]
+    assert texts.count("Machine Learning Group Universiteit van Amsterdam") == 2
+    for row in ("Diederik P. Kingma", "dpkingma@gmail.com", "Max Welling", "welling.max@gmail.com"):
+        assert row in texts

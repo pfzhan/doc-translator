@@ -854,6 +854,69 @@ def _verbatim_seam(host: TextBlock, guest: TextBlock) -> bool:
     )
 
 
+def _row_style(spans: list[dict]) -> tuple[bool, bool]:
+    """一行字的样式：是否整行粗体、是否整行等宽。只看带字母的正文 span，名字后面的角标星号、
+    邮箱外面公式字体的花括号不算。"""
+    words = [
+        span for span in spans
+        if any(ch.isalpha() for ch in str(span.get("text") or "")) and not _span_is_math(span)
+    ]
+    bold = bool(words) and all(
+        emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0)).bold for span in words
+    )
+    mono = bool(words) and all(_mono_span(span) for span in words) and not any(
+        CJK_RE.search(str(span.get("text") or "")) for span in words
+    )
+    return bold, mono
+
+
+def _row_boxes(rects: Sequence[pymupdf.Rect]) -> list[pymupdf.Rect]:
+    """按上下交叠把几截并成可视行。"""
+    rows: list[pymupdf.Rect] = []
+    for rect in rects:
+        if rows:
+            last = rows[-1]
+            overlap = min(last.y1, rect.y1) - max(last.y0, rect.y0)
+            if overlap > min(last.height, rect.height) * 0.5:
+                rows[-1] = last | rect
+                continue
+        rows.append(pymupdf.Rect(rect))
+    return rows
+
+
+def _centered_rows(rows: Sequence[pymupdf.Rect], size: float) -> bool:
+    """几行共用一条中线、宽窄不一：居中排的一摞（作者名、单位、邮箱）。
+    两端对齐的正文行左右缘都相同；只有两行时宽窄碰巧一样，要看整摞。"""
+    if len(rows) < 2:
+        return False
+    mids = [(row.x0 + row.x1) / 2 for row in rows]
+    if max(mids) - min(mids) > size * 0.5:
+        return False
+    return max(row.x0 for row in rows) - min(row.x0 for row in rows) >= 1
+
+
+def _restyled_seam(host: TextBlock, guest: TextBlock) -> bool:
+    """两块是同一摞居中排的行，接缝处的上下两行换了样式：粗体的作者名下面接常规字体的单位，
+    单位下面接等宽字的邮箱。是一行一项，不是一段话的折行。一行拆成几截的按整行比。"""
+    if not host.span_lines or not guest.span_lines or not host.line_rects or not guest.line_rects:
+        return False
+    if len(host.span_lines) != len(host.line_rects) or len(guest.span_lines) != len(guest.line_rects):
+        return False
+    if not _centered_rows(_row_boxes(host.line_rects + guest.line_rects), host.size):
+        return False
+    gap = max(host.size * 0.4, 2.0)
+
+    def row_spans(block: TextBlock, at: pymupdf.Rect) -> list[dict]:
+        return [
+            span for rect, spans in zip(block.line_rects, block.span_lines)
+            if abs(rect.y0 - at.y0) <= gap for span in spans
+        ]
+
+    upper = row_spans(host, host.line_rects[-1])
+    lower = row_spans(guest, guest.line_rects[0])
+    return _row_style(upper) != _row_style(lower)
+
+
 _PAREN_ENUM_RE = re.compile(r"\(([a-z]|\d{1,2})\)\s")
 
 
@@ -905,8 +968,12 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         box = row_box.get(head, pymupdf.Rect(items[head][1])) | items[index][1]
         for member in range(head, index + 1):
             row_box[member] = box
+    # 整块是居中排的一摞短行时，换了样式的下一行是另一项
+    first_size = max((s["size"] for s in items[0][2]), default=10)
+    stacked = _centered_rows(_row_boxes([item[1] for item in items]), first_size)
     groups, cur = [], [0]
     row_rect = pymupdf.Rect(items[0][1])  # 当前可视行已经接上的部分
+    row_spans = list(items[0][2])
     # 这一段第一行的左缘、已有几行。一行常被拆成几截，按行比，不按截比
     group_x0, group_rows = row_rect.x0, 1
     ref = 0  # 参考行：上一条正文字号的行。上下标拆出的 dict 小行不能当参考，
@@ -1026,6 +1093,9 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             and _typewriter_line(pspans) and not _typewriter_line(items[i][2])
             and _prose_units(stripped) >= 4
         )
+        # 作者栏一行一项：名字、单位、邮箱居中排，换了字体就是下一项。
+        # 一行可能拆成几截（并排的几个作者名），按整行比
+        restyled = stacked and not same_visual_line and _row_style(row_spans) != _row_style(items[i][2])
         # 撑满的上一行没有句末，下一行的 "Q. " 是换行，不是 "a. " 这种列表项。
         wrapped_letter = (
             bool(_LETTER_BULLET_RE.match(stripped))
@@ -1039,7 +1109,7 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         example = bool(_EXAMPLE_NUMBER_RE.match(stripped)) and _ends_sentence(ptext)
         if not same_visual_line and not sec_label and (
             bullet or example or NO_TEXT_RE.match(stripped) or prev_symbol
-            or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim
+            or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim or restyled
             or _caption_opens(items[i][2], pspans)
         ):
             groups.append(cur)
@@ -1055,6 +1125,7 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             elif group_rows == 1:
                 group_x0 = min(group_x0, rect.x0)
         row_rect = row_rect | rect if same_visual_line else pymupdf.Rect(rect)
+        row_spans = row_spans + items[i][2] if same_visual_line else list(items[i][2])
         isize = max((s["size"] for s in items[i][2]), default=10)
         # 字号落下拆出的新段，基准改成这一行。否则后面的同字号续行仍对着标题拆。
         # 角标短行不在这里更新，避免左跳量相对小行算飞。接在行尾的等号也不当参考行
@@ -4221,7 +4292,8 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
             if (p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note)
                     and p.leader is None and b.leader is None
-                    and (title_frag or latin or (y_close and _cjk_wrap(p, b)))):
+                    and (title_frag or latin or (y_close and _cjk_wrap(p, b)))
+                    and not _restyled_seam(p, b)):
                 _absorb_block(p, b)
                 break
         else:
