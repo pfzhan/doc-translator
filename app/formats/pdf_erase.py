@@ -11,6 +11,7 @@ span 的基线上、宽度范围内，就是这个 span 的字。点阵字这类
 from __future__ import annotations
 
 import math
+import re
 import statistics
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -214,6 +215,7 @@ def erase(page: pymupdf.Page, erasure: Erasure) -> int:
     """
     if not erasure.spans and not erasure.lines:
         return 0
+    glyphs = type3_glyphs(page)
     sanitizer = _Sanitizer(page, erasure)
     factory = _Factory(sanitizer)
     options = mupdf.PdfFilterOptions()
@@ -225,6 +227,29 @@ def erase(page: pymupdf.Page, erasure: Erasure) -> int:
     options.newlines = 0
     options.add_factory(factory.internal())
     mupdf.pdf_filter_page_contents(pymupdf._as_pdf_document(page.parent), pymupdf._as_pdf_page(page), options)
+    restore_glyphs(page.parent, glyphs)
     if sanitizer.error is not None:
         raise sanitizer.error
     return sanitizer.removed
+
+
+def type3_glyphs(page: pymupdf.Page) -> dict[int, bytes]:
+    """这一页用到的 Type3 字体的字形流。MuPDF 递归过滤内容流时也进到字形里，按字形自己的坐标
+    问归属，删掉的是全文共用的字形：别的页、贴公式用的原页上同一个字都跟着没了。过滤完原样写回。"""
+    doc = page.parent
+    glyphs: dict[int, bytes] = {}
+    for xref, _ext, kind, *_rest in page.get_fonts(full=True):
+        if kind != "Type3" or xref <= 0:
+            continue
+        procs = doc.xref_get_key(xref, "CharProcs")
+        if procs[0] == "xref":
+            procs = ("dict", doc.xref_object(int(procs[1].split()[0])))
+        for ref in re.findall(r"(\d+) 0 R", procs[1]):
+            glyphs[int(ref)] = doc.xref_stream(int(ref))
+    return glyphs
+
+
+def restore_glyphs(doc: pymupdf.Document, glyphs: dict[int, bytes]) -> None:
+    for xref, data in glyphs.items():
+        if doc.xref_stream(xref) != data:
+            doc.update_stream(xref, data)

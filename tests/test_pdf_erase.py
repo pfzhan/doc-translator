@@ -136,3 +136,28 @@ def test_a_span_starting_with_a_space_is_found_by_its_glyphs():
     span = {**span, "origin": (span["origin"][0], span["origin"][1] + 1.6)}
     assert _erase_spans(page, [span]) == 13
     assert _words(page) == []
+
+
+def test_shared_type3_glyphs_are_left_alone():
+    """MuPDF 递归过滤时也进到 Type3 字体的字形里。字形是全文共用的，删了别处的同一个字也没了。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=300, height=200)
+    glyph = doc.get_new_xref()
+    doc.update_object(glyph, "<<>>")
+    doc.update_stream(glyph, b"100 0 0 0 100 100 d1 0 0 100 100 re f")
+    font = doc.get_new_xref()
+    doc.update_object(font, (
+        f"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 100 100] /FontMatrix [0.01 0 0 0.01 0 0] "
+        f"/CharProcs << /a {glyph} 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> "
+        f"/FirstChar 97 /LastChar 97 /Widths [100] /Resources << >> >>"
+    ))
+    doc.xref_set_key(page.xref, "Resources", f"<< /Font << /T3 {font} 0 R >> >>")
+    content = doc.get_new_xref()
+    doc.update_object(content, "<<>>")
+    doc.update_stream(content, b"BT /T3 10 Tf 50 100 Td (a) Tj ET")
+    doc.xref_set_key(page.xref, "Contents", f"{content} 0 R")
+    before = doc.xref_stream(glyph)
+    erasure = Erasure()
+    erasure.lines.append(pymupdf.Rect(-1000, -1000, 1000, 1000))
+    erase(page, erasure)
+    assert doc.xref_stream(glyph) == before
