@@ -1,23 +1,36 @@
+import itertools
+import string
+
 import pymupdf
 
 from app.formats.pdf import extract_blocks
 from app.formats.pdf_frame import FrameLine, margin_notes, note_groups, text_frames
 
 _LINE = "a body line of running text that is long enough to vote"
+# 正文每行的字都不同；各页同一高度、同一句话的是页眉
+_TAGS = ("".join(pair) for pair in itertools.product(string.ascii_lowercase, repeat=3))
 
 
 def _lines(x0: float, x1: float, count: int = 14, top: float = 100) -> list[FrameLine]:
-    return [FrameLine(pymupdf.Rect(x0, top + 12 * i, x1, top + 12 * i + 10), _LINE, 10) for i in range(count)]
+    return [
+        FrameLine(pymupdf.Rect(x0, top + 12 * i, x1, top + 12 * i + 10), f"{_LINE} {next(_TAGS)}", 10)
+        for i in range(count)
+    ]
 
 
 def test_frame_follows_body_lines_not_the_leftmost_block():
     header = FrameLine(pymupdf.Rect(77, 84, 143, 94), "4 CHAPTER 2 • WORDS AND TOKENS ...........", 8)
-    even = [header, *_lines(142, 475)]
-    odd = _lines(160, 493)
-    frames = text_frames([odd, even, odd, even])
+    frames = text_frames([_lines(160, 493), [header, *_lines(142, 475)], _lines(160, 493), [header, *_lines(142, 475)]])
     assert (frames[0].x0, frames[0].x1) == (160, 493)
     assert (frames[1].x0, frames[1].x1) == (142, 475)
     assert frames[1].y0 == 100
+
+
+def test_a_running_header_set_like_body_text_is_outside_the_frame():
+    """页眉和正文一样大、一样长，每页同一高度同一句话，不算版心的第一行。"""
+    header = "Published as a conference paper at ICLR 2015"
+    pages = [[FrameLine(pymupdf.Rect(105, 61, 285, 73), header, 10), *_lines(108, 504, top=116)] for _ in range(4)]
+    assert all(frame.y0 == 116 for frame in text_frames(pages))
 
 
 def test_two_columns_span_both_columns():
