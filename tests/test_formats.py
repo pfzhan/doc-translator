@@ -3754,6 +3754,10 @@ def test_capital_continuation_joins_across_columns_only():
     tail2 = blk("The exchange avoids another platform.", 40, 80, page=1)
     units = _cross_page_units([host2, host, tail, tail2], 9.0, geometries=[wide, wide])
     assert [unit for unit in units if len(unit) == 2] == [[host, tail]]
+    # 行尾断词（fine-）后半截只会是小写，换栏碰上大写起头的是表头或标题。
+    broken = blk("score. Without TriviaQA fine-", 300, 700)
+    units = _cross_page_units([host2, broken, tail, tail2], 9.0, geometries=[wide, wide])
+    assert all(len(unit) == 1 for unit in units)
     assert all(len(unit) == 1 for unit in _cross_page_units([host2, host, tail, tail2], 9.0))
 
     same_column = _merge_continuations([
