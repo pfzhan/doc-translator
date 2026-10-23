@@ -377,6 +377,9 @@ def _text_box(span: dict) -> pymupdf.Rect:
     if not _span_is_math(span) or not ink:
         return rect
     top, bottom = ink[1] - _INK_PAD, ink[3] + _INK_PAD
+    if span.get("ink_drawn"):
+        # 单画量出的墨迹不夹在字体框里：字体框量错了（txsys 的根号往基线下伸了大半个字）
+        return pymupdf.Rect(rect.x0, top, rect.x1, bottom)
     return pymupdf.Rect(rect.x0, max(rect.y0, top), rect.x1, min(rect.y1, bottom))
 
 
@@ -395,12 +398,81 @@ def _attach_ink(page: pymupdf.Page, data: dict) -> None:
             for span in line["spans"]:
                 key = (span["text"], round(span["origin"][0], 1), round(span["origin"][1], 1))
                 found[key] = tuple(span["bbox"])
+    fonts: dict[str, list[bytes]] | None = None
     for block in data.get("blocks", []):
         for line in block.get("lines", []):
             for span in line["spans"]:
                 ink = found.get((span["text"], round(span["origin"][0], 1), round(span["origin"][1], 1)))
-                if ink is not None:
-                    span["ink"] = ink
+                if ink is None:
+                    continue
+                # 量不出来的字形（txsys 的根号）精确框和默认框一样，按嵌入的字体单画一遍量。
+                # 墨迹出了字体框才是字体框量错了，换成墨迹；在框里的照旧
+                if ink == tuple(span["bbox"]) and span["text"].strip() and _font_is_math(str(span.get("font") or "")):
+                    if fonts is None:
+                        fonts = _embedded_fonts(page)
+                    drawn = _drawn_ink(span, fonts.get(str(span.get("font") or ""), []))
+                    if drawn is not None and (drawn[1] < ink[1] - _INK_PAD or drawn[3] > ink[3] + _INK_PAD):
+                        ink = drawn
+                        span["ink_drawn"] = True
+                span["ink"] = ink
+
+
+def _embedded_fonts(page: pymupdf.Page) -> dict[str, list[tuple[bytes, bytes]]]:
+    """页上嵌入的字体文件和它的散列，按去掉子集前缀的名字分组。Type 3 这类取不出文件的不收。"""
+    out: dict[str, list[tuple[bytes, bytes]]] = {}
+    for xref, _ext, _kind, basefont, *_rest in page.get_fonts():
+        try:
+            buffer = page.parent.extract_font(xref)[3]
+        except (RuntimeError, ValueError):
+            continue
+        if buffer:
+            out.setdefault(basefont.split("+", 1)[-1], []).append((hashlib.sha1(buffer).digest(), buffer))
+    return out
+
+
+def _drawn_ink(span: dict, fonts: list[tuple[bytes, bytes]]) -> tuple[float, float, float, float] | None:
+    """按字形单画出来的墨迹算 span 的上下沿，左右照原框。"""
+    chars = [char for char in span["text"] if not char.isspace()]
+    size = float(span.get("size") or 0)
+    for digest, buffer in fonts:
+        extents = [_glyph_extent(digest, buffer, char) for char in chars]
+        if size <= 0 or not all(extents):
+            continue
+        baseline = span["origin"][1]
+        x0, _y0, x1, _y1 = span["bbox"]
+        return (x0, baseline + min(top for top, _ in extents) * size,
+                x1, baseline + max(bottom for _, bottom in extents) * size)
+    return None
+
+
+# 字形墨迹的上下沿，键是字体文件的散列和字
+_GLYPH_EXTENTS: dict[tuple[bytes, str], tuple[float, float] | None] = {}
+
+
+def _glyph_extent(digest: bytes, buffer: bytes, char: str) -> tuple[float, float] | None:
+    """字形墨迹的上下沿，基线往下为正，单位是字号。字体里没有这个字、或画不出墨迹时为 None。"""
+    key = (digest, char)
+    if key not in _GLYPH_EXTENTS:
+        _GLYPH_EXTENTS[key] = _measure_glyph(buffer, char)
+    return _GLYPH_EXTENTS[key]
+
+
+def _measure_glyph(buffer: bytes, char: str) -> tuple[float, float] | None:
+    try:
+        if not pymupdf.Font(fontbuffer=buffer).has_glyph(ord(char)):
+            return None
+        page = pymupdf.open().new_page(width=300, height=300)
+        page.insert_font(fontname="G", fontbuffer=buffer)
+        page.insert_text((100, 150), char, fontname="G", fontsize=100)
+        pix = page.get_pixmap(dpi=72, colorspace=pymupdf.csGRAY)
+    except (RuntimeError, ValueError):
+        return None
+    width = pix.width
+    samples = pix.samples
+    rows = [y for y in range(pix.height) if min(samples[y * width:(y + 1) * width]) < 128]
+    if not rows:
+        return None
+    return (rows[0] - 150) / 100, (rows[-1] + 1 - 150) / 100
 
 
 # 下划线在基线下多深（字号的比例）。语料里的下划线在 0.11–0.3 之间；贴着基线的是删除线、
@@ -458,8 +530,50 @@ def _mark_underlines(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.R
                 continue
             if chars is None:
                 chars = _char_boxes(page)
-            out.extend(_split_underlined(span, under, chars, _line_edges(spans, chars)))
+            out.extend(_split_covered(span, under, chars, _line_edges(spans, chars), "underline"))
         line["spans"] = out
+
+
+# 根号。横线从根号右上角起笔
+_RADICALS = "√∛∜"
+
+
+def _mark_radicands(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.Rect]) -> None:
+    """根号横线下面的字是被开方数，标成公式（√81 的 81）。正文和公式用同一套字体时，
+    按字体分不出来，81 留在正文里，根号单独成了一个公式，两边各排各的。"""
+    lines = [line for block in data.get("blocks", []) for line in block.get("lines", []) if line.get("spans")]
+    radicals = [
+        _glyph_box(span) for line in lines for span in line["spans"]
+        if str(span.get("text") or "").strip()[-1:] in _RADICALS and str(span.get("text") or "").strip()
+    ]
+    bars = [
+        stroke for stroke in strokes
+        if any(abs(stroke.x0 - radical.x1) <= 1.5 and radical.y0 - 1.5 <= stroke.y0 <= radical.y0 + 2.0 for radical in radicals)
+    ]
+    if not bars:
+        return
+    chars = _char_boxes(page)
+    for line in lines:
+        out: list[dict] = []
+        for span in line["spans"]:
+            size = float(span.get("size") or 10.0)
+            base = float(span["origin"][1])
+            box = pymupdf.Rect(span["bbox"])
+            over = [] if _span_is_math(span) or not str(span.get("text") or "").strip() else [
+                bar for bar in bars
+                if base - size * 1.1 <= bar.y0 <= base - size * 0.5 and min(bar.x1, box.x1) - max(bar.x0, box.x0) > 0.5
+            ]
+            out.extend(_split_covered(span, over, chars, _line_edges(line["spans"], chars), "math") if over else [span])
+        line["spans"] = out
+
+
+def _glyph_box(span: dict) -> pymupdf.Rect:
+    """字形占的框。字体框量错、墨迹是单画量出来的，上下按墨迹算。"""
+    box = pymupdf.Rect(span["bbox"])
+    ink = span.get("ink")
+    if ink and span.get("ink_drawn"):
+        return pymupdf.Rect(box.x0, ink[1], box.x1, ink[3])
+    return box
 
 
 def _painted_stroke(page: pymupdf.Page, rect: pymupdf.Rect) -> bool:
@@ -524,12 +638,14 @@ def _line_edges(
     return lefts, rights
 
 
-def _split_underlined(
+def _split_covered(
     span: dict, under: list[pymupdf.Rect],
     chars: dict[tuple[str, float, float], list[tuple[float, float, float]]],
     edges: tuple[list[float], list[float]] = ([], []),
+    flag: str = "underline",
 ) -> list[dict]:
-    """span 按字切成线下和线外的几截。逐字的框对不上时，整个 span 都在线上才标。"""
+    """span 按字切成线盖着的和线外的几截，盖着的标上 flag（下划线、根号里的数）。
+    逐字的框对不上时，整个 span 都在线的范围里才标。"""
     text = str(span["text"])
     boxes = chars.get((text, round(span["origin"][0], 1), round(span["origin"][1], 1)))
 
@@ -540,7 +656,7 @@ def _split_underlined(
     if boxes is None or len(boxes) != len(text):
         box = pymupdf.Rect(span["bbox"])
         if all(rect.x0 - 1 <= box.x0 for rect in under) and covered(box.x0, box.x0 + 0.1) and covered(box.x1 - 0.1, box.x1):
-            return [{**span, "underline": True}]
+            return [{**span, flag: True}]
         return [span]
     # 下划线从某个字的左边画到某个字的右边。图里的虚线、图例线、分数线和字边对不上。
     # 一条线下面的字可能分成几个 span，按整行的字边对
@@ -567,9 +683,9 @@ def _split_underlined(
         if "ink" in span:
             piece["ink"] = (x0, span["ink"][1], x1, span["ink"][3])
         if marks[start]:
-            piece["underline"] = True
+            piece[flag] = True
         else:
-            piece.pop("underline", None)
+            piece.pop(flag, None)
         pieces.append(piece)
         start = index
     return pieces
@@ -2505,9 +2621,9 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                     # 孤立标点 run 不当公式（<EOS> 的尖括号、括号、等号），留在正文里
                     joined = "".join(s["text"] for s in run_spans).strip()
                     if not _LONE_PUNCT_RE.match(joined) or any(_SYMBOL_FONT_RE.search(s["font"]) for s in run_spans):
-                        bbox = pymupdf.Rect(run_spans[0]["bbox"])
+                        bbox = _glyph_box(run_spans[0])
                         for s in run_spans[1:]:
-                            bbox |= pymupdf.Rect(s["bbox"])
+                            bbox |= _glyph_box(s)
                         runs.append({"spans": run_spans, "bbox": bbox,
                                      "max_size": max(s["size"] for s in run_spans),
                                      "pos": (line_no, i, j - 1)})
@@ -3638,6 +3754,7 @@ def _extract(
         data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
         _attach_ink(page, data)
         _mark_underlines(page, data, scans[-1].strokes)
+        _mark_radicands(page, data, scans[-1].strokes)
         # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
         recover_type3_page(page, data, type3)
         pages.append(data)

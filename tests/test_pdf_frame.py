@@ -551,6 +551,42 @@ def test_underlined_letters_are_marked_and_a_fraction_bar_is_not():
     assert "".join(span["text"] for span in spans).startswith("outputs {A, D} and more")
 
 
+def test_digits_under_a_radical_bar_join_the_formula():
+    """√81 的 81 和正文同一种字体。根号横线下面的字标成公式，句号不算。"""
+    from app.formats.pdf import _attach_ink, _mark_radicands, _span_is_math
+    from app.formats.pdf_layout import scan_page
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=300)
+    page.insert_text((72, 100), "6 + 3 =", fontsize=10, fontname="tiro")
+    root = 72 + pymupdf.get_text_length("6 + 3 = ", fontname="tiro", fontsize=10)
+    page.insert_text((root, 100), "\u221a", fontsize=10, fontname="china-s")
+    data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
+    radical = next(span for block in data["blocks"] for line in block["lines"] for span in line["spans"] if "\u221a" in span["text"])
+    left = radical["bbox"][2]
+    page.insert_text((left, 100), "81. Find the least", fontsize=10, fontname="tiro")
+    digits = pymupdf.get_text_length("81", fontname="tiro", fontsize=10)
+    page.draw_line((left, radical["bbox"][1] + 0.5), (left + digits, radical["bbox"][1] + 0.5), width=0.4)
+    data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
+    _attach_ink(page, data)
+    _mark_radicands(page, data, scan_page(page).strokes)
+    spans = [span for block in data["blocks"] for line in block["lines"] for span in line["spans"]]
+    assert [span["text"] for span in spans if span.get("math")] == ["81"]
+    assert any(span["text"].startswith(". Find") and not _span_is_math(span) for span in spans)
+
+
+def test_a_glyph_is_measured_by_drawing_it_alone():
+    """字体框量错的字形（txsys 的根号）单画一遍量墨迹：上下沿相对基线，单位是字号。"""
+    from app.formats.pdf import _measure_glyph
+
+    buffer = pymupdf.Font("tiro").buffer
+    top, bottom = _measure_glyph(buffer, "g")
+    assert -0.6 < top < 0 < bottom < 0.4
+    top, bottom = _measure_glyph(buffer, "x")
+    assert -0.6 < top < 0 and abs(bottom) < 0.03
+    assert _measure_glyph(buffer, "\u4e2d") is None
+
+
 def test_an_underline_is_written_as_a_mark_and_drawn_under_the_words():
     """下划线送翻时写成 {u}，整块都画了线也照写；写回中文时字下面画一条线。"""
     from app.formats.pdf_align import _place_line
