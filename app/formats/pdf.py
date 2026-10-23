@@ -4212,6 +4212,10 @@ def _continues_fragment(host: TextBlock, guest: TextBlock) -> bool:
     first = guest.line_rects[0]
     if first.x0 > last.x0 - max(host.size * 3.5, 28):
         return False
+    # 行尾半句折到下一行，这一行排到了栏的右缘。单独排的式子两边都空着，下面的正文另起一段；
+    # 式子下面的上下限是几截短的式子，仍接上
+    if last.x1 < first.x1 - host.size * 3 and _prose_units(guest.text) >= 4:
+        return False
     gap = first.y0 - last.y1 - host.line_gap * host.size
     if not (-0.5 * host.size <= gap < 1.5 * host.size):
         return False

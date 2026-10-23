@@ -3485,6 +3485,24 @@ def test_same_line_merge_by_page_matches_the_rescan():
     assert shape(_merge_same_line_sentences(copy.deepcopy(chain))) == shape(expected)
 
 
+def test_a_displayed_formula_does_not_swallow_the_prose_below_it():
+    """单独排的式子两边都空着，分子分母、分号各是一截，最后一截落在右边。下面回到栏边的正文另起一段。"""
+    from app.formats.pdf import TextBlock, _continues_fragment
+
+    lines = [pymupdf.Rect(117, 145, 173, 158), pymupdf.Rect(178, 145, 253, 165), pymupdf.Rect(254, 157, 257, 164)]
+    host = TextBlock(
+        page=0, rect=lines[0] | lines[1] | lines[2], line_rects=lines,
+        text="dNorm(x, X)/dx and dNorm(x, X)/dX ;", size=10, color="#000", bold=False,
+    )
+    guest_lines = [pymupdf.Rect(72, 175, 301, 188), pymupdf.Rect(72, 187, 301, 200)]
+    guest = TextBlock(
+        page=0, rect=guest_lines[0] | guest_lines[1], line_rects=guest_lines,
+        text="ignoring the latter term would lead to the explosion described above.",
+        size=10, color="#000", bold=False,
+    )
+    assert not _continues_fragment(host, guest)
+
+
 def test_finished_condition_line_does_not_swallow_the_next_paragraph():
     """公式条件行以句号结束时，不把下面回到栏边的正文接进来。没写完的右半句仍接下一行。"""
     from app.formats.pdf import TextBlock, _continues_fragment, _merge_same_line_sentences
