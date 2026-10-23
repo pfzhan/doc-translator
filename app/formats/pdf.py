@@ -118,9 +118,14 @@ SENT_ENDS = ("。", "！", "？", "：", "…", ".", "!", "?", ":")
 _SENT_CLOSERS = "\"'”’」』)）"
 
 
+# 段末的证毕号（□、∎，Symbol 字体里取出来是 \x00 或私用区字符）不算正文，句号在它前面。
+# \x01、\x02 是公式哨兵的分隔符，不能剥
+_END_MARK_RE = re.compile(r"[\s\x00\ue000-\uf8ff□■∎◻◼]+$")
+
+
 def _ends_sentence(text: str) -> bool:
-    """以句末标点收尾，或者以式子收尾。"""
-    text = text.rstrip()
+    """以句末标点收尾，或者以式子收尾。段末的证毕号不算。"""
+    text = _END_MARK_RE.sub("", text)
     return text.rstrip(_SENT_CLOSERS).endswith(SENT_ENDS) or _ends_in_call(text)
 
 
@@ -1331,7 +1336,7 @@ def _can_continue(
     if allow_capital and not broken_word and head.isalpha() and head.isupper() and len(prev.text.split()) >= 3:
         continues = True
     return bool(not numbered_heading and not is_heading and continues
-                and not prev.text.rstrip().endswith(_SENT_END_PUNCT)
+                and not _END_MARK_RE.sub("", prev.text).endswith(_SENT_END_PUNCT)
                 and not _is_float_text(nxt.text)
                 and nxt.size <= prev.size * 1.4)
 

@@ -1321,6 +1321,22 @@ def test_pdf_biblio_entry_needs_a_citation_not_a_year_in_prose():
     assert biblio_skips(toc) == [False] * 5
 
 
+def test_a_proof_mark_after_the_full_stop_still_ends_the_paragraph():
+    """段末的证毕号从 Symbol 字体里取出来是 \x00，句号在它前面。下一页大写起头的是新段，不接上来。"""
+    from app.formats.pdf import TextBlock, _can_continue, _ends_sentence
+
+    def blk(text, page):
+        return TextBlock(page=page, rect=pymupdf.Rect(318, 700, 558, 729), line_rects=[],
+                         text=text, size=10, color="#000000", bold=False)
+
+    end = blk("Consequently, the query output can be computed from the view. \x00", 0)
+    assert _ends_sentence(end.text) and _ends_sentence("which proves the claim. □")
+    nxt = blk("As this example illustrated, to correctly test availability of output columns", 1)
+    assert not _can_continue(end, nxt, 10, None, allow_capital=True)
+    # 公式哨兵的分隔符不当证毕号剥掉
+    assert not _ends_sentence("f\x01s\x02i\x01/s\x02(")
+
+
 def test_pdf_biblio_author_year_entries_after_the_heading():
     """作者-年份体的条目不带编号和括号年份。标题后面连着几条「姓, 名缩写.」起头的就进入参考文献；
     正文里只一句这样开头的不算。"""
