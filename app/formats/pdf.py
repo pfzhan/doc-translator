@@ -1358,6 +1358,17 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             not prev_symbol and _open_operator_end(ptext)
             and not same_visual_line and rect.x0 <= row_rect.x0 + psize
         )
+        # 标签和值分两栏排（View ranges:   {l_partkey, …} ∈ (150, +∞), | {o_custkey} …）：值和标签隔着
+        # 一个字宽以上，值的下一行从值的左缘起笔，不回到标签下面。值是另一栏，另成一段
+        next_row = items[i + 1][1] if i + 1 < len(items) else None
+        # 条目号（2.1、a.）后面的悬挂缩进是列表项，不在这里拆，标签要是词
+        value_column = (
+            overlap > min(qrect.height, rect.height) * 0.5 and not touching
+            and bool(re.search(r"[^\W\d_]{2,}", items[i - 1][0])) and not _list_item(items[i - 1][0])
+            and rect.x0 - qrect.x1 >= psize and rect.x0 > group_x0 + psize
+            and next_row is not None and next_row.y0 >= rect.y0 + rect.height * 0.5
+            and abs(next_row.x0 - rect.x0) <= 1.0
+        )
         # 上一句说完，下一行以例句编号开头：一行一个例句
         example = bool(_EXAMPLE_NUMBER_RE.match(stripped)) and _ends_sentence(ptext)
         # 上一句（或句末括起来的例词）说完，下一行以粗体标签起头：定义列表的下一条。
@@ -1366,11 +1377,11 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             not same_visual_line and _label_lead(items[i][2])
             and (_ends_sentence(ptext) or ptext.rstrip().endswith(")"))
         )
-        if not same_visual_line and not sec_label and (
+        if value_column or (not same_visual_line and not sec_label and (
             (not open_end and (bullet or example or NO_TEXT_RE.match(stripped))) or (prev_symbol and not closing)
             or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim or restyled or labeled
             or _caption_opens(items[i][2], pspans)
-        ):
+        )):
             groups.append(cur)
             cur = [i]
             group_x0, group_rows, group_size = rect.x0, 1, line_size if body_line else 0
@@ -4943,7 +4954,14 @@ def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
                 continuation = (len(p.text) < 60 and b.text[:1].islower()
                                 and (":" in p.text or "：" in p.text)
                                 and not _ends_sentence(p.text))
-                if (same_line and -1 <= gap < 3 * p.size and label) or (below and (continuation or (label and note))):
+                # 定义式的标签后面是一栏值：值有几行、每行都从值的左缘起笔（View ranges:  {…}, | {…}）。
+                # 并进标签的话，译文折回标签下面，栏就没了。图注标签照旧并
+                rows = _visual_lines(b) if b.line_rects else []
+                column = (
+                    not _caption_label(p.text) and len(rows) >= 2 and b.rect.x0 > p.rect.x1
+                    and all(abs(min(rect.x0 for rect in row) - b.rect.x0) <= 1.0 for row in rows)
+                )
+                if (same_line and -1 <= gap < 3 * p.size and label and not column) or (below and (continuation or (label and note))):
                     _absorb_block(p, b)
                     continue
         out.append(b)

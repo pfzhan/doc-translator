@@ -570,3 +570,49 @@ def test_an_underline_is_written_as_a_mark_and_drawn_under_the_words():
     assert placed is not None
     rules = placed[3]
     assert len(rules) == 1 and 0 < rules[0][1] - rules[0][0] < 10
+
+
+def test_a_value_column_beside_a_word_label_is_its_own_paragraph():
+    """标签和值分两栏排：值的下一行从值的左缘起笔。值另成一段，标签单独翻；条目号后面的悬挂缩进仍是一条。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, x0, y0, x1):
+        span = {"text": text, "size": 9.0, "font": "Times-Roman", "flags": 0}
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [span])
+
+    ranges = [
+        item("Step 3: Compute ranges.", 318, 594, 407),
+        item("View ranges:", 318, 604, 366),
+        item("{l_partkey, p_partkey} in (150, +inf),", 390, 604, 522),
+        item("{o_custkey} in (50, 500)", 390, 614, 482),
+        item("Query ranges:", 318, 627, 369),
+        item("{l_partkey, p_partkey} in (150, 160),", 390, 627, 524),
+        item("{o_custkey} in (123, 123)", 390, 637, 484),
+    ]
+    assert _split_lines(ranges) == [[0], [1], [2, 3], [4], [5, 6]]
+    numbered = [
+        item("2.1", 318, 604, 330),
+        item("Translate a sentence from one language you know to another. Now", 345, 604, 558),
+        item("tokenize both sentences with a tokenizer visualizer.", 345, 614, 520),
+    ]
+    assert _split_lines(numbered) == [[0, 1, 2]]
+
+
+def test_a_word_label_does_not_absorb_the_value_column_block_beside_it():
+    """标签和值分在两块时，值是几行一栏，不并进标签；图注标签后面的半句照旧并。"""
+    from app.formats.pdf import TextBlock, _merge_caption_fragments
+
+    def blk(text, rects):
+        rect = pymupdf.Rect(rects[0])
+        for other in rects[1:]:
+            rect |= other
+        return TextBlock(page=0, rect=rect, line_rects=[pymupdf.Rect(r) for r in rects], text=text,
+                         size=9.0, color="#000", bold=False)
+
+    label = blk("View ranges:", [(318, 604, 366, 616)])
+    values = blk("{l_partkey, p_partkey} in (150, +inf), {o_custkey} in (50, 500)",
+                 [(390, 604, 522, 616), (390, 614, 482, 626)])
+    assert len(_merge_caption_fragments([label, values])) == 2
+    caption = blk("Figure 2:", [(318, 604, 350, 616)])
+    tail = blk("Examples of decay schedules for the learning rate", [(356, 604, 540, 616)])
+    assert len(_merge_caption_fragments([caption, tail])) == 1
