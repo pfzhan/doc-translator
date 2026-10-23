@@ -6957,6 +6957,35 @@ def test_a_colored_example_sentence_stays_original_but_an_epigraph_does_not():
     assert not _attribution(example, blk("Here Victoria is referred to by many different phrases", (142, 484, 475, 520)))
 
 
+def test_numbered_and_bracket_labeled_examples_stay_original():
+    """编号起头、续行悬挂在编号右边的例句和带 [角标 …] 标注的例句留原文。
+    以式子编号起头、续行回到栏边的段落，层号上标 W[1]、整个括号只有一个词的 [EOS] 照翻。"""
+    from app.formats.pdf import TextBlock, _example_ids
+
+    def blk(spans, rows):
+        rects = [pymupdf.Rect(row) for row in rows]
+        rect = pymupdf.Rect(rects[0])
+        for row in rects[1:]:
+            rect |= row
+        text = "".join(text for text, _size in spans)
+        return TextBlock(page=0, rect=rect, line_rects=rects, text=text, size=10.0, color="#000000", bold=False,
+                         span_lines=[[{"text": text, "size": size} for text, size in spans]])
+
+    example = blk([("(24.3) AMD agreed to [buy] Markham, Ontario-based ATI for around $5.4 billion", 10.0),
+                   (" in cash and stock, the companies announced Monday.", 10.0)],
+                  [(160, 491, 490, 504), (185, 504, 399, 516)])
+    reference = blk([("(2.4) follows from the definition of the loss and the bound on the", 10.0),
+                     (" gradient given above.", 10.0)], [(160, 491, 490, 504), (160, 504, 300, 516)])
+    labeled = blk([("[", 10.0), ("Arg0", 7.0), (" The group] ", 10.0), ("agreed", 10.0), (" [", 10.0), ("Arg1", 7.0),
+                   (" it wouldn’t make an offer].", 10.0)], [(185, 300, 400, 312)])
+    layers = blk([("We use W", 10.0), ("[", 7.0), ("1", 7.0), ("] and W", 10.0), ("[", 7.0), ("2", 7.0),
+                  ("] for the weights.", 10.0)], [(160, 300, 400, 312)])
+    tokens = blk([("Then we append an [", 10.0), ("EOS", 7.0), ("] and [", 10.0), ("BOS", 7.0), ("] token.", 10.0)],
+                 [(160, 300, 400, 312)])
+    found = _example_ids([example, reference, labeled, layers, tokens])
+    assert found == {id(example), id(labeled)}
+
+
 def test_a_verbatim_line_does_not_run_into_the_prose_below():
     """等宽字照录的问答 Q: ... A: Charles 没有句末标点，下一行回到栏边、小写开头的正文不是它的续行。"""
     from app.formats.pdf import TextBlock, _line_tail_match

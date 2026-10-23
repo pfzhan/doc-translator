@@ -96,6 +96,8 @@ _FORMULA_DESCENT_EM = 1.3
 _PAREN_ITEM_RE = re.compile(r"^\([a-zA-Z]\)\s+")
 # 书里按章编号的例句：(1.2) It was difficult ...
 _EXAMPLE_NUMBER_RE = re.compile(r"^\(\d+\.\d+[a-z]?\)\s+\S")
+# 例句里方括号标注的角标（Arg0、ArgM-TMP、PER）最多几个字
+_BRACKET_LABEL_CHARS = 10
 # 单独一截的编号：例句、式子的 (25.4)、(3)，列表的 (a)
 _PAREN_LABEL_RE = re.compile(r"\((?:[a-zA-Z]|\d+(?:\.\d+)*)\)")
 _LIST_INTRO_END = (".", "?", "!", "。", "！", "？", ":", ";", "：", "；")
@@ -3740,6 +3742,45 @@ def _colored_example(block: TextBlock, frame: TextFrame) -> bool:
     return block.size * 1.5 <= indent <= block.size * 4 and block.rect.x1 <= frame.x1 + 2
 
 
+def _example_ids(blocks: list[TextBlock]) -> set[int]:
+    """讲语言现象时举的例句：(24.3) 编号起头、续行悬挂在编号右边的句子，和带两处以上
+    [角标 …] 标注的句子（[Arg0 The group] agreed …、[PER Jane] of [ORG United]）。
+    下文拿原句里的词来讲，标注也夹在词中间，留原文。
+
+    正文以式子编号起头（(2.4) follows from …）的段落，续行回到栏边，不算。"""
+    found: set[int] = set()
+    for block in blocks:
+        if block.clip is not None or block.side_note:
+            continue
+        if _EXAMPLE_NUMBER_RE.match(block.text) and _hanging(block):
+            found.add(id(block))
+        elif _labeled_brackets(block) >= 2:
+            found.add(id(block))
+    return found
+
+
+def _hanging(block: TextBlock) -> bool:
+    """首行以下各行都比首行靠右起笔。只有一行的也算。"""
+    starts = [min(rect.x0 for rect in row) for row in sorted(_visual_lines(block), key=lambda row: row[0].y0)]
+    return all(x0 > starts[0] + block.size for x0 in starts[1:])
+
+
+def _labeled_brackets(block: TextBlock) -> int:
+    """左方括号后面紧跟一个小一号的字母标签、标签后面还有词的次数。
+    层号 W[1] 的上标是数字，[EOS] 这样整个括号里只有一个词，都不算。"""
+    spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
+    count = 0
+    for left, label, after in zip(spans, spans[1:], spans[2:]):
+        text = str(label.get("text") or "").strip()
+        if (
+            str(left.get("text") or "").rstrip().endswith("[") and float(label.get("size") or 0) < block.size * 0.95
+            and len(text) <= _BRACKET_LABEL_CHARS and " " not in text and sum(c.isalpha() for c in text) >= 2
+            and not str(after.get("text") or "").lstrip().startswith("]")
+        ):
+            count += 1
+    return count
+
+
 def _foreign_ids(blocks: list[TextBlock]) -> set[int]:
     """和全文不是同一种语言的段落：英文书里的西班牙文题记、德文引文、巴斯克语例句。
     作者有意留着原文，旁边多半已经给了译文，留原文。
@@ -7123,6 +7164,7 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
         _display_formula_ids(blocks, geometries) | _gloss_ids(blocks, glosses) | _code_panel_ids(blocks, scans)
         | _foreign_ids(blocks) | _colored_examples(blocks, geometries)
     )
+    examples = _example_ids(blocks)
     # 页眉不进大纲，旁注、目录条目不是标题
     kinds = [
         "h2" if role is Role.HEADING and not edge and not block.side_note and block.leader is None else "p"
@@ -7132,6 +7174,7 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
     skips = [
         bib or role is Role.FIGURE or edge or _garbled_label(block.text) or _code_block(block)
         or _margin_term(block) or id(block) in displayed or id(block) in cell_ids or _equation_block(block)
+        or id(block) in examples
         for bib, role, edge, block in zip(biblio_skips(blocks), roles, edges, blocks)
     ]
     skip_ids = {id(b) for b, s in zip(blocks, skips) if s}
@@ -7141,6 +7184,13 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
         id(b) for b, role in zip(blocks, roles) if role is not Role.BODY or b.side_note or b.leader is not None
     } | margin_ids
     # 跨页合并照旧把格子当正文看：栏底是格子时不接下一页，格子上面的表头、图里的字不能顶上去当页末
+    # 跨页的例句：下一页接着的半句也留原文。先让例句照正文接段，找出接在它后面的块
+    if examples:
+        skip_ids |= {
+            id(block)
+            for unit in _cross_page_units(blocks, median, skip_ids - cell_ids - examples, geometries, halt_ids, margin_ids)
+            for index, block in enumerate(unit) if any(id(head) in examples for head in unit[:index])
+        }
     units = _cross_page_units(blocks, median, skip_ids - cell_ids, geometries, halt_ids, margin_ids)
     block_kind = {id(b): k for b, k in zip(blocks, kinds)}
 
