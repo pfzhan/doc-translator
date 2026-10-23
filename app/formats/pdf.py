@@ -7117,6 +7117,13 @@ _BIBLIO_LEAD_RE = re.compile(r"^(?:\[\d+\]\s*|\d{1,3}[.)]\s+|\[?[A-Z][A-Za-z]{0,
 _BIBLIO_WRAP_RE = re.compile(r"^[a-zà-öø-ÿ]")
 # 弱信号：只有编号条目才算。“这项研究发表于某出版社。”是正文。
 _BIBLIO_CN_PUB_RE = re.compile(r"出版社|年版")
+# 一串作者名：Y. Bai, A. Jones, K. Ndousse, …；Alan Akbik, Duncan Blythe, and Roland Vollgraf.
+# 标题和正文不会以连着两三个「名, 名,」起头
+_AUTHOR_NAME = r"(?:(?:[A-Z]\.[\s-]?){1,3}[A-Z][\w'’-]+|[A-Z][a-z][\w'’-]*(?:\s(?:[A-Z]\.|[A-Z][\w'’-]+)){1,3})"
+_AUTHOR_LIST_RE = re.compile(rf"^{_AUTHOR_NAME}(?:,\s+(?:and\s+)?{_AUTHOR_NAME}){{2,}}(?:,|\.|$)")
+# ACL 体：作者. 2018. 题名. In Proceedings …, pages 1–10. 年份在作者后面单独一句，后面是出处
+_BIBLIO_ACL_YEAR_RE = re.compile(r"(?:^|\.\s)(?:19|20)\d{2}[a-z]?\.\s+\S")
+_BIBLIO_VENUE_RE = re.compile(r"\bIn\s+(?:Proc|[A-Z]{2,})|\bpages\s+\d+\s*[–-]\s*\d+|\bJournal\b")
 
 
 def _biblio_heading_like(block: TextBlock, text: str, median: float) -> bool:
@@ -7129,7 +7136,7 @@ def _biblio_heading_like(block: TextBlock, text: str, median: float) -> bool:
 
 def _biblio_entry_citation(text: str) -> bool:
     """标题后面这行像引文，才进入参考文献。正文里的 2017 / arXiv / 出版社 / [J] 不算。"""
-    if _BIBLIO_CITE_RE.search(text):
+    if _BIBLIO_CITE_RE.search(text) or _author_entry(text):
         return True
     # 类型标记 + 年份才是著录条目；“出处见某书[M]。后续还有讨论。”是正文
     if _BIBLIO_TYPE_MARK_RE.search(text) and _BIBLIO_YEAR_RE.search(text):
@@ -7139,6 +7146,14 @@ def _biblio_entry_citation(text: str) -> bool:
     if (_BIBLIO_YEAR_END_RE.search(text) or _BIBLIO_PAGES_END_RE.search(text)) and (lead or mark):
         return True
     return lead and (mark or bool(_BIBLIO_CN_PUB_RE.search(text)))
+
+
+def _author_entry(text: str) -> bool:
+    """一串作者名起头，或者 ACL 体的「作者. 年份. 题名. In 出处」。参考文献的字号常比正文大一点，
+    作者那一行按字号像标题，要靠这个认出来。"""
+    if _AUTHOR_LIST_RE.match(text):
+        return True
+    return bool(_BIBLIO_ACL_YEAR_RE.search(text) and _BIBLIO_VENUE_RE.search(text))
 
 
 def _vol_roman_continuation(text: str) -> bool:
@@ -7166,7 +7181,7 @@ def _biblio_year_continuation(text: str) -> bool:
 
 def _biblio_citation_line(block: TextBlock, text: str, start_size: float, median: float) -> bool:
     """已经在参考文献里：这行是引文或换行前的条目，不能当成下一章。"""
-    if _BIBLIO_CITE_RE.search(text) or _BIBLIO_MARK_RE.search(text):
+    if _BIBLIO_CITE_RE.search(text) or _BIBLIO_MARK_RE.search(text) or _author_entry(text):
         return True
     heading = _biblio_heading_like(block, text, median)
     short_heading = heading and len(text) < 40
@@ -7193,7 +7208,7 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
     if not blocks:
         return []
     sizes = sorted(b.size for b in blocks)
-    median = sizes[len(sizes) // 2]
+    median = median_all = sizes[len(sizes) // 2]
     prepared = [(b, re.sub(r"\s+", " ", b.text).strip()) for b in blocks]
 
     def smaller_subsection(block: TextBlock, text: str, origin: float) -> bool:
@@ -7236,11 +7251,17 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
             pending_type = bool(_BIBLIO_TYPE_MARK_RE.search(text) and not _BIBLIO_YEAR_RE.search(text))
         return False
 
-    def exits(block: TextBlock, text: str, start_size: float, prev_numbered: bool) -> bool:
+    def exits(block: TextBlock, text: str, start_size: float, prev_numbered: bool, entry_size: float) -> bool:
+        # 像不像标题按条目的字号比：有的参考文献整体比正文大一号，按全文的中位字号，条目也像标题
+        median = max(median_all, entry_size)
         if not text or len(text) > 120 or smaller_subsection(block, text, start_size):
             return False
         # 悬挂缩进里单独成行的编号 [ESS]、[12] 是条目的标签，不是下一章
         if _BIBLIO_LEAD_RE.fullmatch(text + " "):
+            return False
+        # 句中标点起头的、没有空格的一整串网址，是上一条折过来的半截
+        # （https: 后面折行，下一行是 //github.com/…；…-Abstract-Datasets_and_Benchmarks_Track.html.）
+        if text[:1] in "/.,;:)]}-–_" or (" " not in text and re.search(r"[/_]|\.[A-Za-z]{2,}\.?$", text)):
             return False
         if block.size + 0.5 < start_size * 0.8:
             return False
@@ -7264,6 +7285,8 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
     in_biblio = False
     start_size = 0.0
     prev_numbered = False
+    # 已经认进参考文献的条目字号
+    entry_sizes: list[float] = []
     for i, (block, text) in enumerate(prepared):
         title = len(text) < 40 and bool(BIBLIO_HEADING_RE.match(text))
         if title and in_biblio:
@@ -7279,18 +7302,22 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
             in_biblio = True
             start_size = block.size
             prev_numbered = False
+            entry_sizes = []
             skips.append(False)
             continue
         if in_biblio and smaller_subsection(block, text, start_size):
             prev_numbered = False
             skips.append(False)
             continue
-        if in_biblio and exits(block, text, start_size, prev_numbered):
+        entry_size = sorted(entry_sizes)[len(entry_sizes) // 2] if entry_sizes else 0.0
+        if in_biblio and exits(block, text, start_size, prev_numbered, entry_size):
             in_biblio = False
             prev_numbered = False
             skips.append(False)
             continue
         skips.append(in_biblio)
+        if in_biblio:
+            entry_sizes.append(block.size)
         if in_biblio and _BIBLIO_LEAD_RE.match(text):
             prev_numbered = True
         elif _BIBLIO_WRAP_RE.match(text):

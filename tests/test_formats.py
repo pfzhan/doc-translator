@@ -1464,6 +1464,35 @@ def test_pdf_biblio_same_size_citations_do_not_exit():
     assert biblio_skips(appendix) == [False, False, False, True, False, False]
 
 
+def test_pdf_biblio_author_lists_and_url_halves_stay_in():
+    """ACL 体（作者. 年份. 题名. In 出处）进得去；条目字号比正文大一号时，作者一行、折行的网址半截都不是下一章。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    acl = [
+        blk("Body text of the paper.", 10),
+        blk("References", 12, bold=True),
+        blk("Alan Akbik, Duncan Blythe, and Roland Vollgraf.", 10),
+        blk("2018. Contextual string embeddings for sequence labeling. In Proceedings of COLING, pages 1638–1649.", 10),
+        blk("Appendix A", 12, bold=True),
+    ]
+    assert biblio_skips(acl) == [False, False, True, True, False]
+    larger = [
+        *[blk("Body text of the paper.", 10) for _ in range(5)],
+        blk("References", 13, bold=True),
+        blk("E. Akyurek, M. Damani, L. Qiu, H. Guo, Y. Kim, and J. Andreas. The surprising effectiveness. arXiv, 2024.", 10.8),
+        blk("Y. Bai, A. Jones, K. Ndousse, A. Askell, A. Chen, N. DasSarma, D. Drain, S. Fort", 11),
+        blk("H. Face. Open r1: A fully open reproduction of deepseek-r1, January 2025. URL https:", 11),
+        blk("//github.com/huggingface/open-r1.", 12),
+        blk("1b2feafb99a24-Abstract-Datasets_and_Benchmarks_Track.html.", 12),
+        blk("D. Ganguli, L. Lovitt, J. Kernion. Red teaming language models. arXiv, 2022.", 11),
+    ]
+    assert biblio_skips(larger)[6:] == [True] * 6
+
+
 def _one_epub(path, docs: dict[str, str]):
     items = "".join(
         f'<item id="d{i}" href="{name}" media-type="application/xhtml+xml"/>'
