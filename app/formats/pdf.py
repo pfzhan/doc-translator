@@ -48,7 +48,7 @@ from .pdf_flow import (
     writer_for,
 )
 from .pdf_dedupe import merge_duplicates
-from .pdf_erase import Erasure, erase
+from .pdf_erase import Erasure, erase, restore_glyphs, type3_glyphs
 from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, text_frames
 from .pdf_layout import (
     PageGeometry, PageScan, RuledTable, cell_containing, content_floor, interlinear_glosses, light_fill, margin_skips,
@@ -5922,7 +5922,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             page_spans = [s for blk in page_data["blocks"] if blk.get("type") == 0
                           for ln in blk["lines"] for s in ln["spans"] if s.get("font") not in bitmap_fonts]
         fmS = _page_form(doc, page) if mid_map else None
-        # 公式贴的是擦除前打包的原页，不受影响
+        # 公式贴的是擦除前打包的原页，不受影响。点阵字的字形是全文共用的，擦除、裁公式的过滤会改到它，
+        # 这一页写完原样写回
+        glyphs = type3_glyphs(page) if mid_map else {}
         erasure = Erasure()
         for b, _ in items:
             erasure.add_block(b.span_lines, b.line_rects or [b.rect])
@@ -6113,6 +6115,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         _flush_draws(page, doc, draws, deferred_png)
         if mid_map:
             _place_formula_images(page, doc, images_before, mid_map, fmS, page_spans)
+            restore_glyphs(doc, glyphs)
     return doc
 
 
