@@ -5950,7 +5950,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         # 公式贴的是擦除前打包的原页，不受影响。点阵字的字形是全文共用的，擦除、裁公式的过滤会改到它，
         # 这一页写完原样写回
         glyphs = type3_glyphs(page) if mid_map else {}
-        erasure = Erasure()
+        erasure = Erasure(math=_span_is_math)
         for b, _ in items:
             erasure.add_block(b.span_lines, b.line_rects or [b.rect])
             # 目录条目的点线一起擦掉，写完译文再从页码前补到译文末尾
