@@ -163,3 +163,20 @@ def test_smaller_pseudocode_above_a_caption_is_the_figure():
     geo = PageGeometry.from_rects(612, [item.rect for item in items], [], 792)
     roles = HeuristicLayout().classify(items, [geo], median=10)
     assert roles == [Role.BODY, Role.FIGURE, Role.CAPTION]
+
+
+def test_a_paragraph_in_a_framed_box_is_body_text():
+    """带底色的圆角框按图算，框里成段的几句话仍是正文；图里的短标签照旧算图。"""
+    box = pymupdf.Rect(100, 100, 500, 300)
+    paragraph = (
+        "The Framework is intended to be flexible and to augment existing risk practices which should align "
+        "with applicable laws, regulations, and norms. Organizations should follow existing regulations and "
+        "guidelines for risk criteria, tolerance, and response established by organizational, domain, "
+        "discipline, sector, or professional requirements."
+    )
+    items = [
+        LayoutItem(0, pymupdf.Rect(110, 110, 490, 290), paragraph, 10, False),
+        LayoutItem(0, pymupdf.Rect(120, 120, 180, 130), "Encoder output", 8, False),
+    ]
+    roles = HeuristicLayout().classify(items, [_geo([box])], median=10)
+    assert roles == [Role.BODY, Role.FIGURE]

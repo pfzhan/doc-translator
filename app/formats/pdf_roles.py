@@ -79,7 +79,7 @@ class HeuristicLayout:
             figures = (*_figures_of(item.page, geometries), *floats.get(item.page, ()))
             # 画图程序铺的白底常连图注一起包住，图注标签起头的仍是图注
             labeled = len(item.text.strip()) < _CAPTION_LEN and _caption_start(item, _CAPTION_RE, median)
-            if _inside_figure(item.rect, figures) and not labeled:
+            if _inside_figure(item.rect, figures) and not labeled and not _framed_prose(item):
                 roles.append(Role.FIGURE)
             elif labeled and _inside_figure(item.rect, figures) or _is_caption(item, figures, median):
                 roles.append(Role.CAPTION)
@@ -88,6 +88,20 @@ class HeuristicLayout:
             else:
                 roles.append(Role.BODY)
         return roles
+
+
+# 框里成段的正文至少这么多词、这么多句
+_PROSE_WORDS = 40
+_PROSE_SENTENCES = 2
+
+
+def _framed_prose(item: LayoutItem) -> bool:
+    """框起来的一段正文（带底色、圆角框的提示段）。矢量框按图算，框里的字不能都当图里的标签：
+    图里的标签是几个词，不会是几句话的整段。"""
+    text = item.text.strip()
+    if len(text.split()) < _PROSE_WORDS or not text.endswith(_SENT_END):
+        return False
+    return len(re.findall(r"[.!?。！？](?:\s|$)", text)) >= _PROSE_SENTENCES
 
 
 def is_size_heading(text: str, size: float, bold: bool, median: float) -> bool:
