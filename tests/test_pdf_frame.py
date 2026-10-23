@@ -360,3 +360,25 @@ def test_centered_author_rows_stay_one_item_per_row():
     assert texts.count("Machine Learning Group Universiteit van Amsterdam") == 2
     for row in ("Diederik P. Kingma", "dpkingma@gmail.com", "Max Welling", "welling.max@gmail.com"):
         assert row in texts
+
+
+def test_a_centered_name_list_wrapping_at_commas_stays_one_unit():
+    """作者名单居中排、在逗号处折行，PyMuPDF 分成了几块。下一行大写起头也是接着写的，
+    拆开后单独一行的名字会被音译。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def row(text, x0, y0, x1):
+        rect = pymupdf.Rect(x0, y0, x1, y0 + 10)
+        span = {"text": text, "font": "NimbusRomNo9L-Medi", "flags": 20, "size": 10.0}
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000",
+                         bold=True, span_lines=[[span]])
+
+    rows = [row("Guillaume Lample, Lucile Saulnier, Lélio Renard Lavaud, Marie-Anne Lachaux,", 133.9, 179.7, 478.1),
+            row("Pierre Stock, Teven Le Scao, Thibaut Lavril, Thomas Wang, Timothée Lacroix,", 137.8, 190.6, 474.2),
+            row("William El Sayed", 269.0, 201.5, 343.0)]
+    [merged] = _merge_continuations(rows)
+    assert merged.text.endswith("Lacroix, William El Sayed")
+    # 左对齐的两行不算居中排
+    left = [row("Results are listed in the table below, for each model,", 108, 300, 380),
+            row("Accuracy improves with scale.", 108, 311, 250)]
+    assert len(_merge_continuations(left)) == 2

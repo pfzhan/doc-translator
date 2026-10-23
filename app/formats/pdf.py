@@ -4275,18 +4275,24 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             dangling = _dangling(p.text) and not _list_item(b.text) and not _opens_with_math(b) and same_size
             # 居中段落的末行大写起头（Rates.、MATH dataset.）也接上；题词下面小一号的出处不接
             centered_end = centered_tail and same_size
+            # 居中排的一段（作者名单）在逗号处折行，下一行大写起头也是接着写的。整摞共用一条中线、字体不变
+            centered_comma = (
+                same_size and p.text.rstrip().endswith((",", "，")) and not _list_item(b.text)
+                and bool(p.line_rects) and bool(b.line_rects)
+                and _centered_rows(_row_boxes(p.line_rects + b.line_rects), p.size)
+            )
             # 列表项后面第一行比它还靠左起笔的是列表完了以后的正文。续行和条目文字对齐或者悬挂缩进，不会往左
             list_end = _list_item(p.text) and first_x0 < p.rect.x0 - p.size * 0.5
             latin = (
                 y_close
-                and (x_close or centered_tail or math_wrap)
+                and (x_close or centered_tail or math_wrap or centered_comma)
                 and not list_end
                 and len(p.text.split()) >= 3  # 一两个词的无标点短块是标题/标签，不是段落
                 and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
                 and (colon_wrap or call_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
                      or not _ends_sentence(p.text))
                 and (first.islower() or first in ".),;%,；，" or open_paren or math_wrap or centered_end
-                     or dangling)
+                     or dangling or centered_comma)
                 and not _verbatim_seam(p, b)
             )
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
