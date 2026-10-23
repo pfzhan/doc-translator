@@ -854,6 +854,21 @@ def _verbatim_seam(host: TextBlock, guest: TextBlock) -> bool:
     )
 
 
+_PAREN_ENUM_RE = re.compile(r"\(([a-z]|\d{1,2})\)\s")
+
+
+def _follows_inline_enum(text: str, before: list[str]) -> bool:
+    """text 以 (b) 起头，前面的行里在行中间出现过 (a)。"""
+    match = _PAREN_ENUM_RE.match(text)
+    if not match:
+        return False
+    label = match.group(1)
+    if label in ("a", "1", "0"):
+        return False
+    prev = chr(ord(label) - 1) if label.isalpha() else str(int(label) - 1)
+    return any(f"({prev})" in line.strip()[1:] for line in before)
+
+
 # 下一行的字号比这一段大这么多倍，是另一段。一行至少这么多字才算这一段的字号
 _SIZE_RISE = 1.15
 _SIZE_ROW_CHARS = 6
@@ -1017,7 +1032,9 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             and max_x1 - prect.x1 <= 3 * psize
             and not ptext.rstrip().endswith(_LIST_INTRO_END)
         )
-        bullet = _list_item(text) and not wrapped_letter
+        # 段中列举 (a) … (b) …，前一项写在行中间，这一项碰巧落到行首，上一行又排满：是折行，不是列表
+        inline_enum = max_x1 - prect.x1 <= 3 * psize and _follows_inline_enum(stripped, [items[j][0] for j in cur])
+        bullet = _list_item(text) and not wrapped_letter and not inline_enum
         # 上一句说完，下一行以例句编号开头：一行一个例句
         example = bool(_EXAMPLE_NUMBER_RE.match(stripped)) and _ends_sentence(ptext)
         if not same_visual_line and not sec_label and (
