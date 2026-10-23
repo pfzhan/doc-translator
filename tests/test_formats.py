@@ -1321,6 +1321,33 @@ def test_pdf_biblio_entry_needs_a_citation_not_a_year_in_prose():
     assert biblio_skips(toc) == [False] * 5
 
 
+def test_pdf_biblio_author_year_entries_after_the_heading():
+    """作者-年份体的条目不带编号和括号年份。标题后面连着几条「姓, 名缩写.」起头的就进入参考文献；
+    正文里只一句这样开头的不算。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=False)
+
+    book = [
+        blk("A potential DAMSL labeling of the conversational fragment.", 9),
+        blk("Bibliography", 24),
+        blk("Abadi, M., A. Agarwal, P. Barham, Agirre, E. and D. Martinez. 2001.", 8),
+        blk("E. Brevdo, Z. Chen, C. Citro, G. S. Corrado, A. Davis, J. Dean, M. Devin.", 8),
+        blk("Agichtein, E. and L. Gravano. 2000.", 8),
+        blk("Snowball: Extracting relations from large plain-text collections.", 8),
+        blk("Subject Index", 24),
+    ]
+    assert biblio_skips(book) == [False, False, True, True, True, True, False]
+    prose = [
+        blk("Bibliography", 14),
+        blk("Smith, J. and colleagues kept the sources in a shared folder.", 11),
+        blk("The chapter continues here.", 11),
+    ]
+    assert biblio_skips(prose) == [False] * 3
+
+
 def test_pdf_biblio_numbered_entry_ending_with_pages():
     """老数据库论文的条目是 会议 年份, 页码。，行尾是页码不是年份，也要进入。"""
     from app.formats.pdf import TextBlock, biblio_skips

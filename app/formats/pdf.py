@@ -6768,6 +6768,8 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
         origin = prepared[idx][0].size
         pending_lead = False
         pending_type = False
+        # 作者-年份体的条目不带编号和括号年份（Abadi, M., A. Agarwal, … 2001.），连着几条才算
+        author_leads = 0
         for block, text in prepared[idx + 1:idx + 16]:
             # Endnotes / 参考文献是另一节的标题，必须停住，不能把进入字号抬高
             if len(text) < 40 and BIBLIO_HEADING_RE.match(text):
@@ -6786,6 +6788,10 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
                 or (pending_type and _biblio_year_continuation(text))
             ):
                 return True
+            if _AUTHOR_LEAD_RE.match(text):
+                author_leads += 1
+                if author_leads >= _AUTHOR_LEADS_TO_ENTER:
+                    return True
             pending_lead = bool(_BIBLIO_LEAD_RE.match(text))
             pending_type = bool(_BIBLIO_TYPE_MARK_RE.search(text) and not _BIBLIO_YEAR_RE.search(text))
         return False
@@ -6868,6 +6874,7 @@ _AUTHOR_LEAD_RE = re.compile(
     r"(?:[A-Z]\.(?:\s?-?[A-Z]\.)*|[A-Z][a-z]+)"
     r"(?:,|\s(?:and|&)\s|\s\(?(?:19|20)\d{2})"
 )
+_AUTHOR_LEADS_TO_ENTER = 2  # 参考文献标题后面至少几块以作者-年份条目起头
 _ENTRY_WINDOW = 8   # 往后看几块
 _ENTRY_LEADS = 4    # 其中至少几块是条目开头
 _ENTRY_GAP = 4      # 连续这么多块没有新条目，参考文献就结束了
