@@ -6745,6 +6745,25 @@ def test_a_centered_formula_or_a_hanging_item_line_keeps_its_place():
     assert len(_merge_continuations(item)) == 1
 
 
+def test_a_line_opening_with_an_inline_formula_continues_the_sentence():
+    """以行内式子起头、从栏边起笔、后面接着正文的一行是上一句的折行；缩进单独排的式子不是。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(spans, x0, x1, y):
+        rect = pymupdf.Rect(x0, y, x1, y + 12)
+        text = "".join(text for text, _font in spans)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=9.7, color="#000", bold=False,
+                         span_lines=[[{"text": text, "font": font, "size": 9.7, "math": font.startswith("CM")}
+                                      for text, font in spans]])
+
+    # 正文是 Times，CMR 的 1/ 是公式（提取时标上 math）
+    head = blk([("whereas SGD is low at learning rare features. Adam with", "Times-Roman")], 105, 490, 682)
+    wrap = blk([("1/", "CMR10"), ("t decay on its stepsize should theoretically match", "Times-Roman")], 105, 490, 694)
+    assert len(_merge_continuations([head, wrap])) == 1
+    display = blk([("x", "CMMI10"), (" = y + z for all inputs", "Times-Roman")], 160, 300, 694)
+    assert len(_merge_continuations([head, display])) == 2
+
+
 def test_the_line_gap_is_measured_from_the_documents_body_lines():
     """行框高的字体紧排的两行叠上一点，量出来是负的。正文太少量不出来时用常见值。"""
     from app.formats.pdf import _LINE_GAP, _line_gap
