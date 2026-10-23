@@ -237,6 +237,24 @@ def _list_item(text: str) -> bool:
     return bool(BULLET_RE.match(text) or _PAREN_ITEM_RE.match(stripped))
 
 
+def _label_lead(spans: list[dict]) -> bool:
+    """行首是几个词的粗体标签，冒号或句号收尾，后面接着非粗体正文（Speaker demographics: What…）。"""
+    label = ""
+    for index, span in enumerate(spans):
+        text = str(span.get("text") or "")
+        if emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0)).bold:
+            label += text
+            continue
+        if not label.strip():
+            return False
+        rest = "".join(str(s.get("text") or "") for s in spans[index:]).strip()
+        if rest[:1] in ":.":
+            label, rest = label + rest[0], rest[1:].strip()
+        phrase = label.strip()
+        return phrase.endswith((":", ".")) and len(phrase.split()) <= 4 and _prose_units(rest) >= 2
+    return False
+
+
 def _justified_joins(items: list[tuple], max_x1: float) -> set[int]:
     """两端对齐的一行被 PyMuPDF 按词拆开时，后面几个词的下标。
 
@@ -1143,9 +1161,15 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         )
         # 上一句说完，下一行以例句编号开头：一行一个例句
         example = bool(_EXAMPLE_NUMBER_RE.match(stripped)) and _ends_sentence(ptext)
+        # 上一句（或句末括起来的例词）说完，下一行以粗体标签起头：定义列表的下一条。
+        # 单行的条目排得差不多满，按硬换行看不出来
+        labeled = (
+            not same_visual_line and _label_lead(items[i][2])
+            and (_ends_sentence(ptext) or ptext.rstrip().endswith(")"))
+        )
         if not same_visual_line and not sec_label and (
             (not open_end and (bullet or example or NO_TEXT_RE.match(stripped))) or (prev_symbol and not closing)
-            or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim or restyled
+            or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim or restyled or labeled
             or _caption_opens(items[i][2], pspans)
         ):
             groups.append(cur)
@@ -4300,10 +4324,15 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             # 不比上一段最左的一行靠右（首行缩进的段落），或者和其中一行同一左缘（悬挂缩进的条目续行），
             # 或者居中接在居中段落后面。
             # (a) 这样的编号是下一项，(2.11) 是例句、公式的编号；
-            # 缩进的是单独排的式子（LUNAR 的逻辑式），往右错开的是表头一列列的 (Acc)
+            # 缩进的是单独排的式子（LUNAR 的逻辑式），往右错开的是表头一列列的 (Acc)。
+            # 粗体标签起头的条目只有一行时，没有续行可比，悬挂缩进一两个字宽的也是它的续行
+            label_hang = (
+                bool(p.span_lines) and 0 < b.rect.x0 - p.rect.x0 <= 3 * p.size
+                and _label_lead([span for span in p.span_lines[0] if str(span.get("text") or "").strip()])
+            )
             open_paren = (
                 first == "(" and not _list_item(b.text) and not _EQUATION_TAG_RE.match(b.text)
-                and (centered_tail or b.rect.x0 <= p.rect.x0 + p.size * 0.5
+                and (centered_tail or label_hang or b.rect.x0 <= p.rect.x0 + p.size * 0.5
                      or any(abs(b.rect.x0 - rect.x0) <= p.size * 0.5 for rect in p.line_rects))
             )
             # 上一行停在 and、of 上，下一行哪怕大写起头也是接着写的。下一行是另一个列表项（…; and | • …）
