@@ -45,6 +45,7 @@ from .pdf_flow import (
     restore_emphasis,
     separate_after_formula,
     space_around_latin,
+    span_emphasis,
     strip_style_marks,
     writer_for,
 )
@@ -375,6 +376,178 @@ def _attach_ink(page: pymupdf.Page, data: dict) -> None:
                 ink = found.get((span["text"], round(span["origin"][0], 1), round(span["origin"][1], 1)))
                 if ink is not None:
                     span["ink"] = ink
+
+
+# 下划线在基线下多深（字号的比例）。语料里的下划线在 0.11–0.3 之间；贴着基线的是删除线、
+# 表格线，再往下是下一行的分数线、表格线
+_UNDERLINE_TOP = 0.05
+_UNDERLINE_DEPTH = 0.35
+
+
+def _mark_underlines(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.Rect]) -> None:
+    """字下面画的线（opt_views 例 6 里标出的列 {A, D, G}）。线不在字体里，按细横线认：
+    在字的基线下、降部以内，横向不出这一行。线下面的字切成单独的 span，标上 underline，
+    送翻时写成 {u}。公式字下面的横线是分数线、根号线，不算。"""
+    if not strokes:
+        return
+    lines = [line for block in data.get("blocks", []) for line in block.get("lines", []) if line.get("spans")]
+    # 分数线下面紧挨着分母，下划线下面空着一段行距。量字形的墨迹框，不量字体框。
+    # 下面那行自己也画着下划线的（一列链接）不是分母
+    inks = [
+        (id(span), pymupdf.Rect(span.get("ink") or span["bbox"]))
+        for line in lines for span in line["spans"]
+        if str(span.get("text") or "").strip()
+        and not _underline_strokes(span, strokes, line["bbox"][0], line["bbox"][2])
+    ]
+    chars: dict[tuple[str, float, float], list[tuple[float, float, float]]] | None = None
+    seen: dict[tuple[float, float, float, float], bool] = {}
+
+    def visible(rect: pymupdf.Rect) -> bool:
+        key = (rect.x0, rect.y0, rect.x1, rect.y1)
+        if key not in seen:
+            seen[key] = _painted_stroke(page, rect)
+        return seen[key]
+
+    for line in lines:
+        spans = line["spans"]
+        left = min(span["bbox"][0] for span in spans)
+        right = max(span["bbox"][2] for span in spans)
+        main = max(float(span.get("size") or 0) for span in spans)
+        # 这一行正文的基线。分子抬在基线上面，下划线的字落在基线上
+        body = [span for span in spans if float(span.get("size") or 0) >= main * 0.85 and str(span.get("text") or "").strip()]
+        baseline = float(_by_chars(body, lambda span: round(span["origin"][1], 1))) if body else 0.0
+        out: list[dict] = []
+        for span in spans:
+            size = float(span.get("size") or 10.0)
+            raised = abs(span["origin"][1] - baseline) > size * 0.15
+            under = [] if size < main * 0.85 or raised else [
+                rect for rect in _underline_strokes(span, strokes, left, right)
+                if not any(
+                    other != id(span) and rect.y1 - 0.5 <= ink.y0 <= rect.y1 + size * 0.25
+                    and min(ink.x1, rect.x1) - max(ink.x0, rect.x0) > 0.5
+                    for other, ink in inks
+                ) and visible(rect)
+            ]
+            if not under:
+                out.append(span)
+                continue
+            if chars is None:
+                chars = _char_boxes(page)
+            out.extend(_split_underlined(span, under, chars, _line_edges(spans, chars)))
+        line["spans"] = out
+
+
+def _painted_stroke(page: pymupdf.Page, rect: pymupdf.Rect) -> bool:
+    """线真的画出来了：剪裁路径外面、被盖住的线也在 get_drawings 里。按线所在的一条细带渲染，
+    几乎每一列都有深色才算。字的降部只穿过其中几列。"""
+    band = pymupdf.Rect(rect.x0, rect.y0 - 0.4, rect.x1, rect.y1 + 0.4)
+    try:
+        pix = page.get_pixmap(clip=band, dpi=144, colorspace=pymupdf.csGRAY, alpha=False)
+    except Exception:  # noqa: BLE001 - 渲染不了就不认
+        return False
+    if pix.width <= 0 or pix.height <= 0:
+        return False
+    samples = pix.samples
+    dark = sum(
+        1 for x in range(pix.width)
+        if any(samples[y * pix.stride + x] < 200 for y in range(pix.height))
+    )
+    return dark >= pix.width * 0.8
+
+
+def _underline_strokes(
+    span: dict, strokes: Sequence[pymupdf.Rect], left: float, right: float,
+) -> list[pymupdf.Rect]:
+    text = str(span.get("text") or "")
+    if not text.strip() or _span_is_math(span):
+        return []
+    size = float(span.get("size") or 10.0)
+    base = float(span["origin"][1])
+    box = pymupdf.Rect(span["bbox"])
+    return [
+        rect for rect in strokes
+        if base + size * _UNDERLINE_TOP <= rect.y0 and rect.y1 <= base + size * _UNDERLINE_DEPTH
+        and rect.x0 >= left - 1 and rect.x1 <= right + 1
+        and min(rect.x1, box.x1) - max(rect.x0, box.x0) > 0.5
+    ]
+
+
+def _char_boxes(page: pymupdf.Page) -> dict[tuple[str, float, float], list[tuple[float, float, float]]]:
+    """每个 span 逐字的左右边和起笔点，按 span 的文字和起笔点对上。"""
+    found: dict[tuple[str, float, float], list[tuple[float, float, float]]] = {}
+    raw = page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
+    for block in raw.get("blocks", []):
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                chars = span.get("chars") or []
+                text = "".join(char["c"] for char in chars)
+                key = (text, round(span["origin"][0], 1), round(span["origin"][1], 1))
+                found[key] = [(char["bbox"][0], char["bbox"][2], char["origin"][0]) for char in chars]
+    return found
+
+
+def _line_edges(
+    spans: list[dict], chars: dict[tuple[str, float, float], list[tuple[float, float, float]]],
+) -> tuple[list[float], list[float]]:
+    """一行里所有字的左边和右边。"""
+    lefts: list[float] = []
+    rights: list[float] = []
+    for span in spans:
+        boxes = chars.get((str(span["text"]), round(span["origin"][0], 1), round(span["origin"][1], 1))) or []
+        lefts += [x0 for x0, _x1, _ox in boxes]
+        rights += [x1 for _x0, x1, _ox in boxes]
+    return lefts, rights
+
+
+def _split_underlined(
+    span: dict, under: list[pymupdf.Rect],
+    chars: dict[tuple[str, float, float], list[tuple[float, float, float]]],
+    edges: tuple[list[float], list[float]] = ([], []),
+) -> list[dict]:
+    """span 按字切成线下和线外的几截。逐字的框对不上时，整个 span 都在线上才标。"""
+    text = str(span["text"])
+    boxes = chars.get((text, round(span["origin"][0], 1), round(span["origin"][1], 1)))
+
+    def covered(x0: float, x1: float) -> bool:
+        middle = (x0 + x1) / 2
+        return any(rect.x0 - 0.5 <= middle <= rect.x1 + 0.5 for rect in under)
+
+    if boxes is None or len(boxes) != len(text):
+        box = pymupdf.Rect(span["bbox"])
+        if all(rect.x0 - 1 <= box.x0 for rect in under) and covered(box.x0, box.x0 + 0.1) and covered(box.x1 - 0.1, box.x1):
+            return [{**span, "underline": True}]
+        return [span]
+    # 下划线从某个字的左边画到某个字的右边。图里的虚线、图例线、分数线和字边对不上。
+    # 一条线下面的字可能分成几个 span，按整行的字边对
+    reach = max(1.0, float(span.get("size") or 10.0) * 0.15)
+    lefts = edges[0] or [x0 for x0, _x1, _ox in boxes]
+    rights = edges[1] or [x1 for _x0, x1, _ox in boxes]
+    under = [
+        rect for rect in under
+        if any(abs(rect.x0 - x0) <= reach for x0 in lefts) and any(abs(rect.x1 - x1) <= reach for x1 in rights)
+    ]
+    # 下划线字符本身不算画了下划线（有的 PDF 把 _ 画成一条线）
+    marks = [covered(x0, x1) and char != "_" for char, (x0, x1, _ox) in zip(text, boxes)]
+    if not any(marks):
+        return [span]
+    pieces: list[dict] = []
+    start = 0
+    y0, y1 = span["bbox"][1], span["bbox"][3]
+    for index in range(1, len(text) + 1):
+        if index < len(text) and marks[index] == marks[start]:
+            continue
+        x0, x1 = boxes[start][0], boxes[index - 1][1]
+        piece = {**span, "text": text[start:index], "bbox": (x0, y0, x1, y1),
+                 "origin": (boxes[start][2], span["origin"][1])}
+        if "ink" in span:
+            piece["ink"] = (x0, span["ink"][1], x1, span["ink"][3])
+        if marks[start]:
+            piece["underline"] = True
+        else:
+            piece.pop("underline", None)
+        pieces.append(piece)
+        start = index
+    return pieces
 
 
 # 栏边：至少这么多条、每条至少这么多字宽的行从同一处起笔
@@ -2480,7 +2653,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 continue  # 已被某个公式吞掉，或是序数的上标
             elif id(s) in ordinal_at:
                 reading = ordinal_at[id(s)]
-                emphasis = emphasis_of(s.get("font") or "", int(s.get("flags") or 0))
+                emphasis = span_emphasis(s)
                 parts.append(writer.text(reading, emphasis, size_of(s), s.get("color")))
                 shown = dict(s)
                 shown["text"] = reading
@@ -2488,7 +2661,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                     flush()
                 pending = _extend_text_run(pending, shown, emphasis, line_no)
             else:
-                emphasis = emphasis_of(s.get("font") or "", int(s.get("flags") or 0))
+                emphasis = span_emphasis(s)
                 parts.append(writer.text(s["text"], emphasis, size_of(s), s.get("color")))
                 if pending is not None and not _same_text_style(pending, s, emphasis):
                     flush()
@@ -3428,6 +3601,7 @@ def _extract(
         tables_by_page.append(scans[-1].tables)
         data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
         _attach_ink(page, data)
+        _mark_underlines(page, data, scans[-1].strokes)
         # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
         recover_type3_page(page, data, type3)
         pages.append(data)
@@ -6321,7 +6495,7 @@ def _own_line_box(block: TextBlock, cjk: bool) -> pymupdf.Rect:
 
 
 # break_lines 在行末收起跨行的样式标记
-_TRAILING_CLOSERS_RE = re.compile(r"(?:\{/[bizc]\})+$")
+_TRAILING_CLOSERS_RE = re.compile(r"(?:\{/[bizcu]\})+$")
 
 
 def _after_first_line(source: str, head: str) -> str:
@@ -7145,7 +7319,7 @@ def _compose_accents(text: str) -> str:
     return _CEDILLA_RE.sub(lambda m: unicodedata.normalize("NFC", (m.group(1) or m.group(2)) + "\u0327"), text)
 
 
-_MARKUP_RE = re.compile(r"\{v\d+\}|\{\|\}|\{/?[bi]\}|\{z\d+\}|\{/z\}")
+_MARKUP_RE = re.compile(r"\{v\d+\}|\{\|\}|\{/?[biu]\}|\{z\d+\}|\{/z\}")
 
 
 def _only_formulas(sent: str) -> bool:
@@ -7252,9 +7426,9 @@ def _assign_restored_parts(
 
 # 节号、条目号：4、4.1、3.2.1.、B.3.2.、1.、(a)、a)、(1)。编号外面可能包着字号、粗体标记
 _NUMBER_LABEL_RE = re.compile(
-    r"^((?:\{[biz]\d*\})*)"
+    r"^((?:\{[bizu]\d*\})*)"
     r"(\d{1,3}(?:\.\d{1,3})*\.?|[A-Z](?:\.\d{1,3})+\.?|[A-Z]\.|[IVX]{1,4}\.|\(?[a-z]\)|\(\d{1,2}\))"
-    r"((?:\{/[biz]\})*)(?=\s|\{[biz]\d*\}\s)"
+    r"((?:\{/[bizu]\})*)(?=\s|\{[bizu]\d*\}\s)"
 )
 
 
@@ -7292,12 +7466,12 @@ def _normalize_heading_number(src_text: str, translation: str) -> str:
     if not m or len(src_text) > 60 or _ends_sentence(src_text):
         return translation
     # 编号可能包在字号、粗体标记里：{z125}二{/z} 算法
-    lead = re.match(r"^\s*((?:\{[biz]\d*\})*)", translation)
+    lead = re.match(r"^\s*((?:\{[bizu]\d*\})*)", translation)
     body = translation[lead.end():]
     if not _TRANS_HEAD_NUM_RE.match(body):
         return translation
     rest = _TRANS_HEAD_NUM_RE.sub("", body, count=1)
-    close = re.match(r"^((?:\{/[biz]\})*)\s*", rest)
+    close = re.match(r"^((?:\{/[bizu]\})*)\s*", rest)
     rest = rest[close.end():]
     return f"{lead.group(1)}{m.group(1)}{close.group(1)} {rest}" if rest else translation
 
@@ -7326,7 +7500,7 @@ def _list_number(src_text: str, translation: str) -> str:
 
 _CAPTION_NUM_RE = re.compile(r"\s*(?:Figure|Fig\.?|Table|Tab\.?)\s*(\d+)\b", re.I)
 # 图注标签常带字号或粗体标记：{z110}图一:{/z}
-_CN_CAPTION_RE = re.compile(r"^(\s*(?:\{/?[biz]\d*\}\s*)*)([图表])\s*[一二三四五六七八九十百零〇两]+")
+_CN_CAPTION_RE = re.compile(r"^(\s*(?:\{/?[bizu]\d*\}\s*)*)([图表])\s*[一二三四五六七八九十百零〇两]+")
 
 
 def _strip_boundary_echo(prev_src: str, cur_src: str, prev_t: str, cur_t: str) -> str:
@@ -7631,7 +7805,7 @@ def _sound_colors(translation: str, sent: str) -> str:
 
 
 # 送翻文本里的标记：样式、字号、颜色、公式占位符、栏界
-_MARKUP_RE = re.compile(r"\{(?:/?[bi]|z\d+|/z|c[0-9a-f]{6}|/c|v\d+|\|)\}")
+_MARKUP_RE = re.compile(r"\{(?:/?[biu]|z\d+|/z|c[0-9a-f]{6}|/c|v\d+|\|)\}")
 
 
 def _drop_stray_braces(translation: str, sent: str) -> str:

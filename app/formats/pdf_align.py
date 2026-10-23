@@ -30,7 +30,10 @@ _MAX_GAP_EM = 0.35
 _NO_GAP_BEFORE = frozenset("。，、；：？！）】」』〉》％%.,;:?!)]}>")
 _NO_GAP_AFTER = frozenset("（【「『《〈([{")
 
-_MARK_RE = re.compile(r"\{i\}|\{/i\}|\{b\}|\{/b\}|\{/z\}|\{z(\d+)\}|\{/c\}|\{c([0-9a-f]{6})\}")
+_MARK_RE = re.compile(r"\{i\}|\{/i\}|\{b\}|\{/b\}|\{u\}|\{/u\}|\{/z\}|\{z(\d+)\}|\{/c\}|\{c([0-9a-f]{6})\}")
+# 下划线在基线下多远、多粗（em）
+_UNDERLINE_DROP = 0.1
+_UNDERLINE_WIDTH = 0.05
 _LATIN_FONTS = {
     (True, False): ("DocIT", "heit"),
     (False, True): ("DocBO", "hebo"),
@@ -56,6 +59,7 @@ class _Run:
     size_pct: int
     # #rrggbb。空串是块的颜色
     color: str = ""
+    underline: bool = False
 
 
 @dataclass(frozen=True)
@@ -66,6 +70,7 @@ class _Segment:
     size: float
     bold: bool = False
     color: str = ""
+    underline: bool = False
 
     @property
     def width(self) -> float:
@@ -89,9 +94,10 @@ def _latin_font(italic: bool, bold: bool) -> tuple[str, pymupdf.Font]:
 
 
 def _styled_runs(text: str) -> list[_Run]:
-    """按 {i} {b} {zN} {cRRGGBB} 切开。标记本身不占字。"""
+    """按 {i} {b} {u} {zN} {cRRGGBB} 切开。标记本身不占字。"""
     italic = False
     bold = False
+    underline = False
     size = 100
     color = ""
     runs: list[_Run] = []
@@ -99,7 +105,7 @@ def _styled_runs(text: str) -> list[_Run]:
 
     def flush() -> None:
         if buf:
-            runs.append(_Run("".join(buf), italic, bold, size, color))
+            runs.append(_Run("".join(buf), italic, bold, size, color, underline))
             buf.clear()
 
     index = 0
@@ -119,6 +125,10 @@ def _styled_runs(text: str) -> list[_Run]:
             bold = True
         elif token == "{/b}":
             bold = False
+        elif token == "{u}":
+            underline = True
+        elif token == "{/u}":
+            underline = False
         elif token == "{/z}":
             size = 100
         elif token == "{/c}":
@@ -162,6 +172,7 @@ def _append_segment(
     size: float,
     bold: bool,
     color: str = "",
+    underline: bool = False,
 ) -> None:
     if not buf or face is None:
         return
@@ -174,11 +185,12 @@ def _append_segment(
         and segments[-1].size == size
         and segments[-1].bold == bold
         and segments[-1].color == color
+        and segments[-1].underline == underline
     ):
         prev = segments[-1]
-        segments[-1] = _Segment(prev.text + text, name, font, size, bold, color)
+        segments[-1] = _Segment(prev.text + text, name, font, size, bold, color, underline)
     else:
-        segments.append(_Segment(text, name, font, size, bold, color))
+        segments.append(_Segment(text, name, font, size, bold, color, underline))
     buf.clear()
 
 
@@ -199,11 +211,11 @@ def _segments(text: str, em: float) -> list[_Segment] | None:
             if picked is None:
                 return None
             if face is not None and picked != face:
-                _append_segment(segments, buf, face, size, stroke and face[0] == _FONT_NAME, run.color)
+                _append_segment(segments, buf, face, size, stroke and face[0] == _FONT_NAME, run.color, run.underline)
             face = picked
             buf.append(char)
         if face is not None:
-            _append_segment(segments, buf, face, size, stroke and face[0] == _FONT_NAME, run.color)
+            _append_segment(segments, buf, face, size, stroke and face[0] == _FONT_NAME, run.color, run.underline)
     return segments
 
 
@@ -327,6 +339,8 @@ def _place_lines(
     wrote = False
     # 公式把一行切成几片，每片从头读标记。前一片还开着的粗体、颜色带到下一片
     opened: list[str] = []
+    # 下划线：文本对象里不能画填充，写完字再画
+    rules: list[tuple[float, float, float, float, str]] = []
     lift = _lift(em, first_room)
     for index, line in enumerate(lines):
         baseline = box.y0 + em * FIRST_BASELINE - lift + index * em * gap + offsets[index]
@@ -342,17 +356,23 @@ def _place_lines(
         )
         if row is None:
             return None
-        ops, line_slots, line_fonts = row
+        ops, line_slots, line_fonts, line_rules = row
         fonts.update(line_fonts)
         if ops:
             wrote = True
             pdf_y = page_top - baseline
             chunks.extend(op.replace("{Y}", f"{pdf_y:.2f}") for op in ops)
+        rules.extend((x0, x1, baseline, size, paint) for x0, x1, size, paint in line_rules)
         for slot_index, slot_x in line_slots:
             slots.append(FormulaSlot(slot_index, slot_x, baseline))
     if not wrote and not slots:
         return "", [], {}
     chunks.append("ET")
+    for x0, x1, baseline, size, paint in rules:
+        red, green, blue = _rgb(paint or color)
+        thick = max(size * _UNDERLINE_WIDTH, 0.4)
+        bottom = page_top - (baseline + size * _UNDERLINE_DROP + thick)
+        chunks.append(f"{red:.4f} {green:.4f} {blue:.4f} rg {x0:.2f} {bottom:.2f} {x1 - x0:.2f} {thick:.2f} re f")
     chunks.append("Q")
     return "\n".join(chunks) + "\n", slots, fonts
 
@@ -368,8 +388,10 @@ def _place_line(
     fallback_text: dict[int, str],
     opened: list[str] | None = None,
     color: str = "#000000",
-) -> tuple[list[str], list[tuple[int, float]], dict[str, pymupdf.Font]] | None:
-    """一行的文本操作（基线 y 先写成 {Y}）和公式槽的横坐标。
+) -> tuple[
+    list[str], list[tuple[int, float]], dict[str, pymupdf.Font], list[tuple[float, float, float, str]],
+] | None:
+    """一行的文本操作（基线 y 先写成 {Y}）、公式槽的横坐标，和要画下划线的几段（起止横坐标、字号、颜色）。
     opened 是前面还开着的样式标记，读完这一行就地更新。color 是块的颜色，片段没有颜色时用它。"""
     pieces: list[tuple[list[_Segment], int | None, float, str]] = []
     fonts: dict[str, pymupdf.Font] = {}
@@ -397,6 +419,7 @@ def _place_line(
     cursor = x0 + (width - total) / 2 if centered and total < width else x0
     ops: list[str] = []
     slots: list[tuple[int, float]] = []
+    rules: list[tuple[float, float, float, str]] = []
     extra_at = 0
     face_now: tuple[str, float] | None = None
     paint_now = ""
@@ -432,6 +455,12 @@ def _place_line(
             if seg.bold:
                 ops.append("0 Tr")
             advance = seg.width + sum(internal)
+            if seg.underline and seg.text.strip():
+                # 接着上一段下划线画，词间拉开的空也画上
+                if rules and abs(rules[-1][1] - cursor) < 0.5 and rules[-1][3] == seg.color:
+                    rules[-1] = (rules[-1][0], cursor + advance, rules[-1][2], seg.color)
+                else:
+                    rules.append((cursor, cursor + advance, seg.size, seg.color))
             pos += n
             if pos < len(visible) and pos - 1 < len(piece_extras):
                 advance += piece_extras[pos - 1]
@@ -441,7 +470,7 @@ def _place_line(
         red, green, blue = _rgb(color)
         ops.append(f"{red:.4f} {green:.4f} {blue:.4f} rg")
         ops.append(f"{red:.4f} {green:.4f} {blue:.4f} RG")
-    return ops, slots, fonts
+    return ops, slots, fonts, rules
 
 
 def _draw_piece(
