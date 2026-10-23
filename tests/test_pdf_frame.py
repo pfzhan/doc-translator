@@ -268,6 +268,25 @@ def test_the_short_last_line_of_an_example_does_not_open_the_next_paragraph():
     assert _split_lines(indented) == [[0, 1]]
 
 
+def test_a_heading_across_a_narrow_gutter_is_not_joined_to_the_left_line():
+    """左栏一行和右栏的节号标题同高，中间只隔一个字宽的栏沟。节号从右栏栏边起笔，不是左边那行的后半截。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    left = ["BN-Baseline: Same as Inception with Batch Normal-", "ization before each nonlinearity."]
+    for i, text in enumerate(left):
+        page.insert_text((72, 320 + 12 * i), text, fontsize=10)
+    page.insert_text((311, 318), "4.2.3", fontsize=10, fontname="hebo")
+    page.insert_text((352, 318), "Ensemble Classification", fontsize=10, fontname="hebo")
+    for i in range(6):
+        page.insert_text((311, 340 + 12 * i), f"The current reported best results on ImageNet line {i}", fontsize=10)
+    from app.formats.pdf import _rejoin_split_lines
+
+    data = page.get_text("dict")
+    _rejoin_split_lines(data)
+    left_block = next(block for block in data["blocks"] if "Normal-" in block["lines"][0]["spans"][0]["text"])
+    assert ["".join(span["text"] for span in line["spans"]) for line in left_block["lines"]] == left
+
+
 def test_blocks_in_a_flagged_monospace_font_are_code():
     """txtt 这类字体名字里没有 Mono，只有 PDF 的等宽标志。整块是这种字就留原文。"""
     from app.formats.pdf import TextBlock, _code_block
