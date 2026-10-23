@@ -3991,6 +3991,25 @@ def test_section_and_item_numbers_are_not_sent_for_translation():
     assert _with_label("", "实验") == "实验"
 
 
+def test_a_bitmap_glyph_without_its_own_box_is_kept_by_its_extent():
+    """点阵字不报自己的框（宽为 0），只有整套字体的上下界，算出的中心离墨迹半行。
+    横向看起笔点、纵向看上下界和保留框交叠，上标仍留下；起笔点在框外的照旧删掉。"""
+    from types import SimpleNamespace as NS
+
+    from app.formats.pdf import _GlyphKeeper
+
+    keeper = _GlyphKeeper([(484.9, 240.1, 490.5, 244.7)])
+    trm = NS(a=0.1, b=0.0, c=0.0, d=-0.1, e=485.5, f=249.8)
+    ctm = NS(a=1.0, b=0.0, c=0.0, d=1.0, e=0.0, f=0.0)
+    font_box = NS(x0=0.0, y0=-65.0, x1=0.0, y1=86.0)
+    assert keeper.text_filter(None, None, 0, trm, ctm, font_box) == 0
+    beside = NS(a=0.1, b=0.0, c=0.0, d=-0.1, e=495.3, f=249.8)
+    assert keeper.text_filter(None, None, 0, beside, ctm, font_box) == 1
+    # 报了自己的框的字仍按中心算
+    own_box = NS(x0=0.0, y0=-65.0, x1=60.0, y1=126.0)
+    assert keeper.text_filter(None, None, 0, trm, ctm, own_box) == 1
+
+
 def test_stray_braces_around_marks_are_dropped():
     """模型在标记外面多套的花括号去掉。原文本来有花括号（集合 {k=1}）的不动。"""
     from app.formats.pdf import _drop_stray_braces
