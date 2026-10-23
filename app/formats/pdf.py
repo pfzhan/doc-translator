@@ -6312,11 +6312,21 @@ def _own_line_box(block: TextBlock, cjk: bool) -> pymupdf.Rect:
     return _clip_write_rect(rect, block.clip)
 
 
+# break_lines 在行末收起跨行的样式标记
+_TRAILING_CLOSERS_RE = re.compile(r"(?:\{/[bizc]\})+$")
+
+
 def _after_first_line(source: str, head: str) -> str:
-    """第一行从原文切下去。断行吃掉的那个空格不要留在下一行行首。"""
-    if not head or not source.startswith(head):
+    """第一行从原文切下去。断行吃掉的那个空格不要留在下一行行首。
+    粗体、斜体跨过第一行时，break_lines 在行末补了收尾标记，原文里没有：去掉再比，剩下的重开这些标记。"""
+    if not head:
         return source
-    return source[len(head):].lstrip(" \t")
+    if source.startswith(head):
+        return source[len(head):].lstrip(" \t")
+    body = _TRAILING_CLOSERS_RE.sub("", head)
+    if not body or not source.startswith(body):
+        return source
+    return balance_marks(body, source[len(body):].lstrip(" \t"))[1]
 
 
 def _split_own_lines(

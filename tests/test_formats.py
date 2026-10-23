@@ -4864,6 +4864,11 @@ def test_inset_rest_reflows_at_the_column_width():
     assert "框架用于" not in head + rest
     glued = (head + rest.replace("\n", "")).replace(" ", "")
     assert glued == text.replace(" ", "")
+    # 斜体跨过第一行：第一行末尾补了收尾标记，剩下的只接着写后半，斜体在开头重开
+    styled = "前面普通{i}斜体跨过第一行的末尾一直延续到下一行{/i}后面普通"
+    head, rest = _split_own_lines(styled, [], 10.0, 10.0, 80.0)
+    assert head == "前面普通{i}斜体跨过{/i}"
+    assert rest == "{i}第一行的末尾一直延续到下一行{/i}后面普通"
 
 
 def test_inset_continuation_fills_the_column(tmp_path):
