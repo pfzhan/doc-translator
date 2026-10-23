@@ -3991,6 +3991,16 @@ def test_section_and_item_numbers_are_not_sent_for_translation():
     assert _with_label("", "实验") == "实验"
 
 
+def test_stray_braces_around_marks_are_dropped():
+    """模型在标记外面多套的花括号去掉。原文本来有花括号（集合 {k=1}）的不动。"""
+    from app.formats.pdf import _drop_stray_braces
+
+    sent = "called a {b}fragment{/b}. {c0000ff}Fox Tree{/c} showed {v1}"
+    out = _drop_stray_braces("叫做{b}断裂{/b}}。{{c0000ff}Fox Tree{/c}}证明了{v1}", sent)
+    assert out == "叫做{b}断裂{/b}。{c0000ff}Fox Tree{/c}证明了{v1}"
+    assert _drop_stray_braces("集合 {k=1} 是", "the set {k=1} is") == "集合 {k=1} 是"
+
+
 def test_heading_number_skips_body_blocks():
     from app.formats.pdf import _heading_number_for
 

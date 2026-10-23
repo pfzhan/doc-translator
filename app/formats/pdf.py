@@ -7106,6 +7106,23 @@ def _sound_colors(translation: str, sent: str) -> str:
     return translation if depth == 0 else COLOR_MARK_RE.sub("", translation)
 
 
+# 送翻文本里的标记：样式、字号、颜色、公式占位符、栏界
+_MARKUP_RE = re.compile(r"\{(?:/?[bi]|z\d+|/z|c[0-9a-f]{6}|/c|v\d+|\|)\}")
+
+
+def _drop_stray_braces(translation: str, sent: str) -> str:
+    """模型偶尔在标记外面多套一层括号（{{b}填充词{/b}、{{c0000ff}Fox Tree{/c}}），
+    写出来就剩下孤零零的 { 和 }。原文标记以外没有花括号时，译文标记以外的花括号都去掉。"""
+    if "{" not in translation and "}" not in translation:
+        return translation
+    if re.search(r"[{}]", _MARKUP_RE.sub("", sent)):
+        return translation
+    pieces = _MARKUP_RE.split(translation)
+    marks = _MARKUP_RE.findall(translation)
+    cleaned = [re.sub(r"[{}]", "", piece) for piece in pieces]
+    return "".join(piece + mark for piece, mark in zip(cleaned, [*marks, ""]))
+
+
 def _crop_formulas(
     src_doc: pymupdf.Document, flat_units: list[list[TextBlock]], sent_formulas: list[list[dict]],
 ) -> pymupdf.Archive:
@@ -7187,7 +7204,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
                 per_block[id(b)] = b.text
                 block_formulas[id(b)] = []
             continue
-        t = _sound_colors(t, sent_text)
+        t = _sound_colors(_drop_stray_braces(t, sent_text), sent_text)
         restored = (_restore_placeholders(t, formulas, lenient=True) if formulas
                     else _STRAY_PLACEHOLDER_RE.sub("", t))
         if restored is not None:
