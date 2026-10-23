@@ -3982,12 +3982,13 @@ def _mono_span(span: dict) -> bool:
 
 
 def _mono_share(block: TextBlock) -> float:
-    """块里正文字（公式除外）有多少是等宽字体。"""
+    """块里正文字（公式除外）有多少是等宽字体。只数字母：行首的计数、编号用正文字体排，
+    不说明这一行是正文（语料表的 2 n e w）。"""
     total = mono = 0
     for span in _block_spans(block):
         if _span_is_math(span):
             continue
-        count = _latin_chars(str(span["text"]))
+        count = sum(1 for ch in str(span["text"]) if ch.isalpha() and not CJK_RE.match(ch))
         total += count
         if _mono_span(span):
             mono += count
