@@ -1092,6 +1092,34 @@ def test_a_three_rule_table_with_group_names_is_found():
     assert len(table.cells) == 3 + 2 * (1 + 2 * 3)
 
 
+def test_a_two_column_three_rule_table_with_long_row_names_is_found():
+    """两列的三线表，行名占了大半宽也是表。线间排着图注的不是表，图注照常翻。"""
+    from app.formats.pdf_layout import page_tables
+
+    page = pymupdf.open().new_page(width=600, height=400)
+    for y in (100, 114, 160):
+        page.draw_line((350, y), (500, y), width=0.4)
+    page.insert_text((355, 110), "Guardrails", fontsize=8)
+    page.insert_text((450, 110), "MT Bench", fontsize=8)
+    for row, (name, score) in enumerate((("No system prompt", "6.84 ± 0.07"), ("Llama 2 system prompt", "6.38 ± 0.07"),
+                                         ("Mistral system prompt", "6.58 ± 0.05"))):
+        page.insert_text((355, 126 + row * 12), name, fontsize=8)
+        page.insert_text((450, 126 + row * 12), score, fontsize=8)
+    [table] = page_tables(page)
+    assert table.rect.y0 <= 100 and table.rect.y1 >= 160
+
+    grammar = pymupdf.open().new_page(width=600, height=400)
+    for y in (100, 150, 200):
+        grammar.draw_line((100, y), (500, y), width=0.4)
+    for row, (left, right) in enumerate((("S → NP VP", "I + want a morning flight"), ("NP → Pronoun", "I"),
+                                         ("| Proper-Noun", "Los Angeles"))):
+        grammar.insert_text((110, 115 + row * 12), left, fontsize=9)
+        grammar.insert_text((300, 115 + row * 12), right, fontsize=9)
+    grammar.insert_text((110, 170), "Figure 19.3", fontsize=9)
+    grammar.insert_text((180, 170), "The grammar for L0, with example phrases for each rule.", fontsize=9)
+    assert all(table.rect.y1 < 165 for table in page_tables(grammar))
+
+
 def test_table_of_abutting_filled_cells_is_found():
     """每格一块底色、只有上下横线的表。一整块底色的文本框、白底的图、压着跨格图注的格子都不是表。"""
     from app.formats.pdf_layout import filled_tables, page_words
