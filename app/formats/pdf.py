@@ -4132,6 +4132,13 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             # 以 f(x) 收尾算句末，是为了单独排的式子下面的 where 不接上来。
             # 末行从下一行的左缘一直排到右缘、下一行又是正文词起头的，是句中折行，式子只是落在行尾
             call_wrap = _ends_in_call(p.text.rstrip()) and _opens_with_word(b) and _wraps_into(p, b)
+            # 以行内式子起头、从栏边起笔、后面接着正文的一行（Adam with | 1/√t decay on its stepsize）
+            # 是句中折行。单独排的式子缩进，也没有几个正文词
+            first_x0 = b.line_rects[0].x0 if b.line_rects else b.rect.x0
+            math_wrap = (
+                _opens_with_math(b) and abs(first_x0 - p.rect.x0) <= p.size * 0.5
+                and _plain_words(b) >= _MATH_WRAP_WORDS
+            )
             # 句中的缩写（Brants et al. | (2007)）不是句末。左括号起头的续行是引文年份、插入语，
             # 不比上一段最左的一行靠右（首行缩进的段落），或者和其中一行同一左缘（悬挂缩进的条目续行），
             # 或者居中接在居中段落后面。
@@ -4143,7 +4150,6 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                      or any(abs(b.rect.x0 - rect.x0) <= p.size * 0.5 for rect in p.line_rects))
             )
             # 列表项后面第一行比它还靠左起笔的是列表完了以后的正文。续行和条目文字对齐或者悬挂缩进，不会往左
-            first_x0 = b.line_rects[0].x0 if b.line_rects else b.rect.x0
             list_end = _list_item(p.text) and first_x0 < p.rect.x0 - p.size * 0.5
             latin = (
                 y_close
@@ -4153,7 +4159,7 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                 and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
                 and (colon_wrap or call_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
                      or not _ends_sentence(p.text))
-                and (first.islower() or first in "),;%,；，" or open_paren)
+                and (first.islower() or first in "),;%,；，" or open_paren or math_wrap)
                 and not _verbatim_seam(p, b)
             )
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
@@ -4165,6 +4171,16 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
         else:
             out.append(b)
     return out
+
+
+# 以式子起头的续行里至少这么多正文词
+_MATH_WRAP_WORDS = 3
+
+
+def _opens_with_math(block: TextBlock) -> bool:
+    """第一截是公式字体。"""
+    spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
+    return bool(spans) and _span_is_math(spans[0])
 
 
 def _opens_with_word(block: TextBlock) -> bool:
