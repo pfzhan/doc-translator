@@ -4477,7 +4477,13 @@ def test_snake_case_identifiers_are_one_word():
 
     assert tokenize("{l_partkey, o_custkey}") == ["{", "l_partkey", ",", " ", "o_custkey", "}"]
     assert not can_stretch("l", "_") and not can_stretch("_", "p")
-    assert can_stretch(",", "o")
+    assert can_stretch(",", "中") and can_stretch(",", " ")
+    # 网址、邮箱连着写，@ . / 两边也不拉开，也不从中间折行
+    email = "jimmy@psi.utoronto.ca"
+    assert not any(can_stretch(a, b) for a, b in zip(email, email[1:]))
+    assert tokenize("多伦多大学 jimmy@psi.utoronto.ca 获取")[6] == email
+    assert tokenize("见 http://www.github.com/goodfeli/adversarial).")[2:] == [
+        "http://www.github.com/goodfeli/adversarial", ")", "."]
 
 
 def test_a_centered_title_breaks_after_a_clause_mark():
