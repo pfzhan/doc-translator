@@ -4112,14 +4112,16 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             x_jump = b.rect.x0 - p.rect.x0
             x_close = abs(x_jump) < 2 * p.size or 0 < x_jump <= max(4 * p.size, 36)
             # 居中排的段落（表格说明）末行短，两边都缩进，和上一行中线对齐，按正常行距紧贴着上一行。
-            # 段落下面居中的公式行上下空得多，也不止一行或者不成句
+            # 段落下面居中的公式行上下空得多，也不止一行或者不成句。只剩一两个词的末行
+            # （图注的 learning.）全是正文词、以句号收尾，也不是公式
             last_y1 = p.line_rects[-1].y1 if p.line_rects else p.rect.y1
+            words = b.text.split()
             centered_tail = (
                 len(_visual_lines(b)) == 1
                 and b.rect.y0 - last_y1 - p.line_gap * p.size <= 0.3 * p.size
                 and b.rect.width < p.rect.width
                 and abs((b.rect.x0 + b.rect.x1) - (p.rect.x0 + p.rect.x1)) / 2 <= p.size
-                and _prose_units(b.text) >= 3
+                and (_prose_units(b.text) >= 3 or (_ends_sentence(b.text) and _prose_units(b.text) == len(words)))
             )
             # 行尾冒号的上下两行都撑到右缘，是句中换行（"is called interpolation: | computing ..."）。
             # 下一行没撑满的是冒号引出的例句、列表

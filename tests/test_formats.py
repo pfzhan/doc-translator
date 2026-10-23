@@ -6713,6 +6713,10 @@ def test_the_short_centered_last_line_of_a_caption_continues_it():
     # 中线不对齐的缩进行是别的东西
     offset = [caption[0], blk("performance is statistically significant (t-test with p < 0.01).", 200.0, 488.0, 98.2)]
     assert len(_merge_continuations(offset)) == 2
+    # 只剩一个词的末行全是正文词、以句号收尾，也接上
+    short = [blk("Figure 7 | The experiment results of Language Consistency (LC) Reward during reinforcement",
+                 71.0, 524.0, 439.0), blk("learning.", 276.0, 319.0, 452.5)]
+    assert len(_merge_continuations(short)) == 1
 
 
 def test_a_centered_formula_or_a_hanging_item_line_keeps_its_place():
