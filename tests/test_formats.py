@@ -6385,6 +6385,31 @@ def test_cjk_line_keeps_bold_across_a_formula():
     assert stroked == [False, True, True, False]
 
 
+def test_cjk_lines_rise_to_stay_inside_a_tight_first_line_box():
+    """原文第一行的行框比汉字字形矮时整段往上提，字形下沿不压到紧贴在下面的线；
+    最多提到字形上沿和盒子顶齐平。行框够高时不动。"""
+    import pymupdf
+
+    from app.formats.pdf_align import FIRST_BASELINE, _place_lines
+    from app.formats.pdf_typeset import typeset_lines
+
+    lines = typeset_lines("用于生成适合人类阅读的解答的提示词。", 10, 400, {})
+
+    def baseline(first_room):
+        _commands, slots, _fonts = _place_lines(
+            lines, pymupdf.Rect(0, 100, 400, 200), 10, 1.4, "#000000", False, frozenset(), {}, 800,
+            first_room=first_room,
+        )
+        commands = _commands.splitlines()
+        tm = next(op for op in commands if op.endswith(" Tm"))
+        return 800 - float(tm.split()[5])
+
+    assert baseline(None) == pytest.approx(100 + 10 * FIRST_BASELINE, abs=0.01)
+    assert baseline(13.0) == pytest.approx(100 + 10 * FIRST_BASELINE, abs=0.01)
+    assert baseline(11.0) == pytest.approx(100 + 11.0 - 10 * 0.12, abs=0.01)
+    assert baseline(5.0) == pytest.approx(100 + 10 * 0.88, abs=0.01)
+
+
 def test_inline_colors_are_marked_relative_to_the_block():
     """和块同色的不写标记；别的颜色写 {cRRGGBB}，同色的几个词中间的空格不断开；白字（图注标签）不写。
     颜色在字号里面、强调外面，标记成对嵌套。"""
