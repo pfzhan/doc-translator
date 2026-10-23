@@ -3801,11 +3801,12 @@ def _gloss_ids(blocks: list[TextBlock], glosses: dict[int, tuple[pymupdf.Rect, .
 
 
 def _garbled_label(text: str) -> bool:
-    """图内标签用符号字体时，$ 顶替了空格。重排会把乱码译出来，留下原字。"""
+    """图内标签用符号字体时，$ 顶替了空格。重排会把乱码译出来，留下原字。
+    $ 贴着字母才算：「of $2 per hour」的 $ 前面本来就有空格，去掉空白再看会误认。"""
     compact = re.sub(r"\s+", "", text)
     if not compact or len(compact) > 80:
         return False
-    return compact.count("$") >= 1 and bool(re.search(r"[A-Za-z]\$|\$[A-Za-z]", compact))
+    return bool(re.search(r"[A-Za-z]\$|\$[A-Za-z]", text))
 
 
 def _line_text(span_lines: list[list[dict]], index: int) -> str:

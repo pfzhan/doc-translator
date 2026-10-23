@@ -4559,6 +4559,7 @@ def test_garbled_figure_label_is_recognized():
 
     assert _garbled_label("(c)$Bo8om(up$sta.s.cs$deriva.on$")
     assert not _garbled_label("Figure 2: Interaction of Orca with database system")
+    assert not _garbled_label("Table 7 | Training costs, assuming the rental price is $2 per GPU hour.")
 
 
 def test_right_fragment_stays_on_its_own_line():
