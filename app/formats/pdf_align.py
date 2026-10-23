@@ -213,9 +213,14 @@ def can_stretch(left: str, right: str) -> bool:
     if right in _NO_GAP_BEFORE or left in _NO_GAP_AFTER:
         return False
     # 作者名被拉成 Z h o n g，就是把词内的字母也拉开了。只在词与词之间留缝。
-    if _latin_unit(left) and _latin_unit(right):
+    # 网址、邮箱（jimmy@psi.utoronto.ca）中间的 @ . / 也是连着写的一串，拉开就像断成了几段
+    if _latin_unit(left) and _latin_unit(right) or _ascii_mark(left) and _ascii_mark(right):
         return False
     return True
+
+
+def _ascii_mark(ch: str) -> bool:
+    return ch.isascii() and ch.isprintable() and not ch.isspace()
 
 
 def justify_extras(text: str, slack: float, em: float) -> list[float]:

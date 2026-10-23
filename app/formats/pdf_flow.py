@@ -18,6 +18,8 @@ import pymupdf
 _SENTINEL_RE = re.compile(r"\x01i\x02(\d+)\x01/i\x02")
 STYLE_MARK_RE = re.compile(r"\{z\d+\}|\{/z\}|\{c[0-9a-f]{6}\}|\{/c\}|\{/?[bi]\}")
 _ATOM_RE = re.compile(rf"\x01i\x02\d+\x01/i\x02|{STYLE_MARK_RE.pattern}")
+# 网址、邮箱整个不折行。结尾的句号、括号、逗号是句子的，不算在里面
+_LINK_RE = re.compile(r"(?:https?://|www\.)[!-~]*[A-Za-z0-9/#=_-]|[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", re.A)
 _SIZE_OPEN_RE = re.compile(r"\{z(\d+)\}")
 COLOR_MARK_RE = re.compile(r"\{c[0-9a-f]{6}\}|\{/c\}")
 _COLOR_OPEN_RE = re.compile(r"\{c([0-9a-f]{6})\}")
@@ -577,7 +579,7 @@ def _tokenize(text: str) -> list[str]:
     index = 0
     length = len(text)
     while index < length:
-        atom = _ATOM_RE.match(text, index)
+        atom = _ATOM_RE.match(text, index) or _LINK_RE.match(text, index)
         if atom:
             tokens.append(atom.group(0))
             index = atom.end()
