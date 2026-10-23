@@ -3449,6 +3449,11 @@ def test_same_line_sentence_joins_the_paragraph_and_keeps_side_labels():
     memo = line("Memo.", 40, 100, 72, 112, bold=True)
     memo.span_lines = [[{"text": "Memo.", "font": "CMBX9", "flags": 16}]]
     assert _with_source_bold(memo, "备忘录。") == "{b}备忘录。{/b}"
+    # 粗体名字后面跟着公式字体的星号角标，整行仍是粗体
+    author = line("Jimmy Lei Ba∗", 40, 120, 100, 132, bold=True)
+    author.span_lines = [[{"text": "Jimmy Lei Ba", "font": "NimbusRomNo9L-Medi", "flags": 20},
+                          {"text": "∗", "font": "CMSY7", "flags": 7}]]
+    assert _with_source_bold(author, "Jimmy Lei Ba{v1}") == "{b}Jimmy Lei Ba{v1}{/b}"
 
 
 def _reference_same_line_merge(blocks):

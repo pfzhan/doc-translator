@@ -5601,9 +5601,10 @@ def _source_bold_lead(block: TextBlock) -> str:
 
 
 def _uniform_bold(block: TextBlock) -> bool:
+    """正文字都是粗体。公式字体的角标（名字后面的星号）原样贴回，不算。"""
     spans = [
         span for line in (block.span_lines or [])
-        for span in line if str(span.get("text") or "").strip()
+        for span in line if str(span.get("text") or "").strip() and not _span_is_math(span)
     ]
     if not spans:
         return False
