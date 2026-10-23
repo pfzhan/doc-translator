@@ -5230,6 +5230,8 @@ def _clause_lines(
         head, tail = text[:index + 1].rstrip(), text[index + 1:].strip()
         if not head or not tail:
             continue
+        # 整段粗体的作者名单在逗号处断开，后半截要重开粗体
+        head, tail = balance_marks(head, tail)
         parts = typeset_lines(head, em, width, metrics) + typeset_lines(tail, em, width, metrics)
         widest = max(line.width for line in parts)
         if len(parts) > len(lines) or widest > width + 1:
