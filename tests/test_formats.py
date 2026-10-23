@@ -6719,6 +6719,32 @@ def test_the_short_centered_last_line_of_a_caption_continues_it():
     assert len(_merge_continuations(short)) == 1
 
 
+def test_a_line_ending_on_a_function_word_continues_into_a_capital():
+    """上一行停在 and、of 上，下一行大写起头（专名）也是接着写的；下一行是另一个列表项、
+    小一号的脚注时不接。居中段落大写起头的末行接上，题词下面小一号的出处不接。句点起头的接上。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, x0, x1, y, size=10.9):
+        rect = pymupdf.Rect(x0, y, x1, y + 11)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False,
+                         span_lines=[[{"text": text, "font": "Palatino", "size": size}]])
+
+    def head():
+        return blk("safe answers to questions, rather than simply declining to respond). For DeepSeek-V3 and",
+                   80, 515, 141)
+
+    assert len(_merge_continuations([head(), blk("DeepSeek-R1, we report results under two configurations", 85, 510, 154)])) == 1
+    assert len(_merge_continuations([head(), blk("• DeepSeek-R1 is reported under two configurations", 85, 510, 154)])) == 2
+    assert len(_merge_continuations([head(), blk("Available at the project page of the authors", 85, 510, 154, size=9.0)])) == 2
+    caption = blk("Table 6 | DeepSeek-R1 Distilled Models, their corresponding Base Models, and Initial Learning",
+                  71, 524, 275)
+    assert len(_merge_continuations([caption, blk("Rates.", 282, 313, 288)])) == 1
+    poem = blk("Dim as an evening shadow in a brook,", 274, 433, 250, size=10.0)
+    assert len(_merge_continuations([poem, blk("Thomas Lovell Beddoes, 1851", 298, 408, 263, size=9.0)])) == 2
+    words = blk("we counted some representative reflective words, including wait, mistake, however", 71, 524, 300)
+    assert len(_merge_continuations([words, blk(". These reflective words were selected by 3 experts", 71, 524, 313)])) == 1
+
+
 def test_a_centered_formula_or_a_hanging_item_line_keeps_its_place():
     """段落下面居中的公式行不是居中段落的末行；悬挂缩进条目的续行以左括号起头也接上。"""
     from app.formats.pdf import TextBlock, _merge_continuations

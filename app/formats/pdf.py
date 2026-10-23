@@ -4082,7 +4082,7 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
     """合并同页内被公式/碎片拆断的段落续行：上行无句末标点、下行小写（或闭括号）
     开头、同左 margin、行距正常，就是同一段被拆开的两行。各翻各的会产出半截译文，
     渲染时在断点强制换行（'（如 | 序列）'）。中文换行左缘对齐、上行够长时同样接上。
-    英文大写开头的换行仍分开，那和下一句分不开。
+    英文大写开头的换行仍分开，那和下一句分不开；上一行停在 and、of、the 这类词上的除外。
     段落绕着图排时，图注在阅读顺序里会夹在两半中间。夹着的这块在上一半下面、
     下一半旁边时，跳过它和再前面一块比。"""
     out: list[TextBlock] = []
@@ -4119,8 +4119,9 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             centered_tail = (
                 len(_visual_lines(b)) == 1
                 and b.rect.y0 - last_y1 - p.line_gap * p.size <= 0.3 * p.size
-                and b.rect.width < p.rect.width
+                and b.rect.x0 > p.rect.x0 + p.size and b.rect.x1 < p.rect.x1 - p.size
                 and abs((b.rect.x0 + b.rect.x1) - (p.rect.x0 + p.rect.x1)) / 2 <= p.size
+                and not _list_item(b.text)
                 and (_prose_units(b.text) >= 3 or (_ends_sentence(b.text) and _prose_units(b.text) == len(words)))
             )
             # 行尾冒号的上下两行都撑到右缘，是句中换行（"is called interpolation: | computing ..."）。
@@ -4154,6 +4155,12 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                 and (centered_tail or b.rect.x0 <= p.rect.x0 + p.size * 0.5
                      or any(abs(b.rect.x0 - rect.x0) <= p.size * 0.5 for rect in p.line_rects))
             )
+            # 上一行停在 and、of 上，下一行哪怕大写起头也是接着写的。下一行是另一个列表项（…; and | • …）
+            # 或者小一号的脚注时不算
+            same_size = abs(b.size - p.size) <= p.size * 0.05
+            dangling = _dangling(p.text) and not _list_item(b.text) and not _opens_with_math(b) and same_size
+            # 居中段落的末行大写起头（Rates.、MATH dataset.）也接上；题词下面小一号的出处不接
+            centered_end = centered_tail and same_size
             # 列表项后面第一行比它还靠左起笔的是列表完了以后的正文。续行和条目文字对齐或者悬挂缩进，不会往左
             list_end = _list_item(p.text) and first_x0 < p.rect.x0 - p.size * 0.5
             latin = (
@@ -4164,7 +4171,8 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
                 and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
                 and (colon_wrap or call_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
                      or not _ends_sentence(p.text))
-                and (first.islower() or first in "),;%,；，" or open_paren or math_wrap)
+                and (first.islower() or first in ".),;%,；，" or open_paren or math_wrap or centered_end
+                     or dangling)
                 and not _verbatim_seam(p, b)
             )
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
@@ -4180,6 +4188,15 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
 
 # 以式子起头的续行里至少这么多正文词
 _MATH_WRAP_WORDS = 3
+# 句子不会停在这些词上：行尾是它们，下一行哪怕大写起头（专名）也是接着写的
+_DANGLING_WORDS = frozenset(
+    "a an the and or of to in for with by from on at as that which whose than its their our his her".split()
+)
+
+
+def _dangling(text: str) -> bool:
+    words = text.split()
+    return bool(words) and words[-1] in _DANGLING_WORDS
 
 
 def _opens_with_math(block: TextBlock) -> bool:
