@@ -6842,6 +6842,15 @@ def test_a_centered_formula_or_a_hanging_item_line_keeps_its_place():
                 [pymupdf.Rect(142, 300, 475, 312), pymupdf.Rect(157, 312, 475, 324)]),
             blk("(like Hong Kong, Marie Curie, or the New York Times.", 157, 380, 324)]
     assert len(_merge_continuations(item)) == 1
+    # 条目只有一行，没有续行可比：粗体标签起头的条目，悬挂缩进的左括号行也是它的续行
+    label = blk("unused NPs: these introduce entities that are discourse-new but hearer-old", 185, 493, 656)
+    label.span_lines = [[
+        {"text": "unused NPs:", "font": "NimbusRomNo9L-Medi", "flags": 16},
+        {"text": " ", "font": "NimbusRomNo9L-Regu", "flags": 0},
+        {"text": "these introduce entities that are discourse-new but hearer-old", "font": "NimbusRomNo9L-Regu", "flags": 0},
+    ]]
+    single = [label, blk("(like Hong Kong, Marie Curie, or the New York Times.", 207, 425, 668)]
+    assert len(_merge_continuations(single)) == 1
 
 
 def test_a_line_opening_with_an_inline_formula_continues_the_sentence():

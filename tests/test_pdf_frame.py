@@ -275,6 +275,29 @@ def test_the_short_last_line_of_an_example_does_not_open_the_next_paragraph():
     assert _split_lines(mid_item) == [[0, 1], [2]]
 
 
+def test_a_bold_label_after_a_finished_sentence_opens_the_next_item():
+    """定义列表里一行一条，排得差不多满，按硬换行看不出来。上一句说完、下一行以粗体标签起头的是下一条。
+    句中折行落到行首的粗体词不拆。"""
+    from app.formats.pdf import _split_lines
+
+    def item(label, rest, y0, x1):
+        spans = [{"text": label, "size": 10.0, "font": "NimbusRomNo9L-Medi", "flags": 16}] if label else []
+        spans.append({"text": rest, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0})
+        return (label + rest, pymupdf.Rect(147, y0, x1, y0 + 10), spans)
+
+    rows = [
+        item("Language variety", ": What language (including dialect/region) was the corpus in?", 362, 468),
+        item("Speaker demographics", ": What was, e.g., the age or gender of the text’s authors?", 377, 468),
+        item("Collection process", ": How big is the data? If it is a subsample how was it sampled?", 391, 475),
+    ]
+    assert _split_lines(rows) == [[0], [1], [2]]
+    wrapped = [
+        item("", "Tokenization is usually done in one of two ways, which we will call the", 362, 475),
+        item("two kinds", ": top-down tokenization and bottom-up tokenization of the text", 377, 475),
+    ]
+    assert _split_lines(wrapped) == [[0, 1]]
+
+
 def test_a_heading_across_a_narrow_gutter_is_not_joined_to_the_left_line():
     """左栏一行和右栏的节号标题同高，中间只隔一个字宽的栏沟。节号从右栏栏边起笔，不是左边那行的后半截。"""
     doc = pymupdf.open()
