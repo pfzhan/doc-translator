@@ -427,3 +427,25 @@ def test_a_justified_row_with_an_italic_variable_stays_one_row():
         piece(54.0, 136.2, 580.5, ("SUM(", roman), ("E", "Times-Italic"), (")/count_big(*).", roman)),
     ]
     assert _split_lines(items) == [list(range(len(items)))]
+
+
+def test_a_line_opening_with_a_closing_bracket_continues_the_row():
+    """行尾单拆出来一个等宽的 [，下一行以 ]) 起头接着写。不是符号行后面另起一段。"""
+    from app.formats.pdf import _split_lines
+
+    def piece(x0, x1, y, *spans):
+        text = "".join(t for t, _ in spans)
+        return (text, pymupdf.Rect(x0, y, x1, y + 10),
+                [{"text": t, "font": f, "size": 10.0, "flags": 0} for t, f in spans])
+
+    roman, mono = "NimbusRomNo9L-Regu", "txtt"
+    items = [
+        piece(160.2, 493.2, 280, ("the . to mean period and not the wildcard. By contrast, the regular expression", roman)),
+        piece(160.2, 493.2, 292, ("r\"The dog.$\"", mono), (" would match The dog. but also The dog! and The dogo. As", roman)),
+        piece(160.2, 461.8, 304, ("we’ll discuss below, all the special characters we’ve defined so far (", roman),
+              ("* + ?", mono)),
+        piece(472.3, 477.5, 304, (".", mono)),
+        piece(488.0, 493.2, 304, ("[", mono)),
+        piece(160.2, 408.8, 316, ("]", mono), (") need to be backslashed when we mean to use them literally.", roman)),
+    ]
+    assert _split_lines(items) == [list(range(len(items)))]
