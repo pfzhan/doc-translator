@@ -233,6 +233,28 @@ def test_a_larger_line_below_a_slide_formula_starts_a_new_paragraph():
     assert _split_lines(reference) == [[0, 1]]
 
 
+def test_the_short_last_line_of_an_example_does_not_open_the_next_paragraph():
+    """例句的悬挂续行没排满、以句号收尾，下一段从栏边起笔，只左跳一个多字宽，不是首行缩进。
+    首行缩进的段落第一行排满，照样接着。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, x0, y0, x1):
+        span = {"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [span])
+
+    example = [
+        item("of graphics chips.", 185, 529, 256),
+        item("Event mentions are much harder to detect than entity mentions, since they can be ver-", 160, 543, 493),
+        item("bal as well as nominal.", 160, 555, 300),
+    ]
+    assert _split_lines(example) == [[0], [1, 2]]
+    indented = [
+        item("Event mentions are much harder to detect than entity mentions, since they", 175, 529, 493),
+        item("can be verbal as well as nominal.", 160, 543, 300),
+    ]
+    assert _split_lines(indented) == [[0, 1]]
+
+
 def test_blocks_in_a_flagged_monospace_font_are_code():
     """txtt 这类字体名字里没有 Mono，只有 PDF 的等宽标志。整块是这种字就留原文。"""
     from app.formats.pdf import TextBlock, _code_block

@@ -6930,7 +6930,7 @@ def test_a_paragraph_after_a_hanging_list_line_is_split_off():
              item("to the other party", (167, 214, 235, 226)),
              item("The kind of world knowledge that might be needed to solve the problems", (157, 229, 475, 241))]
     assert _split_lines(items) == [[0, 1], [2]]
-    paragraph = [item("Short first line of a paragraph.", (157, 202, 300, 214)),
+    paragraph = [item("The first line of a paragraph is set to the full measure and", (157, 202, 475, 214)),
                  item("The second line goes back to the margin", (142, 214, 475, 226))]
     assert _split_lines(paragraph) == [[0, 1]]
 
