@@ -382,3 +382,25 @@ def test_a_centered_name_list_wrapping_at_commas_stays_one_unit():
     left = [row("Results are listed in the table below, for each model,", 108, 300, 380),
             row("Accuracy improves with scale.", 108, 311, 250)]
     assert len(_merge_continuations(left)) == 2
+
+
+def test_a_formula_wrapping_after_an_operator_keeps_its_tail():
+    """行尾停在 > 上，下一行行首的 100) 是式子的后半截，不是编号也不是符号行。
+    单独排的式子里分子从等号右边起笔，仍拆开；===Instructions=== 后面的编号照常是列表。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, x0, y, x1=504):
+        span = {"text": text, "size": 10.0, "font": "Times-Roman", "flags": 0}
+        return (text, pymupdf.Rect(x0, y, x1, y + 10), [span])
+
+    wrapped = [item("we can still evaluate the predicate (l_quantity*l_extendedprice >", 72, 100),
+               item("100) without the columns l_quantity and l_extendedprice.", 72, 111, 330)]
+    assert _split_lines(wrapped) == [[0, 1]]
+    item_end = [item("one predicate of this type: (l_quantity*l_extendedprice >", 90, 100),
+                item("100).", 90, 111, 112)]
+    assert _split_lines(item_end) == [[0, 1]]
+    display = [item("cos(cherry, information) =", 147, 140, 280),
+               item("442 * 5 + 8 * 3982 + 2 * 3325", 300, 130, 400)]
+    assert _split_lines(display) == [[0], [1]]
+    marker = [item("===Instructions===", 72, 100, 160), item("1. Carefully compare the answers.", 72, 111, 300)]
+    assert _split_lines(marker) == [[0], [1]]

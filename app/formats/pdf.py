@@ -917,6 +917,21 @@ def _restyled_seam(host: TextBlock, guest: TextBlock) -> bool:
     return _row_style(upper) != _row_style(lower)
 
 
+# 行尾停在这些符号上，式子还没写完
+_OPERATOR_ENDS = ("(", "+", "*", "/", "=", "<", ">", "≤", "≥")
+
+
+def _open_operator_end(text: str) -> bool:
+    """行尾停在运算符或左括号上。尖括号前面要有空格，<Workflow> 这样的标签不算；
+    ===Instructions=== 这样连写的一串是分隔标记，句号后面单独的星号是脚注标记，也不算。"""
+    text = text.rstrip()
+    if not text.endswith(_OPERATOR_ENDS) or text[-2:-1] == text[-1]:
+        return False
+    if text[:-1].rstrip()[-1:] in tuple(".!?:;,"):
+        return False
+    return text[-1] not in "<>" or text[-2:-1].isspace()
+
+
 _PAREN_ENUM_RE = re.compile(r"\(([a-z]|\d{1,2})\)\s")
 
 
@@ -1105,10 +1120,16 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
         # 段中列举 (a) … (b) …，前一项写在行中间，这一项碰巧落到行首，上一行又排满：是折行，不是列表
         inline_enum = max_x1 - prect.x1 <= 3 * psize and _follows_inline_enum(stripped, [items[j][0] for j in cur])
         bullet = _list_item(text) and not wrapped_letter and not inline_enum
+        # 上一行停在运算符、左括号上，式子没写完，折到下一行行首：下一行的 100) 是式子的后半截，
+        # 不是编号，也不是符号行。单独排的式子里，分子从等号右边起笔，不是折行
+        open_end = (
+            not prev_symbol and _open_operator_end(ptext)
+            and not same_visual_line and rect.x0 <= row_rect.x0 + psize
+        )
         # 上一句说完，下一行以例句编号开头：一行一个例句
         example = bool(_EXAMPLE_NUMBER_RE.match(stripped)) and _ends_sentence(ptext)
         if not same_visual_line and not sec_label and (
-            bullet or example or NO_TEXT_RE.match(stripped) or prev_symbol
+            (not open_end and (bullet or example or NO_TEXT_RE.match(stripped))) or prev_symbol
             or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim or restyled
             or _caption_opens(items[i][2], pspans)
         ):
