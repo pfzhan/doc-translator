@@ -2960,6 +2960,9 @@ def _split_one_table_block(block: TextBlock, tables: tuple[RuledTable, ...]) -> 
         cell_order: list[tuple[float, float, float, float] | None] = []
         for span in spans:
             if not str(span.get("text", "")).strip():
+                # 两端对齐的行，词间空格常是单独的 span，跟着前一截进同一格，丢了词就粘在一起
+                if cell_order:
+                    by_cell[cell_order[-1]].append(span)
                 continue
             bbox = span.get("bbox")
             key = _clip_key(cell_containing(_text_box(span), tables) if bbox else None)
@@ -2977,7 +2980,8 @@ def _split_one_table_block(block: TextBlock, tables: tuple[RuledTable, ...]) -> 
         for key in cell_order:
             box = pymupdf.Rect()
             for span in by_cell[key]:
-                box |= pymupdf.Rect(span["bbox"])
+                if str(span.get("text", "")).strip():
+                    box |= pymupdf.Rect(span["bbox"])
             _remember_cell(grouped, order, key, box, by_cell[key])
     if len(order) <= 1:
         block.clip = order[0] if order else _clip_key(cell_containing(block.rect, tables))
