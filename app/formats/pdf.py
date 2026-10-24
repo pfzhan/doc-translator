@@ -1436,6 +1436,12 @@ def _centered_rows(rows: Sequence[pymupdf.Rect], size: float) -> bool:
     return max(row.x0 for row in rows) - min(row.x0 for row in rows) >= 1
 
 
+def _new_voice(host: TextBlock, guest: TextBlock) -> bool:
+    """下一块字号差一成以上、颜色也换了：幻灯片标题下面的例句、正文下面的图注，不是同一段的折行。
+    同一段里正文的字号、颜色不变，夹着的强调词、公式占不了多数。"""
+    return abs(guest.size - host.size) > host.size * 0.12 and guest.color != host.color
+
+
 def _restyled_seam(host: TextBlock, guest: TextBlock) -> bool:
     """两块是同一摞居中排的行，接缝处的上下两行换了样式：粗体的作者名下面接常规字体的单位，
     单位下面接等宽字的邮箱。是一行一项，不是一段话的折行。一行拆成几截的按整行比。"""
@@ -5065,7 +5071,7 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             if (p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note)
                     and p.leader is None and b.leader is None
                     and (title_frag or latin or (y_close and _cjk_wrap(p, b)))
-                    and not _restyled_seam(p, b)):
+                    and not _restyled_seam(p, b) and not _new_voice(p, b)):
                 _absorb_block(p, b)
                 break
         else:

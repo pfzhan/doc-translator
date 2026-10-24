@@ -7625,3 +7625,18 @@ def test_text_under_a_big_cmex_radical_is_part_of_the_formula():
     _mark_radicands(page, data, [pymupdf.Rect(188.4, 114.6, right, 115.1)])
     marked = [span for span in line["spans"] if span["text"] == "Var"]
     assert marked and marked[0].get("math")
+
+
+def test_a_smaller_line_in_another_colour_does_not_continue_a_title():
+    """幻灯片标题（51 磅灰色）下面小一号的紫色例句不是标题的折行，不并成一段。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    title = pymupdf.Rect(97.9, 63.0, 859.0, 125.3)
+    item = pymupdf.Rect(112.3, 151.7, 1087.7, 198.1)
+    blocks = [
+        TextBlock(page=0, rect=title, line_rects=[title], text="Berkeley Restaurant Project sentences",
+                  size=51.0, color="#404040", bold=False, body_size=38.0),
+        TextBlock(page=0, rect=item, line_rects=[item], text="can you tell me about any good cantonese restaurants",
+                  size=38.0, color="#330099", bold=False, body_size=38.0),
+    ]
+    assert len(_merge_continuations(blocks)) == 2
