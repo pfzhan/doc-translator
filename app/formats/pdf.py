@@ -6846,7 +6846,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             # 目录的页码留在原页上，译文不能写过去
             obstacles += [ob.leader.number for ob in same_page if ob.leader is not None]
             if geo is not None:
-                obstacles = [*obstacles, *geo.figures]
+                # 带框线的表和算法框画着外框，右扩也不能压上去
+                obstacles = [*obstacles, *geo.figures, *(table.rect for table in geo.tables)]
             limit = _write_limit(block, rect, geo, obstacles)
             if x_cap is not None:
                 limit = x_cap if limit is None else min(limit, x_cap)
