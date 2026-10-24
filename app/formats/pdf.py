@@ -3278,6 +3278,40 @@ def _small_caps_sizes(span_lines: list[list[dict]]) -> dict[int, float]:
             big = pairs.get(round(float(span.get("size") or 0), 1))
             if big and id(span) not in out and _all_caps(str(span.get("text") or "")):
                 out[id(span)] = big
+    # 正文里整个词排成小型大写（AGENT、GOVERN），没有大一号的首字母：
+    # 落在正文基线上、比正文小一号的全大写词，按正文字号算。中文没有大小写，照搬小字号就缩成一团
+    lower = [s for line in span_lines for s in line if any(c.islower() for c in str(s.get("text") or ""))]
+    if not lower:
+        return out
+    body = float(_by_chars(lower, lambda s: round(float(s.get("size") or 0), 1)))
+    lower_ids = {id(s) for s in lower}
+    for line in span_lines:
+        bases = [float(s["origin"][1]) for s in line if id(s) in lower_ids and s.get("origin") is not None]
+        # 同一字号连着的一串里有小写（{z90}mouse (N)），是小一号的正文，不是小型大写
+        lowered = [False] * len(line)
+        start = 0
+        for i in range(1, len(line) + 1):
+            if i == len(line) or round(float(line[i].get("size") or 0), 1) != round(float(line[start].get("size") or 0), 1):
+                low = any(c.islower() for s in line[start:i] for c in str(s.get("text") or ""))
+                lowered[start:i] = [low] * (i - start)
+                start = i
+        caps_at = []
+        for i, span in enumerate(line):
+            text = str(span.get("text") or "")
+            size = float(span.get("size") or 0)
+            on_base = not bases or span.get("origin") is None or min(abs(float(span["origin"][1]) - b) for b in bases) <= body * 0.15
+            caps_at.append(id(span) not in out and body > 0 and 0.6 <= size / body < 0.92 and on_base and not lowered[i]
+                           and (_all_caps(text) or not text.strip()))
+        # 空格跟着两边走：夹在小型大写词中间的空格算进去，正文和小型大写之间的空格不动
+        for i, span in enumerate(line):
+            if not caps_at[i]:
+                continue
+            if str(span.get("text") or "").strip():
+                out[id(span)] = body
+                continue
+            sides = [j for j in (i - 1, i + 1) if 0 <= j < len(line)]
+            if sides and all(id(line[j]) in out or caps_at[j] for j in sides):
+                out[id(span)] = body
     return out
 
 

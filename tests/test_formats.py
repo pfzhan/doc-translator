@@ -6029,6 +6029,23 @@ def test_small_caps_heading_is_sent_without_size_marks():
     assert sent == "2.1 ADAM’S UPDATE"
 
 
+def test_small_caps_words_in_body_text_take_the_body_size():
+    """正文里整词小型大写（AGENT）比正文小一号，译成中文后照搬小字号会缩成一团。"""
+    from app.formats.pdf import TextBlock, _placeholderize
+
+    def span(text, size, x0, base=110):
+        return {"text": text, "font": "NimbusRomNo9L-Regu", "size": size, "flags": 0,
+                "bbox": (x0, base - 10, x0 + 5 * len(text), base + 2), "origin": (x0, base)}
+
+    spans = [span("roles like", 9.96, 100), span(" ", 7.97, 150), span("AGENT", 7.97, 154),
+             span(", or the", 9.96, 180), span("TM", 7.97, 220, base=106), span(" x", 9.96, 232)]
+    rect = pymupdf.Rect(100, 100, 245, 112)
+    block = TextBlock(0, rect, [rect], "roles like AGENT, or theTM x", 9.96, "#000", False, span_lines=[spans])
+    sent, _ = _placeholderize(block, 0)
+    # 抬高的上标不是小型大写，字号照旧
+    assert sent.startswith("roles like AGENT, or the{z")
+
+
 def test_bare_chinese_section_number_is_restored():
     from app.formats.pdf import _normalize_heading_number
 
