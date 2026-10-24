@@ -4472,7 +4472,12 @@ def _display_formula_ids(blocks: list[TextBlock], geometries: list[PageGeometry]
     for block in blocks:
         geo = geometries[block.page] if block.page < len(geometries) else None
         frame = geo.frame if geo is not None else None
-        if frame is None or block.rect.x0 <= frame.x0 + block.size * 2:
+        if frame is None:
+            continue
+        # 居中排的宽式子左边只空出一点，和右边空的一样多；成段的正文写到右缘
+        left, right = block.rect.x0 - frame.x0, frame.x1 - block.rect.x1
+        centered = left > block.size and abs(left - right) <= block.size
+        if left <= block.size * 2 and not centered:
             continue
         if any(
             _BIG_DELIMITER_FONT_RE.search(str(span.get("font") or "")) and _BIG_GLYPH_RE.search(str(span.get("text") or ""))
