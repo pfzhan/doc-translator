@@ -188,3 +188,26 @@ def test_shared_type3_glyphs_are_left_alone():
     erasure.lines.append(pymupdf.Rect(-1000, -1000, 1000, 1000))
     erase(page, erasure)
     assert doc.xref_stream(glyph) == before
+
+
+def test_a_color_repeated_in_a_new_color_space_survives():
+    """换了色彩空间再给同样的颜色值，MuPDF 重写时把颜色省掉，换空间又把颜色重置成黑色，
+    图里的白底成了黑块。没给颜色就画的原流照旧画初始色。"""
+    lab = "[/Lab <</WhitePoint [0.9505 1 1.089]>>]"
+    shades = {}
+    for name, stream in {
+        "repeated": b"0 g 0 0 300 200 re f /L1 cs 100 0 0 sc 10 10 50 50 re f /L2 cs 100 0 0 sc 100 10 50 50 re f",
+        "bare": b"1 g 0 0 300 200 re f /L1 cs 100 0 0 sc 10 10 50 50 re f /L2 cs 100 10 50 50 re f",
+    }.items():
+        doc = pymupdf.open()
+        page = doc.new_page(width=300, height=200)
+        page.insert_text((200, 150), "x")
+        doc.update_stream(page.get_contents()[0], stream)
+        doc.xref_set_key(page.xref, "Resources", f"<</ColorSpace<</L1 {lab} /L2 {lab}>>>>")
+        erasure = Erasure()
+        erasure.lines.append(pymupdf.Rect(0, 0, 1, 1))
+        erase(page, erasure)
+        pix = page.get_pixmap(clip=pymupdf.Rect(120, 160, 130, 170), colorspace=pymupdf.csGRAY)
+        shades[name] = set(pix.samples)
+    assert min(shades["repeated"]) > 200
+    assert max(shades["bare"]) < 50

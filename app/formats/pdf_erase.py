@@ -36,6 +36,15 @@ _WORD_GAP = 0.8
 
 _PAINTED_PATHS = {mupdf.FZ_CULL_PATH_FILL, mupdf.FZ_CULL_PATH_STROKE, mupdf.FZ_CULL_PATH_FILL_STROKE}
 
+# 内容流的词法单元。字符串可以嵌套括号，另外按字扫
+_TOKEN_RE = re.compile(rb"\s+|%[^\r\n]*|<<|>>|<[^>]*>|[\[\]{}]|/[^\s()<>\[\]{}/%]*|[^\s()<>\[\]{}/%]+|\(")
+_NUMBER_RE = re.compile(rb"[+-]?(?:\d+\.?\d*|\.\d+)")
+_INLINE_END_RE = re.compile(rb"\sEI(?=\s|$)")
+# 设颜色的操作符：填充色、描边色
+_FILL_COLOR = {b"g", b"rg", b"k", b"sc", b"scn"}
+_STROKE_COLOR = {b"G", b"RG", b"K", b"SC", b"SCN"}
+_PAINT_OPS = {b"f", b"F", b"f*", b"B", b"B*", b"b", b"b*", b"S", b"s", b"Tj", b"TJ", b"'", b'"', b"Do", b"EI"}
+
 
 @dataclass
 class _Line:
@@ -259,7 +268,11 @@ def erase(page: pymupdf.Page, erasure: Erasure) -> int:
     """
     if not erasure.spans and not erasure.lines:
         return 0
+    doc = page.parent
     glyphs = type3_glyphs(page)
+    streams = [*page.get_contents(), *(xref for xref, *_rest in page.get_xobjects())]
+    bare = any(_paints_in_bare_space(doc.xref_stream(xref) or b"") for xref in streams)
+    first_new = doc.xref_length()
     sanitizer = _Sanitizer(page, erasure)
     factory = _Factory(sanitizer)
     options = mupdf.PdfFilterOptions()
@@ -270,11 +283,100 @@ def erase(page: pymupdf.Page, erasure: Erasure) -> int:
     options.no_update = 0
     options.newlines = 0
     options.add_factory(factory.internal())
-    mupdf.pdf_filter_page_contents(pymupdf._as_pdf_document(page.parent), pymupdf._as_pdf_page(page), options)
-    restore_glyphs(page.parent, glyphs)
+    mupdf.pdf_filter_page_contents(pymupdf._as_pdf_document(doc), pymupdf._as_pdf_page(page), options)
+    restore_glyphs(doc, glyphs)
     if sanitizer.error is not None:
         raise sanitizer.error
+    # 重写出来的页面流和表单都是新对象。原流里有不给颜色就画的，补色会改掉它的初始色，整页不补
+    if not bare:
+        for xref in range(first_new, doc.xref_length()):
+            data = doc.xref_stream(xref) if doc.xref_is_stream(xref) else None
+            fixed = _restore_dropped_colors(data) if data else data
+            if fixed != data:
+                doc.update_stream(xref, fixed)
     return sanitizer.removed
+
+
+def _operators(data: bytes) -> Iterable[tuple[bytes, int, int]]:
+    """内容流里的操作符，带上它的操作数起点和它自己的终点。"""
+    pos, end, start = 0, len(data), -1
+    while pos < end:
+        match = _TOKEN_RE.match(data, pos)
+        if match is None:
+            pos += 1
+            continue
+        token = match.group()
+        if token[:1].isspace() or token[:1] == b"%":
+            pos = match.end()
+            continue
+        if start < 0:
+            start = pos
+        if token == b"(":
+            depth = 0
+            while pos < end:
+                char = data[pos]
+                if char == 0x5C:
+                    pos += 2
+                    continue
+                pos += 1
+                depth += (char == 0x28) - (char == 0x29)
+                if depth == 0:
+                    break
+            continue
+        pos = match.end()
+        if token[:1] in b"<>[]{}/" or _NUMBER_RE.fullmatch(token) or token in (b"true", b"false", b"null"):
+            continue
+        yield token, start, pos
+        start = -1
+        if token == b"ID":
+            # 内联图的数据是二进制，跳到 EI
+            inline = _INLINE_END_RE.search(data, pos)
+            pos = end if inline is None else inline.start() + 1
+
+
+def _paints_in_bare_space(data: bytes) -> bool:
+    """换了色彩空间不给颜色就画：按规范画的是这个空间的初始色。"""
+    fill = stroke = False
+    for op, _start, _end in _operators(data):
+        if op == b"cs" or op == b"CS":
+            fill, stroke = fill or op == b"cs", stroke or op == b"CS"
+        elif op in _FILL_COLOR:
+            fill = False
+        elif op in _STROKE_COLOR:
+            stroke = False
+        elif op in _PAINT_OPS and (fill or stroke):
+            return True
+    return False
+
+
+def _restore_dropped_colors(data: bytes) -> bytes:
+    """MuPDF 重写内容流时，换了色彩空间后的颜色值若和换之前的相同就省掉，可换色彩空间会把
+    颜色重置成初始色，白底就画成了黑块。每个后面没跟颜色的 cs、CS 后补回换之前的颜色值。"""
+    if re.search(rb"(?<![^\s\]>)])(?:cs|CS)(?![^\s/\[(<%])", data) is None:
+        return data
+    ops = list(_operators(data))
+    current: dict[bool, bytes | None] = {True: None, False: None}
+    saved: list[dict[bool, bytes | None]] = []
+    pieces: list[bytes] = []
+    copied = 0
+    for index, (op, start, op_end) in enumerate(ops):
+        if op == b"q":
+            saved.append(dict(current))
+        elif op == b"Q" and saved:
+            current = saved.pop()
+        elif op in _FILL_COLOR or op in _STROKE_COLOR:
+            current[op in _FILL_COLOR] = data[start:op_end - len(op)].strip()
+        elif op == b"cs" or op == b"CS":
+            fill = op == b"cs"
+            follow = ops[index + 1][0] if index + 1 < len(ops) else b""
+            values = current[fill]
+            if values and follow not in ((b"sc", b"scn") if fill else (b"SC", b"SCN")):
+                pieces += [data[copied:op_end], b" ", values, b" scn" if fill else b" SCN"]
+                copied = op_end
+    if not pieces:
+        return data
+    pieces.append(data[copied:])
+    return b"".join(pieces)
 
 
 def type3_glyphs(page: pymupdf.Page) -> dict[int, bytes]:
