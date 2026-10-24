@@ -1281,3 +1281,21 @@ def test_header_rows_above_a_three_line_table_join_it():
     (table,) = _with_header_rows([body], words)
     assert table.rect.y0 < 195 and table.rect.y0 > 165
     assert len(table.cells) == len(body.cells) + 2
+
+
+def test_a_combining_accent_is_drawn_over_its_letter(tmp_path):
+    """没有合成字的 P̂：字体里没有组合字形，画成独立的 ˆ，中线对着 P，不落回 HTML 排版。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=200)
+    page.insert_text((40, 52), "The estimated precision P is the fraction", fontsize=11)
+    src = tmp_path / "hat.pdf"
+    doc.save(src)
+    rect = pymupdf.Rect(40, 42, 300, 56)
+    block = TextBlock(page=0, rect=rect, line_rects=[rect], text="The estimated precision P is the fraction",
+                      size=11, color="#000000", bold=False)
+    out = _render_translated(src, [block], ["估计精度 {i}P̂{/i} 是比例"], "zh-CN")
+    chars = [(chr(c[0]), c[3]) for trace in out[0].get_texttrace() for c in trace["chars"]]
+    letter = next(box for char, box in chars if char == "P")
+    hat = next(box for char, box in chars if char == "ˆ")
+    assert abs((hat[0] + hat[2]) / 2 - (letter[0] + letter[2]) / 2) < 1.5
+    assert hat[1] < letter[1] + 1

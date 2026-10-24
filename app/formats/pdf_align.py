@@ -44,6 +44,16 @@ _LATIN_FONTS = {
     (True, True): ("DocBI", "hebi"),
 }
 
+# 没有合成字的组合重音（P̂、x̃）。字体里没有组合字形，画成对应的独立重音叠在前一个字上
+_MARK_GLYPHS = {
+    "\u0300": "`", "\u0301": "´", "\u0302": "ˆ", "\u0303": "˜", "\u0304": "¯", "\u0305": "¯",
+    "\u0306": "˘", "\u0307": "˙", "\u0308": "¨", "\u030a": "˚", "\u030c": "ˇ",
+}
+_MARK_FONT = ("DocRG", "helv")
+# 独立重音按小写字母的高度画，叠在大写字母、带上伸部的字母上要抬高（em）
+_TALL_LIFT = 0.2
+_ITALIC_SLANT = 0.21
+
 _font: pymupdf.Font | None = None
 _latin: dict[str, pymupdf.Font] = {}
 
@@ -75,9 +85,14 @@ class _Segment:
     bold: bool = False
     color: str = ""
     underline: bool = False
+    # 组合重音：不占宽，叠在前一个字上
+    mark: bool = False
+    italic: bool = False
 
     @property
     def width(self) -> float:
+        if self.mark:
+            return 0.0
         return self.font.text_length(self.text, self.size) if self.text else 0.0
 
 
@@ -185,6 +200,7 @@ def _append_segment(
     # 汉字没有粗体字形。粗体只记在片段上，写的时候描一笔，不换字体。
     if (
         segments
+        and not segments[-1].mark
         and segments[-1].font_name == name
         and segments[-1].size == size
         and segments[-1].bold == bold
@@ -211,6 +227,13 @@ def _segments(text: str, em: float) -> list[_Segment] | None:
         # 拉丁粗体已经换了 hebo。描边只加在仍用正文字体的汉字上。
         stroke = run.bold
         for char in run.text:
+            if char in _MARK_GLYPHS and (buf or segments):
+                if face is not None:
+                    _append_segment(segments, buf, face, size, stroke and face[0] == _FONT_NAME, run.color, run.underline)
+                face = None
+                name, font = _latin_font(run.italic, run.bold) if run.italic or run.bold else _mark_font()
+                segments.append(_Segment(char, name, font, size, False, run.color, False, True, run.italic))
+                continue
             picked = _face_for(char, run.italic, run.bold)
             if picked is None:
                 return None
@@ -223,13 +246,22 @@ def _segments(text: str, em: float) -> list[_Segment] | None:
     return segments
 
 
+def _mark_font() -> tuple[str, pymupdf.Font]:
+    name, builtin = _MARK_FONT
+    face = _latin.get(name)
+    if face is None:
+        face = pymupdf.Font(builtin)
+        _latin[name] = face
+    return name, face
+
+
 def _latin_unit(ch: str) -> bool:
     """词内的拉丁字母、数字、连字符和下划线（l_partkey）。两端对齐不能从这里拉开。"""
     return ch.isascii() and (ch.isalnum() or ch in "-'’_")
 
 
 def can_stretch(left: str, right: str) -> bool:
-    if right in _NO_GAP_BEFORE or left in _NO_GAP_AFTER:
+    if right in _NO_GAP_BEFORE or left in _NO_GAP_AFTER or right in _MARK_GLYPHS:
         return False
     # 作者名被拉成 Z h o n g，就是把词内的字母也拉开了。只在词与词之间留缝。
     # 网址、邮箱（jimmy@psi.utoronto.ca）中间的 @ . / 也是连着写的一串，拉开就像断成了几段
@@ -450,8 +482,19 @@ def _place_line(
         piece_extras = extras[extra_at:extra_at + count]
         extra_at += count
         pos = 0
+        # 上一个字的起点、宽度和字，组合重音叠在它上面
+        base: tuple[float, float, str] | None = None
         for seg in segments:
             n = len(seg.text)
+            if seg.mark:
+                if base is not None:
+                    ops.extend(_mark_ops(seg, base, color, face_now, paint_now))
+                    face_now = (seg.font_name, seg.size)
+                    paint_now = seg.color
+                pos += n
+                if pos < len(visible) and pos - 1 < len(piece_extras):
+                    cursor += piece_extras[pos - 1]
+                continue
             internal = piece_extras[pos:pos + max(n - 1, 0)]
             glyphs = _glyphs(seg.font, seg.text)
             if glyphs is None:
@@ -479,6 +522,8 @@ def _place_line(
                     rules[-1] = (rules[-1][0], cursor + advance, rules[-1][2], seg.color)
                 else:
                     rules.append((cursor, cursor + advance, seg.size, seg.color))
+            last = seg.font.text_length(seg.text[-1], seg.size) if seg.text else 0.0
+            base = (cursor + advance - last, last, seg.text[-1:])
             pos += n
             if pos < len(visible) and pos - 1 < len(piece_extras):
                 advance += piece_extras[pos - 1]
@@ -489,6 +534,36 @@ def _place_line(
         ops.append(f"{red:.4f} {green:.4f} {blue:.4f} rg")
         ops.append(f"{red:.4f} {green:.4f} {blue:.4f} RG")
     return ops, slots, fonts, rules
+
+
+def _mark_ops(
+    seg: _Segment, base: tuple[float, float, str], color: str,
+    face_now: tuple[str, float] | None, paint_now: str,
+) -> list[str]:
+    """组合重音画成独立重音，中线对着前一个字的中线。大写字母和带上伸部的字母上抬高一截，
+    斜体顺着字的斜度往右挪。"""
+    x, width, char = base
+    glyph = _MARK_GLYPHS[seg.text]
+    gid = seg.font.has_glyph(ord(glyph))
+    if not gid:
+        return []
+    ops: list[str] = []
+    if (seg.font_name, seg.size) != face_now:
+        ops.append(f"/{seg.font_name} {seg.size:.2f} Tf")
+    if seg.color != paint_now:
+        red, green, blue = _rgb(seg.color or color)
+        ops.append(f"{red:.4f} {green:.4f} {blue:.4f} rg")
+        ops.append(f"{red:.4f} {green:.4f} {blue:.4f} RG")
+    lift = seg.size * _TALL_LIFT if char.isupper() or char.isdigit() or char in "bdfhklt" else 0.0
+    shift = lift * _ITALIC_SLANT if seg.italic else 0.0
+    left = x + (width - seg.font.text_length(glyph, seg.size)) / 2 + shift
+    ops.append(f"1 0 0 1 {left:.2f} {{Y}} Tm")
+    if lift:
+        ops.append(f"{lift:.2f} Ts")
+    ops.append(f"[<{gid:04X}>]TJ")
+    if lift:
+        ops.append("0 Ts")
+    return ops
 
 
 def _draw_piece(
