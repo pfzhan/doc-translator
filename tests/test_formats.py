@@ -7694,3 +7694,22 @@ def test_a_glyph_arrow_over_a_word_marks_both_as_formula():
     assert marked["woman"] and marked["#    »"]
     assert not marked["is close to"]
     assert not marked["end of the line above, ..."] and not marked["____"]
+
+
+def test_a_word_grid_is_translated_cell_by_cell():
+    """一格一个词的词表：各格自成一条，同一排的几格不连成一句。表下面同一块里的图注标签不算格子。"""
+    from app.formats.pdf import _grid_cells
+
+    words = [["dwindle", "move", "soar", "shift"], ["advance", "edge", "swell", "tumble"],
+             ["climb", "explode", "swing", "fall"]]
+    items = [
+        (word, pymupdf.Rect(184 + 60 * col, 180 + 10 * row, 230 + 60 * col, 190 + 10 * row), [], [])
+        for row, line in enumerate(words) for col, word in enumerate(line)
+    ]
+    items.append(("Figure 2.4", pymupdf.Rect(80, 240, 120, 250), [], []))
+    items.append(("Some selected ASCII codes for some English letters", pymupdf.Rect(130, 240, 400, 250), [], []))
+    cells = _grid_cells(items)
+    assert cells == set(range(12))
+    prose = [(f"line {i} of an ordinary paragraph that wraps", pymupdf.Rect(80, 100 + 10 * i, 400, 110 + 10 * i), [], [])
+             for i in range(12)]
+    assert not _grid_cells(prose)

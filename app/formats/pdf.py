@@ -187,7 +187,8 @@ class TextBlock:
     line_gap: float = _LINE_GAP
     # 这份文档的正文字号（见 _body_size）。0 是没量
     body_size: float = 0.0
-    # 索引页上以页码收尾的一条（见 _index_page）。到页码就完整了，不和下一条并段
+    # 自成一条：索引页上以页码收尾的一条（见 _index_page）、词表里的一格（见 _grid_cells）。
+    # 不和上下的条目并段
     entry: bool = False
 
 
@@ -1047,6 +1048,36 @@ _INDEX_REF_RE = re.compile(r",\s*\d+(?:\s*[-–]\s*\d+)?(?:\s*,\s*\d+(?:\s*[-–
 # 一页至少这么多行、这么大比例的行以页码收尾，才是索引页
 _INDEX_MIN_LINES = 15
 _INDEX_SHARE = 0.4
+
+
+# 词表：至少这么多行，几列各有这么多行从同一处起笔
+_GRID_LINES = 9
+_GRID_COLUMNS = 3
+_GRID_ROWS = 3
+
+
+def _grid_cells(items: list[tuple]) -> set[int]:
+    """一块里一格一个词的词表（FrameNet 的 VERBS: dwindle move soar …）的格子：一两个词的短行，
+    左缘落在三列以上、每列好几行的列上，上下在这几列的范围以内。按行并成段会把同一排的几格
+    连成一句，译文各列叠在一起。同一块里表上下的图注、标签（Figure 2.4）不算格子。"""
+    if len(items) < _GRID_LINES:
+        return set()
+    short = [index for index, item in enumerate(items) if _grid_cell(item[0])]
+    if len(short) < len(items) * 0.8:
+        return set()
+    starts = Counter(round(items[index][1].x0 / 2) for index in short)
+    columns = {start for start, count in starts.items() if count >= _GRID_ROWS}
+    members = [index for index in short if round(items[index][1].x0 / 2) in columns]
+    if len(columns) < _GRID_COLUMNS or len({round(items[index][1].y0 / 2) for index in members}) < _GRID_ROWS:
+        return set()
+    top = min(items[index][1].y0 for index in members)
+    bottom = max(items[index][1].y1 for index in members)
+    return {index for index in short if top - 1 <= items[index][1].y0 and items[index][1].y1 <= bottom + 1}
+
+
+def _grid_cell(text: str) -> bool:
+    """词表的一格：一两个词。同一块里的图注、行名照常分段。"""
+    return len(text.split()) <= 2 and len(text.strip()) <= 25
 
 
 def _index_page(data: dict) -> bool:
@@ -4109,9 +4140,12 @@ def _extract(
             side_note = bool(b.get("side_note"))
             # 一条旁注就是一块，不按正文的规则拆
             groups = [list(range(len(items)))] if side_note and items else _split_lines(items)
-            # 带点线的一行是一个目录条目的末行，下一行是另一条。索引页上以页码收尾的一行也是
+            # 带点线的一行是一个目录条目的末行，下一行是另一条。索引页上以页码收尾的一行、
+            # 词表的一格也是
+            cells = _grid_cells(items)
             entry_ends = {
-                index for index, item in enumerate(items) if index_page and _INDEX_REF_RE.search(item[0].rstrip())
+                index for index, item in enumerate(items)
+                if index in cells or (index_page and _INDEX_REF_RE.search(item[0].rstrip()))
             }
             groups = [part for group in groups for part in _cut_after(group, {*leaders, *entry_ends})]
             # 文字分式所在的行自成一组，留原字，不和上下的正文连成一段
@@ -5352,10 +5386,10 @@ def _merge_line_tails(blocks: list[TextBlock], edges: Collection[int] = ()) -> l
     for index, block in enumerate(blocks):
         if id(block) in used:
             continue
-        if id(block) not in edges and _is_line_tail(block, earlier[index]):
+        if id(block) not in edges and not block.entry and _is_line_tail(block, earlier[index]):
             later = [other for other in blocks[index + 1:] if id(other) not in edges]
             nxt = _line_tail_continuation(block, later, blocks)
-            if nxt is not None and id(nxt) not in used:
+            if nxt is not None and id(nxt) not in used and not nxt.entry:
                 _absorb_block(block, nxt)
                 used.add(id(nxt))
         out.append(block)
@@ -5475,7 +5509,8 @@ def _merge_same_line_sentences(blocks: list[TextBlock], edges: Collection[int] =
 
 
 def _same_line_sentence(host: TextBlock, guest: TextBlock) -> bool:
-    if host.side_note or guest.side_note:
+    # 旁注、索引条目、词表的一格都自成一条
+    if host.side_note or guest.side_note or host.entry or guest.entry:
         return False
     return _sits_on_last_line(host, guest) or _continues_fragment(host, guest)
 
