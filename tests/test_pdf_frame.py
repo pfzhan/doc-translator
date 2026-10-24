@@ -62,6 +62,21 @@ def test_small_terms_on_a_lane_beside_the_frame_are_notes():
     assert found == {len(body), len(body) + 1, len(body) + 2}
 
 
+def test_a_body_size_symbol_on_the_note_lane_is_a_note():
+    """旁注里的 ŷ 和正文一样大，贴着旁注那条边对齐，也是旁注。外凸的节号不在那条边上。"""
+    body = _lines(142, 475)
+    notes = [
+        FrameLine(pymupdf.Rect(84, 161, 128, 169), "Herdan's Law", 7.2),
+        FrameLine(pymupdf.Rect(91, 173, 128, 180), "Heaps' Law", 7.2),
+        FrameLine(pymupdf.Rect(82, 281, 128, 288), "function words", 7.2),
+        FrameLine(pymupdf.Rect(123.4, 300, 128, 312), "\u02c6y", 10),
+        FrameLine(pymupdf.Rect(77, 330, 99, 345), "2.1", 10),
+    ]
+    page = [*body, *notes]
+    found = margin_notes([page], text_frames([page]))[0]
+    assert found == {len(body), len(body) + 1, len(body) + 2, len(body) + 3}
+
+
 def test_two_line_note_is_one_note_and_neighbours_stay_apart():
     lines = [
         FrameLine(pymupdf.Rect(123, 623, 146, 630), "regular", 7.2),

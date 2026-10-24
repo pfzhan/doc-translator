@@ -28,6 +28,7 @@ _NOTE_GAP = 2.0       # 旁注离版心至少这么远
 _NOTE_SMALL = 0.9     # 旁注字号不超过正文的这个比例
 _LANE_ALIGN = 1.5
 _LANE_MIN = 3         # 同一条边上至少这么多条旁注
+_NOTE_SYMBOL_CHARS = 3  # 和正文一样大的旁注最多这么几个字（ŷ 提出来是 ˆ 和 y 两个字）
 
 
 @dataclass(frozen=True)
@@ -108,17 +109,23 @@ def _running_lines(pages: Sequence[Sequence[FrameLine]]) -> set[tuple[int, str]]
 def margin_notes(pages: Sequence[Sequence[FrameLine]], frames: Sequence[TextFrame | None]) -> list[set[int]]:
     """每页里是页边旁注的行（下标）。"""
     candidates: list[tuple[int, int, str]] = []
+    # 和正文一样大的几个字（旁注里的 ŷ）：贴着旁注那条边对齐的才算
+    symbols: list[tuple[int, int, str]] = []
     for pno, (lines, frame) in enumerate(zip(pages, frames)):
         if frame is None:
             continue
         for index, line in enumerate(lines):
             # 不要求有字母：旁注也可以是 *? 这样的记号。页码和外凸的节号不比正文小，不在其内
-            if not line.text.strip() or line.size > frame.size * _NOTE_SMALL:
+            if not line.text.strip():
                 continue
-            if line.rect.x1 <= frame.x0 - _NOTE_GAP:
-                candidates.append((pno, index, "left"))
-            elif line.rect.x0 >= frame.x1 + _NOTE_GAP:
-                candidates.append((pno, index, "right"))
+            side = "left" if line.rect.x1 <= frame.x0 - _NOTE_GAP else "right" if line.rect.x0 >= frame.x1 + _NOTE_GAP else ""
+            if not side:
+                continue
+            if line.size <= frame.size * _NOTE_SMALL:
+                candidates.append((pno, index, side))
+            elif len("".join(line.text.split())) <= _NOTE_SYMBOL_CHARS and re.search(r"[^\W\d_]", line.text):
+                # 页码、条目号（1.）是数字，不算
+                symbols.append((pno, index, side))
     edges: dict[tuple[str, int], Counter[int]] = {}
     for pno, index, side in candidates:
         rect = pages[pno][index].rect
@@ -130,6 +137,16 @@ def margin_notes(pages: Sequence[Sequence[FrameLine]], frames: Sequence[TextFram
         rect = pages[pno][index].rect
         counter = edges[(side, pno % 2)]
         if any(_support(counter, edge) >= _LANE_MIN for edge in (rect.x0, rect.x1)):
+            found[pno].add(index)
+    # 靠版心的那条边：左侧旁注靠右对齐，右侧的靠左对齐。外侧的边参差，不拿来比
+    inner_edges: dict[tuple[str, int], Counter[int]] = {}
+    for pno, index, side in candidates:
+        rect = pages[pno][index].rect
+        inner_edges.setdefault((side, pno % 2), Counter())[round(rect.x1 if side == "left" else rect.x0)] += 1
+    for pno, index, side in symbols:
+        rect = pages[pno][index].rect
+        inner = rect.x1 if side == "left" else rect.x0
+        if _support(inner_edges.get((side, pno % 2), Counter()), inner) >= _LANE_MIN:
             found[pno].add(index)
     return found
 
