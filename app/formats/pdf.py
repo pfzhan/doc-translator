@@ -1045,6 +1045,8 @@ _TOC_MIN_ENTRIES = 5
 
 # 索引条目以页码收尾：「fully-connected, 157」「linear chain CRF, 414, 415」「Kleene *, 50–52」
 _INDEX_REF_RE = re.compile(r",\s*\d+(?:\s*[-–]\s*\d+)?(?:\s*,\s*\d+(?:\s*[-–]\s*\d+)?)*\s*$")
+# 条目太长时页码折到下一行，那一行只有页码：「BNF (Backus-Naur form),」下一行缩进写「426」
+_INDEX_REFS_ONLY_RE = re.compile(r"^\d+(?:\s*[-–]\s*\d+)?(?:\s*,\s*\d+(?:\s*[-–]\s*\d+)?)*,?$")
 # 一页至少这么多行、这么大比例的行以页码收尾，才是索引页
 _INDEX_MIN_LINES = 15
 _INDEX_SHARE = 0.4
@@ -1090,6 +1092,51 @@ def _index_page(data: dict) -> bool:
     if len(texts) < _INDEX_MIN_LINES:
         return False
     return sum(bool(_INDEX_REF_RE.search(text)) for text in texts) >= len(texts) * _INDEX_SHARE
+
+
+def _index_ref_rows(data: dict) -> list[pymupdf.Rect]:
+    """索引页上只有页码的行。PyMuPDF 常把它和上一行的条目分在两块里，按整页收。"""
+    return [
+        _line_box(line) for block in data.get("blocks", []) if block.get("type") == 0 for line in block["lines"]
+        if _INDEX_REFS_ONLY_RE.match("".join(span["text"] for span in line["spans"]).strip())
+    ]
+
+
+def _index_entry_ends(items: list[tuple], ref_rows: Sequence[pymupdf.Rect]) -> set[int]:
+    """索引页一块里每个条目的末行（下标）。条目折行时，续行比条目的首行缩进得深：
+    下一行起笔不比这一行靠右，这一行就收住了一条（「CFG, see context-free gram-」「mar」
+    后面的「chain rule」）。以页码收尾的行、只有页码的行、页码折到下一行的那一行也收住一条。
+    两端对齐把一行拆成几截（collaborative | completion,），按整行看。"""
+    rows: list[list[int]] = []
+    for index, item in enumerate(items):
+        box = item[1]
+        if rows and min(box.y1, items[rows[-1][0]][1].y1) - max(box.y0, items[rows[-1][0]][1].y0) > box.height * 0.5:
+            rows[-1].append(index)
+        else:
+            rows.append([index])
+    ends: set[int] = set()
+    for at, row in enumerate(rows):
+        rect = pymupdf.Rect()
+        for index in row:
+            rect |= items[index][1]
+        text = " ".join(items[index][0].strip() for index in row)
+        size = max(span["size"] for index in row for span in items[index][2])
+        nxt = rows[at + 1] if at + 1 < len(rows) else None
+        below = None
+        if nxt is not None:
+            below = pymupdf.Rect()
+            for index in nxt:
+                below |= items[index][1]
+        if (_INDEX_REF_RE.search(text) or _INDEX_REFS_ONLY_RE.match(text)
+                or (text.endswith(",") and _refs_below(rect, ref_rows, size))
+                or (below is not None and below.y0 - rect.y1 <= size * 0.5 and below.x0 <= rect.x0 + 1)):
+            ends.add(row[-1])
+    return ends
+
+
+def _refs_below(rect: pymupdf.Rect, ref_rows: Sequence[pymupdf.Rect], size: float) -> bool:
+    """条目的页码折到了下一行：只有页码的一行紧贴在下面，缩进落在这一行的左右缘之间。"""
+    return any(-size * 0.3 <= box.y0 - rect.y1 <= size * 0.5 and rect.x0 < box.x0 < rect.x1 for box in ref_rows)
 
 
 def _toc_pages(pages: list[dict]) -> set[int]:
@@ -4156,6 +4203,7 @@ def _extract(
         fractions = _fraction_parts(data, scans[pno].rules)
         toc_page = _has_leader_line(data) or pno in toc_pages
         index_page = _index_page(data)
+        ref_rows = _index_ref_rows(data) if index_page else []
         for b in data["blocks"]:
             if b.get("type") != 0:
                 continue
@@ -4175,12 +4223,9 @@ def _extract(
             # 一条旁注就是一块，不按正文的规则拆
             groups = [list(range(len(items)))] if side_note and items else _split_lines(items)
             # 带点线的一行是一个目录条目的末行，下一行是另一条。索引页上以页码收尾的一行、
-            # 词表的一格也是
+            # 页码折到下一行的条目、词表的一格也是
             cells = _grid_cells(items)
-            entry_ends = {
-                index for index, item in enumerate(items)
-                if index in cells or (index_page and _INDEX_REF_RE.search(item[0].rstrip()))
-            }
+            entry_ends = cells | (_index_entry_ends(items, ref_rows) if index_page else set())
             groups = [part for group in groups for part in _cut_after(group, {*leaders, *entry_ends})]
             # 文字分式所在的行自成一组，留原字，不和上下的正文连成一段
             formula_rows = {i for i, item in enumerate(items) if any(id(span) in fractions for span in item[2])}
@@ -5107,6 +5152,8 @@ def _absorb_block(p: TextBlock, b: TextBlock):
         p.span_lines = None
     if len(b.text) > len(p.text) - len(b.text):  # 风格跟随占多的片段
         p.size, p.color, p.bold = b.size, b.color, b.bold
+    # 并好的块在 b 的末行收住：b 是一个索引条目的末行，合起来也是
+    p.entry = b.entry
 
 
 def _cjk_wrap(prev: TextBlock, nxt: TextBlock) -> bool:
@@ -5641,7 +5688,8 @@ def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
     for b in blocks:
         if out:
             p = out[-1]
-            if p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note):
+            # 索引条目到页码就完了（perplexity:coined by, 89 带冒号，也不是图注标签）
+            if p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note or p.entry):
                 y_ov = min(p.rect.y1, b.rect.y1) - max(p.rect.y0, b.rect.y0)
                 same_line = y_ov > 0.5 * min(p.rect.y1 - p.rect.y0, b.rect.y1 - b.rect.y0)
                 gap = b.rect.x0 - p.rect.x1

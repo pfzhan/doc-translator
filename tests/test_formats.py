@@ -7689,6 +7689,25 @@ def test_an_index_entry_ends_at_its_page_numbers():
     assert len(_merge_continuations(blocks)) == 2
 
 
+def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
+    """索引条目折行时续行悬挂缩进。下一行起笔不比这一行靠右就是另一条（see 引用没有页码）；
+    页码折到下一行时那一行只有页码，可能分在另一块里；两端对齐拆开的一行按整行看。"""
+    from app.formats.pdf import _index_entry_ends
+
+    def item(text, x0, y0, x1):
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 9.6), [{"text": text, "size": 8.0}], [])
+
+    see = [item("CFG, see context-free gram-", 179.3, 111.8, 271.3), item("mar", 203.3, 121.2, 215.6),
+           item("chain rule, 123, 171", 179.3, 130.4, 242.9)]
+    assert _index_entry_ends(see, []) == {1, 2}
+    head = [item("Chinese", 179.3, 206.6, 205.0), item("as verb-framed language,", 187.3, 216.1, 271.3)]
+    assert 0 not in _index_entry_ends(head, [])
+    split = [item("collaborative", 179.3, 652.4, 220.6), item("completion,", 233.5, 652.4, 271.3)]
+    numbers = [pymupdf.Rect(203.3, 661.6, 215.2, 671.9)]
+    assert _index_entry_ends(split, numbers) == {1}
+    assert _index_entry_ends(split, []) == set()
+
+
 def test_one_sentence_per_line_is_not_joined_into_a_paragraph():
     """幻灯片上逐行排的例句：各占一行、左缘对齐，好几处上一行后面还放得下下一行的第一个词，
     小写起头也不并成一段。段落里折行的上一行放不下下一个词，照常接上。"""
