@@ -294,13 +294,14 @@ def _label_lead(spans: list[dict]) -> bool:
     return False
 
 
-def _justified_joins(items: list[tuple], max_x1: float) -> set[int]:
+def _justified_joins(items: list[tuple], max_x1: float, whole_rows: bool = False) -> set[int]:
     """两端对齐的一行被 PyMuPDF 按词拆开时，后面几个词的下标。
 
     窄栏里的标题两端对齐，词距能拉到两个字宽，按词距拆就成了一词一段。
     认法：同一基线、同一字体字号，最后一词顶到块的右缘，词距差不多一样大。
     只拆成两截的另看 _full_row。
     并排的格子、侧标不是这样：格子之间的空档大小不一，也不会恰好铺满一行。
+    whole_rows 为真时（索引页，一块就是一栏，没有格子和侧标），同一行的几截都是一行。
     """
     joins: set[int] = set()
     start = 0
@@ -309,7 +310,8 @@ def _justified_joins(items: list[tuple], max_x1: float) -> set[int]:
         while end < len(items) and _same_row(items[end - 1], items[end]):
             end += 1
         row = items[start:end]
-        if len(row) >= 3 and _spread_evenly(row, max_x1) or len(row) == 2 and _full_row(row, items, max_x1):
+        if (whole_rows and len(row) >= 2 or len(row) >= 3 and _spread_evenly(row, max_x1)
+                or len(row) == 2 and _full_row(row, items, max_x1)):
             joins.update(range(start + 1, end))
         start = end
     return joins
@@ -1105,9 +1107,10 @@ def _index_ref_rows(data: dict) -> list[pymupdf.Rect]:
 
 
 def _index_entry_ends(items: list[tuple], ref_rows: Sequence[pymupdf.Rect]) -> set[int]:
-    """索引页一块里每个条目的末行（下标）。条目折行时，续行比条目的首行缩进得深：
-    下一行起笔不比这一行靠右，这一行就收住了一条（「CFG, see context-free gram-」「mar」
-    后面的「chain rule」）。以页码收尾的行、只有页码的行、页码折到下一行的那一行也收住一条。
+    """索引页一块里每个条目的末行（下标）。条目折行时，续行比条目的首行缩进得深，
+    几行续行缩进一样：下一行起笔不比这一条的首行靠右，或者从续行往回退（退到子条目），
+    这一行就收住了一条（「CFG, see context-free gram-」「mar」后面的「chain rule」）。
+    以页码收尾的行、只有页码的行、页码折到下一行的那一行也收住一条。
     两端对齐把一行拆成几截（collaborative | completion,），按整行看。"""
     rows: list[list[int]] = []
     for index, item in enumerate(items):
@@ -1117,10 +1120,14 @@ def _index_entry_ends(items: list[tuple], ref_rows: Sequence[pymupdf.Rect]) -> s
         else:
             rows.append([index])
     ends: set[int] = set()
+    first_x0: float | None = None
     for at, row in enumerate(rows):
         rect = pymupdf.Rect()
         for index in row:
             rect |= items[index][1]
+        continued = first_x0 is not None
+        if first_x0 is None:
+            first_x0 = rect.x0
         text = " ".join(items[index][0].strip() for index in row)
         size = max(span["size"] for index in row for span in items[index][2])
         nxt = rows[at + 1] if at + 1 < len(rows) else None
@@ -1131,14 +1138,20 @@ def _index_entry_ends(items: list[tuple], ref_rows: Sequence[pymupdf.Rect]) -> s
                 below |= items[index][1]
         if (_INDEX_REF_RE.search(text) or _INDEX_REFS_ONLY_RE.match(text)
                 or (text.endswith(",") and _refs_below(rect, ref_rows, size))
-                or (below is not None and below.y0 - rect.y1 <= size * 0.5 and below.x0 <= rect.x0 + 1)):
+                or (below is not None and below.y0 - rect.y1 <= size * 0.5
+                    and (below.x0 <= first_x0 + 1 or (continued and below.x0 < rect.x0 - 1)))):
             ends.add(row[-1])
+            first_x0 = None
     return ends
 
 
 def _refs_below(rect: pymupdf.Rect, ref_rows: Sequence[pymupdf.Rect], size: float) -> bool:
-    """条目的页码折到了下一行：只有页码的一行紧贴在下面，缩进落在这一行的左右缘之间。"""
-    return any(-size * 0.3 <= box.y0 - rect.y1 <= size * 0.5 and rect.x0 < box.x0 < rect.x1 for box in ref_rows)
+    """条目的页码折到了下一行：只有页码的一行紧贴在下面，起笔落在这一行的左右缘之间。
+    这一行本身是续行时，页码和它缩进一样（branching factor, | 77）。"""
+    return any(
+        -size * 0.3 <= box.y0 - rect.y1 <= size * 0.5 and rect.x0 - size * 0.5 <= box.x0 < rect.x1
+        for box in ref_rows
+    )
 
 
 def _toc_pages(pages: list[dict]) -> set[int]:
@@ -1660,7 +1673,7 @@ _SIZE_RISE = 1.15
 _SIZE_ROW_CHARS = 6
 
 
-def _split_lines(items: list[tuple]) -> list[list[int]]:
+def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]]:
     """把一个文本块里的行分成独立段落（返回每组的行下标）。
 
     幻灯片里多个列表项、甚至不同的图注标签常被 PyMuPDF 归进同一块，整段翻译会把
@@ -1673,7 +1686,7 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
       连接标点结尾、左跳只是缩进、或仍是同一条列表项的续行，都不算硬换行。
     自动换行的续行（小写开头、上行撑满）仍并入上一段。
     标题行下面字号明显更小、又是完整句子的正文单独成段；字号明显变大的一行也单独成段。
-    角标拆出的短行字数不够，不拆。
+    角标拆出的短行字数不够，不拆。whole_rows 见 _justified_joins。
     左跳/硬换行的比较基准是"上一条正文字号的行"（参考行）：上下标拆出的 dict
     小行会把左跳量算飞，让段落在公式处被切碎。
     items 的元素是 (行文本, 行 rect, 行 span, ...) 的元组，只用前三个。
@@ -1681,7 +1694,7 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
     if not items:
         return []
     max_x1 = max(it[1].x1 for it in items)
-    justified = _justified_joins(items, max_x1)
+    justified = _justified_joins(items, max_x1, whole_rows)
     # 拆开的一行按整行比较左跳和右缘，不按行尾那个词
     row_box: dict[int, pymupdf.Rect] = {}
     for index in sorted(justified):
@@ -4244,7 +4257,7 @@ def _extract(
             items, leaders = _cut_leaders(items, toc_page)
             side_note = bool(b.get("side_note"))
             # 一条旁注就是一块，不按正文的规则拆
-            groups = [list(range(len(items)))] if side_note and items else _split_lines(items)
+            groups = [list(range(len(items)))] if side_note and items else _split_lines(items, index_page)
             # 带点线的一行是一个目录条目的末行，下一行是另一条。索引页上以页码收尾的一行、
             # 页码折到下一行的条目、词表的一格也是
             cells = _grid_cells(items)

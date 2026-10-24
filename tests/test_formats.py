@@ -7727,10 +7727,18 @@ def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
     assert _index_entry_ends(see, []) == {1, 2}
     head = [item("Chinese", 179.3, 206.6, 205.0), item("as verb-framed language,", 187.3, 216.1, 271.3)]
     assert 0 not in _index_entry_ends(head, [])
+    # 续行几行缩进一样，到下一条从首行的左缘起笔才收住
+    long = [item("Transformations and Dis-", 77.4, 518.7, 169.4), item("course Analysis", 101.3, 528.2, 169.4),
+            item("Project (TDAP),", 101.3, 537.7, 169.4), item("422", 101.3, 547.1, 113.3),
+            item("transition probability", 77.4, 556.6, 144.5)]
+    assert _index_entry_ends(long, []) == {3}
     split = [item("collaborative", 179.3, 652.4, 220.6), item("completion,", 233.5, 652.4, 271.3)]
     numbers = [pymupdf.Rect(203.3, 661.6, 215.2, 671.9)]
     assert _index_entry_ends(split, numbers) == {1}
     assert _index_entry_ends(split, []) == set()
+    # 续行带着逗号收住，页码和续行缩进一样
+    wrapped = [item("as weighted average", 187.3, 225.6, 271.3), item("branching factor,", 203.3, 235.0, 271.3)]
+    assert _index_entry_ends(wrapped, [pymupdf.Rect(203.3, 244.5, 211.2, 254.1)]) == {1}
 
 
 def test_the_rest_of_a_broken_word_continues_the_line_above():
