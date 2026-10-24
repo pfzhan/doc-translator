@@ -5837,10 +5837,17 @@ def test_a_formula_line_wrapped_from_a_full_line_is_kept():
     above = TextBlock(page=4, rect=line, line_rects=[line], text="Where the projections are parameter matrices W Q",
                       size=10, color="#000000", bold=False)
     tail = pymupdf.Rect(108, 215.6, 201.2, 227.9)
-    assert _wraps_from_above([above], 4, tail, "and W O ∈Rhdv×dmodel.", frame)
+    rows = [pymupdf.Rect(108, y, 503, y + 12) for y in (100, 112, 124, 136)]
+    assert _wraps_from_above([above], 4, tail, "and W O ∈Rhdv×dmodel.", rows, frame)
     short = pymupdf.Rect(107.5, 203.1, 200, 217.6)
     stacked = TextBlock(page=4, rect=short, line_rects=[short], text="et = Ext", size=10, color="#000000", bold=False)
-    assert not _wraps_from_above([stacked], 4, tail, "ht = g(Uht−1 + Wet)", frame)
+    assert not _wraps_from_above([stacked], 4, tail, "ht = g(Uht−1 + Wet)", rows, frame)
+    # 两栏排时上一行写到的是左栏的右缘，不是版心右缘
+    column = pymupdf.Rect(108, 203.1, 297.5, 217.6)
+    left = TextBlock(page=4, rect=column, line_rects=[column], text="where the mean is computed over",
+                     size=10, color="#000000", bold=False)
+    rows = [pymupdf.Rect(108, y, 298, y + 12) for y in (100, 112, 124, 136)]
+    assert _wraps_from_above([left], 4, tail, "and x̂ = (x − µ)/σ.", rows, frame)
 
 
 def test_tex_spacing_accents_are_composed_before_translation():

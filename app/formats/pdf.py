@@ -3965,6 +3965,11 @@ def _extract(
         _detach_margin_notes(data, lines, refs, found - _wide_block_lines(lines, refs, found, frame))
     for pno, data in enumerate(pages):
         margins = _left_margins(data)
+        # 本页各行的起止，用来找一行所在那一栏的右缘
+        row_ends = [
+            _line_box(line) for block in data["blocks"] if block.get("type") == 0 for line in block["lines"]
+            if "".join(span["text"] for span in line["spans"]).strip()
+        ]
         fractions = _fraction_parts(data, scans[pno].rules)
         toc_page = _has_leader_line(data) or pno in toc_pages
         for b in data["blocks"]:
@@ -4006,7 +4011,7 @@ def _extract(
                 displayed = len(group) == 1 and _displayed(rect, spans, margins)
                 fraction = group[0] in formula_rows
                 if not in_cell and (fraction or _untranslatable(spans, text, _DISPLAY_PROSE if displayed else 3)) \
-                        and not _wraps_from_above(blocks, pno, rect, text, frames[pno]):
+                        and not _wraps_from_above(blocks, pno, rect, text, row_ends, frames[pno]):
                     # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
                     # 捐了会被擦掉，而这些行没有占位符、不会重画。
                     if NO_TEXT_RE.match(text) and blocks and blocks[-1].page == pno:
@@ -4282,22 +4287,43 @@ def _main_span(lines: list[list[dict]]) -> dict:
 
 
 def _wraps_from_above(
-    blocks: list[TextBlock], pno: int, rect: pymupdf.Rect, text: str, frame: TextFrame | None,
+    blocks: list[TextBlock], pno: int, rect: pymupdf.Rect, text: str,
+    rows: Sequence[pymupdf.Rect], frame: TextFrame | None,
 ) -> bool:
     """以小写正文词起头、从上一行正文的左缘接着写的式子行（and W^O ∈ ℝ^{hd_v×d_model}.）是上一句
-    折下来的，不是单独排的式子：上一行写到版心右缘、没写完一句，这一行紧贴在它下面。
+    折下来的，不是单独排的式子：上一行写到本栏右缘、没写完一句，这一行紧贴在它下面。
     叠着排的几行式子（e_t = Ex_t、h_t = g(…)）写不到右缘。"""
-    if frame is None or not re.match(r"[a-z]{2,}\b", text.lstrip()):
+    if not re.match(r"[a-z]{2,}\b", text.lstrip()):
         return False
-    for block in reversed(blocks[-4:]):
-        if block.page != pno or not block.line_rects:
-            continue
+    for block in reversed([block for block in blocks if block.page == pno and block.line_rects]):
         last = block.line_rects[-1]
-        if (abs(block.rect.x0 - rect.x0) <= block.size * 0.5
-                and -0.5 * block.size <= rect.y0 - last.y1 <= 0.6 * block.size
-                and last.x1 >= frame.x1 - block.size and not _ends_sentence(block.text)):
+        if rect.y0 - last.y1 > 0.6 * block.size:
+            # 块按阅读顺序排，再往前的都在更上面或者在别的栏
+            continue
+        # 折下来的是一行：底下再叠几行的是另排的式子
+        if (abs(block.rect.x0 - rect.x0) <= block.size * 0.5 and rect.height <= block.size * 1.6
+                and -0.5 * block.size <= rect.y0 - last.y1
+                and last.x1 >= _column_right(block, rows, frame) - block.size
+                and not _ends_sentence(block.text)):
             return True
     return False
+
+
+def _column_right(block: TextBlock, rows: Sequence[pymupdf.Rect], frame: TextFrame | None) -> float:
+    """块所在那一栏的右缘：本页和它同一左缘起笔的行有四成以上止于同一处（两端对齐）。
+    索引、代码这类参差的行对不出这条缘，用版心右缘。"""
+    ends = Counter(round(row.x1) for row in rows if abs(row.x0 - block.rect.x0) <= block.size)
+    total = sum(ends.values())
+    if ends:
+        edge = max(ends, key=lambda value: (_near_votes(ends, value), value))
+        votes = _near_votes(ends, edge)
+        if votes >= 3 and votes >= total * 0.4:
+            return float(edge)
+    return frame.x1 if frame is not None else float("inf")
+
+
+def _near_votes(counter: Counter[int], value: int) -> int:
+    return sum(count for other, count in counter.items() if abs(other - value) <= 1)
 
 
 def _untranslatable(spans: list[dict], text: str, min_prose: int = 3) -> bool:
