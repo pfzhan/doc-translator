@@ -4254,7 +4254,8 @@ def _extract(
         geo = PageGeometry.from_page(doc[pno], [block.rect for block in page_blocks], scan=scans[pno])
         geometries[pno] = geo
         ordered.extend(reading_order(page_blocks, geo))
-    merged = _merge_continuations(_merge_caption_fragments(_merge_visual_lines(ordered, geometries)))
+    lines_first = _merge_caption_fragments(_merge_visual_lines(ordered, geometries))
+    merged = _merge_continuations(lines_first, _line_lists(lines_first, frames))
     # 页眉页脚不和正文的半句相接：书的页眉靠右排、不带句号，像一行的后半句。
     # 页眉常在页顶窄带以下、版心以上，要带上版心才认得出
     margin_geometries = [
@@ -5122,7 +5123,54 @@ def _cjk_wrap(prev: TextBlock, nxt: TextBlock) -> bool:
     return len(CJK_RE.findall(prev.text)) >= 8 or prev.rect.width >= prev.size * 12
 
 
-def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
+# 一行一句的清单：至少这么多行
+_LIST_RUN = 3
+
+
+def _line_lists(blocks: list[TextBlock], frames: Sequence[TextFrame | None]) -> set[int]:
+    """一行一句的清单（幻灯片上的例句）里的块。几块各占一行、左缘对齐、行距一样，
+    一半以上的换行处，上一行后面还放得下下一行的第一个词：是逐行排的，不是一段折出来的。
+    段落按行折，上一行放得下的词不会挪到下一行。绕图排的几行止于图边，同一处止笔的行够多，
+    栏的右缘按图边算（见 _column_right）。"""
+    rows_of: dict[int, list[pymupdf.Rect]] = {}
+    for block in blocks:
+        rows_of.setdefault(block.page, []).extend(block.line_rects or [block.rect])
+    listed: set[int] = set()
+    run: list[TextBlock] = []
+
+    def close() -> None:
+        if len(run) < _LIST_RUN:
+            return
+        frame = frames[run[0].page] if run[0].page < len(frames) else None
+        if frame is None:
+            return
+        early = 0
+        for upper, lower in zip(run, run[1:]):
+            right = _column_right(upper, rows_of[upper.page], frame)
+            word = lower.text.split()[0] if lower.text.split() else ""
+            if upper.rect.x1 + (len(word) * 0.5 + 1.0) * upper.size <= right:
+                early += 1
+        if early * 2 >= len(run) - 1:
+            listed.update(id(block) for block in run)
+
+    for block in blocks:
+        single = bool(block.line_rects) and len(_visual_lines(block)) == 1
+        if run and single:
+            last = run[-1]
+            pitch = block.rect.y0 - last.rect.y0
+            first_pitch = run[1].rect.y0 - run[0].rect.y0 if len(run) >= 2 else pitch
+            if (block.page == last.page and abs(block.rect.x0 - last.rect.x0) <= last.size * 0.5
+                    and abs(block.size - last.size) <= last.size * 0.05
+                    and 0 < pitch <= last.size * 2.0 and abs(pitch - first_pitch) <= last.size * 0.2):
+                run.append(block)
+                continue
+        close()
+        run = [block] if single else []
+    close()
+    return listed
+
+
+def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = frozenset()) -> list[TextBlock]:
     """合并同页内被公式/碎片拆断的段落续行：上行无句末标点、下行小写（或闭括号）
     开头、同左 margin、行距正常，就是同一段被拆开的两行。各翻各的会产出半截译文，
     渲染时在断点强制换行（'（如 | 序列）'）。中文换行左缘对齐、上行够长时同样接上。
@@ -5236,6 +5284,7 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
             if (p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note)
                     and p.leader is None and b.leader is None and not p.entry
+                    and not (id(p) in listed and id(b) in listed)
                     and (title_frag or latin or (y_close and _cjk_wrap(p, b)))
                     and not _restyled_seam(p, b) and not _new_voice(p, b)):
                 _absorb_block(p, b)

@@ -7689,6 +7689,30 @@ def test_an_index_entry_ends_at_its_page_numbers():
     assert len(_merge_continuations(blocks)) == 2
 
 
+def test_one_sentence_per_line_is_not_joined_into_a_paragraph():
+    """幻灯片上逐行排的例句：各占一行、左缘对齐，好几处上一行后面还放得下下一行的第一个词，
+    小写起头也不并成一段。段落里折行的上一行放不下下一个词，照常接上。"""
+    from app.formats.pdf import TextBlock, _line_lists, _merge_continuations
+    from app.formats.pdf_frame import TextFrame
+
+    def blk(text, y, x1, size=38.0):
+        rect = pymupdf.Rect(112.3, y, x1, y + 46.4)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
+
+    frame = TextFrame(97.9, 1088.0, 11.0, 600.0, 38.0)
+    examples = [blk("can you tell me about any good cantonese restaurants close by", 151.7, 1087.7),
+                blk("tell me about chez panisse", 210.8, 524.4),
+                blk("i’m looking for a good place to eat breakfast", 269.8, 795.0),
+                blk("when is caffe venezia open during the day", 329.8, 764.4)]
+    listed = _line_lists(examples, [frame])
+    assert len(_merge_continuations(examples, listed)) == 4
+    paragraph = [blk("the model is trained on a large corpus of text and then it is", 151.7, 1087.7),
+                 blk("evaluated on a held out set of sentences that were never seen", 210.8, 1085.0),
+                 blk("during training so that the estimate of its quality is fair", 269.8, 1080.0),
+                 blk("and unbiased", 329.8, 400.0)]
+    assert _line_lists(paragraph, [frame]) == set()
+
+
 def test_a_glyph_arrow_over_a_word_marks_both_as_formula():
     """esvect 的 \\vv{woman} 提出来是「#    »」：没有字母、墨迹是一条细带、基线比词高不到一个字，
     紧贴在 woman 上面。箭头和 woman 是式子，后面的 is close to 照翻。上一行的标点不算。"""
