@@ -8415,10 +8415,14 @@ _CN_CAPTION_RE = re.compile(r"^(\s*(?:\{/?[bizu]\d*\}\s*)*)([图表])\s*[一二�
 def _strip_boundary_echo(prev_src: str, cur_src: str, prev_t: str, cur_t: str) -> str:
     """去掉模型在段界复读的连接语。
 
+    复读只发生在一句话被切成两块时，这一块原文接着上一块的句子，以小写字母开头。
+    标题后面另起的一段，开头常常就是标题里的词，不是复读。
     相同原文会命中同一条缓存，译文必然相同，不能删。无标点的短重叠
     （「如下所示」）是常见短语，也不是断点复读。整段重叠不删。
     """
     if not prev_t or not cur_t or prev_src.strip() == cur_src.strip() or "\x01" in cur_t[:40]:
+        return cur_t
+    if not re.match(r"(?:\{[^{}\s]{1,10}\}|\s)*[a-z]", cur_src):
         return cur_t
     limit = min(40, len(prev_t), len(cur_t) - 1)
     for k in range(limit, 3, -1):

@@ -4605,6 +4605,10 @@ def test_boundary_echo_keeps_repeated_cells_and_short_phrases():
     prev = "前文结束序列），而目标输出"
     cur = "序列），而目标输出才是下一段"
     assert _strip_boundary_echo("alpha beta", "gamma delta", prev, cur) == "才是下一段"
+    # 标题后另起一段，开头就是标题里的词
+    head_src, para_src = "4.7.2 Applying softmax in logistic regression", "When we apply softmax for logistic regression"
+    head_t, para_t = "4.7.2 在逻辑回归中应用 softmax", "在逻辑回归中应用 softmax 时, 输入与 sigmoid 一样"
+    assert _strip_boundary_echo(head_src, para_src, head_t, para_t) == para_t
 
 
 def test_tighten_line_height_for_cjk():
