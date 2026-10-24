@@ -3046,7 +3046,11 @@ def _absorb_one_box(formula: dict, drawings: list[pymupdf.Rect], glyphs: list[di
     ink = _spans_ink(formula.get("spans") or [])
     probe = old if ink is None or ink.is_empty else ink + (-_INK_PAD, -_INK_PAD, _INK_PAD, _INK_PAD)
     own = {_origin_key(span) for span in formula.get("spans") or [] if span.get("origin")}
-    curves = [curve for curve in intersecting_curves(probe, drawings) if not _rests_on(curve, glyphs, own)]
+    spans = formula.get("spans") or []
+    curves = [
+        curve for curve in intersecting_curves(probe, drawings)
+        if _radical_bar(curve, spans) or not _rests_on(curve, glyphs, own)
+    ]
     curves = [curve for curve in curves if not _joins_outer_shape(curve, curves, drawings, probe)]
     formula["curves"] = list(curves)
     if not curves:
@@ -3300,6 +3304,24 @@ def _joins_outer_shape(
         if not (other & reach).is_empty:
             return True
     return False
+
+
+def _radical_bar(curve: pymupdf.Rect, spans: list[dict]) -> bool:
+    """横线左端接在本公式一个字的右上角：是根号的横线。被开方数在线下面，线上面常贴着上一行的降部，
+    不能因此留在原处。CMEX 的大号根号提出来是字母，按位置认。"""
+    if curve.height > _RULE_IMAGE_THICK:
+        return False
+    for span in spans:
+        if not str(span.get("text") or "").strip():
+            continue
+        box = pymupdf.Rect(span.get("ink") or span["bbox"])
+        if abs(curve.x0 - box.x1) <= _RADICAL_JOIN and abs(curve.y0 - box.y0) <= _RADICAL_JOIN:
+            return True
+    return False
+
+
+# 根号横线的左端和根号右上角相距在这以内（点）
+_RADICAL_JOIN = 1.0
 
 
 def _rests_on(curve: pymupdf.Rect, glyphs: list[dict], own: set[tuple[float, float]]) -> bool:
