@@ -378,8 +378,10 @@ def _text_box(span: dict) -> pymupdf.Rect:
         return rect
     top, bottom = ink[1] - _INK_PAD, ink[3] + _INK_PAD
     if span.get("ink_drawn"):
-        # 单画量出的墨迹不夹在字体框里：字体框量错了（txsys 的根号往基线下伸了大半个字）
-        return pymupdf.Rect(rect.x0, top, rect.x1, bottom)
+        # 单画量出的墨迹不夹在字体框里：字体框量错了（txsys 的根号往基线下伸了大半个字）。
+        # 连上起笔点：宽波浪号这类重音整个在起笔点上方，只看墨迹就离开了它排的那一行
+        base = float(span["origin"][1])
+        return pymupdf.Rect(rect.x0, min(top, base), rect.x1, max(bottom, base))
     return pymupdf.Rect(rect.x0, max(rect.y0, top), rect.x1, min(rect.y1, bottom))
 
 
@@ -399,7 +401,7 @@ def _attach_ink(page: pymupdf.Page, data: dict) -> None:
                 key = (span["text"], round(span["origin"][0], 1), round(span["origin"][1], 1))
                 found[key] = tuple(span["bbox"])
     fonts: dict[str, list[tuple[bytes, bytes]]] | None = None
-    glyphs: dict[tuple[str, float, float], list[tuple[str, float, float]]] | None = None
+    glyphs: dict[tuple[str, float, float], list[tuple[int, float, float]]] | None = None
     for block in data.get("blocks", []):
         for line in block.get("lines", []):
             for span in line["spans"]:
@@ -433,35 +435,42 @@ def _embedded_fonts(page: pymupdf.Page) -> dict[str, list[tuple[bytes, bytes]]]:
     return out
 
 
-def _char_origins(page: pymupdf.Page) -> dict[tuple[str, float, float], list[tuple[str, float, float]]]:
-    """每个 span 逐字的字、基线和字宽，按 span 的文字和起笔点对上。
+def _char_origins(page: pymupdf.Page) -> dict[tuple[str, float, float], list[tuple[int, float, float]]]:
+    """每个 span 逐字的字形编号、基线和字宽，按 span 的文字和起笔点对上。空白和对不上编号的字不收。
     span 的起笔点是第一个字的：「 √」的空格和根号不在一条基线上。"""
-    found: dict[tuple[str, float, float], list[tuple[str, float, float]]] = {}
+    gids = {
+        (round(char[2][0], 1), round(char[2][1], 1)): char[1]
+        for trace in page.get_texttrace() for char in trace["chars"] if char[1] >= 0
+    }
+    found: dict[tuple[str, float, float], list[tuple[int, float, float]]] = {}
     for block in page.get_text("rawdict", flags=_TEXT_FLAGS).get("blocks", []):
         for line in block.get("lines", []):
             for span in line.get("spans", []):
                 chars = span.get("chars") or []
                 text = "".join(char["c"] for char in chars)
                 key = (text, round(span["origin"][0], 1), round(span["origin"][1], 1))
-                found[key] = [(char["c"], char["origin"][1], char["bbox"][2] - char["bbox"][0]) for char in chars]
+                found[key] = [
+                    (gid, char["origin"][1], char["bbox"][2] - char["bbox"][0]) for char in chars
+                    if not char["c"].isspace()
+                    and (gid := gids.get((round(char["origin"][0], 1), round(char["origin"][1], 1)))) is not None
+                ]
     return found
 
 
 def _drawn_ink(
-    span: dict, fonts: list[tuple[bytes, bytes]], chars: list[tuple[str, float, float]],
+    span: dict, fonts: list[tuple[bytes, bytes]], glyphs: list[tuple[int, float, float]],
 ) -> tuple[float, float, float, float] | None:
     """按字形单画出来的墨迹算 span 的上下沿，左右照原框。每个字按自己的基线放。
-    按 Unicode 在字体里找到的字形和页上用的不一定是同一个（大号定界符有好几档），
-    字宽对不上的不认。"""
+    按页上用的字形编号画：大号定界符有好几档，CMEX 的宽波浪号按 Unicode 在字体里找不到。
+    同名字体可能有好几个子集，字宽对不上的不是这一个。"""
     size = float(span.get("size") or 0)
-    glyphs = [(char, base, width) for char, base, width in chars if not char.isspace()]
     if size <= 0 or not glyphs:
         return None
     for digest, buffer in fonts:
         tops: list[float] = []
         bottoms: list[float] = []
-        for char, base, width in glyphs:
-            extent = _glyph_extent(digest, buffer, char)
+        for gid, base, width in glyphs:
+            extent = _glyph_extent(digest, buffer, gid)
             if extent is None or abs(extent[2] * size - width) > max(0.3, width * 0.08):
                 break
             tops.append(base + extent[0] * size)
@@ -472,28 +481,38 @@ def _drawn_ink(
     return None
 
 
-# 字形墨迹的上下沿，键是字体文件的散列和字
-_GLYPH_EXTENTS: dict[tuple[bytes, str], tuple[float, float, float] | None] = {}
+# 字形墨迹的上下沿，键是字体文件的散列和字形编号
+_GLYPH_EXTENTS: dict[tuple[bytes, int], tuple[float, float, float] | None] = {}
 
 
-def _glyph_extent(digest: bytes, buffer: bytes, char: str) -> tuple[float, float, float] | None:
-    """字形墨迹的上下沿（基线往下为正）和字宽，单位是字号。字体里没有这个字、或画不出墨迹时为 None。"""
-    key = (digest, char)
+def _glyph_extent(digest: bytes, buffer: bytes, gid: int) -> tuple[float, float, float] | None:
+    """字形墨迹的上下沿（基线往下为正）和字宽，单位是字号。字体里没有这个字形、或画不出墨迹时为 None。"""
+    key = (digest, gid)
     if key not in _GLYPH_EXTENTS:
-        _GLYPH_EXTENTS[key] = _measure_glyph(buffer, char)
+        _GLYPH_EXTENTS[key] = _measure_glyph(buffer, gid)
     return _GLYPH_EXTENTS[key]
 
 
-def _measure_glyph(buffer: bytes, char: str) -> tuple[float, float, float] | None:
+def _measure_glyph(buffer: bytes, gid: int) -> tuple[float, float, float] | None:
+    """按字形编号在 100 号字上单画一遍，量墨迹的上下沿。"""
+    mupdf = pymupdf.mupdf
     try:
-        font = pymupdf.Font(fontbuffer=buffer)
-        if not font.has_glyph(ord(char)):
+        font = mupdf.fz_new_font_from_buffer(None, mupdf.fz_new_buffer_from_copied_data(buffer), 0, 0)
+        if not 0 < gid < font.m_internal.glyph_count:
             return None
-        advance = font.glyph_advance(ord(char))
-        page = pymupdf.open().new_page(width=300, height=300)
-        page.insert_font(fontname="G", fontbuffer=buffer)
-        page.insert_text((100, 150), char, fontname="G", fontsize=100)
-        pix = page.get_pixmap(dpi=72, colorspace=pymupdf.csGRAY)
+        advance = mupdf.fz_advance_glyph(font, gid, 0)
+        text = mupdf.fz_new_text()
+        mupdf.fz_show_glyph(
+            text, font, mupdf.FzMatrix(100, 0, 0, -100, 100, 150), gid, 0, 0, 0, mupdf.FZ_BIDI_LTR, mupdf.FZ_LANG_UNSET,
+        )
+        canvas = mupdf.fz_new_pixmap(mupdf.fz_device_gray(), 300, 300, mupdf.FzSeparations(), 0)
+        mupdf.fz_clear_pixmap_with_value(canvas, 255)
+        device = mupdf.fz_new_draw_device(mupdf.FzMatrix(), canvas)
+        mupdf.fz_fill_text(device, text, mupdf.FzMatrix(), mupdf.fz_device_gray(), [0.0], 1.0, mupdf.FzColorParams())
+        mupdf.fz_close_device(device)
+        pix = pymupdf.Pixmap(canvas)
+        if pix.alpha:
+            pix = pymupdf.Pixmap(pix, 0)
     except (RuntimeError, ValueError):
         return None
     width = pix.width

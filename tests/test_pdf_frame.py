@@ -603,12 +603,25 @@ def test_a_glyph_is_measured_by_drawing_it_alone():
     """字体框量错的字形（txsys 的根号）单画一遍量墨迹：上下沿相对基线，单位是字号。"""
     from app.formats.pdf import _measure_glyph
 
-    buffer = pymupdf.Font("tiro").buffer
-    top, bottom, _width = _measure_glyph(buffer, "g")
-    assert -0.6 < top < 0 < bottom < 0.4
-    top, bottom, _width = _measure_glyph(buffer, "x")
+    font = pymupdf.Font("tiro")
+    top, bottom, width = _measure_glyph(font.buffer, font.has_glyph(ord("g")))
+    assert -0.6 < top < 0 < bottom < 0.4 and width == font.glyph_advance(ord("g"))
+    top, bottom, _width = _measure_glyph(font.buffer, font.has_glyph(ord("x")))
     assert -0.6 < top < 0 and abs(bottom) < 0.03
-    assert _measure_glyph(buffer, "\u4e2d") is None
+    assert _measure_glyph(font.buffer, font.has_glyph(ord("\u4e2d"))) is None
+
+
+def test_glyphs_are_matched_by_the_glyph_id_used_on_the_page():
+    """逐字按页上用的字形编号记下，空白不收。自定义编码的字体（CMEX）按 Unicode 找不到字形。"""
+    from app.formats.pdf import _char_origins
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((72, 100), "g x", fontname="tiro", fontsize=10)
+    font = pymupdf.Font("tiro")
+    [glyphs] = _char_origins(page).values()
+    assert [gid for gid, _base, _width in glyphs] == [font.has_glyph(ord("g")), font.has_glyph(ord("x"))]
+    assert all(abs(base - 100) < 0.01 for _gid, base, _width in glyphs)
 
 
 def test_an_underline_is_written_as_a_mark_and_drawn_under_the_words():
