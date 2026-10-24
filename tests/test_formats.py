@@ -7385,3 +7385,31 @@ def test_a_split_off_period_keeps_its_own_baseline():
     pieces = _split_covered(span, [bar], chars, ([440.7, 455.2, 457.0], [455.2, 457.0, 459.5]), "math")
     assert [piece["text"] for piece in pieces] == [" ", "."]
     assert pieces[1]["origin"] == (457.0, 613.0)
+
+
+def test_a_numerator_left_in_its_own_block_rejoins_the_paragraph():
+    """分子 g⁴ 和它的下标 T,i 被分进一个单独的块，逐行挪都有同块的行贴着。整块叠在段落里
+    分母的式子上、和段落的正文行同高，一起挪回段落。"""
+    from app.formats.pdf import _rejoin_split_lines
+
+    reg, cmmi = "NimbusRomNo9L-Regu", "CMMI7"
+
+    def line(*spans):
+        box = pymupdf.Rect(spans[0]["bbox"])
+        for span in spans[1:]:
+            box |= pymupdf.Rect(span["bbox"])
+        return {"bbox": tuple(box), "dir": (1, 0), "spans": list(spans)}
+
+    lead = line(_glyph("From,", reg, 9.7, 4, (105.0, 558.9, 128.4, 570.6), (105.0, 561.0, 128.4, 569.9)))
+    denominator = line(_glyph("4∥g", cmmi, 6.8, 0, (209.1, 566.4, 220.8, 573.2), (209.1, 566.4, 220.8, 573.2), math=True))
+    tail = line(_glyph("T,i", cmmi, 6.8, 0, (312.9, 565.5, 323.1, 572.2), (312.9, 565.5, 323.1, 571.0), math=True),
+                _glyph(", we can take square root of both side and", reg, 9.7, 4,
+                       (323.6, 558.9, 490.3, 570.6), (323.6, 561.0, 490.3, 569.9)))
+    g4 = line(_glyph("g", cmmi, 6.8, 0, (219.6, 556.9, 223.3, 563.7), (219.6, 558.9, 223.3, 563.7), math=True),
+              _glyph("4", "CMR5", 4.8, 0, (223.6, 555.4, 226.9, 560.3), (223.6, 555.4, 226.9, 559.1), math=True))
+    sub = line(_glyph("T,i", "CMMI5", 4.8, 0, (223.3, 560.3, 232.7, 565.1), (223.3, 560.3, 232.7, 563.9), math=True))
+    data = {"blocks": [{"type": 0, "bbox": (105.0, 558.9, 490.3, 573.2), "lines": [lead, denominator, tail]},
+                       {"type": 0, "bbox": (219.6, 555.4, 232.7, 565.1), "lines": [g4, sub]}]}
+    _rejoin_split_lines(data)
+    assert {id(item) for item in data["blocks"][0]["lines"]} == {id(item) for item in (lead, denominator, tail, g4, sub)}
+    assert data["blocks"][1]["lines"] == []

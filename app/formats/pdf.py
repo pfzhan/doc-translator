@@ -753,6 +753,7 @@ def _rejoin_split_lines(data: dict) -> None:
     for _ in range(3):
         if not _rejoin_pass(blocks, line_box, starts):
             break
+    _embed_math_blocks(blocks, line_box)
 
 
 def _column_starts(blocks: list[dict]) -> list[float]:
@@ -787,6 +788,56 @@ def _rejoin_pass(blocks: list[dict], line_box=None, starts: Sequence[float] = ()
             host_block["bbox"] = tuple(pymupdf.Rect(host_block["bbox"]) | pymupdf.Rect(line["bbox"]))
             moved = True
     return moved
+
+
+def _embed_math_blocks(blocks: list[dict], line_box) -> None:
+    """块里同一行高的几截都是式子（分子，或连着分子的半截式子），叠在别的块某一行的式子上，
+    又和那块里的正文行同高：是那一行里的式子被 PyMuPDF 分了出来，一起挪回去。
+    逐行挪接不上：几截互相是上下标，单看每一截都有同块的行贴着。留在原块里的会当成公式行
+    留原字，同一行的其余部分译完挪走以后，它孤零零留在原处，公式也缺了一截。"""
+    for block in blocks:
+        shown = [
+            line for line in block["lines"]
+            if abs(line["dir"][1]) <= 0.01 and "".join(span["text"] for span in line["spans"]).strip()
+        ]
+        maths = [line for line in shown if all(_span_is_math(span) for span in line["spans"] if span["text"].strip())]
+        while maths:
+            group = [line for line in maths if _same_band(line, maths[0], line_box)]
+            maths = [line for line in maths if not any(line is member for member in group)]
+            box = pymupdf.Rect()
+            for line in group:
+                box |= line_box(line)
+            # 同一行里还有本块的正文，是本块自己的式子
+            if any(_band_overlap(line_box(line), box) for line in shown if not any(line is member for member in group)):
+                continue
+            spans = [span for line in group for span in line["spans"] if span["text"].strip()]
+            under = _math_host(blocks, block, spans, box, line_box)
+            if under is None:
+                continue
+            host, anchor = under
+            index = host["lines"].index(anchor) + 1
+            host["lines"][index:index] = group
+            block["lines"] = [line for line in block["lines"] if not any(line is member for member in group)]
+            host["bbox"] = tuple(pymupdf.Rect(host["bbox"]) | box)
+
+
+def _math_host(
+    blocks: list[dict], own: dict, spans: list[dict], box: pymupdf.Rect, line_box,
+) -> tuple[dict, dict] | None:
+    """box 叠在哪一块的式子行上，那一块在同一行高上有一行正文（三个以上正文词）。
+    只和公式行同高的不挪：行间公式里拆开的大括号挪到另一截公式里没有用处。"""
+    size = max(float(span["size"]) for span in spans)
+    for host in blocks:
+        if host is own or not any(
+            _band_overlap(line_box(line), box)
+            and _plain_units([span for span in line["spans"] if span["text"].strip()]) >= 3
+            for line in host["lines"]
+        ):
+            continue
+        under = _stacked_on(host, {"spans": spans}, box, size, False)
+        if under is not None:
+            return host, under
+    return None
 
 
 def _stacked_rows(upper: list[dict], lower: list[dict]) -> bool:
@@ -1226,7 +1277,10 @@ def _same_band(a: dict, b: dict, box=None) -> bool:
     """纵向交叠够多。分式的分母、大括号把框往下拉，同一行的两截交叠不到一半。
     默认按字高比：数学字体的字体框伸到下一行，会和下一行交叠，一截字在两行之间来回挪。"""
     box = box or _line_box
-    ra, rb = box(a), box(b)
+    return _band_overlap(box(a), box(b))
+
+
+def _band_overlap(ra: pymupdf.Rect, rb: pymupdf.Rect) -> bool:
     overlap = min(ra.y1, rb.y1) - max(ra.y0, rb.y0)
     return overlap >= min(ra.height, rb.height) * 0.35
 
