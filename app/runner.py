@@ -281,7 +281,7 @@ class Runner:
         html_sources = self.translator.html_texts
 
         def fixed(src: str, dst: str) -> str:
-            dst = keep_section_number(src, normalize_punctuation(drop_added_braces(src, tidy_marks(src, drop_invented_marks(src, strip_control_marks(dst)))), tl), tl)
+            dst = clean_translation(src, dst, tl)
             if src not in headings:
                 return dst
             return fix_numbered_unit(dst, tl, html=src in html_sources)
@@ -396,9 +396,9 @@ _PARENS = str.maketrans("（）", "()")
 # 句号、书名号、引号保持全角；其余全角标点换成半角并补一个空格（已有空格不重复）
 _PUNCT_HALF = {"，": ",", "、": ",", "；": ";", "：": ":", "？": "?", "！": "!"}
 _PUNCT_RE = re.compile(r"([，、；：？！])\s*")
-_CN_SMALL = {c: i for i, c in enumerate("零一二三四五六七八九")}
-_CN_SMALL["〇"] = 0
-_DOT_SECTION_RE = re.compile(r"第([一二三四五六七八九十]+)点([一二三四五六七八九十]+)节")
+# 原文里带点的编号和小数：7.6、16.4.3、0.5
+_DOTTED_RE = re.compile(r"(?<![\d.])\d{1,4}(?:\.\d{1,4})+(?![\d.])")
+_CN_NUMERALS = "一二三四五六七八九十百千零〇"
 # 第2卷、第２卷，以及模型翻串了的“第卷26”。单位不含页/期/号，那些保留阿拉伯数字
 _UNIT_HEAD_RE = re.compile(r"^第([0-9０-９]{1,4})(?=[卷章部篇集册])")
 _UNIT_INVERTED_RE = re.compile(r"^第([卷章部篇集册])([0-9０-９]{1,4})")
@@ -406,31 +406,6 @@ _UNIT_INVERTED_RE = re.compile(r"^第([卷章部篇集册])([0-9０-９]{1,4})")
 _CITE_RE = re.compile(r"第[0-9０-９]{1,4}\s*[期页号]|[卷章部篇集册]\s*第?\s*[0-9０-９]{1,4}\s*期")
 _FULLWIDTH = str.maketrans("０１２３４５６７８９", "0123456789")
 _NUM_CHARS = frozenset("第0123456789０１２３４５６７８９卷章部篇集册")
-
-
-def _cn_small(text: str) -> int | None:
-    """一到九十九。节号用得到，百以上不在这里认。"""
-    if text.isdigit():
-        return int(text)
-    if text == "十":
-        return 10
-    if text.startswith("十") and len(text) == 2 and text[1] in _CN_SMALL:
-        return 10 + _CN_SMALL[text[1]]
-    if len(text) == 2 and text[1] == "十" and text[0] in _CN_SMALL:
-        return _CN_SMALL[text[0]] * 10
-    if len(text) == 3 and text[1] == "十" and text[0] in _CN_SMALL and text[2] in _CN_SMALL:
-        return _CN_SMALL[text[0]] * 10 + _CN_SMALL[text[2]]
-    if len(text) == 1 and text in _CN_SMALL:
-        return _CN_SMALL[text]
-    return None
-
-
-def _dot_section(match: re.Match[str]) -> str:
-    major = _cn_small(match.group(1))
-    minor = _cn_small(match.group(2))
-    if major is None or minor is None:
-        return match.group(0)
-    return f"第{major}.{minor}节"
 
 
 # 两边都是列表分隔符、运算符的省略号是数学里的省略（T1, T2, …, Tn；x1 + … + xn），
@@ -443,13 +418,11 @@ _LIST_ELLIPSIS_RE = re.compile(rf"({_LIST_SEP}[ \t]*{_MARKS}[ \t]*)(?:……|⋯
 def normalize_punctuation(dst: str, target_lang: str) -> str:
     """中文译文的全角标点统一半角：括号直接换，逗号/顿号/分号/冒号/问号/叹号
     换成半角并补一个空格。句号、书名号、引号保持全角——它们是中文排版的一部分，
-    而全角的 , ; : ? ! 和汉字同宽，夹在正文里又宽又笨。
-    第二点一节改成第 2.1 节，避免节号被点开。"""
+    而全角的 , ; : ? ! 和汉字同宽，夹在正文里又宽又笨。"""
     if not target_lang.startswith("zh"):
         return dst
     out = _PUNCT_RE.sub(lambda m: _PUNCT_HALF[m.group(1)] + " ", dst.translate(_PARENS))
     out = _LIST_ELLIPSIS_RE.sub(r"\1…\2", out)
-    out = _DOT_SECTION_RE.sub(_dot_section, out)
     return out.rstrip() if out.endswith(" ") else out
 
 
@@ -590,12 +563,41 @@ _SECTION_NUMBER_RE = re.compile(_LEADING_MARKS + r"(\d{1,3}(?:\.\d{1,3})+)(?![\d
 _BARE_NUMBER_RE = re.compile(_LEADING_MARKS + r"(\d{1,3})\s+(?=[^\W\d_])")
 
 
+def clean_translation(src: str, dst: str, target_lang: str) -> str:
+    """模型译文入库前统一整理：去掉漏进来的协议标记和编造的标记，理顺样式标记，标点、编号改回原文写法。"""
+    dst = drop_invented_marks(src, strip_control_marks(dst))
+    dst = drop_added_braces(src, tidy_marks(src, dst))
+    return keep_section_number(src, normalize_punctuation(dst, target_lang), target_lang)
+
+
+def _readings(number: str) -> list[str]:
+    """带点编号的中文读法，长的在前：十六点四点三；小数部分也可能逐位读（二点一零）。"""
+    head, *rest = number.split(".")
+    whole = _cn_number(int(head))
+    readings = {
+        "点".join([whole, *(_cn_number(int(part)) for part in rest)]),
+        "点".join([whole, *("".join(_CN_DIGITS[int(digit)] for digit in part) for part in rest)]),
+    }
+    return sorted(readings, key=len, reverse=True)
+
+
+def keep_dotted_numbers(src: str, dst: str) -> str:
+    """原文的 7.6、16.4.3 被读成「七点六」「十六点四点三」时改回原文的写法。"""
+    if "点" not in dst:
+        return dst
+    for number in sorted(set(_DOTTED_RE.findall(src)), key=len, reverse=True):
+        for reading in _readings(number):
+            dst = re.sub(rf"(?<![{_CN_NUMERALS}]){reading}(?![{_CN_NUMERALS}点])", number, dst)
+    return dst
+
+
 def keep_section_number(src: str, dst: str, target_lang: str) -> str:
     """原文编号是阿拉伯数字，译文却写成「七点四」「四.11」「第一点七点一」，或给裸章号加上
     「第十二章」时改回原样。提示词以前让目录、标题里的章节号一律写中文数字，模型连带点的
     小节号、没写 Chapter 的章号也改了，同一页有的改有的不改。缓存里的旧译文命中时也走这里。"""
     if not target_lang.startswith("zh"):
         return dst
+    dst = keep_dotted_numbers(src, dst)
     dotted = _SECTION_NUMBER_RE.match(src)
     if dotted is not None:
         number = dotted.group(1)

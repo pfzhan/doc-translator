@@ -30,7 +30,7 @@ import pymupdf
 
 from .. import langdetect
 from ..languages import RTL_LANGUAGES
-from ..runner import normalize_punctuation
+from ..runner import clean_translation
 from .pdf_align import FIRST_BASELINE, draw_cjk_lines, page_origin
 from .pdf_flow import (
     COLOR_MARK_RE,
@@ -3893,7 +3893,7 @@ async def _retry_lost_placeholders(
     for i, result in zip(lost, results):
         if not isinstance(result, list) or not result or not (result[0] or "").strip():
             continue
-        text = normalize_punctuation(result[0], translator.target_lang)
+        text = clean_translation(sent_texts[i], result[0], translator.target_lang)
         if _restore_placeholders(text, sent_formulas[i]) is not None:
             # 预览按 _done 显示，换成新译文，后面恢复占位符时才对得上
             done = getattr(runner, "_done", None)

@@ -323,7 +323,7 @@ def test_normalize_applies_to_cache_hits():
 def test_normalize_punctuation():
     """中文译文的全角标点统一半角（逗号类补空格）：句号、书名号、引号保持全角；
     新翻译和缓存命中都改写，其他语言不动。"""
-    from app.runner import Runner, normalize_punctuation
+    from app.runner import Runner, clean_translation, normalize_punctuation
 
     assert normalize_punctuation("词元（token）的概率", "zh-CN") == "词元(token)的概率"
     assert normalize_punctuation("训练时，我们随机决定，是否采样", "zh-CN") == "训练时, 我们随机决定, 是否采样"
@@ -334,8 +334,9 @@ def test_normalize_punctuation():
     # 句末标点补的空格不留尾巴
     assert normalize_punctuation("结束了吗？", "zh-CN") == "结束了吗?"
     assert normalize_punctuation("（保持），不变", "en") == "（保持），不变"
-    assert normalize_punctuation("我们将在第二点一节介绍", "zh-CN") == "我们将在第2.1节介绍"
-    assert normalize_punctuation("第二点二节 Hadoop", "zh-CN") == "第2.2节 Hadoop"
+    # 读成中文的节号按原文改回数字
+    assert clean_translation("introduced in Section 2.1", "我们将在第二点一节介绍", "zh-CN") == "我们将在第2.1节介绍"
+    assert clean_translation("Section 2.2 Hadoop", "第二点二节 Hadoop", "zh-CN") == "第2.2节 Hadoop"
     # 夹在列表分隔符、运算符中间的是数学省略号，只写一个；句尾、话尾的「……」不动
     assert normalize_punctuation("引用表{v1}{i}, {/i}{v2}{i}, ……, {/i}{v3}", "zh-CN") == "引用表{v1}{i}, {/i}{v2}{i}, …, {/i}{v3}"
     assert normalize_punctuation("x{v1} + …… + x{v2}", "zh-CN") == "x{v1} + … + x{v2}"
@@ -515,6 +516,11 @@ def test_dotted_section_numbers_stay_in_digits():
     assert keep("2 words were found", "找到了两个词", "zh-CN") == "找到了两个词"
     assert keep("1.1 What", "一点十一 什么", "zh-CN") == "一点十一 什么"
     assert keep("7.4 The input", "七点四 输入", "en") == "七点四 输入"
+    # 句中引用的节号、图号、小数也一样
+    assert keep("introduced in Section {c0000ff}7.6{/c}", "在第 {c0000ff}七点六节{/c}中介绍", "zh-CN") == \
+        "在第 {c0000ff}7.6节{/c}中介绍"
+    assert keep("see Section 16.4.3 and Fig. 17.3", "见十六点四点三节和图十七点三", "zh-CN") == "见16.4.3节和图17.3"
+    assert keep("16.2 and 6.2, with p = 0.5", "十六点二和六点二, 取 p = 零点五", "zh-CN") == "16.2和6.2, 取 p = 0.5"
 
     class NeverCalled(MockTranslator):
         async def translate_batch(self, texts):
