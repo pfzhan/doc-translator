@@ -525,7 +525,7 @@ def _mark_underlines(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.R
         if str(span.get("text") or "").strip()
         and not _underline_strokes(span, strokes, line["bbox"][0], line["bbox"][2])
     ]
-    chars: dict[tuple[str, float, float], list[tuple[float, float, float]]] | None = None
+    chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]] | None = None
     seen: dict[tuple[float, float, float, float], bool] = {}
 
     def visible(rect: pymupdf.Rect) -> bool:
@@ -640,9 +640,11 @@ def _underline_strokes(
     ]
 
 
-def _char_boxes(page: pymupdf.Page) -> dict[tuple[str, float, float], list[tuple[float, float, float]]]:
+def _char_boxes(
+    page: pymupdf.Page,
+) -> dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]]:
     """每个 span 逐字的左右边和起笔点，按 span 的文字和起笔点对上。"""
-    found: dict[tuple[str, float, float], list[tuple[float, float, float]]] = {}
+    found: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]] = {}
     raw = page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
     for block in raw.get("blocks", []):
         for line in block.get("lines", []):
@@ -650,12 +652,12 @@ def _char_boxes(page: pymupdf.Page) -> dict[tuple[str, float, float], list[tuple
                 chars = span.get("chars") or []
                 text = "".join(char["c"] for char in chars)
                 key = (text, round(span["origin"][0], 1), round(span["origin"][1], 1))
-                found[key] = [(char["bbox"][0], char["bbox"][2], char["origin"][0]) for char in chars]
+                found[key] = [(char["bbox"][0], char["bbox"][2], tuple(char["origin"])) for char in chars]
     return found
 
 
 def _line_edges(
-    spans: list[dict], chars: dict[tuple[str, float, float], list[tuple[float, float, float]]],
+    spans: list[dict], chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]],
 ) -> tuple[list[float], list[float]]:
     """一行里所有字的左边和右边。"""
     lefts: list[float] = []
@@ -669,7 +671,7 @@ def _line_edges(
 
 def _split_covered(
     span: dict, under: list[pymupdf.Rect],
-    chars: dict[tuple[str, float, float], list[tuple[float, float, float]]],
+    chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]],
     edges: tuple[list[float], list[float]] = ([], []),
     flag: str = "underline",
 ) -> list[dict]:
@@ -707,8 +709,9 @@ def _split_covered(
         if index < len(text) and marks[index] == marks[start]:
             continue
         x0, x1 = boxes[start][0], boxes[index - 1][1]
-        piece = {**span, "text": text[start:index], "bbox": (x0, y0, x1, y1),
-                 "origin": (boxes[start][2], span["origin"][1])}
+        # 起笔点取这一截第一个字的。span 的起笔点是第一个字的：「 .」的空格落在前面下标的基线上，
+        # 切下来的句点照抄它，擦除时按基线认不到，句点留在原处
+        piece = {**span, "text": text[start:index], "bbox": (x0, y0, x1, y1), "origin": boxes[start][2]}
         if "ink" in span:
             piece["ink"] = (x0, span["ink"][1], x1, span["ink"][3])
         if marks[start]:
