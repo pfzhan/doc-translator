@@ -7413,3 +7413,16 @@ def test_a_numerator_left_in_its_own_block_rejoins_the_paragraph():
     _rejoin_split_lines(data)
     assert {id(item) for item in data["blocks"][0]["lines"]} == {id(item) for item in (lead, denominator, tail, g4, sub)}
     assert data["blocks"][1]["lines"] == []
+
+
+def test_a_radical_bar_moves_with_its_formula_under_the_line_above():
+    """根号横线上面贴着上一行的降部，横线左端接在本公式根号的右上角，照样跟公式走。"""
+    from app.formats.pdf import _absorb_one_box
+
+    radical = {"text": "√", "origin": (339.8, 625.9), "ink": (339.8, 618.0, 348.1, 628.0)}
+    alpha = {"text": "α", "origin": (348.1, 625.5), "ink": (348.1, 619.6, 354.5, 625.7)}
+    bar = pymupdf.Rect(347.9, 618.0, 358.2, 618.4)
+    above = {"text": "p", "origin": (349.0, 613.5), "ink": (349.0, 608.8, 354.0, 616.6)}
+    formula = {"bbox": pymupdf.Rect(339.8, 617.0, 358.2, 628.6), "d": 3.0, "spans": [radical, alpha]}
+    _absorb_one_box(formula, [bar], [radical, alpha, above])
+    assert formula["curves"] == [bar]
