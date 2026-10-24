@@ -3397,6 +3397,25 @@ def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
     assert any(pymupdf.Rect(span["bbox"]).x1 > 450 and span["bbox"][1] > 443 for span in spans)
 
 
+def test_a_full_line_wraps_into_a_capitalized_next_line():
+    """段落缩进的首行和页边旁注挤在一块里被单拆出来。它排到右缘、没有句末标点，下一行回到左缘、
+    以专名大写起头（RNNs, one where…），仍是同一句。末行没排满、或者有句号的不接。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, y, x0=160.2, x1=493.2, rows=1):
+        lines = [pymupdf.Rect(x0 if i == 0 else 160.2, y + 12 * i, x1, y + 12 * i + 12) for i in range(rows)]
+        rect = pymupdf.Rect(lines[0])
+        for line in lines:
+            rect |= line
+        return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=10.0, color="#000", bold=False)
+
+    head = "A bidirectional RNN (Schuster and Paliwal, 1997) combines two independent"
+    tail = "RNNs, one where the input is processed from the start to the end, and the other"
+    assert len(_merge_continuations([blk(head, 610, x0=175.1), blk(tail, 622, rows=2)])) == 1
+    assert len(_merge_continuations([blk(head, 610, x0=175.1, x1=420), blk(tail, 622, rows=2)])) == 2
+    assert len(_merge_continuations([blk(head + ".", 610, x0=175.1), blk(tail, 622, rows=2)])) == 2
+
+
 def test_cjk_wrap_merges_and_short_labels_stay():
     """左缘对齐、上行够长的中文换行接回一段。短标签和缩进的新段不接。"""
     from app.formats.pdf import TextBlock, _cross_page_units, _merge_continuations

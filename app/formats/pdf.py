@@ -5391,6 +5391,10 @@ def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = froz
                 and bool(p.line_rects) and bool(b.line_rects)
                 and _centered_rows(_row_boxes(p.line_rects + b.line_rects), p.size)
             )
+            # 段落缩进的首行和页边旁注挤在一块里，被单拆出来：这一行排到右缘、没有句末标点，
+            # 下一行比它靠左一个缩进，是句中折行，大写起头（专名）也接上
+            full_wrap = (same_size and not _list_item(b.text) and len(_visual_lines(p)) == 1
+                         and _wraps_into(p, b, indented=True))
             # 列表项后面第一行比它还靠左起笔的是列表完了以后的正文。续行和条目文字对齐或者悬挂缩进，不会往左
             list_end = _list_item(p.text) and first_x0 < p.rect.x0 - p.size * 0.5
             # 上一块停在没收口的代码围栏里（```sql 开了还没关），下一行是代码的接续，大写起头也接上
@@ -5404,7 +5408,7 @@ def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = froz
                 and (colon_wrap or call_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
                      or not _ends_sentence(p.text))
                 and (first.islower() or first in ".),;%,；，" or open_paren or math_wrap or centered_end
-                     or dangling or centered_comma or in_fence)
+                     or dangling or centered_comma or in_fence or full_wrap)
                 and not _verbatim_seam(p, b)
             )
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
@@ -5447,8 +5451,9 @@ def _opens_with_word(block: TextBlock) -> bool:
     return bool(spans) and not _span_is_math(spans[0]) and bool(re.match(r"[a-z]{2,}\b(?!\s*[\[(←=∈<>≤≥+])", block.text))
 
 
-def _wraps_into(block: TextBlock, nxt: TextBlock) -> bool:
-    """block 的末行（连同同一行的分子分母、上下限）和 nxt 的首行同一左缘，并且排到两块的右缘。"""
+def _wraps_into(block: TextBlock, nxt: TextBlock, indented: bool = False) -> bool:
+    """block 的末行（连同同一行的分子分母、上下限）和 nxt 的首行同一左缘，并且排到两块的右缘。
+    indented 时 block 的末行是段落缩进的第一行，nxt 的首行要比它靠左一个缩进。"""
     lines = block.line_rects or [block.rect]
     tail = lines[-1]
     row = [
@@ -5456,10 +5461,16 @@ def _wraps_into(block: TextBlock, nxt: TextBlock) -> bool:
         if min(rect.y1, tail.y1) - max(rect.y0, tail.y0) >= min(rect.height, tail.height) * 0.5
     ]
     first = nxt.line_rects[0] if nxt.line_rects else nxt.rect
-    return (
-        abs(min(rect.x0 for rect in row) - first.x0) <= block.size * 0.5
-        and max(rect.x1 for rect in row) >= max(block.rect.x1, nxt.rect.x1) - block.size * 0.5
-    )
+    shift = min(rect.x0 for rect in row) - first.x0
+    if indented:
+        lead = block.size * 0.5 < shift <= block.size * _MAX_INDENT_EM
+    else:
+        lead = abs(shift) <= block.size * 0.5
+    return lead and max(rect.x1 for rect in row) >= max(block.rect.x1, nxt.rect.x1) - block.size * 0.5
+
+
+# 段落首行缩进最多这么多个字宽
+_MAX_INDENT_EM = 3
 
 
 # 几乎只在句中出现的缩写。etc. 常在句末，不算
