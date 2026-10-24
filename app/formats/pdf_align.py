@@ -26,7 +26,7 @@ _GLYPH_DESCENT = 0.12
 _MIN_SLOTS = 6
 _MIN_SLACK_EM = 0.15
 _MAX_GAP_EM = 0.35
-# 词间空格每处最多再拉开多少（em）。一处空格算前后两个缝
+# 词间空格每处最多再拉开多少（em），前后两个缝各摊一半
 _MAX_SPACE_EM = 0.5
 # 有词间空格的行里，字与字之间最多拉开多少（em）
 _MAX_MIXED_GAP_EM = 0.1
@@ -260,12 +260,13 @@ def _spread(pairs: list[tuple[str, str]], slack: float, em: float) -> list[float
     n_space = sum(spaces)
     n_char = sum(stretch) - n_space
     unit = slack / (2 * n_space + n_char)
-    space_each = min(2 * unit, em * _MAX_SPACE_EM) if n_space else 0.0
+    space_cap = em * _MAX_SPACE_EM / 2
+    space_each = min(2 * unit, space_cap) if n_space else 0.0
     # 有词间空格的行，字与字之间只稍微拉开，再多的余量留在行尾
     char_cap = _MAX_MIXED_GAP_EM if n_space else _MAX_GAP_EM
     char_each = min((slack - space_each * n_space) / n_char, em * char_cap) if n_char else 0.0
     if n_space:
-        space_each = min((slack - char_each * n_char) / n_space, em * _MAX_SPACE_EM)
+        space_each = min((slack - char_each * n_char) / n_space, space_cap)
     if max(space_each, char_each) < 0.05:
         return []
     return [space_each if spaced else char_each if ok else 0.0 for ok, spaced in zip(stretch, spaces)]
