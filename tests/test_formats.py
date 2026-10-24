@@ -2951,6 +2951,30 @@ def test_body_font_symbols_and_script_bases_become_formulas():
     assert "=" in _placeholderize(equals)[0]
 
 
+def test_a_script_on_the_next_line_does_not_join_the_letter_above_it():
+    """下一行行首 H^enc 的 enc 字框碰到上一行的 X，基线低了大半行：它是 H 的上标，
+    不是 X 的下标。X 是正文时不收成角标的底，X 是公式时也不并成一个式子。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text, font, size, x0, y0, x1, y1, base):
+        return {"text": text, "font": font, "size": size, "flags": 0,
+                "bbox": (x0, y0, x1, y1), "origin": (x0, base)}
+
+    for x_font in ("CMSSBX10", "CMBX10"):
+        block = _block_with_spans([
+            [span("is", "NimbusRomNo9L-Regu", 10, 160, 464, 167, 476, 473.3),
+             span(" X", x_font, 10, 167, 466, 177, 476, 473.3),
+             span(", in cross attention the input is", "NimbusRomNo9L-Regu", 10, 177, 464, 421, 476, 473.3)],
+            [span("H", "CMSSBX10", 10, 160, 477, 168, 487, 485.3),
+             span("enc", "NimbusRomNo9L-ReguItal", 7.4, 168, 475, 178, 484, 481.7),
+             span(" is of shape", "NimbusRomNo9L-Regu", 10, 178, 476, 226, 488, 485.3)],
+        ], size=10.0)
+        sent, formulas = _placeholderize(block)
+        assert not any("X" in f["text"] and "enc" in f["text"] for f in formulas), x_font
+        assert any(f["text"] == "enc" for f in formulas), x_font
+        assert "H{v" in sent or "H{/b}{v" in sent, sent
+
+
 def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
     """贴着公式的 CMR 数字、括号、算子名并进同一占位符。
     i^{th} 留在正文，送翻成 i-th。远处的数字、Times 里的数字不收。"""

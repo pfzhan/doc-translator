@@ -2611,9 +2611,13 @@ _CAPTION_LABEL_RE = re.compile(
 )
 
 
-def _script_base(span: dict, bbox: pymupdf.Rect, block_size: float, math: bool = False) -> bool:
+def _script_base(
+    span: dict, bbox: pymupdf.Rect, block_size: float, math: bool = False, script_y: float | None = None,
+) -> bool:
     """单字母贴在较小角标上，才并进公式。引用上标在字母右侧，中心出了字框，不收；
-    数学字体的角标（inf、tr 这样宽的）不是引用，只要紧贴字母右缘。"""
+    数学字体的角标（inf、tr 这样宽的）不是引用，只要紧贴字母右缘。
+    script_y 是角标的基线，下标比底低不过半个字。
+    下一行 H^enc 的 enc 字框碰到上一行的 X，基线却低了大半行，不是 X 的下标。"""
     if not _VARIABLE_BASE_RE.match(str(span.get("text") or "").strip()):
         return False
     if float(span.get("size") or 0) < block_size * 0.79:
@@ -2628,7 +2632,28 @@ def _script_base(span: dict, bbox: pymupdf.Rect, block_size: float, math: bool =
     # 同一行上的底和角标字框叠着或贴着；上下隔开几磅的是上一行的字母（w_end 的 w 不是下一行 mention 的底）
     if y_gap >= block_size * 0.3 or bbox.x0 > base.x1 + 0.4:
         return False
+    if script_y is not None and span.get("origin"):
+        drop = script_y - float(span["origin"][1])
+        if drop > block_size * 0.5:
+            return False
     return math or base.x0 - 1 <= center <= base.x1 + 2.0
+
+
+def _has_text_base(run: dict, span_lines: list[list[dict]], members: set[int], block_size: float) -> bool:
+    """只有小字的 run 左边紧贴着同一行一个正文字号、不在公式里的字：那个字是它的底。"""
+    if run["max_size"] >= block_size * 0.79:
+        return False
+    box = run["bbox"]
+    for line in span_lines:
+        for span in line:
+            if (id(span) in members or not str(span.get("text") or "").strip()
+                    or float(span.get("size") or 0) < block_size * 0.79):
+                continue
+            base = _glyph_box(span)
+            overlap = min(base.y1, box.y1) - max(base.y0, box.y0)
+            if -0.5 <= box.x0 - base.x1 <= block_size * 0.25 and overlap > box.height * 0.5:
+                return True
+    return False
 
 
 def _absorb_script_bases(runs: list[dict], span_lines: list[list[dict]], block_size: float) -> None:
@@ -2638,6 +2663,7 @@ def _absorb_script_bases(runs: list[dict], span_lines: list[list[dict]], block_s
     for run in runs:
         scripts = pymupdf.Rect()
         math = False
+        script_y: float | None = None
         for span in run["spans"]:
             if not str(span.get("text") or "").strip():
                 continue
@@ -2645,6 +2671,8 @@ def _absorb_script_bases(runs: list[dict], span_lines: list[list[dict]], block_s
                 break
             scripts |= pymupdf.Rect(span["bbox"])
             math = math or _span_is_math(span)
+            if script_y is None and span.get("origin"):
+                script_y = float(span["origin"][1])
         if scripts.is_empty:
             continue
         line_no, start, end = run["pos"]
@@ -2655,7 +2683,7 @@ def _absorb_script_bases(runs: list[dict], span_lines: list[list[dict]], block_s
             for index, span in enumerate(span_lines[line_no - 1]):
                 candidates.append((line_no - 1, index, span))
         for other_no, index, span in candidates:
-            if id(span) in taken or not _script_base(span, scripts, block_size, math):
+            if id(span) in taken or not _script_base(span, scripts, block_size, math, script_y):
                 continue
             run["spans"].insert(0, span)
             run["bbox"] |= pymupdf.Rect(span["bbox"])
@@ -2959,7 +2987,13 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
 
     runs.sort(key=lambda r: r["pos"])
 
+    # 只有小字的 run 紧贴在本行一个正文的字后面，是那个字的角标（H^enc 的 H 是正文的粗体）。
+    # 下一行行首的 H^enc 正好在上一行 X 的下面，不能按 x 交叠并成 X 的下标
+    based = {id(r) for r in runs if _has_text_base(r, block.span_lines, member_ids, block.size)}
+
     def geometric(m: dict, r: dict) -> bool:
+        if any(id(x) in based and x["max_size"] < block.size * 0.79 for x in (m, r)):
+            return False
         x_overlap = min(m["bbox"].x1, r["bbox"].x1) - max(m["bbox"].x0, r["bbox"].x0)
         y_gap = max(m["bbox"].y0, r["bbox"].y0) - min(m["bbox"].y1, r["bbox"].y1)
         min_w = min(m["bbox"].width, r["bbox"].width)
