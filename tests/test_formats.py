@@ -7708,6 +7708,23 @@ def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
     assert _index_entry_ends(split, []) == set()
 
 
+def test_the_rest_of_a_broken_word_continues_the_line_above():
+    """上一行停在连字符断开的半个词上，下一行缩进多少都是接着写的（expres- | sions, 50, 65），
+    字母少也不当成一行页码留原文。索引页上比上一行缩进得深的也是续行（as, 51）。"""
+    from app.formats.pdf import TextBlock, _wraps_from_above
+
+    def blk(text, rect):
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=8.0, color="#000", bold=False)
+
+    above = blk("anchors in regular expres-", pymupdf.Rect(299.3, 366.9, 391.3, 376.5))
+    rest = pymupdf.Rect(323.2, 376.1, 363.5, 386.5)
+    assert _wraps_from_above([above], 0, rest, "sions, 50, 65", [], None)
+    whole = blk("pipe in regular expressions", pymupdf.Rect(205.3, 121.5, 289.3, 131.1))
+    tail = pymupdf.Rect(221.3, 130.7, 239.8, 141.0)
+    assert not _wraps_from_above([whole], 0, tail, "as, 51", [], None)
+    assert _wraps_from_above([whole], 0, tail, "as, 51", [], None, index_page=True)
+
+
 def test_one_sentence_per_line_is_not_joined_into_a_paragraph():
     """幻灯片上逐行排的例句：各占一行、左缘对齐，好几处上一行后面还放得下下一行的第一个词，
     小写起头也不并成一段。段落里折行的上一行放不下下一个词，照常接上。"""

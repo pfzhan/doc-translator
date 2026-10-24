@@ -4253,7 +4253,7 @@ def _extract(
                 displayed = len(group) == 1 and _displayed(rect, spans, margins)
                 fraction = group[0] in formula_rows
                 if not in_cell and (fraction or _untranslatable(spans, text, _DISPLAY_PROSE if displayed else 3, displayed)) \
-                        and not _wraps_from_above(blocks, pno, rect, text, row_ends, frames[pno]):
+                        and not _wraps_from_above(blocks, pno, rect, text, row_ends, frames[pno], index_page):
                     # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
                     # 捐了会被擦掉，而这些行没有占位符、不会重画。
                     if NO_TEXT_RE.match(text) and blocks and blocks[-1].page == pno:
@@ -4558,10 +4558,12 @@ def _inside_kept_formula(block: TextBlock, kept: Sequence[pymupdf.Rect]) -> bool
 
 def _wraps_from_above(
     blocks: list[TextBlock], pno: int, rect: pymupdf.Rect, text: str,
-    rows: Sequence[pymupdf.Rect], frame: TextFrame | None,
+    rows: Sequence[pymupdf.Rect], frame: TextFrame | None, index_page: bool = False,
 ) -> bool:
     """以小写正文词起头、从上一行正文的左缘接着写的式子行（and W^O ∈ ℝ^{hd_v×d_model}.）是上一句
     折下来的，不是单独排的式子：上一行写到本栏右缘、没写完一句，这一行紧贴在它下面。
+    上一行以连字符断开的半个词收尾时，这一行是那个词的后半截。索引页上比上一行缩进得深的
+    是上一条的续行（pipe in regular expressions | as, 51）。
     居中排的图注末行（significant (t-test with p ≤ 0.01).）和上一行中线对齐。
     叠着排的几行式子（e_t = Ex_t、h_t = g(…)）写不到右缘。"""
     if not re.match(r"[a-z]{2,}\b", text.lstrip()):
@@ -4584,7 +4586,12 @@ def _wraps_from_above(
             and abs(line.x0 - last.x0) <= block.size and abs(line.x1 - last.x1) <= block.size
             for other in page_blocks for line in other.line_rects if line is not last
         )
-        if left or centered:
+        # 上一行停在连字符断开的半个词上（expres- | sions, 50, 65）：不管缩进多少都是接着写的。
+        # 索引条目的续行悬挂缩进，剩下的半个词带着页码，字母少，像一行页码
+        broken = (re.search(r"[A-Za-z]-$", block.text.rstrip()) is not None
+                  and block.rect.x0 - block.size * 0.5 <= rect.x0 < last.x1)
+        hanging = index_page and last.x0 + block.size * 0.5 < rect.x0 < last.x1
+        if left or centered or broken or hanging:
             return True
     return False
 
