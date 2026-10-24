@@ -5127,6 +5127,46 @@ def test_cross_page_stops_above_the_page_number(tmp_path):
     assert kept > 780
 
 
+def test_cross_column_host_stops_above_kept_formula(tmp_path):
+    """栏底段落接到另一栏时，译文停在下面留着原字的行间公式上方，余下的写到续块。
+
+    行间公式在提取时丢掉，不在块列表里；只按块算余量，会一直写到本页正文下沿，压在公式上。
+    """
+    from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_text((150, 186), "dl/dTheta", fontsize=10)
+    doc.save(src)
+    doc.close()
+    formula_top = pymupdf.open(src)[0].get_text("words")[0][1]
+
+    def block(rect, text):
+        rect = pymupdf.Rect(rect)
+        lines = [pymupdf.Rect(rect.x0, y, rect.x1, y + 10) for y in range(int(rect.y0), int(rect.y1) - 9, 12)]
+        return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=10, color="#000000", bold=False)
+
+    host = block((72, 100, 300, 160), "where x is the training data set and the mini-batch is used to approximate it")
+    tail = block((311, 60, 540, 90), "Using mini-batches of examples is helpful in several ways.")
+    lower = block((311, 300, 540, 400), "While stochastic gradient is simple and effective, it needs tuning.")
+    paragraph = "其中训练数据集按小批量逐步处理，每一步都用小批量来近似损失函数的梯度。" * 6
+    out = _render_translated(
+        src, [host, tail, lower], [paragraph, SPILL_TAIL, "随机梯度下降简单而有效，但需要仔细调节。"], "zh-CN",
+        continuations={id(host): tail},
+    )
+    chars = [
+        pymupdf.Rect(ch["bbox"])
+        for b in out[0].get_text("rawdict")["blocks"] if b.get("type") == 0
+        for line in b["lines"] for span in line["spans"] for ch in span["chars"]
+        if "\u4e00" <= ch["c"] <= "\u9fff"
+    ]
+    left = [rect for rect in chars if rect.x1 < 306]
+    assert left and max(rect.y1 for rect in left) < formula_top
+    assert any(rect.x0 > 306 and rect.y1 < 100 for rect in chars)
+    assert "dl/dTheta" in out[0].get_text()
+
+
 def test_page_margins_stay_with_the_source(tmp_path):
     """页首对齐原文上沿，正文不写进原文下沿以下。页脚带里的脚注仍不额外下刀。"""
     from app.formats.pdf import TextBlock, _render_translated, _room_below
