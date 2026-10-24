@@ -4175,6 +4175,22 @@ def test_section_number_stays_with_heading():
     assert _split_lines(items2) == [[0], [1]]
 
 
+def test_a_chapter_number_across_a_rule_is_not_joined_to_the_title():
+    """章首的两位数章号和标题挨得近，按词距会连成一句，整行重写时压过中间的竖线。隔着竖线就拆开。"""
+    from app.formats.pdf import _cut_at_posts, _split_lines
+
+    items = [
+        ("10", pymupdf.Rect(98.4, 132.0, 158.2, 204.1), [{"text": "10", "size": 59.8}], None),
+        ("Interpretability", pymupdf.Rect(167.3, 137.3, 331.9, 169.6),
+         [{"text": "Interpretability", "size": 24.8}], None),
+    ]
+    post = pymupdf.Rect(161.2, 110.8, 162.4, 200.8)
+    groups = [part for group in _split_lines(items) for part in _cut_at_posts(group, items, [post])]
+    assert groups == [[0], [1]]
+    # 竖线不在两截之间（表格外框），照常相连
+    assert _cut_at_posts([0, 1], items, [pymupdf.Rect(90, 110, 91, 200)]) == [[0, 1]]
+
+
 def test_heading_number_kept_in_source_form():
     """标题章节号保留原文形式：模型按提示词译成中文数字（'第二章第一节'），
     学术论文里要回 '2.1'。段落里以数字开头的句子不受影响。"""

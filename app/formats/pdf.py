@@ -4264,6 +4264,7 @@ def _extract(
             cells = _grid_cells(items)
             entry_ends = cells | (_index_entry_ends(items, ref_rows) if index_page else set())
             groups = [part for group in groups for part in _cut_after(group, {*leaders, *entry_ends})]
+            groups = [part for group in groups for part in _cut_at_posts(group, items, scans[pno].posts)]
             # 文字分式所在的行自成一组，留原字，不和上下的正文连成一段
             formula_rows = {i for i, item in enumerate(items) if any(id(span) in fractions for span in item[2])}
             groups = [part for group in groups for part in _cut_runs(group, formula_rows)]
@@ -4548,6 +4549,24 @@ def _beside_bar(span: dict, bar: pymupdf.Rect, axis: float) -> bool:
         return False
     reach = span["size"] * _FRACTION_NEIGHBOR
     return bar.x0 - reach <= span["bbox"][2] <= bar.x0 + 1 or bar.x1 - 1 <= span["bbox"][0] <= bar.x1 + reach
+
+
+def _cut_at_posts(group: list[int], items: list[tuple], posts: Sequence[pymupdf.Rect]) -> list[list[int]]:
+    """同一行上隔着一条竖线的两截不连成一句：章首的大号章号和标题挨得近，中间隔着竖线。"""
+    parts = [group[:1]]
+    for prev, cur in zip(group, group[1:]):
+        left, right = items[prev][1], items[cur][1]
+        rows = min(left.height, right.height) * 0.5
+        between = any(
+            left.x1 - 1 <= post.x0 and post.x1 <= right.x0 + 1
+            and min(left.y1, right.y1, post.y1) - max(left.y0, right.y0, post.y0) > rows
+            for post in posts
+        )
+        if between:
+            parts.append([cur])
+        else:
+            parts[-1].append(cur)
+    return [part for part in parts if part]
 
 
 def _cut_runs(group: list[int], marked: set[int]) -> list[list[int]]:

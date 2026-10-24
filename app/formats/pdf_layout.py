@@ -213,16 +213,19 @@ class PageScan:
     rules: tuple[pymupdf.Rect, ...] = ()
     # 所有细横线，连一个字母宽的短线也在（单个字母的下划线比 rules 的下限还短）
     strokes: tuple[pymupdf.Rect, ...] = ()
+    # 细竖线：表格竖线、章首章号和标题之间的分隔线
+    posts: tuple[pymupdf.Rect, ...] = ()
 
 
 def scan_page(page: pymupdf.Page) -> PageScan:
     images = _image_infos(page)
     drawings = _page_drawings(page, images)
     words = page_words(page)
+    horizontal, vertical = _rule_segments(page, drawings)
     return PageScan(
         page_tables(page, drawings, words), tuple(_figure_rects(page, drawings, images)), words,
-        _shaded_areas(drawings, text_page_rect(page)), tuple(_rule_segments(page, drawings)[0]),
-        tuple(_thin_strokes(drawings)),
+        _shaded_areas(drawings, text_page_rect(page)), tuple(horizontal),
+        tuple(_thin_strokes(drawings)), tuple(vertical),
     )
 
 
