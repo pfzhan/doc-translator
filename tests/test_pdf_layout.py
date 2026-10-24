@@ -175,6 +175,24 @@ def test_the_left_column_end_skips_the_author_name_over_the_right_column():
     assert [unit for unit in units if len(unit) == 2] == [[left[1], right[0]]]
 
 
+def test_index_entries_hold_their_place_at_the_column_top():
+    """索引条目不接上下文，但照样占着栏顶：右栏底一个没页码的词头（BERT）不能越过下一页
+    栏顶的一串条目，接到栏中间另一个没页码的词头（broadcast news）上。"""
+    geo = _two_columns()
+    above = _block("Bayes", 0, pymupdf.Rect(250, 680, 280, 690), size=8)
+    head = _block("BERT", 0, pymupdf.Rect(250, 700, 280, 710), size=8)
+    entries = [_block(f"bigram term, {70 + i}", 1, pymupdf.Rect(40, 60 + 10 * i, 120, 70 + 10 * i), size=8)
+               for i in range(5)]
+    for entry in entries:
+        entry.entry = True
+    later = [_block("broadcast news", 1, pymupdf.Rect(40, 110, 100, 120), size=8),
+             _block("cascade", 1, pymupdf.Rect(40, 140, 100, 150), size=8)]
+    blocks = [above, head, *entries, *later]
+    halt = {id(entry) for entry in entries}
+    units = _cross_page_units(blocks, 8.0, geometries=[geo, geo], halt_ids=halt)
+    assert all(len(unit) == 1 for unit in units)
+
+
 def test_spanning_footer_does_not_steal_the_next_page_join():
     """跨栏页脚排在页末时，右栏末行仍接到下一页左栏，不被页脚抢走。"""
     geo = _two_columns()

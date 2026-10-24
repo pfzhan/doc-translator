@@ -190,6 +190,8 @@ class TextBlock:
     # 自成一条：索引页上以页码收尾的一条（见 _index_page）、词表里的一格（见 _grid_cells）。
     # 不和上下的条目并段
     entry: bool = False
+    # 是词表里的一格。词表和图一样，栏顶栏底跳过它找正文；索引条目照样占着栏顶栏底
+    grid: bool = False
 
 
 def _join_lines(lines: list[str]) -> str:
@@ -2177,7 +2179,10 @@ def _continuation_prose(
 ) -> bool:
     if id(block) in skip_ids or id(block) in ignored:
         return False
-    if halt_ids is not None and id(block) in halt_ids:
+    # 目录、索引条目不接上下文，但照样占着栏顶栏底：跳过它们，栏底一个没页码的词头
+    # 会接到下一栏中间的条目上。词表的格子和图一样跳过
+    listed = (block.leader is not None or block.entry) and not block.grid
+    if halt_ids is not None and id(block) in halt_ids and not listed:
         return False
     if block.size < median * 0.8 or _is_page_footnote(block, median):
         return False
@@ -2304,6 +2309,8 @@ def _try_column_pair(
     if id(host) in pairs or id(host) in tails or id(tail) in pairs or id(tail) in tails:
         return
     if id(host) in skip_ids or id(tail) in skip_ids:
+        return
+    if halt_ids is not None and id(host) in halt_ids:
         return
     if abs(host.size - tail.size) > max(host.size, 1.0) * 0.25:
         return
@@ -4275,6 +4282,7 @@ def _extract(
                     line_gap=line_gap,
                     body_size=body_size,
                     entry=group[-1] in entry_ends,
+                    grid=group[-1] in cells,
                 ))
         absorbed.update(id(block) for block in blocks[page_start:] if _inside_kept_formula(block, kept_rows))
     split: list[TextBlock] = []
