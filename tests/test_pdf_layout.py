@@ -122,6 +122,24 @@ def test_expand_right_honors_column_limit():
     assert kept.x1 == 200
 
 
+def test_the_indented_next_line_does_not_stop_widening():
+    """索引条目下一行是缩进的子条目，写入框比原文行多出的留白探进下一行，不是并排的障碍。
+    算法框和段落首行并排十几点，就算比段落高很多也要让开。"""
+    from app.formats.pdf import _beside_rows
+
+    entry_row = pymupdf.Rect(197, 130.4, 234, 140.8)
+    entry_box = pymupdf.Rect(197, 131.2, 236, 144.8)
+    sub = pymupdf.Rect(205, 139.9, 254, 150.3)
+    beside = pymupdf.Rect(300, 132, 340, 141)
+    assert _beside_rows([sub, beside], entry_box, [entry_row]) == [beside]
+    rows = [pymupdf.Rect(72, 651 + 12 * i, 303, 662 + 12 * i) for i in range(6)]
+    algorithm = pymupdf.Rect(308, 497, 543, 665)
+    assert _beside_rows([algorithm], pymupdf.Rect(72, 650.7, 303, 723), rows) == [algorithm]
+    # 框往下多出两行，那里的障碍也算
+    low = pymupdf.Rect(310, 735, 400, 746)
+    assert _beside_rows([low], pymupdf.Rect(72, 650.7, 303, 750), rows) == [low]
+
+
 def test_from_page_collects_image_not_page_border():
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=400)

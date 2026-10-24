@@ -7399,6 +7399,26 @@ def _kept_ink(page: "pymupdf.Page", blocks: list[TextBlock]) -> list[pymupdf.Rec
     return kept
 
 
+def _beside_rows(
+    obstacles: list[pymupdf.Rect], rect: pymupdf.Rect, rows: Sequence[pymupdf.Rect],
+) -> list[pymupdf.Rect]:
+    """右扩时挡路的障碍：和原文某一行并排的才算。写入框比原文的行上下多出留白，
+    上一行、下一行的框会探进这几点，不在旁边（索引里缩进的子条目压着上一条的下沿）。
+    框往下多出来的整行也算一行，那里将来要写字。"""
+    top, bottom = min(row.y0 for row in rows), max(row.y1 for row in rows)
+    pitch = max(row.height for row in rows)
+    bands = list(rows)
+    if rect.y1 - bottom > pitch * 0.5:
+        bands.append(pymupdf.Rect(rect.x0, bottom, rect.x1, rect.y1))
+    if top - rect.y0 > pitch * 0.5:
+        bands.append(pymupdf.Rect(rect.x0, rect.y0, rect.x1, top))
+    return [
+        ob for ob in obstacles
+        if any(min(ob.y1, band.y1) - max(ob.y0, band.y0) > min(ob.height, band.height) * 0.5 for band in bands)
+        or not (ob.y0 < rect.y1 and ob.y1 > rect.y0)
+    ]
+
+
 def _on_rows(ink: pymupdf.Rect, rows: Sequence[pymupdf.Rect]) -> bool:
     """这处字和某一行的上下交叠过它自己高度的一半：在这一行的旁边，不是上一行、下一行。"""
     return any(min(ink.y1, row.y1) - max(ink.y0, row.y0) > ink.height * 0.5 for row in rows)
@@ -7649,7 +7669,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             if geo is not None:
                 # 带框线的表和算法框画着外框，右扩也不能压上去
                 obstacles = [*obstacles, *geo.figures, *(table.rect for table in geo.tables)]
-            limit = _write_limit(block, rect, geo, obstacles)
+            beside = _beside_rows(obstacles, rect, block.line_rects or [block.rect])
+            limit = _write_limit(block, rect, geo, beside)
             if x_cap is not None:
                 limit = x_cap if limit is None else min(limit, x_cap)
             # 跨页接过来的半段按上一页的栏宽写，要让开的图可能在块的框外面
@@ -7665,17 +7686,17 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     f"font-weight: {weight}; line-height: {1.45 if cjk else 1.2}; margin: 0; padding: 0; "
                     f"text-align: {align};}}"
                 )
-                _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, obstacles, archive, limit)
+                _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, beside, archive, limit)
             elif any(f.get("has_img") for f in bformulas):
                 _place_typeset(
                     page, doc, block, text, bformulas, rect, size, cjk, centered, div_attrs,
-                    block.color, weight, obstacles, limit, fmS, page_spans, draws, deferred_png,
+                    block.color, weight, beside, limit, fmS, page_spans, draws, deferred_png,
                     justify_last, holes, first_room,
                 )
             else:
                 _place_plain(
                     page, text, bformulas, rect, size, block.size, cjk, centered, div_attrs,
-                    block.color, weight, obstacles, limit, archive, justify_last, holes, first_room,
+                    block.color, weight, beside, limit, archive, justify_last, holes, first_room,
                 )
             if block.leader is not None and not page.rotation:
                 _extend_leader(page, block, block.leader)
