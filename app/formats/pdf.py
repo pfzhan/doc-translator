@@ -617,14 +617,17 @@ def _mark_radicands(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.Re
 
 # 单独画出来的重音字形（\hat、\bar、Montr\'eal 的 ´）。ASCII 的 ^ ~ ` 在正文、代码里另有用处，不算
 _STACKED_ACCENTS = "ˆ˜¯´˙¨ˇ˘˚"
+# 占自己宽度的 ˆ ˜ 是代码、正则、网址里的 ^ ~（r"^The"、nyu.edu/~roweis），等宽字体也画成这两个字形
+_ASCII_ACCENTS = {"ˆ": "^", "˜": "~"}
 
 
 def _split_accents(page: pymupdf.Page, data: dict) -> None:
     """重音和前面的字常在同一个 span 里（「(ˆ」「log ˆ」），按 span 认不出它盖在后面的字或公式上。
-    切成单独的一截：盖在公式上的并进公式，盖在字母上的送翻前合成 ŷ、é。"""
+    切成单独的一截：盖在公式上的并进公式，盖在字母上的送翻前合成 ŷ、é。
+    占自己宽度的 ˆ ˜ 不是重音，改回 ^ ~，送翻前不和后面的字母合成。"""
     lines = [line for block in data.get("blocks", []) for line in block.get("lines", []) if line.get("spans")]
     if not any(
-        len(text.strip()) > 1 and any(char in _STACKED_ACCENTS for char in text)
+        any(char in _STACKED_ACCENTS for char in text)
         for line in lines for text in (str(span.get("text") or "") for span in line["spans"])
     ):
         return
@@ -635,17 +638,34 @@ def _split_accents(page: pymupdf.Page, data: dict) -> None:
         for index, span in enumerate(spans):
             text = str(span.get("text") or "")
             boxes = chars.get((text, round(span["origin"][0], 1), round(span["origin"][1], 1)))
-            if len(text.strip()) <= 1 or boxes is None or len(boxes) != len(text):
+            if not any(char in _STACKED_ACCENTS for char in text) or boxes is None or len(boxes) != len(text):
                 out.append(span)
                 continue
             # 后一个字的左边：同一截里的下一个字，或者下一截的起头
             follow = [x0 for x0, _x1, _origin in boxes[1:]]
             follow.append(spans[index + 1]["bbox"][0] if index + 1 < len(spans) else float("inf"))
-            # 叠在后一个字上的重音不占位，后一个字从它中间起笔。网址里的 ˜ 占自己的宽度
+            # 叠在后一个字上的重音不占位，后一个字从它中间起笔
+            stacked = [
+                char in _STACKED_ACCENTS and after < x1 - (x1 - x0) * 0.3
+                for char, (x0, x1, _origin), after in zip(text, boxes, follow)
+            ]
+            # 前一个字的右边：叠在前一个字上的（公式里的 sˆ）也是重音
+            before = [spans[index - 1]["bbox"][2] if index else float("-inf")]
+            before += [x1 for _x0, x1, _origin in boxes[:-1]]
+            # 后面同一行有字、从它右边起笔，才能断定它占自己的宽度。单成一行的 ˆ 叠在别的行上
+            spaced = "".join(
+                _ASCII_ACCENTS.get(char, char)
+                if not on and after != float("inf") and prior <= x0 + (x1 - x0) * 0.3 else char
+                for char, on, (x0, x1, _origin), prior, after in zip(text, stacked, boxes, before, follow)
+            )
+            if spaced != text:
+                text = spaced
+                span = {**span, "text": text}
+            if len(text.strip()) <= 1:
+                out.append(span)
+                continue
             cuts = sorted({
-                cut for index, (char, (x0, x1, _origin), after) in enumerate(zip(text, boxes, follow))
-                if char in _STACKED_ACCENTS and after < x1 - (x1 - x0) * 0.3
-                for cut in (index, index + 1)
+                cut for index, on in enumerate(stacked) if on for cut in (index, index + 1)
             } - {0, len(text)})
             for start, end in zip([0, *cuts], [*cuts, len(text)]):
                 out.append(span if not cuts else {

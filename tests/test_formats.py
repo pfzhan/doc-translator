@@ -5865,7 +5865,8 @@ def test_tex_spacing_accents_are_composed_before_translation():
 
 
 def test_a_stacked_accent_is_split_from_the_glyphs_before_it():
-    """「(ˆ」里的帽子叠在后面的 y 上，切成单独的一截。网址里的 ˜ 占自己的宽度，不切。"""
+    """「(ˆ」里的帽子叠在后面的 y 上，切成单独的一截。网址里的 ˜、正则里的 ˆ 占自己的宽度，
+    是 ~ ^，不切。"""
     from app.formats.pdf import _split_accents
 
     doc = pymupdf.open()
@@ -5876,10 +5877,11 @@ def test_a_stacked_accent_is_split_from_the_glyphs_before_it():
     page.insert_text((100, 100), "(\u02c6", fontname="T", fontsize=10)
     page.insert_text((100 + font.text_length("(", 10), 100), "y", fontname="T", fontsize=10)
     page.insert_text((100, 140), "nyu.edu/\u02dcroweis", fontname="T", fontsize=10)
+    page.insert_text((100, 180), 'r"\u02c6The"', fontname="T", fontsize=10)
     data = page.get_text("dict")
     _split_accents(page, data)
     texts = [span["text"] for block in data["blocks"] for line in block["lines"] for span in line["spans"]]
-    assert texts == ["(", "\u02c6", "y", "nyu.edu/\u02dcroweis"]
+    assert texts == ["(", "\u02c6", "y", "nyu.edu/~roweis", 'r"^The"']
 
 
 def test_caption_number_is_restored_inside_style_marks():
