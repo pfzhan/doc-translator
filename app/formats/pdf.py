@@ -615,6 +615,47 @@ def _mark_radicands(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.Re
         line["spans"] = out
 
 
+# 单独画出来的重音字形（\hat、\bar、Montr\'eal 的 ´）。ASCII 的 ^ ~ ` 在正文、代码里另有用处，不算
+_STACKED_ACCENTS = "ˆ˜¯´˙¨ˇ˘˚"
+
+
+def _split_accents(page: pymupdf.Page, data: dict) -> None:
+    """重音和前面的字常在同一个 span 里（「(ˆ」「log ˆ」），按 span 认不出它盖在后面的字或公式上。
+    切成单独的一截：盖在公式上的并进公式，盖在字母上的送翻前合成 ŷ、é。"""
+    lines = [line for block in data.get("blocks", []) for line in block.get("lines", []) if line.get("spans")]
+    if not any(
+        len(text.strip()) > 1 and any(char in _STACKED_ACCENTS for char in text)
+        for line in lines for text in (str(span.get("text") or "") for span in line["spans"])
+    ):
+        return
+    chars = _char_boxes(page)
+    for line in lines:
+        out: list[dict] = []
+        spans = line["spans"]
+        for index, span in enumerate(spans):
+            text = str(span.get("text") or "")
+            boxes = chars.get((text, round(span["origin"][0], 1), round(span["origin"][1], 1)))
+            if len(text.strip()) <= 1 or boxes is None or len(boxes) != len(text):
+                out.append(span)
+                continue
+            # 后一个字的左边：同一截里的下一个字，或者下一截的起头
+            follow = [x0 for x0, _x1, _origin in boxes[1:]]
+            follow.append(spans[index + 1]["bbox"][0] if index + 1 < len(spans) else float("inf"))
+            # 叠在后一个字上的重音不占位，后一个字从它中间起笔。网址里的 ˜ 占自己的宽度
+            cuts = sorted({
+                cut for index, (char, (x0, x1, _origin), after) in enumerate(zip(text, boxes, follow))
+                if char in _STACKED_ACCENTS and after < x1 - (x1 - x0) * 0.3
+                for cut in (index, index + 1)
+            } - {0, len(text)})
+            for start, end in zip([0, *cuts], [*cuts, len(text)]):
+                out.append(span if not cuts else {
+                    **span, "text": text[start:end], "origin": boxes[start][2],
+                    "bbox": (boxes[start][0], span["bbox"][1], boxes[end - 1][1], span["bbox"][3]),
+                    **({"ink": (boxes[start][0], span["ink"][1], boxes[end - 1][1], span["ink"][3])} if "ink" in span else {}),
+                })
+        line["spans"] = out
+
+
 def _glyph_box(span: dict) -> pymupdf.Rect:
     """字形占的框。字体框量错、墨迹是单画量出来的，上下按墨迹算。"""
     box = pymupdf.Rect(span["bbox"])
@@ -3895,6 +3936,7 @@ def _extract(
         _attach_ink(page, data)
         _mark_underlines(page, data, scans[-1].strokes)
         _mark_radicands(page, data, scans[-1].strokes)
+        _split_accents(page, data)
         # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
         recover_type3_page(page, data, type3)
         pages.append(data)
@@ -7663,15 +7705,18 @@ _SPACING_ACCENTS = {
     "´": "\u0301", "`": "\u0300", "ˆ": "\u0302", "¨": "\u0308", "˜": "\u0303",
     "ˇ": "\u030c", "˘": "\u0306", "˙": "\u0307", "˚": "\u030a",
 }
-_ACCENT_BEFORE_RE = re.compile("([" + "".join(_SPACING_ACCENTS) + r"])([A-Za-zıȷ])")
+# 重音和字母之间可能隔着样式标记：ŷ 的 y 是斜体，提出来是 ˆ{i}y{/i}
+_ACCENT_BEFORE_RE = re.compile(
+    "([" + "".join(_SPACING_ACCENTS) + r"])((?:\{[biu]\}|\{z\d+\}|\{c[0-9a-f]{6}\})*)([A-Za-zıȷ])"
+)
 # 软音符只挂在 c、s、t 下面，提出来可能在字母前，也可能在后：c¸、¸c → ç
 _CEDILLA_RE = re.compile(r"([cCsStT])\s?¸|¸\s?([cCsStT])")
 
 
 def _compose_accents(text: str) -> str:
     def before(m: re.Match[str]) -> str:
-        letter = {"ı": "i", "ȷ": "j"}.get(m.group(2), m.group(2))
-        return unicodedata.normalize("NFC", letter + _SPACING_ACCENTS[m.group(1)])
+        letter = {"ı": "i", "ȷ": "j"}.get(m.group(3), m.group(3))
+        return m.group(2) + unicodedata.normalize("NFC", letter + _SPACING_ACCENTS[m.group(1)])
 
     text = _ACCENT_BEFORE_RE.sub(before, text)
     return _CEDILLA_RE.sub(lambda m: unicodedata.normalize("NFC", (m.group(1) or m.group(2)) + "\u0327"), text)
