@@ -672,6 +672,27 @@ def test_a_full_row_split_after_a_sentence_stays_in_the_paragraph():
     assert _split_lines(items[1:3]) == [[0], [1]]
 
 
+def test_a_number_wrapped_to_its_own_line_ends_the_sentence():
+    """排满的一行没说完，折下来独占一行的数是句尾，不按符号行拆出去。行首的节号后面还有标题，照旧拆开。"""
+    from app.formats.pdf import _split_lines
+
+    def line(text, x0, x1, y0):
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"size": 10.0, "font": "Times-Roman", "text": text}])
+
+    items = [
+        line("perparameter that controls the penalty term; values typically range from 0.01 to", 160.2, 493.2, 121.9),
+        line("0.1.", 160.2, 175.1, 133.8),
+        line("As illustrated in Fig. 8.12, DPO uses gradient descent with this loss over the", 175.1, 493.2, 145.8),
+    ]
+    assert _split_lines(items) == [[0, 1], [2]]
+    toc = [
+        line("9.5 Fine-Tuning for Sequence Labeling: Named Entity Recognition . . . 238", 160.2, 493.2, 121.9),
+        line("9.6", 160.2, 175.1, 133.8),
+        line("Summary", 190.0, 230.0, 133.8),
+    ]
+    assert [0] in _split_lines(toc)
+
+
 def test_pdf_hard_break_splits_lines():
     """无项目符号的硬换行（上行远短于块最宽行、下行大写开头、左对齐）也拆成两段。"""
     from app.formats.pdf import extract_blocks
