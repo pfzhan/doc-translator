@@ -4145,6 +4145,17 @@ def _sized_lines(pages: list[dict]) -> list[list[tuple[pymupdf.Rect, float, int]
     return rows
 
 
+def _median_size(blocks: list[TextBlock]) -> float:
+    """按字数取中位的字号。按块数取时，索引、图里成百上千个小字的短块会把它拉下来。"""
+    total = sum(len(block.text) for block in blocks)
+    seen = 0
+    for block in sorted(blocks, key=lambda block: block.size):
+        seen += len(block.text)
+        if seen * 2 >= total:
+            return block.size
+    return 0.0
+
+
 def _body_size(rows: list[list[tuple[pymupdf.Rect, float, int]]]) -> float:
     """正文字号：字数最多的字号。没有字时是 0。"""
     chars: dict[float, int] = {}
@@ -8225,7 +8236,7 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
         meta_title = ""
     title = meta_title or src.stem
     runner.set_title(title)
-    median = sorted(b.size for b in blocks)[len(blocks) // 2]
+    median = _median_size(blocks)
     # 栏和障碍先于角色、也先于跨页合并：图内文字和图注靠这些框来认
     rects_by_page: dict[int, list[pymupdf.Rect]] = {}
     for b in blocks:
