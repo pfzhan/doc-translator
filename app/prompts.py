@@ -286,16 +286,26 @@ def _braces_at_marks(text: str) -> tuple[list[int], list[int]]:
     return before, after
 
 
-# 花括号里夹了空白的标记：{ i}、{/ b}、{ v1 }
-_LOOSE_MARK_RE = re.compile(r"\{\s*(/?)\s*([biu]|z\d*|c[0-9a-f]{6}|v\d+|\|)\s*\}")
+# 写走样的标记：花括号里夹了空白、零宽字符、问号（{ i}、{​i}、{ i? }），写成方括号（[i]），
+# 收尾写成 >（{/b>），颜色的收尾带上色号（{/cb30000}）
+_LOOSE_MARK_RE = re.compile(r"[{\[][^{}\[\]<>\n]{1,14}[}\]>]")
+_NOT_MARK_CHAR_RE = re.compile(r"[^A-Za-z0-9/|]")
+_CLOSE_WITH_ARG_RE = re.compile(r"^/(c)[0-9a-f]{6}$|^/(z)\d+$")
 
 
 def tidy_marks(src: str, dst: str) -> str:
-    """模型偶尔在标记的花括号里多写空格（{ i}m{/i}），认不出是标记，渲染成字面的 i。
-    改回标准写法；只改原文里有的标记，原文正文里本来就有的 { i} 这类字面花括号不动。"""
+    """模型偶尔把标记写走样，认不出是标记，渲染成字面的 i、/cb30000。改回标准写法；
+    只改成原文里有的标记，原文正文里本来就有的同样写法（{ i}、x[i]）不动。"""
+    marks = set(_MARK_TOKEN_RE.findall(src))
+
     def tidy(match: re.Match[str]) -> str:
-        mark = "{" + match.group(1) + match.group(2) + "}"
-        return mark if mark in src else match.group(0)
+        text = match.group(0)
+        if text in marks or text in src:
+            return text
+        core = _NOT_MARK_CHAR_RE.sub("", text[1:-1])
+        core = _CLOSE_WITH_ARG_RE.sub(lambda close: "/" + (close.group(1) or close.group(2)), core)
+        mark = "{" + core + "}"
+        return mark if mark in marks else text
 
     return _LOOSE_MARK_RE.sub(tidy, dst)
 

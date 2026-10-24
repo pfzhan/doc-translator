@@ -339,3 +339,8 @@ def test_marks_written_with_spaces_inside_are_restored():
     assert tidy_marks(src, dst) == "简化模型{i}m{/i}, 在两个模型{v1}和{v2}之间较{|}低 {/i}"
     assert tidy_marks("a set {n,m} of {b}x{/b}", "集合 { b} 和 { n,m}") == "集合 {b} 和 { n,m}"
     assert tidy_marks("plain text", "字面的 { i} 不动") == "字面的 { i} 不动"
+    # 零宽字符、问号、方括号、写错的收尾、带色号的收尾
+    src = "if {i}surprised{/i} or {i}just{/i} is {b}hot{/b} for {cb30000}POSITION{/c}"
+    dst = "如果{\u200b\u200bi}surprised{/i}或{ i? }just{/i}中的[i]x{/i}是{b}热点{/b>, {cb30000}职务{/cb30000}"
+    assert tidy_marks(src, dst) == "如果{i}surprised{/i}或{i}just{/i}中的{i}x{/i}是{b}热点{/b}, {cb30000}职务{/c}"
+    assert tidy_marks("x[i] for {i}i{/i}", "x[i] 对 {i}i{/i}") == "x[i] 对 {i}i{/i}"
