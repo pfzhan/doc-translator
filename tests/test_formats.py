@@ -3416,6 +3416,38 @@ def test_a_full_line_wraps_into_a_capitalized_next_line():
     assert len(_merge_continuations([blk(head + ".", 610, x0=175.1), blk(tail, 622, rows=2)])) == 2
 
 
+def test_one_query_per_line_in_one_block_is_cut_into_lines():
+    """PyMuPDF 把一行一句的查询归成一块。每行都早早换行（下一行的第一个词放得下），按行拆开。
+    排满的段落照旧是一段。"""
+    from app.formats.pdf import _cut_line_list
+
+    def item(text, y, x1):
+        rect = pymupdf.Rect(167.1, y, x1, y + 10.8)
+        return (text, rect, [{"text": text, "size": 9.0}], None)
+
+    queries = [
+        item("can you tell me about any good cantonese restaurants close by", 356.2, 390.1),
+        item("tell me about chez panisse", 367.1, 261.2),
+        item("i'm looking for a good place to eat breakfast", 378.1, 326.4),
+        item("when is caffe venezia open during the day", 389.1, 317.9),
+    ]
+    assert _cut_line_list([0, 1, 2, 3], queries, [item[1] for item in queries]) == [[0], [1], [2], [3]]
+    # 绕图、表格里的段落比栏窄，参差地折行，下一行的第一个词都放不进最长的那一行
+    paragraph = [
+        item("Policies, processes,", 100, 240), item("procedures, and", 111, 225),
+        item("practices across the", 122, 238), item("organization related", 133, 236),
+    ]
+    assert _cut_line_list([0, 1, 2, 3], paragraph, [item[1] for item in paragraph]) == [[0, 1, 2, 3]]
+    # 绕着右边的图排的几行止于图边，下面一行排满全栏
+    around = [
+        item("the first full-sentence speech synthesizer, shown partially to the right. His", 100, 475),
+        item("device consisted of a bellows to simulate the lungs, a rub-", 111, 380),
+        item("ber mouthpiece and a nose aperture, a", 122, 380.5),
+        item("reed to simulate the vocal folds, var-", 133, 379.6),
+    ]
+    assert _cut_line_list([0, 1, 2, 3], around, [item[1] for item in around]) == [[0, 1, 2, 3]]
+
+
 def test_cjk_wrap_merges_and_short_labels_stay():
     """左缘对齐、上行够长的中文换行接回一段。短标签和缩进的新段不接。"""
     from app.formats.pdf import TextBlock, _cross_page_units, _merge_continuations

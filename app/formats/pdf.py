@@ -4281,6 +4281,7 @@ def _extract(
             # 文字分式所在的行自成一组，留原字，不和上下的正文连成一段
             formula_rows = {i for i, item in enumerate(items) if any(id(span) in fractions for span in item[2])}
             groups = [part for group in groups for part in _cut_runs(group, formula_rows)]
+            groups = [part for group in groups for part in _cut_line_list(group, items, row_ends)]
             for group in groups:
                 texts = [items[i][0] for i in group]
                 line_rects = [items[i][1] for i in group]
@@ -4644,7 +4645,7 @@ def _wraps_from_above(
             continue
         # 靠左排的上一行写到本栏右缘。居中排的段落逐行成块，上一行和它上面那行一样宽，是排满的行
         left = (abs(block.rect.x0 - rect.x0) <= block.size * 0.5
-                and last.x1 >= _column_right(block, rows, frame) - block.size)
+                and last.x1 >= _column_right(block.rect.x0, block.size, rows, frame) - block.size)
         centered = abs((last.x0 + last.x1) / 2 - (rect.x0 + rect.x1) / 2) <= block.size and any(
             0 <= last.y0 - line.y1 <= block.size
             and abs(line.x0 - last.x0) <= block.size and abs(line.x1 - last.x1) <= block.size
@@ -4660,10 +4661,10 @@ def _wraps_from_above(
     return False
 
 
-def _column_right(block: TextBlock, rows: Sequence[pymupdf.Rect], frame: TextFrame | None) -> float:
-    """块所在那一栏的右缘：本页和它同一左缘起笔的行有四成以上止于同一处（两端对齐）。
+def _column_right(x0: float, size: float, rows: Sequence[pymupdf.Rect], frame: TextFrame | None) -> float:
+    """从 x0 起笔的块所在那一栏的右缘：本页和它同一左缘起笔的行有四成以上止于同一处（两端对齐）。
     索引、代码这类参差的行对不出这条缘，用版心右缘。"""
-    ends = Counter(round(row.x1) for row in rows if abs(row.x0 - block.rect.x0) <= block.size)
+    ends = Counter(round(row.x1) for row in rows if abs(row.x0 - x0) <= size)
     total = sum(ends.values())
     if ends:
         edge = max(ends, key=lambda value: (_near_votes(ends, value), value))
@@ -5270,13 +5271,9 @@ def _line_lists(blocks: list[TextBlock], frames: Sequence[TextFrame | None]) -> 
         frame = frames[run[0].page] if run[0].page < len(frames) else None
         if frame is None:
             return
-        early = 0
-        for upper, lower in zip(run, run[1:]):
-            right = _column_right(upper, rows_of[upper.page], frame)
-            word = lower.text.split()[0] if lower.text.split() else ""
-            if upper.rect.x1 + (len(word) * 0.5 + 1.0) * upper.size <= right:
-                early += 1
-        if early * 2 >= len(run) - 1:
+        rows = rows_of[run[0].page]
+        if _breaks_early([(block.rect, block.text, block.size) for block in run],
+                         lambda rect, size: _column_right(rect.x0, size, rows, frame)):
             listed.update(id(block) for block in run)
 
     for block in blocks:
@@ -5294,6 +5291,58 @@ def _line_lists(blocks: list[TextBlock], frames: Sequence[TextFrame | None]) -> 
         run = [block] if single else []
     close()
     return listed
+
+
+def _breaks_early(
+    rows: Sequence[tuple[pymupdf.Rect, str, float]], right_of: Callable[[pymupdf.Rect, float], float],
+    at_least: int = 1,
+) -> bool:
+    """一行一行（框、文字、字号）里，一半以上、至少 at_least 处换行，上一行后面还放得下下一行的第一个词。
+    right_of 给出一行能排到的右缘。"""
+    early = 0
+    for (upper, _text, size), (_rect, text, _size) in zip(rows, rows[1:]):
+        right = right_of(upper, size)
+        word = text.split()[0] if text.split() else ""
+        if upper.x1 + (len(word) * 0.5 + 1.0) * size <= right:
+            early += 1
+    return early >= at_least and early * 2 >= len(rows) - 1
+
+
+def _cut_line_list(group: list[int], items: list[tuple], page_rows: Sequence[pymupdf.Rect]) -> list[list[int]]:
+    """PyMuPDF 常把一行一句的清单（例句、查询）归成一块。和跨块的清单同一个判法（见 _line_lists）：
+    几行各占一行、左缘对齐、同字号、行距一样，一半以上的换行处上一行还放得下下一行的第一个词，按行拆开。
+    右缘按这一块最长的一行算：栏宽从别的行估，图边、表格里、两栏里的段落都会估宽；
+    按块里最长的行算，自动折出来的段落一处也不会早换行。绕图排的几行止于图边：本页同一左缘起笔、
+    同一处止笔的行不止一行，算排满。"""
+    if len(group) < _LIST_RUN:
+        return [group]
+    rects = [items[i][1] for i in group]
+    sizes = [max(float(span["size"]) for span in items[i][2]) for i in group]
+    size = sizes[0]
+    pitches = [lower.y0 - upper.y0 for upper, lower in zip(rects, rects[1:])]
+    aligned = (
+        all(abs(rect.x0 - rects[0].x0) <= size * 0.5 for rect in rects)
+        and all(abs(other - size) <= size * 0.05 for other in sizes)
+        and all(upper.y1 - lower.y0 <= size * 0.3 for upper, lower in zip(rects, rects[1:]))
+        and all(0 < pitch <= size * 2.0 and abs(pitch - pitches[0]) <= size * 0.2 for pitch in pitches)
+    )
+    widest = max(rect.x1 for rect in rects)
+
+    def full(rect: pymupdf.Rect) -> bool:
+        return sum(1 for row in page_rows if abs(row.x1 - rect.x1) <= 1 and abs(row.x0 - rect.x0) <= size) >= 2
+
+    # 一块里只有一处早换行的，多半是段末短行接着下一段、下一个小标题
+    rows = [(items[i][1], items[i][0], size) for i in group]
+    if not aligned or not _breaks_early(rows, lambda rect, _size: rect.x1 if full(rect) else widest, at_least=2):
+        return [group]
+    # 排满的一行后面是句中折行，接着；其余换行处都拆开
+    parts = [group[:1]]
+    for prev, cur in zip(group, group[1:]):
+        if full(items[prev][1]):
+            parts[-1].append(cur)
+        else:
+            parts.append([cur])
+    return parts
 
 
 def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = frozenset()) -> list[TextBlock]:
