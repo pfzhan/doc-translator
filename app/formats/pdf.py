@@ -4669,7 +4669,8 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             # 带列表标记的是幻灯片的下一项，左缘随层级变，也不是标题的下一行。
             # 标题换行的两行左右总有交叠，横向错开的是旁边的标签。
             # 大字号比这份文档的正文字号算：幻灯片的正文就有三十来磅，子项缩进排，不是标题换行。
-            title_frag = (p.size >= max(12, p.body_size * 1.1) and b.size >= p.size * 0.7
+            # 换行的标题两行一样大。紧接着大一号的是下一级标题（8.4.4 小节名下面的 8.5 Summary）
+            title_frag = (p.size >= max(12, p.body_size * 1.1) and p.size * 0.7 <= b.size <= p.size * 1.1
                           and 0 <= b.rect.y0 - p.rect.y1 < 0.75 * p.size
                           and abs(b.rect.x0 - p.rect.x0) > p.size * 0.5
                           and min(p.rect.x1, b.rect.x1) > max(p.rect.x0, b.rect.x0)

@@ -3288,6 +3288,20 @@ def test_paragraph_split_by_a_caption_beside_it_is_joined():
     assert len(_merge_continuations([left, right, below])) == 3
 
 
+def test_a_larger_heading_below_a_title_is_not_its_wrapped_line():
+    """小节名下面紧接着的大一号的是下一节的标题，不是小节名换行的第二行。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, x0, y0, x1, y1, size):
+        rect = pymupdf.Rect(x0, y0, x1, y1)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=True,
+                         body_size=10)
+
+    title = blk("8.4.4 Limitations of Preference-Based Learning", 160.2, 515.9, 410.3, 531.4, 12)
+    section = blk("8.5 Summary", 95.4, 539.6, 201.1, 560.4, 17.2)
+    assert len(_merge_continuations([title, section])) == 2
+
+
 def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
     """原文段落前几行在图左边让开、图下面恢复整宽。译文碰到图高度的行同样让开，图下面的行写满。
     只有一行在旁边的不算绕排（引文最后一行旁边的出处）。"""
