@@ -26,6 +26,13 @@ def test_frame_follows_body_lines_not_the_leftmost_block():
     assert frames[1].y0 == 100
 
 
+def test_a_wide_caption_does_not_move_the_frame_of_its_page():
+    """通栏图注从页边起笔，本页的正文仍从同侧页的左缘起笔。"""
+    caption = _lines(77, 475, count=6, top=300)
+    frames = text_frames([_lines(160, 493), [*_lines(142, 475, count=12), *caption], _lines(160, 493), _lines(142, 475)])
+    assert (frames[1].x0, frames[1].x1) == (142, 475)
+
+
 def test_a_running_header_set_like_body_text_is_outside_the_frame():
     """页眉和正文一样大、一样长，每页同一高度同一句话，不算版心的第一行。"""
     header = "Published as a conference paper at ICLR 2015"

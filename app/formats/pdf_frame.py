@@ -65,6 +65,11 @@ def text_frames(pages: Sequence[Sequence[FrameLine]]) -> list[TextFrame | None]:
     for index, lines in enumerate(prose):
         frame = shared[index % 2]
         own = _frame_of([lines], with_rows=False) if len(lines) >= _MIN_LINES else None
+        if own is not None and frame is not None:
+            # 同侧页的缘在本页仍有一批长行起笔、收尾，本页外扩的是通栏图注、宽表这类少数行
+            x0 = frame.x0 if _holds([line.rect.x0 for line in lines], frame.x0) else own.x0
+            x1 = frame.x1 if _holds([line.rect.x1 for line in lines], frame.x1) else own.x1
+            own = TextFrame(x0, x1, own.y0, own.y1, own.size)
         if own is not None and (
             frame is None
             or abs(own.x0 - frame.x0) > _PAGE_SHIFT or abs(own.x1 - frame.x1) > _PAGE_SHIFT
@@ -77,6 +82,15 @@ def text_frames(pages: Sequence[Sequence[FrameLine]]) -> list[TextFrame | None]:
             )
         frames.append(frame)
     return frames
+
+
+def _holds(values: Sequence[float], edge: float) -> bool:
+    """这条缘在这些行里票数够：不低于最多那条缘的 _EDGE_SHARE。"""
+    counter = Counter(round(value) for value in values)
+    if not counter:
+        return False
+    best = max(_near(counter, value) for value in counter)
+    return _near(counter, round(edge)) >= best * _EDGE_SHARE
 
 
 def _line_key(line: FrameLine) -> tuple[int, str]:
