@@ -3208,6 +3208,9 @@ def _tighten_formula_sides(
         if span.get("bbox") is not None
     ]
     ours = [box for span in part.get("spans") or [] for box in _span_ink_boxes(span, char_index)]
+    # 字体框量错的字（txsys、CMSY 的根号）框在墨迹上方，按单画量出的墨迹补上，不然根号的下半截
+    # 当成邻字的墨迹，左边收到根号中间
+    ours.extend(pymupdf.Rect(span["ink"]) for span in part.get("spans") or [] if span.get("ink_drawn"))
     ours.extend(
         pymupdf.Rect(curve) for curve in part.get("curves") or [] if curve is not None
     )
