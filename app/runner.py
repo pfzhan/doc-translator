@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from . import glossary, langdetect
-from .prompts import drop_added_braces, strip_control_marks, tidy_marks
+from .prompts import drop_added_braces, drop_invented_marks, strip_control_marks, tidy_marks
 from .translators import Translator, TranslatorError
 
 CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "cache.sqlite3"
@@ -277,7 +277,7 @@ class Runner:
         html_sources = self.translator.html_texts
 
         def fixed(src: str, dst: str) -> str:
-            dst = keep_section_number(src, normalize_punctuation(drop_added_braces(src, tidy_marks(src, strip_control_marks(dst))), tl), tl)
+            dst = keep_section_number(src, normalize_punctuation(drop_added_braces(src, tidy_marks(src, drop_invented_marks(src, strip_control_marks(dst)))), tl), tl)
             if src not in headings:
                 return dst
             return fix_numbered_unit(dst, tl, html=src in html_sources)

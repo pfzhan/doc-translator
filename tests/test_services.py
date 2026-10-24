@@ -493,3 +493,13 @@ def test_rejects_requests_for_other_host_names():
         assert client.get("/api/services").status_code == 400
     with TestClient(main.app, base_url="http://127.0.0.1:8765") as client:
         assert client.get("/api/services").status_code == 200
+
+
+def test_a_marker_the_model_made_up_is_dropped():
+    """模型照着协议标记编出 [[toolong]] 接在译文后面。原文里没有的 [[词]] 去掉，原文有的留着。"""
+    from app.prompts import drop_invented_marks
+
+    assert drop_invented_marks("The derivative of tanh is:", "tanh 的导数为: [[toolong]]") == "tanh 的导数为:"
+    assert drop_invented_marks("S: a start symbol", "S: 起始符号\n[[toolong]]") == "S: 起始符号"
+    assert drop_invented_marks("as follows.", "如下。[[/INST]]") == "如下。"
+    assert drop_invented_marks("write [[link]] here", "在这里写 [[link]]") == "在这里写 [[link]]"

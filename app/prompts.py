@@ -243,6 +243,24 @@ def strip_control_marks(text: str) -> str:
     return TAIL_CONTROL_RE.sub("", "\n".join(lines)).strip()
 
 
+# 协议标记样子的 [[词]]
+_BRACKET_WORD_RE = re.compile(r"[ \t]*\[\[/?[A-Za-z_][\w-]*\]\]")
+
+
+def drop_invented_marks(src: str, dst: str) -> str:
+    """去掉原文里没有的 [[词]]。模型偶尔照着协议标记自己编一个（[[toolong]]、[[/INST]]），接在译文后面。"""
+    if "[[" not in dst:
+        return dst
+    kept = {match.group().strip() for match in _BRACKET_WORD_RE.finditer(src)}
+    lines: list[str] = []
+    for line in dst.split("\n"):
+        cleaned = _BRACKET_WORD_RE.sub(lambda match: match.group() if match.group().strip() in kept else "", line)
+        # 标记独占的一行整行去掉
+        if cleaned == line or cleaned.strip():
+            lines.append(cleaned)
+    return "\n".join(lines)
+
+
 # 送翻文本里的标记：强调、字号、颜色的开关，公式占位符，跨页分界
 _MARK_TOKEN_RE = re.compile(r"\{(?:/?[biuzc]|z\d+|c[0-9a-f]{6}|v\d+|\|)\}")
 
