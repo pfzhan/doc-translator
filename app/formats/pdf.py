@@ -1393,12 +1393,21 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
     # 否则左跳量相对小行算，段落会在公式处被切碎（"(like a | sequence)"）
     ref_size = max((s["size"] for s in items[0][2]), default=10)
     group_size = ref_size if len("".join(items[0][0].split())) >= _SIZE_ROW_CHARS else 0
+    # 排满的一行没说完，折到下一行行首的数（range from 0.01 to | 0.1.）是句尾，不是符号行
+    number_tails: set[int] = set()
     for i in range(1, len(items)):
         text, rect = items[i][0], items[i][1]
         ptext, prect, pspans = items[ref][0], row_box.get(ref, items[ref][1]), items[ref][2]
         psize = max((s["size"] for s in pspans), default=10)
         stripped = text.lstrip()
-        prev_symbol = bool(NO_TEXT_RE.match(ptext.strip()))  # 纯符号行独立成段，后面的内容不和它拼
+        # 纯符号行独立成段，后面的内容不和它拼
+        prev_symbol = bool(NO_TEXT_RE.match(ptext.strip())) and ref not in number_tails
+        if (NO_TEXT_RE.match(stripped) and re.search(r"\d", stripped) and not prev_symbol
+                and max_x1 - prect.x1 <= 0.5 * psize and not _ends_sentence(ptext)
+                and abs(rect.x0 - group_x0) <= 0.5 * psize and rect.y0 >= prect.y1 - 0.5 * psize
+                and (i + 1 == len(items) or items[i + 1][1].y0 >= rect.y1 - 0.5 * psize)):
+            # 这个数独占一行。同一行后面还有字的是行首的节号（9.6 Summary）
+            number_tails.add(i)
         jump = prect.x0 - rect.x0
         # 1–2em 左跳是首行缩进，不是新段落。首行缩进只缩一行：这一段已有两行以上、上一行不是第一行，
         # 再往左起笔是列表项、例句的悬挂续行完了。块从续行起头时第一行也是缩着的（datasheet 的条目）。
@@ -1548,7 +1557,8 @@ def _split_lines(items: list[tuple]) -> list[list[int]]:
             and (_ends_sentence(ptext) or ptext.rstrip().endswith(")"))
         )
         if value_column or (not same_visual_line and not sec_label and (
-            (not open_end and (bullet or example or NO_TEXT_RE.match(stripped))) or (prev_symbol and not closing)
+            (not open_end and (bullet or example or (NO_TEXT_RE.match(stripped) and i not in number_tails)))
+            or (prev_symbol and not closing)
             or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim or restyled or labeled
             or _caption_opens(items[i][2], pspans)
         )):
