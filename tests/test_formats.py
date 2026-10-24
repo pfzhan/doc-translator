@@ -3245,7 +3245,7 @@ def test_placeholderize_absorbs_accent_over_formula():
         [span("an estimate ", "TimesNewRomanPSMT", 10, 0, 50),
          span("y", "CMMI10", 10, 40, 50, x1=48, y1=60),
          span(" coming", "TimesNewRomanPSMT", 10, 60, 50)],
-        [span("^", "CMR10", 10, 41, 42, x1=45, y1=48)],  # 帽子是独立 dict 行
+        [{**span("^", "CMR10", 10, 41, 42, x1=45, y1=48), "origin": (41, 56)}],  # 帽子是独立 dict 行，基线抬高一点
     ], size=10.0)
     sent, formulas = _placeholderize(b, 0)
     assert "^" not in sent
@@ -3258,6 +3258,15 @@ def test_placeholderize_absorbs_accent_over_formula():
     ], size=10.0)
     sent2, _ = _placeholderize(b2, 0)
     assert "^" in sent2
+    # 上一行 naïve 的两点不算到下一行的公式上
+    b3 = _block_with_spans([
+        [span("usual (na", "TimesNewRomanPSMT", 10, 0, 40, x1=40, y1=50),
+         {**span("\u00a8", "TimesNewRomanPSMT", 10, 40, 40, x1=44, y1=50), "origin": (40, 48)},
+         span("\u0131ve)", "TimesNewRomanPSMT", 10, 40, 40, x1=60, y1=50)],
+        [span("\u2207", "CMSY10", 10, 38, 50, x1=48, y1=62)],
+    ], size=10.0)
+    sent3, _ = _placeholderize(b3, 0)
+    assert "\u00a8" in sent3
 
 
 

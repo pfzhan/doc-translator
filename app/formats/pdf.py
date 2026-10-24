@@ -2868,13 +2868,19 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
             if s["text"].strip() not in _ACCENT_CHARS:
                 continue
             sb = pymupdf.Rect(s["bbox"])
-            cx, cy = (sb.x0 + sb.x1) / 2, (sb.y0 + sb.y1) / 2
+            # 重音盖在公式里同一行的某一截字上：横向交叠，基线相近（大写字母上的帽子抬高一点）。
+            # 按公式框比，上一行 naïve 的两点会算到下一行的公式上
+            base = float(s["origin"][1]) if s.get("origin") else (sb.y0 + sb.y1) / 2
+
+            def covers(span: dict) -> bool:
+                box = pymupdf.Rect(span["bbox"])
+                raised = float(span["origin"][1]) - base
+                return min(box.x1, sb.x1) - max(box.x0, sb.x0) > 0 and -0.2 <= raised / block.size <= 0.6
+
             for m in merged:
                 if any(s is x for x in m["spans"]):
                     break
-                rb = m["bbox"]
-                if (rb.x0 - 1 <= cx <= rb.x1 + 1
-                        and rb.y0 - block.size * 0.8 <= cy <= rb.y1 + 1):
+                if any(covers(x) for x in m["spans"] if x.get("origin") and str(x.get("text") or "").strip()):
                     m["spans"].append(s)
                     m["bbox"] |= sb
                     break
