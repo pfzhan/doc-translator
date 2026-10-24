@@ -4743,9 +4743,10 @@ def test_a_loose_mixed_line_stretches_word_spaces_before_the_chinese():
     inside = extras[text.index("识")]
     space = extras[text.index(" ")]
     assert 0 < inside <= 1.0 + 1e-9
-    # 一处空格前后两个缝合起来算，最多再拉开半个字
+    # 一处空格前后两个缝合起来算，最多再拉开四分之一个字。余下的留在行尾
     space += extras[text.index(" ") - 1]
-    assert space > inside * 3 and space <= 5.0 + 1e-9
+    assert space > inside * 2 and space <= 2.5 + 1e-9
+    assert sum(extras) < 60.0
     # 没有空格的中文行照旧平均摊
     plain = "我们在此提出一种采样机制已经写完了"
     extras = justify_extras(plain, 16.0, 10.0)
