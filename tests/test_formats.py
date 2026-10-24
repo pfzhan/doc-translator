@@ -5839,6 +5839,12 @@ def test_formula_box_height_follows_the_glyph_ink():
     _tighten_formula_height(part)
     assert [round(v, 1) for v in part["bbox"]] == [114.7, 219.2, 147.4, 227.1]
     assert part["h"] == 7.9 and part["d"] == 0.8
+    # 减号整个在基线上面（数学轴），收紧后下沿仍在基线上方，不能贴到基线上
+    minus = {"text": "−", "ink": (197.2, 713.4, 205.0, 715.0)}
+    part = {"bbox": pymupdf.Rect(197.2, 708.9, 205.0, 726.2), "h": 17.3, "d": 9.6, "spans": [minus]}
+    _tighten_formula_height(part)
+    baseline = 726.2 - 9.6
+    assert part["d"] < 0 and abs(part["bbox"].y1 - part["d"] - baseline) < 0.1
     # 点阵字没有墨迹框，照旧用原来的框
     unknown = {"bbox": pymupdf.Rect(0, 0, 10, 20), "h": 20, "d": 5, "spans": [{"text": "x"}]}
     _tighten_formula_height(unknown)

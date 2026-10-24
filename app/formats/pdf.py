@@ -3592,7 +3592,8 @@ def _tighten_formula_height(part: dict) -> None:
         return
     part["bbox"] = pymupdf.Rect(bbox.x0, top, bbox.x1, bottom)
     part["h"] = round(bottom - top, 1)
-    part["d"] = round(max(0.0, float(part.get("d") or 0) - (bbox.y1 - bottom)), 1)
+    # 减号、等号的墨迹整个在基线上面，下沿比基线高时 d 是负的，落位时照样抬上去
+    part["d"] = round(float(part.get("d") or 0) - (bbox.y1 - bottom), 1)
 
 
 def _origin_key(span: dict) -> tuple[float, float]:
