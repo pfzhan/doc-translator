@@ -5772,6 +5772,27 @@ def test_tex_spacing_accents_are_composed_before_translation():
     assert _compose_accents("Fr´ed´eric, na¨ıve, ˆetre") == "Frédéric, naïve, être"
     assert _compose_accents("Fran¸cois, gar c¸on") == "François, gar çon"
     assert _compose_accents("f(x)´ and x¸") == "f(x)´ and x¸"
+    # 字母是斜体、粗体时，标记夹在重音和字母之间
+    assert _compose_accents("the estimate ˆ{i}y{/i} and ˜{i}x,r{/i}") == "the estimate {i}ŷ{/i} and {i}x̃,r{/i}"
+    assert _compose_accents("output ˆ{b}Y{/b}") == "output {b}Ŷ{/b}"
+
+
+def test_a_stacked_accent_is_split_from_the_glyphs_before_it():
+    """「(ˆ」里的帽子叠在后面的 y 上，切成单独的一截。网址里的 ˜ 占自己的宽度，不切。"""
+    from app.formats.pdf import _split_accents
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    # 嵌入字体文件才能写 ˆ ˜；按内置 Times 的单字节编码写会换成别的字
+    font = pymupdf.Font("tiro")
+    page.insert_font(fontname="T", fontbuffer=font.buffer)
+    page.insert_text((100, 100), "(\u02c6", fontname="T", fontsize=10)
+    page.insert_text((100 + font.text_length("(", 10), 100), "y", fontname="T", fontsize=10)
+    page.insert_text((100, 140), "nyu.edu/\u02dcroweis", fontname="T", fontsize=10)
+    data = page.get_text("dict")
+    _split_accents(page, data)
+    texts = [span["text"] for block in data["blocks"] for line in block["lines"] for span in line["spans"]]
+    assert texts == ["(", "\u02c6", "y", "nyu.edu/\u02dcroweis"]
 
 
 def test_caption_number_is_restored_inside_style_marks():
