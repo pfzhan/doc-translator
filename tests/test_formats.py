@@ -7372,3 +7372,16 @@ def test_table_split_keeps_space_spans():
                        (pymupdf.Rect(100, 98, 300, 111), pymupdf.Rect(100, 111, 300, 124)), algorithm=True)
     parts = _split_table_blocks([block], (table,))
     assert [part.text for part in parts] == ["Sample minibatch rule.", "We used"]
+
+
+def test_a_split_off_period_keeps_its_own_baseline():
+    """「 .」的空格落在根号里下标的基线上，切开后句点要用自己的起笔点，擦除时才认得到。"""
+    from app.formats.pdf import _split_covered
+
+    span = {"text": " .", "font": "NimbusRomNo9L-Regu", "size": 10.0, "bbox": (455.2, 605.4, 459.5, 620.7),
+            "origin": (455.2, 618.3)}
+    chars = {(" .", 455.2, 618.3): [(455.2, 457.0, (455.2, 618.3)), (457.0, 459.5, (457.0, 613.0))]}
+    bar = pymupdf.Rect(440.5, 610.3, 456.0, 610.7)
+    pieces = _split_covered(span, [bar], chars, ([440.7, 455.2, 457.0], [455.2, 457.0, 459.5]), "math")
+    assert [piece["text"] for piece in pieces] == [" ", "."]
+    assert pieces[1]["origin"] == (457.0, 613.0)
