@@ -4082,14 +4082,28 @@ def _detach_margin_notes(
     data["blocks"] = kept
 
 
+# 这么长的行才算正文行，至少这么多行从同一处（差不过 _EDGE_NEAR）起笔，才是本页正文的边
+_WIDE_TEXT = 40
+_WIDE_ROWS = 3
+_EDGE_NEAR = 2
+
+
 def _wide_block_lines(
     lines: list[FrameLine], refs: list[tuple[dict, dict]], notes: set[int], frame: TextFrame | None,
 ) -> set[int]:
     """伸进页边的宽表、宽图注里落在旁注位置的行。块里另有一行从同一条边起笔、一直写进版心，
-    这一行就是块的一部分（Figure 3.7 的标签，下面一行图注从同一处起笔），不是旁注。"""
+    这一行就是块的一部分（Figure 3.7 的标签，下面一行图注从同一处起笔），不是旁注。
+    另一行从页边深处起笔、写进版心也是：正文不从页边起笔，这一块整个伸进了页边
+    （Figure 6.17 的标签后面接着图注，下一行的 tion of 也在页边）。"""
     if frame is None:
         return set()
     note_lines = {id(refs[index][1]) for index in notes}
+    # 本页正文起笔、收笔最靠外的地方（好几行都在这里）。版心按同侧页投票，个别页的正文比它往外
+    long_lines = [line.rect for line in lines if len(line.text.strip()) >= _WIDE_TEXT]
+    starts = Counter(round(rect.x0) for rect in long_lines)
+    ends = Counter(round(rect.x1) for rect in long_lines)
+    body_x0 = min([frame.x0, *(x for x in starts if _near_votes(starts, x, _EDGE_NEAR) >= _WIDE_ROWS)])
+    body_x1 = max([frame.x1, *(x for x in ends if _near_votes(ends, x, _EDGE_NEAR) >= _WIDE_ROWS)])
     kept: set[int] = set()
     for index in notes:
         block, _line = refs[index]
@@ -4099,10 +4113,11 @@ def _wide_block_lines(
             if id(other) in note_lines:
                 continue
             box = pymupdf.Rect(other["bbox"])
-            if left and abs(box.x0 - rect.x0) <= _WIDE_ALIGN and box.x1 > frame.x0:
+            deep = lines[index].size * 2
+            if left and (abs(box.x0 - rect.x0) <= _WIDE_ALIGN or box.x0 <= body_x0 - deep) and box.x1 > frame.x0:
                 kept.add(index)
                 break
-            if not left and abs(box.x1 - rect.x1) <= _WIDE_ALIGN and box.x0 < frame.x1:
+            if not left and (abs(box.x1 - rect.x1) <= _WIDE_ALIGN or box.x1 >= body_x1 + deep) and box.x0 < frame.x1:
                 kept.add(index)
                 break
     return kept
@@ -4610,8 +4625,8 @@ def _column_right(block: TextBlock, rows: Sequence[pymupdf.Rect], frame: TextFra
     return frame.x1 if frame is not None else float("inf")
 
 
-def _near_votes(counter: Counter[int], value: int) -> int:
-    return sum(count for other, count in counter.items() if abs(other - value) <= 1)
+def _near_votes(counter: Counter[int], value: int, near: int = 1) -> int:
+    return sum(count for other, count in counter.items() if abs(other - value) <= near)
 
 
 def _untranslatable(spans: list[dict], text: str, min_prose: int = 3, displayed: bool = False) -> bool:

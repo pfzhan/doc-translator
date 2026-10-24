@@ -128,6 +128,27 @@ def test_label_of_a_caption_wider_than_the_body_is_not_a_margin_note():
     assert caption.text.startswith("Figure 3.7") and "corpus of 9332" in caption.text
 
 
+def test_a_caption_spanning_the_margin_keeps_its_short_lines():
+    """图注整个伸进页边：标签后面接着的一行从页边深处起笔、写进版心，下一行只剩几个字，
+    也落在旁注的位置（Figure 6.17 … computa- | tion of）。标签和这几个字都留在图注里。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    words = ("The body of this paragraph keeps going across many lines so that the "
+             "frame has enough long lines to vote on where the text starts ").split()
+    for i in range(16):
+        page.insert_text((160, 120 + 12 * i), " ".join(words[(i * 3) % 20:(i * 3) % 20 + 9]), fontsize=10)
+    for row, note in ((2, "tokenization"), (6, "regular"), (10, "edit distance")):
+        page.insert_text((78, 120 + 12 * row), note, fontsize=7)
+    # 标签是黑底白字，排在图注后面画，PyMuPDF 分成单独一行
+    page.insert_text((132, 330), "Computation graph for the function, showing the backward pass computa-", fontsize=9)
+    page.insert_text((78, 341), "tion of it.", fontsize=9)
+    page.insert_text((78, 330), "Figure 6.17", fontsize=9, fontname="hebo")
+    blocks = extract_blocks(doc)
+    assert [block.text for block in blocks if block.side_note] == ["tokenization", "regular", "edit distance"]
+    [caption] = [block for block in blocks if "Computation graph" in block.text]
+    assert caption.text.startswith("Figure 6.17") and caption.text.endswith("computation of it.")
+
+
 def test_displayed_formula_with_a_big_brace_keeps_its_rows():
     from app.formats.pdf import TextBlock, _display_formula_ids
     from app.formats.pdf_frame import TextFrame
