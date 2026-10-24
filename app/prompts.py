@@ -263,6 +263,16 @@ def drop_invented_marks(src: str, dst: str) -> str:
 
 # 送翻文本里的标记：强调、字号、颜色的开关，公式占位符，跨页分界
 _MARK_TOKEN_RE = re.compile(r"\{(?:/?[biuzc]|z\d+|c[0-9a-f]{6}|v\d+|\|)\}")
+_PLACEHOLDER_RE = re.compile(r"\{v\d+\}")
+
+
+def without_marks(text: str) -> str:
+    return _MARK_TOKEN_RE.sub("", text)
+
+
+def placeholders(text: str) -> set[str]:
+    """公式占位符 {v1}、{v2}…"""
+    return set(_PLACEHOLDER_RE.findall(text))
 
 
 def _braces_at_marks(text: str) -> tuple[list[int], list[int]]:

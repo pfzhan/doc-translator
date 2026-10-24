@@ -94,6 +94,39 @@ def _numbers_mismatch(source: str, translation: str) -> bool:
     return bool(src) and bool(dst) and not (src & dst)
 
 
+# 译文和原文的长度比偏离常见值这么多倍，多半是模型把相邻几段串了位，或者译到一半断了。
+# 实测英译中常见值约 0.35，正常译文最低约 0.58 倍，原样照抄的最高约 3 倍
+_RATIO_LOW = 0.45
+_RATIO_HIGH = 4.0
+# 原文去掉标记后至少这么长才比长度，短句的比例本来就散
+_RATIO_MIN_CHARS = 60
+# 算常见值至少要这么多段
+_RATIO_SAMPLES = 3
+
+
+def _length_ratio(source: str, translation: str) -> float | None:
+    length = len(prompts.without_marks(source).strip())
+    if length < _RATIO_MIN_CHARS:
+        return None
+    return len(prompts.without_marks(translation).strip()) / length
+
+
+def typical_ratio(pairs) -> float | None:
+    """一批 (原文, 译文) 的长度比中位数。段数太少时不算。"""
+    ratios = sorted(r for source, translation in pairs if (r := _length_ratio(source, translation)) is not None)
+    if len(ratios) < _RATIO_SAMPLES:
+        return None
+    return ratios[len(ratios) // 2]
+
+
+def misplaced(source: str, translation: str, typical: float | None) -> bool:
+    """译文多半不是这一段的：带着原文没有的公式占位符，或者长度比远离同批的常见值。"""
+    if prompts.placeholders(translation) - prompts.placeholders(source):
+        return True
+    ratio = _length_ratio(source, translation)
+    return bool(typical) and ratio is not None and not typical * _RATIO_LOW <= ratio <= typical * _RATIO_HIGH
+
+
 # 这些状态码说明是我们这边的配置有问题（Key 错、没权限、地址错），重试也不会好，立即报错
 FATAL_STATUS = {401, 403, 404}
 
@@ -285,9 +318,11 @@ class LLMTranslator(Translator):
             return [prompts.clean_output(content)]
         found = prompts.parse_markers(content, len(texts), marker=prompts.pick_marker(texts))
         # 模型漏掉的段落补翻（和插件的 recovery 思路一样，只补缺失的），并行发出。
-        # 数字对不上的也单独重翻：标记数量对得上，内容却可能整体错了一位
+        # 数字、公式占位符、长度对不上的也单独重翻：标记数量对得上，内容却可能错了位
+        typical = typical_ratio((texts[i], found[i]) for i in found)
         missing = [i for i in range(len(texts))
-                   if i not in found or _numbers_mismatch(texts[i], found[i])]
+                   if i not in found or _numbers_mismatch(texts[i], found[i])
+                   or misplaced(texts[i], found[i], typical)]
         if missing:
             redone = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in missing))
             for i, [text] in zip(missing, redone):

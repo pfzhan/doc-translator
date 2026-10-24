@@ -81,6 +81,44 @@ def test_shifted_batch_items_are_retranslated_one_by_one():
     assert len(singles) == 2
     run(tr.aclose())
 
+def test_items_holding_a_neighbors_translation_are_retranslated():
+    """模型漏了一段、后面几段串了位：译文带着原文没有的公式占位符，或者长度比远离同批的常见值。"""
+    singles = []
+
+    async def handler(request):
+        user = json.loads(request.content)["messages"][-1]["content"]
+        if "[[source_end]]" in user:
+            content = (
+                "[[p0]]\n{v1} 将简单循环神经网络表示为前馈网络。前一时间步的隐藏层{v2}与权重矩阵 U 相乘。\n"
+                "[[p1]]\n{v1} 将简单循环神经网络表示为前馈网络。前一时间步的隐藏层{v2}与权重矩阵 U 相乘。\n"
+                "[[p2]]\nRNN 中的前向推理几乎与前馈网络完全相同, 为了根据输入 {v2} 计算输出 {v1}。\n"
+                "[[p3]]\n{v1}{v2} 前向推理。\n"
+                "[[p4]]\n我们分别将输入层, 隐藏层和输出层的维度记为 {v1}, {v2} 和 {v3}, 由此得到三个参数矩阵。"
+            )
+        else:
+            singles.append(user)
+            content = "单独重翻"
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    tr = make_openai(handler)
+    out = run(tr.translate_batch([
+        "Adding this temporal dimension makes RNNs appear to be more complex than non-recurrent "
+        "architectures. But in reality, they are not all that different.",
+        "{v1} Simple recurrent neural network illustrated as a feedforward network. The hidden "
+        "layer{v2} from the prior time step is multiplied by weight matrix U.",
+        "Inference in RNNs",
+        "Forward inference (mapping a sequence of inputs to a sequence of outputs) in an RNN is nearly "
+        "identical to what we have already seen with feedforward networks, to compute an output {v1} "
+        "for an input {v2}.",
+        "Let us refer to the input, hidden and output layer dimensions as {v1}, {v2}, and {v3} "
+        "respectively, which gives three parameter matrices.",
+    ]))
+    # 第 0、2 段带着别段的占位符，第 3 段只译出一个词，各单独重翻；第 1、4 段照收
+    assert [text == "单独重翻" for text in out] == [True, False, True, True, False]
+    assert len(singles) == 3
+    run(tr.aclose())
+
+
 def test_error_text_tolerates_non_dict_json():
     """中转站的错误响应可能是 JSON 数组 / 纯字符串 / HTML，都不能抛 AttributeError。"""
     resp = httpx.Response(500, json=[{"error": "upstream boom"}])

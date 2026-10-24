@@ -13,7 +13,7 @@ from typing import Callable
 
 from . import glossary, langdetect
 from .prompts import drop_added_braces, drop_invented_marks, strip_control_marks, tidy_marks
-from .translators import Translator, TranslatorError
+from .translators import Translator, TranslatorError, misplaced, typical_ratio
 
 CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "cache.sqlite3"
 # 候选术语少于这么多条的文档（短文、对话）不值得多一次请求
@@ -268,6 +268,10 @@ class Runner:
         done_map = {} if self.fresh else self.cache.get_many(prefix, need)
         # 整句英文回显进过缓存的话，下次重排仍是英文。丢掉，让这次重新翻译。
         echoed = [src for src, dst in done_map.items() if _is_prose_echo(src, dst)]
+        # 以前批量翻译时串了位的译文也进过缓存，同样丢掉重翻。只排版时没法重翻，留着
+        if not self.cache_only:
+            typical = typical_ratio(done_map.items())
+            echoed += [src for src, dst in done_map.items() if src not in echoed and misplaced(src, dst, typical)]
         if echoed:
             done_map = {src: dst for src, dst in done_map.items() if src not in set(echoed)}
             drop = getattr(self.cache, "drop_many", None)

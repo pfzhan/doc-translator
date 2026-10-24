@@ -503,3 +503,50 @@ def test_a_marker_the_model_made_up_is_dropped():
     assert drop_invented_marks("S: a start symbol", "S: 起始符号\n[[toolong]]") == "S: 起始符号"
     assert drop_invented_marks("as follows.", "如下。[[/INST]]") == "如下。"
     assert drop_invented_marks("write [[link]] here", "在这里写 [[link]]") == "在这里写 [[link]]"
+
+
+def test_a_cached_translation_of_a_neighbor_is_retranslated():
+    """以前批量翻译串了位的译文进过缓存：带着原文没有的公式占位符，或者长度远离同篇常见值。丢掉重翻。"""
+    from app.runner import Runner
+
+    class Cache:
+        def __init__(self):
+            self.d = {}
+
+        def get_many(self, prefix, texts):
+            return {t: self.d[(prefix, t)] for t in texts if (prefix, t) in self.d}
+
+        def put_many(self, prefix, pairs):
+            self.d.update({(prefix, s): t for s, t in pairs.items()})
+
+        def drop_many(self, prefix, texts):
+            for t in texts:
+                self.d.pop((prefix, t), None)
+
+    asked = []
+
+    def handler(request):
+        user = json.loads(request.content)["messages"][-1]["content"]
+        asked.append(user)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "重新翻译的译文"}}]})
+
+    svc = {"id": "svc-a", "provider": "openai", "api_key": "k", "model": "m", "base_url": "https://r.example.com/v1"}
+    tr = create_translator(svc, "zh-CN", "en", transport=httpx.MockTransport(handler))
+    cache = Cache()
+    good = {
+        "The hidden layer from the previous time step provides a form of memory, or context.":
+            "前一个时间步的隐藏层提供了一种记忆或上下文。",
+        "Critically, this approach does not impose a fixed-length limit on this prior context.":
+            "关键在于, 这种方法不会对先前的上下文施加固定长度的限制。",
+        "Given an input vector and the values for the hidden layer from the previous time step.":
+            "给定一个输入向量和前一个时间步隐藏层的值。",
+    }
+    shifted = "Adding this temporal dimension makes RNNs appear to be more complex than before."
+    cut = "After putting in place the structures, systems, processes, and teams described above."
+    cache.d.update({(tr.cache_key, s): t for s, t in good.items()})
+    cache.d[(tr.cache_key, shifted)] = "{v1} 将简单循环神经网络表示为前馈网络。"
+    cache.d[(tr.cache_key, cut)] = "在建立"
+    out = run(Runner(tr, cache=cache).translate_all([*good, shifted, cut]))
+    assert out == [*good.values(), "重新翻译的译文", "重新翻译的译文"]
+    sent = "".join(asked)
+    assert shifted in sent and cut in sent and not any(source in sent for source in good)
