@@ -290,3 +290,14 @@ def test_braces_the_model_added_around_marks_are_dropped():
     assert drop_added_braces(src, "采样一组 {{i}o{/i}{v1}, {i}o{/i}{v2}}") == "采样一组 {{i}o{/i}{v1}, {i}o{/i}{v2}}"
     # 不贴着标记的花括号不动
     assert drop_added_braces("{b}x{/b}", "{b}x{/b} 和 {n,m}") == "{b}x{/b} 和 {n,m}"
+
+
+def test_marks_written_with_spaces_inside_are_restored():
+    """模型偶尔写成 { i}m{/i}、{ |}，认不出是标记。原文有的标记改回标准写法，原文没有的不动。"""
+    from app.prompts import tidy_marks
+
+    src = "a simplified model {i}m{/i} between models{v1} and{v2}, the {|} lower"
+    dst = "简化模型{ i}m{/i}, 在两个模型{v1 }和{ v2}之间较{ |}低 {/ i}"
+    assert tidy_marks(src, dst) == "简化模型{i}m{/i}, 在两个模型{v1}和{v2}之间较{|}低 {/i}"
+    assert tidy_marks("a set {n,m} of {b}x{/b}", "集合 { b} 和 { n,m}") == "集合 {b} 和 { n,m}"
+    assert tidy_marks("plain text", "字面的 { i} 不动") == "字面的 { i} 不动"
