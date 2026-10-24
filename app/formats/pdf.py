@@ -2419,6 +2419,7 @@ def _cross_page_units(
     geometries: list[PageGeometry] | None = None,
     halt_ids: set[int] | None = None,
     ignore_ids: set[int] | None = None,
+    aside_ids: set[int] = frozenset(),
 ) -> list[list[TextBlock]]:
     """把跨页续段两两合并成翻译单元（返回块列表的列表，每单元 1~2 块）。
 
@@ -2426,6 +2427,7 @@ def _cross_page_units(
     视为被页边界切断的同一段。页脚脚注（字号明显小于正文，或小一号且以编号、链接开头）和指定跳过的块不参与。
     同一栏的续段照旧合并。多栏时，只再放开「本页最右栏的末块接到下页最左栏的首块」。
     ignore_ids 是页眉页脚，不占页末、也不挡页首。跨栏标题和整表同样不占栏首栏尾。
+    aside_ids 是图和图注：下一页先排了一张图，被切断的那段接在图注下面。
     """
     by_page: dict[int, list[TextBlock]] = {}
     for b in blocks:
@@ -2459,9 +2461,9 @@ def _cross_page_units(
     pages = sorted(by_page)
     used: set[int] = {id(tail) for tail in extra.values()}
     for pno in pages:
-        body = _page_edge_blocks(by_page[pno], median, ignored)
+        body = _page_edge_blocks(by_page[pno], median, ignored | aside_ids)
         nxt = by_page.get(pno + 1) or []
-        nxt_body = _page_edge_blocks(nxt, median, ignored)
+        nxt_body = _page_edge_blocks(nxt, median, ignored | aside_ids)
         first = _column_page_start(nxt_body, geometries)
         end = _column_page_end(body, geometries)
         head = (
@@ -8752,15 +8754,18 @@ def _plan_document(src: Path, src_doc: pymupdf.Document, runner, layout_model: s
         id(b) for b, role in zip(blocks, roles)
         if role is not Role.BODY or b.side_note or b.leader is not None or b.entry
     } | margin_ids
+    aside_ids = {id(b) for b, role in zip(blocks, roles) if role in (Role.CAPTION, Role.FIGURE)}
     # 跨页合并照旧把格子当正文看：栏底是格子时不接下一页，格子上面的表头、图里的字不能顶上去当页末
     # 跨页的例句：下一页接着的半句也留原文。先让例句照正文接段，找出接在它后面的块
     if examples:
         skip_ids |= {
             id(block)
-            for unit in _cross_page_units(blocks, median, skip_ids - cell_ids - examples, geometries, halt_ids, margin_ids)
+            for unit in _cross_page_units(
+                blocks, median, skip_ids - cell_ids - examples, geometries, halt_ids, margin_ids, aside_ids,
+            )
             for index, block in enumerate(unit) if any(id(head) in examples for head in unit[:index])
         }
-    units = _cross_page_units(blocks, median, skip_ids - cell_ids, geometries, halt_ids, margin_ids)
+    units = _cross_page_units(blocks, median, skip_ids - cell_ids, geometries, halt_ids, margin_ids, aside_ids)
     block_kind = {id(b): k for b, k in zip(blocks, kinds)}
 
     sent_texts: list[str] = []

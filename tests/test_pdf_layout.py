@@ -177,6 +177,17 @@ def test_cross_page_joins_the_right_column_end_to_the_next_left_column():
     assert all(len(unit) == 1 for unit in stopped)
 
 
+def test_a_paragraph_continues_below_a_figure_at_the_top_of_the_next_page():
+    """下一页先排了一张图和图注，被页边界切断的那段接在图注下面。"""
+    end = _block("you can see the ex-", 0, pymupdf.Rect(40, 700, 300, 712))
+    caption = _block("Windowing, showing a 25 ms window.", 1, pymupdf.Rect(60, 260, 300, 272))
+    rest = _block("tracted windowed signal looks just like the original.", 1, pymupdf.Rect(40, 300, 300, 312))
+    blocks = [end, caption, rest]
+    assert all(len(unit) == 1 for unit in _cross_page_units(blocks, 10.0))
+    units = _cross_page_units(blocks, 10.0, aside_ids={id(caption)})
+    assert [end, rest] in units and [caption] in units
+
+
 def test_the_left_column_end_skips_the_author_name_over_the_right_column():
     """右栏顶上是比正文大的署名，左栏末句接到署名下面的右栏正文，不接署名。"""
     geo = _two_columns()
