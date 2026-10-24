@@ -623,6 +623,66 @@ def _mark_radicands(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.Re
         line["spans"] = out
 
 
+# 叠在词上面的长箭头、横线最多盖住这么多个字：再长的是表格里的分隔线
+_OVERLAY_CHARS = 12
+
+
+def _mark_overlays(page: pymupdf.Page, data: dict) -> None:
+    """用字形画在词上面的向量箭头（esvect 的 \vv{king} 提出来是「#    »」）和上横线：没有字母数字、
+    墨迹是一条比一个字宽的细带，紧贴在别的词的墨迹上面。它和盖住的字是一个式子，标成公式，
+    不然箭头当成字排进译文，「# » man」叠在一起。"""
+    for block in data.get("blocks", []):
+        spans = [span for line in block.get("lines", []) for span in line.get("spans", [])]
+        overlays = []
+        for span in spans:
+            text = str(span.get("text") or "").strip()
+            ink = span.get("ink")
+            size = float(span.get("size") or 10.0)
+            if not text or ink is None or any(char.isalnum() for char in text):
+                continue
+            box = pymupdf.Rect(ink)
+            if box.width >= size * 0.8 and box.height <= size * 0.45:
+                overlays.append((span, box, size))
+        if not overlays:
+            continue
+        chars = _char_boxes(page)
+        for overlay, box, size in overlays:
+            covered: list[tuple[dict, pymupdf.Rect]] = []
+            for span in spans:
+                ink = span.get("ink")
+                if span is overlay or ink is None or not any(char.isalpha() for char in str(span.get("text") or "")):
+                    continue
+                word = pymupdf.Rect(ink)
+                if min(word.x1, box.x1) - max(word.x0, box.x0) <= 0:
+                    continue
+                # 按基线比：整个 span 的墨迹顶会被后面带升部的字（close 的 l）抬高。
+                # 箭头自己的基线离词的基线不到一个字高；上一行的标点、省略号、填空横线隔着一整行
+                base = float(span["origin"][1])
+                lift = base - float(overlay["origin"][1])
+                if 0 <= lift <= size * 0.8 and base - size * 1.3 <= box.y0 and box.y1 <= base - size * 0.45:
+                    covered.append((span, word))
+            if not covered:
+                continue
+            boxes = [
+                (x0, x1) for span, _word in covered
+                for x0, x1, _origin in chars.get((str(span["text"]), round(span["origin"][0], 1), round(span["origin"][1], 1))) or []
+                if box.x0 <= (x0 + x1) / 2 <= box.x1
+            ]
+            if not boxes or len(boxes) > _OVERLAY_CHARS:
+                continue
+            under = pymupdf.Rect(min(x0 for x0, _ in boxes), box.y0, max(x1 for _, x1 in boxes), box.y1)
+            overlay["math"] = True
+            targets = {id(span) for span, _word in covered}
+            for line in block.get("lines", []):
+                out: list[dict] = []
+                for span in line.get("spans", []):
+                    if id(span) in targets:
+                        out.extend(_split_covered(span, [under], chars, ([under.x0], [under.x1]), "math"))
+                    else:
+                        out.append(span)
+                line["spans"] = out
+
+
 # 单独画出来的重音字形（\hat、\bar、Montr\'eal 的 ´）。ASCII 的 ^ ~ ` 在正文、代码里另有用处，不算
 _STACKED_ACCENTS = "ˆ˜¯´˙¨ˇ˘˚"
 # 占自己宽度的 ˆ ˜ 是代码、正则、网址里的 ^ ~（r"^The"、nyu.edu/~roweis），等宽字体也画成这两个字形
@@ -3995,6 +4055,7 @@ def _extract(
         _attach_ink(page, data)
         _mark_underlines(page, data, scans[-1].strokes)
         _mark_radicands(page, data, scans[-1].strokes)
+        _mark_overlays(page, data)
         _split_accents(page, data)
         # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
         recover_type3_page(page, data, type3)

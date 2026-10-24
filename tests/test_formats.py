@@ -7662,3 +7662,35 @@ def test_an_index_entry_ends_at_its_page_numbers():
 
     blocks = [blk("Frump, 497", 100, True), blk("fully-connected, 157", 110, True)]
     assert len(_merge_continuations(blocks)) == 2
+
+
+def test_a_glyph_arrow_over_a_word_marks_both_as_formula():
+    """esvect 的 \\vv{woman} 提出来是「#    »」：没有字母、墨迹是一条细带、基线比词高不到一个字，
+    紧贴在 woman 上面。箭头和 woman 是式子，后面的 is close to 照翻。上一行的标点不算。"""
+    from app.formats.pdf import _mark_overlays
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((139.5, 597.2), "woman is close to", fontname="tiro", fontsize=9)
+    page.insert_text((140.5, 593.4), "#    »", fontname="tiro", fontsize=9)
+    page.insert_text((139.5, 586.4), "end of the line above, ...", fontname="tiro", fontsize=9)
+    page.insert_text((172.0, 586.4), "____", fontname="tiro", fontsize=9)
+    data = page.get_text("dict")
+    for block in data["blocks"]:
+        for line in block["lines"]:
+            for span in line["spans"]:
+                if span["text"].startswith("#"):
+                    span["ink"] = (140.5, 589.8, 165.8, 592.5)
+                elif span["text"].startswith("woman"):
+                    span["ink"] = (139.5, 591.1, 203.7, 597.3)
+                elif span["text"].startswith("_"):
+                    span["ink"] = (172.0, 586.0, 190.0, 586.6)
+                else:
+                    span["ink"] = (139.5, 580.0, 230.0, 586.6)
+    data["blocks"] = [{"type": 0, "lines": [line for block in data["blocks"] for line in block["lines"]]}]
+    _mark_overlays(page, data)
+    spans = [span for line in data["blocks"][0]["lines"] for span in line["spans"]]
+    marked = {span["text"].strip(): bool(span.get("math")) for span in spans}
+    assert marked["woman"] and marked["#    »"]
+    assert not marked["is close to"]
+    assert not marked["end of the line above, ..."] and not marked["____"]
