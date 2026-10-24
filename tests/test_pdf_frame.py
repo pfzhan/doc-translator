@@ -151,6 +151,23 @@ def test_displayed_formula_with_a_big_brace_keeps_its_rows():
     assert ids == {id(brace), id(condition)}
 
 
+def test_a_centered_wide_formula_close_to_the_left_edge_is_displayed():
+    """居中排的宽式子左边只空出不到两个字宽，和右边空的一样多。"""
+    from app.formats.pdf import TextBlock, _display_formula_ids
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import PageGeometry
+
+    rect = pymupdf.Rect(160.5, 640, 457.7, 655)
+    formula = TextBlock(
+        page=0, rect=rect, line_rects=[rect], text="", size=10, color="#000000", bold=False,
+        span_lines=[[{"text": "p(x1,...,xn) =", "font": "CMMI10", "size": 10.0},
+                     {"text": "Y", "font": "CMEX10", "size": 10.0},
+                     {"text": "p(xi|R(q) ; Answer the following question... ; q ;x<i)", "font": "CMMI10", "size": 10.0}]],
+    )
+    geo = PageGeometry.from_rects(612, [], [], 792, frame=TextFrame(142, 475, 111, 719, 10))
+    assert _display_formula_ids([formula], [geo]) == {id(formula)}
+
+
 def test_body_cut_at_a_margin_note_is_joined_back():
     from app.formats.pdf import _rejoin_note_cuts
 
