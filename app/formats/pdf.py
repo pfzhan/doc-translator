@@ -4281,7 +4281,9 @@ def _extract(
                 # 模型重排这种行常把数学意思改掉
                 displayed = len(group) == 1 and _displayed(rect, spans, margins)
                 fraction = group[0] in formula_rows
-                if not in_cell and (fraction or _untranslatable(spans, text, _DISPLAY_PROSE if displayed else 3, displayed)) \
+                # 索引条目后面的一串页码不算进字母占比：perplexity, 27, 76, 88, 203 是一条词目，不是一行数
+                judged = _INDEX_REF_RE.sub("", text) if index_page else text
+                if not in_cell and (fraction or _untranslatable(spans, judged, _DISPLAY_PROSE if displayed else 3, displayed)) \
                         and not _wraps_from_above(blocks, pno, rect, text, row_ends, frames[pno], index_page):
                     # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
                     # 捐了会被擦掉，而这些行没有占位符、不会重画。
