@@ -53,6 +53,16 @@ def test_decimal_number_is_not_split_at_its_point():
     assert not any(line.rstrip().endswith("2.") for line in lines)
 
 
+def test_a_long_hyphenated_word_breaks_after_its_hyphen():
+    """(Super-NaturalInstructions 整个放不下时，前一行只能早早折断，汉字被拉开。连字符两边都是
+    三个字母以上的词时可以在连字符后折行；GPT-4、x-axis 不折。"""
+    text = "由于许多任务彼此相似(Super-NaturalInstructions 包含 25 个数据集"
+    lines = break_lines(text, em=10, max_width=200, formula_widths={})
+    assert lines[0].endswith("(Super-") and "".join(lines) == text
+    lines = break_lines("由于许多任务彼此相似, GPT-4 和 x-axis", em=10, max_width=110, formula_widths={})
+    assert not any(line.endswith(("GPT-", "x-")) for line in lines)
+
+
 def test_punctuation_does_not_start_a_line():
     lines = break_lines("甲乙丙丁。", em=10, max_width=40, formula_widths={})
     assert lines == ["甲乙丙", "丁。"]

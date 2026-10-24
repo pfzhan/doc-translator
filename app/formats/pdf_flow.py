@@ -639,12 +639,28 @@ def _tokenize(text: str) -> list[str]:
             # 2.07、10,000 里夹在数字中间的点和逗号属于这个数，不能从这里断行
             while end < length and (_is_word_char(text[end]) or _inside_number(text, end)):
                 end += 1
+                if _hyphen_break(text, end):
+                    break
             tokens.append(text[index:end])
             index = end
             continue
         tokens.append(char)
         index += 1
     return tokens
+
+
+# 连字符两边至少这么多个字母才能在它后面折行：Super-|NaturalInstructions、pre-|training。
+# GPT-4、x-axis 不折
+_HYPHEN_SIDE = 3
+_HYPHEN_LEFT_RE = re.compile(rf"[A-Za-z]{{{_HYPHEN_SIDE}}}-$")
+_HYPHEN_RIGHT_RE = re.compile(rf"[A-Za-z]{{{_HYPHEN_SIDE}}}")
+
+
+def _hyphen_break(text: str, end: int) -> bool:
+    """text[:end] 以连字符收尾，连字符可以折行。"""
+    return bool(_HYPHEN_LEFT_RE.search(text, max(0, end - _HYPHEN_SIDE - 1), end)) and bool(
+        _HYPHEN_RIGHT_RE.match(text, end)
+    )
 
 
 def _is_word_char(char: str) -> bool:
