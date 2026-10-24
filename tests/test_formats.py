@@ -4137,6 +4137,9 @@ def test_section_and_item_numbers_are_not_sent_for_translation():
     assert _peel_number("B.3.2. DeepSeek-R1 Cold Start", "p") == ("B.3.2.", "DeepSeek-R1 Cold Start")
     assert _peel_number("4 Experiments", "h2") == ("4", "Experiments")
     assert _peel_number("{b}3{/b} {b}Method{/b}", "h2") == ("{b}3{/b}", "{b}Method{/b}")
+    # 粗体从编号延续到文字：编号关上，文字重开
+    assert _peel_number("{b}17.2.1 The Encoder{/b} ENCODEC {b}model{/b}", "h3") == (
+        "{b}17.2.1{/b}", "{b}The Encoder{/b} ENCODEC {b}model{/b}")
     assert _peel_number("1.{i} Intractability{/i}: the case where", "p") == ("1.", "{i} Intractability{/i}: the case where")
     assert _peel_number("(a) Let u be the view of least cost.", "p") == ("(a)", "Let u be the view of least cost.")
     assert _peel_number("2 samples were drawn from each model and we report the mean.", "p")[0] == ""

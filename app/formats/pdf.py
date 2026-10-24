@@ -7676,7 +7676,16 @@ def _peel_number(sent: str, kind: str) -> tuple[str, str]:
     sure = bool(re.fullmatch(r"\d{1,3}\.|\d{1,3}(?:\.\d{1,3})+\.|[A-Z](?:\.\d{1,3})+\.?|\(?[a-z]\)|\(\d{1,2}\)", number))
     if not sure and kind == "p" and (len(sent) > 80 or _ends_sentence(sent)):
         return "", sent
-    return m.group(0), rest.lstrip()
+    # 粗体从编号一直延续到标题文字（{b}17.2.1 The Encoder{/b}）：编号这边关上，文字这边重开
+    closed = re.findall(r"\{/([bizu])\}", m.group(3))
+    still_open: list[str] = []
+    for mark in re.findall(r"\{[bizu]\d*\}", m.group(1)):
+        if mark[1] in closed:
+            closed.remove(mark[1])
+        else:
+            still_open.append(mark)
+    label = m.group(0) + "".join(f"{{/{mark[1]}}}" for mark in reversed(still_open))
+    return label, "".join(still_open) + rest.lstrip()
 
 
 def _with_label(label: str, translation: str) -> str:
