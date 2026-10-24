@@ -10,6 +10,7 @@
 import asyncio
 import bisect
 import contextlib
+import contextvars
 import functools
 import hashlib
 import html
@@ -205,7 +206,11 @@ def _join_lines(lines: list[str]) -> str:
             continue
         out, line = _carry_marks(out, line)
         if out.endswith("-") and re.match(r"[a-zA-ZÀ-ÿ]", line):
-            out = out[:-1] + line  # 行尾连字符断词（德语等断词后首字母可能大写）
+            # 行尾连字符断词接回去。数字后面的是名字里本来的连字符（Claude-3.7-|Sonnet），留着。
+            # 小写字母接大写的（Distill-|Qwen、Mc-|Callum）看全文：接起来的词在别处出现过才是断词
+            kept = out[-2:-1].isdigit() or (out[-2:-1].islower() and line[0].isupper()
+                                            and _camel_join(out, line) not in _CAMEL_WORDS.get())
+            out = out + line if kept else out[:-1] + line
         elif CJK_RE.search(out[-1]) or CJK_RE.search(line[0]):
             out += line
         elif line[:1] in ")]}>，。；：、）】」.,":
@@ -215,6 +220,17 @@ def _join_lines(lines: list[str]) -> str:
         else:
             out += " " + line
     return out
+
+
+# 全文里大小写夹在中间的词（McCallum、PropBank）。TeX 在大写字母前断词时，接回去要去掉连字符
+_CAMEL_WORDS: contextvars.ContextVar[frozenset[str]] = contextvars.ContextVar("camel_words", default=frozenset())
+_CAMEL_RE = re.compile(r"[A-Za-z]*[a-z][A-Z][A-Za-z]*")
+
+
+def _camel_join(out: str, line: str) -> str:
+    left = re.search(r"[A-Za-z]+(?=-$)", out)
+    right = re.match(r"[A-Za-z]+", line)
+    return (left.group() if left else "") + (right.group() if right else "")
 
 
 def _carry_marks(out: str, line: str) -> tuple[str, str]:
@@ -8606,10 +8622,20 @@ class _PdfPlan:
 
 
 def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
-    """送翻前的部分：读版面、定角色、并跨页段落，给每个单元打好占位符。"""
+    """送翻前的部分：读版面、定角色、并跨页段落，给每个单元打好占位符。
+    断行处的连字符要不要留，看全文里有没有接起来的词（见 _join_lines），整个分析期间都按这一篇的词。"""
     src_doc = pymupdf.open(src)
     if src_doc.needs_pass:
         raise ValueError("PDF 有密码保护，暂不支持")
+    words = frozenset(word for page in src_doc for word in _CAMEL_RE.findall(page.get_text("text")))
+    token = _CAMEL_WORDS.set(words)
+    try:
+        return _plan_document(src, src_doc, runner, layout_model)
+    finally:
+        _CAMEL_WORDS.reset(token)
+
+
+def _plan_document(src: Path, src_doc: pymupdf.Document, runner, layout_model: str) -> _PdfPlan:
     # 逐页读线、表、字占准备时间的大半，按页报进度
     blocks, frames, scans = _extract(
         src_doc, lambda done, total: runner.report_stage("分析版面", done, total, "页"),

@@ -574,9 +574,20 @@ def test_epub_nav_in_spine_parsed_once(tmp_path):
 
 
 def test_pdf_hyphen_joins_uppercase_word():
-    """行尾连字符断词：德语断词后首字母大写也要合并掉连字符。"""
-    assert _join_lines(["Donau-", "Dampfschiff"]) == "DonauDampfschiff"
+    """行尾连字符断词接回去，全大写的词也一样。数字后面的、小写字母接大写的是名字里本来的连字符，留着。"""
     assert _join_lines(["word-", "wrap"]) == "wordwrap"
+    assert _join_lines(["INTER-", "NATIONAL"]) == "INTERNATIONAL"
+    assert _join_lines(["Claude-3.7-", "Sonnet"]) == "Claude-3.7-Sonnet"
+    assert _join_lines(["DeepSeek-R1-Distill-", "Qwen-7B"]) == "DeepSeek-R1-Distill-Qwen-7B"
+    assert _join_lines(["Donau-", "Dampfschiff"]) == "Donau-Dampfschiff"
+    # TeX 在大写字母前断开的 McCallum：全文别处写的是 McCallum，连字符去掉
+    from app.formats.pdf import _CAMEL_WORDS
+    token = _CAMEL_WORDS.set(frozenset({"McCallum"}))
+    try:
+        assert _join_lines(["({c0000ff}Mc-", "Callum and"]) == "({c0000ff}McCallum and"
+        assert _join_lines(["Witten-", "Bell discounting"]) == "Witten-Bell discounting"
+    finally:
+        _CAMEL_WORDS.reset(token)
     assert _join_lines(["hello", "world"]) == "hello world"  # 非断词只是换行
     assert _join_lines(["the {v1}", ". This"]) == "the {v1}. This"
     assert _join_lines(["end", ", next"]) == "end, next"
