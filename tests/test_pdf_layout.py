@@ -239,6 +239,29 @@ def test_translation_stops_before_a_ruled_box_on_the_right(tmp_path):
     assert right_edge < box.x0
 
 
+def test_translation_stops_before_text_left_in_place_on_the_right(tmp_path):
+    """不属于任何块、原处留着的字（式号）也挡住右扩。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=400)
+    page.insert_text((40, 52), "Short left", fontsize=12)
+    page.insert_text((200, 52), "(17)", fontsize=12)
+    src = tmp_path / "kept.pdf"
+    doc.save(src)
+
+    geo = PageGeometry.from_rects(400, [pymupdf.Rect(40, 40, 360, 54)], height=400)
+    block = TextBlock(
+        page=0, rect=pymupdf.Rect(40, 40, 90, 54), line_rects=[pymupdf.Rect(40, 40, 90, 54)],
+        text="Short left", size=12, color="#000000", bold=False,
+    )
+    translation = "这是一段很长的译文一定会向右铺开直到碰上右边留着的式号才停下来"
+    out = _render_translated(src, [block], [translation], "zh-CN", geometries=[geo])
+    lines = [ln for blk in out[0].get_text("dict")["blocks"] if blk.get("type") == 0 for ln in blk["lines"]]
+    zh = [ln for ln in lines if any("\u4e00" <= ch <= "\u9fff" for ch in "".join(s["text"] for s in ln["spans"]))]
+    assert zh
+    assert "(17)" in out[0].get_text()
+    assert max(ln["bbox"][2] for ln in zh) < 200
+
+
 def test_three_gutters_make_three_columns():
     left = _stack(30, 110, 40)
     middle = _stack(140, 220, 40)

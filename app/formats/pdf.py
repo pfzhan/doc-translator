@@ -6849,7 +6849,8 @@ def _fit_page_margins(
 
 
 def _kept_ink(page: "pymupdf.Page", blocks: list[TextBlock]) -> list[pymupdf.Rect]:
-    """不属于任何块、原处留着不擦的字，如提取时丢掉的行间公式。要在擦除之前取。"""
+    """擦除以后原处还留着、不属于任何块的字，如提取时丢掉的行间公式。
+    目录的点线、随公式图搬走的字形已经擦掉，不在其内。"""
     boxes = [rect + (-1, -1, 1, 1) for block in blocks for rect in (block.rect, *block.line_rects)]
     kept = []
     for word in page.get_text("words"):
@@ -6858,6 +6859,11 @@ def _kept_ink(page: "pymupdf.Page", blocks: list[TextBlock]) -> list[pymupdf.Rec
         if not any(center in box for box in boxes):
             kept.append(rect)
     return kept
+
+
+def _on_rows(ink: pymupdf.Rect, rows: Sequence[pymupdf.Rect]) -> bool:
+    """这处字和某一行的上下交叠过它自己高度的一半：在这一行的旁边，不是上一行、下一行。"""
+    return any(min(ink.y1, row.y1) - max(ink.y0, row.y0) > ink.height * 0.5 for row in rows)
 
 
 def _room_below(
@@ -7042,11 +7048,6 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         # 公式贴的是擦除前打包的原页，不受影响。点阵字的字形是全文共用的，擦除、裁公式的过滤会改到它，
         # 这一页写完原样写回
         glyphs = type3_glyphs(page) if mid_map else {}
-        # 跨页续写的段落要让开原处留着的字
-        kept = (
-            _kept_ink(page, same_page)
-            if any(t == SPILL_TAIL or id(b) in continuations for b, t in items) else []
-        )
         erasure = Erasure(math=_span_is_math)
         for b, _ in items:
             erasure.add_block(b.span_lines, b.line_rects or [b.rect])
@@ -7073,6 +7074,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 if part.get("bbox") is not None and int(part.get("page", f.get("page", pno))) == pno
             )
         erase(page, erasure)
+        # 擦完还在原处的字（丢掉的行间公式、式号），译文右扩、续写都要让开
+        kept = _kept_ink(page, same_page)
         # 重写内容流会把 /Resources 改写成内联字典；排版器写入后 /XObject 条目上百个，
         # 这么大的内联嵌套字典在保存的 GC（garbage≥3）里会被写坏（第一个表单的条目
         # 指向字体流，内容静默丢失）。规范成间接引用避开这个 MuPDF bug。
@@ -7104,6 +7107,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             obstacles = [ob.rect for ob in same_page if ob is not block]
             # 目录的页码留在原页上，译文不能写过去
             obstacles += [ob.leader.number for ob in same_page if ob.leader is not None]
+            obstacles += [ink for ink in kept if _on_rows(ink, block.line_rects or [block.rect])]
             if geo is not None:
                 # 带框线的表和算法框画着外框，右扩也不能压上去
                 obstacles = [*obstacles, *geo.figures, *(table.rect for table in geo.tables)]
