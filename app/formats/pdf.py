@@ -4005,7 +4005,8 @@ def _extract(
                 # 模型重排这种行常把数学意思改掉
                 displayed = len(group) == 1 and _displayed(rect, spans, margins)
                 fraction = group[0] in formula_rows
-                if not in_cell and (fraction or _untranslatable(spans, text, _DISPLAY_PROSE if displayed else 3)):
+                if not in_cell and (fraction or _untranslatable(spans, text, _DISPLAY_PROSE if displayed else 3)) \
+                        and not _wraps_from_above(blocks, pno, rect, text, frames[pno]):
                     # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
                     # 捐了会被擦掉，而这些行没有占位符、不会重画。
                     if NO_TEXT_RE.match(text) and blocks and blocks[-1].page == pno:
@@ -4013,7 +4014,7 @@ def _extract(
                     continue
                 # 字号取最长的 span。颜色、粗细按字数取占多数的：逐词一个 span 的书里，
                 # 最长的一截常是黑底白字的图注标签 Figure 10.3，整条图注会写成白字
-                main = max(spans, key=lambda s: len(s["text"]))
+                main = _main_span([items[i][2] for i in group])
                 color = _by_chars(spans, lambda s: s["color"])
                 bold = _by_chars(spans, lambda s: bool(s["flags"] & 16) or "Bold" in s["font"])
                 if in_cell:
@@ -4260,6 +4261,43 @@ def _cut_runs(group: list[int], marked: set[int]) -> list[list[int]]:
         else:
             runs.append([index])
     return runs
+
+
+def _main_span(lines: list[list[dict]]) -> dict:
+    """定块字号、颜色用的那一截：基线上正文字体里最长的一截。式子多的行里最长的常是下标
+    （d_model 的 model 用正文字体排成小字），按它算字号只有正文的一半，和上一行接不上。"""
+    kept: list[dict] = []
+    for spans in lines:
+        weights: Counter[int] = Counter()
+        for span in spans:
+            weights[round(float(span["origin"][1]))] += len(span["text"].strip())
+        base = weights.most_common(1)[0][0] if weights else None
+        kept += [
+            span for span in spans
+            if base is None or abs(float(span["origin"][1]) - base) <= float(span["size"]) * 0.2
+        ]
+    words = [span for span in kept if not _span_is_math(span) and span["text"].strip()]
+    pool = words or kept or [span for spans in lines for span in spans]
+    return max(pool, key=lambda span: len(span["text"]))
+
+
+def _wraps_from_above(
+    blocks: list[TextBlock], pno: int, rect: pymupdf.Rect, text: str, frame: TextFrame | None,
+) -> bool:
+    """以小写正文词起头、从上一行正文的左缘接着写的式子行（and W^O ∈ ℝ^{hd_v×d_model}.）是上一句
+    折下来的，不是单独排的式子：上一行写到版心右缘、没写完一句，这一行紧贴在它下面。
+    叠着排的几行式子（e_t = Ex_t、h_t = g(…)）写不到右缘。"""
+    if frame is None or not re.match(r"[a-z]{2,}\b", text.lstrip()):
+        return False
+    for block in reversed(blocks[-4:]):
+        if block.page != pno or not block.line_rects:
+            continue
+        last = block.line_rects[-1]
+        if (abs(block.rect.x0 - rect.x0) <= block.size * 0.5
+                and -0.5 * block.size <= rect.y0 - last.y1 <= 0.6 * block.size
+                and last.x1 >= frame.x1 - block.size and not _ends_sentence(block.text)):
+            return True
+    return False
 
 
 def _untranslatable(spans: list[dict], text: str, min_prose: int = 3) -> bool:

@@ -5774,6 +5774,35 @@ def test_formula_box_height_follows_the_glyph_ink():
     assert unknown["h"] == 20
 
 
+def test_a_block_is_sized_by_its_base_line_text_not_a_subscript():
+    """d_model 的 model 用正文字体排成小字下标，是这一行最长的一截，块字号仍按基线上的 and 算。"""
+    from app.formats.pdf import _main_span
+
+    def span(text, font, size, y):
+        return {"text": text, "font": font, "size": size, "origin": (0, y)}
+
+    line = [span("and", "NimbusRomNo9L-Regu", 10, 225.0), span(" W", "CMMI10", 10, 225.0),
+            span("model", "NimbusRomNo9L-Regu", 5, 227.6), span(".", "NimbusRomNo9L-Regu", 10, 225.0)]
+    assert _main_span([line])["text"] == "and"
+
+
+def test_a_formula_line_wrapped_from_a_full_line_is_kept():
+    """上一行写到版心右缘、没写完一句，下一行 and W^O ∈ … 从左缘接着写，是这句的后半，不是单独的式子。
+    叠着排的式子写不到右缘。"""
+    from app.formats.pdf import TextBlock, _wraps_from_above
+    from app.formats.pdf_frame import TextFrame
+
+    frame = TextFrame(108, 504, 72, 720, 10)
+    line = pymupdf.Rect(107.5, 203.1, 502.8, 217.6)
+    above = TextBlock(page=4, rect=line, line_rects=[line], text="Where the projections are parameter matrices W Q",
+                      size=10, color="#000000", bold=False)
+    tail = pymupdf.Rect(108, 215.6, 201.2, 227.9)
+    assert _wraps_from_above([above], 4, tail, "and W O ∈Rhdv×dmodel.", frame)
+    short = pymupdf.Rect(107.5, 203.1, 200, 217.6)
+    stacked = TextBlock(page=4, rect=short, line_rects=[short], text="et = Ext", size=10, color="#000000", bold=False)
+    assert not _wraps_from_above([stacked], 4, tail, "ht = g(Uht−1 + Wet)", frame)
+
+
 def test_tex_spacing_accents_are_composed_before_translation():
     from app.formats.pdf import _compose_accents
 
