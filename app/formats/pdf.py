@@ -5414,7 +5414,11 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
     union = pymupdf.Rect()
     for rr in base:
         union |= rr
-    lim = {"l": 1.5, "r": 1.5, "t": 1.5, "b": 1.5}  # 每侧扩展上限（pt）
+    lim = {"t": 1.5, "b": 1.5}  # 上下扩展上限（pt），左右也是 1.5
+    # 左右邻居的边。每个矩形按自己到邻居的距离扩：按整个公式的外框算，紧挨着一个逗号时
+    # 里面每个矩形都只扩 0.2，𝒩 伸进下一个字前空档里的笔画就被切断
+    left_edges: list[float] = []
+    right_edges: list[float] = []
     if page_spans:
         for fb in page_spans:
             if not fb["text"].strip():  # 空白 span 没有墨迹，不限扩展也不挖洞
@@ -5423,15 +5427,22 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
             if is_run_member(fr) or not (fr.y0 < union.y1 and fr.y1 > union.y0):
                 continue
             if fr.x1 <= union.x0 + 0.01:      # 左侧邻居
-                lim["l"] = max(0.2, min(lim["l"], union.x0 - fr.x1 - 0.3))
+                left_edges.append(fr.x1)
             elif fr.x0 >= union.x1 - 0.01:    # 右侧邻居
-                lim["r"] = max(0.2, min(lim["r"], fr.x0 - union.x1 - 0.3))
+                right_edges.append(fr.x0)
             if fr.y1 <= union.y0 + 0.01:      # 上方邻居（pymupdf y 向下）
                 lim["t"] = max(0.2, min(lim["t"], union.y0 - fr.y1 - 0.3))
             elif fr.y0 >= union.y1 - 0.01:    # 下方邻居
                 lim["b"] = max(0.2, min(lim["b"], fr.y0 - union.y1 - 0.3))
-    our_rects = merge_rects([pymupdf.Rect(b.x0 - lim["l"], b.y0 - lim["t"],
-                                          b.x1 + lim["r"], b.y1 + lim["b"]) for b in base])
+
+    def reach(gaps: list[float]) -> float:
+        return max(0.2, min([1.5, *(gap - 0.3 for gap in gaps)]))
+
+    our_rects = merge_rects([
+        pymupdf.Rect(b.x0 - reach([b.x0 - x for x in left_edges]), b.y0 - lim["t"],
+                     b.x1 + reach([x - b.x1 for x in right_edges]), b.y1 + lim["b"])
+        for b in base
+    ])
     ours, holes = [], []
     for b in our_rects:
         r = _pdf_rect(page, b)

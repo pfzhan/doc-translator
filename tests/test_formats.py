@@ -7426,3 +7426,28 @@ def test_a_radical_bar_moves_with_its_formula_under_the_line_above():
     formula = {"bbox": pymupdf.Rect(339.8, 617.0, 358.2, 628.6), "d": 3.0, "spans": [radical, alpha]}
     _absorb_one_box(formula, [bar], [radical, alpha, above])
     assert formula["curves"] == [bar]
+
+
+def test_a_formula_clip_reaches_into_its_own_gaps_beside_a_comma():
+    """𝒩 的笔画伸进它和 ( 之间的空档。公式后面紧挨着逗号时，只有最右边的矩形要让着逗号，
+    中间的矩形照常扩，空档不能被切掉。"""
+    from app.formats.pdf import _formula_form, _page_form
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    fms = _page_form(doc, page)
+    spans = [{"text": "x", "bbox": (407.1, 490.1, 413.0, 500.1)}, {"text": "∼N", "bbox": (424.5, 489.9, 444.3, 498.1)},
+             {"text": "(", "bbox": (445.8, 490.1, 449.7, 500.1)}, {"text": ")", "bbox": (464.2, 490.1, 468.0, 500.1)}]
+    formula = {"bbox": pymupdf.Rect(407.1, 489.9, 468.0, 500.1), "spans": spans}
+    # 前面的 for 和后面的逗号都紧挨着公式
+    word = {"text": "for", "bbox": (395.2, 489.9, 407.0, 500.0)}
+    comma = {"text": ",", "bbox": (468.0, 489.9, 470.6, 500.0)}
+    xref = _formula_form(doc, page, fms, formula, "/Fx", [dict(span) for span in spans] + [word, comma])
+    rects = [tuple(map(float, found)) for found in re.findall(r"([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) re", doc.xref_stream(xref).decode())]
+
+    def inside(x, y):
+        y = page.rect.height - y
+        return sum(x0 <= x <= x0 + w and y0 <= y <= y0 + h for x0, y0, w, h in rects) % 2 == 1
+
+    assert inside(445.0, 491.0)
+    assert not inside(469.0, 495.0)
