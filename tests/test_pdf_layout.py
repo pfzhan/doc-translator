@@ -212,6 +212,33 @@ def test_two_column_translation_stops_at_the_gutter(tmp_path):
     assert right_edge < geo.columns[1].x0
 
 
+def test_translation_stops_before_a_ruled_box_on_the_right(tmp_path):
+    """栏间空白太窄没分出栏时，右边算法框的外框也挡住右扩。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=400)
+    page.insert_text((40, 52), "Short left", fontsize=12)
+    src = tmp_path / "box.pdf"
+    doc.save(src)
+
+    box = pymupdf.Rect(152, 30, 362, 120)
+    geo = PageGeometry.from_rects(
+        400, [pymupdf.Rect(40, 40, 360, 54)], height=400, tables=[RuledTable(box, (), True)],
+    )
+    assert len(geo.columns) == 1
+    block = TextBlock(
+        page=0, rect=pymupdf.Rect(40, 40, 90, 54), line_rects=[pymupdf.Rect(40, 40, 90, 54)],
+        text="Short left", size=12, color="#000000", bold=False,
+    )
+    translation = "这是一段很长的译文一定会向右铺开直到碰上右边的算法框才停下来"
+    out = _render_translated(src, [block], [translation], "zh-CN", geometries=[geo])
+    lines = [ln for blk in out[0].get_text("dict")["blocks"] if blk.get("type") == 0 for ln in blk["lines"]]
+    zh = [ln for ln in lines if any("\u4e00" <= ch <= "\u9fff" for ch in "".join(s["text"] for s in ln["spans"]))]
+    assert zh
+    right_edge = max(ln["bbox"][2] for ln in zh)
+    assert right_edge > block.rect.x1 + 1
+    assert right_edge < box.x0
+
+
 def test_three_gutters_make_three_columns():
     left = _stack(30, 110, 40)
     middle = _stack(140, 220, 40)
