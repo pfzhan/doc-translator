@@ -7689,6 +7689,31 @@ def test_an_index_entry_ends_at_its_page_numbers():
     assert len(_merge_continuations(blocks)) == 2
 
 
+def test_no_borderless_table_is_found_on_an_index_page(monkeypatch):
+    """索引页上几栏短条目行首对齐，几行凑在一起像无线的格子表。和目录页一样不找表，条目照翻。"""
+    from dataclasses import replace
+
+    from app.formats import pdf
+    from app.formats.pdf_layout import RuledTable
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=500, height=700)
+    for column, x in enumerate((60, 260)):
+        for row in range(14):
+            page.insert_text((x, 80 + 12 * row), f"entry term {column}{row}, {100 + row}", fontsize=8)
+    real = pdf.scan_page
+
+    def scan(page):
+        found = real(page)
+        cells = tuple(pymupdf.Rect(x, 72 + 12 * row, x + 150, 84 + 12 * row) for row in range(3) for x in (58, 258))
+        return replace(found, tables=(RuledTable(pymupdf.Rect(58, 72, 408, 108), cells),))
+
+    monkeypatch.setattr(pdf, "scan_page", scan)
+    blocks, _frames, scans = pdf._extract(doc)
+    assert scans[0].tables == ()
+    assert all(block.clip is None for block in blocks)
+
+
 def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
     """索引条目折行时续行悬挂缩进。下一行起笔不比这一行靠右就是另一条（see 引用没有页码）；
     页码折到下一行时那一行只有页码，可能分在另一块里；两端对齐拆开的一行按整行看。"""

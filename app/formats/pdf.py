@@ -4182,9 +4182,10 @@ def _extract(
         if on_page is not None:
             on_page(len(pages), doc.page_count)
     _mark_math_roman(pages)
-    # 目录页上不找表：页码一列和节号一列对齐，短条目会被认成格子表，格子不翻
+    # 目录页上不找表：页码一列和节号一列对齐，短条目会被认成格子表，格子不翻。
+    # 索引页也是：几栏短条目行首对齐，凑出几行就像无线的格子表
     toc_pages = _toc_pages(pages)
-    for pno in toc_pages:
+    for pno in toc_pages | {pno for pno, data in enumerate(pages) if _index_page(data)}:
         tables_by_page[pno] = ()
         scans[pno] = replace(scans[pno], tables=())
     for data in pages:
