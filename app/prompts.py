@@ -258,6 +258,20 @@ def _braces_at_marks(text: str) -> tuple[list[int], list[int]]:
     return before, after
 
 
+# 花括号里夹了空白的标记：{ i}、{/ b}、{ v1 }
+_LOOSE_MARK_RE = re.compile(r"\{\s*(/?)\s*([biu]|z\d*|c[0-9a-f]{6}|v\d+|\|)\s*\}")
+
+
+def tidy_marks(src: str, dst: str) -> str:
+    """模型偶尔在标记的花括号里多写空格（{ i}m{/i}），认不出是标记，渲染成字面的 i。
+    改回标准写法；只改原文里有的标记，原文正文里本来就有的 { i} 这类字面花括号不动。"""
+    def tidy(match: re.Match[str]) -> str:
+        mark = "{" + match.group(1) + match.group(2) + "}"
+        return mark if mark in src else match.group(0)
+
+    return _LOOSE_MARK_RE.sub(tidy, dst)
+
+
 def drop_added_braces(src: str, dst: str) -> str:
     """去掉模型套在标记外面的花括号：{{b}填充词{/b}}、{/b}}、{{c0000ff}Chen{/c}}。
     原文正文里有 {n,m} 这类花括号时，模型会把标记也照着写一层。只去紧贴标记的，
