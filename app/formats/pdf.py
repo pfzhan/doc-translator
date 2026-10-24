@@ -3863,8 +3863,21 @@ def _restore_placeholders(translation: str, formulas: list[dict], lenient: bool 
             if lenient and _small_formula(f):
                 continue
             return None
+        if _ends_in_relation(f):
+            # 式子图里带着等号（y_c =），后面的数字是正文字（1 if …）。模型不知道占位符里已有等号，
+            # 又写一遍「为 1」，读出来是「y_c = 为 1」
+            translation = re.sub(rf"(\{{\s*v\s*{n}\s*\}}\s*){_RELATION_WORD_RE}", r"\1", translation, count=1)
         translation = pattern.sub(lambda _: f"\x01i\x02{n}\x01/i\x02", translation, count=1)
     return re.sub(r"\{\s*v\s*\d+\s*\}", "", translation)
+
+
+# 跟在以关系符收尾的式子后面、数字前面的「为」「等于」「大于」
+_RELATION_WORD_RE = r"(?:(?:大于|小于|不)?等于|约为|大于|小于|为|是)\s*(?=[-−+]?\d)"
+
+
+def _ends_in_relation(formula: dict) -> bool:
+    text = re.sub(r"\x01[^\x02]*\x02", "", str(formula.get("text") or "")).strip()
+    return text.endswith(("=", "<", ">", "≤", "≥", "≠", "≈"))
 
 
 def _small_formula(formula: dict) -> bool:

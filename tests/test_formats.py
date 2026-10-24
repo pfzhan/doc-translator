@@ -7872,3 +7872,13 @@ def test_a_word_grid_is_translated_cell_by_cell():
     prose = [(f"line {i} of an ordinary paragraph that wraps", pymupdf.Rect(80, 100 + 10 * i, 400, 110 + 10 * i), [], [])
              for i in range(12)]
     assert not _grid_cells(prose)
+
+
+def test_a_relation_word_after_an_equals_sign_in_the_formula_is_dropped():
+    """y_c = 收进了式子图，后面的 1 是正文字。模型又写一遍「为 1」，读出来是「y_c = 为 1」。"""
+    from app.formats.pdf import _restore_placeholders
+
+    formulas = [{"text": "y\x01b\x02c\x01/b\x02 ="}, {"text": "n\x01b\x020\x01/b\x02"}]
+    out = _restore_placeholders("其中 {v1} 为 1, 而 {v2} 为 2", formulas)
+    assert out == "其中 \x01i\x021\x01/i\x02 1, 而 \x01i\x022\x01/i\x02 为 2"
+    assert _restore_placeholders("而 {v1} 大于 1 时", [{"text": "β <"}]) == "而 \x01i\x021\x01/i\x02 1 时"
