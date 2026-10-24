@@ -187,6 +187,8 @@ class TextBlock:
     line_gap: float = _LINE_GAP
     # 这份文档的正文字号（见 _body_size）。0 是没量
     body_size: float = 0.0
+    # 索引页上以页码收尾的一条（见 _index_page）。到页码就完整了，不和下一条并段
+    entry: bool = False
 
 
 def _join_lines(lines: list[str]) -> str:
@@ -980,6 +982,25 @@ _TOC_TITLE_RE = re.compile(r"(?:(?:table|summary) of )?contents|list of (?:figur
 _TOC_MIN_ENTRIES = 5
 
 
+# 索引条目以页码收尾：「fully-connected, 157」「linear chain CRF, 414, 415」「Kleene *, 50–52」
+_INDEX_REF_RE = re.compile(r",\s*\d+(?:\s*[-–]\s*\d+)?(?:\s*,\s*\d+(?:\s*[-–]\s*\d+)?)*\s*$")
+# 一页至少这么多行、这么大比例的行以页码收尾，才是索引页
+_INDEX_MIN_LINES = 15
+_INDEX_SHARE = 0.4
+
+
+def _index_page(data: dict) -> bool:
+    """书后的索引页：四成以上的行以「, 页码」收尾。正文的行很少停在逗号加数字上。"""
+    texts = [
+        "".join(span["text"] for span in line["spans"]).strip()
+        for block in data.get("blocks", []) if block.get("type") == 0 for line in block["lines"]
+    ]
+    texts = [text for text in texts if text]
+    if len(texts) < _INDEX_MIN_LINES:
+        return False
+    return sum(bool(_INDEX_REF_RE.search(text)) for text in texts) >= len(texts) * _INDEX_SHARE
+
+
 def _toc_pages(pages: list[dict]) -> set[int]:
     """没有点线的目录页：标题行和每行行尾隔得很远、右缘对齐、往下递增的页码。
     目录跨页时，后面几页没有标题，接在目录页后面、页码一列照样排的也算。
@@ -1174,7 +1195,7 @@ def _leader_of(spans: list[dict], shared: list[dict]) -> Leader | None:
     )
 
 
-def _cut_after(group: list[int], ends: dict[int, Leader]) -> list[list[int]]:
+def _cut_after(group: list[int], ends: Collection[int]) -> list[list[int]]:
     parts: list[list[int]] = [[]]
     for index in group:
         parts[-1].append(index)
@@ -4008,6 +4029,7 @@ def _extract(
         ]
         fractions = _fraction_parts(data, scans[pno].rules)
         toc_page = _has_leader_line(data) or pno in toc_pages
+        index_page = _index_page(data)
         for b in data["blocks"]:
             if b.get("type") != 0:
                 continue
@@ -4026,8 +4048,11 @@ def _extract(
             side_note = bool(b.get("side_note"))
             # 一条旁注就是一块，不按正文的规则拆
             groups = [list(range(len(items)))] if side_note and items else _split_lines(items)
-            # 带点线的一行是一个目录条目的末行，下一行是另一条
-            groups = [part for group in groups for part in _cut_after(group, leaders)]
+            # 带点线的一行是一个目录条目的末行，下一行是另一条。索引页上以页码收尾的一行也是
+            entry_ends = {
+                index for index, item in enumerate(items) if index_page and _INDEX_REF_RE.search(item[0].rstrip())
+            }
+            groups = [part for group in groups for part in _cut_after(group, {*leaders, *entry_ends})]
             # 文字分式所在的行自成一组，留原字，不和上下的正文连成一段
             formula_rows = {i for i, item in enumerate(items) if any(id(span) in fractions for span in item[2])}
             groups = [part for group in groups for part in _cut_runs(group, formula_rows)]
@@ -4075,6 +4100,7 @@ def _extract(
                     leader=leaders.get(group[-1]),
                     line_gap=line_gap,
                     body_size=body_size,
+                    entry=group[-1] in entry_ends,
                 ))
         absorbed.update(id(block) for block in blocks[page_start:] if _inside_kept_formula(block, kept_rows))
     split: list[TextBlock] = []
@@ -5080,7 +5106,7 @@ def _merge_continuations(blocks: list[TextBlock]) -> list[TextBlock]:
             )
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
             if (p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note)
-                    and p.leader is None and b.leader is None
+                    and p.leader is None and b.leader is None and not p.entry
                     and (title_frag or latin or (y_close and _cjk_wrap(p, b)))
                     and not _restyled_seam(p, b) and not _new_voice(p, b)):
                 _absorb_block(p, b)
@@ -8270,9 +8296,10 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
     ]
     skip_ids = {id(b) for b, s in zip(blocks, skips) if s}
     margin_ids = {id(b) for b, edge in zip(blocks, edges) if edge}
-    # 目录条目到点线就完了，不和下一页的条目并段
+    # 目录条目到点线就完了，索引条目到页码就完了，不和下一栏、下一页的条目并段
     halt_ids = {
-        id(b) for b, role in zip(blocks, roles) if role is not Role.BODY or b.side_note or b.leader is not None
+        id(b) for b, role in zip(blocks, roles)
+        if role is not Role.BODY or b.side_note or b.leader is not None or b.entry
     } | margin_ids
     # 跨页合并照旧把格子当正文看：栏底是格子时不接下一页，格子上面的表头、图里的字不能顶上去当页末
     # 跨页的例句：下一页接着的半句也留原文。先让例句照正文接段，找出接在它后面的块

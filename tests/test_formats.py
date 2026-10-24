@@ -7640,3 +7640,25 @@ def test_a_smaller_line_in_another_colour_does_not_continue_a_title():
                   size=38.0, color="#330099", bold=False, body_size=38.0),
     ]
     assert len(_merge_continuations(blocks)) == 2
+
+
+def test_an_index_entry_ends_at_its_page_numbers():
+    """索引页上一条到页码就完整了：下一行小写起头也是另一条，不并成一段。正文的行很少停在「, 数字」上。"""
+    from app.formats.pdf import TextBlock, _index_page, _merge_continuations
+
+    def page(lines):
+        return {"blocks": [{"type": 0, "lines": [{"spans": [{"text": line}]} for line in lines]}]}
+
+    entries = [f"term number {i}, {100 + i}" for i in range(12)] + ["sub entry", "linear chain CRF, 414, 415",
+                                                                       "Kleene *, 50–52", "fully-connected, 157"]
+    assert _index_page(page(entries))
+    prose = [f"this is line {i} of an ordinary paragraph that wraps" for i in range(16)]
+    assert not _index_page(page(prose))
+
+    def blk(text, y, entry):
+        rect = pymupdf.Rect(80, y, 200, y + 9)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=8.0, color="#000", bold=False,
+                         span_lines=[[{"text": text, "font": "Times", "size": 8.0}]], entry=entry)
+
+    blocks = [blk("Frump, 497", 100, True), blk("fully-connected, 157", 110, True)]
+    assert len(_merge_continuations(blocks)) == 2
