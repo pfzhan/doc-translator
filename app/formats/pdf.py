@@ -588,11 +588,17 @@ _RADICALS = "√∛∜"
 
 def _mark_radicands(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.Rect]) -> None:
     """根号横线下面的字是被开方数，标成公式（√81 的 81）。正文和公式用同一套字体时，
-    按字体分不出来，81 留在正文里，根号单独成了一个公式，两边各排各的。"""
+    按字体分不出来，81 留在正文里，根号单独成了一个公式，两边各排各的。
+    CMEX 的大号根号提出来是字母 p，大号定界符字体里的字都按位置认：横线从它的右上角起头才是根号。"""
     lines = [line for block in data.get("blocks", []) for line in block.get("lines", []) if line.get("spans")]
+    # 大号根号的字体框比字形高出一截，横线接在墨迹的右上角
     radicals = [
-        _glyph_box(span) for line in lines for span in line["spans"]
-        if str(span.get("text") or "").strip()[-1:] in _RADICALS and str(span.get("text") or "").strip()
+        pymupdf.Rect(span["ink"]) if span.get("ink") else _glyph_box(span)
+        for line in lines for span in line["spans"]
+        if str(span.get("text") or "").strip() and (
+            str(span.get("text") or "").strip()[-1:] in _RADICALS
+            or _BIG_DELIMITER_FONT_RE.search(str(span.get("font") or ""))
+        )
     ]
     bars = [
         stroke for stroke in strokes

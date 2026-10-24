@@ -7606,3 +7606,22 @@ def test_a_fragment_inside_a_kept_formula_is_part_of_it():
     label = TextBlock(page=0, rect=piece, line_rects=[piece], text="prior", size=10, color="#000000", bold=False)
     assert not _inside_kept_formula(label, [formula])
     assert not _inside_kept_formula(block, [pymupdf.Rect(100, 100, 200, 120)])
+
+
+def test_text_under_a_big_cmex_radical_is_part_of_the_formula():
+    """CMEX 的大号根号提出来是字母 p，字体框比字形高。横线从它墨迹的右上角起头，线下的 Var 是被开方数。"""
+    from app.formats.pdf import _mark_radicands
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_text((188.4, 123.8), "Var", fontname="tiro", fontsize=9.96)
+    data = page.get_text("dict")
+    line = data["blocks"][0]["lines"][0]
+    line["spans"].insert(0, {
+        "text": "p", "font": "CMEX10", "size": 9.96, "flags": 0, "color": 0,
+        "bbox": (177.2, 107.7, 188.4, 138.6), "origin": (177.2, 115.1), "ink": (177.2, 114.7, 188.4, 126.6),
+    })
+    right = line["spans"][1]["bbox"][2]
+    _mark_radicands(page, data, [pymupdf.Rect(188.4, 114.6, right, 115.1)])
+    marked = [span for span in line["spans"] if span["text"] == "Var"]
+    assert marked and marked[0].get("math")
