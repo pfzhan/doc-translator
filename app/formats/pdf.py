@@ -3983,9 +3983,13 @@ def _extract(
     notes = margin_notes([lines for lines, _refs in page_lines], frames)
     for data, (lines, refs), found, frame in zip(pages, page_lines, notes, frames):
         _detach_margin_notes(data, lines, refs, found - _wide_block_lines(lines, refs, found, frame))
+    absorbed: set[int] = set()
     for pno, data in enumerate(pages):
         margins = _left_margins(data)
         # 本页各行的起止，用来找一行所在那一栏的右缘
+        # 本页留原字的式子行，压在里面的碎片（分母 dx）也是式子
+        kept_rows: list[pymupdf.Rect] = []
+        page_start = len(blocks)
         row_ends = [
             _line_box(line) for block in data["blocks"] if block.get("type") == 0 for line in block["lines"]
             if "".join(span["text"] for span in line["spans"]).strip()
@@ -4030,12 +4034,14 @@ def _extract(
                 # 模型重排这种行常把数学意思改掉
                 displayed = len(group) == 1 and _displayed(rect, spans, margins)
                 fraction = group[0] in formula_rows
-                if not in_cell and (fraction or _untranslatable(spans, text, _DISPLAY_PROSE if displayed else 3)) \
+                if not in_cell and (fraction or _untranslatable(spans, text, _DISPLAY_PROSE if displayed else 3, displayed)) \
                         and not _wraps_from_above(blocks, pno, rect, text, row_ends, frames[pno]):
                     # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
                     # 捐了会被擦掉，而这些行没有占位符、不会重画。
                     if NO_TEXT_RE.match(text) and blocks and blocks[-1].page == pno:
                         _donate_punct_rects(blocks[-1], line_rects)
+                    else:
+                        kept_rows.append(rect)
                     continue
                 # 字号取最长的 span。颜色、粗细按字数取占多数的：逐词一个 span 的书里，
                 # 最长的一截常是黑底白字的图注标签 Figure 10.3，整条图注会写成白字
@@ -4058,9 +4064,12 @@ def _extract(
                     line_gap=line_gap,
                     body_size=body_size,
                 ))
+        absorbed.update(id(block) for block in blocks[page_start:] if _inside_kept_formula(block, kept_rows))
     split: list[TextBlock] = []
     unchecked: set[int] = set()
     for index, block in enumerate(blocks):
+        if id(block) in absorbed:
+            continue
         tables = tables_by_page[block.page] if block.page < len(tables_by_page) else ()
         parts = _split_table_blocks([block], tables)
         if index in pending_cells:
@@ -4306,25 +4315,44 @@ def _main_span(lines: list[list[dict]]) -> dict:
     return max(pool, key=lambda span: len(span["text"]))
 
 
+def _inside_kept_formula(block: TextBlock, kept: Sequence[pymupdf.Rect]) -> bool:
+    """一行、没有三个字母以上的词的碎片，大半落在留原字的式子行的框里：是式子的一截
+    （分数的分母 dx），不单独送翻。式子下面花括号上的标注（prior）是词，照翻。"""
+    if len(block.line_rects) != 1 or re.search(r"[A-Za-z]{3,}", block.text) or CJK_RE.search(block.text):
+        return False
+    area = block.rect.get_area()
+    return area > 0 and any((block.rect & row).get_area() >= area * 0.6 for row in kept)
+
+
 def _wraps_from_above(
     blocks: list[TextBlock], pno: int, rect: pymupdf.Rect, text: str,
     rows: Sequence[pymupdf.Rect], frame: TextFrame | None,
 ) -> bool:
     """以小写正文词起头、从上一行正文的左缘接着写的式子行（and W^O ∈ ℝ^{hd_v×d_model}.）是上一句
     折下来的，不是单独排的式子：上一行写到本栏右缘、没写完一句，这一行紧贴在它下面。
+    居中排的图注末行（significant (t-test with p ≤ 0.01).）和上一行中线对齐。
     叠着排的几行式子（e_t = Ex_t、h_t = g(…)）写不到右缘。"""
     if not re.match(r"[a-z]{2,}\b", text.lstrip()):
         return False
-    for block in reversed([block for block in blocks if block.page == pno and block.line_rects]):
+    page_blocks = [block for block in blocks if block.page == pno and block.line_rects]
+    for block in reversed(page_blocks):
         last = block.line_rects[-1]
         if rect.y0 - last.y1 > 0.6 * block.size:
             # 块按阅读顺序排，再往前的都在更上面或者在别的栏
             continue
         # 折下来的是一行：底下再叠几行的是另排的式子
-        if (abs(block.rect.x0 - rect.x0) <= block.size * 0.5 and rect.height <= block.size * 1.6
-                and -0.5 * block.size <= rect.y0 - last.y1
-                and last.x1 >= _column_right(block, rows, frame) - block.size
-                and not _ends_sentence(block.text)):
+        if (rect.height > block.size * 1.6 or rect.y0 - last.y1 < -0.5 * block.size
+                or _ends_sentence(block.text)):
+            continue
+        # 靠左排的上一行写到本栏右缘。居中排的段落逐行成块，上一行和它上面那行一样宽，是排满的行
+        left = (abs(block.rect.x0 - rect.x0) <= block.size * 0.5
+                and last.x1 >= _column_right(block, rows, frame) - block.size)
+        centered = abs((last.x0 + last.x1) / 2 - (rect.x0 + rect.x1) / 2) <= block.size and any(
+            0 <= last.y0 - line.y1 <= block.size
+            and abs(line.x0 - last.x0) <= block.size and abs(line.x1 - last.x1) <= block.size
+            for other in page_blocks for line in other.line_rects if line is not last
+        )
+        if left or centered:
             return True
     return False
 
@@ -4346,14 +4374,19 @@ def _near_votes(counter: Counter[int], value: int) -> int:
     return sum(count for other, count in counter.items() if abs(other - value) <= 1)
 
 
-def _untranslatable(spans: list[dict], text: str, min_prose: int = 3) -> bool:
+def _untranslatable(spans: list[dict], text: str, min_prose: int = 3, displayed: bool = False) -> bool:
     """纯符号、纯公式、几乎没有字母的行不送翻，留原字。
 
     只跳过"纯公式行"：数学字符多且几乎没有正文词。公式外面有三个正文词就是一句话
     （If … then … Otherwise …），照翻，公式走占位符。公式里的字母不算词：
     点阵字的数学符号认出来的字母是乱的。
+
+    单独排的一行带算符、没有一个正文词的也是式子。用正文斜体写变量的书
+    （Q = H_dec W^Q、ŷ = argmax_{w∈V} P(w|w_<t)）按字体认不出公式字符。
     """
     if NO_TEXT_RE.match(text):
+        return True
+    if displayed and _OPERATOR_RE.search(text) and not _prose_words(spans, text):
         return True
     total = sum(len(span["text"]) for span in spans)
     # 空白 span 已经滤掉，拼的时候补上空格，不然 It、follows 会拼成一个词
@@ -4366,6 +4399,26 @@ def _untranslatable(spans: list[dict], text: str, min_prose: int = 3) -> bool:
         return False
     letters = sum(c.isalpha() for c in text)
     return (letters < 2 or letters < len(text) * 0.4) and not _numbered_list_item(text)
+
+
+_MATH_NAMES = frozenset(_OPERATOR_NAMES.split("|")) | {"argmax", "argmin", "softmax", "tanh", "sigmoid"}
+
+
+def _prose_words(spans: list[dict], text: str) -> list[str]:
+    """行里前后有空格隔开、正文字体写的词（带小写字母、两个字母以上）。
+    和符号连写的（H_dec、argmax_{char∈Alphabet}）、全大写的矩阵名（HU）、
+    算子名（argmax、log）不算。"""
+    upright = set()
+    for span in spans:
+        if not _span_is_math(span):
+            upright.update(re.findall(r"[A-Za-z]{2,}", span["text"]))
+    words = []
+    for token in text.split():
+        word = token.strip(",.;:!?\"'“”‘’()[]{}")
+        if (len(word) >= 2 and word.isascii() and word.isalpha() and word in upright
+                and any(c.islower() for c in word) and word not in _MATH_NAMES):
+            words.append(word)
+    return words
 
 
 def _merge_cells(blocks: list[TextBlock], unchecked: set[int]) -> list[TextBlock]:

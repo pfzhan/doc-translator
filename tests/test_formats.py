@@ -5850,6 +5850,15 @@ def test_a_formula_line_wrapped_from_a_full_line_is_kept():
                      size=10, color="#000000", bold=False)
     rows = [pymupdf.Rect(108, y, 298, y + 12) for y in (100, 112, 124, 136)]
     assert _wraps_from_above([left], 4, tail, "and x̂ = (x − µ)/σ.", rows, frame)
+    # 居中排的图注，末行和上面的整行中线对齐
+    first, second = pymupdf.Rect(83.2, 135.0, 511.7, 147.1), pymupdf.Rect(87.9, 149.7, 507.8, 160.6)
+    caption = [
+        TextBlock(page=4, rect=line, line_rects=[line], text=text, size=10.9, color="#000000", bold=False)
+        for line, text in ((first, "Table 15 | Comparison of models on"),
+                           (second, "Numbers in bold denote the performance is statistically"))
+    ]
+    end = pymupdf.Rect(219.6, 161.2, 375.7, 174.2)
+    assert _wraps_from_above(caption, 4, end, "significant (t−test with 𝑝< 0.01).", [], frame)
 
 
 def test_tex_spacing_accents_are_composed_before_translation():
@@ -7561,3 +7570,39 @@ def test_a_formula_clip_reaches_into_its_own_gaps_beside_a_comma():
 
     assert inside(445.0, 491.0)
     assert not inside(469.0, 495.0)
+
+
+def test_a_displayed_formula_set_in_the_text_italic_is_kept():
+    """用正文斜体写变量的书，单独排的式子按字体认不出公式字符。带算符、正文词不超过两个的留原字；
+    单独排的整句（L(ŷ,y) = How much ŷ differs from the true y）照翻。"""
+    from app.formats.pdf import _untranslatable
+
+    def spans(*parts):
+        return [{"text": text, "font": font, "size": 10.0, "flags": 2 if "Ital" in font else 0}
+                for text, font in parts]
+
+    roman, italic, sans, cmr = "NimbusRomNo9L-Regu", "NimbusRomNo9L-ReguItal", "CMSSBX10", "CMR10"
+    line = spans(("Q", sans), (" =", cmr), (" H", sans), ("dec", italic), ("W", sans), ("Q", sans), (";", roman),
+                 ("K", sans), (" =", cmr), (" H", sans), ("enc", italic), ("W", sans), ("K", sans))
+    assert _untranslatable(line, "Q = HdecWQ; K = HencWK", 8, True)
+    line = spans(("ˆ", roman), ("y", italic), ("i", italic), ("=", cmr), ("argmax", roman), ("char", roman),
+                 ("∈", "CMSY10"), ("Alphabet", roman), ("P", italic), ("(", cmr), ("char", roman), (")", cmr))
+    assert _untranslatable(line, "ˆyi = argmaxchar∈AlphabetP(char)", 8, True)
+    line = spans(("L", italic), ("(", cmr), ("y", italic), (")", cmr), ("=", cmr), ("How much", roman),
+                 ("y", italic), (" differs from the true", roman), (" y", italic))
+    assert not _untranslatable(line, "L(y) = How much y differs from the true y", 8, True)
+    line = spans(("convolution with width-1 kernel:", italic), ("z", sans), ("j", italic), ("=", cmr), ("x", sans))
+    assert not _untranslatable(line, "convolution with width-1 kernel: zj = x", 8, True)
+
+
+def test_a_fragment_inside_a_kept_formula_is_part_of_it():
+    """分数的分母 dx 单成一行，落在留原字的式子行（dv · dv）的框里，是式子的一截。"""
+    from app.formats.pdf import TextBlock, _inside_kept_formula
+
+    formula = pymupdf.Rect(329.5, 429.0, 357.5, 461.4)
+    piece = pymupdf.Rect(347.6, 442.6, 357.5, 454.5)
+    block = TextBlock(page=0, rect=piece, line_rects=[piece], text="dx", size=10, color="#000000", bold=False)
+    assert _inside_kept_formula(block, [formula])
+    label = TextBlock(page=0, rect=piece, line_rects=[piece], text="prior", size=10, color="#000000", bold=False)
+    assert not _inside_kept_formula(label, [formula])
+    assert not _inside_kept_formula(block, [pymupdf.Rect(100, 100, 200, 120)])
