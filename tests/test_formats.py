@@ -1604,6 +1604,26 @@ def test_a_proof_mark_after_the_full_stop_still_ends_the_paragraph():
     assert not _ends_sentence("f\x01s\x02i\x01/s\x02(")
 
 
+def test_a_column_break_inside_brackets_or_after_et_al_continues():
+    """换栏、换页处圆括号起头的看括号里的字，句中的 et al. 不算句末。编号、音标、引文另起。"""
+    from app.formats.pdf import TextBlock, _can_continue
+
+    def blk(text, page):
+        return TextBlock(page=page, rect=pymupdf.Rect(318, 700, 558, 729), line_rects=[],
+                         text=text, size=10, color="#000000", bold=False)
+
+    def joins(prev, nxt):
+        return _can_continue(blk(prev, 0), blk(nxt, 1), 10, None, allow_capital=True)
+
+    assert joins("Accordingly, we use frame-wise root-mean-square", "(RMS) loudness to describe the trajectory.")
+    assert joins("any of its variants such as Adagrad", "(Duchi et al., 2011). The normalization of activations")
+    assert joins("work on 3D multimodal LLMs [Hong et al. 2023; Mao et al.", "2026; Xu et al. 2024] shows that LLMs")
+    assert not joins("the scores are combined as shown below", "(3) where the weights sum to one")
+    assert not joins("The Vocal Organs", "[v], [z], and all the English vowels, among others.")
+    assert not joins("we use the fact that", "“[M]achines of this character can behave in a complicated manner.”")
+    assert not joins("The scores are combined as shown below.", "(RMS) loudness to describe the trajectory.")
+
+
 def test_pdf_biblio_author_year_entries_after_the_heading():
     """作者-年份体的条目不带编号和括号年份。标题后面连着几条「姓, 名缩写.」起头的就进入参考文献；
     正文里只一句这样开头的不算。"""

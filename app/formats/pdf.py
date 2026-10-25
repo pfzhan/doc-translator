@@ -2404,7 +2404,12 @@ def _can_continue(
     """
     if prev.clip is not None or nxt.clip is not None:
         return False
-    head = nxt.text.lstrip()[:1]
+    # 圆括号起头的看里面的字：(RMS) loudness、(0, 1), which。(3)、(a) 这样的编号不算。
+    # 方括号、引号里的不看：[v], [z] 是音标，“[M]achines 是另起的引文
+    opening = nxt.text.lstrip()
+    if not _EQUATION_TAG_RE.match(opening) and not _list_item(opening):
+        opening = opening.lstrip("(")
+    head = opening[:1]
     numbered_heading = bool(_SRC_HEAD_NUM_RE.match(nxt.text.lstrip()))
     if halt_ids is None:
         is_heading = _preview_kind(nxt, median) != "p"
@@ -2415,8 +2420,9 @@ def _can_continue(
     broken_word = bool(re.search(r"[a-z]-$", prev.text.rstrip()))
     if allow_capital and not broken_word and head.isalpha() and head.isupper() and len(prev.text.split()) >= 3:
         continues = True
-    return bool(not numbered_heading and not is_heading and continues
-                and not _END_MARK_RE.sub("", prev.text).endswith(_SENT_END_PUNCT)
+    # 句中的缩写（Mao et al. | 2026）不是句末
+    ended = _END_MARK_RE.sub("", prev.text).endswith(_SENT_END_PUNCT) and not _MID_ABBREV_RE.search(prev.text.rstrip())
+    return bool(not numbered_heading and not is_heading and continues and not ended
                 and not _is_float_text(nxt.text)
                 and nxt.size <= prev.size * 1.4)
 
