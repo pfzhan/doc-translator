@@ -2457,8 +2457,10 @@ def _can_continue(
     broken_word = bool(re.search(r"[a-z]-$", prev.text.rstrip()))
     if allow_capital and not broken_word and head.isalpha() and head.isupper() and len(prev.text.split()) >= 3:
         continues = True
-    # 句中的缩写（Mao et al. | 2026）不是句末
-    ended = _END_MARK_RE.sub("", prev.text).endswith(_SENT_END_PUNCT) and not _MID_ABBREV_RE.search(prev.text.rstrip())
+    # 句中的缩写（Mao et al. | 2026）不是句末。分号后面小写接着写的是同一句（… on BC trials; | an explanation …）
+    tail = _END_MARK_RE.sub("", prev.text)
+    ended = (tail.endswith(_SENT_END_PUNCT) and not _MID_ABBREV_RE.search(prev.text.rstrip())
+             and not (tail.endswith((";", "；")) and head.islower()))
     return bool(not numbered_heading and not is_heading and continues and not ended
                 and not _is_float_text(nxt.text)
                 and nxt.size <= prev.size * 1.4)

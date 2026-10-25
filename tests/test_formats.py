@@ -1623,6 +1623,8 @@ def test_a_column_break_inside_brackets_or_after_et_al_continues():
     assert not joins("The Vocal Organs", "[v], [z], and all the English vowels, among others.")
     assert not joins("we use the fact that", "“[M]achines of this character can behave in a complicated manner.”")
     assert not joins("The scores are combined as shown below.", "(RMS) loudness to describe the trajectory.")
+    assert joins("the policy is confused on BC trials;", "an explanation that also fails to cover the rest.")
+    assert not joins("the policy is confused on BC trials;", "An explanation that also fails to cover the rest.")
     heading = blk("E. Energy-Detection Characterization", 0)
     heading.line_rects = [pymupdf.Rect(49, 661, 204, 671)]
     heading.span_lines = [[{"text": heading.text, "font": "NimbusRomNo9L-ReguItal", "flags": 2, "size": 10}]]
