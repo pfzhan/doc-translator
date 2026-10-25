@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pymupdf
 
-from .. import langdetect
+from .. import langdetect, prompts
 from ..languages import RTL_LANGUAGES
 from ..runner import clean_translation
 from .pdf_align import FIRST_BASELINE, draw_cjk_lines, page_origin
@@ -193,6 +193,8 @@ class TextBlock:
     entry: bool = False
     # 是词表里的一格。词表和图一样，栏顶栏底跳过它找正文；索引条目照样占着栏顶栏底
     grid: bool = False
+    # 在书后的索引页上（见 _index_page）
+    index: bool = False
 
 
 def _join_lines(lines: list[str]) -> str:
@@ -4103,7 +4105,7 @@ async def _retry_lost_placeholders(
                 done[sent_texts[i]] = text
             raw[i] = text
             fixed[sent_texts[i]] = text
-    cache = getattr(runner, "cache", None)
+    cache = getattr(runner, "keyed_cache", None) or getattr(runner, "cache", None)
     if fixed and cache is not None:
         cache.put_many(translator.cache_key, fixed)
 
@@ -4523,6 +4525,7 @@ def _extract(
                     body_size=body_size,
                     entry=group[-1] in entry_ends,
                     grid=group[-1] in cells,
+                    index=index_page,
                 ))
         absorbed.update(id(block) for block in blocks[page_start:] if _inside_kept_formula(block, kept_rows))
     split: list[TextBlock] = []
@@ -8925,6 +8928,7 @@ class _PdfPlan:
     block_kind: dict[int, str]
     title: str = ""
     labels: list[str] = field(default_factory=list)  # 每个单元开头摘下的编号，见 _peel_number
+    notes: list[str] = field(default_factory=list)  # 每个单元在书里所处位置的说明，见 _index_notes
 
 
 def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
@@ -9057,8 +9061,58 @@ def _plan_document(src: Path, src_doc: pymupdf.Document, runner, layout_model: s
 
     return _PdfPlan(
         src_doc, blocks, geometries, toc, flat_units, sent_texts, sent_formulas, sent_kinds, sent_skips,
-        skip_ids, block_kind, title, sent_labels,
+        skip_ids, block_kind, title, sent_labels, _index_notes(flat_units, sent_texts, sent_skips),
     )
+
+
+# 比所在那一栏的条目左缘缩进这么多（字号的倍数）才是子条目
+_SUBENTRY_INDENT = 0.4
+# 说明里最多举几个子条目
+_NOTE_CHILDREN = 3
+
+
+def _index_notes(units: list[list[TextBlock]], texts: list[str], skips: list[bool]) -> list[str]:
+    """索引条目单独送翻没有上下文，log 译成「日志」，MT 下面的 divergences 译成「散度」。
+    给每条写一句说明：它是书后索引的条目，子条目在哪一条下面，有子条目的举出前几个。
+    子条目按缩进认：比同一栏最靠左的条目缩进的，挂在前面最近一条缩进更浅的条目下面。"""
+    notes = [""] * len(units)
+    by_page: dict[int, list[pymupdf.Rect]] = {}
+    for unit in units:
+        if unit[0].index:
+            by_page.setdefault(unit[0].page, []).append(unit[0].rect)
+    parents: list[int | None] = [None] * len(units)
+    children: dict[int, list[int]] = {}
+    stack: list[tuple[float, int]] = []
+    for n, (unit, skip) in enumerate(zip(units, skips)):
+        block = unit[0]
+        if not block.index:
+            stack = []
+            continue
+        if skip:
+            continue
+        rect = block.rect
+        left = min(other.x0 for other in by_page[block.page] if other.x0 < rect.x1 and other.x1 > rect.x0)
+        indent = rect.x0 - left
+        while stack and stack[-1][0] >= indent - block.size * _SUBENTRY_INDENT:
+            stack.pop()
+        if stack:
+            parents[n] = stack[-1][1]
+            children.setdefault(stack[-1][1], []).append(n)
+        stack.append((indent, n))
+
+    def head(n: int) -> str:
+        return _INDEX_REF_RE.sub("", prompts.without_marks(texts[n])).strip().rstrip(",")
+
+    for n, unit in enumerate(units):
+        if not unit[0].index or skips[n]:
+            continue
+        note = "An entry in the subject index at the back of the book"
+        if parents[n] is not None:
+            note += f", listed under the entry “{head(parents[n])}”"
+        if children.get(n):
+            note += "; its sub-entries include " + ", ".join(f"“{head(c)}”" for c in children[n][:_NOTE_CHILDREN])
+        notes[n] = note + "."
+    return notes
 
 
 def _saved_plan(src: Path, runner, layout_model: str, path: Path | None) -> _PdfPlan:
@@ -9224,7 +9278,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     src_doc, blocks, geometries, toc = plan.src_doc, plan.blocks, plan.geometries, plan.toc
     flat_units, sent_texts, sent_formulas = plan.units, plan.texts, plan.formulas
     skip_ids, block_kind = plan.skip_ids, plan.block_kind
-    raw = await runner.translate_all(sent_texts, kinds=plan.kinds, preview=True, skip=plan.skips)
+    raw = await runner.translate_all(sent_texts, kinds=plan.kinds, preview=True, skip=plan.skips, notes=plan.notes)
     await _retry_lost_placeholders(runner, sent_texts, sent_formulas, raw)
 
     async with _job_turn(runner):

@@ -389,3 +389,14 @@ def test_stray_chars_marks_symbols_absent_from_source():
     assert not stray_chars("a ✓ marks the best", "✓ 表示最好", "zh-CN")
     assert not stray_chars("Figure 2 | The pipeline", "图 2｜流程", "zh-CN")
     assert not stray_chars("90 degrees", "90°", "zh-CN")
+
+
+def test_single_item_note_is_written_into_the_system_prompt():
+    """只有一段时说明写在系统提示词末尾，原文照旧只放在用户消息里。"""
+    from app.prompts import build_messages
+
+    system, user = build_messages(["log"], "zh-CN", notes=["An entry in the subject index."])
+    assert system.endswith("Note: An entry in the subject index.")
+    assert user.endswith("log") and "Note" not in user
+    system, _ = build_messages(["log"], "zh-CN", notes=[""])
+    assert "## Item notes" not in system

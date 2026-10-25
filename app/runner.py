@@ -103,6 +103,8 @@ class Runner:
         self.document = ""
         # 按段落序号覆盖预览译文（标题改写、段界去重），同一句在不同位置可以不同
         self._index_overrides: dict[int, str] = {}
+        # 上一次 translate_all 用的缓存：键带上各段的说明（见 _NotedCache）
+        self.keyed_cache = None
 
         # ---- 边翻边预览 ----
         # segments：文档顺序的段落 [{"s": 原文, "k": 类型}]，translate_all(preview=True) 时填充
@@ -229,13 +231,15 @@ class Runner:
 
     async def translate_all(self, texts: list[str], kinds: list[str] | None = None,
                             preview: bool = False, html: list[bool] | None = None,
-                            skip: list[bool] | None = None) -> list[str]:
+                            skip: list[bool] | None = None, notes: list[str] | None = None) -> list[str]:
         """按原顺序返回译文；空白文本和已是目标语言的段落原样返回。
 
         preview=True 时记录段落供预览接口读取；kinds 是每段的类型（h1~h6 / p / li / quote / td / toc），
         只影响预览的显示样式。html 与 texts 对齐，标记哪些段是电子书富文本片段。
         skip 与 texts 对齐，标记调用方要求保留原文的段落（如参考文献章节），预览里标注为跳过。
         这个标记按位置生效：同一句在正文里出现时仍会翻译。
+        notes 与 texts 对齐，是各段在文档里所处位置的说明（索引的子条目属于哪一条），随批次交给模型选词义。
+        同一句有说明和没有说明译法可能不同，缓存按原文加说明存。同一句出现多次时用第一个说明。
         """
         n = len(texts)
         # 准备阶段到此结束。之后的进度看已译段数，格式自己再报写回的阶段
@@ -261,11 +265,23 @@ class Runner:
             texts[i] for i in range(n) if html_flags[i] and texts[i].strip() and not kept(i)
         }
         need = list(dict.fromkeys(texts[i] for i in range(n) if texts[i].strip() and not kept(i)))
+        note_of: dict[str, str] = {}
+        for text, note in zip(texts, notes or []):
+            if note and text not in note_of:
+                note_of[text] = note
+        self.translator.notes = note_of
+
+        def key(text: str) -> str:
+            note = note_of.get(text)
+            return f"{text}\n\n[note] {note}" if note else text
+
+        # 翻完以后格式自己补翻的译文（见 pdf 的 _retry_lost_placeholders）也按这个键写回
+        self.keyed_cache = cache = _NotedCache(self.cache, key)
         # 术语表要在算缓存键之前定下来：它是键的一部分
         await self._prepare_glossary(need)
         prefix = self.translator.cache_key
         tl = self.translator.target_lang
-        done_map = {} if self.fresh else self.cache.get_many(prefix, need)
+        done_map = {} if self.fresh else cache.get_many(prefix, need)
         # 整句英文回显进过缓存的话，下次重排仍是英文。丢掉，让这次重新翻译。
         echoed = [src for src, dst in done_map.items() if _is_prose_echo(src, dst)]
         # 以前批量翻译时串了位、夹带了外文的译文也进过缓存，同样丢掉重翻。只排版时没法重翻，留着
@@ -275,9 +291,8 @@ class Runner:
                        and (misplaced(src, dst, typical) or stray_chars(src, dst, tl))]
         if echoed:
             done_map = {src: dst for src, dst in done_map.items() if src not in set(echoed)}
-            drop = getattr(self.cache, "drop_many", None)
-            if callable(drop):
-                drop(prefix, echoed)
+            if callable(getattr(self.cache, "drop_many", None)):
+                cache.drop_many(prefix, echoed)
         headings = {t for t, k in zip(texts, kinds or []) if k in _HEADING_KINDS}
         html_sources = self.translator.html_texts
 
@@ -291,7 +306,7 @@ class Runner:
         # 命中时改写，预览不用重翻
         rewrites = {t: d2 for t, d in done_map.items() if (d2 := fixed(t, d)) != d}
         if rewrites:
-            self.cache.put_many(prefix, rewrites)
+            cache.put_many(prefix, rewrites)
             done_map.update(rewrites)
         todo = [t for t in need if t not in done_map]
         if self.cache_only and todo:
@@ -366,7 +381,7 @@ class Runner:
                 }
                 empty = [s for s in batch if s not in good]
                 if good:
-                    self.cache.put_many(prefix, good)
+                    cache.put_many(prefix, good)
                     done_map.update(good)
                     if preview:
                         self._record(list(good))
@@ -389,6 +404,25 @@ class Runner:
             texts[i] if not texts[i].strip() or kept(i) else done_map.get(texts[i], texts[i])
             for i in range(n)
         ]
+
+
+class _NotedCache:
+    """按原文存取译文，键换成 key(原文)：带说明的段落连说明一起算键。"""
+
+    def __init__(self, cache, key: Callable[[str], str]):
+        self.cache = cache
+        self.key = key
+
+    def get_many(self, prefix: str, texts: list[str]) -> dict[str, str]:
+        keys = {text: self.key(text) for text in texts}
+        found = self.cache.get_many(prefix, list(dict.fromkeys(keys.values())))
+        return {text: found[k] for text, k in keys.items() if k in found}
+
+    def put_many(self, prefix: str, pairs: dict[str, str]) -> None:
+        self.cache.put_many(prefix, {self.key(text): value for text, value in pairs.items()})
+
+    def drop_many(self, prefix: str, texts: list[str]) -> None:
+        self.cache.drop_many(prefix, [self.key(text) for text in texts])
 
 
 _CN_DIGITS = "零一二三四五六七八九"

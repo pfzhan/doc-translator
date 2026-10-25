@@ -548,3 +548,25 @@ def test_cached_translation_with_stray_script_is_dropped_and_retried():
     cache.d[src] = "请花一点时间 убед自己。"
     out = asyncio.run(Runner(tr, cache=cache, skip_same_lang=False, cache_only=True).translate_all([src]))
     assert out[0] == "请花一点时间 убед自己。"
+
+
+def test_notes_reach_the_prompt_and_key_the_cache():
+    """带说明的段落：说明随批次写进系统提示词，缓存按原文加说明存，以前没说明时存的译文不再命中。"""
+    systems = []
+
+    def handler(request):
+        import json as _json
+        messages = _json.loads(request.content)["messages"]
+        systems.append(messages[0]["content"])
+        return httpx.Response(200, json={"choices": [{"message": {"content": "[[p0]]\n对数\n[[p1]]\n对数似然比, 531"}}]})
+
+    tr = __import__("tests.test_translators", fromlist=["make_openai"]).make_openai(handler)
+    cache = MemCache({"log": "日志"})
+    texts = ["log", "log likelihood ratio, 531"]
+    notes = ["An entry in the subject index at the back of the book.", ""]
+    out = asyncio.run(Runner(tr, cache=cache, skip_same_lang=False).translate_all(texts, notes=notes))
+    assert out == ["对数", "对数似然比, 531"]
+    assert "## Item notes" in systems[0] and "[[p0]] An entry in the subject index" in systems[0]
+    assert "[[p1]]" not in systems[0].split("## Item notes")[1]
+    assert cache.d["log"] == "日志"
+    assert cache.d["log\n\n[note] An entry in the subject index at the back of the book."] == "对数"

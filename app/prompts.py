@@ -98,6 +98,14 @@ and class) and translate only the text between tags. Move a tag together with th
 words it wraps so the markup follows the target word order. Do not add, drop, or
 nest tags."""
 
+# 条目在文档里所处位置的说明（索引页上的子条目属于哪一条）。只用来选词义，不译、不输出
+NOTES_SUFFIX = """
+
+## Item notes
+Some items come with a note on where they appear in the document. Use the note only
+to choose the sense of the words. Translate the item itself; do not translate the note
+or add it to the output."""
+
 TITLE_PROMPT = "\n\n## Context Awareness\nDocument Metadata:\nTitle: “{{imt_title}}”"
 
 # 术语表：每行“原文 = 译文”，翻译时保持一致
@@ -176,8 +184,9 @@ def fill(template: str, values: dict) -> str:
 
 def build_messages(texts: list[str], target_lang: str, *, source_lang: str = "auto", title: str = "",
                    system_template: str = "", user_template: str = "", contains_html: bool = False,
-                   glossary: str = "") -> tuple[str, str]:
-    """返回 (system, user)。自定义模板为空时用默认模板。source_lang 是用户选的或检测出的源语言。"""
+                   glossary: str = "", notes: list[str] | None = None) -> tuple[str, str]:
+    """返回 (system, user)。自定义模板为空时用默认模板。source_lang 是用户选的或检测出的源语言。
+    notes 与 texts 对齐，是各段在文档里所处位置的说明，空串表示没有。"""
     defaults = default_prompts(target_lang, source_lang)
     system_t = system_template.strip() or defaults["system"]
     user_t = user_template.strip() or defaults["user"]
@@ -211,6 +220,13 @@ def build_messages(texts: list[str], target_lang: str, *, source_lang: str = "au
         system += FORMULA_SUFFIX
     if any(_STYLE_IN_TEXT.search(text) for text in texts):
         system += STYLE_SUFFIX
+    noted = [(i, note) for i, note in enumerate(notes or []) if note]
+    if noted:
+        system += NOTES_SUFFIX + "\n"
+        if len(texts) == 1:
+            system += f"Note: {noted[0][1]}"
+        else:
+            system += "\n".join(f"[[{marker}{i}]] {note}" for i, note in noted)
     # {{text}} 最后替换，避免原文里恰好有 {{xxx}} 被当成占位符
     user = fill(user_t.replace("{{text}}", "\0TEXT\0"), values).replace("\0TEXT\0", body)
     return system, user

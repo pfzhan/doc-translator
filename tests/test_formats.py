@@ -8192,3 +8192,29 @@ def test_drawn_visible_space_is_read_into_the_text():
     lines = ["".join(span["text"] for span in line["spans"]) for block in data["blocks"] for line in block["lines"]]
     assert lines[0].replace("  ", " ") == "merged to ␣re."
     assert " ".join(lines[1:]) == "Next ␣ r (total)"
+
+
+def test_index_entries_get_notes_with_their_parent_entry():
+    """索引条目的说明：子条目按缩进挂在前面最近一条缩进更浅的条目下面，有子条目的举出前几个。
+    跨栏时按各栏自己的左缘量缩进。不在索引页上的单元没有说明。"""
+    from app.formats.pdf import TextBlock, _index_notes
+
+    def block(text, x0, y0, index=True):
+        rect = pymupdf.Rect(x0, y0, x0 + 80, y0 + 10)
+        return [TextBlock(5, rect, [rect], text, 9.0, "#000", False, index=index)]
+
+    units = [
+        block("Index", 72, 50, index=False),
+        block("MT, {b}276{/b}", 72, 100), block("divergences, {b}278{/b}", 82, 110),
+        block("post-editing, 293", 82, 120), block("multinomial logistic regression, 108", 72, 130),
+        block("why used for probabilities,", 322, 100), block("log", 312, 90),
+    ]
+    units = [units[0], units[1], units[2], units[3], units[4], units[6], units[5]]
+    texts = [unit[0].text for unit in units]
+    notes = _index_notes(units, texts, [False] * len(units))
+    assert notes[0] == ""
+    assert notes[1] == ("An entry in the subject index at the back of the book; "
+                        "its sub-entries include “divergences”, “post-editing”.")
+    assert notes[2] == "An entry in the subject index at the back of the book, listed under the entry “MT”."
+    assert notes[4] == "An entry in the subject index at the back of the book."
+    assert "listed under the entry “log”" in notes[6]

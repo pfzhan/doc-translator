@@ -48,6 +48,8 @@ class Translator:
         self.usage = {"prompt": 0, "completion": 0}
         # 由 Runner 按调用方标记填入：这些原文是电子书富文本片段，不能从尖括号猜
         self.html_texts: set[str] = set()
+        # 由 Runner 按调用方给的说明填入：原文 → 它在文档里所处位置的说明（只有大模型引擎用得上）
+        self.notes: dict[str, str] = {}
 
     def is_html_item(self, text: str) -> bool:
         return text in self.html_texts
@@ -283,7 +285,7 @@ class LLMTranslator(Translator):
             texts, self.target_lang, source_lang=self.effective_source, title=self.title,
             system_template=self.prompt, user_template=self.user_prompt,
             contains_html=any(self.is_html_item(t) for t in texts),
-            glossary=self.glossary_for(texts),
+            glossary=self.glossary_for(texts), notes=[self.notes.get(t, "") for t in texts],
         )
 
     async def _complete(self, system: str, user: str) -> str:
