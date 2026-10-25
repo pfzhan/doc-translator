@@ -2200,11 +2200,15 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and bool(_RELATION_RE.search(stripped))
         )
         # 缩进排开的一行（例句的译文）下面另起一段：这一行比上一行靠左，下一行又比它靠左一两个字宽，
-        # 这一行是下一段的首行缩进，不是上一行的续行。两端对齐的行拆成几截，按整行的左缘比
+        # 这一行是下一段的首行缩进，不是上一行的续行。两端对齐的行拆成几截，按整行的左缘比。
+        # 三行对着同一条中线是居中排的（作者单位），越往下越宽，不是缩进
         above = _row_left(items, i - 1)
         below = _row_left(items, i + 1) if i + 1 < len(items) and items[i + 1][1].y0 >= rect.y1 - 0.5 * psize else None
+        centered_rows = below is not None and all(
+            abs((other.x0 + other.x1) - (rect.x0 + rect.x1)) / 2 <= 0.15 * psize for other in (prect, items[i + 1][1])
+        )
         opens_indent = (
-            own_row and seg_start and below is not None
+            own_row and seg_start and below is not None and not centered_rows
             and above - rect.x0 > 0.5 * psize and 0.5 * psize < rect.x0 - below <= 3 * psize
             and not ptext.rstrip().endswith((",", "，", "、", ";", "；", ":", "："))
         )

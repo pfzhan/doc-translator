@@ -8168,7 +8168,7 @@ def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
 
 def test_a_paragraph_indented_under_an_inset_line_starts_on_its_own():
     """例句的译文缩进排成一行，下一段的首行缩进比它靠左、比后面几行靠右，是新的一段。
-    两端对齐的参考文献一行拆成几截，按整行的左缘比，不拆。"""
+    两端对齐的参考文献一行拆成几截，按整行的左缘比，不拆。居中排的几行不算缩进。"""
     from app.formats.pdf import _split_lines
 
     def item(text, x0, y0, x1):
@@ -8184,6 +8184,10 @@ def test_a_paragraph_indented_under_an_inset_line_starts_on_its_own():
              item("Journal of Machine Learning", 242.0, 247.1, 339.3), item("Research, 21(248):1-43.", 223.3, 255.6, 301.9),
              item("Henderson, P., X. Li, D. Jurafsky,", 213.3, 266.7, 339.3)]
     assert any({2, 3} <= set(group) for group in _split_lines(entry))
+    # 居中排的作者单位越往下越宽，三行对着同一条中线，不是缩进
+    author = [item("Machine Learning Group", 339.9, 182.1, 441.1), item("Universiteit van Amsterdam", 334.4, 193.0, 446.6),
+              item("Welling Max at the institute of", 327.7, 203.5, 453.3)]
+    assert _split_lines(author) == [[0, 1, 2]]
 
 
 def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
