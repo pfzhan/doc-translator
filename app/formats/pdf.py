@@ -5334,8 +5334,16 @@ def _code_block(block: TextBlock) -> bool:
 
     句子里夹着的等宽单词（属性名、函数名）不在这里。块里八成以上是等宽字才算，
     FROM R 这种短行认不出等宽也不影响整块。
+    正文字只有一个词、等宽字占三分之二以上的，是表格一行的行名带着几格记号（rooster -female,
+    +chicken, +adult），和同表的其他行一样留原字。
     """
-    return _mono_share(block) >= 0.8
+    share = _mono_share(block)
+    if share >= 0.8:
+        return True
+    plain = " ".join(
+        str(span["text"]) for span in _block_spans(block) if not _span_is_math(span) and not _mono_span(span)
+    )
+    return share >= 2 / 3 and sum(1 for word in plain.split() if any(ch.isalpha() for ch in word)) == 1
 
 
 def _code_panel_ids(blocks: list[TextBlock], scans: list[PageScan]) -> set[int]:
@@ -5574,7 +5582,7 @@ _LIST_RUN = 3
 
 def _line_lists(blocks: list[TextBlock], frames: Sequence[TextFrame | None]) -> set[int]:
     """一行一句的清单（幻灯片上的例句）里的块。几块各占一行、左缘对齐、行距一样，
-    一半以上的换行处，上一行后面还放得下下一行的第一个词：是逐行排的，不是一段折出来的。
+    一半以上的换行处，上一行后面还放得下下一行的第一个词，或者每行同一个词起头：是逐行排的，不是一段折出来的。
     段落按行折，上一行放得下的词不会挪到下一行。绕图排的几行止于图边，同一处止笔的行够多，
     栏的右缘按图边算（见 _column_right）。"""
     rows_of: dict[int, list[pymupdf.Rect]] = {}

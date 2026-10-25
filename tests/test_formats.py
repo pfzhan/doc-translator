@@ -5707,6 +5707,11 @@ def test_block_of_typewriter_lines_is_code_and_inline_names_are_not():
         span("part, supplier, ", "Courier"), span("and customer.", "Times-Roman"),
     ]])
     assert not _code_block(prose)
+    # 表格一行：斜体的行名后面是几格等宽记号
+    row = _block_with_spans([[
+        span("rooster", "NimbusRomNo9L-ReguItal"), span(" -female, +chicken, +adult", "Courier"),
+    ]])
+    assert _code_block(row)
 
 
 def test_lone_relation_symbol_from_a_symbol_font_stays_a_formula():
