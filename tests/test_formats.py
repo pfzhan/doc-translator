@@ -3845,8 +3845,9 @@ def test_a_line_after_an_inline_formula_wraps_to_the_column_edge():
 
 
 def test_layout_model_regions_join_a_paragraph_cut_by_a_formula():
-    """开了版面模型时，前后两个单元落在模型框出的同一段正文里，就是被式子切开的同一段。
-    没有模型、上一块句末收住而下一块大写起头（一串列表）、上一块是一行作者名的，都不并。"""
+    """开了版面模型时，前后两个单元落在模型框出的同一段正文里、切口上又有式子，就是被式子切开的同一段。
+    没有模型、上一块句末收住而下一块大写起头（一串列表）、上一块是一行作者名、
+    切口上没有式子的（幻灯片上一条条要点），都不并。"""
     from app.formats.pdf import TextBlock, _region_joins
     from app.formats.pdf_roles import HeuristicLayout
 
@@ -3864,9 +3865,14 @@ def test_layout_model_regions_join_a_paragraph_cut_by_a_formula():
         return len(out) == 2 and out[0] == [head, tail]
 
     head = blk("We fix weights α with α > 0 and consider the measure on the line. For a Borel set E,", 505)
-    tail = blk("1E is the indicator function of that set, and we let the map act on it.", 552, rows=2)
+    tail = blk("1E is the indicator function of that set, and we let the map act on it.", 562, rows=2)
     assert joined(head, tail)
     assert not joined(head, tail, regions=[])
+    near = blk("1E is the indicator function of that set, and we let the map act on it.", 541, rows=2)
+    assert not joined(head, near)
+    near.span_lines = [[{"text": "1E", "font": "CMMI10", "flags": 0, "size": 10},
+                        {"text": " is the indicator function of that set,", "font": "Times", "flags": 0, "size": 10}], []]
+    assert joined(head, near)
     ended = blk("We show that the dimension remains similar over time under fixed conditions.", 505)
     assert not joined(ended, blk("We demonstrate that aging changes the dimension of the data.", 552, rows=2))
     authors = blk("Jie Yu, Jianyu Zhang, Zian Pei, Xue Shi, Mohamed Ali", 505, rows=1, x0=190)

@@ -2889,7 +2889,7 @@ def _region_joins(
     regions_of: Callable[[int], list[pymupdf.Rect]],
 ) -> list[list[TextBlock]]:
     """开了版面模型时：同一页上前后两个单元（中间可以隔着跳过的块）落在模型框出的同一段正文里，
-    就是被行间公式切开的同一段（… with{式子} For a Borel set … | 1{式子} is the indicator …）。
+    切口上又有式子，就是被式子切开的同一段（… with{式子} For a Borel set … | 1{式子} is the indicator …）。
     上一块要是成段的正文：模型也会把一串作者名、算法的一行行框成一块（见 _region_prose）。
     模型常把一串列表框成一块，上一块句末收住、下一块大写起头的不并（… under fixed conditions. | We show that …）。
     标题、图注、页眉页脚、列表项、行首的粗斜体标签也不并。没有模型时原样返回。"""
@@ -2918,17 +2918,24 @@ def _region_joins(
 
 
 def _region_prose(block: TextBlock, box: pymupdf.Rect) -> bool:
-    """框里成段的正文：有几个小写的词（一串作者名没有），不止一行，或者单独一行从框的左缘起笔
-    （算法的一步步缩进排在行号右边）。"""
+    """框里成段的正文：有几个小写的词（一串作者名没有），不止一行，或者单独一行撑满框宽。
+    幻灯片的要点、算法的一步步、提示词模板都是一行一行的短句，模型也框成一块。"""
     if len(re.findall(r"\b[a-z]{3,}\b", block.text)) < _REGION_WORDS:
         return False
-    return len(_visual_lines(block)) >= 2 or block.rect.x0 - box.x0 <= 1.5 * block.size
+    return len(_visual_lines(block)) >= 2 or (
+        block.rect.x0 - box.x0 <= 1.5 * block.size and box.x1 - block.rect.x1 <= 1.5 * block.size
+    )
 
 
 def _region_continues(prev: TextBlock, nxt: TextBlock, halt_ids: set[int]) -> bool:
     if prev.page != nxt.page or id(prev) in halt_ids or id(nxt) in halt_ids:
         return False
-    if _list_item(nxt.text) or _LABEL_START_RE.match(nxt.text) or _styled_edge(nxt, 0):
+    if (_list_item(nxt.text) or _LABEL_START_RE.match(nxt.text) or _styled_edge(nxt, 0)
+            or _ALGO_LINE_RE.match(nxt.text)):
+        return False
+    # 切口上有式子：上一块的末行、下一块的首行里有式子，或者中间空出一行行间公式
+    if not (_math_on_line(prev, -1) or _math_on_line(nxt, 0)
+            or nxt.rect.y0 - prev.rect.y1 >= _REGION_GAP * prev.size):
         return False
     letter = re.search(r"[A-Za-z]", nxt.text)
     ended = _END_MARK_RE.sub("", prev.text).rstrip().endswith(tuple(".!?;:。！？；："))
@@ -2955,6 +2962,10 @@ def _region_index(rect: pymupdf.Rect, regions: list[pymupdf.Rect]) -> int | None
 _REGION_COVER = 0.5
 # 模型并段时上一块至少有这么多小写的词
 _REGION_WORDS = 3
+# 上下两块之间空出这么多（字号的倍数）就是中间排了一行行间公式
+_REGION_GAP = 1.5
+# 算法的行号：6: until converged
+_ALGO_LINE_RE = re.compile(r"\d{1,3}:\s")
 # 往后最多跳过这么多页整页的图表，去找续段
 _FLOAT_PAGES = 2
 # 分图号：(C)、(b)、C.
@@ -6600,6 +6611,15 @@ def _opens_with_math(block: TextBlock) -> bool:
     """第一截是公式字体。"""
     spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
     return bool(spans) and _span_is_math(spans[0])
+
+
+def _math_on_line(block: TextBlock, index: int) -> bool:
+    """块的第几行（-1 是末行）里有公式字体。"""
+    lines = block.span_lines or []
+    if not lines:
+        return False
+    return any(_span_is_math(span) for span in lines[index] if str(span.get("text") or "").strip())
+
 
 
 def _opens_with_word(block: TextBlock) -> bool:
