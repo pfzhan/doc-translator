@@ -741,6 +741,31 @@ def test_wrapped_letter_period_stays_in_the_paragraph():
     assert _split_lines(paren) == [[0], [1, 2], [3]]
 
 
+def test_a_dash_after_a_full_line_continues_the_sentence():
+    """排满的上一行没说完，下一行行首的破折号是句中的，不是弹点。上一行是大一号的等宽网址也一样。
+    破折号起头的一项下面的破折号是同级的下一项，缩进、换了字号的是下一级弹点。"""
+    from app.formats.pdf import _split_lines
+
+    wrapped = [
+        _line("performance of 80%. Most notably, the model attains a score of 143.7/150 in AMC 12 2024",
+              70.5, 524.4, 366.6, size=11),
+        _line("(https://artofproblemsolving.com/wiki/index.php/2024_AMC_12B_Problems)", 70.5, 525.5, 379.3, size=12),
+        _line("- a performance that, when combined with its AIME results, yields a score exceeding the",
+              69.4, 524.4, 393.7, size=11),
+    ]
+    assert _split_lines(wrapped) == [[0, 1, 2]]
+    items = [
+        _line("– Effect of Number of Training Steps; and", 340.5, 525.5, 168.1, size=10.9),
+        _line("– Ablation for Different Masking Proce-", 340.5, 525.5, 183.8, size=10.9),
+    ]
+    assert _split_lines(items) == [[0], [1]]
+    nested = [
+        _line("• A relational database layer for Apache HBase", 43.2, 581.3, 101.5, size=25),
+        _line("– Query engine", 79.2, 581.3, 127.5, size=22),
+    ]
+    assert _split_lines(nested) == [[0], [1]]
+
+
 def test_justified_rows_are_not_a_centered_stack():
     """排满的正文行左缘差一两磅，宽窄几乎一样，不是居中排的一摞。作者名、单位、邮箱宽窄不一。"""
     from app.formats.pdf import _centered_rows

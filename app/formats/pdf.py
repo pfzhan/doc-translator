@@ -89,6 +89,7 @@ NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
 _OPERATOR_RE = re.compile(r"[=+−±×·<>≤≥≈≃≅∼≡≠→←⇒⇔∈∉⊂⊆∝]+")
 # 单个字母加句点，像 "a. " 也像换行后的 "Q. The cost"。后者不是列表项。
 _LETTER_BULLET_RE = re.compile(r"^[a-zA-Z][.)]\s+")
+_DASH_BULLET_RE = re.compile(r"^[-–—]\s+")
 # 行内公式最高几个字高。根号、求和带上下限的式子在这以内按原大写，行距跟着撑开
 _INLINE_FORMULA_EM = 2.6
 # 盒子放不下撑开的行距时，公式压到的高度：正好在一行里
@@ -1941,8 +1942,17 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         # 一行可能拆成几截（并排的几个作者名），按整行比
         restyled = stacked and not same_visual_line and _row_style(row_spans) != _row_style(items[i][2])
         # 撑满的上一行没有句末，下一行的 "Q. " 是换行，不是 "a. " 这种列表项。
+        # 行首的破折号也可能是句中的（... 2024 (URL) | - a performance that ...）：和这一段的首行同字号
+        # （上一行可能是大一号的等宽网址），不往里缩，这一段也不是破折号起头的一项。
+        # 缩进、换了字号的是下一级弹点，接着上一项的是同级的下一项
+        dash_wrap = (
+            bool(_DASH_BULLET_RE.match(stripped))
+            and abs(_text_size(items[i][2]) - _text_size(items[cur[0]][2])) <= psize * 0.05
+            and rect.x0 <= prect.x0 + 0.5 * psize
+            and not _DASH_BULLET_RE.match(items[cur[0]][0].lstrip())
+        )
         wrapped_letter = (
-            bool(_LETTER_BULLET_RE.match(stripped))
+            (bool(_LETTER_BULLET_RE.match(stripped)) or dash_wrap)
             and max_x1 - prect.x1 <= 3 * psize
             and not ptext.rstrip().endswith(_LIST_INTRO_END)
         )
