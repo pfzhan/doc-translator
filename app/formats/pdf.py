@@ -5030,13 +5030,15 @@ def _extract(
         geometries[pno] = geo
         ordered.extend(reading_order(page_blocks, geo))
     lines_first = _merge_caption_fragments(_merge_visual_lines(ordered, geometries))
-    merged = _merge_continuations(lines_first, _line_lists(lines_first, frames))
-    # 页眉页脚不和正文的半句相接：书的页眉靠右排、不带句号，像一行的后半句。
+    # 页眉页脚不和正文的半句相接：书的页眉靠右排、不带句号，像一行的后半句；
+    # 论文的页眉停在 et al. 上，像没写完的半句。
     # 页眉常在页顶窄带以下、版心以上，要带上版心才认得出
     margin_geometries = [
         PageGeometry.from_page(doc[pno], [block.rect for block in by_page.get(pno, [])], frames[pno], scans[pno])
         for pno in range(doc.page_count)
     ]
+    heads = {id(block) for block, edge in zip(lines_first, margin_skips(lines_first, margin_geometries)) if edge}
+    merged = _merge_continuations(lines_first, _line_lists(lines_first, frames), heads)
     edges = {id(block) for block, edge in zip(merged, margin_skips(merged, margin_geometries)) if edge}
     merged = _merge_same_line_sentences(_merge_line_tails(merged, edges), edges)
     return _split_affiliation_tails(merged), frames, scans
@@ -6191,13 +6193,15 @@ def _same_opening(texts: Sequence[str]) -> bool:
     return len(set(heads)) == 1
 
 
-def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = frozenset()) -> list[TextBlock]:
+def _merge_continuations(
+    blocks: list[TextBlock], listed: Collection[int] = frozenset(), margins: Collection[int] = frozenset(),
+) -> list[TextBlock]:
     """合并同页内被公式/碎片拆断的段落续行：上行无句末标点、下行小写（或闭括号）
     开头、同左 margin、行距正常，就是同一段被拆开的两行。各翻各的会产出半截译文，
     渲染时在断点强制换行（'（如 | 序列）'）。中文换行左缘对齐、上行够长时同样接上。
     英文大写开头的换行仍分开，那和下一句分不开；上一行停在 and、of、the 这类词上的除外。
     段落绕着图排时，图注在阅读顺序里会夹在两半中间。夹着的这块在上一半下面、
-    下一半旁边时，跳过它和再前面一块比。"""
+    下一半旁边时，跳过它和再前面一块比。margins 是页眉页脚，不和上下的块相接。"""
     out: list[TextBlock] = []
     indents = _indents_paragraphs(blocks)
     measure = _body_measure(blocks) if indents else 0.0
@@ -6345,6 +6349,7 @@ def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = froz
                 break
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
             if (p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note)
+                    and id(p) not in margins and id(b) not in margins
                     and p.leader is None and b.leader is None and not p.entry
                     and not (id(p) in listed and id(b) in listed)
                     and (title_frag or latin or (y_close and _cjk_wrap(p, b)))

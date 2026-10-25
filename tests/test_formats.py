@@ -3716,6 +3716,25 @@ def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
     assert any(pymupdf.Rect(span["bbox"]).x1 > 450 and span["bbox"][1] > 443 for span in spans)
 
 
+def test_a_running_head_does_not_run_into_the_first_line_below():
+    """页眉停在 et al. 上，像没写完的半句。认成页眉的块不和下面小写起头的正文相接。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blocks():
+        head = TextBlock(page=1, rect=pymupdf.Rect(51, 42, 344, 54), line_rects=[pymupdf.Rect(51, 42, 344, 54)],
+                         text="2 Sarkar et al.", size=10.0, color="#000", bold=False)
+        lines = [pymupdf.Rect(51, 67 + 12.5 * i, 292, 77 + 12.5 * i) for i in range(3)]
+        body = TextBlock(page=1, rect=pymupdf.Rect(51, 67, 292, 102), line_rects=lines,
+                         text="rounded by an outer, extended low surface brightness envelope. This came into light.",
+                         size=10.0, color="#000", bold=False)
+        return head, body
+
+    head, body = blocks()
+    assert len(_merge_continuations([head, body])) == 1
+    head, body = blocks()
+    assert len(_merge_continuations([head, body], margins={id(head)})) == 2
+
+
 def test_a_full_line_wraps_into_a_capitalized_next_line():
     """段落缩进的首行和页边旁注挤在一块里被单拆出来。它排到右缘、没有句末标点，下一行回到左缘、
     以专名大写起头（RNNs, one where…），仍是同一句。末行没排满、或者有句号的不接。"""
