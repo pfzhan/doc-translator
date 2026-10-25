@@ -8900,3 +8900,24 @@ def test_an_indented_paragraph_start_is_not_a_continuation():
 
     assert len(plan("The adjoint state carries the sensitivity of the final error to the control.")) == 6
     assert len(plan("the adjoint state carries the sensitivity of the final error to the control.")) == 5
+
+
+def test_a_paragraph_continues_after_a_page_of_figures():
+    """下一页整页是图，只有图注和紧贴着的分图说明 (C) …：上一页没写完的段落接在再下一页。
+    图注下面紧接着正文字号的段落时，那一页有正文，不跳过。"""
+    from app.formats.pdf import TextBlock, _cross_page_units
+
+    def blk(text, page, y, rows=3, size=10.0):
+        rect = pymupdf.Rect(72, y, 540, y + 12 * rows)
+        lines = [pymupdf.Rect(72, y + 12 * k, 540, y + 12 * k + 11) for k in range(rows)]
+        return TextBlock(page=page, rect=rect, line_rects=lines, text=text, size=size, color="#000", bold=False)
+
+    host = blk("By the end of training, A is mutually", 0, 600)
+    caption = blk("Figure 5: Model comparison on the supervised dataset.", 1, 519, rows=5)
+    panel = blk("(C) Difference in summed AIC relative to the best-fitting model.", 1, 584, rows=3)
+    tail = blk("excitatory with all units; B and C are mutually inhibitory.", 2, 74, rows=10)
+    units = _cross_page_units([host, caption, panel, tail], 10.0)
+    assert [host, tail] in units
+    body = blk("bie and Shutova (2022), who show that ablating induction heads hurts.", 1, 584, rows=6)
+    units = _cross_page_units([host, caption, body, tail], 10.0)
+    assert [host, tail] not in units

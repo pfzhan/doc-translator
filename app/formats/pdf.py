@@ -2807,16 +2807,53 @@ def _column_continuations(
             if host.rect.x1 > head.rect.x0 + 4:
                 continue
             _try_column_pair(pairs, tails, host, head, median, halt_ids, skip_ids)
-        nxt = columns_of.get(pno + 1) or []
+        later = _next_text_page(by_page, pno, median, skip_ids, ignored)
+        nxt = columns_of.get(later) or []
         if not columns or not nxt:
             continue
         host = host_of(pno, columns[-1])
-        head = head_of(pno + 1, nxt[0])
+        head = head_of(later, nxt[0])
         _try_column_pair(
             pairs, tails, host, head, median, halt_ids, skip_ids,
             allow_capital=bool(host and head and _column_wrap(host, head)),
         )
     return pairs
+
+
+# 往后最多跳过这么多页整页的图表，去找续段
+_FLOAT_PAGES = 2
+# 分图号：(C)、(b)、C.
+_PANEL_LABEL_RE = re.compile(r"\(?[A-Za-z]\)\s|[A-Z]\.\s")
+
+
+def _next_text_page(
+    by_page: dict[int, list[TextBlock]], pno: int, median: float, skip_ids: set[int], ignored: set[int],
+) -> int:
+    """pno 之后第一个有正文的页。整页只有图、图注（连同紧贴在图注下面的分图说明）和页眉页脚的页跳过：
+    上一页没写完的段落接在它后面那一页。分图说明以 (C) 这样的分图号起头，或者比正文小一号；
+    图注下面紧接着的正文字号的段落是正文（上一页断开的那段接在这里）"""
+    later = pno + 1
+    while later <= pno + _FLOAT_PAGES and _float_page(by_page.get(later) or [], median, skip_ids, ignored):
+        later += 1
+    return later if later <= pno + _FLOAT_PAGES else pno + 1
+
+
+def _float_page(blocks: list[TextBlock], median: float, skip_ids: set[int], ignored: set[int]) -> bool:
+    prose = [
+        block for block in blocks
+        if id(block) not in ignored and id(block) not in skip_ids and block.size >= median * 0.8
+    ]
+    captions = [block for block in prose if _is_float_text(block.text)]
+    for block in sorted(prose, key=lambda block: block.rect.y0):
+        if block in captions:
+            continue
+        panel = _PANEL_LABEL_RE.match(block.text.lstrip()) is not None or block.size < median * 0.95
+        if panel and any(0 <= block.rect.y0 - caption.rect.y1 <= 1.5 * block.size
+                         and abs(block.rect.x0 - caption.rect.x0) <= block.size for caption in captions):
+            captions.append(block)
+            continue
+        return False
+    return True
 
 
 def _cross_page_units(
@@ -2869,13 +2906,14 @@ def _cross_page_units(
     used: set[int] = {id(tail) for tail in extra.values()}
     for pno in pages:
         body = _page_edge_blocks(by_page[pno], median, ignored | aside_ids)
-        nxt = by_page.get(pno + 1) or []
+        later = _next_text_page(by_page, pno, median, skip_ids, ignored)
+        nxt = by_page.get(later) or []
         nxt_body = _page_edge_blocks(nxt, median, ignored | aside_ids)
         first = _column_page_start(nxt_body, geometries)
         end = _column_page_end(body, geometries)
         head = (
-            _left_column_head(nxt_body, geometries[pno + 1])
-            if geometries and pno + 1 < len(geometries) else None
+            _left_column_head(nxt_body, geometries[later])
+            if geometries and later < len(geometries) else None
         )
         for b in by_page[pno]:
             if id(b) in used:
