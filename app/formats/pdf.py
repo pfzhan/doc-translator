@@ -9318,7 +9318,7 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
             pass  # 引文单词不是标题，编号条目的续行还没结束
         else:
             prev_numbered = False
-    for index in _headless_bibliography(prepared):
+    for index in _headless_bibliography(prepared) | _headless_numbered_bibliography(prepared, median):
         skips[index] = True
     return skips
 
@@ -9367,6 +9367,53 @@ def _headless_bibliography(prepared: list[tuple[TextBlock, str]]) -> set[int]:
             end += 1
         found.update(range(index, end))
         index = max(end, index + 1)
+    return found
+
+
+# 编号条目的开头：[12] A. Buonanno。上一条的续行和下一条挤在一块里时，编号跟在句点后面
+_NUMBERED_LEAD_RE = re.compile(r"(?:^|[.)]\s)\[(\d{1,3})\]\s+\S")
+
+
+def _headless_numbered_bibliography(prepared: list[tuple[TextBlock, str]], median: float) -> set[int]:
+    """没有标题的编号参考文献（revtex 的期刊版式不印 References）：从 [1] 起头的块开始，
+    往后几块里编号挨着排到 [4] 以上就是。编号连不上、隔了几块没有新条目、字号变大，
+    或者碰到标题（SUPPLEMENTAL MATERIAL、另一栏的 Appendix F），到此为止。
+    标题后面以下一个编号起头的块是另一栏接着排的条目，从那里接着认。
+    """
+    numbers = [[int(n) for n in _NUMBERED_LEAD_RE.findall(text)] for _, text in prepared]
+
+    def stops(block: TextBlock, text: str, size: float) -> bool:
+        return block.size > size + 0.5 or _biblio_heading_like(block, text, median) or (block.bold and len(text) < 80)
+
+    found: set[int] = set()
+    resume = None
+    index = 0
+    while index < len(prepared):
+        block, text = prepared[index]
+        opens = text.startswith("[1] ") and _biblio_entry_citation(text)
+        if not opens and (resume is None or resume not in numbers[index]):
+            index += 1
+            continue
+        first = 1 if opens else resume
+        size = block.size
+        expected = first
+        last = cursor = index
+        while cursor < len(prepared) and cursor - last <= _ENTRY_GAP and not stops(*prepared[cursor], size):
+            for number in numbers[cursor]:
+                if number == expected:
+                    expected += 1
+                    last = cursor
+            cursor += 1
+        if first == 1 and expected - 1 < _ENTRY_LEADS:
+            index += 1
+            continue
+        end = last + 1
+        # 最后一条的续行：不再有编号
+        while end < cursor and not numbers[end]:
+            end += 1
+        found.update(range(index, end))
+        resume = expected
+        index = end
     return found
 
 

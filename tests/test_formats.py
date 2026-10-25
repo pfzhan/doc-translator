@@ -1679,6 +1679,34 @@ def test_table_cells_do_not_set_the_column_body_size():
     assert all(block in kept for block in body)
 
 
+def test_pdf_biblio_numbered_entries_without_a_heading():
+    """revtex 的期刊版式不印 References：[1] 起头、编号挨着往下排的一串是参考文献。
+    碰到标题停住，另一栏接着排的下一个编号从那里续上。正文里一句 [1] 起头的不算。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size=9.0, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    blocks = [
+        blk("In future work we will present a more detailed exposition of our methods.", 10),
+        blk("[1] B. P. Abbott et al. (LIGO Scientific, Virgo), Phys. Rev. Lett. 116, 061102 (2016)."),
+        blk("[2] R. Abbott et al., Phys. Rev. X 13, 041039 (2023), arXiv:2111.03606 [gr-qc]."),
+        blk("[3] A. Buonanno and T. Damour, Phys. Rev. D 59, 084006"),
+        blk("(1999), arXiv:gr-qc/9811091. [4] A. Buonanno and T. Damour, Phys. Rev. D 62, 064015"),
+        blk("(2000), arXiv:gr-qc/0001013."),
+        blk("Appendix F: Control-space dimension and optimizer", bold=True),
+        blk("Table VIII compares 21- and 27-parameter controls at all three stages.", 10),
+        blk("Phys. Rev. D 108, 124035 (2023). [5] L. Pompili et al., Phys. Rev. D 108, 124035 (2023)."),
+        blk("[6] https://github.com/DUsseglio/Scattering-Waveform-1SF."),
+        blk("SUPPLEMENTAL MATERIAL", bold=True),
+        blk("The leading multipole moments take the form below.", 10),
+    ]
+    assert biblio_skips(blocks) == [False, True, True, True, True, True, False, False, True, True, False, False]
+    assert biblio_skips([blk("[1] We first fix the gauge, Phys. Rev. D 59 (1999).", 10),
+                         blk("The second step follows.", 10)]) == [False, False]
+
+
 def test_pdf_biblio_author_year_entries_after_the_heading():
     """作者-年份体的条目不带编号和括号年份。标题后面连着几条「姓, 名缩写.」起头的就进入参考文献；
     正文里只一句这样开头的不算。"""
