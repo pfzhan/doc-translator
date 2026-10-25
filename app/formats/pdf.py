@@ -2441,6 +2441,33 @@ def _try_column_pair(
     tails.add(id(tail))
 
 
+def _float_contents(column: list[TextBlock], page_blocks: list[TextBlock]) -> set[int]:
+    """栏顶一张表（图）的字：从栏顶到下面的图注（Table 7: …）之间，每一行都没排到栏的右缘。
+    表头、行名都是短行；段落的行排满栏宽，栏顶是段落时不算。图注在表上面的不管。
+    栏的右缘按两端对齐的正文行最常收在的地方算，栏里比正文宽的图不算。"""
+    if not column:
+        return set()
+    x0 = min(block.rect.x0 for block in column)
+    x1 = max(block.rect.x1 for block in column)
+    ends = Counter(round(line.x1) for block in column for line in (block.line_rects or [block.rect]))
+    right, count = ends.most_common(1)[0]
+    if count < 3:
+        return set()
+    captions = [
+        block for block in page_blocks
+        if _is_float_text(block.text) and block.rect.x0 < x1 and block.rect.x1 > x0
+    ]
+    if not captions:
+        return set()
+    caption = min(captions, key=lambda block: block.rect.y0)
+    above = [block for block in column if block.rect.y1 <= caption.rect.y0 + 1]
+    if not above or any(
+        line.x1 >= right - block.size * 2 for block in above for line in (block.line_rects or [block.rect])
+    ):
+        return set()
+    return {id(block) for block in above}
+
+
 def _column_continuations(
     by_page: dict[int, list[TextBlock]],
     median: float,
@@ -2450,7 +2477,7 @@ def _column_continuations(
 ) -> dict[int, TextBlock]:
     """左栏页尾接到右栏页首，右栏页尾接到下一页左栏。
 
-    栏顶的图、清单和图注跳过，续句在它们下面。几何栏不准时也按左缘分，
+    栏顶的图、清单和图注跳过，续句在它们下面，栏顶的表也是（见 _float_contents）。几何栏不准时也按左缘分，
     不依赖 reads_in_columns。同一栏跨页不放开大写：另一栏没形成左缘时，
     页末左栏不能把下一页新起的一段吞进去。
     """
@@ -2468,8 +2495,9 @@ def _column_continuations(
         columns_of[pno] = [column for column in columns if column]
         orphans_of[pno] = orphans
 
-    def head_of(column: list[TextBlock]) -> TextBlock | None:
-        body = _column_body(column)
+    def head_of(pno: int, column: list[TextBlock]) -> TextBlock | None:
+        contents = _float_contents(column, by_page.get(pno) or [])
+        body = _column_body([block for block in column if id(block) not in contents])
         return _column_top(body) if body else None
 
     def host_of(pno: int, column: list[TextBlock]) -> TextBlock | None:
@@ -2483,7 +2511,7 @@ def _column_continuations(
         for index in range(len(columns) - 1):
             host = host_of(pno, columns[index])
             # 续句不比上半句的字大。右栏顶上比正文大的是两栏上面的标题、署名，续句在它们下面
-            head = head_of([
+            head = head_of(pno, [
                 block for block in columns[index + 1] if host is None or block.size <= host.size * 1.1
             ])
             # 左栏写到底、再跳到右栏顶，才是换栏续句。并排开头不接。
@@ -2496,7 +2524,7 @@ def _column_continuations(
         if not columns or not nxt:
             continue
         host = host_of(pno, columns[-1])
-        head = head_of(nxt[0])
+        head = head_of(pno + 1, nxt[0])
         _try_column_pair(
             pairs, tails, host, head, median, halt_ids, skip_ids,
             allow_capital=bool(host and head and _column_wrap(host, head)),

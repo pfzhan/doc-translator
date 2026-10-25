@@ -4046,6 +4046,29 @@ def test_column_wrap_joins_when_geometry_misses_the_gutter():
     assert [unit for unit in joined if len(unit) == 2] == [[cus, prose]]
 
 
+def test_a_column_continues_below_the_table_at_the_top_of_the_next_column():
+    """右栏顶上是一张表，表注在表下面。表头、行名都是短行，左栏没写完的句子接在表注下面的正文上。
+    栏顶是排满的段落时照常接上。"""
+    from app.formats.pdf import TextBlock, _cross_page_units
+    from app.formats.pdf_layout import Column, PageGeometry
+
+    def blk(text, x0, y, x1, rows=1):
+        rect = pymupdf.Rect(x0, y, x1, y + 10 * rows)
+        lines = [pymupdf.Rect(x0, y + 10 * k, x1, y + 10 * k + 9) for k in range(rows)]
+        return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=10, color="#000", bold=False)
+
+    two = PageGeometry(600, (Column(72, 290), Column(307, 526)), (), reads_in_columns=True)
+    left = [blk("Following standard practice, we formulate this as a tagging task", 72, 600, 290, rows=6),
+            blk("include the maximal context and do not use a CRF", 72, 670, 290, rows=4)]
+    table = [blk("System", 317, 67, 343), blk("Fine-tuning approach", 317, 118, 394),
+             blk("Feature-based approach (BERT)", 317, 153, 450)]
+    caption = blk("Table 7: CoNLL-2003 Named Entity Recognition results.", 307, 236, 526, rows=4)
+    tail = blk("layer in the output. We use the representation of the first sub-token", 307, 290, 526, rows=3)
+    later = blk("To ablate the fine-tuning approach, we apply the feature-based approach", 307, 330, 526, rows=5)
+    units = _cross_page_units([*left, *table, caption, tail, later], 10.0, geometries=[two])
+    assert [unit for unit in units if len(unit) == 2] == [[left[1], tail]]
+
+
 def test_column_tail_drawn_before_its_host_keeps_the_paragraph(tmp_path):
     """内容流先画右栏时，右栏顶的续块排在左栏宿主前面。整段译文仍要写出来。"""
     from app.formats.pdf import translate_pdf
