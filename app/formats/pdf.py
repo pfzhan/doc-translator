@@ -3941,6 +3941,47 @@ def _restore_placeholders(translation: str, formulas: list[dict], lenient: bool 
     return re.sub(r"\{\s*v\s*\d+\s*\}", "", translation)
 
 
+# 公式串里夹在占位符之间的东西：空白、样式标记、单个字母的变量和运算符（σ(Σ…) {b}W{/b} x_i + b）。
+# 两个字母以上的是词（as、the），不算
+_CHAIN_GLUE = r"(?:\s+|\{/?[biu]\}|\{/[cz]\}|\{c[0-9a-f]{6}\}|\{z\d+\}|(?<![A-Za-z0-9])[A-Za-z0-9](?![A-Za-z0-9])|[+\-−=·×*/,.()\[\]|]{1,3})"
+_CHAIN_RE = re.compile(rf"\{{v\d+\}}(?:{_CHAIN_GLUE})*?\{{v\d+\}}(?:(?:{_CHAIN_GLUE})*?\{{v\d+\}})*")
+_PLACEHOLDER_NUM_RE = re.compile(r"\{\s*v\s*(\d+)\s*\}")
+
+
+def _keep_formula_chains(translation: str, source: str) -> str:
+    """原文里一串挨着的式子（{v2} {b}W{/b}{v3}，一个公式被正文字号的变量切成几截），
+    模型有时把几截的次序调了（{b}W{/b}{v3}{v2}），画出来前后颠倒。
+    译文里这几截仍挨在一起、只是次序不同时，按原文的次序换回去。中间夹着中文的不动。"""
+    glue = re.compile(rf"(?:{_CHAIN_GLUE})")
+    for chain in _CHAIN_RE.finditer(source):
+        order = [int(n) for n in _PLACEHOLDER_NUM_RE.findall(chain.group(0))]
+        spots = {int(m.group(1)): m for m in _PLACEHOLDER_NUM_RE.finditer(translation) if int(m.group(1)) in order}
+        if len(spots) != len(order):
+            continue
+        start = min(m.start() for m in spots.values())
+        end = max(m.end() for m in spots.values())
+        middle = translation[start:end]
+        rest = _PLACEHOLDER_NUM_RE.sub("", middle)
+        if glue.sub("", rest):
+            continue  # 中间夹着别的字
+        found = [int(n) for n in _PLACEHOLDER_NUM_RE.findall(middle)]
+        if found == order:
+            continue
+        # 向两边扩到挨着的变量和标记，免得原文的 W 换回去以后又多出一个
+        while True:
+            before = re.search(rf"(?:{_CHAIN_GLUE})$", translation[:start])
+            if before is None or not before.group(0).strip():
+                break
+            start = before.start()
+        while True:
+            after = glue.match(translation, end)
+            if after is None or not after.group(0).strip() or after.group(0) in ".,":
+                break
+            end = after.end()
+        translation = translation[:start] + chain.group(0) + translation[end:]
+    return translation
+
+
 # 跟在以关系符收尾的式子后面、数字前面的「为」「等于」「大于」
 _RELATION_WORD_RE = r"(?:(?:大于|小于|不)?等于|约为|大于|小于|为|是)\s*(?=[-−+]?\d)"
 
@@ -9125,7 +9166,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
                 per_block[id(b)] = b.text
                 block_formulas[id(b)] = []
             continue
-        t = _sound_colors(_drop_stray_braces(t, sent_text), sent_text)
+        t = _keep_formula_chains(_sound_colors(_drop_stray_braces(t, sent_text), sent_text), sent_text)
         restored = (_restore_placeholders(t, formulas, lenient=True) if formulas
                     else _STRAY_PLACEHOLDER_RE.sub("", t))
         if restored is not None:

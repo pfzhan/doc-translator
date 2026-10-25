@@ -8117,3 +8117,13 @@ def test_a_wrapped_formula_with_tall_glyph_boxes_is_split_by_baseline():
     parts = formulas[0].get("parts") or []
     assert len(parts) == 2 and parts[0]["bbox"].x0 >= 450 and parts[1]["bbox"].x1 <= 170
 
+
+def test_formula_pieces_keep_their_source_order():
+    """一个公式被正文字号的变量切成几截（{v2} {b}W{/b}{v3}），模型把次序调了，按原文换回去。
+    中间夹着中文的不动；两个字母以上的是词，不算公式串里的东西。"""
+    from app.formats.pdf import _keep_formula_chains
+
+    source = "compute the value of each{v1} as{v2} {b}W{/b}{v3}."
+    assert _keep_formula_chains("计算每个{v1}的值, 即 {b}W{/b}{v3}{v2}。", source) == "计算每个{v1}的值, 即 {v2} {b}W{/b}{v3}。"
+    assert _keep_formula_chains("即 {v2} {b}W{/b}{v3}。", source) == "即 {v2} {b}W{/b}{v3}。"
+    assert _keep_formula_chains("{v3} 是 {v2} 的一部分", source) == "{v3} 是 {v2} 的一部分"
