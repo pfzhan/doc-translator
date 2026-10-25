@@ -8162,6 +8162,26 @@ def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
     assert _index_entry_ends(broken, []) == {1, 2}
 
 
+def test_a_paragraph_indented_under_an_inset_line_starts_on_its_own():
+    """例句的译文缩进排成一行，下一段的首行缩进比它靠左、比后面几行靠右，是新的一段。
+    两端对齐的参考文献一行拆成几截，按整行的左缘比，不拆。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, x0, y0, x1):
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 12),
+                [{"text": text, "size": 10.0, "bbox": (x0, y0, x1, y0 + 12), "font": "Times", "flags": 0}], [])
+
+    items = [item("Soak the preserved vegetable in water until soft, remove, drain, and chop", 192.1, 463.4, 482.6),
+             item("We generally distinguish two broad classes of morphemes: roots, the central", 175.1, 479.9, 493.2),
+             item("morpheme of the word, supplying the main meaning, and affixes, adding", 160.2, 491.9, 493.2),
+             item("additional meanings of various kinds.", 160.2, 504.2, 320.0)]
+    assert _split_lines(items) == [[0], [1, 2, 3]]
+    entry = [item("carbon footprints of machine learn-", 223.3, 238.6, 339.3), item("ing.", 223.3, 247.1, 235.5),
+             item("Journal of Machine Learning", 242.0, 247.1, 339.3), item("Research, 21(248):1-43.", 223.3, 255.6, 301.9),
+             item("Henderson, P., X. Li, D. Jurafsky,", 213.3, 266.7, 339.3)]
+    assert any({2, 3} <= set(group) for group in _split_lines(entry))
+
+
 def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
     """索引条目停在逗号上，页码折到下一行、缩到条目文字下面。页码那一行跟着条目一起送翻，
     条目到页码收住，下一条照常另起。"""

@@ -1954,6 +1954,15 @@ _SIZE_RISE = 1.15
 _SIZE_ROW_CHARS = 6
 
 
+def _row_left(items: list[tuple], index: int) -> float:
+    """第 index 截所在那一行的左缘：和它上下交叠过半的几截里最靠左的。"""
+    box = items[index][1]
+    return min(
+        other[1].x0 for other in items
+        if min(other[1].y1, box.y1) - max(other[1].y0, box.y0) > min(other[1].height, box.height) * 0.5
+    )
+
+
 def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]]:
     """把一个文本块里的行分成独立段落（返回每组的行下标）。
 
@@ -2190,6 +2199,15 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and all(_span_is_math(span) for span in items[i][2] if str(span["text"]).strip())
             and bool(_RELATION_RE.search(stripped))
         )
+        # 缩进排开的一行（例句的译文）下面另起一段：这一行比上一行靠左，下一行又比它靠左一两个字宽，
+        # 这一行是下一段的首行缩进，不是上一行的续行。两端对齐的行拆成几截，按整行的左缘比
+        above = _row_left(items, i - 1)
+        below = _row_left(items, i + 1) if i + 1 < len(items) and items[i + 1][1].y0 >= rect.y1 - 0.5 * psize else None
+        opens_indent = (
+            own_row and seg_start and below is not None
+            and above - rect.x0 > 0.5 * psize and 0.5 * psize < rect.x0 - below <= 3 * psize
+            and not ptext.rstrip().endswith((",", "，", "、", ";", "；", ":", "："))
+        )
         # 带编号的定理、引理标签（Lemma 10.3.）总是另起一段，上一行停在式子上也一样
         labeled = (
             not same_visual_line and _label_lead(items[i][2])
@@ -2200,7 +2218,7 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
                 (not open_end and (bullet or example or (NO_TEXT_RE.match(stripped) and i not in number_tails)))
                 or (prev_symbol and not closing)
                 or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim or restyled
-                or labeled or display_math
+                or labeled or display_math or opens_indent
                 or displayed
                 or _caption_opens(items[i][2], pspans)
             )
