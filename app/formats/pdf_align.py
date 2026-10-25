@@ -465,7 +465,7 @@ def _place_line(
     widths = [piece_width for _, _, piece_width, _ in pieces]
     total = sum(widths)
     slack = width - total
-    extras = _line_extras(texts, slack, em) if justify and slack > 0 else []
+    extras = line_extras(texts, slack, em) if justify and slack > 0 else []
     cursor = x0 + (width - total) / 2 if centered and total < width else x0
     ops: list[str] = []
     slots: list[tuple[int, float]] = []
@@ -583,7 +583,7 @@ def _draw_piece(
     return segments, None
 
 
-def _line_extras(texts: list[str | None], slack: float, em: float) -> list[float]:
+def line_extras(texts: list[str | None], slack: float, em: float) -> list[float]:
     """把整行的余量摊进各段文字。公式槽是原子，不在这里拆。"""
     if em <= 0 or slack < em * _MIN_SLACK_EM:
         return []

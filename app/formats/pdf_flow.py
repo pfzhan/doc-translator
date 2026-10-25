@@ -323,6 +323,8 @@ def _break_lines(
     for index, start in _marked_words(tokens, em, formula_widths, min((max_width, *first_widths))).items():
         group_of.setdefault(index, start)
     lines: list[str] = []
+    # 每行的词，和 lines 一一对应。硬切、独占一行的超宽公式记 None，不参与匀开
+    rows: list[list[tuple[int, str]] | None] = []
     buf: list[tuple[int, str]] = []
     width = 0.0
 
@@ -333,8 +335,13 @@ def _break_lines(
         nonlocal width
         if buf:
             lines.append(_trim_line_end("".join(token for _, token in buf)))
+            rows.append(list(buf))
             buf.clear()
         width = 0.0
+
+    def put(line: str) -> None:
+        lines.append(line)
+        rows.append(None)
 
     index = 0
     while index < len(tokens):
@@ -343,7 +350,7 @@ def _break_lines(
         if not token.isspace() and token_width > room():
             flush()
             if _SENTINEL_RE.fullmatch(token):
-                lines.append(token)  # 公式超宽：独占一行（调用方会缩它）
+                put(token)  # 公式超宽：独占一行（调用方会缩它）
             else:
                 # 超宽普通词（长 URL 等）按字符硬切，不 nowrap 越出右缘
                 chunk, cw = "", 0.0
@@ -354,10 +361,10 @@ def _break_lines(
                         if moved is not None:
                             head, tail = moved
                             if head:
-                                lines.append(_trim_line_end(head))
+                                put(_trim_line_end(head))
                             chunk, cw = tail, _token_width(tail, em, formula_widths)
                         else:
-                            lines.append(_trim_line_end(chunk))
+                            put(_trim_line_end(chunk))
                             chunk, cw = "", 0.0
                     chunk += ch
                     cw += chw
@@ -408,7 +415,75 @@ def _break_lines(
         width += token_width
         index += 1
     flush()
-    return lines or [text]
+    if not lines:
+        return [text]
+    widths = [first_widths[k] if k < len(first_widths) else max_width for k in range(len(lines))]
+    for k in _even_out(rows, widths, em, formula_widths, group_of):
+        lines[k] = _trim_line_end("".join(token for _, token in rows[k]))
+    return lines
+
+
+def _even_out(
+    rows: list[list[tuple[int, str]] | None], widths: Sequence[float], em: float,
+    formula_widths: dict[int, float], group_of: dict[int, int],
+) -> set[int]:
+    """下一行行首的长词、公式放不下，这一行空出好几个字宽，两端对齐时字距拉得很开。
+    把上一行行尾的汉字挪几个下来，空白分给两行，挪到两行里拉得最开的缝不再变小为止；上一行再从更上一行挪，
+    一直往上匀。只挪单个汉字和跟着它的样式标记，不挪拉丁词、公式、括号组，行首行尾的标点照禁则。
+    末行不两端对齐，不管它空多少。返回改过的行号。"""
+    # 两端对齐由 pdf_align 来摊，它引用本模块，只能在这里引
+    from .pdf_align import line_extras
+
+    changed: set[int] = set()
+
+    def used(row: list[tuple[int, str]]) -> float:
+        return sum(_token_width(token, em, formula_widths) for _, token in row)
+
+    def stretch(row: list[tuple[int, str]], slack: float) -> float:
+        # 照写出时的摊法看这一行拉不拉：缝太少、余量太小的行不拉，算 0。拉的行按余量摊到每道缝上算，
+        # 不封顶：拉到上限的行余量留在行尾，挪几个字下来照样能把它收回上限以内
+        texts: list[str | None] = [""]
+        for _, token in row:
+            if _SENTINEL_RE.fullmatch(token):
+                texts.extend([None, ""])
+            elif not STYLE_MARK_RE.fullmatch(token):
+                texts[-1] += token
+        slots = sum(1 for extra in line_extras(texts, slack, em) if extra)
+        return slack / slots if slots else 0.0
+
+    for k in range(len(rows) - 2, 0, -1):
+        upper, lower = rows[k - 1], rows[k]
+        if upper is None or lower is None:
+            continue
+        while True:
+            end = len(upper)
+            while end > 0 and STYLE_MARK_RE.fullmatch(upper[end - 1][1]):
+                end -= 1
+            if end < 2:
+                break
+            index, char = upper[end - 1]
+            if not _CJK_RE.fullmatch(char) or index in group_of:
+                break
+            # 字前面刚开的样式标记跟着字走，上一行不留空的 {b}
+            start = end - 1
+            while start > 0 and STYLE_MARK_RE.fullmatch(upper[start - 1][1]) and not upper[start - 1][1].startswith("{/"):
+                start -= 1
+            if start == 0:
+                break
+            rest = upper[start - 1][1]
+            if rest.isspace() or rest in _NO_LINE_END or STYLE_MARK_RE.fullmatch(rest):
+                break
+            char_width = _token_width(char, em, formula_widths)
+            upper_slack = widths[k - 1] - used(upper)
+            lower_slack = widths[k] - used(lower)
+            moved, kept = upper[start:] + lower, upper[:start]
+            before = max(stretch(upper, upper_slack), stretch(lower, lower_slack))
+            after = max(stretch(kept, upper_slack + char_width), stretch(moved, lower_slack - char_width))
+            if lower_slack < char_width or after >= before:
+                break
+            rows[k - 1], rows[k] = upper, lower = kept, moved
+            changed.update((k - 1, k))
+    return changed
 
 
 def _trim_line_end(line: str) -> str:

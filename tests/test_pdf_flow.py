@@ -263,3 +263,18 @@ def test_a_word_split_by_style_marks_is_not_broken_at_the_mark():
             assert not line.rstrip().endswith(("{b}R{/b}", "{b}B{/b}", "{b}T{/b}", "("))
         assert "".join(lines).replace("{b}", "").replace("{/b}", "").replace(" ", "") == \
             text.replace("{b}", "").replace("{/b}", "").replace(" ", "")
+
+
+def test_slack_before_a_long_word_is_shared_with_the_line_above():
+    """下一行行首的长词放不下，这一行空出好几个字宽。上一行行尾的汉字挪下来，两行各空一点，
+    两端对齐时字距都只拉开一点。末行不管空多少。"""
+    from app.formats.pdf_flow import _break_lines, measure_width
+
+    text = ("目前为止所展示的所有结果都采用了微调方法即在预训练模型上添加一个简单的分类层并在下游任务上"
+            "对所有参数进行联合微调然而基于特征的方法也具有一定优势首先并非所有任务都能轻易地用 "
+            "Transformer 编码器架构表示因此需要额外添加特定于任务的模型架构")
+    lines = _break_lines(text, 10, 230, {})
+    assert "".join(lines).replace(" ", "") == text.replace(" ", "")
+    # 不匀开时 Transformer 上面那一行空出将近六个字宽
+    slack = [230 - measure_width(line, 10) for line in lines[:-1]]
+    assert max(slack) < 30
