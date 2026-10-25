@@ -32,6 +32,8 @@ _CAPTION_SMALL = 0.95
 # 正文段落：从左缘起笔、有一句话长
 _BODY_LEN = 20
 _NUMBERED_TITLE_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+\S")
+_ROMAN_TITLE_RE = re.compile(r"^[IVX]{1,6}\.\s+(?=\S)")
+_LETTER_TITLE_RE = re.compile(r"^[A-Z]\.\s+[A-Z][a-z]")
 _SENT_END = tuple("。！？.!?")
 _BODY_END = tuple("。！？：.!?:")
 
@@ -52,6 +54,8 @@ class LayoutItem:
     bold: bool
     # 开头的 Figure、Table 标签用了和后文不同的字体（粗体）
     label_styled: bool = False
+    # 整块每一截都是粗体或斜体
+    styled: bool = False
 
 
 class LayoutDetector(Protocol):
@@ -91,7 +95,8 @@ class HeuristicLayout:
                 roles.append(Role.FIGURE)
             elif labeled and _inside_figure(item.rect, figures) or _is_caption(item, figures, median):
                 roles.append(Role.CAPTION)
-            elif is_size_heading(item.text, item.size, item.bold, median) or _is_numbered_title(item.text):
+            elif (is_size_heading(item.text, item.size, item.bold, median) or _is_numbered_title(item.text)
+                  or _is_lettered_title(item.text, item.styled)):
                 roles.append(Role.HEADING)
             else:
                 roles.append(Role.BODY)
@@ -182,6 +187,22 @@ def _is_numbered_title(text: str) -> bool:
         return False
     head = stripped[matched.end() - 1]
     return head.isupper() or "\u4e00" <= head <= "\u9fff"
+
+
+def _is_lettered_title(text: str, styled: bool) -> bool:
+    """IEEE 的节标题和正文一样大：II. METHODS（小型大写）、A. Materials（整行斜体）。
+    罗马数字后面全是大写的算，字母编号要整行加粗或斜体：正文里的 B. Smith、V. Vuletić 是人名。"""
+    stripped = text.strip()
+    if not stripped or len(stripped) >= 80 or stripped.endswith(_SENT_END) or "," in stripped:
+        return False
+    if len(stripped.split()) > 8:
+        return False
+    roman = _ROMAN_TITLE_RE.match(stripped)
+    if roman is not None:
+        rest = stripped[roman.end():]
+        if styled or (rest.upper() == rest and sum(ch.isalpha() for ch in rest) >= 2):
+            return True
+    return styled and _LETTER_TITLE_RE.match(stripped) is not None
 
 
 def _float_zones(

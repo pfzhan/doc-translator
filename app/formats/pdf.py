@@ -2817,6 +2817,7 @@ def _column_continuations(
     skip_ids: set[int],
     halt_ids: set[int] | None,
     ignored: set[int],
+    aside_ids: set[int] = frozenset(),
 ) -> dict[int, TextBlock]:
     """左栏页尾接到右栏页首，右栏页尾接到下一页左栏。
 
@@ -2849,7 +2850,31 @@ def _column_continuations(
             and abs((block.rect.x0 + block.rect.x1) - (other.rect.x0 + other.rect.x1)) / 2 <= block.size
             for other in orphans
         ))]
-        return _column_top(body) if body else None
+        if not body:
+            return None
+        head = _column_top(body)
+        return None if heading_above(pno, column, head) else head
+
+    def heading_above(pno: int, column: list[TextBlock], head: TextBlock) -> bool:
+        """栏顶正上方紧挨着本栏的小标题（A. Materials），这一栏是新的一节，没有续句。
+        横跨几栏的大标题不算，图里认成标题的大字（中间还隔着图里别的字）也不算"""
+        if halt_ids is None:
+            return False
+        above = [
+            block for block in by_page.get(pno) or []
+            if id(block) not in ignored and block is not head and block.rect.y1 <= head.rect.y0 + 1
+            and block.rect.x0 < head.rect.x1 and block.rect.x1 > head.rect.x0
+        ]
+        if not above:
+            return False
+        near = max(above, key=lambda block: block.rect.y1)
+        x0 = min(block.rect.x0 for block in column)
+        x1 = max(block.rect.x1 for block in column)
+        return (
+            id(near) in halt_ids and id(near) not in aside_ids and id(near) not in skip_ids
+            and not near.side_note and near.leader is None and not near.entry
+            and near.rect.x0 >= x0 - near.size and near.rect.x1 <= x1 + near.size
+        )
 
     def host_of(pno: int, column: list[TextBlock]) -> TextBlock | None:
         body = _column_body(column)
@@ -3039,7 +3064,7 @@ def _cross_page_units(
         taken.add(id(tail))
     if geometries is not None:
         for host_id, tail in _column_continuations(
-            by_page, median, skip_ids, halt_ids, ignored,
+            by_page, median, skip_ids, halt_ids, ignored, aside_ids,
         ).items():
             if host_id in taken or id(tail) in taken:
                 continue
@@ -10042,7 +10067,8 @@ def _plan_document(src: Path, src_doc: pymupdf.Document, runner, layout_model: s
     ]
     detector = layout_detector(src_doc, layout_model)
     roles = detector.classify(
-        [LayoutItem(b.page, pymupdf.Rect(b.rect), b.text, b.size, b.bold, _label_styled(b)) for b in blocks],
+        [LayoutItem(b.page, pymupdf.Rect(b.rect), b.text, b.size, b.bold, _label_styled(b), _all_styled(b))
+         for b in blocks],
         geometries,
         median,
     )

@@ -1765,6 +1765,46 @@ def test_pdf_biblio_bold_heading_as_large_as_the_entries():
     assert biblio_skips(blocks) == [False, False, *[True] * 9, False, False]
 
 
+def test_ieee_section_headings_are_headings():
+    """IEEE 的节标题和正文一样大：罗马数字后面全大写（小型大写）、字母编号整行斜体的是标题。
+    正文里的人名缩写、带逗号的作者行不是。"""
+    from app.formats.pdf_roles import _is_lettered_title
+
+    assert _is_lettered_title("II. METHODS", styled=False)
+    assert _is_lettered_title("IV. EXPERIMENTS AND RESULTS", styled=False)
+    assert _is_lettered_title("A. Materials", styled=True)
+    assert not _is_lettered_title("A. Materials", styled=False)
+    assert not _is_lettered_title("B. Smith", styled=False)
+    assert not _is_lettered_title("V. Vuletić, and M. D. Lukin,", styled=True)
+
+
+def test_a_column_does_not_continue_under_a_heading_at_its_top():
+    """右栏顶上紧挨着本栏的小标题时，右栏是新的一节，左栏末句不往下接；
+    小标题和栏顶之间还隔着别的字（图里认成标题的大字）时照常接。"""
+    from app.formats.pdf import TextBlock, _column_continuations
+
+    def blk(text, x0, y, rows=3):
+        return TextBlock(page=0, rect=pymupdf.Rect(x0, y, x0 + 245, y + 12 * rows), line_rects=[],
+                         text=text, size=10.0, color="#000000", bold=False)
+
+    left = [blk("The arm is described in the next section of this paper in full detail.", 54, 100),
+            blk("Our solution is a novel tendon-actuated arm that we describe below.", 54, 200),
+            blk("The arm is mechanically simpler than comparative actuators [17], [18],", 54, 600)]
+    heading = blk("A. Materials", 313, 89, rows=1)
+    right = [blk("the soft structure including the chambers is cast in one piece.", 313, 105),
+             blk("To facilitate free sliding of the tendon the ribbon is coated.", 313, 300)]
+
+    def pairs(extra):
+        blocks = [*left, heading, *extra, *right]
+        return _column_continuations({0: blocks}, 10.0, {id(block) for block in extra}, {id(heading)}, set())
+
+    assert id(left[-1]) not in pairs([])
+    heading.rect = pymupdf.Rect(313, 60, 400, 72)
+    label = blk("Reward Model", 313, 80, rows=1)
+    label.rect = pymupdf.Rect(330, 80, 380, 90)
+    assert pairs([label]).get(id(left[-1])) is right[0]
+
+
 def test_pdf_biblio_author_year_entries_after_the_heading():
     """作者-年份体的条目不带编号和括号年份。标题后面连着几条「姓, 名缩写.」起头的就进入参考文献；
     正文里只一句这样开头的不算。"""
