@@ -2452,7 +2452,10 @@ def _can_continue(
         is_heading = _preview_kind(nxt, median) != "p"
     else:
         is_heading = id(nxt) in halt_ids
-    continues = head.islower() or head.isdigit() or _cjk_page_continue(prev, nxt)
+    # 以行内式子起头的（… minimise a divergence, | 𝐷(⋅||⋅) between …）也是接着写：式子的大写字母不是句首。
+    # 数学字体的项目符号（• We introduce …）不算
+    math_start = _opens_with_math(nxt) and not _list_item(nxt.text)
+    continues = head.islower() or head.isdigit() or _cjk_page_continue(prev, nxt) or math_start
     # 行尾断开的词（fine-）后半截是小写，换栏也不放开大写：右栏顶上大写起头的是表头、标题
     broken_word = bool(re.search(r"[a-z]-$", prev.text.rstrip()))
     if allow_capital and not broken_word and head.isalpha() and head.isupper() and len(prev.text.split()) >= 3:

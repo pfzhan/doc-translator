@@ -1630,6 +1630,15 @@ def test_a_column_break_inside_brackets_or_after_et_al_continues():
     assert joins("with a dual success metric and scripted certificates", "(§5.3). Urban probes stress the agent.")
     assert joins("Stress-tested on the held-out pool", "(Tables S32–S35), the port scores lower.")
     assert not joins("The scores are combined as shown below.", "(Tables S32–S35), the port scores lower.")
+    formula = blk("D(·||·) between the data generating process and the model.", 1)
+    formula.span_lines = [[{"text": "D", "font": "CMMI10", "flags": 2, "size": 10},
+                           {"text": "(·||·) between the data generating process and the model.", "font": "Times", "flags": 0, "size": 10}]]
+    assert _can_continue(blk("results from trying to minimise a divergence,", 0), formula, 10, None)
+    assert not _can_continue(blk("results from trying to minimise a divergence.", 0), formula, 10, None)
+    bullet = blk("• We introduce finite-transition modeling for accelerated MRI.", 1)
+    bullet.span_lines = [[{"text": "•", "font": "CMSY7", "flags": 0, "size": 7},
+                          {"text": " We introduce finite-transition modeling for accelerated MRI.", "font": "Times", "flags": 0, "size": 10}]]
+    assert not _can_continue(blk("loss broadly across the image. At", 0), bullet, 10, None)
     assert joins("similarity recovery comes with higher mean GOP (4.750 vs. 4.733)", "and lower mean WER on the test set.")
     assert not joins("similarity recovery comes with higher mean GOP (4.750 vs. 4.733)", "On the item-matched test set, C wins.")
     heading = blk("E. Energy-Detection Characterization", 0)
