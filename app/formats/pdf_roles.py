@@ -78,12 +78,13 @@ class HeuristicLayout:
             item for item in items
             if len(item.text.strip()) < _CAPTION_LEN and _caption_start(item, _CAPTION_RE, median)
         ]
+        boxed = _boxed_items(items, geometries, floats, captions)
         roles: list[Role] = []
         for item in items:
             figures = (*_figures_of(item.page, geometries), *floats.get(item.page, ()))
             # 画图程序铺的白底常连图注一起包住，图注标签起头的仍是图注
             labeled = len(item.text.strip()) < _CAPTION_LEN and _caption_start(item, _CAPTION_RE, median)
-            if _inside_figure(item.rect, figures) and not labeled and not _boxed_text(item, figures, captions):
+            if _inside_figure(item.rect, figures) and not labeled and id(item) not in boxed:
                 roles.append(Role.FIGURE)
             elif labeled and _inside_figure(item.rect, figures) or _is_caption(item, figures, median):
                 roles.append(Role.CAPTION)
@@ -97,6 +98,34 @@ class HeuristicLayout:
 # 框里成段的正文至少这么多词、这么多句
 _PROSE_WORDS = 40
 _PROSE_SENTENCES = 2
+# 成段正文占了框里一半以上的词，这个框是文本框。框里别的成句的行（列表项、示例）至少这么多词
+_BOX_PROSE_SHARE = 0.5
+_BOX_LINE_WORDS = 4
+
+
+def _boxed_items(
+    items: Sequence[LayoutItem], geometries: Sequence[PageGeometry],
+    floats: dict[int, tuple[pymupdf.Rect, ...]], captions: Sequence[LayoutItem],
+) -> set[int]:
+    """框里按正文算的块（id）。一个框整框一个算法：成段正文占了框里大半的词，是带底色的提示段、
+    提示词框，框里成句的列表项、示例和正文一起算正文，不留半框原文。图里的短标签照旧算图。"""
+    prose = {
+        id(item) for item in items
+        if _boxed_text(item, (*_figures_of(item.page, geometries), *floats.get(item.page, ())), captions)
+    }
+    boxed = set(prose)
+    by_page: dict[int, list[LayoutItem]] = {}
+    for item in items:
+        by_page.setdefault(item.page, []).append(item)
+    for page, members in by_page.items():
+        for figure in (*_figures_of(page, geometries), *floats.get(page, ())):
+            inside = [item for item in members if _inside_figure(item.rect, [figure])]
+            words = sum(len(item.text.split()) for item in inside)
+            framed = sum(len(item.text.split()) for item in inside if id(item) in prose)
+            if not framed or framed < words * _BOX_PROSE_SHARE:
+                continue
+            boxed.update(id(item) for item in inside if len(item.text.split()) >= _BOX_LINE_WORDS)
+    return boxed
 
 
 def _boxed_text(item: LayoutItem, figures: Sequence[pymupdf.Rect], captions: Sequence[LayoutItem]) -> bool:
@@ -122,7 +151,8 @@ def _captions(caption: pymupdf.Rect, figure: pymupdf.Rect, size: float) -> bool:
 def _framed_prose(item: LayoutItem) -> bool:
     """成段的几句话。图里的标签是几个词，不会是几句话的整段。"""
     text = item.text.strip()
-    if len(text.split()) < _PROSE_WORDS or not text.endswith(_SENT_END):
+    # 引出下文的一段以冒号收尾（……as your final verdict with a label:）
+    if len(text.split()) < _PROSE_WORDS or not text.endswith(_BODY_END):
         return False
     return len(re.findall(r"[.!?。！？](?:\s|$)", text)) >= _PROSE_SENTENCES
 

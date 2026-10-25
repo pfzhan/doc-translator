@@ -180,3 +180,29 @@ def test_a_paragraph_in_a_framed_box_is_body_text():
     ]
     roles = HeuristicLayout().classify(items, [_geo([box])], median=10)
     assert roles == [Role.BODY, Role.FIGURE]
+
+
+def test_a_prompt_box_is_translated_as_a_whole():
+    """框里大半是成段的正文（以冒号引出下文的一段也算），框里成句的列表项、示例和正文一起算正文，
+    不留半框原文。两三个词的短标签照旧算图。"""
+    box = pymupdf.Rect(70, 330, 525, 700)
+    first = (
+        "Please act as an impartial judge and evaluate the quality of the responses provided by two AI "
+        "assistants to the user prompt displayed below. You will be given assistant A's answer and assistant "
+        "B's answer. Your job is to evaluate which assistant's answer is better."
+    )
+    second = (
+        "Then consider if the assistant's answers are helpful, relevant, and concise. Helpful means the answer "
+        "correctly responds to the prompt or follows the instructions. After providing your explanation, you "
+        "must output only one of the following choices as your final verdict with a label:"
+    )
+    items = [
+        LayoutItem(0, pymupdf.Rect(86, 348, 509, 440), first, 11, False),
+        LayoutItem(0, pymupdf.Rect(86, 443, 510, 600), second, 11, False),
+        LayoutItem(0, pymupdf.Rect(86, 604, 302, 616), "1. Assistant A is significantly better: [[A>>B]]", 11, False),
+        LayoutItem(0, pymupdf.Rect(86, 631, 251, 643), "3. Tie, relatively the same: [[A=B]]", 11, False),
+        LayoutItem(0, pymupdf.Rect(400, 660, 450, 670), "Encoder output", 8, False),
+    ]
+    roles = HeuristicLayout().classify(items, [_geo([box], 612, 792)], median=11)
+    # 带编号的短列表项可能认成标题，都会送翻
+    assert [role is Role.FIGURE for role in roles] == [False, False, False, False, True]
