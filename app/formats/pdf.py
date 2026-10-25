@@ -2881,6 +2881,77 @@ def _column_continuations(
     return pairs
 
 
+def _region_joins(
+    units: list[list[TextBlock]], skip_ids: set[int], halt_ids: set[int],
+    regions_of: Callable[[int], list[pymupdf.Rect]],
+) -> list[list[TextBlock]]:
+    """开了版面模型时：同一页上前后两个单元（中间可以隔着跳过的块）落在模型框出的同一段正文里，
+    就是被行间公式切开的同一段（… with{式子} For a Borel set … | 1{式子} is the indicator …）。
+    上一块要是成段的正文：模型也会把一串作者名、算法的一行行框成一块（见 _region_prose）。
+    模型常把一串列表框成一块，上一块句末收住、下一块大写起头的不并（… under fixed conditions. | We show that …）。
+    标题、图注、页眉页脚、列表项、行首的粗斜体标签也不并。没有模型时原样返回。"""
+    pages: dict[int, list[pymupdf.Rect]] = {}
+
+    def region(block: TextBlock) -> pymupdf.Rect | None:
+        if block.page not in pages:
+            pages[block.page] = regions_of(block.page)
+        index = _region_index(block.rect, pages[block.page])
+        return None if index is None else pages[block.page][index]
+
+    out: list[list[TextBlock]] = []
+    last: int | None = None
+    for unit in units:
+        if all(id(block) in skip_ids for block in unit):
+            out.append(unit)
+            continue
+        if last is not None and _region_continues(out[last][-1], unit[0], halt_ids):
+            box = region(out[last][-1])
+            if box is not None and box == region(unit[0]) and _region_prose(out[last][-1], box):
+                out[last] = [*out[last], *unit]
+                continue
+        out.append(unit)
+        last = len(out) - 1
+    return out
+
+
+def _region_prose(block: TextBlock, box: pymupdf.Rect) -> bool:
+    """框里成段的正文：有几个小写的词（一串作者名没有），不止一行，或者单独一行从框的左缘起笔
+    （算法的一步步缩进排在行号右边）。"""
+    if len(re.findall(r"\b[a-z]{3,}\b", block.text)) < _REGION_WORDS:
+        return False
+    return len(_visual_lines(block)) >= 2 or block.rect.x0 - box.x0 <= 1.5 * block.size
+
+
+def _region_continues(prev: TextBlock, nxt: TextBlock, halt_ids: set[int]) -> bool:
+    if prev.page != nxt.page or id(prev) in halt_ids or id(nxt) in halt_ids:
+        return False
+    if _list_item(nxt.text) or _LABEL_START_RE.match(nxt.text) or _styled_edge(nxt, 0):
+        return False
+    letter = re.search(r"[A-Za-z]", nxt.text)
+    ended = _END_MARK_RE.sub("", prev.text).rstrip().endswith(tuple(".!?;:。！？；："))
+    return not (ended and letter is not None and letter.group().isupper())
+
+
+def _region_index(rect: pymupdf.Rect, regions: list[pymupdf.Rect]) -> int | None:
+    """块的面积大半落在哪个框里。"""
+    area = rect.width * rect.height
+    if area < 1:
+        return None
+    best, best_share = None, _REGION_COVER
+    for index, box in enumerate(regions):
+        hit = rect & box
+        if hit.is_empty:
+            continue
+        share = hit.width * hit.height / area
+        if share >= best_share:
+            best, best_share = index, share
+    return best
+
+
+# 块的面积有这么多落在模型的正文框里，才算框里的块
+_REGION_COVER = 0.5
+# 模型并段时上一块至少有这么多小写的词
+_REGION_WORDS = 3
 # 往后最多跳过这么多页整页的图表，去找续段
 _FLOAT_PAGES = 2
 # 分图号：(C)、(b)、C.
@@ -9933,7 +10004,8 @@ def _plan_document(src: Path, src_doc: pymupdf.Document, runner, layout_model: s
         PageGeometry.from_page(src_doc[i], rects_by_page.get(i, []), frames[i], scans[i])
         for i in range(src_doc.page_count)
     ]
-    roles = layout_detector(src_doc, layout_model).classify(
+    detector = layout_detector(src_doc, layout_model)
+    roles = detector.classify(
         [LayoutItem(b.page, pymupdf.Rect(b.rect), b.text, b.size, b.bold, _label_styled(b)) for b in blocks],
         geometries,
         median,
@@ -9975,6 +10047,7 @@ def _plan_document(src: Path, src_doc: pymupdf.Document, runner, layout_model: s
             for index, block in enumerate(unit) if any(id(head) in examples for head in unit[:index])
         }
     units = _cross_page_units(blocks, median, skip_ids - cell_ids, geometries, halt_ids, margin_ids, aside_ids)
+    units = _region_joins(units, skip_ids, halt_ids, detector.text_regions)
     block_kind = {id(b): k for b, k in zip(blocks, kinds)}
 
     sent_texts: list[str] = []

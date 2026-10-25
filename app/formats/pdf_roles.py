@@ -63,6 +63,9 @@ class LayoutDetector(Protocol):
     ) -> list[Role]:
         """和 items 等长。换模型时只替换这一方法。"""
 
+    def text_regions(self, pno: int) -> list[pymupdf.Rect]:
+        """一页上框出的一段段正文。没有模型时为空。"""
+
 
 class HeuristicLayout:
     """图内文字、贴着图的图注、以及大于正文的短标题。其余是正文。"""
@@ -93,6 +96,9 @@ class HeuristicLayout:
             else:
                 roles.append(Role.BODY)
         return roles
+
+    def text_regions(self, pno: int) -> list[pymupdf.Rect]:
+        return []
 
 
 # 框里成段的正文至少这么多词、这么多句

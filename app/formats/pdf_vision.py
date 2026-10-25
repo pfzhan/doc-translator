@@ -6,7 +6,8 @@
 
 模型只在它擅长的地方说了算：框成图和行间公式的块原样保留，规则当成正文的块
 可以改成标题、图注。框成正文的块、表格和页眉页脚仍按规则，规则已经认出来的
-图内文字、编号标题不会被模型改掉。
+图内文字、编号标题不会被模型改掉。框出的正文段落（text_regions）用来把被式子切开的
+同一段并回去（见 pdf._region_joins）。
 """
 from __future__ import annotations
 
@@ -79,6 +80,7 @@ class ModelLayout:
         names = session.get_modelmeta().custom_metadata_map.get("names", "{}")
         self.names: dict[int, str] = ast.literal_eval(names)
         self.input = session.get_inputs()[0].name
+        self._pages: dict[int, list[Region]] = {}
 
     def classify(
         self,
@@ -87,12 +89,21 @@ class ModelLayout:
         median: float,
     ) -> list[Role]:
         roles = HeuristicLayout().classify(items, geometries, median)
-        regions = {page: self.regions(page) for page in {item.page for item in items}}
+        regions = {page: self.page_regions(page) for page in {item.page for item in items}}
         out: list[Role] = []
         for item, role in zip(items, roles):
             found = _covering(item.rect, regions.get(item.page, []))
             out.append(_merge(role, _ROLES.get(found.label) if found is not None else None))
         return out
+
+    def text_regions(self, pno: int) -> list[pymupdf.Rect]:
+        return [region.rect for region in self.page_regions(pno) if region.label == "plain text"]
+
+    def page_regions(self, pno: int) -> list[Region]:
+        """每页只推一次：定角色和并段都要用。"""
+        if pno not in self._pages:
+            self._pages[pno] = self.regions(pno)
+        return self._pages[pno]
 
     def regions(self, pno: int) -> list[Region]:
         """一页上的框，坐标和 PyMuPDF 的文字坐标一致（不转页面旋转）。"""

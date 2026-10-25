@@ -116,3 +116,16 @@ def test_without_a_usable_model_the_rules_are_used(tmp_path):
     broken = tmp_path / "broken.onnx"
     broken.write_bytes(b"not a model")
     assert isinstance(layout_detector(_doc(), str(broken)), HeuristicLayout)
+
+
+def test_text_regions_are_the_plain_text_boxes_and_the_page_is_read_once():
+    """并段要的是模型框出的正文段落。定角色时已经推过的页不再推一次。"""
+    doc = _doc()
+    body = pymupdf.Rect(38, 298, 362, 342)
+    session = FakeSession(doc[0].rect, [(body, 0.95, 1), (pymupdf.Rect(110, 195, 290, 220), 0.8, 8)])
+    layout = ModelLayout(doc, session)
+    layout.classify([_item("A body paragraph that explains the figure.", pymupdf.Rect(40, 300, 360, 340))],
+                    [_geo()], median=10)
+    [region] = layout.text_regions(0)
+    assert all(abs(a - b) < 1 for a, b in zip(region, body))
+    assert len(session.inputs) == 1
