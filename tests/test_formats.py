@@ -8905,6 +8905,23 @@ def test_a_word_broken_at_the_block_end_continues_in_the_next_block():
     assert len(kept) == 2
 
 
+def test_a_model_name_broken_at_its_hyphen_continues_with_the_number():
+    """行尾停在型号的连字符上（VE- | 8. Both datasets …），下一行的数字是型号的后半截，不是编号。
+    接回去连字符留着、中间不加空格"""
+    from app.formats.pdf import TextBlock, _join_lines, _merge_continuations
+
+    def blk(text, y0, x1):
+        rect = pymupdf.Rect(54.0, y0, x1, y0 + 10.0)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False,
+                         span_lines=[[{"text": text, "font": "Times", "size": 10.0}]])
+
+    merged = _merge_continuations([blk("Table 5: Out-of-distribution evaluation on VCE and VE-", 226.0, 292.0),
+                                   blk("8. Both datasets are evaluated after re-annotation.", 237.0, 280.0)])
+    assert [block.text for block in merged] == [
+        "Table 5: Out-of-distribution evaluation on VCE and VE-8. Both datasets are evaluated after re-annotation."]
+    assert _join_lines(["control system) and GPT-", "4o (2024-05-13)"]) == "control system) and GPT-4o (2024-05-13)"
+
+
 def test_the_left_column_of_an_index_page_is_not_a_side_note():
     """索引页分几栏，最左一栏比正文版心靠外，像页边旁注。旁注里的短词留原文，索引条目就没有翻。"""
     from app.formats import pdf

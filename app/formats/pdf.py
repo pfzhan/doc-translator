@@ -214,6 +214,8 @@ def _join_lines(lines: list[str]) -> str:
             kept = out[-2:-1].isdigit() or (out[-2:-1].islower() and line[0].isupper()
                                             and _camel_join(out, line) not in _CAMEL_WORDS.get())
             out = out + line if kept else out[:-1] + line
+        elif out.endswith("-") and out[-2:-1].isalpha() and line[:1].isdigit():
+            out += line  # 型号在连字符处折行（VE-|8、GPT-|4），连字符留着，中间没有空格
         elif CJK_RE.search(out[-1]) or CJK_RE.search(line[0]):
             out += line
         elif line[:1] in ")]}>，。；：、）】」.,":
@@ -6429,13 +6431,14 @@ def _merge_continuations(
             # 列表项后面第一行比它还靠左起笔的是列表完了以后的正文。续行和条目文字对齐或者悬挂缩进，不会往左
             list_end = _list_item(p.text) and first_x0 < p.rect.x0 - p.size * 0.5
             # 上一块停在断开的半个词上（retrieval-augmented genera- | tion, 267），下一行小写接着写完这个词。
+            # 连字符后面是数字的是折开的型号（VE- | 8. Both …、GPT- | 4），不是下一行的编号。
             # 只有两个词也接上：标题、标签不会停在连字符上
             # 跟在行内标签、行内式子后面的半行（Backbones. | Models are … at temper-、… This no longer
             # agrees with the MLE under）从它们右边起笔，下一行回到栏边。这一行和下一块右缘对齐就是同一栏
             row_tail = len(_visual_lines(p)) == 1 and abs(p.rect.x1 - b.rect.x1) <= p.size and first_x0 < p.rect.x0
             word_cut = (
                 same_size and y_close and re.search(r"[A-Za-z]{2}-$", p.text.rstrip()) is not None
-                and first.islower() and first_x0 < p.rect.x1
+                and (first.islower() or first.isdigit()) and first_x0 < p.rect.x1
                 and (p.rect.x0 - p.size <= first_x0 or row_tail)
             )
             row_wrap = same_size and row_tail and first.islower() and not _ends_sentence(p.text)
@@ -6472,7 +6475,7 @@ def _merge_continuations(
                 and (colon_wrap or call_wrap or flush_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
                      or not _ends_sentence(p.text))
                 and (first.islower() or first in ".),;%,；，" or open_paren or math_wrap or centered_end
-                     or dangling or centered_comma or in_fence or full_wrap or flush_wrap or bracketed)
+                     or dangling or centered_comma or in_fence or full_wrap or flush_wrap or bracketed or word_cut)
                 and not _verbatim_seam(p, b)
                 # 段落首行缩进的文档里，首行比下面几行缩进一两个字宽、大写的词起头的块是新的一段，
                 # 上一块停在 and 上（式子前的半句）也不接。行首是式子（W 1,∞ …）的不算
