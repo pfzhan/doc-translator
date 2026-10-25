@@ -1630,6 +1630,8 @@ def test_a_column_break_inside_brackets_or_after_et_al_continues():
     assert joins("with a dual success metric and scripted certificates", "(§5.3). Urban probes stress the agent.")
     assert joins("Stress-tested on the held-out pool", "(Tables S32–S35), the port scores lower.")
     assert not joins("The scores are combined as shown below.", "(Tables S32–S35), the port scores lower.")
+    assert joins("similarity recovery comes with higher mean GOP (4.750 vs. 4.733)", "and lower mean WER on the test set.")
+    assert not joins("similarity recovery comes with higher mean GOP (4.750 vs. 4.733)", "On the item-matched test set, C wins.")
     heading = blk("E. Energy-Detection Characterization", 0)
     heading.line_rects = [pymupdf.Rect(49, 661, 204, 671)]
     heading.span_lines = [[{"text": heading.text, "font": "NimbusRomNo9L-ReguItal", "flags": 2, "size": 10}]]
