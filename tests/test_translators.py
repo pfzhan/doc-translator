@@ -346,20 +346,20 @@ def test_marks_written_with_spaces_inside_are_restored():
     assert tidy_marks("x[i] for {i}i{/i}", "x[i] 对 {i}i{/i}") == "x[i] 对 {i}i{/i}"
 
 
-def test_stray_script_marks_text_neither_language_uses():
+def test_stray_chars_marks_text_neither_language_uses():
     """译文夹着原文和目标语言都不用的文字算坏译文；原文本来就有的、目标语言用的、公式里的希腊字母不算。"""
-    from app.translators import stray_script
+    from app.translators import stray_chars
 
-    assert stray_script("Please take a moment to convince yourself", "请花一点时间 убед自己", "zh-CN")
-    assert stray_script("with a small change", "通过做 მცირე修改", "zh-CN")
-    assert not stray_script("the Russian word Привет", "俄语词 Привет", "zh-CN")
-    assert not stray_script("mu-law, 339", "μ律, 339", "zh-CN")
-    assert not stray_script("a text", "日本語のテキスト", "ja")
-    assert not stray_script("a text", "Привет", "ru")
-    assert stray_script("a text", "テキスト", "zh-CN")
+    assert stray_chars("Please take a moment to convince yourself", "请花一点时间 убед自己", "zh-CN")
+    assert stray_chars("with a small change", "通过做 მცირე修改", "zh-CN")
+    assert not stray_chars("the Russian word Привет", "俄语词 Привет", "zh-CN")
+    assert not stray_chars("mu-law, 339", "μ律, 339", "zh-CN")
+    assert not stray_chars("a text", "日本語のテキスト", "ja")
+    assert not stray_chars("a text", "Привет", "ru")
+    assert stray_chars("a text", "テキスト", "zh-CN")
 
 
-def test_items_with_stray_script_are_retranslated():
+def test_items_with_stray_chars_are_retranslated():
     """批量里夹带外文的段落单独重翻；单独重翻仍夹带时再问一次。"""
     singles = []
 
@@ -377,3 +377,15 @@ def test_items_with_stray_script_are_retranslated():
     assert out == ["请花一点时间说服自己。", "我们开发了一套方法。"]
     assert len(singles) == 2
     run(tr.aclose())
+
+
+def test_stray_chars_marks_symbols_absent_from_source():
+    """译文多出原文没有的杂项符号、表情或私用区字符算坏译文；原文本来就有的不算。"""
+    from app.translators import stray_chars
+
+    src = "How AI Risks Differ from Traditional Software Risks"
+    assert stray_chars(src, "AI 风险与传统软件风险的差异♀♀♀♀♀♀", "zh-CN")
+    assert stray_chars("Results", "结果", "zh-CN")
+    assert not stray_chars("a ✓ marks the best", "✓ 表示最好", "zh-CN")
+    assert not stray_chars("Figure 2 | The pipeline", "图 2｜流程", "zh-CN")
+    assert not stray_chars("90 degrees", "90°", "zh-CN")

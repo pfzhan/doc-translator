@@ -13,7 +13,7 @@ from typing import Callable
 
 from . import glossary, langdetect
 from .prompts import drop_added_braces, drop_invented_marks, strip_control_marks, tidy_marks
-from .translators import Translator, TranslatorError, misplaced, stray_script, typical_ratio
+from .translators import Translator, TranslatorError, misplaced, stray_chars, typical_ratio
 
 CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "cache.sqlite3"
 # 候选术语少于这么多条的文档（短文、对话）不值得多一次请求
@@ -272,7 +272,7 @@ class Runner:
         if not self.cache_only:
             typical = typical_ratio(done_map.items())
             echoed += [src for src, dst in done_map.items() if src not in echoed
-                       and (misplaced(src, dst, typical) or stray_script(src, dst, tl))]
+                       and (misplaced(src, dst, typical) or stray_chars(src, dst, tl))]
         if echoed:
             done_map = {src: dst for src, dst in done_map.items() if src not in set(echoed)}
             drop = getattr(self.cache, "drop_many", None)

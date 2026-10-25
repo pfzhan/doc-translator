@@ -151,9 +151,17 @@ def _scripts(text: str) -> set[str]:
     return found
 
 
-def stray_script(source: str, translation: str, target_lang: str) -> bool:
-    """译文里夹着原文和目标语言都不用的文字，例如中文译文里冒出半个俄文词「убед自己」。
-    目标语言用的文字从它的本地名（简体中文、Русский）里看。"""
+def _symbols(text: str) -> set[str]:
+    """杂项符号、装饰符号、表情和私用区字符。译文里的这类字符应当都来自原文。"""
+    return {ch for ch in text if 0x2600 <= ord(ch) <= 0x27BF or ord(ch) >= 0x1F000
+            or unicodedata.category(ch) == "Co"}
+
+
+def stray_chars(source: str, translation: str, target_lang: str) -> bool:
+    """译文里夹着原文和目标语言都不用的文字，例如中文译文里冒出半个俄文词「убед自己」，
+    或者原文没有的符号（标题后面多出一串「♀♀♀」）。目标语言用的文字从它的本地名（简体中文、Русский）里看。"""
+    if _symbols(translation) - _symbols(source):
+        return True
     allowed = _scripts(source) | _scripts(_NATIVE_NAMES.get(target_lang, ""))
     allowed |= _EXTRA_SCRIPTS.get(target_lang, set())
     return bool(_scripts(translation) - allowed)
@@ -349,10 +357,10 @@ class LLMTranslator(Translator):
         if len(texts) == 1:
             out = prompts.clean_output(content)
             # 夹带外文的译文再问一次，仍然夹带就照收，由 Runner 下次重排时丢掉重翻
-            if stray_script(texts[0], out, self.target_lang):
+            if stray_chars(texts[0], out, self.target_lang):
                 async with self._sem:
                     again = prompts.clean_output(await self._complete(system, user))
-                if again.strip() and not stray_script(texts[0], again, self.target_lang):
+                if again.strip() and not stray_chars(texts[0], again, self.target_lang):
                     out = again
             return [out]
         found = prompts.parse_markers(content, len(texts), marker=prompts.pick_marker(texts))
@@ -362,7 +370,7 @@ class LLMTranslator(Translator):
         missing = [i for i in range(len(texts))
                    if i not in found or _numbers_mismatch(texts[i], found[i])
                    or misplaced(texts[i], found[i], typical)
-                   or stray_script(texts[i], found[i], self.target_lang)]
+                   or stray_chars(texts[i], found[i], self.target_lang)]
         if missing:
             redone = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in missing))
             for i, [text] in zip(missing, redone):
