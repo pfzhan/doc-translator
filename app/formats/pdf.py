@@ -4830,7 +4830,10 @@ def _extract(
                 fraction = group[0] in formula_rows
                 # 索引条目后面的一串页码不算进字母占比：perplexity, 27, 76, 88, 203 是一条词目，不是一行数
                 judged = _INDEX_REF_RE.sub("", text) if index_page else text
-                if not in_cell and (fraction or _untranslatable(spans, judged, _DISPLAY_PROSE if displayed else 3, displayed)) \
+                # 以页码收尾的索引条目字母再少（F0, 340）也是一条，成块留原文，索引重排时跟着挪
+                entry = index_page and judged != text and bool(judged.strip()) and not fraction
+                if not in_cell and not entry \
+                        and (fraction or _untranslatable(spans, judged, _DISPLAY_PROSE if displayed else 3, displayed)) \
                         and not _wraps_from_above(blocks, pno, rect, text, row_ends, frames[pno], index_page):
                     # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
                     # 捐了会被擦掉，而这些行没有占位符、不会重画。

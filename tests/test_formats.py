@@ -8117,7 +8117,8 @@ def test_no_borderless_table_is_found_on_an_index_page(monkeypatch):
 
 
 def test_an_index_entry_with_many_page_numbers_is_translated():
-    """词目后面一串页码，字母占不到四成，也是一条词目，不当成一行数留原文。只有页码的一行照旧留原文。"""
+    """词目后面一串页码，字母占不到四成，也是一条词目，不当成一行数留原文。只有页码的一行照旧留原文。
+    只有一两个字母的词目（F0）也是一条。"""
     from app.formats import pdf
 
     doc = pymupdf.open()
@@ -8126,9 +8127,12 @@ def test_an_index_entry_with_many_page_numbers_is_translated():
         page.insert_text((60, 80 + 12 * row), f"entry term {row}, {100 + row}", fontsize=8)
     page.insert_text((60, 290), "perplexity, 27, 76, 88, 203", fontsize=8)
     page.insert_text((60, 302), "CRF, 414", fontsize=8)
+    page.insert_text((60, 314), "F0, 340", fontsize=8)
     blocks, _frames, _scans = pdf._extract(doc)
     texts = {block.text for block in blocks}
     assert "perplexity, 27, 76, 88, 203" in texts and "CRF, 414" in texts
+    # 只有一个字母的词目也成块，索引重排时跟着挪，不留在原处被压住
+    assert "F0, 340" in texts
 
 
 def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
