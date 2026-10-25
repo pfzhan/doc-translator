@@ -8501,3 +8501,17 @@ def test_wrapped_monospace_phrase_keeps_its_word_space():
     assert _wrap_gap(url, [span("5_AIME_II_Problems", 307, 400)]) == _PART_GAP
     assert _wrap_gap([span("a", 500, 505), span(" ", 505, 508), span("+", 508, 515)], [span("b", 307, 312)]) == _PART_GAP
 
+
+def test_inline_formulas_keep_their_size_next_to_chinese():
+    """中文字号比原文小一成，看着一样大。公式按中文的字号比，没缩字号时是原大，不跟着小一成；
+    整段缩小时公式跟着缩。"""
+    from app.formats.pdf import _formula_slot
+
+    formula = {"has_img": True, "w": 40.0, "h": 8.0, "d": 2.0, "text": "f(x)"}
+    scale, _, _ = _formula_slot(formula, 10.0, 8.8, 8.8)
+    assert abs(scale - 1.0) < 1e-6
+    scale, _, _ = _formula_slot(formula, 10.0, 8.8 * 0.9, 8.8)
+    assert abs(scale - 0.9) < 1e-6
+    # 不传 reference 时照旧按原文字号比
+    scale, _, _ = _formula_slot(formula, 10.0, 8.8)
+    assert abs(scale - 0.88) < 1e-6

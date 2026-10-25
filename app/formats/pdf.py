@@ -6910,11 +6910,13 @@ def _paint_formula(
     page.insert_image(target, stream=png, keep_proportion=False, overlay=True)
 
 
-def _formula_metrics(formulas: list[dict], block_size: float, em: float) -> dict[int, FormulaMetric]:
-    """按当前字号给出每个公式槽。rs 写回记录，矢量缩放和槽位用同一个数。"""
+def _formula_metrics(
+    formulas: list[dict], block_size: float, em: float, reference: float | None = None,
+) -> dict[int, FormulaMetric]:
+    """按当前字号给出每个公式槽。rs 写回记录，矢量缩放和槽位用同一个数。reference 见 _formula_slot。"""
     metrics: dict[int, FormulaMetric] = {}
     for index, formula in enumerate(formulas, 1):
-        scale, slot_width, height = _formula_slot(formula, block_size, em)
+        scale, slot_width, height = _formula_slot(formula, block_size, em, reference)
         formula["rs"] = scale
         body = float(formula["w"]) * scale if formula.get("has_img") else slot_width
         below = (float(formula.get("d") or 0) - float(formula.get("raise") or 0)) * scale
@@ -6937,6 +6939,7 @@ def _fit_typeset(
     """放得下就按原字号排。放不下先在本栏右扩，再压行距，最后才缩字号。
     holes 是原文绕开的图，碰到它的行让到一边，另外返回这几行的缩进和宽度。"""
     gap = 1.45 if cjk else 1.2
+    reference = block_size * 0.88 if cjk else block_size
     box = rect
     expanded = False
     tightened = False
@@ -6948,7 +6951,7 @@ def _fit_typeset(
     for _ in range(24):
         lanes = _hole_lanes(box, holes, em, gap)
         lines = typeset_lines(
-            text, em, max(box.width, 1.0), _formula_metrics(formulas, block_size, em),
+            text, em, max(box.width, 1.0), _formula_metrics(formulas, block_size, em, reference),
             [width for _, width in lanes],
         )
         # 首行字形顶部还有 0.3em 的出头（实测 MuPDF 盒子内容高 = 行数×行距 + ~0.25em），
@@ -6991,10 +6994,11 @@ _CLAUSE_MARKS = "，、；：,;:"
 
 def _clause_lines(
     text: str, formulas: list[dict], em: float, block_size: float, width: float, lines: list[TypesetLine],
+    reference: float | None = None,
 ) -> list[TypesetLine]:
     """居中排的题名、副标题折成几行时，在小句标点后面断开，不留一两个字单独一行。
     行数不能比按宽度断的多；几处标点都行的，取各行最宽的那行最窄的断法。"""
-    metrics = _formula_metrics(formulas, block_size, em)
+    metrics = _formula_metrics(formulas, block_size, em, reference)
     best, best_width = lines, None
     for index, char in enumerate(text[:-1]):
         if char not in _CLAUSE_MARKS:
@@ -7228,7 +7232,7 @@ def _place_plain(
         text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit, holes,
     )
     if centered and len(lines) > 1 and not any(indent for indent, _ in lanes):
-        lines = _clause_lines(text, formulas, em, block_size, box.width, lines)
+        lines = _clause_lines(text, formulas, em, block_size, box.width, lines, block_size * 0.88 if cjk else None)
     if cjk and _draw_cjk(
         page, page.parent, lines, formulas, box, em, gap, color, centered,
         None, None, [], [], justify_last, lanes, first_room,
@@ -7439,10 +7443,14 @@ def _nowrap_parens(body: str) -> str:
     return re.sub(r"（[^（）]+）|\([^()]+\)", repl, body)
 
 
-def _formula_slot(formula: dict, block_size: float, render_size: float) -> tuple[float, float, float]:
+def _formula_slot(
+    formula: dict, block_size: float, render_size: float, reference: float | None = None,
+) -> tuple[float, float, float]:
     """行内公式槽位 (缩放, 宽, 高)。高超过 _INLINE_FORMULA_EM 时压下来，再高的那一行撑开行距（见 line_offsets）。
     盒子放不下时 _fit_typeset 在公式上记 cap，压到一行高。
-    换行切开的几片按阅读顺序横排，宽度相加，不把两行空白裁进同一个框。"""
+    换行切开的几片按阅读顺序横排，宽度相加，不把两行空白裁进同一个框。
+    reference 是公式保持原大时的译文字号。中文比原文的字号小一成（看着和原文一样大），
+    公式按 render_size / block_size 缩就跟着小一成，夹在汉字里显得小；中文按 reference 比，没缩字号就是原大。"""
     parts = _formula_parts(formula)
     height = max(float(part.get("h") or 0) for part in parts)
     if not formula.get("has_img") or height <= 0 or block_size <= 0:
@@ -7454,7 +7462,7 @@ def _formula_slot(formula: dict, block_size: float, render_size: float) -> tuple
     descent = max(float(part.get("d") or 0) for part in parts)
     if ascent > _FORMULA_ASCENT_EM * block_size or descent > _FORMULA_DESCENT_EM * block_size:
         cap = min(cap, _LINE_FORMULA_EM)
-    scale = min(render_size / block_size, cap * render_size / height)
+    scale = min(render_size / (reference or block_size), cap * render_size / height)
     gaps = sum(_part_lead(part, scale) for part in parts[1:])
     width = sum(float(part["w"]) * scale for part in parts) + gaps + 4.0
     return scale, width, height * scale
@@ -7681,7 +7689,7 @@ def _body_first_starts(
         if _SENTINEL_NUM_RE.search(translation) and not formulas:
             continue
         em = label.size * 0.88 if cjk else label.size
-        metrics = _formula_metrics(formulas, label.size, em)
+        metrics = _formula_metrics(formulas, label.size, em, em)
         widths = {index: metric.slot_width for index, metric in metrics.items()}
         start = label.rect.x0 + measure_width(translation, em, widths) + 8.0
         if start >= first_box.x1 - max(em * 4, 24):
@@ -8091,7 +8099,7 @@ def _split_filled_lines(
     框在那里被裁掉，多算的这截放不下，这几行会被整体缩小。"""
     prepared = space_around_latin(separate_after_formula(text))
     gap = 1.2 if cjk else 1.1
-    metrics = _formula_metrics(formulas, block_size, em)
+    metrics = _formula_metrics(formulas, block_size, em, block_size * 0.88 if cjk else None)
     widths = {index: metric.slot_width for index, metric in metrics.items()}
     raw = break_lines(prepared, em, max(width, 1.0), widths)
     line_h = em * gap
@@ -8160,7 +8168,8 @@ def _split_own_lines(
     按整宽预先断好也不行：续行旁边有图时，写入还要让开图，预断的换行会留下半截短行。
     """
     prepared = space_around_latin(separate_after_formula(text))
-    metrics = _formula_metrics(formulas, block_size, em)
+    # em 是没缩过的译文字号，公式按它保持原大（见 _formula_slot）
+    metrics = _formula_metrics(formulas, block_size, em, em)
     widths = {index: metric.slot_width for index, metric in metrics.items()}
     raw = break_lines(prepared, em, max(host_width, 1.0), widths)
     if not raw:
