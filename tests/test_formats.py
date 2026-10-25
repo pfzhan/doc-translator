@@ -3795,6 +3795,24 @@ def test_a_line_inside_an_open_bracket_runs_on_below():
     assert len(_merge_continuations([blk(head, 100), blk("Ghosal et al. Then the second sentence starts here.", 148)])) == 2
 
 
+def test_a_line_after_an_inline_formula_wraps_to_the_column_edge():
+    """一行里左边是式子、右边接着写正文，这半行撑到右缘、没写完，下一行回到栏边小写接着写。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blocks(x1=521, text="This no longer agrees with the asymptotic distribution of the MLE under"):
+        half = TextBlock(page=0, rect=pymupdf.Rect(154, 414, x1, 425), line_rects=[pymupdf.Rect(154, 414, x1, 425)],
+                         text=text, size=10.9, color="#000", bold=False)
+        lines = [pymupdf.Rect(89, 434 + 22 * i, 522, 445 + 22 * i) for i in range(3)]
+        below = TextBlock(page=0, rect=pymupdf.Rect(89, 434, 522, 489), line_rects=lines,
+                          text="model misspecification, which although still centered at the same point.",
+                          size=10.9, color="#000", bold=False)
+        return [half, below]
+
+    assert len(_merge_continuations(blocks())) == 1
+    assert len(_merge_continuations(blocks(x1=400))) == 2
+    assert len(_merge_continuations(blocks(text="This no longer agrees with the asymptotic distribution."))) == 2
+
+
 def test_a_full_line_wraps_into_a_capitalized_next_line():
     """段落缩进的首行和页边旁注挤在一块里被单拆出来。它排到右缘、没有句末标点，下一行回到左缘、
     以专名大写起头（RNNs, one where…），仍是同一句。末行没排满、或者有句号的不接。"""
