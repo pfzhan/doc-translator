@@ -1234,7 +1234,14 @@ def _index_entry_ends(items: list[tuple], ref_rows: Sequence[pymupdf.Rect]) -> s
             text.endswith(",") and below is not None and below.y0 - rect.y1 <= size * 0.5
             and _INDEX_REFS_ONLY_RE.match(" ".join(items[index][0].strip() for index in nxt)) is not None
         )
-        if refs_next:
+        # 停在连字符断开的半个词上，下一行小写起头，是同一个词的后半（resolu- | tion, 566）。
+        # 块从一条的续行起头时，这一行不是条目的首行，下一行和它对齐也收不住
+        broken = (
+            re.search(r"[A-Za-z]-$", text) is not None and below is not None
+            and below.y0 - rect.y1 <= size * 0.5
+            and items[nxt[0]][0].lstrip()[:1].islower()
+        )
+        if refs_next or broken:
             continue
         if (_INDEX_REF_RE.search(text) or _INDEX_REFS_ONLY_RE.match(text)
                 or (text.endswith(",") and _refs_below(rect, ref_rows, size))

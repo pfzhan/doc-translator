@@ -8156,6 +8156,10 @@ def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
     # 续行带着逗号收住，页码和续行缩进一样
     wrapped = [item("as weighted average", 187.3, 225.6, 271.3), item("branching factor,", 203.3, 235.0, 271.3)]
     assert _index_entry_ends(wrapped, [pymupdf.Rect(203.3, 244.5, 211.2, 254.1)]) == {1}
+    # 块从一条的续行起头，停在断开的半个词上，下一行和它对齐也是同一条
+    broken = [item("for pronoun resolu-", 203.3, 456.0, 271.3), item("tion, 566", 203.3, 465.5, 231.6),
+              item("hold, 597", 179.3, 475.0, 210.0)]
+    assert _index_entry_ends(broken, []) == {1, 2}
 
 
 def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
