@@ -1673,6 +1673,19 @@ def test_a_body_sentence_that_starts_with_figure_is_not_a_caption():
     assert _is_float_text("Fig. 3 (A) Panel view")
 
 
+def test_roman_and_appendix_numbers_are_captions():
+    """IEEE 的表号是罗马数字（TABLE IV: …），附录的图表号带字母（Figure S1: …）；后面接小写词的仍是正文。"""
+    from app.formats.pdf import _is_float_text
+
+    assert _is_float_text("TABLE II: For different values of the number of observed e-folds")
+    assert _is_float_text("TABLE I")
+    assert _is_float_text("Figure S1: Full OSVD three-view label distributions.")
+    assert _is_float_text("Table A2. Hyperparameters")
+    assert not _is_float_text("Table IV compares inference time.")
+    assert not _is_float_text("Figure S1 shows that Satisfaction constitutes the largest share.")
+    assert not _is_float_text("Table Index of symbols")
+
+
 def test_table_cells_do_not_set_the_column_body_size():
     """栏顶一张表一格一块、字号比正文大，正文字号仍按正文块算，栏底的正文段不被当成小一号的脚注。"""
     from app.formats.pdf import TextBlock, _column_body
