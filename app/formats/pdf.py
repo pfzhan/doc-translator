@@ -3560,6 +3560,23 @@ def _color_value(color: str) -> int | None:
     return int(color[1:], 16) if re.fullmatch(r"#[0-9a-fA-F]{6}", color or "") else None
 
 
+def _block_size(main: dict, span_lines: list[list[dict]]) -> float:
+    """块的字号：最长那一截的字号。小型大写的标题（INITIALIZATION 首字母大一号）最长的一截是
+    小号的那部分，按大写的字号算。大写字母和它同一条基线才算，往下错开的是下标（BERT_LARGE）。"""
+    size = float(main["size"])
+    big = _small_caps_sizes(span_lines).get(id(main))
+    if big is None or main.get("origin") is None:
+        return size
+    base = float(main["origin"][1])
+    for line in span_lines:
+        for span in line:
+            if (span is not main and str(span.get("text") or "").strip() and span.get("origin") is not None
+                    and abs(float(span.get("size") or 0) - big) <= 0.1
+                    and abs(float(span["origin"][1]) - base) <= big * 0.1):
+                return big
+    return size
+
+
 def _small_caps_sizes(span_lines: list[list[dict]]) -> dict[int, float]:
     """小型大写（INTRODUCTION 首字母大一号、其余小一号）里小的那部分，按大写字号算。
 
@@ -4767,6 +4784,7 @@ def _extract(
                 # 字号取最长的 span。颜色、粗细按字数取占多数的：逐词一个 span 的书里，
                 # 最长的一截常是黑底白字的图注标签 Figure 10.3，整条图注会写成白字
                 main = _main_span([items[i][2] for i in group])
+                main_size = _block_size(main, span_lines)
                 color = _by_chars(spans, lambda s: s["color"])
                 bold = _by_chars(spans, lambda s: bool(s["flags"] & 16) or "Bold" in s["font"])
                 if in_cell:
@@ -4776,7 +4794,7 @@ def _extract(
                     rect=rect,
                     line_rects=line_rects,
                     text=text,
-                    size=round(main["size"], 1),
+                    size=round(main_size, 1),
                     color=f"#{color:06x}",
                     bold=bold,
                     span_lines=span_lines,

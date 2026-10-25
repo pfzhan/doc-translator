@@ -805,6 +805,20 @@ def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces():
     assert len(_join_line_wrapped_formulas(runs(long), long, 12.0)) == 2
 
 
+def test_a_small_caps_heading_takes_the_size_of_its_capitals():
+    """小型大写的标题首字母大一号，其余小一号，最长的一截是小号的。块的字号按大写算，
+    不然译文比正文还小。往下错开的下标（BERT_LARGE）不算小型大写。"""
+    from app.formats.pdf import _block_size
+
+    def span(text, x0, size, base):
+        return {"text": text, "size": size, "origin": (x0, base), "bbox": (x0, base - size, x0 + 50, base + 2)}
+
+    heading = [span("I", 123.0, 11.6, 362.0), span("NITIALIZATION", 127.0, 9.3, 362.0)]
+    assert _block_size(heading[1], [heading]) == 11.6
+    model = [span("BERT", 324.5, 9.0, 135.0), span("LARGE", 347.0, 6.5, 137.5)]
+    assert _block_size(model[1], [model]) == 6.5
+
+
 def test_wrapped_letter_period_stays_in_the_paragraph():
     """撑满的上一行没有句末时，下一行的 Q. 是换行，不是列表项。句末之后的 a. 仍拆开。"""
     from app.formats.pdf import _split_lines
@@ -8459,3 +8473,4 @@ def test_wrapped_monospace_phrase_keeps_its_word_space():
     url = [span("https://artofproblemsolving.com/wiki/index.php/202", 300, 525)]
     assert _wrap_gap(url, [span("5_AIME_II_Problems", 307, 400)]) == _PART_GAP
     assert _wrap_gap([span("a", 500, 505), span(" ", 505, 508), span("+", 508, 515)], [span("b", 307, 312)]) == _PART_GAP
+
