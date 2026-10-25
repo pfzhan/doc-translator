@@ -8139,3 +8139,35 @@ def test_a_period_after_a_small_denominator_does_not_make_it_a_heading():
     assert not _larger_text(denominator, sigma)
     heading = {"spans": [{"text": "4.2 SQuAD", "font": "NimbusRomNo9L-Medi", "size": 12.0}]}
     assert _larger_text(heading, {"spans": [{"text": "words", "font": "NimbusRomNo9L-Regu", "size": 9.0}]})
+
+
+def _draw_visible_space(page, x, baseline):
+    """按 LaTeX 的画法用三条短线画一个 ␣：底线 3 点长，两头各立一条 1.4 点的竖线。"""
+    page.draw_line((x, baseline - 1.4), (x, baseline), width=0.4)
+    page.draw_line((x, baseline), (x + 3, baseline), width=0.4)
+    page.draw_line((x + 3, baseline - 1.4), (x + 3, baseline), width=0.4)
+
+
+def test_drawn_visible_space_is_read_into_the_text():
+    """画出来的 ␣ 提取不到字。盖在空格上的换掉空格，空隙里没有字的补一个 ␣，和前面的字隔开一个空格。
+    不在字行基线上的同样形状（图里的刻度）不算。"""
+    from app.formats.pdf import _mark_visible_spaces
+    from app.formats.pdf_layout import scan_page
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    font = pymupdf.Font("cour")
+    page.insert_font(fontname="C", fontbuffer=font.buffer)
+    page.insert_text((100, 100), "merged to   re.", fontname="C", fontsize=10)
+    _draw_visible_space(page, 100 + font.text_length("merged to  ", 10) + 2.8, 100)
+    page.insert_text((100, 140), "Next", fontname="C", fontsize=10)
+    _draw_visible_space(page, 100 + font.text_length("Next", 10) + 4, 140)
+    page.insert_text((100 + font.text_length("Next", 10) + 12, 140), "r (total)", fontname="C", fontsize=10)
+    _draw_visible_space(page, 300, 300)
+    scan = scan_page(page)
+    assert len(scan.visible_spaces) == 3
+    data = page.get_text("dict")
+    _mark_visible_spaces(page, data, scan.visible_spaces)
+    lines = ["".join(span["text"] for span in line["spans"]) for block in data["blocks"] for line in block["lines"]]
+    assert lines[0].replace("  ", " ") == "merged to ␣re."
+    assert " ".join(lines[1:]) == "Next ␣ r (total)"

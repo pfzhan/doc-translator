@@ -218,6 +218,8 @@ class PageScan:
     # 只描边的弧线（依存弧、注意力弧）和填了底色的圆角框（弧上的标签）
     arcs: tuple[pymupdf.Rect, ...] = ()
     round_boxes: tuple[pymupdf.Rect, ...] = ()
+    # 用三条短线画成的可见空格 ␣（LaTeX 的 \verb* 和 \textvisiblespace），字体里没有这个字
+    visible_spaces: tuple[pymupdf.Rect, ...] = ()
 
 
 def scan_page(page: pymupdf.Page) -> PageScan:
@@ -228,8 +230,8 @@ def scan_page(page: pymupdf.Page) -> PageScan:
     return PageScan(
         page_tables(page, drawings, words), tuple(_figure_rects(page, drawings, images)), words,
         _shaded_areas(drawings, text_page_rect(page)), tuple(horizontal),
-        tuple(_thin_strokes(drawings)), tuple(vertical),
-        *_curved_paths(drawings),
+        tuple(_thin_strokes(drawings)), tuple(vertical), *_curved_paths(drawings),
+        visible_spaces=tuple(_visible_spaces(drawings)),
     )
 
 
@@ -263,6 +265,36 @@ def _curved_paths(drawings: list[dict]) -> tuple[tuple[pymupdf.Rect, ...], tuple
         elif drawing.get("fill") is not None and curves >= _ROUND_CORNERS:
             boxes.append(rect)
     return tuple(arcs), tuple(boxes)
+
+
+# 可见空格的底线长度（点）。按 0.3 个字宽画，正文字号下约 3 点
+_VISIBLE_SPACE_WIDTH = (1.0, 6.0)
+
+
+def _visible_spaces(drawings: list[dict]) -> list[pymupdf.Rect]:
+    """一条短横线，两端各立着一条更短的竖线，竖线的下端落在横线上：画出来是 ␣ 的形状。
+    只认形状，是不是落在一行字的空隙里由提取时判断。"""
+    flats: list[pymupdf.Rect] = []
+    stems: list[pymupdf.Rect] = []
+    low, high = _VISIBLE_SPACE_WIDTH
+    for drawing in drawings:
+        for item in drawing.get("items", ()):
+            if item[0] != "l":
+                continue
+            rect = pymupdf.Rect(item[1], item[2]).normalize()
+            if rect.height < 0.05 and low <= rect.width <= high:
+                flats.append(rect)
+            elif rect.width < 0.05 and 0.3 <= rect.height <= high:
+                stems.append(rect)
+    found: list[pymupdf.Rect] = []
+    for flat in flats:
+        ends = [
+            [stem for stem in stems if abs(stem.x0 - x) <= 0.5 and abs(stem.y1 - flat.y1) <= 0.5 and stem.height < flat.width]
+            for x in (flat.x0, flat.x1)
+        ]
+        if all(ends):
+            found.append(pymupdf.Rect(flat.x0, min(stem.y0 for stem in ends[0] + ends[1]), flat.x1, flat.y1))
+    return found
 
 
 # 下划线至少这么宽（点）。再短的是字里的笔画、标记

@@ -765,6 +765,72 @@ def _split_accents(page: pymupdf.Page, data: dict) -> None:
         line["spans"] = out
 
 
+VISIBLE_SPACE = "\u2423"
+
+
+def _mark_visible_spaces(page: pymupdf.Page, data: dict, cups: Sequence[pymupdf.Rect]) -> None:
+    """画出来的可见空格 ␣ 不在字体里，提取出来只剩一个普通空格或者一段空白，
+    merged to ␣re 读成 merged to re。落在一行字的基线上、字的空隙里的，在原处写上 ␣：
+    盖着空格的换掉这个空格，空隙里没有字的补一截。和前后的字隔着一段的，中间留一个空格。"""
+    if not cups:
+        return
+    lines = [
+        line for block in data.get("blocks", []) if block.get("type") == 0 for line in block.get("lines", [])
+        if line.get("spans") and abs(line["dir"][1]) <= 0.01
+    ]
+    chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]] | None = None
+    for cup in cups:
+        middle = (cup.x0 + cup.x1) / 2
+        row = [
+            (line, span) for line in lines for span in line["spans"]
+            if abs(float(span["origin"][1]) - cup.y1) <= float(span.get("size") or 10.0) * 0.12
+            and span["bbox"][1] < cup.y0
+        ]
+        covering = [(line, span) for line, span in row if span["bbox"][0] < middle < span["bbox"][2]]
+        if covering:
+            line, span = covering[0]
+            text = str(span.get("text") or "")
+            if chars is None:
+                chars = _char_boxes(page)
+            boxes = chars.get((text, round(span["origin"][0], 1), round(span["origin"][1], 1)))
+            if boxes is None or len(boxes) != len(text):
+                boxes = [(span["bbox"][0], span["bbox"][2], tuple(span["origin"]))] if len(text) == 1 else []
+            hit = next((i for i, (x0, x1, _o) in enumerate(boxes) if x0 <= middle <= x1), None)
+            if hit is None or not text[hit].isspace():
+                continue
+            x0, x1, _origin = boxes[hit]
+            lead = " " if cup.x0 - x0 > 1.0 and (hit == 0 or not text[hit - 1].isspace()) else ""
+            tail = " " if x1 - cup.x1 > 1.0 and hit + 1 < len(text) and not text[hit + 1].isspace() else ""
+            span["text"] = text[:hit] + lead + VISIBLE_SPACE + tail + text[hit + 1:]
+            continue
+        # 空隙里没有字：接在离得近的那截上，左边的接在后面，右边的接在前面。两边一个字宽内都没有字的不算
+        inked = [(line, span) for line, span in row if str(span.get("text") or "").strip()]
+        before = [item for item in inked if item[1]["bbox"][2] <= middle]
+        after = [item for item in inked if item[1]["bbox"][0] >= middle]
+        left = max(before, key=lambda item: item[1]["bbox"][2], default=None)
+        right = min(after, key=lambda item: item[1]["bbox"][0], default=None)
+        size = float((left or right or (None, {}))[1].get("size") or 10.0)
+        near_left = left is not None and cup.x0 - left[1]["bbox"][2] <= size
+        near_right = right is not None and right[1]["bbox"][0] - cup.x1 <= size
+        if not near_left and not near_right:
+            continue
+        gap_left = cup.x0 - left[1]["bbox"][2] if near_left else float("inf")
+        gap_right = right[1]["bbox"][0] - cup.x1 if near_right else float("inf")
+        to_left = gap_left <= gap_right
+        line, neighbor = left if to_left else right
+        spans = line["spans"]
+        place = spans.index(neighbor) + (1 if to_left else 0)
+        lead = " " if gap_left > 1.0 and (to_left or place > 0) else ""
+        tail = " " if gap_right > 1.0 and (not to_left or place < len(spans)) else ""
+        box = (cup.x0, neighbor["bbox"][1], cup.x1, neighbor["bbox"][3])
+        spans.insert(place, {
+            **neighbor, "text": lead + VISIBLE_SPACE + tail, "bbox": box,
+            "origin": (cup.x0, neighbor["origin"][1]),
+            **({"ink": (cup.x0, cup.y0, cup.x1, cup.y1)} if "ink" in neighbor else {}),
+        })
+        line["bbox"] = tuple(pymupdf.Rect(line["bbox"]) | pymupdf.Rect(box))
+
+
 def _glyph_box(span: dict) -> pymupdf.Rect:
     """字形占的框。字体框量错、墨迹是单画量出来的，上下按墨迹算。"""
     box = pymupdf.Rect(span["bbox"])
@@ -4331,6 +4397,7 @@ def _extract(
         _mark_radicands(page, data, scans[-1].strokes)
         _mark_overlays(page, data)
         _split_accents(page, data)
+        _mark_visible_spaces(page, data, scans[-1].visible_spaces)
         # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
         recover_type3_page(page, data, type3)
         pages.append(data)
