@@ -6067,6 +6067,23 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
     assert data["blocks"][1]["lines"] == heading
 
 
+def test_the_hole_for_a_neighbour_stays_inside_its_font_box():
+    """上一行网址的精确框往下多出半行，按它挖孔会削掉下一行网址的字头。孔夹在字体框里；
+    单画量出的墨迹（字体框量错了）照旧。"""
+    from app.formats.pdf import _hole_ink
+
+    def box(span):
+        return tuple(round(v, 1) for v in _hole_ink(span))
+
+    url = {"text": " https://artofproblemsolving.com", "bbox": (121.2, 420.0, 525.0, 432.0),
+           "ink": (121.2, 420.0, 525.0, 437.5)}
+    assert box(url) == (121.2, 420.0, 525.0, 432.0)
+    arrow = {"text": "←", "bbox": (130.2, 214.0, 139.9, 232.0), "ink": (130.2, 221.3, 139.9, 226.4)}
+    assert box(arrow) == (130.2, 221.3, 139.9, 226.4)
+    root = {"text": "√", "bbox": (330.5, 187.2, 337.0, 195.0), "ink": (330.5, 187.2, 337.0, 200.0), "ink_drawn": True}
+    assert box(root) == (330.5, 187.2, 337.0, 200.0)
+
+
 def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line():
     """ϵ 的字体框伸到下一行，按字体框算和下一行同一行高，分母就被接到下一行后面，分子跟过去。"""
     from app.formats.pdf import _rejoin_split_lines

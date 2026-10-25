@@ -6616,6 +6616,16 @@ def _keep_marks(doc: "pymupdf.Document", form: int, keep: list["pymupdf.Rect"]) 
     return form
 
 
+def _hole_ink(span: dict) -> pymupdf.Rect:
+    """外来 span 在公式裁剪里挖的孔：墨迹框，夹在字体框里。精确框比字体框还大的
+    （LMMono 的精确框往下多出半行）不是墨迹，按字体框挖，不然会削掉下一行的字头。单画量出的照旧。"""
+    box = pymupdf.Rect(span["bbox"])
+    if span.get("ink") is None:
+        return box
+    ink = pymupdf.Rect(span["ink"])
+    return ink if span.get("ink_drawn") else ink & box
+
+
 def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
                   f: dict, f_name: str, page_spans: list[dict] | None = None) -> int:
     """给单个公式造紧致 BBox 的包裹 Form（按 span 逐个裁剪后引用源页 Form），返回 xref。
@@ -6704,7 +6714,7 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
                    for rr in run_rects):
                 continue
             # 挖不挖按字体框判断，孔按墨迹挖：括号、箭头的字体框比字形高出一截，会伸到下一行的字上
-            ink = pymupdf.Rect(fb["ink"]) if fb.get("ink") is not None else fr
+            ink = _hole_ink(fb)
             # 孔 = 外来 span 与我们的每个矩形的交。必须完全落在我们的矩形内：
             # even-odd 裁剪下越出并集的孔会反开，把正要排除的外来笔画整个画出来。
             # 只挖纵向不共线的 span（降部、邻公式的角标等）：同行邻字的 bbox 常常
