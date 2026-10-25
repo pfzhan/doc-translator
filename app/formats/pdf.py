@@ -2910,6 +2910,11 @@ def _column_continuations(
         if not columns or not nxt:
             continue
         host = host_of(pno, columns[-1])
+        # 右栏没分出来（右栏的块都没归栏）时最后一栏不是最右一栏：右边还排着正文的不是页末
+        if host is not None and any(
+            block.rect.x0 >= host.rect.x1 - host.size and block.rect.y1 > host.rect.y0 for block in prose[pno]
+        ):
+            continue
         head = head_of(later, nxt[0])
         _try_column_pair(
             pairs, tails, host, head, median, halt_ids, skip_ids,

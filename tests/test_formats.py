@@ -1821,6 +1821,26 @@ def test_a_column_does_not_continue_under_a_heading_at_its_top():
     assert id(left[-1]) not in pairs([])
 
 
+def test_the_page_end_is_not_in_a_column_with_body_text_to_its_right(monkeypatch):
+    """右栏没分出来、块都没归栏时，最后一栏是左栏：右边还排着正文，左栏栏底不是页末，不接下一页的页首。"""
+    from app.formats import pdf
+    from app.formats.pdf import TextBlock, _column_continuations
+
+    def blk(text, x0, y, page=0):
+        return TextBlock(page=page, rect=pymupdf.Rect(x0, y, x0 + 245, y + 36), line_rects=[],
+                         text=text, size=10.0, color="#000000", bold=False)
+
+    left = [blk("Text-to-SQL systems allow users to query structured databases in plain", 54, 100),
+            blk("language, and most evaluation focuses on the final generated query and", 54, 600)]
+    right = [blk("Even when benchmark performance is relatively strong, generated queries fail.", 313, 100),
+             blk("This framing is relevant to uncertainty-aware generation, and we treat the", 313, 600)]
+    head = blk("results under the conversational-history condition in the rest of the paper.", 54, 80, page=1)
+    monkeypatch.setattr(pdf, "_assigned_columns", lambda blocks, anchors: (
+        [[block for block in blocks if block.rect.x0 < 300]], [block for block in blocks if block.rect.x0 >= 300]))
+    pairs = _column_continuations({0: [*left, *right], 1: [head]}, 10.0, set(), set(), set())
+    assert id(left[-1]) not in pairs
+
+
 
 def test_pdf_biblio_author_year_entries_after_the_heading():
     """作者-年份体的条目不带编号和括号年份。标题后面连着几条「姓, 名缩写.」起头的就进入参考文献；
