@@ -8195,6 +8195,33 @@ def test_page_numbers_in_the_next_block_join_the_index_entry():
     assert [block.text for block in merged] == ["Berkeley Restaurant Project, 72", "BERT"]
 
 
+def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down():
+    """索引一栏排满到下沿。译文要两行的条目多占一行，下面的条目（含留原文的）跟着往下挪，
+    整栏行距收紧一点，末条不出下沿；别栏不动。多出的行太多就照旧不挪。"""
+    from app.formats.pdf import TextBlock, _index_reflow
+    from app.formats.pdf_layout import Column, PageGeometry
+
+    def blk(text, x0, row):
+        rect = pymupdf.Rect(x0, 100 + row * 9.6, x0 + 60, 110 + row * 9.6)
+        span = {"text": text, "size": 8.0, "font": "Times-Roman", "flags": 0, "color": 0, "bbox": tuple(rect)}
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=8.0, color="#000", bold=False,
+                         span_lines=[[span]], entry=True, index=True)
+
+    left = [blk(f"entry {n}, {n}", 80, n) for n in range(10)]
+    right = [blk(f"other {n}, {n}", 180, n) for n in range(10)]
+    geo = PageGeometry(612, (Column(80, 280),), ())
+    items = [(b, f"条目{n}, {n}") for n, b in enumerate(left) if n != 6] + [(b, "其他") for b in right]
+    items[2] = (left[2], "在命名实体识别(NER)中, 241, 419")
+    bottom = left[-1].rect.y1
+    moved = _index_reflow(items, [*left, *right], geo, True, {}, set(), bottom)
+    assert moved[id(left[2])].rect.height > left[2].rect.height + 8
+    assert id(left[6]) in moved and moved[id(left[6])].rect.y0 > left[6].rect.y0
+    assert moved[id(left[9])].rect.y1 <= bottom + 1
+    assert not any(id(b) in moved for b in right)
+    crowded = [(b, "在命名实体识别(NER)中, 241, 419") for b in left]
+    assert _index_reflow(crowded, left, geo, True, {}, set(), bottom) == {}
+
+
 def test_the_rest_of_a_broken_word_continues_the_line_above():
     """上一行停在连字符断开的半个词上，下一行缩进多少都是接着写的（expres- | sions, 50, 65），
     字母少也不当成一行页码留原文。索引页上比上一行缩进得深的也是续行（as, 51）。"""

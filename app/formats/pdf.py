@@ -7755,6 +7755,126 @@ def _beside_body(block: TextBlock, blocks: list[TextBlock]) -> TextBlock | None:
     return found
 
 
+def _index_reflow(
+    items: list[tuple[TextBlock, str]], blocks: list[TextBlock], geo: PageGeometry | None,
+    cjk: bool, formulas_map: dict[int, list[dict]], fixed: set[int], bottom: float,
+) -> dict[int, TextBlock]:
+    """索引一栏里译文比原文多占行的条目，连同下面的条目按原文行距往下挪。
+
+    一条一行紧挨着排，不挪的话多出来的一行没有地方，只能缩小字号。少占行的条目让出的空行、
+    字母分组之间的空白先拿来抵。挪到下一个不动的块（没有译文的条目、跨栏跨页的段落）
+    或正文下沿还放不下，这一段照旧。返回挪过的条目的副本，框和行框都已挪好。
+    """
+    if geo is None or not any(b.index for b in blocks):
+        return {}
+    texts = {id(b): t for b, t in items if t != SPILL_TAIL}
+    # 留原文的条目（BERT、CKY）也跟着挪，挪了就按原文重写
+    texts.update(
+        (id(b), _source_marked(b)) for b in blocks
+        if b.index and id(b) not in texts and not any(_span_is_math(s) for line in b.span_lines for s in line)
+    )
+    moved: dict[int, TextBlock] = {}
+    for column, right in _index_columns(blocks, geo):
+        tops = sorted(row[0].y0 for b in column for row in _visual_lines(b))
+        steps = [b - a for a, b in zip(tops, tops[1:]) if 0 < b - a]
+        if not steps:
+            continue
+        pitch = sorted(steps)[len(steps) // 2]
+        segment: list[tuple[TextBlock, int, int]] = []
+        for b in [*column, None]:
+            movable = (
+                b is not None and b.index and id(b) in texts and id(b) not in fixed
+                and pitch < b.size * 2
+            )
+            if movable:
+                rows = len(_visual_lines(b))
+                em = b.size * 0.88 if cjk else b.size
+                text = space_around_latin(separate_after_formula(texts[id(b)]))
+                metrics = _formula_metrics(formulas_map.get(id(b), []), b.size, em, b.size * 0.88 if cjk else None)
+                need = len(typeset_lines(text, em, max(right - b.rect.x0, 1.0), metrics))
+                segment.append((b, rows, need))
+                continue
+            limit = b.rect.y0 if b is not None else bottom
+            moved.update(_restack(segment, pitch, limit))
+            segment = []
+    return moved
+
+
+def _source_marked(block: TextBlock) -> str:
+    """原文按 span 写出粗体、斜体标记。重写留原文的块时，粗体的页码照旧是粗体。"""
+    spans = [s for line in block.span_lines for s in line]
+    writer = writer_for(spans, block.size, _color_value(block.color))
+    return _join_lines([
+        "".join(writer.text(str(s["text"]), span_emphasis(s), float(s.get("size") or 0), s.get("color"))
+                for s in line) + writer.close()
+        for line in block.span_lines
+    ])
+
+
+def _index_columns(blocks: list[TextBlock], geo: PageGeometry) -> list[tuple[list[TextBlock], float]]:
+    """索引页按左右不重叠分栏，栏内从上到下排好，另给出每栏能写到的右缘。
+
+    索引的行参差不齐，版面分析常常只认出一栏。条目只在本栏里写，横向和别栏的条目不相交。
+    分栏只看索引条目，页首横跨几栏的标题不算；它和别的块一起放进左右相交的栏里，挡住条目。
+    """
+    groups: list[list[TextBlock]] = []
+    for b in sorted((b for b in blocks if b.index), key=lambda b: b.rect.x0):
+        if groups and b.rect.x0 < max(other.rect.x1 for other in groups[-1]):
+            groups[-1].append(b)
+        else:
+            groups.append([b])
+    out = []
+    for index, group in enumerate(groups):
+        x0, x1 = min(b.rect.x0 for b in group), max(b.rect.x1 for b in group)
+        group += [b for b in blocks if not b.index and b.rect.x0 < x1 and b.rect.x1 > x0]
+        group.sort(key=lambda b: b.rect.y0)
+        right = geo.column_of(group[0].rect).x1
+        if index + 1 < len(groups):
+            right = min(right, min(b.rect.x0 for b in groups[index + 1]) - 2)
+        out.append((group, right))
+    return out
+
+
+def _restack(segment: list[tuple[TextBlock, int, int]], pitch: float, limit: float) -> dict[int, TextBlock]:
+    """一段条目从上往下排：每条从原位或上一条末行之下起，占它要的行数。
+
+    索引一栏常常排到正文下沿，没有空行可借。超出 limit 时整段行距一起收紧，至多收一成，
+    一行少不到一点，比单独缩小一条的字号好认；再不够就不挪。
+    """
+    if not segment or not any(need > rows for _b, rows, need in segment):
+        return {}
+    placed: list[tuple[TextBlock, float, float, float]] = []
+    cursor = None
+    for b, rows, need in segment:
+        top = b.line_rects[0].y0 if b.line_rects else b.rect.y0
+        new_top = max(top, cursor if cursor is not None else top)
+        grow = max(0, need - rows) * pitch
+        cursor = new_top + max(need, rows) * pitch
+        placed.append((b, top, new_top, grow))
+    first = placed[0][1]
+    last, top, new_top, grow = placed[-1]
+    end = last.rect.y1 + new_top - top + grow
+    scale = min(1.0, (limit - first) / (end - first)) if end > first else 1.0
+    if scale < 0.9:
+        return {}
+    out: dict[int, TextBlock] = {}
+    for b, top, new_top, grow in placed:
+        new_top = first + (new_top - first) * scale
+        if abs(new_top - top) < 0.05 and not grow:
+            continue
+        out[id(b)] = replace(
+            b,
+            rect=pymupdf.Rect(b.rect.x0, b.rect.y0 + new_top - top, b.rect.x1,
+                              b.rect.y1 + new_top - top + grow * scale),
+            line_rects=[
+                pymupdf.Rect(rect.x0, new_top + (rect.y0 - top) * scale, rect.x1,
+                             new_top + (rect.y0 - top) * scale + rect.height)
+                for rect in b.line_rects
+            ],
+        )
+    return out
+
+
 def _affiliation_write_rects(blocks: list[TextBlock]) -> dict[int, pymupdf.Rect]:
     """并排的作者单位改成逐行写下。中文比原文宽，并排写会叠在一起。"""
     marked = [
@@ -8280,6 +8400,17 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         # 公式贴的是擦除前打包的原页，不受影响。点阵字的字形是全文共用的，擦除、裁公式的过滤会改到它，
         # 这一页写完原样写回
         glyphs = type3_glyphs(page) if mid_map else {}
+        stacked = _affiliation_write_rects(same_page)
+        fixed = {*stacked, *continuations, *(id(tail) for tail in continuations.values())}
+        reflowed = _index_reflow(
+            items, same_page, geo, cjk, formulas_map or {}, fixed,
+            _page_content_bottom(same_page, pno, bounds.height),
+        )
+        # 挪过的索引条目，别的块右扩、绕排时按挪过的位置让开
+        layout = [reflowed.get(id(ob), ob) for ob in same_page]
+        written = {id(b) for b, _ in items}
+        items = [*items, *((b, _with_source_bold(b, _source_marked(b))) for b in same_page
+                           if id(b) in reflowed and id(b) not in written)]
         erasure = Erasure(math=_span_is_math)
         for b, _ in items:
             erasure.add_block(b.span_lines, b.line_rects or [b.rect])
@@ -8319,7 +8450,6 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         images_before = {img[0] for img in page.get_images(full=True)}
         draws: list[str] = []
         deferred_png: list[tuple[pymupdf.Rect, bytes]] = []
-        stacked = _affiliation_write_rects(same_page)
         starts = _body_first_starts(same_page, items, cjk, formulas_map)
 
         def write_floor(block: TextBlock, rect: pymupdf.Rect) -> float:
@@ -8336,7 +8466,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             bformulas = formulas if formulas is not None else (formulas_map or {}).get(id(block), [])
             weight = "bold" if block.bold else "normal"
             size = block.size * 0.88 if cjk else block.size
-            obstacles = [ob.rect for ob in same_page if ob is not block]
+            obstacles = [ob.rect for ob in layout if ob is not block]
             # 目录的页码留在原页上，译文不能写过去
             obstacles += [ob.leader.number for ob in same_page if ob.leader is not None]
             obstacles += [ink for ink in kept if _on_rows(ink, block.line_rects or [block.rect])]
@@ -8455,6 +8585,13 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             rect, centered = _write_rect(b, visible, cjk, rtl, geo)
             if id(b) in stacked:
                 rect, centered = stacked[id(b)], False
+            shifted = reflowed.get(id(b))
+            if shifted is not None:
+                rect = pymupdf.Rect(
+                    rect.x0, rect.y0 + shifted.rect.y0 - b.rect.y0, rect.x1, rect.y1 + shifted.rect.y1 - b.rect.y1,
+                )
+                write_one(shifted, t, rect, centered, (formulas_map or {}).get(id(b), []))
+                continue
             if b.side_note and geo is not None and geo.frame is not None and b.rect.x1 <= geo.frame.x0:
                 # 左侧的旁注靠右对齐，贴着正文。放不下一行时照常从左起笔
                 width = measure_width(t, b.size * 0.88 if cjk else b.size)
