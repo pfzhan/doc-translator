@@ -344,3 +344,36 @@ def test_marks_written_with_spaces_inside_are_restored():
     dst = "如果{\u200b\u200bi}surprised{/i}或{ i? }just{/i}中的[i]x{/i}是{b}热点{/b>, {cb30000}职务{/cb30000}"
     assert tidy_marks(src, dst) == "如果{i}surprised{/i}或{i}just{/i}中的{i}x{/i}是{b}热点{/b}, {cb30000}职务{/c}"
     assert tidy_marks("x[i] for {i}i{/i}", "x[i] 对 {i}i{/i}") == "x[i] 对 {i}i{/i}"
+
+
+def test_stray_script_marks_text_neither_language_uses():
+    """译文夹着原文和目标语言都不用的文字算坏译文；原文本来就有的、目标语言用的、公式里的希腊字母不算。"""
+    from app.translators import stray_script
+
+    assert stray_script("Please take a moment to convince yourself", "请花一点时间 убед自己", "zh-CN")
+    assert stray_script("with a small change", "通过做 მცირე修改", "zh-CN")
+    assert not stray_script("the Russian word Привет", "俄语词 Привет", "zh-CN")
+    assert not stray_script("mu-law, 339", "μ律, 339", "zh-CN")
+    assert not stray_script("a text", "日本語のテキスト", "ja")
+    assert not stray_script("a text", "Привет", "ru")
+    assert stray_script("a text", "テキスト", "zh-CN")
+
+
+def test_items_with_stray_script_are_retranslated():
+    """批量里夹带外文的段落单独重翻；单独重翻仍夹带时再问一次。"""
+    singles = []
+
+    async def handler(request):
+        user = json.loads(request.content)["messages"][-1]["content"]
+        if "[[source_end]]" in user:
+            content = "[[p0]]\n请花一点时间 убед自己。\n[[p1]]\n我们开发了一套方法。"
+        else:
+            singles.append(user)
+            content = "请花一点时间 убед自己。" if len(singles) == 1 else "请花一点时间说服自己。"
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    tr = make_openai(handler)
+    out = run(tr.translate_batch(["Please take a moment to convince yourself.", "We developed a method."]))
+    assert out == ["请花一点时间说服自己。", "我们开发了一套方法。"]
+    assert len(singles) == 2
+    run(tr.aclose())

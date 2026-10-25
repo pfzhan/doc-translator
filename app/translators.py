@@ -7,6 +7,7 @@
 import asyncio
 import hashlib
 import re
+import unicodedata
 from urllib.parse import urlparse
 
 import httpx
@@ -125,6 +126,37 @@ def misplaced(source: str, translation: str, typical: float | None) -> bool:
         return True
     ratio = _length_ratio(source, translation)
     return bool(typical) and ratio is not None and not typical * _RATIO_LOW <= ratio <= typical * _RATIO_HIGH
+
+
+# 判断夹带外文用的文字系统，取字符 Unicode 名称的第一个词。拉丁字母、希腊字母不在其中：
+# 代码、人名、公式符号（μ律、λ）在任何语言的译文里都可能出现
+_SCRIPTS = frozenset({
+    "CYRILLIC", "ARMENIAN", "HEBREW", "ARABIC", "SYRIAC", "THAANA", "DEVANAGARI", "BENGALI",
+    "GURMUKHI", "GUJARATI", "ORIYA", "TAMIL", "TELUGU", "KANNADA", "MALAYALAM", "SINHALA", "THAI",
+    "LAO", "TIBETAN", "MYANMAR", "GEORGIAN", "HANGUL", "ETHIOPIC", "KHMER", "MONGOLIAN",
+    "HIRAGANA", "KATAKANA", "CJK",
+})
+# 本地名里看不出的文字系统：日文的假名
+_EXTRA_SCRIPTS = {"ja": {"HIRAGANA", "KATAKANA"}}
+_NATIVE_NAMES = {code: native for code, _, native in LANGUAGES}
+
+
+def _scripts(text: str) -> set[str]:
+    found = set()
+    for ch in text:
+        if ch.isalpha() and ord(ch) > 0x2FF:
+            name = unicodedata.name(ch, "").removeprefix("HALFWIDTH ").split(" ", 1)[0]
+            if name in _SCRIPTS:
+                found.add(name)
+    return found
+
+
+def stray_script(source: str, translation: str, target_lang: str) -> bool:
+    """译文里夹着原文和目标语言都不用的文字，例如中文译文里冒出半个俄文词「убед自己」。
+    目标语言用的文字从它的本地名（简体中文、Русский）里看。"""
+    allowed = _scripts(source) | _scripts(_NATIVE_NAMES.get(target_lang, ""))
+    allowed |= _EXTRA_SCRIPTS.get(target_lang, set())
+    return bool(_scripts(translation) - allowed)
 
 
 # 这些状态码说明是我们这边的配置有问题（Key 错、没权限、地址错），重试也不会好，立即报错
@@ -315,14 +347,22 @@ class LLMTranslator(Translator):
             left, right = await asyncio.gather(self.translate_batch(texts[:mid]), self.translate_batch(texts[mid:]))
             return left + right
         if len(texts) == 1:
-            return [prompts.clean_output(content)]
+            out = prompts.clean_output(content)
+            # 夹带外文的译文再问一次，仍然夹带就照收，由 Runner 下次重排时丢掉重翻
+            if stray_script(texts[0], out, self.target_lang):
+                async with self._sem:
+                    again = prompts.clean_output(await self._complete(system, user))
+                if again.strip() and not stray_script(texts[0], again, self.target_lang):
+                    out = again
+            return [out]
         found = prompts.parse_markers(content, len(texts), marker=prompts.pick_marker(texts))
         # 模型漏掉的段落补翻（和插件的 recovery 思路一样，只补缺失的），并行发出。
-        # 数字、公式占位符、长度对不上的也单独重翻：标记数量对得上，内容却可能错了位
+        # 数字、公式占位符、长度对不上的也单独重翻：标记数量对得上，内容却可能错了位。夹带外文的同样重翻
         typical = typical_ratio((texts[i], found[i]) for i in found)
         missing = [i for i in range(len(texts))
                    if i not in found or _numbers_mismatch(texts[i], found[i])
-                   or misplaced(texts[i], found[i], typical)]
+                   or misplaced(texts[i], found[i], typical)
+                   or stray_script(texts[i], found[i], self.target_lang)]
         if missing:
             redone = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in missing))
             for i, [text] in zip(missing, redone):

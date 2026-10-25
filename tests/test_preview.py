@@ -531,3 +531,20 @@ def test_dotted_section_numbers_stay_in_digits():
     out = asyncio.run(runner.translate_all(["17.2.3 Residual vector quantization"], kinds=["h2"]))
     assert out == ["17.2.3 残差向量量化"]
     assert cache.d["17.2.3 Residual vector quantization"] == "17.2.3 残差向量量化"
+
+
+def test_cached_translation_with_stray_script_is_dropped_and_retried():
+    """缓存里夹带外文的译文丢掉重翻；只排版时没法重翻，照用。"""
+    src = "Please take a moment to convince yourself."
+    cache = MemCache({src: "请花一点时间 убед自己。"})
+
+    def handler(request):
+        return httpx.Response(200, json={"choices": [{"message": {"content": "请花一点时间说服自己。"}}]})
+
+    tr = __import__("tests.test_translators", fromlist=["make_openai"]).make_openai(handler)
+    out = asyncio.run(Runner(tr, cache=cache, skip_same_lang=False).translate_all([src]))
+    assert out[0] == "请花一点时间说服自己。"
+    assert cache.d[src] == "请花一点时间说服自己。"
+    cache.d[src] = "请花一点时间 убед自己。"
+    out = asyncio.run(Runner(tr, cache=cache, skip_same_lang=False, cache_only=True).translate_all([src]))
+    assert out[0] == "请花一点时间 убед自己。"
