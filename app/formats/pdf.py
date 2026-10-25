@@ -295,6 +295,12 @@ def _list_item(text: str) -> bool:
     return bool(BULLET_RE.match(text) or _PAREN_ITEM_RE.match(stripped))
 
 
+# 式子里的关系符号
+_RELATION_RE = re.compile(r"[=<>≤≥≈≡≜∝→←⇒⇔∈∉⊂⊆]")
+# 定理、引理、定义一类的编号标签：Lemma 10.3.、Theorem 4.1.、Definition 2.
+_NUMBERED_LABEL_RE = re.compile(r"[A-Z][a-z]+\s+\d+(?:\.\d+)*\.\s")
+
+
 def _label_lead(spans: list[dict]) -> bool:
     """行首是几个词的粗体标签，冒号或句号收尾，后面接着非粗体正文（Speaker demographics: What…）。"""
     label = ""
@@ -2154,14 +2160,23 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         example = bool(_EXAMPLE_NUMBER_RE.match(stripped)) and _ends_sentence(ptext)
         # 上一句（或句末括起来的例词）说完，下一行以粗体标签起头：定义列表的下一条。
         # 单行的条目排得差不多满，按硬换行看不出来
+        # 单独一行、两边都缩进三个字宽以上、只有数学字体、带关系符号的一行是单独排的式子，
+        # 上一行停在逗号上也不接。分式拆出来的求和号、分母那几截没有关系符号，不算
+        display_math = (
+            own_row and rect.x0 - group_x0 > 3 * psize and max_x1 - rect.x1 > 3 * psize
+            and all(_span_is_math(span) for span in items[i][2] if str(span["text"]).strip())
+            and bool(_RELATION_RE.search(stripped))
+        )
+        # 带编号的定理、引理标签（Lemma 10.3.）总是另起一段，上一行停在式子上也一样
         labeled = (
             not same_visual_line and _label_lead(items[i][2])
-            and (_ends_sentence(ptext) or ptext.rstrip().endswith(")"))
+            and (_ends_sentence(ptext) or ptext.rstrip().endswith(")") or bool(_NUMBERED_LABEL_RE.match(stripped)))
         )
         if value_column or i in cells or i in row_labels or (not same_visual_line and not sec_label and (
             (not open_end and (bullet or example or (NO_TEXT_RE.match(stripped) and i not in number_tails)))
             or (prev_symbol and not closing)
             or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim or restyled or labeled
+            or display_math
             or displayed
             or _caption_opens(items[i][2], pspans)
         )):

@@ -819,6 +819,33 @@ def test_a_small_caps_heading_takes_the_size_of_its_capitals():
     assert _block_size(model[1], [model]) == 6.5
 
 
+def test_a_numbered_lemma_and_a_displayed_formula_start_their_own_paragraphs():
+    """带编号的引理标签另起一段，上一行停在式子上也一样。两边缩进、只有数学字体、带关系符号的一行
+    是单独排的式子，上一行停在逗号上也不接。分式拆出来的求和号那一截不算。"""
+    from app.formats.pdf import _split_lines
+
+    def line(text, x0, x1, y, font="NimbusRomNo9L-Regu", flags=0):
+        return (text, pymupdf.Rect(x0, y, x1, y + 11),
+                [{"text": text, "size": 9.7, "font": font, "flags": flags, "bbox": (x0, y, x1, y + 11)}])
+
+    lemma = [
+        line("that contains the ith dimension of the gradients over all iterations till t, g1:t,i = [g1,i, g2,i]",
+             105.0, 485.6, 300.0),
+        ("Lemma 10.3. Let gt = ∇ft(θt) and g1:t be defined as above and bounded,", pymupdf.Rect(105.0, 314.0, 490.3, 325.0),
+         [{"text": "Lemma 10.3.", "size": 9.7, "font": "NimbusRomNo9L-Medi", "flags": 16, "bbox": (105, 314, 160, 325)},
+          {"text": " Let gt = ∇ft(θt) and g1:t be defined as above and bounded,", "size": 9.7,
+           "font": "NimbusRomNo9L-Regu", "flags": 0, "bbox": (160, 314, 490.3, 325)}]),
+    ]
+    assert _split_lines(lemma) == [[0], [1]]
+    display = [
+        line("Lemma 10.2. If a function f : Rd → R is convex, then for all x, y ∈ Rd,", 105.0, 391.0, 209.9),
+        line("f(y) ≥ f(x) + ∇f(x)T (y − x)", 235.1, 360.2, 226.0, font="CMMI10"),
+        line("The above lemma can be used to upper bound the regret and our proof for the main theorem is",
+             105.0, 490.3, 248.0),
+    ]
+    assert _split_lines(display) == [[0], [1], [2]]
+
+
 def test_wrapped_letter_period_stays_in_the_paragraph():
     """撑满的上一行没有句末时，下一行的 Q. 是换行，不是列表项。句末之后的 a. 仍拆开。"""
     from app.formats.pdf import _split_lines
