@@ -1649,6 +1649,19 @@ def test_a_number_heavy_results_paragraph_is_prose():
     assert _is_code_line("0.1 0.2 0.3 0.4 0.5 0.6 (s)")
 
 
+def test_a_body_sentence_that_starts_with_figure_is_not_a_caption():
+    """编号后面接小写词的是正文（Figure 8(a) shows that …），编号后面是冒号、句点或大写的是图注。"""
+    from app.formats.pdf import _is_float_text
+
+    assert not _is_float_text("Figure 8(a) shows that the fidelity converges.")
+    assert not _is_float_text("Table 5 evaluates the out-of-distribution results.")
+    assert not _is_float_text("Table 1.2 shows the settings.")
+    assert _is_float_text("Figure 3: The pipeline.")
+    assert _is_float_text("FIG. 8. Temporal and spatial convergence.")
+    assert _is_float_text("Table 1.2 Results on the test set")
+    assert _is_float_text("Fig. 3 (A) Panel view")
+
+
 def test_pdf_biblio_author_year_entries_after_the_heading():
     """作者-年份体的条目不带编号和括号年份。标题后面连着几条「姓, 名缩写.」起头的就进入参考文献；
     正文里只一句这样开头的不算。"""

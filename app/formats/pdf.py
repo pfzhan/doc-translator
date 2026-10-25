@@ -2578,9 +2578,10 @@ def _left_column_head(page_blocks: list[TextBlock], geo: PageGeometry) -> TextBl
     return min(heads, key=lambda block: (block.rect.y0, block.rect.x0))
 
 
-# 栏顶的图注、清单不占续句的位置。正文里的 Figure 3 shows 不是图注。
+# 栏顶的图注、清单不占续句的位置。正文里的 Figure 3 shows、Figure 8(a) shows 不是图注：编号后面接着小写的词
 _FLOAT_HEAD_RE = re.compile(
-    r"^(?:Figure|Fig\.?|Table|Tab\.?|Listing|List\.?|Scheme|Plate|Algorithm|图|表|清单)\s*\d+\b",
+    r"^(?:Figure|Fig\.?|Table|Tab\.?|Listing|List\.?|Scheme|Plate|Algorithm|图|表|清单)\s*\d++(?:\.\d+)*+\b"
+    r"(?!(?:\s*\((?-i:[a-z])\))?\s+(?-i:[a-z]))",
     re.I,
 )
 _CODE_LINE_RE = re.compile(r"^(?:<|\d+\s+0x[0-9a-fA-F])")
