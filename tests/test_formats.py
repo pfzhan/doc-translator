@@ -8085,3 +8085,35 @@ def test_text_annotated_with_arcs_stays_original():
     found = pdf._arc_figure_ids(blocks, scans)
     kept = {block.text for block in blocks if id(block) in found}
     assert kept == {"She announced this in January", "nsubj"}
+
+
+def test_a_wrapped_formula_with_tall_glyph_boxes_is_split_by_baseline():
+    """折行的公式上下两片（(o_i ≻ | o_j|x)）字体框交叠一点，按基线看是两行，收成两片，
+    不并成一个横跨整栏的框。数值取自 ed3book p226。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text, font, size, box, base, ink=None):
+        out = {"text": text, "font": font, "size": size, "bbox": box, "origin": (box[0], base)}
+        if ink is not None:
+            out["ink"] = ink
+        return out
+
+    italic, roman, symbol, body = "NimbusRomNo9L-ReguItal", "CMR10", "CMSY10", "NimbusRomNo9L-Regu"
+    b = _block_with_spans([
+        [span("move from the simple assertion ", body, 10, (142.2, 140.1, 450.0, 152.1), 149.3),
+         span("(", roman, 10, (453.4, 141.8, 457.2, 151.8), 149.3, (453.4, 141.8, 457.2, 151.8)),
+         span("o", italic, 10, (457.2, 140.1, 462.2, 152.0), 149.3),
+         span("i", italic, 7.4, (462.2, 144.0, 464.3, 152.8), 150.8),
+         span("≻", symbol, 10, (467.5, 141.6, 475.2, 158.9), 149.3, (467.5, 143.9, 475.2, 149.7))],
+        [span("o", italic, 10, (142.2, 152.1, 147.2, 163.9), 161.3),
+         span(" j", italic, 7.4, (147.2, 154.4, 150.3, 164.7), 161.3),
+         span("|", symbol, 10, (151.0, 153.5, 153.8, 170.8), 161.3, (151.0, 153.8, 153.8, 163.8)),
+         span("x", italic, 10, (153.8, 152.1, 158.2, 163.9), 161.3),
+         span(")", roman, 10, (158.2, 153.8, 162.1, 163.8), 161.3, (158.2, 153.8, 162.1, 163.8)),
+         span(" to knowing the value", body, 10, (162.1, 152.1, 300.0, 164.1), 161.3)],
+    ], size=10.0)
+    sent, formulas = _placeholderize(b, 0)
+    assert sent.count("{v") == 1
+    parts = formulas[0].get("parts") or []
+    assert len(parts) == 2 and parts[0]["bbox"].x0 >= 450 and parts[1]["bbox"].x1 <= 170
+

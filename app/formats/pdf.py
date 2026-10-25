@@ -3098,8 +3098,10 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         y_overlap = min(m["bbox"].y1, r["bbox"].y1) - max(m["bbox"].y0, r["bbox"].y0)
         # 前一段收住一行，后一段整个在它左下方：折到了下一行行首。
         # 分子右边还有式子，分母的根号也在左下方，不算折行
+        # 数学字体的字框很高，上下两行的框会交叠，再按基线比：低了半行以上就是下一行
         wrapped = (r["bbox"].x1 <= m["bbox"].x0
-                   and _run_text_box(r).y0 >= _run_text_box(m).y1
+                   and (_run_text_box(r).y0 >= _run_text_box(m).y1
+                        or _run_baseline(r) - _run_baseline(m) > block.size * 0.6)
                    and _ends_row(m, block.span_lines))
         return (flow_adjacent(m, r)
                 and r["bbox"].x0 - m["bbox"].x1 < block.size
@@ -3846,6 +3848,15 @@ def _small_band(run: dict, over: pymupdf.Rect, small: float) -> pymupdf.Rect | N
         if top <= (box.y0 + box.y1) / 2 <= bottom:
             band |= box
     return band
+
+
+def _run_baseline(run: dict) -> float:
+    """公式 run 里正文字号的那几截的基线，取中位数。角标抬高、压低，不算。"""
+    sizes = [float(span.get("size") or 0) for span in run["spans"] if span.get("origin") is not None]
+    top = max(sizes, default=0.0)
+    lows = sorted(float(span["origin"][1]) for span in run["spans"]
+                  if span.get("origin") is not None and float(span.get("size") or 0) >= top * 0.9)
+    return lows[len(lows) // 2] if lows else float(run["bbox"].y1)
 
 
 def _join_line_wrapped_formulas(
