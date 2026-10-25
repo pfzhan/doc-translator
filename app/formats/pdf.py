@@ -2010,7 +2010,8 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
     ref_size = max((s["size"] for s in items[0][2]), default=10)
     group_size = ref_size if len("".join(items[0][0].split())) >= _SIZE_ROW_CHARS else 0
     # 排满的一行没说完，折到下一行行首的数（range from 0.01 to | 0.1.）是句尾，不是符号行。
-    # 左缘和上一行对齐也算：段落首行缩进，第二行以后才是左缘（13 tokens: 11865, … | 885, 220, …）
+    # 左缘和上一行对齐也算：段落首行缩进，第二行以后才是左缘（13 tokens: 11865, … | 885, 220, …）。
+    # 上一行停在句中的缩写上（Tanikawa et al. | 2012).）也没说完
     number_tails: set[int] = set()
     for i in range(1, len(items)):
         text, rect = items[i][0], items[i][1]
@@ -2020,7 +2021,8 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         # 纯符号行独立成段，后面的内容不和它拼
         prev_symbol = bool(NO_TEXT_RE.match(ptext.strip())) and ref not in number_tails
         if (NO_TEXT_RE.match(stripped) and re.search(r"\d", stripped) and not prev_symbol
-                and max_x1 - prect.x1 <= 0.5 * psize and not _ends_sentence(ptext)
+                and max_x1 - prect.x1 <= 0.5 * psize
+                and (not _ends_sentence(ptext) or _MID_ABBREV_RE.search(ptext.rstrip()) is not None)
                 and min(abs(rect.x0 - group_x0), abs(rect.x0 - prect.x0)) <= 0.5 * psize
                 and rect.y0 >= prect.y1 - 0.5 * psize
                 and (i + 1 == len(items) or items[i + 1][1].y0 >= rect.y1 - 0.5 * psize)):

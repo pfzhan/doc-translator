@@ -8375,6 +8375,11 @@ def test_numbers_wrapped_under_an_indented_first_line_stay_in_the_paragraph():
              item("Notice that most words are their own token, usually including the leading space.", 157.0, 217.0, 475.0),
              item("Clitics like 's are segmented off when they appear on proper nouns like Jane, but", 142.0, 229.0, 475.0)]
     assert _split_lines(items) == [[0, 1, 2, 3], [4, 5]]
+    # 上一行停在句中的 et al. 上，下一行的年份是引文的后半截
+    cited = [item("least another star and/or BH in close proximity to carry away", 303.3, 728.3, 558.4),
+             item("the excess energy and momentum (Heggie 1975; Tanikawa et al.", 303.3, 739.7, 558.4),
+             item("2012).", 303.3, 750.6, 329.0)]
+    assert _split_lines(cited) == [[0, 1, 2]]
 
 
 def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
