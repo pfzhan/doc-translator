@@ -8158,6 +8158,24 @@ def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
     assert _index_entry_ends(wrapped, [pymupdf.Rect(203.3, 244.5, 211.2, 254.1)]) == {1}
 
 
+def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
+    """索引条目停在逗号上，页码折到下一行、缩到条目文字下面。页码那一行跟着条目一起送翻，
+    条目到页码收住，下一条照常另起。"""
+    from app.formats.pdf import _index_entry_ends, _split_lines
+
+    def item(text, x0, y0, x1):
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 9.6),
+                [{"text": text, "size": 8.0, "bbox": (x0, y0, x1, y0 + 9.6)}], [])
+
+    items = [item("Switchboard, 359", 401.2, 130.6, 457.5), item("Switchboard Corpus,", 401.2, 140.5, 472.4),
+             item("338,", 479.3, 140.5, 493.2), item("339, 348, 349, 359", 425.1, 149.7, 484.9),
+             item("sycophantic, 29", 401.2, 159.2, 451.3)]
+    groups = _split_lines(items, True)
+    assert [1, 2, 3] in groups or any({1, 2, 3} <= set(group) for group in groups)
+    ends = _index_entry_ends(items, [])
+    assert 2 not in ends and 3 in ends and 4 in ends
+
+
 def test_the_rest_of_a_broken_word_continues_the_line_above():
     """上一行停在连字符断开的半个词上，下一行缩进多少都是接着写的（expres- | sions, 50, 65），
     字母少也不当成一行页码留原文。索引页上比上一行缩进得深的也是续行（as, 51）。"""

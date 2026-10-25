@@ -1201,7 +1201,8 @@ def _index_entry_ends(items: list[tuple], ref_rows: Sequence[pymupdf.Rect]) -> s
     """索引页一块里每个条目的末行（下标）。条目折行时，续行比条目的首行缩进得深，
     几行续行缩进一样：下一行起笔不比这一条的首行靠右，或者从续行往回退（退到子条目），
     这一行就收住了一条（「CFG, see context-free gram-」「mar」后面的「chain rule」）。
-    以页码收尾的行、只有页码的行、页码折到下一行的那一行也收住一条。
+    以页码收尾的行、只有页码的行也收住一条。页码折到下一行时，同一块里的页码行跟着条目，
+    别的块里的页码行收不进来，在折行的那一行收住。
     两端对齐把一行拆成几截（collaborative | completion,），按整行看。"""
     rows: list[list[int]] = []
     for index, item in enumerate(items):
@@ -1227,6 +1228,14 @@ def _index_entry_ends(items: list[tuple], ref_rows: Sequence[pymupdf.Rect]) -> s
             below = pymupdf.Rect()
             for index in nxt:
                 below |= items[index][1]
+        # 页码折到了下一行，那一行在同一块里：条目连着页码一起送翻，到页码那一行才收住。
+        # 只剩页码的一行单独留着，译文里这一条就没有页码
+        refs_next = (
+            text.endswith(",") and below is not None and below.y0 - rect.y1 <= size * 0.5
+            and _INDEX_REFS_ONLY_RE.match(" ".join(items[index][0].strip() for index in nxt)) is not None
+        )
+        if refs_next:
+            continue
         if (_INDEX_REF_RE.search(text) or _INDEX_REFS_ONLY_RE.match(text)
                 or (text.endswith(",") and _refs_below(rect, ref_rows, size))
                 or (below is not None and below.y0 - rect.y1 <= size * 0.5
@@ -1999,6 +2008,13 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
                 and (i + 1 == len(items) or items[i + 1][1].y0 >= rect.y1 - 0.5 * psize)):
             # 这个数独占一行。同一行后面还有字的是行首的节号（9.6 Summary）
             number_tails.add(i)
+        # 索引条目停在逗号上，页码折到下一行：页码跟着条目（见 _index_entry_ends），缩进多深都不拆
+        index_tail = (
+            whole_rows and ptext.rstrip().endswith(",") and bool(_INDEX_REFS_ONLY_RE.match(stripped))
+            and -0.3 * psize <= rect.y0 - prect.y1 <= 0.5 * psize
+        )
+        if index_tail:
+            number_tails.add(i)
         jump = prect.x0 - rect.x0
         # 1–2em 左跳是首行缩进，不是新段落。首行缩进只缩一行：这一段已有两行以上、上一行不是第一行，
         # 再往左起笔是列表项、例句的悬挂续行完了。块从续行起头时第一行也是缩着的（datasheet 的条目）。
@@ -2172,13 +2188,15 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             not same_visual_line and _label_lead(items[i][2])
             and (_ends_sentence(ptext) or ptext.rstrip().endswith(")") or bool(_NUMBERED_LABEL_RE.match(stripped)))
         )
-        if value_column or i in cells or i in row_labels or (not same_visual_line and not sec_label and (
-            (not open_end and (bullet or example or (NO_TEXT_RE.match(stripped) and i not in number_tails)))
-            or (prev_symbol and not closing)
-            or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim or restyled or labeled
-            or display_math
-            or displayed
-            or _caption_opens(items[i][2], pspans)
+        if not index_tail and (value_column or i in cells or i in row_labels or (
+            not same_visual_line and not sec_label and (
+                (not open_end and (bullet or example or (NO_TEXT_RE.match(stripped) and i not in number_tails)))
+                or (prev_symbol and not closing)
+                or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim or restyled
+                or labeled or display_math
+                or displayed
+                or _caption_opens(items[i][2], pspans)
+            )
         )):
             groups.append(cur)
             cur = [i]
