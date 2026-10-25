@@ -8359,6 +8359,24 @@ def test_an_indented_line_after_a_full_line_that_ends_a_sentence_starts_a_paragr
     assert [0, 1] in _split_lines(entry)
 
 
+def test_numbers_wrapped_under_an_indented_first_line_stay_in_the_paragraph():
+    """段落首行缩进，没说完的一串数折到下一行的左缘（13 tokens: 11865, … | 885, 220, … 0)）：
+    这一行和上一行对齐，是句尾，不另成一段。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, x0, y0, x1):
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 12),
+                [{"text": text, "size": 10.0, "bbox": (x0, y0, x1, y0 + 12), "font": "Times", "flags": 0}], [])
+
+    items = [item("The visualization shows colors to separate out words, but of course the true out-", 157.0, 169.0, 475.0),
+             item("put of the tokenizer is simply a sequence of unique token ids. (In case you're in-", 142.0, 181.0, 475.0),
+             item("terested, they were the following 13 tokens: 11865, 8923, 11, 31211, 6177, 23919,", 142.0, 193.0, 475.0),
+             item("885, 220, 19427, 7633, 18887, 147065, 0)", 142.0, 205.0, 310.0),
+             item("Notice that most words are their own token, usually including the leading space.", 157.0, 217.0, 475.0),
+             item("Clitics like 's are segmented off when they appear on proper nouns like Jane, but", 142.0, 229.0, 475.0)]
+    assert _split_lines(items) == [[0, 1, 2, 3], [4, 5]]
+
+
 def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
     """索引条目停在逗号上，页码折到下一行、缩到条目文字下面。页码那一行跟着条目一起送翻，
     条目到页码收住，下一条照常另起。"""
