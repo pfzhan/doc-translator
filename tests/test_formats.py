@@ -3735,6 +3735,24 @@ def test_a_running_head_does_not_run_into_the_first_line_below():
     assert len(_merge_continuations([head, body], margins={id(head)})) == 2
 
 
+def test_a_word_cut_after_a_run_in_label_continues_at_the_column_edge():
+    """行内标签后面的半行从标签右边起笔，行尾断开的词（temper-）在下一行栏边接着写。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blocks(x1=522):
+        half = TextBlock(page=0, rect=pymupdf.Rect(163, 620, x1, 631), line_rects=[pymupdf.Rect(163, 620, x1, 631)],
+                         text="Models are served through OpenRouter (OpenRouter, 2026) at temper-",
+                         size=10.9, color="#000", bold=False)
+        lines = [pymupdf.Rect(90, 634 + 13 * i, 522, 645 + 13 * i) for i in range(3)]
+        below = TextBlock(page=0, rect=pymupdf.Rect(90, 634, 522, 672), line_rects=lines,
+                          text="ature 0 with fixed seeds: all scenarios and every memory design.",
+                          size=10.9, color="#000", bold=False)
+        return [half, below]
+
+    assert len(_merge_continuations(blocks())) == 1
+    assert len(_merge_continuations(blocks(x1=400))) == 2
+
+
 def test_a_full_line_wraps_into_a_capitalized_next_line():
     """段落缩进的首行和页边旁注挤在一块里被单拆出来。它排到右缘、没有句末标点，下一行回到左缘、
     以专名大写起头（RNNs, one where…），仍是同一句。末行没排满、或者有句号的不接。"""

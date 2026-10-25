@@ -6300,9 +6300,13 @@ def _merge_continuations(
             list_end = _list_item(p.text) and first_x0 < p.rect.x0 - p.size * 0.5
             # 上一块停在断开的半个词上（retrieval-augmented genera- | tion, 267），下一行小写接着写完这个词。
             # 只有两个词也接上：标题、标签不会停在连字符上
+            # 跟在行内标签后面的半行（Backbones. | Models are … at temper-）从标签右边起笔，
+            # 下一行回到栏边。这一行和下一块右缘对齐就是同一栏
             word_cut = (
                 same_size and y_close and re.search(r"[A-Za-z]{2}-$", p.text.rstrip()) is not None
-                and first.islower() and p.rect.x0 - p.size <= first_x0 < p.rect.x1
+                and first.islower() and first_x0 < p.rect.x1
+                and (p.rect.x0 - p.size <= first_x0
+                     or (len(_visual_lines(p)) == 1 and abs(p.rect.x1 - b.rect.x1) <= p.size))
             )
             # 单独排开的一行（缩进的例句 The green witch arrived），下一行回到左边接着写正文，不是它的续行。
             # 段首缩进的首行被旁注切成一块时撑到右缘，和下一行一样宽
