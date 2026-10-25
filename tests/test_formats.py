@@ -3660,6 +3660,67 @@ def test_a_full_line_wraps_into_a_capitalized_next_line():
     assert len(_merge_continuations([blk(head + ".", 610, x0=175.1), blk(tail, 622, rows=2)])) == 2
 
 
+def test_a_full_line_in_a_document_that_indents_paragraphs_runs_on_below():
+    """段落首行缩进的文档里，排满一整行、恰好在句末断开的一行，下面齐平起笔的一行是同一段的续行。
+    带编号的标签、隔着一行的、自己往下悬挂缩进的（续行另成一块也算）、上一行是表格几格的，都另起。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, y, rows):
+        # 一行可以是几截：[(x0, x1), ...]
+        lines = [pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 12)
+                 for i, row in enumerate(rows) for x0, x1 in (row if isinstance(row, list) else [row])]
+        rect = pymupdf.Rect(lines[0])
+        for line in lines:
+            rect |= line
+        return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=10.0, color="#000", bold=False)
+
+    body = "Words of a paragraph run across the column and wrap onto the next line. It ends here."
+    head = "The first line opens indented and the second fills the measure to the margin."
+
+    # 并段会改动上一块，每次重新排
+    def plan(text, y=316, rows=((72, 400),), tail=(), last=((72, 540),)):
+        paragraphs = [blk(body, 100 + 48 * i, [(87, 540), (72, 540), (72, 540), (72, 300)]) for i in range(4)]
+        return _merge_continuations([*paragraphs, blk(head, 292, [(87, 540), *last]), blk(text, y, list(rows)), *tail])
+
+    assert len(plan("The next sentence goes on in the same paragraph.")) == 5
+    assert len(plan("EXAMPLE 2.1 The next sentence goes on in the same paragraph.")) == 6
+    assert len(plan("The next sentence goes on in the same paragraph.", y=328)) == 6
+    entry = "The next entry runs to the margin and hangs its continuation"
+    assert len(plan(entry + " below it", rows=((72, 540), (90, 300)))) == 6
+    merged = plan(entry + ",", rows=((72, 540),), tail=[blk("under its first line.", 328, [(90, 300)])])
+    assert [block.text[:14] for block in merged[-2:]] == ["The first line", "The next entry"]
+    assert len(plan("The next sentence goes on in the same paragraph.", last=([(72, 200), (300, 540)],))) == 6
+    # 只有一行、在句末收住，下面紧贴着缩进的新段：是这一段的末行，不是悬挂缩进
+    merged = plan("The paragraph ends on this line.", rows=((72, 300),), tail=[blk(body, 328, [(87, 540), (72, 300)])])
+    assert len(merged) == 6 and merged[-2].text.endswith("on this line.")
+
+
+def test_theorem_labels_do_not_count_as_flush_paragraphs():
+    """定理、证明的标签本来就齐平起笔，不算段落不缩进的证据。正文一行的宽度按整行量，行内式子切开的几截并起来。"""
+    from app.formats.pdf import TextBlock, _body_measure, _indents_paragraphs
+
+    def blk(text, y, rows):
+        lines = [pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 12)
+                 for i, row in enumerate(rows) for x0, x1 in (row if isinstance(row, list) else [row])]
+        rect = pymupdf.Rect(lines[0])
+        for line in lines:
+            rect |= line
+        return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=10.0, color="#000", bold=False)
+
+    body = "Words of a paragraph run across the column and wrap onto the next line. It ends here."
+    labels = ["Lemma 3.4. Let U be a span.", "Proposition 2.4. Let T be bounded.", "2.1. Bosonic Fourier transform.",
+              "Theorem 3.3. Suppose that T is linear."]
+    blocks = []
+    for i in range(3):
+        blocks.append(blk(body, 100 + 96 * i, [(87, 540), (72, 300)]))
+        blocks.append(blk(body, 124 + 96 * i, [(87, 540), (72, 300)]))
+        blocks.append(blk(labels[i], 148 + 96 * i, [(72, 300)]))
+    blocks.append(blk(labels[3], 388, [(72, 300)]))
+    assert _indents_paragraphs(blocks)
+    split = blk(body, 500, [[(72, 200), (210, 540)], [(72, 300), (310, 540)], [(72, 540)], (72, 300)])
+    assert _body_measure([split]) == 468.0
+
+
 def test_one_query_per_line_in_one_block_is_cut_into_lines():
     """PyMuPDF 把一行一句的查询归成一块。每行都早早换行（下一行的第一个词放得下），按行拆开。
     排满的段落照旧是一段。"""

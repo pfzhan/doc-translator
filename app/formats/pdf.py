@@ -6064,7 +6064,9 @@ def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = froz
     段落绕着图排时，图注在阅读顺序里会夹在两半中间。夹着的这块在上一半下面、
     下一半旁边时，跳过它和再前面一块比。"""
     out: list[TextBlock] = []
-    for b in blocks:
+    indents = _indents_paragraphs(blocks)
+    measure = _body_measure(blocks) if indents else 0.0
+    for index, b in enumerate(blocks):
         hosts = out[-1:]
         if len(out) >= 2 and _beside_wrap(out[-1], out[-2], b):
             hosts.append(out[-2])
@@ -6168,6 +6170,21 @@ def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = froz
             displayed_line = (
                 len(_visual_lines(p)) == 1 and p.rect.x0 > first_x0 + p.size and p.rect.x1 < b.rect.x1 - p.size
             )
+            # 段落首行缩进的文档里，排到右缘的一行下面齐平起笔的一行是同一段的续行，
+            # 上一行恰好在句末断开、下一行大写起头也一样（双倍行距的稿子每行各成一块）。
+            # 行首换了粗体、斜体、字号的是不缩进的小标题（Execution Accuracy (EX) We…、Lemma 2.3.）
+            # 「排到右缘」按正文一整行的宽度比，表格里的一格、短标题对着自己的窄框也是满的。
+            # 带编号的标签（EXAMPLE 2.1、Table 3:）也另起。
+            # 下一行要按正常行距紧贴着：隔着一行的是悬挂缩进的参考文献，中间的续行另成了块。
+            # 下一块自己往下悬挂缩进的是参考文献的下一条；上一行几截之间空开好几个字宽的是表格的一行
+            flush_wrap = (
+                indents and same_size and b.rect.y0 - last_y1 - p.line_gap * p.size <= 0.5 * p.size
+                and not _list_item(b.text) and not _LABEL_START_RE.match(b.text)
+                and not _is_float_text(b.text) and not _styled_edge(b, 0) and not _styled_edge(p, -1)
+                and _wraps_into(p, b) and bool(p.line_rects) and _row_width(_visual_lines(p)[-1]) >= measure * 0.9
+                and not _hangs(b, blocks[index + 1] if index + 1 < len(blocks) else None)
+                and _row_gap(_visual_lines(p)[-1]) <= 1.5 * p.size
+            )
             # 上一块停在没收口的代码围栏里（```sql 开了还没关），下一行是代码的接续，大写起头也接上
             in_fence = len(_FENCE_RE.findall(p.text)) % 2 == 1 and same_size
             latin = (
@@ -6176,10 +6193,10 @@ def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = froz
                 and not list_end and not displayed_line
                 and (len(p.text.split()) >= 3 or word_cut)  # 一两个词的无标点短块是标题/标签，不是段落
                 and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
-                and (colon_wrap or call_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
+                and (colon_wrap or call_wrap or flush_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
                      or not _ends_sentence(p.text))
                 and (first.islower() or first in ".),;%,；，" or open_paren or math_wrap or centered_end
-                     or dangling or centered_comma or in_fence or full_wrap)
+                     or dangling or centered_comma or in_fence or full_wrap or flush_wrap)
                 and not _verbatim_seam(p, b)
             )
             # 索引条目停在逗号上，页码折到下一块里（见 _wraps_from_above）：条目收在页码上
@@ -6198,6 +6215,82 @@ def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = froz
         else:
             out.append(b)
     return out
+
+
+# 行首是一个词加编号的标签：EXAMPLE 2.1、Lemma 3.、Table 2:
+_LABEL_START_RE = re.compile(r"[A-Z][A-Za-z]*\s+\d+(?:\.\d+)*[.:]?\s")
+# 行首是小节编号：2.1. Bosonic Fourier transform、3 Method
+_NUMBERED_HEAD_RE = re.compile(r"\d+(?:\.\d+)*\.?\s+[A-Z]")
+
+
+def _styled_edge(block: TextBlock, index: int) -> bool:
+    """第一截（index=0）或最后一截（-1）是粗体、斜体，或者字号和块的不一样。"""
+    spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
+    if not spans:
+        return False
+    span = spans[index]
+    mark = emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0))
+    return mark.bold or mark.italic or abs(float(span.get("size") or block.size) - block.size) > block.size * 0.05
+
+
+def _body_measure(blocks: list[TextBlock]) -> float:
+    """正文一整行的宽度：多行块里不是末行的那些行，最常见的宽度（取整到点）。
+    行内式子把一行切成几截，按整行量"""
+    widths: Counter[int] = Counter()
+    for block in blocks:
+        rows = _visual_lines(block)
+        if len(rows) >= 3:
+            widths.update(round(_row_width(row)) for row in rows[:-1])
+    return float(widths.most_common(1)[0][0]) if widths else 0.0
+
+
+def _row_width(row: list[pymupdf.Rect]) -> float:
+    return max(rect.x1 for rect in row) - min(rect.x0 for rect in row)
+
+
+def _row_gap(row: list[pymupdf.Rect]) -> float:
+    """一行里相邻两截之间最宽的空白。"""
+    pieces = sorted(row, key=lambda rect: rect.x0)
+    return max((b.x0 - a.x1 for a, b in zip(pieces, pieces[1:])), default=0.0)
+
+
+def _hangs(block: TextBlock, nxt: TextBlock | None = None) -> bool:
+    """首行顶格、下面的行往右缩进的悬挂缩进（参考文献的一条）。
+    只有一行时看紧贴在下面的 nxt：续行另成了块。这一行在句末收住的是段落的末行，下面是缩进的新段"""
+    rows = sorted(_visual_lines(block), key=lambda row: row[0].y0)
+    if not rows:
+        return False
+    left = min(rect.x0 for rect in rows[0])
+    if len(rows) == 1:
+        if nxt is None or not nxt.line_rects or nxt.page != block.page or _ends_sentence(block.text):
+            return False
+        head = nxt.line_rects[0]
+        bottom = max(rect.y1 for rect in rows[0])
+        return (0 <= head.y0 - bottom <= block.size and abs(nxt.size - block.size) <= block.size * 0.05
+                and block.size * 0.5 < head.x0 - left <= block.size * _MAX_INDENT_EM)
+    return all(min(rect.x0 for rect in row) - left > block.size * 0.5 for row in rows[1:])
+
+
+def _indents_paragraphs(blocks: list[TextBlock]) -> bool:
+    """这份文档的段落是首行缩进的。看段落的末行（句末收住、没排到右缘）下面紧接着的一块：
+    首行缩进一两个字宽的比和末行齐平的多。靠段间空白分段的文档新段齐平起笔，不算。
+    定理、引理的标签（Proposition 2.4.、Proof.）和带编号的小标题本来就齐平起笔，不计"""
+    indented = flush = 0
+    for p, b in zip(blocks, blocks[1:]):
+        if p.page != b.page or not p.line_rects or not b.line_rects or abs(p.size - b.size) > p.size * 0.05:
+            continue
+        if _styled_edge(b, 0) or _LABEL_START_RE.match(b.text) or _NUMBERED_HEAD_RE.match(b.text):
+            continue
+        tail, head = p.line_rects[-1], b.line_rects[0]
+        if (not _ends_sentence(p.text) or _list_item(b.text) or tail.x1 > max(p.rect.x1, b.rect.x1) - 2 * p.size
+                or not 0 <= head.y0 - tail.y1 <= 1.5 * p.size):
+            continue
+        shift = head.x0 - tail.x0
+        if p.size * 0.5 < shift <= p.size * _MAX_INDENT_EM:
+            indented += 1
+        elif abs(shift) <= p.size * 0.3:
+            flush += 1
+    return indented >= 3 and indented > flush
 
 
 # 以式子起头的续行里至少这么多正文词
