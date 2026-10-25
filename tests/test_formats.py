@@ -717,6 +717,40 @@ def _line(text: str, x0: float, x1: float, y0: float, size: float = 10) -> tuple
     return (text, pymupdf.Rect(x0, y0, x1, y0 + size + 2), [{"size": size}])
 
 
+def test_a_table_row_name_is_cut_from_its_numbers_and_the_rows_around():
+    """表格的行名和同一行的几格数、上面的分组名各自成段。挨得近的数照样拆开；
+    PyMuPDF 并进行名那一行的几格数从行里拿掉，和别的行的数一样留在原页上。"""
+    from app.formats.pdf import _drop_number_tails, _split_lines
+
+    def span(text, x0, x1, y):
+        return {"text": text, "size": 9.0, "bbox": (x0, y, x1, y + 9), "origin": (x0, y + 7), "font": "Times"}
+
+    def item(parts, y):
+        spans = [span(text, x0, x1, y) for text, x0, x1 in parts]
+        text = "".join(part[0] for part in parts)
+        rect = pymupdf.Rect(parts[0][1], y, parts[-1][2], y + 9)
+        return (text, rect, [one for one in spans if one["text"].strip()], spans)
+
+    rows = [
+        item([("Top Leaderboard Systems (Dec 10th, 2018)", 102.8, 259.5)], 328.6),
+        item([("Human", 81.4, 107.8)], 338.6),
+        item([("86.3", 198.5, 214.2), (" ", 214.2, 220.7), ("89.0", 220.7, 236.4), (" ", 236.4, 243.0),
+              ("86.9", 243.0, 258.7), (" ", 258.7, 265.2), ("89.5", 265.2, 280.9)], 338.6),
+        item([("#1 Single - MIR-MRC (F-Net)", 81.4, 192.0)], 348.6),
+        item([("-", 204.8, 207.8)], 348.6),
+        item([("74.8", 243.0, 258.7), (" ", 258.7, 265.2), ("78.0", 265.2, 280.9)], 348.6),
+        item([("#2 Single - nlnet", 81.4, 140.9)], 358.5),
+        item([("74.2", 243.0, 258.7), (" ", 258.7, 265.2), ("77.1", 265.2, 280.9)], 358.5),
+        item([("BERT (Ens.+TriviaQA)", 81.4, 190.5), (" ", 190.5, 198.5), ("86.2", 198.5, 214.2),
+              (" ", 214.2, 220.7), ("92.2", 220.7, 236.4)], 368.5),
+    ]
+    rows = _drop_number_tails(rows)
+    assert rows[-1][0] == "BERT (Ens.+TriviaQA)"
+    texts = [" ".join(rows[i][0] for i in group) for group in _split_lines(rows)]
+    assert "Human" in texts and "#1 Single - MIR-MRC (F-Net)" in texts and "#2 Single - nlnet" in texts
+    assert "Top Leaderboard Systems (Dec 10th, 2018)" in texts
+
+
 def test_wrapped_letter_period_stays_in_the_paragraph():
     """撑满的上一行没有句末时，下一行的 Q. 是换行，不是列表项。句末之后的 a. 仍拆开。"""
     from app.formats.pdf import _split_lines

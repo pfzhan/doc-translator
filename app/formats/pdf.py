@@ -1288,6 +1288,97 @@ def _page_number_column(lines: list[dict]) -> bool:
     return len(numbers) >= _TOC_MIN_ENTRIES and drops <= len(numbers) // 5
 
 
+# 表格里一格数：1.5、-、86.2%、12.0/15、93.1†
+_NUMBER_CELL_RE = re.compile(r"(?:[-–—−]|[±+−-]?\d[\d.,/]*%?[*†‡]*)(?:\s+(?:[-–—−]|[±+−-]?\d[\d.,/]*%?[*†‡]*))*")
+
+
+def _number_cell(text: str) -> bool:
+    return _NUMBER_CELL_RE.fullmatch(text.strip()) is not None
+
+
+def _number_cells(items: list[tuple]) -> set[int]:
+    """表格里只有数的几截：左缘或右缘和另外两行的数对齐（同一列），或者和这样的数并排在一行。
+    句号收尾的数（参考文献的年份 2015.）不算。"""
+    numbers = [
+        index for index, item in enumerate(items)
+        if _number_cell(item[0]) and not item[0].rstrip().endswith(".")
+    ]
+    found: set[int] = set()
+    for index in numbers:
+        rect = items[index][1]
+        for edge in ("x0", "x1"):
+            mates = [
+                other for other in numbers
+                if other != index and min(rect.y1, items[other][1].y1) - max(rect.y0, items[other][1].y0) <= 0
+                and abs(getattr(items[other][1], edge) - getattr(rect, edge)) <= 1
+            ]
+            if len(mates) >= 2:
+                found.add(index)
+                break
+    # 同一行里和这些数并排的数（只出现两行的 -）也是这一行的格子
+    for index in numbers:
+        rect = items[index][1]
+        if index not in found and any(
+            min(rect.y1, items[cell][1].y1) - max(rect.y0, items[cell][1].y0)
+            > min(rect.height, items[cell][1].height) * 0.5
+            for cell in found
+        ):
+            found.add(index)
+    return found
+
+
+def _row_labels(items: list[tuple], cells: Collection[int]) -> set[int]:
+    """表格的行名：同一行右边隔着一个字宽以上有一格数。"""
+    found: set[int] = set()
+    for index, (text, rect, spans, *_rest) in enumerate(items):
+        if index in cells or not re.search(r"[^\W\d_]", text):
+            continue
+        size = max((float(span["size"]) for span in spans), default=10.0)
+        for cell in cells:
+            mate = items[cell][1]
+            if (mate.x0 - rect.x1 >= size
+                    and min(rect.y1, mate.y1) - max(rect.y0, mate.y0) > min(rect.height, mate.height) * 0.5):
+                found.add(index)
+                break
+    return found
+
+
+def _drop_number_tails(items: list[tuple]) -> list[tuple]:
+    """行名太长，PyMuPDF 把后面几格数并进了同一行（BERT (Ens.+TriviaQA) 86.2 92.2 …）。
+    后半截全是数、第一格的左缘和别的行里单独的一格数对齐时，从行里拿掉，留在原页上，
+    和别的行的数一样不送翻。只认隔开小半个字宽以上的：句中的词距没有这么宽。"""
+    starts = [items[index][1].x0 for index in _number_cells(items)]
+    if not starts:
+        return items
+    out: list[tuple] = []
+    for item in items:
+        text, rect, spans, raw = item[:4]
+        cut = None
+        for k in range(1, len(spans)):
+            x = float(spans[k]["bbox"][0])
+            size = float(spans[k]["size"])
+            if (any(abs(x - start) <= 1 for start in starts)
+                    and x - float(spans[k - 1]["bbox"][2]) >= size * 0.5
+                    and _number_cell("".join(str(span["text"]) for span in spans[k:]))
+                    and re.search(r"[^\W\d_]", "".join(str(span["text"]) for span in spans[:k]))):
+                cut = x
+                break
+        if cut is None:
+            out.append(item)
+            continue
+        kept = [span for span in raw if float(span["bbox"][0]) < cut - 0.5]
+        while kept and not str(kept[-1]["text"]).strip():
+            kept.pop()
+        box = pymupdf.Rect()
+        for span in kept:
+            if str(span["text"]).strip():
+                box |= _text_box(span)
+        head = "".join(str(span["text"]) for span in kept)
+        out.append((head, pymupdf.Rect(box.x0, rect.y0, box.x1, rect.y1),
+                    [span for span in spans if float(span["bbox"][0]) < cut - 0.5], kept, *item[4:]))
+    return out
+
+
 def _cut_leaders(items: list[tuple], toc_page: bool = False) -> tuple[list[tuple], dict[int, Leader]]:
     """目录条目的点线和页码从行里拿掉，只留标题送翻。返回新的行和 {行下标: 点线}。
     toc_page 时（这一页有点线条目），没有点线、页码隔着两个字宽以上靠右排的（卷名一行）也算，
@@ -1794,6 +1885,9 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         box = row_box.get(head, pymupdf.Rect(items[head][1])) | items[index][1]
         for member in range(head, index + 1):
             row_box[member] = box
+    # 表格的一格数和行名各自成段：行名短、数挨得近时，会和上下的行名、同一行的数并成一句
+    cells = _number_cells(items)
+    row_labels = _row_labels(items, cells)
     # 整块是居中排的一摞短行时，换了样式的下一行是另一项
     first_size = max((s["size"] for s in items[0][2]), default=10)
     stacked = _centered_rows(_row_boxes([item[1] for item in items]), first_size)
@@ -1986,7 +2080,7 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             not same_visual_line and _label_lead(items[i][2])
             and (_ends_sentence(ptext) or ptext.rstrip().endswith(")"))
         )
-        if value_column or (not same_visual_line and not sec_label and (
+        if value_column or i in cells or i in row_labels or (not same_visual_line and not sec_label and (
             (not open_end and (bullet or example or (NO_TEXT_RE.match(stripped) and i not in number_tails)))
             or (prev_symbol and not closing)
             or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim or restyled or labeled
@@ -4540,6 +4634,7 @@ def _extract(
                     items.append((text, _line_box(ln), spans, ln["spans"]))
             items = _left_to_right(items)
             items, leaders = _cut_leaders(items, toc_page)
+            items = _drop_number_tails(items)
             side_note = bool(b.get("side_note"))
             # 一条旁注就是一块，不按正文的规则拆
             groups = [list(range(len(items)))] if side_note and items else _split_lines(items, index_page)
