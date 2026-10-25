@@ -1816,6 +1816,10 @@ def test_a_column_does_not_continue_under_a_heading_at_its_top():
     label = blk("Reward Model", 313, 80, rows=1)
     label.rect = pymupdf.Rect(330, 80, 380, 90)
     assert pairs([label]).get(id(left[-1])) is right[0]
+    # 小节号悬在栏边左面（1.4 Related work）的也是栏顶的小标题
+    heading.rect = pymupdf.Rect(290, 89, 420, 101)
+    assert id(left[-1]) not in pairs([])
+
 
 
 def test_pdf_biblio_author_year_entries_after_the_heading():

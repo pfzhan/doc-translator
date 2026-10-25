@@ -2483,6 +2483,10 @@ def _can_continue(
                 and nxt.size <= prev.size * 1.4)
 
 
+# 小节号悬在栏边左面最多这么多字宽
+_HANGING_HEAD_EM = 3
+
+
 def _unclosed_bracket(text: str) -> bool:
     depth = 0
     for ch in text:
@@ -2861,6 +2865,7 @@ def _column_continuations(
 
     def heading_above(pno: int, column: list[TextBlock], head: TextBlock) -> bool:
         """栏顶正上方紧挨着本栏的小标题（A. Materials），这一栏是新的一节，没有续句。
+        小节号悬在栏边左面的（1.4 Related work）也算。
         横跨几栏的大标题不算，图里认成标题的大字（中间还隔着图里别的字）也不算"""
         if halt_ids is None:
             return False
@@ -2877,7 +2882,7 @@ def _column_continuations(
         return (
             id(near) in halt_ids and id(near) not in aside_ids and id(near) not in skip_ids
             and not near.side_note and near.leader is None and not near.entry
-            and near.rect.x0 >= x0 - near.size and near.rect.x1 <= x1 + near.size
+            and near.rect.x0 >= x0 - _HANGING_HEAD_EM * near.size and near.rect.x1 <= x1 + near.size
         )
 
     def host_of(pno: int, column: list[TextBlock]) -> TextBlock | None:
