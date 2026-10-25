@@ -1738,6 +1738,33 @@ def test_a_table_with_its_caption_above_is_skipped_at_the_column_top():
     assert _float_contents([*cells, body], [caption, *cells, body]) == set()
 
 
+def test_pdf_biblio_bold_heading_as_large_as_the_entries():
+    """条目首行折断成的一串作者名、接在作者名后面的题名短行都不是下一章，哪怕和标题一样大；
+    后面加粗的附录标题才是。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=10.0, color="#000000", bold=bold)
+
+    blocks = [
+        blk("This work was supported by the National Science Foundation under Grant 2200000."),
+        blk("References", bold=True),
+        blk("Ahmed M. Alaa, Zaid Ahmad, and Mark van der Laan."),
+        blk("Conformal meta-learners for predictive inference of treatment effects. arXiv preprint arXiv:2308.14895, 2023."),
+        blk("Anastasios N Angelopoulos, Stephen Bates, Adam"),
+        blk("Fisch, Lihua Lei, and Tal Schuster. Conformal risk control. In ICLR, 2024."),
+        blk("Jean-Yves Audibert, Sébastien Bubeck, and Rémi"),
+        blk("Munos. Best arm identification in multi-armed bandits. In COLT, pages 41–53, 2010."),
+        blk("Jiayuan Su, Jing Luo, Hongwei Wang, and Lu Cheng."),
+        blk("API is enough: Conformal prediction for large lan-"),
+        blk("guage models without logit-access. In Findings of EMNLP, 2024."),
+        blk("Proofs and Theoretical Results", bold=True),
+        blk("We first restate the main theorem and then prove it in two steps."),
+    ]
+    assert biblio_skips(blocks) == [False, False, *[True] * 9, False, False]
+
+
 def test_pdf_biblio_author_year_entries_after_the_heading():
     """作者-年份体的条目不带编号和括号年份。标题后面连着几条「姓, 名缩写.」起头的就进入参考文献；
     正文里只一句这样开头的不算。"""

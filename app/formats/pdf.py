@@ -9243,6 +9243,14 @@ _BIBLIO_CN_PUB_RE = re.compile(r"出版社|年版")
 # 标题和正文不会以连着两三个「名, 名,」起头
 _AUTHOR_NAME = r"(?:(?:[A-Z]\.[\s-]?){1,3}[A-Z][\w'’-]+|[A-Z][a-z][\w'’-]*(?:\s(?:[A-Z]\.|[A-Z][\w'’-]+)){1,3})"
 _AUTHOR_LIST_RE = re.compile(rf"^{_AUTHOR_NAME}(?:,\s+(?:and\s+)?{_AUTHOR_NAME}){{2,}}(?:,|\.|$)")
+# 一行只有作者名：逗号隔开的两个以上名字，每个至少两个词（名、中间名缩写可以不带点、van der 这类小写前缀），
+# 最后一个折行时只剩名（前面至少两个完整的名字）。老字体把重音拆成单独的符号（S´ebastien）
+_NAME_WORD = r"[A-Z][\w´`¨˜ˆ'’.-]*"
+_FULL_NAME = rf"{_NAME_WORD}(?:\s+(?:(?:van|von|der|den|de|da|di|du|del|la|le)\s+)*{_NAME_WORD})+"
+_NAMES_LINE_RE = re.compile(
+    rf"^{_FULL_NAME}(?:,\s+(?:and\s+)?{_FULL_NAME})*,\s+(?:and\s+)?{_FULL_NAME}[,.]?$"
+    rf"|^{_FULL_NAME}(?:,\s+(?:and\s+)?{_FULL_NAME})+,\s+(?:and\s+)?{_NAME_WORD}[,.]?$"
+)
 # ACL 体：作者. 2018. 题名. In Proceedings …, pages 1–10. 年份在作者后面单独一句，后面是出处
 _BIBLIO_ACL_YEAR_RE = re.compile(r"(?:^|\.\s)(?:19|20)\d{2}[a-z]?\.\s+\S")
 _BIBLIO_VENUE_RE = re.compile(r"\bIn\s+(?:Proc|[A-Z]{2,})|\bpages\s+\d+\s*[–-]\s*\d+|\bJournal\b")
@@ -9373,7 +9381,9 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
             pending_type = bool(_BIBLIO_TYPE_MARK_RE.search(text) and not _BIBLIO_YEAR_RE.search(text))
         return False
 
-    def exits(block: TextBlock, text: str, start_size: float, prev_numbered: bool, entry_size: float) -> bool:
+    def exits(
+        block: TextBlock, text: str, start_size: float, prev_numbered: bool, entry_size: float, prev_text: str,
+    ) -> bool:
         # 像不像标题按条目的字号比：有的参考文献整体比正文大一号，按全文的中位字号，条目也像标题
         median = max(median_all, entry_size)
         if not text or len(text) > 120 or smaller_subsection(block, text, start_size):
@@ -9401,7 +9411,10 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
         # 加粗长标题（heading_like 的加粗分支有 80 字上限）
         if block.bold and block.size + 0.4 >= median:
             return True
-        return len(text) < 60 and block.size >= start_size - 0.5
+        # 条目首行折断时只剩一串作者名（Ahmed M. Alaa, Zaid Ahmad, and Mark van der Laan.），
+        # 接在作者名后面的短行是题名（API is enough: Conformal prediction for large lan-），都不是下一章
+        names = _NAMES_LINE_RE.match(text) or _NAMES_LINE_RE.match(prev_text)
+        return len(text) < 60 and block.size >= start_size - 0.5 and not names
 
     skips: list[bool] = []
     in_biblio = False
@@ -9437,7 +9450,7 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
             skips.append(False)
             continue
         entry_size = sorted(entry_sizes)[len(entry_sizes) // 2] if entry_sizes else 0.0
-        if in_biblio and exits(block, text, start_size, prev_numbered, entry_size):
+        if in_biblio and exits(block, text, start_size, prev_numbered, entry_size, prepared[i - 1][1] if i else ""):
             in_biblio = False
             prev_numbered = False
             skips.append(False)
