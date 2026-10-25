@@ -1625,6 +1625,11 @@ def test_a_column_break_inside_brackets_or_after_et_al_continues():
     assert not joins("The scores are combined as shown below.", "(RMS) loudness to describe the trajectory.")
     assert joins("the policy is confused on BC trials;", "an explanation that also fails to cover the rest.")
     assert not joins("the policy is confused on BC trials;", "An explanation that also fails to cover the rest.")
+    assert joins("closed-loop reasoning in later work (Fu et al., 2024b;", "Mao et al., 2024) share the same confound.")
+    assert not joins("closed-loop reasoning in later work (Fu et al., 2024b;", "Results differ. Both (a) and (b) fail).")
+    assert joins("with a dual success metric and scripted certificates", "(§5.3). Urban probes stress the agent.")
+    assert joins("Stress-tested on the held-out pool", "(Tables S32–S35), the port scores lower.")
+    assert not joins("The scores are combined as shown below.", "(Tables S32–S35), the port scores lower.")
     heading = blk("E. Energy-Detection Characterization", 0)
     heading.line_rects = [pymupdf.Rect(49, 661, 204, 671)]
     heading.span_lines = [[{"text": heading.text, "font": "NimbusRomNo9L-ReguItal", "flags": 2, "size": 10}]]

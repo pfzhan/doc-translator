@@ -2457,13 +2457,47 @@ def _can_continue(
     broken_word = bool(re.search(r"[a-z]-$", prev.text.rstrip()))
     if allow_capital and not broken_word and head.isalpha() and head.isupper() and len(prev.text.split()) >= 3:
         continues = True
+    # 下一块以括注起头，括注后面是标点或小写：(Tables S32–S35), the port …、(§5.3). Urban …
+    lead = nxt.text.lstrip()
+    if (re.match(r"\([^()]{1,60}\)\s*(?:[.,;:]|[a-z])", lead) and not _EQUATION_TAG_RE.match(lead)
+            and not _list_item(lead)):
+        continues = True
     # 句中的缩写（Mao et al. | 2026）不是句末。分号后面小写接着写的是同一句（… on BC trials; | an explanation …）
     tail = _END_MARK_RE.sub("", prev.text)
     ended = (tail.endswith(_SENT_END_PUNCT) and not _MID_ABBREV_RE.search(prev.text.rstrip())
              and not (tail.endswith((";", "；")) and head.islower()))
+    # 括号还没合上，下一块在第一句里合上它：(Fu et al., 2024b; | Mao et al., 2024) share …
+    if _unclosed_bracket(prev.text) and _closes_first(nxt.text):
+        continues, ended = True, False
     return bool(not numbered_heading and not is_heading and continues and not ended
                 and not _is_float_text(nxt.text)
                 and nxt.size <= prev.size * 1.4)
+
+
+def _unclosed_bracket(text: str) -> bool:
+    depth = 0
+    for ch in text:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]" and depth:
+            depth -= 1
+    return depth > 0
+
+
+def _closes_first(text: str) -> bool:
+    """块的第一句之内有一个多出来的右括号。"""
+    depth = 0
+    for match in re.finditer(r"[()\[\]]|[.!?](?=\s+[A-Z])", text[:300]):
+        mark = match.group()
+        if mark in "([":
+            depth += 1
+        elif mark in ")]":
+            if depth == 0:
+                return True
+            depth -= 1
+        elif depth == 0 and not _MID_ABBREV_RE.search(text[:match.end()]):
+            return False
+    return False
 
 
 def _page_edge_blocks(
