@@ -3455,7 +3455,7 @@ def test_one_query_per_line_in_one_block_is_cut_into_lines():
 
     def item(text, y, x1):
         rect = pymupdf.Rect(167.1, y, x1, y + 10.8)
-        return (text, rect, [{"text": text, "size": 9.0}], None)
+        return (text, rect, [{"text": text, "size": 9.0, "bbox": tuple(rect)}], None)
 
     queries = [
         item("can you tell me about any good cantonese restaurants close by", 356.2, 390.1),
@@ -3478,6 +3478,39 @@ def test_one_query_per_line_in_one_block_is_cut_into_lines():
         item("reed to simulate the vocal folds, var-", 133, 379.6),
     ]
     assert _cut_line_list([0, 1, 2, 3], around, [item[1] for item in around]) == [[0, 1, 2, 3]]
+
+
+def test_rows_of_a_table_or_a_list_with_one_opening_are_cut_into_lines():
+    """同一行分成几条的先并成一行。各行同一处另起一列（行名和特征），或者每行同一个词起头
+    （特征模板），哪怕长短差不多，也按行拆开。"""
+    from app.formats.pdf import _cut_line_list
+
+    def item(text, x0, y, x1, size=9.96):
+        rect = pymupdf.Rect(x0, y, x1, y + 11.9)
+        return (text, rect, [{"text": text, "size": size, "bbox": tuple(rect)}], None)
+
+    def row(parts, y):
+        spans = [{"text": text, "size": 9.96, "bbox": (x0, y, x1, y + 11.9)} for text, x0, x1 in parts]
+        return (" ".join(p[0] for p in parts), pymupdf.Rect(parts[0][1], y, parts[-1][2], y + 11.9), spans, None)
+
+    table = [
+        item("hen", 178.1, 414.7, 192.5),
+        row([("+female,", 212.4, 250.1), ("+chicken,", 259.5, 302.9), ("+adult", 311.8, 343.2)], 416.0),
+        row([("rooster", 178.1, 209.4), ("-female,", 212.4, 250.1), ("+chicken,", 259.5, 302.9),
+             ("+adult", 311.8, 343.2)], 426.7),
+        item("chick", 178.1, 438.6, 198.8),
+        row([("+chicken,", 212.4, 255.8), ("-adult", 264.7, 296.1)], 439.9),
+    ]
+    rects = [item[1] for item in table]
+    assert _cut_line_list([0, 1, 2, 3, 4], table, rects) == [[0, 1], [2], [3, 4]]
+    templates = [
+        item("xi contains a particular prefix (perhaps from all prefixes of length ≤2)", 185.7, 589.9, 465.9),
+        item("xi contains a particular suffix (perhaps from all suffixes of length ≤2)", 185.7, 601.9, 464.3),
+        item("xi’s word shape", 185.7, 613.8, 247.3),
+        item("xi’s short word shape", 185.7, 625.8, 269.8),
+    ]
+    rects = [item[1] for item in templates]
+    assert _cut_line_list([0, 1, 2, 3], templates, rects) == [[0], [1], [2], [3]]
 
 
 def test_cjk_wrap_merges_and_short_labels_stay():

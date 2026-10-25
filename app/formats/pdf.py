@@ -5590,8 +5590,9 @@ def _line_lists(blocks: list[TextBlock], frames: Sequence[TextFrame | None]) -> 
         if frame is None:
             return
         rows = rows_of[run[0].page]
-        if _breaks_early([(block.rect, block.text, block.size) for block in run],
-                         lambda rect, size: _column_right(rect.x0, size, rows, frame)):
+        if _same_opening([block.text for block in run]) or _breaks_early(
+                [(block.rect, block.text, block.size) for block in run],
+                lambda rect, size: _column_right(rect.x0, size, rows, frame)):
             listed.update(id(block) for block in run)
 
     for block in blocks:
@@ -5631,11 +5632,31 @@ def _cut_line_list(group: list[int], items: list[tuple], page_rows: Sequence[pym
     几行各占一行、左缘对齐、同字号、行距一样，一半以上的换行处上一行还放得下下一行的第一个词，按行拆开。
     右缘按这一块最长的一行算：栏宽从别的行估，图边、表格里、两栏里的段落都会估宽；
     按块里最长的行算，自动折出来的段落一处也不会早换行。绕图排的几行止于图边：本页同一左缘起笔、
-    同一处止笔的行不止一行，算排满。"""
+    同一处止笔的行不止一行，算排满。
+    同一行分成几条的（表格的行名和后面几格）先并成一行再比。各行同一处另起一列（hen | +female），
+    或者每行同一个词起头（x_i contains ..., x_i's word shape），是表格和清单，也按行拆开。"""
     if len(group) < _LIST_RUN:
         return [group]
-    rects = [items[i][1] for i in group]
-    sizes = [max(float(span["size"]) for span in items[i][2]) for i in group]
+    rows: list[list[int]] = []
+    for i in group:
+        rect = items[i][1]
+        if rows:
+            top = pymupdf.Rect(items[rows[-1][0]][1])
+            for j in rows[-1][1:]:
+                top |= items[j][1]
+            if top.y0 < (rect.y0 + rect.y1) / 2 < top.y1:
+                rows[-1].append(i)
+                continue
+        rows.append([i])
+    if len(rows) < _LIST_RUN:
+        return [group]
+    rects = []
+    for row in rows:
+        rect = pymupdf.Rect(items[row[0]][1])
+        for j in row[1:]:
+            rect |= items[j][1]
+        rects.append(rect)
+    sizes = [max(float(span["size"]) for i in row for span in items[i][2]) for row in rows]
     size = sizes[0]
     pitches = [lower.y0 - upper.y0 for upper, lower in zip(rects, rects[1:])]
     aligned = (
@@ -5644,23 +5665,63 @@ def _cut_line_list(group: list[int], items: list[tuple], page_rows: Sequence[pym
         and all(upper.y1 - lower.y0 <= size * 0.3 for upper, lower in zip(rects, rects[1:]))
         and all(0 < pitch <= size * 2.0 and abs(pitch - pitches[0]) <= size * 0.2 for pitch in pitches)
     )
+    if not aligned:
+        return [group]
     widest = max(rect.x1 for rect in rects)
 
     def full(rect: pymupdf.Rect) -> bool:
         return sum(1 for row in page_rows if abs(row.x1 - rect.x1) <= 1 and abs(row.x0 - rect.x0) <= size) >= 2
 
+    texts = [" ".join(items[i][0].strip() for i in row) for row in rows]
     # 一块里只有一处早换行的，多半是段末短行接着下一段、下一个小标题
-    rows = [(items[i][1], items[i][0], size) for i in group]
-    if not aligned or not _breaks_early(rows, lambda rect, _size: rect.x1 if full(rect) else widest, at_least=2):
+    lines = [(rect, text, size) for rect, text in zip(rects, texts)]
+    early = _breaks_early(lines, lambda rect, _size: rect.x1 if full(rect) else widest, at_least=2)
+    if not (early or _column_rows(rows, items, size) or _same_opening(texts)):
         return [group]
     # 排满的一行后面是句中折行，接着；其余换行处都拆开
-    parts = [group[:1]]
-    for prev, cur in zip(group, group[1:]):
-        if full(items[prev][1]):
-            parts[-1].append(cur)
+    parts = [list(rows[0])]
+    for rect, row in zip(rects, rows[1:]):
+        if full(rect):
+            parts[-1].extend(row)
         else:
-            parts.append([cur])
+            parts.append(list(row))
     return parts
+
+
+def _column_rows(rows: list[list[int]], items: list[tuple], size: float) -> bool:
+    """每一行在同一处另起一段字（行首以外），至少一行在那儿前面空出一个字宽以上：是表格的列。
+    段落折出来的几行，词的起点不会每行都落在同一处，词间也只有一个空格宽。"""
+    starts: list[list[tuple[float, float]]] = []
+    for row in rows:
+        spans = sorted((span for i in row for span in items[i][2]), key=lambda span: span["bbox"][0])
+        found = []
+        for prev, span in zip(spans, spans[1:]):
+            if span["text"][:1].isspace():
+                continue
+            found.append((span["bbox"][0], span["bbox"][0] - prev["bbox"][2]))
+        starts.append(found)
+    for x, _gap in starts[0]:
+        gaps = []
+        for found in starts:
+            near = [gap for other, gap in found if abs(other - x) <= size * 0.5]
+            if not near:
+                break
+            gaps.append(max(near))
+        else:
+            if max(gaps) >= size:
+                return True
+    return False
+
+
+def _same_opening(texts: Sequence[str]) -> bool:
+    """每行开头是同一个词（只比词里的字母数字，x_i 和 x_i's 算同一个）：是逐行排的清单。"""
+    heads = []
+    for text in texts:
+        match = re.match(r"\w+", text.strip())
+        if match is None:
+            return False
+        heads.append(match.group(0))
+    return len(set(heads)) == 1
 
 
 def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = frozenset()) -> list[TextBlock]:
