@@ -3781,6 +3781,20 @@ def test_a_word_cut_after_a_run_in_label_continues_at_the_column_edge():
     assert len(_merge_continuations(blocks(x1=400))) == 2
 
 
+def test_a_line_inside_an_open_bracket_runs_on_below():
+    """括号还没合上就换行，下一行大写或数字起头、在第一句里合上括号，仍是同一句。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, y, rows=2):
+        lines = [pymupdf.Rect(72, y + 24 * i, 540, y + 24 * i + 12) for i in range(rows)]
+        return TextBlock(page=0, rect=pymupdf.Rect(72, y, 540, y + 24 * rows - 12), line_rects=lines,
+                         text=text, size=12.0, color="#000", bold=False)
+
+    head = "the influence of the prior decreases with sample size (see e.g."
+    assert len(_merge_continuations([blk(head, 100), blk("Ghosal et al., 2000; Walker, 2004). The density follows.", 148)])) == 1
+    assert len(_merge_continuations([blk(head, 100), blk("Ghosal et al. Then the second sentence starts here.", 148)])) == 2
+
+
 def test_a_full_line_wraps_into_a_capitalized_next_line():
     """段落缩进的首行和页边旁注挤在一块里被单拆出来。它排到右缘、没有句末标点，下一行回到左缘、
     以专名大写起头（RNNs, one where…），仍是同一句。末行没排满、或者有句号的不接。"""

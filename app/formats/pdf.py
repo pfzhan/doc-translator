@@ -6275,6 +6275,8 @@ def _merge_continuations(
                 bool(p.span_lines) and 0 < b.rect.x0 - p.rect.x0 <= 3 * p.size
                 and _label_lead([span for span in p.span_lines[0] if str(span.get("text") or "").strip()])
             )
+            # 括号还没合上，下一行在第一句里合上它（(see e.g. | Ghosal et al., 2000)、(Chérief- | Abdellatif …)）
+            bracketed = _unclosed_bracket(p.text) and _closes_first(b.text)
             open_paren = (
                 first == "(" and not _list_item(b.text) and not _EQUATION_TAG_RE.match(b.text)
                 and (centered_tail or label_hang or b.rect.x0 <= p.rect.x0 + p.size * 0.5
@@ -6339,7 +6341,7 @@ def _merge_continuations(
                 and (colon_wrap or call_wrap or flush_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
                      or not _ends_sentence(p.text))
                 and (first.islower() or first in ".),;%,；，" or open_paren or math_wrap or centered_end
-                     or dangling or centered_comma or in_fence or full_wrap or flush_wrap)
+                     or dangling or centered_comma or in_fence or full_wrap or flush_wrap or bracketed)
                 and not _verbatim_seam(p, b)
                 # 段落首行缩进的文档里，首行比下面几行缩进一两个字宽、大写的词起头的块是新的一段，
                 # 上一块停在 and 上（式子前的半句）也不接。行首是式子（W 1,∞ …）的不算
