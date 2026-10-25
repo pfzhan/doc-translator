@@ -8928,8 +8928,8 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
 
     if not blocks:
         return []
-    sizes = sorted(b.size for b in blocks)
-    median = median_all = sizes[len(sizes) // 2]
+    # 按字数取中位：按块数取时，正文接上续行少了几块，中位就掉到小字号上，参考文献的标题认不出来
+    median = median_all = _median_size(blocks)
     prepared = [(b, re.sub(r"\s+", " ", b.text).strip()) for b in blocks]
 
     def smaller_subsection(block: TextBlock, text: str, origin: float) -> bool:
@@ -9019,7 +9019,12 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
             else:
                 skips.append(True)
             continue
-        if title and citations_follow(i) and (_biblio_heading_like(block, text, median) or block.size + 0.4 >= median):
+        # 标题比正文小的排法（ICASSP 整节参考文献都小一号）：加粗、不比下面几条引文小，也是这一节的标题
+        following = sorted(b.size for b, _t in prepared[i + 1:i + 6]) or [block.size]
+        if title and citations_follow(i) and (
+            _biblio_heading_like(block, text, median) or block.size + 0.4 >= median
+            or (block.bold and block.size + 0.4 >= following[len(following) // 2])
+        ):
             in_biblio = True
             start_size = block.size
             prev_numbered = False

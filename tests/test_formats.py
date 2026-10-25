@@ -1484,6 +1484,30 @@ def test_pdf_biblio_skips_alpha_labels_at_uniform_size():
     tail = blocks[:3] + [blk("Appendix"), blk("Appendix body text continues here.")]
     assert biblio_skips(tail) == [False, False, True, False, False]
 
+def test_pdf_biblio_skips_weigh_sizes_by_text():
+    """表格里成串的小字格子按块数比正文多，按块数取的中位落到小字号上，同字号的引文就像标题了。
+    中位按字数取。标题比正文小一号、整节参考文献都小一号的（ICASSP），加粗又不比引文小，也是标题。"""
+    from app.formats.pdf import TextBlock, biblio_skips
+
+    def blk(text, size, bold=False):
+        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
+                         text=text, size=size, color="#000000", bold=bold)
+
+    body = [blk("Learning widely applicable representations of words has been an active area of research " * 4, 10)
+            for _ in range(3)]
+    cells = [blk(f"{80 + n}.5", 9) for n in range(20)]
+    entries = [blk("Alan Akbik, Duncan Blythe, and Roland Vollgraf. 2018.", 10),
+               blk("Contextual string embeddings for sequence labeling.", 10),
+               blk("Rami Al-Rfou, Dokook Choe, and Llion Jones. 2018.", 10),
+               blk("Character-level language modeling with deeper self-attention.", 10)]
+    skips = biblio_skips([*body, *cells, blk("References", 12), *entries])
+    assert skips[-4:] == [True] * 4
+    small = [blk("[1] R. Xu and Q. Liu, \u201cX-Voice,\u201d in Proc. Interspeech, 2023, pp. 1\u20135.", 8),
+             blk("[2] M. Yang and J. Hansen, \u201cActivation steering,\u201d in Proc. ICASSP, 2024.", 8)]
+    skips = biblio_skips([*[blk("Body text of the paper. " * 20, 9) for _ in range(5)], blk("8. REFERENCES", 8, True), *small])
+    assert skips[-2:] == [True, True]
+
+
 def test_pdf_biblio_skips_follows_font_size():
     from app.formats.pdf import TextBlock, biblio_skips
 
