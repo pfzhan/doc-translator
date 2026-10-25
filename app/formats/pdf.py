@@ -1929,10 +1929,12 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         )
         body_line = line_size >= ref_size * 0.79 and len("".join(stripped.split())) >= _SIZE_ROW_CHARS
         # 照录的等宽行后面换回正文字体、像新句子开头的一行：照录的文字到此为止，正文另起一段。
-        # 正文首行缩进和等宽行的左缘只差一点，按缩进算会并进去
+        # 正文首行缩进和等宽行的左缘只差一点，按缩进算会并进去。
+        # 行首还是等宽字的，是上一行的网址、代码折下来的尾巴（...BaBao | 1). This ...），没换回正文
         leaves_verbatim = (
             own_row and seg_start
             and _typewriter_line(pspans) and not _typewriter_line(items[i][2])
+            and not _typewriter_line(items[i][2][:1])
             and _prose_units(stripped) >= 4
         )
         # 作者栏一行一项：名字、单位、邮箱居中排，换了字体就是下一项。

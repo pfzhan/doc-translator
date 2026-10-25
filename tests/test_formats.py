@@ -753,6 +753,28 @@ def test_justified_rows_are_not_a_centered_stack():
     assert _centered_rows(authors, 10.0)
 
 
+def test_the_tail_of_a_wrapped_url_does_not_end_the_verbatim_text():
+    """折行的网址尾巴落在下一行行首，后面接着正文。行首还是等宽字，没换回正文，不拆段。"""
+    from app.formats.pdf import _split_lines
+
+    def span(text, mono):
+        return {"text": text, "size": 12.0 if mono else 11.0, "font": "LMMono10-Regular" if mono else "URWPalladioL-Roma",
+                "flags": 0}
+
+    lines = [
+        ("Olympiad https://artofproblemsolving.com/wiki/index.php/AMC_historical_",
+         pymupdf.Rect(70.9, 420.0, 525.0, 432.0),
+         [span("Olympiad ", False), span("https://artofproblemsolving.com/wiki/index.php/AMC_historical_", True)]),
+        ("results?srsltid=AfmBOoqQ6pQic5NCan_NX1wYgr-aoHgJ33hsq7KSekF-rUwY8TBaBao",
+         pymupdf.Rect(70.9, 433.5, 524.4, 445.5),
+         [span("results?srsltid=AfmBOoqQ6pQic5NCan_NX1wYgr-aoHgJ33hsq7KSekF-rUwY8TBaBao", True)]),
+        ("1). This performance positions DeepSeek-R1 among the nation’s top-tier high school students.",
+         pymupdf.Rect(70.6, 447.1, 524.0, 459.1),
+         [span("1).", True), span(" This performance positions DeepSeek-R1 among the nation’s top-tier", False)]),
+    ]
+    assert _split_lines(lines) == [[0, 1, 2]]
+
+
 def test_an_equals_sign_at_the_end_of_a_list_item_line_keeps_the_item_whole():
     """两端对齐把行尾等号前的空拉到一个字宽以上，等号仍接在这一行，下一行缩在条目号右边的是条目的续行。"""
     from app.formats.pdf import _split_lines
