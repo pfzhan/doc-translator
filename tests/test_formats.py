@@ -3832,6 +3832,34 @@ def test_a_full_line_wraps_into_a_capitalized_next_line():
     assert len(_merge_continuations([blk(head + ".", 610, x0=175.1), blk(tail, 622, rows=2)])) == 2
 
 
+def test_a_document_that_spaces_paragraphs_joins_blocks_at_the_normal_line_gap():
+    """新段齐平起笔、上面多空出一截的文档里，按正常行距紧贴着、上一行排满的下一块是同一段，
+    上一行恰好在句末断开也一样（双倍行距的稿子一段常切成几块）。空出那一截的另起一段。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    size, pitch = 10.9, 21.0
+
+    def blk(text, y, rows=3, last_x1=522):
+        lines = [pymupdf.Rect(89, y + pitch * i, 522 if i < rows - 1 else last_x1, y + pitch * i + 11)
+                 for i in range(rows)]
+        rect = pymupdf.Rect(89, y, 522, lines[-1].y1)
+        return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=size, color="#000",
+                         bold=False, line_gap=10 / size)
+
+    def page(gap):
+        blocks, y = [], 60.0
+        for _ in range(4):
+            blocks.append(blk("This paragraph discusses the prior and the likelihood in turn.", y, last_x1=300))
+            y = blocks[-1].rect.y1 + 16
+        blocks.append(blk("These assumptions are almost never satisfied in practice.", y))
+        blocks.append(blk("As a result, such Bayesian analyses are conducted with care.", blocks[-1].rect.y1 + gap,
+                          last_x1=300))
+        return blocks
+
+    assert len(_merge_continuations(page(gap=10))) == 5
+    assert len(_merge_continuations(page(gap=16))) == 6
+
+
 def test_a_full_line_in_a_document_that_indents_paragraphs_runs_on_below():
     """段落首行缩进的文档里，排满一整行、恰好在句末断开的一行，下面齐平起笔的一行是同一段的续行。
     带编号的标签、隔着一行的、自己往下悬挂缩进的（续行另成一块也算）、上一行是表格几格的，都另起。"""

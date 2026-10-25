@@ -6204,7 +6204,9 @@ def _merge_continuations(
     下一半旁边时，跳过它和再前面一块比。margins 是页眉页脚，不和上下的块相接。"""
     out: list[TextBlock] = []
     indents = _indents_paragraphs(blocks)
-    measure = _body_measure(blocks) if indents else 0.0
+    # 段首缩进的文档里，句末下面齐平起笔的是图注、例句、式子后面的半句，量不出段间空白
+    space = 0.0 if indents else _paragraph_space(blocks)
+    measure = _body_measure(blocks) if indents or space else 0.0
     for index, b in enumerate(blocks):
         hosts = out[-1:]
         if len(out) >= 2 and _beside_wrap(out[-1], out[-2], b):
@@ -6322,9 +6324,11 @@ def _merge_continuations(
             # 「排到右缘」按正文一整行的宽度比，表格里的一格、短标题对着自己的窄框也是满的。
             # 带编号的标签（EXAMPLE 2.1、Table 3:）也另起。
             # 下一行要按正常行距紧贴着：隔着一行的是悬挂缩进的参考文献，中间的续行另成了块。
-            # 下一块自己往下悬挂缩进的是参考文献的下一条；上一行几截之间空开好几个字宽的是表格的一行
+            # 下一块自己往下悬挂缩进的是参考文献的下一条；上一行几截之间空开好几个字宽的是表格的一行。
+            # 靠段间空白分段的文档里，新段上面多空出一截：只按正常行距紧贴着的才是同一段
+            row_gap = b.rect.y0 - last_y1 - p.line_gap * p.size
             flush_wrap = (
-                indents and same_size and b.rect.y0 - last_y1 - p.line_gap * p.size <= 0.5 * p.size
+                same_size and ((indents and row_gap <= 0.5 * p.size) or (space and row_gap <= space / 2))
                 and not _list_item(b.text) and not _LABEL_START_RE.match(b.text)
                 and not _is_float_text(b.text) and not _styled_edge(b, 0) and not _styled_edge(p, -1)
                 and _wraps_into(p, b) and bool(p.line_rects) and _row_width(_visual_lines(p)[-1]) >= measure * 0.9
@@ -6465,6 +6469,30 @@ def _indents_paragraphs(blocks: list[TextBlock]) -> bool:
     return indented >= 3 and indented > flush
 
 
+def _paragraph_space(blocks: list[TextBlock]) -> float:
+    """靠段间空白分段的文档里，新段比正常行距多空出的那一截（点）。不是这样排的返回 0。
+    看段落的末行（句末收住、没排到右缘）下面齐平起笔的一块，多数都空出半个字高以上才算"""
+    gaps: list[tuple[float, float]] = []
+    for p, b in zip(blocks, blocks[1:]):
+        if p.page != b.page or not p.line_rects or not b.line_rects or abs(p.size - b.size) > p.size * 0.05:
+            continue
+        if _styled_edge(b, 0) or _LABEL_START_RE.match(b.text) or _NUMBERED_HEAD_RE.match(b.text) or _list_item(b.text):
+            continue
+        tail, head = p.line_rects[-1], b.line_rects[0]
+        if (not _ends_sentence(p.text) or tail.x1 > max(p.rect.x1, b.rect.x1) - 2 * p.size
+                or abs(head.x0 - tail.x0) > p.size * 0.3):
+            continue
+        gap = head.y0 - tail.y1 - p.line_gap * p.size
+        if 0 <= gap <= 1.5 * p.size:
+            gaps.append((gap, p.size))
+    if len(gaps) < _SPACED_PARAGRAPHS:
+        return 0.0
+    space, size = sorted(gaps)[len(gaps) // 2]
+    return space if space >= 0.4 * size else 0.0
+
+
+# 至少这么多段落末行下面量得到段间空白
+_SPACED_PARAGRAPHS = 3
 # 以式子起头的续行里至少这么多正文词
 _MATH_WRAP_WORDS = 3
 # Markdown 代码围栏。LaTeX 把 ``` 排成弯引号 “‘
