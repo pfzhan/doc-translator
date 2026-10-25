@@ -2212,6 +2212,14 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and above - rect.x0 > 0.5 * psize and 0.5 * psize < rect.x0 - below <= 3 * psize
             and not ptext.rstrip().endswith((",", "，", "、", ";", "；", ":", "："))
         )
+        # 上一行在句末收住（哪怕排满了），这一行缩进一两个字宽、排到右缘，下一行又回到上一行的左缘：
+        # 是新一段的首行缩进。上下是编号条目的是悬挂缩进的续行（46. Fuller … | Monthly Notices … | 47. …）
+        indent_after_end = (
+            own_row and seg_start and below is not None and not centered_rows and _ends_sentence(ptext)
+            and not _list_item(items[i - 1][0]) and not _list_item(items[i + 1][0])
+            and 0.5 * psize < rect.x0 - above <= 3 * psize and abs(below - above) <= 0.5 * psize
+            and rect.x1 >= max_x1 - 2 * psize
+        )
         # 带编号的定理、引理标签（Lemma 10.3.）总是另起一段，上一行停在式子上也一样
         labeled = (
             not same_visual_line and _label_lead(items[i][2])
@@ -2222,7 +2230,7 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
                 (not open_end and (bullet or example or (NO_TEXT_RE.match(stripped) and i not in number_tails)))
                 or (prev_symbol and not closing)
                 or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim or restyled
-                or labeled or display_math or opens_indent
+                or labeled or display_math or opens_indent or indent_after_end
                 or displayed
                 or _caption_opens(items[i][2], pspans)
             )

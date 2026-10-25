@@ -8338,6 +8338,27 @@ def test_a_paragraph_indented_under_an_inset_line_starts_on_its_own():
     assert _split_lines(author) == [[0, 1, 2]]
 
 
+def test_an_indented_line_after_a_full_line_that_ends_a_sentence_starts_a_paragraph():
+    """上一行排满、恰好在句末收住，下一行缩进一个半字宽、排到右缘，再下一行回到左缘：是新一段。
+    上下是编号条目的是参考文献悬挂缩进的续行，不拆。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, x0, y0, x1):
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 12),
+                [{"text": text, "size": 10.0, "bbox": (x0, y0, x1, y0 + 12), "font": "Times", "flags": 0}], [])
+
+    items = [item("This ordering reverses by 10 dB, and the residual advantage", 315.2, 428.9, 559.0),
+             item("10 dB, and the residual advantage grows to 4.08 dB at 25 dB.", 315.2, 440.9, 559.0),
+             item("The correction target in (9) provides an interpretation of", 330.2, 453.6, 559.0),
+             item("this crossover. For slowly varying channels and weak obser-", 315.2, 465.5, 559.0),
+             item("baseline achieves lower mean NMSE than both variants.", 315.2, 477.5, 539.5)]
+    assert _split_lines(items) == [[0, 1], [2, 3, 4]]
+    entry = [item("46. Jim Fuller, Anthony L Piro, and Adam S Jermyn. Slowing the spins of cores.", 114.0, 100.0, 474.0),
+             item("Monthly Notices of the Royal Astronomical Society, 485(3):3661, 2019.", 129.0, 112.0, 474.0),
+             item("47. Ilya Mandel and Alison Farmer. Merging stellar-mass binary black holes.", 114.0, 124.0, 474.0)]
+    assert [0, 1] in _split_lines(entry)
+
+
 def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
     """索引条目停在逗号上，页码折到下一行、缩到条目文字下面。页码那一行跟着条目一起送翻，
     条目到页码收住，下一条照常另起。"""
