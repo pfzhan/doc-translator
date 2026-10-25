@@ -7548,7 +7548,15 @@ def _split_own_lines(
         return "", ""
     if len(raw) == 1:
         return raw[0], ""
-    return raw[0], _after_first_line(prepared, raw[0]).strip()
+    rest = _after_first_line(prepared, raw[0]).strip()
+    # 半句的位置太窄，放不下第一个词时 break_lines 按字符硬切（BER / T）。
+    # 后面的行比这里宽，这个词整个留给续行
+    shown = STYLE_MARK_RE.sub("", raw[0]).rstrip()
+    visible = STYLE_MARK_RE.sub("", prepared)
+    joint = visible[len(shown) - 1:len(shown) + 1] if shown and visible.startswith(shown) else ""
+    if not shown or len(joint) == 2 and all(ch.isascii() and ch.isalnum() for ch in joint):
+        return "", prepared
+    return raw[0], rest
 
 
 def _render_translated(src_path: Path, blocks: list[TextBlock], translations: list[str],

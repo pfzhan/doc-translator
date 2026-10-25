@@ -320,6 +320,8 @@ def _break_lines(
     tokens = _tokenize(text)
     # 括号组按最窄的一行锁，否则组在窄行放不下，回滚后又回到同一处
     group_of = _paren_groups(tokens, em, formula_widths, min((max_width, *first_widths)))
+    for index, start in _marked_words(tokens, em, formula_widths, min((max_width, *first_widths))).items():
+        group_of.setdefault(index, start)
     lines: list[str] = []
     buf: list[tuple[int, str]] = []
     width = 0.0
@@ -368,9 +370,11 @@ def _break_lines(
             start = group_of.get(index)
             if start is not None and any(token_index >= start for token_index, _ in buf):
                 buf[:] = [(token_index, item) for token_index, item in buf if token_index < start]
+                # 组前面的左括号也跟着组到下一行
+                carried = _detach_opener(buf)
                 width = sum(_token_width(item, em, formula_widths) for _, item in buf)
                 flush()
-                index = start
+                index = carried[0][0] if carried else start
                 continue
             if token in _NO_LINE_START:
                 detached = _detach_for_punct(buf)
@@ -469,6 +473,47 @@ def _visible_len(token: str) -> int:
     if _SENTINEL_RE.fullmatch(token):
         return 1
     return len(token)
+
+
+_WORD_PIECE_RE = re.compile(r"[A-Za-z0-9'’_-]+")
+
+
+def _marked_words(
+    tokens: list[str],
+    em: float,
+    formula_widths: dict[int, float],
+    max_width: float,
+) -> dict[int, int]:
+    """词中间夹着样式标记（{b}R{/b}epresentations）切成了几个 token，整个词锁成一组，
+    不在标记处断行。前面开着的标记跟着词走。和括号组交叠、本身超宽的不锁。"""
+    group_of: dict[int, int] = {}
+    count = len(tokens)
+    index = 0
+    while index < count:
+        start = index
+        while index < count and STYLE_MARK_RE.fullmatch(tokens[index]):
+            index += 1
+        if index >= count or not _WORD_PIECE_RE.fullmatch(tokens[index]):
+            index = max(index, start + 1)
+            continue
+        end = index
+        cursor = index + 1
+        while cursor < count:
+            probe = cursor
+            while probe < count and STYLE_MARK_RE.fullmatch(tokens[probe]):
+                probe += 1
+            if probe == cursor or probe >= count or not _WORD_PIECE_RE.fullmatch(tokens[probe]):
+                break
+            end = probe
+            cursor = probe + 1
+        if end > index:
+            members = range(start, end + 1)
+            width = sum(_token_width(tokens[m], em, formula_widths) for m in members)
+            if width <= max_width:
+                for m in members:
+                    group_of[m] = start
+        index = end + 1
+    return group_of
 
 
 def _paren_groups(

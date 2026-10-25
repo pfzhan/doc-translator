@@ -250,3 +250,16 @@ def test_wide_glyphs_wrap_before_they_pass_the_edge():
     lines = break_lines("甲甲甲HMM", em=10, max_width=45, formula_widths={})
     assert lines[0] == "甲甲甲"
     assert "HMM" in lines[1]
+
+
+def test_a_word_split_by_style_marks_is_not_broken_at_the_mark():
+    """{b}R{/b}epresentations 是一个词，加粗的首字母后面不能断行；词前的左括号跟着词走。"""
+    from app.formats.pdf_flow import break_lines
+
+    text = "双向编码器表示”({b}B{/b}idirectional {b}E{/b}ncoder {b}R{/b}epresentations from {b}T{/b}ransformers)的缩写"
+    for width in (100, 120, 140, 160):
+        lines = break_lines(text, 9.0, width, {})
+        for line in lines:
+            assert not line.rstrip().endswith(("{b}R{/b}", "{b}B{/b}", "{b}T{/b}", "("))
+        assert "".join(lines).replace("{b}", "").replace("{/b}", "").replace(" ", "") == \
+            text.replace("{b}", "").replace("{/b}", "").replace(" ", "")

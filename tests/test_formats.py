@@ -5095,6 +5095,16 @@ def test_inset_rest_reflows_at_the_column_width():
     assert rest == "{i}第一行的末尾一直延续到下一行{/i}后面普通"
 
 
+def test_a_word_too_wide_for_the_shared_line_moves_whole_to_the_next_line():
+    """同一行剩下的半截只有一个短词宽，放不下 BERT 时整个词留给续行，不切成 BER / T。"""
+    from app.formats.pdf import _split_own_lines
+
+    assert _split_own_lines("BERT 和 GPT 在所有任务上的表现", [], 8.8, 10.0, 20.0) == ("", "BERT 和 GPT 在所有任务上的表现")
+    assert _split_own_lines("{b}BERT{/b} 在所有任务上", [], 8.8, 10.0, 20.0)[0] == ""
+    head, rest = _split_own_lines("在所有任务上 BERT 都更好", [], 8.8, 10.0, 20.0)
+    assert head == "在所" and rest.startswith("有任务")
+
+
 def test_inset_continuation_fills_the_column(tmp_path):
     """侧标旁边的正文，续行回到栏左缘并写到栏右缘，字号不再因为窄行太多而被压小。"""
     from app.formats.pdf import TextBlock, _render_translated
