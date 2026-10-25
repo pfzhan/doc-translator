@@ -55,7 +55,7 @@ from .pdf_erase import Erasure, erase, restore_glyphs, type3_glyphs
 from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, text_frames
 from .pdf_layout import (
     PageGeometry, PageScan, RuledTable, cell_containing, content_floor, interlinear_glosses, light_fill, margin_skips,
-    scan_page, reading_order, text_page_rect,
+    scan_page, reading_order, text_page_rect, visible_drawings,
 )
 from .pdf_parts import plan_parts, render_in_parts, worker_count
 from .pdf_roles import LayoutItem, Role, is_size_heading
@@ -3788,10 +3788,7 @@ def _extend_text_run(pending: TextRun | None, span: dict, emphasis: Emphasis, li
 def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
     """矢量线条，加上拉长成细线的一像素图片：老 TeX 的分式线、根号横线是这样画的。
     描边的线按画出来的范围算：路径框不含线宽，一条横线的框高为零。"""
-    try:
-        drawings = page.get_drawings()
-    except Exception:  # noqa: BLE001 - 个别页面的矢量表读不出来，当没有曲线
-        drawings = []
+    drawings = visible_drawings(page)
     rects: list[pymupdf.Rect] = []
     for drawing in drawings:
         raw = drawing.get("rect")

@@ -8819,3 +8819,22 @@ def test_inline_formulas_keep_their_size_next_to_chinese():
     # 不传 reference 时照旧按原文字号比
     scale, _, _ = _formula_slot(formula, 10.0, 8.8)
     assert abs(scale - 0.88) < 1e-6
+
+
+def test_a_clipped_plot_path_does_not_cover_the_text_below_it():
+    """剪进图框的曲线路径框伸到页外几万点。按剪裁区裁过，只剩图框里那一截，盖不住下面的正文。
+    整个落在剪裁区外面的路径去掉。"""
+    from app.formats.pdf_layout import visible_drawings
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((40, 620), "Otherwise, we take the simulation snapshot before the binary", fontsize=10)
+    xref = page.get_contents()[0]
+    stream = doc.xref_stream(xref) + (
+        b"\nq 81 628 207 154 re W n 1 0 0 rg 90 746 m 279 746 l 279 -31000 l 90 -31000 l h f Q"
+        b"\nq 81 628 207 154 re W n 0 1 0 rg 300 700 m 320 700 l 320 720 l h f Q\n"
+    )
+    doc.update_stream(xref, stream)
+    rects = [drawing["rect"] for drawing in visible_drawings(page)]
+    assert len(rects) == 1
+    assert rects[0].y1 <= 842 - 628 + 1 and rects[0].y0 >= 842 - 782 - 1

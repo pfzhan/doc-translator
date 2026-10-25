@@ -224,11 +224,14 @@ class PageScan:
 
 def scan_page(page: pymupdf.Page) -> PageScan:
     images = _image_infos(page)
-    drawings = _page_drawings(page, images)
+    visible, raw = _drawing_paths(page)
+    rules = _image_rules(images)
+    drawings = [*visible, *rules]
     words = page_words(page)
     horizontal, vertical = _rule_segments(page, drawings)
+    # 找图仍按原样的路径框：裁过以后，原先铺满整页、被当成底色略过的图会冒出来，改变图里文字的取舍
     return PageScan(
-        page_tables(page, drawings, words), tuple(_figure_rects(page, drawings, images)), words,
+        page_tables(page, drawings, words), tuple(_figure_rects(page, [*raw, *rules], images)), words,
         _shaded_areas(drawings, text_page_rect(page)), tuple(horizontal),
         tuple(_thin_strokes(drawings)), tuple(vertical), *_curved_paths(drawings),
         visible_spaces=tuple(_visible_spaces(drawings)),
@@ -371,13 +374,46 @@ def _clip_images(page: pymupdf.Page, infos: list[dict]) -> list[dict]:
     return out
 
 
+def visible_drawings(page: pymupdf.Page) -> list[dict]:
+    """get_drawings 的路径，框裁到它所在的剪裁区里。剪进图框的曲线路径框可能伸到页外几万点，
+    按原框算会盖住下面整栏正文。整个落在剪裁区外面的路径看不见，去掉"""
+    return _drawing_paths(page)[0]
+
+
+def _drawing_paths(page: pymupdf.Page) -> tuple[list[dict], list[dict]]:
+    """读一次本页的路径，给出裁过的（见 visible_drawings）和原样的两份。"""
+    try:
+        paths = page.get_drawings(extended=True)
+    except Exception:  # noqa: BLE001 - 个别页面的矢量表读不出来，当没有线
+        return [], []
+    out: list[dict] = []
+    raw: list[dict] = []
+    clips: list[tuple[int, pymupdf.Rect]] = []
+    for path in paths:
+        level = int(path.get("level") or 0)
+        # 剪裁区管到同一层级以下的路径，回到它的层级就失效
+        clips = [clip for clip in clips if clip[0] < level]
+        kind = path.get("type")
+        if kind == "clip":
+            if path.get("scissor") is not None:
+                clips.append((level, pymupdf.Rect(path["scissor"])))
+            continue
+        if kind == "group" or path.get("rect") is None:
+            continue
+        raw.append(path)
+        rect = pymupdf.Rect(path["rect"])
+        x0, y0, x1, y1 = rect.x0, rect.y0, rect.x1, rect.y1
+        for _, scissor in clips:
+            x0, y0, x1, y1 = max(x0, scissor.x0), max(y0, scissor.y0), min(x1, scissor.x1), min(y1, scissor.y1)
+        if x0 > x1 or y0 > y1:
+            continue
+        out.append({**path, "rect": pymupdf.Rect(x0, y0, x1, y1)} if clips else path)
+    return out, raw
+
+
 def _page_drawings(page: pymupdf.Page, images: list[dict] | None = None) -> list[dict]:
     """本页的矢量图，加上图片画的细线。images 是本页的图片框，没给时现读。"""
-    try:
-        drawings = page.get_drawings()
-    except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有线
-        drawings = []
-    return [*drawings, *_image_rules(_image_infos(page) if images is None else images)]
+    return [*visible_drawings(page), *_image_rules(_image_infos(page) if images is None else images)]
 
 
 def light_fill(drawing: dict) -> bool:
@@ -1842,10 +1878,7 @@ def _figure_rects(
         if rect.width > _FIGURE_MIN and rect.height > _FIGURE_MIN:
             found.append(rect)
     if drawings is None:
-        try:
-            drawings = page.get_drawings()
-        except Exception:  # noqa: BLE001 - 个别页面的矢量表读不出来，当没有图
-            drawings = []
+        drawings = visible_drawings(page)
     grounds: list[pymupdf.Rect] = []
     for drawing in drawings:
         rect = pymupdf.Rect(drawing.get("rect"))
