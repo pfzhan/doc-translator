@@ -3217,12 +3217,21 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 raised = float(span["origin"][1]) - base
                 return min(box.x1, sb.x1) - max(box.x0, sb.x0) > 0 and -0.2 <= raised / block.size <= 0.6
 
+            # 重音自己可能单独成了一个式子（CMR10 的 ˆ 单成一行）。并进它盖着的式子以后，
+            # 原来那个就不再单列，不然送翻文本里多出一个只有 ˆ 的占位符
+            owner = next((m for m in merged if any(s is x for x in m["spans"])), None)
+            if owner is not None and any(
+                str(x.get("text") or "").strip() not in _ACCENT_CHARS for x in owner["spans"] if str(x.get("text") or "").strip()
+            ):
+                continue
             for m in merged:
-                if any(s is x for x in m["spans"]):
-                    break
+                if m is owner:
+                    continue
                 if any(covers(x) for x in m["spans"] if x.get("origin") and str(x.get("text") or "").strip()):
                     m["spans"].append(s)
                     m["bbox"] |= sb
+                    if owner is not None:
+                        merged.remove(owner)
                     break
     merged = _join_line_wrapped_formulas(merged, block.span_lines, block.size)
 

@@ -2275,6 +2275,27 @@ def _block_with_spans(span_lines, size=12.0):
                      text="", size=size, color="#000", bold=False, span_lines=span_lines)
 
 
+def test_accent_on_its_own_line_joins_the_formula_once():
+    """ŝ 的 ˆ 单成一行，排在 s 那一行后面，自己也判成了式子。并进它盖着的式子以后不再单列一个占位符。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text, font, size, x0, x1, y0, y1, base):
+        return {"text": text, "font": font, "size": size, "flags": 0, "bbox": (x0, y0, x1, y1), "origin": (x0, base)}
+
+    # 前面认出它在式子里，标了 math
+    hat = [{**span("\u02c6", "CMR10", 10.0, 311.9, 317.4, 242.0, 252.9, 250.5), "math": True}]
+    line = [
+        span("span ", "NimbusRomNo9L-Regu", 10.0, 280.0, 307.0, 242.2, 253.1, 250.5),
+        span("s", "CMMI10", 10.0, 307.3, 312.4, 242.0, 252.9, 250.5),
+        span("i,j", "CMMI8", 8.0, 312.4, 321.1, 245.9, 253.9, 252.1),
+        span(". We predict a non-null answer", "NimbusRomNo9L-Regu", 10.0, 322.1, 470.0, 242.2, 253.1, 250.5),
+    ]
+    sent, formulas = _placeholderize(_block_with_spans([line, hat], size=10.0), 0)
+    assert sent == "span {v1}. We predict a non-null answer"
+    assert len(formulas) == 1
+    assert formulas[0]["bbox"].x1 >= 317.4
+
+
 def test_placeholderize_and_restore_roundtrip():
     from app.formats.pdf import _placeholderize, _restore_placeholders
 
