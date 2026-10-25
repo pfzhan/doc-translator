@@ -3279,6 +3279,8 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 if piece
             )
             record["parts"] = [record, *(_part_record(extra, block.page, f"{formula_run.name[:-4]}_p{i}.png") for i, extra in enumerate(extras, 1))]
+            for part, before, after in zip(record["parts"][1:], [m, *extras], extras):
+                part["lead"] = _wrap_gap(before["spans"], after["spans"])
         formulas.append(record)
         first_span[id(anchor)] = n
 
@@ -3970,6 +3972,37 @@ def _part_record(run: dict, page: int, name: str) -> dict:
         "curves": [],
         "text": _formula_markup(spans, float(main["size"])).strip(),
     }
+
+
+# 换行切开的公式几片并排贴时中间的空（点）
+_PART_GAP = 1.5
+
+
+# 一片里有空格隔开的两个词：是一句等宽字体的例句，断行处也是词间
+_SPACED_WORDS_RE = re.compile(r"[^\W_]\s+[^\W_]")
+
+
+def _wrap_gap(before: list[dict], after: list[dict]) -> float:
+    """换行切开的公式两片之间的空。等宽字体的例句在词间断行（my dog is | hairy），留一个词距，
+    取片里空格的宽度。片里的词本来就用空格隔开、断处两边都是字母或数字才算；
+    网址、标识符在词中间断行，式子在运算符后面断行，都挨着排。"""
+    def text(spans: list[dict]) -> str:
+        return "".join(str(span.get("text") or "") for span in sorted(spans, key=lambda span: span["bbox"][0]))
+
+    head, tail = text(before), text(after)
+    last, first = head.rstrip()[-1:], tail.lstrip()[:1]
+    if not (last.isalnum() and first.isalnum()) or not (_SPACED_WORDS_RE.search(head) or _SPACED_WORDS_RE.search(tail)):
+        return _PART_GAP
+    spaces = sorted(
+        span["bbox"][2] - span["bbox"][0] for span in [*before, *after]
+        if str(span.get("text") or "") and not str(span.get("text") or "").strip()
+    )
+    return max(_PART_GAP, spaces[len(spaces) // 2]) if spaces else _PART_GAP
+
+
+def _part_lead(part: dict, scale: float) -> float:
+    """这一片和前一片之间的空，按公式的缩放算。"""
+    return max(_PART_GAP, float(part.get("lead") or 0) * scale)
 
 
 def _formula_parts(formula: dict) -> list[dict]:
@@ -6760,13 +6793,15 @@ def _paint_formula_parts(
     """一个占位符的几片按阅读顺序并排贴。换行切开的后半段不再留在源文横坐标。"""
     scale = float(formula.get("rs") or 1)
     x = slot_x + 2.0
-    for part in _formula_parts(formula):
+    for index, part in enumerate(_formula_parts(formula)):
+        if index:
+            x += _part_lead(part, scale)
         width = float(part["w"]) * scale
         height = float(part["h"]) * scale
         below = (float(part.get("d") or 0) - float(part.get("raise") or 0)) * scale
         target = pymupdf.Rect(x, baseline + below - height, x + width, baseline + below)
         _paint_formula(page, doc, part, target, fmS, page_spans, draws, deferred_png)
-        x += width + 1.5
+        x += width
 
 
 def _typeset_line_html(line: TypesetLine, formulas: list[dict]) -> str:
@@ -7080,7 +7115,7 @@ def _formula_slot(formula: dict, block_size: float, render_size: float) -> tuple
     if ascent > _FORMULA_ASCENT_EM * block_size or descent > _FORMULA_DESCENT_EM * block_size:
         cap = min(cap, _LINE_FORMULA_EM)
     scale = min(render_size / block_size, cap * render_size / height)
-    gaps = 1.5 * (len(parts) - 1)
+    gaps = sum(_part_lead(part, scale) for part in parts[1:])
     width = sum(float(part["w"]) * scale for part in parts) + gaps + 4.0
     return scale, width, height * scale
 

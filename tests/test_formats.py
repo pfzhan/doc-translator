@@ -8218,3 +8218,19 @@ def test_index_entries_get_notes_with_their_parent_entry():
     assert notes[2] == "An entry in the subject index at the back of the book, listed under the entry “MT”."
     assert notes[4] == "An entry in the subject index at the back of the book."
     assert "listed under the entry “log”" in notes[6]
+
+
+def test_wrapped_monospace_phrase_keeps_its_word_space():
+    """等宽例句 my dog is | hairy 在词间断行，两片并排时留出原文空格那么宽的词距；
+    网址在词中间断行、式子在运算符后面断行的，两片照旧挨着。"""
+    from app.formats.pdf import _PART_GAP, _wrap_gap
+
+    def span(text, x0, x1):
+        return {"text": text, "font": "NimbusMonL-Regu", "size": 9.0, "bbox": (x0, 0, x1, 9)}
+
+    line = [span("my", 477.1, 487.9), span(" ", 487.9, 493.3), span("dog", 493.3, 509.4),
+            span(" ", 509.4, 514.8), span("is", 514.8, 525.5)]
+    assert abs(_wrap_gap(line, [span("hairy", 307.3, 334.2)]) - 5.4) < 0.05
+    url = [span("https://artofproblemsolving.com/wiki/index.php/202", 300, 525)]
+    assert _wrap_gap(url, [span("5_AIME_II_Problems", 307, 400)]) == _PART_GAP
+    assert _wrap_gap([span("a", 500, 505), span(" ", 505, 508), span("+", 508, 515)], [span("b", 307, 312)]) == _PART_GAP
