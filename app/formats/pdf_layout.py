@@ -1398,6 +1398,14 @@ def _glossed(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
         if any(abs(word.x0 - x) <= _GLOSS_ALIGN for x in starts) and any(ch.isalpha() for ch in word.text)
     ]
     hit = [x for x in starts if any(abs(word.x0 - x) <= _GLOSS_ALIGN for word in lower)]
+    # 对得上的词大半和上一行同一处的词一样：是两条开头相同的列表项（Else search from right to
+    # left for ...），对译行写的是另一种语言，同一处的词不会一样
+    same = [
+        word for word in aligned
+        if any(abs(word.x0 - other.x0) <= _GLOSS_ALIGN and word.text == other.text for other in upper)
+    ]
+    if aligned and len(same) >= len(aligned) * 0.5:
+        return False
     if len(aligned) >= len(lower) * _GLOSS_SHARE and len(hit) >= len(upper) * _GLOSS_SHARE:
         if len(aligned) >= _GLOSS_MIN:
             return True

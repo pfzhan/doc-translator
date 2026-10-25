@@ -1366,3 +1366,26 @@ def test_image_box_is_clipped_to_what_shows():
     [info] = _image_infos(page)
     assert pymupdf.Rect(info["bbox"]) == pymupdf.Rect(100, 100, 400, 160)
     assert all(rect.y1 <= 160.5 for rect in scan_page(page).figures)
+
+
+def test_two_list_items_with_the_same_opening_are_not_a_gloss():
+    """两条列表项开头一样（Else search from right to left for ...），逐词左缘对得上，但同一处是同一个词。
+    对译行写的是另一种语言，不会这样，两条照常送翻。"""
+    from app.formats.pdf_layout import _TextWord, interlinear_glosses
+
+    def row(y: float, *texts: str) -> list[_TextWord]:
+        words, x = [], 177.0
+        for text in texts:
+            words.append(_TextWord(x, y, x + 5 * len(text), y + 10, text))
+            x += 5 * len(text) + 3
+        return words
+
+    head = ("•", "Else", "search", "from", "right", "to", "left", "for", "the", "first", "child", "which", "is", "a")
+    words = [
+        *row(100, "•", "Else", "search", "from", "left", "to", "right", "for", "the", "first", "child", "which", "is", "an", "NP."),
+        *row(111, *head, "$,", "ADJP,", "or", "PRN."),
+        *row(122, *head, "CD."),
+        *row(133, "•", "Else", "return", "the", "last", "word"),
+    ]
+    page = pymupdf.open().new_page(width=612, height=792)
+    assert interlinear_glosses(page, words) == ()
