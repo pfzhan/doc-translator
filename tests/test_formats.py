@@ -1842,6 +1842,36 @@ def test_the_page_end_is_not_in_a_column_with_body_text_to_its_right(monkeypatch
     assert id(left[-1]) not in pairs
 
 
+def test_a_flush_paragraph_under_a_table_continues_the_column_above():
+    """段落首行缩进的文档里，栏顶的表下面齐平起笔的一段是左栏末段的续段，左栏恰好在句末断开、
+    续段大写起头也接上。续段首行缩进的是新的一段；正上方是正文字号的短行（PROMPT、漏认的小标题）的
+    是新起的一段；文档不缩进段首时不接"""
+    from app.formats.pdf import TextBlock, _column_continuations
+
+    def blk(text, x0, y, rows=3, size=10.0, indent=0.0):
+        lines = [pymupdf.Rect(x0 + (indent if i == 0 else 0), y + 12 * i, x0 + 245, y + 12 * i + 10)
+                 for i in range(rows)]
+        return TextBlock(page=0, rect=pymupdf.Rect(x0, y, x0 + 245, y + 12 * rows), line_rects=lines,
+                         text=text, size=size, color="#000000", bold=False)
+
+    host = blk("Ablation studies on fastMRI examine the principal design elements; "
+               "the support-restricted objective also degrades performance.", 54, 600)
+    left = [blk("Table V compares inference time and peak GPU memory across methods here.", 54, 300), host]
+    caption = blk("TABLE IV: Cross-dataset generalization. Models were trained on M4Raw.", 313, 100, rows=1)
+    cells = [blk("PSNR", 361, 130, rows=1, size=7.3), blk("FLEX-MRI", 315, 160, rows=1, size=7.3)]
+    head = blk("Perturbing the training inputs provides no additional benefit. These results", 313, 190)
+    later = blk("Fig. 5 further examines the number of retained transitions in the model.", 313, 400, indent=10)
+
+    def pairs(above, indents=True):
+        blocks = [*left, caption, *cells, *above, head, later]
+        return _column_continuations({0: blocks}, 10.0, set(), set(), set(), indents=indents)
+
+    assert pairs([]).get(id(host)) is head
+    assert id(host) not in pairs([], indents=False)
+    assert id(host) not in pairs([blk("PROMPT", 313, 175, rows=1)])
+    head.line_rects[0].x0 += 10
+    assert id(host) not in pairs([])
+
 
 def test_pdf_biblio_author_year_entries_after_the_heading():
     """作者-年份体的条目不带编号和括号年份。标题后面连着几条「姓, 名缩写.」起头的就进入参考文献；

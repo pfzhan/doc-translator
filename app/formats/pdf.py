@@ -2430,13 +2430,15 @@ def _is_page_footnote(block: TextBlock, median: float) -> bool:
 
 def _can_continue(
     prev: TextBlock, nxt: TextBlock, median: float, halt_ids: set[int] | None,
-    allow_capital: bool = False,
+    allow_capital: bool = False, flush: bool = False,
 ) -> bool:
     """页末块没有句末标点，页首块以小写、数字或中文开头，且不是标题。
 
     换栏时允许大写开头：没写完的句子常常断在 SQL 这种专有名词上。
     同一栏里的普通换行仍不放开，那和下一句分不开。
     表格的格子各是各的：格子的列看起来也像栏，上一列的末格不能接到下一列的表头。
+    flush 是段落首行缩进的文档里，页首、栏首（或者栏顶的图表下面）齐平起笔的一段（见 _flush_start）：
+    新段都缩进，齐平的是上一段的续段，上一块恰好在句末断开、下一块大写起头也接上。
     """
     if prev.clip is not None or nxt.clip is not None:
         return False
@@ -2478,13 +2480,50 @@ def _can_continue(
     # 括号还没合上，下一块在第一句里合上它：(Fu et al., 2024b; | Mao et al., 2024) share …
     if _unclosed_bracket(prev.text) and _closes_first(nxt.text):
         continues, ended = True, False
+    # 只看正文：小一号的图注、表注下面齐平起笔的正文不是它们的续段。
+    # 只放开大写起头的：句末下面小写起头的（restric- | tion from …）是别的块断开的后半截
+    if (flush and head.isupper() and len(prev.text.split()) >= _FLUSH_HOST_WORDS
+            and abs(prev.size - nxt.size) <= prev.size * 0.05 and _flush_start(nxt)):
+        continues, ended = True, False
     return bool(not numbered_heading and not is_heading and continues and not ended
                 and not _is_float_text(nxt.text)
                 and nxt.size <= prev.size * 1.4)
 
 
+def _flush_start(block: TextBlock) -> bool:
+    """块是排满栏宽的一段，首行和下面的行一样从栏边起笔。行首换了粗体、斜体的小标题，
+    带编号的标签、小节号和列表项本来就齐平起笔，不算"""
+    rows = sorted(_visual_lines(block), key=lambda row: row[0].y0)
+    if len(rows) < 2 or _styled_edge(block, 0) or _list_item(block.text):
+        return False
+    if _LABEL_START_RE.match(block.text) or _NUMBERED_HEAD_RE.match(block.text):
+        return False
+    lefts = [min(rect.x0 for rect in row) for row in rows]
+    rights = [max(rect.x1 for rect in row) for row in rows]
+    return (max(lefts) - min(lefts) <= 0.3 * block.size
+            and rights[0] >= max(rights[1:]) - 0.5 * block.size)
+
+
+def _resumes(head: TextBlock, page_blocks: list[TextBlock], skip_ids: set[int], passed: set[int]) -> bool:
+    """块是接着上一栏、上一页往下写的位置：正上方没有块（栏顶、页首），或者正上方是跳过的图、式子、
+    小一号的表格格子，或者图注（passed 里是页眉页脚、图和图注）。正上方是一行正文字号的短行
+    （漏认的小标题 B.3.1. RL Data、提示词框里的 PROMPT）时，下面是新起的一段"""
+    above = [
+        block for block in page_blocks
+        if block is not head and block.rect.y1 <= head.rect.y0 + 1
+        and block.rect.x0 < head.rect.x1 and block.rect.x1 > head.rect.x0
+    ]
+    if not above:
+        return True
+    near = max(above, key=lambda block: block.rect.y1)
+    return (id(near) in skip_ids or id(near) in passed or _is_float_text(near.text)
+            or near.size < head.size * 0.9)
+
+
 # 小节号悬在栏边左面最多这么多字宽
 _HANGING_HEAD_EM = 3
+# 齐平起笔的续段接上去，上一块至少要有这么多词（成段的正文）
+_FLUSH_HOST_WORDS = 8
 
 
 def _unclosed_bracket(text: str) -> bool:
@@ -2760,7 +2799,7 @@ def _column_wrap(host: TextBlock, tail: TextBlock) -> bool:
 def _try_column_pair(
     pairs: dict[int, TextBlock], tails: set[int], host: TextBlock | None, tail: TextBlock | None,
     median: float, halt_ids: set[int] | None, skip_ids: set[int],
-    allow_capital: bool = True,
+    allow_capital: bool = True, flush: bool = False,
 ) -> None:
     if host is None or tail is None or host is tail:
         return
@@ -2772,7 +2811,7 @@ def _try_column_pair(
         return
     if abs(host.size - tail.size) > max(host.size, 1.0) * 0.25:
         return
-    if not _can_continue(host, tail, median, halt_ids, allow_capital=allow_capital):
+    if not _can_continue(host, tail, median, halt_ids, allow_capital=allow_capital, flush=flush):
         return
     pairs[id(host)] = tail
     tails.add(id(tail))
@@ -2826,12 +2865,13 @@ def _column_continuations(
     halt_ids: set[int] | None,
     ignored: set[int],
     aside_ids: set[int] = frozenset(),
+    indents: bool = False,
 ) -> dict[int, TextBlock]:
     """左栏页尾接到右栏页首，右栏页尾接到下一页左栏。
 
     栏顶的图、清单和图注跳过，续句在它们下面，栏顶的表也是（见 _float_contents）。几何栏不准时也按左缘分，
     不依赖 reads_in_columns。同一栏跨页不放开大写：另一栏没形成左缘时，
-    页末左栏不能把下一页新起的一段吞进去。
+    页末左栏不能把下一页新起的一段吞进去。段落首行缩进的文档里齐平起笔的除外（indents，见 _can_continue）。
     """
     pairs: dict[int, TextBlock] = {}
     tails: set[int] = set()
@@ -2904,7 +2944,8 @@ def _column_continuations(
                 continue
             if host.rect.x1 > head.rect.x0 + 4:
                 continue
-            _try_column_pair(pairs, tails, host, head, median, halt_ids, skip_ids)
+            _try_column_pair(pairs, tails, host, head, median, halt_ids, skip_ids,
+                             flush=indents and _resumes(head, by_page.get(pno) or [], skip_ids, ignored | aside_ids))
         later = _next_text_page(by_page, pno, median, skip_ids, ignored)
         nxt = columns_of.get(later) or []
         if not columns or not nxt:
@@ -2919,6 +2960,7 @@ def _column_continuations(
         _try_column_pair(
             pairs, tails, host, head, median, halt_ids, skip_ids,
             allow_capital=bool(host and head and _column_wrap(host, head)),
+            flush=bool(indents and head and _resumes(head, by_page.get(later) or [], skip_ids, ignored | aside_ids)),
         )
     return pairs
 
@@ -3062,6 +3104,7 @@ def _cross_page_units(
     for b in blocks:
         by_page.setdefault(b.page, []).append(b)
     ignored = ignore_ids or set()
+    indents = _indents_paragraphs(blocks)
     # 不传几何时保持旧的页末/页首规则。传了几何才按左缘把换栏续句接上。
     # 共基线的半句不依赖栏几何：下一行仍和它成对送翻，只是不并成一个外框。
     extra: dict[int, TextBlock] = {}
@@ -3078,7 +3121,7 @@ def _cross_page_units(
         taken.add(id(tail))
     if geometries is not None:
         for host_id, tail in _column_continuations(
-            by_page, median, skip_ids, halt_ids, ignored, aside_ids,
+            by_page, median, skip_ids, halt_ids, ignored, aside_ids, indents,
         ).items():
             if host_id in taken or id(tail) in taken:
                 continue
@@ -3118,7 +3161,8 @@ def _cross_page_units(
                 end is not None and b is end and first is not None and id(first) not in used
                 and id(first) not in extra
                 and id(b) not in skip_ids and id(first) not in skip_ids
-                and _can_continue(b, first, median, halt_ids)
+                and _can_continue(b, first, median, halt_ids,
+                                  flush=indents and _resumes(first, nxt, skip_ids, ignored | aside_ids))
                 and not _different_columns(geometries, b, first)
             )
             cross_target = head if head is not None and id(head) not in used and id(head) not in extra else None
@@ -3127,7 +3171,8 @@ def _cross_page_units(
                 and pno < len(geometries)
                 and _is_last_in_right_column(b, body, geometries[pno])
                 and id(b) not in skip_ids and id(cross_target) not in skip_ids
-                and _can_continue(b, cross_target, median, halt_ids)
+                and _can_continue(b, cross_target, median, halt_ids,
+                                  flush=indents and _resumes(cross_target, nxt, skip_ids, ignored | aside_ids))
             )
             other = first if same else cross_target
             if (same or cross) and other is not None:
