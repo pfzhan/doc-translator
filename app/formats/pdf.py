@@ -2584,6 +2584,8 @@ _FLOAT_HEAD_RE = re.compile(
     re.I,
 )
 _CODE_LINE_RE = re.compile(r"^(?:<|\d+\s+0x[0-9a-fA-F])")
+# 这么多词的块是正文，不看字母占比
+_PROSE_WORDS = 8
 _CLUSTER_GAP = 28.0
 
 
@@ -2596,6 +2598,7 @@ def _is_code_line(text: str) -> bool:
     """XML、堆栈和图内标签。它们贴在栏顶时不能占续句的位置。
 
     短续句（well.、tomer）仍是正文。没有空格、又夹着数字或符号的才是标签。
+    数字多的结果段（and lower mean WER (0.009 vs. 0.013); paired …）字母占比低，词数够的仍是正文。
     """
     stripped = text.strip()
     if not stripped or _CODE_LINE_RE.match(stripped):
@@ -2603,7 +2606,7 @@ def _is_code_line(text: str) -> bool:
     if stripped[:1] in "<{" or "::" in stripped or '="' in stripped or "/>" in stripped:
         return True
     letters = sum(ch.isalpha() for ch in stripped)
-    if letters < len(stripped) * 0.45:
+    if letters < len(stripped) * 0.45 and _prose_units(stripped) < _PROSE_WORDS:
         return True
     return " " not in stripped and re.search(r"[\d%$<>!#_]", stripped) is not None
 

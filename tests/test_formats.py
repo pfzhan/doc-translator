@@ -1639,6 +1639,16 @@ def test_a_column_break_inside_brackets_or_after_et_al_continues():
     assert _can_continue(heading, head, 10, None, allow_capital=True)
 
 
+def test_a_number_heavy_results_paragraph_is_prose():
+    """数字多的结果段字母占比低，仍是正文，能当换栏续句的栏顶。刻度数字那样的短行不是。"""
+    from app.formats.pdf import _is_code_line
+
+    assert not _is_code_line(
+        "and lower mean WER (0.009 vs. 0.013); paired differences are +0.017 [−0.043, 0.077] "
+        "and −0.004 [−0.012, 0.004] (n = 1200/arm), 95% CI.")
+    assert _is_code_line("0.1 0.2 0.3 0.4 0.5 0.6 (s)")
+
+
 def test_pdf_biblio_author_year_entries_after_the_heading():
     """作者-年份体的条目不带编号和括号年份。标题后面连着几条「姓, 名缩写.」起头的就进入参考文献；
     正文里只一句这样开头的不算。"""
