@@ -1346,3 +1346,23 @@ def test_a_combining_accent_is_drawn_over_its_letter(tmp_path):
     hat = next(box for char, box in chars if char == "ˆ")
     assert abs((hat[0] + hat[2]) / 2 - (letter[0] + letter[2]) / 2) < 1.5
     assert hat[1] < letter[1] + 1
+
+
+def test_image_box_is_clipped_to_what_shows():
+    """图片只露出剪裁路径里的一块，框按看得见的部分算，压在被剪掉部分上的正文不算图里的字。"""
+    import pymupdf
+
+    from app.formats.pdf_layout import _image_infos, scan_page
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=600, height=800)
+    pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 60, 60), False)
+    pix.set_rect(pix.irect, (200, 30, 30))
+    page.insert_image(pymupdf.Rect(100, 100, 400, 400), pixmap=pix)
+    xref = page.get_contents()[0]
+    # 只露出上面 60 点：PDF 坐标从页底往上量
+    doc.update_stream(xref, b"q 100 640 300 60 re W n\n" + doc.xref_stream(xref) + b"\nQ")
+    page.insert_text((110, 300), "Body text written below the part that shows.", fontsize=10)
+    [info] = _image_infos(page)
+    assert pymupdf.Rect(info["bbox"]) == pymupdf.Rect(100, 100, 400, 160)
+    assert all(rect.y1 <= 160.5 for rect in scan_page(page).figures)

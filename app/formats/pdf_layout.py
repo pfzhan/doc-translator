@@ -331,10 +331,44 @@ def _thin_strokes(drawings: list[dict]) -> list[pymupdf.Rect]:
 
 
 def _image_infos(page: pymupdf.Page) -> list[dict]:
+    """本页的图片，框按剪裁路径收过。"""
     try:
-        return page.get_image_info()
+        infos = page.get_image_info()
     except Exception:  # noqa: BLE001 - 读不出来就当没有图片
         return []
+    return _clip_images(page, infos) if infos else infos
+
+
+# 文本层里图片块的说明：<image: DeviceRGB, width: 678, height: 678, bpc: 8>
+_IMAGE_SIZE_RE = re.compile(r"width: (\d+), height: (\d+)")
+
+
+def _clip_images(page: pymupdf.Page, infos: list[dict]) -> list[dict]:
+    """图片框换成剪裁以后看得见的部分。get_image_info 不管剪裁路径：一张 20 行的样例图只露出
+    上面三行，框却一直伸到页底，盖住的两段正文被当成图里的字。按剪裁读文本层，
+    图片块的框就是看得见的部分，按像素尺寸和位置对回各张图。对不上的照原框。"""
+    try:
+        blocks = page.get_text("blocks", flags=pymupdf.TEXT_PRESERVE_IMAGES | pymupdf.TEXT_CLIP)
+    except Exception:  # noqa: BLE001 - 读不出来就照原框
+        return infos
+    shown: list[tuple[pymupdf.Rect, tuple[int, int]]] = []
+    for block in blocks:
+        size = _IMAGE_SIZE_RE.search(str(block[4])) if block[6] == 1 else None
+        if size is not None:
+            shown.append((pymupdf.Rect(block[:4]), (int(size.group(1)), int(size.group(2)))))
+    out: list[dict] = []
+    for info in infos:
+        whole = pymupdf.Rect(info["bbox"])
+        found = next((
+            n for n, (rect, size) in enumerate(shown)
+            if size == (info.get("width"), info.get("height")) and rect in whole + (-1, -1, 1, 1)
+        ), None)
+        if found is None:
+            out.append(info)
+            continue
+        rect, _size = shown.pop(found)
+        out.append({**info, "bbox": tuple(rect)} if rect != whole else info)
+    return out
 
 
 def _page_drawings(page: pymupdf.Page, images: list[dict] | None = None) -> list[dict]:
@@ -1795,7 +1829,7 @@ def _figure_rects(
     bounds = text_page_rect(page)
     width, height = bounds.width, bounds.height
     found: list[pymupdf.Rect] = []
-    for info in page.get_image_info() if images is None else images:
+    for info in _image_infos(page) if images is None else images:
         rect = pymupdf.Rect(info.get("bbox"))
         if rect.width > _FIGURE_MIN and rect.height > _FIGURE_MIN:
             found.append(rect)
