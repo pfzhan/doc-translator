@@ -8876,3 +8876,27 @@ def test_a_bold_run_in_label_starts_a_paragraph():
              item("Parallelization Across Batches and Batch Instances. A", 313.2, 216.0, 558.0, 6),
              item("batch consists of B evaluations of the same function at dif-", 313.2, 227.9, 558.0)]
     assert _split_lines(items) == [[0, 1], [2, 3]]
+
+
+def test_an_indented_paragraph_start_is_not_a_continuation():
+    """段落首行缩进的文档里，首行缩进、大写的词起头的块是新的一段：上一块停在 and 上
+    （下面是单独排的式子）也不接。小写起头、行首是式子的照旧接上。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, y, rows):
+        lines = [pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 12) for i, (x0, x1) in enumerate(rows)]
+        rect = pymupdf.Rect(lines[0])
+        for line in lines:
+            rect |= line
+        return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=10.0, color="#000", bold=False)
+
+    body = "Words of a paragraph run across the column and wrap onto the next line. It ends here."
+    para = [(64, 299), (54, 299), (54, 200)]
+
+    def plan(text):
+        blocks = [blk(body, 100 + 36 * i, para) for i in range(4)]
+        return _merge_continuations([*blocks, blk("The forward pass gives its overlap, and", 244, [(54, 299)]),
+                                     blk(text, 256, para)])
+
+    assert len(plan("The adjoint state carries the sensitivity of the final error to the control.")) == 6
+    assert len(plan("the adjoint state carries the sensitivity of the final error to the control.")) == 5

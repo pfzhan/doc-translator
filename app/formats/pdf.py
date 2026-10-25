@@ -6248,6 +6248,10 @@ def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = froz
                 and (first.islower() or first in ".),;%,；，" or open_paren or math_wrap or centered_end
                      or dangling or centered_comma or in_fence or full_wrap or flush_wrap)
                 and not _verbatim_seam(p, b)
+                # 段落首行缩进的文档里，首行比下面几行缩进一两个字宽、大写的词起头的块是新的一段，
+                # 上一块停在 and 上（式子前的半句）也不接。行首是式子（W 1,∞ …）的不算
+                and not (indents and re.match(r"[A-Z][a-z]", b.text.lstrip()) is not None
+                         and not _opens_with_math(b) and not word_cut and _first_line_indented(b))
             )
             # 索引条目停在逗号上，页码折到下一块里（见 _wraps_from_above）：条目收在页码上
             if (p.index and p.page == b.page and p.text.rstrip().endswith(",") and p.line_rects
@@ -6299,6 +6303,20 @@ def _body_measure(blocks: list[TextBlock]) -> float:
         if len(rows) >= 3:
             widths.update(round(_row_width(row)) for row in rows[:-1])
     return float(widths.most_common(1)[0][0]) if widths else 0.0
+
+
+def _first_line_indented(block: TextBlock) -> bool:
+    """块的首行比下面的行往右缩进半个到三个字宽，下面几行左缘齐，首行和下面的行排到同一右缘。
+    居中排的几行右缘跟着左缘一起收进来，不算"""
+    rows = sorted(_visual_lines(block), key=lambda row: row[0].y0)
+    if len(rows) < 2:
+        return False
+    lefts = [min(rect.x0 for rect in row) for row in rows]
+    rights = [max(rect.x1 for rect in row) for row in rows]
+    rest = lefts[1:]
+    return (max(rest) - min(rest) <= 0.5 * block.size
+            and 0.5 * block.size < lefts[0] - min(rest) <= _MAX_INDENT_EM * block.size
+            and rights[0] >= max(rights[1:]) - 0.5 * block.size)
 
 
 def _row_width(row: list[pymupdf.Rect]) -> float:
