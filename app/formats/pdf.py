@@ -1687,13 +1687,16 @@ def _row_boxes(rects: Sequence[pymupdf.Rect]) -> list[pymupdf.Rect]:
 
 def _centered_rows(rows: Sequence[pymupdf.Rect], size: float) -> bool:
     """几行共用一条中线、宽窄不一：居中排的一摞（作者名、单位、邮箱）。
-    两端对齐的正文行左右缘都相同；只有两行时宽窄碰巧一样，要看整摞。"""
+    两端对齐的正文行左右缘都相同；只有两行时宽窄碰巧一样，要看整摞。
+    排满的正文行左缘也会差一两磅（行首的引号、连字号往外伸），宽窄差不出小半个字。"""
     if len(rows) < 2:
         return False
     mids = [(row.x0 + row.x1) / 2 for row in rows]
     if max(mids) - min(mids) > size * 0.5:
         return False
-    return max(row.x0 for row in rows) - min(row.x0 for row in rows) >= 1
+    widths = [row.width for row in rows]
+    return (max(row.x0 for row in rows) - min(row.x0 for row in rows) >= 1
+            and max(widths) - min(widths) >= max(1.0, size * 0.2))
 
 
 def _new_voice(host: TextBlock, guest: TextBlock) -> bool:

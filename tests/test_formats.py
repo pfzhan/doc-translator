@@ -741,6 +741,18 @@ def test_wrapped_letter_period_stays_in_the_paragraph():
     assert _split_lines(paren) == [[0], [1, 2], [3]]
 
 
+def test_justified_rows_are_not_a_centered_stack():
+    """排满的正文行左缘差一两磅，宽窄几乎一样，不是居中排的一摞。作者名、单位、邮箱宽窄不一。"""
+    from app.formats.pdf import _centered_rows
+
+    paragraph = [pymupdf.Rect(x0, y, x1, y + 11) for x0, x1, y in (
+        (70.9, 524.4, 285.5), (70.4, 524.4, 326.0), (70.5, 525.5, 379.3), (69.4, 524.4, 393.7))]
+    assert not _centered_rows(paragraph, 11.0)
+    authors = [pymupdf.Rect(x0, y, x1, y + 10) for x0, x1, y in (
+        (424.3, 497.2, 233.5), (424.5, 492.9, 246.0), (422.1, 495.3, 257.2))]
+    assert _centered_rows(authors, 10.0)
+
+
 def test_an_equals_sign_at_the_end_of_a_list_item_line_keeps_the_item_whole():
     """两端对齐把行尾等号前的空拉到一个字宽以上，等号仍接在这一行，下一行缩在条目号右边的是条目的续行。"""
     from app.formats.pdf import _split_lines
