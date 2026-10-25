@@ -8232,6 +8232,21 @@ def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down():
     assert not any(id(b) in moved for b in rest)
 
 
+def test_an_index_entry_is_never_centered():
+    """缩进的子条目正好落在栏中间，也是靠左排的。"""
+    from app.formats.pdf import TextBlock, _write_rect
+    from app.formats.pdf_layout import Column, PageGeometry
+
+    geo = PageGeometry(612, (Column(80, 280), Column(300, 500)), ())
+    rect = pymupdf.Rect(150, 100, 210, 110)
+    plain = TextBlock(page=0, rect=rect, line_rects=[rect], text="in NER, 241, 419", size=8.0, color="#000",
+                      bold=False)
+    entry = TextBlock(page=0, rect=rect, line_rects=[rect], text="in NER, 241, 419", size=8.0, color="#000",
+                      bold=False, entry=True, index=True)
+    assert _write_rect(plain, [(plain, "")], True, False, geo)[1]
+    assert not _write_rect(entry, [(entry, "")], True, False, geo)[1]
+
+
 def test_the_rest_of_a_broken_word_continues_the_line_above():
     """上一行停在连字符断开的半个词上，下一行缩进多少都是接着写的（expres- | sions, 50, 65），
     字母少也不当成一行页码留原文。索引页上比上一行缩进得深的也是续行（as, 51）。"""

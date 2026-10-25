@@ -8045,10 +8045,10 @@ def _write_rect(
         and block.rect.width < geo.width * 0.85
         and all(abs((line.x0 + line.x1) / 2 - page_mid) < 4 for line in block.line_rects or [block.rect])
     )
-    # 弹点、短横线起头的列表项是靠左排的，中线碰巧对上栏中线也不算居中。
-    # (a) 子图小标题和 1. 引言这种居中的标题不在其内
+    # 弹点、短横线起头的列表项是靠左排的，中线碰巧对上栏中线也不算居中。索引的条目也一样，
+    # 缩进的子条目常常正好落在栏中间。(a) 子图小标题和 1. 引言这种居中的标题不在其内
     centered = (
-        not rtl and len(block.text) < 100
+        not rtl and not block.index and len(block.text) < 100
         and not _left_aligned_stack(block, [other for other, _ in items])
         and (
             (block.rect.width < col_width * 0.85 and abs(mid - (col_x0 + col_x1) / 2) < 15
@@ -8064,7 +8064,7 @@ def _write_rect(
         round(span.get("size", block.size))
         for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()
     }) == 1
-    if (not centered and not rtl and (len(block.text) < 100 or long_title)
+    if (not centered and not rtl and not block.index and (len(block.text) < 100 or long_title)
             and not _MARK_ITEM_RE.match(block.text)):
         axis = _centered_axis(block, [other for other, _ in items])
     if axis is not None:
