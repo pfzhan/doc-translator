@@ -4158,14 +4158,23 @@ def _run_baseline(run: dict) -> float:
 def _join_line_wrapped_formulas(
     runs: list[dict], span_lines: list[list[dict]], block_size: float,
 ) -> list[dict]:
-    """换行切开的公式收成一个占位符的多片。不并 bbox，否则裁进两行之间的整栏空白。"""
+    """换行切开的公式收成一个占位符的多片。不并 bbox，否则裁进两行之间的整栏空白。
+    几片并排起来比一行还宽的不收（跨两行的长网址）：占位符整个排在一行里，放不下就把整段缩小，
+    分开的几片可以像原文一样在断处换行。"""
     if len(runs) < 2:
         return runs
+    line_width = max(
+        (max(float(span["bbox"][2]) for span in line) - min(float(span["bbox"][0]) for span in line)
+         for line in span_lines if line),
+        default=0.0,
+    )
     joined: list[dict] = []
     for run in runs:
         if joined and _continues_wrapped_formula(joined[-1], run, span_lines, block_size):
-            joined[-1].setdefault("extras", []).append(run)
-            continue
+            pieces = [joined[-1], *joined[-1].get("extras", []), run]
+            if not line_width or sum(pymupdf.Rect(piece["bbox"]).width for piece in pieces) <= line_width:
+                joined[-1].setdefault("extras", []).append(run)
+                continue
         joined.append(run)
     return joined
 

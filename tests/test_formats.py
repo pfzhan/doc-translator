@@ -779,6 +779,32 @@ def test_header_cells_over_number_columns_are_cut_apart():
     assert len(items) == 1 and not cells
 
 
+def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces():
+    """换行切开的式子并成一个占位符的多片。几片并排比一行还宽（跨两行的长网址）时不并：
+    一个占位符只能排在一行里，放不下就把整段缩小；分开的两片能在原来的断处换行。"""
+    from app.formats.pdf import _join_line_wrapped_formulas
+
+    def span(text, x0, x1, y, font="LMMono10-Regular"):
+        return {"text": text, "size": 12.0, "font": font, "flags": 0, "bbox": (x0, y, x1, y + 12),
+                "origin": (x0, y + 9)}
+
+    def lines(head_x0, tail_x1):
+        return [
+            [span("Olympiad ", 70.9, head_x0, 420.0, "URWPalladioL"), span("https://example.org/wiki/AMC_", head_x0, 524.4, 420.0)],
+            [span("results?srsltid=AfmBOoqQ6pQic5NCan", 70.9, tail_x1, 433.5),
+             span(" positions DeepSeek-R1", tail_x1, 524.4, 433.5, "URWPalladioL")],
+        ]
+
+    def runs(span_lines):
+        return [{"spans": [span_lines[0][1]], "bbox": pymupdf.Rect(span_lines[0][1]["bbox"]), "pos": (0, 1, 1)},
+                {"spans": [span_lines[1][0]], "bbox": pymupdf.Rect(span_lines[1][0]["bbox"]), "pos": (1, 0, 0)}]
+
+    short = lines(400.0, 200.0)
+    assert len(_join_line_wrapped_formulas(runs(short), short, 12.0)) == 1
+    long = lines(121.2, 470.0)
+    assert len(_join_line_wrapped_formulas(runs(long), long, 12.0)) == 2
+
+
 def test_wrapped_letter_period_stays_in_the_paragraph():
     """撑满的上一行没有句末时，下一行的 Q. 是换行，不是列表项。句末之后的 a. 仍拆开。"""
     from app.formats.pdf import _split_lines
