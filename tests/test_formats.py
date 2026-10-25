@@ -1605,7 +1605,8 @@ def test_a_proof_mark_after_the_full_stop_still_ends_the_paragraph():
 
 
 def test_a_column_break_inside_brackets_or_after_et_al_continues():
-    """换栏、换页处圆括号起头的看括号里的字，句中的 et al. 不算句末。编号、音标、引文另起。"""
+    """换栏、换页处圆括号起头的看括号里的字，句中的 et al. 不算句末。编号、音标、引文另起，
+    栏底整行斜体的小标题也不往下接。"""
     from app.formats.pdf import TextBlock, _can_continue
 
     def blk(text, page):
@@ -1622,6 +1623,13 @@ def test_a_column_break_inside_brackets_or_after_et_al_continues():
     assert not joins("The Vocal Organs", "[v], [z], and all the English vowels, among others.")
     assert not joins("we use the fact that", "“[M]achines of this character can behave in a complicated manner.”")
     assert not joins("The scores are combined as shown below.", "(RMS) loudness to describe the trajectory.")
+    heading = blk("E. Energy-Detection Characterization", 0)
+    heading.line_rects = [pymupdf.Rect(49, 661, 204, 671)]
+    heading.span_lines = [[{"text": heading.text, "font": "NimbusRomNo9L-ReguItal", "flags": 2, "size": 10}]]
+    head = blk("This letter proposed an LLM-assisted hierarchical framework", 1)
+    assert not _can_continue(heading, head, 10, None, allow_capital=True)
+    heading.span_lines = [[{"text": heading.text, "font": "NimbusRomNo9L-Regu", "flags": 0, "size": 10}]]
+    assert _can_continue(heading, head, 10, None, allow_capital=True)
 
 
 def test_pdf_biblio_author_year_entries_after_the_heading():
@@ -4301,6 +4309,41 @@ def test_a_column_continues_below_the_table_at_the_top_of_the_next_column():
     later = blk("To ablate the fine-tuning approach, we apply the feature-based approach", 307, 330, 526, rows=5)
     units = _cross_page_units([*left, *table, caption, tail, later], 10.0, geometries=[two])
     assert [unit for unit in units if len(unit) == 2] == [[left[1], tail]]
+
+
+def test_a_column_of_one_paragraph_still_continues_into_the_next_column():
+    """左栏上面是缩进排的摘要、下面只有一整段，没有两块同一左缘，这一整段也算一栏，接到右栏顶。
+    右栏顶居中排在第二位作者名下面的单位不是栏顶。页上没有一栏是两块对齐的（幻灯片），不另起栏。"""
+    from app.formats.pdf import TextBlock, _cross_page_units
+
+    def blk(text, x0, y, x1, rows=1, page=0):
+        rect = pymupdf.Rect(x0, y, x1, y + 10 * rows)
+        lines = [pymupdf.Rect(x0, y + 10 * k, x1, y + 10 * k + 9) for k in range(rows)]
+        return TextBlock(page=page, rect=rect, line_rects=lines, text=text, size=10, color="#000", bold=False)
+
+    abstract = blk("Oddly satisfying videos can evoke strong viewer responses in many ways.", 83, 240, 280, rows=20)
+    intro = blk("Accordingly, Oddly Satisfying Video Emotion Anal-", 63, 530, 290, rows=17)
+    right = [blk("ysis (OSVEA) requires models to move beyond recognizing objects.", 307, 220, 526, rows=20),
+             blk("To address the lack of a dataset, we construct one and annotate it.", 307, 430, 526, rows=20)]
+    units = _cross_page_units([abstract, intro, *right], 10.0, geometries=[])
+    assert [unit for unit in units if len(unit) == 2] == [[intro, right[0]]]
+
+    author = blk("Shixiang Zhu", 376, 162, 442)
+    office = blk("Carnegie Mellon University", 350, 174, 468)
+    left = [blk("Generative conformal prediction builds uncertainty sets from samples.", 83, 240, 280, rows=30),
+            blk("allowing the set to reflect complex or multimodal predictive distributions", 63, 623, 290, rows=10)]
+    tail = blk("(Wang et al., 2023b). Probabilistic conformal prediction samples outputs.", 307, 209, 526, rows=6)
+    later = blk("This efficiency, however, depends on drawing enough samples per input.", 307, 275, 526, rows=20)
+    units = _cross_page_units([author, office, *left, tail, later], 10.0, geometries=[])
+    assert [unit for unit in units if len(unit) == 2] == [[left[1], tail]]
+
+    slide = blk("If we need probabilities we can do one exp at the end p1 = exp(log", 115, 509, 700, rows=3)
+    title = blk("This avoids underflow from multiplying many small numbers", 105, 279, 700, rows=3)
+    heading = blk("Larger ngrams", 115, 25, 400, page=1)
+    bullet = blk("4-grams, 5-grams", 114, 150, 400, page=1)
+    more = blk("Large datasets of large n-grams have been released", 114, 216, 700, rows=2, page=1)
+    units = _cross_page_units([title, slide, heading, bullet, more], 10.0, geometries=[], halt_ids={id(heading)})
+    assert all(len(unit) == 1 for unit in units)
 
 
 def test_column_tail_drawn_before_its_host_keeps_the_paragraph(tmp_path):

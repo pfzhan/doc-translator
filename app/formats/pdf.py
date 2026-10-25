@@ -2404,6 +2404,9 @@ def _can_continue(
     """
     if prev.clip is not None or nxt.clip is not None:
         return False
+    # 栏底整行斜体、粗体的短行是小标题（E. Energy-Detection Characterization），不往下一栏接
+    if len(_visual_lines(prev)) == 1 and len(prev.text.split()) <= 8 and _all_styled(prev):
+        return False
     # 圆括号起头的看里面的字：(RMS) loudness、(0, 1), which。(3)、(a) 这样的编号不算。
     # 方括号、引号里的不看：[v], [z] 是音标，“[M]achines 是另起的引文
     opening = nxt.text.lstrip()
@@ -2554,6 +2557,7 @@ def _continuation_prose(
 
 def _column_anchors(blocks: list[TextBlock]) -> list[float]:
     """正文左缘。至少两块落在同一左缘才算一栏，单行右半句不另起栏。
+    页上已经有这样的一栏时，另一栏只有一整段（左栏上面是缩进排的摘要），三行以上的一块也算。
 
     下一栏从上一栏的右缘以外起笔。缩进排的例句、引文落在上一栏中间，不另起栏：
     不然它的最后一块会被当成页末，把下一页的段首接过来。
@@ -2568,8 +2572,9 @@ def _column_anchors(blocks: list[TextBlock]) -> list[float]:
             groups.append([block])
     merged: list[float] = []
     right = None
+    paired = any(len(group) >= 2 for group in groups)
     for group in groups:
-        if len(group) < 2:
+        if len(group) < 2 and not (paired and len(_visual_lines(group[0])) >= 3):
             continue
         anchor = sum(block.rect.x0 for block in group) / len(group)
         if merged and (anchor - merged[-1] < _CLUSTER_GAP or (right is not None and anchor < right - 4)):
@@ -2738,6 +2743,14 @@ def _column_continuations(
     def head_of(pno: int, column: list[TextBlock]) -> TextBlock | None:
         contents = _float_contents(column, by_page.get(pno) or [])
         body = _column_body([block for block in column if id(block) not in contents])
+        # 一行居中排在不归哪一栏的一行底下的，是分栏排的作者、单位（Shixiang Zhu | Carnegie Mellon University），
+        # 不是栏顶。表格的格子、横跨两栏的标题下面就是栏顶
+        orphans = orphans_of.get(pno) or []
+        body = [block for block in body if not (len(_visual_lines(block)) == 1 and any(
+            0 <= block.rect.y0 - other.rect.y1 <= 1.5 * block.size
+            and abs((block.rect.x0 + block.rect.x1) - (other.rect.x0 + other.rect.x1)) / 2 <= block.size
+            for other in orphans
+        ))]
         return _column_top(body) if body else None
 
     def host_of(pno: int, column: list[TextBlock]) -> TextBlock | None:
@@ -6227,6 +6240,13 @@ def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = froz
 _LABEL_START_RE = re.compile(r"[A-Z][A-Za-z]*\s+\d+(?:\.\d+)*[.:]?\s")
 # 行首是小节编号：2.1. Bosonic Fourier transform、3 Method
 _NUMBERED_HEAD_RE = re.compile(r"\d+(?:\.\d+)*\.?\s+[A-Z]")
+
+
+def _all_styled(block: TextBlock) -> bool:
+    """每一截都是粗体或斜体。"""
+    spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
+    marks = [emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0)) for span in spans]
+    return bool(marks) and all(mark.bold or mark.italic for mark in marks)
 
 
 def _styled_edge(block: TextBlock, index: int) -> bool:
