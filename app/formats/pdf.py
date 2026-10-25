@@ -302,21 +302,43 @@ _NUMBERED_LABEL_RE = re.compile(r"[A-Z][a-z]+\s+\d+(?:\.\d+)*\.\s")
 
 
 def _label_lead(spans: list[dict]) -> bool:
-    """行首是几个词的粗体标签，冒号或句号收尾，后面接着非粗体正文（Speaker demographics: What…）。"""
+    """行首是粗体标签，冒号或句号收尾，后面接着非粗体正文（Speaker demographics: What…、
+    On the Optimality of the Level Schedule. Recall…）。粗体的一个词后面跟着编号的是定理一类的标签
+    （Proposition 5 (Efficiency …). Under…），编号常用别的字体排。粗体的 Q2、RQ1 是编号条目"""
+    # 按词拆开的 span 之间没有空格 span，隔开的按空格补上
+    texts = [str(span.get("text") or "") for span in spans]
+    for k in range(1, len(spans)):
+        before, after = spans[k - 1].get("bbox"), spans[k].get("bbox")
+        size = float(spans[k].get("size") or 10)
+        if before and after and after[0] - before[2] > 0.1 * size and not texts[k - 1].endswith(" "):
+            texts[k] = " " + texts[k]
     label = ""
     for index, span in enumerate(spans):
-        text = str(span.get("text") or "")
+        text = texts[index]
         if emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0)).bold:
             label += text
             continue
         if not label.strip():
             return False
-        rest = "".join(str(s.get("text") or "") for s in spans[index:]).strip()
+        rest = "".join(texts[index:]).strip()
+        phrase = label.strip()
+        # 研究问题、假设这样的编号条目（Q2 Which…、RQ1 How…、H3 …）也是
+        numbered = re.fullmatch(r"[A-Z]{1,3}\d+", phrase) is not None or (
+            re.fullmatch(r"[A-Z][a-z]+(?:\s+\d+(?:\.\d+)*)?", phrase) is not None
+            and (any(ch.isdigit() for ch in phrase) or re.match(r"\d+(?:\.\d+)*\b", rest) is not None))
+        if numbered:
+            return _prose_units(rest) >= 2
         if rest[:1] in ":.":
             label, rest = label + rest[0], rest[1:].strip()
         phrase = label.strip()
-        return phrase.endswith((":", ".")) and len(phrase.split()) <= 4 and _prose_units(rest) >= 2
+        # 标签后面这一行可能只剩一个词就折行了（… Batch Instances. A | batch consists of …）
+        return (phrase.endswith((":", ".")) and len(phrase.split()) <= _LABEL_WORDS
+                and re.search(r"[^\W\d_]", rest) is not None)
     return False
+
+
+# 行首粗体标签最多这么多个词。再长的是整句加粗的强调
+_LABEL_WORDS = 10
 
 
 def _justified_joins(items: list[tuple], max_x1: float, whole_rows: bool = False) -> set[int]:

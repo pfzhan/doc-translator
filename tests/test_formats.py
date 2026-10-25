@@ -8843,3 +8843,36 @@ def test_a_clipped_plot_path_does_not_cover_the_text_below_it():
     rects = [drawing["rect"] for drawing in visible_drawings(page)]
     assert len(rects) == 1
     assert rects[0].y1 <= 842 - 628 + 1 and rects[0].y0 >= 842 - 782 - 1
+
+
+def test_a_bold_run_in_label_starts_a_paragraph():
+    """上一行在句末收住，下一行以粗体标签起头：几个词的段落小标题（八个词也算）、
+    粗体的定理名加编号、Q2 这样的编号条目，都另起一段。按词拆开的 span 之间补上空格再认。"""
+    from app.formats.pdf import _label_lead, _split_lines
+
+    def span(text, x0, x1, bold=False):
+        return {"text": text, "size": 10.0, "bbox": (x0, 0, x1, 10), "font": "Times-Bold" if bold else "Times",
+                "flags": 20 if bold else 4}
+
+    def words(text, x0, bold_words=0):
+        out, x = [], x0
+        for k, word in enumerate(text.split()):
+            out.append(span(word, x, x + 5 * len(word), bold=k < bold_words))
+            x += 5 * len(word) + 3
+        return out
+
+    assert _label_lead(words("On the Optimality of the Level Schedule. Recall from", 313, 7))
+    assert _label_lead(words("Parallelization Across Batches and Batch Instances. A", 313, 6))
+    assert _label_lead(words("Proposition 5 (Efficiency beyond oracle radii). Un-", 315, 2))
+    assert _label_lead(words("Q2 Which dynamical system functions benefit most", 60, 1))
+    assert not _label_lead(words("Important things happen when we look closely", 60, 1))
+    assert not _label_lead(words("This whole sentence is set in bold for emphasis and runs on. Then", 60, 12))
+
+    def item(text, x0, y0, x1, bold_words=0):
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), words(text, x0, bold_words), [])
+
+    items = [item("units. Finally, we return to the batch and state when the", 313.2, 190.0, 558.0),
+             item("resulting schedule is also optimal for the whole batch.", 313.2, 201.9, 536.2),
+             item("Parallelization Across Batches and Batch Instances. A", 313.2, 216.0, 558.0, 6),
+             item("batch consists of B evaluations of the same function at dif-", 313.2, 227.9, 558.0)]
+    assert _split_lines(items) == [[0, 1], [2, 3]]
