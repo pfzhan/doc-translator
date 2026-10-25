@@ -4976,7 +4976,67 @@ def _example_ids(blocks: list[TextBlock]) -> set[int]:
             found.add(id(block))
         elif _labeled_brackets(block) >= 2:
             found.add(id(block))
-    return found
+    return found | _example_tails(blocks, found)
+
+
+def _example_tails(blocks: list[TextBlock], examples: set[int]) -> set[int]:
+    """编号例句的后几行另成了块（(24.14) 的第二句、例句里换行的 wine.、IT、JA 几种语言的对照）：
+    紧贴在例句下面、不比编号后面的句子靠左起笔、字号一样的块，也是这个例句。
+    正文回到编号的左缘起笔；段首缩进的首行被旁注切成一块时，也比例句的句子靠左。"""
+    by_page: dict[int, list[TextBlock]] = {}
+    for block in blocks:
+        if block.clip is None and not block.side_note:
+            by_page.setdefault(block.page, []).append(block)
+    tails: set[int] = set()
+    for page_blocks in by_page.values():
+        page_blocks.sort(key=lambda block: block.rect.y0)
+        for index, head in enumerate(page_blocks):
+            if id(head) not in examples or not _EXAMPLE_NUMBER_RE.match(head.text):
+                continue
+            text_x0 = _after_number_x0(head)
+            last = head
+            for block in page_blocks[index + 1:]:
+                if block.rect.x0 >= head.rect.x1 or block.rect.x1 <= head.rect.x0:
+                    continue  # 另一栏
+                if block.rect.y0 - last.rect.y1 > head.size * 0.6:
+                    break
+                if (block.rect.x0 < text_x0 - head.size * 0.5 or abs(block.size - head.size) > head.size * 0.1
+                        or _EXAMPLE_NUMBER_RE.match(block.text)):
+                    break
+                tails.add(id(block))
+                last = block
+    return tails
+
+
+def _after_number_x0(block: TextBlock) -> float:
+    """例句编号后面第一个字的横坐标。编号和句子在同一个 span 里时按字数比例估。"""
+    matched = _EXAMPLE_NUMBER_RE.match(block.text)
+    # 编号和句子可能分在同一高度的两行里
+    lines = block.span_lines or [[]]
+    first = [span for span in lines[0] if str(span.get("text") or "").strip() and span.get("bbox") is not None]
+    top = pymupdf.Rect(first[0]["bbox"]) if first else None
+    spans = sorted(
+        (span for line in lines for span in line if str(span.get("text") or "").strip()
+         and span.get("bbox") is not None
+         and top is not None and abs(pymupdf.Rect(span["bbox"]).y1 - top.y1) <= block.size * 0.3),
+        key=lambda span: span["bbox"][0],
+    )
+    if matched is None or not spans:
+        return block.rect.x0 + block.size * 3
+    label = len(matched.group(0)[:-1].rstrip())
+    seen = 0
+    for span in spans:
+        text = str(span["text"])
+        start = len(text) - len(text.lstrip())
+        stripped = text.strip()
+        if seen + len(stripped) > label:
+            box = pymupdf.Rect(span["bbox"])
+            offset = max(label - seen, 0) + start
+            while offset < len(text) and text[offset].isspace():
+                offset += 1
+            return box.x0 + box.width * offset / max(len(text), 1)
+        seen += len(stripped)
+    return block.rect.x1
 
 
 def _hanging(block: TextBlock) -> bool:

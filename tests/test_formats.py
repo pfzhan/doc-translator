@@ -8007,3 +8007,28 @@ def test_the_left_column_of_an_index_page_is_not_a_side_note():
     blocks, _frames, _scans = pdf._extract(doc)
     index = [block for block in blocks if block.page == 4]
     assert index and not any(block.side_note for block in index)
+
+
+def test_the_rest_of_a_numbered_example_stays_original():
+    """编号例句的第二句、换行的 wine.、IT 对照另成了块：紧贴在下面、和编号后的句子对齐的块也是例句。
+    回到编号左缘的正文、段首缩进被旁注切出来的首行照翻。"""
+    from app.formats.pdf import TextBlock, _example_ids
+
+    def blk(text, rect, label=""):
+        rect = pymupdf.Rect(rect)
+        spans = [{"text": text, "bbox": tuple(rect), "size": 10.0}]
+        if label:
+            cut = rect.x0 + 30
+            spans = [{"text": label, "bbox": (rect.x0, rect.y0, cut, rect.y1), "size": 10.0},
+                     {"text": text[len(label) + 1:], "bbox": (cut + 2, rect.y0, rect.x1, rect.y1), "size": 10.0}]
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False,
+                         span_lines=[spans])
+
+    head = blk("(24.14) I just bought a copy of Thoreau’s Walden.", (160.2, 222.1, 491.1, 234.1), "(24.14)")
+    second = blk("That one had been very tattered.", (192.1, 234.1, 474.9, 246.1))
+    prose = blk("Note that this NP is ambiguous.", (160.2, 250.8, 493.2, 274.8))
+    other = blk("(19.2) We saw the Eiffel Tower flying to Paris.", (142.2, 304.6, 329.9, 316.6), "(19.2)")
+    first_line = blk("In coordination ambiguity phrases can be conjoined", (157.1, 320.1, 475.2, 333.0))
+    found = _example_ids([head, second, prose, other, first_line])
+    assert id(second) in found and id(prose) not in found and id(first_line) not in found
+
