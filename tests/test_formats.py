@@ -1681,6 +1681,7 @@ def test_roman_and_appendix_numbers_are_captions():
     assert _is_float_text("TABLE I")
     assert _is_float_text("Figure S1: Full OSVD three-view label distributions.")
     assert _is_float_text("Table A2. Hyperparameters")
+    assert _is_float_text("Figure B.6: Constrained distributional evolution")
     assert not _is_float_text("Table IV compares inference time.")
     assert not _is_float_text("Figure S1 shows that Satisfaction constitutes the largest share.")
     assert not _is_float_text("Table Index of symbols")
