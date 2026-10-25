@@ -1464,8 +1464,10 @@ def _past_column(block: dict, line: dict, x: float, size: float, line_box=None) 
 
 
 def _larger_text(line: dict, host: dict) -> bool:
-    """line 里的正文字号比 host 大一截：是隔壁栏和它同一基线的标题，切开的后半截字号不变。"""
-    sizes = [float(span["size"]) for span in line["spans"] if span["text"].strip() and not _span_is_math(span)]
+    """line 里的正文字号比 host 大一截：是隔壁栏和它同一基线的标题，切开的后半截字号不变。
+    只有标点的一截不算：式子后面跟的句号用正文字号，接在小一号的分母后面（Σ_j e^{S·T_j} .）。"""
+    sizes = [float(span["size"]) for span in line["spans"]
+             if any(ch.isalnum() for ch in span["text"]) and not _span_is_math(span)]
     host_size = max((float(span["size"]) for span in host["spans"] if span["text"].strip()), default=0.0)
     return bool(sizes) and host_size > 0 and max(sizes) > host_size * 1.2
 

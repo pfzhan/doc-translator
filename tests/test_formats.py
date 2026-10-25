@@ -8127,3 +8127,15 @@ def test_formula_pieces_keep_their_source_order():
     assert _keep_formula_chains("计算每个{v1}的值, 即 {b}W{/b}{v3}{v2}。", source) == "计算每个{v1}的值, 即 {v2} {b}W{/b}{v3}。"
     assert _keep_formula_chains("即 {v2} {b}W{/b}{v3}。", source) == "即 {v2} {b}W{/b}{v3}。"
     assert _keep_formula_chains("{v3} 是 {v2} 的一部分", source) == "{v3} 是 {v2} 的一部分"
+
+
+def test_a_period_after_a_small_denominator_does_not_make_it_a_heading():
+    """分母 Σ_j e^{S·T_j} 后面跟着正文字号的句号。句号不算正文字号的字，分母照样接回分式所在的行。"""
+    from app.formats.pdf import _larger_text
+
+    denominator = {"spans": [{"text": "j", "font": "CMMI6", "size": 6.0}, {"text": "e", "font": "CMMI8", "size": 8.0},
+                             {"text": " .", "font": "NimbusRomNo9L-Regu", "size": 10.9}]}
+    sigma = {"spans": [{"text": "P", "font": "CMEX8", "size": 8.0}]}
+    assert not _larger_text(denominator, sigma)
+    heading = {"spans": [{"text": "4.2 SQuAD", "font": "NimbusRomNo9L-Medi", "size": 12.0}]}
+    assert _larger_text(heading, {"spans": [{"text": "words", "font": "NimbusRomNo9L-Regu", "size": 9.0}]})
