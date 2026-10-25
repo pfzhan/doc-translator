@@ -5502,13 +5502,19 @@ def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = froz
                          and _wraps_into(p, b, indented=True))
             # 列表项后面第一行比它还靠左起笔的是列表完了以后的正文。续行和条目文字对齐或者悬挂缩进，不会往左
             list_end = _list_item(p.text) and first_x0 < p.rect.x0 - p.size * 0.5
+            # 上一块停在断开的半个词上（retrieval-augmented genera- | tion, 267），下一行小写接着写完这个词。
+            # 只有两个词也接上：标题、标签不会停在连字符上
+            word_cut = (
+                same_size and y_close and re.search(r"[A-Za-z]{2}-$", p.text.rstrip()) is not None
+                and first.islower() and p.rect.x0 - p.size <= first_x0 < p.rect.x1
+            )
             # 上一块停在没收口的代码围栏里（```sql 开了还没关），下一行是代码的接续，大写起头也接上
             in_fence = len(_FENCE_RE.findall(p.text)) % 2 == 1 and same_size
             latin = (
                 y_close
-                and (x_close or centered_tail or math_wrap or centered_comma)
+                and (x_close or centered_tail or math_wrap or centered_comma or word_cut)
                 and not list_end
-                and len(p.text.split()) >= 3  # 一两个词的无标点短块是标题/标签，不是段落
+                and (len(p.text.split()) >= 3 or word_cut)  # 一两个词的无标点短块是标题/标签，不是段落
                 and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
                 and (colon_wrap or call_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
                      or not _ends_sentence(p.text))

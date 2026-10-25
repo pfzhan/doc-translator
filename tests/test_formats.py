@@ -7973,6 +7973,23 @@ def test_a_relation_word_after_an_equals_sign_in_the_formula_is_dropped():
     assert _restore_placeholders("而 {v1} 大于 1 时", [{"text": "β <"}]) == "而 \x01i\x021\x01/i\x02 1 时"
 
 
+def test_a_word_broken_at_the_block_end_continues_in_the_next_block():
+    """上一块停在连字符断开的半个词上，只有两个词也接上下一块（retrieval-augmented genera- | tion, 267）。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, x0, y0, x1, entry=False):
+        rect = pymupdf.Rect(x0, y0, x1, y0 + 9.6)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=8.0, color="#000", bold=False,
+                         span_lines=[[{"text": text, "font": "Times", "size": 8.0}]], entry=entry)
+
+    merged = _merge_continuations([blk("retrieval-augmented genera-", 95.4, 217.0, 187.4),
+                                   blk("tion, 267", 119.3, 226.2, 147.7, entry=True)])
+    assert [block.text for block in merged] == ["retrieval-augmented generation, 267"]
+    # 两个词的标签后面不是断开的词，不接
+    kept = _merge_continuations([blk("Figure label", 95.4, 217.0, 150.0), blk("tion, 267", 119.3, 226.2, 147.7)])
+    assert len(kept) == 2
+
+
 def test_the_left_column_of_an_index_page_is_not_a_side_note():
     """索引页分几栏，最左一栏比正文版心靠外，像页边旁注。旁注里的短词留原文，索引条目就没有翻。"""
     from app.formats import pdf
