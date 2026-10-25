@@ -8032,3 +8032,32 @@ def test_the_rest_of_a_numbered_example_stays_original():
     found = _example_ids([head, second, prose, other, first_line])
     assert id(second) in found and id(prose) not in found and id(first_line) not in found
 
+
+def test_a_displayed_line_inside_a_block_is_its_own_paragraph():
+    """缩进排开、没排满的一行例句和下一行的正文在同一块里：例句自成一段，下一行小写起头也不并进来。
+    绕图排的段落首行和下一行收在同一处，照旧是一段。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, x0, y0, x1):
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"text": text, "size": 10.0}], [])
+
+    witch = [item("The green witch arrived", 185.1, 473.7, 280.2),
+             item("and must translate it into the Spanish sentence:", 160.2, 488.6, 347.0)]
+    assert _split_lines(witch) == [[0], [1]]
+    wrapped = [item("This volume is about the implementation and im-", 175.1, 384.7, 369.9),
+               item("plications of that exciting idea, as realized in large", 160.2, 396.3, 369.9),
+               item("language models, and the vibrant interdisciplinary field", 160.2, 408.2, 493.2)]
+    assert _split_lines(wrapped) == [[0, 1, 2]]
+
+
+def test_a_colored_example_on_its_own_line_needs_no_period():
+    """单独排开的一行彩色例句常常不带句号（The green witch arrived）。"""
+    from app.formats.pdf import TextBlock, _colored_example
+    from app.formats.pdf_frame import TextFrame
+
+    frame = TextFrame(160.2, 493.2, 82.0, 719.0, 10.0)
+    rect = pymupdf.Rect(185.1, 473.7, 280.2, 485.7)
+    block = TextBlock(page=0, rect=rect, line_rects=[rect], text="The green witch arrived", size=10.0,
+                      color="#0000ff", bold=False, body_size=10.0,
+                      span_lines=[[{"text": "The green witch arrived", "size": 10.0, "color": 0x0000FF, "flags": 0}]])
+    assert _colored_example(block, frame)

@@ -1761,7 +1761,13 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             group_rows == 1 and max_x1 - prect.x1 > 3 * psize and ptext.rstrip().endswith((".", "?", "!"))
             and _ends_sentence(ptext) and bool(SEG_START_RE.match(stripped))
         )
-        indent = 0 < jump <= 3 * psize and not hanging_end and not closed
+        # 缩进起笔、没排到右缘的第一行，下一行回到左边：单独排开的一行（例句 The green witch arrived），
+        # 下一行接着写正文。段落的首行缩进排到右缘；绕图排的段落各行收在同一处，首行不比下一行短
+        displayed = (
+            group_rows == 1 and row_rect.x0 - rect.x0 > 0.5 * psize and max_x1 - row_rect.x1 > 3 * psize
+            and row_rect.x1 < rect.x1 - psize and _prose_units(items[i - 1][0]) >= 2
+        )
+        indent = 0 < jump <= 3 * psize and not hanging_end and not closed and not displayed
         # 列表项的续行：缩进在弹点之后的悬挂对齐。同 x0 或左跳的不是续行，可能是下一段
         continuing_list = (
             _list_item(ptext)
@@ -1899,6 +1905,7 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             (not open_end and (bullet or example or (NO_TEXT_RE.match(stripped) and i not in number_tails)))
             or (prev_symbol and not closing)
             or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim or restyled or labeled
+            or displayed
             or _caption_opens(items[i][2], pspans)
         )):
             groups.append(cur)
@@ -4945,7 +4952,10 @@ def _attribution(quote: TextBlock, below: TextBlock) -> bool:
 
 def _colored_example(block: TextBlock, frame: TextFrame) -> bool:
     spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
-    if not spans or block.bold or len(block.text.split()) < 4 or not _ends_sentence(block.text):
+    # 单独排开的一行例句常常不带句号（The green witch arrived）
+    if not spans or block.bold or len(block.text.split()) < 4 or not (
+        _ends_sentence(block.text) or len(_visual_lines(block)) == 1
+    ):
         return False
     if block.body_size and abs(block.size - block.body_size) > 0.5:
         return False
@@ -5568,12 +5578,17 @@ def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = froz
                 same_size and y_close and re.search(r"[A-Za-z]{2}-$", p.text.rstrip()) is not None
                 and first.islower() and p.rect.x0 - p.size <= first_x0 < p.rect.x1
             )
+            # 单独排开的一行（缩进的例句 The green witch arrived），下一行回到左边接着写正文，不是它的续行。
+            # 段首缩进的首行被旁注切成一块时撑到右缘，和下一行一样宽
+            displayed_line = (
+                len(_visual_lines(p)) == 1 and p.rect.x0 > first_x0 + p.size and p.rect.x1 < b.rect.x1 - p.size
+            )
             # 上一块停在没收口的代码围栏里（```sql 开了还没关），下一行是代码的接续，大写起头也接上
             in_fence = len(_FENCE_RE.findall(p.text)) % 2 == 1 and same_size
             latin = (
                 y_close
                 and (x_close or centered_tail or math_wrap or centered_comma or word_cut)
-                and not list_end
+                and not list_end and not displayed_line
                 and (len(p.text.split()) >= 3 or word_cut)  # 一两个词的无标点短块是标题/标签，不是段落
                 and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
                 and (colon_wrap or call_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
