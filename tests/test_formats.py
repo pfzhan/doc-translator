@@ -1664,6 +1664,21 @@ def test_a_body_sentence_that_starts_with_figure_is_not_a_caption():
     assert _is_float_text("Fig. 3 (A) Panel view")
 
 
+def test_table_cells_do_not_set_the_column_body_size():
+    """栏顶一张表一格一块、字号比正文大，正文字号仍按正文块算，栏底的正文段不被当成小一号的脚注。"""
+    from app.formats.pdf import TextBlock, _column_body
+
+    def blk(text, y, size, clip=None):
+        return TextBlock(page=0, rect=pymupdf.Rect(54, y, 290, y + 20), line_rects=[],
+                         text=text, size=size, color="#000000", bold=False, clip=clip)
+
+    cells = [blk(f"AR + VMD {k}", 100 + 12 * k, 11.1, clip=(54, 100, 290, 200)) for k in range(7)]
+    body = [blk("Overall, every proposed component helps.", 400 + 60 * k, 10) for k in range(4)]
+    heading = blk("Out-of-Distribution Generalization", 650, 10.9)
+    kept = _column_body([*cells, *body, heading])
+    assert all(block in kept for block in body)
+
+
 def test_pdf_biblio_author_year_entries_after_the_heading():
     """作者-年份体的条目不带编号和括号年份。标题后面连着几条「姓, 名缩写.」起头的就进入参考文献；
     正文里只一句这样开头的不算。"""

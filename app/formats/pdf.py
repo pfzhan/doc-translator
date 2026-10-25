@@ -2687,10 +2687,13 @@ def _assigned_columns(
 
 
 def _column_body(column: list[TextBlock]) -> list[TextBlock]:
-    """栏末的小一号脚注不占续句的位置。整栏都是这个字号时全部留下。"""
+    """栏末的小一号脚注不占续句的位置。整栏都是这个字号时全部留下。
+
+    正文字号不算表格的格子：栏顶一张表一格一块，按块数会压过正文。
+    """
     if not column:
         return []
-    sizes = sorted(block.size for block in column)
+    sizes = sorted(block.size for block in column if block.clip is None) or sorted(block.size for block in column)
     body_size = sizes[len(sizes) // 2]
     body = [block for block in column if block.size + 0.6 >= body_size]
     return body or column
