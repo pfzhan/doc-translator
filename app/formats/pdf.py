@@ -1343,6 +1343,84 @@ def _row_labels(items: list[tuple], cells: Collection[int]) -> set[int]:
     return found
 
 
+def _number_columns(data: dict) -> list[float]:
+    """本页表格里一列列数的中线：三格以上的数中线落在同一处（差一磅以内）。"""
+    centers = sorted(
+        (float(span["bbox"][0]) + float(span["bbox"][2])) / 2
+        for block in data.get("blocks", []) if block.get("type") == 0
+        for line in block["lines"] for span in line["spans"]
+        if str(span["text"]).strip() and _number_cell(str(span["text"]))
+        and not str(span["text"]).rstrip().endswith(".")
+    )
+    columns: list[float] = []
+    run: list[float] = []
+    for center in centers:
+        if run and center - run[0] > 1:
+            if len(run) >= 3:
+                columns.append(sum(run) / len(run))
+            run = []
+        run.append(center)
+    if len(run) >= 3:
+        columns.append(sum(run) / len(run))
+    return columns
+
+
+# 表头一格最多几个词。两端对齐的正文行词距拉宽，也能拆成几截，每截都是半句
+_HEADER_CELL_WORDS = 3
+
+
+def _cut_header_cells(items: list[tuple], columns: Sequence[float]) -> tuple[list[tuple], set[int]]:
+    """表头一行几格（Fine-tune Fine-tune Feature-based）挨得近，PyMuPDF 并成一行，译文就挤在左边，
+    对不上下面的列。一行按半个字宽以上的空拆成几截，每截都正对着下面不同的一列数时，各截自成一条。
+    行首一截可以不对着数（行名那一列的表头）。
+    返回新的行和这些格子的下标。正文的行拆不出几截，每截都对着一列数的更没有。"""
+    if len(columns) < 2:
+        return items, set()
+    rows: list[list[int]] = []
+    for index, item in enumerate(items):
+        if rows:
+            first = items[rows[-1][0]][1]
+            if min(first.y1, item[1].y1) - max(first.y0, item[1].y0) >= min(first.height, item[1].height) * 0.5:
+                rows[-1].append(index)
+                continue
+        rows.append([index])
+    out: list[tuple] = []
+    found: set[int] = set()
+    for row in rows:
+        spans = sorted((span for index in row for span in items[index][2]), key=lambda span: span["bbox"][0])
+        pieces: list[list[dict]] = []
+        for span in spans:
+            if pieces and float(span["bbox"][0]) - float(pieces[-1][-1]["bbox"][2]) < float(span["size"]) * 0.5:
+                pieces[-1].append(span)
+            else:
+                pieces.append([span])
+        hits = []
+        for piece in pieces:
+            center = (float(piece[0]["bbox"][0]) + float(piece[-1]["bbox"][2])) / 2
+            near = [k for k, column in enumerate(columns) if abs(column - center) <= max(2.0, float(piece[0]["size"]) * 0.25)]
+            hits.append(near[0] if near else None)
+        # 行首一截是行名那一列的表头（System），下面没有数
+        aligned = hits[1:] if hits and hits[0] is None else hits
+        texts = [" ".join(str(span["text"]).strip() for span in piece) for piece in pieces]
+        if (len(aligned) < 2 or None in aligned or len(set(aligned)) < len(aligned)
+                or not all(re.search(r"[^\W\d_]", text) and len(text.split()) <= _HEADER_CELL_WORDS for text in texts)):
+            out.extend(items[index] for index in row)
+            continue
+        raw = sorted((span for index in row for span in items[index][3]), key=lambda span: span["bbox"][0])
+        top = min(items[index][1].y0 for index in row)
+        bottom = max(items[index][1].y1 for index in row)
+        for piece in pieces:
+            x0, x1 = float(piece[0]["bbox"][0]), float(piece[-1]["bbox"][2])
+            kept = [span for span in raw if x0 - 0.5 <= float(span["bbox"][0]) and float(span["bbox"][2]) <= x1 + 0.5]
+            box = pymupdf.Rect()
+            for span in piece:
+                box |= _text_box(span)
+            found.add(len(out))
+            out.append(("".join(str(span["text"]) for span in kept), pymupdf.Rect(box.x0, top, box.x1, bottom),
+                        piece, kept))
+    return out, found
+
+
 def _drop_number_tails(items: list[tuple]) -> list[tuple]:
     """行名太长，PyMuPDF 把后面几格数并进了同一行（BERT (Ens.+TriviaQA) 86.2 92.2 …）。
     后半截全是数、第一格的左缘和别的行里单独的一格数对齐时，从行里拿掉，留在原页上，
@@ -4619,6 +4697,8 @@ def _extract(
         toc_page = _has_leader_line(data) or pno in toc_pages
         index_page = _index_page(data)
         ref_rows = _index_ref_rows(data) if index_page else []
+        # 索引页的页码排成几列，条目的词会碰巧对上
+        number_columns = [] if index_page else _number_columns(data)
         for b in data["blocks"]:
             if b.get("type") != 0:
                 continue
@@ -4635,13 +4715,14 @@ def _extract(
             items = _left_to_right(items)
             items, leaders = _cut_leaders(items, toc_page)
             items = _drop_number_tails(items)
+            items, header_cells = _cut_header_cells(items, number_columns)
             side_note = bool(b.get("side_note"))
             # 一条旁注就是一块，不按正文的规则拆
             groups = [list(range(len(items)))] if side_note and items else _split_lines(items, index_page)
             # 带点线的一行是一个目录条目的末行，下一行是另一条。索引页上以页码收尾的一行、
             # 页码折到下一行的条目、词表的一格也是
             cells = _grid_cells(items)
-            entry_ends = cells | (_index_entry_ends(items, ref_rows) if index_page else set())
+            entry_ends = cells | header_cells | (_index_entry_ends(items, ref_rows) if index_page else set())
             groups = [part for group in groups for part in _cut_after(group, {*leaders, *entry_ends})]
             groups = [part for group in groups for part in _cut_at_posts(group, items, scans[pno].posts)]
             # 文字分式所在的行自成一组，留原字，不和上下的正文连成一段

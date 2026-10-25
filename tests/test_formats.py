@@ -751,6 +751,34 @@ def test_a_table_row_name_is_cut_from_its_numbers_and_the_rows_around():
     assert "Top Leaderboard Systems (Dec 10th, 2018)" in texts
 
 
+def test_header_cells_over_number_columns_are_cut_apart():
+    """表头一行的几格挨得近，并成了一行。每截正对着下面一列数时拆开，行首行名那一列的表头可以不对。
+    两端对齐的正文行拆出来的是半句，不拆。"""
+    from app.formats.pdf import _cut_header_cells
+
+    def span(text, x0, x1, y=238.1):
+        return {"text": text, "size": 9.0, "bbox": (x0, y, x1, y + 9), "origin": (x0, y + 7), "font": "Times"}
+
+    def item(spans):
+        text = "".join(one["text"] for one in spans)
+        rect = pymupdf.Rect(spans[0]["bbox"][0], spans[0]["bbox"][1], spans[-1]["bbox"][2], spans[0]["bbox"][3])
+        return (text, rect, [one for one in spans if one["text"].strip()], spans)
+
+    columns = [411.8, 452.7, 501.6]
+    header = item([span("Fine-tune", 394.6, 429.0), span(" ", 429.0, 435.5), span("Fine-tune", 435.5, 469.9),
+                   span(" ", 469.9, 476.5), span("Feature-based", 476.5, 526.7)])
+    items, cells = _cut_header_cells([header], columns)
+    assert [one[0] for one in items] == ["Fine-tune", "Fine-tune", "Feature-based"] and cells == {0, 1, 2}
+    stub = [item([span("System", 317.0, 343.4)]), item([span("Dev F1", 395.0, 428.6), span(" ", 428.6, 435.2),
+                                                         span("Test F1", 439.4, 466.0)])]
+    items, cells = _cut_header_cells(stub, columns)
+    assert [one[0] for one in items] == ["System", "Dev F1", "Test F1"]
+    prose = item([span("Second,", 380.0, 406.8), span("there", 412.6, 434.4), span("are", 439.6, 452.9),
+                  span("major", 458.1, 483.6), span("computational", 488.7, 551.2)])
+    items, cells = _cut_header_cells([prose], [393.4, 470.0])
+    assert len(items) == 1 and not cells
+
+
 def test_wrapped_letter_period_stays_in_the_paragraph():
     """撑满的上一行没有句末时，下一行的 Q. 是换行，不是列表项。句末之后的 a. 仍拆开。"""
     from app.formats.pdf import _split_lines
