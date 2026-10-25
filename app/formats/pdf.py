@@ -7765,12 +7765,13 @@ def _beside_body(block: TextBlock, blocks: list[TextBlock]) -> TextBlock | None:
 def _index_reflow(
     items: list[tuple[TextBlock, str]], blocks: list[TextBlock], geo: PageGeometry | None,
     cjk: bool, formulas_map: dict[int, list[dict]], fixed: set[int], bottom: float,
+    ink: Sequence[pymupdf.Rect] = (),
 ) -> dict[int, TextBlock]:
     """索引一栏里译文比原文多占行的条目，连同下面的条目按原文行距往下挪。
 
-    一条一行紧挨着排，不挪的话多出来的一行没有地方，只能缩小字号。少占行的条目让出的空行、
-    字母分组之间的空白先拿来抵。挪到下一个不动的块（没有译文的条目、跨栏跨页的段落）
-    或正文下沿还放不下，这一段照旧。返回挪过的条目的副本，框和行框都已挪好。
+    一条一行紧挨着排，不挪的话多出来的一行没有地方，只能缩小字号。字母分组之间的空白先拿来抵，
+    不够再收紧行距（见 _restack）。留原文的条目也跟着挪。跨栏跨页的段落、不属于任何块的原字
+    （ink，提取时丢掉的条目）挪不了，挪到它们上面为止。返回挪过的条目的副本，框和行框都已挪好。
     """
     if geo is None or not any(b.index for b in blocks):
         return {}
@@ -7788,9 +7789,15 @@ def _index_reflow(
             continue
         pitch = sorted(steps)[len(steps) // 2]
         segment: list[tuple[TextBlock, int, int]] = []
-        for b in [*column, None]:
+        x0, x1 = min(b.rect.x0 for b in column), max(b.rect.x1 for b in column)
+        stops = [rect for rect in ink if x0 <= (rect.x0 + rect.x1) / 2 <= x1]
+        for b in sorted([*column, *stops], key=lambda item: item.y0 if isinstance(item, pymupdf.Rect) else item.rect.y0):
+            if isinstance(b, pymupdf.Rect):
+                moved.update(_restack(segment, pitch, b.y0))
+                segment = []
+                continue
             movable = (
-                b is not None and b.index and id(b) in texts and id(b) not in fixed
+                b.index and id(b) in texts and id(b) not in fixed
                 and pitch < b.size * 2
             )
             if movable:
@@ -7801,9 +7808,9 @@ def _index_reflow(
                 need = len(typeset_lines(text, em, max(right - b.rect.x0, 1.0), metrics))
                 segment.append((b, rows, need))
                 continue
-            limit = b.rect.y0 if b is not None else bottom
-            moved.update(_restack(segment, pitch, limit))
+            moved.update(_restack(segment, pitch, b.rect.y0))
             segment = []
+        moved.update(_restack(segment, pitch, bottom))
     return moved
 
 
@@ -8412,6 +8419,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         reflowed = _index_reflow(
             items, same_page, geo, cjk, formulas_map or {}, fixed,
             _page_content_bottom(same_page, pno, bounds.height),
+            _kept_ink(page, same_page) if any(b.index for b in same_page) else (),
         )
         # 挪过的索引条目，别的块右扩、绕排时按挪过的位置让开
         layout = [reflowed.get(id(ob), ob) for ob in same_page]

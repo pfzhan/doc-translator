@@ -8224,6 +8224,12 @@ def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down():
     assert not any(id(b) in moved for b in right)
     crowded = [(b, "在命名实体识别(NER)中, 241, 419") for b in left]
     assert _index_reflow(crowded, left, geo, True, {}, set(), bottom) == {}
+    # 第 5 条提取时丢了，原字留在原处。上面四条挤不下多出来的一行，不挪，也不压到原字上
+    dropped = left[4].rect
+    rest = [b for n, b in enumerate(left) if n != 4]
+    moved = _index_reflow([item for item in items if item[0] is not left[4]], rest, geo, True, {}, set(),
+                          bottom, [dropped])
+    assert not any(id(b) in moved for b in rest)
 
 
 def test_the_rest_of_a_broken_word_continues_the_line_above():
