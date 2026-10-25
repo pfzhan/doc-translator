@@ -215,6 +215,9 @@ class PageScan:
     strokes: tuple[pymupdf.Rect, ...] = ()
     # 细竖线：表格竖线、章首章号和标题之间的分隔线
     posts: tuple[pymupdf.Rect, ...] = ()
+    # 只描边的弧线（依存弧、注意力弧）和填了底色的圆角框（弧上的标签）
+    arcs: tuple[pymupdf.Rect, ...] = ()
+    round_boxes: tuple[pymupdf.Rect, ...] = ()
 
 
 def scan_page(page: pymupdf.Page) -> PageScan:
@@ -226,7 +229,40 @@ def scan_page(page: pymupdf.Page) -> PageScan:
         page_tables(page, drawings, words), tuple(_figure_rects(page, drawings, images)), words,
         _shaded_areas(drawings, text_page_rect(page)), tuple(horizontal),
         tuple(_thin_strokes(drawings)), tuple(vertical),
+        *_curved_paths(drawings),
     )
+
+
+# 圆角框一圈四个角都是曲线；弧线至少这么宽
+_ROUND_CORNERS = 4
+_ARC_MIN_WIDTH = 6.0
+# 弧的两只脚离框的下沿最多这么远
+_ARC_FOOT = 3.0
+
+
+def _curved_paths(drawings: list[dict]) -> tuple[tuple[pymupdf.Rect, ...], tuple[pymupdf.Rect, ...]]:
+    """只描边、带曲线的拱形是弧线：起点和终点分开，都落在框的下沿，中间拱起来。
+    曲线图里的线一头高一头低，圆圈、圆角框首尾相接，都不算。填色、四个角都是曲线的小框是圆角框。"""
+    arcs: list[pymupdf.Rect] = []
+    boxes: list[pymupdf.Rect] = []
+    for drawing in drawings:
+        items = drawing.get("items") or []
+        curves = sum(1 for item in items if item[0] == "c")
+        if not curves:
+            continue
+        rect = pymupdf.Rect(drawing["rect"])
+        start, end = items[0][1], items[-1][-1]
+        arched = (
+            isinstance(start, pymupdf.Point) and isinstance(end, pymupdf.Point)
+            and abs(start.x - end.x) >= _ARC_MIN_WIDTH * 0.5
+            and abs(start.y - rect.y1) <= _ARC_FOOT and abs(end.y - rect.y1) <= _ARC_FOOT
+            and rect.height >= _ARC_FOOT * 2
+        )
+        if drawing.get("type") == "s" and rect.width >= _ARC_MIN_WIDTH and arched:
+            arcs.append(rect)
+        elif drawing.get("fill") is not None and curves >= _ROUND_CORNERS:
+            boxes.append(rect)
+    return tuple(arcs), tuple(boxes)
 
 
 # 下划线至少这么宽（点）。再短的是字里的笔画、标记

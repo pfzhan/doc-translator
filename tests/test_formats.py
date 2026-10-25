@@ -8061,3 +8061,27 @@ def test_a_colored_example_on_its_own_line_needs_no_period():
                       color="#0000ff", bold=False, body_size=10.0,
                       span_lines=[[{"text": "The green witch arrived", "size": 10.0, "color": 0x0000FF, "flags": 0}]])
     assert _colored_example(block, frame)
+
+
+def test_text_annotated_with_arcs_stays_original():
+    """依存弧从词连到词，弧上的圆角框里是标签（nsubj）。句子译成中文以后弧对不上词，句子和标签都留原文。
+    曲线图里一头高一头低的线不是弧，旁边的正文照翻。"""
+    from app.formats import pdf
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=500, height=700)
+    page.insert_text((238, 395), "She announced this in January", fontsize=10)
+    page.draw_bezier((275, 386), (275, 372), (246, 372), (246, 384), width=0.4)
+    shape = page.new_shape()
+    shape.draw_rect(pymupdf.Rect(251, 367, 270, 376), radius=0.3)
+    shape.finish(color=(0, 0, 0), fill=(1, 1, 1), width=0.4)
+    shape.commit()
+    page.insert_text((253, 374), "nsubj", fontsize=7)
+    page.draw_bezier((300, 470), (330, 420), (360, 440), (400, 430), width=0.4)
+    page.insert_text((300, 480), "The loss falls quickly as training goes on.", fontsize=10)
+    scan = pdf.scan_page(page)
+    assert len(scan.arcs) == 1 and len(scan.round_boxes) == 1
+    blocks, _frames, scans = pdf._extract(doc)
+    found = pdf._arc_figure_ids(blocks, scans)
+    kept = {block.text for block in blocks if id(block) in found}
+    assert kept == {"She announced this in January", "nsubj"}

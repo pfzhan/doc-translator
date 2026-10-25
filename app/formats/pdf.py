@@ -4972,6 +4972,32 @@ def _colored_example(block: TextBlock, frame: TextFrame) -> bool:
     return block.size * 1.5 <= indent <= block.size * 4 and block.rect.x1 <= frame.x1 + 2
 
 
+def _arc_figure_ids(blocks: list[TextBlock], scans: Sequence[PageScan]) -> set[int]:
+    """用弧线标注的例句（依存弧、注意力弧从词连到词）和弧上圆角框里的标签（nsubj、coreference attention）。
+    弧的两端落在句子里某个词的上方，译成中文以后对不上词，留原文。
+    句子的上缘接着弧线的下端；标签在圆角框里，框压着弧线。"""
+    found: set[int] = set()
+    for block in blocks:
+        if block.page >= len(scans):
+            continue
+        scan = scans[block.page]
+        if not scan.arcs:
+            continue
+        rows = block.line_rects or [block.rect]
+        if any(
+            abs(arc.y1 - row.y0) <= block.size * 0.4 and row.x0 - 2 <= arc.x0 and arc.x1 <= row.x1 + 2
+            for arc in scan.arcs for row in rows
+        ):
+            found.add(id(block))
+            continue
+        for box in scan.round_boxes:
+            framed = pymupdf.Rect(box.x0 - 2, box.y0 - 2, box.x1 + 2, box.y1 + 2)
+            if framed.contains(block.rect) and any(not (box & arc).is_empty for arc in scan.arcs):
+                found.add(id(block))
+                break
+    return found
+
+
 def _example_ids(blocks: list[TextBlock]) -> set[int]:
     """讲语言现象时举的例句：(24.3) 编号起头、续行悬挂在编号右边的句子，和带两处以上
     [角标 …] 标注的句子（[Arg0 The group] agreed …、[PER Jane] of [ORG United]）。
@@ -8825,7 +8851,7 @@ def _plan_document(src: Path, src_doc: pymupdf.Document, runner, layout_model: s
     edges = margin_skips(blocks, geometries)
     displayed = (
         _display_formula_ids(blocks, geometries) | _gloss_ids(blocks, glosses) | _code_panel_ids(blocks, scans)
-        | _foreign_ids(blocks) | _colored_examples(blocks, geometries)
+        | _foreign_ids(blocks) | _colored_examples(blocks, geometries) | _arc_figure_ids(blocks, scans)
     )
     examples = _example_ids(blocks)
     # 页眉不进大纲，旁注、目录条目不是标题
