@@ -7971,3 +7971,22 @@ def test_a_relation_word_after_an_equals_sign_in_the_formula_is_dropped():
     out = _restore_placeholders("其中 {v1} 为 1, 而 {v2} 为 2", formulas)
     assert out == "其中 \x01i\x021\x01/i\x02 1, 而 \x01i\x022\x01/i\x02 为 2"
     assert _restore_placeholders("而 {v1} 大于 1 时", [{"text": "β <"}]) == "而 \x01i\x021\x01/i\x02 1 时"
+
+
+def test_the_left_column_of_an_index_page_is_not_a_side_note():
+    """索引页分几栏，最左一栏比正文版心靠外，像页边旁注。旁注里的短词留原文，索引条目就没有翻。"""
+    from app.formats import pdf
+
+    doc = pymupdf.open()
+    for number in range(4):
+        page = doc.new_page(width=500, height=700)
+        for row in range(40):
+            word = "abcdefghij"[number] + "klmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"[row]
+            page.insert_text((140, 80 + 14 * row), f"ordinary body text {word} that runs across the column", fontsize=10)
+    page = doc.new_page(width=500, height=700)
+    for column, x in enumerate((40, 200, 330)):
+        for row in range(30):
+            page.insert_text((x, 80 + 12 * row), f"term {column} {row}, {100 + row}", fontsize=8)
+    blocks, _frames, _scans = pdf._extract(doc)
+    index = [block for block in blocks if block.page == 4]
+    assert index and not any(block.side_note for block in index)

@@ -4279,7 +4279,8 @@ def _extract(
     # 目录页上不找表：页码一列和节号一列对齐，短条目会被认成格子表，格子不翻。
     # 索引页也是：几栏短条目行首对齐，凑出几行就像无线的格子表
     toc_pages = _toc_pages(pages)
-    for pno in toc_pages | {pno for pno, data in enumerate(pages) if _index_page(data)}:
+    index_pages = {pno for pno, data in enumerate(pages) if _index_page(data)}
+    for pno in toc_pages | index_pages:
         tables_by_page[pno] = ()
         scans[pno] = replace(scans[pno], tables=())
     for data in pages:
@@ -4289,7 +4290,10 @@ def _extract(
     page_lines = [_frame_lines(data) for data in pages]
     frames = text_frames([lines for lines, _refs in page_lines])
     notes = margin_notes([lines for lines, _refs in page_lines], frames)
-    for data, (lines, refs), found, frame in zip(pages, page_lines, notes, frames):
+    for pno, (data, (lines, refs), found, frame) in enumerate(zip(pages, page_lines, notes, frames)):
+        # 索引页分好几栏，最左一栏比正文的版心靠外，看着像页边旁注。索引页上没有旁注
+        if pno in index_pages:
+            continue
         _detach_margin_notes(data, lines, refs, found - _wide_block_lines(lines, refs, found, frame))
     absorbed: set[int] = set()
     for pno, data in enumerate(pages):
