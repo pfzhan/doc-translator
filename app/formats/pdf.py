@@ -5129,6 +5129,13 @@ def _inside_kept_formula(block: TextBlock, kept: Sequence[pymupdf.Rect]) -> bool
     return area > 0 and any((block.rect & row).get_area() >= area * 0.6 for row in kept)
 
 
+def _index_refs_tail(block: TextBlock, rect: pymupdf.Rect) -> bool:
+    """rect 是 block 末行折下来的一行页码：紧贴在末行下面，起笔落在末行的左右缘之间。"""
+    last = block.line_rects[-1]
+    return (-block.size * 0.3 <= rect.y0 - last.y1 <= block.size * 0.5
+            and last.x0 - block.size * 0.5 <= rect.x0 < last.x1)
+
+
 def _wraps_from_above(
     blocks: list[TextBlock], pno: int, rect: pymupdf.Rect, text: str,
     rows: Sequence[pymupdf.Rect], frame: TextFrame | None, index_page: bool = False,
@@ -5138,10 +5145,16 @@ def _wraps_from_above(
     上一行以连字符断开的半个词收尾时，这一行是那个词的后半截。索引页上比上一行缩进得深的
     是上一条的续行（pipe in regular expressions | as, 51）。
     居中排的图注末行（significant (t-test with p ≤ 0.01).）和上一行中线对齐。
-    叠着排的几行式子（e_t = Ex_t、h_t = g(…)）写不到右缘。"""
+    叠着排的几行式子（e_t = Ex_t、h_t = g(…)）写不到右缘。
+    索引条目停在逗号上，页码折到下一行、分在下一块里：只有页码的一行紧贴在下面，也接上去。"""
+    page_blocks = [block for block in blocks if block.page == pno and block.line_rects]
+    if index_page and _INDEX_REFS_ONLY_RE.match(text.strip()):
+        return any(
+            block.text.rstrip().endswith(",") and _index_refs_tail(block, rect)
+            for block in page_blocks[-1:]
+        )
     if not re.match(r"[a-z]{2,}\b", text.lstrip()):
         return False
-    page_blocks = [block for block in blocks if block.page == pno and block.line_rects]
     for block in reversed(page_blocks):
         last = block.line_rects[-1]
         if rect.y0 - last.y1 > 0.6 * block.size:
@@ -6137,6 +6150,11 @@ def _merge_continuations(blocks: list[TextBlock], listed: Collection[int] = froz
                      or dangling or centered_comma or in_fence or full_wrap)
                 and not _verbatim_seam(p, b)
             )
+            # 索引条目停在逗号上，页码折到下一块里（见 _wraps_from_above）：条目收在页码上
+            if (p.index and p.page == b.page and p.text.rstrip().endswith(",") and p.line_rects
+                    and _INDEX_REFS_ONLY_RE.match(b.text.strip()) and _index_refs_tail(p, b.rect)):
+                _absorb_block(p, b)
+                break
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
             if (p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note)
                     and p.leader is None and b.leader is None and not p.entry

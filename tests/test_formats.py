@@ -8176,6 +8176,25 @@ def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
     assert 2 not in ends and 3 in ends and 4 in ends
 
 
+def test_page_numbers_in_the_next_block_join_the_index_entry():
+    """页码折到下一行、分在下一块里。只有页码的一行紧贴在停在逗号上的条目下面，接到条目上；
+    下面另起的条目不接。"""
+    from app.formats.pdf import TextBlock, _merge_continuations, _wraps_from_above
+
+    def blk(text, x0, y0, x1, entry=False):
+        rect = pymupdf.Rect(x0, y0, x1, y0 + 9.6)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=8.0, color="#000", bold=False,
+                         entry=entry, index=True)
+
+    host = blk("Berkeley Restaurant Project,", 401.2, 643.0, 493.2, entry=True)
+    refs = pymupdf.Rect(425.1, 652.5, 433.1, 662.1)
+    assert _wraps_from_above([host], 0, refs, "72", [], None, index_page=True)
+    assert not _wraps_from_above([host], 0, refs, "72", [], None, index_page=False)
+    merged = _merge_continuations([host, blk("72", 425.1, 652.5, 433.1, entry=True),
+                                   blk("BERT", 401.2, 662.0, 421.1)])
+    assert [block.text for block in merged] == ["Berkeley Restaurant Project, 72", "BERT"]
+
+
 def test_the_rest_of_a_broken_word_continues_the_line_above():
     """上一行停在连字符断开的半个词上，下一行缩进多少都是接着写的（expres- | sions, 50, 65），
     字母少也不当成一行页码留原文。索引页上比上一行缩进得深的也是续行（as, 51）。"""
