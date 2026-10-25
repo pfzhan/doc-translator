@@ -1707,6 +1707,28 @@ def test_pdf_biblio_numbered_entries_without_a_heading():
                          blk("The second step follows.", 10)]) == [False, False]
 
 
+def test_a_table_with_its_caption_above_is_skipped_at_the_column_top():
+    """表的图注排在表上面时，紧接在图注下面的短行是表格，续句是下面第一块排满栏宽的段落。
+    图的图注排在图下面，图注下面的短行（式子后面的 subject to）是正文。"""
+    from app.formats.pdf import TextBlock, _float_contents
+
+    def blk(text, y, x1, rows=1):
+        lines = [pymupdf.Rect(318, y + 11 * i, x1, y + 11 * i + 9) for i in range(rows)]
+        return TextBlock(page=0, rect=pymupdf.Rect(318, y, x1, lines[-1].y1), line_rects=lines,
+                         text=text, size=9.0, color="#000", bold=False)
+
+    def page(caption_text):
+        caption = blk(caption_text, 359, 560, rows=2)
+        cells = [blk("Method", 397, 350), blk("w/o point cloud", 412, 380), blk("w/o artist scenes", 434, 390)]
+        body = blk("available support surfaces. Figure 7 corroborates this.", 493, 560, rows=4)
+        return caption, cells, body
+
+    caption, cells, body = page("Table 3. Controlled ablations on the test set.")
+    assert _float_contents([*cells, body], [caption, *cells, body]) == {id(cell) for cell in cells}
+    caption, cells, body = page("Fig. 3. Transient feature extraction.")
+    assert _float_contents([*cells, body], [caption, *cells, body]) == set()
+
+
 def test_pdf_biblio_author_year_entries_after_the_heading():
     """作者-年份体的条目不带编号和括号年份。标题后面连着几条「姓, 名缩写.」起头的就进入参考文献；
     正文里只一句这样开头的不算。"""

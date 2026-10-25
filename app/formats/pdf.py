@@ -2769,7 +2769,9 @@ def _try_column_pair(
 
 def _float_contents(column: list[TextBlock], page_blocks: list[TextBlock]) -> set[int]:
     """栏顶一张表（图）的字：从栏顶到下面的图注（Table 7: …）之间，每一行都没排到栏的右缘。
-    表头、行名都是短行；段落的行排满栏宽，栏顶是段落时不算。图注在表上面的不管。
+    表头、行名都是短行；段落的行排满栏宽，栏顶是段落时不算。
+    表的图注排在表上面、整栏都紧接在图注下面的，从栏顶往下数到第一块排满栏宽的段落为止。
+    图的图注排在图下面，下面的短行是正文（式子后面的 subject to），不算。
     栏的右缘按两端对齐的正文行最常收在的地方算，栏里比正文宽的图不算。"""
     if not column:
         return set()
@@ -2786,10 +2788,22 @@ def _float_contents(column: list[TextBlock], page_blocks: list[TextBlock]) -> se
     if not captions:
         return set()
     caption = min(captions, key=lambda block: block.rect.y0)
+
+    def short(block: TextBlock) -> bool:
+        return all(line.x1 < right - block.size * 2 for line in (block.line_rects or [block.rect]))
+
+    top = min(column, key=lambda block: block.rect.y0)
+    over = [block for block in captions if block.rect.y1 <= top.rect.y0 + 1]
+    near = max(over, key=lambda block: block.rect.y1) if over else None
+    if near is not None and re.match(r"(?i)tab", near.text.lstrip()) and top.rect.y0 - near.rect.y1 <= 2 * top.size:
+        contents: set[int] = set()
+        for block in sorted(column, key=lambda block: block.rect.y0):
+            if not short(block):
+                return contents
+            contents.add(id(block))
+        return set()
     above = [block for block in column if block.rect.y1 <= caption.rect.y0 + 1]
-    if not above or any(
-        line.x1 >= right - block.size * 2 for block in above for line in (block.line_rects or [block.rect])
-    ):
+    if not above or not all(short(block) for block in above):
         return set()
     return {id(block) for block in above}
 
