@@ -3019,7 +3019,8 @@ def _region_continues(prev: TextBlock, nxt: TextBlock, halt_ids: set[int]) -> bo
             or nxt.rect.y0 - prev.rect.y1 >= _REGION_GAP * prev.size):
         return False
     letter = re.search(r"[A-Za-z]", nxt.text)
-    ended = _END_MARK_RE.sub("", prev.text).rstrip().endswith(tuple(".!?;:。！？；："))
+    # 引号收住的也算句末：题词下面大写起头的一行是出处（… Location, Location” | Randall Munroe）
+    ended = _END_MARK_RE.sub("", prev.text).rstrip().endswith(tuple(".!?;:。！？；：”\""))
     return not (ended and letter is not None and letter.group().isupper())
 
 

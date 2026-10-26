@@ -3982,7 +3982,7 @@ def test_a_line_after_an_inline_formula_wraps_to_the_column_edge():
 def test_layout_model_regions_join_a_paragraph_cut_by_a_formula():
     """开了版面模型时，前后两个单元落在模型框出的同一段正文里、切口上又有式子，就是被式子切开的同一段。
     没有模型、上一块句末收住而下一块大写起头（一串列表）、上一块是一行作者名、
-    切口上没有式子的（幻灯片上一条条要点），都不并。"""
+    切口上没有式子的（幻灯片上一条条要点）、题词和下面的出处，都不并。"""
     from app.formats.pdf import TextBlock, _region_joins
     from app.formats.pdf_roles import HeuristicLayout
 
@@ -4012,6 +4012,8 @@ def test_layout_model_regions_join_a_paragraph_cut_by_a_formula():
     assert not joined(ended, blk("We demonstrate that aging changes the dimension of the data.", 552, rows=2))
     authors = blk("Jie Yu, Jianyu Zhang, Zian Pei, Xue Shi, Mohamed Ali", 505, rows=1, x0=190)
     assert not joined(authors, blk("Yumei Liu, Xin Jiang, Quanying Liu, Yi Guo", 552, rows=1, x0=190))
+    quote = blk("“The most important attributes of a vector in 3-space are Location, Location, Location”", 505, rows=2)
+    assert not joined(quote, blk("Randall Munroe, the hover from https://xkcd.com/2358/ on vectors", 552, rows=2))
     assert HeuristicLayout().text_regions(0) == []
 
 
