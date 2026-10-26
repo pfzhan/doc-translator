@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import ast
 import functools
+import hashlib
+import json
 import os
+import tempfile
 import re
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
@@ -69,10 +72,78 @@ class Region:
     score: float
 
 
-def layout_detector(doc: pymupdf.Document, model_path: str = "") -> LayoutDetector:
-    """model_path 为空表示没开模型。"""
+def layout_detector(doc: pymupdf.Document, model_path: str = "", boxes: ModelBoxes | None = None) -> LayoutDetector:
+    """model_path 为空表示没开模型。boxes 给了时读回上次存下的框，推了新的页再存回去。"""
     session = _usable_session(model_path)
-    return HeuristicLayout() if session is None else ModelLayout(doc, session)
+    if session is None:
+        return HeuristicLayout()
+    layout = ModelLayout(doc, session)
+    if boxes is not None:
+        layout.keep_in(boxes, model_path)
+    return layout
+
+
+class ModelBoxes:
+    """两个模型框出的框，按任务存在一个 JSON 文件里（见 pdf._saved_plan）。
+
+    框只取决于 PDF、模型文件、输入尺寸，和这个文件里画页面、推理、换算坐标的代码。改了别处的代码，
+    存下的分析结果作废、要重新分析时，直接读回框，只重跑规则：一本几百页的书，公式检测要十分钟上下，
+    版面模型要二十多分钟。"""
+
+    def __init__(self, path: Path, src: Path):
+        self.path = path
+        self.src = src
+
+    def load(self, kind: str, model_path: str, size: int) -> Any | None:
+        key = self._key(kind, model_path, size)
+        if key is None:
+            return None
+        try:
+            saved = json.loads(self.path.read_text(encoding="utf-8")).get(kind) or {}
+        except (OSError, ValueError, AttributeError):
+            return None
+        return saved.get("pages") if saved.get("key") == key else None
+
+    def keep(self, kind: str, model_path: str, size: int, pages: Any) -> None:
+        """先写临时文件再改名，写到一半退出不留坏文件。存不下只是下次要重新推。"""
+        key = self._key(kind, model_path, size)
+        if key is None:
+            return
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        except (OSError, ValueError):
+            data = {}
+        data[kind] = {"key": key, "pages": pages}
+        name = ""
+        try:
+            handle, name = tempfile.mkstemp(dir=self.path.parent, prefix=self.path.name, suffix=".tmp")
+            with os.fdopen(handle, "w", encoding="utf-8") as out:
+                json.dump(data, out)
+            Path(name).replace(self.path)
+        except OSError:
+            if name:
+                Path(name).unlink(missing_ok=True)
+
+    def _key(self, kind: str, model_path: str, size: int) -> str | None:
+        model = Path(model_path) if model_path else None
+        if model is None or not model.is_file():
+            return None
+        stat = model.stat()
+        digest = hashlib.sha1(self.src.read_bytes())
+        digest.update(Path(__file__).read_bytes())
+        digest.update(f"{kind}@{size}:{model.resolve()}:{stat.st_size}:{stat.st_mtime_ns}".encode())
+        digest.update(f"{pymupdf.VersionBind}:{_runtime_version()}".encode())
+        return digest.hexdigest()
+
+
+def _runtime_version() -> str:
+    try:
+        import onnxruntime
+    except ImportError:
+        return ""
+    return onnxruntime.__version__
 
 
 @functools.lru_cache(maxsize=6)
@@ -109,6 +180,17 @@ class ModelLayout:
         self.names: dict[int, str] = ast.literal_eval(names)
         self.input = session.get_inputs()[0].name
         self._pages: dict[int, list[Region]] = {}
+        # 推完以后存到哪里（见 keep_in）；_fresh 是这次新推了页
+        self._boxes: tuple[ModelBoxes, str] | None = None
+        self._fresh = False
+
+    def keep_in(self, boxes: ModelBoxes, model_path: str) -> None:
+        """读回 boxes 里存下的框，prepare 推完以后有新推的页时存回去。"""
+        self._boxes = (boxes, model_path)
+        saved = boxes.load("layout", model_path, _INPUT)
+        if isinstance(saved, dict):
+            for pno, found in saved.items():
+                self._pages[int(pno)] = [Region(label, pymupdf.Rect(rect), score) for label, rect, score in found]
 
     def classify(
         self,
@@ -136,12 +218,18 @@ class ModelLayout:
         for done, pno in enumerate(pages, 1):
             self.page_regions(pno)
             on_page(done, len(pages))
+        if self._boxes is not None and self._fresh:
+            boxes, model_path = self._boxes
+            boxes.keep("layout", model_path, _INPUT, {
+                str(pno): [[r.label, list(r.rect), r.score] for r in found] for pno, found in self._pages.items()
+            })
 
     def page_regions(self, pno: int) -> list[Region]:
         """每页只推一次：定角色和并段都要用。一页要推两三秒，整本书要几十分钟，任务被暂停时在这里停下。"""
         if pno not in self._pages:
             background.check_stop()
             self._pages[pno] = self.regions(pno)
+            self._fresh = True
         return self._pages[pno]
 
     def regions(self, pno: int) -> list[Region]:
@@ -205,6 +293,8 @@ class FormulaDetector:
         self.input = self.sessions[0].get_inputs()[0].name
         # pages() 顺带记下的每页行间公式框（isolated），定哪些块留原文时用（见 pdf._isolated_formula_ids）
         self.isolated: dict[int, list[pymupdf.Rect]] = {}
+        # 整本推完以后存到哪里（见 formula_detector）
+        self.keep: Callable[[list], None] | None = None
 
     def regions(self, pno: int) -> list[Region]:
         batch, to_page = _page_batch(self.doc[pno], self.size)
@@ -219,6 +309,7 @@ class FormulaDetector:
         MuPDF 不能在两个线程里同时用同一个文档，后台线程只跑模型。"""
         count = self.doc.page_count
         workers = len(self.sessions)
+        pages: list[tuple[list[pymupdf.Rect], list[pymupdf.Rect]]] = []
         with ThreadPoolExecutor(max_workers=workers) as pool:
 
             def submit(pno: int) -> tuple[Future, Callable[..., pymupdf.Rect]]:
@@ -233,7 +324,12 @@ class FormulaDetector:
                 if pno + workers < count:
                     pending.append(submit(pno + workers))
                 self.isolated[pno] = [to_page(*box) for label, box, _score in found if label == _DISPLAY_FORMULA]
-                yield [to_page(*box) for label, box, _score in found if label == _INLINE_FORMULA]
+                inline = [to_page(*box) for label, box, _score in found if label == _INLINE_FORMULA]
+                pages.append((inline, self.isolated[pno]))
+                # 最后一页推完就存：调用方取完最后一页就关掉，走不到循环后面。中途停下（暂停）时不存半本
+                if pno == count - 1 and self.keep is not None:
+                    self.keep([[[list(r) for r in kept], [list(r) for r in isolated]] for kept, isolated in pages])
+                yield inline
 
     def _detect(
         self, batch: np.ndarray, worker: int = 0,
@@ -256,11 +352,17 @@ class FormulaDetector:
         return found
 
 
-def formula_detector(doc: pymupdf.Document, model: FormulaModel | None = None) -> FormulaDetector | None:
+def formula_detector(
+    doc: pymupdf.Document, model: FormulaModel | None = None, boxes: ModelBoxes | None = None,
+) -> FormulaDetector | None:
     """model 为 None 表示没开。模型用不了，或者类别里没有行内公式（填成了版面模型）时返回 None，只用规则。
-    多份模型里后面的加载不了时，用已经加载好的几份。"""
+    多份模型里后面的加载不了时，用已经加载好的几份。boxes 里存着这本的框时直接读回，不加载模型；
+    没存着时推完整本存进去。"""
     if model is None:
         return None
+    saved = boxes.load("formula", model.path, model.size) if boxes is not None else None
+    if isinstance(saved, list) and len(saved) == doc.page_count:
+        return SavedFormulas(saved)
     workers, threads = formula_parallel(model.workers, model.threads)
     sessions = []
     for copy in range(workers):
@@ -274,7 +376,25 @@ def formula_detector(doc: pymupdf.Document, model: FormulaModel | None = None) -
         detector = FormulaDetector(doc, sessions, model.size)
     except (ValueError, SyntaxError):
         return None
-    return detector if _INLINE_FORMULA in detector.names.values() else None
+    if _INLINE_FORMULA not in detector.names.values():
+        return None
+    if boxes is not None:
+        detector.keep = lambda pages: boxes.keep("formula", model.path, model.size, pages)
+    return detector
+
+
+class SavedFormulas(FormulaDetector):
+    """读回的公式检测框（见 ModelBoxes）：不加载模型，pages() 逐页给出存下的行内公式框，顺带记下行间公式框。"""
+
+    def __init__(self, pages: list):
+        self.saved = pages
+        self.isolated = {}
+        self.keep = None
+
+    def pages(self) -> Iterator[list[pymupdf.Rect]]:
+        for pno, (inline, isolated) in enumerate(self.saved):
+            self.isolated[pno] = [pymupdf.Rect(rect) for rect in isolated]
+            yield [pymupdf.Rect(rect) for rect in inline]
 
 
 def formula_parallel(workers: int = 0, threads: int = 0) -> tuple[int, int]:

@@ -62,7 +62,7 @@ from .pdf_roles import LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
 from .pdf_type3 import Type3Reader, broken_type3_names, recover_type3_page
 from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, line_offsets, typeset_lines
-from .pdf_vision import FormulaDetector, FormulaModel, formula_detector, layout_detector
+from .pdf_vision import FormulaDetector, FormulaModel, ModelBoxes, formula_detector, layout_detector
 
 MATH_FONT_RE = re.compile(r"CMMI|CMB?SY|CMEX|MSBM|MSAM|Math|Symbol|STIX|Cambria Math", re.I)
 # 精确的数学字体白名单（直接判公式）
@@ -10358,25 +10358,29 @@ class _PdfPlan:
     notes: list[str] = field(default_factory=list)  # 每个单元在书里所处位置的说明，见 _index_notes
 
 
-def _plan_pdf(src: Path, runner, layout_model: str, formula_model: FormulaModel | None = None) -> _PdfPlan:
+def _plan_pdf(
+    src: Path, runner, layout_model: str, formula_model: FormulaModel | None = None, boxes: ModelBoxes | None = None,
+) -> _PdfPlan:
     """送翻前的部分：读版面、定角色、并跨页段落，给每个单元打好占位符。
-    断行处的连字符要不要留，看全文里有没有接起来的词（见 _join_lines），整个分析期间都按这一篇的词。"""
+    断行处的连字符要不要留，看全文里有没有接起来的词（见 _join_lines），整个分析期间都按这一篇的词。
+    boxes 是存模型框的地方，给了时两个模型的框读回或存下（见 ModelBoxes）。"""
     src_doc = pymupdf.open(src)
     if src_doc.needs_pass:
         raise ValueError("PDF 有密码保护，暂不支持")
     words = frozenset(word for page in src_doc for word in _CAMEL_RE.findall(page.get_text("text")))
     token = _CAMEL_WORDS.set(words)
     try:
-        return _plan_document(src, src_doc, runner, layout_model, formula_model)
+        return _plan_document(src, src_doc, runner, layout_model, formula_model, boxes)
     finally:
         _CAMEL_WORDS.reset(token)
 
 
 def _plan_document(
     src: Path, src_doc: pymupdf.Document, runner, layout_model: str, formula_model: FormulaModel | None = None,
+    boxes: ModelBoxes | None = None,
 ) -> _PdfPlan:
     # 逐页读线、表、字占准备时间的大半，按页报进度
-    formulas = formula_detector(src_doc, formula_model)
+    formulas = formula_detector(src_doc, formula_model, boxes)
     blocks, frames, scans = _extract(
         src_doc, lambda done, total: runner.report_stage("分析版面", done, total, "页"), formulas,
     )
@@ -10407,7 +10411,7 @@ def _plan_document(
         PageGeometry.from_page(src_doc[i], rects_by_page.get(i, []), frames[i], scans[i])
         for i in range(src_doc.page_count)
     ]
-    detector = layout_detector(src_doc, layout_model)
+    detector = layout_detector(src_doc, layout_model, boxes)
     # 开了版面模型时逐页推好、按页报进度，推完回到「整理段落」
     modeled: list[int] = []
 
@@ -10563,7 +10567,8 @@ def _saved_plan(
     src: Path, runner, layout_model: str, path: Path | None, formula_model: FormulaModel | None = None,
 ) -> _PdfPlan:
     """暂停、中断后继续，或生成另一种版本时，原文件、两个模型和代码都没变，就读回上次的分析结果。
-    一本几百页的书逐页读版面要一分多钟，读回只要一两秒。path 为 None 时不存。"""
+    一本几百页的书逐页读版面要一分多钟，读回只要一两秒。path 为 None 时不存。
+    改了代码要重新分析时，模型框出的框存在旁边的 boxes.json 里（见 ModelBoxes），读回来只重跑规则。"""
     if path is None:
         return _plan_pdf(src, runner, layout_model, formula_model)
     key = _plan_key(src, layout_model, formula_model)
@@ -10571,7 +10576,7 @@ def _saved_plan(
     if plan is not None:
         runner.set_title(plan.title)
         return plan
-    plan = _plan_pdf(src, runner, layout_model, formula_model)
+    plan = _plan_pdf(src, runner, layout_model, formula_model, ModelBoxes(path.with_name("boxes.json"), src))
     _save_plan(path, key, plan)
     return plan
 

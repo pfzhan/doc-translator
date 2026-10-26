@@ -7599,7 +7599,7 @@ def test_the_layout_model_reports_each_page_it_reads(tmp_path, monkeypatch):
     src = tmp_path / "pages.pdf"
     doc.save(src)
     session = NoBoxes()
-    monkeypatch.setattr(pdf, "layout_detector", lambda doc, path: pdf_vision.ModelLayout(doc, session))
+    monkeypatch.setattr(pdf, "layout_detector", lambda doc, path, boxes=None: pdf_vision.ModelLayout(doc, session))
     stages: list[tuple] = []
 
     class R:
@@ -7613,6 +7613,86 @@ def test_the_layout_model_reports_each_page_it_reads(tmp_path, monkeypatch):
     start = stages.index(("版面模型分析", 1, 3, "页"))
     assert stages[start:start + 4] == [("版面模型分析", n, 3, "页") for n in (1, 2, 3)] + [("整理段落", 0, 0, "")]
     assert session.runs == 3
+
+
+def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path, monkeypatch):
+    """改了代码、存下的分析结果作废时重新分析：两个模型的框从 boxes.json 读回，不再推，结果和第一次一样"""
+    import numpy as np
+
+    from app.formats import pdf, pdf_vision
+    from app.formats.pdf_vision import FormulaModel
+
+    class Meta:
+        def __init__(self, names):
+            self.custom_metadata_map = {"names": names}
+
+    class Input:
+        name = "images"
+
+    runs = {"mfd": 0, "layout": 0}
+
+    class Formula:
+        """在 Q7 上框一个行内公式（中心、宽高、两类的分，没做 NMS）"""
+
+        def __init__(self, page):
+            self.page = page
+
+        def get_modelmeta(self):
+            return Meta("{0: 'embedding', 1: 'isolated'}")
+
+        def get_inputs(self):
+            return [Input()]
+
+        def run(self, _outputs, feeds):
+            runs["mfd"] += 1
+            height, width = feeds["images"].shape[2:]
+            zoom = max(height, width) / max(self.page.rect.width, self.page.rect.height)
+            left = (width - round(self.page.rect.width * zoom)) // 2
+            top = (height - round(self.page.rect.height * zoom)) // 2
+            r = self.page.search_for("Q7")[0]
+            x0, y0, x1, y1 = r.x0 * zoom + left, r.y0 * zoom + top, r.x1 * zoom + left, r.y1 * zoom + top
+            return [np.array([[[(x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0, 0.9, 0.0]]], np.float32).transpose(0, 2, 1)]
+
+    class Layout:
+        def get_modelmeta(self):
+            return Meta("{0: 'title'}")
+
+        def get_inputs(self):
+            return [Input()]
+
+        def run(self, _outputs, _feeds):
+            runs["layout"] += 1
+            return [np.zeros((1, 0, 6), np.float32)]
+
+    doc = pymupdf.open()
+    for _ in range(2):
+        page = doc.new_page(width=420, height=240)
+        page.insert_text((40, 60), "We set Q7 to the value found in the previous section here.", fontsize=10)
+    src = tmp_path / "book.pdf"
+    doc.save(src)
+    for name in ("mfd.onnx", "layout.onnx"):
+        (tmp_path / name).write_bytes(b"x")
+    shown = pymupdf.open(src)[0]
+    monkeypatch.setattr(pdf_vision, "_usable_session",
+                        lambda path, *args, **kwargs: Formula(shown) if path.endswith("mfd.onnx") else Layout())
+
+    class R:
+        def report_stage(self, *args, **kwargs):
+            pass
+
+        def set_title(self, title):
+            pass
+
+    plan_path = tmp_path / "plan.pickle"
+    model = FormulaModel(str(tmp_path / "mfd.onnx"))
+    first = pdf._saved_plan(src, R(), str(tmp_path / "layout.onnx"), plan_path, model)
+    assert runs == {"mfd": 2, "layout": 2} and (tmp_path / "boxes.json").is_file()
+    assert any(f.get("text") == "Q7" for formulas in first.formulas for f in formulas)
+    monkeypatch.setattr(pdf, "_code_version", lambda: "changed")
+    again = pdf._saved_plan(src, R(), str(tmp_path / "layout.onnx"), plan_path, model)
+    assert runs == {"mfd": 2, "layout": 2}
+    assert again.texts == first.texts and again.skips == first.skips
+    assert [[f.get("text") for f in fs] for fs in again.formulas] == [[f.get("text") for f in fs] for fs in first.formulas]
 
 def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monkeypatch):
     """同时跑的两个任务不能一起用 MuPDF（find_tables 会改进程全局的字框开关）；

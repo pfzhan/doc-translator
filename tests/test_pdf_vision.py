@@ -361,3 +361,55 @@ def test_layout_inference_stops_when_the_job_is_paused():
 
     asyncio.run(main())
     assert 0 < len(session.inputs) < 50
+
+
+def test_saved_boxes_come_back_only_for_the_same_pdf_model_and_size(tmp_path):
+    """框按 PDF、模型文件、输入尺寸存。换了哪一样都不读回；两个模型分开存"""
+    import os
+
+    from app.formats.pdf_vision import ModelBoxes
+
+    src = tmp_path / "a.pdf"
+    src.write_bytes(b"%PDF-1.4 fake")
+    model = tmp_path / "mfd.onnx"
+    model.write_bytes(b"x")
+    boxes = ModelBoxes(tmp_path / "boxes.json", src)
+    pages = [[[[1.0, 2.0, 3.0, 4.0]], []]]
+    boxes.keep("formula", str(model), 1024, pages)
+    boxes.keep("layout", str(model), 1024, {"0": [["figure", [0.0, 0.0, 5.0, 5.0], 0.9]]})
+    again = ModelBoxes(tmp_path / "boxes.json", src)
+    assert again.load("formula", str(model), 1024) == pages
+    assert again.load("layout", str(model), 1024) == {"0": [["figure", [0.0, 0.0, 5.0, 5.0], 0.9]]}
+    assert again.load("formula", str(model), 768) is None
+    assert again.load("formula", "", 1024) is None
+    stat = model.stat()
+    os.utime(model, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+    assert again.load("formula", str(model), 1024) is None
+    os.utime(model, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+    src.write_bytes(b"%PDF-1.4 another")
+    assert again.load("formula", str(model), 1024) is None
+    # 存不下（目录不在了）只是下次要重新推
+    ModelBoxes(tmp_path / "gone" / "boxes.json", src).keep("formula", str(model), 1024, pages)
+
+
+def test_formula_boxes_are_kept_only_after_the_whole_book():
+    """整本推完才存；暂停时中途停下，不存半本"""
+    doc = pymupdf.open()
+    for _ in range(3):
+        doc.new_page(width=400, height=500)
+    session = FormulaSession(doc[0].rect, [(pymupdf.Rect(100, 100, 140, 112), 0.9, 0)])
+    kept = []
+    detector = FormulaDetector(doc, [session])
+    detector.keep = kept.append
+    pages = detector.pages()
+    next(pages)
+    pages.close()
+    assert kept == []
+    # 和提取时一样：逐页取，取完最后一页就关掉
+    detector = FormulaDetector(doc, [session])
+    detector.keep = kept.append
+    pages = detector.pages()
+    assert all(len(next(pages)) == 1 for _ in range(3))
+    pages.close()
+    [saved] = kept
+    assert len(saved) == 3 and all(len(inline) == 1 and isolated == [] for inline, isolated in saved)
