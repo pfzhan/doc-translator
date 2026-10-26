@@ -18,7 +18,7 @@ class _Input:
 
 
 class FakeSession:
-    """按页面坐标给框，换算成模型输入里的像素坐标（长边缩放到 1024、居中补边）。"""
+    """按页面坐标给框，换算成模型输入里的像素坐标（长边缩放到输入的长边、两侧补边）。"""
 
     def __init__(self, page_rect, boxes):
         self.page_rect = page_rect
@@ -34,9 +34,10 @@ class FakeSession:
     def run(self, _outputs, feeds):
         batch = feeds["images"]
         self.inputs.append(batch.shape)
-        zoom = 1024 / max(self.page_rect.width, self.page_rect.height)
-        left = (1024 - round(self.page_rect.width * zoom)) // 2
-        top = (1024 - round(self.page_rect.height * zoom)) // 2
+        height, width = batch.shape[2:]
+        zoom = max(height, width) / max(self.page_rect.width, self.page_rect.height)
+        left = (width - round(self.page_rect.width * zoom)) // 2
+        top = (height - round(self.page_rect.height * zoom)) // 2
         rows = [
             [rect.x0 * zoom + left, rect.y0 * zoom + top, rect.x1 * zoom + left, rect.y1 * zoom + top, score, cls]
             for rect, score, cls in self.boxes
@@ -77,7 +78,8 @@ def test_model_marks_chart_labels_and_display_formulas_as_figures():
     ]
     roles = ModelLayout(doc, session).classify(items, [_geo()], median=10)
     assert roles == [Role.FIGURE, Role.FIGURE, Role.BODY]
-    assert session.inputs == [(1, 3, 1024, 1024)]
+    # 400 × 500 的页：长边 1024，短边 820 补到 32 的倍数 832，不补成正方形
+    assert session.inputs == [(1, 3, 1024, 832)]
 
 
 def test_model_titles_and_captions_do_not_pull_text_out_of_a_figure():
@@ -124,6 +126,8 @@ def test_boxes_map_back_through_page_rotation():
     [region] = ModelLayout(doc, session).regions(0)
     assert region.label == "figure"
     assert all(abs(a - b) < 1 for a, b in zip(region.rect, target))
+    # 转过以后是横的，补的是上下
+    assert session.inputs == [(1, 3, 832, 1024)]
 
 
 def test_without_a_usable_model_the_rules_are_used(tmp_path):
@@ -159,11 +163,11 @@ class FormulaSession(FakeSession):
         return _FormulaMeta()
 
     def run(self, _outputs, feeds):
-        size = feeds["images"].shape[-1]
+        height, width = feeds["images"].shape[2:]
         self.inputs.append(feeds["images"].shape)
-        zoom = size / max(self.page_rect.width, self.page_rect.height)
-        left = (size - round(self.page_rect.width * zoom)) // 2
-        top = (size - round(self.page_rect.height * zoom)) // 2
+        zoom = max(height, width) / max(self.page_rect.width, self.page_rect.height)
+        left = (width - round(self.page_rect.width * zoom)) // 2
+        top = (height - round(self.page_rect.height * zoom)) // 2
         columns = []
         for rect, score, cls in self.boxes:
             x0, y0, x1, y1 = rect.x0 * zoom + left, rect.y0 * zoom + top, rect.x1 * zoom + left, rect.y1 * zoom + top
@@ -218,7 +222,7 @@ def test_formula_pages_come_in_page_order_at_the_chosen_size():
     session = PerPage(doc[0].rect, [])
     pages = list(FormulaDetector(doc, [session], 768).pages())
     assert [round(found.y0) for [found] in pages] == [100, 200, 300]
-    assert session.inputs == [(1, 3, 768, 768)] * 3
+    assert session.inputs == [(1, 3, 768, 640)] * 3
 
 
 def test_formula_inference_splits_the_cores_between_two_pages(monkeypatch):

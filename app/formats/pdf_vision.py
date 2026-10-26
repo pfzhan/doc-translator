@@ -33,6 +33,8 @@ from .pdf_roles import HeuristicLayout, LayoutDetector, LayoutItem, Role
 
 _INPUT = 1024
 _PAD_GRAY = 114
+# 两个模型的输入边长都要是 32 的倍数（YOLO 的下采样步长）
+_STRIDE = 32
 _MIN_SCORE = 0.4
 # 块的面积有这么多落在框里，才算框里的块
 _COVER = 0.6
@@ -147,13 +149,17 @@ class ModelLayout:
 
 
 def _page_batch(page: pymupdf.Page, size: int) -> tuple[np.ndarray, Callable[..., pymupdf.Rect]]:
-    """页面画成模型的输入：长边缩到 size，居中补灰边成正方形。另给把输入里的框换回页面坐标的函数。"""
+    """页面画成模型的输入：长边缩到 size，两边各补灰边到 _STRIDE 的倍数。另给把输入里的框换回页面坐标的函数。
+    补成 size × size 的正方形时，信纸大小的页有两成多是灰边，推理时间也跟着多两成多；
+    Ultralytics 自己推理时也只补到步长的倍数。"""
     zoom = size / max(page.rect.width, page.rect.height)
     pix = page.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), colorspace=pymupdf.csRGB, alpha=False)
     image = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, 3)
-    canvas = np.full((size, size, 3), _PAD_GRAY, np.uint8)
-    top = (size - pix.height) // 2
-    left = (size - pix.width) // 2
+    height = -(-pix.height // _STRIDE) * _STRIDE
+    width = -(-pix.width // _STRIDE) * _STRIDE
+    canvas = np.full((height, width, 3), _PAD_GRAY, np.uint8)
+    top = (height - pix.height) // 2
+    left = (width - pix.width) // 2
     canvas[top:top + pix.height, left:left + pix.width] = image
     batch = canvas.transpose(2, 0, 1)[None].astype(np.float32) / 255.0
 
