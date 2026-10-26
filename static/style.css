@@ -504,7 +504,18 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-
 .layout-download { margin-top: 0; }
 .layout-download .field { margin-bottom: 0; }
 .layout-download .btn { height: 38px; }
-.layout-card + .layout-card { margin-top: 20px; }
+/* 两个模型各占一个标签，标签上标出开没开 */
+.model-tabs { display: flex; width: fit-content; max-width: 100%; margin-bottom: 16px; }
+.model-tab {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border: 0; border-radius: 5px;
+  background: none; color: var(--text-2); font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.model-tab:hover { color: var(--text); }
+.model-tab[aria-selected="true"] { background: var(--seg-on); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
+.model-tab:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+.model-state { font-size: 12px; font-weight: 400; color: var(--muted); }
+.model-state.is-on { color: var(--ok); }
 .download-status { margin: 8px 0 0; min-height: 1.4em; }
 .download-status.warn { color: var(--error); }
 .actions { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); }
@@ -549,6 +560,8 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-
   .lang-row { flex-wrap: wrap; }
   .lang-row .field { flex: 1 1 calc(50% - 30px); }
   .field-row { flex-direction: column; align-items: stretch; }
+  /* 两个标签并排放不下时折行，不横向撑出页面 */
+  .model-tab { flex: 1 1 0; min-width: 0; flex-wrap: wrap; justify-content: center; gap: 2px 8px; white-space: normal; }
   .form-foot { flex-direction: column-reverse; align-items: stretch; }
   .form-foot .btn { width: 100%; }
   .job { grid-template-columns: 32px minmax(0, 1fr); grid-template-areas: "fmt main" "fmt status" "actions actions"; }

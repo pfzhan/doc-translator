@@ -270,7 +270,16 @@
     <p class="hint">可选。翻译 PDF 时用模型从页面图像里框出图、行间公式、标题和图注，和规则一起判断哪些文字保留原文。不开启时只用规则。</p>
   </div>
 
-  <form id="layout-form" class="card svc-detail layout-card" autocomplete="off">
+  <div class="segmented model-tabs" role="tablist" aria-label="模型">
+    <button type="button" role="tab" class="model-tab" id="layout-tab" data-model="layout" aria-controls="layout-form" aria-selected="true">
+      DocLayout-YOLO<span class="model-state" id="layout-state"></span>
+    </button>
+    <button type="button" role="tab" class="model-tab" id="formula-tab" data-model="formula" aria-controls="formula-form" aria-selected="false">
+      Pix2Text MFD 公式检测<span class="model-state" id="formula-state"></span>
+    </button>
+  </div>
+
+  <form id="layout-form" class="card svc-detail layout-card" role="tabpanel" aria-labelledby="layout-tab" autocomplete="off">
     <div class="layout-info">
       <div class="svc-title">
         <h3>DocLayout-YOLO</h3>
@@ -309,7 +318,7 @@
     </div>
   </form>
 
-  <form id="formula-form" class="card svc-detail layout-card" autocomplete="off">
+  <form id="formula-form" class="card svc-detail layout-card" role="tabpanel" aria-labelledby="formula-tab" autocomplete="off" hidden>
     <div class="layout-info">
       <div class="svc-title">
         <h3>Pix2Text MFD 公式检测</h3>

@@ -1725,6 +1725,9 @@ function renderModel(kind, m, { keepForm = false } = {}) {
     warn.textContent = "文件不存在：";
     file.append(warn, where);
   }
+  const onOff = el("state");
+  onOff.textContent = m.enabled ? "已开启" : "未开启";
+  onOff.classList.toggle("is-on", m.enabled);
   if (!keepForm) {
     el("enabled").checked = m.enabled;
     el("path").value = m.path;
@@ -1782,6 +1785,28 @@ function modelForm(kind) {
 
 function loadLayoutModel() {
   for (const kind of MODEL_KINDS) loadModel(kind);
+}
+
+// 两个模型各占一个标签，记住上次看的是哪个
+function showModelTab(kind) {
+  if (!MODEL_KINDS.includes(kind)) kind = MODEL_KINDS[0];
+  for (const k of MODEL_KINDS) {
+    $(`${k}-tab`).setAttribute("aria-selected", String(k === kind));
+    $(`${k}-form`).hidden = k !== kind;
+  }
+  try {
+    localStorage.setItem("doc-translator-model-tab", kind);
+  } catch {
+    /* 忽略 */
+  }
+}
+for (const tab of document.querySelectorAll(".model-tab")) {
+  tab.addEventListener("click", () => showModelTab(tab.dataset.model));
+}
+try {
+  showModelTab(localStorage.getItem("doc-translator-model-tab"));
+} catch {
+  showModelTab(MODEL_KINDS[0]);
 }
 
 for (const kind of MODEL_KINDS) {
