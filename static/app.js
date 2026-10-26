@@ -5,6 +5,9 @@ const state = {
   providers: {}, services: [], defaultId: "google", selectedId: null,
   jobs: [], diskUsage: 0, retentionDays: 30, readerView: "both", view: "translate",
   selected: new Set(),  // 记录页勾选的记录 id，批量删除用
+  historyPage: 1,  // 记录页的第几页（从 1 起）
+  pageSize: 20,  // 记录页每页的条数，页面上可以改（PAGE_SIZES 之一）
+  pageJobs: [],  // 记录页当前这一页的记录
 };
 
 async function api(url, options = {}) {
@@ -983,13 +986,26 @@ function serviceLabel(job) {
   return job.model && !job.service_name.includes(job.model) ? `${job.service_name} · ${job.model}` : job.service_name;
 }
 
+// 记录页每页可选的条数。有任务在跑时列表每 2 秒重画一次，只画一页
+const PAGE_SIZES = [10, 20, 50, 100];
+
 function renderJobs() {
   const all = state.jobs;
   const list = $("history-list");
-  // 已经不在列表里的（删掉了、过期了）不再算选中
-  const ids = new Set(all.map((j) => j.id));
+  const pages = Math.max(1, Math.ceil(all.length / state.pageSize));
+  state.historyPage = Math.min(Math.max(1, state.historyPage), pages);
+  const start = (state.historyPage - 1) * state.pageSize;
+  state.pageJobs = all.slice(start, start + state.pageSize);
+  // 不在这一页的（删掉了、过期了、挤到别的页）不再算选中
+  const ids = new Set(state.pageJobs.map((j) => j.id));
   for (const id of state.selected) if (!ids.has(id)) state.selected.delete(id);
-  list.replaceChildren(...all.map((job) => jobRow(job, true)));
+  list.replaceChildren(...state.pageJobs.map((job) => jobRow(job, true)));
+  // 只有一页时不显示翻页按钮，每页条数仍可以改
+  $("history-pager").hidden = all.length === 0;
+  $("pager-pages").hidden = pages <= 1;
+  $("page-info").textContent = `第 ${state.historyPage} / ${pages} 页`;
+  $("page-prev").disabled = state.historyPage <= 1;
+  $("page-next").disabled = state.historyPage >= pages;
   $("history-empty").hidden = all.length > 0;
   $("recent").hidden = all.length === 0;
   $("recent-list").replaceChildren(...all.slice(0, 3).map((job) => jobRow(job)));
@@ -1001,10 +1017,10 @@ function renderJobs() {
   renderSelection();
 }
 
-// 列表上方的勾选栏：没勾选时显示全部暂停/继续，勾选后换成取消选择、删除选中
+// 列表上方的勾选栏：没勾选时显示全部暂停/继续，勾选后换成取消选择、删除选中。全选只选当前这一页
 function renderSelection() {
   const n = state.selected.size;
-  const total = state.jobs.length;
+  const total = state.pageJobs.length;
   const all = $("select-all");
   $("history-bar").hidden = total === 0;
   all.checked = n > 0 && n === total;
@@ -1017,11 +1033,41 @@ function renderSelection() {
 }
 
 $("select-all").addEventListener("change", () => {
-  // 已经全选时点一下是全部取消，否则（含部分选中）全选
-  const allSelected = state.selected.size === state.jobs.length;
+  // 已经全选时点一下是全部取消，否则（含部分选中）全选这一页
+  const allSelected = state.selected.size === state.pageJobs.length;
   state.selected.clear();
-  if (!allSelected) for (const job of state.jobs) state.selected.add(job.id);
+  if (!allSelected) for (const job of state.pageJobs) state.selected.add(job.id);
   renderJobs();
+});
+
+// 换页时清掉勾选：看不见的记录不会被一起删掉
+function showHistoryPage(page) {
+  state.historyPage = page;
+  state.selected.clear();
+  renderJobs();
+  $("view-history").scrollIntoView({ block: "start" });
+}
+$("page-prev").addEventListener("click", () => showHistoryPage(state.historyPage - 1));
+$("page-next").addEventListener("click", () => showHistoryPage(state.historyPage + 1));
+
+// 每页条数记在浏览器里，改了以后回到第一页
+try {
+  const saved = Number(localStorage.getItem("doc-translator-page-size"));
+  if (PAGE_SIZES.includes(saved)) state.pageSize = saved;
+} catch {
+  /* 忽略 */
+}
+$("page-size").value = String(state.pageSize);
+$("page-size").addEventListener("change", (e) => {
+  const size = Number(e.target.value);
+  if (!PAGE_SIZES.includes(size)) return;
+  state.pageSize = size;
+  try {
+    localStorage.setItem("doc-translator-page-size", String(size));
+  } catch {
+    /* 忽略 */
+  }
+  showHistoryPage(1);
 });
 
 $("select-none").addEventListener("click", () => {

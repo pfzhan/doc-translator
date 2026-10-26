@@ -120,6 +120,22 @@
     </span>
   </div>
   <ul class="job-list" id="history-list"></ul>
+  <nav class="pager" id="history-pager" aria-label="翻页" hidden>
+    <span class="pager-pages" id="pager-pages">
+      <button type="button" class="btn sm" id="page-prev">上一页</button>
+      <span class="hint" id="page-info"></span>
+      <button type="button" class="btn sm" id="page-next">下一页</button>
+    </span>
+    <label class="pager-size hint">每页
+      <select id="page-size" aria-label="每页条数">
+        <option value="10">10</option>
+        <option value="20">20</option>
+        <option value="50">50</option>
+        <option value="100">100</option>
+      </select>
+      条
+    </label>
+  </nav>
   <div class="empty" id="history-empty" hidden>
     <div class="empty-mark" aria-hidden="true">译</div>
     <p>还没有翻译记录</p>
