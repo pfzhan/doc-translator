@@ -1048,6 +1048,8 @@ def _split_covered(
         # 起笔点取这一截第一个字的。span 的起笔点是第一个字的：「 .」的空格落在前面下标的基线上，
         # 切下来的句点照抄它，擦除时按基线认不到，句点留在原处
         piece = {**span, "text": text[start:index], "bbox": (x0, y0, x1, y1), "origin": boxes[start][2]}
+        # 页面上的 span 还是切开前的那一个，裁公式时按它认出哪些字是公式自己的（见 _outside_formula）
+        piece["source"] = span.get("source") or tuple(span["bbox"])
         if "ink" in span:
             piece["ink"] = (x0, span["ink"][1], x1, span["ink"][3])
         if marks[start]:
@@ -4362,6 +4364,65 @@ def _span_ink_boxes(
     return []
 
 
+def _outside_formula(
+    page_spans: list[dict], run_spans: Sequence[dict],
+    char_index: list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]] | None = None,
+) -> list[dict]:
+    """页面上的 span，公式自己的字除外。
+
+    公式的字可能是从正文 span 里切出来的（公式检测模型框出的 σ、y = 1，根号下的数）。
+    页面上的 span 还是切开前的那一个，框和公式的 span 对不上，整个会被当成别人的字：
+    公式又高又宽时（带分式、上标）按它挖洞，公式自己的字就被挖掉。这样的 span 只留
+    切剩下的非空白字，按连着的几段算。逐字的框取 span 的 chars（见 _attach_chars），没有时查 char_index。"""
+    sources = [pymupdf.Rect(span["source"]) for span in run_spans if span.get("source") is not None]
+    if not sources:
+        return page_spans
+    pieces = [pymupdf.Rect(span["bbox"]) for span in run_spans if span.get("bbox") is not None]
+    out: list[dict] = []
+    for span in page_spans:
+        box = pymupdf.Rect(span["bbox"])
+        if not any(_boxes_match(box, source) for source in sources):
+            out.append(span)
+            continue
+        chars = span.get("chars")
+        if chars is None and char_index is not None:
+            chars = next((found for span_box, found in char_index if _boxes_match(box, span_box)), None)
+        if chars is None:
+            out.append(span)
+            continue
+        group: list[tuple[str, pymupdf.Rect]] = []
+        for char, rect in [*chars, ("", None)]:
+            middle = (rect.x0 + rect.x1) / 2 if rect is not None else 0.0
+            ours = rect is not None and any(
+                piece.x0 - 0.1 <= middle <= piece.x1 + 0.1 and min(piece.y1, box.y1) > max(piece.y0, box.y0)
+                for piece in pieces
+            )
+            if rect is not None and char.strip() and not ours:
+                group.append((char, rect))
+                continue
+            if group:
+                x0, x1 = min(r.x0 for _c, r in group), max(r.x1 for _c, r in group)
+                rest = {**span, "text": "".join(c for c, _r in group), "bbox": (x0, box.y0, x1, box.y1)}
+                if span.get("ink") is not None:
+                    rest["ink"] = (x0, span["ink"][1], x1, span["ink"][3])
+                out.append(rest)
+            group = []
+    return out
+
+
+def _attach_chars(page: pymupdf.Page, spans: list[dict]) -> None:
+    """给 span 记下逐字的框（span["chars"]），按 span 的框对上。页面擦过以后再查就查不到了。"""
+    index = {_rect_key(rect): chars for rect, chars in _page_char_index(page)}
+    for span in spans:
+        chars = index.get(_rect_key(pymupdf.Rect(span["bbox"])))
+        if chars is not None:
+            span["chars"] = chars
+
+
+def _rect_key(rect: pymupdf.Rect) -> tuple[float, float, float, float]:
+    return (round(rect.x0, 1), round(rect.y0, 1), round(rect.x1, 1), round(rect.y1, 1))
+
+
 def _ink_x_bounds(
     pix: pymupdf.Pixmap,
     clip: pymupdf.Rect,
@@ -4441,7 +4502,7 @@ def _tighten_formula_sides(
         pymupdf.Rect(curve) for curve in part.get("curves") or [] if curve is not None
     )
     foreign: list[pymupdf.Rect] = []
-    for span in page_spans:
+    for span in _outside_formula(page_spans, part.get("spans") or [], char_index):
         if not str(span.get("text") or "").strip() or span.get("bbox") is None:
             continue
         rect = pymupdf.Rect(span["bbox"])
@@ -7401,6 +7462,8 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
     # 当成外来 span 被挖洞挖掉
     curve_rects = [pymupdf.Rect(r) for r in f.get("curves") or []]
     run_rects = [pymupdf.Rect(s["bbox"]) for s in f["spans"]] + curve_rects
+    if page_spans:
+        page_spans = _outside_formula(page_spans, f["spans"])
 
     def merge_rects(rects: list["pymupdf.Rect"]) -> list["pymupdf.Rect"]:
         out: list[pymupdf.Rect] = []
@@ -9089,6 +9152,10 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             _attach_ink(page, page_data)
             page_spans = [s for blk in page_data["blocks"] if blk.get("type") == 0
                           for ln in blk["lines"] for s in ln["spans"] if s.get("font") not in bitmap_fonts]
+            # 公式的字从正文 span 里切出来时，裁公式要按字认，擦了就查不到了
+            if any(span.get("source") for f in mid_map.values() for part in _formula_parts(f)
+                   for span in part.get("spans") or []):
+                _attach_chars(page, page_spans)
         fmS = _page_form(doc, page) if mid_map else None
         # 公式贴的是擦除前打包的原页，不受影响。点阵字的字形是全文共用的，擦除、裁公式的过滤会改到它，
         # 这一页写完原样写回

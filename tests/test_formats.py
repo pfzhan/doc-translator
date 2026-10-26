@@ -2843,6 +2843,10 @@ def test_detected_formula_boxes_mark_their_letters():
     sent, formulas = _placeholderize(block, 0)
     assert sent == "We call the input {v1}, and set {v2}, then 0 and 1."
     assert [formula["text"] for formula in formulas] == ["x", "y = 1"]
+    # y = 1 是从一整段正文 span 里切出来的，记着页面上原来那个 span，裁公式时按它认（见 _outside_formula）
+    [line] = page.get_text("dict")["blocks"][0]["lines"][-1:]
+    [y_span] = formulas[1]["spans"]
+    assert pymupdf.Rect(y_span["source"]) == pymupdf.Rect(line["spans"][-1]["bbox"])
     [block], _frames, _scans = _extract(doc)
     assert _placeholderize(block, 0)[0] == "We call the input {i}x{/i}, and set y = 1, then 0 and 1."
 
@@ -7215,6 +7219,31 @@ def test_formula_holes_follow_the_neighbours_ink_not_their_font_box():
     # N 的墨迹从 460.3 起
     assert hole_bottom(brace) > 460.3
     assert hole_bottom({**brace, "ink": (328.0, 445.6, 332.9, 457.4)}) <= 457.5
+
+
+def test_a_formula_cut_from_a_text_span_is_not_holed_by_that_span():
+    """公式检测模型把「 σ」里的 σ 切出来做公式。页面上还是原来那个「 σ」span，框和公式的 σ 对不上；
+    公式带上标、比一行高时，按它挖洞会把 σ 挖掉（译文里只剩上标）。原 span 只留切剩的字，空格没有墨迹，不挖。
+    上一行伸下来的字照样挖"""
+    from app.formats.pdf import _formula_form, _page_form
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    fms = _page_form(doc, page)
+    whole = (269.5, 213.2, 277.4, 222.2)
+    sigma = {"text": "σ", "bbox": (272.0, 213.2, 277.4, 222.2), "source": whole}
+    square = {"text": "2", "bbox": (277.6, 206.0, 280.0, 214.0)}
+    formula = {"bbox": pymupdf.Rect(272.0, 206.0, 280.0, 222.2), "spans": [sigma, square]}
+    source = {"text": " σ", "bbox": whole,
+              "chars": [(" ", pymupdf.Rect(269.5, 213.2, 272.0, 222.2)), ("σ", pymupdf.Rect(272.0, 213.2, 277.4, 222.2))]}
+    above = {"text": "p", "bbox": (273.0, 196.0, 276.0, 205.5)}
+
+    def clip_rects(page_spans):
+        xref = _formula_form(doc, page, fms, formula, "/Fx", page_spans)
+        return re.findall(r"([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) re", doc.xref_stream(xref).decode())
+
+    assert len(clip_rects([dict(source), dict(square)])) == 1
+    assert len(clip_rects([dict(source), dict(square), above])) == 2
 
 
 def test_list_item_near_the_page_middle_stays_left_aligned():
