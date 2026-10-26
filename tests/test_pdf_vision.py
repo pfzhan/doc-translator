@@ -183,7 +183,7 @@ def test_formula_boxes_keep_the_best_of_overlapping_ones():
         (pymupdf.Rect(200, 100, 230, 112), 0.1, 0),
         (pymupdf.Rect(80, 200, 320, 240), 0.8, 1),
     ])
-    detector = FormulaDetector(doc, session)
+    detector = FormulaDetector(doc, [session])
     assert sorted(region.label for region in detector.regions(0)) == ["embedding", "isolated"]
     [found] = detector.inline(0)
     assert all(abs(a - b) < 1 for a, b in zip(found, inline))
@@ -194,9 +194,9 @@ def test_formula_detector_needs_an_inline_formula_class(monkeypatch, tmp_path):
     assert formula_detector(_doc()) is None
     assert formula_detector(_doc(), FormulaModel(str(tmp_path / "missing.onnx"))) is None
     doc = _doc()
-    monkeypatch.setattr(pdf_vision, "_usable_session", lambda path, threads=0: FakeSession(doc[0].rect, []))
+    monkeypatch.setattr(pdf_vision, "_usable_session", lambda path, *args, **kwargs: FakeSession(doc[0].rect, []))
     assert formula_detector(doc, FormulaModel("layout.onnx")) is None
-    monkeypatch.setattr(pdf_vision, "_usable_session", lambda path, threads=0: FormulaSession(doc[0].rect, []))
+    monkeypatch.setattr(pdf_vision, "_usable_session", lambda path, *args, **kwargs: FormulaSession(doc[0].rect, []))
     assert isinstance(formula_detector(doc, FormulaModel("mfd.onnx")), FormulaDetector)
 
 
@@ -216,26 +216,106 @@ def test_formula_pages_come_in_page_order_at_the_chosen_size():
             return super().run(outputs, feeds)
 
     session = PerPage(doc[0].rect, [])
-    pages = list(FormulaDetector(doc, session, 768).pages())
+    pages = list(FormulaDetector(doc, [session], 768).pages())
     assert [round(found.y0) for [found] in pages] == [100, 200, 300]
     assert session.inputs == [(1, 3, 768, 768)] * 3
 
 
-def test_formula_inference_leaves_two_cores_for_reading_pages(monkeypatch):
-    """模型在后台推理时主线程还在读页面，推理线程比核数少两个，至少一个"""
+def test_formula_inference_splits_the_cores_between_two_pages(monkeypatch):
+    """自动时 4 核以上两页同时推理，核平分；核少时一页用满。设置里给了就按设置。推理线程都不空转"""
     seen = []
     doc = _doc()
 
-    def usable(path, threads=0):
-        seen.append(threads)
+    def usable(path, threads=0, spin=True, copy=0):
+        seen.append((threads, spin, copy))
         return FormulaSession(doc[0].rect, [])
 
     monkeypatch.setattr(pdf_vision, "_usable_session", usable)
     monkeypatch.setattr(pdf_vision.os, "cpu_count", lambda: 6)
-    formula_detector(doc, FormulaModel("mfd.onnx"))
+    assert len(formula_detector(doc, FormulaModel("mfd.onnx")).sessions) == 2
+    assert seen == [(3, False, 0), (3, False, 1)]
+    seen.clear()
+    assert len(formula_detector(doc, FormulaModel("mfd.onnx", workers=3, threads=1)).sessions) == 3
+    assert seen == [(1, False, 0), (1, False, 1), (1, False, 2)]
+    seen.clear()
     monkeypatch.setattr(pdf_vision.os, "cpu_count", lambda: 2)
-    formula_detector(doc, FormulaModel("mfd.onnx"))
-    assert seen == [4, 1]
+    assert len(formula_detector(doc, FormulaModel("mfd.onnx")).sessions) == 1
+    assert seen == [(2, False, 0)]
+
+
+def test_formula_detector_uses_the_copies_that_load(monkeypatch):
+    """后面几份模型加载不了时用已经加载好的，第一份都加载不了才只用规则"""
+    doc = _doc()
+    monkeypatch.setattr(pdf_vision, "_usable_session",
+                        lambda path, threads=0, spin=True, copy=0: FormulaSession(doc[0].rect, []) if copy < 1 else None)
+    assert len(formula_detector(doc, FormulaModel("mfd.onnx", workers=3)).sessions) == 1
+    monkeypatch.setattr(pdf_vision, "_usable_session", lambda path, *args, **kwargs: None)
+    assert formula_detector(doc, FormulaModel("mfd.onnx", workers=3)) is None
+
+
+def test_several_pages_infer_at_once_each_with_its_own_copy():
+    """两份模型时页按顺序轮流交给两份，同一份不会同时推两页；给出的框仍按页的顺序"""
+    import threading
+    import time
+
+    doc = pymupdf.open()
+    for _ in range(5):
+        doc.new_page(width=400, height=500)
+    box = pymupdf.Rect(100, 100, 140, 112)
+    done = []
+
+    class Copy(FormulaSession):
+        def __init__(self, name, pause):
+            super().__init__(doc[0].rect, [])
+            self.name = name
+            self.pause = pause
+            self.lock = threading.Lock()
+
+        def run(self, outputs, feeds):
+            assert self.lock.acquire(blocking=False), "同一份模型同时推了两页"
+            try:
+                time.sleep(self.pause)
+                shift = len(done) * 100
+                done.append(self.name)
+                self.boxes = [(box + (0, shift, 0, shift), 0.9, 0)]
+                return super().run(outputs, feeds)
+            finally:
+                self.lock.release()
+
+    # a 比 b 慢：b 先推完时，下一页要等 a 空出来才能交给 a
+    copies = [Copy("a", 0.05), Copy("b", 0.01)]
+    detector = FormulaDetector(doc, copies)
+    pages = list(detector.pages())
+    assert len(pages) == 5 and sorted(done) == ["a", "a", "a", "b", "b"]
+    assert [len(c.inputs) for c in copies] == [3, 2]
+    assert sorted(detector.isolated) == [0, 1, 2, 3, 4]
+
+
+def test_formula_sessions_do_not_spin_while_waiting(monkeypatch, tmp_path):
+    """不空转的推理线程等活时让出核；同一个模型的几份各是一个会话"""
+    import onnxruntime
+
+    made = []
+
+    class Session:
+        def __init__(self, path, options, providers):
+            try:
+                made.append(options.get_session_config_entry("session.intra_op.allow_spinning"))
+            except RuntimeError:  # 没设过，onnxruntime 默认空转
+                made.append(None)
+
+    monkeypatch.setattr(onnxruntime, "InferenceSession", Session)
+    pdf_vision.load_session.cache_clear()
+    try:
+        model = tmp_path / "mfd.onnx"
+        model.write_bytes(b"x")
+        first = pdf_vision._usable_session(str(model), 3, spin=False, copy=0)
+        assert pdf_vision._usable_session(str(model), 3, spin=False, copy=1) is not first
+        assert pdf_vision._usable_session(str(model), 3, spin=False, copy=0) is first
+        pdf_vision.load_session("layout.onnx")
+        assert made == ["0", "0", None]
+    finally:
+        pdf_vision.load_session.cache_clear()
 
 
 def test_formula_pages_also_keep_the_display_formula_boxes():
@@ -243,7 +323,7 @@ def test_formula_pages_also_keep_the_display_formula_boxes():
     doc = _doc()
     display = pymupdf.Rect(80, 200, 320, 240)
     session = FormulaSession(doc[0].rect, [(pymupdf.Rect(100, 100, 140, 112), 0.9, 0), (display, 0.8, 1)])
-    detector = FormulaDetector(doc, session)
+    detector = FormulaDetector(doc, [session])
     [inline] = list(detector.pages())
     assert len(inline) == 1
     [found] = detector.isolated[0]

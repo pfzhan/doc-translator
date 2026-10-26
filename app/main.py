@@ -19,7 +19,7 @@ from . import history, layout_model
 from .formats import PREVIEW_FORMATS, SUPPORTED, output_variant, translate_file
 from .formats.epub import book_outline
 from .formats.pdf import mupdf_turn
-from .formats.pdf_vision import FormulaModel
+from .formats.pdf_vision import FormulaModel, formula_parallel
 from .history import Job, JobStore
 from .languages import GOOGLE_CODES, LANGUAGES
 from .prompts import default_prompts
@@ -670,15 +670,22 @@ def _model_path(kind: str) -> str:
 
 def _formula_model() -> FormulaModel | None:
     path = _model_path("formula")
-    return FormulaModel(path, settings.formula_model["size"]) if path else None
+    conf = settings.formula_model
+    return FormulaModel(path, conf["size"], conf["workers"], conf["threads"]) if path else None
 
 
 def _model_status(kind: str) -> dict:
     spec = _spec(kind)
     conf = settings.model(spec.key)
     path = spec.resolve(conf["path"])
+    extra = {}
+    if spec is layout_model.FORMULA:
+        # 页面上「自动」现在对应的值
+        workers, threads = formula_parallel()
+        extra["auto"] = {"workers": workers, "threads": threads}
     return {
         **conf,
+        **extra,
         "resolved": str(path),
         "default_path": str(spec.default_path()),
         "runtime": layout_model.runtime_version(),
@@ -698,7 +705,7 @@ def get_model(kind: str):
 def update_model(kind: str, data: dict = Body(...)):
     spec = _spec(kind)
     try:
-        settings.update({spec.key: {k: data[k] for k in ("enabled", "path", "size") if k in data}})
+        settings.update({spec.key: {k: data[k] for k in ("enabled", "path", "size", "workers", "threads") if k in data}})
     except SettingsError as e:
         raise HTTPException(400, str(e))
     return _model_status(kind)

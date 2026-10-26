@@ -340,6 +340,16 @@
         </select>
       </label>
 
+      <div class="field-row">
+        <label class="field">同时推理的页数
+          <input name="workers" id="formula-workers" type="number" min="0" max="8">
+        </label>
+        <label class="field">每页推理线程数
+          <input name="threads" id="formula-threads" type="number" min="0" max="64">
+        </label>
+      </div>
+      <p class="hint">默认值按 CPU 核数算出，清空后恢复默认。这两项只影响分析版面的速度，分析结果不变。</p>
+
       <div class="field-row layout-download">
         <label class="field">下载来源
           <select id="formula-source"></select>

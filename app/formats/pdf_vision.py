@@ -17,6 +17,7 @@ import ast
 import functools
 import os
 import re
+from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
@@ -71,22 +72,26 @@ def layout_detector(doc: pymupdf.Document, model_path: str = "") -> LayoutDetect
     return HeuristicLayout() if session is None else ModelLayout(doc, session)
 
 
-@functools.lru_cache(maxsize=2)
-def load_session(path: str, threads: int = 0) -> Any:
+@functools.lru_cache(maxsize=6)
+def load_session(path: str, threads: int = 0, spin: bool = True, copy: int = 0) -> Any:
     """加载模型。threads 是推理用的线程数，0 表示 onnxruntime 自己定（用满所有核）。
+    spin 为假时推理线程等活不空转，把核让给同时在跑的其他线程。copy 区分同一个模型的几份，
+    几页同时推理时每页用一份（见 FormulaDetector.pages）。
     没装 onnxruntime 时抛 ImportError，文件不对时抛 onnxruntime 的异常。"""
     import onnxruntime
 
     options = onnxruntime.SessionOptions()
     options.intra_op_num_threads = threads
+    if not spin:
+        options.add_session_config_entry("session.intra_op.allow_spinning", "0")
     return onnxruntime.InferenceSession(path, options, providers=["CPUExecutionProvider"])
 
 
-def _usable_session(path: str, threads: int = 0) -> Any | None:
+def _usable_session(path: str, threads: int = 0, spin: bool = True, copy: int = 0) -> Any | None:
     if not path or not Path(path).is_file():
         return None
     try:
-        return load_session(path, threads)
+        return load_session(path, threads, spin, copy)
     except Exception:  # noqa: BLE001  翻译不因为模型出问题而失败，退回规则
         return None
 
@@ -159,9 +164,12 @@ def _page_batch(page: pymupdf.Page, size: int) -> tuple[np.ndarray, Callable[...
 
 @dataclass(frozen=True)
 class FormulaModel:
-    """公式检测模型的设置：ONNX 文件和输入边长（FORMULA_SIZES 之一）。"""
+    """公式检测模型的设置：ONNX 文件、输入边长（FORMULA_SIZES 之一），同时推理几页、每页用几个线程
+    （0 表示按核数定，见 formula_parallel）。后两个只影响快慢，分析结果不变。"""
     path: str
     size: int = FORMULA_SIZES[0]
+    workers: int = 0
+    threads: int = 0
 
 
 class FormulaDetector:
@@ -172,13 +180,14 @@ class FormulaDetector:
     它是 Ultralytics 导出的 YOLO，输出没做 NMS：每列是中心 x、y、宽、高和各类的分。
     """
 
-    def __init__(self, doc: pymupdf.Document, session: Any, size: int = FORMULA_SIZES[0]):
+    def __init__(self, doc: pymupdf.Document, sessions: Sequence[Any], size: int = FORMULA_SIZES[0]):
         self.doc = doc
-        self.session = session
+        # 同一个模型的几份，pages() 里几页同时推理，每页用一份
+        self.sessions = list(sessions)
         self.size = size
-        names = session.get_modelmeta().custom_metadata_map.get("names", "{}")
+        names = self.sessions[0].get_modelmeta().custom_metadata_map.get("names", "{}")
         self.names: dict[int, str] = ast.literal_eval(names)
-        self.input = session.get_inputs()[0].name
+        self.input = self.sessions[0].get_inputs()[0].name
         # pages() 顺带记下的每页行间公式框（isolated），定哪些块留原文时用（见 pdf._isolated_formula_ids）
         self.isolated: dict[int, list[pymupdf.Rect]] = {}
 
@@ -190,27 +199,32 @@ class FormulaDetector:
         return [region.rect for region in self.regions(pno) if region.label == _INLINE_FORMULA]
 
     def pages(self) -> Iterator[list[pymupdf.Rect]]:
-        """逐页给出行内公式框。取第 n 页时第 n + 1 页已交给后台线程推理，调用方处理第 n 页的同时
-        模型在算下一页，一页的时间是两者里长的那个。画页面、换算坐标都在调用方的线程里做：
+        """逐页给出行内公式框。有 k 份模型时，后台线程同时推理后面的 k 页，每页用一份：
+        调用方处理第 n 页的同时，模型在算第 n + 1 到 n + k 页。画页面、换算坐标都在调用方的线程里做：
         MuPDF 不能在两个线程里同时用同一个文档，后台线程只跑模型。"""
         count = self.doc.page_count
-        with ThreadPoolExecutor(max_workers=1) as pool:
+        workers = len(self.sessions)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
 
             def submit(pno: int) -> tuple[Future, Callable[..., pymupdf.Rect]]:
                 batch, to_page = _page_batch(self.doc[pno], self.size)
-                return pool.submit(self._detect, batch), to_page
+                return pool.submit(self._detect, batch, pno % workers), to_page
 
-            pending = submit(0) if count else None
+            pending = deque(submit(pno) for pno in range(min(workers, count)))
             for pno in range(count):
-                future, to_page = pending
-                pending = submit(pno + 1) if pno + 1 < count else None
+                future, to_page = pending.popleft()
                 found = future.result()
+                # 第 n 页用的那份模型空出来了，交给第 n + k 页
+                if pno + workers < count:
+                    pending.append(submit(pno + workers))
                 self.isolated[pno] = [to_page(*box) for label, box, _score in found if label == _DISPLAY_FORMULA]
                 yield [to_page(*box) for label, box, _score in found if label == _INLINE_FORMULA]
 
-    def _detect(self, batch: np.ndarray) -> list[tuple[str, tuple[float, float, float, float], float]]:
-        """模型输入里的框：(类别, 输入像素坐标, 分)。不碰 MuPDF，可以放在后台线程里跑。"""
-        rows = self.session.run(None, {self.input: batch})[0][0].T
+    def _detect(
+        self, batch: np.ndarray, worker: int = 0,
+    ) -> list[tuple[str, tuple[float, float, float, float], float]]:
+        """用第 worker 份模型推理，给出模型输入里的框：(类别, 输入像素坐标, 分)。不碰 MuPDF，可以放在后台线程里跑。"""
+        rows = self.sessions[worker].run(None, {self.input: batch})[0][0].T
         scores = rows[:, 4:]
         classes = scores.argmax(1)
         best = scores.max(1)
@@ -228,21 +242,33 @@ class FormulaDetector:
 
 
 def formula_detector(doc: pymupdf.Document, model: FormulaModel | None = None) -> FormulaDetector | None:
-    """model 为 None 表示没开。模型用不了，或者类别里没有行内公式（填成了版面模型）时返回 None，只用规则。"""
-    session = _usable_session(model.path, formula_threads()) if model is not None else None
-    if session is None:
+    """model 为 None 表示没开。模型用不了，或者类别里没有行内公式（填成了版面模型）时返回 None，只用规则。
+    多份模型里后面的加载不了时，用已经加载好的几份。"""
+    if model is None:
+        return None
+    workers, threads = formula_parallel(model.workers, model.threads)
+    sessions = []
+    for copy in range(workers):
+        session = _usable_session(model.path, threads, spin=False, copy=copy)
+        if session is None:
+            break
+        sessions.append(session)
+    if not sessions:
         return None
     try:
-        detector = FormulaDetector(doc, session, model.size)
+        detector = FormulaDetector(doc, sessions, model.size)
     except (ValueError, SyntaxError):
         return None
     return detector if _INLINE_FORMULA in detector.names.values() else None
 
 
-def formula_threads() -> int:
-    """公式检测模型推理和读页面同时进行（见 FormulaDetector.pages），给读页面的主线程和 Python 留出两个核。
-    6 核上 4 个线程最快：25 页的论文用满 6 个要多花六成时间，只用 2 个多花两成多。"""
-    return max(1, (os.cpu_count() or 1) - 2)
+def formula_parallel(workers: int = 0, threads: int = 0) -> tuple[int, int]:
+    """公式检测模型同时推理几页、每页用几个线程。0 表示按核数定：4 核以上两页同时推理，核平分给这两页。
+    推理线程等活不空转（见 load_session），线程总数和核数一样多也不会挤掉读页面的主线程。
+    6 核上 24 页的论文分析（各跑 6 次取中位数）：一页 4 个线程 44 s，关掉空转 37 s，两页各 3 个线程 35 s。"""
+    cores = os.cpu_count() or 1
+    workers = workers or (2 if cores >= 4 else 1)
+    return workers, threads or max(1, cores // workers)
 
 
 def _nms(boxes: np.ndarray, scores: np.ndarray) -> list[int]:

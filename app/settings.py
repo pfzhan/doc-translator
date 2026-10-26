@@ -17,9 +17,13 @@ PATH = Path(__file__).resolve().parent.parent / "data" / "settings.json"
 DEFAULTS = {
     "retention_days": 30,
     "layout_model": {"enabled": False, "path": ""},
-    "formula_model": {"enabled": True, "path": "", "size": FORMULA_SIZES[0]},
+    # workers、threads 是公式检测模型同时推理几页、每页几个线程，0 表示按核数定
+    "formula_model": {"enabled": True, "path": "", "size": FORMULA_SIZES[0], "workers": 0, "threads": 0},
 }
 MAX_RETENTION_DAYS = 3650
+# 公式检测模型同时推理的页数、每页推理线程数的上限
+MAX_FORMULA_WORKERS = 8
+MAX_FORMULA_THREADS = 64
 
 
 class SettingsError(Exception):
@@ -63,6 +67,11 @@ class Settings:
         conf = {"enabled": bool(value.get("enabled", default["enabled"])), "path": str(value.get("path") or "")}
         if "size" in default:
             conf["size"] = value.get("size") if value.get("size") in FORMULA_SIZES else default["size"]
+        for name, limit in (("workers", MAX_FORMULA_WORKERS), ("threads", MAX_FORMULA_THREADS)):
+            if name in default:
+                count = value.get(name)
+                valid = isinstance(count, int) and not isinstance(count, bool) and 0 <= count <= limit
+                conf[name] = count if valid else default[name]
         return conf
 
     def public(self) -> dict:
@@ -95,6 +104,16 @@ class Settings:
                     conf["size"] = 0
                 if conf["size"] not in FORMULA_SIZES:
                     raise SettingsError("输入尺寸只能是 " + " 或 ".join(str(size) for size in FORMULA_SIZES))
+            for name, label, limit in (("workers", "同时推理的页数", MAX_FORMULA_WORKERS),
+                                       ("threads", "每页推理线程数", MAX_FORMULA_THREADS)):
+                if name not in DEFAULTS[key]:
+                    continue
+                count = merged.get(name)
+                if count in (None, ""):
+                    count = 0
+                if isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= limit:
+                    raise SettingsError(f"{label}要填 0 到 {limit} 的整数（0 表示自动）")
+                conf[name] = count
             with self.lock:
                 self.data[key] = conf
                 self._save()

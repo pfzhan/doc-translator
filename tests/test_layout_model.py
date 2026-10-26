@@ -28,14 +28,29 @@ def test_the_formula_model_is_on_by_default(tmp_path):
     """公式检测模型默认开着，关掉以后记住。两个模型的设置互不影响"""
     path = tmp_path / "settings.json"
     settings = Settings(path)
-    assert settings.formula_model == {"enabled": True, "path": "", "size": 1024}
+    assert settings.formula_model == {"enabled": True, "path": "", "size": 1024, "workers": 0, "threads": 0}
     settings.update({"formula_model": {"enabled": False}})
     settings.update({"formula_model": {"size": 768}})
-    assert Settings(path).formula_model == {"enabled": False, "path": "", "size": 768}
+    assert Settings(path).formula_model == {"enabled": False, "path": "", "size": 768, "workers": 0, "threads": 0}
     assert Settings(path).layout_model == {"enabled": False, "path": ""}
     with pytest.raises(SettingsError):
         settings.update({"formula_model": {"size": 640}})
     assert Settings(path).formula_model["size"] == 768
+
+
+def test_formula_parallel_settings_take_small_whole_numbers(tmp_path):
+    """同时推理的页数、每页推理线程数存成整数，留空是 0（自动）。别的设置不受影响"""
+    path = tmp_path / "settings.json"
+    settings = Settings(path)
+    settings.update({"formula_model": {"workers": 3, "threads": 2}})
+    assert Settings(path).formula_model == {"enabled": True, "path": "", "size": 1024, "workers": 3, "threads": 2}
+    settings.update({"formula_model": {"workers": "", "threads": None}})
+    assert Settings(path).formula_model["workers"] == 0 and Settings(path).formula_model["threads"] == 0
+    for bad in ({"workers": -1}, {"workers": 9}, {"threads": 65}, {"threads": 1.5}, {"workers": "2"},
+                {"threads": True}):
+        with pytest.raises(SettingsError):
+            settings.update({"formula_model": bad})
+    assert Settings(path).formula_model == {"enabled": True, "path": "", "size": 1024, "workers": 0, "threads": 0}
 
 
 def test_empty_and_relative_paths_resolve_inside_the_project():
@@ -114,6 +129,11 @@ def test_formula_model_page_api(app_env, monkeypatch, tmp_path):
         assert client.put("/api/formula-model", json={"size": 768}).json()["size"] == 768
         assert main._formula_model() == FormulaModel(str(model), 768)
         assert client.put("/api/formula-model", json={"size": "big"}).status_code == 400
+        assert status["auto"]["workers"] >= 1 and status["auto"]["threads"] >= 1
+        saved = client.put("/api/formula-model", json={"workers": 1, "threads": 4}).json()
+        assert (saved["workers"], saved["threads"]) == (1, 4)
+        assert main._formula_model() == FormulaModel(str(model), 768, 1, 4)
+        assert client.put("/api/formula-model", json={"threads": 100}).status_code == 400
         client.put("/api/formula-model", json={"enabled": False})
         assert main._model_path("formula") == "" and main._formula_model() is None
 
@@ -131,3 +151,5 @@ def test_saved_analysis_depends_on_the_formula_model_and_its_size(tmp_path):
     keys = {_plan_key(src, ""), _plan_key(src, "", FormulaModel(str(model), 1024)),
             _plan_key(src, "", FormulaModel(str(model), 768))}
     assert len(keys) == 3
+    # 同时推理几页、用几个线程只影响快慢
+    assert _plan_key(src, "", FormulaModel(str(model), 768, 2, 3)) == _plan_key(src, "", FormulaModel(str(model), 768))

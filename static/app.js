@@ -1730,6 +1730,12 @@ function renderModel(kind, m, { keepForm = false } = {}) {
     el("path").value = m.path;
     el("path").placeholder = `留空使用默认位置：${m.default_path}`;
     if (m.size) el("size").value = String(m.size);
+    if (m.auto) {
+      for (const name of ["workers", "threads"]) {
+        el(name).value = String(m[name] || m.auto[name]);
+        el(name).dataset.auto = String(m.auto[name]);
+      }
+    }
     const select = el("source");
     if (!select.options.length) {
       for (const source of m.sources) select.add(new Option(source.label, source.id));
@@ -1761,11 +1767,16 @@ async function loadModel(kind, options = {}) {
   }
 }
 
-// 表单里要存的字段。公式检测模型多一个输入尺寸
+// 表单里要存的字段。公式检测模型多输入尺寸、同时推理的页数和每页推理线程数。
+// 后两项填着按核数算出的值；没改或清空时存 0，换了机器仍按核数定
 function modelForm(kind) {
   const form = { enabled: $(`${kind}-enabled`).checked, path: $(`${kind}-path`).value };
   const size = $(`${kind}-size`);
   if (size) form.size = Number(size.value);
+  for (const name of ["workers", "threads"]) {
+    const input = $(`${kind}-${name}`);
+    if (input) form[name] = input.value === input.dataset.auto ? 0 : Number(input.value || 0);
+  }
   return form;
 }
 

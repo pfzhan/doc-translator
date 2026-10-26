@@ -143,7 +143,9 @@ def check(spec: ModelSpec, path: Path, size: int | None = None) -> dict:
         raise LayoutModelError(f"找不到模型文件：{path}")
     start = time.monotonic()
     try:
-        session = pdf_vision.load_session(str(path), pdf_vision.formula_threads() if spec is FORMULA else 0)
+        # 公式检测模型按自动定的线程数加载，和翻译时的第一份一样
+        threads = pdf_vision.formula_parallel()[1] if spec is FORMULA else 0
+        session = pdf_vision.load_session(str(path), threads, spin=spec is not FORMULA)
     except Exception as e:  # noqa: BLE001  模型文件不对时 onnxruntime 抛的异常类型不固定
         raise LayoutModelError(f"模型加载失败：{e}") from e
     loaded = time.monotonic()
@@ -151,7 +153,7 @@ def check(spec: ModelSpec, path: Path, size: int | None = None) -> dict:
     if spec is FORMULA:
         if size not in pdf_vision.FORMULA_SIZES:
             size = pdf_vision.FORMULA_SIZES[0]
-        detector = pdf_vision.formula_detector(doc, pdf_vision.FormulaModel(str(path), size))
+        detector = pdf_vision.formula_detector(doc, pdf_vision.FormulaModel(str(path), size, workers=1, threads=threads))
         if detector is None:
             raise LayoutModelError("这个文件不是公式检测模型：类别里没有行内公式（embedding）")
         regions = detector.regions(0)
