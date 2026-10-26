@@ -96,6 +96,22 @@ def test_model_titles_and_captions_do_not_pull_text_out_of_a_figure():
     assert roles == [Role.FIGURE, Role.HEADING]
 
 
+def test_a_body_sentence_under_a_caption_is_not_a_caption():
+    """图注下面紧接着的正文以图号起头（Fig. 19.15 sketches …）、被模型框成图注时，仍是正文；真的图注照样认。"""
+    doc = _doc()
+    caption = pymupdf.Rect(60, 270, 340, 292)
+    body = pymupdf.Rect(40, 300, 360, 312)
+    session = FakeSession(doc[0].rect, [
+        (pymupdf.Rect(58, 268, 342, 294), 0.5, 4),
+        (pymupdf.Rect(38, 298, 362, 314), 0.8, 4),
+    ])
+    items = [_item("Figure 19.15 A simplified outline of computing the span scores", caption),
+             _item("Fig. 19.15 sketches the architecture. The input word tokens are embedded by", body)]
+    roles = ModelLayout(doc, session).classify(items, [_geo()], median=10)
+    assert roles[1] is Role.BODY
+    assert roles[0] is Role.CAPTION
+
+
 def test_boxes_map_back_through_page_rotation():
     """转过的页面按转过的样子渲染，框要转回文字坐标。"""
     doc = _doc(400, 500)

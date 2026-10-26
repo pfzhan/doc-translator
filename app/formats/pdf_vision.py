@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,6 +40,11 @@ _ROLES = {
     "figure_caption": Role.CAPTION,
     "table_caption": Role.CAPTION,
 }
+# 正文里以图表编号起头的一句（Fig. 19.15 sketches the architecture.）：编号后面接着小写的词。
+# 这句紧挨在图注下面时模型常把它也框成图注
+_BODY_REFERENCE_RE = re.compile(
+    r"(?:Figure|Fig\.|Table|Tab\.)\s*(?:[A-Z]\.?)?\d+(?:\.\d+)*\s+(?-i:[a-z])", re.I,
+)
 
 
 @dataclass(frozen=True)
@@ -93,7 +99,10 @@ class ModelLayout:
         out: list[Role] = []
         for item, role in zip(items, roles):
             found = _covering(item.rect, regions.get(item.page, []))
-            out.append(_merge(role, _ROLES.get(found.label) if found is not None else None))
+            model = _ROLES.get(found.label) if found is not None else None
+            if model is Role.CAPTION and _BODY_REFERENCE_RE.match(item.text.lstrip()):
+                model = None
+            out.append(_merge(role, model))
         return out
 
     def text_regions(self, pno: int) -> list[pymupdf.Rect]:
