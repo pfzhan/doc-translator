@@ -30,6 +30,8 @@ _DRAW_AREA = 800.0
 _PAGE_FILL = 0.85
 _GROUND_SHARE = 2.0  # 图的白底最多是里面曲线、图片所占范围的几倍
 _GROUND_REACH = 24.0  # 标题、坐标轴名离曲线最远多少
+_GROUND_MARKS = 3  # 白底里没有成形的图时，至少要有这么多个小记号
+_FRAME_REACH = 12.0  # 框线离白底的上下沿最多多远
 _WALL_MIN_H = 48.0
 _WALL_MIN_W = 36.0
 _CELL_MIN_W = 18.0
@@ -1880,11 +1882,15 @@ def _figure_rects(
     if drawings is None:
         drawings = visible_drawings(page)
     grounds: list[pymupdf.Rect] = []
+    marks: list[pymupdf.Rect] = []
+    ruled: list[pymupdf.Rect] = []
     for drawing in drawings:
         rect = pymupdf.Rect(drawing.get("rect"))
-        if rect.width < _DRAW_MIN or rect.height < _DRAW_MIN:
-            continue
-        if rect.width * rect.height < _DRAW_AREA:
+        if _is_mark(drawing):
+            marks.append(rect)
+        elif drawing.get("type") == "s":
+            ruled.extend(_flat_strokes(drawing))
+        if rect.width < _DRAW_MIN or rect.height < _DRAW_MIN or rect.width * rect.height < _DRAW_AREA:
             continue
         if rect.width > width * _PAGE_FILL and rect.height > height * _PAGE_FILL:
             continue
@@ -1892,16 +1898,61 @@ def _figure_rects(
             grounds.append(rect)
             continue
         found.append(rect)
-    return [*found, *_figure_grounds(grounds, found)]
+    framed = [ground for ground in grounds if _framed(ground, ruled)]
+    return [*found, *_figure_grounds(grounds, found, marks, framed)]
 
 
-def _figure_grounds(grounds: Sequence[pymupdf.Rect], figures: Sequence[pymupdf.Rect]) -> list[pymupdf.Rect]:
+def _is_mark(drawing: dict) -> bool:
+    """图里的小记号：圈出词的彩色椭圆、虚线箭头。实线的细线是框线、下划线，不算"""
+    items = drawing.get("items") or []
+    if any(item[0] == "c" for item in items):
+        return True
+    if drawing.get("dashes") and str(drawing.get("dashes")).strip("[] 0"):
+        return True
+    fill = drawing.get("fill")
+    return isinstance(fill, (tuple, list)) and len(fill) >= 3 and any(float(channel) < 0.96 for channel in fill[:3])
+
+
+def _flat_strokes(drawing: dict) -> list[pymupdf.Rect]:
+    """描边路径里的横线：直线段，和矩形的上下两条边。"""
+    out: list[pymupdf.Rect] = []
+    for item in drawing.get("items") or []:
+        if item[0] == "l":
+            rect = pymupdf.Rect(item[1], item[2]).normalize()
+            if rect.height < 1.5:
+                out.append(rect)
+        elif item[0] == "re":
+            rect = pymupdf.Rect(item[1])
+            out += [pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y0), pymupdf.Rect(rect.x0, rect.y1, rect.x1, rect.y1)]
+    return out
+
+
+def _framed(ground: pymupdf.Rect, ruled: Sequence[pymupdf.Rect]) -> bool:
+    """白底上下各有一条横线，横跨整块白底、离它的上下沿不远：白底是框起来的一幅图。"""
+    def edge(y: float) -> bool:
+        return any(
+            abs(line.y0 - y) <= _FRAME_REACH and line.x0 <= ground.x0 + 2 and line.x1 >= ground.x1 - 2
+            for line in ruled
+        )
+    return edge(ground.y0) and edge(ground.y1)
+
+
+def _figure_grounds(
+    grounds: Sequence[pymupdf.Rect], figures: Sequence[pymupdf.Rect], marks: Sequence[pymupdf.Rect] = (),
+    framed: Sequence[pymupdf.Rect] = (),
+) -> list[pymupdf.Rect]:
     """画图程序（matplotlib）先铺一块白底，标题、坐标轴名、图例都写在白底上，曲线只占中间一块。
     白底里装着曲线、图片，又不比它们大出一倍的，是图。铺在正文和图下面的白底比图大得多。
-    标题、坐标轴名紧挨着曲线，白底只算到曲线外面一圈：有的白底往下一直铺到正文里。"""
+    标题、坐标轴名紧挨着曲线，白底只算到曲线外面一圈：有的白底往下一直铺到正文里。
+    框起来的白底上一段示例文字、词上圈着彩色椭圆、连着虚线（ed3book 的 Figure 4.2）也是图：
+    这些小记号凑够几个、铺满白底的大半，就和曲线一样算进去。没框的白底铺在正文下面，里面零星的
+    曲线、虚线不算"""
     kept: list[pymupdf.Rect] = []
     for ground in grounds:
         inside = [figure for figure in figures if _mostly_inside(figure, [ground])]
+        dots = [mark for mark in marks if ground in framed and _mostly_inside(mark, [ground])]
+        if inside or len(dots) >= _GROUND_MARKS:
+            inside += dots
         if not inside:
             continue
         drawn = pymupdf.Rect(inside[0])

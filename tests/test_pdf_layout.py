@@ -45,6 +45,30 @@ def test_a_plot_on_a_white_ground_covers_its_title_and_axis_labels():
     assert geo.figures == (pymupdf.Rect(40, 30, 260, 200),)
 
 
+def test_a_framed_panel_with_circled_words_is_a_figure():
+    """框起来的白底上一段示例文字，词上圈着彩色椭圆、连着虚线（ed3book 的 Figure 4.2）：
+    白底是一幅图，里面的字留原文。同样的记号铺在没框的白底上不算。"""
+    from app.formats.pdf_layout import _figure_rects
+
+    def panel(framed):
+        page = pymupdf.open().new_page(width=612, height=792)
+        if framed:  # 框是四条单独的线
+            for start, end in (((160, 510), (493, 510)), ((160, 623), (493, 623)),
+                               ((160, 510), (160, 623)), ((493, 510), (493, 623))):
+                page.draw_line(start, end, color=(0, 0, 0), width=0.4)
+        page.draw_rect(pymupdf.Rect(168, 515, 485, 618), fill=(1, 1, 1), color=None, width=0)
+        for x0, y0, x1, color in ((183, 544, 211, (1, 0.4, 0)), (417, 544, 465, (1, 0.4, 0)),
+                                  (236, 556, 279, (0.8, 0.9, 0.1)), (326, 579, 339, (0.3, 0.2, 0.9))):
+            page.draw_oval(pymupdf.Rect(x0, y0, x1, y0 + 10), fill=color, color=(0, 0, 0), width=0.4)
+        for start, end in (((208, 545), (261, 527)), ((283, 524), (420, 546)), ((187, 577), (225, 602)),
+                           ((404, 600), (448, 586))):
+            page.draw_line(start, end, color=(0, 0, 0), width=0.4, dashes="[3 3] 0")
+        return _figure_rects(page)
+
+    assert any(rect.contains(pymupdf.Rect(170, 520, 480, 610)) for rect in panel(framed=True))
+    assert not any(rect.contains(pymupdf.Rect(170, 520, 480, 610)) for rect in panel(framed=False))
+
+
 def test_white_rectangle_fill_is_not_a_figure():
     """近白矩形是底色。盖住它的正文不能被当成图内文字跳过。描边框和图片仍是图。"""
     from app.formats.pdf_layout import _figure_rects
