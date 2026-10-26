@@ -1779,6 +1779,7 @@ function renderModel(kind, m, { keepForm = false } = {}) {
     el("path").value = m.path;
     el("path").placeholder = `留空使用默认位置：${m.default_path}`;
     if (m.size) el("size").value = String(m.size);
+    if (m.precision) el("precision").value = m.precision;
     if (m.auto) {
       for (const name of ["workers", "threads"]) {
         el(name).value = String(m[name] || m.auto[name]);
@@ -1804,8 +1805,37 @@ function renderModel(kind, m, { keepForm = false } = {}) {
   }
   el("download").disabled = d.running;
   el("download").textContent = m.file.exists ? "重新下载" : "下载模型";
+  if (m.int8) renderInt8(m);
   clearTimeout(modelPolls[kind]);
-  if (d.running) modelPolls[kind] = setTimeout(() => loadModel(kind, { keepForm: true }), 1000);
+  const busyNow = d.running || Boolean(m.int8 && m.int8.state.running);
+  if (busyNow) modelPolls[kind] = setTimeout(() => loadModel(kind, { keepForm: true }), 1000);
+}
+
+// 公式检测模型的 int8 版：生成了没有、正在生成到哪一页、没装 onnx 时怎么装
+function renderInt8(m) {
+  const q = m.int8;
+  const status = $("formula-int8-status");
+  const btn = $("formula-quantize");
+  status.classList.toggle("warn", Boolean(q.state.error) || !q.available);
+  btn.textContent = q.file.exists ? "重新生成" : "生成 int8 模型";
+  btn.disabled = q.state.running || !q.available || !m.file.exists;
+  if (q.state.running) {
+    status.textContent = q.state.done < q.state.total
+      ? `生成中：校准 ${q.state.done} / ${q.state.total} 页`
+      : "生成中：量化并核对结果…";
+  } else if (q.state.error) {
+    status.textContent = `生成失败：${q.state.error}`;
+  } else if (!q.available) {
+    status.textContent = `生成 int8 模型要先安装 onnx：在项目目录运行 ${q.install_hint}，装好后重启服务。`;
+  } else if (q.file.exists) {
+    status.textContent = m.in_use === q.path
+      ? `int8 模型已生成（${formatMB(q.file.size)}），翻译时使用`
+      : `int8 模型已生成（${formatMB(q.file.size)}），选了 fp32，翻译时不用`;
+  } else if (!m.file.exists) {
+    status.textContent = "先下载模型，才能生成 int8 模型。";
+  } else {
+    status.textContent = "还没有生成 int8 模型，翻译时用 fp32。生成约需三分钟，用翻译过的 PDF 抽页校准。";
+  }
 }
 
 async function loadModel(kind, options = {}) {
@@ -1822,6 +1852,8 @@ function modelForm(kind) {
   const form = { enabled: $(`${kind}-enabled`).checked, path: $(`${kind}-path`).value };
   const size = $(`${kind}-size`);
   if (size) form.size = Number(size.value);
+  const precision = $(`${kind}-precision`);
+  if (precision) form.precision = precision.value;
   for (const name of ["workers", "threads"]) {
     const input = $(`${kind}-${name}`);
     if (input) form[name] = input.value === input.dataset.auto ? 0 : Number(input.value || 0);
@@ -1832,6 +1864,14 @@ function modelForm(kind) {
 function loadLayoutModel() {
   for (const kind of MODEL_KINDS) loadModel(kind);
 }
+
+$("formula-quantize").addEventListener("click", async () => {
+  try {
+    renderModel("formula", await api("/api/formula-model/quantize", { method: "POST" }), { keepForm: true });
+  } catch (err) {
+    toast(err.message);
+  }
+});
 
 // 两个模型各占一个标签，记住上次看的是哪个
 function showModelTab(kind) {

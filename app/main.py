@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import history, layout_model
+from . import history, layout_model, quantize
 from .formats import PREVIEW_FORMATS, SUPPORTED, output_variant, translate_file
 from .formats.epub import book_outline
 from .formats.pdf import mupdf_turn
@@ -45,6 +45,8 @@ deleting: set[str] = set()
 pause_requested: set[str] = set()
 # 版面模型的下载（同一时间只有一个）
 model_downloads = {kind: layout_model.Downloader(spec) for kind, spec in layout_model.MODELS.items()}
+# 公式检测模型的 int8 版在本机生成（见 quantize.py）
+quantizer = quantize.Quantizer()
 ACTIVE = ("queued", "running")
 PROGRESS_SAVE_INTERVAL = 5
 
@@ -671,7 +673,14 @@ def _model_path(kind: str) -> str:
 def _formula_model() -> FormulaModel | None:
     path = _model_path("formula")
     conf = settings.formula_model
-    return FormulaModel(path, conf["size"], conf["workers"], conf["threads"]) if path else None
+    return FormulaModel(_formula_file(path, conf["precision"]), conf["size"], conf["workers"], conf["threads"]) \
+        if path else None
+
+
+def _formula_file(path: str, precision: str) -> str:
+    """选了 int8、int8 文件也生成了时用它，否则用 fp32 文件。"""
+    int8 = quantize.int8_path(Path(path))
+    return str(int8) if precision == "int8" and int8.is_file() else path
 
 
 def _model_status(kind: str) -> dict:
@@ -683,6 +692,12 @@ def _model_status(kind: str) -> dict:
         # 页面上「自动」现在对应的值
         workers, threads = formula_parallel()
         extra["auto"] = {"workers": workers, "threads": threads}
+        int8 = quantize.int8_path(path)
+        extra["int8"] = {
+            "path": str(int8), "file": layout_model.file_status(int8), "available": quantize.available(),
+            "install_hint": quantize.INSTALL_HINT, "state": dict(quantizer.state),
+        }
+        extra["in_use"] = _formula_file(str(path), conf["precision"])
     return {
         **conf,
         **extra,
@@ -705,7 +720,7 @@ def get_model(kind: str):
 def update_model(kind: str, data: dict = Body(...)):
     spec = _spec(kind)
     try:
-        settings.update({spec.key: {k: data[k] for k in ("enabled", "path", "size", "workers", "threads") if k in data}})
+        settings.update({spec.key: {k: data[k] for k in ("enabled", "path", "size", "precision", "workers", "threads") if k in data}})
     except SettingsError as e:
         raise HTTPException(400, str(e))
     return _model_status(kind)
@@ -730,11 +745,36 @@ async def test_model(kind: str, data: dict | None = Body(None)):
     conf = settings.model(spec.key)
     raw = (data or {}).get("path", conf["path"])
     size = (data or {}).get("size", conf.get("size"))
+    path = spec.resolve(str(raw or ""))
+    if spec is layout_model.FORMULA:
+        # 测翻译时会用的那个文件
+        path = Path(_formula_file(str(path), (data or {}).get("precision", conf["precision"])))
     try:
         async with mupdf_turn():  # 样例页用 MuPDF 画，和正在跑的任务错开
-            return await asyncio.to_thread(layout_model.check, spec, spec.resolve(str(raw or "")), size)
+            return await asyncio.to_thread(layout_model.check, spec, path, size)
     except layout_model.LayoutModelError as e:
         raise HTTPException(400, str(e))
+
+
+@app.post("/api/formula-model/quantize")
+async def quantize_formula_model():
+    """用翻译过的 PDF 抽页校准，生成公式检测模型的 int8 版。页面轮询 GET 看进度。"""
+    if not quantize.available():
+        raise HTTPException(400, f"生成 int8 模型要先安装 onnx，在项目目录运行：{quantize.INSTALL_HINT}，装好后重启服务")
+    src = layout_model.FORMULA.resolve(settings.formula_model["path"])
+    if not src.is_file():
+        raise HTTPException(400, f"找不到公式检测模型文件：{src}，请先下载模型")
+    if quantizer.running:
+        raise HTTPException(400, "int8 模型正在生成")
+    pdfs = [path for job in jobs.list() if (path := jobs.source_path(job)).suffix.lower() == ".pdf" and path.is_file()]
+    async with mupdf_turn():  # 抽页要用 MuPDF 画，和正在跑的任务错开
+        picks = await asyncio.to_thread(quantize.pick_pages, pdfs)
+        images = await asyncio.to_thread(quantize.calibration_images, picks, layout_model.sample_page)
+    try:
+        quantizer.start(src, quantize.int8_path(src), images)
+    except quantize.QuantizeError as e:
+        raise HTTPException(400, str(e))
+    return _model_status("formula")
 
 
 class NoCacheStaticFiles(StaticFiles):

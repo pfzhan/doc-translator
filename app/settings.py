@@ -4,6 +4,7 @@
 - layout_model：PDF 版面模型，{"enabled": 是否使用, "path": 模型文件，空串表示默认位置}。
 - formula_model：PDF 公式检测模型，格式同上，另有 "size": 输入边长（1024 或 768）。默认开启、用 1024：
   行内公式认得准不准直接影响译文，模型文件下好了就用，没下时只用规则。
+  "precision" 是用 int8 还是 fp32，默认 int8：生成了 int8 文件就用它（见 quantize.py），没生成时用 fp32。
 
 可以在页面上改，也可以直接改这个文件后重启服务。
 """
@@ -12,13 +13,15 @@ import threading
 from pathlib import Path
 
 from .formats.pdf_vision import FORMULA_SIZES
+from .quantize import PRECISIONS
 
 PATH = Path(__file__).resolve().parent.parent / "data" / "settings.json"
 DEFAULTS = {
     "retention_days": 30,
     "layout_model": {"enabled": False, "path": ""},
     # workers、threads 是公式检测模型同时推理几页、每页几个线程，0 表示按核数定
-    "formula_model": {"enabled": True, "path": "", "size": FORMULA_SIZES[0], "workers": 0, "threads": 0},
+    "formula_model": {"enabled": True, "path": "", "size": FORMULA_SIZES[0], "precision": PRECISIONS[0],
+                      "workers": 0, "threads": 0},
 }
 MAX_RETENTION_DAYS = 3650
 # 公式检测模型同时推理的页数、每页推理线程数的上限
@@ -67,6 +70,8 @@ class Settings:
         conf = {"enabled": bool(value.get("enabled", default["enabled"])), "path": str(value.get("path") or "")}
         if "size" in default:
             conf["size"] = value.get("size") if value.get("size") in FORMULA_SIZES else default["size"]
+        if "precision" in default:
+            conf["precision"] = value.get("precision") if value.get("precision") in PRECISIONS else default["precision"]
         for name, limit in (("workers", MAX_FORMULA_WORKERS), ("threads", MAX_FORMULA_THREADS)):
             if name in default:
                 count = value.get(name)
@@ -104,6 +109,10 @@ class Settings:
                     conf["size"] = 0
                 if conf["size"] not in FORMULA_SIZES:
                     raise SettingsError("输入尺寸只能是 " + " 或 ".join(str(size) for size in FORMULA_SIZES))
+            if "precision" in DEFAULTS[key]:
+                conf["precision"] = merged.get("precision")
+                if conf["precision"] not in PRECISIONS:
+                    raise SettingsError("精度只能是 " + " 或 ".join(PRECISIONS))
             for name, label, limit in (("workers", "同时推理的页数", MAX_FORMULA_WORKERS),
                                        ("threads", "每页推理线程数", MAX_FORMULA_THREADS)):
                 if name not in DEFAULTS[key]:

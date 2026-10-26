@@ -27,7 +27,7 @@ def isolate_cache(tmp_path, monkeypatch):
 def app_env(tmp_path, monkeypatch):
     """把 Web 服务的翻译服务、翻译记录、设置都换到临时目录，并加一个 mock 翻译服务。
     模型目录也换掉：公式检测模型默认开着，本机下好的模型不能让测试跑真模型。"""
-    from app import layout_model, main
+    from app import layout_model, main, quantize
     from app.history import JobStore
     from app.services import ServiceStore
     from app.settings import Settings
@@ -42,4 +42,5 @@ def app_env(tmp_path, monkeypatch):
     monkeypatch.setattr(main, "variant_tasks", {})
     monkeypatch.setattr(main, "deleting", set())
     monkeypatch.setattr(main, "pause_requested", set())
+    monkeypatch.setattr(main, "quantizer", quantize.Quantizer())
     return main

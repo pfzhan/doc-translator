@@ -149,7 +149,7 @@ def check(spec: ModelSpec, path: Path, size: int | None = None) -> dict:
     except Exception as e:  # noqa: BLE001  模型文件不对时 onnxruntime 抛的异常类型不固定
         raise LayoutModelError(f"模型加载失败：{e}") from e
     loaded = time.monotonic()
-    doc = _sample_page()
+    doc = sample_page()
     if spec is FORMULA:
         if size not in pdf_vision.FORMULA_SIZES:
             size = pdf_vision.FORMULA_SIZES[0]
@@ -167,7 +167,7 @@ def check(spec: ModelSpec, path: Path, size: int | None = None) -> dict:
     }
 
 
-def _sample_page() -> pymupdf.Document:
+def sample_page() -> pymupdf.Document:
     """一页小论文：标题、两段正文、一张带图注的图，一行带行内公式的句子。"""
     doc = pymupdf.open()
     page = doc.new_page(width=595, height=842)

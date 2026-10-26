@@ -28,10 +28,10 @@ def test_the_formula_model_is_on_by_default(tmp_path):
     """公式检测模型默认开着，关掉以后记住。两个模型的设置互不影响"""
     path = tmp_path / "settings.json"
     settings = Settings(path)
-    assert settings.formula_model == {"enabled": True, "path": "", "size": 1024, "workers": 0, "threads": 0}
+    assert settings.formula_model == {"enabled": True, "path": "", "size": 1024, "precision": "int8", "workers": 0, "threads": 0}
     settings.update({"formula_model": {"enabled": False}})
     settings.update({"formula_model": {"size": 768}})
-    assert Settings(path).formula_model == {"enabled": False, "path": "", "size": 768, "workers": 0, "threads": 0}
+    assert Settings(path).formula_model == {"enabled": False, "path": "", "size": 768, "precision": "int8", "workers": 0, "threads": 0}
     assert Settings(path).layout_model == {"enabled": False, "path": ""}
     with pytest.raises(SettingsError):
         settings.update({"formula_model": {"size": 640}})
@@ -43,14 +43,14 @@ def test_formula_parallel_settings_take_small_whole_numbers(tmp_path):
     path = tmp_path / "settings.json"
     settings = Settings(path)
     settings.update({"formula_model": {"workers": 3, "threads": 2}})
-    assert Settings(path).formula_model == {"enabled": True, "path": "", "size": 1024, "workers": 3, "threads": 2}
+    assert Settings(path).formula_model == {"enabled": True, "path": "", "size": 1024, "precision": "int8", "workers": 3, "threads": 2}
     settings.update({"formula_model": {"workers": "", "threads": None}})
     assert Settings(path).formula_model["workers"] == 0 and Settings(path).formula_model["threads"] == 0
     for bad in ({"workers": -1}, {"workers": 9}, {"threads": 65}, {"threads": 1.5}, {"workers": "2"},
                 {"threads": True}):
         with pytest.raises(SettingsError):
             settings.update({"formula_model": bad})
-    assert Settings(path).formula_model == {"enabled": True, "path": "", "size": 1024, "workers": 0, "threads": 0}
+    assert Settings(path).formula_model == {"enabled": True, "path": "", "size": 1024, "precision": "int8", "workers": 0, "threads": 0}
 
 
 def test_empty_and_relative_paths_resolve_inside_the_project():

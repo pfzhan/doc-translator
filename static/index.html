@@ -365,6 +365,17 @@
         </select>
       </label>
 
+      <label class="field">精度
+        <select name="precision" id="formula-precision">
+          <option value="int8">int8（默认）：推理快一倍左右，准确率略低于 fp32</option>
+          <option value="fp32">fp32：原始模型</option>
+        </select>
+      </label>
+      <div class="int8-row">
+        <p class="hint" id="formula-int8-status" aria-live="polite"></p>
+        <button type="button" class="btn" id="formula-quantize">生成 int8 模型</button>
+      </div>
+
       <div class="field-row">
         <label class="field">同时推理的页数
           <input name="workers" id="formula-workers" type="number" min="0" max="8">

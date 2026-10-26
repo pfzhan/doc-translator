@@ -507,6 +507,11 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-
 .layout-status dd.is-ok::before { content: "✓"; margin-right: 6px; color: var(--ok); font-weight: 700; }
 .layout-status .warn { color: var(--error); }
 .layout-download { margin-top: 0; }
+/* int8 模型的状态和生成按钮：状态在左，按钮靠右 */
+.int8-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -6px 0 14px; }
+.int8-row .hint { margin: 0; }
+.int8-row .hint.warn { color: var(--error); }
+.int8-row .btn { flex: none; }
 .layout-download .field { margin-bottom: 0; }
 .layout-download .btn { height: 38px; }
 /* 两个模型各占一个标签，标签上标出开没开 */
