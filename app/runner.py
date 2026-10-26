@@ -11,7 +11,7 @@ import threading
 from pathlib import Path
 from typing import Callable
 
-from . import glossary, langdetect
+from . import background, glossary, langdetect
 from .prompts import drop_added_braces, drop_invented_marks, strip_control_marks, tidy_marks
 from .translators import Translator, TranslatorError, misplaced, stray_chars, typical_ratio
 
@@ -152,8 +152,10 @@ class Runner:
 
     def report_stage(self, name: str, done: int = 0, total: int = 0, unit: str = "") -> None:
         """翻译前的准备、翻译后的写回做到哪里，unit 是计数的单位（页、段）。整本书的版面分析、
-        写回各要几分钟，任务页据此显示进度。可以在线程里调用：只整体替换一个字典。"""
+        写回各要几分钟，任务页据此显示进度。可以在线程里调用：只整体替换一个字典。
+        在 background.run 起的线程里调用时，任务被暂停就在这里停下（抛 background.Stopped）。"""
         self.stage = {"name": name, "done": done, "total": total, "unit": unit}
+        background.check_stop()
 
     def preview(self, since: int = -1) -> dict:
         """since < 0 时返回全部段落和所有已完成的译文；否则只返回版本 since 之后完成的。"""

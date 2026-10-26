@@ -27,6 +27,7 @@ from typing import Any
 import numpy as np
 import pymupdf
 
+from .. import background
 from .pdf_layout import PageGeometry
 from .pdf_roles import HeuristicLayout, LayoutDetector, LayoutItem, Role
 
@@ -128,8 +129,9 @@ class ModelLayout:
         return [region.rect for region in self.page_regions(pno) if region.label == "plain text"]
 
     def page_regions(self, pno: int) -> list[Region]:
-        """每页只推一次：定角色和并段都要用。"""
+        """每页只推一次：定角色和并段都要用。一页要推两三秒，整本书要几十分钟，任务被暂停时在这里停下。"""
         if pno not in self._pages:
+            background.check_stop()
             self._pages[pno] = self.regions(pno)
         return self._pages[pno]
 

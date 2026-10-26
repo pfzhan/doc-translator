@@ -328,3 +328,32 @@ def test_formula_pages_also_keep_the_display_formula_boxes():
     assert len(inline) == 1
     [found] = detector.isolated[0]
     assert all(abs(a - b) < 1 for a, b in zip(found, display))
+
+
+def test_layout_inference_stops_when_the_job_is_paused():
+    """版面模型一页推一秒多，整本书在定角色时逐页推。任务被暂停时在下一页停下"""
+    import asyncio
+    import time
+
+    from app import background
+
+    doc = pymupdf.open()
+    for _ in range(100):
+        doc.new_page(width=400, height=500)
+
+    class Slow(FakeSession):
+        def run(self, outputs, feeds):
+            time.sleep(0.01)
+            return super().run(outputs, feeds)
+
+    session = Slow(doc[0].rect, [])
+    layout = ModelLayout(doc, session)
+
+    async def main():
+        task = asyncio.ensure_future(background.run(lambda: [layout.page_regions(p) for p in range(100)]))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(main())
+    assert 0 < len(session.inputs) < 50

@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pymupdf
 
-from .. import langdetect, prompts
+from .. import background, langdetect, prompts
 from ..languages import RTL_LANGUAGES
 from ..runner import clean_translation
 from .pdf_align import FIRST_BASELINE, draw_cjk_lines, page_origin
@@ -5278,25 +5278,28 @@ def _extract(
     pages: list[dict] = []
     pending_cells: set[int] = set()
     detected = formulas.pages() if formulas is not None else None
-    for page in doc:
-        scans.append(scan_page(page))
-        tables_by_page.append(scans[-1].tables)
-        data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
-        _attach_ink(page, data)
-        _mark_underlines(page, data, scans[-1].strokes)
-        _mark_radicands(page, data, scans[-1].strokes)
-        _mark_overlays(page, data)
-        _split_accents(page, data)
+    try:
+        for page in doc:
+            scans.append(scan_page(page))
+            tables_by_page.append(scans[-1].tables)
+            data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
+            _attach_ink(page, data)
+            _mark_underlines(page, data, scans[-1].strokes)
+            _mark_radicands(page, data, scans[-1].strokes)
+            _mark_overlays(page, data)
+            _split_accents(page, data)
+            if detected is not None:
+                _mark_detected_formulas(page, data, next(detected))
+            _mark_visible_spaces(page, data, scans[-1].visible_spaces)
+            # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
+            recover_type3_page(page, data, type3)
+            pages.append(data)
+            if on_page is not None:
+                on_page(len(pages), doc.page_count)
+    finally:
         if detected is not None:
-            _mark_detected_formulas(page, data, next(detected))
-        _mark_visible_spaces(page, data, scans[-1].visible_spaces)
-        # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
-        recover_type3_page(page, data, type3)
-        pages.append(data)
-        if on_page is not None:
-            on_page(len(pages), doc.page_count)
-    if detected is not None:
-        detected.close()  # 停掉后台线程
+            # 停掉后台推理。中途停下（见 background.check_stop）时也在这个线程里等它推完手上的页
+            detected.close()
     _mark_math_roman(pages)
     # 目录页上不找表：页码一列和节号一列对齐，短条目会被认成格子表，格子不翻。
     # 索引页也是：几栏短条目行首对齐，凑出几行就像无线的格子表
@@ -10664,6 +10667,7 @@ def _crop_formulas(
     curve_rects = [_page_curve_rects(page) for page in src_doc]
     glyphs: dict[int, list[dict]] = {}
     for unit, formulas in zip(flat_units, sent_formulas):
+        background.check_stop()
         for f in formulas:
             page_no = int(f["page"])
             if page_no not in glyphs:
@@ -10672,6 +10676,7 @@ def _crop_formulas(
     span_cache: dict[int, list[dict]] = {}
     char_cache: dict[int, list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]]] = {}
     for formulas in sent_formulas:
+        background.check_stop()
         for f in formulas:
             pieces = _formula_parts(f)
             ready = False
@@ -10712,9 +10717,9 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
 
     读版面、裁公式图、写回都用 MuPDF，一本书要算几分钟，放在线程里做，事件循环还能响应
     任务页的轮询。这几步轮到才做（见 mupdf_turn），等翻译接口时放开，别的任务可以接着
-    做它的准备。"""
+    做它的准备。任务被暂停时线程在下一页停下，停了才放开 MuPDF（见 background.run）。"""
     async with _job_turn(runner):
-        plan = await asyncio.to_thread(_saved_plan, src, runner, layout_model, plan_path, formula_model)
+        plan = await background.run(_saved_plan, src, runner, layout_model, plan_path, formula_model)
     src_doc, blocks, geometries, toc = plan.src_doc, plan.blocks, plan.geometries, plan.toc
     flat_units, sent_texts, sent_formulas = plan.units, plan.texts, plan.formulas
     skip_ids, block_kind = plan.skip_ids, plan.block_kind
@@ -10722,7 +10727,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     await _retry_lost_placeholders(runner, sent_texts, sent_formulas, raw)
 
     async with _job_turn(runner):
-        archive = await asyncio.to_thread(_crop_formulas, src_doc, flat_units, sent_formulas)
+        archive = await background.run(_crop_formulas, src_doc, flat_units, sent_formulas)
 
     per_block: dict[int, str] = {}
     block_formulas: dict[int, list] = {}
@@ -10813,4 +10818,4 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         return dst
 
     async with _job_turn(runner):
-        return [await asyncio.to_thread(build)]
+        return [await background.run(build)]
