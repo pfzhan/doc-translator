@@ -236,3 +236,15 @@ def test_formula_inference_leaves_two_cores_for_reading_pages(monkeypatch):
     monkeypatch.setattr(pdf_vision.os, "cpu_count", lambda: 2)
     formula_detector(doc, FormulaModel("mfd.onnx"))
     assert seen == [4, 1]
+
+
+def test_formula_pages_also_keep_the_display_formula_boxes():
+    """逐页取行内公式框时，行间公式框（isolated）按页记下，定哪些块留原文时用"""
+    doc = _doc()
+    display = pymupdf.Rect(80, 200, 320, 240)
+    session = FormulaSession(doc[0].rect, [(pymupdf.Rect(100, 100, 140, 112), 0.9, 0), (display, 0.8, 1)])
+    detector = FormulaDetector(doc, session)
+    [inline] = list(detector.pages())
+    assert len(inline) == 1
+    [found] = detector.isolated[0]
+    assert all(abs(a - b) < 1 for a, b in zip(found, display))

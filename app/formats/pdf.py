@@ -6254,6 +6254,20 @@ _BIG_DELIMITER_FONT_RE = re.compile(r"CMEX|cmex|LMMathExtension", re.I)
 _BIG_GLYPH_RE = re.compile(r"[^\sb-gpq]")
 # 公式外的词数到这个数就是成段的句子。行内积分号也用这种字体，右栏、列表续行又都离开版心左缘
 _DISPLAY_FORMULA_MAX_WORDS = 24
+# 块的面积有这么多落在公式检测模型的行间公式框里，才算行间公式（同版面模型的 _COVER）
+_ISOLATED_COVER = 0.6
+# 冠词、系动词、介词、连词、代词这类虚词。行间公式框里有这么多个虚词的是说明句
+_FUNCTION_WORDS = frozenset("""
+a an the is are was were be been being am do does did has have had can could will would shall should may might must
+of to in for with by from on at as into onto over under about between than that which who whom whose what where
+when why how this these those it its they their them we our us you your he his she her him i my not no nor
+and or but if then so each every any all some such much many
+""".split())
+_SENTENCE_FUNCTION_WORDS = 3
+
+
+def _function_words(text: str) -> int:
+    return sum(1 for word in re.findall(r"[A-Za-z]+", text) if word.lower() in _FUNCTION_WORDS)
 
 
 def _plain_words(block: TextBlock) -> int:
@@ -6293,6 +6307,33 @@ def _display_formula_ids(blocks: list[TextBlock], geometries: list[PageGeometry]
                 continue
             hit = block.rect & (formula.rect + (-2, -2, 2, 2))
             if not hit.is_empty and hit.width * hit.height >= area * 0.7:
+                ids.add(id(block))
+                break
+    return ids
+
+
+def _isolated_formula_ids(
+    blocks: list[TextBlock], formulas: FormulaDetector | None, roles: Sequence[Role] | None = None,
+) -> set[int]:
+    """公式检测模型框成行间公式的块留原文：块的面积大半落在框里。Word 排的行间公式用正文字体，
+    按字体认不出来，没有伸长的定界符时 _display_formula_ids 也认不到。
+
+    框里成句的说明照翻（(where c is the correct class)、L(ŷ, y) = How much ŷ differs from the true y）。
+    成不成句看虚词，不看正文词数：式子里的词是实词和变量名（perplexity_A(T) = P_A(red red red red blue)），
+    数正文词会把它当成句子，译成「困惑度 = P(红红红红蓝)」。
+    标题、图注不算：幻灯片上的大字标题（Phoenix + Calcite）模型也常框成行间公式。"""
+    if formulas is None:
+        return set()
+    ids: set[int] = set()
+    for index, block in enumerate(blocks):
+        area = block.rect.width * block.rect.height
+        if area < 1 or roles is not None and roles[index] in (Role.HEADING, Role.CAPTION):
+            continue
+        if _function_words(block.text) >= _SENTENCE_FUNCTION_WORDS:
+            continue
+        for rect in formulas.isolated.get(block.page, ()):
+            hit = block.rect & rect
+            if not hit.is_empty and hit.width * hit.height >= area * _ISOLATED_COVER:
                 ids.add(id(block))
                 break
     return ids
@@ -10332,9 +10373,9 @@ def _plan_document(
     src: Path, src_doc: pymupdf.Document, runner, layout_model: str, formula_model: FormulaModel | None = None,
 ) -> _PdfPlan:
     # 逐页读线、表、字占准备时间的大半，按页报进度
+    formulas = formula_detector(src_doc, formula_model)
     blocks, frames, scans = _extract(
-        src_doc, lambda done, total: runner.report_stage("分析版面", done, total, "页"),
-        formula_detector(src_doc, formula_model),
+        src_doc, lambda done, total: runner.report_stage("分析版面", done, total, "页"), formulas,
     )
     runner.report_stage("整理段落")
     glosses = {
@@ -10372,7 +10413,8 @@ def _plan_document(
     )
     edges = margin_skips(blocks, geometries)
     displayed = (
-        _display_formula_ids(blocks, geometries) | _gloss_ids(blocks, glosses) | _code_panel_ids(blocks, scans)
+        _display_formula_ids(blocks, geometries) | _isolated_formula_ids(blocks, formulas, roles)
+        | _gloss_ids(blocks, glosses) | _code_panel_ids(blocks, scans)
         | _foreign_ids(blocks) | _colored_examples(blocks, geometries) | _arc_figure_ids(blocks, scans)
     )
     examples = _example_ids(blocks)

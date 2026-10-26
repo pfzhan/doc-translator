@@ -2851,6 +2851,38 @@ def test_detected_formula_boxes_mark_their_letters():
     assert _placeholderize(block, 0)[0] == "We call the input {i}x{/i}, and set y = 1, then 0 and 1."
 
 
+def test_blocks_inside_a_display_formula_box_are_kept():
+    """公式检测模型框成行间公式的块留原文（align 里的 s.t.、otherwise、\\text{...}）。
+    只有一角碰到框的块照翻；框里的说明句（有三个虚词）、标题也照翻"""
+    from app.formats.pdf import TextBlock, _isolated_formula_ids
+    from app.formats.pdf_roles import Role
+
+    def block(text, rect, page=0):
+        rect = pymupdf.Rect(rect)
+        spans = [{"text": text, "font": "TimesNewRomanPSMT", "size": 10.0, "flags": 0}]
+        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False,
+                         span_lines=[spans])
+
+    inside = block("otherwise,", (300, 210, 340, 222))
+    # 式子右下角外面的一个词，只有一角碰到框
+    below = block("and", (390, 230, 450, 242))
+    other_page = block("s.t.", (300, 210, 340, 222), page=1)
+
+    class Detector:
+        isolated = {0: [pymupdf.Rect(80, 200, 400, 236)]}
+
+    found = _isolated_formula_ids([inside, below, other_page], Detector())
+    assert found == {id(inside)}
+    assert _isolated_formula_ids([inside], None) == set()
+    note = block("(where c is the correct class)", (300, 210, 390, 222))
+    title = block("Phoenix + Calcite", (100, 205, 380, 230))
+    # 式子里的 perplexity、red、blue 是实词，没有虚词，不是句子
+    words = block("perplexityA(T) = PA(red red red red blue)−1/5", (100, 205, 380, 225))
+    blocks = [note, title, inside, words]
+    found = _isolated_formula_ids(blocks, Detector(), [Role.BODY, Role.HEADING, Role.BODY, Role.BODY])
+    assert found == {id(inside), id(words)}
+
+
 def test_accent_on_its_own_line_joins_the_formula_once():
     """ŝ 的 ˆ 单成一行，排在 s 那一行后面，自己也判成了式子。并进它盖着的式子以后不再单列一个占位符。"""
     from app.formats.pdf import _placeholderize

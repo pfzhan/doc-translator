@@ -40,6 +40,7 @@ FORMULA_SIZES = (1024, 768)
 _FORMULA_SCORE = 0.25
 _FORMULA_IOU = 0.45
 _INLINE_FORMULA = "embedding"
+_DISPLAY_FORMULA = "isolated"
 
 # 模型的类别名到角色。不在这里的类别（正文、表格、页眉页脚）交给规则
 _ROLES = {
@@ -178,6 +179,8 @@ class FormulaDetector:
         names = session.get_modelmeta().custom_metadata_map.get("names", "{}")
         self.names: dict[int, str] = ast.literal_eval(names)
         self.input = session.get_inputs()[0].name
+        # pages() 顺带记下的每页行间公式框（isolated），定哪些块留原文时用（见 pdf._isolated_formula_ids）
+        self.isolated: dict[int, list[pymupdf.Rect]] = {}
 
     def regions(self, pno: int) -> list[Region]:
         batch, to_page = _page_batch(self.doc[pno], self.size)
@@ -201,7 +204,9 @@ class FormulaDetector:
             for pno in range(count):
                 future, to_page = pending
                 pending = submit(pno + 1) if pno + 1 < count else None
-                yield [to_page(*box) for label, box, _score in future.result() if label == _INLINE_FORMULA]
+                found = future.result()
+                self.isolated[pno] = [to_page(*box) for label, box, _score in found if label == _DISPLAY_FORMULA]
+                yield [to_page(*box) for label, box, _score in found if label == _INLINE_FORMULA]
 
     def _detect(self, batch: np.ndarray) -> list[tuple[str, tuple[float, float, float, float], float]]:
         """模型输入里的框：(类别, 输入像素坐标, 分)。不碰 MuPDF，可以放在后台线程里跑。"""
