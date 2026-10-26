@@ -1686,16 +1686,20 @@ async function init() {
   if (m && state.jobs.some((j) => j.id === m[1] && j.preview !== false)) openReader(m[1]);
 }
 
-// ---------- 版面模型 ----------
+// ---------- 版面模型、公式检测模型 ----------
+// 两张卡片结构一样，元素 id 以 layout- / formula- 开头，接口是 /api/layout-model、/api/formula-model
 
-let layoutPoll;
+const MODEL_KINDS = ["layout", "formula"];
+const MODEL_NAMES = { layout: "版面模型", formula: "公式检测模型" };
+const modelPolls = {};
 
 function formatMB(bytes) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function renderLayoutModel(m, { keepForm = false } = {}) {
-  const runtime = $("layout-runtime");
+function renderModel(kind, m, { keepForm = false } = {}) {
+  const el = (name) => $(`${kind}-${name}`);
+  const runtime = el("runtime");
   runtime.replaceChildren();
   if (m.runtime) {
     runtime.textContent = `onnxruntime ${m.runtime}`;
@@ -1708,7 +1712,7 @@ function renderLayoutModel(m, { keepForm = false } = {}) {
     runtime.append(warn, code, " 后重启服务");
   }
   runtime.classList.toggle("is-ok", Boolean(m.runtime));
-  const file = $("layout-file");
+  const file = el("file");
   file.replaceChildren();
   file.classList.toggle("is-ok", m.file.exists);
   const where = document.createElement("code");
@@ -1722,16 +1726,17 @@ function renderLayoutModel(m, { keepForm = false } = {}) {
     file.append(warn, where);
   }
   if (!keepForm) {
-    $("layout-enabled").checked = m.enabled;
-    $("layout-path").value = m.path;
-    $("layout-path").placeholder = `留空使用默认位置：${m.default_path}`;
-    const select = $("layout-source");
+    el("enabled").checked = m.enabled;
+    el("path").value = m.path;
+    el("path").placeholder = `留空使用默认位置：${m.default_path}`;
+    if (m.size) el("size").value = String(m.size);
+    const select = el("source");
     if (!select.options.length) {
       for (const source of m.sources) select.add(new Option(source.label, source.id));
     }
   }
   const d = m.download;
-  const status = $("layout-download-status");
+  const status = el("download-status");
   status.classList.toggle("warn", Boolean(d.error));
   if (d.running) {
     status.textContent = d.total ? `下载中 ${formatMB(d.done)} / ${formatMB(d.total)}` : `下载中 ${formatMB(d.done)}`;
@@ -1742,68 +1747,82 @@ function renderLayoutModel(m, { keepForm = false } = {}) {
   } else {
     status.textContent = "";
   }
-  $("layout-download").disabled = d.running;
-  $("layout-download").textContent = m.file.exists ? "重新下载" : "下载模型";
-  clearTimeout(layoutPoll);
-  if (d.running) layoutPoll = setTimeout(() => loadLayoutModel({ keepForm: true }), 1000);
+  el("download").disabled = d.running;
+  el("download").textContent = m.file.exists ? "重新下载" : "下载模型";
+  clearTimeout(modelPolls[kind]);
+  if (d.running) modelPolls[kind] = setTimeout(() => loadModel(kind, { keepForm: true }), 1000);
 }
 
-async function loadLayoutModel(options = {}) {
+async function loadModel(kind, options = {}) {
   try {
-    renderLayoutModel(await api("/api/layout-model"), options);
+    renderModel(kind, await api(`/api/${kind}-model`), options);
   } catch (err) {
-    toast(`读取版面模型设置失败：${err.message}`);
+    toast(`读取${MODEL_NAMES[kind]}设置失败：${err.message}`);
   }
 }
 
-$("layout-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const status = $("layout-save-status");
-  await busy($("layout-save"), "保存中…", async () => {
+// 表单里要存的字段。公式检测模型多一个输入尺寸
+function modelForm(kind) {
+  const form = { enabled: $(`${kind}-enabled`).checked, path: $(`${kind}-path`).value };
+  const size = $(`${kind}-size`);
+  if (size) form.size = Number(size.value);
+  return form;
+}
+
+function loadLayoutModel() {
+  for (const kind of MODEL_KINDS) loadModel(kind);
+}
+
+for (const kind of MODEL_KINDS) {
+  const el = (name) => $(`${kind}-${name}`);
+
+  $(`${kind}-form`).addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const status = el("save-status");
+    await busy(el("save"), "保存中…", async () => {
+      try {
+        const m = await api(`/api/${kind}-model`, { method: "PUT", json: modelForm(kind) });
+        renderModel(kind, m);
+        status.textContent = m.enabled && !(m.runtime && m.file.exists)
+          ? "已保存。缺运行环境或模型文件时，翻译仍只用规则"
+          : "已保存";
+      } catch (err) {
+        status.textContent = `保存失败：${err.message}`;
+      }
+    });
+  });
+
+  el("download").addEventListener("click", async () => {
     try {
-      const m = await api("/api/layout-model", {
-        method: "PUT",
-        json: { enabled: $("layout-enabled").checked, path: $("layout-path").value },
-      });
-      renderLayoutModel(m);
-      status.textContent = m.enabled && !(m.runtime && m.file.exists)
-        ? "已保存。缺运行环境或模型文件时，翻译仍只用规则"
-        : "已保存";
+      renderModel(
+        kind,
+        await api(`/api/${kind}-model/download`, {
+          json: { source: el("source").value, path: el("path").value },
+        }),
+        { keepForm: true },
+      );
     } catch (err) {
-      status.textContent = `保存失败：${err.message}`;
+      toast(err.message);
     }
   });
-});
 
-$("layout-download").addEventListener("click", async () => {
-  try {
-    renderLayoutModel(
-      await api("/api/layout-model/download", {
-        json: { source: $("layout-source").value, path: $("layout-path").value },
-      }),
-      { keepForm: true },
-    );
-  } catch (err) {
-    toast(err.message);
-  }
-});
-
-$("layout-test").addEventListener("click", async (e) => {
-  const box = $("layout-test-result");
-  box.hidden = false;
-  box.className = "test-result";
-  box.textContent = "测试中…";
-  await busy(e.currentTarget, "测试中…", async () => {
-    try {
-      const r = await api("/api/layout-model/test", { json: { path: $("layout-path").value } });
-      box.classList.add("ok");
-      const found = r.labels.length ? r.labels.join("、") : "没有框出东西";
-      box.textContent = `测试成功：加载 ${r.load_ms} ms，一页推理 ${r.page_ms} ms，样例页上框出 ${found}`;
-    } catch (err) {
-      box.classList.add("fail");
-      box.textContent = `测试失败：${err.message}`;
-    }
+  el("test").addEventListener("click", async (e) => {
+    const box = el("test-result");
+    box.hidden = false;
+    box.className = "test-result";
+    box.textContent = "测试中…";
+    await busy(e.currentTarget, "测试中…", async () => {
+      try {
+        const r = await api(`/api/${kind}-model/test`, { json: modelForm(kind) });
+        box.classList.add("ok");
+        const found = r.labels.length ? r.labels.join("、") : "没有框出东西";
+        box.textContent = `测试成功：加载 ${r.load_ms} ms，一页推理 ${r.page_ms} ms，样例页上框出 ${found}`;
+      } catch (err) {
+        box.classList.add("fail");
+        box.textContent = `测试失败：${err.message}`;
+      }
+    });
   });
-});
+}
 
 init().catch((err) => alert(`初始化失败：${err.message}`));

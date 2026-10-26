@@ -62,7 +62,7 @@ from .pdf_roles import LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
 from .pdf_type3 import Type3Reader, broken_type3_names, recover_type3_page
 from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, line_offsets, typeset_lines
-from .pdf_vision import layout_detector
+from .pdf_vision import FormulaDetector, FormulaModel, formula_detector, layout_detector
 
 MATH_FONT_RE = re.compile(r"CMMI|CMB?SY|CMEX|MSBM|MSAM|Math|Symbol|STIX|Cambria Math", re.I)
 # 精确的数学字体白名单（直接判公式）
@@ -735,6 +735,74 @@ def _mark_overlays(page: pymupdf.Page, data: dict) -> None:
                     else:
                         out.append(span)
                 line["spans"] = out
+
+
+# 公式检测模型的框常把公式后面的句读也框进去（$x$, 框成「x,」）。句读留在正文里，译文才排得成中文标点
+_FORMULA_TRAIL = ",.;:?!"
+# 框里只有数字（0、.5、(0, 1)）的排出来和正文一样，不当公式，免得同一句里 0 是占位符、1 不是
+_NUMERIC_RE = re.compile(r"[\d\s.,()%+\-−]*")
+
+
+def _mark_detected_formulas(page: pymupdf.Page, data: dict, rects: Sequence[pymupdf.Rect]) -> None:
+    """公式检测模型框出的行内公式，框里的字按字切出来标上 detected_formula。
+    只在认行内公式的 span 时算数（见 _is_formula_span），角色、跳过、拼段仍按字体定下的 math。"""
+    if not rects:
+        return
+    chars = _char_boxes(page)
+    for block in data.get("blocks", []):
+        for line in block.get("lines", []):
+            spans = line.get("spans", [])
+            box = pymupdf.Rect(line["bbox"])
+            here = [
+                kept for rect in rects
+                if min(rect.y1, box.y1) > max(rect.y0, box.y0) and min(rect.x1, box.x1) > max(rect.x0, box.x0)
+                for kept in [_trim_formula_box(rect, spans, chars)] if kept is not None
+            ]
+            if not here:
+                continue
+            out: list[dict] = []
+            for span in spans:
+                hit = [] if _span_is_math(span) or not span["text"].strip() else [
+                    rect for rect in here if _box_holds_span(rect, span)
+                ]
+                # 字边按框边对：框是从图像上来的，和字边差一点，不能按下划线那样要求对齐
+                out.extend(
+                    _split_covered(span, hit, chars, ([r.x0 for r in hit], [r.x1 for r in hit]), "detected_formula")
+                    if hit else [span]
+                )
+            line["spans"] = out
+
+
+def _box_holds_span(rect: pymupdf.Rect, span: dict) -> bool:
+    """框和 span 左右相交，上下有一半以上重合：上下两行的框碰到这一行的边不算。"""
+    box = pymupdf.Rect(span["bbox"])
+    return (
+        min(rect.y1, box.y1) - max(rect.y0, box.y0) >= 0.5 * min(box.height, rect.height)
+        and min(rect.x1, box.x1) > max(rect.x0, box.x0)
+    )
+
+
+def _trim_formula_box(
+    rect: pymupdf.Rect, spans: list[dict],
+    chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]],
+) -> pymupdf.Rect | None:
+    """框落到这一行的字上：右端的句读让出去，只框着数字的不要。"""
+    covered: list[tuple[float, str]] = []
+    for span in spans:
+        if not _box_holds_span(rect, span):
+            continue
+        boxes = chars.get((str(span["text"]), round(span["origin"][0], 1), round(span["origin"][1], 1))) or []
+        covered += [
+            (x0, char) for char, (x0, x1, _origin) in zip(str(span["text"]), boxes)
+            if rect.x0 - 0.5 <= (x0 + x1) / 2 <= rect.x1 + 0.5
+        ]
+    covered.sort()
+    trimmed = pymupdf.Rect(rect)
+    while len(covered) > 1 and covered[-1][1] in _FORMULA_TRAIL:
+        trimmed.x1 = covered.pop()[0]
+    if covered and _NUMERIC_RE.fullmatch("".join(char for _x, char in covered)):
+        return None
+    return trimmed
 
 
 # 单独画出来的重音字形（\hat、\bar、Montr\'eal 的 ´）。ASCII 的 ^ ~ ` 在正文、代码里另有用处，不算
@@ -3328,11 +3396,11 @@ def _light_text(span: dict) -> bool:
 
 
 def _is_formula_span(span: dict, main_size: float, *, prose_line: bool = False, code: bool = False) -> bool:
-    """行内公式：数学字体的 span，或明显小于正文的角标 span（引用编号等）。
+    """行内公式：数学字体的 span、公式检测模型框出的字，或明显小于正文的角标 span（引用编号等）。
     粗体 CM（CMBX 等）的一两个字符按 mathbf 单字母算公式；粗体单词仍是正文。
     正文字体里的希腊字母和数学符号也是公式。单个拉丁字母不是，除非贴在角标上。
     prose_line 为真时，整行都是比标题小的正文，不能单凭字号收成公式。"""
-    if _span_is_math(span):
+    if _span_is_math(span) or span.get("detected_formula"):
         return True
     # 近白的字压在深色底上（黑底白字的图注标签）。重写会用正文的颜色，和底色混成一片，原样贴回
     if _light_text(span):
@@ -5138,14 +5206,17 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
 
 def _extract(
     doc: pymupdf.Document, on_page: Callable[[int, int], None] | None = None,
+    formulas: FormulaDetector | None = None,
 ) -> tuple[list[TextBlock], list[TextFrame | None], list[PageScan]]:
-    """文本块，以及每页的版心和表格、图、词。on_page(已读页数, 总页数) 在逐页读完一页后调用。"""
+    """文本块，以及每页的版心和表格、图、词。on_page(已读页数, 总页数) 在逐页读完一页后调用。
+    formulas 是公式检测模型，给了时它框出的行内公式标到字上。模型在后台线程里提前推下一页（见 FormulaDetector.pages）。"""
     blocks = []
     scans: list[PageScan] = []
     tables_by_page: list[tuple[RuledTable, ...]] = []
     type3 = Type3Reader(doc)
     pages: list[dict] = []
     pending_cells: set[int] = set()
+    detected = formulas.pages() if formulas is not None else None
     for page in doc:
         scans.append(scan_page(page))
         tables_by_page.append(scans[-1].tables)
@@ -5155,12 +5226,16 @@ def _extract(
         _mark_radicands(page, data, scans[-1].strokes)
         _mark_overlays(page, data)
         _split_accents(page, data)
+        if detected is not None:
+            _mark_detected_formulas(page, data, next(detected))
         _mark_visible_spaces(page, data, scans[-1].visible_spaces)
         # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
         recover_type3_page(page, data, type3)
         pages.append(data)
         if on_page is not None:
             on_page(len(pages), doc.page_count)
+    if detected is not None:
+        detected.close()  # 停掉后台线程
     _mark_math_roman(pages)
     # 目录页上不找表：页码一列和节号一列对齐，短条目会被认成格子表，格子不翻。
     # 索引页也是：几栏短条目行首对齐，凑出几行就像无线的格子表
@@ -10172,7 +10247,7 @@ class _PdfPlan:
     notes: list[str] = field(default_factory=list)  # 每个单元在书里所处位置的说明，见 _index_notes
 
 
-def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
+def _plan_pdf(src: Path, runner, layout_model: str, formula_model: FormulaModel | None = None) -> _PdfPlan:
     """送翻前的部分：读版面、定角色、并跨页段落，给每个单元打好占位符。
     断行处的连字符要不要留，看全文里有没有接起来的词（见 _join_lines），整个分析期间都按这一篇的词。"""
     src_doc = pymupdf.open(src)
@@ -10181,15 +10256,18 @@ def _plan_pdf(src: Path, runner, layout_model: str) -> _PdfPlan:
     words = frozenset(word for page in src_doc for word in _CAMEL_RE.findall(page.get_text("text")))
     token = _CAMEL_WORDS.set(words)
     try:
-        return _plan_document(src, src_doc, runner, layout_model)
+        return _plan_document(src, src_doc, runner, layout_model, formula_model)
     finally:
         _CAMEL_WORDS.reset(token)
 
 
-def _plan_document(src: Path, src_doc: pymupdf.Document, runner, layout_model: str) -> _PdfPlan:
+def _plan_document(
+    src: Path, src_doc: pymupdf.Document, runner, layout_model: str, formula_model: FormulaModel | None = None,
+) -> _PdfPlan:
     # 逐页读线、表、字占准备时间的大半，按页报进度
     blocks, frames, scans = _extract(
         src_doc, lambda done, total: runner.report_stage("分析版面", done, total, "页"),
+        formula_detector(src_doc, formula_model),
     )
     runner.report_stage("整理段落")
     glosses = {
@@ -10359,28 +10437,35 @@ def _index_notes(units: list[list[TextBlock]], texts: list[str], skips: list[boo
     return notes
 
 
-def _saved_plan(src: Path, runner, layout_model: str, path: Path | None) -> _PdfPlan:
-    """暂停、中断后继续，或生成另一种版本时，原文件、版面模型和代码都没变，就读回上次的分析结果。
+def _saved_plan(
+    src: Path, runner, layout_model: str, path: Path | None, formula_model: FormulaModel | None = None,
+) -> _PdfPlan:
+    """暂停、中断后继续，或生成另一种版本时，原文件、两个模型和代码都没变，就读回上次的分析结果。
     一本几百页的书逐页读版面要一分多钟，读回只要一两秒。path 为 None 时不存。"""
     if path is None:
-        return _plan_pdf(src, runner, layout_model)
-    key = _plan_key(src, layout_model)
+        return _plan_pdf(src, runner, layout_model, formula_model)
+    key = _plan_key(src, layout_model, formula_model)
     plan = _load_plan(path, key, src, runner)
     if plan is not None:
         runner.set_title(plan.title)
         return plan
-    plan = _plan_pdf(src, runner, layout_model)
+    plan = _plan_pdf(src, runner, layout_model, formula_model)
     _save_plan(path, key, plan)
     return plan
 
 
-def _plan_key(src: Path, layout_model: str) -> str:
+def _plan_key(src: Path, layout_model: str, formula_model: FormulaModel | None = None) -> str:
     digest = hashlib.sha1(src.read_bytes())
     digest.update(_code_version().encode())
-    model = Path(layout_model) if layout_model else None
-    if model is not None and model.is_file():
-        stat = model.stat()
-        digest.update(f"{model.resolve()}:{stat.st_size}:{stat.st_mtime_ns}".encode())
+    # 两个模型分开记：只开了公式模型和只开了版面模型的分析结果不一样。公式模型换了输入尺寸也要重新分析
+    models = [("layout", layout_model)]
+    if formula_model is not None:
+        models.append((f"formula@{formula_model.size}", formula_model.path))
+    for tag, path in models:
+        model = Path(path) if path else None
+        if model is not None and model.is_file():
+            stat = model.stat()
+            digest.update(f"{tag}:{model.resolve()}:{stat.st_size}:{stat.st_mtime_ns}".encode())
     return digest.hexdigest()
 
 
@@ -10511,14 +10596,16 @@ def _crop_formulas(
 
 
 async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "",
-                        layout_model: str = "", plan_path: Path | None = None) -> list[Path]:
-    """layout_model 是版面模型文件的路径，空串表示只用规则。plan_path 是存分析结果的文件，见 _saved_plan。
+                        layout_model: str = "", plan_path: Path | None = None,
+                        formula_model: FormulaModel | None = None) -> list[Path]:
+    """layout_model 是版面模型文件的路径，空串表示不用；formula_model 是公式检测模型的设置，None 表示不用。
+    都不用时只用规则。plan_path 是存分析结果的文件，见 _saved_plan。
 
     读版面、裁公式图、写回都用 MuPDF，一本书要算几分钟，放在线程里做，事件循环还能响应
     任务页的轮询。这几步轮到才做（见 mupdf_turn），等翻译接口时放开，别的任务可以接着
     做它的准备。"""
     async with _job_turn(runner):
-        plan = await asyncio.to_thread(_saved_plan, src, runner, layout_model, plan_path)
+        plan = await asyncio.to_thread(_saved_plan, src, runner, layout_model, plan_path, formula_model)
     src_doc, blocks, geometries, toc = plan.src_doc, plan.blocks, plan.geometries, plan.toc
     flat_units, sent_texts, sent_formulas = plan.units, plan.texts, plan.formulas
     skip_ids, block_kind = plan.skip_ids, plan.block_kind

@@ -300,11 +300,57 @@
         </label>
         <button type="button" class="btn" id="layout-download">下载模型</button>
       </div>
-      <p class="hint" id="layout-download-status" aria-live="polite"></p>
+      <p class="hint download-status" id="layout-download-status" aria-live="polite"></p>
 
       <div class="actions">
         <button type="submit" class="btn primary" id="layout-save">保存</button>
         <span id="layout-save-status" class="hint" aria-live="polite"></span>
+      </div>
+    </div>
+  </form>
+
+  <form id="formula-form" class="card svc-detail layout-card" autocomplete="off">
+    <div class="layout-info">
+      <div class="svc-title">
+        <h3>Pix2Text MFD 公式检测</h3>
+        <button type="button" class="btn sm" id="formula-test">测试模型</button>
+      </div>
+      <p class="desc">模型框出的行内公式整体保留原样，斜体变量、P(y = 1) 这类式子在译文里保持完整。正文用 Times 等字体排的论文提升最明显。分析版面时每页多花一秒左右（6 核 CPU）。约 80 MB，模型卡标的是 MIT 许可，文件元数据标的是 AGPL-3.0。</p>
+      <div id="formula-test-result" class="test-result" hidden></div>
+
+      <dl class="layout-status">
+        <dt>运行环境</dt>
+        <dd id="formula-runtime">—</dd>
+        <dt>模型文件</dt>
+        <dd id="formula-file">—</dd>
+      </dl>
+    </div>
+
+    <div class="layout-settings">
+      <label class="check"><input type="checkbox" name="enabled" id="formula-enabled"> 翻译 PDF 时使用公式检测模型</label>
+
+      <label class="field">模型文件路径
+        <input name="path" id="formula-path" spellcheck="false">
+      </label>
+
+      <label class="field">输入尺寸
+        <select name="size" id="formula-size">
+          <option value="1024">1024（默认）：单个字母的变量也认得出</option>
+          <option value="768">768：分析版面快三成左右，单个字母的变量漏得多一些</option>
+        </select>
+      </label>
+
+      <div class="field-row layout-download">
+        <label class="field">下载来源
+          <select id="formula-source"></select>
+        </label>
+        <button type="button" class="btn" id="formula-download">下载模型</button>
+      </div>
+      <p class="hint download-status" id="formula-download-status" aria-live="polite"></p>
+
+      <div class="actions">
+        <button type="submit" class="btn primary" id="formula-save">保存</button>
+        <span id="formula-save-status" class="hint" aria-live="polite"></span>
       </div>
     </div>
   </form>

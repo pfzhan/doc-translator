@@ -19,6 +19,7 @@ from . import history, layout_model
 from .formats import PREVIEW_FORMATS, SUPPORTED, output_variant, translate_file
 from .formats.epub import book_outline
 from .formats.pdf import mupdf_turn
+from .formats.pdf_vision import FormulaModel
 from .history import Job, JobStore
 from .languages import GOOGLE_CODES, LANGUAGES
 from .prompts import default_prompts
@@ -43,7 +44,7 @@ deleting: set[str] = set()
 # 用户点了暂停的任务：取消时据此把状态记成“已暂停”，而不是“已中断”
 pause_requested: set[str] = set()
 # 版面模型的下载（同一时间只有一个）
-layout_downloads = layout_model.Downloader()
+model_downloads = {kind: layout_model.Downloader(spec) for kind, spec in layout_model.MODELS.items()}
 ACTIVE = ("queued", "running")
 PROGRESS_SAVE_INTERVAL = 5
 
@@ -121,8 +122,8 @@ async def _run_job(job: Job, translator, bilingual: bool, fresh: bool = False):
     jobs.save(job)
     try:
         outputs = await translate_file(jobs.source_path(job), jobs.out_dir(job.id), job.runner, bilingual,
-                                       job.target_lang, layout_model=_layout_model_path(),
-                                       plan_path=jobs.plan_path(job.id))
+                                       job.target_lang, layout_model=_model_path("layout"),
+                                       plan_path=jobs.plan_path(job.id), formula_model=_formula_model())
         job.outputs = [p.name for p in outputs]
         job.status = "done"
     except asyncio.CancelledError:
@@ -517,7 +518,8 @@ async def build_variant(job_id: str):
         try:
             outputs = await translate_file(
                 jobs.source_path(job), stage, Runner(translator, cache_only=True), bilingual, job.target_lang,
-                layout_model=_layout_model_path(), plan_path=jobs.plan_path(job.id),
+                layout_model=_model_path("layout"), plan_path=jobs.plan_path(job.id),
+                formula_model=_formula_model(),
             )
         except (TranslatorError, ValueError) as e:
             raise HTTPException(400, str(e))
@@ -650,61 +652,80 @@ async def update_settings(data: dict = Body(...)):
     return result
 
 
-# ---------- 版面模型 ----------
+# ---------- 版面模型、公式检测模型 ----------
+# 两个模型的接口一样：/api/layout-model、/api/formula-model
 
-def _layout_model_path() -> str:
+def _spec(kind: str) -> layout_model.ModelSpec:
+    if kind not in layout_model.MODELS:
+        raise HTTPException(404, "没有这个模型")
+    return layout_model.MODELS[kind]
+
+
+def _model_path(kind: str) -> str:
     """PDF 翻译用的模型文件。没开时是空串，只用规则。"""
-    conf = settings.layout_model
-    return str(layout_model.resolve(conf["path"])) if conf["enabled"] else ""
+    spec = layout_model.MODELS[kind]
+    conf = settings.model(spec.key)
+    return str(spec.resolve(conf["path"])) if conf["enabled"] else ""
 
 
-def _layout_status() -> dict:
-    conf = settings.layout_model
-    path = layout_model.resolve(conf["path"])
+def _formula_model() -> FormulaModel | None:
+    path = _model_path("formula")
+    return FormulaModel(path, settings.formula_model["size"]) if path else None
+
+
+def _model_status(kind: str) -> dict:
+    spec = _spec(kind)
+    conf = settings.model(spec.key)
+    path = spec.resolve(conf["path"])
     return {
         **conf,
         "resolved": str(path),
-        "default_path": str(layout_model.default_path()),
+        "default_path": str(spec.default_path()),
         "runtime": layout_model.runtime_version(),
         "install_hint": layout_model.INSTALL_HINT,
         "file": layout_model.file_status(path),
-        "download": dict(layout_downloads.state),
-        "sources": [{"id": key, "label": label} for key, (label, _url) in layout_model.SOURCES.items()],
+        "download": dict(model_downloads[kind].state),
+        "sources": [{"id": key, "label": label} for key, (label, _url) in spec.sources.items()],
     }
 
 
-@app.get("/api/layout-model")
-def get_layout_model():
-    return _layout_status()
+@app.get("/api/{kind}-model")
+def get_model(kind: str):
+    return _model_status(kind)
 
 
-@app.put("/api/layout-model")
-def update_layout_model(data: dict = Body(...)):
+@app.put("/api/{kind}-model")
+def update_model(kind: str, data: dict = Body(...)):
+    spec = _spec(kind)
     try:
-        settings.update({"layout_model": {k: data[k] for k in ("enabled", "path") if k in data}})
+        settings.update({spec.key: {k: data[k] for k in ("enabled", "path", "size") if k in data}})
     except SettingsError as e:
         raise HTTPException(400, str(e))
-    return _layout_status()
+    return _model_status(kind)
 
 
-@app.post("/api/layout-model/download")
-async def download_layout_model(data: dict = Body(...)):
+@app.post("/api/{kind}-model/download")
+async def download_model(kind: str, data: dict = Body(...)):
     """下到设置里的路径（留空是默认位置）。页面轮询 GET 看进度。"""
-    target = layout_model.resolve(str(data.get("path", settings.layout_model["path"]) or ""))
+    spec = _spec(kind)
+    target = spec.resolve(str(data.get("path", settings.model(spec.key)["path"]) or ""))
     try:
-        layout_downloads.start(str(data.get("source") or ""), target)
+        model_downloads[kind].start(str(data.get("source") or ""), target)
     except layout_model.LayoutModelError as e:
         raise HTTPException(400, str(e))
-    return _layout_status()
+    return _model_status(kind)
 
 
-@app.post("/api/layout-model/test")
-async def test_layout_model(data: dict | None = Body(None)):
+@app.post("/api/{kind}-model/test")
+async def test_model(kind: str, data: dict | None = Body(None)):
     """用表单里的路径（可能还没保存）加载模型，在一张样例页上跑一遍。"""
-    raw = (data or {}).get("path", settings.layout_model["path"])
+    spec = _spec(kind)
+    conf = settings.model(spec.key)
+    raw = (data or {}).get("path", conf["path"])
+    size = (data or {}).get("size", conf.get("size"))
     try:
         async with mupdf_turn():  # 样例页用 MuPDF 画，和正在跑的任务错开
-            return await asyncio.to_thread(layout_model.check, layout_model.resolve(str(raw or "")))
+            return await asyncio.to_thread(layout_model.check, spec, spec.resolve(str(raw or "")), size)
     except layout_model.LayoutModelError as e:
         raise HTTPException(400, str(e))
 

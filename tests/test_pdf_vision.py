@@ -3,7 +3,8 @@ import pymupdf
 
 from app.formats.pdf_layout import PageGeometry
 from app.formats.pdf_roles import HeuristicLayout, LayoutItem, Role
-from app.formats.pdf_vision import ModelLayout, layout_detector
+from app.formats import pdf_vision
+from app.formats.pdf_vision import FormulaDetector, FormulaModel, ModelLayout, formula_detector, layout_detector
 
 NAMES = "{0: 'title', 1: 'plain text', 3: 'figure', 4: 'figure_caption', 8: 'isolate_formula'}"
 
@@ -145,3 +146,93 @@ def test_text_regions_are_the_plain_text_boxes_and_the_page_is_read_once():
     [region] = layout.text_regions(0)
     assert all(abs(a - b) < 1 for a, b in zip(region, body))
     assert len(session.inputs) == 1
+
+
+class _FormulaMeta:
+    custom_metadata_map = {"names": "{0: 'embedding', 1: 'isolated'}"}
+
+
+class FormulaSession(FakeSession):
+    """Ultralytics 导出的 YOLO：输出 [1, 4 + 类别数, N]，每列是中心、宽高和各类的分，没做 NMS。"""
+
+    def get_modelmeta(self):
+        return _FormulaMeta()
+
+    def run(self, _outputs, feeds):
+        size = feeds["images"].shape[-1]
+        self.inputs.append(feeds["images"].shape)
+        zoom = size / max(self.page_rect.width, self.page_rect.height)
+        left = (size - round(self.page_rect.width * zoom)) // 2
+        top = (size - round(self.page_rect.height * zoom)) // 2
+        columns = []
+        for rect, score, cls in self.boxes:
+            x0, y0, x1, y1 = rect.x0 * zoom + left, rect.y0 * zoom + top, rect.x1 * zoom + left, rect.y1 * zoom + top
+            scores = [0.0, 0.0]
+            scores[cls] = score
+            columns.append([(x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0, *scores])
+        return [np.array([columns], dtype=np.float32).transpose(0, 2, 1)]
+
+
+def test_formula_boxes_keep_the_best_of_overlapping_ones():
+    """同一个公式常有几个重叠的框，只留分最高的。分太低的不要，行间公式不算行内公式"""
+    doc = _doc()
+    inline = pymupdf.Rect(100, 100, 140, 112)
+    session = FormulaSession(doc[0].rect, [
+        (inline, 0.9, 0),
+        (pymupdf.Rect(101, 100, 141, 112), 0.6, 0),
+        (pymupdf.Rect(200, 100, 230, 112), 0.1, 0),
+        (pymupdf.Rect(80, 200, 320, 240), 0.8, 1),
+    ])
+    detector = FormulaDetector(doc, session)
+    assert sorted(region.label for region in detector.regions(0)) == ["embedding", "isolated"]
+    [found] = detector.inline(0)
+    assert all(abs(a - b) < 1 for a, b in zip(found, inline))
+
+
+def test_formula_detector_needs_an_inline_formula_class(monkeypatch, tmp_path):
+    """没开、文件不存在都只用规则。路径填成版面模型（类别里没有行内公式）也不用"""
+    assert formula_detector(_doc()) is None
+    assert formula_detector(_doc(), FormulaModel(str(tmp_path / "missing.onnx"))) is None
+    doc = _doc()
+    monkeypatch.setattr(pdf_vision, "_usable_session", lambda path, threads=0: FakeSession(doc[0].rect, []))
+    assert formula_detector(doc, FormulaModel("layout.onnx")) is None
+    monkeypatch.setattr(pdf_vision, "_usable_session", lambda path, threads=0: FormulaSession(doc[0].rect, []))
+    assert isinstance(formula_detector(doc, FormulaModel("mfd.onnx")), FormulaDetector)
+
+
+def test_formula_pages_come_in_page_order_at_the_chosen_size():
+    """逐页给的框和一页一页单独推的一样（下一页在后台线程里推）。输入尺寸按设置画页面"""
+    doc = pymupdf.open()
+    for _ in range(3):
+        doc.new_page(width=400, height=500)
+    box = pymupdf.Rect(100, 100, 140, 112)
+
+    class PerPage(FormulaSession):
+        """第 n 次推理给出往下挪 n * 100 的框，看得出框对的是哪一页"""
+
+        def run(self, outputs, feeds):
+            shift = len(self.inputs) * 100
+            self.boxes = [(box + (0, shift, 0, shift), 0.9, 0)]
+            return super().run(outputs, feeds)
+
+    session = PerPage(doc[0].rect, [])
+    pages = list(FormulaDetector(doc, session, 768).pages())
+    assert [round(found.y0) for [found] in pages] == [100, 200, 300]
+    assert session.inputs == [(1, 3, 768, 768)] * 3
+
+
+def test_formula_inference_leaves_two_cores_for_reading_pages(monkeypatch):
+    """模型在后台推理时主线程还在读页面，推理线程比核数少两个，至少一个"""
+    seen = []
+    doc = _doc()
+
+    def usable(path, threads=0):
+        seen.append(threads)
+        return FormulaSession(doc[0].rect, [])
+
+    monkeypatch.setattr(pdf_vision, "_usable_session", usable)
+    monkeypatch.setattr(pdf_vision.os, "cpu_count", lambda: 6)
+    formula_detector(doc, FormulaModel("mfd.onnx"))
+    monkeypatch.setattr(pdf_vision.os, "cpu_count", lambda: 2)
+    formula_detector(doc, FormulaModel("mfd.onnx"))
+    assert seen == [4, 1]

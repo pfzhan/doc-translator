@@ -2821,6 +2821,32 @@ def test_italic_letters_between_math_brackets_are_a_formula():
     assert _CM_UPRIGHT_RE.match("CMSSBX10") and _CM_UPRIGHT_RE.match("ABCDEF+CMSS10")
 
 
+def test_detected_formula_boxes_mark_their_letters():
+    """公式检测模型框出的 x、y = 1 是行内公式，y = 1 全是正文的正体字，按字体认不出来。
+    框把后面的逗号也框进去时，逗号留在正文里；只框着 0 的框不算公式"""
+    from app.formats.pdf import _extract, _placeholderize
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=200)
+    page.insert_text((40, 60), "We call the input", fontsize=10, fontname="tiro")
+    x0 = 40 + pymupdf.get_text_length("We call the input ", "tiro", 10)
+    page.insert_text((x0, 60), "x", fontsize=10, fontname="tiit")
+    x1 = x0 + pymupdf.get_text_length("x", "tiit", 10)
+    page.insert_text((x1, 60), ", and set y = 1, then 0 and 1.", fontsize=10, fontname="tiro")
+    boxes = [page.search_for("x,")[0], page.search_for("y = 1,")[0], page.search_for("0")[0]]
+
+    class Detector:
+        def pages(self):
+            yield boxes
+
+    [block], _frames, _scans = _extract(doc, formulas=Detector())
+    sent, formulas = _placeholderize(block, 0)
+    assert sent == "We call the input {v1}, and set {v2}, then 0 and 1."
+    assert [formula["text"] for formula in formulas] == ["x", "y = 1"]
+    [block], _frames, _scans = _extract(doc)
+    assert _placeholderize(block, 0)[0] == "We call the input {i}x{/i}, and set y = 1, then 0 and 1."
+
+
 def test_accent_on_its_own_line_joins_the_formula_once():
     """ŝ 的 ˆ 单成一行，排在 s 那一行后面，自己也判成了式子。并进它盖着的式子以后不再单列一个占位符。"""
     from app.formats.pdf import _placeholderize

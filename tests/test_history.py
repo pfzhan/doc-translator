@@ -335,7 +335,7 @@ def test_variant_rejects_second_request_and_discards_partial(app_env, monkeypatc
 
         async def boom(
             src: object, out_dir: object, runner: object, bilingual: bool, target_lang: str, layout_model: str = "",
-            plan_path: object = None,
+            plan_path: object = None, formula_model: str = "",
         ) -> list[object]:
             from pathlib import Path
 
