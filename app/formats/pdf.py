@@ -2469,11 +2469,12 @@ def _can_continue(
     if (re.match(r"\([^()]{1,60}\)\s*(?:[.,;:]|[a-z])", lead) and not _EQUATION_TAG_RE.match(lead)
             and not _list_item(lead)):
         continues = True
-    # 句中的缩写（Mao et al. | 2026）不是句末。分号、里面没有句号的右括号后面小写接着写的是同一句
-    # （… on BC trials; | an explanation …、… GOP (4.750 vs. 4.733) | and lower …）
+    # 句中的缩写（Mao et al. | 2026）不是句末。分号、冒号、里面没有句号的右括号后面小写接着写的是同一句
+    # （… on BC trials; | an explanation …、… GOP (4.750 vs. 4.733) | and lower …）。
+    # 冒号后面的行间公式跳过了不译时，下一页的 where 接在冒号后面（… scoring function: | where U, W …）
     tail = _END_MARK_RE.sub("", prev.text)
     closers = "\"'”’)]}》"
-    weak = tail.endswith((";", "；")) or (tail.endswith(tuple(closers))
+    weak = tail.endswith((";", "；", ":", "：")) or (tail.endswith(tuple(closers))
                                          and not tail.rstrip(closers).endswith(_SENT_END_PUNCT))
     ended = (tail.endswith(_SENT_END_PUNCT) and not _MID_ABBREV_RE.search(prev.text.rstrip())
              and not (weak and head.islower()))

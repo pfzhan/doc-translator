@@ -1605,7 +1605,7 @@ def test_a_proof_mark_after_the_full_stop_still_ends_the_paragraph():
 
 
 def test_a_column_break_inside_brackets_or_after_et_al_continues():
-    """换栏、换页处圆括号起头的看括号里的字，句中的 et al. 不算句末。编号、音标、引文另起，
+    """换栏、换页处圆括号起头的看括号里的字，句中的 et al. 不算句末，分号、冒号后面小写的接着写。编号、音标、引文另起，
     栏底整行斜体的小标题也不往下接。"""
     from app.formats.pdf import TextBlock, _can_continue
 
@@ -1625,6 +1625,9 @@ def test_a_column_break_inside_brackets_or_after_et_al_continues():
     assert not joins("The scores are combined as shown below.", "(RMS) loudness to describe the trajectory.")
     assert joins("the policy is confused on BC trials;", "an explanation that also fails to cover the rest.")
     assert not joins("the policy is confused on BC trials;", "An explanation that also fails to cover the rest.")
+    # 冒号后面的行间公式跳过了，下一页小写起头的 where 接着写
+    assert joins("into a biaffine scoring function:", "where U, W, and b are weights learned by the model.")
+    assert not joins("into a biaffine scoring function:", "We use U, W, and b as weights learned by the model.")
     assert joins("closed-loop reasoning in later work (Fu et al., 2024b;", "Mao et al., 2024) share the same confound.")
     assert not joins("closed-loop reasoning in later work (Fu et al., 2024b;", "Results differ. Both (a) and (b) fail).")
     assert joins("with a dual success metric and scripted certificates", "(§5.3). Urban probes stress the agent.")
