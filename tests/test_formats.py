@@ -1628,6 +1628,9 @@ def test_a_column_break_inside_brackets_or_after_et_al_continues():
     # 冒号后面的行间公式跳过了，下一页小写起头的 where 接着写
     assert joins("into a biaffine scoring function:", "where U, W, and b are weights learned by the model.")
     assert not joins("into a biaffine scoring function:", "We use U, W, and b as weights learned by the model.")
+    assert not _can_continue(blk("the context window from that instance:", 0),
+                             blk("is traditionally followed by cherry pie, a traditional dessert", 1), 10, None,
+                             allow_capital=True, at_edge=False)
     assert joins("closed-loop reasoning in later work (Fu et al., 2024b;", "Mao et al., 2024) share the same confound.")
     assert not joins("closed-loop reasoning in later work (Fu et al., 2024b;", "Results differ. Both (a) and (b) fail).")
     assert joins("with a dual success metric and scripted certificates", "(§5.3). Urban probes stress the agent.")
@@ -1651,6 +1654,27 @@ def test_a_column_break_inside_brackets_or_after_et_al_continues():
     assert not _can_continue(heading, head, 10, None, allow_capital=True)
     heading.span_lines = [[{"text": heading.text, "font": "NimbusRomNo9L-Regu", "flags": 0, "size": 10}]]
     assert _can_continue(heading, head, 10, None, allow_capital=True)
+
+
+def test_a_block_at_the_text_edge_starts_where_the_body_lines_start():
+    """冒号下面接着写的半句从正文的左缘起笔；引出的例句、式子缩进或者居中排。
+    左缘按同一栏里各段除首行以外的行算，首行缩进的段落不影响，图注居中的续行不算。"""
+    from app.formats.pdf import TextBlock, _at_text_edge
+
+    def blk(text, lefts, y, x1=493.0):
+        lines = [pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 10) for i, x0 in enumerate(lefts)]
+        rect = pymupdf.Rect(lines[0])
+        for line in lines:
+            rect |= line
+        return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=10.0, color="#000", bold=False)
+
+    body = [blk("Apple pie computer peripherals and personal digital assistants. These dimensions", [175, 160, 160], 300),
+            blk("Figure 5.3 A spatial visualization of word vectors in two dimensions", [160, 210], 400)]
+    example = blk("is traditionally followed by cherry pie, a traditional dessert often mixed", [191, 217, 161], 108, x1=457)
+    resumed = blk("then the same kinds of training data would lead the language model to assign", [160, 160, 160], 108)
+    assert not _at_text_edge(example, [example, resumed, *body])
+    assert _at_text_edge(resumed, [resumed, *body])
+    assert not _at_text_edge(blk("fair but brutal", [167], 108, x1=222), body)
 
 
 def test_a_number_heavy_results_paragraph_is_prose():

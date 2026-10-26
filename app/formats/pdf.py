@@ -2430,7 +2430,7 @@ def _is_page_footnote(block: TextBlock, median: float) -> bool:
 
 def _can_continue(
     prev: TextBlock, nxt: TextBlock, median: float, halt_ids: set[int] | None,
-    allow_capital: bool = False, flush: bool = False,
+    allow_capital: bool = False, flush: bool = False, at_edge: bool = True,
 ) -> bool:
     """页末块没有句末标点，页首块以小写、数字或中文开头，且不是标题。
 
@@ -2439,6 +2439,7 @@ def _can_continue(
     表格的格子各是各的：格子的列看起来也像栏，上一列的末格不能接到下一列的表头。
     flush 是段落首行缩进的文档里，页首、栏首（或者栏顶的图表下面）齐平起笔的一段（见 _flush_start）：
     新段都缩进，齐平的是上一段的续段，上一块恰好在句末断开、下一块大写起头也接上。
+    at_edge 是下一块的首行从本栏正文的左缘起笔（见 _at_text_edge）。
     """
     if prev.clip is not None or nxt.clip is not None:
         return False
@@ -2471,10 +2472,12 @@ def _can_continue(
         continues = True
     # 句中的缩写（Mao et al. | 2026）不是句末。分号、冒号、里面没有句号的右括号后面小写接着写的是同一句
     # （… on BC trials; | an explanation …、… GOP (4.750 vs. 4.733) | and lower …）。
-    # 冒号后面的行间公式跳过了不译时，下一页的 where 接在冒号后面（… scoring function: | where U, W …）
+    # 冒号后面的行间公式跳过了不译时，下一页的 where 接在冒号后面（… scoring function: | where U, W …）。
+    # 冒号下面缩进、居中排的是引出的例句、式子（… from that instance: | is traditionally followed by cherry pie），
+    # 不接：接着写的半句从正文的左缘起笔
     tail = _END_MARK_RE.sub("", prev.text)
     closers = "\"'”’)]}》"
-    weak = tail.endswith((";", "；", ":", "：")) or (tail.endswith(tuple(closers))
+    weak = tail.endswith((";", "；")) or (at_edge and tail.endswith((":", "："))) or (tail.endswith(tuple(closers))
                                          and not tail.rstrip(closers).endswith(_SENT_END_PUNCT))
     ended = (tail.endswith(_SENT_END_PUNCT) and not _MID_ABBREV_RE.search(prev.text.rstrip())
              and not (weak and head.islower()))
@@ -2503,6 +2506,23 @@ def _flush_start(block: TextBlock) -> bool:
     rights = [max(rect.x1 for rect in row) for row in rows]
     return (max(lefts) - min(lefts) <= 0.3 * block.size
             and rights[0] >= max(rights[1:]) - 0.5 * block.size)
+
+
+def _at_text_edge(head: TextBlock, page_blocks: list[TextBlock]) -> bool:
+    """块的首行从本栏正文的左缘起笔。左缘取同一页上和它左右交叠的多行块（连同它自己）里，
+    除首行以外各行最常见的左边，首行缩进、悬挂缩进的段落也量得准。图注的续行居中排，不算。
+    没有能量的行时按在左缘算"""
+    lefts = Counter(
+        round(min(rect.x0 for rect in row))
+        for block in page_blocks
+        if block.rect.x0 < head.rect.x1 and block.rect.x1 > head.rect.x0 and not _is_float_text(block.text)
+        for row in sorted(_visual_lines(block), key=lambda row: row[0].y0)[1:]
+    )
+    if not lefts:
+        return True
+    rows = sorted(_visual_lines(head), key=lambda row: row[0].y0)
+    first = min(rect.x0 for rect in rows[0]) if rows else head.rect.x0
+    return abs(first - lefts.most_common(1)[0][0]) <= 0.3 * head.size
 
 
 def _resumes(head: TextBlock, page_blocks: list[TextBlock], skip_ids: set[int], passed: set[int]) -> bool:
@@ -2800,7 +2820,7 @@ def _column_wrap(host: TextBlock, tail: TextBlock) -> bool:
 def _try_column_pair(
     pairs: dict[int, TextBlock], tails: set[int], host: TextBlock | None, tail: TextBlock | None,
     median: float, halt_ids: set[int] | None, skip_ids: set[int],
-    allow_capital: bool = True, flush: bool = False,
+    allow_capital: bool = True, flush: bool = False, at_edge: bool = True,
 ) -> None:
     if host is None or tail is None or host is tail:
         return
@@ -2812,7 +2832,7 @@ def _try_column_pair(
         return
     if abs(host.size - tail.size) > max(host.size, 1.0) * 0.25:
         return
-    if not _can_continue(host, tail, median, halt_ids, allow_capital=allow_capital, flush=flush):
+    if not _can_continue(host, tail, median, halt_ids, allow_capital=allow_capital, flush=flush, at_edge=at_edge):
         return
     pairs[id(host)] = tail
     tails.add(id(tail))
@@ -2946,7 +2966,8 @@ def _column_continuations(
             if host.rect.x1 > head.rect.x0 + 4:
                 continue
             _try_column_pair(pairs, tails, host, head, median, halt_ids, skip_ids,
-                             flush=indents and _resumes(head, by_page.get(pno) or [], skip_ids, ignored | aside_ids))
+                             flush=indents and _resumes(head, by_page.get(pno) or [], skip_ids, ignored | aside_ids),
+                             at_edge=_at_text_edge(head, by_page.get(pno) or []))
         later = _next_text_page(by_page, pno, median, skip_ids, ignored)
         nxt = columns_of.get(later) or []
         if not columns or not nxt:
@@ -2962,6 +2983,7 @@ def _column_continuations(
             pairs, tails, host, head, median, halt_ids, skip_ids,
             allow_capital=bool(host and head and _column_wrap(host, head)),
             flush=bool(indents and head and _resumes(head, by_page.get(later) or [], skip_ids, ignored | aside_ids)),
+            at_edge=head is None or _at_text_edge(head, by_page.get(later) or []),
         )
     return pairs
 
@@ -3164,7 +3186,8 @@ def _cross_page_units(
                 and id(first) not in extra
                 and id(b) not in skip_ids and id(first) not in skip_ids
                 and _can_continue(b, first, median, halt_ids,
-                                  flush=indents and _resumes(first, nxt, skip_ids, ignored | aside_ids))
+                                  flush=indents and _resumes(first, nxt, skip_ids, ignored | aside_ids),
+                                  at_edge=_at_text_edge(first, nxt))
                 and not _different_columns(geometries, b, first)
             )
             cross_target = head if head is not None and id(head) not in used and id(head) not in extra else None
@@ -3174,7 +3197,8 @@ def _cross_page_units(
                 and _is_last_in_right_column(b, body, geometries[pno])
                 and id(b) not in skip_ids and id(cross_target) not in skip_ids
                 and _can_continue(b, cross_target, median, halt_ids,
-                                  flush=indents and _resumes(cross_target, nxt, skip_ids, ignored | aside_ids))
+                                  flush=indents and _resumes(cross_target, nxt, skip_ids, ignored | aside_ids),
+                                  at_edge=_at_text_edge(cross_target, nxt))
             )
             other = first if same else cross_target
             if (same or cross) and other is not None:
