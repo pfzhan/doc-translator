@@ -7564,6 +7564,56 @@ def test_pdf_reports_its_preparation_and_writing_stages(tmp_path):
     assert after[-1] == ("生成文件", 0, 0, "")
 
 
+
+def test_the_layout_model_reports_each_page_it_reads(tmp_path, monkeypatch):
+    """版面模型一页推两秒左右，在定角色前逐页推好、按页报进度，推完回到「整理段落」"""
+    import numpy as np
+
+    from app.formats import pdf, pdf_vision
+
+    class Meta:
+        custom_metadata_map = {"names": "{0: 'title'}"}
+
+    class Input:
+        name = "images"
+
+    class NoBoxes:
+        def __init__(self):
+            self.runs = 0
+
+        def get_modelmeta(self):
+            return Meta()
+
+        def get_inputs(self):
+            return [Input()]
+
+        def run(self, _outputs, _feeds):
+            self.runs += 1
+            return [np.zeros((1, 0, 6), np.float32)]
+
+    doc = pymupdf.open()
+    for _ in range(3):
+        page = doc.new_page(width=420, height=240)
+        page.insert_text((40, 60), "A body paragraph long enough to be translated here.", fontsize=10)
+    doc.new_page(width=420, height=240)  # 没有字的页不推
+    src = tmp_path / "pages.pdf"
+    doc.save(src)
+    session = NoBoxes()
+    monkeypatch.setattr(pdf, "layout_detector", lambda doc, path: pdf_vision.ModelLayout(doc, session))
+    stages: list[tuple] = []
+
+    class R:
+        def report_stage(self, name, done=0, total=0, unit=""):
+            stages.append((name, done, total, unit))
+
+        def set_title(self, title):
+            pass
+
+    pdf._plan_pdf(src, R(), "layout.onnx")
+    start = stages.index(("版面模型分析", 1, 3, "页"))
+    assert stages[start:start + 4] == [("版面模型分析", n, 3, "页") for n in (1, 2, 3)] + [("整理段落", 0, 0, "")]
+    assert session.runs == 3
+
 def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monkeypatch):
     """同时跑的两个任务不能一起用 MuPDF（find_tables 会改进程全局的字框开关）；
     用 MuPDF 的部分在线程里做，事件循环一直能响应别的请求。"""

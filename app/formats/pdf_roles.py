@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Protocol, Sequence
+from typing import Callable, Protocol, Sequence
 
 import pymupdf
 
@@ -70,6 +70,9 @@ class LayoutDetector(Protocol):
     def text_regions(self, pno: int) -> list[pymupdf.Rect]:
         """一页上框出的一段段正文。没有模型时为空。"""
 
+    def prepare(self, pages: Sequence[int], on_page: Callable[[int, int], None]) -> None:
+        """定角色之前先把这些页看好，on_page(已看页数, 总页数) 报进度。没有模型时什么也不做。"""
+
 
 class HeuristicLayout:
     """图内文字、贴着图的图注、以及大于正文的短标题。其余是正文。"""
@@ -104,6 +107,9 @@ class HeuristicLayout:
 
     def text_regions(self, pno: int) -> list[pymupdf.Rect]:
         return []
+
+    def prepare(self, pages: Sequence[int], on_page: Callable[[int, int], None]) -> None:
+        pass
 
 
 # 框里成段的正文至少这么多词、这么多句

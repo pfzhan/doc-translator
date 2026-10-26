@@ -130,6 +130,13 @@ class ModelLayout:
     def text_regions(self, pno: int) -> list[pymupdf.Rect]:
         return [region.rect for region in self.page_regions(pno) if region.label == "plain text"]
 
+    def prepare(self, pages: Sequence[int], on_page: Callable[[int, int], None]) -> None:
+        """逐页推好，on_page(已推页数, 总页数) 报进度。整本书要推几十分钟，
+        不先推好、不报进度时，任务页一直停在「整理段落」，看着像卡住了。"""
+        for done, pno in enumerate(pages, 1):
+            self.page_regions(pno)
+            on_page(done, len(pages))
+
     def page_regions(self, pno: int) -> list[Region]:
         """每页只推一次：定角色和并段都要用。一页要推两三秒，整本书要几十分钟，任务被暂停时在这里停下。"""
         if pno not in self._pages:

@@ -10408,6 +10408,16 @@ def _plan_document(
         for i in range(src_doc.page_count)
     ]
     detector = layout_detector(src_doc, layout_model)
+    # 开了版面模型时逐页推好、按页报进度，推完回到「整理段落」
+    modeled: list[int] = []
+
+    def on_model_page(done: int, total: int) -> None:
+        modeled.append(done)
+        runner.report_stage("版面模型分析", done, total, "页")
+
+    detector.prepare(sorted({b.page for b in blocks}), on_model_page)
+    if modeled:
+        runner.report_stage("整理段落")
     roles = detector.classify(
         [LayoutItem(b.page, pymupdf.Rect(b.rect), b.text, b.size, b.bold, _label_styled(b), _all_styled(b))
          for b in blocks],
