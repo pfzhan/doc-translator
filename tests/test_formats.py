@@ -2783,6 +2783,44 @@ def _block_with_spans(span_lines, size=12.0):
                      text="", size=size, color="#000", bold=False, span_lines=span_lines)
 
 
+def test_italic_letters_between_math_brackets_are_a_formula():
+    """正文是 Times 的书里，P(y = 1) 的 P、y 是正文的斜体，括号、等号是标了 math 的 CMR：单看都不成公式，
+    连起来是一个行内公式。括号里的斜体词（P(to|want)）也在公式里。只有斜体词、没有公式标点的不算"""
+    from app.formats.pdf import _placeholderize
+
+    x = [0.0]
+
+    def span(text, font, flags=4, math=False):
+        x0 = x[0]
+        x[0] += 5.0 * len(text)
+        out = {"text": text, "font": font, "size": 10.0, "flags": flags,
+               "bbox": (x0, 100.0, x[0], 110.0), "origin": (x0, 108.0)}
+        return {**out, "math": True} if math else out
+
+    def italic(text):
+        return span(text, "NimbusRomNo9L-ReguItal", flags=6)
+
+    def cm(text):
+        return span(text, "CMR10", math=True)
+
+    line = [span("the two cases,", "NimbusRomNo9L-Regu"), italic(" P"), cm("("), italic("y"), cm(" ="),
+            span(" 1", "NimbusRomNo9L-Regu"), cm(")"), span(" and the word", "NimbusRomNo9L-Regu"),
+            italic(" great"), span(" here.", "NimbusRomNo9L-Regu")]
+    sent, formulas = _placeholderize(_block_with_spans([line], size=10.0), 0)
+    assert sent == "the two cases,{v1} and the word {i}great{/i} here."
+    assert [formula["text"] for formula in formulas] == ["P(y = 1)"]
+
+    x[0] = 0.0
+    line = [span("probability", "NimbusRomNo9L-Regu"), italic(" P"), cm("("), italic("to"),
+            span("|", "CMSY10", flags=6), italic("want"), cm(")"), span(" decreases.", "NimbusRomNo9L-Regu")]
+    sent, formulas = _placeholderize(_block_with_spans([line], size=10.0), 0)
+    assert sent == "probability{v1} decreases."
+    assert [formula["text"] for formula in formulas] == ["P(to|want)"]
+    # 无衬线粗体的向量 w、x（CMSSBX10）在 Times 排的书里也只出现在公式里
+    from app.formats.pdf import _CM_UPRIGHT_RE
+    assert _CM_UPRIGHT_RE.match("CMSSBX10") and _CM_UPRIGHT_RE.match("ABCDEF+CMSS10")
+
+
 def test_accent_on_its_own_line_joins_the_formula_once():
     """ŝ 的 ˆ 单成一行，排在 s 那一行后面，自己也判成了式子。并进它盖着的式子以后不再单列一个占位符。"""
     from app.formats.pdf import _placeholderize

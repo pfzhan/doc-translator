@@ -2309,8 +2309,8 @@ def _font_is_math(font: str) -> bool:
 
 
 # Computer Modern 的正体。正文是 CM 时它们是正文；正文用 Times 之类时只出现在公式里
-# （\mathrm、\log、括号、等号、\mathbf）。
-_CM_UPRIGHT_RE = re.compile(r"^(?:[A-Z]{6}\+)?(?:CMR|CMBX|CMSS|CMSL)\d", re.I)
+# （\mathrm、\log、括号、等号、\mathbf，无衬线粗体的向量 w、x）。
+_CM_UPRIGHT_RE = re.compile(r"^(?:[A-Z]{6}\+)?(?:CMR|CMBX|CMSS(?:BX|I)?|CMSL)\d", re.I)
 
 
 def _span_is_math(span: dict) -> bool:
@@ -3397,6 +3397,72 @@ _CAPTION_LABEL_RE = re.compile(
 )
 
 
+# 后面的数字算进公式的运算符
+_ASSIGN_OPS = {"=", "<", ">", "+", "-", "−"}
+
+
+def _letter_formula_runs(span_lines: list[list[dict]], runs: list[dict]) -> list[dict]:
+    """正文字体的斜体单字母，夹着按全文字体标成公式的括号、等号（P(y = 1)、f(x)）：
+    P、y 是正文的斜体，括号、等号各自是孤立标点，单看哪个都不成公式。同一行上连着的一串里
+    既有标成公式的标点、又有斜体单字母的，整串是行内公式。中间的数字是公式里的，首尾的不收。
+    等号后面的数字也收（y = 1）。公式的括号里的斜体词、已经认出的符号也在串里（P(to|want) 的 to、|、want），
+    被整串盖住的公式并进来。返回新的整串，盖住的公式从 runs 里拿掉"""
+    taken = {id(span) for run in runs for span in run["spans"]}
+
+    def math_mark(span: dict) -> bool:
+        return bool(span.get("math")) and _LONE_PUNCT_RE.match(span["text"].strip() or " ") is not None
+
+    def italic(span: dict) -> bool:
+        return bool(int(span.get("flags") or 0) & 2)
+
+    def letter(span: dict) -> bool:
+        return italic(span) and _VARIABLE_BASE_RE.match(span["text"].strip()) is not None
+
+    def edge(span: dict) -> bool:
+        return math_mark(span) or letter(span) or id(span) in taken
+
+    def assigned(window: list[dict]) -> bool:
+        """串尾是数字，前面紧挨着的是标成公式的运算符（= 1、< 0）"""
+        words = [span for span in window if span["text"].strip()]
+        return (len(words) >= 2 and words[-1]["text"].strip().isdigit() and math_mark(words[-2])
+                and words[-2]["text"].strip() in _ASSIGN_OPS)
+
+    found: list[dict] = []
+    for line_no, spans in enumerate(span_lines):
+        i, n = 0, len(spans)
+        while i < n:
+            if not (math_mark(spans[i]) or letter(spans[i])):
+                i += 1
+                continue
+            depth = 0
+            j = i
+            while True:
+                text = spans[j]["text"]
+                if math_mark(spans[j]) or id(spans[j]) in taken:
+                    depth = max(0, depth + text.count("(") - text.count(")"))
+                if j + 1 >= n:
+                    break
+                nxt = spans[j + 1]
+                word = nxt["text"].strip()
+                if not (not word or edge(nxt) or word.isdigit()
+                        or (depth > 0 and italic(nxt) and word.isalpha())):
+                    break
+                j += 1
+            while j > i and not edge(spans[j]) and not assigned(spans[i:j + 1]):
+                j -= 1
+            window = spans[i:j + 1]
+            if any(math_mark(span) for span in window) and any(letter(span) for span in window):
+                bbox = _glyph_box(window[0])
+                for span in window[1:]:
+                    bbox |= _glyph_box(span)
+                found.append({"spans": window, "bbox": bbox, "max_size": max(span["size"] for span in window),
+                              "pos": (line_no, i, j)})
+            i = j + 1
+    covered = {id(span) for run in found for span in run["spans"]}
+    runs[:] = [run for run in runs if not all(id(span) in covered for span in run["spans"] if span["text"].strip())]
+    return found
+
+
 def _script_base(
     span: dict, bbox: pymupdf.Rect, block_size: float, math: bool = False, script_y: float | None = None,
 ) -> bool:
@@ -3744,6 +3810,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 i = j
             else:
                 i += 1
+    runs.extend(_letter_formula_runs(block.span_lines, runs))
     _absorb_script_bases(runs, block.span_lines, block.size)
     ordinal_at, ordinal_skip = _release_ordinals(runs, block.size)
     _absorb_math_glue(runs, block.span_lines, block.size)
