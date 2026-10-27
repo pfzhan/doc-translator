@@ -52,6 +52,7 @@ from .pdf_flow import (
 )
 from .pdf_dedupe import merge_duplicates
 from .pdf_erase import Erasure, erase, restore_glyphs, type3_glyphs
+from .pdf_order import ReadingOrder
 from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, text_frames
 from .pdf_layout import (
     PageGeometry, PageScan, RuledTable, cell_containing, content_floor, interlinear_glosses, light_fill, margin_skips,
@@ -9351,7 +9352,10 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 for part in _formula_parts(f)
                 if part.get("bbox") is not None and int(part.get("page", f.get("page", pno))) == pno
             )
+        # 擦之前在原文的位置放好标记，写完把译文插回去，拖选、复制按阅读顺序走
+        order = ReadingOrder(page, [b for b, _ in items])
         erase(page, erasure)
+        order.after_erase()
         # 擦完还在原处的字（丢掉的行间公式、式号），译文右扩、续写都要让开
         kept = _kept_ink(page, same_page)
         # 重写内容流会把 /Resources 改写成内联字典；排版器写入后 /XObject 条目上百个，
@@ -9377,6 +9381,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             x_cap: float | None = None,
         ) -> None:
             rect = _fit_page_margins(block, rect, same_page, bounds.height, cjk)
+            before = order.snapshot()
             bformulas = formulas if formulas is not None else (formulas_map or {}).get(id(block), [])
             weight = "bold" if block.bold else "normal"
             size = block.size * 0.88 if cjk else block.size
@@ -9418,6 +9423,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 )
             if block.leader is not None and not page.rotation:
                 _extend_leader(page, block, block.leader)
+            # 右扩、绕排时字会写出框外，按能写到的最右边算
+            reach = pymupdf.Rect(rect.x0, rect.y0, max(rect.x1, limit or rect.x1), rect.y1) | block.rect
+            order.record(block, before, reach + (-2, -2, 2, 2))
 
         # 续行可能排在半句前面。先把后半放进 carry，写的时候才不会丢掉。
         shared_head: dict[int, tuple[str, pymupdf.Rect, list[dict], bool]] = {}
@@ -9547,6 +9555,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         if mid_map:
             _place_formula_images(page, doc, images_before, mid_map, forms, page_spans)
             restore_glyphs(doc, glyphs)
+        order.assemble()
     return doc
 
 
