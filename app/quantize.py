@@ -206,4 +206,4 @@ def _check(src: Path, quantized: Path, images: list[np.ndarray], spec: QuantSpec
 
     expected, found = count(src), count(quantized)
     if expected and found < expected / 2:
-        raise QuantizeError(f"量化后的模型框出的框太少（{found}，原模型 {expected}），没有保存")
+        raise QuantizeError(f"量化后的模型识别出的区域过少（{found} 个，原模型 {expected} 个），未保存")

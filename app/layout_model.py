@@ -126,7 +126,7 @@ class Downloader:
                             digest.update(chunk)
                             self.state["done"] += len(chunk)
             if digest.hexdigest() != self.spec.sha3:
-                raise LayoutModelError("下载的文件校验不通过，可能没下完整，请换个来源重试")
+                raise LayoutModelError("下载的文件校验未通过，可能下载不完整，请更换来源后重试")
             part.replace(dest)
         except (httpx.HTTPError, OSError, LayoutModelError) as e:
             self.state["error"] = str(e) or type(e).__name__
@@ -138,7 +138,7 @@ class Downloader:
 def check(spec: ModelSpec, path: Path, size: int | None = None) -> dict:
     """加载模型，在一张自造的页面上跑一遍，报出耗时和框出来的类别。size 是公式检测模型的输入边长。"""
     if not runtime_version():
-        raise LayoutModelError(f"还没有安装 onnxruntime，在项目目录运行：{INSTALL_HINT}")
+        raise LayoutModelError(f"未安装 onnxruntime，请在项目目录运行：{INSTALL_HINT}")
     if not path.is_file():
         raise LayoutModelError(f"找不到模型文件：{path}")
     start = time.monotonic()
@@ -155,7 +155,7 @@ def check(spec: ModelSpec, path: Path, size: int | None = None) -> dict:
             size = pdf_vision.FORMULA_SIZES[0]
         detector = pdf_vision.formula_detector(doc, pdf_vision.FormulaModel(str(path), size, workers=1, threads=threads))
         if detector is None:
-            raise LayoutModelError("这个文件不是公式检测模型：类别里没有行内公式（embedding）")
+            raise LayoutModelError("该文件不是公式检测模型：类别中没有行内公式（embedding）")
         regions = detector.regions(0)
     else:
         regions = pdf_vision.ModelLayout(doc, session).regions(0)

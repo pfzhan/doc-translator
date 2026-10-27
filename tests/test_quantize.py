@@ -83,7 +83,7 @@ def test_boxes_are_counted_by_each_model_output_layout():
 def test_quantizer_reports_failures_and_runs_one_at_a_time(monkeypatch, tmp_path):
     """同一时间只生成一份；量化出错时记下原因，页面上显示"""
     def broken(self, src, dest, images, spec):
-        raise quantize.QuantizeError("量化后的模型框出的框太少")
+        raise quantize.QuantizeError("量化后的模型识别出的区域过少")
 
     monkeypatch.setattr(quantize.Quantizer, "_quantize", broken)
     quantizer = quantize.Quantizer()
@@ -97,7 +97,7 @@ def test_quantizer_reports_failures_and_runs_one_at_a_time(monkeypatch, tmp_path
         await quantizer.task
 
     asyncio.run(main())
-    assert quantizer.state["running"] is False and "太少" in quantizer.state["error"]
+    assert quantizer.state["running"] is False and "过少" in quantizer.state["error"]
 
 
 def test_int8_is_the_default_precision(tmp_path):

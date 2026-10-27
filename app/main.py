@@ -661,7 +661,7 @@ MODEL_NAMES = {"layout": "版面模型", "formula": "公式检测模型"}
 
 def _spec(kind: str) -> layout_model.ModelSpec:
     if kind not in layout_model.MODELS:
-        raise HTTPException(404, "没有这个模型")
+        raise HTTPException(404, "未知的模型")
     return layout_model.MODELS[kind]
 
 
@@ -762,13 +762,13 @@ async def quantize_model(kind: str):
     """用翻译过的 PDF 抽页校准，生成模型的 int8 版。页面轮询 GET 看进度。"""
     spec = _spec(kind)
     if not quantize.available():
-        raise HTTPException(400, f"生成 int8 模型要先安装 onnx，在项目目录运行：{quantize.INSTALL_HINT}，装好后重启服务")
+        raise HTTPException(400, f"生成 int8 模型需要先安装 onnx：请在项目目录运行 {quantize.INSTALL_HINT}，安装后重启服务")
     src = spec.resolve(settings.model(spec.key)["path"])
     if not src.is_file():
         raise HTTPException(400, f"找不到{MODEL_NAMES[kind]}文件：{src}，请先下载模型")
     # 一次只生成一个：校准时每页的中间结果都留在内存里，两个一起生成要多占一倍
     if any(quantizer.running for quantizer in quantizers.values()):
-        raise HTTPException(400, "int8 模型正在生成" if quantizers[kind].running else "另一个模型的 int8 版正在生成，完成后再试")
+        raise HTTPException(400, "int8 模型正在生成" if quantizers[kind].running else "另一个模型的 int8 版本正在生成，请在完成后重试")
     pdfs = [path for job in jobs.list() if (path := jobs.source_path(job)).suffix.lower() == ".pdf" and path.is_file()]
     quant = quantize.SPECS[kind]
     async with mupdf_turn():  # 抽页要用 MuPDF 画，和正在跑的任务错开

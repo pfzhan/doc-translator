@@ -1752,7 +1752,7 @@ function renderModel(kind, m, { keepForm = false } = {}) {
   } else {
     const warn = document.createElement("span");
     warn.className = "warn";
-    warn.textContent = "没有安装 onnxruntime，在项目目录运行 ";
+    warn.textContent = "未安装 onnxruntime，请在项目目录运行 ";
     const code = document.createElement("code");
     code.textContent = m.install_hint;
     runtime.append(warn, code, " 后重启服务");
@@ -1782,6 +1782,7 @@ function renderModel(kind, m, { keepForm = false } = {}) {
     el("path").placeholder = `留空使用默认位置：${m.default_path}`;
     if (m.size) el("size").value = String(m.size);
     if (m.precision) el("precision").value = m.precision;
+    for (const select of $(`${kind}-form`).querySelectorAll("select.has-hint")) showOptionHint(select);
     if (m.auto) {
       for (const name of ["workers", "threads"]) {
         el(name).value = String(m[name] || m.auto[name]);
@@ -1835,16 +1836,24 @@ function renderInt8(kind, m) {
   } else if (q.state.error) {
     status.textContent = `生成失败：${q.state.error}`;
   } else if (!q.file.exists && !m.file.exists) {
-    status.textContent = "先下载模型，才能生成。";
+    status.textContent = "下载模型后才能生成。";
   } else if (q.file.exists) {
     const size = formatMB(q.file.size);
-    if (m.in_use !== q.path) status.textContent = `已生成（${size}），选了 fp32，翻译时不用`;
-    else status.textContent = m.enabled ? `已生成（${size}），翻译时使用` : `已生成（${size}），开启模型后翻译时使用`;
+    if (m.in_use !== q.path) status.textContent = `已生成（${size}）。当前精度为 fp32，翻译时不使用`;
+    else status.textContent = m.enabled ? `已生成（${size}），翻译时使用` : `已生成（${size}），开启模型后在翻译时使用`;
   } else if (!q.available) {
-    status.textContent = `要先安装 onnx：在项目目录运行 ${q.install_hint}，装好后重启服务。`;
+    status.textContent = `需要先安装 onnx：请在项目目录运行 ${q.install_hint}，安装后重启服务。`;
   } else {
-    status.textContent = "未生成，翻译时用 fp32。生成约需三分钟，用翻译过的 PDF 抽页校准。";
+    status.textContent = "未生成，翻译时使用 fp32。生成约需 3 分钟，从翻译记录中的 PDF 抽取 64 页校准。";
   }
+}
+
+// 下拉框只列取值，选中项的说明显示在下拉框下面（写在 option 的 data-hint 里）
+function showOptionHint(select) {
+  $(`${select.id}-hint`).textContent = select.selectedOptions[0]?.dataset.hint || "";
+}
+for (const select of document.querySelectorAll("select.has-hint")) {
+  select.addEventListener("change", () => showOptionHint(select));
 }
 
 async function loadModel(kind, options = {}) {
@@ -1917,7 +1926,7 @@ for (const kind of MODEL_KINDS) {
         const m = await api(`/api/${kind}-model`, { method: "PUT", json: modelForm(kind) });
         renderModel(kind, m);
         status.textContent = m.enabled && !(m.runtime && m.file.exists)
-          ? "已保存。缺运行环境或模型文件时，翻译仍只用规则"
+          ? "已保存。运行环境或模型文件缺失时，翻译仍只使用规则"
           : "已保存";
       } catch (err) {
         status.textContent = `保存失败：${err.message}`;
@@ -1948,8 +1957,8 @@ for (const kind of MODEL_KINDS) {
       try {
         const r = await api(`/api/${kind}-model/test`, { json: modelForm(kind) });
         box.classList.add("ok");
-        const found = r.labels.length ? r.labels.join("、") : "没有框出东西";
-        box.textContent = `测试成功：加载 ${r.load_ms} ms，一页推理 ${r.page_ms} ms，样例页上框出 ${found}`;
+        const found = r.labels.length ? `识别出 ${r.labels.join("、")}` : "未识别出任何区域";
+        box.textContent = `测试成功：加载 ${r.load_ms} ms，单页推理 ${r.page_ms} ms，样例页${found}`;
       } catch (err) {
         box.classList.add("fail");
         box.textContent = `测试失败：${err.message}`;

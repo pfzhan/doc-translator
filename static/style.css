@@ -471,6 +471,9 @@ body.reading .topbar { display: none; }
 .switch:disabled { opacity: 0.45; cursor: not-allowed; }
 .svc-detail { padding: 24px 28px; min-width: 0; }
 .svc-detail .field { margin-bottom: 14px; }
+/* 下拉框下面的选项说明，贴着下拉框 */
+.svc-detail .field:has(+ .field-hint) { margin-bottom: 6px; }
+.field-hint { margin: 0 0 14px; }
 .svc-detail label.check { margin: -6px 0 14px; }
 .svc-title { display: flex; align-items: center; gap: 14px; }
 .svc-title h3 { flex: 1; min-width: 0; word-break: break-all; }
