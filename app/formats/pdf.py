@@ -10159,6 +10159,13 @@ def _subset_fonts_safe(data: bytes) -> bytes:
         return data
 
 
+def _drop_mupdf_cache() -> None:
+    """清空 MuPDF 的资源缓存。缓存里是前面几步加载的字体、图片，后面用不上，缓存满了以后
+    后面每一步都明显变慢：ed3book 上合并重复对象慢两倍多，子集化慢三倍。写回的子进程从主进程
+    fork 出来，也带着这份缓存。在写回、拼并排页、压缩之前各清一次。"""
+    pymupdf.TOOLS.store_shrink(100)
+
+
 def _compact(doc: pymupdf.Document) -> bytes:
     """合并内容相同的对象，再子集化字体，返回要写出的文件内容。
 
@@ -10987,11 +10994,13 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             )
 
         # 一本书要写好几分钟，这时译文已经全部到齐，进度条停在满格，按页报写到哪里
+        _drop_mupdf_cache()
         translated = _render_by_parts(
             src_doc, blocks, translations, continuations, render,
             lambda done, total: runner.report_stage("写回译文", done, total, "页"),
         )
         runner.report_stage("生成文件")
+        _drop_mupdf_cache()
         if bilingual:
             dst = out_dir / f"{src.stem}.bilingual.pdf"
             # 先落盘再读回，并排页从读回的文档里取页面
@@ -11001,6 +11010,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             output = translated
         if toc:
             output.set_toc(toc)  # 并排页和原页一一对应，书签页码不用映射
+        _drop_mupdf_cache()
         dst.write_bytes(_compact(output))
         return dst
 
