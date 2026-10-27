@@ -104,11 +104,14 @@ def _near_formula_stroke(box: pymupdf.Rect, rect: pymupdf.Rect) -> bool:
 def intersecting_curves(box: pymupdf.Rect, drawings: list[pymupdf.Rect]) -> tuple[pymupdf.Rect, ...]:
     """和公式框相交、或紧贴框外的分式线与根号。整页通栏线不并进来。"""
     found: list[pymupdf.Rect] = []
+    x0, y0, x1, y1 = box
     for rect in drawings:
         if rect.width < 0.4 or rect.height < 0.3:
             continue
-        hit = rect & box
-        intersects = not hit.is_empty and hit.width >= 0.4 and hit.height >= 0.3
+        # 一页上几千条线，逐条按坐标比，不另建交集的 Rect
+        if rect.x0 > x1 + _STROKE_GAP or rect.x1 < x0 - _STROKE_GAP or rect.y0 > y1 + _STROKE_GAP or rect.y1 < y0 - _STROKE_GAP:
+            continue
+        intersects = min(rect.x1, x1) - max(rect.x0, x0) >= 0.4 and min(rect.y1, y1) - max(rect.y0, y0) >= 0.3
         if intersects:
             if rect.width > max(box.width * 3, box.width + 8):
                 continue

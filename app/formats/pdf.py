@@ -14,6 +14,7 @@ import contextvars
 import functools
 import hashlib
 import html
+import math
 import os
 import pickle
 import re
@@ -23,7 +24,7 @@ import unicodedata
 import weakref
 import zlib
 from collections import Counter
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -4319,9 +4320,27 @@ def _page_glyphs(page: pymupdf.Page) -> list[dict]:
     return [span for block in data["blocks"] if block.get("type") == 0 for line in block["lines"] for span in line["spans"]]
 
 
-def _page_char_index(
-    page: pymupdf.Page,
-) -> list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]]:
+class _CharIndex(list):
+    """一页上逐 span 的框和逐字的框，按 span 框的上沿分桶，查一个框（见 find）不用从头比到尾。"""
+
+    def __init__(self, entries: Iterable[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]] = ()) -> None:
+        super().__init__(entries)
+        self._rows: dict[int, list[int]] = {}
+        for order, (span_box, _chars) in enumerate(self):
+            self._rows.setdefault(math.floor(span_box.y0), []).append(order)
+
+    def find(self, box: pymupdf.Rect) -> list[tuple[str, pymupdf.Rect]] | None:
+        """框和 box 对得上的第一个 span 的逐字框（见 _boxes_match），没有时返回 None。
+        上沿相差不到半点，所在的桶最多差一格。"""
+        row = math.floor(box.y0)
+        found = [
+            order for key in (row - 1, row, row + 1) for order in self._rows.get(key, ())
+            if _boxes_match(box, self[order][0])
+        ]
+        return self[min(found)][1] if found else None
+
+
+def _page_char_index(page: pymupdf.Page) -> _CharIndex:
     data = page.get_text("rawdict", flags=_TEXT_FLAGS)
     index: list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]] = []
     for block in data["blocks"]:
@@ -4335,7 +4354,7 @@ def _page_char_index(
                     if char.get("bbox") is not None
                 ]
                 index.append((pymupdf.Rect(span["bbox"]), chars))
-    return index
+    return _CharIndex(index)
 
 
 def _boxes_match(left: pymupdf.Rect, right: pymupdf.Rect) -> bool:
@@ -4347,18 +4366,14 @@ def _boxes_match(left: pymupdf.Rect, right: pymupdf.Rect) -> bool:
     )
 
 
-def _span_ink_boxes(
-    span: dict,
-    char_index: list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]],
-) -> list[pymupdf.Rect]:
+def _span_ink_boxes(span: dict, char_index: _CharIndex) -> list[pymupdf.Rect]:
     """非空白字符的框。空白不算墨迹；没有字符数据时整段非空文字算一块。"""
     raw = span.get("bbox")
     if raw is None:
         return []
     box = pymupdf.Rect(raw)
-    for span_box, chars in char_index:
-        if not _boxes_match(box, span_box):
-            continue
+    chars = char_index.find(box)
+    if chars is not None:
         return [rect for text, rect in chars if text.strip()]
     if str(span.get("text") or "").strip():
         return [box]
@@ -4366,8 +4381,7 @@ def _span_ink_boxes(
 
 
 def _outside_formula(
-    page_spans: list[dict], run_spans: Sequence[dict],
-    char_index: list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]] | None = None,
+    page_spans: list[dict], run_spans: Sequence[dict], char_index: _CharIndex | None = None,
 ) -> list[dict]:
     """页面上的 span，公式自己的字除外。
 
@@ -4387,7 +4401,7 @@ def _outside_formula(
             continue
         chars = span.get("chars")
         if chars is None and char_index is not None:
-            chars = next((found for span_box, found in char_index if _boxes_match(box, span_box)), None)
+            chars = char_index.find(box)
         if chars is None:
             out.append(span)
             continue
@@ -4477,9 +4491,11 @@ def _tighten_formula_sides(
     part: dict,
     page: pymupdf.Page,
     page_spans: list[dict] | None = None,
-    char_index: list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]] | None = None,
+    char_index: _CharIndex | None = None,
+    display: pymupdf.DisplayList | None = None,
 ) -> None:
-    """公式框左右收到墨迹外同一条窄边。上下和式子内部的间距不动。"""
+    """公式框左右收到墨迹外同一条窄边。上下和式子内部的间距不动。
+    display 是这一页的显示列表，同一页的公式共用，不用每裁一块都重新解析整页。"""
     raw = part.get("bbox")
     if raw is None:
         return
@@ -4506,12 +4522,12 @@ def _tighten_formula_sides(
     for span in _outside_formula(page_spans, part.get("spans") or [], char_index):
         if not str(span.get("text") or "").strip() or span.get("bbox") is None:
             continue
-        rect = pymupdf.Rect(span["bbox"])
+        # 先按坐标排除离得远的：一页的字有上千段，每块公式都要比一遍
+        x0, y0, x1, y1 = span["bbox"]
+        if y1 < bbox.y0 - 1 or y0 > bbox.y1 + 1 or x1 < bbox.x0 - 1 or x0 > bbox.x1 + 1:
+            continue
+        rect = pymupdf.Rect(x0, y0, x1, y1)
         if any(_boxes_match(rect, own) for own in own_spans):
-            continue
-        if rect.y1 < bbox.y0 - 1 or rect.y0 > bbox.y1 + 1:
-            continue
-        if rect.x1 < bbox.x0 - 1 or rect.x0 > bbox.x1 + 1:
             continue
         foreign.append(rect)
     if page.rotation:
@@ -4519,8 +4535,13 @@ def _tighten_formula_sides(
     clip = bbox & text_page_rect(page)
     if clip.width < 1 or clip.height < 1:
         return
+    if display is None:
+        pix = page.get_pixmap(dpi=_FORMULA_INK_DPI, clip=clip, alpha=False)
+    else:
+        zoom = _FORMULA_INK_DPI / 72
+        pix = display.get_pixmap(matrix=pymupdf.Matrix(zoom, zoom), colorspace=pymupdf.csRGB, alpha=False, clip=clip)
     bounds = _ink_x_bounds(
-        page.get_pixmap(dpi=_FORMULA_INK_DPI, clip=clip, alpha=False),
+        pix,
         clip,
         ours,
         foreign,
@@ -10868,7 +10889,9 @@ def _crop_formulas(
                 glyphs[page_no] = _page_glyphs(src_doc[page_no])
             _absorb_curves(f, curve_rects[page_no], unit[int(f.get("owner") or 0)], glyphs[page_no])
     span_cache: dict[int, list[dict]] = {}
-    char_cache: dict[int, list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]]] = {}
+    char_cache: dict[int, _CharIndex] = {}
+    # 只留最近一页的显示列表：公式大致按页序排，整本都留着太占内存
+    display: tuple[int, pymupdf.DisplayList] | None = None
     for formulas in sent_formulas:
         background.check_stop()
         for f in formulas:
@@ -10880,9 +10903,11 @@ def _crop_formulas(
                 if part_page not in span_cache:
                     span_cache[part_page] = _page_text_spans(src_doc[part_page])
                     char_cache[part_page] = _page_char_index(src_doc[part_page])
+                if display is None or display[0] != part_page:
+                    display = part_page, src_doc[part_page].get_displaylist()
                 _tighten_formula_height(part)
                 _tighten_formula_sides(
-                    part, src_doc[part_page], span_cache[part_page], char_cache[part_page],
+                    part, src_doc[part_page], span_cache[part_page], char_cache[part_page], display[1],
                 )
                 bbox = pymupdf.Rect(part["bbox"])
                 if bbox.width < 1 or bbox.height < 1:
