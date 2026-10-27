@@ -3422,6 +3422,18 @@ def test_formulas_on_a_page_filter_their_own_lines():
     assert sources.source(formulas[14]) == whole
 
 
+def test_glyph_places_match_when_a_column_jitters_in_the_last_digits():
+    """过滤后重写的内容流里数字少几位，同一列上下几行行首的字横坐标差万分之几，
+    按坐标排序后先后不同。各字仍在原处，位置核对要通过；真偏了的不通过。"""
+    from app.formats.pdf import _same_places
+
+    before = [(72.0001, 500.9), (71.9999, 169.0), (72.0, 181.0), (80.0, 169.0)]
+    after = [(71.9999, 500.9), (72.0001, 169.0), (71.9998, 181.0), (80.05, 169.0)]
+    assert sorted(before) != sorted(after)
+    assert _same_places(before, after)
+    assert not _same_places(before, after[:3] + [(80.3, 169.0)])
+    assert not _same_places(before, after[:3])
+
 def test_formula_glyphs_stay_in_place_after_a_size_change_on_their_line():
     """同一行中途换过字号（小型大写），MuPDF 删掉前面的字后会把公式算偏。
     偏了就整行留下，别的行照样删掉。"""

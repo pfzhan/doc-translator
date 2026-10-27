@@ -7453,9 +7453,29 @@ def _keeps_places(doc: "pymupdf.Document", xref: int, kept: list[tuple[float, fl
     if not xref:
         return False
     _same, now = _filter_form(doc, xref, _EVERYWHERE, recurse)
-    return len(now) == len(kept) and all(
-        abs(a[0] - b[0]) < 0.1 and abs(a[1] - b[1]) < 0.1 for a, b in zip(sorted(kept), sorted(now))
-    )
+    return _same_places(kept, now)
+
+
+def _same_places(a: list[tuple[float, float]], b: list[tuple[float, float]]) -> bool:
+    """两组字形位置一一配得上，各差不到 0.1。不能排序后逐个比：同一列上下几行行首的字，
+    横坐标差万分之几，排出来的先后就乱了，拿不同行的字来比。这里按 0.1 的格子分好，
+    每个字在自己和相邻的格子里找。"""
+    if len(a) != len(b):
+        return False
+    cells: dict[tuple[int, int], list[tuple[float, float]]] = {}
+    for x, y in b:
+        cells.setdefault((round(x * 10), round(y * 10)), []).append((x, y))
+    for x, y in a:
+        cx, cy = round(x * 10), round(y * 10)
+        for key in [(cx + i, cy + j) for i in (-1, 0, 1) for j in (-1, 0, 1)]:
+            cell = cells.get(key, [])
+            hit = next((k for k, (u, v) in enumerate(cell) if abs(u - x) < 0.1 and abs(v - y) < 0.1), None)
+            if hit is not None:
+                cell.pop(hit)
+                break
+        else:
+            return False
+    return True
 
 
 def _keep_marks(doc: "pymupdf.Document", form: int, keep: list["pymupdf.Rect"]) -> int:
