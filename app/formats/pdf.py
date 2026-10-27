@@ -2207,7 +2207,15 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         both_full = max_x1 - prect.x1 <= 3 * psize and max_x1 - rect.x1 <= 3 * psize
         # 列表项的折行缩在条目号右边、比第一行的正文靠左：条目号后面隔着宽空档时，正文另成一截
         hanging_wrap = _list_item(items[cur[0]][0]) and group_x0 < rect.x0 <= group_x0 + 3 * psize
-        left_jump = jump > 3 * psize and not both_full and not hanging_wrap
+        # 图注的标签（Figure 4.12）单独一截，和后面的正文隔着一段空。第一行排满，折到下一行、回到标签的左缘：
+        # 是图注的折行，不是左跳。按正文那一截量，左跳有好几个字宽。只看块里的行，排满的一列短行
+        # （右缘就是块的右缘）和它分不开，所以要第一截是图注标签
+        wrap_back = (
+            group_rows == 1 and bool(_CAPTION_SPAN_RE.match(items[cur[0]][0].strip()))
+            and abs(rect.x0 - group_x0) <= 0.5 * psize and max_x1 - prect.x1 <= 0.5 * psize
+            and rect.y0 >= prect.y1 - 0.5 * psize
+        )
+        left_jump = jump > 3 * psize and not both_full and not hanging_wrap and not wrap_back
         # 两行纵向交叠超过一半、且横向区间相交：是同一可视行被上下标/公式拆出来的
         # （y_1^T 的 1 和 T 各算一行，x 区间是交错咬合的），不能在这里拆段。
         # 并排标签横向是分开的（无横向交叠），left_jump 照常拆开。

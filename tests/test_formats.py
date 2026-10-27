@@ -9144,6 +9144,22 @@ def test_numbers_wrapped_under_an_indented_first_line_stay_in_the_paragraph():
     assert _split_lines(cited) == [[0, 1, 2]]
 
 
+def test_caption_lines_wrapped_back_under_the_label_stay_in_the_caption():
+    """图注的标签（Figure 4.12）和后面的正文隔着一段空，是同一行的两截。折下来的行回到标签的左缘，
+    按整行比不是左跳，不另成一段：只剩 (2012). 的一行另成一段时整行留原文，译文写完它还在下一行。"""
+    from app.formats.pdf import _split_lines
+
+    def item(text, x0, y0, x1, font="NimbusRomNo9L-Regu"):
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 11),
+                [{"text": text, "size": 9.0, "bbox": (x0, y0, x1, y0 + 11), "font": font, "flags": 0}], [])
+
+    label = item("Figure 4.12", 143.2, 254.2, 186.4, "NimbusRomNo9L-Medi")
+    first = item("A version of the paired bootstrap algorithm after Berg-Kirkpatrick et al.", 196.3, 254.5, 475.2)
+    assert _split_lines([label, first, item("(2012).", 142.2, 265.5, 168.3)]) == [[0, 1, 2]]
+    assert _split_lines([label, first, item("(2012), resampling the test set with replacement.", 142.2, 265.5, 380.0)]) \
+        == [[0, 1, 2]]
+
+
 def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
     """索引条目停在逗号上，页码折到下一行、缩到条目文字下面。页码那一行跟着条目一起送翻，
     条目到页码收住，下一条照常另起。"""
