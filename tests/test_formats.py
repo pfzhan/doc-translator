@@ -7048,7 +7048,7 @@ def test_tex_spacing_accents_are_composed_before_translation():
 def test_a_stacked_accent_is_split_from_the_glyphs_before_it():
     """「(ˆ」里的帽子叠在后面的 y 上，切成单独的一截。网址里的 ˜、正则里的 ˆ 占自己的宽度，
     是 ~ ^，不切。"""
-    from app.formats.pdf import _split_accents
+    from app.formats.pdf import _PageChars, _split_accents
 
     doc = pymupdf.open()
     page = doc.new_page()
@@ -7060,7 +7060,7 @@ def test_a_stacked_accent_is_split_from_the_glyphs_before_it():
     page.insert_text((100, 140), "nyu.edu/\u02dcroweis", fontname="T", fontsize=10)
     page.insert_text((100, 180), 'r"\u02c6The"', fontname="T", fontsize=10)
     data = page.get_text("dict")
-    _split_accents(page, data)
+    _split_accents(_PageChars(page), data)
     texts = [span["text"] for block in data["blocks"] for line in block["lines"] for span in line["spans"]]
     assert texts == ["(", "\u02c6", "y", "nyu.edu/~roweis", 'r"^The"']
 
@@ -9000,7 +9000,7 @@ def test_a_fragment_inside_a_kept_formula_is_part_of_it():
 
 def test_text_under_a_big_cmex_radical_is_part_of_the_formula():
     """CMEX 的大号根号提出来是字母 p，字体框比字形高。横线从它墨迹的右上角起头，线下的 Var 是被开方数。"""
-    from app.formats.pdf import _mark_radicands
+    from app.formats.pdf import _PageChars, _mark_radicands
 
     doc = pymupdf.open()
     page = doc.new_page()
@@ -9012,7 +9012,7 @@ def test_text_under_a_big_cmex_radical_is_part_of_the_formula():
         "bbox": (177.2, 107.7, 188.4, 138.6), "origin": (177.2, 115.1), "ink": (177.2, 114.7, 188.4, 126.6),
     })
     right = line["spans"][1]["bbox"][2]
-    _mark_radicands(page, data, [pymupdf.Rect(188.4, 114.6, right, 115.1)])
+    _mark_radicands(_PageChars(page), data, [pymupdf.Rect(188.4, 114.6, right, 115.1)])
     marked = [span for span in line["spans"] if span["text"] == "Var"]
     assert marked and marked[0].get("math")
 
@@ -9342,7 +9342,7 @@ def test_one_sentence_per_line_is_not_joined_into_a_paragraph():
 def test_a_glyph_arrow_over_a_word_marks_both_as_formula():
     """esvect 的 \\vv{woman} 提出来是「#    »」：没有字母、墨迹是一条细带、基线比词高不到一个字，
     紧贴在 woman 上面。箭头和 woman 是式子，后面的 is close to 照翻。上一行的标点不算。"""
-    from app.formats.pdf import _mark_overlays
+    from app.formats.pdf import _PageChars, _mark_overlays
 
     doc = pymupdf.open()
     page = doc.new_page()
@@ -9363,7 +9363,7 @@ def test_a_glyph_arrow_over_a_word_marks_both_as_formula():
                 else:
                     span["ink"] = (139.5, 580.0, 230.0, 586.6)
     data["blocks"] = [{"type": 0, "lines": [line for block in data["blocks"] for line in block["lines"]]}]
-    _mark_overlays(page, data)
+    _mark_overlays(_PageChars(page), data)
     spans = [span for line in data["blocks"][0]["lines"] for span in line["spans"]]
     marked = {span["text"].strip(): bool(span.get("math")) for span in spans}
     assert marked["woman"] and marked["#    »"]
@@ -9595,7 +9595,7 @@ def _draw_visible_space(page, x, baseline):
 def test_drawn_visible_space_is_read_into_the_text():
     """画出来的 ␣ 提取不到字。盖在空格上的换掉空格，空隙里没有字的补一个 ␣，和前面的字隔开一个空格。
     不在字行基线上的同样形状（图里的刻度）不算。"""
-    from app.formats.pdf import _mark_visible_spaces
+    from app.formats.pdf import _PageChars, _mark_visible_spaces
     from app.formats.pdf_layout import scan_page
 
     doc = pymupdf.open()
@@ -9611,7 +9611,7 @@ def test_drawn_visible_space_is_read_into_the_text():
     scan = scan_page(page)
     assert len(scan.visible_spaces) == 3
     data = page.get_text("dict")
-    _mark_visible_spaces(page, data, scan.visible_spaces)
+    _mark_visible_spaces(_PageChars(page), data, scan.visible_spaces)
     lines = ["".join(span["text"] for span in line["spans"]) for block in data["blocks"] for line in block["lines"]]
     assert lines[0].replace("  ", " ") == "merged to ␣re."
     assert " ".join(lines[1:]) == "Next ␣ r (total)"

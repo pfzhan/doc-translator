@@ -590,7 +590,7 @@ def test_a_figure_row_pressed_onto_the_caption_is_its_own_row():
 def test_underlined_letters_are_marked_and_a_fraction_bar_is_not():
     """字下面画的线（例 6 里标出的列）认成下划线，只标线下面那几个字；行内小分数的分数线下面紧挨着分母，
     不算下划线。"""
-    from app.formats.pdf import _attach_ink, _mark_underlines
+    from app.formats.pdf import _PageChars, _attach_ink, _mark_underlines
     from app.formats.pdf_layout import scan_page
 
     doc = pymupdf.open()
@@ -605,7 +605,7 @@ def test_underlined_letters_are_marked_and_a_fraction_bar_is_not():
     page.insert_text((110, 164.5), "2", fontsize=7, fontname="tiro")
     data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
     _attach_ink(page, data)
-    _mark_underlines(page, data, scan_page(page).strokes)
+    _mark_underlines(_PageChars(page), data, scan_page(page).strokes)
     spans = [span for block in data["blocks"] for line in block["lines"] for span in line["spans"]]
     assert [span["text"] for span in spans if span.get("underline")] == ["A"]
     assert "".join(span["text"] for span in spans).startswith("outputs {A, D} and more")
@@ -613,7 +613,7 @@ def test_underlined_letters_are_marked_and_a_fraction_bar_is_not():
 
 def test_digits_under_a_radical_bar_join_the_formula():
     """√81 的 81 和正文同一种字体。根号横线下面的字标成公式，句号不算。"""
-    from app.formats.pdf import _attach_ink, _mark_radicands, _span_is_math
+    from app.formats.pdf import _PageChars, _attach_ink, _mark_radicands, _span_is_math
     from app.formats.pdf_layout import scan_page
 
     doc = pymupdf.open()
@@ -629,7 +629,7 @@ def test_digits_under_a_radical_bar_join_the_formula():
     page.draw_line((left, radical["bbox"][1] + 0.5), (left + digits, radical["bbox"][1] + 0.5), width=0.4)
     data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
     _attach_ink(page, data)
-    _mark_radicands(page, data, scan_page(page).strokes)
+    _mark_radicands(_PageChars(page), data, scan_page(page).strokes)
     spans = [span for block in data["blocks"] for line in block["lines"] for span in line["spans"]]
     assert [span["text"] for span in spans if span.get("math")] == ["81"]
     assert any(span["text"].startswith(". Find") and not _span_is_math(span) for span in spans)

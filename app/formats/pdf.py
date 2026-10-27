@@ -597,13 +597,27 @@ def _measure_glyph(buffer: bytes, gid: int) -> tuple[float, float, float] | None
     return (rows[0] - 150) / 100, (rows[-1] + 1 - 150) / 100, advance
 
 
+class _PageChars:
+    """一页逐字的框（见 _read_char_boxes），第一次用到时才读。下划线、根号、重音等几步标记共用，
+    同一页只读一次。"""
+
+    def __init__(self, page: pymupdf.Page):
+        self.page = page
+        self._boxes: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]] | None = None
+
+    def boxes(self) -> dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]]:
+        if self._boxes is None:
+            self._boxes = _read_char_boxes(self.page)
+        return self._boxes
+
+
 # 下划线在基线下多深（字号的比例）。语料里的下划线在 0.11–0.3 之间；贴着基线的是删除线、
 # 表格线，再往下是下一行的分数线、表格线
 _UNDERLINE_TOP = 0.05
 _UNDERLINE_DEPTH = 0.35
 
 
-def _mark_underlines(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.Rect]) -> None:
+def _mark_underlines(page_chars: _PageChars, data: dict, strokes: Sequence[pymupdf.Rect]) -> None:
     """字下面画的线（opt_views 例 6 里标出的列 {A, D, G}）。线不在字体里，按细横线认：
     在字的基线下、降部以内，横向不出这一行。线下面的字切成单独的 span，标上 underline，
     送翻时写成 {u}。公式字下面的横线是分数线、根号线，不算。"""
@@ -624,7 +638,7 @@ def _mark_underlines(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.R
     def visible(rect: pymupdf.Rect) -> bool:
         key = (rect.x0, rect.y0, rect.x1, rect.y1)
         if key not in seen:
-            seen[key] = _painted_stroke(page, rect)
+            seen[key] = _painted_stroke(page_chars.page, rect)
         return seen[key]
 
     for line in lines:
@@ -651,7 +665,7 @@ def _mark_underlines(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.R
                 out.append(span)
                 continue
             if chars is None:
-                chars = _char_boxes(page)
+                chars = page_chars.boxes()
             out.extend(_split_covered(span, under, chars, _line_edges(spans, chars), "underline"))
         line["spans"] = out
 
@@ -660,7 +674,7 @@ def _mark_underlines(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.R
 _RADICALS = "√∛∜"
 
 
-def _mark_radicands(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.Rect]) -> None:
+def _mark_radicands(page_chars: _PageChars, data: dict, strokes: Sequence[pymupdf.Rect]) -> None:
     """根号横线下面的字是被开方数，标成公式（√81 的 81）。正文和公式用同一套字体时，
     按字体分不出来，81 留在正文里，根号单独成了一个公式，两边各排各的。
     CMEX 的大号根号提出来是字母 p，大号定界符字体里的字都按位置认：横线从它的右上角起头才是根号。"""
@@ -680,7 +694,7 @@ def _mark_radicands(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.Re
     ]
     if not bars:
         return
-    chars = _char_boxes(page)
+    chars = page_chars.boxes()
     for line in lines:
         out: list[dict] = []
         for span in line["spans"]:
@@ -699,7 +713,7 @@ def _mark_radicands(page: pymupdf.Page, data: dict, strokes: Sequence[pymupdf.Re
 _OVERLAY_CHARS = 12
 
 
-def _mark_overlays(page: pymupdf.Page, data: dict) -> None:
+def _mark_overlays(page_chars: _PageChars, data: dict) -> None:
     """用字形画在词上面的向量箭头（esvect 的 \vv{king} 提出来是「#    »」）和上横线：没有字母数字、
     墨迹是一条比一个字宽的细带，紧贴在别的词的墨迹上面。它和盖住的字是一个式子，标成公式，
     不然箭头当成字排进译文，「# » man」叠在一起。"""
@@ -717,7 +731,7 @@ def _mark_overlays(page: pymupdf.Page, data: dict) -> None:
                 overlays.append((span, box, size))
         if not overlays:
             continue
-        chars = _char_boxes(page)
+        chars = page_chars.boxes()
         for overlay, box, size in overlays:
             covered: list[tuple[dict, pymupdf.Rect]] = []
             for span in spans:
@@ -761,12 +775,12 @@ _FORMULA_TRAIL = ",.;:?!"
 _NUMERIC_RE = re.compile(r"[\d\s.,()%+\-−]*")
 
 
-def _mark_detected_formulas(page: pymupdf.Page, data: dict, rects: Sequence[pymupdf.Rect]) -> None:
+def _mark_detected_formulas(page_chars: _PageChars, data: dict, rects: Sequence[pymupdf.Rect]) -> None:
     """公式检测模型框出的行内公式，框里的字按字切出来标上 detected_formula。
     只在认行内公式的 span 时算数（见 _is_formula_span），角色、跳过、拼段仍按字体定下的 math。"""
     if not rects:
         return
-    chars = _char_boxes(page)
+    chars = page_chars.boxes()
     for block in data.get("blocks", []):
         for line in block.get("lines", []):
             spans = line.get("spans", [])
@@ -829,7 +843,7 @@ _STACKED_ACCENTS = "ˆ˜¯´˙¨ˇ˘˚"
 _ASCII_ACCENTS = {"ˆ": "^", "˜": "~"}
 
 
-def _split_accents(page: pymupdf.Page, data: dict) -> None:
+def _split_accents(page_chars: _PageChars, data: dict) -> None:
     """重音和前面的字常在同一个 span 里（「(ˆ」「log ˆ」），按 span 认不出它盖在后面的字或公式上。
     切成单独的一截：盖在公式上的并进公式，盖在字母上的送翻前合成 ŷ、é。
     占自己宽度的 ˆ ˜ 不是重音，改回 ^ ~，送翻前不和后面的字母合成。"""
@@ -839,7 +853,7 @@ def _split_accents(page: pymupdf.Page, data: dict) -> None:
         for line in lines for text in (str(span.get("text") or "") for span in line["spans"])
     ):
         return
-    chars = _char_boxes(page)
+    chars = page_chars.boxes()
     for line in lines:
         out: list[dict] = []
         spans = line["spans"]
@@ -887,7 +901,7 @@ def _split_accents(page: pymupdf.Page, data: dict) -> None:
 VISIBLE_SPACE = "\u2423"
 
 
-def _mark_visible_spaces(page: pymupdf.Page, data: dict, cups: Sequence[pymupdf.Rect]) -> None:
+def _mark_visible_spaces(page_chars: _PageChars, data: dict, cups: Sequence[pymupdf.Rect]) -> None:
     """画出来的可见空格 ␣ 不在字体里，提取出来只剩一个普通空格或者一段空白，
     merged to ␣re 读成 merged to re。落在一行字的基线上、字的空隙里的，在原处写上 ␣：
     盖着空格的换掉这个空格，空隙里没有字的补一截。和前后的字隔着一段的，中间留一个空格。"""
@@ -910,7 +924,7 @@ def _mark_visible_spaces(page: pymupdf.Page, data: dict, cups: Sequence[pymupdf.
             line, span = covering[0]
             text = str(span.get("text") or "")
             if chars is None:
-                chars = _char_boxes(page)
+                chars = page_chars.boxes()
             boxes = chars.get((text, round(span["origin"][0], 1), round(span["origin"][1], 1)))
             if boxes is None or len(boxes) != len(text):
                 boxes = [(span["bbox"][0], span["bbox"][2], tuple(span["origin"]))] if len(text) == 1 else []
@@ -992,22 +1006,6 @@ def _underline_strokes(
         and rect.x0 >= left - 1 and rect.x1 <= right + 1
         and min(rect.x1, box.x1) - max(rect.x0, box.x0) > 0.5
     ]
-
-
-# _extract 正在读的那一页和它逐字的框。下划线、根号、重音等几步标记都要用，同一页只取一次
-_PAGE_CHARS: contextvars.ContextVar[list | None] = contextvars.ContextVar("page_chars", default=None)
-
-
-def _char_boxes(
-    page: pymupdf.Page,
-) -> dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]]:
-    """每个 span 逐字的左右边和起笔点，按 span 的文字和起笔点对上。"""
-    memo = _PAGE_CHARS.get()
-    if memo is None or memo[0] is not page:
-        return _read_char_boxes(page)
-    if memo[1] is None:
-        memo[1] = _read_char_boxes(page)
-    return memo[1]
 
 
 def _read_char_boxes(
@@ -5345,17 +5343,14 @@ def _extract(
             tables_by_page.append(scans[-1].tables)
             data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
             _attach_ink(page, data)
-            token = _PAGE_CHARS.set([page, None])
-            try:
-                _mark_underlines(page, data, scans[-1].strokes)
-                _mark_radicands(page, data, scans[-1].strokes)
-                _mark_overlays(page, data)
-                _split_accents(page, data)
-                if detected is not None:
-                    _mark_detected_formulas(page, data, next(detected))
-                _mark_visible_spaces(page, data, scans[-1].visible_spaces)
-            finally:
-                _PAGE_CHARS.reset(token)
+            page_chars = _PageChars(page)
+            _mark_underlines(page_chars, data, scans[-1].strokes)
+            _mark_radicands(page_chars, data, scans[-1].strokes)
+            _mark_overlays(page_chars, data)
+            _split_accents(page_chars, data)
+            if detected is not None:
+                _mark_detected_formulas(page_chars, data, next(detected))
+            _mark_visible_spaces(page_chars, data, scans[-1].visible_spaces)
             # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
             recover_type3_page(page, data, type3)
             pages.append(data)
