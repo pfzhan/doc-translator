@@ -3380,6 +3380,40 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
     assert words.count("BETA") == 1 and words.count("EPSILON") == 1
 
 
+def test_formulas_on_a_page_filter_their_own_lines():
+    """一页的公式按上下对半分，每一份只留自己所在的行，每个公式在最小的一份上过滤，
+    留下的字和在整页上过滤一样。没有登记的公式也能找到盖住它的一份。"""
+    from app.formats.pdf import _FormulaSources, _keep_marks, _page_form, _pdf_rect
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=400)
+    for row in range(16):
+        page.insert_text((40, 30 + 22 * row), f"line {row} has v{row} inside", fontsize=10)
+    whole = _page_form(doc, page)
+    formulas = []
+    for row in range(16):
+        box = page.search_for(f"v{row} ")[0] + (0, 0, -2, 0)
+        formulas.append({"bbox": box, "spans": [{"bbox": tuple(box)}]})
+    sources = _FormulaSources(doc, page, whole, formulas[:12])
+
+    def shown(form):
+        view = doc.new_page(width=400, height=400)
+        draw = doc.get_new_xref()
+        doc.update_object(draw, "<<>>")
+        doc.update_stream(draw, b"q /Fm Do Q")
+        doc.xref_set_key(view.xref, "Contents", f"{draw} 0 R")
+        doc.xref_set_key(view.xref, "Resources", f"<< /XObject << /Fm {form} 0 R >> >>")
+        return sorted(w[4] for w in doc[-1].get_text("words"))
+
+    lines = shown(sources.source(formulas[3]))
+    assert "v3" in lines and len(lines) <= 4 * 4 and "v12" not in lines
+    for row in (0, 5, 11, 14):
+        keep = [_pdf_rect(doc[0], formulas[row]["bbox"] + (-1, -1, 1, 1))]
+        source = sources.source(formulas[row])
+        assert shown(_keep_marks(doc, source, keep)) == shown(_keep_marks(doc, whole, keep)) == [f"v{row}"]
+    assert sources.source(formulas[14]) == whole
+
+
 def test_formula_glyphs_stay_in_place_after_a_size_change_on_their_line():
     """同一行中途换过字号（小型大写），MuPDF 删掉前面的字后会把公式算偏。
     偏了就整行留下，别的行照样删掉。"""

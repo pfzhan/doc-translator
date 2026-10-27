@@ -7424,16 +7424,17 @@ class _SanitizeFactory(pymupdf.mupdf.PdfFilterFactory2):
         )
 
 
-def _filter_form(doc: "pymupdf.Document", form: int,
-                 keep: list[tuple[float, float, float, float]]) -> tuple[int, list[tuple[float, float]]]:
-    """过滤一遍 Form，返回新 Form 的 xref 和留下的字的位置。"""
+def _filter_form(doc: "pymupdf.Document", form: int, keep: list[tuple[float, float, float, float]],
+                 recurse: bool = True) -> tuple[int, list[tuple[float, float]]]:
+    """过滤一遍 Form，返回新 Form 的 xref 和留下的字的位置。recurse 为假时只过滤这一层，套着的 Form 原样引用。"""
     mupdf = pymupdf.mupdf
     keeper = _GlyphKeeper(keep)
     factory = _SanitizeFactory(keeper)
     options = mupdf.PdfFilterOptions()
-    # 页里套的 Form（图）也要过滤。过滤结果另存新对象，原对象页面自己还在用，直接改会把图删掉
-    options.recurse = 1
-    options.instance_forms = 1
+    # 页里套的 Form（图）也要过滤。过滤结果另存新对象，原对象页面自己还在用，直接改会把图删掉。
+    # 不进套着的 Form 时也不复制：复制时 MuPDF 会改写内容流，图就和原来的字节不同了（见 _lines_form）
+    options.recurse = int(recurse)
+    options.instance_forms = int(recurse)
     options.add_factory(factory.internal())
     pdoc = doc.this if isinstance(doc.this, mupdf.PdfDocument) else mupdf.PdfDocument(doc.this)
     ref = mupdf.pdf_new_indirect(pdoc, form, 0)
@@ -7445,11 +7446,12 @@ def _filter_form(doc: "pymupdf.Document", form: int,
 _EVERYWHERE = [(-1e9, -1e9, 1e9, 1e9)]
 
 
-def _keeps_places(doc: "pymupdf.Document", xref: int, kept: list[tuple[float, float]]) -> bool:
-    """过滤后的 Form 里每个字还在原来的位置上。"""
+def _keeps_places(doc: "pymupdf.Document", xref: int, kept: list[tuple[float, float]],
+                  recurse: bool = True) -> bool:
+    """过滤后的 Form 里每个字还在原来的位置上。recurse 和过滤时一样。"""
     if not xref:
         return False
-    _same, now = _filter_form(doc, xref, _EVERYWHERE)
+    _same, now = _filter_form(doc, xref, _EVERYWHERE, recurse)
     return len(now) == len(kept) and all(
         abs(a[0] - b[0]) < 0.1 and abs(a[1] - b[1]) < 0.1 for a, b in zip(sorted(kept), sorted(now))
     )
@@ -7474,6 +7476,90 @@ def _keep_marks(doc: "pymupdf.Document", form: int, keep: list["pymupdf.Rect"]) 
     except Exception:
         pass
     return form
+
+
+def _merge_bands(bands: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    merged: list[list[float]] = []
+    for y0, y1 in sorted(bands):
+        if merged and y0 <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], y1)
+        else:
+            merged.append([y0, y1])
+    return [(y0, y1) for y0, y1 in merged]
+
+
+def _lines_form(doc: "pymupdf.Document", form: int, bands: list[tuple[float, float]]) -> int:
+    """过滤一遍 Form 这一层，只留 bands（PDF 坐标的纵向区间）里的字，返回新 Form 的 xref。位置核对不过时用原 Form。
+
+    套着的 Form（图）不进去，原样引用，留给每个公式最后那一遍（_keep_marks）。MuPDF 每过滤一遍都会去掉
+    一层空的 q Q，图里的字在哪一遍删掉，删完的字节也不一样。各公式的图要是过滤的遍数不同，
+    内容相同而字节不同，合并重复对象时合不掉，一张大图会在文件里存好几份。"""
+    try:
+        xref, kept = _filter_form(doc, form, [(-1e9, y0, 1e9, y1) for y0, y1 in bands], recurse=False)
+        if _keeps_places(doc, xref, kept, recurse=False):
+            return xref
+    except Exception:  # noqa: BLE001 - 和 _keep_marks 一样，过滤出错时用原 Form
+        pass
+    return form
+
+
+@dataclass
+class _LinesNode:
+    bands: list[tuple[float, float]]
+    xref: int
+    children: list["_LinesNode"]
+
+
+class _FormulaSources:
+    """本页公式透传时引用的源 Form。
+
+    每个公式透传前都要过滤一遍源 Form（见 _keep_marks），每个字形回调一次。都在整页上过滤，
+    一页几十个公式就要把整页的字走几十遍。这里把本页的公式按上下位置对半分，每一半只留自己所在的行，
+    再往下分，到每份不超过四个公式为止：每层合起来只走一遍整页，每个公式最后只在自己那几行的字上过滤。
+    留下的行是公式的框上下各放 2pt，盖住 _formula_form 的裁剪框（上下最多扩 1.5pt），
+    按框、按行过滤时要留的字都在里面。取的时候按位置找最小的、整个盖住这个公式的一份，
+    没有登记的公式也能找到，最差是整页。"""
+
+    def __init__(self, doc: "pymupdf.Document", page: "pymupdf.Page", form: int, formulas):
+        # 只记换算 PDF 坐标要的页面上沿（见 _pdf_rect），不留页面对象
+        self.top = page_origin(page)[1]
+        group: list[tuple[tuple[float, float], dict]] = []
+        for formula in formulas:
+            for part in _formula_parts(formula):
+                source_page = part.get("page")
+                band = self._band(part)
+                if band is not None and (source_page is None or int(source_page) == page.number):
+                    group.append((band, part))
+
+        def build(source: int, group: list[tuple[tuple[float, float], dict]]) -> _LinesNode:
+            bands = _merge_bands([band for band, _part in group])
+            node = _LinesNode(bands, _lines_form(doc, source, bands), [])
+            if len(group) > 4:
+                group = sorted(group, key=lambda item: item[0])
+                half = len(group) // 2
+                node.children = [build(node.xref, sub) for sub in (group[:half], group[half:])]
+            return node
+
+        self.root = _LinesNode([], form, [build(form, group)] if group else [])
+
+    def _band(self, formula: dict) -> tuple[float, float] | None:
+        rects = [s["bbox"] for s in formula.get("spans") or []] + list(formula.get("curves") or [])
+        if formula.get("bbox") is not None:
+            rects.append(formula["bbox"])
+        if not rects:
+            return None
+        return self.top - max(rect[3] for rect in rects) - 2, self.top - min(rect[1] for rect in rects) + 2
+
+    def source(self, formula: dict) -> int:
+        band = self._band(formula)
+        node = self.root
+        while band is not None:
+            inner = next((child for child in node.children
+                          if any(y0 <= band[0] and band[1] <= y1 for y0, y1 in child.bands)), None)
+            if inner is None:
+                break
+            node = inner
+        return node.xref
 
 
 def _hole_ink(span: dict) -> pymupdf.Rect:
@@ -7540,6 +7626,9 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
         for fb in page_spans:
             if not fb["text"].strip():  # 空白 span 没有墨迹，不限扩展也不挖洞
                 continue
+            # 先用坐标排除和公式不在同一高度的 span：一页上千个，每个都建 Rect 很慢
+            if not (fb["bbox"][1] < union.y1 and fb["bbox"][3] > union.y0):
+                continue
             fr = pymupdf.Rect(fb["bbox"])
             if is_run_member(fr) or not (fr.y0 < union.y1 and fr.y1 > union.y0):
                 continue
@@ -7567,8 +7656,19 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
             ours.append(f"{r.x0:.2f} {r.y0:.2f} {r.width:.2f} {r.height:.2f} re")
     if page_spans and our_rects:
         hole_rects = []
+        reach_x0 = min(r.x0 for r in our_rects)
+        reach_y0 = min(r.y0 for r in our_rects)
+        reach_x1 = max(r.x1 for r in our_rects)
+        reach_y1 = max(r.y1 for r in our_rects)
+
+        def touches(box) -> bool:
+            return box[0] <= reach_x1 and box[2] >= reach_x0 and box[1] <= reach_y1 and box[3] >= reach_y0
+
         for fb in page_spans:
             if not fb["text"].strip():  # 空白 span 没有墨迹，限扩展和挖洞都不参与
+                continue
+            # 孔落在 span 的字体框或墨迹框里，两个都碰不到裁剪框的 span 挖不出孔
+            if not touches(fb["bbox"]) and (fb.get("ink") is None or not touches(fb["ink"])):
                 continue
             fr = pymupdf.Rect(fb["bbox"])
             if any(abs(fr.x0 - rr.x0) < 0.5 and abs(fr.y0 - rr.y0) < 0.5
@@ -7627,14 +7727,14 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
 
 
 def _place_formula_images(page: "pymupdf.Page", doc: "pymupdf.Document", before: set[int],
-                          mid_map: dict[int, dict], fmS: int | None = None,
+                          mid_map: dict[int, dict], forms: "_FormulaSources | None" = None,
                           page_spans: list[dict] | None = None):
     """把占位标记换成公式内容并校准基线。
 
     htmlbox 对 <img> 只做图片底部对齐，公式的 baseline 在图片内部（上下标在 baseline
     之下还有延伸），直接插会整体浮起来。所以先插一个按公式宽高占位的 1x1 标记像素，
     从落位矩形读出文本基线位置，再把公式按“bbox 底 − 公式 baseline”下移贴到精确位置。
-    有源页 Form（fmS）时用紧致 BBox 的包裹 Form 做矢量透传（原 glyph、可选中、选择
+    有源页 Form（forms）时用紧致 BBox 的包裹 Form 做矢量透传（原 glyph、可选中、选择
     不爆框）；失败回退到 PNG 位图。
 
     标记像素按全局序号（mid）编码，整页一次处理；所有公式绘制集中在最后一条新内容
@@ -7682,7 +7782,7 @@ def _place_formula_images(page: "pymupdf.Page", doc: "pymupdf.Document", before:
         else:
             target = pymupdf.Rect(rect.x0 + 2.0, rect.y0 + d, rect.x0 + 2.0 + w, rect.y0 + d + h)
         page.replace_image(xref, pixmap=_white_pixmap(doc))
-        _paint_formula(page, doc, f, target, fmS, page_spans, draws)
+        _paint_formula(page, doc, f, target, forms, page_spans, draws)
     if draws:
         ns = doc.get_new_xref()
         doc.update_object(ns, "<<>>")
@@ -7699,7 +7799,7 @@ def _paint_formula(
     doc: "pymupdf.Document",
     formula: dict,
     target: "pymupdf.Rect",
-    fmS: int | None,
+    forms: "_FormulaSources | None",
     page_spans: list[dict] | None,
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]] | None = None,
@@ -7712,13 +7812,13 @@ def _paint_formula(
     source_page = formula.get("page")
     same_page = source_page is None or int(source_page) == page.number
     if (
-        same_page and fmS is not None and bbox is not None
+        same_page and forms is not None and bbox is not None
         and bbox.width > 0.5 and bbox.height > 0.5 and target.width > 0.5
     ):
         try:
             # 资源名必须全页唯一：块内序号相同的 FmF0 会互相覆盖
             f_name = "FmF_" + re.sub(r"[^A-Za-z0-9_]", "_", str(formula["name"]))
-            _formula_form(doc, page, fmS, formula, f_name, page_spans)
+            _formula_form(doc, page, forms.source(formula), formula, f_name, page_spans)
             sx = target.width / bbox.width
             sy = target.height / bbox.height
             # 带缩放的仿射：平移量必须吸收缩放，否则公式整体往下漂 (1-sy)*H
@@ -7958,7 +8058,7 @@ def _paint_formula_parts(
     formula: dict,
     slot_x: float,
     baseline: float,
-    fmS: int | None,
+    forms: "_FormulaSources | None",
     page_spans: list[dict] | None,
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
@@ -7973,7 +8073,7 @@ def _paint_formula_parts(
         height = float(part["h"]) * scale
         below = (float(part.get("d") or 0) - float(part.get("raise") or 0)) * scale
         target = pymupdf.Rect(x, baseline + below - height, x + width, baseline + below)
-        _paint_formula(page, doc, part, target, fmS, page_spans, draws, deferred_png)
+        _paint_formula(page, doc, part, target, forms, page_spans, draws, deferred_png)
         x += width
 
 
@@ -8011,7 +8111,7 @@ def _draw_cjk(
     gap: float,
     color: str,
     centered: bool,
-    fmS: int | None,
+    forms: "_FormulaSources | None",
     page_spans: list[dict] | None,
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
@@ -8031,7 +8131,7 @@ def _draw_cjk(
             continue
         _paint_formula_parts(
             page, doc, formulas[slot.index - 1], slot.x, slot.baseline,
-            fmS, page_spans, draws, deferred_png,
+            forms, page_spans, draws, deferred_png,
         )
     return True
 
@@ -8160,7 +8260,7 @@ def _place_typeset(
     weight: str,
     obstacles: list["pymupdf.Rect"],
     right_limit: float | None,
-    fmS: int | None,
+    forms: "_FormulaSources | None",
     page_spans: list[dict] | None,
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
@@ -8175,7 +8275,7 @@ def _place_typeset(
     )
     if cjk and _draw_cjk(
         page, doc, lines, formulas, box, em, gap, color, centered,
-        fmS, page_spans, draws, deferred_png, justify_last, lanes, first_room,
+        forms, page_spans, draws, deferred_png, justify_last, lanes, first_room,
     ):
         return
     css = (
@@ -8231,7 +8331,7 @@ def _place_typeset(
     for piece, slot_x, line_top in pending:
         baseline = _line_baseline(spans, line_top, line_h, em, cjk, slot_x)
         _paint_formula_parts(
-            page, doc, formulas[piece.index - 1], slot_x, baseline, fmS, page_spans, draws, deferred_png,
+            page, doc, formulas[piece.index - 1], slot_x, baseline, forms, page_spans, draws, deferred_png,
         )
 
 
@@ -9200,7 +9300,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             if any(span.get("source") for f in mid_map.values() for part in _formula_parts(f)
                    for span in part.get("spans") or []):
                 _attach_chars(page, page_spans)
-        fmS = _page_form(doc, page) if mid_map else None
+        forms = _FormulaSources(doc, page, _page_form(doc, page), mid_map.values()) if mid_map else None
         # 公式贴的是擦除前打包的原页，不受影响。点阵字的字形是全文共用的，擦除、裁公式的过滤会改到它，
         # 这一页写完原样写回
         glyphs = type3_glyphs(page) if mid_map else {}
@@ -9299,7 +9399,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             elif any(f.get("has_img") for f in bformulas):
                 _place_typeset(
                     page, doc, block, text, bformulas, rect, size, cjk, centered, div_attrs,
-                    block.color, weight, beside, limit, fmS, page_spans, draws, deferred_png,
+                    block.color, weight, beside, limit, forms, page_spans, draws, deferred_png,
                     justify_last, holes, first_room,
                 )
             else:
@@ -9436,7 +9536,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 carried[id(tail)] = _Carry(rest, bformulas, rect.width)
         _flush_draws(page, doc, draws, deferred_png)
         if mid_map:
-            _place_formula_images(page, doc, images_before, mid_map, fmS, page_spans)
+            _place_formula_images(page, doc, images_before, mid_map, forms, page_spans)
             restore_glyphs(doc, glyphs)
     return doc
 
