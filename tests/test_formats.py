@@ -3452,6 +3452,45 @@ def test_a_formula_bitmap_is_rendered_only_when_used(monkeypatch):
     assert _formula_png({"png": b"given"}) == b"given" and _formula_png({}) is None
 
 
+def test_formula_bitmaps_rendered_in_forked_workers_read_their_own_copy(tmp_path):
+    """写回的子进程是 fork 出来的，和父进程共用原文件的读写位置。几个子进程同时用父进程打开的
+    文档渲染公式位图，会读到别处的字节，渲染错或报错。子进程要用自己打开的那份。"""
+    import multiprocessing
+
+    from app.formats.pdf import _FormulaImage
+
+    src = tmp_path / "book.pdf"
+    doc = pymupdf.open()
+    for pno in range(12):
+        page = doc.new_page(width=300, height=400)
+        for row in range(20):
+            page.insert_text((20, 30 + row * 18), f"page {pno} row {row} x + y = z", fontsize=11)
+    doc.save(src)
+    clips = [(pno, pymupdf.Rect(15, 15 + row * 18, 200, 35 + row * 18)) for pno in range(12) for row in range(0, 20, 4)]
+    fresh = pymupdf.open(src)
+    expected = [fresh[pno].get_pixmap(dpi=300, clip=clip).samples for pno, clip in clips]
+    shared = pymupdf.open(src)
+    images = [_FormulaImage(shared, pno, clip) for pno, clip in clips]
+    pymupdf.TOOLS.store_shrink(100)
+
+    def work(part: int, out) -> None:
+        try:
+            got = [pymupdf.Pixmap(images[k].png()).samples == expected[k] for k in range(part, len(images), 4)]
+            out.put(all(got))
+        except Exception:  # noqa: BLE001 - 读坏的文档会报错，算渲染错
+            out.put(False)
+
+    context = multiprocessing.get_context("fork")
+    out = context.Queue()
+    workers = [context.Process(target=work, args=(part, out)) for part in range(4)]
+    for worker in workers:
+        worker.start()
+    results = [out.get(timeout=60) for _ in workers]
+    for worker in workers:
+        worker.join()
+    assert results == [True] * 4
+
+
 def test_formula_glyphs_stay_in_place_after_a_size_change_on_their_line():
     """同一行中途换过字号（小型大写），MuPDF 删掉前面的字后会把公式算偏。
     偏了就整行留下，别的行照样删掉。"""

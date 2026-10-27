@@ -7401,16 +7401,35 @@ def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
 
 class _FormulaImage:
     """公式在原页上的位图。只在矢量贴回失败时才用到（见 _paint_formula），裁图时只记下从哪一页、
-    哪一块裁，用到时才渲染，渲染一次。写回在子进程里时，子进程用自己那份原文档渲染。"""
+    哪一块裁，用到时才渲染，渲染一次。
+
+    写回在 fork 出来的子进程里时（见 render_in_parts），不能用父进程打开的原文档渲染：
+    父子进程共用这个文件的读写位置，几个子进程同时读，读到的是别处的字节，点阵字的字形缺笔画、
+    画成黑块，页面树也会读坏。子进程按文件名自己打开一份（见 _own_source）。"""
 
     def __init__(self, doc: pymupdf.Document, page: int, clip: pymupdf.Rect):
         self.doc, self.page, self.clip = doc, page, pymupdf.Rect(clip)
+        self._pid = os.getpid()
         self._png: bytes | None = None
 
     def png(self) -> bytes:
         if self._png is None:
-            self._png = self.doc[self.page].get_pixmap(dpi=300, clip=self.clip).tobytes("png")
+            doc = self.doc if os.getpid() == self._pid else _own_source(self.doc)
+            self._png = doc[self.page].get_pixmap(dpi=300, clip=self.clip).tobytes("png")
         return self._png
+
+
+# 子进程自己打开的原文档，按文件名记。只在子进程里存，子进程写完就退出
+_OWN_SOURCES: dict[str, pymupdf.Document] = {}
+
+
+def _own_source(doc: pymupdf.Document) -> pymupdf.Document:
+    """本进程自己打开的那份原文档。从内存打开的文档没有文件可共用，照用原来的。"""
+    if not doc.name or not os.path.isfile(doc.name):
+        return doc
+    if doc.name not in _OWN_SOURCES:
+        _OWN_SOURCES[doc.name] = pymupdf.open(doc.name)
+    return _OWN_SOURCES[doc.name]
 
 
 def _formula_png(formula: dict) -> bytes | None:
@@ -9364,7 +9383,7 @@ def _split_own_lines(
 
 def _render_translated(src_path: Path, blocks: list[TextBlock], translations: list[str],
                        target_lang: str = "", formulas_map: dict | None = None,
-                       archive=None, orig: "pymupdf.Document | None" = None,
+                       archive=None,
                        geometries: list[PageGeometry] | None = None,
                        continuations: dict[int, TextBlock] | None = None,
                        on_page: Callable[[int, int], None] | None = None,
@@ -11049,7 +11068,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         def render(pages, on_page):
             return _render_translated(
                 src, blocks, translations, target_lang, block_formulas, archive,
-                orig=src_doc, geometries=geometries, continuations=continuations,
+                geometries=geometries, continuations=continuations,
                 on_page=on_page, pages=pages,
             )
 
