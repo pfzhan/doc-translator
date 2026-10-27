@@ -7769,6 +7769,7 @@ def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path, monkeyp
 def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monkeypatch):
     """同时跑的两个任务不能一起用 MuPDF（find_tables 会改进程全局的字框开关）；
     用 MuPDF 的部分在线程里做，事件循环一直能响应别的请求。"""
+    import threading
     import time
 
     from app.formats import pdf
@@ -7780,10 +7781,14 @@ def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monk
 
     inside = most = 0
     stages: list[tuple] = []
+    # 在事件循环所在的主线程里调用的次数
+    on_loop: list[str] = []
 
     def counted(real):
         def wrapper(*args, **kwargs):
             nonlocal inside, most
+            if threading.current_thread() is threading.main_thread():
+                on_loop.append(real.__name__)
             inside += 1
             most = max(most, inside)
             try:
@@ -7799,7 +7804,8 @@ def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monk
     class SlowGeometry(real_geometry):
         @classmethod
         def from_page(cls, *args, **kwargs):
-            time.sleep(1.0)
+            if threading.current_thread() is threading.main_thread():
+                on_loop.append("from_page")
             return real_geometry.from_page(*args, **kwargs)
 
     monkeypatch.setattr(pdf, "_extract", counted(pdf._extract))
@@ -7807,33 +7813,20 @@ def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monk
     monkeypatch.setattr(pdf, "PageGeometry", SlowGeometry)
 
     async def scenario():
-        gaps: list[float] = []
-
-        async def poll():
-            last = time.monotonic()
-            while True:
-                await asyncio.sleep(0.01)
-                now = time.monotonic()
-                gaps.append(now - last)
-                last = now
-
-        poller = asyncio.create_task(poll())
         for name in "ab":
             (tmp_path / name).mkdir()
         runners = [runner() for _ in "ab"]
         for r in runners:
             r.report_stage = lambda name, done=0, total=0, unit="": stages.append((name, done, total, unit))
-        outs = await asyncio.gather(*(
+        return await asyncio.gather(*(
             pdf.translate_pdf(src, tmp_path / name, r, False, "zh-CN") for name, r in zip("ab", runners)
         ))
-        poller.cancel()
-        return outs, max(gaps)
 
-    outs, longest_gap = run(scenario())
+    outs = run(scenario())
     # 后到的任务等的时候任务页上显示在等
     assert ("等待其他任务", 0, 0, "") in stages
-    # 线程里的 MuPDF 调用不放 GIL，循环偶尔停零点几秒；在循环里算的话一停就是一秒
-    assert longest_gap < 0.6
+    # 只看在哪个线程里调用，不量循环停了多久：机器忙的时候线程里的调用也会让循环停上零点几秒
+    assert on_loop == []
     assert most == 1
     assert [pymupdf.open(out)[0].get_text() for [out] in outs] == [pymupdf.open(outs[0][0])[0].get_text()] * 2
 
