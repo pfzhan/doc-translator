@@ -415,32 +415,48 @@ def _line_box(line: dict) -> pymupdf.Rect:
     """一行字的框。数学字体的 span 只算基线上下一个字高。
 
     PyMuPDF 按字体的上下伸量给框，CMSY、CMEX 的伸量是给大号括号、根号留的，
-    一个箭头就能把行框撑到两行高。行框偏高，译文就从上一行的位置写起。"""
-    box = pymupdf.Rect()
+    一个箭头就能把行框撑到两行高。行框偏高，译文就从上一行的位置写起。
+
+    分析时每行要算好几遍，按坐标取最值，不逐个建 Rect 求并集。两个 Rect 求并集在 MuPDF 里按单精度算，
+    有两截以上时结果也按单精度存，和用 Rect 求并集得到的框一样，挨着阈值的比较才不变。"""
+    x0 = y0 = math.inf
+    x1 = y1 = -math.inf
+    count = 0
     for span in line["spans"]:
         if not span["text"].strip() or "bbox" not in span:
             continue
-        rect = _text_box(span)
-        if not rect.is_empty:
-            box |= rect
-    return box if not box.is_empty else pymupdf.Rect(line["bbox"])
+        left, top, right, bottom = _text_bounds(span)
+        if left >= right or top >= bottom:
+            continue
+        x0, y0, x1, y1 = min(x0, left), min(y0, top), max(x1, right), max(y1, bottom)
+        count += 1
+    if not count:
+        return pymupdf.Rect(line["bbox"])
+    if count == 1:
+        return pymupdf.Rect(x0, y0, x1, y1)
+    return pymupdf.Rect(struct.unpack("4f", struct.pack("4f", x0, y0, x1, y1)))
 
 
 def _text_box(span: dict) -> pymupdf.Rect:
     """span 占的那一行的高度。数学字体按字形墨迹算，其余照 PyMuPDF 的框。
 
     根号、大括号的起笔点在字形顶上，不在基线上，只能看墨迹。"""
-    rect = pymupdf.Rect(span["bbox"])
+    return pymupdf.Rect(_text_bounds(span))
+
+
+def _text_bounds(span: dict) -> tuple[float, float, float, float]:
+    """_text_box 的四个坐标。"""
+    x0, y0, x1, y1 = span["bbox"]
     ink = span.get("ink")
     if not _span_is_math(span) or not ink:
-        return rect
+        return x0, y0, x1, y1
     top, bottom = ink[1] - _INK_PAD, ink[3] + _INK_PAD
     if span.get("ink_drawn"):
         # 单画量出的墨迹不夹在字体框里：字体框量错了（txsys 的根号往基线下伸了大半个字）。
         # 连上起笔点：宽波浪号这类重音整个在起笔点上方，只看墨迹就离开了它排的那一行
         base = float(span["origin"][1])
-        return pymupdf.Rect(rect.x0, min(top, base), rect.x1, max(bottom, base))
-    return pymupdf.Rect(rect.x0, max(rect.y0, top), rect.x1, min(rect.y1, bottom))
+        return x0, min(top, base), x1, max(bottom, base)
+    return x0, max(y0, top), x1, min(y1, bottom)
 
 
 _INK_PAD = 0.6
@@ -978,10 +994,25 @@ def _underline_strokes(
     ]
 
 
+# _extract 正在读的那一页和它逐字的框。下划线、根号、重音等几步标记都要用，同一页只取一次
+_PAGE_CHARS: contextvars.ContextVar[list | None] = contextvars.ContextVar("page_chars", default=None)
+
+
 def _char_boxes(
     page: pymupdf.Page,
 ) -> dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]]:
     """每个 span 逐字的左右边和起笔点，按 span 的文字和起笔点对上。"""
+    memo = _PAGE_CHARS.get()
+    if memo is None or memo[0] is not page:
+        return _read_char_boxes(page)
+    if memo[1] is None:
+        memo[1] = _read_char_boxes(page)
+    return memo[1]
+
+
+def _read_char_boxes(
+    page: pymupdf.Page,
+) -> dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]]:
     found: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]] = {}
     raw = page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
     for block in raw.get("blocks", []):
@@ -5306,13 +5337,17 @@ def _extract(
             tables_by_page.append(scans[-1].tables)
             data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
             _attach_ink(page, data)
-            _mark_underlines(page, data, scans[-1].strokes)
-            _mark_radicands(page, data, scans[-1].strokes)
-            _mark_overlays(page, data)
-            _split_accents(page, data)
-            if detected is not None:
-                _mark_detected_formulas(page, data, next(detected))
-            _mark_visible_spaces(page, data, scans[-1].visible_spaces)
+            token = _PAGE_CHARS.set([page, None])
+            try:
+                _mark_underlines(page, data, scans[-1].strokes)
+                _mark_radicands(page, data, scans[-1].strokes)
+                _mark_overlays(page, data)
+                _split_accents(page, data)
+                if detected is not None:
+                    _mark_detected_formulas(page, data, next(detected))
+                _mark_visible_spaces(page, data, scans[-1].visible_spaces)
+            finally:
+                _PAGE_CHARS.reset(token)
             # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
             recover_type3_page(page, data, type3)
             pages.append(data)
