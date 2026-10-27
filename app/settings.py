@@ -1,10 +1,10 @@
 """应用设置，保存在 data/settings.json。
 
 - retention_days：翻译记录的保留时间，0 表示永久保留。
-- layout_model：PDF 版面模型，{"enabled": 是否使用, "path": 模型文件，空串表示默认位置}。
+- layout_model：PDF 版面模型，{"enabled": 是否使用, "path": 模型文件，空串表示默认位置,
+  "precision": 用 int8 还是 fp32}。precision 默认 int8：生成了 int8 文件就用它（见 quantize.py），没生成时用 fp32。
 - formula_model：PDF 公式检测模型，格式同上，另有 "size": 输入边长（1024 或 768）。默认开启、用 1024：
   行内公式认得准不准直接影响译文，模型文件下好了就用，没下时只用规则。
-  "precision" 是用 int8 还是 fp32，默认 int8：生成了 int8 文件就用它（见 quantize.py），没生成时用 fp32。
 
 可以在页面上改，也可以直接改这个文件后重启服务。
 """
@@ -18,7 +18,7 @@ from .quantize import PRECISIONS
 PATH = Path(__file__).resolve().parent.parent / "data" / "settings.json"
 DEFAULTS = {
     "retention_days": 30,
-    "layout_model": {"enabled": False, "path": ""},
+    "layout_model": {"enabled": False, "path": "", "precision": PRECISIONS[0]},
     # workers、threads 是公式检测模型同时推理几页、每页几个线程，0 表示按核数定
     "formula_model": {"enabled": True, "path": "", "size": FORMULA_SIZES[0], "precision": PRECISIONS[0],
                       "workers": 0, "threads": 0},

@@ -1805,17 +1805,17 @@ function renderModel(kind, m, { keepForm = false } = {}) {
   }
   el("download").disabled = d.running;
   el("download").textContent = m.file.exists ? "重新下载" : "下载模型";
-  if (m.int8) renderInt8(m);
+  if (m.int8) renderInt8(kind, m);
   clearTimeout(modelPolls[kind]);
   const busyNow = d.running || Boolean(m.int8 && m.int8.state.running);
   if (busyNow) modelPolls[kind] = setTimeout(() => loadModel(kind, { keepForm: true }), 1000);
 }
 
-// 公式检测模型的 int8 版：生成了没有、正在生成到哪一页、没装 onnx 时怎么装
-function renderInt8(m) {
+// 模型的 int8 版：生成了没有、正在生成到哪一页、没装 onnx 时怎么装
+function renderInt8(kind, m) {
   const q = m.int8;
-  const status = $("formula-int8-status");
-  const btn = $("formula-quantize");
+  const status = $(`${kind}-int8-status`);
+  const btn = $(`${kind}-quantize`);
   status.classList.toggle("warn", Boolean(q.state.error) || !q.available);
   btn.textContent = q.file.exists ? "重新生成" : "生成 int8 模型";
   btn.disabled = q.state.running || !q.available || !m.file.exists;
@@ -1828,9 +1828,13 @@ function renderInt8(m) {
   } else if (!q.available) {
     status.textContent = `生成 int8 模型要先安装 onnx：在项目目录运行 ${q.install_hint}，装好后重启服务。`;
   } else if (q.file.exists) {
-    status.textContent = m.in_use === q.path
-      ? `int8 模型已生成（${formatMB(q.file.size)}），翻译时使用`
-      : `int8 模型已生成（${formatMB(q.file.size)}），选了 fp32，翻译时不用`;
+    if (m.in_use !== q.path) {
+      status.textContent = `int8 模型已生成（${formatMB(q.file.size)}），选了 fp32，翻译时不用`;
+    } else {
+      status.textContent = m.enabled
+        ? `int8 模型已生成（${formatMB(q.file.size)}），翻译时使用`
+        : `int8 模型已生成（${formatMB(q.file.size)}），开启模型后翻译时使用`;
+    }
   } else if (!m.file.exists) {
     status.textContent = "先下载模型，才能生成 int8 模型。";
   } else {
@@ -1865,13 +1869,15 @@ function loadLayoutModel() {
   for (const kind of MODEL_KINDS) loadModel(kind);
 }
 
-$("formula-quantize").addEventListener("click", async () => {
-  try {
-    renderModel("formula", await api("/api/formula-model/quantize", { method: "POST" }), { keepForm: true });
-  } catch (err) {
-    toast(err.message);
-  }
-});
+for (const kind of MODEL_KINDS) {
+  $(`${kind}-quantize`).addEventListener("click", async () => {
+    try {
+      renderModel(kind, await api(`/api/${kind}-model/quantize`, { method: "POST" }), { keepForm: true });
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+}
 
 // 两个模型各占一个标签，记住上次看的是哪个
 function showModelTab(kind) {

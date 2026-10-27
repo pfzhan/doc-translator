@@ -17,10 +17,10 @@ PAYLOAD = b"fake onnx model bytes" * 1000
 def test_settings_keep_the_layout_model_choice(tmp_path):
     path = tmp_path / "settings.json"
     settings = Settings(path)
-    assert settings.layout_model == {"enabled": False, "path": ""}
+    assert settings.layout_model == {"enabled": False, "path": "", "precision": "int8"}
     settings.update({"layout_model": {"enabled": True}})
     settings.update({"layout_model": {"path": " models/x.onnx "}})
-    assert Settings(path).layout_model == {"enabled": True, "path": "models/x.onnx"}
+    assert Settings(path).layout_model == {"enabled": True, "path": "models/x.onnx", "precision": "int8"}
     assert Settings(path).retention_days == 30
 
 
@@ -32,7 +32,7 @@ def test_the_formula_model_is_on_by_default(tmp_path):
     settings.update({"formula_model": {"enabled": False}})
     settings.update({"formula_model": {"size": 768}})
     assert Settings(path).formula_model == {"enabled": False, "path": "", "size": 768, "precision": "int8", "workers": 0, "threads": 0}
-    assert Settings(path).layout_model == {"enabled": False, "path": ""}
+    assert Settings(path).layout_model == {"enabled": False, "path": "", "precision": "int8"}
     with pytest.raises(SettingsError):
         settings.update({"formula_model": {"size": 640}})
     assert Settings(path).formula_model["size"] == 768

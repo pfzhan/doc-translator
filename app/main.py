@@ -45,8 +45,8 @@ deleting: set[str] = set()
 pause_requested: set[str] = set()
 # 版面模型的下载（同一时间只有一个）
 model_downloads = {kind: layout_model.Downloader(spec) for kind, spec in layout_model.MODELS.items()}
-# 公式检测模型的 int8 版在本机生成（见 quantize.py）
-quantizer = quantize.Quantizer()
+# 两个模型的 int8 版在本机生成（见 quantize.py），同一时间只生成一个
+quantizers = {kind: quantize.Quantizer() for kind in layout_model.MODELS}
 ACTIVE = ("queued", "running")
 PROGRESS_SAVE_INTERVAL = 5
 
@@ -656,6 +656,8 @@ async def update_settings(data: dict = Body(...)):
 
 # ---------- 版面模型、公式检测模型 ----------
 # 两个模型的接口一样：/api/layout-model、/api/formula-model
+MODEL_NAMES = {"layout": "版面模型", "formula": "公式检测模型"}
+
 
 def _spec(kind: str) -> layout_model.ModelSpec:
     if kind not in layout_model.MODELS:
@@ -664,20 +666,19 @@ def _spec(kind: str) -> layout_model.ModelSpec:
 
 
 def _model_path(kind: str) -> str:
-    """PDF 翻译用的模型文件。没开时是空串，只用规则。"""
+    """PDF 翻译用的模型文件（按精度选，见 _model_file）。没开时是空串，只用规则。"""
     spec = layout_model.MODELS[kind]
     conf = settings.model(spec.key)
-    return str(spec.resolve(conf["path"])) if conf["enabled"] else ""
+    return _model_file(str(spec.resolve(conf["path"])), conf["precision"]) if conf["enabled"] else ""
 
 
 def _formula_model() -> FormulaModel | None:
     path = _model_path("formula")
     conf = settings.formula_model
-    return FormulaModel(_formula_file(path, conf["precision"]), conf["size"], conf["workers"], conf["threads"]) \
-        if path else None
+    return FormulaModel(path, conf["size"], conf["workers"], conf["threads"]) if path else None
 
 
-def _formula_file(path: str, precision: str) -> str:
+def _model_file(path: str, precision: str) -> str:
     """选了 int8、int8 文件也生成了时用它，否则用 fp32 文件。"""
     int8 = quantize.int8_path(Path(path))
     return str(int8) if precision == "int8" and int8.is_file() else path
@@ -687,17 +688,18 @@ def _model_status(kind: str) -> dict:
     spec = _spec(kind)
     conf = settings.model(spec.key)
     path = spec.resolve(conf["path"])
-    extra = {}
+    int8 = quantize.int8_path(path)
+    extra = {
+        "int8": {
+            "path": str(int8), "file": layout_model.file_status(int8), "available": quantize.available(),
+            "install_hint": quantize.INSTALL_HINT, "state": dict(quantizers[kind].state),
+        },
+        "in_use": _model_file(str(path), conf["precision"]),
+    }
     if spec is layout_model.FORMULA:
         # 页面上「自动」现在对应的值
         workers, threads = formula_parallel()
         extra["auto"] = {"workers": workers, "threads": threads}
-        int8 = quantize.int8_path(path)
-        extra["int8"] = {
-            "path": str(int8), "file": layout_model.file_status(int8), "available": quantize.available(),
-            "install_hint": quantize.INSTALL_HINT, "state": dict(quantizer.state),
-        }
-        extra["in_use"] = _formula_file(str(path), conf["precision"])
     return {
         **conf,
         **extra,
@@ -746,9 +748,8 @@ async def test_model(kind: str, data: dict | None = Body(None)):
     raw = (data or {}).get("path", conf["path"])
     size = (data or {}).get("size", conf.get("size"))
     path = spec.resolve(str(raw or ""))
-    if spec is layout_model.FORMULA:
-        # 测翻译时会用的那个文件
-        path = Path(_formula_file(str(path), (data or {}).get("precision", conf["precision"])))
+    # 测翻译时会用的那个文件
+    path = Path(_model_file(str(path), (data or {}).get("precision", conf["precision"])))
     try:
         async with mupdf_turn():  # 样例页用 MuPDF 画，和正在跑的任务错开
             return await asyncio.to_thread(layout_model.check, spec, path, size)
@@ -756,25 +757,28 @@ async def test_model(kind: str, data: dict | None = Body(None)):
         raise HTTPException(400, str(e))
 
 
-@app.post("/api/formula-model/quantize")
-async def quantize_formula_model():
-    """用翻译过的 PDF 抽页校准，生成公式检测模型的 int8 版。页面轮询 GET 看进度。"""
+@app.post("/api/{kind}-model/quantize")
+async def quantize_model(kind: str):
+    """用翻译过的 PDF 抽页校准，生成模型的 int8 版。页面轮询 GET 看进度。"""
+    spec = _spec(kind)
     if not quantize.available():
         raise HTTPException(400, f"生成 int8 模型要先安装 onnx，在项目目录运行：{quantize.INSTALL_HINT}，装好后重启服务")
-    src = layout_model.FORMULA.resolve(settings.formula_model["path"])
+    src = spec.resolve(settings.model(spec.key)["path"])
     if not src.is_file():
-        raise HTTPException(400, f"找不到公式检测模型文件：{src}，请先下载模型")
-    if quantizer.running:
-        raise HTTPException(400, "int8 模型正在生成")
+        raise HTTPException(400, f"找不到{MODEL_NAMES[kind]}文件：{src}，请先下载模型")
+    # 一次只生成一个：校准时每页的中间结果都留在内存里，两个一起生成要多占一倍
+    if any(quantizer.running for quantizer in quantizers.values()):
+        raise HTTPException(400, "int8 模型正在生成" if quantizers[kind].running else "另一个模型的 int8 版正在生成，完成后再试")
     pdfs = [path for job in jobs.list() if (path := jobs.source_path(job)).suffix.lower() == ".pdf" and path.is_file()]
+    quant = quantize.SPECS[kind]
     async with mupdf_turn():  # 抽页要用 MuPDF 画，和正在跑的任务错开
         picks = await asyncio.to_thread(quantize.pick_pages, pdfs)
-        images = await asyncio.to_thread(quantize.calibration_images, picks, layout_model.sample_page)
+        images = await asyncio.to_thread(quantize.calibration_images, picks, layout_model.sample_page, quant.size)
     try:
-        quantizer.start(src, quantize.int8_path(src), images)
+        quantizers[kind].start(src, quantize.int8_path(src), images, quant)
     except quantize.QuantizeError as e:
         raise HTTPException(400, str(e))
-    return _model_status("formula")
+    return _model_status(kind)
 
 
 class NoCacheStaticFiles(StaticFiles):

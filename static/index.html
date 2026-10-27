@@ -319,6 +319,17 @@
         <input name="path" id="layout-path" spellcheck="false">
       </label>
 
+      <label class="field">精度
+        <select name="precision" id="layout-precision">
+          <option value="int8">int8（默认）：推理快三成左右，分析结果和 fp32 基本相同</option>
+          <option value="fp32">fp32：原始模型</option>
+        </select>
+      </label>
+      <div class="int8-row">
+        <p class="hint" id="layout-int8-status" aria-live="polite"></p>
+        <button type="button" class="btn" id="layout-quantize">生成 int8 模型</button>
+      </div>
+
       <div class="field-row layout-download">
         <label class="field">下载来源
           <select id="layout-source"></select>

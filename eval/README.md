@@ -186,7 +186,7 @@ bash eval/models/run_cal.sh avg64:avg:64:0 mm64:minmax:64:0
 
 方法可选 `minmax`、`avg`（各页最大最小值的滑动平均，产品里用的）、`percentile`、`entropy`。校准页默认从 `data/jobs` 下翻译过的 PDF 里抽，`CALIB_PDFS` 可以换目录，`EXCLUDE` 可以排除文件（逗号分隔的文件名，例如排除也在评测集里的论文）。`$WORK/int8/mfd.<名字>.onnx` 已存在时不再量化，可以用这种方式评测程序生成的模型文件。
 
-版面模型：`lqcal.py` 用同样的设置量化，`run_layout_model.sh` 出框打分，`boxcmp.py` 逐类比较两套框（同类且 IoU ≥ 0.5 算对上）：
+版面模型：程序的「版面模型」页可以直接生成 int8 版（`data/models/` 下的 `.int8.onnx`）；评测校准方法时用 `lqcal.py`，设置和程序里相同，可以用 `EXCLUDE` 排除文件。`run_layout_model.sh` 出框打分，`boxcmp.py` 逐类比较两套框（同类且 IoU ≥ 0.5 算对上）：
 
 ```bash
 .venv/bin/python -I eval/models/lqcal.py . data/models/doclayout_yolo_docstructbench_imgsz1024.onnx $WORK/int8/layout.onnx
@@ -241,13 +241,15 @@ bash eval/models/run_layout_model.sh $WORK/int8/layout.onnx regions_lq8 rect
 | 公式检测模型 int8，滑动平均校准，5 组抽页 | 89 / 0 | 98.9% |
 | 同上，校准时排除评测集里的 2 篇，2 组抽页 | 89 / 0 | 98.9%（3150、3151/3186） |
 | 公式检测模型 fp32 + 版面模型 fp32 | 73 / 0 | — |
-| 公式检测模型 fp32 + 版面模型 int8 | 73 / 0 | — |
+| 公式检测模型 fp32 + 版面模型 int8（`lqcal.py` 生成，排除评测集里的 2 篇） | 73 / 0 | — |
+| 公式检测模型 fp32 + 版面模型 int8（程序生成） | 73 / 0 | — |
 | PDF-Extract-Kit MFD，输入 1024 | 91 / 0 | 97.1%（3082/3173） |
 | PDF-Extract-Kit MFD，输入 1280 | 89 / 0 | 98.8%（3133/3171） |
 
-- 版面模型 int8 和 fp32 的框逐类比较，7946 个框中对上 98.6%。
+- 版面模型 int8 和 fp32 的框逐类比较，7946 个框中对上 98.6%（两份 int8 都是），图注对上 96.8%～97.3%，是各类中最低的。
+- 6 核 i5-8500 上，版面模型每页推理 1.05 秒（fp32）、0.66 秒（int8）。
 - 6 核 i5-8500 上，公式检测模型每页推理 1.11 秒（fp32）、0.56 秒（int8）。
-- 回归语料上，公式检测模型 int8（滑动平均）和 fp32 相比，约 2.1 万个单元中有 6 个跳过与否不同。
+- 回归语料上，int8 和 fp32 相比，约 2.1 万个单元中跳过与否不同的：公式检测模型（滑动平均）6 个，版面模型 6 个。
 
 ## 论文和文件来源
 
