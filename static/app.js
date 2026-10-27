@@ -1761,8 +1761,10 @@ function renderModel(kind, m, { keepForm = false } = {}) {
   const file = el("file");
   file.replaceChildren();
   file.classList.toggle("is-ok", m.file.exists);
+  // 只显示文件名，完整路径放在悬停提示里；默认位置在高级设置的路径框里也能看到
   const where = document.createElement("code");
-  where.textContent = m.resolved;
+  where.textContent = m.resolved.split(/[\\/]/).pop();
+  where.title = m.resolved;
   if (m.file.exists) {
     file.append(where, `（${formatMB(m.file.size)}）`);
   } else {
@@ -1786,6 +1788,8 @@ function renderModel(kind, m, { keepForm = false } = {}) {
         el(name).dataset.auto = String(m.auto[name]);
       }
     }
+    // 高级设置里有改过的值时展开，免得收起来看不到
+    if (m.path || m.workers || m.threads) el("advanced").open = true;
     const select = el("source");
     if (!select.options.length) {
       for (const source of m.sources) select.add(new Option(source.label, source.id));
@@ -1805,18 +1809,23 @@ function renderModel(kind, m, { keepForm = false } = {}) {
   }
   el("download").disabled = d.running;
   el("download").textContent = m.file.exists ? "重新下载" : "下载模型";
+  // 还没有模型文件时，下载是这页要做的第一步
+  el("download").classList.toggle("primary", !m.file.exists);
   if (m.int8) renderInt8(kind, m);
   clearTimeout(modelPolls[kind]);
   const busyNow = d.running || Boolean(m.int8 && m.int8.state.running);
   if (busyNow) modelPolls[kind] = setTimeout(() => loadModel(kind, { keepForm: true }), 1000);
 }
 
-// 模型的 int8 版：生成了没有、正在生成到哪一页、没装 onnx 时怎么装
+// 模型的 int8 版：生成了没有、正在生成到哪一页、没装 onnx 时怎么装。这一行标着「int8 模型」，文字里不再重复
 function renderInt8(kind, m) {
   const q = m.int8;
   const status = $(`${kind}-int8-status`);
   const btn = $(`${kind}-quantize`);
-  status.classList.toggle("warn", Boolean(q.state.error) || !q.available);
+  const ready = q.file.exists && !q.state.running && !q.state.error;
+  status.closest("dd").classList.toggle("is-ok", ready);
+  // int8 是可选的：只有生成失败标红，没装 onnx 照常显示
+  status.classList.toggle("warn", Boolean(q.state.error));
   btn.textContent = q.file.exists ? "重新生成" : "生成 int8 模型";
   btn.disabled = q.state.running || !q.available || !m.file.exists;
   if (q.state.running) {
@@ -1825,20 +1834,16 @@ function renderInt8(kind, m) {
       : "生成中：量化并核对结果…";
   } else if (q.state.error) {
     status.textContent = `生成失败：${q.state.error}`;
-  } else if (!q.available) {
-    status.textContent = `生成 int8 模型要先安装 onnx：在项目目录运行 ${q.install_hint}，装好后重启服务。`;
+  } else if (!q.file.exists && !m.file.exists) {
+    status.textContent = "先下载模型，才能生成。";
   } else if (q.file.exists) {
-    if (m.in_use !== q.path) {
-      status.textContent = `int8 模型已生成（${formatMB(q.file.size)}），选了 fp32，翻译时不用`;
-    } else {
-      status.textContent = m.enabled
-        ? `int8 模型已生成（${formatMB(q.file.size)}），翻译时使用`
-        : `int8 模型已生成（${formatMB(q.file.size)}），开启模型后翻译时使用`;
-    }
-  } else if (!m.file.exists) {
-    status.textContent = "先下载模型，才能生成 int8 模型。";
+    const size = formatMB(q.file.size);
+    if (m.in_use !== q.path) status.textContent = `已生成（${size}），选了 fp32，翻译时不用`;
+    else status.textContent = m.enabled ? `已生成（${size}），翻译时使用` : `已生成（${size}），开启模型后翻译时使用`;
+  } else if (!q.available) {
+    status.textContent = `要先安装 onnx：在项目目录运行 ${q.install_hint}，装好后重启服务。`;
   } else {
-    status.textContent = "还没有生成 int8 模型，翻译时用 fp32。生成约需三分钟，用翻译过的 PDF 抽页校准。";
+    status.textContent = "未生成，翻译时用 fp32。生成约需三分钟，用翻译过的 PDF 抽页校准。";
   }
 }
 

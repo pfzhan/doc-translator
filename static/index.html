@@ -304,31 +304,18 @@
       <p class="desc">模型框成图和行间公式的文字保留原文：图表里的图例、没有图注的图、Word 排的公式不会再被翻译。每页在 CPU 上推理一秒多。模型使用 AGPL-3.0 许可，约 75 MB。</p>
       <div id="layout-test-result" class="test-result" hidden></div>
 
+      <!-- 左栏是模型本身：装好没有、下载、生成 int8，点了就生效，不用保存 -->
       <dl class="layout-status">
         <dt>运行环境</dt>
         <dd id="layout-runtime">—</dd>
         <dt>模型文件</dt>
         <dd id="layout-file">—</dd>
+        <dt>int8 模型</dt>
+        <dd class="int8-row">
+          <span id="layout-int8-status" aria-live="polite"></span>
+          <button type="button" class="btn sm" id="layout-quantize">生成 int8 模型</button>
+        </dd>
       </dl>
-    </div>
-
-    <div class="layout-settings">
-      <label class="check"><input type="checkbox" name="enabled" id="layout-enabled"> 翻译 PDF 时使用版面模型</label>
-
-      <label class="field">模型文件路径
-        <input name="path" id="layout-path" spellcheck="false">
-      </label>
-
-      <label class="field">精度
-        <select name="precision" id="layout-precision">
-          <option value="int8">int8（默认）：推理快三成左右，分析结果和 fp32 基本相同</option>
-          <option value="fp32">fp32：原始模型</option>
-        </select>
-      </label>
-      <div class="int8-row">
-        <p class="hint" id="layout-int8-status" aria-live="polite"></p>
-        <button type="button" class="btn" id="layout-quantize">生成 int8 模型</button>
-      </div>
 
       <div class="field-row layout-download">
         <label class="field">下载来源
@@ -337,6 +324,25 @@
         <button type="button" class="btn" id="layout-download">下载模型</button>
       </div>
       <p class="hint download-status" id="layout-download-status" aria-live="polite"></p>
+    </div>
+
+    <!-- 右栏是翻译时怎么用，改了要保存 -->
+    <div class="layout-settings">
+      <label class="check"><input type="checkbox" name="enabled" id="layout-enabled"> 翻译 PDF 时使用版面模型</label>
+
+      <label class="field">精度
+        <select name="precision" id="layout-precision">
+          <option value="int8">int8（默认）：推理快三成左右</option>
+          <option value="fp32">fp32：原始模型</option>
+        </select>
+      </label>
+
+      <details class="model-advanced" id="layout-advanced">
+        <summary>高级设置</summary>
+        <label class="field">模型文件路径
+          <input name="path" id="layout-path" spellcheck="false">
+        </label>
+      </details>
 
       <div class="actions">
         <button type="submit" class="btn primary" id="layout-save">保存</button>
@@ -354,20 +360,30 @@
       <p class="desc">模型框出的行内公式整体保留原样，斜体变量、P(y = 1) 这类式子在译文里保持完整。正文用 Times 等字体排的论文提升最明显。分析版面时每页多花一秒左右（6 核 CPU）。约 80 MB，模型卡标的是 MIT 许可，文件元数据标的是 AGPL-3.0。</p>
       <div id="formula-test-result" class="test-result" hidden></div>
 
+      <!-- 左栏是模型本身：装好没有、下载、生成 int8，点了就生效，不用保存 -->
       <dl class="layout-status">
         <dt>运行环境</dt>
         <dd id="formula-runtime">—</dd>
         <dt>模型文件</dt>
         <dd id="formula-file">—</dd>
+        <dt>int8 模型</dt>
+        <dd class="int8-row">
+          <span id="formula-int8-status" aria-live="polite"></span>
+          <button type="button" class="btn sm" id="formula-quantize">生成 int8 模型</button>
+        </dd>
       </dl>
+
+      <div class="field-row layout-download">
+        <label class="field">下载来源
+          <select id="formula-source"></select>
+        </label>
+        <button type="button" class="btn" id="formula-download">下载模型</button>
+      </div>
+      <p class="hint download-status" id="formula-download-status" aria-live="polite"></p>
     </div>
 
     <div class="layout-settings">
       <label class="check"><input type="checkbox" name="enabled" id="formula-enabled"> 翻译 PDF 时使用公式检测模型</label>
-
-      <label class="field">模型文件路径
-        <input name="path" id="formula-path" spellcheck="false">
-      </label>
 
       <label class="field">输入尺寸
         <select name="size" id="formula-size">
@@ -382,28 +398,22 @@
           <option value="fp32">fp32：原始模型</option>
         </select>
       </label>
-      <div class="int8-row">
-        <p class="hint" id="formula-int8-status" aria-live="polite"></p>
-        <button type="button" class="btn" id="formula-quantize">生成 int8 模型</button>
-      </div>
 
-      <div class="field-row">
-        <label class="field">同时推理的页数
-          <input name="workers" id="formula-workers" type="number" min="0" max="8">
+      <details class="model-advanced" id="formula-advanced">
+        <summary>高级设置</summary>
+        <label class="field">模型文件路径
+          <input name="path" id="formula-path" spellcheck="false">
         </label>
-        <label class="field">每页推理线程数
-          <input name="threads" id="formula-threads" type="number" min="0" max="64">
-        </label>
-      </div>
-      <p class="hint">默认值按 CPU 核数算出，清空后恢复默认。这两项只影响分析版面的速度，分析结果不变。</p>
-
-      <div class="field-row layout-download">
-        <label class="field">下载来源
-          <select id="formula-source"></select>
-        </label>
-        <button type="button" class="btn" id="formula-download">下载模型</button>
-      </div>
-      <p class="hint download-status" id="formula-download-status" aria-live="polite"></p>
+        <div class="field-row">
+          <label class="field">同时推理的页数
+            <input name="workers" id="formula-workers" type="number" min="0" max="8">
+          </label>
+          <label class="field">每页推理线程数
+            <input name="threads" id="formula-threads" type="number" min="0" max="64">
+          </label>
+        </div>
+        <p class="hint">默认值按 CPU 核数算出，清空后恢复默认。这两项只影响分析版面的速度，分析结果不变。</p>
+      </details>
 
       <div class="actions">
         <button type="submit" class="btn primary" id="formula-save">保存</button>

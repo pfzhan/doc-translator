@@ -499,20 +499,26 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-
   background: var(--surface-2); color: var(--text); font-size: 14px; font-weight: 500;
 }
 .svc-detail .layout-settings > label.check:first-child:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
-.layout-info .layout-status { margin-bottom: 0; }
 .layout-status { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 18px 0; font-size: 13.5px; }
 .layout-status dt { color: var(--text-2); font-weight: 500; }
 .layout-status dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .layout-status code { padding: 0; background: none; font-size: 12.5px; word-break: break-all; }
 .layout-status dd.is-ok::before { content: "✓"; margin-right: 6px; color: var(--ok); font-weight: 700; }
 .layout-status .warn { color: var(--error); }
-.layout-download { margin-top: 0; }
-/* int8 模型的状态和生成按钮：状态在左，按钮靠右 */
-.int8-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: -6px 0 14px; }
-.int8-row .hint { margin: 0; }
-.int8-row .hint.warn { color: var(--error); }
-.int8-row .btn { flex: none; }
+/* 状态列表下面是下载：选来源、点下载 */
+.layout-download { margin-top: 4px; padding-top: 18px; border-top: 1px solid var(--border); }
+/* int8 模型那一行：状态在左，生成按钮靠右 */
+.layout-status dd.int8-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.layout-status dd.int8-row::before { flex: none; margin-right: -6px; }
+.int8-row span { flex: 1; min-width: 0; color: var(--text-2); }
+.int8-row span.warn { color: var(--error); }
+/* 按钮比文字高，上下收进去，这一行和别的行一样高 */
+.int8-row .btn { flex: none; margin: -5px 0; }
 .layout-download .field { margin-bottom: 0; }
+/* 不常改的设置收起来，改过时自动展开（见 renderModel） */
+.model-advanced { margin: 4px 0 18px; }
+.model-advanced[open] summary { margin-bottom: 14px; }
+.model-advanced .hint { margin-top: -6px; }
 .layout-download .btn { height: 38px; }
 /* 两个模型各占一个标签，标签上标出开没开 */
 .model-tabs { display: flex; width: fit-content; max-width: 100%; margin-bottom: 16px; }
@@ -549,7 +555,7 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-
   .form-card { grid-template-columns: minmax(0, 1fr); gap: 20px; }
   .layout-card { grid-template-columns: minmax(0, 1fr); }
   .layout-info { padding-right: 0; }
-  .layout-settings { padding: 18px 0 0; border-left: 0; }
+  .layout-settings { margin-top: 6px; padding: 18px 0 0; border-left: 0; border-top: 1px solid var(--border); }
   /* 窄屏：目录收起，对照改为上下排列 */
   .reader-main { grid-template-columns: minmax(0, 1fr); }
   .outline { display: none; }
