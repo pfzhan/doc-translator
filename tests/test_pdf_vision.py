@@ -198,9 +198,9 @@ def test_formula_detector_needs_an_inline_formula_class(monkeypatch, tmp_path):
     assert formula_detector(_doc()) is None
     assert formula_detector(_doc(), FormulaModel(str(tmp_path / "missing.onnx"))) is None
     doc = _doc()
-    monkeypatch.setattr(pdf_vision, "_usable_session", lambda path, *args, **kwargs: FakeSession(doc[0].rect, []))
+    monkeypatch.setattr(pdf_vision, "_usable_sessions", lambda path, *args, **kwargs: [FakeSession(doc[0].rect, [])])
     assert formula_detector(doc, FormulaModel("layout.onnx")) is None
-    monkeypatch.setattr(pdf_vision, "_usable_session", lambda path, *args, **kwargs: FormulaSession(doc[0].rect, []))
+    monkeypatch.setattr(pdf_vision, "_usable_sessions", lambda path, *args, **kwargs: [FormulaSession(doc[0].rect, [])])
     assert isinstance(formula_detector(doc, FormulaModel("mfd.onnx")), FormulaDetector)
 
 
@@ -230,30 +230,29 @@ def test_formula_inference_splits_the_cores_between_two_pages(monkeypatch):
     seen = []
     doc = _doc()
 
-    def usable(path, threads=0, spin=True, copy=0):
-        seen.append((threads, spin, copy))
-        return FormulaSession(doc[0].rect, [])
+    def usable(path, threads=0, spin=True, count=1):
+        seen.append((threads, spin, count))
+        return [FormulaSession(doc[0].rect, []) for _ in range(count)]
 
-    monkeypatch.setattr(pdf_vision, "_usable_session", usable)
+    monkeypatch.setattr(pdf_vision, "_usable_sessions", usable)
     monkeypatch.setattr(pdf_vision.os, "cpu_count", lambda: 6)
     assert len(formula_detector(doc, FormulaModel("mfd.onnx")).sessions) == 2
-    assert seen == [(3, False, 0), (3, False, 1)]
+    assert seen == [(3, False, 2)]
     seen.clear()
     assert len(formula_detector(doc, FormulaModel("mfd.onnx", workers=3, threads=1)).sessions) == 3
-    assert seen == [(1, False, 0), (1, False, 1), (1, False, 2)]
+    assert seen == [(1, False, 3)]
     seen.clear()
     monkeypatch.setattr(pdf_vision.os, "cpu_count", lambda: 2)
     assert len(formula_detector(doc, FormulaModel("mfd.onnx")).sessions) == 1
-    assert seen == [(2, False, 0)]
+    assert seen == [(2, False, 1)]
 
 
 def test_formula_detector_uses_the_copies_that_load(monkeypatch):
     """后面几份模型加载不了时用已经加载好的，第一份都加载不了才只用规则"""
     doc = _doc()
-    monkeypatch.setattr(pdf_vision, "_usable_session",
-                        lambda path, threads=0, spin=True, copy=0: FormulaSession(doc[0].rect, []) if copy < 1 else None)
+    monkeypatch.setattr(pdf_vision, "_usable_sessions", lambda path, *args, **kwargs: [FormulaSession(doc[0].rect, [])])
     assert len(formula_detector(doc, FormulaModel("mfd.onnx", workers=3)).sessions) == 1
-    monkeypatch.setattr(pdf_vision, "_usable_session", lambda path, *args, **kwargs: None)
+    monkeypatch.setattr(pdf_vision, "_usable_sessions", lambda path, *args, **kwargs: [])
     assert formula_detector(doc, FormulaModel("mfd.onnx", workers=3)) is None
 
 
@@ -300,26 +299,39 @@ def test_formula_sessions_do_not_spin_while_waiting(monkeypatch, tmp_path):
     import onnxruntime
 
     made = []
+    broken = set()
 
     class Session:
         def __init__(self, path, options, providers):
+            if len(made) in broken:
+                raise RuntimeError("out of memory")
             try:
                 made.append(options.get_session_config_entry("session.intra_op.allow_spinning"))
             except RuntimeError:  # 没设过，onnxruntime 默认空转
                 made.append(None)
 
     monkeypatch.setattr(onnxruntime, "InferenceSession", Session)
-    pdf_vision.load_session.cache_clear()
+    pdf_vision.clear_sessions()
     try:
-        model = tmp_path / "mfd.onnx"
-        model.write_bytes(b"x")
-        first = pdf_vision._usable_session(str(model), 3, spin=False, copy=0)
-        assert pdf_vision._usable_session(str(model), 3, spin=False, copy=1) is not first
-        assert pdf_vision._usable_session(str(model), 3, spin=False, copy=0) is first
+        model = str(tmp_path / "mfd.onnx")
+        first, second = pdf_vision.load_sessions(model, 3, spin=False, count=2)
+        assert first is not second and made == ["0", "0"]
+        # 加载过的留给后面的任务
+        assert pdf_vision.load_sessions(model, 3, spin=False, count=2) == [first, second]
+        assert pdf_vision.load_sessions(model, 3, spin=False) == [first]
+        # 第三份加载不了，用已经有的两份
+        broken.add(2)
+        assert pdf_vision.load_sessions(model, 3, spin=False, count=3) == [first, second]
+        # 线程设置改了，换成新的
+        broken.clear()
+        assert first not in pdf_vision.load_sessions(model, 2, spin=False)
         pdf_vision.load_session("layout.onnx")
-        assert made == ["0", "0", None]
+        assert made == ["0", "0", "0", None]
+        # 重新生成模型以后加载新文件
+        pdf_vision.clear_sessions()
+        assert pdf_vision.load_session("layout.onnx") is not None and len(made) == 5
     finally:
-        pdf_vision.load_session.cache_clear()
+        pdf_vision.clear_sessions()
 
 
 def test_formula_pages_also_keep_the_display_formula_boxes():

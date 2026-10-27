@@ -188,8 +188,7 @@ class Quantizer:
             )
             _check(src, out, images[:4], spec)
             out.replace(dest)
-        # 重新生成时文件名不变，缓存里的旧会话要扔掉，下次翻译加载新文件
-        pdf_vision.load_session.cache_clear()
+        pdf_vision.clear_sessions()
 
 
 def _check(src: Path, quantized: Path, images: list[np.ndarray], spec: QuantSpec) -> None:

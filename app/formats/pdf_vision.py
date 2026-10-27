@@ -14,11 +14,11 @@
 from __future__ import annotations
 
 import ast
-import functools
 import hashlib
 import json
 import os
 import tempfile
+import threading
 import re
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
@@ -74,10 +74,10 @@ class Region:
 
 def layout_detector(doc: pymupdf.Document, model_path: str = "", boxes: ModelBoxes | None = None) -> LayoutDetector:
     """model_path 为空表示没开模型。boxes 给了时读回上次存下的框，推了新的页再存回去。"""
-    session = _usable_session(model_path)
-    if session is None:
+    sessions = _usable_sessions(model_path)
+    if not sessions:
         return HeuristicLayout()
-    layout = ModelLayout(doc, session)
+    layout = ModelLayout(doc, sessions[0])
     if boxes is not None:
         layout.keep_in(boxes, model_path)
     return layout
@@ -146,12 +146,42 @@ def _runtime_version() -> str:
     return onnxruntime.__version__
 
 
-@functools.lru_cache(maxsize=6)
-def load_session(path: str, threads: int = 0, spin: bool = True, copy: int = 0) -> Any:
-    """加载模型。threads 是推理用的线程数，0 表示 onnxruntime 自己定（用满所有核）。
-    spin 为假时推理线程等活不空转，把核让给同时在跑的其他线程。copy 区分同一个模型的几份，
-    几页同时推理时每页用一份（见 FormulaDetector.pages）。
-    没装 onnxruntime 时抛 ImportError，文件不对时抛 onnxruntime 的异常。"""
+# 加载过的模型会话，按模型文件记：（线程数, 空转）和几份会话。线程设置改了就换掉，旧的不留
+_SESSIONS: dict[str, tuple[tuple[int, bool], list[Any]]] = {}
+_SESSIONS_LOCK = threading.Lock()
+
+
+def load_sessions(path: str, threads: int = 0, spin: bool = True, count: int = 1) -> list[Any]:
+    """同一个模型的 count 份会话，几页同时推理时每页用一份（见 FormulaDetector.pages）。
+    加载好的留给后面的任务。后面几份加载不了时返回已经有的几份；第一份就加载不了时抛出异常，
+    没装 onnxruntime 时是 ImportError，文件不对时是 onnxruntime 的异常。"""
+    with _SESSIONS_LOCK:
+        setting, sessions = _SESSIONS.get(path, ((threads, spin), []))
+        if setting != (threads, spin):
+            sessions = []
+        try:
+            while len(sessions) < count:
+                sessions.append(_new_session(path, threads, spin))
+        except Exception:
+            if not sessions:
+                raise
+        _SESSIONS[path] = (threads, spin), sessions
+        return sessions[:count]
+
+
+def load_session(path: str, threads: int = 0, spin: bool = True) -> Any:
+    return load_sessions(path, threads, spin)[0]
+
+
+def clear_sessions() -> None:
+    """重新生成模型时文件名不变，留着的会话要扔掉，下次加载新文件。正在推理的任务照用手上那份。"""
+    with _SESSIONS_LOCK:
+        _SESSIONS.clear()
+
+
+def _new_session(path: str, threads: int, spin: bool) -> Any:
+    """threads 是推理用的线程数，0 表示 onnxruntime 自己定（用满所有核）。
+    spin 为假时推理线程等活不空转，把核让给同时在跑的其他线程。"""
     import onnxruntime
 
     options = onnxruntime.SessionOptions()
@@ -161,13 +191,14 @@ def load_session(path: str, threads: int = 0, spin: bool = True, copy: int = 0) 
     return onnxruntime.InferenceSession(path, options, providers=["CPUExecutionProvider"])
 
 
-def _usable_session(path: str, threads: int = 0, spin: bool = True, copy: int = 0) -> Any | None:
+def _usable_sessions(path: str, threads: int = 0, spin: bool = True, count: int = 1) -> list[Any]:
+    """能用的几份会话。没开模型、模型用不了时是空的。"""
     if not path or not Path(path).is_file():
-        return None
+        return []
     try:
-        return load_session(path, threads, spin, copy)
+        return load_sessions(path, threads, spin, count)
     except Exception:  # noqa: BLE001  翻译不因为模型出问题而失败，退回规则
-        return None
+        return []
 
 
 class ModelLayout:
@@ -364,12 +395,7 @@ def formula_detector(
     if isinstance(saved, list) and len(saved) == doc.page_count:
         return SavedFormulas(saved)
     workers, threads = formula_parallel(model.workers, model.threads)
-    sessions = []
-    for copy in range(workers):
-        session = _usable_session(model.path, threads, spin=False, copy=copy)
-        if session is None:
-            break
-        sessions.append(session)
+    sessions = _usable_sessions(model.path, threads, spin=False, count=workers)
     if not sessions:
         return None
     try:
@@ -399,7 +425,7 @@ class SavedFormulas(FormulaDetector):
 
 def formula_parallel(workers: int = 0, threads: int = 0) -> tuple[int, int]:
     """公式检测模型同时推理几页、每页用几个线程。0 表示按核数定：4 核以上两页同时推理，核平分给这两页。
-    推理线程等活不空转（见 load_session），线程总数和核数一样多也不会挤掉读页面的主线程。
+    推理线程等活不空转（见 _new_session），线程总数和核数一样多也不会挤掉读页面的主线程。
     6 核上 24 页的论文分析（各跑 6 次取中位数）：一页 4 个线程 44 s，关掉空转 37 s，两页各 3 个线程 35 s。"""
     cores = os.cpu_count() or 1
     workers = workers or (2 if cores >= 4 else 1)

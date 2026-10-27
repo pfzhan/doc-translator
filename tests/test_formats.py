@@ -7837,8 +7837,8 @@ def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path, monkeyp
     for name in ("mfd.onnx", "layout.onnx"):
         (tmp_path / name).write_bytes(b"x")
     shown = pymupdf.open(src)[0]
-    monkeypatch.setattr(pdf_vision, "_usable_session",
-                        lambda path, *args, **kwargs: Formula(shown) if path.endswith("mfd.onnx") else Layout())
+    monkeypatch.setattr(pdf_vision, "_usable_sessions",
+                        lambda path, *args, **kwargs: [Formula(shown) if path.endswith("mfd.onnx") else Layout()])
 
     class R:
         def report_stage(self, *args, **kwargs):
