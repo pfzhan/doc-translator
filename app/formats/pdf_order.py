@@ -5,12 +5,14 @@
 
 擦除之前，在每串要重写的字的位置放一个标记（/DTrN MP，什么也不画）。标记放在两个文本对象之间，
 或者文本对象里一个换行定位操作（Td、TD、Tm、T*、'、"）前面：在那里先结束文本对象，放标记，
-再开始一个文本对象，用 Tm 恢复当时的文本行矩阵，后面的字位置不变。擦除时 MuPDF 重写内容流，
+再开始一个文本对象，用 Tm 恢复当时的文本行矩阵，后面的字位置不变。字在 Form 里的段落（插图里的
+标签）在顶层流里找不到字，标记放在画这个 Form 的 Do 后面。擦除时 MuPDF 重写内容流，
 标记留在原处。整页写完后在标记处把原页的流切开，把这些段落写出的流插进去。
 
 插进去的流套一层：当时的 CTM 取逆，回到页面坐标；文字状态、颜色、透明度复位。
-下列情况这一串不挪，照旧画在最后：
-- 后面还有不透明的填充、图片、Form 压在写出的位置上，挪了会被盖住；
+写出的位置按这一段自己写出的字形轮廓算。下列情况这一串不挪，照旧画在最后：
+- 后面还有不透明的填充、图片、Form、渐变压在写出的位置上，挪了会被盖住。画的范围和当时
+  裁剪路径的外接框取交集；
 - 当时的裁剪不是矩形，或者没有盖住写出的位置。
 自己解析出的字形数和 MuPDF 的对不上、字体编码认不出、页面旋转过时整页不挪。
 """
@@ -33,7 +35,7 @@ _FILLS = {b"f", b"F", b"f*", b"B", b"B*", b"b", b"b*"}
 _PATH_END = _FILLS | {b"S", b"s", b"n"}
 # 查字形归属时行框按纵坐标分桶的高度（点）
 _ROW = 10
-# 比这细的填充是表格线、分数线，压不住字
+# 比这细的填充、图片是表格线、分数线，压不住字
 _THIN = 1.5
 _GS_NAME = "DTrGS"
 _GS = "<< /Type /ExtGState /CA 1 /ca 1 /BM /Normal /SMask /None /AIS false /OP false /op false /OPM 0 >>"
@@ -179,6 +181,7 @@ class _Op:
     line: pymupdf.Matrix | None = None  # 执行前的文本行矩阵
     ctm: pymupdf.Matrix | None = None
     clips: list[pymupdf.Rect] | None = None  # 页面坐标；None 表示有不是矩形的裁剪
+    bounds: pymupdf.Rect | None = None  # 各层裁剪路径外接框的交集，页面坐标
 
 
 @dataclass
@@ -210,7 +213,6 @@ class ReadingOrder:
         self.streams: dict[int, list[int]] = {}
         self.rects: dict[int, list[pymupdf.Rect]] = {}
         self.base: list[int] = []
-        self._spans: list[pymupdf.Rect] | None = None
         if not enabled or page.rotation:
             return
         try:
@@ -230,19 +232,23 @@ class ReadingOrder:
                 widths[name] = 1
         return widths
 
-    def _xobjects(self) -> dict[str, pymupdf.Rect | None]:
-        """XObject 资源名 → 在用户空间里画的范围（图片是单位方块）。"""
-        out: dict[str, pymupdf.Rect | None] = {}
+    def _xobjects(self) -> dict[str, tuple[pymupdf.Rect, bool]]:
+        """页面这一层的 XObject 资源名 → 在用户空间里画的范围（图片是单位方块）、是不是 Form。
+        Form 里面的资源也会列出来，名字可能和页面这一层的重复，不算。"""
+        out: dict[str, tuple[pymupdf.Rect, bool]] = {}
         for img in self.page.get_images(full=True):
-            out[img[7]] = pymupdf.Rect(0, 0, 1, 1)
-        for xref, name, _invoker, bbox in self.page.get_xobjects():
+            if img[9] == 0:
+                out[img[7]] = (pymupdf.Rect(0, 0, 1, 1), False)
+        for xref, name, invoker, bbox in self.page.get_xobjects():
+            if invoker != 0:
+                continue
             rect = pymupdf.Rect(bbox)
             kind, value = self.doc.xref_get_key(xref, "Matrix")
             if kind == "array":
                 values = _numbers(value.encode())
                 if len(values) == 6:
                     rect = rect * pymupdf.Matrix(*values)
-            out[name] = rect
+            out[name] = (rect, True)
         return out
 
     def _walk(self, raw: bytes, strict: bool = True) -> list[_Op] | None:
@@ -253,9 +259,10 @@ class ReadingOrder:
         to_page = self.page.transformation_matrix
         whole = self.page.rect
         ops: list[_Op] = []
-        # 图形状态栈：CTM、裁剪、TL、Tr
+        # 图形状态栈：CTM、裁剪、裁剪的外接框、TL、Tr
         ctm = pymupdf.Matrix(1, 0, 0, 1, 0, 0)
         clips: list[pymupdf.Rect] | None = []
+        bounds = pymupdf.Rect(whole)
         leading, render = 0.0, 0
         stack: list[tuple] = []
         group: int | None = None
@@ -269,17 +276,25 @@ class ReadingOrder:
         path_parts = 0
         clipping = False
         self.paints: list[tuple[int, pymupdf.Rect]] = []
+        self.forms: list[tuple[int, pymupdf.Rect]] = []  # 画 Form 的 Do 和画的范围
         self.unsplittable: set[int] = set()
+
+        def paint(area: pymupdf.Rect) -> None:
+            # 裁剪外面画不出来；裁空了、太细的不算
+            area = area & bounds
+            if not area.is_empty and min(area.width, area.height) >= _THIN:
+                self.paints.append((len(ops) - 1, area))
+
         for name, start, end in _operators(raw):
             operands = raw[start:end - len(name)]
             op = _Op(name, start, group, line=line if group is not None else None, ctm=ctm,
-                     clips=None if clips is None else list(clips))
+                     clips=None if clips is None else list(clips), bounds=bounds)
             ops.append(op)
             if name == b"q":
-                stack.append((ctm, clips, leading, render))
+                stack.append((ctm, clips, bounds, leading, render))
             elif name == b"Q":
                 if stack:
-                    ctm, clips, leading, render = stack.pop()
+                    ctm, clips, bounds, leading, render = stack.pop()
             elif name == b"cm":
                 values = _numbers(operands)
                 if len(values) != 6:
@@ -351,9 +366,9 @@ class ReadingOrder:
                 clipping = True
             elif name in _PATH_END:
                 if name in _FILLS and path is not None:
-                    painted = pymupdf.Rect(path) * ctm * to_page
-                    if min(painted.width, painted.height) >= _THIN:
-                        self.paints.append((len(ops) - 1, painted))
+                    paint(pymupdf.Rect(path) * ctm * to_page)
+                if clipping and path is not None:
+                    bounds = bounds & (pymupdf.Rect(path) * ctm * to_page)
                 if clipping and clips is not None:
                     axis = abs(ctm.b) < 1e-9 and abs(ctm.c) < 1e-9 or abs(ctm.a) < 1e-9 and abs(ctm.d) < 1e-9
                     if path_rect is None:
@@ -365,12 +380,15 @@ class ReadingOrder:
                 path, path_rect, corners, path_parts, clipping = None, None, [], 0, False
             elif name == b"Do":
                 found = re.findall(rb"/([^\s/\[\]<>()]+)", operands)
-                area = xobjects.get(found[0].decode("latin1")) if found else None
-                self.paints.append((len(ops) - 1, area * ctm * to_page if area is not None else whole))
+                xobject = xobjects.get(found[0].decode("latin1")) if found else None
+                area = xobject[0] * ctm * to_page if xobject is not None else whole
+                paint(area)
+                if xobject is not None and xobject[1]:
+                    self.forms.append((len(ops) - 1, area & bounds))
             elif name == b"EI":
-                self.paints.append((len(ops) - 1, pymupdf.Rect(0, 0, 1, 1) * ctm * to_page))
+                paint(pymupdf.Rect(0, 0, 1, 1) * ctm * to_page)
             elif name == b"sh":
-                self.paints.append((len(ops) - 1, whole))
+                paint(whole)
         return ops
 
     def _mark(self, moved: list) -> None:
@@ -394,10 +412,14 @@ class ReadingOrder:
                 for row in range(int(area.y0 // _ROW), int(area.y1 // _ROW) + 1):
                     rows.setdefault(row, []).append((area, id(block)))
 
-        def owner(x: float, y: float) -> int | None:
+        def owner(x: float, y: float, bounds: pymupdf.Rect) -> int | None:
             for area, key in rows.get(int(y // _ROW), ()):
                 if area.x0 <= x <= area.x1 and area.y0 <= y <= area.y1:
-                    return key
+                    # 起笔点在裁剪外面超过一行高的字原页上看不见，抽取时也不算，不是这一段的字
+                    pad = area.height
+                    if bounds.x0 - pad <= x <= bounds.x1 + pad and bounds.y0 - pad <= y <= bounds.y1 + pad:
+                        return key
+                    return None
             return None
 
         # 按流的顺序排成一串字：(操作符序号, 归属)
@@ -409,7 +431,7 @@ class ReadingOrder:
             if op.name == b"BT":
                 points, taken = next(cursor), 0
             for x, y in points[taken:taken + op.glyphs]:
-                glyphs.append((index, owner(x, y)))
+                glyphs.append((index, owner(x, y, op.bounds)))
             taken += op.glyphs
 
         def between(left: int, right: int) -> int | None:
@@ -455,6 +477,18 @@ class ReadingOrder:
                 self._add(ops, at, len(raw), run)
                 assigned.update(run)
             i = j + 1
+        # 顶层流里没有字的段落，字在 Form 里：标记放在最后一个盖住段落中心的 Form 的 Do 后面
+        in_stream = {key for _, key in glyphs}
+        after: dict[int, list[int]] = {}
+        for block in moved:
+            if id(block) in in_stream:
+                continue
+            middle = (block.rect.tl + block.rect.br) / 2
+            hosts = [index for index, area in self.forms if area.contains(middle)]
+            if hosts:
+                after.setdefault(hosts[-1] + 1, []).append(id(block))
+        for at, keys in after.items():
+            self._add(ops, at, len(raw), keys)
         if self.marks:
             self._write(raw)
 
@@ -463,7 +497,8 @@ class ReadingOrder:
             self.marks.append(_Mark(len(self.marks), end, False, None, blocks))
         else:
             op = ops[at]
-            self.marks.append(_Mark(len(self.marks), op.start, op.name != b"BT", op.line, blocks))
+            inside = op.group is not None and op.name != b"BT"
+            self.marks.append(_Mark(len(self.marks), op.start, inside, op.line, blocks))
 
     def _write(self, raw: bytes) -> None:
         pieces, last = [], 0
@@ -502,22 +537,25 @@ class ReadingOrder:
 
     # ---- 整页写完：在标记处插回 ----
 
-    def _extent(self, rect: pymupdf.Rect) -> pymupdf.Rect:
-        """写入框里实际写出的字的范围。框按能写到的最远处给，比字大，拿它判断会不会被盖住太保守。"""
-        if self._spans is None:
-            self._spans = [pymupdf.Rect(span["bbox"]) for block in self.page.get_text("dict")["blocks"]
-                           if block.get("type") == 0 for line in block["lines"] for span in line["spans"]
-                           if span["text"].strip()]
-        found = pymupdf.Rect()
-        for span in self._spans:
-            middle = (span.tl + span.br) / 2
-            if rect.contains(middle):
-                found |= span
-        return found if not found.is_empty else rect
+    def _extent(self, key: int) -> list[pymupdf.Rect]:
+        """这一段写出的各个字的范围，按字形轮廓算。写入框按能写到的最远处给，比字大；按位置取
+        页面上的字又会混进别的段落。这里把页面内容流临时换成这一段的流来取。没写出字时退回写入框。"""
+        streams = self.streams.get(key)
+        if not streams:
+            return list(self.rects.get(key, []))
+        _kind, contents = self.doc.xref_get_key(self.page.xref, "Contents")
+        self.doc.xref_set_key(self.page.xref, "Contents", "[" + " ".join(f"{x} 0 R" for x in streams) + "]")
+        try:
+            text = self.page.get_text("dict", flags=pymupdf.TEXTFLAGS_DICT | pymupdf.TEXT_ACCURATE_BBOXES)
+        finally:
+            self.doc.xref_set_key(self.page.xref, "Contents", contents)
+        found = [pymupdf.Rect(span["bbox"]) for block in text["blocks"] if block.get("type") == 0
+                 for line in block["lines"] for span in line["spans"] if span["text"].strip()]
+        return found or list(self.rects.get(key, []))
 
     def _movable(self, key: int, cut: _Cut) -> bool:
         """这一段写出的字插到 cut 处不会被裁掉、不会被后面画的东西盖住。"""
-        rects = [self._extent(rect) for rect in self.rects.get(key, [])]
+        rects = self._extent(key)
         if not rects or cut.clips is None or abs(cut.ctm.a * cut.ctm.d - cut.ctm.b * cut.ctm.c) < 1e-9:
             return False
         for rect in rects:

@@ -94,3 +94,88 @@ def test_a_clip_drawn_as_four_lines_counts_as_a_rectangle(tmp_path):
     path = _source(tmp_path, clip + _BODY + b"Q\n")
     out = _render_translated(path, _blocks(path), ["甲乙丙", "丁戊己"], "zh-CN")
     assert _words(out) == ["Header", "line", "甲乙丙", "cell", "one", "two", "丁戊己"]
+
+
+def test_a_label_inside_a_figure_goes_right_after_the_figure(tmp_path):
+    """插图是一个 Form，标签的字在 Form 里，顶层流里放不了标记：译文插在画插图的 Do 后面，紧跟着插图读。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=400)
+    font = doc.get_new_xref()
+    doc.update_object(font, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    form = doc.get_new_xref()
+    doc.update_object(form, f"<< /Type /XObject /Subtype /Form /BBox [30 230 300 300] "
+                            f"/Resources << /Font << /F1 {font} 0 R >> >> >>")
+    doc.update_stream(form, b"BT /F1 10 Tf 40 280 Td (Figure) Tj 0 -40 Td (delta epsilon zeta) Tj ET\n")
+    doc.xref_set_key(page.xref, "Resources", f"<< /Font << /F1 {font} 0 R >> /XObject << /Fm0 {form} 0 R >> >>")
+    stream = doc.get_new_xref()
+    doc.update_object(stream, "<<>>")
+    doc.update_stream(stream, b"BT /F1 10 Tf 40 320 Td (alpha beta gamma) Tj ET\n"
+                              b"q /Fm0 Do Q\n"
+                              b"BT /F1 10 Tf 40 200 Td (cell one two) Tj ET\n")
+    doc.xref_set_key(page.xref, "Contents", f"{stream} 0 R")
+    path = tmp_path / "src.pdf"
+    doc.save(path)
+    out = _render_translated(path, _blocks(path), ["甲乙丙", "丁戊己"], "zh-CN")
+    assert _words(out) == ["甲乙丙", "Figure", "丁戊己", "cell", "one", "two"]
+
+
+def test_a_fill_counts_only_inside_its_clip(tmp_path):
+    """后面画的整页填充套着一个不是矩形的小裁剪，只画在裁剪里，压不到译文，照样插回原处。"""
+    clipped = b"q 300 20 m 350 20 l 330 60 l h W n 0.9 g 0 0 400 400 re f Q\n"
+    path = _source(tmp_path, _BODY, clipped)
+    out = _render_translated(path, _blocks(path), ["甲乙丙", "丁戊己"], "zh-CN")
+    assert _words(out) == ["Header", "line", "甲乙丙", "cell", "one", "two", "丁戊己"]
+
+
+def test_a_thin_image_over_the_text_does_not_cover_it(tmp_path):
+    """后面用 0.5 点高的内联图片画了一条线压在第一段上（分数线常这样画），压不住字，照样插回原处。"""
+    line = b"q 200 0 0 0.5 40 324 cm BI /W 1 /H 1 /BPC 8 /CS /G ID \x00 EI Q\n"
+    path = _source(tmp_path, _BODY, line)
+    out = _render_translated(path, _blocks(path), ["甲乙丙", "丁戊己"], "zh-CN")
+    assert _words(out) == ["Header", "line", "甲乙丙", "cell", "one", "two", "丁戊己"]
+
+
+def test_glyphs_cut_off_by_a_clip_do_not_belong_to_the_paragraph(tmp_path):
+    """前面有一组字落在第一段的位置上，但被裁剪挡在外面看不见：它们不算第一段的字，
+    标记不放进那组字的裁剪里，译文照样插回原处。"""
+    hidden = b"q 300 0 100 400 re W n BT /F1 10 Tf 40 320 Td (hidden words) Tj ET Q\n"
+    path = _source(tmp_path, hidden + _BODY)
+    out = _render_translated(path, _blocks(path), ["甲乙丙", "丁戊己"], "zh-CN")
+    assert _words(out) == ["Header", "line", "甲乙丙", "cell", "one", "two", "丁戊己"]
+
+
+def test_a_form_is_measured_by_its_own_box_not_a_nested_one_of_the_same_name(tmp_path):
+    """后面画的小插图 Fm0 不压字；它里面引用的另一个 Form 也叫 Fm0，范围是整页。
+    按页面这一层的 Fm0 算范围，译文照样插回原处。"""
+    doc = pymupdf.open()
+    page = doc.new_page(width=400, height=400)
+    font = doc.get_new_xref()
+    doc.update_object(font, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    inner = doc.get_new_xref()
+    doc.update_object(inner, "<< /Type /XObject /Subtype /Form /BBox [-400 -400 800 800] >>")
+    doc.update_stream(inner, b"0 0 1 1 re f\n")
+    outer = doc.get_new_xref()
+    doc.update_object(outer, f"<< /Type /XObject /Subtype /Form /BBox [300 20 380 60] "
+                             f"/Resources << /XObject << /Fm0 {inner} 0 R >> >> >>")
+    doc.update_stream(outer, b"q 1 0 0 1 320 30 cm /Fm0 Do Q\n")
+    doc.xref_set_key(page.xref, "Resources", f"<< /Font << /F1 {font} 0 R >> /XObject << /Fm0 {outer} 0 R >> >>")
+    stream = doc.get_new_xref()
+    doc.update_object(stream, "<<>>")
+    doc.update_stream(stream, _BODY + b"q /Fm0 Do Q\n")
+    doc.xref_set_key(page.xref, "Contents", f"{stream} 0 R")
+    path = tmp_path / "src.pdf"
+    doc.save(path)
+    out = _render_translated(path, _blocks(path), ["甲乙丙", "丁戊己"], "zh-CN")
+    assert _words(out) == ["Header", "line", "甲乙丙", "cell", "one", "two", "丁戊己"]
+
+
+def test_a_shifted_index_entry_still_goes_back_where_it_was(tmp_path, monkeypatch):
+    """索引条目往下挪过时按副本写，标记放在原块上，译文照样插回原处。"""
+    from dataclasses import replace
+
+    path = _source(tmp_path, _BODY)
+    blocks = _blocks(path)
+    first = blocks[0]
+    monkeypatch.setattr(pdf, "_index_reflow", lambda *_args, **_kwargs: {id(first): replace(first)})
+    out = _render_translated(path, blocks, ["甲乙丙", "丁戊己"], "zh-CN")
+    assert _words(out) == ["Header", "line", "甲乙丙", "cell", "one", "two", "丁戊己"]

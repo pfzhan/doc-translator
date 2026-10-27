@@ -9378,7 +9378,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         def write_one(
             block: TextBlock, text: str, rect: pymupdf.Rect, centered: bool,
             formulas: list[dict] | None = None, justify_last: bool = False,
-            x_cap: float | None = None,
+            # source：block 是挪过位置的副本（索引条目）时的原块，阅读顺序的标记放在原块上
+            x_cap: float | None = None, source: TextBlock | None = None,
         ) -> None:
             rect = _fit_page_margins(block, rect, same_page, bounds.height, cjk)
             before = order.snapshot()
@@ -9425,7 +9426,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 _extend_leader(page, block, block.leader)
             # 右扩、绕排时字会写出框外，按能写到的最右边算
             reach = pymupdf.Rect(rect.x0, rect.y0, max(rect.x1, limit or rect.x1), rect.y1) | block.rect
-            order.record(block, before, reach + (-2, -2, 2, 2))
+            order.record(source or block, before, reach + (-2, -2, 2, 2))
 
         # 续行可能排在半句前面。先把后半放进 carry，写的时候才不会丢掉。
         shared_head: dict[int, tuple[str, pymupdf.Rect, list[dict], bool]] = {}
@@ -9512,7 +9513,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 rect = pymupdf.Rect(
                     rect.x0, rect.y0 + shifted.rect.y0 - b.rect.y0, rect.x1, rect.y1 + shifted.rect.y1 - b.rect.y1,
                 )
-                write_one(shifted, t, rect, centered, (formulas_map or {}).get(id(b), []))
+                write_one(shifted, t, rect, centered, (formulas_map or {}).get(id(b), []), source=b)
                 continue
             if b.side_note and geo is not None and geo.frame is not None and b.rect.x1 <= geo.frame.x0:
                 # 左侧的旁注靠右对齐，贴着正文。放不下一行时照常从左起笔
