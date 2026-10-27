@@ -360,25 +360,24 @@ def _rgb(color: object) -> int:
 
 
 def _ocr_pages(doc: pymupdf.Document, numbers: list[int]) -> dict[int, list[OcrWord]]:
-    """整份文档一起认。渲染在主线程，tesseract 并行跑。某一页超时就不给这页投票。"""
+    """整份文档一起认。渲染在主线程，tesseract 并行跑，渲染好一页就开始认这一页。某一页超时就不给这页投票。"""
     if shutil.which("tesseract") is None:
         raise ValueError("此 PDF 的文字为不含 Unicode 编码的点阵字体，需要安装 tesseract 才能识别原文")
-    with tempfile.TemporaryDirectory(prefix="type3-") as tmp:
-        paths: dict[int, Path] = {}
+
+    def read(path: Path) -> list[OcrWord]:
+        try:
+            return ocr_image(path)
+        except subprocess.TimeoutExpired:
+            return []
+
+    workers = max(1, min(4, os.cpu_count() or 1, len(numbers)))
+    with tempfile.TemporaryDirectory(prefix="type3-") as tmp, ThreadPoolExecutor(max_workers=workers) as pool:
+        pending = {}
         for pno in numbers:
             path = Path(tmp) / f"p{pno}.png"
             doc[pno].get_pixmap(matrix=pymupdf.Matrix(_OCR_SCALE, _OCR_SCALE), alpha=False).save(path)
-            paths[pno] = path
-
-        def read(pno: int) -> list[OcrWord]:
-            try:
-                return ocr_image(paths[pno])
-            except subprocess.TimeoutExpired:
-                return []
-
-        workers = max(1, min(4, os.cpu_count() or 1, len(numbers)))
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            return dict(zip(numbers, pool.map(read, numbers)))
+            pending[pno] = pool.submit(read, path)
+        return {pno: future.result() for pno, future in pending.items()}
 
 
 def ocr_image(path: Path, scale: float = _OCR_SCALE) -> list[OcrWord]:
