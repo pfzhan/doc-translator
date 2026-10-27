@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+import weakref
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -38,6 +39,8 @@ _MARK_RE = re.compile(r"\{i\}|\{/i\}|\{b\}|\{/b\}|\{u\}|\{/u\}|\{/z\}|\{z(\d+)\}
 # 下划线在基线下多远、多粗（em）
 _UNDERLINE_DROP = 0.1
 _UNDERLINE_WIDTH = 0.05
+# 每页已装上的字体名。insert_font 每次都先列一遍页面的全部字体，一页几十段就要列几十遍
+_PAGE_FONTS: weakref.WeakKeyDictionary[pymupdf.Page, set[str]] = weakref.WeakKeyDictionary()
 _LATIN_FONTS = {
     (True, False): ("DocIT", "heit"),
     (False, True): ("DocBO", "hebo"),
@@ -56,6 +59,8 @@ _ITALIC_SLANT = 0.21
 
 _font: pymupdf.Font | None = None
 _latin: dict[str, pymupdf.Font] = {}
+# 各字体里每个字的宽度（1 号字）
+_ADVANCES: dict[pymupdf.Font, dict[str, float]] = {}
 
 
 @dataclass(frozen=True)
@@ -93,7 +98,20 @@ class _Segment:
     def width(self) -> float:
         if self.mark:
             return 0.0
-        return self.font.text_length(self.text, self.size) if self.text else 0.0
+        return _text_length(self.font, self.text, self.size) if self.text else 0.0
+
+
+def _text_length(font: pymupdf.Font, text: str, size: float) -> float:
+    """同 Font.text_length。它每个字都要问一遍 MuPDF 用哪个字形，这里每个字只问一次，
+    按原来的次序累加，结果相同。"""
+    advances = _ADVANCES.setdefault(font, {})
+    total = 0.0
+    for char in text:
+        advance = advances.get(char)
+        if advance is None:
+            advance = advances[char] = font.text_length(char, 1)
+        total += advance
+    return total * size
 
 
 def cjk_font() -> pymupdf.Font:
@@ -361,8 +379,11 @@ def draw_cjk_lines(
         # 文本对象里不能画 XObject，先结束再接着写；字体、颜色是图形状态，接着写的字照旧
         commands = commands.replace(_slot_mark(number), f"ET\n{drawn}\nBT" if drawn else "")
     if commands:
+        inserted = _PAGE_FONTS.setdefault(page, set())
         for name, face in fonts.items():
-            page.insert_font(fontname=name, fontbuffer=face.buffer)
+            if name not in inserted:
+                page.insert_font(fontname=name, fontbuffer=face.buffer)
+                inserted.add(name)
         _append_contents(page, doc, commands)
     return slots
 
@@ -540,7 +561,7 @@ def _place_line(
                     rules[-1] = (rules[-1][0], cursor + advance, rules[-1][2], seg.color)
                 else:
                     rules.append((cursor, cursor + advance, seg.size, seg.color))
-            last = seg.font.text_length(seg.text[-1], seg.size) if seg.text else 0.0
+            last = _text_length(seg.font, seg.text[-1], seg.size) if seg.text else 0.0
             base = (cursor + advance - last, last, seg.text[-1:])
             pos += n
             if pos < len(visible) and pos - 1 < len(piece_extras):
@@ -574,7 +595,7 @@ def _mark_ops(
         ops.append(f"{red:.4f} {green:.4f} {blue:.4f} RG")
     lift = seg.size * _TALL_LIFT if char.isupper() or char.isdigit() or char in "bdfhklt" else 0.0
     shift = lift * _ITALIC_SLANT if seg.italic else 0.0
-    left = x + (width - seg.font.text_length(glyph, seg.size)) / 2 + shift
+    left = x + (width - _text_length(seg.font, glyph, seg.size)) / 2 + shift
     ops.append(f"1 0 0 1 {left:.2f} {{Y}} Tm")
     if lift:
         ops.append(f"{lift:.2f} Ts")
