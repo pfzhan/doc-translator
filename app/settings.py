@@ -90,7 +90,7 @@ class Settings:
             except (TypeError, ValueError):
                 raise SettingsError("保留天数必须是整数")
             if not 0 <= days <= MAX_RETENTION_DAYS:
-                raise SettingsError(f"保留天数需要在 0 到 {MAX_RETENTION_DAYS} 之间（0 表示永久保留）")
+                raise SettingsError(f"保留天数须在 0 到 {MAX_RETENTION_DAYS} 之间（0 表示永久保留）")
             with self.lock:
                 self.data["retention_days"] = days
                 self._save()
@@ -99,7 +99,7 @@ class Settings:
                 continue
             value = changes[key]
             if not isinstance(value, dict):
-                raise SettingsError(f"{name}设置格式不对")
+                raise SettingsError(f"{name}设置格式错误")
             merged = {**self.model(key), **value}
             conf = {"enabled": bool(merged.get("enabled")), "path": str(merged.get("path") or "").strip()}
             if "size" in DEFAULTS[key]:
@@ -121,7 +121,7 @@ class Settings:
                 if count in (None, ""):
                     count = 0
                 if isinstance(count, bool) or not isinstance(count, int) or not 0 <= count <= limit:
-                    raise SettingsError(f"{label}要填 0 到 {limit} 的整数（0 表示自动）")
+                    raise SettingsError(f"{label}须为 0 到 {limit} 的整数（0 表示自动）")
                 conf[name] = count
             with self.lock:
                 self.data[key] = conf

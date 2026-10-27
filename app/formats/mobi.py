@@ -99,7 +99,7 @@ def _extract(src: Path, tmpdir: Path) -> Path:
     for path in (tmpdir / "mobi8" / f"{src.stem}.epub", tmpdir / "mobi7" / "book.html", tmpdir / f"{src.stem}.001.pdf"):
         if path.exists():
             return path
-    raise ValueError("无法解包这本电子书，可能有 DRM 保护或文件已损坏")
+    raise ValueError("无法解包此电子书，可能受 DRM 保护或文件已损坏")
 
 
 async def translate_mobi(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "") -> list[Path]:
@@ -114,7 +114,7 @@ async def translate_mobi(src: Path, out_dir: Path, runner, bilingual: bool, targ
             epub_src = tmpdir / "mobi7.epub"
             await asyncio.to_thread(_epub_from_mobi7, extracted, epub_src)
         else:
-            raise ValueError("这本 MOBI 里只有 PDF 内容，请直接上传 PDF")
+            raise ValueError("此 MOBI 文件仅包含 PDF 内容，请直接上传 PDF")
 
         suffix = "bilingual" if bilingual else "translated"
         epub_dst = out_dir / f"{src.stem}.{suffix}.epub"

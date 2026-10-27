@@ -361,7 +361,7 @@ def _rgb(color: object) -> int:
 def _ocr_pages(doc: pymupdf.Document, numbers: list[int]) -> dict[int, list[OcrWord]]:
     """整份文档一起认。渲染在主线程，tesseract 并行跑。某一页超时就不给这页投票。"""
     if shutil.which("tesseract") is None:
-        raise ValueError("这份 PDF 的文字是没有 Unicode 的点阵字，需要安装 tesseract 才能读出原文")
+        raise ValueError("此 PDF 的文字为不含 Unicode 编码的点阵字体，需要安装 tesseract 才能识别原文")
     with tempfile.TemporaryDirectory(prefix="type3-") as tmp:
         paths: dict[int, Path] = {}
         for pno in numbers:
@@ -390,7 +390,7 @@ def ocr_image(path: Path, scale: float = _OCR_SCALE) -> list[OcrWord]:
         capture_output=True, text=True, timeout=_OCR_TIMEOUT, check=False, env=env,
     )
     if proc.returncode != 0 and "traineddata" in proc.stderr:
-        raise ValueError("点阵字页面没有认出文字。请确认 tesseract 的英文语言包已安装")
+        raise ValueError("点阵字体页面未识别出文字，请确认已安装 tesseract 英文语言包")
     parser = _HocrWords(scale)
     parser.feed(proc.stdout)
     return parser.words

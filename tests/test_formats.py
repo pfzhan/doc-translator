@@ -7759,7 +7759,7 @@ def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monk
 
     outs, longest_gap = run(scenario())
     # 后到的任务等的时候任务页上显示在等
-    assert ("等候其他任务", 0, 0, "") in stages
+    assert ("等待其他任务", 0, 0, "") in stages
     # 线程里的 MuPDF 调用不放 GIL，循环偶尔停零点几秒；在循环里算的话一停就是一秒
     assert longest_gap < 0.6
     assert most == 1
@@ -7864,7 +7864,7 @@ def test_resumed_pdf_job_reads_back_its_layout_analysis(tmp_path, monkeypatch):
     first, title, _ = translate(tmp_path / "a")
     assert saved.exists() and len(calls) == 1
     again, title_again, stages = translate(tmp_path / "b")
-    assert len(calls) == 1 and "分析版面" not in stages and "读取上次的版面分析" in stages
+    assert len(calls) == 1 and "分析版面" not in stages and "读取上次的版面分析结果" in stages
     assert title_again == title == "book"
     assert again[0].get_text() == first[0].get_text()
     assert "for i in range(10)" in again[0].get_text()

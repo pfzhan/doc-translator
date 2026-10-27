@@ -147,7 +147,7 @@ class JobStore:
                 continue  # 损坏的记录跳过，目录保留不动
             if job.status in ("queued", "running"):
                 job.status = "interrupted"
-                job.error = "服务重启，翻译被中断。已翻译的段落有缓存，重新翻译会很快。"
+                job.error = "服务重启导致翻译中断。已翻译的段落已缓存，继续翻译时直接复用。"
             self.jobs[job.id] = job
         for job in self.jobs.values():
             self.save(job)

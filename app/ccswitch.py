@@ -55,7 +55,7 @@ def _parse_claude(cfg: dict, common: dict) -> dict:
     token = env.get("ANTHROPIC_AUTH_TOKEN", "")
     key = env.get("ANTHROPIC_API_KEY", "")
     if not (token or key):
-        raise Unavailable("使用的是 Claude 官方账号登录，没有 API Key")
+        raise Unavailable("当前以 Claude 官方账号登录，没有 API Key")
     model = next((env[k] for k in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
                                     "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL") if env.get(k)), "")
     return {
@@ -76,7 +76,7 @@ def _parse_codex(cfg: dict, common_toml: str, use_common: bool) -> dict:
     auth = cfg.get("auth") or {}
     key = auth.get("OPENAI_API_KEY") or (os.environ.get(mp["env_key"], "") if mp.get("env_key") else "")
     if not key:
-        raise Unavailable("使用的是 ChatGPT 账号登录，没有 API Key")
+        raise Unavailable("当前以 ChatGPT 账号登录，没有 API Key")
     return {
         "base_url": _openai_base(mp.get("base_url") or "https://api.openai.com/v1"),
         "api_key": key,
@@ -93,7 +93,7 @@ def _parse_gemini(cfg: dict, common: dict, use_common: bool) -> dict:
     env = {**common_env, **cfg.get("env", {})}
     key = env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY") or ""
     if not key:
-        raise Unavailable("使用的是 Google 账号登录，没有 API Key")
+        raise Unavailable("当前以 Google 账号登录，没有 API Key")
     base = env.get("GOOGLE_GEMINI_BASE_URL") or "https://generativelanguage.googleapis.com"
     return {
         "base_url": _append_path(base, "/v1beta", keep=("/v1",)),
@@ -110,7 +110,7 @@ def _parse_grok(cfg: dict) -> dict:
     default = (conf.get("models") or {}).get("default")
     m = models.get(default) or next(iter(models.values()), None)
     if not m or not m.get("api_key"):
-        raise Unavailable("使用的是 Grok 官方账号登录（OAuth），没有 API Key")
+        raise Unavailable("当前以 Grok 官方账号登录（OAuth），没有 API Key")
     return {
         "base_url": _openai_base(m.get("base_url") or "https://api.x.ai/v1"),
         "api_key": m["api_key"],

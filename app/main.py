@@ -133,7 +133,7 @@ async def _run_job(job: Job, translator, bilingual: bool, fresh: bool = False):
             job.status, job.error = "paused", ""
         else:
             # 服务关闭等原因被取消
-            job.status, job.error = "interrupted", "翻译被中断。已翻译的段落有缓存，继续翻译会很快。"
+            job.status, job.error = "interrupted", "翻译已中断。已翻译的段落已缓存，继续翻译时直接复用。"
         raise
     except (TranslatorError, ValueError) as e:
         job.status, job.error = "error", str(e)
@@ -198,12 +198,12 @@ async def _pause(job: Job) -> bool:
 def _resume(job: Job, service_id: str | None = None, fresh: bool = False) -> Job:
     """继续（或重新）翻译同一个文件。已翻好的段落在缓存里，不会重复请求；fresh 为真时重新分析版面、全部重新请求。"""
     if job.status in ACTIVE:
-        raise HTTPException(400, "这个任务还在翻译中")
+        raise HTTPException(400, "该任务正在翻译")
     if not jobs.source_path(job).exists():
         raise HTTPException(400, "原文件已不存在，无法重新翻译")
     service = store.get(service_id or job.service_id)
     if not service:
-        raise HTTPException(400, "原来的翻译服务已不存在，请选择其他服务")
+        raise HTTPException(400, "原翻译服务已不存在，请选择其他服务")
     # 先验证配置，通过后才重置状态、删旧译文，否则配置失效时译文已丢
     translator = _make_translator(job, service)
     job.service_id, job.service_name = service["id"], service.get("name", "")
@@ -324,7 +324,7 @@ async def test_service(data: dict = Body(...)):
 async def fetch_models(data: dict = Body(...)):
     async def run(tr):
         if not hasattr(tr, "list_models"):
-            raise TranslatorError("该服务没有模型列表")
+            raise TranslatorError("该服务不提供模型列表")
         return {"models": await tr.list_models()}
 
     return await _with_translator(data, run)
@@ -351,7 +351,7 @@ async def create_job(
     name = Path(file.filename or "upload").name
     ext = Path(name).suffix.lower()
     if ext not in SUPPORTED:
-        raise HTTPException(400, f"不支持的格式 {ext}，支持: {', '.join(sorted(SUPPORTED))}")
+        raise HTTPException(400, f"不支持的格式 {ext}，支持的格式：{', '.join(sorted(SUPPORTED))}")
     service = store.get(service_id or store.effective_default())
     if not service:
         raise HTTPException(400, "翻译服务不存在")
@@ -457,7 +457,7 @@ async def pause_job(job_id: str):
     """暂停：立即停止发送请求。已翻好的段落在缓存里，继续翻译时直接复用。"""
     job = _job_or_404(job_id)
     if not await _pause(job):
-        raise HTTPException(400, "这个任务没有在翻译")
+        raise HTTPException(400, "该任务未在翻译")
     # 暂停期间记录可能被并发删除，别返回已过期的结果
     if jobs.get(job_id) is None:
         raise HTTPException(404, "翻译记录不存在")
@@ -497,7 +497,7 @@ async def build_variant(job_id: str):
     if any(output_variant(name) == want for name in job.outputs):
         return job.to_dict()  # 已经生成过
     if job.id in deleting:
-        raise HTTPException(409, "这条记录正在清理，请稍后再试")
+        raise HTTPException(409, "该记录正在清理，请稍后重试")
     if job.id in variant_tasks:
         raise HTTPException(409, "正在生成另一种版本，请稍候")
     task = asyncio.current_task()
@@ -512,7 +512,7 @@ async def build_variant(job_id: str):
             raise HTTPException(400, "原文件已不存在，无法生成")
         service = store.get(job.service_id)
         if not service:
-            raise HTTPException(400, "原来的翻译服务已不存在，无法生成")
+            raise HTTPException(400, "原翻译服务已不存在，无法生成")
         translator = _make_translator(job, _variant_service(job, service))
         if stage.exists():
             shutil.rmtree(stage)
@@ -622,7 +622,7 @@ def epub_outline(job_id: str, name: str):
         with zipfile.ZipFile(path) as zf:
             return book_outline(zf)
     except (zipfile.BadZipFile, KeyError, ValueError) as e:
-        raise HTTPException(422, f"EPUB 读不出来：{e}") from e
+        raise HTTPException(422, f"无法读取 EPUB：{e}") from e
 
 
 @app.get("/api/jobs/{job_id}/epub/{name}/{member:path}")

@@ -147,7 +147,7 @@ function renderServiceList() {
   refresh.type = "button";
   refresh.className = "link small";
   refresh.textContent = "刷新";
-  refresh.title = "在 CC Switch 里切换供应商后，点这里重新读取";
+  refresh.title = "在 CC Switch 中切换供应商后，点击此处重新读取";
   refresh.addEventListener("click", () =>
     busy(refresh, "刷新中…", async () => {
       try {
@@ -165,7 +165,7 @@ function renderServiceList() {
     if (!items.length) {
       const empty = document.createElement("li");
       empty.className = "hint service-empty";
-      empty.textContent = "没有读到配置";
+      empty.textContent = "未读取到配置";
       list.append(empty);
     }
     for (const s of items) list.append(serviceItem(s));
@@ -243,7 +243,7 @@ async function cloneService(s, btn) {
       const svc = await api(`/api/services/${s.id}/clone`, { method: "POST" });
       state.selectedId = svc.id;
       await loadServices();
-      toast("已复制到本地配置，连接信息已固化，不再跟随 CC Switch");
+      toast("已复制为本地配置，连接信息不再随 CC Switch 变化");
     } catch (err) {
       toast(`复制失败：${err.message}`);
     }
@@ -297,8 +297,8 @@ function renderDetail() {
   $("cc-notice").hidden = !fromCC;
   if (fromCC) {
     $("cc-notice").textContent = s.available
-      ? `来自 CC Switch 当前生效的「${s.name.split(" · ").pop()}」。地址和 API Key 每次翻译时现读，在 CC Switch 里切换供应商后点列表里的「刷新」即可。模型和高级设置可以在这里单独调整。`
-      : `CC Switch 当前生效的「${s.name.split(" · ").pop()}」不能用于翻译：${s.unavailable_reason}。在 CC Switch 里切换到带 API Key 的供应商后点「刷新」。`;
+      ? `来自 CC Switch 当前生效的「${s.name.split(" · ").pop()}」。地址和 API Key 在每次翻译时从 CC Switch 读取；在 CC Switch 中切换供应商后，点击列表中的「刷新」。模型和高级设置可在此处单独修改。`
+      : `CC Switch 当前生效的「${s.name.split(" · ").pop()}」无法用于翻译：${s.unavailable_reason}。请在 CC Switch 中切换到配置了 API Key 的供应商，然后点击「刷新」。`;
   }
   if (!editable) return;
 
@@ -313,7 +313,7 @@ function renderDetail() {
       a.href = meta.key_url;
       a.target = "_blank";
       a.rel = "noopener";
-      a.textContent = "去申请 Key";
+      a.textContent = "申请 API Key";
       notice.append("，", a);
     }
   }
@@ -351,7 +351,7 @@ function renderDetail() {
   // 没有可选模型（如 OpenAI 兼容接口）、或者当前模型不在列表里（中转站自定义的模型名）时，默认用输入框
   useCustomModel(!models.length || (fromCC && !models.includes(s.model)));
   if (fromCC) {
-    $("model-input").placeholder = `留空使用 CC Switch 里的模型（${s.ccswitch_model}）`;
+    $("model-input").placeholder = `留空时使用 CC Switch 中配置的模型（${s.ccswitch_model}）`;
   }
 }
 
@@ -381,7 +381,7 @@ async function showDefaultPromptPlaceholders() {
 
 $("load-default-prompt").addEventListener("click", async () => {
   const f = svcForm.elements;
-  if ((f.prompt.value || f.user_prompt.value) && !confirm("用默认提示词覆盖当前内容吗？")) return;
+  if ((f.prompt.value || f.user_prompt.value) && !confirm("使用默认提示词替换当前内容？")) return;
   const d = await getDefaultPrompts();
   f.prompt.value = d.system;
   f.user_prompt.value = d.user;
@@ -498,7 +498,7 @@ $("fetch-models").addEventListener("click", async () => {
     const payload = formPayload();
     payload.model = payload.model || "placeholder"; // 获取列表时还没选模型
     const { models } = await api("/api/services/models", { json: payload });
-    if (!models.length) throw new Error("接口没有返回模型");
+    if (!models.length) throw new Error("接口未返回任何模型");
     fetchedModels[sid] = models;
     if (state.selectedId !== sid) return; // 获取期间切到了别的服务
     const current = $("custom-model").checked ? $("model-input").value : $("model-select").value;
@@ -506,7 +506,7 @@ $("fetch-models").addEventListener("click", async () => {
     const fallback = models.includes(current) ? current : models[0];
     setModelOptions(models, fallback);
     useCustomModel(false);
-    const note = current && current !== fallback ? `，原模型 ${current} 不在列表中已切换` : "";
+    const note = current && current !== fallback ? `，原模型 ${current} 不在列表中，已改选 ${fallback}` : "";
     setFetchStatus(`已获取 ${models.length} 个模型${note} · ${new Date().toLocaleTimeString()}`);
   } catch (err) {
     if (state.selectedId === sid) setFetchStatus(`获取失败：${err.message}`, true);
@@ -595,7 +595,7 @@ function checkLangPair() {
   const to = $("target_lang").value;
   const warn = $("lang-warning");
   const msgs = [];
-  if (from !== "auto" && from === to) msgs.push("源语言和目标语言相同，没有需要翻译的内容。");
+  if (from !== "auto" && from === to) msgs.push("源语言与目标语言相同，无需翻译。");
   const svc = selectedService();
   if (svc && svc.provider === "google") {
     const bad = [from, to].filter((c) => c !== "auto" && !langInfo(c)?.google);
@@ -619,7 +619,7 @@ $("swap-lang").addEventListener("click", () => {
   const lastDetected = (state.jobs || []).find((j) => j.detected_lang)?.detected_lang;
   const from = src.value === "auto" ? lastDetected : src.value;
   if (!from) {
-    toast("源语言是自动检测，先翻译一次或手动选择源语言后再交换");
+    toast("源语言为自动检测，无法交换。请先手动选择源语言，或完成一次翻译后再交换");
     return;
   }
   src.value = dst.value;
@@ -638,7 +638,7 @@ function formatSize(bytes) {
 function showFile() {
   const f = fileInput.files[0];
   drop.classList.toggle("has-file", !!f);
-  $("drop-text").textContent = f ? f.name : "选择文件，或拖到这里";
+  $("drop-text").textContent = f ? f.name : "选择文件，或将文件拖放到此处";
   $("drop-sub").textContent = f ? `${formatSize(f.size)} · 点击更换` : "最大 200 MB";
 }
 fileInput.addEventListener("change", showFile);
@@ -923,7 +923,7 @@ function jobRow(job, selectable = false) {
   } else {
     const parts = [job.total ? `${job.total} 段` : ""];
     if (job.skipped) parts.push(`${job.skipped} 段无需翻译`);
-    if (job.failed) parts.push(`${job.failed} 段失败保留原文`);
+    if (job.failed) parts.push(`${job.failed} 段翻译失败，保留原文`);
     const tokens = tokensText(job);
     if (tokens) parts.push(tokens);
     const exp = expiryText(job);
@@ -1080,7 +1080,7 @@ $("delete-selected").addEventListener("click", async (e) => {
   if (!chosen.length) return;
   const running = chosen.filter((j) => ACTIVE.has(j.status)).length;
   const msg = `删除选中的 ${chosen.length} 条翻译记录？原文件和译文都会被删除，无法恢复。` +
-    (running ? `\n其中 ${running} 本还在翻译，会先停止。` : "");
+    (running ? `\n其中 ${running} 本正在翻译，将先停止翻译。` : "");
   if (!confirm(msg)) return;
   await busy(e.currentTarget, "删除中…", async () => {
     try {
@@ -1130,7 +1130,7 @@ async function pauseJob(id, btn) {
     const job = await api(`/api/jobs/${id}/pause`, { method: "POST" });
     upsertJob(job);
     if (reader.jobId === id) refreshReader();
-    toast("已暂停，翻好的段落都保留着");
+    toast("已暂停，已翻译的段落均已保留");
   } catch (err) {
     if (btn) btn.disabled = false;
     toast(`暂停失败：${err.message}`);
@@ -1196,7 +1196,7 @@ function scheduleJobsPoll() {
 async function deleteJob(job) {
   const running = ACTIVE.has(job.status);
   const msg = running
-    ? `「${job.filename}」还在翻译，删除会停止翻译并删除所有文件。确定吗？`
+    ? `「${job.filename}」正在翻译。删除将停止翻译并删除全部相关文件，是否继续？`
     : `删除「${job.filename}」的翻译记录？原文件和译文都会被删除，无法恢复。`;
   if (!confirm(msg)) return;
   try {
@@ -1226,8 +1226,8 @@ function redoJob(job) {
   // 重译用的是服务现在选中的模型，不写当初的模型名
   const service = job.service_name;
   $("redo-text").textContent =
-    `用${service ? `「${service}」` : "原来的翻译服务"}当前的设置重新生成「${job.filename}」。` +
-    "已有译文的段落直接复用，只请求有变化的段落。开始后现有的译文文件会先删除。";
+    `使用${service ? `「${service}」` : "原翻译服务"}的当前设置重新生成「${job.filename}」。` +
+    "已有译文的段落直接复用，仅对有变化的段落发送请求。开始后，现有的译文文件将被删除。";
   $("redo-fresh").checked = false;
   dialog.returnValue = "";
   dialog.addEventListener("close", () => {
@@ -1356,7 +1356,7 @@ async function readerTick() {
       applyUpdates(data.updates, initial);
       reader.version = data.version;
     } else if (reader.version < 0 && !ACTIVE.has(job.status)) {
-      $("reader-content").replaceChildren(el("div", "hint", "这条记录没有可预览的内容。"));
+      $("reader-content").replaceChildren(el("div", "hint", "此记录没有可预览的内容。"));
     }
     renderNotice(job);
     // 已经不在翻译、预览也没就绪时不再轮询。加密或扫描版 PDF 会一直 ready=false，
@@ -1442,15 +1442,15 @@ function renderReaderBar(job) {
 function explainError(raw) {
   const text = raw || "";
   if (/INVALID_MODEL|Invalid model|model.*(not found|does not exist|不存在)/i.test(text)) {
-    return "翻译服务暂时不接受这个模型。中转站偶尔会这样，通常过一会儿重试就好；一直不行的话，换个模型或服务。";
+    return "翻译服务暂时拒绝了该模型的请求。中转服务偶尔出现这种情况，通常稍后重试即可；若持续出现，请更换模型或服务。";
   }
-  if (/\b401\b|invalid.*api.?key|Incorrect API key|unauthori[sz]ed/i.test(text)) return "API Key 无效或已过期，请到「翻译服务」里检查。";
-  if (/\b403\b|forbidden|permission/i.test(text)) return "这个 API Key 没有权限使用该模型。";
-  if (/\b429\b|rate.?limit|quota|余额|insufficient/i.test(text)) return "请求太频繁或额度不足，稍后重试，或在服务里调低并发。";
-  if (/不是 JSON|API 地址/.test(text)) return "API 地址可能不对（通常以 /v1 结尾），请到「翻译服务」里检查。";
-  if (/服务重启/.test(text)) return "服务重启时翻译被中断了。已经翻好的段落有缓存，继续翻译会很快。";
-  if (/请求失败|timed? ?out|ConnectError|超时/i.test(text)) return "连不上翻译服务，请检查网络或服务地址后重试。";
-  return "翻译没有完成。";
+  if (/\b401\b|invalid.*api.?key|Incorrect API key|unauthori[sz]ed/i.test(text)) return "API Key 无效或已过期，请在「翻译服务」中检查。";
+  if (/\b403\b|forbidden|permission/i.test(text)) return "该 API Key 无权使用此模型。";
+  if (/\b429\b|rate.?limit|quota|余额|insufficient/i.test(text)) return "请求过于频繁或额度不足。请稍后重试，或在翻译服务设置中降低并发数。";
+  if (/不是 JSON|API 地址/.test(text)) return "API 地址可能有误（通常以 /v1 结尾），请在「翻译服务」中检查。";
+  if (/服务重启/.test(text)) return "服务重启导致翻译中断。已翻译的段落已缓存，继续翻译时直接复用。";
+  if (/请求失败|timed? ?out|ConnectError|超时/i.test(text)) return "无法连接翻译服务，请检查网络或服务地址后重试。";
+  return "翻译未完成。";
 }
 
 function renderNotice(job) {
@@ -1465,7 +1465,7 @@ function renderNotice(job) {
     const done = job.done ? `已翻译 ${job.done} / ${job.total} 段。` : "";
     const title = paused ? "已暂停" : job.status === "interrupted" ? "翻译已中断" : "翻译失败";
     const text = paused
-      ? `${done}继续翻译时，已翻好的段落直接复用，剩下的段落用翻译服务当前选中的模型。`
+      ? `${done}继续翻译时，已翻译的段落直接复用，其余段落使用翻译服务当前选择的模型。`
       : `${explainError(job.error)}${done ? " " + done : ""}`;
     body.append(el("div", "notice-title", title), el("div", "notice-text", text));
     if (job.error && job.status === "error") {
@@ -1476,7 +1476,7 @@ function renderNotice(job) {
     const actions = el("div", "notice-actions");
     const services = state.services.filter((s) => s.enabled);
     const pick = el("select", "notice-service");
-    pick.setAttribute("aria-label", "用哪个服务重新翻译");
+    pick.setAttribute("aria-label", "重新翻译使用的服务");
     for (const s of services) pick.add(new Option(s.name, s.id));
     pick.value = services.some((s) => s.id === job.service_id) ? job.service_id : state.defaultId;
     // 和记录页同一个操作用同一个词；“重新翻译”容易和“重译”里的全部重新翻译混淆
@@ -1496,7 +1496,7 @@ function renderNotice(job) {
     actions.append(pick, retry);
     notice.append(body, actions);
   } else if (job.same_lang) {
-    notice.append(el("div", "notice-text", `文档语言和目标语言一致（${langLabel(job.target_lang)}），可能没有需要翻译的内容。`));
+    notice.append(el("div", "notice-text", `文档语言与目标语言相同（${langLabel(job.target_lang)}），可能没有需要翻译的内容。`));
   }
   notice.hidden = !notice.childNodes.length;
   // 任务停了，还没翻到的段落不再显示“加载中”的闪烁，改成静态的未翻译状态
@@ -1565,7 +1565,7 @@ function buildOutline() {
     }),
   );
   reader.outline = items;
-  if (items.length < 2) $("outline-list").replaceChildren(el("li", "hint", "没有章节标题"));
+  if (items.length < 2) $("outline-list").replaceChildren(el("li", "hint", "无章节标题"));
 }
 
 function applyUpdates(updates, initial) {
@@ -1779,7 +1779,7 @@ function renderModel(kind, m, { keepForm = false } = {}) {
   if (!keepForm) {
     el("enabled").checked = m.enabled;
     el("path").value = m.path;
-    el("path").placeholder = `留空使用默认位置：${m.default_path}`;
+    el("path").placeholder = `留空时使用默认位置：${m.default_path}`;
     if (m.size) el("size").value = String(m.size);
     if (m.precision) el("precision").value = m.precision;
     for (const select of $(`${kind}-form`).querySelectorAll("select.has-hint")) showOptionHint(select);

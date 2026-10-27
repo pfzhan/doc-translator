@@ -312,7 +312,7 @@ class Runner:
             done_map.update(rewrites)
         todo = [t for t in need if t not in done_map]
         if self.cache_only and todo:
-            raise ValueError("有段落不在翻译缓存里，无法只重新排版。请重新翻译。")
+            raise ValueError("部分段落不在翻译缓存中，无法仅重新排版，请重新翻译。")
 
         # 每段原文第一次出现的位置，用来按“离关注位置的远近”挑批次
         first_pos: dict[str, int] = {}

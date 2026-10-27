@@ -180,7 +180,7 @@ def test_retry_after_header_drives_backoff(monkeypatch, retry_after, expected):
 
 
 def test_temperature_strip_does_not_mask_real_error(monkeypatch):
-    """只剩最后一次尝试时不再剥离 temperature：抛出带真实消息的 400，而不是“重试次数用尽”。"""
+    """只剩最后一次尝试时不再剥离 temperature：抛出带真实消息的 400，而不是“已达到最大重试次数”。"""
     monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
     calls = []
 
@@ -194,7 +194,7 @@ def test_temperature_strip_does_not_mask_real_error(monkeypatch):
         run(tr.translate_batch(["good"]))
     assert e.value.status == 400
     assert "'temperature' is not supported" in str(e.value)
-    assert "重试次数用尽" not in str(e.value)
+    assert "已达到最大重试次数" not in str(e.value)
     assert len(calls) == 1
     run(tr.aclose())
 

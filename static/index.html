@@ -29,7 +29,7 @@
     <label class="drop" id="drop">
       <input type="file" id="file" name="file" accept=".epub,.mobi,.azw3,.azw,.pdf,.md,.markdown" required>
       <span class="drop-icon" aria-hidden="true">⇪</span>
-      <span class="drop-title" id="drop-text">选择文件，或拖到这里</span>
+      <span class="drop-title" id="drop-text">选择文件，或将文件拖放到此处</span>
       <span class="drop-sub" id="drop-sub">最大 200 MB</span>
     </label>
 
@@ -59,7 +59,7 @@
       </div>
 
       <div class="form-foot">
-        <span class="hint">在「翻译服务」里添加 OpenAI、Claude、Gemini、Grok 或任意 OpenAI 兼容接口。</span>
+        <span class="hint">可在「翻译服务」中添加 OpenAI、Claude、Gemini、Grok 或任意 OpenAI 兼容接口。</span>
         <button type="submit" id="submit" class="btn primary lg">开始翻译</button>
       </div>
       <p class="inline-msg error" id="submit-error" hidden></p>
@@ -83,7 +83,7 @@
   <div class="page-head row-head">
     <div>
       <h1>翻译记录</h1>
-      <p class="hint">记录和文件会一直保留，直到你在这里删除，或者超过保留时间。</p>
+      <p class="hint">翻译记录和文件在手动删除或超过保留时间之前一直保留。</p>
     </div>
 
     <div class="retention" id="retention">
@@ -138,8 +138,8 @@
   </nav>
   <div class="empty" id="history-empty" hidden>
     <div class="empty-mark" aria-hidden="true">译</div>
-    <p>还没有翻译记录</p>
-    <button type="button" class="btn primary" data-goto="translate">翻译一本书</button>
+    <p>暂无翻译记录</p>
+    <button type="button" class="btn primary" data-goto="translate">翻译文档</button>
   </div>
 </main>
 
@@ -182,7 +182,7 @@
   <div class="page-head row-head">
     <div>
       <h1>翻译服务</h1>
-      <p class="hint">可以添加多个服务，开启常用的、关闭不需要的。开启的服务会出现在翻译页的下拉框里。</p>
+      <p class="hint">可添加多个翻译服务。已开启的服务显示在翻译页的服务列表中。</p>
     </div>
     <div class="add-service">
       <select id="add-provider" aria-label="服务类型"></select>
@@ -258,9 +258,9 @@
             <textarea name="glossary" id="glossary" rows="3" spellcheck="false"
               placeholder="Book = 卷&#10;The Spirit of the Laws = 论法的精神"></textarea>
           </label>
-          <label class="check"><input type="checkbox" name="auto_glossary"> 翻译前从文档里找出反复出现的术语，先统一译名（多一次请求）</label>
+          <label class="check"><input type="checkbox" name="auto_glossary"> 翻译前提取文档中反复出现的术语并统一译名（增加一次请求）</label>
           <div class="inline">
-            <span class="hint">默认提示词取自沉浸式翻译，按语言自动切换。留空即使用默认值。</span>
+            <span class="hint">默认提示词来自沉浸式翻译，按语言自动选用。留空时使用默认提示词。</span>
             <button type="button" class="link" id="load-default-prompt">填入默认提示词</button>
           </div>
           <p class="hint">
@@ -430,7 +430,7 @@
   <form method="dialog">
     <h3 id="redo-title">重译</h3>
     <p class="dialog-text" id="redo-text"></p>
-    <label class="check"><input type="checkbox" id="redo-fresh"> 全部重新翻译：PDF 重新分析版面，不用已有译文，每一段都重新请求翻译服务</label>
+    <label class="check"><input type="checkbox" id="redo-fresh"> 全部重新翻译：PDF 重新分析版面，不使用已有译文，所有段落重新请求翻译服务</label>
     <div class="dialog-actions">
       <button type="submit" class="btn" value="cancel">取消</button>
       <button type="submit" class="btn primary" value="ok">重译</button>

@@ -155,7 +155,7 @@ def test_clone_ccswitch_service_to_local(tmp_path, cc_db):
     again = ServiceStore(tmp_path / "s.json", ccswitch_db=tmp_path / "gone.db")
     assert again.get(clone["id"])["api_key"] == "sk-openai-key-123456"
 
-    with pytest.raises(ServiceError, match="不需要复制"):
+    with pytest.raises(ServiceError, match="无需复制"):
         store.clone_to_local(clone["id"])
     with pytest.raises(ServiceError, match="不存在"):
         store.clone_to_local("nope")

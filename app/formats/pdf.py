@@ -10334,7 +10334,7 @@ async def _job_turn(runner):
     """轮到这个任务用 MuPDF。别的任务在读写一本大书时要等几分钟，任务页上显示在等。"""
     turn = mupdf_turn()
     if turn.locked():
-        runner.report_stage("等候其他任务")
+        runner.report_stage("等待其他任务")
     async with turn:
         yield
 
@@ -10366,7 +10366,7 @@ def _plan_pdf(
     boxes 是存模型框的地方，给了时两个模型的框读回或存下（见 ModelBoxes）。"""
     src_doc = pymupdf.open(src)
     if src_doc.needs_pass:
-        raise ValueError("PDF 有密码保护，暂不支持")
+        raise ValueError("不支持有密码保护的 PDF")
     words = frozenset(word for page in src_doc for word in _CAMEL_RE.findall(page.get_text("text")))
     token = _CAMEL_WORDS.set(words)
     try:
@@ -10391,10 +10391,10 @@ def _plan_document(
     blocks = _split_gloss_lines(blocks, glosses)
     # 纯扫描件提不出块。有块的文件不必再逐页查文本层
     if not blocks and _scan_status(src_doc) == "scanned":
-        raise ValueError("这是没有文本层的扫描版 PDF：请先用 Acrobat、ABBYY 或 WPS 的 OCR 功能识别文字，"
+        raise ValueError("此 PDF 为没有文本层的扫描件，请先使用 Acrobat、ABBYY 或 WPS 的 OCR 功能识别文字，"
                          "再上传识别后的文件")
     if not blocks:
-        raise ValueError("没有提取到可用的文字：可能是图片型页面或 OCR 文本层质量太差")
+        raise ValueError("未提取到可用的文字：页面可能为图片，或 OCR 文本层质量过低")
     toc = src_doc.get_toc()  # 输出文件带上原书签
     # PDF 元数据里的标题经常是 "Microsoft Word - xxx.docx" 之类，看起来像文件名就不用
     meta_title = ((src_doc.metadata or {}).get("title") or "").strip()
@@ -10631,7 +10631,7 @@ def _load_plan(path: Path, key: str, src: Path, runner) -> _PdfPlan | None:
         with path.open("rb") as saved:
             if pickle.load(saved) != key:
                 return None
-            runner.report_stage("读取上次的版面分析")
+            runner.report_stage("读取上次的版面分析结果")
             plan, skipped, kinds = pickle.loads(zlib.decompress(saved.read()))
     except Exception:  # noqa: BLE001 - 没有、读不出或格式旧了都重新分析
         return None

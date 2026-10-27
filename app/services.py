@@ -229,7 +229,7 @@ class ServiceStore:
         if changes.get("enabled") and not svc["available"]:
             raise ServiceError(f"无法启用：{svc['unavailable_reason']}")
         if changes.get("enabled") is False and self.default_id == svc["id"]:
-            raise ServiceError("默认服务不能关闭，请先把别的服务设为默认")
+            raise ServiceError("默认服务不能关闭，请先将其他服务设为默认")
         # 模型和 CC Switch 一致时不单独保存，这样在 CC Switch 里改模型也会跟着变
         if "model" in changes and changes["model"] in ("", svc["ccswitch_model"]):
             changes["model"] = ""
@@ -269,7 +269,7 @@ class ServiceStore:
             if "name" in changes and not changes["name"]:
                 changes.pop("name")
             if changes.get("enabled") is False and self.default_id == sid:
-                raise ServiceError("默认服务不能关闭，请先把别的服务设为默认")
+                raise ServiceError("默认服务不能关闭，请先将其他服务设为默认")
             svc.update(changes)
             self._save()
         return public(svc)
@@ -281,7 +281,7 @@ class ServiceStore:
                 raise ServiceError("服务不存在")
             if svc.get("builtin"):
                 raise ServiceError("内置服务不能删除" if svc.get("source") != "ccswitch" else
-                                   "CC Switch 的服务不能删除，可以关闭它")
+                                   "CC Switch 的服务不能删除，可将其关闭")
             self.services.remove(svc)
             if self.default_id == sid:
                 self.default_id = "google"
@@ -294,7 +294,7 @@ class ServiceStore:
             if not svc:
                 raise ServiceError("服务不存在")
             if svc.get("source") != "ccswitch":
-                raise ServiceError("本地服务不需要复制，直接编辑即可")
+                raise ServiceError("本地服务无需复制，可直接编辑")
             if not svc["available"]:
                 raise ServiceError(f"无法复制：{svc['unavailable_reason']}")
             clone = {"id": uuid.uuid4().hex[:8], "provider": svc["provider"], "builtin": False,

@@ -323,7 +323,7 @@ class LLMTranslator(Translator):
                 await asyncio.sleep(_retry_delay(resp, 2 ** (attempt + 1)))
                 continue
             raise TranslatorError(f"接口错误 {resp.status_code}: {msg}", status=resp.status_code)
-        raise TranslatorError("重试次数用尽")
+        raise TranslatorError("已达到最大重试次数")
 
     async def _get(self, url: str, headers: dict, params: dict | None = None) -> dict:
         try:
@@ -582,17 +582,17 @@ class GoogleTranslator(Translator):
                     # 每个 q 对应一项：sl=auto 时是 [译文, 检测到的语言]，否则直接是译文
                     out = [d[0] if isinstance(d, list) else d for d in data]
                     if len(out) != len(texts):
-                        raise TranslatorError("Google 返回条数不一致")
+                        raise TranslatorError("Google 返回的译文条数与请求不一致")
                     return out
                 if last:
-                    raise TranslatorError("Google 返回的不是 JSON（可能被限流，稍后重试或换用 AI 翻译）")
+                    raise TranslatorError("Google 返回的不是 JSON（可能已被限流，请稍后重试或改用 AI 翻译服务）")
                 await asyncio.sleep(_retry_delay(resp, min(2 ** (attempt + 1), 30)))
                 continue
             # 302 跳到验证码页 / 429 都是限流，退避重试
             if resp.status_code not in (302, 429, 500, 503) or last:
-                raise TranslatorError(f"Google 接口错误 {resp.status_code}（可能被限流，稍后重试或换用 AI 翻译）")
+                raise TranslatorError(f"Google 接口错误 {resp.status_code}（可能已被限流，请稍后重试或改用 AI 翻译服务）")
             await asyncio.sleep(_retry_delay(resp, min(2 ** (attempt + 1), 30)))
-        raise TranslatorError("重试次数用尽")
+        raise TranslatorError("已达到最大重试次数")
 
     async def aclose(self):
         await self.client.aclose()

@@ -29,7 +29,7 @@ def _opf_path(zf: zipfile.ZipFile) -> str:
     container = BeautifulSoup(data, "lxml-xml")
     rootfile = container.find("rootfile")
     if rootfile is None:
-        raise ValueError("不是有效的 EPUB：container.xml 里没有 rootfile")
+        raise ValueError("不是有效的 EPUB：container.xml 中缺少 rootfile")
     return rootfile["full-path"]
 
 
