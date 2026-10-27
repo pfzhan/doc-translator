@@ -23,13 +23,17 @@ _REF_RE = re.compile(r"(?<![\w.])(\d+) 0 R(?!\w)")
 def merge_duplicates(doc: pymupdf.Document) -> int:
     """把引用指向内容相同的第一份对象，返回合并掉的对象数。"""
     gone: set[int] = set()
+    # 合并只改字典里的引用，流的内容不变，哈希算一次
+    digests: dict[int, bytes] = {}
     while True:
         first_of: dict[tuple[str, bytes | None], int] = {}
         remap: dict[int, int] = {}
+        texts: dict[int, str] = {}
         for xref in range(1, doc.xref_length()):
             if xref in gone:
                 continue
-            key = _content_key(doc, xref)
+            text = texts[xref] = doc.xref_object(xref, compressed=True)
+            key = _content_key(doc, xref, text, digests)
             if key is None:
                 continue
             first = first_of.setdefault(key, xref)
@@ -38,23 +42,27 @@ def merge_duplicates(doc: pymupdf.Document) -> int:
         if not remap:
             return len(gone)
         gone.update(remap)
-        for xref in range(1, doc.xref_length()):
-            if xref not in gone:
-                _redirect(doc, xref, remap)
+        # 只改引用了被合并对象的。字符串里写着的 "12 0 R" 也会挑出来，_redirect 不改它
+        for xref, text in texts.items():
+            if xref not in gone and any(int(m.group(1)) in remap for m in _REF_RE.finditer(text)):
+                _redirect(doc, xref, remap, text)
 
 
-def _content_key(doc: pymupdf.Document, xref: int) -> tuple[str, bytes | None] | None:
-    text = doc.xref_object(xref, compressed=True)
+def _content_key(
+    doc: pymupdf.Document, xref: int, text: str, digests: dict[int, bytes],
+) -> tuple[str, bytes | None] | None:
     if doc.xref_is_stream(xref):
-        return text, hashlib.sha1(doc.xref_stream_raw(xref) or b"").digest()
+        if xref not in digests:
+            digests[xref] = hashlib.sha1(doc.xref_stream_raw(xref) or b"").digest()
+        return text, digests[xref]
     if not text.startswith(("<<", "[")) or _IDENTITY_RE.search(text):
         return None
     return text, None
 
 
-def _redirect(doc: pymupdf.Document, xref: int, remap: dict[int, int]) -> None:
+def _redirect(doc: pymupdf.Document, xref: int, remap: dict[int, int], text: str) -> None:
+    """text 是这个对象现在的文本（流对象是它的字典）。"""
     if not doc.xref_is_stream(xref):
-        text = doc.xref_object(xref, compressed=True)
         new = replace_refs(text, remap)
         if new != text:
             doc.update_object(xref, new)
