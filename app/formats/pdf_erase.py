@@ -40,6 +40,8 @@ _PAINTED_PATHS = {mupdf.FZ_CULL_PATH_FILL, mupdf.FZ_CULL_PATH_STROKE, mupdf.FZ_C
 _TOKEN_RE = re.compile(rb"\s+|%[^\r\n]*|<<|>>|<[^>]*>|[\[\]{}]|/[^\s()<>\[\]{}/%]*|[^\s()<>\[\]{}/%]+|\(")
 _NUMBER_RE = re.compile(rb"[+-]?(?:\d+\.?\d*|\.\d+)")
 _INLINE_END_RE = re.compile(rb"\sEI(?=\s|$)")
+# 流里可能有 cs、CS 操作符：前后是空白、分隔符或流的两头。_operators 认出的 cs、CS 都在这里面
+_COLOR_SPACE_RE = re.compile(rb"(?<![^\s()<>\[\]{}/%])(?:cs|CS)(?![^\s()<>\[\]{}/%])")
 # 设颜色的操作符：填充色、描边色
 _FILL_COLOR = {b"g", b"rg", b"k", b"sc", b"scn"}
 _STROKE_COLOR = {b"G", b"RG", b"K", b"SC", b"SCN"}
@@ -197,9 +199,10 @@ def _char_origins(page: pymupdf.Page) -> dict[tuple[float, ...], list[tuple[floa
 
 def _page_point(x: float, y: float, ctm, to_page: mupdf.FzMatrix) -> tuple[float, float]:
     """内容流里的点换成页面坐标。和 Point * Matrix 调同一个 MuPDF 函数、结果相同，
-    但每个字形都要换一次，省掉 PyMuPDF 包装的那几层参数处理。"""
-    point = mupdf.fz_transform_point(mupdf.FzPoint(x, y), mupdf.FzMatrix(ctm.a, ctm.b, ctm.c, ctm.d, ctm.e, ctm.f))
-    point = mupdf.fz_transform_point(point, to_page)
+    但每个字形都要换一次，省掉 PyMuPDF 包装的那几层参数处理。ctm 是回调给的底层矩阵，直接传，
+    不逐项读出来再建一个。"""
+    point = mupdf.ll_fz_transform_point_xy(x, y, ctm)
+    point = mupdf.ll_fz_transform_point_xy(point.x, point.y, to_page.internal())
     return point.x, point.y
 
 
@@ -345,6 +348,9 @@ def _operators(data: bytes) -> Iterable[tuple[bytes, int, int]]:
 
 def _paints_in_bare_space(data: bytes) -> bool:
     """换了色彩空间不给颜色就画：按规范画的是这个空间的初始色。"""
+    # 大多数流不换色彩空间，不用逐个操作符过一遍
+    if _COLOR_SPACE_RE.search(data) is None:
+        return False
     fill = stroke = False
     for op, _start, _end in _operators(data):
         if op == b"cs" or op == b"CS":
@@ -361,7 +367,7 @@ def _paints_in_bare_space(data: bytes) -> bool:
 def _restore_dropped_colors(data: bytes) -> bytes:
     """MuPDF 重写内容流时，换了色彩空间后的颜色值若和换之前的相同就省掉，可换色彩空间会把
     颜色重置成初始色，白底就画成了黑块。每个后面没跟颜色的 cs、CS 后补回换之前的颜色值。"""
-    if re.search(rb"(?<![^\s\]>)])(?:cs|CS)(?![^\s/\[(<%])", data) is None:
+    if _COLOR_SPACE_RE.search(data) is None:
         return data
     ops = list(_operators(data))
     current: dict[bool, bytes | None] = {True: None, False: None}
