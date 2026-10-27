@@ -8113,27 +8113,29 @@ def _draw_cjk(
     centered: bool,
     forms: "_FormulaSources | None",
     page_spans: list[dict] | None,
-    draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
     justify_last: bool = False,
     lanes: list[tuple[float, float]] = (),
     first_room: float | None = None,
 ) -> bool:
-    """中文行按字形两端对齐。缺字时返回 False。"""
+    """中文行按字形两端对齐，公式画在内容流里它所在的位置（见 draw_cjk_lines）。缺字时返回 False。"""
     images, fallback = _formula_draw_args(formulas)
-    slots = draw_cjk_lines(
-        page, doc, lines, box, em, gap, color, centered, images, fallback, justify_last, lanes, first_room,
-    )
-    if slots is None:
-        return False
-    for slot in slots:
+
+    def paint(slot) -> str:
         if not 1 <= slot.index <= len(formulas):
-            continue
+            return ""
+        drawn: list[str] = []
         _paint_formula_parts(
             page, doc, formulas[slot.index - 1], slot.x, slot.baseline,
-            forms, page_spans, draws, deferred_png,
+            forms, page_spans, drawn, deferred_png,
         )
-    return True
+        return "\n".join(drawn)
+
+    slots = draw_cjk_lines(
+        page, doc, lines, box, em, gap, color, centered, images, fallback, justify_last, lanes, first_room,
+        paint,
+    )
+    return slots is not None
 
 
 def _place_plain(
@@ -8164,7 +8166,7 @@ def _place_plain(
         lines = _clause_lines(text, formulas, em, block_size, box.width, lines, block_size * 0.88 if cjk else None)
     if cjk and _draw_cjk(
         page, page.parent, lines, formulas, box, em, gap, color, centered,
-        None, None, [], [], justify_last, lanes, first_room,
+        None, None, [], justify_last, lanes, first_room,
     ):
         return
     rendered = [_typeset_line_html(line, formulas) for line in lines]
@@ -8262,7 +8264,6 @@ def _place_typeset(
     right_limit: float | None,
     forms: "_FormulaSources | None",
     page_spans: list[dict] | None,
-    draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
     justify_last: bool = False,
     holes: list["pymupdf.Rect"] = (),
@@ -8275,7 +8276,7 @@ def _place_typeset(
     )
     if cjk and _draw_cjk(
         page, doc, lines, formulas, box, em, gap, color, centered,
-        forms, page_spans, draws, deferred_png, justify_last, lanes, first_room,
+        forms, page_spans, deferred_png, justify_last, lanes, first_room,
     ):
         return
     css = (
@@ -8283,7 +8284,8 @@ def _place_typeset(
         f"font-weight: {weight}; line-height: {gap}; margin: 0; padding: 0; text-align: left;}}"
     )
     line_h = em * gap
-    pending: list[tuple[FormulaPiece, float, float]] = []
+    # 公式记下前面一片文字写完时最后一条内容流，量完基线画在它后面，拖选时夹在前后的字中间
+    pending: list[tuple[FormulaPiece, float, float, int | None]] = []
     offsets, _extra = line_offsets(lines, em, gap)
     for index, line in enumerate(lines):
         y = box.y0 + index * line_h + offsets[index]
@@ -8317,7 +8319,7 @@ def _place_typeset(
                 cursor = written if written > cursor + 0.4 else cursor + piece.width
                 after_formula = False
             elif isinstance(piece, FormulaPiece) and 1 <= piece.index <= len(formulas):
-                pending.append((piece, cursor, y))
+                pending.append((piece, cursor, y, _last_contents(doc, page)))
                 cursor += piece.slot_width
                 after_formula = True
     if not pending:
@@ -8328,34 +8330,42 @@ def _place_typeset(
         for ln in blk["lines"] for span in ln["spans"]
         if span.get("text", "").strip() and span.get("origin")
     ]
-    for piece, slot_x, line_top in pending:
+    after_stream: dict[int | None, list[str]] = {}
+    for piece, slot_x, line_top, after in pending:
         baseline = _line_baseline(spans, line_top, line_h, em, cjk, slot_x)
         _paint_formula_parts(
-            page, doc, formulas[piece.index - 1], slot_x, baseline, forms, page_spans, draws, deferred_png,
+            page, doc, formulas[piece.index - 1], slot_x, baseline, forms, page_spans,
+            after_stream.setdefault(after, []), deferred_png,
         )
+    for after, drawn in after_stream.items():
+        if drawn:
+            _insert_contents_after(page, doc, after, "\n".join(drawn))
 
 
-def _flush_draws(
-    page: "pymupdf.Page",
-    doc: "pymupdf.Document",
-    draws: list[str],
-    deferred_png: list[tuple["pymupdf.Rect", bytes]] | None = None,
-) -> None:
-    for target, png in deferred_png or []:
+def _last_contents(doc: "pymupdf.Document", page: "pymupdf.Page") -> int | None:
+    """页面 Contents 里最后一条内容流的 xref。"""
+    refs = re.findall(r"(\d+) 0 R", doc.xref_get_key(page.xref, "Contents")[1])
+    return int(refs[-1]) if refs else None
+
+
+def _insert_contents_after(page: "pymupdf.Page", doc: "pymupdf.Document", after: int | None, commands: str) -> None:
+    """新建一条内容流，排在 Contents 里 after 这条后面；找不到 after 时排在最后。
+
+    按 xref 找位置：insert_htmlbox 第一次写时会在最前面补一条 q，按下标记会错位。"""
+    stream = doc.get_new_xref()
+    doc.update_object(stream, "<<>>")
+    doc.update_stream(stream, ("\n" + commands + "\n").encode())
+    refs = [int(ref) for ref in re.findall(r"(\d+) 0 R", doc.xref_get_key(page.xref, "Contents")[1])]
+    at = refs.index(after) + 1 if after in refs else len(refs)
+    refs.insert(at, stream)
+    doc.xref_set_key(page.xref, "Contents", "[" + " ".join(f"{ref} 0 R" for ref in refs) + "]")
+
+
+def _flush_png(page: "pymupdf.Page", deferred_png: list[tuple["pymupdf.Rect", bytes]]) -> None:
+    """矢量透传失败、退回位图的公式，整页写完再贴。"""
+    for target, png in deferred_png:
         page.insert_image(target, stream=png, keep_proportion=False, overlay=True)
-    if deferred_png is not None:
-        deferred_png.clear()
-    if not draws:
-        return
-    ns = doc.get_new_xref()
-    doc.update_object(ns, "<<>>")
-    doc.update_stream(ns, ("\n" + "\n".join(draws) + "\n").encode())
-    cont_v = doc.xref_get_key(page.xref, "Contents")[1].strip()
-    if cont_v.startswith("["):
-        doc.xref_set_key(page.xref, "Contents", f"{cont_v[:-1].rstrip()} {ns} 0 R]")
-    else:
-        doc.xref_set_key(page.xref, "Contents", f"[{cont_v} {ns} 0 R]")
-    draws.clear()
+    deferred_png.clear()
 
 
 def _nowrap_parens(body: str) -> str:
@@ -9353,7 +9363,6 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             doc.update_object(res_x, res_v)
             doc.xref_set_key(page.xref, "Resources", f"{res_x} 0 R")
         images_before = {img[0] for img in page.get_images(full=True)}
-        draws: list[str] = []
         deferred_png: list[tuple[pymupdf.Rect, bytes]] = []
         starts = _body_first_starts(same_page, items, cjk, formulas_map)
 
@@ -9399,7 +9408,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             elif any(f.get("has_img") for f in bformulas):
                 _place_typeset(
                     page, doc, block, text, bformulas, rect, size, cjk, centered, div_attrs,
-                    block.color, weight, beside, limit, forms, page_spans, draws, deferred_png,
+                    block.color, weight, beside, limit, forms, page_spans, deferred_png,
                     justify_last, holes, first_room,
                 )
             else:
@@ -9534,7 +9543,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 write_one(b, head, head_rect, centered, bformulas, bool(rest))
             if rest:
                 carried[id(tail)] = _Carry(rest, bformulas, rect.width)
-        _flush_draws(page, doc, draws, deferred_png)
+        _flush_png(page, deferred_png)
         if mid_map:
             _place_formula_images(page, doc, images_before, mid_map, forms, page_spans)
             restore_glyphs(doc, glyphs)

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import pymupdf
@@ -336,12 +336,15 @@ def draw_cjk_lines(
     justify_last: bool = False,
     lanes: Sequence[tuple[float, float]] = (),
     first_room: float | None = None,
+    paint: Callable[[FormulaSlot], str] | None = None,
 ) -> list[FormulaSlot] | None:
     """写成两端对齐的行。缺字时返回 None，调用方改走 HTML 盒子。
 
     段落还要接到下一页时，这一页的末行也是满行，同样两端对齐。
     lanes 是开头几行相对盒子左缘的缩进和宽度（让开图的那几行），其余各行占满盒子。
     first_room 是原文第一行从盒子顶到下沿的高度，见 _lift。
+    paint 给出画一个公式槽的命令（页面坐标，不含本段的平移），画在内容流里这个槽的位置上：
+    拖选、复制时公式夹在前后的字中间，不排到整页最后。
     """
     left, top = page_origin(page)
     placed = _place_lines(
@@ -351,6 +354,12 @@ def draw_cjk_lines(
     if placed is None:
         return None
     commands, slots, fonts = placed
+    for number, slot in enumerate(slots):
+        drawn = paint(slot) if paint is not None else ""
+        if drawn and left:
+            drawn = f"q 1 0 0 1 {-left:.2f} 0 cm\n{drawn}\nQ"
+        # 文本对象里不能画 XObject，先结束再接着写；字体、颜色是图形状态，接着写的字照旧
+        commands = commands.replace(_slot_mark(number), f"ET\n{drawn}\nBT" if drawn else "")
     if commands:
         for name, face in fonts.items():
             page.insert_font(fontname=name, fontbuffer=face.buffer)
@@ -407,6 +416,9 @@ def _place_lines(
         if row is None:
             return None
         ops, line_slots, line_fonts, line_rules = row
+        # 行里的槽标记按行内序号写，换成全段的序号
+        ops = [_slot_mark(len(slots) + int(op[len("{line-slot"):-1])) if op.startswith("{line-slot") else op
+               for op in ops]
         fonts.update(line_fonts)
         if ops:
             wrote = True
@@ -425,6 +437,11 @@ def _place_lines(
         chunks.append(f"{red:.4f} {green:.4f} {blue:.4f} rg {x0:.2f} {bottom:.2f} {x1 - x0:.2f} {thick:.2f} re f")
     chunks.append("Q")
     return "\n".join(chunks) + "\n", slots, fonts
+
+
+def _slot_mark(number: int) -> str:
+    """公式槽在文字操作里的位置标记，单占一行，画的时候换成公式（见 draw_cjk_lines）。"""
+    return f"{{slot{number}}}"
 
 
 def _place_line(
@@ -475,6 +492,7 @@ def _place_line(
     paint_now = ""
     for segments, slot, piece_width, visible in pieces:
         if slot is not None:
+            ops.append(f"{{line-slot{len(slots)}}}")
             slots.append((slot, cursor))
             cursor += piece_width
             continue

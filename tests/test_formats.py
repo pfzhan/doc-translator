@@ -3319,10 +3319,11 @@ def test_marker_png_unique_per_formula():
 
 
 def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
-    """矢量透传端到端：两个块的公式各落各的槽位、只画一次、画在最后一条内容流。
+    """矢量透传端到端：两个块的公式各落各的槽位、只画一次，画在内容流里前后两段字中间，
+    按内容流的顺序读（拖选、复制）时公式夹在原位。
 
-    回归场景：块内序号命名的标记图互相去重，所有块的公式 #1 全堆到第一个块的
-    槽位；公式绘制写进 stream[0] 又被后续块的涂白标记盖住上半截。
+    回归场景：块内序号命名的标记图互相去重，所有块的公式 #1 全堆到第一个块的槽位；
+    公式全画在整页最后一条内容流里，拖选正文时选不中公式。
     """
     from app.formats.pdf import TextBlock, _marker_png, _render_translated
 
@@ -3363,10 +3364,17 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
                              {id(b1): [f1], id(b2): [f2]}, archive)
     page = out[0]
     streams = [out.xref_stream(x) or b"" for x in page.get_contents()]
-    # 每个公式只画一次，且集中画在最后一条内容流（不被后续块的白块盖住）
     assert sum(s.count(b"/FmF_a_1_png Do") for s in streams) == 1
     assert sum(s.count(b"/FmF_b_1_png Do") for s in streams) == 1
-    assert b"/FmF_a_1_png Do" in streams[-1] and b"/FmF_b_1_png Do" in streams[-1]
+    words = [w[4] for w in page.get_text("words", sort=False)]
+    assert [w for w in words if w in ("BETA", "EPSILON", "甲", "乙")] == ["BETA", "甲", "EPSILON", "乙"]
+
+    # 译成英文时每片文字一个 HTML 盒子，公式流插在前一片文字的流后面
+    out = _render_translated(src, [b1, b2], ["start \x01i\x021\x01/i\x02 one", "second \x01i\x021\x01/i\x02 two"],
+                             "en", {id(b1): [f1], id(b2): [f2]}, archive)
+    words = [w[4] for w in out[0].get_text("words", sort=False)]
+    assert [w for w in words if w in ("start", "BETA", "one", "second", "EPSILON", "two")] == [
+        "start", "BETA", "one", "second", "EPSILON", "two"]
     # 原文被 redact 后公式 glyph 由透传补回：各出现一次，槽位不同
     assert len(page.search_for("BETA")) == 1
     assert len(page.search_for("EPSILON")) == 1
