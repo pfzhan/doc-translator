@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import re
 import unicodedata
-import weakref
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
@@ -39,8 +38,6 @@ _MARK_RE = re.compile(r"\{i\}|\{/i\}|\{b\}|\{/b\}|\{u\}|\{/u\}|\{/z\}|\{z(\d+)\}
 # 下划线在基线下多远、多粗（em）
 _UNDERLINE_DROP = 0.1
 _UNDERLINE_WIDTH = 0.05
-# 每页已装上的字体名。insert_font 每次都先列一遍页面的全部字体，一页几十段就要列几十遍
-_PAGE_FONTS: weakref.WeakKeyDictionary[pymupdf.Page, set[str]] = weakref.WeakKeyDictionary()
 _LATIN_FONTS = {
     (True, False): ("DocIT", "heit"),
     (False, True): ("DocBO", "hebo"),
@@ -379,11 +376,8 @@ def draw_cjk_lines(
         # 文本对象里不能画 XObject，先结束再接着写；字体、颜色是图形状态，接着写的字照旧
         commands = commands.replace(_slot_mark(number), f"ET\n{drawn}\nBT" if drawn else "")
     if commands:
-        inserted = _PAGE_FONTS.setdefault(page, set())
         for name, face in fonts.items():
-            if name not in inserted:
-                page.insert_font(fontname=name, fontbuffer=face.buffer)
-                inserted.add(name)
+            page.insert_font(fontname=name, fontbuffer=face.buffer)
         _append_contents(page, doc, commands)
     return slots
 
