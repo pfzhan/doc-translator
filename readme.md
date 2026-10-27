@@ -171,6 +171,7 @@ app/
   formats/         各格式的解析和回写
 static/            前端页面
 tests/             测试（pytest）
+eval/              PDF 分段、行内公式和模型的评测脚本，用法和论文列表见 eval/README.md
 ```
 
 ## 已知限制

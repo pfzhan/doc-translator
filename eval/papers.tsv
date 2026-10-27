@@ -1,0 +1,37 @@
+arxiv_id	category	pages	sha256	title
+2608.05882v1	q-bio.NC	23	ea2b9d0c1ed7557824372d3081a9c77dd2c2a615dc42191f7e826474a80c0c6a	Complexity and Stability of Neural Activity Across Aging and Neurodegenerative Disease
+2608.06149v1	q-bio.NC	24	a155f1ae20570499a581d49b0ee61def247bf1f4a26c9895f2e52dbef72c3463	Errorless Irrationality: A unified computational account of the inverse base-rate effect across predictive, observational, and unsupervised procedures
+2608.06427v1	econ.EM	19	b5f5db392f95ac4f553f47c63a1c4da6679ab89785099317874cc6102b4ed597	Adversarial Causal Intervention Falsification
+2610.06279v1	physics.optics	8	c234bcdbf483071a606c7dd7af16105346ea13f0161b60eee6d264933462dafb	Electro-Optical Metalens for Near-Surface Cooling of a Levitated Particle
+2610.11173v1	stat.ME	16	e5eceb529ca3fd8c13a7330a896242289750d7245dd4f8f6432536e2e056e5be	Bayesian inference under model misspecification
+2610.11349v1	stat.ME	23	c240d085a4a0f91b6b591fdbde4a3e9bb207f1afc3c50cfd654fdb9776582d4e	Sample-Efficient Generative Conformal Prediction
+2610.13095v1	eess.SP	10	7e76b91e17f2d6c2e4f69ee726166f38fcdafa94dee01606d79f3b8c35d4cb25	Stochastic Finite-Transition Learning and Exploration for Accelerated MRI Reconstruction
+2610.13108v1	eess.SP	5	d28db38b9e916810126ab0eba0901a5893ca7d9f7b31784fe472b33ada743a25	LLM-Assisted Hierarchical Interference Control for Satellite-Terrestrial Integrated Networks
+2610.13315v1	eess.SP	5	afd0320e7a06dc19210166ad627a7f4163c98dcbe0c7f5e7f7dd657a5cfee8e2	JEPA-kMMVAE: CSI Prediction for Time-Varying Wireless Channels
+2610.18436v1	math.PR	10	3fb08a01202d2cbeda7a4229390a680eaa229b1e160b3a9ae7d98d65669891ce	Stability of the Markov-Krein Transform Under Classical Convolutions
+2610.18440v1	math.PR	17	e5ef66f04b1fad9e0725d696b8969049377fdc07441f58598ba7b274ffd0ce60	A Central Limit Theorem for High-Temperature SYK Model
+2610.18445v1	math.PR	25	c2af2cc898deed071c1ef75ec1d01ee275d7c275b89c0a60fcc0a612ca73b475	The Singularity Has a Distribution: Exact Timing Laws and Detection Limits for a Stochastic Intelligence Explosion
+2610.18505v1	astro-ph.GA	10	cf1bd9fe3adf0be8a72a0e11447f6ce44af427110fbdadb100396ba15d9235ed	Black hole spin-mass correlation and accretion disks at birth stage of dense star clusters
+2610.18576v1	astro-ph.GA	19	cce52b36f9fda8a0abc1a9dcbcce567ec090bfc9f6ae4d4b206a6199fa93a4e1	Massive double-exponential galaxies with extended LSB emission: An IllustrisTNG exploration II -are they unique?
+2610.18601v1	astro-ph.GA	13	5f984f8b8026f443647101de368f34620350481cb47b842fbef2a4f55a4b724c	Dynamical formation of dormant black holes: Predictions for Gaia DR4
+2610.20378v1	hep-th	11	f4e022f5185d3a0734f48f98748ba73f321b8cd6a88562aca1ee3721994b1a93	Origin of the red spectral tilt in Inflation without an Inflaton
+2610.20451v2	hep-th	11	0fbe6312990e111f1a78951d960ca56feed414346fb763ccc6f7a0f8c2e3219e	Analytical Time-Domain Waveforms for Black-Hole Scattering in the Self-Force Expansion
+2610.20452v1	hep-th	10	6e3353a833d0f4a3049c8578c9afa78faa6b2e8e48fe6e32d3527aa7d735b091	Analytical Time-Domain Waveforms for Black-Hole Scattering in the Post-Minkowskian Expansion
+2610.23045v1	math.AP	21	3031584e5f2f5c86b4aabab12517803f3d2ad41deda40470b35d098ef03f1134	Isolated singularities of weak solutions to the Serrin-critical $p$-Laplace equation
+2610.23114v1	math.AP	12	d6804392f3326e1bfc80868463a409cb943cc161c315772f7d49fb217816dd75	Linearization in nonlocal elasticity via Gamma-convergence
+2610.23115v1	math.AP	12	1493b4fd964e1be525b577e2344f45bd84af1ee19c950382312233f4c4677036	Degenerated scalar balance laws: stability of the critical wave
+2610.25014v1	quant-ph	8	746e354dac5342c9254a57eb85a5c729f96e9f2b42f1947ce74da0a5a6c5ebac	Large Language Model Steering of Acousto-Optic Tweezer Arrays
+2610.25020v1	quant-ph	20	18f3f3e6c1090aa8fcddc4ac0757afcf82c00e813978dc91bd1fa4f0133c764e	Fast and High-Fidelity Motional-State-Preserving Transport in Optical Tweezers
+2610.25057v1	quant-ph	24	e18c40b153a453118136accf829cab13d81a58821e3fef4641e4a56a5dfe66a3	Super Howe duality and rigidity of hybrid Fourier transforms
+2610.25476v1	cs.RO	8	a55426e8b66ba1845cc9cd31bf60fa0ff630eb464c2503300c01e37cf7ea5304	CusADi2: Latency-Optimized Batch Computation of Robot Kinematics, Jacobians, and Hessians on the GPU
+2610.25534v1	cs.RO	9	c6bf0dba81def679a9bc4108f7d7c65001f077c93d63cd426b5a682f7cf06eb4	AQUAACT: A Joystick-Level Underwater Teleoperation Dataset and Closed-Loop Benchmark
+2610.25585v1	cs.RO	7	a23c27a5d82130ec40e56aad0bf056165273373bd69b58b2a3c88e45cc79e8b9	Adaptive Bendpoint Formation in Octopus-Inspired Soft Continuum Arms
+2610.27702v1	cs.CL	10	98dd9b0bf6b592dadd85b3bfb1e8b79c22c7da626a1924e285c587a6c84f5bba	Beyond Calibration: Temporal LLM Confidence Assessment Across Languages and Local Settings
+2610.27714v1	cs.CL	16	703db25ac7317af1c77f0b93b5ea4d3d95dca9ca767d6c63447270abcdbbe56e	When Does Experience Memory Help Closed-Loop LLM Driving Agents? A Controlled Evaluation with Resampled Warmup Pools, Token-Matched Fillers, and Audited Baselines
+2610.27720v1	cs.CL	11	e259771c23f939c578d6929e9ff128b2feeca940c09052162d2d73a9477b09a4	Tracing Recurrent and Emergent Hallucination Patterns in Decomposed Text-to-SQL Generation
+2610.28258v1	cs.CV	4	829c24219fe0f788d7b1b2addb5c39b27daa9f7ab6be3e8037844c5eee9ff4d8	Reliability-Aware Reconstruction of V-Shaped Surfaces with a Low-Cost Multi-Zone SPAD Sensor
+2610.28264v1	cs.CV	12	2240faff5339d36251b78cde85c03047e8f7277ed9c9dd688b751669505f2e72	PI-MLLM: Psychophysics-Inspired Multimodal Large Language Model for Oddly Satisfying Video Emotion Analysis
+2610.28280v1	cs.CV	19	18a72082ae471dccc266db70f0c34df1ad84019e75268a2c49ab2853b67f42fd	GALA: Geometry-Aware Language Model for Controllable Object Arrangement
+2610.29351v2	cs.LG	5	21ca0b3f85e00ee3a97d23321f9ed15850b70748df877ad38a2ba0b22a9b779f	Closed-Loop Dual-Reference Guidance for Accent Control in Cross-Lingual Voice Cloning
+2610.29355v1	cs.LG	16	479b7749a8aebbc781d39adb6f9dc7e4afa482cc4afdd0e3ea3245f79df44489	GaP-MoE : Explicit Expert Specialization in Mixture-of-Experts via Orthogonal Gradient Accumulation and Projection
+2610.29378v1	cs.LG	19	52a7ece276fdbc2e2b2087b23d0db2fcdc6183aa2685be14d2e4d0322aec7c5b	Right On Q: Recovering Reasoning under Quantization via Self-Generated Trajectories

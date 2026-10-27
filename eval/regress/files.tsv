@@ -1,0 +1,16 @@
+name	pages	sha256	title	source
+1312.6114	14	bdcb63b79ed88f64f8ee2d43a721930d01dde5441a4dba20ecaa2342b34e017c	Auto-Encoding Variational Bayes	https://arxiv.org/abs/1312.6114
+1406.2661	9	ff5819e3a7b713c3bd3107b7de3d51fe0a347aa5d8444f0efdcf2345ef0a8b63	Generative Adversarial Networks	https://arxiv.org/abs/1406.2661
+1412.6980	15	eab9c73ae2ceda884b94830bda99312254bac4806f6c9f045cbab90721ecda31	Adam: A Method for Stochastic Optimization	https://arxiv.org/abs/1412.6980
+1502.03167	11	bdc69e0b568f41d8d3181cc9077a461f58fcdd1c70c9f49efe60a05ee6109655	Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift	https://arxiv.org/abs/1502.03167
+1706.03762	15	bdfaa68d8984f0dc02beaca527b76f207d99b666d31d1da728ee0728182df697	Attention Is All You Need	https://arxiv.org/abs/1706.03762
+1810.04805	16	5692a5514787a8c6727b4ff3b726a3385798bc68e12138d1d4af83947e2acf6e	BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding	https://arxiv.org/abs/1810.04805
+2006.11239	25	aee5e07a802e8dfd2a386374c94fd61d1d056cb7e1e0fec4f28e8120ff5d8505	Denoising Diffusion Probabilistic Models	https://arxiv.org/abs/2006.11239
+2310.06825	9	dfbac4e7035344b305c947481f2e7e8a02f7a24a563917eb6e47f6591d14c5ae	Mistral 7B	https://arxiv.org/abs/2310.06825
+2501.12948	86	b191b0a365a64b4ab2791d117069ed17a2933d03554a662ced58b37df52018f4	DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning	https://arxiv.org/abs/2501.12948
+NIST.AI.100-1	48	7576edb531d9848825814ee88e28b1795d3a84b435b4b797d3670eafdc4a89f1	Artificial Intelligence Risk Management Framework (AI RMF 1.0)	https://nvlpubs.nist.gov/nistpubs/ai/NIST.AI.100-1.pdf
+ed3book_aug26	646	88d0362c3bcb62a0cd09403fb80fd15e778dd53566943912ab1047cda3ff5c79	Speech and Language Processing, 3rd edition draft (Jurafsky, Martin)	https://web.stanford.edu/~jurafsky/slp3/ed3book_aug26.pdf
+lm_jan25	82	3e8db72721895c17346876991b0a09bbeb6d77cb5aa5f41960786a6e16407e81	N-gram Language Modeling (slides, Jurafsky)	https://web.stanford.edu/~jurafsky/slp3/slides/lm_jan25.pdf
+implementing_data_cube	25	340e004732979611abc13aae704b1966c52c523032b40c3f043ae7826fbf27dc	Implementing Data Cubes Efficiently (Harinarayan, Rajaraman, Ullman)	https://doi.org/10.1145/233269.233333
+opt_views	12	a9f9bddac37f3a302f61699992ce3eb77ed5cbcf9cf9264e121f736300cb85c3	Optimizing Queries Using Materialized Views: A Practical, Scalable Solution (Goldstein, Larson)	https://dsg.uwaterloo.ca/seminars/notes/larson-paper.pdf
+phoenix-on-calcite-hadoop-summit-2016	32	0e13781eb41887583bd7d52bc0f2d74b7c507e4250bda28f725aabe1fb4d4635	Cost-based Query Optimization (slides, Xue, Hyde, Hadoop Summit 2016)	https://www.slideshare.net/HadoopSummit/costbased-query-optimization
