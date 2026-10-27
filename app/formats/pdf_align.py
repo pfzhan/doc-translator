@@ -345,7 +345,7 @@ def draw_cjk_lines(
     em: float,
     gap: float,
     color: str,
-    centered: bool,
+    align: str,
     image_indexes: frozenset[int],
     fallback_text: dict[int, str],
     justify_last: bool = False,
@@ -354,6 +354,7 @@ def draw_cjk_lines(
     paint: Callable[[FormulaSlot], str] | None = None,
 ) -> list[FormulaSlot] | None:
     """写成两端对齐的行。缺字时返回 None，调用方改走 HTML 盒子。
+    align 是 left、center 或 right，居中、靠右排的行不拉开。
 
     段落还要接到下一页时，这一页的末行也是满行，同样两端对齐。
     lanes 是开头几行相对盒子左缘的缩进和宽度（让开图的那几行），其余各行占满盒子。
@@ -363,7 +364,7 @@ def draw_cjk_lines(
     """
     left, top = page_origin(page)
     placed = _place_lines(
-        lines, box, em, gap, color, centered, image_indexes, fallback_text, top,
+        lines, box, em, gap, color, align, image_indexes, fallback_text, top,
         justify_last, left, lanes, first_room,
     )
     if placed is None:
@@ -388,7 +389,7 @@ def _place_lines(
     em: float,
     gap: float,
     color: str,
-    centered: bool,
+    align: str,
     image_indexes: frozenset[int],
     fallback_text: dict[int, str],
     page_top: float,
@@ -421,8 +422,8 @@ def _place_lines(
         indent, width = lanes[index] if index < len(lanes) else (0.0, box.width)
         row = _place_line(
             line, box.x0 + indent, width, em,
-            justify=not centered and (justify_last or index != last),
-            centered=centered,
+            justify=align == "left" and (justify_last or index != last),
+            align=align,
             image_indexes=image_indexes,
             fallback_text=fallback_text,
             opened=opened,
@@ -454,6 +455,21 @@ def _place_lines(
     return "\n".join(chunks) + "\n", slots, fonts
 
 
+def _trailing_space(pieces: list[tuple[list[_Segment], int | None, float, str]]) -> float:
+    """一行末尾空白的宽度。行尾是公式槽时为 0。"""
+    width = 0.0
+    for segments, slot, _width, _visible in reversed(pieces):
+        if slot is not None:
+            return width
+        for seg in reversed(segments):
+            body = seg.text.rstrip()
+            if not seg.mark:
+                width += _text_length(seg.font, seg.text[len(body):], seg.size)
+            if body:
+                return width
+    return width
+
+
 def _slot_mark(number: int) -> str:
     """公式槽在文字操作里的位置标记，单占一行，画的时候换成公式（见 draw_cjk_lines）。"""
     return f"{{slot{number}}}"
@@ -465,7 +481,7 @@ def _place_line(
     width: float,
     em: float,
     justify: bool,
-    centered: bool,
+    align: str,
     image_indexes: frozenset[int],
     fallback_text: dict[int, str],
     opened: list[str] | None = None,
@@ -498,7 +514,11 @@ def _place_line(
     total = sum(widths)
     slack = width - total
     extras = line_extras(texts, slack, em) if justify and slack > 0 else []
-    cursor = x0 + (width - total) / 2 if centered and total < width else x0
+    cursor = x0
+    # 行尾的空格看不见，靠右、居中按最后一个字对齐
+    inked = total - _trailing_space(pieces)
+    if inked < width and align != "left":
+        cursor += width - inked if align == "right" else (width - inked) / 2
     ops: list[str] = []
     slots: list[tuple[int, float]] = []
     rules: list[tuple[float, float, float, str]] = []

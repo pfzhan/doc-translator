@@ -8234,7 +8234,7 @@ def _draw_cjk(
     em: float,
     gap: float,
     color: str,
-    centered: bool,
+    align: str,
     forms: "_FormulaSources | None",
     page_spans: list[dict] | None,
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
@@ -8256,7 +8256,7 @@ def _draw_cjk(
         return "\n".join(drawn)
 
     slots = draw_cjk_lines(
-        page, doc, lines, box, em, gap, color, centered, images, fallback, justify_last, lanes, first_room,
+        page, doc, lines, box, em, gap, color, align, images, fallback, justify_last, lanes, first_room,
         paint,
     )
     return slots is not None
@@ -8270,7 +8270,7 @@ def _place_plain(
     em: float,
     block_size: float,
     cjk: bool,
-    centered: bool,
+    align: str,
     div_attrs: str,
     color: str,
     weight: str,
@@ -8286,10 +8286,10 @@ def _place_plain(
     lines, em, gap, box, lanes = _fit_typeset(
         text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit, holes,
     )
-    if centered and len(lines) > 1 and not any(indent for indent, _ in lanes):
+    if align == "center" and len(lines) > 1 and not any(indent for indent, _ in lanes):
         lines = _clause_lines(text, formulas, em, block_size, box.width, lines, block_size * 0.88 if cjk else None)
     if cjk and _draw_cjk(
-        page, page.parent, lines, formulas, box, em, gap, color, centered,
+        page, page.parent, lines, formulas, box, em, gap, color, align,
         None, None, [], justify_last, lanes, first_room,
     ):
         return
@@ -8311,7 +8311,6 @@ def _place_plain(
         body = "<br>".join(parts)
     if not body:
         return
-    align = "center" if centered else "left"
     css = (
         f"* {{font-family: sans-serif; font-size: {em}px; color: {color}; "
         f"font-weight: {weight}; line-height: {gap}; margin: 0; padding: 0; text-align: {align};}}"
@@ -8380,7 +8379,7 @@ def _place_typeset(
     rect: "pymupdf.Rect",
     em: float,
     cjk: bool,
-    centered: bool,
+    align: str,
     div_attrs: str,
     color: str,
     weight: str,
@@ -8399,7 +8398,7 @@ def _place_typeset(
         text, formulas, rect, em, block.size, cjk, page, obstacles, right_limit, holes,
     )
     if cjk and _draw_cjk(
-        page, doc, lines, formulas, box, em, gap, color, centered,
+        page, doc, lines, formulas, box, em, gap, color, align,
         forms, page_spans, deferred_png, justify_last, lanes, first_room,
     ):
         return
@@ -8415,8 +8414,8 @@ def _place_typeset(
         y = box.y0 + index * line_h + offsets[index]
         indent, width = lanes[index] if index < len(lanes) else (0.0, box.width)
         origin_x = box.x0 + indent
-        if centered and line.width < width:
-            origin_x += (width - line.width) / 2
+        if align != "left" and line.width < width:
+            origin_x += width - line.width if align == "right" else (width - line.width) / 2
         # 拉丁字母按 0.5em 估算，i-th 这种窄词会偏宽。公式若跟估算走，就会被推开。
         # 文字按实际写出的右缘接着排，两侧只留公式槽自己的 2pt。
         cursor = origin_x
@@ -9026,30 +9025,38 @@ def _write_rect(
     cjk: bool,
     rtl: bool,
     geo: PageGeometry | None,
-) -> tuple[pymupdf.Rect, bool]:
-    """写入框。多栏且块落在某一栏内时，居中参照该栏；单栏有版心时参照版心，
-    没有时用本页最宽块。格子里原本居中的文字，改以格子中线居中。
+) -> tuple[pymupdf.Rect, str]:
+    """写入框和对齐方式（left、center、right）。多栏且块落在某一栏内时，居中参照该栏；
+    单栏有版心时参照版心，没有时用本页最宽块。格子里原本居中的文字，改以格子中线居中。
     从栏左缘起笔的块是左对齐的，中线碰巧对上也不算居中。"""
     y0 = _flow_y0(block, cjk)
     pad = block.size * 0.5 if cjk else block.size * 0.3
     if _centered_in_cell(block) and block.clip is not None:
         clip = block.clip
         rect = pymupdf.Rect(clip[0], y0, clip[2], block.rect.y1 + pad)
-        return _clip_write_rect(rect, clip), True
+        return _clip_write_rect(rect, clip), "center"
     column = None
     if geo is not None and len(geo.columns) >= 2:
         candidate = geo.column_of(block.rect)
         if block.rect.x0 >= candidate.x0 - 2 and block.rect.x1 <= candidate.x1 + 2:
             column = candidate
+    # 靠右排参照栏或版心的左右缘，本页最宽块的右缘不算
+    margin: tuple[float, float] | None = None
     if column is not None:
         col_x0, col_x1 = column.x0, column.x1
         col_width = col_x1 - col_x0
+        margin = col_x0, col_x1
     elif geo is not None and geo.frame is not None and (
         geo.frame.x0 - 2 <= block.rect.x0 and block.rect.x1 <= geo.frame.x1 + 2
     ):
         col_x0, col_x1 = geo.frame.x0, geo.frame.x1
         col_width = col_x1 - col_x0
+        margin = col_x0, col_x1
     else:
+        if geo is not None and len(geo.columns) == 1:
+            only = geo.columns[0]
+            if only.x0 - 2 <= block.rect.x0 and block.rect.x1 <= only.x1 + 2:
+                margin = only.x0, only.x1
         widest = max((other.rect for other, _ in items), key=lambda rect: rect.width, default=block.rect)
         col_x0, col_x1 = widest.x0, widest.x1
         col_width = widest.width
@@ -9077,6 +9084,10 @@ def _write_rect(
         )
         and not _MARK_ITEM_RE.match(block.text)
     )
+    right = (
+        margin is not None and not centered and not rtl
+        and _flush_right(block, [other for other, _ in items], geo.figures if geo is not None else (), *margin)
+    )
     axis = None
     # 几行都对着本页中线、字号一样的长副标题也是居中排的。正文段的末行短，对不上中线；
     # 作者名下面接着小一号的单位，各行另有排法
@@ -9084,7 +9095,7 @@ def _write_rect(
         round(span.get("size", block.size))
         for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()
     }) == 1
-    if (not centered and not rtl and not block.index and (len(block.text) < 100 or long_title)
+    if (not centered and not right and not rtl and not block.index and (len(block.text) < 100 or long_title)
             and not _MARK_ITEM_RE.match(block.text)):
         axis = _centered_axis(block, [other for other, _ in items])
     if axis is not None:
@@ -9093,15 +9104,42 @@ def _write_rect(
         right = max(other.rect.x1 for other, _ in items if other.page == block.page)
         half = max(block.rect.width / 2, min(axis - left, right - axis))
         rect = pymupdf.Rect(axis - half, y0, axis + half, block.rect.y1 + pad)
-        return _clip_write_rect(rect, block.clip), True
+        return _clip_write_rect(rect, block.clip), "center"
     if centered and on_page_mid:
         half = max(block.rect.width / 2, min(page_mid - col_x0, col_x1 - page_mid))
         rect = pymupdf.Rect(page_mid - half, y0, page_mid + half, block.rect.y1 + pad)
     elif centered:
         rect = pymupdf.Rect(col_x0, y0, col_x1, block.rect.y1 + pad)
+    elif right:
+        return _clip_write_rect(pymupdf.Rect(block.rect.x0, y0, block.rect.x1, block.rect.y1 + pad), block.clip), "right"
     else:
         rect = pymupdf.Rect(block.rect.x0, y0, block.rect.x1 + 2, block.rect.y1 + pad)
-    return _clip_write_rect(rect, block.clip), centered
+    return _clip_write_rect(rect, block.clip), "center" if centered else "left"
+
+
+def _flush_right(
+    block: TextBlock, others: list[TextBlock], figures: tuple[pymupdf.Rect, ...], col_x0: float, col_x1: float,
+) -> bool:
+    """靠右排的块：章首的引语、署名。每行都收在栏的右缘，左缘离栏的左缘有栏宽的四分之一以上。
+    栏的右缘要有本页更宽的块排到，栏只由这一块撑出来时右缘就是它自己的右缘。
+    有两行起笔对齐的是左对齐的正文，左边空着也不算（图在前一页时绕图的正文左边是空的）。
+    同一行栏里左边还有别的块或图的不算：一行拆成几块时的右边那一块，绕着图排的正文。"""
+    if block.index or block.clip is not None or block.rect.x0 < col_x0 + (col_x1 - col_x0) * 0.25:
+        return False
+    rows = block.line_rects or [block.rect]
+    if any(abs(row.x1 - col_x1) > 1.5 for row in rows):
+        return False
+    starts = sorted(row.x0 for row in rows)
+    if any(later - earlier < 0.5 for earlier, later in zip(starts, starts[1:])):
+        return False
+    lefts = [other.rect for other in others if other is not block and other.page == block.page]
+    if not any(rect.x0 < block.rect.x0 - 1 and abs(rect.x1 - col_x1) <= 1.5 for rect in lefts):
+        return False
+    return not any(
+        col_x0 < rect.x1 <= block.rect.x0 + 1
+        and min(rect.y1, block.rect.y1) - max(rect.y0, block.rect.y0) > block.size * 0.3
+        for rect in [*lefts, *figures]
+    )
 
 
 def _clip_write_rect(
@@ -9512,7 +9550,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             return _fit_page_margins(block, box, same_page, bounds.height, cjk).y1
 
         def write_one(
-            block: TextBlock, text: str, rect: pymupdf.Rect, centered: bool,
+            block: TextBlock, text: str, rect: pymupdf.Rect, align: str,
             formulas: list[dict] | None = None, justify_last: bool = False,
             # source：block 是挪过位置的副本（索引条目）时的原块，阅读顺序的标记放在原块上
             x_cap: float | None = None, source: TextBlock | None = None,
@@ -9533,6 +9571,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             limit = _write_limit(block, rect, geo, beside)
             if x_cap is not None:
                 limit = x_cap if limit is None else min(limit, x_cap)
+            # 靠右排的收在原来的右缘，不往右扩
+            if align == "right":
+                limit = rect.x1
             # 跨页接过来的半段按上一页的栏宽写，要让开的图可能在块的框外面
             holes = _wrap_holes(block, obstacles, rect | block.rect)
             first_room = _first_row_room(block, rect)
@@ -9540,22 +9581,21 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             # 没有公式图时写进一个锁住换行的盒子，避免一行嵌一次整套字体。
             if rtl:
                 body = _translation_html(text, bformulas, block.size, size, rect.width)
-                align = "right" if not centered else "center"
                 css = (
                     f"* {{font-family: sans-serif; font-size: {size}px; color: {block.color}; "
                     f"font-weight: {weight}; line-height: {1.45 if cjk else 1.2}; margin: 0; padding: 0; "
-                    f"text-align: {align};}}"
+                    f"text-align: {'center' if align == 'center' else 'right'};}}"
                 )
                 _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, beside, archive, limit)
             elif any(f.get("has_img") for f in bformulas):
                 _place_typeset(
-                    page, doc, block, text, bformulas, rect, size, cjk, centered, div_attrs,
+                    page, doc, block, text, bformulas, rect, size, cjk, align, div_attrs,
                     block.color, weight, beside, limit, forms, page_spans, deferred_png,
                     justify_last, holes, first_room,
                 )
             else:
                 _place_plain(
-                    page, text, bformulas, rect, size, block.size, cjk, centered, div_attrs,
+                    page, text, bformulas, rect, size, block.size, cjk, align, div_attrs,
                     block.color, weight, beside, limit, archive, justify_last, holes, first_room,
                 )
             if block.leader is not None and not page.rotation:
@@ -9589,21 +9629,21 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     continue
                 if carry.own_line:
                     box = _own_line_box(b, cjk)
-                    write_one(b, carry.text, box, False, carry.formulas, False, box.x1)
+                    write_one(b, carry.text, box, "left", carry.formulas, False, box.x1)
                     continue
-                rect, centered = _write_rect(b, visible or [(b, carry.text)], cjk, rtl, geo)
+                rect, align = _write_rect(b, visible or [(b, carry.text)], cjk, rtl, geo)
                 room = _room_below(page, b, rect.y0, rect.x0, rect.x0 + carry.width, same_page, kept)
                 # 末行下面的行距是空白，框可以伸过 room，字仍在 room 以内（同 _filled_bottom）
                 size = b.size * 0.88 if cjk else b.size
                 bottom = room + ((1.45 if cjk else 1.2) - 1) * size
                 placed = pymupdf.Rect(rect.x0, rect.y0, rect.x0 + carry.width, max(bottom, rect.y0 + 4))
-                write_one(b, carry.text, placed, centered, carry.formulas, False)
+                write_one(b, carry.text, placed, align, carry.formulas, False)
                 continue
             prepared = shared_head.get(id(b))
             if prepared is not None:
                 head, host_box, bformulas, justify = prepared
                 if head:
-                    write_one(b, head, host_box, False, bformulas, justify, host_box.x1)
+                    write_one(b, head, host_box, "left", bformulas, justify, host_box.x1)
                 continue
             inset = _inset_write_boxes(b, cjk)
             if inset is not None and id(b) not in stacked:
@@ -9619,10 +9659,10 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     t, bformulas, size, b.size, first_box.width,
                 )
                 if head:
-                    write_one(b, head, first_box, False, bformulas, bool(rest.strip()), first_box.x1)
+                    write_one(b, head, first_box, "left", bformulas, bool(rest.strip()), first_box.x1)
                 tail = continuations.get(id(b))
                 if rest.strip() and tail is None:
-                    write_one(b, rest, rest_box, False, bformulas, False, rest_box.x1)
+                    write_one(b, rest, rest_box, "left", bformulas, False, rest_box.x1)
                 elif rest.strip() and tail is not None:
                     room = _room_below(page, b, rest_box.y0, rest_box.x0, rest_box.x1, same_page, kept)
                     floor = write_floor(b, rest_box)
@@ -9635,28 +9675,28 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                         placed_rect = pymupdf.Rect(
                             rest_box.x0, rest_box.y0, rest_box.x1, max(bottom, rest_box.y0 + 4),
                         )
-                        write_one(b, placed, placed_rect, False, bformulas, bool(spill), rest_box.x1)
+                        write_one(b, placed, placed_rect, "left", bformulas, bool(spill), rest_box.x1)
                     if spill:
                         carried[id(tail)] = _Carry(spill, bformulas, rest_box.width)
                 continue
             # 栏宽参考：单栏用本页最宽块；多栏用本块所在栏。居中块用整栏宽，
             # 短译文不再被小框挤成孤字行。排版器按这个宽度断行。
-            rect, centered = _write_rect(b, visible, cjk, rtl, geo)
+            rect, align = _write_rect(b, visible, cjk, rtl, geo)
             if id(b) in stacked:
-                rect, centered = stacked[id(b)], False
+                rect, align = stacked[id(b)], "left"
             shifted = reflowed.get(id(b))
             if shifted is not None:
                 rect = pymupdf.Rect(
                     rect.x0, rect.y0 + shifted.rect.y0 - b.rect.y0, rect.x1, rect.y1 + shifted.rect.y1 - b.rect.y1,
                 )
-                write_one(shifted, t, rect, centered, (formulas_map or {}).get(id(b), []), source=b)
+                write_one(shifted, t, rect, align, (formulas_map or {}).get(id(b), []), source=b)
                 continue
             if b.side_note and geo is not None and geo.frame is not None and b.rect.x1 <= geo.frame.x0:
                 # 左侧的旁注靠右对齐，贴着正文。放不下一行时照常从左起笔
                 width = measure_width(t, b.size * 0.88 if cjk else b.size)
                 if width < rect.width:
                     rect = pymupdf.Rect(b.rect.x1 - width - 1, rect.y0, b.rect.x1 + 1, rect.y1)
-                write_one(b, t, rect, False, None, False, rect.x1)
+                write_one(b, t, rect, "left", None, False, rect.x1)
                 continue
             beside = _beside_body(b, same_page)
             if beside is not None and id(b) not in stacked:
@@ -9665,11 +9705,11 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 if moved is not None:
                     cap = min(cap, moved - 2)
                 rect = pymupdf.Rect(rect.x0, rect.y0, min(rect.x1, max(cap, rect.x0 + 4)), rect.y1)
-                write_one(b, t, rect, False, None, False, rect.x1)
+                write_one(b, t, rect, "left", None, False, rect.x1)
                 continue
             tail = continuations.get(id(b))
             if tail is None:
-                write_one(b, t, rect, centered)
+                write_one(b, t, rect, align)
                 continue
             bformulas = (formulas_map or {}).get(id(b), [])
             # 行尾半句只有几个词宽。按它的宽度断行，续页也会被挤小。
@@ -9685,7 +9725,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 lines = head.count("\n") + 1
                 bottom = _filled_bottom(rect.y0, lines, size, cjk, room, floor)
                 head_rect = pymupdf.Rect(rect.x0, rect.y0, rect.x1, max(bottom, rect.y0 + 4))
-                write_one(b, head, head_rect, centered, bformulas, bool(rest))
+                write_one(b, head, head_rect, align, bformulas, bool(rest))
             if rest:
                 carried[id(tail)] = _Carry(rest, bformulas, rect.width)
         _flush_png(page, deferred_png)

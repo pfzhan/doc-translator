@@ -675,7 +675,7 @@ def test_an_underline_is_written_as_a_mark_and_drawn_under_the_words():
     assert whole.text("Step 1:", span_emphasis(marked)) + whole.close() == "{u}Step 1:{/u}"
 
     line = typeset_lines("步骤 {u}A{/u} 列", 10.0, 200.0, {})[0]
-    placed = _place_line(line, 0.0, 200.0, 10.0, False, False, frozenset(), {})
+    placed = _place_line(line, 0.0, 200.0, 10.0, False, "left", frozenset(), {})
     assert placed is not None
     rules = placed[3]
     assert len(rules) == 1 and 0 < rules[0][1] - rules[0][0] < 10

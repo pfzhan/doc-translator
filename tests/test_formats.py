@@ -4138,7 +4138,7 @@ def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
     _place_plain(page, "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 8, [], pymupdf.Rect(160, 386, 495, 521),
-                 8.8, 10, True, False, "", "#000000", "normal", [], None, None, False, holes)
+                 8.8, 10, True, "left", "", "#000000", "normal", [], None, None, False, holes)
     spans = [span for block in page.get_text("dict")["blocks"] for line in block.get("lines", [])
              for span in line["spans"] if span["text"].strip()]
     assert spans
@@ -7400,13 +7400,13 @@ def test_list_item_near_the_page_middle_stays_left_aligned():
     widest = blk("• Apache top-level project since October, 2015", 35.2, 101.8, 477.8)
     sibling = blk("– Optional SQL parser, JDBC server", 71.2, 317.8, 400.0)
     item = blk("– Community-authored rules, adapters", 71.2, 341.8, 431.0)
-    rect, centered = _write_rect(item, [(widest, ""), (sibling, ""), (item, "")], True, False, None)
-    assert not centered
+    rect, align = _write_rect(item, [(widest, ""), (sibling, ""), (item, "")], True, False, None)
+    assert align == "left"
     assert rect.x0 == item.rect.x0
 
     caption = blk("(a) Pixel space nearest neighbors", 197.0, 367.0, 317.0)
-    _, centered = _write_rect(caption, [(widest, ""), (sibling, ""), (caption, "")], True, False, None)
-    assert centered
+    _, align = _write_rect(caption, [(widest, ""), (sibling, ""), (caption, "")], True, False, None)
+    assert align == "center"
 
 
 def test_heading_at_the_frame_edge_stays_left_aligned():
@@ -7425,10 +7425,63 @@ def test_heading_at_the_frame_edge_stays_left_aligned():
     frame = TextFrame(160, 493, 111, 719, 10)
     geo = PageGeometry.from_rects(612, [heading.rect, widest.rect], height=792, frame=frame)
     items = [(heading, ""), (widest, ""), (title, "")]
-    rect, centered = _write_rect(heading, items, True, False, geo)
-    assert not centered and rect.x0 == heading.rect.x0
-    _, centered = _write_rect(title, items, True, False, geo)
-    assert centered
+    rect, align = _write_rect(heading, items, True, False, geo)
+    assert align == "left" and rect.x0 == heading.rect.x0
+    _, align = _write_rect(title, items, True, False, geo)
+    assert align == "center"
+
+
+def test_epigraph_and_attribution_at_the_frame_right_edge_are_written_flush_right():
+    """章首引语和署名每行都收在版心右缘、离左缘很远：按右对齐写回，写入框不往右伸。
+    同一行左边还有别的块时，右边那一块只是一行的后半截，照常左对齐。"""
+    from app.formats.pdf import TextBlock, _write_rect
+    from app.formats.pdf_align import _place_line
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import PageGeometry
+    from app.formats.pdf_typeset import typeset_lines
+
+    def blk(text, rows, size=10.0):
+        rects = [pymupdf.Rect(*row) for row in rows]
+        rect = pymupdf.Rect(rects[0])
+        for row in rects[1:]:
+            rect |= row
+        return TextBlock(page=128, rect=rect, line_rects=rects, text=text, size=size, color="#000", bold=False)
+
+    quote = blk("Numquam ponenda est pluralitas sine necessitate ‘Plurality should never be proposed unless needed’",
+                [(296.0, 545.3, 493.2, 557.2), (290.0, 557.2, 493.2, 569.2)])
+    author = blk("William of Occam", [(426.8, 570.1, 493.2, 580.9)], 9.0)
+    body = blk("There is a problem with learning weights that make the model perfectly match the training data.",
+               [(160.2, 611.8, 493.2, 623.8)])
+    frame = TextFrame(160.2, 493.2, 100, 720, 10)
+    geo = PageGeometry.from_rects(612, [quote.rect, author.rect, body.rect], height=792, frame=frame)
+    items = [(quote, ""), (author, ""), (body, "")]
+    for block in (quote, author):
+        rect, align = _write_rect(block, items, True, False, geo)
+        assert align == "right" and rect.x1 == block.rect.x1
+    assert _write_rect(body, items, True, False, geo)[1] == "left"
+    # 同一行左边是另一块：这一块是一行的后半截
+    left = blk("The first half of the row", [(160.2, 700, 280, 712)])
+    tail = blk("and the second half", [(300, 700, 493.2, 712)])
+    assert _write_rect(tail, [*items, (left, ""), (tail, "")], True, False, geo)[1] == "left"
+    # 图在前一页，绕图的正文左边空着，几行起笔对齐
+    wrap = blk("Probably the most common visualization method, however, is to project the 100 dimensions",
+               [(270, 218, 493.2, 230), (255, 230, 493.2, 242), (255, 242, 493.2, 254)])
+    assert _write_rect(wrap, [*items, (wrap, "")], True, False, geo)[1] == "left"
+    # 栏的右缘只有这一块排到，是它自己撑出来的
+    lone = blk("1 request", [(300, 300, 493.2, 312)])
+    short = blk("Count(w | denied the)", [(160.2, 280, 400, 292)])
+    lone_geo = PageGeometry.from_rects(612, [lone.rect, short.rect], height=792, frame=frame)
+    assert _write_rect(lone, [(short, ""), (lone, "")], True, False, lone_geo)[1] == "left"
+
+    def start(text):
+        line = typeset_lines(text, 9.0, 200.0, {})[0]
+        ops = _place_line(line, 100.0, 200.0, 9.0, False, "right", frozenset(), {})[0]
+        return float(next(op for op in ops if op.endswith("Tm")).split()[4]), line.width
+
+    x, width = start("奥卡姆的威廉")
+    assert abs(x + width - 300.0) < 0.5
+    # 折行留在行尾的空格看不见，不占靠右的位置
+    assert start("William of Occam ")[0] == start("William of Occam")[0]
 
 
 def test_slide_title_and_a_box_label_below_stay_apart():
@@ -7460,8 +7513,8 @@ def test_two_line_title_centered_on_the_page_is_written_centered():
     widest = blk("– To allow other forms of indices (maybe defined as external), e.g., a", 68, 210, 709, 256, 20)
     item = blk("• Get the missing SQL support", 31, 119, 367, 147, 24)
     geo = PageGeometry.from_rects(720, [title.rect, widest.rect, item.rect], height=405)
-    rect, centered = _write_rect(title, [(title, ""), (widest, ""), (item, "")], True, False, geo)
-    assert centered
+    rect, align = _write_rect(title, [(title, ""), (widest, ""), (item, "")], True, False, geo)
+    assert align == "center"
     assert abs((rect.x0 + rect.x1) / 2 - 360) < 1
 
     widest_title = blk("Calcite Planning Process", 122, 25, 599, 76, 44)
@@ -7469,8 +7522,8 @@ def test_two_line_title_centered_on_the_page_is_written_centered():
               blk("Best RelNode Graph", 451, 356, 543, 367, 10)]
     geo = PageGeometry.from_rects(720, [widest_title.rect, *(label.rect for label in labels)], height=405)
     items = [(widest_title, ""), *((label, "") for label in labels)]
-    _, centered = _write_rect(widest_title, items, True, False, geo)
-    assert centered
+    _, align = _write_rect(widest_title, items, True, False, geo)
+    assert align == "center"
 
 
 def test_title_page_centered_off_the_page_middle_is_written_centered():
@@ -7496,8 +7549,8 @@ def test_title_page_centered_off_the_page_middle_is_written_centered():
                                   frame=TextFrame(203, 493, 110, 719, 10))
     items = [(b, "") for b in blocks]
     for block in blocks:
-        rect, centered = _write_rect(block, items, True, False, geo)
-        assert centered, block.text
+        rect, align = _write_rect(block, items, True, False, geo)
+        assert align == "center", block.text
         assert abs((rect.x0 + rect.x1) / 2 - 301) < 1, block.text
 
 
@@ -7581,8 +7634,8 @@ def test_left_aligned_dialogue_lines_are_not_centered():
     second = blk("ELIZA: WHAT WOULD IT MEAN TO YOU IF YOU GOT SOME HELP", 200, 471)
     geo = PageGeometry.from_rects(612, [first.rect, second.rect], height=792,
                                   frame=TextFrame(160, 493, 111, 719, 10))
-    rect, centered = _write_rect(first, [(first, ""), (second, "")], True, False, geo)
-    assert not centered and rect.x0 == first.rect.x0
+    rect, align = _write_rect(first, [(first, ""), (second, "")], True, False, geo)
+    assert align == "left" and rect.x0 == first.rect.x0
 
 
 def test_large_chapter_number_stays_apart_from_the_title():
@@ -8000,7 +8053,7 @@ def test_cjk_line_keeps_bold_across_a_formula():
     text = "前面{b}粗体\x01i\x021\x01/i\x02还是粗体{/b}后面"
     lines = typeset_lines(text, 10, 400, {1: FormulaMetric(10, 10, 8, 2)})
     commands, _slots, _fonts = _place_lines(
-        lines, pymupdf.Rect(0, 0, 400, 100), 10, 1.4, "#000000", False, frozenset({1}), {}, 800,
+        lines, pymupdf.Rect(0, 0, 400, 100), 10, 1.4, "#000000", "left", frozenset({1}), {}, 800,
     )
     stroked, bold = [], False
     for op in commands.splitlines():
@@ -8025,7 +8078,7 @@ def test_cjk_lines_rise_to_stay_inside_a_tight_first_line_box():
 
     def baseline(first_room):
         _commands, slots, _fonts = _place_lines(
-            lines, pymupdf.Rect(0, 100, 400, 200), 10, 1.4, "#000000", False, frozenset(), {}, 800,
+            lines, pymupdf.Rect(0, 100, 400, 200), 10, 1.4, "#000000", "left", frozenset(), {}, 800,
             first_room=first_room,
         )
         commands = _commands.splitlines()
@@ -8124,7 +8177,7 @@ def test_cjk_line_keeps_colors_across_a_formula():
     text = "前面{c0000ff}蓝色\x01i\x021\x01/i\x02还是蓝色{/c}后面"
     lines = typeset_lines(text, 10, 400, {1: FormulaMetric(10, 10, 8, 2)})
     commands, _slots, _fonts = _place_lines(
-        lines, pymupdf.Rect(0, 0, 400, 100), 10, 1.4, "#000000", False, frozenset({1}), {}, 800,
+        lines, pymupdf.Rect(0, 0, 400, 100), 10, 1.4, "#000000", "left", frozenset({1}), {}, 800,
     )
     painted, now = [], None
     for op in commands.splitlines():
@@ -9241,8 +9294,8 @@ def test_an_index_entry_is_never_centered():
                       bold=False)
     entry = TextBlock(page=0, rect=rect, line_rects=[rect], text="in NER, 241, 419", size=8.0, color="#000",
                       bold=False, entry=True, index=True)
-    assert _write_rect(plain, [(plain, "")], True, False, geo)[1]
-    assert not _write_rect(entry, [(entry, "")], True, False, geo)[1]
+    assert _write_rect(plain, [(plain, "")], True, False, geo)[1] == "center"
+    assert _write_rect(entry, [(entry, "")], True, False, geo)[1] == "left"
 
 
 def test_the_rest_of_a_broken_word_continues_the_line_above():
