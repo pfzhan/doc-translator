@@ -164,6 +164,19 @@ def test_the_indented_next_line_does_not_stop_widening():
     assert _beside_rows([low], pymupdf.Rect(72, 650.7, 303, 750), rows) == [low]
 
 
+
+def test_an_equation_number_between_two_rows_is_beside_them():
+    """分情况的行间公式，右边的式号夹在「if …」「otherwise」两行中间，和每一行都只交叠一小半，
+    也在这两行旁边，右扩要让开。在最后一行下面的不算。"""
+    from app.formats.pdf import _beside_rows, _on_rows
+
+    rows = [pymupdf.Rect(351.4, 215.1, 422.0, 227.1), pymupdf.Rect(351.4, 229.4, 390.1, 241.4)]
+    number = pymupdf.Rect(471.5, 222.8, 493.2, 233.6)
+    below = pymupdf.Rect(471.5, 238.0, 493.2, 248.8)
+    assert _on_rows(number, rows)
+    assert not _on_rows(below, rows)
+    assert _beside_rows([number], pymupdf.Rect(351.4, 214, 470, 243), rows) == [number]
+
 def test_from_page_collects_image_not_page_border():
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=400)

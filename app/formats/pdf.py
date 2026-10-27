@@ -9103,7 +9103,7 @@ def _beside_rows(
     框往下多出来的整行也算一行，那里将来要写字。"""
     top, bottom = min(row.y0 for row in rows), max(row.y1 for row in rows)
     pitch = max(row.height for row in rows)
-    bands = list(rows)
+    bands = _row_bands(rows)
     if rect.y1 - bottom > pitch * 0.5:
         bands.append(pymupdf.Rect(rect.x0, bottom, rect.x1, rect.y1))
     if top - rect.y0 > pitch * 0.5:
@@ -9115,9 +9115,21 @@ def _beside_rows(
     ]
 
 
+def _row_bands(rows: Sequence[pymupdf.Rect]) -> list[pymupdf.Rect]:
+    """原文的各行，加上上下相邻、间隔不到半行高的两行合起来的带。夹在两行中间的字
+    （分情况的行间公式右边的式号）和每一行都只交叠一小半，和合起来的带交叠过半。"""
+    bands = list(rows)
+    ordered = sorted(rows, key=lambda row: row.y0)
+    for upper, lower in zip(ordered, ordered[1:]):
+        if lower.y0 - upper.y1 < min(upper.height, lower.height) * 0.5:
+            bands.append(upper | lower)
+    return bands
+
+
 def _on_rows(ink: pymupdf.Rect, rows: Sequence[pymupdf.Rect]) -> bool:
-    """这处字和某一行的上下交叠过它自己高度的一半：在这一行的旁边，不是上一行、下一行。"""
-    return any(min(ink.y1, row.y1) - max(ink.y0, row.y0) > ink.height * 0.5 for row in rows)
+    """这处字和某一行（或相邻两行合起来）的上下交叠过它自己高度的一半：在这几行的旁边，
+    不是上一行、下一行。"""
+    return any(min(ink.y1, band.y1) - max(ink.y0, band.y0) > ink.height * 0.5 for band in _row_bands(rows))
 
 
 def _room_below(
