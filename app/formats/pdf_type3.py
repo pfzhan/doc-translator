@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import bisect
 import os
 import re
 import shutil
@@ -460,10 +461,10 @@ def _vote_labels(glyphs: dict[int, list[Glyph]], words: dict[int, list[OcrWord]]
     votes: dict[Key, Counter[str]] = defaultdict(Counter)
     uneven: list[tuple[list[Glyph], tuple[OcrChar, ...]]] = []
     for pno, page_words in words.items():
-        items = glyphs.get(pno, [])
+        centers = _GlyphCenters(glyphs.get(pno, []))
         for word in page_words:
             box = pymupdf.Rect(word.rect.x0 - 0.7, word.rect.y0 - 0.7, word.rect.x1 + 0.7, word.rect.y1 + 0.7)
-            inside = sorted((glyph for glyph in items if _center_in(glyph.rect, box)), key=lambda glyph: glyph.rect.x0)
+            inside = sorted(centers.inside(box), key=lambda glyph: glyph.rect.x0)
             if not inside or not word.chars:
                 continue
             # 字数对上时按顺序配：OCR 的字序可靠，逐字框常偏出两三个点
@@ -801,12 +802,29 @@ def _bearings(pages: dict[int, list[_Line]], labels: dict[Key, Label]) -> dict[K
 def _word_owners(glyphs: list[Glyph], words: list[OcrWord]) -> dict[int, int]:
     """每个字形落在 OCR 的第几个词里。词距拿不准时按它分词。"""
     owners: dict[int, int] = {}
+    centers = _GlyphCenters(glyphs)
     for index, word in enumerate(words):
         box = pymupdf.Rect(word.rect.x0 - 0.7, word.rect.y0 - 0.7, word.rect.x1 + 0.7, word.rect.y1 + 0.7)
-        for glyph in glyphs:
-            if _center_in(glyph.rect, box):
-                owners[id(glyph)] = index
+        for glyph in centers.inside(box):
+            owners[id(glyph)] = index
     return owners
+
+
+class _GlyphCenters:
+    """一页的字形按中心的纵坐标排好。一页有上千个字形、几百个词，逐个词和每个字形比太慢，
+    查一个框时只看中心落在框上下范围里的那一段。"""
+
+    def __init__(self, glyphs: list[Glyph]) -> None:
+        self._glyphs = glyphs
+        self._order = sorted(range(len(glyphs)), key=lambda index: (glyphs[index].rect.y0 + glyphs[index].rect.y1) / 2)
+        self._middles = [(glyphs[index].rect.y0 + glyphs[index].rect.y1) / 2 for index in self._order]
+
+    def inside(self, box: pymupdf.Rect) -> list[Glyph]:
+        """中心落在 box 里的字形，按原来的先后。"""
+        low = bisect.bisect_left(self._middles, box.y0)
+        high = bisect.bisect_right(self._middles, box.y1)
+        found = sorted(index for index in self._order[low:high] if _center_in(self._glyphs[index].rect, box))
+        return [self._glyphs[index] for index in found]
 
 
 def _learn_roles(
