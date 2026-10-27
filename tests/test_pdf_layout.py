@@ -775,6 +775,19 @@ def test_algorithm_box_lines_become_cells():
         assert all(a.y1 == b.y0 for a, b in zip(bands, bands[1:]))
 
 
+def test_algorithm_boxes_are_looked_for_only_on_pages_naming_one():
+    """给了本页的词时，词里有 Algorithm 才逐行找图注；找出的框和不给词时一样。"""
+    from app.formats.pdf_layout import algorithm_tables, page_words
+
+    page = _algorithm_page(False)
+    assert algorithm_tables(page, words=page_words(page)) == algorithm_tables(page) != ()
+    plain = pymupdf.open().new_page(width=400, height=300)
+    plain.draw_line((50, 50), (350, 50), width=0.8)
+    plain.draw_line((50, 130), (350, 130), width=0.8)
+    plain.insert_text((52, 62), "Figure 1 Gradient descent", fontsize=10)
+    assert algorithm_tables(plain, words=page_words(plain)) == ()
+
+
 def test_algorithm_lines_are_translated_one_by_one():
     page = _algorithm_page(False)
     blocks = [block for block in extract_blocks(page.parent) if not block.text.startswith("Algorithm")]

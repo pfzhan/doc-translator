@@ -814,7 +814,7 @@ def page_tables(
     ruled = tuple(_with_text_rows(table, words) for table in ruled_tables(page, drawings))
     ruled = (*ruled, *filled_tables(page, drawings, words, ruled))
     ruled = (*ruled, *column_ruled_tables(_rule_segments(page, drawings)[1], words, ruled))
-    algorithms = algorithm_tables(page, drawings)
+    algorithms = algorithm_tables(page, drawings, words)
     banded = banded_tables(_rule_segments(page, drawings)[0], words, (*ruled, *algorithms))
     ruled = (*(table for table in ruled if not _mostly_inside(table.rect, [band.rect for band in banded])), *banded)
     # 无线的格子表本来就是按对齐的行找的，表头对齐的话已经在里面，不再往上找
@@ -1175,15 +1175,21 @@ def _holds(cell: pymupdf.Rect, box: pymupdf.Rect) -> bool:
 
 _SYMBOL_FONT_RE = re.compile(r"(?:^|\+)(?:CMSY|CMEX|MSAM|MSBM)", re.I)
 _ALGORITHM_RE = re.compile(r"^\s*(?:Algorithm|Procedure|算法)\s*\d+", re.I)
+_ALGORITHM_WORD_RE = re.compile(r"Algorithm|Procedure|算法", re.I)
 
 
-def algorithm_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> tuple[RuledTable, ...]:
+def algorithm_tables(
+    page: pymupdf.Page, drawings: list[dict] | None = None, words: Sequence[_TextWord] | None = None,
+) -> tuple[RuledTable, ...]:
     """算法框里的伪代码当成一列的表，每一行是一格。
 
     伪代码一行一句，缩进是结构，行和行不是一段话。PyMuPDF 常把几行收进同一块，
     后面的合并又会把它们接成段落重排。做成格子以后，每行单独翻译、写回原行，
     不和别的行合并。算法框的范围按框线定：图注下面那条横线到再下面一条横线。
+    words 是本页的词。没有一个词含 Algorithm、Procedure 或「算法」的页面不会有算法图注，不必再读一遍整页的字。
     """
+    if words is not None and not any(_ALGORITHM_WORD_RE.search(word.text) for word in words):
+        return ()
     try:
         data = page.get_text("dict")
     except Exception:  # noqa: BLE001
