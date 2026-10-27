@@ -10102,8 +10102,9 @@ def _compact(doc: pymupdf.Document) -> bytes:
 
     insert_htmlbox 每次都嵌入整套字体，双语版里原书的图片、字体左右各一份。
     MuPDF 的 garbage=4 也能合并，但它两两比较所有对象，一本几百页的书要十几分钟。
+    合并前先不压缩：重复的字体有几百 MB，压完大半又被合并掉。合并后再压，一篇 25 页的论文省 20 秒。
     """
-    doc = pymupdf.open("pdf", doc.tobytes(garbage=2, deflate=True))
+    doc = pymupdf.open("pdf", doc.tobytes(garbage=2))
     merge_duplicates(doc)
     return _subset_fonts_safe(doc.tobytes(garbage=1, deflate=True))
 
