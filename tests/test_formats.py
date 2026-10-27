@@ -3434,6 +3434,24 @@ def test_glyph_places_match_when_a_column_jitters_in_the_last_digits():
     assert not _same_places(before, after[:3] + [(80.3, 169.0)])
     assert not _same_places(before, after[:3])
 
+
+def test_a_formula_bitmap_is_rendered_only_when_used(monkeypatch):
+    """裁公式图时只记下从哪里裁；矢量贴回失败、要贴位图时才渲染，只渲染一次。"""
+    from app.formats.pdf import _FormulaImage, _formula_png
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=200, height=100)
+    page.insert_text((20, 50), "x + y", fontsize=12)
+    calls = []
+    original = pymupdf.Page.get_pixmap
+    monkeypatch.setattr(pymupdf.Page, "get_pixmap", lambda self, *a, **k: calls.append(1) or original(self, *a, **k))
+    formula = {"png": _FormulaImage(doc, 0, pymupdf.Rect(15, 35, 60, 55))}
+    assert calls == []
+    png = _formula_png(formula)
+    assert png.startswith(b"\x89PNG") and _formula_png(formula) is png and len(calls) == 1
+    assert _formula_png({"png": b"given"}) == b"given" and _formula_png({}) is None
+
+
 def test_formula_glyphs_stay_in_place_after_a_size_change_on_their_line():
     """同一行中途换过字号（小型大写），MuPDF 删掉前面的字后会把公式算偏。
     偏了就整行留下，别的行照样删掉。"""

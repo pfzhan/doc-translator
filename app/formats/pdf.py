@@ -7343,6 +7343,26 @@ def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
     return out
 
 
+class _FormulaImage:
+    """公式在原页上的位图。只在矢量贴回失败时才用到（见 _paint_formula），裁图时只记下从哪一页、
+    哪一块裁，用到时才渲染，渲染一次。写回在子进程里时，子进程用自己那份原文档渲染。"""
+
+    def __init__(self, doc: pymupdf.Document, page: int, clip: pymupdf.Rect):
+        self.doc, self.page, self.clip = doc, page, pymupdf.Rect(clip)
+        self._png: bytes | None = None
+
+    def png(self) -> bytes:
+        if self._png is None:
+            self._png = self.doc[self.page].get_pixmap(dpi=300, clip=self.clip).tobytes("png")
+        return self._png
+
+
+def _formula_png(formula: dict) -> bytes | None:
+    """公式的位图：测试里直接给 PNG，正式流程里是 _FormulaImage。"""
+    png = formula.get("png")
+    return png.png() if isinstance(png, _FormulaImage) else png
+
+
 def _marker_png(idx: int) -> bytes:
     """1x1 彩色像素：颜色编码公式的全局序号（R + G<<8），供插入后找回落位。
     必须全局唯一：同色的标记图会被 MuPDF 去重成同一 xref，落位全串到第一处。"""
@@ -7851,7 +7871,7 @@ def _paint_formula(
             return
         except Exception:  # noqa: BLE001 - 矢量透传失败回退位图
             pass
-    png = formula.get("png")
+    png = _formula_png(formula)
     if not png:
         return
     if deferred_png is not None:
@@ -10860,7 +10880,7 @@ def _crop_formulas(
                 bbox = pymupdf.Rect(part["bbox"])
                 if bbox.width < 1 or bbox.height < 1:
                     continue
-                part["png"] = src_doc[part_page].get_pixmap(dpi=300, clip=bbox).tobytes("png")
+                part["png"] = _FormulaImage(src_doc, part_page, bbox)
                 part["has_img"] = True
                 part["clip"] = bbox + (0.4, 0.4, -0.4, -0.4)
                 ready = True
