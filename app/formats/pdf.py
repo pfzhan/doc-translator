@@ -52,7 +52,7 @@ from .pdf_flow import (
     writer_for,
 )
 from .pdf_dedupe import merge_duplicates
-from .pdf_erase import Erasure, erase, restore_glyphs, type3_glyphs
+from .pdf_erase import Erasure, erase, restore_glyphs, single_precision, type3_glyphs
 from .pdf_order import ReadingOrder
 from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, text_frames
 from .pdf_layout import (
@@ -9200,13 +9200,14 @@ def _fit_page_margins(
 def _kept_ink(page: "pymupdf.Page", blocks: list[TextBlock]) -> list[pymupdf.Rect]:
     """擦除以后原处还留着、不属于任何块的字，如提取时丢掉的行间公式。
     目录的点线、随公式图搬走的字形已经擦掉，不在其内。"""
-    boxes = [rect + (-1, -1, 1, 1) for block in blocks for rect in (block.rect, *block.line_rects)]
+    # 一页几千个词，每个都和所有行框比。点和框都按 MuPDF 的单精度先换好，结果和 Rect 的判断一样
+    boxes = [single_precision(rect + (-1, -1, 1, 1)) for block in blocks for rect in (block.rect, *block.line_rects)]
     kept = []
     for word in page.get_text("words"):
-        rect = pymupdf.Rect(word[:4])
-        center = pymupdf.Point((rect.x0 + rect.x1) / 2, (rect.y0 + rect.y1) / 2)
-        if not any(center in box for box in boxes):
-            kept.append(rect)
+        center = pymupdf.mupdf.FzPoint((word[0] + word[2]) / 2, (word[1] + word[3]) / 2)
+        x, y = center.x, center.y
+        if not any(x0 <= x < x1 and y0 <= y < y1 for x0, y0, x1, y1 in boxes):
+            kept.append(pymupdf.Rect(word[:4]))
     return kept
 
 

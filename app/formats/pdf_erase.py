@@ -114,6 +114,8 @@ class _Owners:
             self.lines.append(_Line(baseline, size, bbox.x0, bbox.x1))
             lined.append(span)
         self.boxes.extend(erasure.spanless)
+        # 每个字形都要和这些框比一遍。按 MuPDF 存矩形的单精度先换好，比的结果和 Rect.contains 一样
+        self._box_bounds = [single_precision(box) for box in self.boxes]
         self.runs = _prose_runs(
             [line for line, span in zip(self.lines, lined) if not erasure.math(span)]
         )
@@ -131,6 +133,7 @@ class _Owners:
         )
 
     def owns(self, x: float, y: float) -> bool:
+        """x、y 是 MuPDF 换算出的页面坐标，本来就是单精度的值。"""
         if _key(x, y) in self.points:
             return True
         for line in self.lines:
@@ -139,8 +142,14 @@ class _Owners:
                 and line.x0 - _X_TOLERANCE <= x < line.x1
             ):
                 return True
-        point = pymupdf.Point(x, y)
-        return any(box.contains(point) for box in self.boxes)
+        # 和 MuPDF 判断点在矩形里一样：左、上边算在里面，右、下边不算
+        return any(x0 <= x < x1 and y0 <= y < y1 for x0, y0, x1, y1 in self._box_bounds)
+
+
+def single_precision(box: pymupdf.Rect) -> tuple[float, float, float, float]:
+    """矩形按 MuPDF 存的单精度取值。拿它和单精度的点比，结果和 Rect.contains 一样，省掉每次的换算。"""
+    rect = mupdf.FzRect(box.x0, box.y0, box.x1, box.y1)
+    return rect.x0, rect.y0, rect.x1, rect.y1
 
 
 def _prose_runs(lines: list[_Line]) -> list[_Line]:
