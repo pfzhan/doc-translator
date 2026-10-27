@@ -3,13 +3,15 @@
 量化要 onnx 包（onnxruntime 的量化工具依赖它），只在生成时用，翻译时不需要。没装时页面上提示安装，
 翻译照常用 fp32 模型。
 
-和一般的量化做法有两处不同：
+和一般的量化做法有三处不同：
 - 检测头的解码（DFL、Sigmoid、拼框和分）和各分支最后一层卷积留 fp32。框坐标 0～1024 和分 0～1 拼在
   一个张量里，共用一个 int8 刻度时分全变成 0，一个公式也框不出来。
 - 权重只用 7 位（reduce_range）。没有 VNNI 指令的 x86 CPU 上，onnxruntime 的 int8 卷积把两个 u8×s8
   乘积加进 16 位，权重用满 8 位时会溢出，第一层的误差就有两倍。
-在 36 篇 arXiv 论文上，用另外 17 个 PDF 校准时，行内公式识别正确的比例 98.6%（fp32 是 98.9%），分段不变；
-6 核 CPU 上每页推理 1.11 s → 0.56 s。
+- 中间结果的范围取各页最大最小值的滑动平均（CalibMovingAverage），不取所有页里的最大最小值。后者被个别页
+  撑大，结果随抽到哪些页变化，抽 128 页也不稳。
+在 36 篇 arXiv 论文上，用另外 17 个 PDF 校准时，行内公式识别正确的比例和 fp32 一样是 98.9%（换 5 组抽页都是，
+不用滑动平均时 98.5%～98.7%），分段不变；6 核 CPU 上每页推理 1.11 s → 0.56 s。
 """
 from __future__ import annotations
 
@@ -150,7 +152,7 @@ class Quantizer:
                 str(pre), str(out), Pages(), quant_format=QuantFormat.QDQ,
                 activation_type=QuantType.QUInt8, weight_type=QuantType.QInt8, per_channel=True,
                 reduce_range=True, nodes_to_exclude=decode_nodes(names),
-                extra_options={"ActivationSymmetric": False},
+                extra_options={"ActivationSymmetric": False, "CalibMovingAverage": True},
             )
             _check(src, out, images[:4])
             out.replace(dest)
