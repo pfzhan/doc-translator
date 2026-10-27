@@ -598,7 +598,7 @@ def ruled_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> tupl
     （含图片画的线，见 _page_drawings），没给时现读。
 
     find_tables 每次先把整页的字逐个转成字典，一页要几十毫秒。页面上凑不出两横两竖的线，
-    就围不出格子，不必调用。"""
+    就围不出格子，不必调用；凑得出时只取线所在一带的字（见 _table_clip）。"""
     if drawings is None:
         drawings = _page_drawings(page)
     if not _grid_possible(drawings):
@@ -606,6 +606,7 @@ def ruled_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> tupl
     pymupdf.no_recommend_layout()
     try:
         found = page.find_tables(
+            clip=_table_clip(page, drawings),
             vertical_strategy="lines_strict", horizontal_strategy="lines_strict", paths=drawings,
         )
     except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有表
@@ -620,6 +621,29 @@ def ruled_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> tupl
             rules = _rule_segments(page, drawings)
         tables.append(_with_open_edges(RuledTable(pymupdf.Rect(table.bbox), cells), *rules))
     return tuple(tables)
+
+
+def _table_clip(page: pymupdf.Page, drawings: Sequence[dict]) -> pymupdf.Rect | None:
+    """find_tables 取字的范围。线都在范围里，找出的表和不限范围时一样，只是少转换范围外的字。
+
+    find_tables 用字做两处判断：表格区域里要有字才算表；几条线连成的一片里要有字，才给这一片
+    补上外框线。后一处比的是字框经页面变换矩阵换算后的上下沿，等于拿上下翻转后的位置去比，
+    所以范围除了线所在的一带，还要加上它上下翻转后的一带。线的外框宽或高可能为零，
+    Rect 求并集时会当成空框跳过，所以按坐标取最值。旋转过的页面不限范围。"""
+    if page.rotation or not drawings:
+        return None
+    rects = [pymupdf.Rect(drawing["rect"]) for drawing in drawings]
+    area = pymupdf.Rect(
+        min(r.x0 for r in rects), min(r.y0 for r in rects), max(r.x1 for r in rects), max(r.y1 for r in rects),
+    )
+    flipped = area * ~page.transformation_matrix
+    top, bottom = min(area.y0, flipped.y0), max(area.y1, flipped.y1)
+    return pymupdf.Rect(area.x0 - _TABLE_CLIP_PAD, top - _TABLE_CLIP_PAD, area.x1 + _TABLE_CLIP_PAD,
+                        bottom + _TABLE_CLIP_PAD) & page.rect
+
+
+# 取字的范围比线多出的一圈：MuPDF 按它自己量的字框决定收不收，和报出来的框差一点
+_TABLE_CLIP_PAD = 5.0
 
 
 def _image_rules(images: Sequence[dict]) -> list[dict]:

@@ -605,6 +605,38 @@ def test_nested_boxes_of_a_diagram_are_not_a_table():
     assert "Node for each node in Input" in texts
 
 
+def test_ruled_tables_read_only_the_text_near_the_lines_and_find_the_same_tables():
+    """find_tables 只取线所在一带的字时，找出的表和取整页的字一样。
+    几条线连成的一片缺右边和下边，find_tables 看到片里有字才补上外框，比的是上下翻过来的位置，
+    所以翻过来那一带的字也要取。只取线附近的字就少了这张表。"""
+    from app.formats.pdf_layout import _page_drawings, _table_clip, ruled_tables
+
+    def found(page, clip):
+        pymupdf.no_recommend_layout()
+        tables = page.find_tables(
+            clip=clip, vertical_strategy="lines_strict", horizontal_strategy="lines_strict", paths=_page_drawings(page),
+        ).tables
+        return [pymupdf.Rect(table.bbox) for table in tables]
+
+    for flipped_text in (False, True):
+        doc = pymupdf.open()
+        page = doc.new_page(width=400, height=600)
+        page.draw_line((40, 70), (260, 70))
+        page.draw_line((40, 70), (40, 160))
+        page.draw_line((40, 115), (260, 115))
+        page.draw_line((150, 70), (150, 160))
+        for x, y in ((60, 95), (170, 95), (60, 140), (170, 140)):
+            page.insert_text((x, y), "ab", fontsize=9)
+        if flipped_text:
+            page.insert_text((60, 485), "Text at the flipped height", fontsize=9)
+        whole = found(page, None)
+        assert whole == ([pymupdf.Rect(40, 70, 260, 160)] if flipped_text else [])
+        assert found(page, _table_clip(page, _page_drawings(page))) == whole
+        assert [table.rect for table in ruled_tables(page)] == whole
+        if flipped_text:
+            assert found(page, pymupdf.Rect(35, 65, 265, 165)) == []
+
+
 def test_unruled_short_cells_stay_inside_and_do_not_vote_as_columns(tmp_path):
     """没有线的短格子按列缘对齐认成表，译文不越出格子，也不把页面拆成分栏。"""
     doc = pymupdf.open()
