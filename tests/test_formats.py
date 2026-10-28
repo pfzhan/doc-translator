@@ -6849,6 +6849,22 @@ def test_computer_modern_upright_is_math_when_the_body_is_times():
     assert "math" not in modern["blocks"][0]["lines"][0]["spans"][0]
 
 
+def test_a_font_that_writes_math_alphabet_letters_is_math():
+    """字体名单里没有的数学斜体（newtxmath 配 Cochineal 叫 cochMI），字母映到 𝑁、𝑡 这些数学字母，
+    同一字体写的括号、逗号也算公式。正文里偶尔夹一个数学字母的字体不算。"""
+    from app.formats.pdf import _font_is_math, _mark_math_alphabet, _span_is_math
+
+    data = _page_data(
+        [("Cochineal-Roman", "fitted a hyperbola "), ("zxcMI", "𝑁("), ("zxcMI", "𝑡"), ("Cochineal-Roman", " to two millennia")],
+        [("Cochineal-Roman", "where 𝑥 is the count of " * 3)],
+    )
+    _mark_math_alphabet([data])
+    first, second = (line["spans"] for line in data["blocks"][0]["lines"])
+    assert _span_is_math(first[1]) and _span_is_math(first[2])
+    assert not _span_is_math(first[0]) and not _span_is_math(second[0])
+    assert _font_is_math("NewTXMI7") and _font_is_math("cochMRM") and not _font_is_math("Cochineal-Italic")
+
+
 def test_a_line_split_into_two_blocks_is_put_back_together():
     """PyMuPDF 把一行从上标处切开、后半截分进别的块时，挪回前半截后面。"""
     from app.formats.pdf import _rejoin_split_lines
@@ -9972,3 +9988,22 @@ def test_a_paragraph_continues_after_a_page_of_figures():
     body = blk("bie and Shutova (2022), who show that ablating induction heads hurts.", 1, 584, rows=6)
     units = _cross_page_units([host, caption, body, tail], 10.0)
     assert [host, tail] not in units
+
+
+def test_a_font_that_only_writes_single_marks_beside_formulas_is_math():
+    """点阵的空心 1（𝟙）是名字只有编号的 Type3 字体，提出来是 1。全文只写一两个字、多半贴着公式，
+    就是公式字体。正文里单独出现的脚注号字体不贴公式，不算。"""
+    from app.formats.pdf import _mark_formula_only_fonts, _span_is_math
+
+    def span(font, text, x0, x1):
+        return {"font": font, "text": text, "size": 10.0, "bbox": (x0, 50, x1, 60)}
+
+    data = {"blocks": [{"type": 0, "lines": [
+        {"spans": [span("CMR10", "the set is", 0, 40), span("CMMI10", "A", 42, 49), span("F74", "1", 49, 55),
+                   span("CMSY10", "{", 55, 60)]},
+        {"spans": [span("CMR10", "see note", 0, 40), span("F99", "2", 41, 45), span("CMR10", " below", 46, 80)]},
+    ]}]}
+    _mark_formula_only_fonts([data])
+    first, second = (line["spans"] for line in data["blocks"][0]["lines"])
+    assert _span_is_math(first[2])
+    assert not _span_is_math(second[1]) and not _span_is_math(first[0])

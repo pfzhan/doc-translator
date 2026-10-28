@@ -66,12 +66,15 @@ from .pdf_type3 import Type3Reader, broken_type3_names, recover_type3_page
 from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, line_offsets, typeset_lines
 from .pdf_vision import FormulaDetector, FormulaModel, ModelBoxes, formula_detector, layout_detector
 
-MATH_FONT_RE = re.compile(r"CMMI|CMB?SY|CMEX|MSBM|MSAM|Math|Symbol|STIX|Cambria Math", re.I)
+MATH_FONT_RE = re.compile(r"CMMI|CMB?SY|CMEX|MSBM|MSAM|Math|Symbol|StandardSym|STIX|Cambria Math", re.I)
 # 精确的数学字体白名单（直接判公式）
-# 正文字体配套的数学字体名里带 Math（XCharterMath、CambriaMath），newtx、pxfonts 的数学字体是 txmi、txsy 这样的短名
+# 正文字体配套的数学字体名里带 Math（XCharterMath、CambriaMath），newtx、pxfonts 的数学字体是 txmi、txsy 这样的短名。
+# newtxmath 的数学斜体叫 NewTXMI、NewTXMI7，配 Cochineal 时叫 cochMI，数学正体叫 cochMRM。
+# Euler 的花体、哥特体（EUSM、EUFM），空心体（bbold、dsfont、bbm）只用来写公式
 MATH_FONT_PRECISE_RE = re.compile(
     r"Asana|FiraMath|STIX|TeXGyre.*Math|XITSMath|LibertinusMath|MathJax|Cambria Math|LatinModern.*Math"
-    r"|(?-i:Math(?![a-z]))|(?:^|\+)n?[tp]x(?:mi|sy|ex)", re.I)
+    r"|(?-i:Math(?![a-z]))|(?:^|\+)n?[tp]x(?:mi|sy|ex)|(?:^|\+)(?:New[TP]X|coch)B?(?:MI|MRM)\d*$"
+    r"|(?:^|\+)(?:EU[SF]M|EURM|EUEX|BBOLD|bbm|dsrom|dsss|DSSerif)", re.I)
 # 常见正文字体黑名单（优先于启发式，里面的希腊字母/符号靠字符级规则识别）
 TEXT_FONT_RE = re.compile(
     r"Times|Arial|Calibri|Minion|Palatino|\bCMR|Charter|Georgia|Helvetica|Verdana|Roboto|Lato|"
@@ -2425,6 +2428,68 @@ _CM_UPRIGHT_RE = re.compile(r"^(?:[A-Z]{6}\+)?(?:CMR|CMBX|CMSS(?:BX|I)?|CMSL)\d"
 def _span_is_math(span: dict) -> bool:
     """按字体判公式。math 是提取时按全文字体定下的（见 _mark_math_roman）。"""
     return bool(span.get("math")) or _font_is_math(str(span.get("font") or ""))
+
+
+# 数学字母区（𝑥、𝜁、𝐀）。字体的 ToUnicode 把字母映到这里，这个字体就是写公式的
+_MATH_ALPHABET_RE = re.compile(r"[\U0001D400-\U0001D7FF\u210E]")
+
+
+def _mark_math_alphabet(pages: list[dict]) -> None:
+    """字母大半映到数学字母区的字体，所有 span 都标上 math。字体名单认不全的数学斜体
+    （newtxmath 配各种正文字体时的名字）照样认得出，同一字体里的逗号、括号也跟着算公式。"""
+    letters: dict[str, int] = {}
+    mathy: dict[str, int] = {}
+    for data in pages:
+        for block in data.get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line["spans"]:
+                    font = str(span.get("font") or "")
+                    text = str(span.get("text") or "")
+                    letters[font] = letters.get(font, 0) + sum(char.isalpha() for char in text)
+                    mathy[font] = mathy.get(font, 0) + len(_MATH_ALPHABET_RE.findall(text))
+    fonts = {font for font, count in mathy.items() if count and count * 2 >= letters[font]}
+    if not fonts:
+        return
+    for data in pages:
+        for block in data.get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line["spans"]:
+                    if span.get("font") in fonts:
+                        span["math"] = True
+
+
+def _mark_formula_only_fonts(pages: list[dict]) -> None:
+    """全文只写一两个字、多半贴着公式的字体，所有 span 都标上 math。
+    点阵的空心 1（𝟙）是 Type3 字体，名字只是 F74 这样的编号，提出来是普通的 1。"""
+    spans_of: dict[str, int] = {}
+    touching: dict[str, int] = {}
+    longer: set[str] = set()
+    for data in pages:
+        for block in data.get("blocks", []):
+            for line in block.get("lines", []):
+                shown = [span for span in line["spans"] if str(span.get("text") or "").strip()]
+                for index, span in enumerate(shown):
+                    font = str(span.get("font") or "")
+                    if _span_is_math(span):
+                        continue
+                    if len(span["text"].strip()) > 2:
+                        longer.add(font)
+                        continue
+                    spans_of[font] = spans_of.get(font, 0) + 1
+                    box = span["bbox"]
+                    neighbours = shown[max(index - 1, 0):index] + shown[index + 1:index + 2]
+                    if any(_span_is_math(other) and min(abs(other["bbox"][0] - box[2]), abs(box[0] - other["bbox"][2])) < 1.5
+                           for other in neighbours):
+                        touching[font] = touching.get(font, 0) + 1
+    fonts = {font for font, count in spans_of.items() if font not in longer and touching.get(font, 0) * 2 >= count}
+    if not fonts:
+        return
+    for data in pages:
+        for block in data.get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line["spans"]:
+                    if span.get("font") in fonts:
+                        span["math"] = True
 
 
 def _mark_math_roman(pages: list[dict]) -> None:
@@ -5392,6 +5457,8 @@ def _extract(
             # 停掉后台推理。中途停下（见 background.check_stop）时也在这个线程里等它推完手上的页
             detected.close()
     _mark_math_roman(pages)
+    _mark_math_alphabet(pages)
+    _mark_formula_only_fonts(pages)
     # 目录页上不找表：页码一列和节号一列对齐，短条目会被认成格子表，格子不翻。
     # 索引页也是：几栏短条目行首对齐，凑出几行就像无线的格子表
     toc_pages = _toc_pages(pages)
