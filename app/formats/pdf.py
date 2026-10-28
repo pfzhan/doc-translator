@@ -1869,9 +1869,9 @@ def _stack_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] 
     单独剩在一个块里的小块照这样收。和别的行在一起的，块里有贴着它的式子就是自己的上下标，
     不去抢；块里没有、又比宿主行小一号的，是被分到下一行那个块里的分母（count(w)/N 的 N）。
     正文用 Times 的书，变量是正文斜体，按字体认不出是式子。小一号的斜体叠在正文字号行里的
-    小一号斜体上，也是分子分母。"""
+    小一号斜体上，也是分子分母。正文字体排的数字分式（24000/75）同样按小一号、居中认。"""
     spans = [span for span in line["spans"] if span["text"].strip()]
-    if not spans or not all(_span_is_math(span) or _italic_span(span) for span in spans):
+    if not spans or not all(_span_is_math(span) or _italic_span(span) or _numeral_span(span) for span in spans):
         return None
     italic = not all(_span_is_math(span) for span in spans)
     box = _line_box(line)
@@ -1895,6 +1895,10 @@ def _italic_span(span: dict) -> bool:
     return bool(_ITALIC_FONT_RE.search(str(span.get("font") or "")) or int(span.get("flags") or 0) & 2)
 
 
+def _numeral_span(span: dict) -> bool:
+    return bool(_NUMERAL_RE.fullmatch(str(span.get("text") or "").strip()))
+
+
 def _line_size(line: dict) -> float:
     return max((float(span["size"]) for span in line["spans"] if span["text"].strip()), default=0.0)
 
@@ -1909,7 +1913,8 @@ def _stacked_on(block: dict, line: dict, box: pymupdf.Rect, size: float, italic:
             if not span["text"].strip() or "bbox" not in span:
                 continue
             # 斜体的一行只认小一号的分子分母，求和号这样的大算子上下的 K、n 不挪
-            if italic and not (float(span["size"]) < small and (_span_is_math(span) or _italic_span(span))):
+            if italic and not (float(span["size"]) < small
+                               and (_span_is_math(span) or _italic_span(span) or _numeral_span(span))):
                 continue
             if not italic and not _span_is_math(span):
                 continue
@@ -3763,6 +3768,7 @@ def _absorb_inner_blanks(runs: list[dict], span_lines: list[list[dict]]) -> None
 # 变量是单个字母或两个大写字母（PE）。If、op 这样的两字母词要和括号、算子在一起（op c)）才算，
 # 定理正文整段是斜体，If、In 贴着公式也是正文
 _ITALIC_FONT_RE = re.compile(r"Italic|Oblique", re.I)
+_NUMERAL_RE = re.compile(r"\d+(?:[.,]\d+)*")
 _ITALIC_GLUE_RE = re.compile(r"^[\s()\[\]{}.,=<>+\-*/'A-Za-z0-9]+$")
 _ITALIC_OPERATOR_RE = re.compile(r"[()\[\]{}=<>+\-*/]")
 

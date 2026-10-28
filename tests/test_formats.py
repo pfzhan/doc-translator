@@ -10059,3 +10059,29 @@ def test_the_margin_piece_of_a_wide_caption_line_is_not_a_side_note():
         refs.append((blocks[key], line))
     kept = _wide_block_lines(lines, refs, {0, 4, 7}, TextFrame(160, 493, 108, 719, 10))
     assert kept == {0, 4}
+
+
+def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator():
+    """正文字体排的数字分式 24000/75，PyMuPDF 把分母 75 分进下一块。分母挪回分子那一行，
+    不然单独成块留原字，压在译文上。"""
+    from app.formats.pdf import _rejoin_split_lines
+
+    def span(text, x0, y0, x1, y1, size, base):
+        return {"text": text, "bbox": (x0, y0, x1, y1), "origin": (x0, base), "size": size,
+                "font": "NimbusRomNo9L-Regu", "flags": 4}
+
+    def line(*spans):
+        box = pymupdf.Rect()
+        for item in spans:
+            box |= pymupdf.Rect(item["bbox"])
+        return {"bbox": tuple(box), "dir": (1, 0), "spans": list(spans)}
+
+    head = line(span("this is a downsampling of", 77.4, 623.9, 368.9, 634.7, 9.0, 631.8),
+                span("24000", 372.6, 622.2, 390.0, 630.6, 7.0, 627.7))
+    denominator = line(span("75", 377.8, 628.9, 384.8, 637.3, 7.0, 634.4))
+    nxt = line(span("the encoder and decoder is a quantization step producing", 77.4, 634.9, 352.1, 645.7, 9.0, 642.6))
+    data = {"blocks": [{"type": 0, "bbox": head["bbox"], "lines": [head]},
+                       {"type": 0, "bbox": (77.4, 628.9, 384.8, 645.7), "lines": [denominator, nxt]}]}
+    _rejoin_split_lines(data)
+    assert data["blocks"][0]["lines"] == [head, denominator]
+    assert data["blocks"][1]["lines"] == [nxt]
