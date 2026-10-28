@@ -5372,6 +5372,23 @@ def _wide_block_lines(
             if not left and (abs(box.x1 - rect.x1) <= _WIDE_ALIGN or box.x1 >= body_x1 + deep) and box.x0 < frame.x1:
                 kept.add(index)
                 break
+        if index in kept:
+            continue
+        # 行内式子把图注的一行切成几块时，留在页边的那截（that w[1]）自成一块。
+        # 紧挨着的上一行或下一行从同一处起笔、写进版心，这一截也是图注的一行
+        pitch = lines[index].size * 0.6
+        for other_index, other in enumerate(lines):
+            if other_index in notes:
+                continue
+            box = other.rect
+            if min(abs(box.y0 - rect.y1), abs(rect.y0 - box.y1)) > pitch:
+                continue
+            if left and abs(box.x0 - rect.x0) <= _WIDE_ALIGN and box.x1 > frame.x0:
+                kept.add(index)
+                break
+            if not left and abs(box.x1 - rect.x1) <= _WIDE_ALIGN and box.x0 < frame.x1:
+                kept.add(index)
+                break
     return kept
 
 

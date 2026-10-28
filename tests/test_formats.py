@@ -10030,3 +10030,32 @@ def test_a_roman_numbered_item_does_not_continue_the_paragraph_above():
                          _line("written as a product of independent exponentials", 102, 400, 154)]) == [[0], [1, 2]]
     assert _split_lines([_line("the intervening low-density region, regardless of r.", 63, 297, 134),
                          _line("(ii) Such misses propagate through calibration. Be-", 63, 297, 146)]) == [[0, 1]]
+
+
+def test_the_margin_piece_of_a_wide_caption_line_is_not_a_side_note():
+    """伸进页边的图注里，行内式子把一行切成几块，留在页边的 that w[1] 自成一块。上下紧挨的行从同一处
+    起笔、写进版心，它是图注的一行，不是旁注。正文旁边的旁注照样是旁注。"""
+    from app.formats.pdf import _wide_block_lines
+    from app.formats.pdf_frame import FrameLine, TextFrame
+
+    rows = [
+        ((96, 570, 140, 581), "Figure 6.18", "a"),
+        ((150, 570, 493, 581), "Sample computation graph for a simple 2-layer neural net with", "a"),
+        ((95, 581, 493, 592), "and 2 hidden units. We have adjusted the notation a bit to avoid", "a"),
+        ((95, 591, 468, 605), "the function that is being computed, and the resulting variable name.", "a"),
+        ((95, 605, 125, 619), "that w[1]", "b"),
+        ((117, 605, 493, 622), "11 is to be multiplied by x1, and the node z[1] = + means that", "c"),
+        ((95, 619.4, 351, 633), "the three nodes that feed into it (the two products, and the bias)", "d"),
+        ((100, 300, 150, 310), "regular expressions", "e"),
+        ((160, 289, 493, 300), "body text that runs across the whole column of the page here", "f"),
+        ((160, 301, 493, 312), "and goes on with more of the same body text below the note", "f"),
+    ]
+    blocks = {}
+    lines, refs = [], []
+    for bbox, text, key in rows:
+        line = {"bbox": bbox}
+        blocks.setdefault(key, {"lines": []})["lines"].append(line)
+        lines.append(FrameLine(pymupdf.Rect(bbox), text, 9))
+        refs.append((blocks[key], line))
+    kept = _wide_block_lines(lines, refs, {0, 4, 7}, TextFrame(160, 493, 108, 719, 10))
+    assert kept == {0, 4}
