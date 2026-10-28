@@ -10129,3 +10129,34 @@ def test_a_fraction_wrapped_to_the_line_start_ends_the_sentence_above():
                                      [span("p", "NimbusRomNo9L-ReguItal")]])
     merged = _merge_continuations([host, fraction])
     assert len(merged) == 1 and merged[0].text.endswith("odds ratio 1−p: p")
+
+
+def test_a_formula_form_box_keeps_the_overhang_of_an_italic_letter():
+    """斜体 f 的弯钩和尾巴伸出字宽。Form 的 BBox 也会裁剪，左右放到字形量出来的墨迹，上下照公式的框。
+    只放到自己的墨迹为止：a 不伸出字宽，前面 If 的 f 伸进空档的弯钩不带进来。"""
+    from app.formats.pdf import _formula_form, _GlyphInk, _page_form
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_font(fontname="ti", fontbuffer=pymupdf.Font("tiit").buffer)
+    page.insert_text((350, 526), "If f is a", fontname="ti", fontsize=10)
+    spans = {}
+    for char in page.get_text("rawdict")["blocks"][0]["lines"][0]["spans"][0]["chars"]:
+        if char["c"] in "fa":
+            spans.setdefault(char["c"], []).append({"text": char["c"], "bbox": char["bbox"], "origin": char["origin"]})
+    fms = _page_form(doc, page)
+    glyphs = _GlyphInk(page)
+
+    def box(letter):
+        formula = {"bbox": pymupdf.Rect(letter["bbox"]), "spans": [letter]}
+        xref = _formula_form(doc, page, fms, formula, "/Fx", [dict(letter)], glyphs)
+        x0, y0, x1, y1 = map(float, doc.xref_get_key(xref, "BBox")[1].strip("[]").split())
+        return x0, 792 - y1, x1, 792 - y0
+
+    letter = spans["f"][1]
+    x0, y0, x1, y1 = box(letter)
+    assert x0 < letter["bbox"][0] - 0.5 and x1 > letter["bbox"][2] + 0.5
+    assert (round(y0, 1), round(y1, 1)) == (round(letter["bbox"][1], 1), round(letter["bbox"][3], 1))
+    a = spans["a"][0]
+    x0, _y0, x1, _y1 = box(a)
+    assert abs(x0 - round(a["bbox"][0], 2)) < 0.02 and abs(x1 - round(a["bbox"][2], 2)) < 0.02

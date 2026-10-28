@@ -636,14 +636,19 @@ def test_digits_under_a_radical_bar_join_the_formula():
 
 
 def test_a_glyph_is_measured_by_drawing_it_alone():
-    """字体框量错的字形（txsys 的根号）单画一遍量墨迹：上下沿相对基线，单位是字号。"""
+    """字体框量错的字形（txsys 的根号）单画一遍量墨迹：上下沿相对基线，左右沿相对起笔点，单位是字号。
+    斜体 f 的弯钩和尾巴伸出字宽。"""
     from app.formats.pdf import _measure_glyph
 
     font = pymupdf.Font("tiro")
-    top, bottom, width = _measure_glyph(font.buffer, font.has_glyph(ord("g")))
+    top, bottom, width, left, right = _measure_glyph(font.buffer, font.has_glyph(ord("g")))
     assert -0.6 < top < 0 < bottom < 0.4 and width == font.glyph_advance(ord("g"))
-    top, bottom, _width = _measure_glyph(font.buffer, font.has_glyph(ord("x")))
+    assert 0 <= left < right <= width + 0.03
+    top, bottom, _width, _left, _right = _measure_glyph(font.buffer, font.has_glyph(ord("x")))
     assert -0.6 < top < 0 and abs(bottom) < 0.03
+    italic = pymupdf.Font("tiit")
+    _top, _bottom, width, left, right = _measure_glyph(italic.buffer, italic.has_glyph(ord("f")))
+    assert left < -0.1 and right > width + 0.1
     assert _measure_glyph(font.buffer, font.has_glyph(ord("\u4e2d"))) is None
 
 

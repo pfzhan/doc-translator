@@ -561,19 +561,19 @@ def _drawn_ink(
 
 
 # 字形墨迹的上下沿，键是字体文件的散列和字形编号
-_GLYPH_EXTENTS: dict[tuple[bytes, int], tuple[float, float, float] | None] = {}
+_GLYPH_EXTENTS: dict[tuple[bytes, int], tuple[float, float, float, float, float] | None] = {}
 
 
-def _glyph_extent(digest: bytes, buffer: bytes, gid: int) -> tuple[float, float, float] | None:
-    """字形墨迹的上下沿（基线往下为正）和字宽，单位是字号。字体里没有这个字形、或画不出墨迹时为 None。"""
+def _glyph_extent(digest: bytes, buffer: bytes, gid: int) -> tuple[float, float, float, float, float] | None:
+    """字形墨迹的上下沿（基线往下为正）、字宽和墨迹的左右沿，单位是字号。字体里没有这个字形、或画不出墨迹时为 None。"""
     key = (digest, gid)
     if key not in _GLYPH_EXTENTS:
         _GLYPH_EXTENTS[key] = _measure_glyph(buffer, gid)
     return _GLYPH_EXTENTS[key]
 
 
-def _measure_glyph(buffer: bytes, gid: int) -> tuple[float, float, float] | None:
-    """按字形编号在 100 号字上单画一遍，量墨迹的上下沿。"""
+def _measure_glyph(buffer: bytes, gid: int) -> tuple[float, float, float, float, float] | None:
+    """按字形编号在 100 号字上单画一遍，量墨迹的上下沿、字宽和墨迹的左右沿（离起笔点多远）。"""
     mupdf = pymupdf.mupdf
     try:
         font = mupdf.fz_new_font_from_buffer(None, mupdf.fz_new_buffer_from_copied_data(buffer), 0, 0)
@@ -599,7 +599,49 @@ def _measure_glyph(buffer: bytes, gid: int) -> tuple[float, float, float] | None
     rows = [y for y in range(pix.height) if min(samples[y * width:(y + 1) * width]) < 128]
     if not rows:
         return None
-    return (rows[0] - 150) / 100, (rows[-1] + 1 - 150) / 100, advance
+    columns = [x for x in range(width) if min(samples[x::width]) < 128]
+    return (rows[0] - 150) / 100, (rows[-1] + 1 - 150) / 100, advance, (columns[0] - 100) / 100, (columns[-1] + 1 - 100) / 100
+
+
+def _bare_font_name(name: str) -> str:
+    return re.sub(r"[^0-9A-Za-z]", "", name)
+
+
+class _GlyphInk:
+    """本页逐字按字形量出来的墨迹左右沿。get_text 的框只到字宽，斜体 f 的弯钩、尾巴伸在框外。
+    字形编号和嵌入的字体要在擦原文之前读，擦过的字读不到。"""
+
+    def __init__(self, page: pymupdf.Page):
+        # 字体表里的名字和 texttrace 报的写法不一定一样（Nimbus Roman Italic、NimbusRoman-Italic），去掉空格、连字符再对
+        self._fonts: dict[str, list[tuple[bytes, bytes]]] = {}
+        for name, found in _embedded_fonts(page).items():
+            self._fonts.setdefault(_bare_font_name(name), []).extend(found)
+        self._chars = [
+            (_bare_font_name(str(trace["font"])), float(trace["size"]), char)
+            for trace in page.get_texttrace() if tuple(trace["dir"]) == (1.0, 0.0)
+            for char in trace["chars"] if char[1] >= 0 and char[0] != 32
+        ]
+
+    def x_bounds(self, span: dict) -> tuple[float, float] | None:
+        """span 里各字墨迹的最左、最右。有一个字量不出来就是 None。"""
+        origin = span.get("origin")
+        if not origin:
+            return None
+        x0, _y0, x1, _y1 = span["bbox"]
+        lefts: list[float] = []
+        rights: list[float] = []
+        for font, size, (_code, gid, (ox, oy), box) in self._chars:
+            if not x0 - 0.05 <= ox < x1 - 0.05 or abs(oy - origin[1]) > 0.1:
+                continue
+            for digest, buffer in self._fonts.get(font, []):
+                extent = _glyph_extent(digest, buffer, gid)
+                if extent is not None and abs(extent[2] * size - (box[2] - box[0])) <= max(0.3, (box[2] - box[0]) * 0.08):
+                    lefts.append(ox + extent[3] * size)
+                    rights.append(ox + extent[4] * size)
+                    break
+            else:
+                return None
+        return (min(lefts), max(rights)) if lefts else None
 
 
 class _PageChars:
@@ -7780,6 +7822,7 @@ class _FormulaSources:
     def __init__(self, doc: "pymupdf.Document", page: "pymupdf.Page", form: int, formulas):
         # 只记换算 PDF 坐标要的页面上沿（见 _pdf_rect），不留页面对象
         self.top = page_origin(page)[1]
+        self.glyphs = _GlyphInk(page)
         group: list[tuple[tuple[float, float], dict]] = []
         for formula in formulas:
             for part in _formula_parts(formula):
@@ -7830,7 +7873,8 @@ def _hole_ink(span: dict) -> pymupdf.Rect:
 
 
 def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
-                  f: dict, f_name: str, page_spans: list[dict] | None = None) -> int:
+                  f: dict, f_name: str, page_spans: list[dict] | None = None,
+                  glyphs: _GlyphInk | None = None) -> int:
     """给单个公式造紧致 BBox 的包裹 Form（按 span 逐个裁剪后引用源页 Form），返回 xref。
 
     裁剪路径是 run 里每个 span 的矩形并集，不是整个外框矩形：外框矩形会把间隙里
@@ -7961,6 +8005,15 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
     # 留哪些字按公式自己的 span 框认，不按往外扩过的裁剪框：MuPDF 只给整套字体的上下界，
     # 下一行的字算出的中心在基线上 0.25em，正好落进裁剪框下沿扩出的那一条，成了公式图里的隐形字
     source = _keep_marks(doc, fmS, [_pdf_rect(page, r) for r in base]) if our_rects else fmS
+    # BBox 也会裁剪。斜体 f 的弯钩和尾巴伸出字宽，按公式框会被切掉：左右放到字形量出来的墨迹，
+    # 不超过裁剪路径。只放到自己的墨迹为止，旁边的字（If 的 f）伸进空档的笔画不带进来
+    inks = [glyphs.x_bounds(span) for span in f["spans"]] if glyphs is not None and our_rects else []
+    inks = [ink for ink in inks if ink is not None]
+    if inks:
+        left = max(min(ink[0] for ink in inks), min(r.x0 for r in our_rects))
+        right = min(max(ink[1] for ink in inks), max(r.x1 for r in our_rects))
+        reach = _pdf_rect(page, pymupdf.Rect(left, bbox.y0, right, bbox.y1))
+        clip_outer = pymupdf.Rect(min(clip_outer.x0, reach.x0), clip_outer.y0, max(clip_outer.x1, reach.x1), clip_outer.y1)
     fmT = doc.get_new_xref()
     doc.update_object(fmT, (
         f"<< /Type /XObject /Subtype /Form /BBox [{clip_outer.x0:.2f} {clip_outer.y0:.2f} "
@@ -8077,7 +8130,7 @@ def _paint_formula(
         try:
             # 资源名必须全页唯一：块内序号相同的 FmF0 会互相覆盖
             f_name = "FmF_" + re.sub(r"[^A-Za-z0-9_]", "_", str(formula["name"]))
-            _formula_form(doc, page, forms.source(formula), formula, f_name, page_spans)
+            _formula_form(doc, page, forms.source(formula), formula, f_name, page_spans, forms.glyphs)
             sx = target.width / bbox.width
             sy = target.height / bbox.height
             # 带缩放的仿射：平移量必须吸收缩放，否则公式整体往下漂 (1-sy)*H
