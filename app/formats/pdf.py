@@ -3669,8 +3669,9 @@ def _script_base(
     y_gap = max(base.y0, bbox.y0) - min(base.y1, bbox.y1)
     center = (bbox.x0 + bbox.x1) / 2
     # 角标可以略伸出字母右缘。再往右就是引用上标，中心已经离开字框。
-    # 同一行上的底和角标字框叠着或贴着；上下隔开几磅的是上一行的字母（w_end 的 w 不是下一行 mention 的底）
-    if y_gap >= block_size * 0.3 or bbox.x0 > base.x1 + 0.4:
+    # 同一行上的底和角标字框叠着或贴着；上下隔开几磅的是上一行的字母（w_end 的 w 不是下一行 mention 的底）。
+    # 整个在字母左边的不是它的角标：行内分式的分子和同一行后面的 x 上下交叠，中间隔着正文
+    if y_gap >= block_size * 0.3 or bbox.x0 > base.x1 + 0.4 or bbox.x1 <= base.x0:
         return False
     if script_y is not None and span.get("origin"):
         drop = script_y - float(span["origin"][1])

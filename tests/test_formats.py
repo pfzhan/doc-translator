@@ -10085,3 +10085,14 @@ def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator():
     _rejoin_split_lines(data)
     assert data["blocks"][0]["lines"] == [head, denominator]
     assert data["blocks"][1]["lines"] == [nxt]
+
+
+def test_a_script_left_of_a_letter_is_not_its_script():
+    """行内分式的分子（小一号）和同一行后面的斜体 x 上下交叠，中间隔着 . Each token in，x 不是它的底。"""
+    from app.formats.pdf import _script_base
+
+    x = {"text": " x", "bbox": (223.9, 596.6, 230.4, 608.5), "origin": (223.9, 606.0), "size": 10.0,
+         "font": "NimbusRomNo9L-ReguItal"}
+    assert not _script_base(x, pymupdf.Rect(146.5, 593.3, 159.8, 607.2), 10.0, math=True, script_y=600.0)
+    assert _script_base({**x, "bbox": (140.0, 596.6, 146.5, 608.5)}, pymupdf.Rect(146.5, 600, 149, 609), 10.0,
+                        math=True, script_y=607.0)
