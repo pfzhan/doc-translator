@@ -9550,6 +9550,43 @@ def _on_rows(ink: pymupdf.Rect, rows: Sequence[pymupdf.Rect]) -> bool:
     return any(min(ink.y1, band.y1) - max(ink.y0, band.y0) > ink.height * 0.5 for band in _row_bands(rows))
 
 
+def _drawn_marks(page: "pymupdf.Page") -> list[pymupdf.Rect]:
+    """页上画出来的线、框、色块和图片。只填白色的块看不见，不算。"""
+    marks = [
+        pymupdf.Rect(path["rect"]) for path in visible_drawings(page)
+        if path.get("color") is not None or tuple(path.get("fill") or ()) != (1, 1, 1)
+    ]
+    marks.extend(pymupdf.Rect(info["bbox"]) for info in page.get_image_info())
+    return marks
+
+
+def _indented_start(
+    block: TextBlock, tail: TextBlock, geometries: list[PageGeometry] | None,
+) -> float | None:
+    """只有段首缩进的一行留在本页（栏），段落接到下一页：本栏的左缘。
+    续块从它那一栏的左缘起笔才是正文段落，译文和别的段落一样从栏左缘写，不留缩进。
+    续块缩着排的是列表项的悬挂缩进，照旧从第一行的左缘写。"""
+    if not geometries or len(block.line_rects) != 1 or block.size <= 0:
+        return None
+
+    def left_edge(rect: pymupdf.Rect, page: int) -> float | None:
+        geo = geometries[page] if page < len(geometries) else None
+        if geo is None:
+            return None
+        edges = [geo.column_of(rect).x0] if len(geo.columns) >= 2 else []
+        if geo.frame is not None:
+            edges.append(geo.frame.x0)
+        return max((edge for edge in edges if edge <= rect.x0 + 2), default=None)
+
+    tail_edge = left_edge(tail.rect, tail.page)
+    if tail_edge is None or tail.rect.x0 - tail_edge > 2:
+        return None
+    edge = left_edge(block.rect, block.page)
+    if edge is None or not block.size * 0.5 < block.rect.x0 - edge <= block.size * 3:
+        return None
+    return edge
+
+
 def _room_below(
     page: "pymupdf.Page", block: TextBlock, y0: float, x0: float, x1: float, blocks: list[TextBlock],
     kept: Sequence[pymupdf.Rect] = (),
@@ -9559,7 +9596,7 @@ def _room_below(
     页码常常是纯数字，提取时被丢掉，x 方向也不一定和这一栏相交。
     块自己已经在页脚带里时不再下刀，贴底的脚注不会因此被缩掉。
     正文下沿以上的块停在原文正文下沿，不写进下边距。
-    kept 是原处留着的字（见 _kept_ink），块下方正文区里的也要让开。
+    kept 是原处留着的字（见 _kept_ink）和画出来的图框、图片（见 _drawn_marks），块下方正文区里的也要让开。
     """
     bounds = text_page_rect(page)
     limit = bounds.y1 - 6
@@ -9788,6 +9825,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         order.after_erase()
         # 擦完还在原处的字（丢掉的行间公式、式号），译文右扩、续写都要让开
         kept = _kept_ink(page, same_page)
+        # 续写往下伸时还要让开图框、图片，它们不在块里。写译文之前读：写进去的公式也是画出来的
+        spills = any(t == SPILL_TAIL or id(b) in continuations for b, t in items)
+        room_ink = [*kept, *_drawn_marks(page)] if spills else kept
         # 重写内容流会把 /Resources 改写成内联字典；排版器写入后 /XObject 条目上百个，
         # 这么大的内联嵌套字典在保存的 GC（garbage≥3）里会被写坏（第一个表单的条目
         # 指向字体流，内容静默丢失）。规范成间接引用避开这个 MuPDF bug。
@@ -9888,7 +9928,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     write_one(b, carry.text, box, "left", carry.formulas, False, box.x1)
                     continue
                 rect, align = _write_rect(b, visible or [(b, carry.text)], cjk, rtl, geo)
-                room = _room_below(page, b, rect.y0, rect.x0, rect.x0 + carry.width, same_page, kept)
+                room = _room_below(page, b, rect.y0, rect.x0, rect.x0 + carry.width, same_page, room_ink)
                 # 末行下面的行距是空白，框可以伸过 room，字仍在 room 以内（同 _filled_bottom）
                 size = b.size * 0.88 if cjk else b.size
                 bottom = room + ((1.45 if cjk else 1.2) - 1) * size
@@ -9928,7 +9968,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 if rest.strip() and tail is None:
                     write_one(b, rest, rest_box, side, bformulas, False, rest_box.x1)
                 elif rest.strip() and tail is not None:
-                    room = _room_below(page, b, rest_box.y0, rest_box.x0, rest_box.x1, same_page, kept)
+                    room = _room_below(page, b, rest_box.y0, rest_box.x0, rest_box.x1, same_page, room_ink)
                     floor = write_floor(b, rest_box)
                     placed, spill = _split_filled_lines(
                         rest, bformulas, size, b.size, rest_box.width, cjk, rest_box.y0, room, floor,
@@ -9978,8 +10018,11 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             if len(b.line_rects) <= 1 and rect.width < tail.rect.width * 0.7:
                 carried[id(tail)] = _Carry(t, bformulas, tail.rect.width)
                 continue
+            left = _indented_start(b, tail, geometries)
+            if left is not None:
+                rect = pymupdf.Rect(left, rect.y0, rect.x1, rect.y1)
             size = b.size * 0.88 if cjk else b.size
-            room = _room_below(page, b, rect.y0, rect.x0, rect.x1, same_page, kept)
+            room = _room_below(page, b, rect.y0, rect.x0, rect.x1, same_page, room_ink)
             floor = write_floor(b, rect)
             head, rest = _split_filled_lines(t, bformulas, size, b.size, rect.width, cjk, rect.y0, room, floor)
             if head:

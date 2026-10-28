@@ -10160,3 +10160,52 @@ def test_a_formula_form_box_keeps_the_overhang_of_an_italic_letter():
     a = spans["a"][0]
     x0, _y0, x1, _y1 = box(a)
     assert abs(x0 - round(a["bbox"][0], 2)) < 0.02 and abs(x1 - round(a["bbox"][2], 2)) < 0.02
+
+
+def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_path):
+    """页末图上面只留着段首缩进的一行，段落接到下一页。译文和别的段落一样从栏左缘写，
+    写不下的接到下一页，不往下压到图框的线上。续块缩着排的是列表项，照旧从第一行的左缘写。"""
+    from app.formats.pdf import SPILL_TAIL, TextBlock, _indented_start, _render_translated
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import Column, PageGeometry
+
+    def blk(page, rows, text):
+        rects = [pymupdf.Rect(*row) for row in rows]
+        rect = pymupdf.Rect(rects[0])
+        for row in rects[1:]:
+            rect |= row
+        return TextBlock(page=page, rect=rect, line_rects=rects, text=text, size=10.0, color="#000000", bold=False)
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    first = doc.new_page(width=612, height=792)
+    first.draw_line((142.2, 541.5), (475.2, 541.5), width=0.4)
+    doc.new_page(width=612, height=792)
+    doc.save(src)
+    doc.close()
+    host = blk(0, [(157.1, 517.0, 475.2, 529.0)], "Formally, then, the gradient of a multi-variable function f is a vector in which")
+    tail = blk(1, [(160.2, 109.9, 493.2, 121.9), (160.2, 121.9, 493.2, 134.2)],
+               "each component expresses the partial derivative of f with respect to one of the variables.")
+    even = PageGeometry(612, (Column(77.4, 261.0), Column(278.6, 475.2)), (), 792, frame=TextFrame(142.0, 475.0, 109, 718, 10))
+    odd = PageGeometry(612, (Column(160.2, 493.2),), (), 792, frame=TextFrame(160.0, 493.0, 109, 718, 10))
+    assert _indented_start(host, tail, [even, odd]) == 142.0
+    item = blk(1, [(175.2, 109.9, 493.2, 121.9)], "expresses the partial derivative of f.")
+    assert _indented_start(host, item, [even, odd]) is None
+
+    paragraph = (
+        "形式化地说，多变量函数 f 的梯度是一个向量，其中每个分量表示 f 相对于其中一个变量的偏导数。"
+        "我们将使用倒置的希腊字母 delta 符号来表示梯度，并以此更明显地体现它对参数的依赖关系。"
+    )
+    out = _render_translated(
+        src, [host, tail], [paragraph, SPILL_TAIL], "zh-CN", geometries=[even, odd], continuations={id(host): tail},
+    )
+    chars = [
+        ch["bbox"]
+        for block in out[0].get_text("rawdict")["blocks"] if block.get("type") == 0
+        for line in block["lines"] for span in line["spans"] for ch in span["chars"]
+        if "一" <= ch["c"] <= "鿿"
+    ]
+    assert chars
+    assert min(box[0] for box in chars) < 150
+    assert max(box[3] for box in chars) < 541.5
+    assert "偏导数" in out[1].get_text()
