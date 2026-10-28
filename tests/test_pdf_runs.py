@@ -94,6 +94,27 @@ def test_assign_keeps_the_cross_page_paragraph_together():
     assert strip_boundary("甲乙丙丁戊己庚辛，壬癸。{|}续页。") == "甲乙丙丁戊己庚辛，壬癸。 续页。"
 
 
+def test_assign_splits_a_paragraph_cut_by_a_display_at_the_boundary():
+    """两块中间隔着行间公式、例句时按分界切回两块，公式哨兵跟着自己的块走。模型丢了分界时仍整段留在起始块。"""
+    from app.formats.pdf import SPILL_TAIL
+
+    left = TextBlock(
+        page=0, rect=pymupdf.Rect(0, 0, 40, 12), line_rects=[],
+        text="the initial learning rate E is 0.1:", size=10, color="#000", bold=False,
+    )
+    right = TextBlock(
+        page=1, rect=pymupdf.Rect(0, 0, 80, 12), line_rects=[],
+        text="The single update step requires F.", size=10, color="#000", bold=False,
+    )
+    formulas = [{"name": "a", "owner": 0}, {"name": "b", "owner": 1}]
+    restored = "初始学习率\x01i\x021\x01/i\x02为 0.1：{|}单次更新步骤要用到\x01i\x022\x01/i\x02。"
+    parts, lists = _assign_restored_parts(restored, [left, right], formulas, apart=True)
+    assert parts == ["初始学习率\x01i\x021\x01/i\x02为 0.1：", "单次更新步骤要用到\x01i\x021\x01/i\x02。"]
+    assert lists == [[formulas[0]], [formulas[1]]]
+    parts, _ = _assign_restored_parts("初始学习率为 0.1：单次更新步骤。", [left, right], [], apart=True)
+    assert parts == ["初始学习率为 0.1：单次更新步骤。", SPILL_TAIL]
+
+
 def test_stroke_just_outside_the_glyph_box_joins_the_formula():
     """分式线贴在框外、根号竖笔贴在左侧时要收进裁剪。通栏线和下划线不收。"""
     box = pymupdf.Rect(40, 40, 70, 54)

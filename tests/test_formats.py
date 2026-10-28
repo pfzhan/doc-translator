@@ -4334,6 +4334,102 @@ def test_a_full_line_wraps_into_a_capitalized_next_line():
     assert len(_merge_continuations([blk(head + ".", 610, x0=175.1), blk(tail, 622, rows=2)])) == 2
 
 
+def test_an_indented_first_line_cut_by_a_margin_note_runs_on_after_a_full_stop():
+    """段落首行缩进的文档，行框比行距高，上下两行的框叠上一点（ed3book 行距 12pt、行框 12.9pt），
+    照样认得出段首缩进。段首缩进的一行被页边旁注切成一块，排到右缘、恰好在句末断开，
+    下面回到左缘起笔的一行是同一段的续行。"""
+    from app.formats.pdf import TextBlock, _indents_paragraphs, _merge_continuations
+
+    def blk(text, y, rows):
+        lines = [pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 12.9) for i, (x0, x1) in enumerate(rows)]
+        rect = pymupdf.Rect(lines[0])
+        for line in lines:
+            rect |= line
+        return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=10.0, color="#000", bold=False)
+
+    body = "Words of a paragraph run across the column and wrap onto the next line. It ends here."
+    paragraphs = [blk(body, 100 + 48 * i, [(175.1, 493.2), (160.2, 493.2), (160.2, 493.2), (160.2, 300)])
+                  for i in range(4)]
+    assert _indents_paragraphs(paragraphs)
+    head = blk("For example in batch training we compute the gradient over the entire dataset.", 292, [(175.1, 493.2)])
+    tail = blk("By seeing so many examples, batch training offers a superb estimate of the direction.", 304,
+               [(160.2, 493.2), (160.2, 493.2), (160.2, 426.5)])
+    merged = _merge_continuations([*paragraphs, head, tail])
+    assert len(merged) == 5 and merged[-1].text.startswith("For example") and merged[-1].text.endswith("direction.")
+
+
+def test_a_numbered_example_under_a_full_line_stays_on_its_own():
+    """段落首行缩进的文档里，编号起头的例句齐平排在引出它的一行下面，空得比行距多一点。
+    它自成一块，不并进上面那段，下面齐平接着写的正文也不并进它。跨页时也一样：
+    页末是例句，下一页齐平起笔的一段不接在例句后面。"""
+    from app.formats.pdf import TextBlock, _can_continue, _merge_continuations
+
+    def blk(text, y, rows, page=0):
+        lines = [pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 12.9) for i, (x0, x1) in enumerate(rows)]
+        rect = pymupdf.Rect(lines[0])
+        for line in lines:
+            rect |= line
+        return TextBlock(page=page, rect=rect, line_rects=lines, text=text, size=10.0, color="#000", bold=False)
+
+    body = "Words of a paragraph run across the column and wrap onto the next line. It ends here."
+    paragraphs = [blk(body, 100 + 48 * i, [(157.1, 475.2), (142.2, 475.2), (142.2, 475.2), (142.2, 300)])
+                  for i in range(4)]
+    lead = blk("The relation between tenses and time is not simple. The present tense can be used to refer "
+               "to a future event, as in this example:", 292, [(157.1, 475.2), (142.2, 475.2)])
+    example = blk("(21.15) Ok, we fly from San Francisco to Boston at 10.", 320, [(142.2, 364.1)])
+    after = blk("Here the present tense refers to an event that will happen later, and the sentence is fine.", 337,
+                [(142.2, 475.2), (142.2, 475.2), (142.2, 300)])
+    merged = _merge_continuations([*paragraphs, lead, example, after])
+    assert [block.text[:7] for block in merged[-3:]] == ["The rel", "(21.15)", "Here th"]
+    # 正文里引用的式子折到行首，后面小写接着写，按正常行距紧贴着上一行：是同一段
+    cited = blk("For the odd generators we put a = 2j − 1 and b = 2j and then apply the two relations. By", 292,
+                [(157.1, 475.2), (142.2, 475.2)])
+    wrapped = blk("(4.5) and (4.6), we have the identity that the paper needs in the next section.", 316,
+                  [(142.2, 475.2), (142.2, 300)])
+    assert len(_merge_continuations([*paragraphs, cited, wrapped])) == 5
+
+    ended = blk("(24.31) IBM announced a new machine translation product yesterday. They have been working on it "
+                "for 20 years.", 660, [(142.2, 475.2), (174.1, 400)])
+    second = blk("Second, singular they has become much more common, in which they is used to describe singular "
+                 "individuals.", 110, [(142.2, 475.2), (142.2, 475.2), (142.2, 300)], page=1)
+    assert not _can_continue(ended, second, 10, None, flush=True)
+    assert _can_continue(blk("However, algorithms cannot enforce number agreement too strictly, as the "
+                             "example shows.", 660, [(142.2, 475.2), (142.2, 400)]), second, 10, None, flush=True)
+
+
+def test_a_cross_page_unit_with_a_display_in_between_is_written_apart():
+    """跨页的两块中间隔着行间公式（抽字时丢掉、只剩不在块里的字）或者跳过的例句，写回时按分界切开。
+    上一块下面只有脚注和页码、下一块上面只有页眉和图注时，只是换页，排满再接。"""
+    from app.formats.pdf import TextBlock, _seam_apart
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import Column, PageGeometry
+
+    def blk(text, page, y0, y1, size=10.0):
+        rect = pymupdf.Rect(142, y0, 475, y1)
+        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
+
+    geo = PageGeometry(612, (Column(142, 475),), (), 792, frame=TextFrame(142, 475, 109, 718, 10))
+    host = blk("Let's assume the initial weights are all set to 0, and the learning rate is 0.1:", 0, 653, 679)
+    tail = blk("The single update step requires that we compute the gradient, multiplied by the rate.", 1, 110, 134)
+    header = blk("4.6 GRADIENT DESCENT", 1, 83, 95)
+    note = blk("1 Note that for infinitesimals we use the notation below.", 0, 700, 709, size=8.0)
+    page_number = (300.0, 752.0, 306.0, 762.0, "4")
+    display = (290.0, 688.0, 330.0, 699.0, "w1=w2=b=0")
+
+    def apart(page0, page1, words0, shown=frozenset(), covered=frozenset()):
+        by_page = {0: [host, *page0], 1: [tail, *page1]}
+        return _seam_apart([host, tail], by_page, [geo, geo], {id(header), *covered}, set(shown), 10.0,
+                           lambda pno: words0 if pno == 0 else [])
+
+    assert not apart([note], [header], [page_number])
+    assert apart([], [header], [display, page_number])
+    example = blk("(24.31) IBM announced a new machine translation product yesterday.", 0, 695, 718)
+    assert apart([example], [header], [], {id(example)})
+    # 版面模型把例句、公式认成图（covered）时也一样，没认出是例句的图才不算
+    assert apart([example], [header], [], {id(example)}, {id(example)})
+    assert not apart([example], [header], [], set(), {id(example)})
+
+
 def test_a_document_that_spaces_paragraphs_joins_blocks_at_the_normal_line_gap():
     """新段齐平起笔、上面多空出一截的文档里，按正常行距紧贴着、上一行排满的下一块是同一段，
     上一行恰好在句末断开也一样（双倍行距的稿子一段常切成几块）。空出那一截的另起一段。"""

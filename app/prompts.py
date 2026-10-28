@@ -70,7 +70,7 @@ drop, or invent markers."""
 
 _STYLE_IN_TEXT = re.compile(r"\{/?[biu]\}|\{z\d+\}|\{c[0-9a-f]{6}\}")
 
-# 跨页段落的 run 分界。模型原样保留，写回时收成一段，不再切回两页。
+# 跨页段落的 run 分界。模型原样保留，写回时收成一段排满再接；中间隔着行间公式、例句的按它切回两块（见 pdf._seam_apart）。
 BOUNDARY_SUFFIX = """
 
 ## Page-boundary placeholder

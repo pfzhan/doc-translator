@@ -2710,9 +2710,11 @@ def _can_continue(
     if _unclosed_bracket(prev.text) and _closes_first(nxt.text):
         continues, ended = True, False
     # 只看正文：小一号的图注、表注下面齐平起笔的正文不是它们的续段。
-    # 只放开大写起头的：句末下面小写起头的（restric- | tion from …）是别的块断开的后半截
+    # 只放开大写起头的：句末下面小写起头的（restric- | tion from …）是别的块断开的后半截。
+    # 页末是编号起头的例句（(24.31) IBM announced …）时，下一页齐平起笔的是例句前面那段的续段，不接在例句后面
     if (flush and head.isupper() and len(prev.text.split()) >= _FLUSH_HOST_WORDS
-            and abs(prev.size - nxt.size) <= prev.size * 0.05 and _flush_start(nxt)):
+            and abs(prev.size - nxt.size) <= prev.size * 0.05 and _flush_start(nxt)
+            and not _numbered_line(prev.text)):
         continues, ended = True, False
     return bool(not numbered_heading and not is_heading and continues and not ended
                 and not _is_float_text(nxt.text)
@@ -3439,6 +3441,80 @@ def _cross_page_units(
                 units.append([b])
                 used.add(id(b))
     return units
+
+
+def _seam_apart(
+    unit: list[TextBlock], by_page: dict[int, list[TextBlock]], geometries: Sequence[PageGeometry],
+    covered: set[int], shown: set[int], median: float, words_of: Callable[[int], list[tuple]],
+) -> bool:
+    """跨页、跨栏、被式子切开的两块单元，中间隔着行间公式、例句：上一块紧下面、下一块紧上面是正文的块，
+    或者是不在任何块里的字（抽字时丢掉的行间公式）。这样的单元写回时按分界切回两块（见 _assign_restored_parts），
+    排满再接会把后半段写到公式、例句前面。紧挨着的是图表、图注、页眉页脚、脚注（covered 里是图、图注、表格的格子
+    和页眉页脚）或者什么都没有时，两块之间只是换页、换栏"""
+    host, tail = unit
+    if host.page == tail.page and _same_page_line_pair(host, tail):
+        return False
+    stacked = host.page == tail.page and tail.rect.y0 >= host.rect.y1 - 1 and _x_overlap(host.rect, tail.rect)
+    context = (by_page, geometries, covered, shown, median, words_of)
+    if _content_next(host, tail, *context, below=True):
+        return True
+    return not stacked and _content_next(tail, host, *context, below=False)
+
+
+def _content_next(
+    block: TextBlock, partner: TextBlock, by_page: dict[int, list[TextBlock]], geometries: Sequence[PageGeometry],
+    covered: set[int], shown: set[int], median: float, words_of: Callable[[int], list[tuple]], below: bool,
+) -> bool:
+    """块的正下方（below 为假时是正上方）离它最近的东西是正文：认出来的行间公式、例句（shown），
+    不在 covered 里、不在图表框里、不是脚注的块，或者版心里不属于任何块的字。版面模型会把行间公式认成图，
+    所以 shown 先看。小一号的块是图注接着的半句、旁注，小得多的是抽成块的公式，算正文。
+    同一页上的 partner 和它后面的不看"""
+    geo = geometries[block.page] if block.page < len(geometries) else None
+    floats = [*geo.figures, *(table.rect for table in geo.tables)] if geo is not None else []
+    frame = geo.frame if geo is not None else None
+    edge = None if frame is None else (frame.y1 if below else frame.y0)
+    page_blocks = by_page.get(block.page) or []
+    found: list[tuple[float, bool]] = []
+
+    def beyond(y0: float, y1: float) -> bool:
+        if below:
+            return y0 >= block.rect.y1 - 1 and not (partner.page == block.page and y0 >= partner.rect.y0 - 1)
+        return y1 <= block.rect.y0 + 1 and not (partner.page == block.page and y1 <= partner.rect.y1 + 1)
+
+    def distance(y0: float, y1: float) -> float:
+        return y0 - block.rect.y1 if below else block.rect.y0 - y1
+
+    for rect in floats:
+        if _x_overlap(rect, block.rect) and beyond(rect.y0, rect.y1):
+            found.append((distance(rect.y0, rect.y1), False))
+    for other in page_blocks:
+        if other is block or other is partner or not _x_overlap(other.rect, block.rect):
+            continue
+        if not beyond(other.rect.y0, other.rect.y1):
+            continue
+        cover = id(other) not in shown and (
+            id(other) in covered or _is_page_footnote(other, median) or _is_float_text(other.text)
+            or any(rect.contains(other.rect) for rect in floats) or block.size * 0.8 <= other.size < block.size - 0.6
+        )
+        found.append((distance(other.rect.y0, other.rect.y1), not cover))
+    # 丢掉的行间公式：和块隔开一点、在版心以内、不落在任何块和图表框里的字
+    for x0, y0, x1, y1, *_rest in words_of(block.page):
+        word = pymupdf.Rect(x0, y0, x1, y1)
+        if not _x_overlap(word, block.rect) or not beyond(y0, y1) or distance(y0, y1) < 0.3 * block.size:
+            continue
+        if edge is not None and (y0 > edge + 2 if below else y1 < edge - 2):
+            continue
+        middle = pymupdf.Point((x0 + x1) / 2, (y0 + y1) / 2)
+        if any((other.rect + (-1, -1, 1, 1)).contains(middle) for other in page_blocks):
+            continue
+        if any(rect.contains(middle) for rect in floats):
+            continue
+        found.append((distance(y0, y1), True))
+    return bool(found) and min(found)[1]
+
+
+def _x_overlap(a: pymupdf.Rect, b: pymupdf.Rect) -> bool:
+    return a.x0 < b.x1 and b.x0 < a.x1
 
 
 # 公式哨兵。硬切不能落在哨兵内部，否则两页都匹配不上。
@@ -7017,18 +7093,24 @@ def _merge_continuations(
             )
             # 段落首行缩进的文档里，排到右缘的一行下面齐平起笔的一行是同一段的续行，
             # 上一行恰好在句末断开、下一行大写起头也一样（双倍行距的稿子每行各成一块）。
+            # 上一块只有段首缩进的那一行（被页边旁注切开）时，下一行比它靠左一个缩进，也是续行。
             # 行首换了粗体、斜体、字号的是不缩进的小标题（Execution Accuracy (EX) We…、Lemma 2.3.）
             # 「排到右缘」按正文一整行的宽度比，表格里的一格、短标题对着自己的窄框也是满的。
             # 带编号的标签（EXAMPLE 2.1、Table 3:）也另起。
             # 下一行要按正常行距紧贴着：隔着一行的是悬挂缩进的参考文献，中间的续行另成了块。
             # 下一块自己往下悬挂缩进的是参考文献的下一条；上一行几截之间空开好几个字宽的是表格的一行。
-            # 靠段间空白分段的文档里，新段上面多空出一截：只按正常行距紧贴着的才是同一段
+            # 靠段间空白分段的文档里，新段上面多空出一截：只按正常行距紧贴着的才是同一段。
+            # 编号起头的（(21.15) Ok, we fly …）是例句、式子，齐平排在引出它的一行下面，自成一块，也不接下面的正文。
+            # 编号后面小写起头的是正文里引用的式子折到行首（(4.5) and (4.6), we have），按正常行距紧贴着就接上；
+            # 小写起头的例句（(24.25) her pay jumped …）上面多空出一截
             row_gap = b.rect.y0 - last_y1 - p.line_gap * p.size
             flush_wrap = (
                 same_size and ((indents and row_gap <= 0.5 * p.size) or (space and row_gap <= space / 2))
                 and not _list_item(b.text) and not _LABEL_START_RE.match(b.text)
+                and not _numbered_line(b.text) and not _numbered_line(p.text)
+                and not (_EQUATION_TAG_RE.match(b.text.lstrip()) and row_gap > 0.15 * p.size)
                 and not _is_float_text(b.text) and not _styled_edge(b, 0) and not _styled_edge(p, -1)
-                and _wraps_into(p, b) and bool(p.line_rects) and _row_width(_visual_lines(p)[-1]) >= measure * 0.9
+                and (_wraps_into(p, b) or full_wrap) and bool(p.line_rects) and _row_width(_visual_lines(p)[-1]) >= measure * 0.9
                 and not _hangs(b, blocks[index + 1] if index + 1 < len(blocks) else None)
                 and _row_gap(_visual_lines(p)[-1]) <= 1.5 * p.size
             )
@@ -7147,7 +7229,8 @@ def _hangs(block: TextBlock, nxt: TextBlock | None = None) -> bool:
 def _indents_paragraphs(blocks: list[TextBlock]) -> bool:
     """这份文档的段落是首行缩进的。看段落的末行（句末收住、没排到右缘）下面紧接着的一块：
     首行缩进一两个字宽的比和末行齐平的多。靠段间空白分段的文档新段齐平起笔，不算。
-    定理、引理的标签（Proposition 2.4.、Proof.）和带编号的小标题本来就齐平起笔，不计"""
+    定理、引理的标签（Proposition 2.4.、Proof.）和带编号的小标题本来就齐平起笔，不计。
+    上下两行的空先扣掉正常行距（见 _line_gap）：行框比行距高的字体，紧接着的两行框会叠上一点"""
     indented = flush = 0
     for p, b in zip(blocks, blocks[1:]):
         if p.page != b.page or not p.line_rects or not b.line_rects or abs(p.size - b.size) > p.size * 0.05:
@@ -7156,7 +7239,7 @@ def _indents_paragraphs(blocks: list[TextBlock]) -> bool:
             continue
         tail, head = p.line_rects[-1], b.line_rects[0]
         if (not _ends_sentence(p.text) or _list_item(b.text) or tail.x1 > max(p.rect.x1, b.rect.x1) - 2 * p.size
-                or not 0 <= head.y0 - tail.y1 <= 1.5 * p.size):
+                or not -0.3 * p.size <= head.y0 - tail.y1 - p.line_gap * p.size <= 1.5 * p.size):
             continue
         shift = head.x0 - tail.x0
         if p.size * 0.5 < shift <= p.size * _MAX_INDENT_EM:
@@ -7246,6 +7329,17 @@ def _wraps_into(block: TextBlock, nxt: TextBlock, indented: bool = False) -> boo
 
 # 段落首行缩进最多这么多个字宽
 _MAX_INDENT_EM = 3
+
+
+def _numbered_line(text: str) -> bool:
+    """行首是编号，后面大写、汉字起头或者没有字：例句、式子、条目的编号（(21.15) Ok, we fly …、(1) For a fixed …）。
+    后面小写、标点起头的多是正文里引用的式子折到了行首（(2) for improved …、(5.9), we have）"""
+    lead = text.lstrip()
+    tag = _EQUATION_TAG_RE.match(lead)
+    if tag is None:
+        return False
+    rest = lead[tag.end():].lstrip()
+    return not rest or not (rest[0].islower() or rest[0] in ",.;:()[]")
 
 
 # 几乎只在句中出现的缩写。etc. 常在句末，不算
@@ -10810,15 +10904,23 @@ def _join_boundary(text: str) -> str:
 
 
 def _assign_restored_parts(
-    restored: str, unit: list[TextBlock], formulas: list[dict],
+    restored: str, unit: list[TextBlock], formulas: list[dict], apart: bool = False,
 ) -> tuple[list[str], list[list[dict]]]:
     """跨页单元的译文整段留在起始块。续页只擦原文，不再按分界切回两页。
 
     模型丢掉 {| } 时同样整段留下。哨兵仍按单元内的序号，公式图跟这段走。
+    apart 时两块中间隔着行间公式、例句（见 _seam_apart），按分界切回两块，公式哨兵跟着自己的块走。
     """
     if len(unit) != 2:
         return [strip_boundary(restored)], [formulas]
-    return [_join_boundary(restored), SPILL_TAIL], [formulas, []]
+    split = split_page_boundary(restored) if apart else None
+    if split is None:
+        return [_join_boundary(restored), SPILL_TAIL], [formulas, []]
+    left, to_right = _take_owner(split[0], formulas, 0)
+    right, to_left = _take_owner(split[1], formulas, 1)
+    left_text, left_formulas = _localize_sentinels(left + "".join(to_left), formulas, 0)
+    right_text, right_formulas = _localize_sentinels("".join(to_right) + right, formulas, 1)
+    return [left_text.strip(), right_text.strip()], [left_formulas, right_formulas]
 
 
 # 节号、条目号：4、4.1、3.2.1.、B.3.2.、1.、(a)、a)、(1)。编号外面可能包着字号、粗体标记
@@ -11008,6 +11110,7 @@ class _PdfPlan:
     title: str = ""
     labels: list[str] = field(default_factory=list)  # 每个单元开头摘下的编号，见 _peel_number
     notes: list[str] = field(default_factory=list)  # 每个单元在书里所处位置的说明，见 _index_notes
+    aparts: list[bool] = field(default_factory=list)  # 两块中间隔着行间公式、例句的单元，见 _seam_apart
 
 
 def _plan_pdf(
@@ -11120,6 +11223,16 @@ def _plan_document(
     units = _cross_page_units(blocks, median, skip_ids - cell_ids, geometries, halt_ids, margin_ids, aside_ids)
     units = _region_joins(units, skip_ids, halt_ids, detector.text_regions)
     block_kind = {id(b): k for b, k in zip(blocks, kinds)}
+    by_page: dict[int, list[TextBlock]] = {}
+    for block in blocks:
+        by_page.setdefault(block.page, []).append(block)
+    covered = aside_ids | margin_ids | cell_ids
+    shown = displayed | examples | {id(block) for block in blocks if _equation_block(block)}
+    words_of = functools.cache(lambda pno: src_doc[pno].get_text("words"))
+    aparts = [
+        len(unit) == 2 and _seam_apart(unit, by_page, geometries, covered, shown, median, words_of)
+        for unit in units
+    ]
 
     sent_texts: list[str] = []
     sent_formulas: list[list[dict]] = []
@@ -11161,7 +11274,7 @@ def _plan_document(
 
     return _PdfPlan(
         src_doc, blocks, geometries, toc, flat_units, sent_texts, sent_formulas, sent_kinds, sent_skips,
-        skip_ids, block_kind, title, sent_labels, _index_notes(flat_units, sent_texts, sent_skips),
+        skip_ids, block_kind, title, sent_labels, _index_notes(flat_units, sent_texts, sent_skips), aparts,
     )
 
 
@@ -11404,7 +11517,10 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     fallbacks = 0
     kept_ids = set(skip_ids)
     labels = plan.labels or [""] * len(flat_units)
-    for unit, t, sent_text, formulas, label in zip(flat_units, raw, sent_texts, sent_formulas, labels):
+    aparts = plan.aparts or [False] * len(flat_units)
+    # 按分界切回两块写的单元，写回时不再排满接续
+    apart_hosts: set[int] = set()
+    for unit, t, sent_text, formulas, label, apart in zip(flat_units, raw, sent_texts, sent_formulas, labels, aparts):
         if t == sent_text:
             # 模型原样返回（编号、代码、专名）。送翻的文字规整过（TeX 的 `u 合成 ù），
             # 和块里的原字不同，按译文写回会擦掉原字重排。留原字，和跳过的块一样
@@ -11424,9 +11540,11 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             formula_lists: list[list[dict]] = [[] for _ in unit]
             shown = _join_lines(parts)
         else:
-            parts, formula_lists = _assign_restored_parts(restored, unit, formulas)
+            parts, formula_lists = _assign_restored_parts(restored, unit, formulas, apart)
+            if len(parts) == 2 and parts[1] != SPILL_TAIL:
+                apart_hosts.add(id(unit[0]))
             parts[0] = _with_label(label, parts[0])
-            shown = strip_style_marks(parts[0])
+            shown = strip_style_marks(_join_lines(parts) if id(unit[0]) in apart_hosts else parts[0])
         for b, part, flist in zip(unit, parts, formula_lists):
             if part == SPILL_TAIL:
                 per_block[id(b)] = SPILL_TAIL
@@ -11458,7 +11576,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     _sync_unit_preview(runner, flat_units, sent_texts, per_block)
     continuations = {
         id(unit[0]): unit[1] for unit in flat_units
-        if len(unit) == 2 and not all(id(b) in skip_ids for b in unit)
+        if len(unit) == 2 and not all(id(b) in skip_ids for b in unit) and id(unit[0]) not in apart_hosts
     }
 
     def build():
