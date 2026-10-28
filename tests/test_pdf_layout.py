@@ -214,6 +214,50 @@ def test_cross_page_joins_the_right_column_end_to_the_next_left_column():
     assert all(len(unit) == 1 for unit in stopped)
 
 
+def test_a_table_column_with_body_text_below_does_not_continue_on_the_next_page():
+    """图里的表格右边一列格子左缘对齐，分栏时认成了一栏；这一列底下接着通栏的正文，末一格不是页末，
+    不接到下一页页首的段落上。"""
+    def blk(page, text, rows, size=10.0):
+        rects = [pymupdf.Rect(row) for row in rows]
+        rect = pymupdf.Rect(rects[0])
+        for row in rects[1:]:
+            rect |= row
+        return TextBlock(page=page, rect=rect, line_rects=rects, text=text, size=size, color="#000", bold=False)
+
+    body = [(142.2, y, 475.2, y + 12) for y in (110, 122, 134, 146)]
+    blocks = [
+        blk(0, "annual challenges included a slot filling task, which is the task of filling in values.",
+            [*body, (142.2, 158, 229.1, 170)]),
+        blk(0, "Example", [(80.4, 180.1, 118.0, 193.1)]),
+        blk(0, "Entity Types & Label", [(371.4, 180.1, 462.8, 193.1)]),
+        blk(0, "Carey will succeed Cathleen P. Black, who held the position at IBM",
+            [(80.4, 192.8, 354.0, 204.8), (80.4, 204.8, 354.0, 216.8), (80.4, 216.7, 177.9, 228.7)]),
+        blk(0, "PERSON/TITLE Relation: per:title", [(371.7, 192.8, 432.5, 204.8), (371.4, 204.8, 443.1, 216.8)]),
+        blk(0, "Irene Morgan Kirkaldy, who was born and reared in Baltimore, Maryland",
+            [(80.4, 228.7, 354.0, 240.7), (80.4, 240.6, 354.0, 252.6), (80.4, 252.6, 188.1, 264.6)]),
+        blk(0, "PERSON/CITY Relation: per:city of birth", [(371.7, 228.7, 428.5, 240.7), (371.4, 240.6, 476.3, 252.6)]),
+        blk(0, "Baldwin declined further comment, and said JetBlue chief executive Dave Barger",
+            [(80.4, 264.6, 354.0, 276.6), (80.4, 276.5, 198.8, 288.5)]),
+        blk(0, "Types: PERSON/TITLE Relation: no relation", [(371.4, 264.6, 461.9, 276.6), (371.4, 276.5, 455.8, 288.5)]),
+        blk(0, "A standard dataset was also produced for the SemEval 2010 task on relations between nominals.",
+            [(157.1, 313.1, 475.2, 325.1), (142.2, 325.0, 475.2, 337.1), (142.2, 337.0, 475.2, 349.0),
+             (142.2, 349.0, 475.2, 361.0), (142.2, 360.9, 283.5, 372.9)]),
+        blk(0, "Hearst points out that most human readers will not know what Gelidium is.",
+            [(142.2, 582.4, 475.2, 594.4), (142.2, 594.0, 475.2, 607.0), (142.2, 605.9, 368.2, 618.9)]),
+        blk(0, "allowing us to infer", [(142.2, 693.0, 219.7, 705.0)]),
+        blk(1, "Figure 21.4 shows five patterns Hearst (1992a, 1998) suggested for inferring the hyponym relation.",
+            [(175.1, 203.0, 493.2, 215.0), (160.2, 215.0, 493.2, 230.2), (160.2, 226.9, 493.2, 238.9),
+             (160.2, 238.9, 493.2, 250.9), (160.2, 250.8, 377.1, 262.8)]),
+        blk(1, "Hand-built patterns have the advantage of high-precision and they can be tailored to specific domains.",
+            [(175.1, 368.5, 493.2, 380.5), (160.2, 380.4, 493.2, 392.4), (160.2, 392.4, 337.7, 404.4)]),
+        blk(1, "These include word features (as embeddings, or 1-hot, stemmed or not):", [(160.2, 679.2, 449.0, 692.1)]),
+    ]
+    cell, head = blocks[8], blocks[-3]
+    geos = [PageGeometry.from_rects(612, [b.rect for b in blocks if b.page == page], height=792) for page in (0, 1)]
+    units = _cross_page_units(blocks, 10.0, geometries=geos)
+    assert [cell] in units and [head] in units
+
+
 def test_a_paragraph_continues_below_a_figure_at_the_top_of_the_next_page():
     """下一页先排了一张图和图注，被页边界切断的那段接在图注下面。"""
     end = _block("you can see the ex-", 0, pymupdf.Rect(40, 700, 300, 712))

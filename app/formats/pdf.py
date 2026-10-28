@@ -3082,9 +3082,14 @@ def _column_continuations(
         if not columns or not nxt:
             continue
         host = host_of(pno, columns[-1])
-        # 右栏没分出来（右栏的块都没归栏）时最后一栏不是最右一栏：右边还排着正文的不是页末
+        # 右栏没分出来（右栏的块都没归栏）时最后一栏不是最右一栏：右边还排着正文的不是页末。
+        # 下面还有从左到右盖过这一块、字不比它小的正文也不是页末：图里的表格有一列格子左缘对齐，认成了一栏，
+        # 底下接着通栏的段落。页脚注的字小，行间公式旁的标注窄，都不挡
         if host is not None and any(
-            block.rect.x0 >= host.rect.x1 - host.size and block.rect.y1 > host.rect.y0 for block in prose[pno]
+            block.rect.x0 >= host.rect.x1 - host.size and block.rect.y1 > host.rect.y0
+            or block is not host and block.rect.y0 >= host.rect.y1 - 1 and block.size >= host.size - 0.5
+            and block.rect.x0 <= host.rect.x0 + host.size and block.rect.x1 >= host.rect.x1 - host.size
+            for block in prose[pno]
         ):
             continue
         head = head_of(later, nxt[0])
