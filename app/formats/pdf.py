@@ -9631,14 +9631,16 @@ def _indented_start(
 
 def _room_below(
     page: "pymupdf.Page", block: TextBlock, y0: float, x0: float, x1: float, blocks: list[TextBlock],
-    kept: Sequence[pymupdf.Rect] = (),
+    kept: Sequence[pymupdf.Rect] = (), marks: Sequence[pymupdf.Rect] = (),
 ) -> float:
     """这一栏往下还能写到哪里。停在页码带上面，也停在后面的脚注或其他块前面。
 
     页码常常是纯数字，提取时被丢掉，x 方向也不一定和这一栏相交。
     块自己已经在页脚带里时不再下刀，贴底的脚注不会因此被缩掉。
     正文下沿以上的块停在原文正文下沿，不写进下边距。
-    kept 是原处留着的字（见 _kept_ink）和画出来的图框、图片（见 _drawn_marks），块下方正文区里的也要让开。
+    kept 是原处留着的字（见 _kept_ink），marks 是画出来的图框、图片（见 _drawn_marks），
+    块下方正文区里的都要让开。marks 的框就是线条本身，末行下面的行距又可以伸过下沿（见 _filled_bottom），
+    只让 2pt 字就贴在线上，这里空出半个字号。
     """
     bounds = text_page_rect(page)
     limit = bounds.y1 - 6
@@ -9654,12 +9656,13 @@ def _room_below(
         if other.rect.x1 < x0 + 4 or other.rect.x0 > x1 - 4:
             continue
         limit = min(limit, other.rect.y0 - 2)
-    for ink in kept:
-        if ink.y0 < max(y0, block.rect.y1) - 1 or ink.y0 >= floor:
-            continue
-        if ink.x1 < x0 + 4 or ink.x0 > x1 - 4:
-            continue
-        limit = min(limit, ink.y0 - 2)
+    for rects, clearance in ((kept, 2.0), (marks, block.size * 0.5)):
+        for ink in rects:
+            if ink.y0 < max(y0, block.rect.y1) - 1 or ink.y0 >= floor:
+                continue
+            if ink.x1 < x0 + 4 or ink.x0 > x1 - 4:
+                continue
+            limit = min(limit, ink.y0 - clearance)
     return limit
 
 
@@ -9869,7 +9872,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         kept = _kept_ink(page, same_page)
         # 续写往下伸时还要让开图框、图片，它们不在块里。写译文之前读：写进去的公式也是画出来的
         spills = any(t == SPILL_TAIL or id(b) in continuations for b, t in items)
-        room_ink = [*kept, *_drawn_marks(page)] if spills else kept
+        marks = _drawn_marks(page) if spills else []
         # 重写内容流会把 /Resources 改写成内联字典；排版器写入后 /XObject 条目上百个，
         # 这么大的内联嵌套字典在保存的 GC（garbage≥3）里会被写坏（第一个表单的条目
         # 指向字体流，内容静默丢失）。规范成间接引用避开这个 MuPDF bug。
@@ -9970,7 +9973,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     write_one(b, carry.text, box, "left", carry.formulas, False, box.x1)
                     continue
                 rect, align = _write_rect(b, visible or [(b, carry.text)], cjk, rtl, geo)
-                room = _room_below(page, b, rect.y0, rect.x0, rect.x0 + carry.width, same_page, room_ink)
+                room = _room_below(page, b, rect.y0, rect.x0, rect.x0 + carry.width, same_page, kept, marks)
                 # 末行下面的行距是空白，框可以伸过 room，字仍在 room 以内（同 _filled_bottom）
                 size = b.size * 0.88 if cjk else b.size
                 bottom = room + ((1.45 if cjk else 1.2) - 1) * size
@@ -10010,7 +10013,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 if rest.strip() and tail is None:
                     write_one(b, rest, rest_box, side, bformulas, False, rest_box.x1)
                 elif rest.strip() and tail is not None:
-                    room = _room_below(page, b, rest_box.y0, rest_box.x0, rest_box.x1, same_page, room_ink)
+                    room = _room_below(page, b, rest_box.y0, rest_box.x0, rest_box.x1, same_page, kept, marks)
                     floor = write_floor(b, rest_box)
                     placed, spill = _split_filled_lines(
                         rest, bformulas, size, b.size, rest_box.width, cjk, rest_box.y0, room, floor,
@@ -10064,7 +10067,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             if left is not None:
                 rect = pymupdf.Rect(left, rect.y0, rect.x1, rect.y1)
             size = b.size * 0.88 if cjk else b.size
-            room = _room_below(page, b, rect.y0, rect.x0, rect.x1, same_page, room_ink)
+            room = _room_below(page, b, rect.y0, rect.x0, rect.x1, same_page, kept, marks)
             floor = write_floor(b, rect)
             head, rest = _split_filled_lines(t, bformulas, size, b.size, rect.width, cjk, rect.y0, room, floor)
             if head:

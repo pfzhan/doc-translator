@@ -10237,5 +10237,6 @@ def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_
     ]
     assert chars
     assert min(box[0] for box in chars) < 150
-    assert max(box[3] for box in chars) < 541.5
+    # 和图框的线空开，不贴着
+    assert max(box[3] for box in chars) < 541.5 - 5
     assert "偏导数" in out[1].get_text()
