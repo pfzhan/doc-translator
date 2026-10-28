@@ -9137,24 +9137,36 @@ def _flush_right(
     block: TextBlock, others: list[TextBlock], figures: tuple[pymupdf.Rect, ...], col_x0: float, col_x1: float,
 ) -> bool:
     """靠右排的块：章首的引语、署名。每行都收在栏的右缘，左缘离栏的左缘有栏宽的四分之一以上。
+    TeX 排的署名末尾常带着一个词间空格，斜体还有倾斜补偿，字的右缘会比栏的右缘短半个字宽左右。
     栏的右缘要有本页更宽的块排到，栏只由这一块撑出来时右缘就是它自己的右缘。
     有两行起笔对齐的是左对齐的正文，左边空着也不算（图在前一页时绕图的正文左边是空的）。
-    同一行栏里左边还有别的块或图的不算：一行拆成几块时的右边那一块，绕着图排的正文。"""
+    同一行栏里左边还有别的块或图的不算：一行拆成几块时的右边那一块，绕着图排的正文。
+    左边几个字宽以内有别的块的行也不算：两端对齐的窄栏里一行拆出来的末一个词。引语末行用
+    \\hfill 推到行尾的署名离左边的字很远。
+    左缘和上下几行的起笔对齐的也不算：表头、列表这类左对齐的字。"""
     if block.index or block.clip is not None or block.rect.x0 < col_x0 + (col_x1 - col_x0) * 0.25:
         return False
     rows = block.line_rects or [block.rect]
-    if any(abs(row.x1 - col_x1) > 1.5 for row in rows):
+    if any(not -1.5 <= col_x1 - row.x1 <= max(1.5, block.size * 0.6) for row in rows):
         return False
     starts = sorted(row.x0 for row in rows)
     if any(later - earlier < 0.5 for earlier, later in zip(starts, starts[1:])):
         return False
-    lefts = [other.rect for other in others if other is not block and other.page == block.page]
-    if not any(rect.x0 < block.rect.x0 - 1 and abs(rect.x1 - col_x1) <= 1.5 for rect in lefts):
+    near = [other for other in others if other is not block and other.page == block.page]
+    if not any(other.rect.x0 < block.rect.x0 - 1 and abs(other.rect.x1 - col_x1) <= 1.5 for other in near):
         return False
+    other_rows = [row for other in near for row in other.line_rects or [other.rect]]
+    if any(
+        abs(row.x0 - block.rect.x0) <= 1
+        and max(row.y0 - block.rect.y1, block.rect.y0 - row.y1) < block.size * 2
+        for row in other_rows
+    ):
+        return False
+    close = [row for row in other_rows if row.x1 > block.rect.x0 - block.size * 3]
     return not any(
         col_x0 < rect.x1 <= block.rect.x0 + 1
         and min(rect.y1, block.rect.y1) - max(rect.y0, block.rect.y0) > block.size * 0.3
-        for rect in [*lefts, *figures]
+        for rect in [*(other.rect for other in near), *close, *figures]
     )
 
 
@@ -9665,9 +9677,17 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 if head:
                     write_one(b, head, host_box, "left", bformulas, justify, host_box.x1)
                 continue
+            # 栏宽参考：单栏用本页最宽块；多栏用本块所在栏。居中块用整栏宽，
+            # 短译文不再被小框挤成孤字行。排版器按这个宽度断行。
+            rect, align = _write_rect(b, visible, cjk, rtl, geo)
             inset = _inset_write_boxes(b, cjk)
             if inset is not None and id(b) not in stacked:
                 first_box, rest_box = inset
+                # 靠右排的引语加署名首行短、起笔靠右：照样按两个框断行，每行收在原来的右缘
+                side = "right" if align == "right" else "left"
+                if side == "right":
+                    first_box = pymupdf.Rect(first_box.x0, first_box.y0, rect.x1, first_box.y1)
+                    rest_box = pymupdf.Rect(rest_box.x0, rest_box.y0, rect.x1, rest_box.y1)
                 moved = starts.get(id(b))
                 if moved is not None:
                     first_box = _clip_write_rect(
@@ -9679,10 +9699,10 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     t, bformulas, size, b.size, first_box.width,
                 )
                 if head:
-                    write_one(b, head, first_box, "left", bformulas, bool(rest.strip()), first_box.x1)
+                    write_one(b, head, first_box, side, bformulas, bool(rest.strip()), first_box.x1)
                 tail = continuations.get(id(b))
                 if rest.strip() and tail is None:
-                    write_one(b, rest, rest_box, "left", bformulas, False, rest_box.x1)
+                    write_one(b, rest, rest_box, side, bformulas, False, rest_box.x1)
                 elif rest.strip() and tail is not None:
                     room = _room_below(page, b, rest_box.y0, rest_box.x0, rest_box.x1, same_page, kept)
                     floor = write_floor(b, rest_box)
@@ -9695,13 +9715,10 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                         placed_rect = pymupdf.Rect(
                             rest_box.x0, rest_box.y0, rest_box.x1, max(bottom, rest_box.y0 + 4),
                         )
-                        write_one(b, placed, placed_rect, "left", bformulas, bool(spill), rest_box.x1)
+                        write_one(b, placed, placed_rect, side, bformulas, bool(spill), rest_box.x1)
                     if spill:
                         carried[id(tail)] = _Carry(spill, bformulas, rest_box.width)
                 continue
-            # 栏宽参考：单栏用本页最宽块；多栏用本块所在栏。居中块用整栏宽，
-            # 短译文不再被小框挤成孤字行。排版器按这个宽度断行。
-            rect, align = _write_rect(b, visible, cjk, rtl, geo)
             if id(b) in stacked:
                 rect, align = stacked[id(b)], "left"
             shifted = reflowed.get(id(b))

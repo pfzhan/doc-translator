@@ -7484,6 +7484,91 @@ def test_epigraph_and_attribution_at_the_frame_right_edge_are_written_flush_righ
     assert start("William of Occam ")[0] == start("William of Occam")[0]
 
 
+def test_attribution_short_of_the_frame_edge_by_a_trailing_space_is_written_flush_right():
+    """署名末尾带着词间空格，右缘比版心右缘短两三点，仍按右对齐写。引语末行用 \\hfill 推到行尾的署名也是。
+    两端对齐的窄栏里一行拆出来的末一个词、和下面格子起笔对齐的表头照常左对齐。"""
+    from app.formats.pdf import TextBlock, _write_rect
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import PageGeometry
+
+    def blk(text, rows, size=10.0):
+        rects = [pymupdf.Rect(*row) for row in rows]
+        rect = pymupdf.Rect(rects[0])
+        for row in rects[1:]:
+            rect |= row
+        return TextBlock(page=75, rect=rect, line_rects=rects, text=text, size=size, color="#000", bold=False)
+
+    frame = TextFrame(142.0, 475.0, 100, 720, 10)
+
+    def align(block, others):
+        items = [(other, "") for other in [*others, block]]
+        geo = PageGeometry.from_rects(612, [other.rect for other, _ in items], height=792, frame=frame)
+        return _write_rect(block, items, True, False, geo)[1]
+
+    quote = blk("You are uniformly charming! cried he, with a smile of associating and now and then I bowed",
+                [(167.1, 218, 475.2, 230), (167.1, 230, 431.4, 242)])
+    author = blk("Random sentence generated from a Jane Austen trigram model", [(246.8, 243, 472.4, 252)], 9.0)
+    body = blk("Predicting is difficult, especially about the future, as the old quip goes.",
+               [(142.2, 280, 475.2, 292), (142.2, 292, 475.2, 304)])
+    assert align(author, [quote, body]) == "right"
+    # 署名和引语末行同在一行
+    babbage = blk("On two occasions I have been asked, Pray, Mr. Babbage, if you put into the machine wrong figures",
+                  [(167.1, 210, 475.2, 222), (167.1, 222, 203.4, 234)])
+    signed = blk("Babbage (1864)", [(411.3, 222, 475.2, 234)])
+    assert align(signed, [babbage, body]) == "right"
+    # 两端对齐时一行里拆出来的末一个词，左边隔着一个拉开的词距
+    para = blk("states yields a finite-transition increment", [(142.2, 300, 475.2, 312), (142.2, 312, 300.0, 324)])
+    word = blk("comprising", [(316.5, 312, 472.6, 324)])
+    assert align(word, [para, body]) == "left"
+    # 表头的左缘和下面格子的起笔对齐
+    header = blk("Emotion Label Emotion Explanation", [(300.0, 330, 472.6, 340)])
+    cells = blk("A V AV Semantic", [(300.8, 344, 320.0, 354), (340.0, 344, 400.0, 354)])
+    assert align(header, [cells, body]) == "left"
+
+
+def test_two_line_attribution_is_split_like_the_source_and_written_flush_right(tmp_path):
+    """引语加署名两行，首行短、起笔靠右：译文照首行的宽度断开，两行都收在原来的右缘。"""
+    from app.formats.pdf import TextBlock, _render_translated
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import PageGeometry
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    right = 475.0
+    # 每行从右缘往回量出起笔
+    for text, y in (("Time will explain.", 230), ("Jane Austen, Persuasion", 240)):
+        page.insert_text((right - pymupdf.get_text_length(text, "tiro", 9), y), text, fontsize=9, fontname="tiro")
+    body_line = "x" * 55
+    for index in range(3):
+        page.insert_text((right - pymupdf.get_text_length(body_line, "cour", 10), 300 + index * 12), body_line,
+                         fontsize=10, fontname="cour")
+    path = tmp_path / "src.pdf"
+    doc.save(path)
+    page = pymupdf.open(path)[0]
+
+    def blk(text, rows, size):
+        rects = [page.search_for(row)[0] for row in rows]
+        rect = pymupdf.Rect(rects[0])
+        for row in rects[1:]:
+            rect |= row
+        return TextBlock(page=0, rect=rect, line_rects=rects, text=text, size=size, color="#000000", bold=False)
+
+    author = blk("Time will explain. Jane Austen, Persuasion", ["Time will explain.", "Jane Austen, Persuasion"], 9.0)
+    body = TextBlock(page=0, rect=pymupdf.Rect(page.search_for(body_line)[0]) | page.search_for(body_line)[-1],
+                     line_rects=page.search_for(body_line), text=body_line * 3, size=10.0, color="#000000", bold=False)
+    frame = TextFrame(body.rect.x0, body.rect.x1, 100, 720, 10)
+    geo = PageGeometry.from_rects(612, [author.rect, body.rect], height=792, frame=frame)
+    out = _render_translated(path, [author, body], ["时间会说明一切。简·奥斯汀，《劝导》", "正文" * 40], "zh-CN",
+                             geometries=[geo])
+    lines = [
+        (line["bbox"], "".join(span["text"] for span in line["spans"]))
+        for block in out[0].get_text("dict", clip=pymupdf.Rect(300, 215, 500, 250))["blocks"]
+        for line in block.get("lines", [])
+    ]
+    assert [text for _, text in lines] == ["时间会说明一切。", "简·奥斯汀，《劝导》"]
+    assert all(abs(bbox[2] - author.rect.x1) < 0.5 for bbox, _ in lines)
+
+
 def test_a_paragraph_with_an_overfull_line_is_written_to_the_frame_edge():
     """一行断不开伸进页边的段落，译文照版心右缘写，不按伸出去的那一行。
     大半行都在版心外的块照旧按自己的宽度写。"""
