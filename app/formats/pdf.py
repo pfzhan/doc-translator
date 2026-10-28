@@ -8968,6 +8968,35 @@ def _affiliation_write_rects(blocks: list[TextBlock]) -> dict[int, pymupdf.Rect]
     return out
 
 
+def _row_span(block: TextBlock, others: list[TextBlock], col_x0: float, col_x1: float) -> pymupdf.Rect:
+    """这一块连同栏里同一行挨着它的块（间隔不到一个半字宽）占的横向范围。一行拆成几块时
+    看整行：节号和节名分成两块的标题整行居中；表格一行的几格连起来不在栏中间。
+    多行的块每一行都要有同一行的块才算，表题下面一行连着表头的块仍按自己的范围看。"""
+    rows = block.line_rects or [block.rect]
+
+    def same_row(rect: pymupdf.Rect, row: pymupdf.Rect) -> bool:
+        return min(rect.y1, row.y1) - max(rect.y0, row.y0) > min(rect.height, row.height) * 0.5
+
+    mates = [
+        other.rect for other in others
+        if other is not block and other.page == block.page
+        and col_x0 - 2 <= other.rect.x0 and other.rect.x1 <= col_x1 + 2
+        and any(same_row(other.rect, row) for row in rows)
+    ]
+    span = pymupdf.Rect(block.rect)
+    if not all(any(same_row(mate, row) for mate in mates) for row in rows):
+        return span
+    grown = True
+    while grown:
+        grown = False
+        for mate in mates:
+            near = span.x0 - block.size * 1.5 <= mate.x1 and mate.x0 <= span.x1 + block.size * 1.5
+            if near and (mate.x0 < span.x0 or mate.x1 > span.x1):
+                span = pymupdf.Rect(min(span.x0, mate.x0), span.y0, max(span.x1, mate.x1), span.y1)
+                grown = True
+    return span
+
+
 def _left_aligned_stack(block: TextBlock, others: list[TextBlock]) -> bool:
     """上下紧挨的一块和它左缘对齐、右缘不齐：是左对齐排的一组行（对话、例句），
     某一行的中线碰巧落在栏中线附近也不是居中。宽度相同的两块居中行左右都齐，不在其内。"""
@@ -9055,7 +9084,6 @@ def _write_rect(
         widest = max((other.rect for other, _ in items), key=lambda rect: rect.width, default=block.rect)
         col_x0, col_x1 = widest.x0, widest.x1
         col_width = widest.width
-    mid = (block.rect.x0 + block.rect.x1) / 2
     # 字比本页多数大、每行都正对页面中线的是居中的标题：幻灯片最宽的一块是靠左的列表项，
     # 中线不在页面正中；标题本身是最宽的一块时，跟页宽比。论文正文左右边距对称，
     # 整行也正对页面中线，字号不大，不算。
@@ -9068,13 +9096,16 @@ def _write_rect(
         and all(abs((line.x0 + line.x1) / 2 - page_mid) < 4 for line in block.line_rects or [block.rect])
     )
     # 弹点、短横线起头的列表项是靠左排的，中线碰巧对上栏中线也不算居中。索引的条目也一样，
-    # 缩进的子条目常常正好落在栏中间。(a) 子图小标题和 1. 引言这种居中的标题不在其内
+    # 缩进的子条目常常正好落在栏中间。(a) 子图小标题和 1. 引言这种居中的标题不在其内。
+    # 一行拆成几块时整行也要对着栏中线（见 _row_span）：表格一行的几格都按栏中线写会叠在一起
+    col_mid = (col_x0 + col_x1) / 2
+    span = _row_span(block, [other for other, _ in items], col_x0, col_x1)
     centered = (
         not rtl and not block.index and len(block.text) < 100
         and not _left_aligned_stack(block, [other for other, _ in items])
         and (
-            (block.rect.width < col_width * 0.85 and abs(mid - (col_x0 + col_x1) / 2) < 15
-             and block.rect.x0 > col_x0 + 2)
+            (block.rect.width < col_width * 0.85 and block.rect.x0 > col_x0 + 2
+             and abs((block.rect.x0 + block.rect.x1) / 2 - col_mid) < 15 and abs((span.x0 + span.x1) / 2 - col_mid) < 15)
             or on_page_mid
         )
         and not _MARK_ITEM_RE.match(block.text)

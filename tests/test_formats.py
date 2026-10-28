@@ -7569,6 +7569,30 @@ def test_two_line_attribution_is_split_like_the_source_and_written_flush_right(t
     assert all(abs(bbox[2] - author.rect.x1) < 0.5 for bbox, _ in lines)
 
 
+def test_header_cells_near_the_column_middle_are_not_all_centred_on_it():
+    """表头一行的几格中线碰巧都在栏中线附近，整行不在栏中间：照各自的位置写，不都按栏中线居中叠在一起。
+    节号和节名分成两块的标题整行对着栏中线，节名仍居中。"""
+    from app.formats.pdf import TextBlock, _write_rect
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import PageGeometry
+
+    def blk(text, x0, x1, y0=676.0, size=10.0):
+        rect = pymupdf.Rect(x0, y0, x1, y0 + 11.6)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=True)
+
+    body = TextBlock(page=0, rect=pymupdf.Rect(160.2, 600, 493.2, 660), line_rects=[pymupdf.Rect(160.2, 600, 493.2, 612)],
+                     text="Let us see how the cosine computes which of the words is closer", size=10.0, color="#000", bold=False)
+    cells = [blk("pie", 313.4, 324.9), blk("data", 332.3, 349.3), blk("computer", 355.7, 392.6)]
+    frame = TextFrame(160.0, 493.0, 100, 720, 10)
+    items = [(body, ""), *((cell, "") for cell in cells)]
+    geo = PageGeometry.from_rects(612, [block.rect for block, _ in items], height=792, frame=frame)
+    assert [_write_rect(cell, items, True, False, geo)[1] for cell in cells] == ["left", "left", "left"]
+    # 节号另成一块，节名和节号整行都对着栏中线
+    number, title = blk("V.", 290.0, 302.0, y0=400), blk("Conclusions", 306.0, 362.0, y0=400)
+    items = [(body, ""), (number, ""), (title, "")]
+    assert _write_rect(title, items, True, False, geo)[1] == "center"
+
+
 def test_a_paragraph_with_an_overfull_line_is_written_to_the_frame_edge():
     """一行断不开伸进页边的段落，译文照版心右缘写，不按伸出去的那一行。
     大半行都在版心外的块照旧按自己的宽度写。"""
