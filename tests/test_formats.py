@@ -3468,7 +3468,7 @@ def test_formula_bitmaps_rendered_in_forked_workers_read_their_own_copy(tmp_path
     doc.save(src)
     clips = [(pno, pymupdf.Rect(15, 15 + row * 18, 200, 35 + row * 18)) for pno in range(12) for row in range(0, 20, 4)]
     fresh = pymupdf.open(src)
-    expected = [fresh[pno].get_pixmap(dpi=300, clip=clip).samples for pno, clip in clips]
+    expected = [fresh[pno].get_pixmap(dpi=300, clip=clip, alpha=True).samples for pno, clip in clips]
     shared = pymupdf.open(src)
     images = [_FormulaImage(shared, pno, clip) for pno, clip in clips]
     pymupdf.TOOLS.store_shrink(100)
@@ -10160,6 +10160,36 @@ def test_a_formula_form_box_keeps_the_overhang_of_an_italic_letter():
     a = spans["a"][0]
     x0, _y0, x1, _y1 = box(a)
     assert abs(x0 - round(a["bbox"][0], 2)) < 0.02 and abs(x1 - round(a["bbox"][2], 2)) < 0.02
+
+
+def test_a_formula_bitmap_keeps_the_overhang_of_an_italic_letter_on_a_clear_background():
+    """跨页的公式贴位图。位图按公式框裁会切掉斜体 f 伸出字宽的弯钩和尾巴，左右放到字形量出来的墨迹，
+    贴的位置跟着按缩放往两侧放。底色透明，贴在图框线上不会盖掉线。"""
+    from app.formats.pdf import _FormulaImage, _formula_png_rect
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_font(fontname="ti", fontbuffer=pymupdf.Font("tiit").buffer)
+    page.insert_text((350, 526), "If f is a", fontname="ti", fontsize=10)
+    chars = page.get_text("rawdict")["blocks"][0]["lines"][0]["spans"][0]["chars"]
+    letter = next(char for char in chars[1:] if char["c"] == "f")
+    span = {"text": "f", "bbox": letter["bbox"], "origin": letter["origin"]}
+    bbox = pymupdf.Rect(letter["bbox"])
+    image = _FormulaImage(doc, 0, bbox, [span])
+    area = image.area()
+    assert area.x0 < bbox.x0 - 0.5 and area.x1 > bbox.x1 + 0.5
+    assert (area.y0, area.y1) == (bbox.y0, bbox.y1)
+    assert area.x0 >= bbox.x0 - 1.5 and area.x1 <= bbox.x1 + 1.5
+    target = pymupdf.Rect(100, 100, 100 + bbox.width * 2, 100 + bbox.height * 2)
+    placed = _formula_png_rect({"png": image, "bbox": bbox}, target)
+    assert placed.x0 == pytest.approx(100 - (bbox.x0 - area.x0) * 2)
+    assert placed.x1 == pytest.approx(target.x1 + (area.x1 - bbox.x1) * 2)
+    assert (placed.y0, placed.y1) == (target.y0, target.y1)
+    pixmap = pymupdf.Pixmap(image.png())
+    assert pixmap.alpha and pixmap.pixel(0, 0)[3] == 0
+    a = next(char for char in chars if char["c"] == "a")
+    plain = _FormulaImage(doc, 0, pymupdf.Rect(a["bbox"]), [{"text": "a", "bbox": a["bbox"], "origin": a["origin"]}])
+    assert plain.area() == pymupdf.Rect(a["bbox"])
 
 
 def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_path):

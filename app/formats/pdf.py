@@ -7583,23 +7583,53 @@ def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
 
 
 class _FormulaImage:
-    """公式在原页上的位图。只在矢量贴回失败时才用到（见 _paint_formula），裁图时只记下从哪一页、
+    """公式在原页上的位图。公式在另一页、或者矢量贴回失败时才用到（见 _paint_formula），裁图时只记下从哪一页、
     哪一块裁，用到时才渲染，渲染一次。
 
     写回在 fork 出来的子进程里时（见 render_in_parts），不能用父进程打开的原文档渲染：
     父子进程共用这个文件的读写位置，几个子进程同时读，读到的是别处的字节，点阵字的字形缺笔画、
     画成黑块，页面树也会读坏。子进程按文件名自己打开一份（见 _own_source）。"""
 
-    def __init__(self, doc: pymupdf.Document, page: int, clip: pymupdf.Rect):
+    def __init__(self, doc: pymupdf.Document, page: int, clip: pymupdf.Rect, spans: Sequence[dict] = ()):
         self.doc, self.page, self.clip = doc, page, pymupdf.Rect(clip)
+        self.spans = list(spans)
         self._pid = os.getpid()
+        self._area: pymupdf.Rect | None = None
         self._png: bytes | None = None
+
+    def _source(self) -> pymupdf.Document:
+        return self.doc if os.getpid() == self._pid else _own_source(self.doc)
+
+    def area(self) -> pymupdf.Rect:
+        """实际裁的范围。斜体 f 的弯钩、尾巴伸出字宽，左右放到公式自己的字形墨迹，每侧最多 1.5pt。"""
+        if self._area is None:
+            area = pymupdf.Rect(self.clip)
+            if self.spans:
+                ink = _page_glyph_ink(self._source(), self.page)
+                bounds = [ink.x_bounds(span) for span in self.spans]
+                if bounds and None not in bounds:
+                    area.x0 = max(min(area.x0, *(b[0] for b in bounds)), self.clip.x0 - 1.5)
+                    area.x1 = min(max(area.x1, *(b[1] for b in bounds)), self.clip.x1 + 1.5)
+            self._area = area
+        return self._area
 
     def png(self) -> bytes:
         if self._png is None:
-            doc = self.doc if os.getpid() == self._pid else _own_source(self.doc)
-            self._png = doc[self.page].get_pixmap(dpi=300, clip=self.clip).tobytes("png")
+            # 透明底：白底会盖住贴图位置下面的图框线、分隔线
+            pixmap = self._source()[self.page].get_pixmap(dpi=300, clip=self.area(), alpha=True)
+            self._png = pixmap.tobytes("png")
         return self._png
+
+
+# 量墨迹要逐字读字形编号、取嵌入字体，同一页的公式挨着裁，只留最近一页
+_GLYPH_INK_PAGE: list[tuple[tuple[int, int], "_GlyphInk"]] = []
+
+
+def _page_glyph_ink(doc: pymupdf.Document, page: int) -> "_GlyphInk":
+    key = (id(doc), page)
+    if not _GLYPH_INK_PAGE or _GLYPH_INK_PAGE[0][0] != key:
+        _GLYPH_INK_PAGE[:] = [(key, _GlyphInk(doc[page]))]
+    return _GLYPH_INK_PAGE[0][1]
 
 
 # 子进程自己打开的原文档，按文件名记。只在子进程里存，子进程写完就退出
@@ -7619,6 +7649,17 @@ def _formula_png(formula: dict) -> bytes | None:
     """公式的位图：测试里直接给 PNG，正式流程里是 _FormulaImage。"""
     png = formula.get("png")
     return png.png() if isinstance(png, _FormulaImage) else png
+
+
+def _formula_png_rect(formula: dict, target: pymupdf.Rect) -> pymupdf.Rect:
+    """位图贴到哪里。裁图比公式框宽出的部分（见 _FormulaImage.area）按公式框到 target 的缩放放到两侧。"""
+    png, bbox = formula.get("png"), formula.get("bbox")
+    if not isinstance(png, _FormulaImage) or bbox is None or bbox.width <= 0 or bbox.height <= 0:
+        return target
+    area = png.area()
+    sx, sy = target.width / bbox.width, target.height / bbox.height
+    return pymupdf.Rect(target.x0 + (area.x0 - bbox.x0) * sx, target.y0 + (area.y0 - bbox.y0) * sy,
+                        target.x1 + (area.x1 - bbox.x1) * sx, target.y1 + (area.y1 - bbox.y1) * sy)
 
 
 def _marker_png(idx: int) -> bytes:
@@ -8145,6 +8186,7 @@ def _paint_formula(
     png = _formula_png(formula)
     if not png:
         return
+    target = _formula_png_rect(formula, target)
     if deferred_png is not None:
         deferred_png.append((target, png))
         return
@@ -11319,9 +11361,8 @@ def _crop_formulas(
                 bbox = pymupdf.Rect(part["bbox"])
                 if bbox.width < 1 or bbox.height < 1:
                     continue
-                part["png"] = _FormulaImage(src_doc, part_page, bbox)
+                part["png"] = _FormulaImage(src_doc, part_page, bbox, part.get("spans") or ())
                 part["has_img"] = True
-                part["clip"] = bbox + (0.4, 0.4, -0.4, -0.4)
                 ready = True
             f["has_img"] = ready
     # 标记像素按全文全局序号编码（同色的会被 MuPDF 去重成同一图片，落位全串）
