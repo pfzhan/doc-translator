@@ -828,12 +828,14 @@ def _char_width(char: str, em: float) -> float:
         estimate = em * 0.33
     else:
         estimate = em * 0.5
+    # 字体里有这个字就按写出的宽度量。估计只给哪个字体都没有的字：拿 0.5em 兜底，
+    # i、l、逗号量宽了一倍，中英混排的行没满就折行，两端对齐也拉不满
     drawn = 0.0
     code = ord(char)
     for font in _drawing_fonts_loaded():
         if font.has_glyph(code):
             drawn = max(drawn, font.text_length(char, em))
-    return max(estimate, drawn)
+    return drawn or estimate
 
 
 def _token_width(token: str, em: float, formula_widths: dict[int, float]) -> float:

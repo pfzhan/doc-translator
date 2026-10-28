@@ -278,3 +278,17 @@ def test_slack_before_a_long_word_is_shared_with_the_line_above():
     # 不匀开时 Transformer 上面那一行空出将近六个字宽
     slack = [230 - measure_width(line, 10) for line in lines[:-1]]
     assert max(slack) < 30
+
+
+def test_narrow_latin_letters_measure_as_drawn():
+    """i、l、逗号按写出的字宽量，不按 0.5em 兜底。量宽了，中英混排的段落没写满就折行，
+    两端对齐拉到上限也够不着右缘。量出的宽度不小于实际写出的宽度，行不会出右缘。"""
+    from app.formats.pdf_align import _segments
+    from app.formats.pdf_flow import measure_width
+
+    for text in ("illicit little", "{i}decisions, steep hills{/i}", "{b}difficult{/b}", "可能会让你了解到, "):
+        drawn = sum(segment.width for segment in _segments(text, 10.0))
+        assert drawn <= measure_width(text, 10.0) <= drawn * 1.1
+    text = ("分布假说的核心思想是: 看到 {i}difficult{/i} 与 {i}hard{/i} 一样, 出现在相似的语境词"
+            "({i}decisions, steep hills{/i})附近, 可能会让你了解到, {i}difficult{/i} 的含义与 {i}hard{/i} 相近。")
+    assert len(break_lines(text, em=8.8, max_width=335, formula_widths={})) == 2
