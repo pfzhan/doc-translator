@@ -9033,7 +9033,7 @@ def _write_rect(
     column = None
     if geo is not None and len(geo.columns) >= 2:
         candidate = geo.column_of(block.rect)
-        if block.rect.x0 >= candidate.x0 - 2 and block.rect.x1 <= candidate.x1 + 2:
+        if block.rect.x0 >= candidate.x0 - 2 and _inside_right(block, candidate.x1):
             column = candidate
     # 靠右排参照栏或版心的左右缘，本页最宽块的右缘不算
     margin: tuple[float, float] | None = None
@@ -9042,7 +9042,7 @@ def _write_rect(
         col_width = col_x1 - col_x0
         margin = col_x0, col_x1
     elif geo is not None and geo.frame is not None and (
-        geo.frame.x0 - 2 <= block.rect.x0 and block.rect.x1 <= geo.frame.x1 + 2
+        geo.frame.x0 - 2 <= block.rect.x0 and _inside_right(block, geo.frame.x1)
     ):
         col_x0, col_x1 = geo.frame.x0, geo.frame.x1
         col_width = col_x1 - col_x0
@@ -9050,7 +9050,7 @@ def _write_rect(
     else:
         if geo is not None and len(geo.columns) == 1:
             only = geo.columns[0]
-            if only.x0 - 2 <= block.rect.x0 and block.rect.x1 <= only.x1 + 2:
+            if only.x0 - 2 <= block.rect.x0 and _inside_right(block, only.x1):
                 margin = only.x0, only.x1
         widest = max((other.rect for other, _ in items), key=lambda rect: rect.width, default=block.rect)
         col_x0, col_x1 = widest.x0, widest.x1
@@ -9108,8 +9108,29 @@ def _write_rect(
     elif right:
         return _clip_write_rect(pymupdf.Rect(block.rect.x0, y0, block.rect.x1, block.rect.y1 + pad), block.clip), "right"
     else:
-        rect = pymupdf.Rect(block.rect.x0, y0, block.rect.x1 + 2, block.rect.y1 + pad)
+        # 伸进页边的那几行不算，译文照栏或版心的右缘断行。旁注另成一栏时，正文栏的右缘也会被这几行撑出去
+        edges = [edge for edge in (margin[1] if margin is not None else None, _frame_x1(block, geo)) if edge is not None]
+        x1 = min(edges) if edges and block.rect.x1 > min(edges) + 2 else block.rect.x1
+        rect = pymupdf.Rect(block.rect.x0, y0, x1 + 2, block.rect.y1 + pad)
     return _clip_write_rect(rect, block.clip), "center" if centered else "left"
+
+
+def _inside_right(block: TextBlock, x1: float) -> bool:
+    """块收在 x1 以内。块的右缘只由个别几行撑出去的也算：TeX 断不开的长词、引用会让一行
+    伸进页边，同一段收在 x1 的行不比伸出去的少。"""
+    if block.rect.x1 <= x1 + 2:
+        return True
+    out = [row.x1 for row in block.line_rects if row.x1 > x1 + 2]
+    held = sum(abs(row.x1 - x1) <= 2 for row in block.line_rects)
+    return bool(out) and max(out) >= block.rect.x1 - 1 and len(out) <= held
+
+
+def _frame_x1(block: TextBlock, geo: PageGeometry | None) -> float | None:
+    """块在版心里时版心的右缘。"""
+    frame = geo.frame if geo is not None else None
+    if frame is not None and frame.x0 - 2 <= block.rect.x0 and _inside_right(block, frame.x1):
+        return frame.x1
+    return None
 
 
 def _flush_right(
@@ -9162,6 +9183,10 @@ def _write_limit(
     block: TextBlock, rect: pymupdf.Rect, geo: PageGeometry | None, obstacles: list[pymupdf.Rect],
 ) -> float | None:
     limit = geo.right_limit(rect, obstacles) if geo is not None else None
+    frame_x1 = _frame_x1(block, geo)
+    if limit is not None and frame_x1 is not None:
+        # 版心里的段落右扩到版心右缘为止。栏的右缘会被伸进页边的行撑出去
+        limit = min(limit, frame_x1 + 2)
     if block.clip is not None:
         cap = block.clip[2] - 0.8
         limit = cap if limit is None else min(limit, cap)

@@ -7484,6 +7484,40 @@ def test_epigraph_and_attribution_at_the_frame_right_edge_are_written_flush_righ
     assert start("William of Occam ")[0] == start("William of Occam")[0]
 
 
+def test_a_paragraph_with_an_overfull_line_is_written_to_the_frame_edge():
+    """一行断不开伸进页边的段落，译文照版心右缘写，不按伸出去的那一行。
+    大半行都在版心外的块照旧按自己的宽度写。"""
+    from app.formats.pdf import TextBlock, _write_limit, _write_rect
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import Column, PageGeometry
+
+    def blk(rows):
+        rects = [pymupdf.Rect(*row) for row in rows]
+        rect = pymupdf.Rect(rects[0])
+        for row in rects[1:]:
+            rect |= row
+        return TextBlock(page=75, rect=rect, line_rects=rects, text="This probabilistic knowledge " * 8,
+                         size=10.0, color="#000", bold=False)
+
+    para = blk([(157.1, 600, 475.2, 612), (142.2, 612, 475.2, 624), (142.2, 624, 489.5, 636),
+                (142.2, 636, 475.2, 648), (142.2, 648, 262.0, 660)])
+    wide = blk([(142.2, 400, 520.0, 412), (142.2, 412, 520.0, 424), (142.2, 424, 300.0, 436)])
+    frame = TextFrame(142.0, 475.0, 100, 720, 10)
+    geo = PageGeometry.from_rects(612, [para.rect, wide.rect], height=792, frame=frame)
+    items = [(para, ""), (wide, "")]
+    rect, align = _write_rect(para, items, True, False, geo)
+    assert align == "left" and rect.x1 == 477.0
+    assert _write_rect(wide, items, True, False, geo)[0].x1 == 522.0
+    # 译文放不下往右扩时，也只扩到版心右缘，栏的右缘是被伸出去的那一行撑开的
+    assert geo.columns[-1].x1 > 500
+    assert _write_limit(para, rect, geo, []) == 477.0
+    assert _write_limit(wide, rect, geo, []) > 500
+    # 两行的段落伸出去一行。旁注另成一栏时正文栏的右缘被这一行撑开，仍照版心右缘写
+    pair = blk([(157.1, 300, 489.5, 312), (142.2, 312, 475.2, 324)])
+    geo = PageGeometry(612, (Column(79.4, 127.8), Column(142.2, 489.5)), (), 792, frame=frame)
+    assert _write_rect(pair, [(pair, ""), (para, "")], True, False, geo)[0].x1 == 477.0
+
+
 def test_slide_title_and_a_box_label_below_stay_apart():
     """幻灯片大标题下面图里的小字框不是图注续行，标题旁边的星形里的字也不是标题的下一行。"""
     from app.formats.pdf import TextBlock, _merge_caption_fragments, _merge_continuations
