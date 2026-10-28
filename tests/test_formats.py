@@ -3837,6 +3837,56 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
     sent_t, _ = _placeholderize(times_digit)
     assert "1" in sent_t
 
+    # 式子收尾的「 + 1」「 = 20」CMR 排成一个 span，Latin Modern 的也一样
+    for roman in ("CMR10", "LMRoman10-Regular"):
+        tail = _block_with_spans([[
+            span("takes only ", roman, 10, 0, 50, 46),
+            span("A", "CMMI10", 10, 47, 50, 54),
+            span(" + 1", roman, 10, 54, 50, 73),
+            span(" values, so ", roman, 10, 77, 50, 120),
+            span("A", "CMMI10", 10, 121, 50, 128),
+            span(" = 20", roman, 10, 128, 50, 151),
+            span(" draws", roman, 10, 154, 50, 180),
+        ]], size=10.0)
+        sent_a, formulas_a = _placeholderize(tail)
+        assert sent_a == "takes only {v1} values, so {v2} draws"
+        assert [f["text"].replace(" ", "") for f in formulas_a] == ["A+1", "A=20"]
+
+    # 小数点是 CMMI 的「.」，后半个数和正文排在一个 span 里：「= 0」不收，免得把 0.31 拆开
+    decimal = _block_with_spans([[
+        span("gives a slightly higher", "CMR10", 10, 0, 50, 100),
+        span(" B/T", "CMMI10", 10, 100, 50, 120),
+        span(" ", "CMR10", 10, 120, 50, 123),
+        span("= 0", "CMR10", 10, 123, 50, 141),
+        span(".", "CMMI10", 10, 141, 50, 144),
+        span("31 likely", "CMR10", 10, 144, 50, 180),
+    ]], size=10.0)
+    sent_dec, _ = _placeholderize(decimal)
+    assert sent_dec == "gives a slightly higher{v1} = 0.31 likely"
+
+    # 单独的 CMMI「>」贴着后面的「= 10¹¹」，一起收进公式
+    bound = _block_with_spans([[
+        span("of stellar mass", "CMR10", 10, 0, 50, 70),
+        span(" >", "CMMI10", 10, 70, 50, 81),
+        span("= 10", "CMR10", 10, 81, 50, 101),
+        span("11", "CMR7", 7, 101, 48, 108, 55),
+        span(" in the nearby", "CMR10", 10, 108, 50, 160),
+    ]], size=10.0)
+    sent_b, formulas_b = _placeholderize(bound)
+    assert sent_b == "of stellar mass{v1} in the nearby"
+    assert formulas_b[0]["text"].replace(" ", "").startswith(">=10")
+
+    # Times 排的式子：斜体 L 后面贴着正体的下标 CE，L 照样收进 ∂ 的式子
+    partial = _block_with_spans([[
+        span("the derivative ", "Times-Roman", 10, 0, 50, 60),
+        span("∂", "CMSY10", 10, 60, 50, 65),
+        span("L", "Times-Italic", 10, 65, 50, 71),
+        span("CE", "Times-Roman", 10, 71, 50, 84),
+        span(" is", "Times-Roman", 10, 84, 50, 96),
+    ]], size=10.0)
+    _, formulas_p = _placeholderize(partial)
+    assert formulas_p[0]["text"].replace(" ", "").startswith("∂L")
+
 
 def test_formula_crop_trims_side_whitespace_to_the_ink():
     """字框里的前导空格不再留在公式图两侧。式子内部的空格还在。

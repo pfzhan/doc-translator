@@ -3661,13 +3661,14 @@ def _absorb_script_bases(runs: list[dict], span_lines: list[list[dict]], block_s
             break
 
 
-# 数学罗马体（CMR）在黑名单里，不当公式字体。贴着公式的数字、括号、算子名仍是式子的一部分。
-_CM_ROMAN_RE = re.compile(r"CMR\d")
+# 数学罗马体（CMR、Latin Modern 的 LMRoman）在黑名单里，不当公式字体。贴着公式的数字、括号、
+# 等号加号这类算子、算子名仍是式子的一部分
+_CM_ROMAN_RE = re.compile(r"CMR\d|LMRoman\d")
 _OPERATOR_NAMES = (
     "arg|max|min|log|ln|sin|cos|tan|cot|sec|csc|exp|lim|sup|inf|det|dim|"
     "ker|gcd|mod|sgn|deg|hom|Pr|arcsin|sinh|cosh"
 )
-_GLUE_ATOM = rf"(?:[\d.()\[\]{{}}|]+|(?:{_OPERATOR_NAMES}))"
+_GLUE_ATOM = rf"(?:[\d.()\[\]{{}}|=+<>≤≥×]+|(?:{_OPERATOR_NAMES}))"
 _MATH_GLUE_RE = re.compile(rf"^(?:{_GLUE_ATOM})(?:\s+{_GLUE_ATOM})*$")
 _ORDINAL_SUFFIXES = {"st", "nd", "rd", "th"}
 
@@ -3698,13 +3699,16 @@ _ITALIC_OPERATOR_RE = re.compile(r"[()\[\]{}=<>+\-*/]")
 
 
 def _is_math_glue(span: dict) -> bool:
-    """CMR 上的数字、括号或算子名；正文斜体写的变量、括号、算子。正文正体里的同形字不收。
-    数学字体的 span 不在这里收：没进公式的是有意放回正文的（序数 t-th 的 t）。"""
+    """CMR 上的数字、括号、算子或算子名；正文斜体写的变量、括号、算子。正文正体里的同形字不收。
+    数学字体的 span 只收单个标点：别的没进公式的是有意放回正文的（序数 t-th 的 t）。"""
     font = str(span.get("font") or "")
     text = str(span.get("text") or "").strip()
     if _CM_ROMAN_RE.search(font):
         return bool(_MATH_GLUE_RE.match(text))
-    if _span_is_math(span) or not (_ITALIC_FONT_RE.search(font) or int(span.get("flags") or 0) & 2):
+    if _span_is_math(span):
+        # 单独成段时当标点放回正文的 >、小数点，贴着公式就是式子里的（> = 10、0.31）
+        return bool(text) and bool(_LONE_PUNCT_RE.match(text))
+    if not (_ITALIC_FONT_RE.search(font) or int(span.get("flags") or 0) & 2):
         return False
     if not text or not _ITALIC_GLUE_RE.match(text):
         return False
@@ -3812,6 +3816,9 @@ def _absorb_math_glue(
         for line_no, line in enumerate(span_lines)
         for index, span in enumerate(line)
         if id(span) not in taken and _is_math_glue(span)
+        # 斜体变量后面贴着下标、正文是常事（∂L 接 CE），只有正体的数字、算子、标点怕拆开一个数
+        and not ((_CM_ROMAN_RE.search(str(span.get("font") or "")) or _span_is_math(span))
+                 and _runs_into_word(line, index, taken))
     ]
     while pending:
         attached = False
@@ -3830,6 +3837,25 @@ def _absorb_math_glue(
         if not attached:
             return
         pending = still
+
+
+def _runs_into_word(line: list[dict], index: int, taken: set[int]) -> bool:
+    """span 后面没隔空格就接着正文的字母、数字：B/T = 0.31 的「= 0」后面是「.」和「31 likely」。
+    收进公式会把一个数拆成两半，这一串都留在正文。中间也能收的 span 跳过去接着看。"""
+    for item in line[index + 1:]:
+        text = str(item.get("text") or "")
+        if id(item) in taken or not text or text[0].isspace():
+            return False
+        if _is_math_glue(item):
+            if text[-1].isspace():
+                return False
+            continue
+        word = text.split()[0]
+        if re.search(r"[A-Za-z0-9]", word):
+            return True
+        if len(word) < len(text):
+            return False
+    return False
 
 
 def _ordinal_reading(run: dict, block_size: float) -> str | None:
