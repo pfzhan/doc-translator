@@ -10007,3 +10007,26 @@ def test_a_font_that_only_writes_single_marks_beside_formulas_is_math():
     first, second = (line["spans"] for line in data["blocks"][0]["lines"])
     assert _span_is_math(first[2])
     assert not _span_is_math(second[1]) and not _span_is_math(first[0])
+
+
+def test_a_roman_numbered_item_does_not_continue_the_paragraph_above():
+    """证明里的 (iii) 是另一项。上一段收在行间公式上、没有句号，(iii) 后面大写起头的也不接上来；
+    句中列举的 (iii) 后面小写，括号里的小写词，照样接。"""
+    from app.formats.pdf import TextBlock, _can_continue
+
+    def blk(text):
+        return TextBlock(page=0, rect=pymupdf.Rect(72, 500, 540, 530), line_rects=[],
+                         text=text, size=10, color="#000000", bold=False)
+
+    prev = blk("The partition statement is the expansion {v11}")
+    assert not _can_continue(prev, blk("(iii) Let {v1} be the sum."), 10, None)
+    assert _can_continue(blk("(ii) it must be light, and"), blk("(iii) the arm must have few actuators."), 10, None)
+    assert _can_continue(prev, blk("(see below) which holds."), 10, None)
+
+    from app.formats.pdf import _split_lines
+
+    # 上一行停在式子上、没排满，(iii) 另起一项；上一行排满的是段中列举折到了行首
+    assert _split_lines([_line("is the expansion = 1", 102, 152, 127), _line("(iii) Let the sum of the first n terms of the series be", 102, 505, 140),
+                         _line("written as a product of independent exponentials", 102, 400, 154)]) == [[0], [1, 2]]
+    assert _split_lines([_line("the intervening low-density region, regardless of r.", 63, 297, 134),
+                         _line("(ii) Such misses propagate through calibration. Be-", 63, 297, 146)]) == [[0, 1]]

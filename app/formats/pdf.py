@@ -103,6 +103,8 @@ _LINE_FORMULA_EM = 1.35
 _FORMULA_ASCENT_EM = 1.8
 _FORMULA_DESCENT_EM = 1.3
 _PAREN_ITEM_RE = re.compile(r"^\([a-zA-Z]\)\s+")
+# 证明分项的 (ii)、(iii) 后面大写起头的是另一项。小写接着写的是句中的列举（(iii) the arm must …）
+_ROMAN_ITEM_RE = re.compile(r"^\((?:[ivx]{2,4}|[IVX]{2,4})\)\s+[A-Z]")
 # 书里按章编号的例句：(1.2) It was difficult ...
 _EXAMPLE_NUMBER_RE = re.compile(r"^\(\d+\.\d+[a-z]?\)\s+\S")
 # 例句里方括号标注的角标（Arg0、ArgM-TMP、PER）最多几个字
@@ -297,9 +299,9 @@ def _same_line_word(
 
 
 def _list_item(text: str) -> bool:
-    """a. 和 (a) 都是列表项。换行后的 Q. 由调用处另行排除。"""
+    """a.、(a) 和后面大写起头的 (ii) 都是列表项。换行后的 Q. 由调用处另行排除。"""
     stripped = text.lstrip()
-    return bool(BULLET_RE.match(text) or _PAREN_ITEM_RE.match(stripped))
+    return bool(BULLET_RE.match(text) or _PAREN_ITEM_RE.match(stripped) or _ROMAN_ITEM_RE.match(stripped))
 
 
 # 式子里的关系符号
@@ -2308,7 +2310,9 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         )
         # 段中列举 (a) … (b) …，前一项写在行中间，这一项碰巧落到行首，上一行又排满：是折行，不是列表
         inline_enum = max_x1 - prect.x1 <= 3 * psize and _follows_inline_enum(stripped, [items[j][0] for j in cur])
-        bullet = _list_item(text) and not wrapped_letter and not inline_enum
+        # 证明分项 (iii) Let … 的上一行停在式子或句末，没排满。上一行排满的是段中列举碰巧折到行首
+        roman_wrap = bool(_ROMAN_ITEM_RE.match(stripped)) and max_x1 - row_rect.x1 <= 3 * psize
+        bullet = _list_item(text) and not wrapped_letter and not inline_enum and not roman_wrap
         # 右括号起头的一行是上一行括号里的内容折下来的（(* + ? . [ | ]) need to…），行尾的 [ 不是符号行
         closing = stripped[:1] in ")]}" and _prose_units(stripped) >= 2
         # 上一行停在运算符、左括号上，式子没写完，折到下一行行首：下一行的 100) 是式子的后半截，
