@@ -5923,20 +5923,25 @@ def _wraps_from_above(
             block.text.rstrip().endswith(",") and _index_refs_tail(block, rect)
             for block in page_blocks[-1:]
         )
-    if not re.match(r"[a-z]{2,}\b", text.lstrip()):
-        return False
+    worded = re.match(r"[a-z]{2,}\b", text.lstrip()) is not None
     for block in reversed(page_blocks):
         last = block.line_rects[-1]
         if rect.y0 - last.y1 > 0.6 * block.size:
             # 块按阅读顺序排，再往前的都在更上面或者在别的栏
             continue
-        # 折下来的是一行：底下再叠几行的是另排的式子
-        if (rect.height > block.size * 1.6 or rect.y0 - last.y1 < -0.5 * block.size
+        # 折下来的是一行：底下再叠几行的是另排的式子。行内分式的分子分母叠着，比一行高
+        if (rect.height > block.size * (1.6 if worded else 2.5) or rect.y0 - last.y1 < -0.5 * block.size
                 or _ends_sentence(block.text)):
             continue
         # 靠左排的上一行写到本栏右缘。居中排的段落逐行成块，上一行和它上面那行一样宽，是排满的行
         left = (abs(block.rect.x0 - rect.x0) <= block.size * 0.5
                 and last.x1 >= _column_right(block.rect.x0, block.size, rows, frame) - block.size)
+        if not worded:
+            # 不以词起头的只认分子分母叠着的行内分式，靠左、紧贴着上一行（the odds ratio | p/(1−p):）。
+            # 单独排的式子上面留着空。一行高的数字、记号是表格、图里的
+            if left and rect.height > block.size * 1.6 and rect.y0 - last.y1 <= 0.3 * block.size:
+                return True
+            continue
         centered = abs((last.x0 + last.x1) / 2 - (rect.x0 + rect.x1) / 2) <= block.size and any(
             0 <= last.y0 - line.y1 <= block.size
             and abs(line.x0 - last.x0) <= block.size and abs(line.x1 - last.x1) <= block.size
@@ -6909,6 +6914,13 @@ def _merge_continuations(
                     and abs(min(rect.x0 for rect in rows[1]) - p.rect.x0) <= p.size * 0.5
                 ))
             )
+            # 句子最后的行内分式折到下一行行首，后面没有正文词（the odds ratio | p/(1−p):）：
+            # 分子分母叠着比一行高，从栏边起笔，紧贴着排到右缘的上一行。单独排的式子缩进，上面也留着空
+            formula_tail = (
+                bool(b.line_rects) and _plain_words(b) == 0 and b.rect.height > p.size * 1.6
+                and abs(first_x0 - p.rect.x0) <= p.size * 0.5
+                and last_x1 >= p.rect.x1 - p.size and b.rect.y0 - last_y1 <= 0.3 * p.size
+            )
             # 句中的缩写（Brants et al. | (2007)）不是句末。左括号起头的续行是引文年份、插入语，
             # 不比上一段最左的一行靠右（首行缩进的段落），或者和其中一行同一左缘（悬挂缩进的条目续行），
             # 或者居中接在居中段落后面。
@@ -6988,7 +7000,7 @@ def _merge_continuations(
                 and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
                 and (colon_wrap or call_wrap or flush_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
                      or not _ends_sentence(p.text))
-                and (first.islower() or first in ".),;%,；，" or open_paren or math_wrap or centered_end
+                and (first.islower() or first in ".),;%,；，" or open_paren or math_wrap or formula_tail or centered_end
                      or dangling or centered_comma or in_fence or full_wrap or flush_wrap or bracketed or word_cut)
                 and not _verbatim_seam(p, b)
                 # 段落首行缩进的文档里，首行比下面几行缩进一两个字宽、大写的词起头的块是新的一段，

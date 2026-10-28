@@ -10096,3 +10096,36 @@ def test_a_script_left_of_a_letter_is_not_its_script():
     assert not _script_base(x, pymupdf.Rect(146.5, 593.3, 159.8, 607.2), 10.0, math=True, script_y=600.0)
     assert _script_base({**x, "bbox": (140.0, 596.6, 146.5, 608.5)}, pymupdf.Rect(146.5, 600, 149, 609), 10.0,
                         math=True, script_y=607.0)
+
+
+def test_a_fraction_wrapped_to_the_line_start_ends_the_sentence_above():
+    """句子最后的行内分式折到下一行行首（the log of the odds ratio | p/(1−p):），分子分母叠着比一行高，
+    后面没有正文词，也是这句的结尾，接回上一段。隔着空、缩进排的是单独的式子。"""
+    from app.formats.pdf import TextBlock, _merge_continuations, _wraps_from_above
+    from app.formats.pdf_frame import TextFrame
+
+    frame = TextFrame(142, 475, 72, 720, 10)
+    rows = [pymupdf.Rect(142.2, y, 475.2, y + 12) for y in (488.8, 500.8, 512.8, 524.7)]
+    line = pymupdf.Rect(142.2, 524.7, 475.2, 536.7)
+    host = TextBlock(page=0, rect=pymupdf.Rect(142.2, 500.8, 475.2, 536.7), line_rects=rows[1:],
+                     text="This is because the logit function is the inverse of the sigmoid. "
+                          "The logit function is the log of the odds ratio",
+                     size=10, color="#000000", bold=False,
+                     span_lines=[[{"text": "The logit function is the log of the odds ratio", "size": 10.0,
+                                   "font": "NimbusRomNo9L-Regu", "bbox": tuple(line)}]])
+    tail = pymupdf.Rect(143.4, 534.5, 161.0, 556.4)
+    assert _wraps_from_above([host], 0, tail, "p 1−p:", rows, frame)
+    displayed = pymupdf.Rect(243.8, 548.0, 338.1, 570.0)
+    assert not _wraps_from_above([host], 0, displayed, "logit(p) = ln p 1−p", rows, frame)
+    # 一行高的数字是下面表格的一格
+    assert not _wraps_from_above([host], 0, pymupdf.Rect(143.4, 537.0, 170.0, 548.0), "0.00025", rows, frame)
+
+    def span(text, font):
+        return {"text": text, "size": 7.4, "font": font, "bbox": tuple(tail)}
+
+    fraction = TextBlock(page=0, rect=tail, line_rects=[tail], text="1−p: p", size=7.4, color="#000000", bold=False,
+                         span_lines=[[span("1", "NimbusRomNo9L-Regu"), span("−", "CMSY10"),
+                                      span("p", "NimbusRomNo9L-ReguItal"), span(":", "NimbusRomNo9L-Regu")],
+                                     [span("p", "NimbusRomNo9L-ReguItal")]])
+    merged = _merge_continuations([host, fraction])
+    assert len(merged) == 1 and merged[0].text.endswith("odds ratio 1−p: p")
