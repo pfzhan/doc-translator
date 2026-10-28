@@ -4076,6 +4076,16 @@ def test_placeholderize_absorbs_accent_over_formula():
     assert "^" not in sent
     assert len(formulas) == 1
     assert formulas[0]["bbox"].y0 <= 42  # 符头顶部包进裁剪区域
+    # 短音符 M̆、小波浪 Ẽ 也一样
+    for accent in ("˘", "˜"):
+        b1 = _block_with_spans([
+            [span("costs at least ", "TimesNewRomanPSMT", 10, 0, 50),
+             span("M", "CMMI10", 10, 40, 50, x1=48, y1=60),
+             span(" over", "TimesNewRomanPSMT", 10, 60, 50)],
+            [{**span(accent, "CMR10", 10, 41, 42, x1=46, y1=48), "origin": (41, 56)}],
+        ], size=10.0)
+        sent1, formulas1 = _placeholderize(b1, 0)
+        assert accent not in sent1 and len(formulas1) == 1
     # 远离公式的 ^ 不吸收（如正文里确实有个符号）
     b2 = _block_with_spans([
         [span("y", "CMMI10", 10, 0, 50, x1=8, y1=60),

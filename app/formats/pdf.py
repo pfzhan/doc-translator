@@ -3904,7 +3904,7 @@ def _release_ordinals(runs: list[dict], block_size: float) -> tuple[dict[int, st
 
 
 # 重音符号（hat/tilde/bar/dot 等）：落在公式 bbox 上的要并进公式，不能留在正文
-_ACCENT_CHARS = {"^", "ˆ", "̂", "~", "̃", "¯", "̄", "´", "`", "˙", "̇", "¨", "̈", "ˇ", "̌", "⃗"}
+_ACCENT_CHARS = {"^", "ˆ", "̂", "~", "˜", "̃", "¯", "̄", "´", "`", "˙", "̇", "¨", "̈", "ˇ", "̌", "˘", "̆", "˚", "̊", "⃗"}
 
 
 def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[dict]]:
