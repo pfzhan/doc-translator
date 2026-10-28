@@ -7851,7 +7851,9 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
         for hb in merged:
             hr = _pdf_rect(page, hb)
             holes.append(f"{hr.x0:.2f} {hr.y0:.2f} {hr.width:.2f} {hr.height:.2f} re")
-    source = _keep_marks(doc, fmS, [_pdf_rect(page, r) for r in our_rects]) if our_rects else fmS
+    # 留哪些字按公式自己的 span 框认，不按往外扩过的裁剪框：MuPDF 只给整套字体的上下界，
+    # 下一行的字算出的中心在基线上 0.25em，正好落进裁剪框下沿扩出的那一条，成了公式图里的隐形字
+    source = _keep_marks(doc, fmS, [_pdf_rect(page, r) for r in base]) if our_rects else fmS
     fmT = doc.get_new_xref()
     doc.update_object(fmT, (
         f"<< /Type /XObject /Subtype /Form /BBox [{clip_outer.x0:.2f} {clip_outer.y0:.2f} "
