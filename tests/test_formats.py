@@ -10381,7 +10381,8 @@ def test_a_one_line_paragraph_is_written_from_the_column_edge():
 
 def test_a_displayed_example_line_keeps_the_original():
     """首行缩进的书里，正文中间缩得比段首更深、单独排开的一行是例句，留原文。
-    以冒号收尾的引导句、字号小一号的出处、居中的图注、列表项折下来的行、「标签: 释义」的行不算"""
+    以冒号收尾的引导句、字号小一号的出处、居中的图注、列表项折下来的行、「标签: 释义」的行、
+    带等号的式子说明、逐词对译例句下面的意译不算"""
     from app.formats.pdf import TextBlock, _display_example_ids
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import Column, PageGeometry
@@ -10409,12 +10410,16 @@ def test_a_displayed_example_line_keeps_the_original():
     item = line(344, 175, 480, "a. Count the parameters in one attention layer.")
     folded = line(356, 188, 300, "Does your answer depend on A?")
     gloss = line(396, 188, 300, "Arg1: Proposition")
+    hanzi = line(436, 188, 260, "姚明进入总决赛")
+    pinyin = line(436, 290, 400, "yáo míng jìn rù zǒng jué sài")
+    free = line(448, 188, 320, "“Yao Ming reaches the finals”")
+    formula = line(488, 200, 440, "convolution with width-1 kernel: z = x w")
     blocks += [example, para(198), lead, para(238), source, para(278), caption, para(318), item, folded, para(370),
-               gloss, para(410)]
+               gloss, para(410), hanzi, pinyin, free, para(462), formula, para(502)]
     found = _display_example_ids(blocks, [geo], set())
     assert id(example) in found
     for name, block in (("lead", lead), ("source", source), ("caption", caption), ("folded", folded), ("item", item),
-                        ("gloss", gloss)):
+                        ("gloss", gloss), ("free", free), ("formula", formula)):
         assert id(block) not in found, name
     assert not found & {id(block) for block in blocks if len(block.line_rects) > 1}
 
