@@ -8697,7 +8697,7 @@ def _written_right(page: "pymupdf.Page", x0: float, y0: float, y1: float) -> flo
 def _place_typeset(
     page: "pymupdf.Page",
     doc: "pymupdf.Document",
-    block: TextBlock,
+    block_size: float,
     text: str,
     formulas: list[dict],
     rect: "pymupdf.Rect",
@@ -8719,7 +8719,7 @@ def _place_typeset(
     """按行写入文字，公式槽用记录的下沿贴到该行基线。"""
     text = space_around_latin(separate_after_formula(text))
     lines, em, gap, box, lanes = _fit_typeset(
-        text, formulas, rect, em, block.size, cjk, page, obstacles, right_limit, holes,
+        text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit, holes,
     )
     if cjk and _draw_cjk(
         page, doc, lines, formulas, box, em, gap, color, align,
@@ -9567,11 +9567,13 @@ def _write_limit(
 
 @dataclass(frozen=True)
 class _Carry:
-    """续页接着写的后半。普通跨页按栏宽断好；共基线的半句按续行自己的宽度再断。"""
+    """续页接着写的后半。普通跨页按栏宽断好；共基线的半句按续行自己的宽度再断。
+    size 是上一块的字号：后半按它断的行，续块的字号稍大一点就放不下，每行末尾挤出一个字"""
 
     text: str
     formulas: list[dict]
     width: float
+    size: float
     own_line: bool = False
 
 
@@ -10018,12 +10020,15 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             formulas: list[dict] | None = None, justify_last: bool = False,
             # source：block 是挪过位置的副本（索引条目）时的原块，阅读顺序的标记放在原块上
             x_cap: float | None = None, source: TextBlock | None = None,
+            # 续写的后半按上一块的字号写（见 _Carry）
+            block_size: float | None = None,
         ) -> None:
             rect = _fit_page_margins(block, rect, same_page, bounds.height, cjk)
             before = order.snapshot()
             bformulas = formulas if formulas is not None else (formulas_map or {}).get(id(block), [])
             weight = "bold" if block.bold else "normal"
-            size = block.size * 0.88 if cjk else block.size
+            block_size = block.size if block_size is None else block_size
+            size = block_size * 0.88 if cjk else block_size
             obstacles = [ob.rect for ob in layout if ob is not block]
             # 目录的页码留在原页上，译文不能写过去
             obstacles += [ob.leader.number for ob in same_page if ob.leader is not None]
@@ -10044,7 +10049,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             # 从右往左仍交给 HTML 盒子。其余段落由排版器断行：有公式图时按行落位，
             # 没有公式图时写进一个锁住换行的盒子，避免一行嵌一次整套字体。
             if rtl:
-                body = _translation_html(text, bformulas, block.size, size, rect.width)
+                body = _translation_html(text, bformulas, block_size, size, rect.width)
                 css = (
                     f"* {{font-family: sans-serif; font-size: {size}px; color: {block.color}; "
                     f"font-weight: {weight}; line-height: {1.45 if cjk else 1.2}; margin: 0; padding: 0; "
@@ -10053,13 +10058,13 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, beside, archive, limit)
             elif any(f.get("has_img") for f in bformulas):
                 _place_typeset(
-                    page, doc, block, text, bformulas, rect, size, cjk, align, div_attrs,
+                    page, doc, block_size, text, bformulas, rect, size, cjk, align, div_attrs,
                     block.color, weight, beside, limit, forms, page_spans, deferred_png,
                     justify_last, holes, first_room,
                 )
             else:
                 _place_plain(
-                    page, text, bformulas, rect, size, block.size, cjk, align, div_attrs,
+                    page, text, bformulas, rect, size, block_size, cjk, align, div_attrs,
                     block.color, weight, beside, limit, archive, justify_last, holes, first_room,
                 )
             if block.leader is not None and not page.rotation:
@@ -10084,7 +10089,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 t, bformulas, size, b.size, host_box.width,
             )
             shared_head[id(b)] = (head, host_box, bformulas, bool(rest.strip()))
-            carried[id(tail)] = _Carry(rest, bformulas, tail_box.width, True)
+            carried[id(tail)] = _Carry(rest, bformulas, tail_box.width, b.size, True)
 
         for b, t in items:
             if t == SPILL_TAIL:
@@ -10093,15 +10098,15 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     continue
                 if carry.own_line:
                     box = _own_line_box(b, cjk)
-                    write_one(b, carry.text, box, "left", carry.formulas, False, box.x1)
+                    write_one(b, carry.text, box, "left", carry.formulas, False, box.x1, block_size=carry.size)
                     continue
                 rect, align = _write_rect(b, visible or [(b, carry.text)], cjk, rtl, geo)
                 room = _room_below(page, b, rect.y0, rect.x0, rect.x0 + carry.width, same_page, kept, marks)
                 # 末行下面的行距是空白，框可以伸过 room，字仍在 room 以内（同 _filled_bottom）
-                size = b.size * 0.88 if cjk else b.size
+                size = carry.size * 0.88 if cjk else carry.size
                 bottom = room + ((1.45 if cjk else 1.2) - 1) * size
                 placed = pymupdf.Rect(rect.x0, rect.y0, rect.x0 + carry.width, max(bottom, rect.y0 + 4))
-                write_one(b, carry.text, placed, align, carry.formulas, False)
+                write_one(b, carry.text, placed, align, carry.formulas, False, block_size=carry.size)
                 continue
             prepared = shared_head.get(id(b))
             if prepared is not None:
@@ -10150,7 +10155,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                         )
                         write_one(b, placed, placed_rect, side, bformulas, bool(spill), rest_box.x1)
                     if spill:
-                        carried[id(tail)] = _Carry(spill, bformulas, rest_box.width)
+                        carried[id(tail)] = _Carry(spill, bformulas, rest_box.width, b.size)
                 continue
             if id(b) in stacked:
                 rect, align = stacked[id(b)], "left"
@@ -10185,7 +10190,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             # 行尾半句只有几个词宽。按它的宽度断行，续页也会被挤小。
             # 原文擦掉，整段按续页的栏宽写在续页上。
             if len(b.line_rects) <= 1 and rect.width < tail.rect.width * 0.7:
-                carried[id(tail)] = _Carry(t, bformulas, tail.rect.width)
+                carried[id(tail)] = _Carry(t, bformulas, tail.rect.width, b.size)
                 continue
             left = _indented_start(b, tail, geometries)
             if left is not None:
@@ -10202,7 +10207,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 head_rect = pymupdf.Rect(rect.x0, rect.y0, rect.x1, max(bottom, rect.y0 + 4))
                 write_one(b, head, head_rect, align, bformulas, bool(rest))
             if rest:
-                carried[id(tail)] = _Carry(rest, bformulas, rect.width)
+                carried[id(tail)] = _Carry(rest, bformulas, rect.width, b.size)
         _flush_png(page, deferred_png)
         if mid_map:
             _place_formula_images(page, doc, images_before, mid_map, forms, page_spans)

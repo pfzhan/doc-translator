@@ -5755,6 +5755,43 @@ def test_fitted_cross_page_paragraph_keeps_body_size(tmp_path):
     assert min(sizes) >= 7
 
 
+def test_carried_lines_keep_the_host_size(tmp_path):
+    """续页的块抽出来字号稍大。接过去的行按上一块的字号断好，也按它写：按续块的字号写，行末会单挤出一个字，放不下又缩字号。"""
+    from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    doc.new_page(width=420, height=300)
+    doc.new_page(width=420, height=300)
+    doc.save(src)
+    doc.close()
+    host = TextBlock(
+        page=0, rect=pymupdf.Rect(40, 230, 375, 262),
+        line_rects=[pymupdf.Rect(40, 230, 375, 246), pymupdf.Rect(40, 246, 375, 262)],
+        text="In our experimental study we", size=10.8, color="#000000", bold=False,
+    )
+    tail = TextBlock(
+        page=1, rect=pymupdf.Rect(40, 40, 375, 120),
+        line_rects=[pymupdf.Rect(40, 40 + 16 * k, 375, 56 + 16 * k) for k in range(5)],
+        text="first compare the systems.", size=11.0, color="#000000", bold=False,
+    )
+    paragraph = "在实验研究中我们首先比较旧优化器与新优化器的计划质量，并说明新优化器在大规模数据上的收益。" * 4
+    out = _render_translated(
+        src, [host, tail], [paragraph, SPILL_TAIL], "zh-CN",
+        continuations={id(host): tail},
+    )
+    rows: dict[float, str] = {}
+    for block in out[1].get_text("dict")["blocks"]:
+        for line in block.get("lines", []):
+            for span in line["spans"]:
+                if any("一" <= ch <= "鿿" for ch in span["text"]):
+                    assert abs(span["size"] - 10.8 * 0.88) < 0.05
+                    key = round(span["origin"][1])
+                    rows[key] = rows.get(key, "") + span["text"]
+    assert len(rows) >= 3
+    assert all(len(text.strip()) > 3 for text in list(rows.values())[:-1])
+
+
 def test_narrow_fragment_is_written_at_the_continuation_width(tmp_path):
     """行尾半句不按自己的窄框排。译文写到续页，字号保持正文。"""
     from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated
