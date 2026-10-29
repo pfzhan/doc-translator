@@ -9762,29 +9762,36 @@ def _room_below(
 
 def _split_filled_lines(
     text: str, formulas: list[dict], em: float, block_size: float, width: float, cjk: bool,
-    y0: float, limit: float, page_bottom: float | None = None,
+    y0: float, limit: float, page_bottom: float | None = None, next_room: float = 0.0,
 ) -> tuple[str, str]:
     """按满行切开。这一页放得下几行整行，就留几行；剩下的从下一页继续。
 
-    译文的行距比原文大，页底原文的两行按原行距放不下两行译文，余下的挤到下一页
-    只能缩小字号。这里和 _fit_typeset 一样先压行距再数行数；末行下面的行距是空白，
+    next_room 是续块从起笔往下能写的高度。余下的行按正常行距在那里写得下时，本页按正常行距数行数。
+    写不下时，页底原文的两行按原行距放不下两行译文，余下的挤到下一页只能缩小字号，
+    这时和 _fit_typeset 一样先压行距再数行数。末行下面的行距是空白，
     也可以伸过 limit（见 _filled_bottom），但写入框到 page_bottom 为止：limit 就是原文正文下沿时，
     框在那里被裁掉，多算的这截放不下，这几行会被整体缩小。"""
     prepared = space_around_latin(separate_after_formula(text))
-    gap = 1.2 if cjk else 1.1
     metrics = _formula_metrics(formulas, block_size, em, block_size * 0.88 if cjk else None)
     widths = {index: metric.slot_width for index, metric in metrics.items()}
     raw = break_lines(prepared, em, max(width, 1.0), widths)
-    line_h = em * gap
-    bottom = limit + (gap - 1) * em
-    if page_bottom is not None:
-        bottom = min(bottom, page_bottom)
-    room = bottom - y0
-    count = 0
-    for index in range(len(raw)):
-        if (index + 1) * line_h + em * 0.3 > room + 1:
-            break
-        count = index + 1
+
+    def fitting(gap: float, room: float) -> int:
+        """高 room 的地方按行距 gap 放得下几行"""
+        count = 0
+        while count < len(raw) and (count + 1) * em * gap + em * 0.3 <= room + 1:
+            count += 1
+        return count
+
+    def page_room(gap: float) -> float:
+        bottom = limit + (gap - 1) * em
+        return (bottom if page_bottom is None else min(bottom, page_bottom)) - y0
+
+    normal = 1.45 if cjk else 1.2
+    count = fitting(1.2 if cjk else 1.1, page_room(1.2 if cjk else 1.1))
+    roomy = fitting(normal, page_room(normal))
+    if 0 < roomy < count and fitting(normal, next_room + (normal - 1) * em) >= len(raw) - roomy:
+        count = roomy
     if count >= len(raw):
         # 返回已经断好的行。返回原文的话，调用方会按一行去量盒子，
         # 整段就被挤进一行高，字号缩到看不清。
@@ -9890,6 +9897,27 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
     page_blocks: dict[int, list[TextBlock]] = {}
     for b in blocks:
         page_blocks.setdefault(b.page, []).append(b)
+    # 各页留在原处的字和画出来的图框（见 _room_below）。写到这一页时换成擦完以后的
+    page_inks: dict[int, tuple[list[pymupdf.Rect], list[pymupdf.Rect]]] = {}
+
+    def tail_room(tail: TextBlock, width: float) -> float:
+        """续块从起笔往下能写多高，和写续块（SPILL_TAIL）时的 room 一样算。
+        续块那一页还没写，原文的字都在块里，留在原处的字、图框照样认得出来。
+        续块右边 width 以内并排着图、别的块时，按 width 断的行到那里要绕开，折成更多行，不算它有地方"""
+        tail_page = doc[tail.page]
+        same = page_blocks.get(tail.page, [])
+        if tail.page not in page_inks:
+            page_inks[tail.page] = _kept_ink(tail_page, same), _drawn_marks(tail_page)
+        kept, marks = page_inks[tail.page]
+        x0, x1 = tail.rect.x0, tail.rect.x0 + width
+        if any(
+            tail.rect.x1 - 2 <= ob.x0 < x1 - 4
+            and min(ob.y1, tail.rect.y1) - max(ob.y0, tail.rect.y0) > tail.size * 0.5
+            for ob in (*marks, *(other.rect for other in same if other is not tail))
+        ):
+            return 0.0
+        y0 = _flow_y0(tail, cjk)
+        return _room_below(tail_page, tail, y0, x0, x1, same, kept, marks) - y0
 
     for written, (pno, items) in enumerate(by_page.items()):
         if on_page is not None:
@@ -9967,6 +9995,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         # 续写往下伸时还要让开图框、图片，它们不在块里。写译文之前读：写进去的公式也是画出来的
         spills = any(t == SPILL_TAIL or id(b) in continuations for b, t in items)
         marks = _drawn_marks(page) if spills else []
+        page_inks[pno] = kept, marks
         # 重写内容流会把 /Resources 改写成内联字典；排版器写入后 /XObject 条目上百个，
         # 这么大的内联嵌套字典在保存的 GC（garbage≥3）里会被写坏（第一个表单的条目
         # 指向字体流，内容静默丢失）。规范成间接引用避开这个 MuPDF bug。
@@ -10111,6 +10140,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     floor = write_floor(b, rest_box)
                     placed, spill = _split_filled_lines(
                         rest, bformulas, size, b.size, rest_box.width, cjk, rest_box.y0, room, floor,
+                        tail_room(tail, rest_box.width),
                     )
                     if placed:
                         lines = placed.count("\n") + 1
@@ -10163,7 +10193,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             size = b.size * 0.88 if cjk else b.size
             room = _room_below(page, b, rect.y0, rect.x0, rect.x1, same_page, kept, marks)
             floor = write_floor(b, rect)
-            head, rest = _split_filled_lines(t, bformulas, size, b.size, rect.width, cjk, rect.y0, room, floor)
+            head, rest = _split_filled_lines(
+                t, bformulas, size, b.size, rect.width, cjk, rect.y0, room, floor, tail_room(tail, rect.width),
+            )
             if head:
                 lines = head.count("\n") + 1
                 bottom = _filled_bottom(rect.y0, lines, size, cjk, room, floor)

@@ -5677,6 +5677,26 @@ def test_split_filled_lines_fills_the_last_lines_of_the_page():
     assert capped.count("\n") == 4
 
 
+def test_split_filled_lines_keeps_the_line_gap_when_the_continuation_has_room():
+    """页底按正常行距放一行、压紧放两行。续块写得下余下的行时本页不压行距，写不下才压。"""
+    from app.formats.pdf import _split_filled_lines
+
+    text = "人工智能领域的一项名为发展的研究计划的成员，并发表了一篇论文。" * 3
+    args = dict(em=8.8, block_size=10, width=300, cjk=True, y0=696.5, limit=719.5)
+    tight, _ = _split_filled_lines(text, [], **args)
+    assert tight.count("\n") == 1
+    roomy, rest = _split_filled_lines(text, [], **args, next_room=200)
+    assert roomy and "\n" not in roomy and rest
+    short, _ = _split_filled_lines(text, [], **args, next_room=12)
+    assert short == tight
+    # 压紧以后整段放得下，续块有地方时也接过去
+    two = "人工智能领域的一项名为发展的研究计划的成员，并发表了一篇论文。" * 2
+    whole, rest = _split_filled_lines(two, [], **args)
+    assert whole.count("\n") == 1 and rest == ""
+    head, rest = _split_filled_lines(two, [], **args, next_room=40)
+    assert "\n" not in head and rest
+
+
 def test_hyphen_bridge_keeps_the_page_boundary():
     from app.formats.pdf import TextBlock, _prepare_unit
 
