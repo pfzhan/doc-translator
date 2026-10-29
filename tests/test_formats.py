@@ -10345,6 +10345,40 @@ def test_a_formula_bitmap_keeps_the_overhang_of_an_italic_letter_on_a_clear_back
     assert plain.area() == pymupdf.Rect(a["bbox"])
 
 
+def test_a_one_line_paragraph_is_written_from_the_column_edge():
+    """首行缩进的书里，只有一行的段落和多行段落一样从栏左缘写。缩进宽度对不上的整块缩排、列表项照旧"""
+    from app.formats.pdf import TextBlock, _indent_edge, _paragraph_indent
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import Column, PageGeometry
+
+    def blk(rows, text):
+        rects = [pymupdf.Rect(*row) for row in rows]
+        rect = pymupdf.Rect(rects[0])
+        for row in rects[1:]:
+            rect |= row
+        return TextBlock(page=0, rect=rect, line_rects=rects, text=text, size=10.0, color="#000000", bold=False)
+
+    paragraphs = [
+        blk([(157, 110 + 24 * k, 475, 122 + 24 * k), (142, 122 + 24 * k, 300, 134 + 24 * k)],
+            "The softmax function takes a vector of arbitrary values. It is an exponential function.")
+        for k in range(5)
+    ]
+    geo = PageGeometry(612, (Column(142, 475),), (), 792, frame=TextFrame(142, 475, 109, 718, 10))
+    indent = _paragraph_indent(paragraphs)
+    assert indent is not None and abs(indent - 15) < 0.5
+    one = blk([(157, 300, 400, 312)], "For a vector z of dimensionality K, the softmax is defined as:")
+    assert _indent_edge(one, geo, indent) == 142
+    quote = blk([(172, 330, 440, 342)], "Ok, we fly from San Francisco to Boston.")
+    assert _indent_edge(quote, geo, indent) is None
+    item = blk([(157, 360, 400, 372)], "• Annotators rank N samples of the output.")
+    assert _indent_edge(item, geo, indent) is None
+    row = blk([(157, 390, 260, 402)], "BiDAF+ELMo (Single)")
+    assert _indent_edge(row, geo, indent) is None
+    flush = [blk([(142, 110 + 30 * k, 475, 122 + 30 * k), (142, 122 + 30 * k, 300, 134 + 30 * k)],
+                 "Paragraphs here are set apart by space. They start flush.") for k in range(5)]
+    assert _paragraph_indent(flush) is None
+
+
 def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_path):
     """页末图上面只留着段首缩进的一行，段落接到下一页。译文和别的段落一样从栏左缘写，
     写不下的接到下一页，不往下压到图框的线上。续块缩着排的是列表项，照旧从第一行的左缘写。"""

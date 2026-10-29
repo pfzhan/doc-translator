@@ -18,6 +18,7 @@ import math
 import os
 import pickle
 import re
+import statistics
 import struct
 import tempfile
 import unicodedata
@@ -9708,19 +9709,49 @@ def _indented_start(
         return None
 
     def left_edge(rect: pymupdf.Rect, page: int) -> float | None:
-        geo = geometries[page] if page < len(geometries) else None
-        if geo is None:
-            return None
-        edges = [geo.column_of(rect).x0] if len(geo.columns) >= 2 else []
-        if geo.frame is not None:
-            edges.append(geo.frame.x0)
-        return max((edge for edge in edges if edge <= rect.x0 + 2), default=None)
+        return _column_left(rect, geometries[page] if page < len(geometries) else None)
 
     tail_edge = left_edge(tail.rect, tail.page)
     if tail_edge is None or tail.rect.x0 - tail_edge > 2:
         return None
     edge = left_edge(block.rect, block.page)
     if edge is None or not block.size * 0.5 < block.rect.x0 - edge <= block.size * 3:
+        return None
+    return edge
+
+
+def _column_left(rect: pymupdf.Rect, geo: PageGeometry | None) -> float | None:
+    """rect 所在栏（单栏时是版心）的左缘。rect 在左缘左边时返回 None"""
+    if geo is None:
+        return None
+    edges = [geo.column_of(rect).x0] if len(geo.columns) >= 2 else []
+    if geo.frame is not None:
+        edges.append(geo.frame.x0)
+    return max((edge for edge in edges if edge <= rect.x0 + 2), default=None)
+
+
+def _paragraph_indent(blocks: list[TextBlock]) -> float | None:
+    """首行缩进的文档里段首缩进多宽（点）：多行段落首行比下面几行缩进的中位数。不缩进的文档返回 None"""
+    if not _indents_paragraphs(blocks):
+        return None
+    shifts = []
+    for block in blocks:
+        if _first_line_indented(block):
+            lefts = [min(rect.x0 for rect in row) for row in sorted(_visual_lines(block), key=lambda row: row[0].y0)]
+            shifts.append(lefts[0] - min(lefts[1:]))
+    return statistics.median(shifts) if shifts else None
+
+
+def _indent_edge(block: TextBlock, geo: PageGeometry | None, indent: float | None) -> float | None:
+    """只有一行的段落比栏左缘正好缩进一个段首缩进：栏左缘。多行段落的译文从栏左缘写，首行缩进不留，
+    只有一行的也一样顶格。缩进的宽度对不上的是引语、代码这些整块缩着排的，列表项、带标签的不算。
+    段落只有这一行，句子就在这一行收住；没有句末标点的是表格里的行名（BiDAF+ELMo (Single)）"""
+    if indent is None or len(block.line_rects) != 1 or not _ends_sentence(block.text.rstrip().rstrip("]")):
+        return None
+    edge = _column_left(block.rect, geo)
+    if edge is None or abs(block.rect.x0 - edge - indent) > block.size * 0.15:
+        return None
+    if _list_item(block.text) or _LABEL_START_RE.match(block.text) or _numbered_line(block.text):
         return None
     return edge
 
@@ -9899,6 +9930,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
     page_blocks: dict[int, list[TextBlock]] = {}
     for b in blocks:
         page_blocks.setdefault(b.page, []).append(b)
+    # 段首缩进的宽度，只有一行的段落按它认出来顶格写（见 _indent_edge）
+    indent = _paragraph_indent(blocks)
     # 各页留在原处的字和画出来的图框（见 _room_below）。写到这一页时换成擦完以后的
     page_inks: dict[int, tuple[list[pymupdf.Rect], list[pymupdf.Rect]]] = {}
 
@@ -10184,6 +10217,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 continue
             tail = continuations.get(id(b))
             if tail is None:
+                edge = _indent_edge(b, geo, indent) if align == "left" and id(b) not in stacked else None
+                if edge is not None:
+                    rect = pymupdf.Rect(edge, rect.y0, rect.x1, rect.y1)
                 write_one(b, t, rect, align)
                 continue
             bformulas = (formulas_map or {}).get(id(b), [])
