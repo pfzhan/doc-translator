@@ -506,7 +506,8 @@ def test_a_marker_the_model_made_up_is_dropped():
 
 
 def test_a_cached_translation_of_a_neighbor_is_retranslated():
-    """以前批量翻译串了位的译文进过缓存：带着原文没有的公式占位符，或者长度远离同篇常见值。丢掉重翻。"""
+    """以前批量翻译串了位的译文进过缓存：带着原文没有的公式占位符，或者长度远离同篇常见值。
+    连同前后一批篇幅以内的段落丢掉重翻，同一批里的邻段多半也跟着挪了位。离得远的照用缓存"""
     from app.runner import Runner
 
     class Cache:
@@ -532,6 +533,8 @@ def test_a_cached_translation_of_a_neighbor_is_retranslated():
 
     svc = {"id": "svc-a", "provider": "openai", "api_key": "k", "model": "m", "base_url": "https://r.example.com/v1"}
     tr = create_translator(svc, "zh-CN", "en", transport=httpx.MockTransport(handler))
+    # 一批只容得下一段，前后各一段在一批篇幅以内
+    tr.max_batch_chars = 100
     cache = Cache()
     good = {
         "The hidden layer from the previous time step provides a form of memory, or context.":
@@ -547,6 +550,8 @@ def test_a_cached_translation_of_a_neighbor_is_retranslated():
     cache.d[(tr.cache_key, shifted)] = "{v1} 将简单循环神经网络表示为前馈网络。"
     cache.d[(tr.cache_key, cut)] = "在建立"
     out = run(Runner(tr, cache=cache).translate_all([*good, shifted, cut]))
-    assert out == [*good.values(), "重新翻译的译文", "重新翻译的译文"]
+    assert out == [*list(good.values())[:2], "重新翻译的译文", "重新翻译的译文", "重新翻译的译文"]
     sent = "".join(asked)
-    assert shifted in sent and cut in sent and not any(source in sent for source in good)
+    near = list(good)[2]
+    assert shifted in sent and cut in sent and near in sent
+    assert not any(source in sent for source in list(good)[:2])

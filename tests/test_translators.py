@@ -57,7 +57,7 @@ def test_concurrency_cap_covers_missing_segment_recovery():
 
 
 def test_shifted_batch_items_are_retranslated_one_by_one():
-    """模型把两段并成一段、后面整体错一位时标记数量仍对得上。数字对不上的段落单独重翻。"""
+    """模型把两段并成一段、后面整体错一位时标记数量仍对得上。有数字对不上的段落，这一批逐段重翻。"""
     singles = []
 
     async def handler(request):
@@ -76,13 +76,14 @@ def test_shifted_batch_items_are_retranslated_one_by_one():
         "Computer Science. McGraw Hill Book Company, New York, 1975.",
         "John Xenakis, editor. Multidimensional Databases. April 1994.",
     ]))
-    # 第 1 段没有数字，照收；第 2、3 段数字对不上，各单独重翻一次
-    assert out == ["特伦布莱，1975 年，麦格劳-希尔。", "单独重翻，1975 年", "单独重翻，1994 年"]
-    assert len(singles) == 2
+    # 第 2、3 段数字对不上。第 1 段的译文是第 1、2 段并成的，看不出来，跟着一起重翻
+    assert out == ["单独重翻，1975 年", "单独重翻，1975 年", "单独重翻，1994 年"]
+    assert len(singles) == 3
     run(tr.aclose())
 
 def test_items_holding_a_neighbors_translation_are_retranslated():
-    """模型漏了一段、后面几段串了位：译文带着原文没有的公式占位符，或者长度比远离同批的常见值。"""
+    """模型漏了一段、后面几段串了位：译文带着原文没有的公式占位符，或者长度比远离同批的常见值。
+    这一批逐段重翻：第 1 段的译文碰巧对得上也不能信，第 4 段之前挪了位的段落不一定都看得出来"""
     singles = []
 
     async def handler(request):
@@ -113,9 +114,44 @@ def test_items_holding_a_neighbors_translation_are_retranslated():
         "Let us refer to the input, hidden and output layer dimensions as {v1}, {v2}, and {v3} "
         "respectively, which gives three parameter matrices.",
     ]))
-    # 第 0、2 段带着别段的占位符，第 3 段只译出一个词，各单独重翻；第 1、4 段照收
-    assert [text == "单独重翻" for text in out] == [True, False, True, True, False]
-    assert len(singles) == 3
+    # 第 0、2 段带着别段的占位符，第 3 段只译出一个词
+    assert all(text == "单独重翻" for text in out)
+    assert len(singles) == 5
+    run(tr.aclose())
+
+
+def test_a_short_heading_holding_the_next_paragraph_shifts_the_batch():
+    """三个词的标题拿到了下一段的译文，后面一段又拿到再下一段的。短句不比长度比，只看译文长得离谱"""
+    singles = []
+    following = (
+        "下一步是提取加窗信号的频谱信息；我们需要知道信号在不同频带上包含多少能量。"
+        "对于离散时间（采样）信号，要提取离散频带的频谱信息，所使用的工具是离散傅里叶变换，即 DFT。"
+    )
+    after = "DFT 的输入是加窗信号，对于每一个离散频带，输出是一个复数，表示该频率分量在原始信号中的幅度和相位。"
+
+    async def handler(request):
+        user = json.loads(request.content)["messages"][-1]["content"]
+        if "[[source_end]]" in user:
+            content = (f"[[p0]]\n{following}\n[[p1]]\n{after}\n[[p2]]\n{after}\n"
+                       "[[p3]]\n这里不介绍 DFT 的数学细节，只需指出傅里叶分析依赖于欧拉公式，其中 j 是虚数单位。")
+        else:
+            singles.append(user)
+            content = "单独重翻"
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    tr = make_openai(handler)
+    out = run(tr.translate_batch([
+        "Discrete Fourier Transform",
+        "The next step is to extract spectral information for our windowed signal; we need to know how much "
+        "energy the signal contains at different frequency bands. The tool for extracting spectral information "
+        "for discrete frequency bands for a discrete-time (sampled) signal is the discrete Fourier transform or DFT.",
+        "The input to the DFT is a windowed signal, and the output, for each of N discrete frequency bands, "
+        "is a complex number representing the magnitude and phase of that frequency component in the original signal.",
+        "We do not introduce the mathematical details of the DFT here, except to note that Fourier analysis "
+        "relies on Euler's formula, with j as the imaginary unit.",
+    ]))
+    assert all(text == "单独重翻" for text in out)
+    assert len(singles) == 4
     run(tr.aclose())
 
 

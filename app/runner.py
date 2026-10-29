@@ -286,11 +286,15 @@ class Runner:
         done_map = {} if self.fresh else cache.get_many(prefix, need)
         # 整句英文回显进过缓存的话，下次重排仍是英文。丢掉，让这次重新翻译。
         echoed = [src for src, dst in done_map.items() if _is_prose_echo(src, dst)]
-        # 以前批量翻译时串了位、夹带了外文的译文也进过缓存，同样丢掉重翻。只排版时没法重翻，留着
+        # 以前批量翻译时串了位、夹带了外文的译文也进过缓存，同样丢掉重翻。只排版时没法重翻，留着。
+        # 串了位的那一批里别的段多半也跟着挪了一格，前后一批篇幅内的一起丢掉
         if not self.cache_only:
             typical = typical_ratio(done_map.items())
+            shifted = {src for src, dst in done_map.items() if src not in echoed and misplaced(src, dst, typical)}
+            shifted |= {src for src in _batch_around(need, shifted, self.translator.max_batch_chars)
+                        if src in done_map}
             echoed += [src for src, dst in done_map.items() if src not in echoed
-                       and (misplaced(src, dst, typical) or stray_chars(src, dst, tl))]
+                       and (src in shifted or stray_chars(src, dst, tl))]
         if echoed:
             done_map = {src: dst for src, dst in done_map.items() if src not in set(echoed)}
             if callable(getattr(self.cache, "drop_many", None)):
@@ -406,6 +410,21 @@ class Runner:
             texts[i] if not texts[i].strip() or kept(i) else done_map.get(texts[i], texts[i])
             for i in range(n)
         ]
+
+
+def _batch_around(order: list[str], flagged: set[str], limit: int) -> set[str]:
+    """order 里 flagged 各段前后各一批篇幅（limit 个字符）以内的段落。"""
+    out: set[str] = set()
+    for index, text in enumerate(order):
+        if text not in flagged:
+            continue
+        for step in (-1, 1):
+            size, other = 0, index + step
+            while 0 <= other < len(order) and size + len(order[other]) <= limit:
+                size += len(order[other])
+                out.add(order[other])
+                other += step
+    return out
 
 
 class _NotedCache:

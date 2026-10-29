@@ -123,11 +123,17 @@ def typical_ratio(pairs) -> float | None:
 
 
 def misplaced(source: str, translation: str, typical: float | None) -> bool:
-    """译文多半不是这一段的：带着原文没有的公式占位符，或者长度比远离同批的常见值。"""
+    """译文多半不是这一段的：带着原文没有的公式占位符，或者长度比远离同批的常见值。
+    短句的比例本来就散，只看上限：原文按 _RATIO_MIN_CHARS 算，译文还长得多，是串进了别段
+    （三个词的标题拿到了下一段的译文）"""
     if prompts.placeholders(translation) - prompts.placeholders(source):
         return True
+    if not typical:
+        return False
     ratio = _length_ratio(source, translation)
-    return bool(typical) and ratio is not None and not typical * _RATIO_LOW <= ratio <= typical * _RATIO_HIGH
+    if ratio is not None:
+        return not typical * _RATIO_LOW <= ratio <= typical * _RATIO_HIGH
+    return len(prompts.without_marks(translation).strip()) > typical * _RATIO_HIGH * _RATIO_MIN_CHARS
 
 
 # 判断夹带外文用的文字系统，取字符 Unicode 名称的第一个词。拉丁字母、希腊字母不在其中：
@@ -366,13 +372,13 @@ class LLMTranslator(Translator):
                     out = again
             return [out]
         found = prompts.parse_markers(content, len(texts), marker=prompts.pick_marker(texts))
-        # 模型漏掉的段落补翻（和插件的 recovery 思路一样，只补缺失的），并行发出。
-        # 数字、公式占位符、长度对不上的也单独重翻：标记数量对得上，内容却可能错了位。夹带外文的同样重翻
+        # 模型漏掉的段落补翻（和插件的 recovery 思路一样，只补缺失的），并行发出。夹带外文的同样重翻。
+        # 数字、公式占位符、长度对不上的是错了位：标记数量对得上，内容却是别段的。模型漏掉或并掉一段，
+        # 后面几段跟着整体挪一格，看得出来的只是其中长短悬殊的一段，这一批逐段重翻
         typical = typical_ratio((texts[i], found[i]) for i in found)
+        shifted = any(_numbers_mismatch(texts[i], found[i]) or misplaced(texts[i], found[i], typical) for i in found)
         missing = [i for i in range(len(texts))
-                   if i not in found or _numbers_mismatch(texts[i], found[i])
-                   or misplaced(texts[i], found[i], typical)
-                   or stray_chars(texts[i], found[i], self.target_lang)]
+                   if shifted or i not in found or stray_chars(texts[i], found[i], self.target_lang)]
         if missing:
             redone = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in missing))
             for i, [text] in zip(missing, redone):
