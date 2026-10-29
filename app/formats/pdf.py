@@ -6294,6 +6294,72 @@ def _colored_examples(blocks: list[TextBlock], geometries: list[PageGeometry]) -
     return found
 
 
+# 例句底下逐行列的「标签: 释义」（Arg1: Proposition、Cf (U2): {John, piano}）
+_GLOSS_ROW_RE = re.compile(r"[^\s:：]{1,8}(?:\s?\([^)]*\))?\s?[:：]\s")
+
+
+def _display_example_ids(blocks: list[TextBlock], geometries: list[PageGeometry], examples: set[int]) -> set[int]:
+    """首行缩进的书里，正文中间单独排开、比段首缩进缩得更深的一行：讲语言现象时举的例句
+    （a clear majority of senators back/VBP the bill、*fair and brutal）、关系的记法
+    （Giraffe is-a ruminant is-a ungulate …）。下文拿原句里的词来讲，留原文。
+    以冒号收尾的是引出下文的一句（Then repeat iteratively until convergence:），
+    字号和正文不一样的是题词的出处，在栏里居中的是图注（Listing 3 | Prompt for …），
+    紧接在列表项、悬挂缩进的条目下面的是这一项折下来的行，「标签: 释义」一行是给人看的释义，都不算"""
+    indent = _paragraph_indent(blocks)
+    if indent is None:
+        return set()
+    by_page: dict[int, list[TextBlock]] = {}
+    for block in blocks:
+        if not block.side_note and block.clip is None:
+            by_page.setdefault(block.page, []).append(block)
+    found: set[int] = set()
+    for page, page_blocks in by_page.items():
+        page_blocks.sort(key=lambda block: block.rect.y0)
+        geo = geometries[page] if page < len(geometries) else None
+        runs: list[list[TextBlock]] = []
+        for block in page_blocks:
+            if (len(block.line_rects) != 1 or block.index or block.entry or block.leader is not None
+                    or _list_item(block.text) or block.text.rstrip().endswith((":", "："))
+                    or _GLOSS_ROW_RE.match(block.text)
+                    or not block.body_size or abs(block.size - block.body_size) > 0.5):
+                continue
+            edge = _column_left(block.rect, geo)
+            if edge is None or not indent + block.size * 0.5 < block.rect.x0 - edge <= block.size * 8:
+                continue
+            last = runs[-1][-1] if runs else None
+            # 连着排、左缘对齐的几行是同一组例句，一起判断
+            if (last is not None and abs(block.rect.x0 - last.rect.x0) <= 1
+                    and -2 <= block.rect.y0 - last.rect.y1 <= block.size * 1.5):
+                runs[-1].append(block)
+            else:
+                runs.append([block])
+        for run in runs:
+            first, last = run[0], run[-1]
+            edge = _column_left(first.rect, geo)
+            right = geo.column_of(first.rect).x1 if len(geo.columns) >= 2 else geo.frame.x1 if geo.frame else None
+            if (len(run) == 1 and right is not None
+                    and abs((first.rect.x0 + first.rect.x1) / 2 - (edge + right) / 2) < first.size * 0.5):
+                continue
+            members = {id(block) for block in run}
+            above = [other for other in page_blocks if id(other) not in members
+                     and other.rect.y1 <= first.rect.y0 + 2 and _x_overlap(other.rect, first.rect)]
+            below = [other for other in page_blocks if id(other) not in members
+                     and other.rect.y0 >= last.rect.y1 - 2 and _x_overlap(other.rect, last.rect)]
+            if not above or not below:
+                continue
+            upper = max(above, key=lambda other: other.rect.y1)
+            lower = min(below, key=lambda other: other.rect.y0)
+            # 上一块第一行靠左、后面几行缩到这一列，是悬挂缩进的条目接下来的行；
+            # 编号例句下面的几行（(22.13) increase.01 下面的 Arg1: thing increasing）还是这个例句
+            hanging = (id(upper) not in examples and len(upper.line_rects) >= 2 and upper.line_rects[0].x0 < first.rect.x0 - first.size
+                       and abs(upper.line_rects[-1].x0 - first.rect.x0) <= 1)
+            if (first.rect.y0 - upper.rect.y1 > first.size * 1.5 or lower.rect.y0 - last.rect.y1 > first.size * 1.5
+                    or _list_item(upper.text) or hanging):
+                continue
+            found |= members
+    return found
+
+
 def _attribution(quote: TextBlock, below: TextBlock) -> bool:
     """题词的出处：紧跟在下面，小一号，或者是靠右排的短行（可以和末行同一行）。"""
     if below.rect.y0 - quote.rect.y1 >= quote.size * 1.5:
@@ -11263,6 +11329,7 @@ def _plan_document(
         | _foreign_ids(blocks) | _colored_examples(blocks, geometries) | _arc_figure_ids(blocks, scans)
     )
     examples = _example_ids(blocks)
+    displayed |= _display_example_ids(blocks, geometries, examples)
     # 页眉不进大纲，旁注、目录条目不是标题
     kinds = [
         "h2" if role is Role.HEADING and not edge and not block.side_note and block.leader is None else "p"

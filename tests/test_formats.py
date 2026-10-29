@@ -10379,6 +10379,46 @@ def test_a_one_line_paragraph_is_written_from_the_column_edge():
     assert _paragraph_indent(flush) is None
 
 
+def test_a_displayed_example_line_keeps_the_original():
+    """首行缩进的书里，正文中间缩得比段首更深、单独排开的一行是例句，留原文。
+    以冒号收尾的引导句、字号小一号的出处、居中的图注、列表项折下来的行、「标签: 释义」的行不算"""
+    from app.formats.pdf import TextBlock, _display_example_ids
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import Column, PageGeometry
+
+    def blk(rows, text, size=10.0):
+        rects = [pymupdf.Rect(*row) for row in rows]
+        rect = pymupdf.Rect(rects[0])
+        for row in rects[1:]:
+            rect |= row
+        return TextBlock(page=0, rect=rect, line_rects=rects, text=text, size=size, color="#000000", bold=False,
+                         body_size=10.0)
+
+    def para(y, text="For example WordNet has the is-a or hypernym relation between classes."):
+        return blk([(175, y, 493, y + 12), (160, y + 12, 400, y + 24)], text)
+
+    def line(y, x0, x1, text, size=10.0):
+        return blk([(x0, y, x1, y + 12)], text, size)
+
+    geo = PageGeometry(612, (Column(160, 493),), (), 792, frame=TextFrame(160, 493, 109, 718, 10))
+    blocks = [para(110), para(134), para(158)]
+    example = line(184, 185, 446, "Giraffe is-a ruminant is-a ungulate is-a mammal is-a vertebrate ...")
+    lead = line(224, 185, 400, "Then repeat iteratively until convergence:")
+    source = line(264, 185, 470, "The seven circumstances, associated with Hermagoras and Aristotle", size=8.0)
+    caption = line(304, 200, 453, "Listing 3 | Prompt for a simple math problem.")
+    item = line(344, 175, 480, "a. Count the parameters in one attention layer.")
+    folded = line(356, 188, 300, "Does your answer depend on A?")
+    gloss = line(396, 188, 300, "Arg1: Proposition")
+    blocks += [example, para(198), lead, para(238), source, para(278), caption, para(318), item, folded, para(370),
+               gloss, para(410)]
+    found = _display_example_ids(blocks, [geo], set())
+    assert id(example) in found
+    for name, block in (("lead", lead), ("source", source), ("caption", caption), ("folded", folded), ("item", item),
+                        ("gloss", gloss)):
+        assert id(block) not in found, name
+    assert not found & {id(block) for block in blocks if len(block.line_rects) > 1}
+
+
 def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_path):
     """页末图上面只留着段首缩进的一行，段落接到下一页。译文和别的段落一样从栏左缘写，
     写不下的接到下一页，不往下压到图框的线上。续块缩着排的是列表项，照旧从第一行的左缘写。"""
