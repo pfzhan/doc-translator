@@ -1137,6 +1137,46 @@ def test_a_paragraph_borrows_the_spare_height_of_the_next_one(tmp_path):
     assert rows[1] - rows[0] < 8.8 * 1.4
 
 
+def test_a_chain_of_paragraphs_moves_down_together(tmp_path):
+    """下一段自己也写满了，再下一段还空着：两段一起往下挪，上面两段都照正常行距写"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = pymupdf.open()
+    page = src.new_page(width=400, height=300)
+    for y in range(40, 172, 12):
+        page.insert_text((40, y + 9), "x " * 60, fontsize=10)
+    src_path = tmp_path / "src.pdf"
+    src.save(src_path)
+
+    def block(y0: float, count: int) -> TextBlock:
+        rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
+        return TextBlock(page=0, rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count), line_rects=rows,
+                         text="x " * 60 + "end.", size=10, color="#000000", bold=False, body_size=10)
+
+    def baselines(doc) -> list[float]:
+        return sorted(
+            line["spans"][0]["origin"][1] for item in doc[0].get_text("dict")["blocks"] if item.get("type") == 0
+            for line in item["lines"] if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
+        )
+
+    long = "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 5
+    full = "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 3
+    blocks = [block(40, 3), block(76, 3), block(112, 5)]
+    rows = baselines(_render_translated(src_path, blocks, [long, full, "第三段原文五行，译文一行。"], "zh-CN"))
+    assert len(rows) == 8
+    pitches = [lower - upper for upper, lower in zip(rows[:7], rows[1:7]) if lower - upper < 8.8 * 1.6]
+    assert len(pitches) == 5 and all(abs(pitch - 8.8 * 1.45) < 0.2 for pitch in pitches)
+    assert rows[7] - rows[6] >= 8.8 * 1.45 * 1.4
+
+    # 一行高的列表项：第一项多出一行，第二项挪下去的起笔低过了第三项的顶，第三项仍跟着挪，不压在一起
+    items = [block(40, 1), block(52, 1), block(64, 1), block(76, 8)]
+    rows = baselines(_render_translated(
+        src_path, items, [full[:60], "第二项。", full[:60], "第四段原文八行，译文一行。"], "zh-CN",
+    ))
+    assert len(rows) == 6
+    assert all(lower - upper > 8.8 * 1.4 for upper, lower in zip(rows, rows[1:]))
+
+
 def test_pdf_cjk_lines_do_not_overlap(tmp_path):
     """中日韩译文缩小并下移，两行不重叠；非中日韩仍用原字号。"""
     from app.formats.pdf import TextBlock, _render_translated

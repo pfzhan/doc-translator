@@ -10319,6 +10319,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         written_ids: set[int] = set()
         texts = {id(b): t for b, t in items}
         claims: dict[int, float] = {}
+        # 下面各段按正常行距排出来要多高（见 spare_below）。只看译文和框宽，算一次就够
+        heights: dict[int, float] = {}
 
         def paragraph_room(block: TextBlock, rect: pymupdf.Rect) -> float | None:
             """段落往下能写到哪里（见 _room_below）。表格里上下相邻的格子（旁边还有别的格子）、
@@ -10371,7 +10373,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
 
         def spare_below(block: TextBlock, rect: pymupdf.Rect, room: float) -> tuple[TextBlock, float] | None:
             """room 停在下面紧挨着的一段上，那一段按正常行距写完还空着的高度：这一段可以借来往下伸，
-            那一段跟着往下挪。下面那一段还没写、按普通段落写时才算。返回那一段和它最低能从哪里起笔"""
+            那一段跟着往下挪。下面那一段还没写、按普通段落写时才算。返回那一段和它最低能从哪里起笔。
+            那一段自己也能向它下面的一段借，一段接一段往下挪，借到的算在它能写到的地方里"""
             below = [
                 other for other in same_page
                 if other is not block and other.rect.y0 > rect.y0 + 1
@@ -10395,15 +10398,19 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 return None
             size = nearest.size * 0.88 if cjk else nearest.size
             gap = 1.45 if cjk else 1.2
-            text = space_around_latin(separate_after_formula(texts[id(nearest)]))
-            lines = typeset_lines(text, size, max(box.width, 1.0), {})
+            if id(nearest) not in heights:
+                text = space_around_latin(separate_after_formula(texts[id(nearest)]))
+                heights[id(nearest)] = _box_height(typeset_lines(text, size, max(box.width, 1.0), {}), size, gap)
             # 挪下去的那一段在框里写到原文末行为止（盒子比末行行框多出首行上方 0.3em 的出头），
             # 框里放不下时和 _fit_typeset 往下长一样，写到下面一块往上半行处。
             # 估的宽度和写的时候差一点就少算一行，留 1pt
             room_below = _room_below(page, nearest, box.y0, box.x0, box.x1, same_page, kept, marks)
+            further = spare_below(nearest, box, room_below)
+            if further is not None:
+                room_below = max(room_below, further[1])
             reach = room_below - size * (gap * 0.5 - 0.3)
             bottom = max(min(box.y1, nearest.rect.y1 + size * 0.3), reach)
-            spare = bottom - box.y0 - _box_height(lines, size, gap) - 1
+            spare = bottom - box.y0 - heights[id(nearest)] - 1
             if spare <= 0:
                 return None
             return nearest, box.y0 + spare
@@ -10524,12 +10531,14 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     rect = pymupdf.Rect(edge, rect.y0, rect.x1, rect.y1)
                 claim = claims.get(id(b))
                 pushed = claim is not None and claim > rect.y0
+                # 下面有哪些块按这一段原来的位置找。挪下去的起笔可能已经低过下一段的顶，从那里往下找会漏掉它
+                own = rect
                 if pushed:
                     rect = pymupdf.Rect(rect.x0, claim, rect.x1, rect.y1)
-                room = paragraph_room(b, rect) if align == "left" and id(b) not in stacked else None
+                room = paragraph_room(b, own) if align == "left" and id(b) not in stacked else None
                 # 格子里的字写不下也不伸进下一格
                 grow = room if b.clip is None else None
-                borrowed = spare_below(b, rect, grow) if grow is not None else None
+                borrowed = spare_below(b, own, grow) if grow is not None else None
                 if borrowed is not None:
                     grow = max(grow, borrowed[1])
                 write_one(b, t, rect, align, lower=paragraph_top(b, rect, room), room=grow, pushed=pushed)
