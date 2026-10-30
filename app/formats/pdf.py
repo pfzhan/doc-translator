@@ -57,7 +57,8 @@ from .pdf_erase import Erasure, erase, restore_glyphs, single_precision, type3_g
 from .pdf_order import ReadingOrder
 from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, text_frames
 from .pdf_layout import (
-    PageGeometry, PageScan, RuledTable, cell_containing, content_floor, interlinear_glosses, light_fill, margin_skips,
+    PageGeometry, PageScan, RuledTable, cell_containing, content_floor, example_numbers, interlinear_glosses,
+    light_fill, margin_skips,
     scan_page, reading_order, text_page_rect, visible_drawings,
 )
 from .pdf_parts import plan_parts, render_in_parts, worker_count
@@ -6422,27 +6423,52 @@ def _arc_figure_ids(blocks: list[TextBlock], scans: Sequence[PageScan]) -> set[i
     return found
 
 
-def _example_ids(blocks: list[TextBlock]) -> set[int]:
+def _example_ids(blocks: list[TextBlock], numbers: dict[int, tuple[pymupdf.Rect, ...]] | None = None) -> set[int]:
     """讲语言现象时举的例句：(24.3) 编号起头、续行悬挂在编号右边的句子，和带两处以上
     [角标 …] 标注的句子（[Arg0 The group] agreed …、[PER Jane] of [ORG United]）。
     下文拿原句里的词来讲，标注也夹在词中间，留原文。
+    numbers 是各页行首单独一截的例句编号（见 example_numbers）：编号没进块，同一行紧接在它右边的块是例句。
 
     正文以式子编号起头（(2.4) follows from …）的段落，续行回到栏边，不算。"""
     found: set[int] = set()
+    starts: dict[int, float] = {}
+    lettered: set[int] = set()
     for block in blocks:
         if block.clip is not None or block.side_note:
             continue
         if _EXAMPLE_NUMBER_RE.match(block.text) and _hanging(block):
             found.add(id(block))
+            starts[id(block)] = _after_number_x0(block)
+        elif _after_example_number(block, (numbers or {}).get(block.page, ())):
+            found.add(id(block))
+            # 逐词对译例句下面的意译、出处给读者看，照翻。只接 a. 下面的 b.、c.
+            if _SUB_ITEM_RE.match(block.text):
+                starts[id(block)] = block.rect.x0
+                lettered.add(id(block))
         elif _labeled_brackets(block) >= 2:
             found.add(id(block))
-    return found | _example_tails(blocks, found)
+    return found | _example_tails(blocks, starts, lettered)
 
 
-def _example_tails(blocks: list[TextBlock], examples: set[int]) -> set[int]:
+# 例句的分项：a. Shelly cut …、b. The knife cut …
+_SUB_ITEM_RE = re.compile(r"[a-z]\.\s")
+
+
+def _after_example_number(block: TextBlock, numbers: tuple[pymupdf.Rect, ...]) -> bool:
+    """块的第一行紧接在一个单独的例句编号右边，同一行"""
+    first = block.line_rects[0] if block.line_rects else block.rect
+    return any(
+        number.x1 <= first.x0 and first.x0 - number.x1 <= block.size * 5
+        and min(number.y1, first.y1) - max(number.y0, first.y0) > min(number.height, first.height) * 0.5
+        for number in numbers
+    )
+
+
+def _example_tails(blocks: list[TextBlock], starts: dict[int, float], lettered: set[int] = frozenset()) -> set[int]:
     """编号例句的后几行另成了块（(24.14) 的第二句、例句里换行的 wine.、IT、JA 几种语言的对照）：
     紧贴在例句下面、不比编号后面的句子靠左起笔、字号一样的块，也是这个例句。
-    正文回到编号的左缘起笔；段首缩进的首行被旁注切成一块时，也比例句的句子靠左。"""
+    正文回到编号的左缘起笔；段首缩进的首行被旁注切成一块时，也比例句的句子靠左。
+    starts 是各个编号例句的句子从哪里起笔。lettered 里的例句分 a.、b. 几项，只接分项。"""
     by_page: dict[int, list[TextBlock]] = {}
     for block in blocks:
         if block.clip is None and not block.side_note:
@@ -6451,9 +6477,9 @@ def _example_tails(blocks: list[TextBlock], examples: set[int]) -> set[int]:
     for page_blocks in by_page.values():
         page_blocks.sort(key=lambda block: block.rect.y0)
         for index, head in enumerate(page_blocks):
-            if id(head) not in examples or not _EXAMPLE_NUMBER_RE.match(head.text):
+            if id(head) not in starts:
                 continue
-            text_x0 = _after_number_x0(head)
+            text_x0 = starts[id(head)]
             last = head
             for block in page_blocks[index + 1:]:
                 if block.rect.x0 >= head.rect.x1 or block.rect.x1 <= head.rect.x0:
@@ -6461,7 +6487,8 @@ def _example_tails(blocks: list[TextBlock], examples: set[int]) -> set[int]:
                 if block.rect.y0 - last.rect.y1 > head.size * 0.6:
                     break
                 if (block.rect.x0 < text_x0 - head.size * 0.5 or abs(block.size - head.size) > head.size * 0.1
-                        or _EXAMPLE_NUMBER_RE.match(block.text)):
+                        or _EXAMPLE_NUMBER_RE.match(block.text) or id(block) in starts
+                        or (id(head) in lettered and not _SUB_ITEM_RE.match(block.text))):
                     break
                 tails.add(id(block))
                 last = block
@@ -11423,7 +11450,8 @@ def _plan_document(
         | _gloss_ids(blocks, glosses) | _code_panel_ids(blocks, scans)
         | _foreign_ids(blocks) | _colored_examples(blocks, geometries) | _arc_figure_ids(blocks, scans)
     )
-    examples = _example_ids(blocks) | _role_pattern_ids(blocks)
+    numbers = {pno: example_numbers(scans[pno].words) for pno in sorted({block.page for block in blocks})}
+    examples = _example_ids(blocks, numbers) | _role_pattern_ids(blocks)
     displayed |= _display_example_ids(blocks, geometries, displayed | examples)
     # 页眉不进大纲，旁注、目录条目不是标题
     kinds = [

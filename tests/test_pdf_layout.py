@@ -1155,6 +1155,78 @@ def test_role_labels_under_an_example_are_a_gloss():
     assert found[1].x0 == 142
 
 
+def test_example_numbers_standing_apart_from_the_sentence():
+    """行首的 (22.9) 和后面的 a. Shelly 隔着一大段空，是例句编号。正文里引到的 (22.9) 不算"""
+    from app.formats.pdf_layout import _TextWord, example_numbers
+
+    words = [
+        _TextWord(142.2, 352.2, 166.3, 364.2, "(22.9)"), _TextWord(190.1, 352.2, 197.0, 364.2, "a."),
+        _TextWord(202.0, 352.2, 227.4, 364.2, "Shelly"),
+        _TextWord(189.9, 364.7, 197.0, 376.7, "b."), _TextWord(202.0, 364.7, 217.5, 376.7, "The"),
+        _TextWord(142.2, 420.0, 170.0, 432.0, "shown"), _TextWord(172.5, 420.0, 180.0, 432.0, "in"),
+        _TextWord(182.5, 420.0, 206.0, 432.0, "(22.9)"), _TextWord(208.5, 420.0, 230.0, 432.0, "above"),
+    ]
+    assert [tuple(round(v) for v in rect) for rect in example_numbers(words)] == [(142, 352, 166, 364)]
+
+
+def test_columns_with_empty_cells_are_a_table():
+    """没有线、有的行空一格的三列表（ArgM 表：REC 没有问句，ADV 没有例子）：按各格左缘落在哪几列认出来。
+    表下面行距相同的图注不算进表。几栏排的索引条目以页码收尾，双栏页上左栏的表和右栏正文，不算表"""
+    from app.formats.pdf_layout import _sparse_grid, _TextCell, _TextWord, unruled_tables
+
+    rows = [
+        ("TMP", "when?", "yesterday evening, now"), ("LOC", "where?", "at the museum, in San Francisco"),
+        ("DIR", "where to/from?", "down, to Bangkok"), ("MNR", "how?", "clearly, with much enthusiasm"),
+        ("PRP/CAU", "why?", "because ... , in response to the ruling"), ("REC", "", "themselves, each other"),
+        ("ADV", "miscellaneous", ""), ("PRD", "secondary predication", "...ate the meat raw"),
+    ]
+    words = []
+    for index, cells in enumerate(rows):
+        y = 217.8 + index * 11.95
+        for x0, text in zip((160.1, 209.3, 308.9), cells):
+            x = x0
+            for part in text.split():
+                width = len(part) * 4.0
+                words.append(_TextWord(x, y, x + width, y + 12.0, part))
+                x += width + 2.5
+    caption = "The ArgM roles and their questions, with examples taken from the PropBank guidelines."
+    x = 209.3
+    words.append(_TextWord(160.1, 313.4, 200.0, 325.4, "Figure 22.4"))
+    for part in caption.split():
+        words.append(_TextWord(x, 313.4, x + len(part) * 4.0, 325.4, part))
+        x += len(part) * 4.0 + 2.5
+    page = pymupdf.open().new_page(width=612, height=792)
+    found = unruled_tables(page, (), words)
+    assert len(found) == 1
+    rect = found[0].rect
+    assert rect.x0 < 160 and rect.y0 < 218 and 313 < rect.y1 < 320 and rect.x1 > 400
+
+    index = []
+    for row in range(6):
+        y = 100 + row * 12
+        for x, text in ((72, "hallucinate, 31"), (250, "Hamming, 112"), (430, "harmonic mean, 67")):
+            first, page_ref = text.rsplit(" ", 1)
+            index += [_TextWord(x, y, x + len(first) * 5.0, y + 10, first),
+                      _TextWord(x + len(first) * 5.0 + 2.5, y, x + len(text) * 5.0, y + 10, page_ref)]
+    assert unruled_tables(page, (), index) == ()
+
+    # 双栏论文：左栏表格的几行和右栏图注挨着排，隔着栏间空档，不连成一张表
+    def cell(x0, x1, y, words, text):
+        return _TextCell(x0, y, x1, y + 9.0, words, text)
+
+    bert = [
+        [cell(83, 153, 183, 2, "BERTBASE (Single)"), cell(197, 235, 183, 2, "80.8 88.5"), cell(248, 251, 183, 1, "-"),
+         cell(270, 273, 183, 1, "-")],
+        [cell(83, 158, 193, 2, "BERTLARGE (Single)"), cell(197, 235, 193, 2, "84.1 90.9"), cell(248, 251, 193, 1, "-"),
+         cell(270, 273, 193, 1, "-"), cell(307, 526, 193, 9, "formance is measured with 100 samples, as reported in")],
+        [cell(83, 171, 203, 2, "BERTLARGE (Ensemble)"), cell(197, 235, 203, 2, "85.8 91.8"), cell(248, 251, 203, 1, "-"),
+         cell(270, 273, 203, 1, "-"), cell(307, 376, 203, 3, "the SWAG paper.")],
+        [cell(83, 189, 213, 2, "BERTLARGE (Sgl.+TriviaQA)"), cell(197, 279, 213, 4, "84.2 91.1 85.1 91.8")],
+    ]
+    assert _sparse_grid(bert) is not None
+    assert _sparse_grid(bert, [(290.3, 307.3)]) is None
+
+
 def test_page_without_two_ruled_lines_each_way_skips_the_table_search(monkeypatch):
     """凑不出两横两竖的线就围不出格子：脚注线、色块背景不值得逐字解析一遍整页。"""
     from app.formats.pdf_layout import ruled_tables

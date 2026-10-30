@@ -9907,6 +9907,26 @@ def test_the_rest_of_a_numbered_example_stays_original():
     assert id(second) in found and id(prose) not in found and id(first_line) not in found
 
 
+def test_sentences_after_a_separate_example_number_stay_original():
+    """编号 (22.9) 字母少，提取时没进块，后面的 a. Shelly cut … 另成一块：编号右边同一行起笔的块是例句，
+    下面对齐的 b. 也是。没有 a. b. 分项的例句（逐词对译）下面的意译、正文里引到编号的句子照翻。"""
+    from app.formats.pdf import TextBlock, _example_ids
+
+    def blk(text, rect):
+        rect = pymupdf.Rect(rect)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False)
+
+    first = blk("a. Shelly cut the banana with a knife.", (190.1, 352.2, 340.0, 364.2))
+    second = blk("b. The knife cut the banana.", (189.9, 364.7, 303.0, 376.7))
+    prose = blk("In addition to the fragmentation problem, there are cases", (157.1, 408.6, 475.0, 420.6))
+    glossed = blk("姚明进入总决赛", (190.0, 380.0, 280.0, 392.0))
+    free = blk("“Yao Ming reaches the finals”", (190.0, 392.5, 300.0, 404.5))
+    cited = blk("as shown in (22.9) the instrument can be the subject.", (142.2, 440.0, 400.0, 452.0))
+    numbers = {0: (pymupdf.Rect(142.2, 352.2, 166.3, 364.2), pymupdf.Rect(160.0, 380.0, 180.0, 392.0))}
+    found = _example_ids([first, second, glossed, free, prose, cited], numbers)
+    assert found == {id(first), id(second), id(glossed)}
+
+
 def test_a_displayed_line_inside_a_block_is_its_own_paragraph():
     """缩进排开、没排满的一行例句和下一行的正文在同一块里：例句自成一段，下一行小写起头也不并进来。
     绕图排的段落首行和下一行收在同一处，照旧是一段。"""

@@ -58,6 +58,8 @@ _GLOSS_SHARE = 0.75
 # 例句词下面的角色标签，小型大写字母抽出来是全大写：AGENT、ARG0、ARGM-TMP
 # 例句编号：(22.27)、(3)、(4a)
 _NUMBER_LABEL_RE = re.compile(r"\(\d+(?:\.\d+)*[a-z]?\)")
+# 按章编号的例句：(22.9)、(3.4a)
+_CHAPTER_NUMBER_RE = re.compile(r"\(\d+\.\d+[a-z]?\)")
 _ROLE_LABEL_RE = re.compile(r"[A-Z][A-Z0-9-]{2,}")
 # 莱比锡标注规则里常用的语法缩写。单个字母（S、A、P）在别处太常见，不算
 _LEIPZIG = frozenset(
@@ -1409,6 +1411,7 @@ class _TextCell:
     x1: float
     y1: float
     words: int
+    text: str = ""
 
     @property
     def width(self) -> float:
@@ -1421,6 +1424,8 @@ def unruled_tables(
     """没有线时，只认短格子组成的网格：列的左缘或右缘对齐，行高重复。words 是本页的词，没给时现读。
 
     词间距并成一格。栏间大空档上的长行是正文，不是表。
+    有空格子、相邻两列挨得近并成一格的表，每行格数不一样，按行对齐认不出来。
+    剩下的行再按各格的左缘落在哪几列上认一遍（见 _sparse_grid）。
     """
     zones = [table.rect for table in ruled]
     words = [
@@ -1442,7 +1447,98 @@ def unruled_tables(
             index = cursor
         else:
             index += 1
+    taken = [table.rect for table in tables]
+    free = [
+        not any(_mostly_inside(pymupdf.Rect(cell.x0, cell.y0, cell.x1, cell.y1), taken) for cell in row)
+        for row in rows
+    ]
+    # 双栏页上左栏的表和右栏正文挨着排，按列对齐会连成一张表，所以栏间空档两边分开认
+    width = text_page_rect(page).width
+    gutters = _find_gutters([
+        pymupdf.Rect(cell.x0, cell.y0, cell.x1, cell.y1) for row in rows for cell in row
+        if cell.x1 - cell.x0 <= width * _SPAN_MAX
+    ])
+    index = 0
+    while index < len(rows):
+        cursor = index
+        while cursor < len(rows) and free[cursor] and (
+            cursor == index or _continues_rows(rows[index:cursor], rows[cursor])
+        ) and len(rows[cursor]) >= 2:
+            cursor += 1
+        table = _sparse_grid(rows[index:cursor], gutters) if cursor - index >= _MIN_TEXT_ROWS else None
+        if table is not None:
+            tables.append(table)
+            index = cursor
+        else:
+            index += 1
     return tuple(tables)
+
+
+def _continues_rows(run: Sequence[Sequence[_TextCell]], row: Sequence[_TextCell]) -> bool:
+    """行距和前面一样。格数不管"""
+    pitch = row[0].y0 - run[-1][0].y0
+    first = run[1][0].y0 - run[0][0].y0 if len(run) > 1 else pitch
+    return _MIN_PITCH <= pitch <= _MAX_PITCH and abs(pitch - first) <= max(4.0, first * 0.3)
+
+
+# 索引条目末尾的页码：hallucinate, 31, 253
+_PAGE_REFS_RE = re.compile(r",\s*\d+$")
+
+
+def _sparse_grid(
+    rows: Sequence[Sequence[_TextCell]], gutters: Sequence[tuple[float, float]] = (),
+) -> RuledTable | None:
+    """格数每行不一样的表（TMP when? yesterday evening 这样的三列，有的行空着一格）：
+    每格的左缘都落在某一列上，这一列至少两行用到；三列以上各有一半的行用到，相邻两列隔得开。
+    最后一列可以是较长的例句、说明，前面几列是一两个词的短格。
+    索引的子条目只比条目缩进一点，列挨得太近，不算；几栏索引条目以页码收尾（hallucinate, 31, 253），也不算。
+    首尾两行在前面几列有长句的（表下面的图注）不算进表。相邻两列隔着页面的栏间空档，是两栏各自的字，不算。"""
+    flat = [cell for row in rows for cell in row]
+    if sum(1 for cell in flat if _PAGE_REFS_RE.search(cell.text)) >= len(flat) * 0.3:
+        return None
+    heads = [cell for row in rows for cell in row[:-1]]
+    short = sum(1 for cell in heads if cell.words <= _SHORT_WORDS and cell.width <= _SHORT_WIDTH)
+    if not heads or short < len(heads) * _SHORT_SHARE:
+        return None
+    columns: list[list[tuple[int, _TextCell]]] = []
+    for row_index, cell in sorted(
+        ((index, cell) for index, row in enumerate(rows) for cell in row), key=lambda item: item[1].x0,
+    ):
+        if columns and cell.x0 - columns[-1][-1][1].x0 <= _COL_ALIGN:
+            columns[-1].append((row_index, cell))
+        else:
+            columns.append([(row_index, cell)])
+    used = [len({row_index for row_index, _ in column}) for column in columns]
+    if min(used) < 2 or sum(1 for count in used if count * 2 >= len(rows)) < 3:
+        return None
+    anchors = [min(cell.x0 for _, cell in column) for column in columns]
+    if any(right - left < _COL_ALIGN * 3 for left, right in zip(anchors, anchors[1:])):
+        return None
+    if any(
+        left < start and end <= right + _COL_ALIGN
+        for left, right in zip(anchors, anchors[1:]) for start, end in gutters
+    ):
+        return None
+    # 表下面的图注（Figure 18.12 The A transition …）行距相同，也落在列上，但长句不在最后一列
+    def long_head(row: Sequence[_TextCell]) -> bool:
+        return any(cell.x0 < anchors[-1] - _COL_ALIGN and cell.words > _SHORT_WORDS for cell in row)
+    if long_head(rows[0]) or long_head(rows[-1]):
+        inner = rows[1 if long_head(rows[0]) else 0:-1 if long_head(rows[-1]) else None]
+        return _sparse_grid(inner, gutters) if len(inner) >= _MIN_TEXT_ROWS else None
+    rights = [anchor - 3.0 for anchor in anchors[1:]]
+    rights.append(max(max(cell.x1 for _, cell in columns[-1]) + 8.0, anchors[-1] + 28.0))
+    tops = [min(cell.y0 for cell in row) for row in rows]
+    bottoms = [top - 1.0 for top in tops[1:]] + [max(cell.y1 for cell in rows[-1]) + 2.0]
+    cells = tuple(
+        pymupdf.Rect(anchor - 1.0, top - 1.0, max(right, anchor + 18.0), bottom)
+        for top, bottom in zip(tops, bottoms) for anchor, right in zip(anchors, rights)
+    )
+    if not _usable_table(cells):
+        return None
+    rect = pymupdf.Rect()
+    for cell in cells:
+        rect |= cell
+    return RuledTable(rect, cells)
 
 
 def interlinear_glosses(
@@ -1492,6 +1588,23 @@ def _with_centered_numbers(rows: list[list[_TextWord]]) -> list[list[_TextWord]]
             continue
         out.append(row)
     return out
+
+
+def example_numbers(words: Sequence[_TextWord]) -> tuple[pymupdf.Rect, ...]:
+    """行首单独一截的例句编号：(22.9) 和后面的 a. Shelly cut … 隔着一大段空。
+    编号字母少，提取时留在原处不成块，后面的句子另成一块。左边紧挨着别的字的不算（正文里引到的编号）。"""
+    found: list[pymupdf.Rect] = []
+    for row in _word_rows(words):
+        for index, word in enumerate(row):
+            if not _CHAPTER_NUMBER_RE.fullmatch(word.text):
+                continue
+            height = word.y1 - word.y0
+            if index and word.x0 - row[index - 1].x1 < height * 2:
+                continue
+            if index + 1 < len(row) and row[index + 1].x0 - word.x1 < height * 0.8:
+                continue
+            found.append(pymupdf.Rect(word.x0, word.y0, word.x1, word.y1))
+    return tuple(found)
 
 
 def _glossed(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
@@ -1603,6 +1716,7 @@ def _row_cells(row: Sequence[_TextWord]) -> list[_TextCell]:
             max(word.x1 for word in group),
             max(word.y1 for word in group),
             len(group),
+            " ".join(word.text for word in group),
         ))
     return cells
 
