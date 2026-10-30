@@ -1208,6 +1208,129 @@ def test_a_paragraph_moves_up_into_the_space_left_above(tmp_path):
     assert rows[1] < 88
 
 
+def test_the_first_paragraph_under_a_heading_moves_up(tmp_path):
+    """标题下面第一段写不下、下面没有地方借：往上提，最多提到标题末行下面半行"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = pymupdf.open()
+    page = src.new_page(width=400, height=300)
+    page.insert_text((40, 52), "Heading", fontsize=14)
+    for y in range(88, 124, 12):
+        page.insert_text((40, y + 9), "x " * 40, fontsize=10)
+    src_path = tmp_path / "src.pdf"
+    src.save(src_path)
+    heading = TextBlock(page=0, rect=pymupdf.Rect(40, 40, 120, 56), line_rects=[pymupdf.Rect(40, 40, 120, 56)],
+                        text="Heading", size=14, color="#000000", bold=True, body_size=10)
+    rows = [pymupdf.Rect(40, 88 + 12 * index, 360, 100 + 12 * index) for index in range(3)]
+    body = TextBlock(page=0, rect=pymupdf.Rect(40, 88, 360, 124), line_rects=rows,
+                     text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+    long = "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 5
+    out = _render_translated(src_path, [heading, body], ["标题", long], "zh-CN")
+    lines = sorted(
+        (line["spans"][0]["origin"][1], line["spans"][0]["size"]) for item in out[0].get_text("dict")["blocks"]
+        if item.get("type") == 0 for line in item["lines"]
+        if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
+    )
+    rows = [y for y, size in lines if abs(size - 8.8) < 0.1]
+    assert len(rows) == 4
+    assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows, rows[1:]))
+    assert rows[0] < 85
+
+
+def test_a_paragraph_does_not_move_up_past_a_heading_that_touches_it(tmp_path):
+    """标题的行框和下面一段的顶边叠着一点，往上提时也算上面的东西，不提到标题上"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = pymupdf.open()
+    page = src.new_page(width=400, height=300)
+    page.insert_text((40, 29), "x " * 40, fontsize=10)
+    page.insert_text((40, 70), "Heading", fontsize=14)
+    for y in range(72, 108, 12):
+        page.insert_text((40, y + 9), "x " * 40, fontsize=10)
+    src_path = tmp_path / "src.pdf"
+    src.save(src_path)
+    above = TextBlock(page=0, rect=pymupdf.Rect(40, 20, 360, 32), line_rects=[pymupdf.Rect(40, 20, 360, 32)],
+                      text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+    heading = TextBlock(page=0, rect=pymupdf.Rect(40, 58, 120, 75), line_rects=[pymupdf.Rect(40, 58, 120, 75)],
+                        text="Heading", size=14, color="#000000", bold=True, body_size=10)
+    rows = [pymupdf.Rect(40, 72 + 12 * index, 360, 84 + 12 * index) for index in range(3)]
+    body = TextBlock(page=0, rect=pymupdf.Rect(40, 72, 360, 108), line_rects=rows,
+                     text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+    long = "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 5
+    out = _render_translated(src_path, [above, heading, body], ["短。", "标题", long], "zh-CN")
+    tops = [
+        line["bbox"][1] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
+        for line in item["lines"] if "这一卷" in "".join(span["text"] for span in line["spans"])
+    ]
+    assert tops and min(tops) > 72
+
+
+def test_an_empty_tail_above_does_not_stop_a_paragraph_moving_up(tmp_path):
+    """栏顶的续块译文全写进了宿主，轮到它时不写字。它不算还没写的块，下面的段落照样往上提"""
+    from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated
+
+    src = pymupdf.open()
+    page = src.new_page(width=400, height=300)
+
+    def block(x0: float, y0: float, count: int, size: float = 10, text: str = "x " * 15 + "end.") -> TextBlock:
+        rows = [pymupdf.Rect(x0, y0 + 12 * index, x0 + 160, y0 + 12 * index + 12) for index in range(count)]
+        for row in rows:
+            page.insert_text((row.x0, row.y0 + 9), "x " * 15, fontsize=size)
+        return TextBlock(page=0, rect=pymupdf.Rect(x0, y0, x0 + 160, y0 + 12 * count), line_rects=rows,
+                         text=text, size=size, color="#000000", bold=False, body_size=10)
+
+    host = block(20, 200, 5, text="x " * 30 + "and")
+    tail = block(220, 20, 1)
+    short = block(220, 40, 3)
+    body = block(220, 80, 3)
+    label = block(220, 120, 2, size=8)
+    src_path = tmp_path / "src.pdf"
+    src.save(src_path)
+    long = "这一卷讲的是这个激动人心的构想如何实现。" * 3
+    out = _render_translated(src_path, [host, tail, short, body, label], ["宿主短。", SPILL_TAIL, "短。", long, "标注"],
+                             "zh-CN", continuations={id(host): tail})
+    rows = sorted(
+        line["spans"][0]["origin"][1] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
+        for line in item["lines"] if line["bbox"][0] > 200 and "标注" not in line["spans"][0]["text"]
+        and abs(line["spans"][0]["size"] - 8.8) < 0.1
+    )
+    assert len(rows) == 5
+    assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows[1:], rows[2:]))
+
+
+def test_a_cross_page_paragraph_moves_up_to_keep_its_line_spacing(tmp_path):
+    """跨页段落这一页照正常行距放不下、下一页也接不住：上面一段译文短、空着，整段往上提"""
+    from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    for bottom in (256, 64):
+        page = doc.new_page(width=400, height=300)
+        for y in range(40, bottom, 12):
+            page.insert_text((40, y + 9), "x " * 40, fontsize=10)
+    doc.save(src)
+    doc.close()
+
+    def block(page: int, y0: float, count: int) -> TextBlock:
+        rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
+        return TextBlock(page=page, rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count), line_rects=rows,
+                         text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+
+    above, host, tail = block(0, 40, 15), block(0, 220, 3), block(1, 40, 2)
+    paragraph = "在实验研究中我们首先比较旧优化器与新优化器的计划质量，并说明新优化器在大规模数据上的收益。" * 4
+    out = _render_translated(
+        src, [above, host, tail], ["上面一段原文十五行，译文一行。", paragraph, SPILL_TAIL], "zh-CN",
+        continuations={id(host): tail},
+    )
+    rows = sorted(
+        line["spans"][0]["origin"][1] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
+        for line in item["lines"] if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
+    )[1:]
+    assert len(rows) >= 3
+    assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows, rows[1:]))
+    assert rows[0] < 220
+
+
 def test_pdf_cjk_lines_do_not_overlap(tmp_path):
     """中日韩译文缩小并下移，两行不重叠；非中日韩仍用原字号。"""
     from app.formats.pdf import TextBlock, _render_translated
