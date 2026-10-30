@@ -5892,6 +5892,54 @@ def test_fitted_cross_page_paragraph_keeps_body_size(tmp_path):
     assert min(sizes) >= 7
 
 
+def test_a_cross_page_paragraph_borrows_on_the_next_page(tmp_path):
+    """跨页段落的续块下面紧挨着一段，那一段还空着：本页照正常行距少放一行，多出来的写到下一页，
+    续块伸进下面那一段，那一段跟着往下挪"""
+    from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+    for bottom in (256, 124):
+        page = doc.new_page(width=400, height=300)
+        for y in range(40, bottom, 12):
+            page.insert_text((40, y + 9), "x " * 40, fontsize=10)
+    doc.save(src)
+    doc.close()
+
+    def block(page: int, y0: float, count: int, text: str) -> TextBlock:
+        rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
+        return TextBlock(page=page, rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count), line_rects=rows,
+                         text=text, size=10, color="#000000", bold=False, body_size=10)
+
+    above = block(0, 40, 15, "x " * 60 + "end.")
+    host = block(0, 220, 3, "x " * 60)
+    tail = block(1, 40, 2, "x " * 30 + "end.")
+    below = block(1, 64, 5, "x " * 60 + "end.")
+    paragraph = "在实验研究中我们首先比较旧优化器与新优化器的计划质量，并说明新优化器在大规模数据上的收益。" * 4
+    out = _render_translated(
+        src, [above, host, tail, below], ["上面一段。", paragraph, SPILL_TAIL, "下面一段原文五行，译文一行。"], "zh-CN",
+        continuations={id(host): tail},
+    )
+
+    def baselines(page) -> list[float]:
+        return sorted(
+            line["spans"][0]["origin"][1] for item in page.get_text("dict")["blocks"] if item.get("type") == 0
+            for line in item["lines"] if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
+            and line["spans"][0]["origin"][1] > 200
+        )
+
+    first = baselines(out[0])
+    assert first and all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(first, first[1:]))
+    second = sorted(
+        line["spans"][0]["origin"][1] for item in out[1].get_text("dict")["blocks"] if item.get("type") == 0
+        for line in item["lines"] if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
+    )
+    pitches = [lower - upper for upper, lower in zip(second, second[1:])]
+    assert len(second) >= 3
+    assert all(abs(pitch - 8.8 * 1.45) < 0.2 for pitch in pitches[:-1])
+    assert pitches[-1] >= 8.8 * 1.45 * 1.4
+
+
 def test_carried_lines_keep_the_host_size(tmp_path):
     """续页的块抽出来字号稍大。接过去的行按上一块的字号断好，也按它写：按续块的字号写，行末会单挤出一个字，放不下又缩字号。"""
     from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated

@@ -10133,10 +10133,92 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
     # 各页留在原处的字和画出来的图框（见 _room_below）。写到这一页时换成擦完以后的
     page_inks: dict[int, tuple[list[pymupdf.Rect], list[pymupdf.Rect]]] = {}
 
-    def tail_room(tail: TextBlock, width: float) -> float:
+    def page_flow(
+        pno: int, items: list[tuple[TextBlock, str]], kept: list[pymupdf.Rect], marks: list[pymupdf.Rect],
+        written_ids: set[int], stacked: dict, reflowed: dict, shared_head: dict,
+    ) -> Callable[[TextBlock, pymupdf.Rect, float], tuple[TextBlock, float] | None]:
+        """第 pno 页的 spare_below。写这一页的时候用；写上一页的跨页段落时也用它估续块能借到多少，
+        那时这一页还没擦，items 是要写的块，kept、marks 按没擦的页认，没有写过的块"""
+        page = doc[pno]
+        same_page = page_blocks.get(pno, [])
+        bounds = text_page_rect(page)
+        geo = geometries[pno] if geometries and pno < len(geometries) else None
+        visible = [(b, t) for b, t in items if t != SPILL_TAIL]
+        texts = {id(b): t for b, t in items}
+        # 下面各段按正常行距排出来要多高。只看译文和框宽，算一次就够
+        heights: dict[int, float] = {}
+
+        def plain_rect(block: TextBlock) -> pymupdf.Rect | None:
+            """按普通段落写的块（不跨页、不分两个框、不是格子和索引）写在哪个框里，和下面写的时候一样算。
+            别的写法返回 None"""
+            text = texts.get(id(block))
+            if (
+                text is None or text == SPILL_TAIL or block.index or block.clip is not None or block.side_note
+                or id(block) in continuations or id(block) in stacked or id(block) in shared_head
+                or id(block) in reflowed or _inset_write_boxes(block, cjk) is not None
+                or _beside_body(block, same_page) is not None or _row_neighbor(block, same_page, geo)
+            ):
+                return None
+            rect, align = _write_rect(block, visible, cjk, rtl, geo)
+            if align != "left":
+                return None
+            edge = _indent_edge(block, geo, indent)
+            if edge is not None:
+                rect = pymupdf.Rect(edge, rect.y0, rect.x1, rect.y1)
+            return _fit_page_margins(block, rect, same_page, bounds.height, cjk)
+
+        def spare_below(block: TextBlock, rect: pymupdf.Rect, room: float) -> tuple[TextBlock, float] | None:
+            """room 停在下面紧挨着的一段上，那一段按正常行距写完还空着的高度：这一段可以借来往下伸，
+            那一段跟着往下挪。下面那一段还没写、按普通段落写时才算。返回那一段和它最低能从哪里起笔。
+            那一段自己也能向它下面的一段借，一段接一段往下挪，借到的算在它能写到的地方里"""
+            below = [
+                other for other in same_page
+                if other is not block and other.rect.y0 > rect.y0 + 1
+                and not (other.rect.x1 < rect.x0 + 4 or other.rect.x0 > rect.x1 - 4)
+            ]
+            nearest = min(below, key=lambda other: other.rect.y0, default=None)
+            if nearest is None or id(nearest) in written_ids or abs(nearest.rect.y0 - 2 - room) > 0.5:
+                return None
+            # 挪下去的只能是正文段落。图里的标签（树状图上的词）各自对着图上的位置，挪了就对不上
+            if nearest.body_size and abs(nearest.size - nearest.body_size) > 0.5:
+                return None
+            box = plain_rect(nearest)
+            # 公式、留在原处的字和图框、框里并排的别的块（Airlines-Wagner）不跟着段落挪，那一段挪下去就压上了
+            if box is None or (formulas_map or {}).get(id(nearest)):
+                return None
+            fixed = [*kept, *marks, *(other.rect for other in same_page if other is not nearest and other is not block)]
+            if any(
+                ink.y0 < nearest.rect.y1 - 1 and ink.y1 > nearest.rect.y0 + 1 and ink.x0 < box.x1 and ink.x1 > box.x0
+                for ink in fixed
+            ):
+                return None
+            size = nearest.size * 0.88 if cjk else nearest.size
+            gap = 1.45 if cjk else 1.2
+            if id(nearest) not in heights:
+                text = space_around_latin(separate_after_formula(texts[id(nearest)]))
+                heights[id(nearest)] = _box_height(typeset_lines(text, size, max(box.width, 1.0), {}), size, gap)
+            # 挪下去的那一段在框里写到原文末行为止（盒子比末行行框多出首行上方 0.3em 的出头），
+            # 框里放不下时和 _fit_typeset 往下长一样，写到下面一块往上半行处。
+            # 估的宽度和写的时候差一点就少算一行，留 1pt
+            room_below = _room_below(page, nearest, box.y0, box.x0, box.x1, same_page, kept, marks)
+            further = spare_below(nearest, box, room_below)
+            if further is not None:
+                room_below = max(room_below, further[1])
+            reach = room_below - size * (gap * 0.5 - 0.3)
+            bottom = max(min(box.y1, nearest.rect.y1 + size * 0.3), reach)
+            spare = bottom - box.y0 - heights[id(nearest)] - 1
+            if spare <= 0:
+                return None
+            return nearest, box.y0 + spare
+
+        return spare_below
+
+    def tail_room(tail: TextBlock, width: float, em: float) -> float:
         """续块从起笔往下能写多高，和写续块（SPILL_TAIL）时的 room 一样算。
         续块那一页还没写，原文的字都在块里，留在原处的字、图框照样认得出来。
-        续块右边 width 以内并排着图、别的块时，按 width 断的行到那里要绕开，折成更多行，不算它有地方"""
+        续块右边 width 以内并排着图、别的块时，按 width 断的行到那里要绕开，折成更多行，不算它有地方。
+        下面紧挨着的段落还空着的话，续块写的时候能借来往下伸（见 spare_below），算在里面。
+        em 是续写的字号"""
         tail_page = doc[tail.page]
         same = page_blocks.get(tail.page, [])
         if tail.page not in page_inks:
@@ -10150,7 +10232,17 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         ):
             return 0.0
         y0 = _flow_y0(tail, cjk)
-        return _room_below(tail_page, tail, y0, x0, x1, same, kept, marks) - y0
+        room = _room_below(tail_page, tail, y0, x0, x1, same, kept, marks)
+        if tail.page in by_page:
+            spare_below = page_flow(
+                tail.page, by_page[tail.page], kept, marks, set(), _affiliation_write_rects(same), {}, {},
+            )
+            borrowed = spare_below(tail, pymupdf.Rect(x0, y0, x1, room), room)
+            if borrowed is not None:
+                # 往下伸到下面那段最低起笔往上半行（同 _fit_typeset），换成和 room 一样的算法：框比 room 多出末行下面的行距
+                gap = 1.45 if cjk else 1.2
+                room = max(room, borrowed[1] - em * (gap * 0.5 - 0.3) - (gap - 1) * em)
+        return room - y0
 
     for written, (pno, items) in enumerate(by_page.items()):
         if on_page is not None:
@@ -10315,12 +10407,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
 
         # 本页写好的块：原块、末行行框的下沿、字号
         ends: dict[int, tuple[TextBlock, float, float]] = {}
-        # 本页已经写过的块，各块的译文，上一段伸下来以后各段最高从哪里起笔（见 spare_below）
+        # 本页已经写过的块，上一段伸下来以后各段最高从哪里起笔（见 spare_below）
         written_ids: set[int] = set()
-        texts = {id(b): t for b, t in items}
         claims: dict[int, float] = {}
-        # 下面各段按正常行距排出来要多高（见 spare_below）。只看译文和框宽，算一次就够
-        heights: dict[int, float] = {}
 
         def paragraph_room(block: TextBlock, rect: pymupdf.Rect) -> float | None:
             """段落往下能写到哪里（见 _room_below）。表格里上下相邻的格子（旁边还有别的格子）、
@@ -10352,69 +10441,6 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 return None
             return wanted, room
 
-        def plain_rect(block: TextBlock) -> pymupdf.Rect | None:
-            """按普通段落写的块（不跨页、不分两个框、不是格子和索引）写在哪个框里，和下面写的时候一样算。
-            别的写法返回 None"""
-            text = texts.get(id(block))
-            if (
-                text is None or text == SPILL_TAIL or block.index or block.clip is not None or block.side_note
-                or id(block) in continuations or id(block) in stacked or id(block) in shared_head
-                or id(block) in reflowed or _inset_write_boxes(block, cjk) is not None
-                or _beside_body(block, same_page) is not None or _row_neighbor(block, same_page, geo)
-            ):
-                return None
-            rect, align = _write_rect(block, visible, cjk, rtl, geo)
-            if align != "left":
-                return None
-            edge = _indent_edge(block, geo, indent)
-            if edge is not None:
-                rect = pymupdf.Rect(edge, rect.y0, rect.x1, rect.y1)
-            return _fit_page_margins(block, rect, same_page, bounds.height, cjk)
-
-        def spare_below(block: TextBlock, rect: pymupdf.Rect, room: float) -> tuple[TextBlock, float] | None:
-            """room 停在下面紧挨着的一段上，那一段按正常行距写完还空着的高度：这一段可以借来往下伸，
-            那一段跟着往下挪。下面那一段还没写、按普通段落写时才算。返回那一段和它最低能从哪里起笔。
-            那一段自己也能向它下面的一段借，一段接一段往下挪，借到的算在它能写到的地方里"""
-            below = [
-                other for other in same_page
-                if other is not block and other.rect.y0 > rect.y0 + 1
-                and not (other.rect.x1 < rect.x0 + 4 or other.rect.x0 > rect.x1 - 4)
-            ]
-            nearest = min(below, key=lambda other: other.rect.y0, default=None)
-            if nearest is None or id(nearest) in written_ids or abs(nearest.rect.y0 - 2 - room) > 0.5:
-                return None
-            # 挪下去的只能是正文段落。图里的标签（树状图上的词）各自对着图上的位置，挪了就对不上
-            if nearest.body_size and abs(nearest.size - nearest.body_size) > 0.5:
-                return None
-            box = plain_rect(nearest)
-            # 公式、留在原处的字和图框、框里并排的别的块（Airlines-Wagner）不跟着段落挪，那一段挪下去就压上了
-            if box is None or (formulas_map or {}).get(id(nearest)):
-                return None
-            fixed = [*kept, *marks, *(other.rect for other in same_page if other is not nearest and other is not block)]
-            if any(
-                ink.y0 < nearest.rect.y1 - 1 and ink.y1 > nearest.rect.y0 + 1 and ink.x0 < box.x1 and ink.x1 > box.x0
-                for ink in fixed
-            ):
-                return None
-            size = nearest.size * 0.88 if cjk else nearest.size
-            gap = 1.45 if cjk else 1.2
-            if id(nearest) not in heights:
-                text = space_around_latin(separate_after_formula(texts[id(nearest)]))
-                heights[id(nearest)] = _box_height(typeset_lines(text, size, max(box.width, 1.0), {}), size, gap)
-            # 挪下去的那一段在框里写到原文末行为止（盒子比末行行框多出首行上方 0.3em 的出头），
-            # 框里放不下时和 _fit_typeset 往下长一样，写到下面一块往上半行处。
-            # 估的宽度和写的时候差一点就少算一行，留 1pt
-            room_below = _room_below(page, nearest, box.y0, box.x0, box.x1, same_page, kept, marks)
-            further = spare_below(nearest, box, room_below)
-            if further is not None:
-                room_below = max(room_below, further[1])
-            reach = room_below - size * (gap * 0.5 - 0.3)
-            bottom = max(min(box.y1, nearest.rect.y1 + size * 0.3), reach)
-            spare = bottom - box.y0 - heights[id(nearest)] - 1
-            if spare <= 0:
-                return None
-            return nearest, box.y0 + spare
-
         # 续行可能排在半句前面。先把后半放进 carry，写的时候才不会丢掉。
         shared_head: dict[int, tuple[str, pymupdf.Rect, list[dict], bool]] = {}
         for b, t in items:
@@ -10432,6 +10458,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             )
             shared_head[id(b)] = (head, host_box, bformulas, bool(rest.strip()))
             carried[id(tail)] = _Carry(rest, bformulas, tail_box.width, b.size, True)
+        spare_below = page_flow(pno, items, kept, marks, written_ids, stacked, reflowed, shared_head)
 
         for b, t in items:
             if t == SPILL_TAIL:
@@ -10448,7 +10475,14 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 size = carry.size * 0.88 if cjk else carry.size
                 bottom = room + ((1.45 if cjk else 1.2) - 1) * size
                 placed = pymupdf.Rect(rect.x0, rect.y0, rect.x0 + carry.width, max(bottom, rect.y0 + 4))
-                write_one(b, carry.text, placed, align, carry.formulas, False, block_size=carry.size)
+                # 上一页按 tail_room 算过能向下面一段借的，这里写不下就伸进去，那一段跟着往下挪
+                borrowed = spare_below(b, placed, room)
+                write_one(b, carry.text, placed, align, carry.formulas, False, block_size=carry.size,
+                          room=None if borrowed is None else borrowed[1])
+                if borrowed is not None and id(b) in ends:
+                    _, end, size = ends[id(b)]
+                    if end + size * 0.3 > placed.y1 + 0.5:
+                        claims[id(borrowed[0])] = end + size * (1.45 if cjk else 1.2) * 0.5
                 continue
             prepared = shared_head.get(id(b))
             if prepared is not None:
@@ -10487,7 +10521,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     floor = write_floor(b, rest_box)
                     placed, spill = _split_filled_lines(
                         rest, bformulas, size, b.size, rest_box.width, cjk, rest_box.y0, room, floor,
-                        tail_room(tail, rest_box.width),
+                        tail_room(tail, rest_box.width, size),
                     )
                     if placed:
                         lines = placed.count("\n") + 1
@@ -10562,7 +10596,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             room = _room_below(page, b, rect.y0, rect.x0, rect.x1, same_page, kept, marks)
             floor = write_floor(b, rect)
             head, rest = _split_filled_lines(
-                t, bformulas, size, b.size, rect.width, cjk, rect.y0, room, floor, tail_room(tail, rect.width),
+                t, bformulas, size, b.size, rect.width, cjk, rect.y0, room, floor, tail_room(tail, rect.width, size),
             )
             if head:
                 lines = head.count("\n") + 1
