@@ -96,7 +96,8 @@ def test_figure_label_stays_original_and_caption_is_translated(tmp_path: Path):
     doc.close()
 
     [out] = run(translate_file(src, tmp_path, runner(), False, "zh-CN"))
-    text = pymupdf.open(out)[0].get_text()
+    # 正文下面空着，译文长了就折到下一行，不缩字号
+    text = " ".join(pymupdf.open(out)[0].get_text().split())
     assert "axis" in text and "[zh-CN] axis" not in text
     assert "[zh-CN] Figure 1: a plot." in text
     assert "[zh-CN] Body paragraph with enough letters here." in text
