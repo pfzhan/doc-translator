@@ -9911,6 +9911,7 @@ def test_sentences_after_a_separate_example_number_stay_original():
     """编号 (22.9) 字母少，提取时没进块，后面的 a. Shelly cut … 另成一块：编号右边同一行起笔的块是例句，
     下面对齐的 b. 也是。没有 a. b. 分项的例句（逐词对译）下面的意译、正文里引到编号的句子照翻。"""
     from app.formats.pdf import TextBlock, _example_ids
+    from app.formats.pdf_layout import ExampleNumber
 
     def blk(text, rect):
         rect = pymupdf.Rect(rect)
@@ -9922,9 +9923,42 @@ def test_sentences_after_a_separate_example_number_stay_original():
     glossed = blk("姚明进入总决赛", (190.0, 380.0, 280.0, 392.0))
     free = blk("“Yao Ming reaches the finals”", (190.0, 392.5, 300.0, 404.5))
     cited = blk("as shown in (22.9) the instrument can be the subject.", (142.2, 440.0, 400.0, 452.0))
-    numbers = {0: (pymupdf.Rect(142.2, 352.2, 166.3, 364.2), pymupdf.Rect(160.0, 380.0, 180.0, 392.0))}
+    numbers = {0: (
+        ExampleNumber(pymupdf.Rect(142.2, 352.2, 166.3, 364.2), pymupdf.Rect(142.2, 352.2, 340.0, 364.2), 190.1),
+        ExampleNumber(pymupdf.Rect(160.0, 380.0, 180.0, 392.0), pymupdf.Rect(160.0, 380.0, 280.0, 392.0), 190.0),
+    )}
     found = _example_ids([first, second, glossed, free, prose, cited], numbers)
     assert found == {id(first), id(second), id(glossed)}
+
+
+def test_lines_under_a_number_row_without_a_block_stay_original():
+    """(22.12) fall.01 整行字母少没成块：编号下面缩进排的 Arg1: …、空一行对齐排的 Ex1: 是例句。
+    段首缩进起笔的下一段不算"""
+    from app.formats.pdf import TextBlock, _example_ids, _example_tails, _ExampleHead
+    from app.formats.pdf_layout import ExampleNumber
+
+    def blk(text, rect):
+        rect = pymupdf.Rect(rect)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False)
+
+    roles = [blk("Arg1: Logical subject, patient, thing falling", (188.1, 466.5, 364.0, 478.5)),
+             blk("Arg2: Extent, amount fallen", (188.1, 478.5, 303.0, 490.5))]
+    label = blk("Ex1:", (188.1, 500.0, 207.0, 512.0))
+    note = blk("Note that there is no Arg0 role for fall.", (175.1, 514.0, 400.0, 526.0))
+    body = blk("Here the body text goes on across the whole column with no indent at all.", (160.2, 540.0, 493.0, 564.0))
+    after = blk("Arg0: causer of increase", (188.1, 608.0, 300.0, 620.0))
+    numbers = {0: (
+        ExampleNumber(pymupdf.Rect(160.2, 455.4, 189.3, 467.4), pymupdf.Rect(160.2, 455.4, 221.0, 467.4), 194.2),
+        ExampleNumber(pymupdf.Rect(160.2, 596.4, 189.3, 608.4), pymupdf.Rect(160.2, 596.4, 330.0, 608.4), 194.2),
+    )}
+    found = _example_ids([*roles, label, note, body], numbers)
+    assert found == {id(block) for block in (*roles, label)}
+
+    # (5.6) 编号短，句子从 185 起笔；正文段首缩进 15，一行的段落从 175 起笔
+    short = ExampleNumber(pymupdf.Rect(160.2, 377.0, 179.0, 389.0), pymupdf.Rect(160.2, 377.0, 361.0, 389.0), 185.0)
+    head = _ExampleHead(0, short.row, short.rect.x0, short.text_x0, 0.0, None)
+    paragraph = blk("And suppose that you had seen many of these context words in other contexts:", (175.1, 393.0, 493.0, 405.0))
+    assert _example_tails([paragraph], [head], {0: (short,)}, indent=15.0) == set()
 
 
 def test_a_displayed_line_inside_a_block_is_its_own_paragraph():

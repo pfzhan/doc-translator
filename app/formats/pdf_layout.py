@@ -1590,10 +1590,18 @@ def _with_centered_numbers(rows: list[list[_TextWord]]) -> list[list[_TextWord]]
     return out
 
 
-def example_numbers(words: Sequence[_TextWord]) -> tuple[pymupdf.Rect, ...]:
-    """行首单独一截的例句编号：(22.9) 和后面的 a. Shelly cut … 隔着一大段空。
-    编号字母少，提取时留在原处不成块，后面的句子另成一块。左边紧挨着别的字的不算（正文里引到的编号）。"""
-    found: list[pymupdf.Rect] = []
+@dataclass(frozen=True)
+class ExampleNumber:
+    """行首的例句编号。rect 是编号，row 是编号这一行，text_x0 是编号后面的字从哪里起笔"""
+    rect: pymupdf.Rect
+    row: pymupdf.Rect
+    text_x0: float
+
+
+def example_numbers(words: Sequence[_TextWord]) -> tuple[ExampleNumber, ...]:
+    """行首的例句编号 (22.9)、(22.11)。编号字母少，提取时常留在原处不进块，后面的句子另成一块，
+    或者整行（(22.12) fall.01）都没成块。左边紧挨着别的字的不算（正文里引到的编号）。"""
+    found: list[ExampleNumber] = []
     for row in _word_rows(words):
         for index, word in enumerate(row):
             if not _CHAPTER_NUMBER_RE.fullmatch(word.text):
@@ -1601,9 +1609,13 @@ def example_numbers(words: Sequence[_TextWord]) -> tuple[pymupdf.Rect, ...]:
             height = word.y1 - word.y0
             if index and word.x0 - row[index - 1].x1 < height * 2:
                 continue
-            if index + 1 < len(row) and row[index + 1].x0 - word.x1 < height * 0.8:
-                continue
-            found.append(pymupdf.Rect(word.x0, word.y0, word.x1, word.y1))
+            rect = pymupdf.Rect(word.x0, word.y0, word.x1, word.y1)
+            for other in row[index + 1:]:
+                if other.x0 - rect.x1 > height * 3:
+                    break  # 另一栏
+                rect |= pymupdf.Rect(other.x0, other.y0, other.x1, other.y1)
+            text_x0 = row[index + 1].x0 if index + 1 < len(row) else word.x1
+            found.append(ExampleNumber(pymupdf.Rect(word.x0, word.y0, word.x1, word.y1), rect, text_x0))
     return tuple(found)
 
 

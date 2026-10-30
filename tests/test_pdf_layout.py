@@ -1156,7 +1156,7 @@ def test_role_labels_under_an_example_are_a_gloss():
 
 
 def test_example_numbers_standing_apart_from_the_sentence():
-    """行首的 (22.9) 和后面的 a. Shelly 隔着一大段空，是例句编号。正文里引到的 (22.9) 不算"""
+    """行首的 (22.9)、(22.11) 是例句编号，记下编号后面的字从哪里起笔。正文里引到的 (22.9) 不算"""
     from app.formats.pdf_layout import _TextWord, example_numbers
 
     words = [
@@ -1165,8 +1165,13 @@ def test_example_numbers_standing_apart_from_the_sentence():
         _TextWord(189.9, 364.7, 197.0, 376.7, "b."), _TextWord(202.0, 364.7, 217.5, 376.7, "The"),
         _TextWord(142.2, 420.0, 170.0, 432.0, "shown"), _TextWord(172.5, 420.0, 180.0, 432.0, "in"),
         _TextWord(182.5, 420.0, 206.0, 432.0, "(22.9)"), _TextWord(208.5, 420.0, 230.0, 432.0, "above"),
+        _TextWord(160.2, 455.4, 189.3, 467.4, "(22.12)"), _TextWord(194.2, 455.4, 221.0, 467.4, "fall.01"),
     ]
-    assert [tuple(round(v) for v in rect) for rect in example_numbers(words)] == [(142, 352, 166, 364)]
+    found = example_numbers(words)
+    assert [(tuple(round(v) for v in number.rect), round(number.text_x0)) for number in found] == [
+        ((142, 352, 166, 364), 190), ((160, 455, 189, 467), 194),
+    ]
+    assert round(found[1].row.x1) == 221
 
 
 def test_columns_with_empty_cells_are_a_table():
