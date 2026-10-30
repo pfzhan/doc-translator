@@ -10380,6 +10380,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             nearest = min(below, key=lambda other: other.rect.y0, default=None)
             if nearest is None or id(nearest) in written_ids or abs(nearest.rect.y0 - 2 - room) > 0.5:
                 return None
+            # 挪下去的只能是正文段落。图里的标签（树状图上的词）各自对着图上的位置，挪了就对不上
+            if nearest.body_size and abs(nearest.size - nearest.body_size) > 0.5:
+                return None
             box = plain_rect(nearest)
             # 公式、留在原处的字和图框、框里并排的别的块（Airlines-Wagner）不跟着段落挪，那一段挪下去就压上了
             if box is None or (formulas_map or {}).get(id(nearest)):
@@ -10394,9 +10397,12 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             gap = 1.45 if cjk else 1.2
             text = space_around_latin(separate_after_formula(texts[id(nearest)]))
             lines = typeset_lines(text, size, max(box.width, 1.0), {})
-            # 挪下去的那一段写到原文末行为止，不占框底留的半行（下面常紧挨着别的字）。
-            # 盒子比末行行框多出首行上方 0.3em 的出头。估的宽度和写的时候差一点就少算一行，再留 1pt
-            bottom = min(box.y1, nearest.rect.y1 + size * 0.3)
+            # 挪下去的那一段在框里写到原文末行为止（盒子比末行行框多出首行上方 0.3em 的出头），
+            # 框里放不下时和 _fit_typeset 往下长一样，写到下面一块往上半行处。
+            # 估的宽度和写的时候差一点就少算一行，留 1pt
+            room_below = _room_below(page, nearest, box.y0, box.x0, box.x1, same_page, kept, marks)
+            reach = room_below - size * (gap * 0.5 - 0.3)
+            bottom = max(min(box.y1, nearest.rect.y1 + size * 0.3), reach)
             spare = bottom - box.y0 - _box_height(lines, size, gap) - 1
             if spare <= 0:
                 return None

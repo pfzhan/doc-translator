@@ -1100,7 +1100,7 @@ def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
 
 def test_a_paragraph_borrows_the_spare_height_of_the_next_one(tmp_path):
     """译文比原文多出一行：下一段写得短、还空着，这一段伸进去，照正常行距写，下一段跟着往下挪半行。
-    下一段自己也写满了，借不到，这一段才压行距"""
+    下一段自己也写满了，借不到，这一段才压行距。下一块不是正文字号（图里的标签）也不挪"""
     from app.formats.pdf import TextBlock, _render_translated
 
     src = pymupdf.open()
@@ -1110,10 +1110,10 @@ def test_a_paragraph_borrows_the_spare_height_of_the_next_one(tmp_path):
     src_path = tmp_path / "src.pdf"
     src.save(src_path)
 
-    def block(y0: float, count: int) -> TextBlock:
+    def block(y0: float, count: int, size: float = 10) -> TextBlock:
         rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
         return TextBlock(page=0, rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count), line_rects=rows,
-                         text="x " * 60 + "end.", size=10, color="#000000", bold=False)
+                         text="x " * 60 + "end.", size=size, color="#000000", bold=False, body_size=10)
 
     def baselines(doc) -> list[float]:
         return sorted(
@@ -1132,6 +1132,9 @@ def test_a_paragraph_borrows_the_spare_height_of_the_next_one(tmp_path):
     rows = baselines(_render_translated(src_path, blocks, [long, long[:130]], "zh-CN"))
     assert rows[1] - rows[0] < 8.8 * 1.4
     assert all(lower - upper > 8.8 for upper, lower in zip(rows, rows[1:]))
+
+    rows = baselines(_render_translated(src_path, [blocks[0], block(76, 4, 8)], [long, "标签"], "zh-CN"))
+    assert rows[1] - rows[0] < 8.8 * 1.4
 
 
 def test_pdf_cjk_lines_do_not_overlap(tmp_path):
