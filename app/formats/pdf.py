@@ -10181,9 +10181,10 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             if nearest.body_size and abs(nearest.size - nearest.body_size) > 0.5:
                 return None
             box = plain_rect(nearest)
-            # 公式、留在原处的字和图框、框里并排的别的块（Airlines-Wagner）不跟着段落挪，那一段挪了就压上了
-            if box is None or (formulas_map or {}).get(id(nearest)):
+            if box is None:
                 return None
+            # 行内公式按译文里的占位贴，跟着段落走。留在原处的字（丢掉的行间公式、式号）和图框、
+            # 框里并排的别的块（Airlines-Wagner）不跟着段落挪，那一段挪了就压上了
             fixed = [*kept, *marks, *(other.rect for other in same_page if other is not nearest and other is not block)]
             if any(
                 ink.y0 < nearest.rect.y1 - 1 and ink.y1 > nearest.rect.y0 + 1 and ink.x0 < box.x1 and ink.x1 > box.x0
@@ -10199,8 +10200,11 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             size = block.size * 0.88 if cjk else block.size
             gap = 1.45 if cjk else 1.2
             if id(block) not in heights:
+                # 和 _fit_typeset 一样按公式槽断行，公式高的行行距跟着加
                 text = space_around_latin(separate_after_formula(texts[id(block)]))
-                heights[id(block)] = _box_height(typeset_lines(text, size, max(box.width, 1.0), {}), size, gap)
+                formulas = (formulas_map or {}).get(id(block), [])
+                metrics = _formula_metrics(formulas, block.size, size, block.size * 0.88 if cjk else block.size)
+                heights[id(block)] = _box_height(typeset_lines(text, size, max(box.width, 1.0), metrics), size, gap)
             room = _room_below(page, block, box.y0, box.x0, box.x1, same_page, kept, marks)
             # 在框里写到原文末行为止（盒子比末行行框多出首行上方 0.3em 的出头）
             own = min(box.y1, block.rect.y1 + size * 0.3)
