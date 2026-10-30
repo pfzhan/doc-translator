@@ -1426,6 +1426,32 @@ def test_table_of_abutting_filled_cells_is_found():
     assert len(table.cells) == 8
 
 
+def test_filled_cells_overlapping_along_their_edges_are_a_table():
+    """逐格上色的表，上下两格沿边叠着一点（LaTeX 多铺一点免得露白缝），每行都叠，面积加起来多出近一成，
+    照样是表。框里再套几块底色的不算"""
+    from app.formats.pdf_layout import filled_tables, page_words
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=600, height=400)
+    blue = (0.77, 0.86, 0.99)
+    words = [("dwindle", "move", "soar"), ("advance", "edge", "swell"), ("climb", "explode", "plummet"),
+             ("decline", "fall", "reach")]
+    for row, texts in enumerate(words):
+        y0 = 60 + row * 10
+        for col, x0 in enumerate((180, 219, 256)):
+            page.draw_rect(pymupdf.Rect(x0, y0, x0 + 39, y0 + 11), color=None, fill=blue)
+            page.insert_text((x0 + 3, y0 + 8), texts[col], fontsize=7)
+    page.draw_rect(pymupdf.Rect(100, 250, 400, 330), color=None, fill=blue)
+    for row in range(2):
+        for col in range(2):
+            page.draw_rect(pymupdf.Rect(120 + col * 120, 260 + row * 30, 230 + col * 120, 285 + row * 30),
+                           color=None, fill=(0.85, 0.9, 0.99))
+            page.insert_text((125 + col * 120, 275 + row * 30), "note", fontsize=8)
+    [table] = filled_tables(page, page.get_drawings(), page_words(page))
+    assert (round(table.rect.x0), round(table.rect.y0), round(table.rect.x1), round(table.rect.y1)) == (180, 60, 295, 101)
+    assert len(table.cells) == 12
+
+
 def test_short_margin_terms_stay_original():
     """页边的术语留原文；成句的旁注照常翻译。"""
     from app.formats.pdf import _margin_term

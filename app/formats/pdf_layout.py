@@ -1146,7 +1146,8 @@ def filled_tables(
         if len(rows) < 2 or len(cols) < 2:
             continue
         # 格子互不交叠、合起来铺满整片：嵌套的底色（框里再套一块）面积会多出来
-        if abs(sum(cell.get_area() for cell in cells) - area.get_area()) > area.get_area() * 0.05:
+        covered = _tiled_area(cells)
+        if covered is None or abs(covered - area.get_area()) > area.get_area() * 0.05:
             continue
         boxes = [pymupdf.Rect(w.x0, w.y0, w.x1, w.y1) for w in words]
         boxes = [box for box in boxes if _mostly_inside(box, [area])]
@@ -1156,6 +1157,21 @@ def filled_tables(
         if len({id(found[0]) for found in holders}) >= 2:
             tables.append(RuledTable(area, tuple(sorted(cells, key=lambda c: (c.y0, c.x0)))))
     return tuple(tables)
+
+
+def _tiled_area(cells: Sequence[pymupdf.Rect]) -> float | None:
+    """底色块合起来的面积。相邻两格沿边叠着一条（LaTeX 给每格上色时多铺一点，免得格间露白缝），
+    叠的这一条扣掉。一块的大半压在另一块上是框里再套一块，返回 None。"""
+    total = sum(cell.get_area() for cell in cells)
+    for index, cell in enumerate(cells):
+        for other in cells[index + 1:]:
+            hit = cell & other
+            if hit.is_empty:
+                continue
+            if hit.get_area() > min(cell.get_area(), other.get_area()) * 0.5:
+                return None
+            total -= hit.get_area()
+    return total
 
 
 def _spaced_rows(cells: Sequence[pymupdf.Rect], words: Sequence[_TextWord]) -> bool:
