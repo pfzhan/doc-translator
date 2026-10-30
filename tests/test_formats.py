@@ -1298,6 +1298,135 @@ def test_an_empty_tail_above_does_not_stop_a_paragraph_moving_up(tmp_path):
     assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows[1:], rows[2:]))
 
 
+_LONG_ZH = "在实验研究中我们首先比较旧优化器与新优化器的计划质量，并说明新优化器在大规模数据上的收益。"
+
+
+def test_a_paragraph_moves_up_when_the_next_box_overlaps_its_bottom(tmp_path):
+    """下一段的框和这一段底下叠着一截，它跟着挪，不算这一段框里不动的东西：这一段照样往上提"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = pymupdf.open()
+    page = src.new_page(width=400, height=300)
+
+    def block(y0: float, count: int, size: float = 10, y1: float | None = None) -> TextBlock:
+        rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
+        for row in rows:
+            page.insert_text((40, row.y0 + 9), "x " * 40, fontsize=size)
+        return TextBlock(page=0, rect=pymupdf.Rect(40, y0, 360, y1 or y0 + 12 * count), line_rects=rows,
+                         text="x " * 40 + "end.", size=size, color="#000000", bold=False, body_size=10)
+
+    short, body, below, label = block(20, 1), block(64, 3, y1=106), block(101, 3), block(139, 1, size=8)
+    src_path = tmp_path / "src.pdf"
+    src.save(src_path)
+    out = _render_translated(src_path, [short, body, below, label], ["短。", _LONG_ZH * 3, _LONG_ZH, "标注"], "zh-CN")
+    rows = sorted(
+        line["spans"][0]["origin"][1] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
+        for line in item["lines"] if abs(line["spans"][0]["size"] - 8.8) < 0.1 and "短" not in line["spans"][0]["text"]
+    )
+    assert len(rows) == 6
+    assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows[:3], rows[1:4]))
+    assert rows[4] - rows[3] > 8.8
+
+
+def test_a_cross_page_paragraph_keeps_its_lines_when_lifting_more_does_not_help(tmp_path):
+    """跨页段落在页底照正常行距放不下，续块旁边并排着别的块、接不住：提上去多放的行照样挤，
+    就保持原来的行数，提到这几行照正常行距放得下的地方"""
+    from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+
+    def block(page: pymupdf.Page, y0: float, count: int, x1: float = 360) -> TextBlock:
+        rows = [pymupdf.Rect(40, y0 + 12 * index, x1, y0 + 12 * index + 12) for index in range(count)]
+        for row in rows:
+            page.insert_text((40, row.y0 + 9), "x " * 40, fontsize=10)
+        return TextBlock(page=page.number, rect=pymupdf.Rect(40, y0, x1, y0 + 12 * count), line_rects=rows,
+                         text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+
+    first = doc.new_page(width=400, height=300)
+    above, host = block(first, 40, 3), block(first, 124, 3)
+    second = doc.new_page(width=400, height=300)
+    tail = block(second, 40, 1, x1=200)
+    second.insert_text((250, 49), "side " * 5, fontsize=10)
+    side = TextBlock(page=1, rect=pymupdf.Rect(250, 40, 360, 52), line_rects=[pymupdf.Rect(250, 40, 360, 52)],
+                     text="side " * 5, size=10, color="#000000", bold=False, body_size=10)
+    doc.save(src)
+    doc.close()
+    out = _render_translated(src, [above, host, tail, side], ["短。", _LONG_ZH * 6, SPILL_TAIL, "旁边"], "zh-CN",
+                             continuations={id(host): tail})
+    rows = [
+        line["spans"][0]["origin"][1] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
+        for line in item["lines"] if "短" not in line["spans"][0]["text"]
+    ]
+    assert len(rows) >= 2
+    assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows, rows[1:]))
+
+
+def test_a_cross_page_paragraph_below_moves_down_to_make_room(tmp_path):
+    """一段写不下，下面一段跨到下一页、续块那里还有地方：下面一段往下挪，留在这一页的行少了，多出的写到续块那里"""
+    from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+
+    def block(page: pymupdf.Page, y0: float, count: int) -> TextBlock:
+        rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
+        for row in rows:
+            page.insert_text((40, row.y0 + 9), "x " * 40, fontsize=10)
+        return TextBlock(page=page.number, rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count), line_rects=rows,
+                         text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+
+    first = doc.new_page(width=400, height=300)
+    body, host = block(first, 104, 3), block(first, 140, 3)
+    second = doc.new_page(width=400, height=300)
+    tail, after = block(second, 40, 2), block(second, 66, 6)
+    doc.save(src)
+    doc.close()
+    out = _render_translated(src, [body, host, tail, after], [_LONG_ZH * 3, _LONG_ZH * 2, SPILL_TAIL, "短。"],
+                             "zh-CN", continuations={id(host): tail})
+    rows = [
+        line["spans"][0]["origin"][1] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
+        for line in item["lines"]
+    ]
+    assert len(rows) == 5
+    assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows[:4], rows[1:4]))
+    assert rows[4] - rows[3] > 8.8 * 1.45
+
+
+def test_the_last_paragraph_continues_on_the_next_page(tmp_path):
+    """页底最后一段照正常行距放不下，上下都没有空：末几行接到下一页页首那一段前面，那一段往下让"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = tmp_path / "src.pdf"
+    doc = pymupdf.open()
+
+    def block(page: pymupdf.Page, y0: float, count: int) -> TextBlock:
+        rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
+        for row in rows:
+            page.insert_text((40, row.y0 + 9), "x " * 40, fontsize=10)
+        return TextBlock(page=page.number, rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count), line_rects=rows,
+                         text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+
+    first = doc.new_page(width=400, height=300)
+    above, last = block(first, 40, 5), block(first, 104, 3)
+    second = doc.new_page(width=400, height=300)
+    head = block(second, 40, 3)
+    doc.save(src)
+    doc.close()
+    out = _render_translated(src, [above, last, head], [_LONG_ZH * 3, _LONG_ZH * 3, "短。"], "zh-CN")
+
+    def rows(page: pymupdf.Page) -> list[tuple[float, str]]:
+        return [
+            (line["spans"][0]["origin"][1], "".join(span["text"] for span in line["spans"]))
+            for item in page.get_text("dict")["blocks"] if item.get("type") == 0 for line in item["lines"]
+        ]
+
+    first_rows, second_rows = rows(out[0]), rows(out[1])
+    assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for (upper, _), (lower, _) in zip(first_rows[4:], first_rows[5:]))
+    assert len(first_rows) == 7 and len(second_rows) == 2
+    assert second_rows[1][1].startswith("短") and second_rows[1][0] - second_rows[0][0] > 8.8 * 1.45
+
+
 def test_a_cross_page_paragraph_moves_up_to_keep_its_line_spacing(tmp_path):
     """跨页段落这一页照正常行距放不下、下一页也接不住：上面一段译文短、空着，整段往上提"""
     from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated
