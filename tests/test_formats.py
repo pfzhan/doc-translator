@@ -1177,6 +1177,37 @@ def test_a_chain_of_paragraphs_moves_down_together(tmp_path):
     assert all(lower - upper > 8.8 * 1.4 for upper, lower in zip(rows, rows[1:]))
 
 
+def test_a_paragraph_moves_up_into_the_space_left_above(tmp_path):
+    """下面没有地方借，上一段译文短、空着一截：这一段往上提，照正常行距写，和上一段隔开半行"""
+    from app.formats.pdf import TextBlock, _render_translated
+
+    src = pymupdf.open()
+    page = src.new_page(width=400, height=300)
+    for y in range(40, 124, 12):
+        page.insert_text((40, y + 9), "x " * 40, fontsize=10)
+    src_path = tmp_path / "src.pdf"
+    src.save(src_path)
+
+    def block(y0: float, count: int) -> TextBlock:
+        rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
+        return TextBlock(page=0, rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count), line_rects=rows,
+                         text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+
+    def baselines(doc) -> list[float]:
+        return sorted(
+            line["spans"][0]["origin"][1] for item in doc[0].get_text("dict")["blocks"] if item.get("type") == 0
+            for line in item["lines"] if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
+        )
+
+    long = "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 5
+    rows = baselines(_render_translated(src_path, [block(40, 4), block(88, 3)], ["第一段原文四行，译文一行。", long], "zh-CN"))
+    assert len(rows) == 5
+    pitches = [lower - upper for upper, lower in zip(rows[1:], rows[2:])]
+    assert all(abs(pitch - 8.8 * 1.45) < 0.2 for pitch in pitches)
+    assert rows[1] - rows[0] >= 8.8 * 1.45 * 1.4
+    assert rows[1] < 88
+
+
 def test_pdf_cjk_lines_do_not_overlap(tmp_path):
     """中日韩译文缩小并下移，两行不重叠；非中日韩仍用原字号。"""
     from app.formats.pdf import TextBlock, _render_translated
