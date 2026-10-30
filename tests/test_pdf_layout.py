@@ -1122,6 +1122,39 @@ def test_pinyin_under_a_line_of_hanzi_is_a_gloss():
     assert (gloss.y0, gloss.y1) == (412, 434)
 
 
+def test_role_labels_under_an_example_are_a_gloss():
+    """例句词下面标着小一号的角色（John 下面 AGENT）：例句和标签两行都留原文。
+    编号对着两行中间排的（(22.27)）并进例句那行。标签的框被下标撑高（ARG0）也算。
+    旁注里的缩写、下标、标题下面的 TBD 不算。"""
+    from app.formats.pdf_layout import _TextWord, interlinear_glosses
+
+    def word(x0: float, y0: float, x1: float, y1: float, text: str) -> _TextWord:
+        return _TextWord(x0, y0, x1, y1, text)
+
+    words = [
+        word(160, 318, 184, 330, "(22.3)"), word(189, 318, 208, 330, "John"), word(221, 318, 243, 330, "broke"),
+        word(246, 318, 258, 330, "the"), word(260, 318, 294, 330, "window."),
+        word(190, 332, 218, 342, "AGENT"), word(246, 332, 275, 342, "THEME"),
+        word(176, 405, 197, 416, "[You]"), word(222, 405, 240, 416, "can’t"), word(246, 405, 274, 416, "[blame]"),
+        word(142, 411, 170, 421, "(22.27)"),
+        word(177, 418, 216, 426, "COGNIZER"), word(246, 418, 270, 426, "TARGET"),
+        word(176, 430, 193, 441, "[The"), word(195, 430, 209, 441, "San"), word(292, 430, 315, 441, "issued"),
+        word(142, 436, 170, 446, "(22.28)"),
+        word(177, 441, 197, 452, "ARG0"), word(292, 443, 316, 451, "TARGET"),
+        # 小一号的标签离例句稍远一点
+        word(208, 604, 216, 615.5, "a."), word(219, 604, 240, 615.5, "Doris"), word(220, 618.1, 246, 626.7, "AGENT"),
+        # 正文一行旁边的旁注，旁注下一行的缩写对着旁注里的词
+        word(160, 500, 480, 512, "signal is the discrete Fourier transform or"),
+        word(100, 501, 130, 509, "Fourier"), word(100, 511, 120, 519, "DFT"),
+        # 标题下面一行 TBD
+        word(160, 680, 260, 695, "Reinforcement"), word(160, 700, 180, 710, "TBD"),
+    ]
+    page = pymupdf.open().new_page(width=612, height=792)
+    found = sorted(interlinear_glosses(page, words), key=lambda rect: rect.y0)
+    assert [(round(rect.y0), round(rect.y1)) for rect in found] == [(318, 342), (405, 426), (430, 452), (604, 627)]
+    assert found[1].x0 == 142
+
+
 def test_page_without_two_ruled_lines_each_way_skips_the_table_search(monkeypatch):
     """凑不出两横两竖的线就围不出格子：脚注线、色块背景不值得逐字解析一遍整页。"""
     from app.formats.pdf_layout import ruled_tables

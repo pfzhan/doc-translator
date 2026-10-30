@@ -10437,6 +10437,21 @@ def test_a_one_line_paragraph_is_written_from_the_column_edge():
     assert _paragraph_indent(flush) is None
 
 
+def test_role_pattern_lines_keep_the_original():
+    """逐行列出的角色记法（AGENT/Subject, THEME/Object）留原文，正文里提到 AGENT 的句子照翻"""
+    from app.formats.pdf import TextBlock, _role_pattern_ids
+
+    def block(text: str) -> TextBlock:
+        rect = pymupdf.Rect(189, 510, 417, 522)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000000", bold=False)
+
+    patterns = [block("AGENT/Subject, THEME/Object"), block("AGENT/Subject, THEME/Object, INSTRUMENT/PPwith"),
+                block("THEME/Subject")]
+    prose = block("These examples suggest that break has AGENT, THEME, and INSTRUMENT.")
+    found = _role_pattern_ids([*patterns, prose])
+    assert found == {id(b) for b in patterns}
+
+
 def test_a_displayed_example_line_keeps_the_original():
     """首行缩进的书里，正文中间缩得比段首更深、单独排开的一行是例句，留原文。
     以冒号收尾的引导句、字号小一号的出处、居中的图注、列表项折下来的行、「标签: 释义」的行、

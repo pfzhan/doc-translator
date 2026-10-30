@@ -6521,6 +6521,20 @@ def _labeled_brackets(block: TextBlock) -> int:
     return count
 
 
+# 论元的几种实现方式逐行列出：AGENT/Subject, THEME/Object, INSTRUMENT/PPwith
+_ROLE_PATTERN_RE = re.compile(r"[A-Z]{3,}/\w+(?:,\s*[A-Z]{3,}/\w+)*")
+
+
+def _role_pattern_ids(blocks: list[TextBlock]) -> set[int]:
+    """逐行列出的角色记法（AGENT/Subject, THEME/Object）。下文拿记法里的角色名来讲，留原文。
+    词下面标着角色的例句按对译认，见 interlinear_glosses。"""
+    return {
+        id(block) for block in blocks
+        if block.clip is None and not block.side_note and len(block.line_rects) <= 3
+        and _ROLE_PATTERN_RE.fullmatch(block.text.strip())
+    }
+
+
 def _foreign_ids(blocks: list[TextBlock]) -> set[int]:
     """和全文不是同一种语言的段落：英文书里的西班牙文题记、德文引文、巴斯克语例句。
     作者有意留着原文，旁边多半已经给了译文，留原文。
@@ -11409,7 +11423,7 @@ def _plan_document(
         | _gloss_ids(blocks, glosses) | _code_panel_ids(blocks, scans)
         | _foreign_ids(blocks) | _colored_examples(blocks, geometries) | _arc_figure_ids(blocks, scans)
     )
-    examples = _example_ids(blocks)
+    examples = _example_ids(blocks) | _role_pattern_ids(blocks)
     displayed |= _display_example_ids(blocks, geometries, displayed | examples)
     # 页眉不进大纲，旁注、目录条目不是标题
     kinds = [

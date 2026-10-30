@@ -55,6 +55,10 @@ _MIN_PITCH = 8.0
 _GLOSS_ALIGN = 1.0
 _GLOSS_MIN = 4
 _GLOSS_SHARE = 0.75
+# 例句词下面的角色标签，小型大写字母抽出来是全大写：AGENT、ARG0、ARGM-TMP
+# 例句编号：(22.27)、(3)、(4a)
+_NUMBER_LABEL_RE = re.compile(r"\(\d+(?:\.\d+)*[a-z]?\)")
+_ROLE_LABEL_RE = re.compile(r"[A-Z][A-Z0-9-]{2,}")
 # 莱比锡标注规则里常用的语法缩写。单个字母（S、A、P）在别处太常见，不算
 _LEIPZIG = frozenset(
     "SG PL DU NOM ACC GEN DAT ERG ABS LOC ABL ALL INS INSTR COM VOC PST PRS FUT PFV IPFV PRF IMPF "
@@ -1438,11 +1442,13 @@ def interlinear_glosses(
       这样的语法标注缩写（莱比锡标注规则）。
     - 逐字注音：上一行是汉字，下一行从同一处起笔，全是拉丁字母，音节数和汉字数一样。
       汉字之间不空格，没法一个词一个词地对齐。
+    - 角色标注：下一行是小一号的全大写标签（AGENT、ARG0、ARGM-TMP），每个都从上一行
+      某个词的下面起笔。标签对着一整个短语，只和短语的第一个词对齐。
 
     表格一连好几行都这样对齐，对译只有孤零零的两行。words 是本页的词，没给时现读。
     """
     words = list(page_words(page) if words is None else words)
-    rows = _word_rows(words)
+    rows = _with_centered_numbers(_word_rows(words))
     pairs = [_glossed(upper, lower) for upper, lower in zip(rows, rows[1:])]
     found: list[pymupdf.Rect] = []
     for index, paired in enumerate(pairs):
@@ -1453,6 +1459,23 @@ def interlinear_glosses(
             rect |= pymupdf.Rect(word.x0, word.y0, word.x1, word.y1)
         found.append(rect)
     return tuple(found)
+
+
+def _with_centered_numbers(rows: list[list[_TextWord]]) -> list[list[_TextWord]]:
+    """例句编号 (22.27) 对着例句和下面一行标签的中间排，单独成了一行，夹在两行中间。
+    并进上面那行，例句和标签才挨着。"""
+    out: list[list[_TextWord]] = []
+    for index, row in enumerate(rows):
+        below = rows[index + 1] if index + 1 < len(rows) else None
+        if (
+            out and below is not None and len(row) == 1 and _NUMBER_LABEL_RE.fullmatch(row[0].text)
+            and row[0].x1 < min(word.x0 for word in (*out[-1], *below))
+            and row[0].y0 < max(word.y1 for word in out[-1]) and row[0].y1 > min(word.y0 for word in below)
+        ):
+            out[-1] = [*out[-1], *row]
+            continue
+        out.append(row)
+    return out
 
 
 def _glossed(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
@@ -1479,7 +1502,25 @@ def _glossed(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
             return True
         if len(aligned) >= 2 and _script_share(upper, latin=False) >= 0.5 and _script_share(lower, latin=True) == 1:
             return True
-    return _morpheme_gloss(upper, lower) or _romanized(upper, lower)
+    return _morpheme_gloss(upper, lower) or _romanized(upper, lower) or _role_labels(upper, lower)
+
+
+def _role_labels(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
+    """标签上面对着的是比它大一号的词，标签整个在这个词下面、紧挨着。
+    旁注里的缩写（DFT、RNN）上面是同样小字号的旁注词，下标（h 下面的 CLS）和上一行叠着，
+    图里的大写字上面是数字，都不算。字号按这一排最矮的标签比，ARG0 的下标会把框撑高。"""
+    height = min(word.y1 - word.y0 for word in lower)
+    return all(
+        _ROLE_LABEL_RE.fullmatch(word.text) and any(_labels(word, other, height) for other in upper)
+        for word in lower
+    )
+
+
+def _labels(label: _TextWord, word: _TextWord, height: float) -> bool:
+    return (
+        word.x0 - _GLOSS_ALIGN * 2 <= label.x0 <= word.x1 and height < (word.y1 - word.y0) * 0.9
+        and word.y1 - 1 <= label.y0 <= word.y1 + height * 0.35 and any(ch.isalpha() for ch in word.text)
+    )
 
 
 def _romanized(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
