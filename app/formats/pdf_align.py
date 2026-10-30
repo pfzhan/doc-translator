@@ -30,6 +30,8 @@ _MAX_GAP_EM = 0.35
 _MAX_SPACE_EM = 0.25
 # 有词间空格的行里，字与字之间最多拉开多少（em）
 _MAX_MIXED_GAP_EM = 0.1
+# 一行最多压掉行宽的多少。排版器估的字宽和实际差一点，断行按 SQUEEZE 放宽，写的时候按实际宽度压，压到 2 倍为止
+SQUEEZE = 0.03
 # 句读贴着前一个字，开括号贴着后一个字。空格可以拉开，公式后的分界就靠它。
 _NO_GAP_BEFORE = frozenset("。，、；：？！）】」』〉》％%.,;:?!)]}>")
 _NO_GAP_AFTER = frozenset("（【「『《〈([{")
@@ -513,7 +515,13 @@ def _place_line(
     widths = [piece_width for _, _, piece_width, _ in pieces]
     total = sum(widths)
     slack = width - total
-    extras = line_extras(texts, slack, em) if justify and slack > 0 else []
+    if justify and slack > 0:
+        extras = line_extras(texts, slack, em)
+    elif -width * SQUEEZE * 2 <= slack < 0:
+        # 比盒子宽的行（压字距断的行、估的字宽偏窄的行）把多出的摊到字与字之间收回来
+        extras = [-extra for extra in line_extras(texts, -slack, em)]
+    else:
+        extras = []
     cursor = x0
     # 行尾的空格看不见，靠右、居中按最后一个字对齐
     inked = total - _trailing_space(pieces)

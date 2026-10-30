@@ -1824,7 +1824,7 @@ def margin_skips(blocks: Sequence[_MarginBlock], geometries: Sequence[PageGeomet
             0 < len(key[1]) <= _MARGIN_LEN
             and sum(1 for y in rows.get(zone, ()) if abs(y - block.rect.y0) <= _MARGIN_ROW) >= _MARGIN_ROWS
         )
-        skips.append(key in repeated or same_row or _is_page_number(block.text))
+        skips.append(key in repeated or same_row or is_page_number(block.text))
     return skips
 
 
@@ -2058,7 +2058,7 @@ def _norm_margin(text: str) -> str:
     return re.sub(r"\d+", "#", re.sub(r"\s+", " ", text).strip().casefold())
 
 
-def _is_page_number(text: str) -> bool:
+def is_page_number(text: str) -> bool:
     stripped = text.strip()
     if not stripped or len(stripped) > 16:
         return False

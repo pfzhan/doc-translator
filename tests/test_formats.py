@@ -1427,6 +1427,139 @@ def test_the_last_paragraph_continues_on_the_next_page(tmp_path):
     assert second_rows[1][1].startswith("短") and second_rows[1][0] - second_rows[0][0] > 8.8 * 1.45
 
 
+def _zh_rows(page: pymupdf.Page, size: float = 8.8) -> list[float]:
+    """译文各行的基线，从上到下"""
+    return sorted(
+        line["spans"][0]["origin"][1] for item in page.get_text("dict")["blocks"] if item.get("type") == 0
+        for line in item["lines"] if abs(line["spans"][0]["size"] - size) < 0.1
+    )
+
+
+def _x_block(page: pymupdf.Page, y0: float, count: int, size: float = 10, row: float = 12) -> "TextBlock":
+    from app.formats.pdf import TextBlock
+
+    rows = [pymupdf.Rect(40, y0 + row * index, 360, y0 + row * index + row) for index in range(count)]
+    for rect in rows:
+        page.insert_text((40, rect.y0 + 9), "x " * 40, fontsize=size)
+    return TextBlock(page=page.number, rect=pymupdf.Rect(40, y0, 360, y0 + row * count), line_rects=rows,
+                     text="x " * 40 + "end.", size=size, color="#000000", bold=False, body_size=10)
+
+
+def test_the_blank_under_the_last_line_may_pass_the_box_bottom(tmp_path):
+    """按整行距量差一点放不下，末行字形在框里、离下面的标注还有半截行距：照正常行距写，不压行距"""
+    from app.formats.pdf import _render_translated
+
+    src = pymupdf.open()
+    page = src.new_page(width=400, height=300)
+    body, label = _x_block(page, 40, 3, row=11.5), _x_block(page, 82, 1, size=8)
+    src_path = tmp_path / "src.pdf"
+    src.save(src_path)
+    out = _render_translated(src_path, [body, label], ["测" * 100, "标注"], "zh-CN")
+    rows = _zh_rows(out[0])
+    assert len(rows) == 3
+    assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows, rows[1:]))
+
+
+def test_a_single_line_still_tightens_inside_its_box():
+    """只有一行时没有行距要保：按框底量，压行距放进框里，末行行框下沿高一些，下面一段能往上提"""
+    from app.formats.pdf import _fit_typeset
+
+    page = pymupdf.open().new_page(width=400, height=300)
+    em = 8.8
+    for text, rows, gap in (("测" * 10, 1, 1.2), ("测" * 50, 2, 1.45)):
+        height = rows * em * 1.45 + em * 0.3 - 2
+        rect = pymupdf.Rect(40, 40, 360, 40 + height)
+        lines, size, used, _, _ = _fit_typeset(text, [], rect, em, 10, True, page, [], None, room=rect.y1 + 1)
+        assert (len(lines), size, used) == (rows, em, gap)
+
+
+def test_a_display_formula_left_at_the_page_bottom_is_part_of_the_body(tmp_path):
+    """页底留在原处的行间公式也是正文：上面一段往下伸到公式上面，不停在自己原来的下沿"""
+    from app.formats.pdf import _render_translated
+
+    src = pymupdf.open()
+    page = src.new_page(width=400, height=300)
+    body = _x_block(page, 40, 3)
+    page.insert_text((150, 125), "E = mc2", fontsize=10)
+    src_path = tmp_path / "src.pdf"
+    src.save(src_path)
+    out = _render_translated(src_path, [body], ["测" * 140], "zh-CN")
+    rows = _zh_rows(out[0])
+    assert len(rows) == 4
+    assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows, rows[1:]))
+
+
+def test_a_page_number_left_below_the_text_is_not_part_of_the_body(tmp_path):
+    """提取时丢掉的页码留在原处，它不算正文：上面一段不往下伸到页码上面"""
+    from app.formats.pdf import _render_translated
+
+    src = pymupdf.open()
+    page = src.new_page(width=400, height=300)
+    body = _x_block(page, 40, 3)
+    page.insert_text((195, 125), "12", fontsize=10)
+    src_path = tmp_path / "src.pdf"
+    src.save(src_path)
+    out = _render_translated(src_path, [body], ["测" * 140], "zh-CN")
+    bottoms = [
+        line["bbox"][3] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
+        for line in item["lines"] if "测" in line["spans"][0]["text"]
+    ]
+    assert bottoms and max(bottoms) < 85
+
+
+def test_a_flush_right_attribution_widens_to_the_left(tmp_path):
+    """署名靠右排，译文比原文宽一点：往左扩成一行，仍收在原来的右缘，不折行也不缩字号"""
+    from app.formats.pdf import TextBlock, _render_translated
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import PageGeometry
+
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    right = 475.0
+    page.insert_text((right - pymupdf.get_text_length("Samuel Johnson", "tiro", 9), 240), "Samuel Johnson",
+                     fontsize=9, fontname="tiro")
+    body_line = "x" * 55
+    for index in range(3):
+        page.insert_text((right - pymupdf.get_text_length(body_line, "cour", 10), 300 + index * 12), body_line,
+                         fontsize=10, fontname="cour")
+    path = tmp_path / "src.pdf"
+    doc.save(path)
+    page = pymupdf.open(path)[0]
+    row = page.search_for("Samuel Johnson")[0]
+    author = TextBlock(page=0, rect=row, line_rects=[row], text="Samuel Johnson", size=9.0, color="#000000",
+                       bold=False)
+    body = TextBlock(page=0, rect=pymupdf.Rect(page.search_for(body_line)[0]) | page.search_for(body_line)[-1],
+                     line_rects=page.search_for(body_line), text=body_line * 3, size=10.0, color="#000000", bold=False)
+    frame = TextFrame(body.rect.x0, body.rect.x1, 100, 720, 10)
+    geo = PageGeometry.from_rects(612, [author.rect, body.rect], height=792, frame=frame)
+    out = _render_translated(path, [author, body], ["塞缪尔·约翰逊，《闲人》", "正文" * 40], "zh-CN", geometries=[geo])
+    lines = [
+        line for block in out[0].get_text("dict", clip=pymupdf.Rect(200, 225, 500, 255))["blocks"]
+        for line in block.get("lines", [])
+    ]
+    assert len(lines) == 1
+    assert abs(lines[0]["bbox"][2] - author.rect.x1) < 0.5
+    assert abs(lines[0]["spans"][0]["size"] - 9.0 * 0.88) < 0.05
+
+
+def test_a_last_line_of_one_character_is_pulled_back_by_tightening_the_letter_spacing(tmp_path):
+    """末行只剩一个字，上下都没有空：字距压一点收回这一行，照正常行距写，各行不出右缘"""
+    from app.formats.pdf import _render_translated
+
+    src = pymupdf.open()
+    page = src.new_page(width=400, height=300)
+    body, label = _x_block(page, 40, 3, row=11.5), _x_block(page, 82, 1, size=8)
+    src_path = tmp_path / "src.pdf"
+    src.save(src_path)
+    out = _render_translated(src_path, [body, label], ["测" * 109, "标注"], "zh-CN")
+    rows = _zh_rows(out[0])
+    assert len(rows) == 3
+    assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows, rows[1:]))
+    right = max(line["bbox"][2] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
+                for line in item["lines"] if abs(line["spans"][0]["size"] - 8.8) < 0.1)
+    assert right < 362.5
+
+
 def test_a_cross_page_paragraph_moves_up_to_keep_its_line_spacing(tmp_path):
     """跨页段落这一页照正常行距放不下、下一页也接不住：上面一段译文短、空着，整段往上提"""
     from app.formats.pdf import SPILL_TAIL, TextBlock, _render_translated
