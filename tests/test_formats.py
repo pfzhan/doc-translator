@@ -9909,7 +9909,7 @@ def test_the_rest_of_a_numbered_example_stays_original():
 
 def test_sentences_after_a_separate_example_number_stay_original():
     """编号 (22.9) 字母少，提取时没进块，后面的 a. Shelly cut … 另成一块：编号右边同一行起笔的块是例句，
-    下面对齐的 b. 也是。没有 a. b. 分项的例句（逐词对译）下面的意译、正文里引到编号的句子照翻。"""
+    下面对齐的 b.、逐词对译下面的意译也是。下一段正文、正文里引到编号的句子照翻。"""
     from app.formats.pdf import TextBlock, _example_ids
     from app.formats.pdf_layout import ExampleNumber
 
@@ -9928,7 +9928,7 @@ def test_sentences_after_a_separate_example_number_stay_original():
         ExampleNumber(pymupdf.Rect(160.0, 380.0, 180.0, 392.0), pymupdf.Rect(160.0, 380.0, 280.0, 392.0), 190.0),
     )}
     found = _example_ids([first, second, glossed, free, prose, cited], numbers)
-    assert found == {id(first), id(second), id(glossed)}
+    assert found == {id(first), id(second), id(glossed), id(free)}
 
 
 def test_lines_under_a_number_row_without_a_block_stay_original():

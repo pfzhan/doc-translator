@@ -6442,11 +6442,7 @@ def _example_ids(blocks: list[TextBlock], numbers: dict[int, tuple[ExampleNumber
             heads.append(_ExampleHead(block.page, block.rect, block.rect.x0, _after_number_x0(block), block.size, id(block)))
         elif (number := _example_number_before(block, numbers.get(block.page, ()))) is not None:
             found.add(id(block))
-            # 逐词对译例句下面的意译、出处给读者看，照翻。只接 a. 下面的 b.、c.
-            if _SUB_ITEM_RE.match(block.text):
-                heads.append(_ExampleHead(
-                    block.page, block.rect, number.rect.x0, block.rect.x0, block.size, id(block), lettered=True,
-                ))
+            heads.append(_ExampleHead(block.page, block.rect, number.rect.x0, block.rect.x0, block.size, id(block)))
         elif _labeled_brackets(block) >= 2:
             found.add(id(block))
     for page, page_numbers in numbers.items():
@@ -6464,18 +6460,13 @@ def _example_ids(blocks: list[TextBlock], numbers: dict[int, tuple[ExampleNumber
 @dataclass(frozen=True)
 class _ExampleHead:
     """编号例句的第一行。block_id 是它所在的块，整行没成块时为 None，size 这时取下面第一块的字号。
-    number_x0 是编号的左缘，text_x0 是编号后面的句子从哪里起笔。lettered 的例句分 a.、b. 几项"""
+    number_x0 是编号的左缘，text_x0 是编号后面的句子从哪里起笔"""
     page: int
     rect: pymupdf.Rect
     number_x0: float
     text_x0: float
     size: float
     block_id: int | None
-    lettered: bool = False
-
-
-# 例句的分项：a. Shelly cut …、b. The knife cut …
-_SUB_ITEM_RE = re.compile(r"[a-z]\.\s")
 
 
 def _example_number_before(block: TextBlock, numbers: tuple[ExampleNumber, ...]) -> ExampleNumber | None:
@@ -6494,7 +6485,7 @@ def _example_tails(
     indent: float | None = None,
 ) -> set[int]:
     """编号例句的后几行另成了块（(24.14) 的第二句、例句里换行的 wine.、IT、JA 几种语言的对照、
-    框架文件条目下面的 Arg0: …、Ex1: …）：紧贴在例句下面、字号一样、起笔在编号和句子之间偏右的块，也是这个例句。
+    框架文件条目下面的 Arg0: …、Ex1: …、对译下面的意译 “Yao Ming reaches the finals”）：紧贴在例句下面、字号一样、起笔在编号和句子之间偏右的块，也是这个例句。
     正文回到编号的左缘起笔；indent 是正文段首缩进多宽，缩进这么多起笔的是下一段。到下一个编号为止。"""
     by_page: dict[int, list[TextBlock]] = {}
     for block in blocks:
@@ -6524,8 +6515,7 @@ def _example_tails(
             gap = size * (1.6 if last is not head.rect and abs(block.rect.x0 - last.x0) <= 1 else 0.6)
             if (block.rect.y0 - last.y1 > gap or block.rect.y0 >= stop - 1
                     or block.rect.x0 < left or abs(block.size - size) > size * 0.1
-                    or _EXAMPLE_NUMBER_RE.match(block.text) or id(block) in head_ids
-                    or (head.lettered and not _SUB_ITEM_RE.match(block.text))):
+                    or _EXAMPLE_NUMBER_RE.match(block.text) or id(block) in head_ids):
                 break
             tails.add(id(block))
             last = block.rect
@@ -6814,7 +6804,7 @@ def _in_gloss(rect: pymupdf.Rect, glosses: tuple[pymupdf.Rect, ...]) -> bool:
 def _split_gloss_lines(
     blocks: list[TextBlock], glosses: dict[int, tuple[pymupdf.Rect, ...]],
 ) -> list[TextBlock]:
-    """对译行和下面的意译常分在同一块里。按行拆开，对译留原文，意译照翻。"""
+    """对译行和下面的意译常分在同一块里。按行拆开，对译留原文，意译另成一块：不在编号例句里的照翻。"""
     out: list[TextBlock] = []
     for block in blocks:
         rects = glosses.get(block.page, ())
