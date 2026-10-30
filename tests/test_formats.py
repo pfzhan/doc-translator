@@ -1040,6 +1040,64 @@ def test_pdf_wrapped_body_on_attention_sample():
         assert any(sentence in t for t in texts), sentence
 
 
+def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
+    """上一段译文写满了框，末行贴着下一段的起笔。下一段写不满时起笔往下挪，两段之间留出半行"""
+    from app.formats.pdf import TextBlock, _render_translated, _row_neighbor
+
+    src = pymupdf.open()
+    page = src.new_page(width=400, height=300)
+    for y in range(40, 148, 12):
+        page.insert_text((40, y + 9), "x " * 60, fontsize=10)
+    src_path = tmp_path / "src.pdf"
+    src.save(src_path)
+
+    def block(y0: float) -> TextBlock:
+        rows = [pymupdf.Rect(40, y, 360, y + 12) for y in (y0, y0 + 12, y0 + 24)]
+        return TextBlock(page=0, rect=pymupdf.Rect(40, y0, 360, y0 + 36), line_rects=rows,
+                         text="x " * 60 + "end.", size=10, color="#000000", bold=False)
+
+    blocks = [block(40), block(76), block(112)]
+    full = "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 4
+    out = _render_translated(src_path, blocks, [full, "第二段只有一行。", full[:60]], "zh-CN")
+    # 原文的块没有 span，擦不掉，只看中文的行
+    rows = sorted(
+        (line["spans"][0]["origin"][1], line["spans"][0]["size"], text)
+        for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0 for line in item["lines"]
+        for text in ["".join(span["text"] for span in line["spans"])] if re.search(r"[一-鿿]", text)
+    )
+    assert len(rows) == 6 and all(abs(size - 8.8) < 0.1 for _, size, _ in rows)
+    baselines = [baseline for baseline, _, _ in rows]
+    pitch = baselines[1] - baselines[0]
+    assert rows[3][2].startswith("第二段")
+    assert baselines[3] - baselines[2] >= pitch * 1.4
+    # 第二段写得短，和第三段之间本来就空着，第三段照原位写
+    assert baselines[4] < 112 + 12
+
+    # 一行一条、行距和原文一样紧的几条：下面一条要挪，就碰到再下面一条，不挪
+    for y in (200, 212, 224):
+        page.insert_text((40, y + 9), "x " * 10, fontsize=10)
+    src.save(tmp_path / "list.pdf")
+    # 中间一条带下标，框比行距高，伸到下一条里
+    rows = [TextBlock(page=0, rect=pymupdf.Rect(40, y, 160, y + h), line_rects=[pymupdf.Rect(40, y, 160, y + h)],
+                      text="x " * 10 + "end.", size=10, color="#000000", bold=False)
+            for y, h in ((200, 12), (212, 16), (224, 12))]
+    out = _render_translated(tmp_path / "list.pdf", rows, ["施事/主语, 主题/宾语", "工具/主语, 主题/宾语", "主题/主语"], "zh-CN")
+    listed = sorted(line["spans"][0]["origin"][1] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
+                    for line in item["lines"] if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"])))
+    assert len(listed) == 3
+    assert all(lower - upper > 11 for upper, lower in zip(listed, listed[1:]))
+
+    # 表格里上下相邻的格子旁边还有别的格子，各自对着原来的行。页边的旁注不算
+    cell = TextBlock(page=0, rect=pymupdf.Rect(40, 40, 90, 52), line_rects=[pymupdf.Rect(40, 40, 90, 52)],
+                     text="rise", size=10, color="#000000", bold=False)
+    other = TextBlock(page=0, rect=pymupdf.Rect(110, 40, 160, 52), line_rects=[pymupdf.Rect(110, 40, 160, 52)],
+                      text="fall", size=10, color="#000000", bold=False)
+    note = TextBlock(page=0, rect=pymupdf.Rect(0, 40, 30, 52), line_rects=[pymupdf.Rect(0, 40, 30, 52)],
+                     text="term", size=7, color="#000000", bold=False, side_note=True)
+    assert _row_neighbor(cell, [cell, other], None)
+    assert not _row_neighbor(blocks[0], [*blocks, note], None)
+
+
 def test_pdf_cjk_lines_do_not_overlap(tmp_path):
     """中日韩译文缩小并下移，两行不重叠；非中日韩仍用原字号。"""
     from app.formats.pdf import TextBlock, _render_translated

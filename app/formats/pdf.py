@@ -8385,9 +8385,12 @@ def _fit_typeset(
     obstacles: list["pymupdf.Rect"],
     right_limit: float | None,
     holes: list["pymupdf.Rect"] = (),
+    lower: tuple[float, float] | None = None,
 ) -> tuple[list[TypesetLine], float, float, "pymupdf.Rect", list[tuple[float, float]]]:
     """放得下就按原字号排。放不下先在本栏右扩，再压行距，最后才缩字号。
-    holes 是原文绕开的图，碰到它的行让到一边，另外返回这几行的缩进和宽度。"""
+    holes 是原文绕开的图，碰到它的行让到一边，另外返回这几行的缩进和宽度。
+    lower 是（想要的起笔，下面一块的上沿）：盒子写不满时上沿往下挪，最多挪到想要的起笔。
+    框的下沿伸过原文末行，挪下去的字不能碰到下面一块。"""
     gap = 1.45 if cjk else 1.2
     reference = block_size * 0.88 if cjk else block_size
     box = rect
@@ -8414,6 +8417,11 @@ def _fit_typeset(
         )
         too_tall = height > box.height + 1
         if not overflows and not too_tall:
+            if lower is not None and not lanes:
+                top, floor = lower
+                lowered = min(top, min(box.y1, floor) - height)
+                if lowered > box.y0:
+                    box = pymupdf.Rect(box.x0, lowered, box.x1, box.y1)
             return lines, em, gap, box, lanes
         page_width = text_page_rect(page).width
         if not expanded and box.width < page_width * 0.6:
@@ -8436,6 +8444,30 @@ def _fit_typeset(
             break
         em = max(1.5, em * 0.9)
     return lines, em, gap, box, lanes
+
+
+def _closes_clause(text: str) -> bool:
+    """以句末标点、分号、冒号收尾（列表项常以分号收尾）。末尾的数字是脚注号，不算"""
+    text = text.rstrip().rstrip("0123456789")
+    return _ends_sentence(text) or text.endswith((";", "；", ":", "："))
+
+
+def _row_neighbor(block: TextBlock, blocks: list[TextBlock], geo: PageGeometry | None) -> bool:
+    """本栏里同一行旁边还有别的块（表格的另一格）。页边的旁注、另一栏的正文不算"""
+    column = geo.index_of(block.rect) if geo is not None and len(geo.columns) >= 2 else None
+    return any(
+        other is not block and other.page == block.page and not other.side_note
+        and (column is None or geo.index_of(other.rect) == column)
+        and not (other.rect.x0 < block.rect.x1 and block.rect.x0 < other.rect.x1)
+        and min(other.rect.y1, block.rect.y1) - max(other.rect.y0, block.rect.y0)
+        > min(other.rect.height, block.rect.height) * 0.5
+        for other in blocks
+    )
+
+
+def _typeset_end(lines: list[TypesetLine], em: float, gap: float, box: "pymupdf.Rect") -> float:
+    """排好的几行末行行框的下沿"""
+    return box.y0 + max(len(lines), 1) * em * gap + line_offsets(lines, em, gap)[1]
 
 
 # 居中的题名折行时可以断开的小句标点
@@ -8677,19 +8709,25 @@ def _place_plain(
     justify_last: bool = False,
     holes: list["pymupdf.Rect"] = (),
     first_room: float | None = None,
-) -> None:
-    """排版器断行，再写入。中文按字形两端对齐；缺字时退回一个 HTML 盒子。"""
+    lower: tuple[float, float] | None = None,
+) -> float | None:
+    """排版器断行，再写入。中文按字形两端对齐；缺字时退回一个 HTML 盒子。
+    lower 见 _fit_typeset。返回末行行框的下沿，没写时返回 None。"""
     text = space_around_latin(separate_after_formula(text))
     lines, em, gap, box, lanes = _fit_typeset(
-        text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit, holes,
+        text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit, holes, lower,
     )
+    if box.y0 > rect.y0:
+        # 起笔挪下来了，首行不再按原文第一行往上提
+        first_room = None
+    end = _typeset_end(lines, em, gap, box)
     if align == "center" and len(lines) > 1 and not any(indent for indent, _ in lanes):
         lines = _clause_lines(text, formulas, em, block_size, box.width, lines, block_size * 0.88 if cjk else None)
     if cjk and _draw_cjk(
         page, page.parent, lines, formulas, box, em, gap, color, align,
         None, None, [], justify_last, lanes, first_room,
     ):
-        return
+        return end
     rendered = [_typeset_line_html(line, formulas) for line in lines]
     if any(indent for indent, _ in lanes):
         # 图在左边时，旁边几行各自缩进。行内的 margin、padding MuPDF 不认，每行写成一个块
@@ -8707,15 +8745,15 @@ def _place_plain(
         ]
         body = "<br>".join(parts)
     if not body:
-        return
+        return None
     css = (
         f"* {{font-family: sans-serif; font-size: {em}px; color: {color}; "
         f"font-weight: {weight}; line-height: {gap}; margin: 0; padding: 0; text-align: {align};}}"
     )
     html_text = f"<div{div_attrs}>{body}</div>"
-    if _try_insert(page, box, html_text, css, 0.9, archive):
-        return
-    _insert_fitting(page, box, html_text, css, obstacles, archive, right_limit)
+    if not _try_insert(page, box, html_text, css, 0.9, archive):
+        _insert_fitting(page, box, html_text, css, obstacles, archive, right_limit)
+    return end
 
 
 def _extend_leader(page: "pymupdf.Page", block: TextBlock, leader: Leader) -> None:
@@ -8788,17 +8826,21 @@ def _place_typeset(
     justify_last: bool = False,
     holes: list["pymupdf.Rect"] = (),
     first_room: float | None = None,
-) -> None:
-    """按行写入文字，公式槽用记录的下沿贴到该行基线。"""
+    lower: tuple[float, float] | None = None,
+) -> float:
+    """按行写入文字，公式槽用记录的下沿贴到该行基线。lower 和返回值见 _place_plain。"""
     text = space_around_latin(separate_after_formula(text))
     lines, em, gap, box, lanes = _fit_typeset(
-        text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit, holes,
+        text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit, holes, lower,
     )
+    if box.y0 > rect.y0:
+        first_room = None
+    end = _typeset_end(lines, em, gap, box)
     if cjk and _draw_cjk(
         page, doc, lines, formulas, box, em, gap, color, align,
         forms, page_spans, deferred_png, justify_last, lanes, first_room,
     ):
-        return
+        return end
     css = (
         f"* {{font-family: sans-serif; font-size: {em}px; color: {color}; "
         f"font-weight: {weight}; line-height: {gap}; margin: 0; padding: 0; text-align: left;}}"
@@ -8843,7 +8885,7 @@ def _place_typeset(
                 cursor += piece.slot_width
                 after_formula = True
     if not pending:
-        return
+        return end
     spans = [
         span
         for blk in page.get_text("dict")["blocks"] if blk.get("type") == 0
@@ -8860,6 +8902,7 @@ def _place_typeset(
     for after, drawn in after_stream.items():
         if drawn:
             _insert_contents_after(page, doc, after, "\n".join(drawn))
+    return end
 
 
 def _last_contents(doc: "pymupdf.Document", page: "pymupdf.Page") -> int | None:
@@ -10127,6 +10170,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             x_cap: float | None = None, source: TextBlock | None = None,
             # 续写的后半按上一块的字号写（见 _Carry）
             block_size: float | None = None,
+            # 往下挪的起笔，见 _fit_typeset
+            lower: tuple[float, float] | None = None,
         ) -> None:
             rect = _fit_page_margins(block, rect, same_page, bounds.height, cjk)
             before = order.snapshot()
@@ -10162,21 +10207,50 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 )
                 _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, beside, archive, limit)
             elif any(f.get("has_img") for f in bformulas):
-                _place_typeset(
+                end = _place_typeset(
                     page, doc, block_size, text, bformulas, rect, size, cjk, align, div_attrs,
                     block.color, weight, beside, limit, forms, page_spans, deferred_png,
-                    justify_last, holes, first_room,
+                    justify_last, holes, first_room, lower,
                 )
+                ends[id(source or block)] = (source or block, end, size)
             else:
-                _place_plain(
+                end = _place_plain(
                     page, text, bformulas, rect, size, block_size, cjk, align, div_attrs,
-                    block.color, weight, beside, limit, archive, justify_last, holes, first_room,
+                    block.color, weight, beside, limit, archive, justify_last, holes, first_room, lower,
                 )
+                if end is not None:
+                    ends[id(source or block)] = (source or block, end, size)
             if block.leader is not None and not page.rotation:
                 _extend_leader(page, block, block.leader)
             # 右扩、绕排时字会写出框外，按能写到的最右边算
             reach = pymupdf.Rect(rect.x0, rect.y0, max(rect.x1, limit or rect.x1), rect.y1) | block.rect
             order.record(source or block, before, reach + (-2, -2, 2, 2))
+
+        # 本页写好的块：原块、末行行框的下沿、字号
+        ends: dict[int, tuple[TextBlock, float, float]] = {}
+
+        def paragraph_top(block: TextBlock, rect: pymupdf.Rect) -> tuple[float, float] | None:
+            """上面紧挨着的一段译文写满了自己的框，末行贴着这一段的起笔，两段读起来像一段。
+            译文不缩进，段落只靠上下的空隙分开：起笔至少比上一段末行低半行。
+            上一块没有在句末、分号、冒号收住的是同一句断开的两半，不隔开。
+            表格里上下相邻的格子（旁边还有别的格子）、索引的条目各自对着原来的行，不挪。"""
+            if block.index or _row_neighbor(block, same_page, geo):
+                return None
+            above = [
+                (end, size) for other, end, size in ends.values()
+                if not other.index and _closes_clause(other.text)
+                and other.rect.y1 <= block.rect.y0 + 2
+                and block.rect.y0 - other.rect.y1 < block.size * 1.5
+                and min(other.rect.x1, block.rect.x1) - max(other.rect.x0, block.rect.x0) > block.size * 2
+                and not _row_neighbor(other, same_page, geo)
+            ]
+            if not above:
+                return None
+            end, size = max(above)
+            wanted = end + size * (1.45 if cjk else 1.2) * 0.5
+            if wanted <= rect.y0:
+                return None
+            return wanted, _room_below(page, block, rect.y0, rect.x0, rect.x1, same_page, kept, marks)
 
         # 续行可能排在半句前面。先把后半放进 carry，写的时候才不会丢掉。
         shared_head: dict[int, tuple[str, pymupdf.Rect, list[dict], bool]] = {}
@@ -10292,7 +10366,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 edge = _indent_edge(b, geo, indent) if align == "left" and id(b) not in stacked else None
                 if edge is not None:
                     rect = pymupdf.Rect(edge, rect.y0, rect.x1, rect.y1)
-                write_one(b, t, rect, align)
+                lower = paragraph_top(b, rect) if align == "left" and id(b) not in stacked else None
+                write_one(b, t, rect, align, lower=lower)
                 continue
             bformulas = (formulas_map or {}).get(id(b), [])
             # 行尾半句只有几个词宽。按它的宽度断行，续页也会被挤小。
