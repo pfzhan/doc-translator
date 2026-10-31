@@ -110,7 +110,7 @@ async def limit_upload_size(request: Request, call_next):
     return await call_next(request)
 
 
-async def _run_job(job: Job, translator, bilingual: bool, fresh: bool = False):
+async def _run_job(job: Job, translator, bilingual: bool):
     last_save = 0.0
 
     def progress(done, total):
@@ -122,7 +122,7 @@ async def _run_job(job: Job, translator, bilingual: bool, fresh: bool = False):
             jobs.save(job)
 
     job.status = "running"
-    job.runner = Runner(translator, progress, fresh=fresh)
+    job.runner = Runner(translator, progress)
     jobs.save(job)
     try:
         outputs = await translate_file(jobs.source_path(job), jobs.out_dir(job.id), job.runner, bilingual,
@@ -169,11 +169,10 @@ def _make_translator(job: Job, service: dict):
         raise HTTPException(400, str(e))
 
 
-def _start(job: Job, translator, fresh: bool = False):
-    """开始（或继续）翻译。每次都按服务当前的配置创建引擎，所以继续翻译时用的是服务现在选中的模型。
-    fresh 为真时不用已有译文，每一段都重新请求。"""
+def _start(job: Job, translator):
+    """开始（或继续）翻译。每次都按服务当前的配置创建引擎，所以继续翻译时用的是服务现在选中的模型。"""
     job.model = getattr(translator, "model", "")
-    running[job.id] = asyncio.create_task(_run_job(job, translator, job.mode == "bilingual", fresh))
+    running[job.id] = asyncio.create_task(_run_job(job, translator, job.mode == "bilingual"))
 
 
 async def _cancel(job_id: str):
@@ -198,8 +197,9 @@ async def _pause(job: Job) -> bool:
     return True
 
 
-def _resume(job: Job, service_id: str | None = None, fresh: bool = False) -> Job:
-    """继续（或重新）翻译同一个文件。已翻好的段落在缓存里，不会重复请求；fresh 为真时重新分析版面、全部重新请求。"""
+async def _resume(job: Job, service_id: str | None = None, fresh: bool = False) -> Job:
+    """继续（或重新）翻译同一个文件。已翻好的段落在缓存里，不会重复请求；
+    fresh 为真时先清理这条记录的缓存痕迹（见 _clear），从版面分析做起、全部重新请求。"""
     if job.status in ACTIVE:
         raise HTTPException(400, "该任务正在翻译")
     if job.id in cleaning:
@@ -211,6 +211,13 @@ def _resume(job: Job, service_id: str | None = None, fresh: bool = False) -> Job
         raise HTTPException(400, "原翻译服务已不存在，请选择其他服务")
     # 先验证配置，通过后才重置状态、删旧译文，否则配置失效时译文已丢
     translator = _make_translator(job, service)
+    if fresh:
+        try:
+            await _clear(job)
+        except BaseException:
+            await translator.aclose()
+            raise
+        job.clear_results()
     job.service_id, job.service_name = service["id"], service.get("name", "")
     job.status, job.error, job.done, job.total, job.outputs, job.finished = "queued", "", 0, 0, [], 0.0
     # 重新计算预览标记：旧记录可能是加预览功能之前创建的（存的是 False）
@@ -218,10 +225,7 @@ def _resume(job: Job, service_id: str | None = None, fresh: bool = False) -> Job
     for old in jobs.out_dir(job.id).glob("*"):
         old.unlink()
     (jobs.dir(job.id) / "preview.json").unlink(missing_ok=True)
-    if fresh:
-        # 全部重新翻译从版面分析做起
-        jobs.plan_path(job.id).unlink(missing_ok=True)
-    _start(job, translator, fresh)
+    _start(job, translator)
     jobs.save(job)
     return job
 
@@ -484,25 +488,29 @@ async def get_job_cache(job_id: str):
     return found.summary(len(job.outputs))
 
 
-@app.delete("/api/jobs/{job_id}/cache")
-async def clear_job_cache(job_id: str, boxes: bool = False):
-    """清理记录留下的缓存痕迹，记录回到未翻译。boxes=true 时连版面模型的识别结果一起清。"""
-    job = _job_or_404(job_id)
+async def _clear(job: Job, boxes: bool = False) -> int:
+    """清理记录留下的缓存痕迹（见 cleanup.purge），返回删掉的缓存条目数。
+    先确认记录空闲；登记和检查之间没有 await，继续翻译、补生成插不进来。"""
     _check_idle(job)
-    # 登记和检查之间没有 await，继续翻译、补生成插不进来
     cleaning.add(job.id)
-    translator = None
+    translator = _service_translator(job)
     try:
-        translator = _service_translator(job)
-        removed = await asyncio.to_thread(cleanup.purge, job, jobs, get_cache(), translator, boxes)
-        if jobs.get(job.id) is None:
-            raise HTTPException(404, "翻译记录不存在")
-        job.clear_results()
-        jobs.save(job)
+        return await asyncio.to_thread(cleanup.purge, job, jobs, get_cache(), translator, boxes)
     finally:
         cleaning.discard(job.id)
         if translator is not None:
             await translator.aclose()
+
+
+@app.delete("/api/jobs/{job_id}/cache")
+async def clear_job_cache(job_id: str, boxes: bool = False):
+    """清理记录留下的缓存痕迹，记录回到未翻译。boxes=true 时连版面模型的识别结果一起清。"""
+    job = _job_or_404(job_id)
+    removed = await _clear(job, boxes)
+    if jobs.get(job.id) is None:
+        raise HTTPException(404, "翻译记录不存在")
+    job.clear_results()
+    jobs.save(job)
     return {**job.to_dict(), "removed": removed}
 
 
@@ -522,7 +530,7 @@ async def resume_all_jobs():
         if job.status not in ("paused", "interrupted"):
             continue
         try:
-            _resume(job)
+            await _resume(job)
             resumed += 1
         except HTTPException as e:
             failed.append({"id": job.id, "filename": job.filename, "error": e.detail})
@@ -547,11 +555,12 @@ async def retry_job(job_id: str, data: dict | None = Body(None)):
 
     用的是服务当前的配置：在服务里换了模型，后面的段落就用新模型。
     可以传 service_id 换一个服务；换了服务 id 就会按新服务重新翻译。
-    传 fresh=true 时不用已有译文，每一段都重新请求。
+    传 fresh=true 时先清理这条记录的缓存痕迹，再从头翻译，每一段都重新请求。
     必须是 async：_start 会创建后台任务，需要在事件循环里调用。
     """
     data = data or {}
-    return _resume(_job_or_404(job_id), data.get("service_id"), fresh=bool(data.get("fresh"))).to_dict()
+    job = await _resume(_job_or_404(job_id), data.get("service_id"), fresh=bool(data.get("fresh")))
+    return job.to_dict()
 
 
 def _variant_service(job: Job, service: dict) -> dict:

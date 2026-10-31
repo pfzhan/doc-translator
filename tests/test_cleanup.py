@@ -137,3 +137,20 @@ def test_document_digest_is_stored_on_the_job(app_env):
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
         assert main.jobs.get(job["id"]).document == hashlib.sha1(MD).hexdigest()
+
+
+def test_redo_from_scratch_clears_stale_entries_first(app_env):
+    main = app_env
+    cache = runner.get_cache()
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        doc = main.jobs.get(job["id"]).document
+        # 旧代码切出来、现在已经不用的段落
+        cache.put_many("old-prefix", {"A stale paragraph.": "旧译文"})
+        cache.claim(doc, "old-prefix", ["A stale paragraph."])
+        r = client.post(f"/api/jobs/{job['id']}/retry", json={"fresh": True})
+        assert r.status_code == 200, r.text
+        again = wait_done(client, job["id"])
+        assert again["status"] == "done" and again["outputs"]
+        assert cache.get_many("old-prefix", ["A stale paragraph."]) == {}
+        assert _rows(cache) == 3

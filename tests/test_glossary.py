@@ -148,12 +148,17 @@ def test_translate_file_names_the_document(tmp_path):
     assert runner.document and len(runner.document) == 40
 
 
-def test_a_fresh_run_defines_terms_and_translates_again(tmp_path):
-    """全部重新翻译：术语表和段落都不读缓存，重新请求，新结果写回缓存。"""
+def test_clearing_a_document_defines_terms_and_translates_again(tmp_path):
+    """清理一份文件的缓存后重新翻译：术语表和段落都登记在这份文件名下，一起清掉，重新请求。"""
     cache = Cache(tmp_path / "c.sqlite3")
-    asyncio.run(Runner(_translator([]), cache=cache, skip_same_lang=False).translate_all(DOC))
+    first = Runner(_translator([]), cache=cache, skip_same_lang=False)
+    first.set_document("doc")
+    asyncio.run(first.translate_all(DOC))
+    cache.purge("doc", cache.owned("doc"))
     requests = []
-    asyncio.run(Runner(_translator(requests), cache=cache, skip_same_lang=False, fresh=True).translate_all(DOC))
+    again = Runner(_translator(requests), cache=cache, skip_same_lang=False)
+    again.set_document("doc")
+    asyncio.run(again.translate_all(DOC))
     assert any("terminology list" in system for system, _user in requests)
     assert sum(user.count("[[p") for system, user in requests if "terminology list" not in system) == len(DOC)
 

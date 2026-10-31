@@ -734,81 +734,209 @@ function outputVariant(name) {
   return token === "bilingual" || token === "translated" ? token : "";
 }
 
-function downloadLabel(name, multiple) {
-  const variant = outputVariant(name) === "bilingual" ? "双语" : outputVariant(name) === "translated" ? "译文" : "";
-  return `下载${variant}${multiple ? ` ${fmtOf(name).toUpperCase()}` : ""}`;
+// ---------- 下拉菜单 ----------
+// 按钮下方弹出（贴近窗口底部时朝上），方向键在项之间移动，Esc、Tab、点外面或滚动时关闭。
+// 窗口尺寸变化时只重新定位：手机上地址栏收起、展开也会触发 resize
+// 有记录在跑时列表和阅读器会定时重画，菜单开着时推迟重画，关了再补（见 deferWhileMenuOpen）
+const menu = { panel: null, anchor: null, pending: new Map() };
+
+function deferWhileMenuOpen(key, render) {
+  if (!menu.panel) return false;
+  menu.pending.set(key, render);
+  return true;
 }
 
-// 批量算按钮文字：只有同一版本存在多个格式（如 MOBI 任务的 EPUB+MOBI）才带格式名
-function downloadLabels(outputs) {
-  const variants = outputs.map((o) => outputVariant(o.name));
-  const dup = variants.some((v, i) => v && variants.indexOf(v) !== i);
-  return outputs.map((o) => downloadLabel(o.name, dup));
+function closeMenu({ focus = false } = {}) {
+  if (!menu.panel) return;
+  const { panel, anchor } = menu;
+  menu.panel = menu.anchor = null;
+  panel.remove();
+  anchor.setAttribute("aria-expanded", "false");
+  document.removeEventListener("pointerdown", onMenuPointer, true);
+  document.removeEventListener("scroll", onMenuScroll, true);
+  window.removeEventListener("resize", placeMenu);
+  if (focus && anchor.isConnected) anchor.focus();
+  const pending = [...menu.pending.values()];
+  menu.pending.clear();
+  for (const render of pending) render();
 }
 
-// 在新标签页里打开生成的文件：PDF 用浏览器自带的阅读器，EPUB 用 epub.html 逐章显示。
-// 两种版本都有时按钮带上版本名
-function previewLinks(job) {
-  const books = job.outputs.filter((o) => ["pdf", "epub"].includes(fmtOf(o.name)));
-  return books.map((o) => {
-    const variant = outputVariant(o.name) === "bilingual" ? "双语" : outputVariant(o.name) === "translated" ? "译文" : "";
-    const a = el("a", "btn sm", `预览${books.length > 1 ? variant : ""}`);
-    a.href = fmtOf(o.name) === "pdf"
-      ? `${o.url}?inline=1`
-      : `epub.html?${new URLSearchParams({ job: job.id, file: o.name })}`;
-    a.target = "_blank";
-    a.rel = "noopener";
-    a.title = `在新标签页打开 ${o.name}`;
-    return a;
-  });
+function onMenuPointer(e) {
+  if (!menu.panel.contains(e.target) && !menu.anchor.contains(e.target)) closeMenu();
 }
 
-// 另一种版本的按钮：文案和已有文件的下载按钮完全一致（“下载译文/下载双语”），
-// 文件还没生成时点击就在后台现生成（服务端按缓存重新排版，几秒）然后直接开始下载
-const variantInflight = new Set();
+function onMenuScroll(e) {
+  if (!menu.panel.contains(e.target)) closeMenu();
+}
 
-function variantButton(job) {
-  if (job.status !== "done") return null;
-  const want = job.mode === "bilingual" ? "译文" : "双语";
-  const marker = job.mode === "bilingual" ? "translated" : "bilingual";
-  if (job.outputs.some((o) => outputVariant(o.name) === marker)) return null;
-  const btn = el("button", "btn sm", `下载${want}`);
-  btn.type = "button";
-  if (variantInflight.has(job.id)) {
-    btn.disabled = true;
-    btn.textContent = "生成中…";
+// 菜单项：{ label, hint, href, download, newTab, danger, disabled, onSelect }，
+// 分组标题 { heading }，分隔线 "sep"
+function menuItem(item) {
+  if (item === "sep") return el("div", "menu-sep");
+  if (item.heading) return el("div", "menu-heading", item.heading);
+  const node = el(item.href ? "a" : "button", `menu-item${item.danger ? " danger" : ""}`);
+  node.setAttribute("role", "menuitem");
+  node.tabIndex = -1;
+  node.append(el("span", "", item.label));
+  if (item.hint) node.append(el("span", "menu-hint", item.hint));
+  if (item.href) {
+    node.href = item.href;
+    if (item.download) node.download = item.download;
+    if (item.newTab) {
+      node.target = "_blank";
+      node.rel = "noopener";
+    }
+  } else {
+    node.type = "button";
+    node.disabled = Boolean(item.disabled);
   }
-  btn.addEventListener("click", async () => {
-    if (variantInflight.has(job.id)) return;
-    variantInflight.add(job.id);
-    btn.disabled = true;
-    btn.textContent = "生成中…";
-    try {
-      const updated = await api(`/api/jobs/${job.id}/variant`, { method: "POST" });
-      upsertJob(updated);
-      if (reader.jobId === job.id) {
-        reader.job = updated;
-        renderReaderBar(updated);
-      }
-      const o = updated.outputs.find((out) => outputVariant(out.name) === marker);
-      if (o) {
-        const a = document.createElement("a");
-        a.href = o.url;
-        a.download = o.name;
-        document.body.append(a);
-        a.click();
-        a.remove();
-      }
-    } catch (err) {
-      toast(`生成失败：${err.message}`);
-    } finally {
-      variantInflight.delete(job.id);
-      const current = state.jobs.find((j) => j.id === job.id);
-      if (current) upsertJob(current);
-      if (reader.jobId === job.id) renderReaderBar(reader.job || current);
+  node.addEventListener("click", () => {
+    closeMenu();
+    item.onSelect?.();
+  });
+  return node;
+}
+
+// 和按钮右边对齐，下方放不下时放到上方
+function placeMenu() {
+  const { panel, anchor } = menu;
+  if (!panel) return;
+  const rect = anchor.getBoundingClientRect();
+  const { offsetWidth: w, offsetHeight: h } = panel;
+  const below = rect.bottom + 4 + h <= window.innerHeight - 8;
+  panel.style.top = `${below ? rect.bottom + 4 : Math.max(8, rect.top - 4 - h)}px`;
+  panel.style.left = `${Math.min(Math.max(8, rect.right - w), window.innerWidth - w - 8)}px`;
+}
+
+function openMenu(anchor, items, { keyboard = false } = {}) {
+  closeMenu();
+  const panel = el("div", "menu");
+  panel.setAttribute("role", "menu");
+  panel.append(...items.map(menuItem));
+  document.body.append(panel);
+  menu.panel = panel;
+  menu.anchor = anchor;
+  placeMenu();
+  anchor.setAttribute("aria-expanded", "true");
+  document.addEventListener("pointerdown", onMenuPointer, true);
+  document.addEventListener("scroll", onMenuScroll, true);
+  window.addEventListener("resize", placeMenu);
+  const entries = () => [...panel.querySelectorAll(".menu-item:not(:disabled)")];
+  panel.addEventListener("keydown", (e) => {
+    const list = entries();
+    const at = list.indexOf(document.activeElement);
+    const move = { ArrowDown: at + 1, ArrowUp: at - 1, Home: 0, End: list.length - 1 }[e.key];
+    if (move !== undefined) {
+      e.preventDefault();
+      list[(move + list.length) % list.length]?.focus();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeMenu({ focus: true });
+    } else if (e.key === "Tab") {
+      closeMenu();
+    }
+  });
+  (keyboard ? entries()[0] : panel)?.focus?.();
+}
+
+// 带下拉菜单的按钮。items 在打开时才算，拿到的是记录的最新状态
+function menuButton(label, cls, items, ariaLabel) {
+  const btn = el("button", cls, label);
+  btn.type = "button";
+  btn.setAttribute("aria-haspopup", "menu");
+  btn.setAttribute("aria-expanded", "false");
+  if (ariaLabel) btn.setAttribute("aria-label", ariaLabel);
+  btn.addEventListener("click", (e) => {
+    if (menu.anchor === btn) closeMenu();
+    else openMenu(btn, items(), { keyboard: e.detail === 0 });
+  });
+  btn.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" && menu.anchor !== btn) {
+      e.preventDefault();
+      openMenu(btn, items(), { keyboard: true });
     }
   });
   return btn;
+}
+
+// ---------- 下载 ----------
+
+const VARIANT_NAMES = { bilingual: "双语对照", translated: "仅译文" };
+
+// 下载菜单：每个译文文件一组（当前模式的版本在前），PDF、EPUB 能在新标签页预览；
+// 另一种版本还没生成的，给一项“生成并下载”（服务端按缓存重新排版，几秒）。没有可下载的返回 null
+function downloadMenu(job, cls) {
+  if (!job.outputs.length) return null;
+  return menuButton("下载", `${cls} has-caret`, () => downloadItems(job));
+}
+
+function downloadItems(job) {
+  const current = job.mode === "bilingual" ? "bilingual" : "translated";
+  const outputs = [...job.outputs].sort((a, b) => (outputVariant(b.name) === current) - (outputVariant(a.name) === current));
+  const items = [];
+  for (const o of outputs) {
+    const fmt = fmtOf(o.name);
+    const name = VARIANT_NAMES[outputVariant(o.name)];
+    if (items.length) items.push("sep");
+    items.push({ heading: name ? `${name} · ${fmt.toUpperCase()}` : o.name });
+    if (fmt === "pdf" || fmt === "epub") {
+      const href = fmt === "pdf" ? `${o.url}?inline=1` : `epub.html?${new URLSearchParams({ job: job.id, file: o.name })}`;
+      items.push({ label: "预览", hint: "新标签页", href, newTab: true });
+    }
+    items.push({ label: "下载", href: o.url, download: o.name });
+  }
+  const other = current === "bilingual" ? "translated" : "bilingual";
+  if (job.status === "done" && !job.outputs.some((o) => outputVariant(o.name) === other)) {
+    const busy = variantInflight.has(job.id);
+    items.push("sep", { heading: VARIANT_NAMES[other] }, {
+      label: busy ? "生成中…" : "生成并下载", hint: busy ? "" : "约需几秒", disabled: busy,
+      onSelect: () => generateVariant(job, other),
+    });
+  }
+  return items;
+}
+
+// 另一种版本在后台现生成，生成完直接开始下载
+const variantInflight = new Set();
+
+async function generateVariant(job, marker) {
+  if (variantInflight.has(job.id)) return;
+  variantInflight.add(job.id);
+  toast(`正在生成${VARIANT_NAMES[marker]}版本…`);
+  try {
+    const updated = await api(`/api/jobs/${job.id}/variant`, { method: "POST" });
+    upsertJob(updated);
+    if (reader.jobId === job.id) {
+      reader.job = updated;
+      renderReaderBar(updated);
+    }
+    const o = updated.outputs.find((out) => outputVariant(out.name) === marker);
+    if (o) {
+      const a = document.createElement("a");
+      a.href = o.url;
+      a.download = o.name;
+      document.body.append(a);
+      a.click();
+      a.remove();
+    }
+  } catch (err) {
+    toast(`生成失败：${err.message}`);
+  } finally {
+    variantInflight.delete(job.id);
+  }
+}
+
+// 低频和会丢东西的操作收进“更多”：重译、清理缓存、删除。删除放最后，和上面隔开
+function moreMenu(job) {
+  return menuButton("⋯", "btn sm ghost more", () => {
+    const items = [];
+    if (!ACTIVE.has(job.status) && job.status !== "idle") {
+      items.push({ label: "重译…", onSelect: () => redoJob(job) });
+      items.push({ label: "清理缓存…", onSelect: () => purgeJob(job) }, "sep");
+    }
+    items.push({ label: "删除", danger: true, onSelect: () => deleteJob(job) });
+    return items;
+  }, "更多操作");
 }
 
 function timeAgo(ts) {
@@ -939,56 +1067,29 @@ function jobRow(job, selectable = false) {
   // 状态单独一列，宽屏时放在信息和按钮中间，窄了再落到信息下面
   li.append(main, status);
 
+  // 每条记录最多三个按钮：次要操作、主操作、更多。主操作用浅色强调，紧挨着“更多”
   const actions = el("div", "job-actions");
-  if (job.preview && job.status !== "idle" && (job.status !== "error" || job.done)) {
-    const read = el("button", "btn sm", ACTIVE.has(job.status) ? "查看进度" : "阅读");
-    read.type = "button";
-    read.addEventListener("click", () => openReader(job.id));
-    actions.append(read);
-  }
-  actions.append(...previewLinks(job));
-  const curVariant = job.mode === "bilingual" ? "bilingual" : "translated";
-  for (const [i, o] of job.outputs.entries()) {
-    // 当前模式对应的版本是主按钮；另一种版本已生成时降为普通按钮，和“生成X版”占位一致
-    const primary = outputVariant(o.name) === curVariant;
-    const a = el("a", primary ? "btn sm soft" : "btn sm", downloadLabels(job.outputs)[i]);
-    a.href = o.url;
-    a.download = o.name;
-    a.title = o.name;
-    actions.append(a);
-  }
-  const variant = variantButton(job);
-  if (variant) actions.append(variant);
+  const button = (label, cls, onClick) => {
+    const b = el("button", cls, label);
+    b.type = "button";
+    b.addEventListener("click", () => onClick(b));
+    return b;
+  };
+  const readable = job.preview && (job.status === "done" || job.done > 0);
   if (ACTIVE.has(job.status)) {
-    const pause = el("button", "btn sm", "暂停");
-    pause.type = "button";
-    pause.addEventListener("click", () => pauseJob(job.id, pause));
-    actions.append(pause);
+    if (job.preview) actions.append(button("查看进度", "btn sm", () => openReader(job.id)));
+    actions.append(button("暂停", "btn sm", (b) => pauseJob(job.id, b)));
+  } else if (job.status === "done") {
+    if (readable) actions.append(button("阅读", "btn sm", () => openReader(job.id)));
+    const download = downloadMenu(job, "btn sm soft");
+    if (download) actions.append(download);
   } else if (job.status === "idle") {
-    const start = el("button", "btn sm soft", "开始翻译");
-    start.type = "button";
-    start.addEventListener("click", () => retryJob(job.id));
-    actions.append(start);
-  } else if (RESUMABLE.has(job.status) || job.status === "error") {
-    const retry = el("button", "btn sm", job.status === "error" ? "重试" : "继续翻译");
-    retry.type = "button";
-    retry.addEventListener("click", () => retryJob(job.id));
-    actions.append(retry);
+    actions.append(button("开始翻译", "btn sm soft", () => retryJob(job.id)));
+  } else {
+    if (readable) actions.append(button("阅读", "btn sm", () => openReader(job.id)));
+    actions.append(button(job.status === "error" ? "重试" : "继续翻译", "btn sm soft", () => retryJob(job.id)));
   }
-  if (!ACTIVE.has(job.status) && job.status !== "idle") {
-    const redo = el("button", "btn sm", "重译");
-    redo.type = "button";
-    redo.addEventListener("click", () => redoJob(job));
-    const purge = el("button", "btn sm ghost", "清理缓存");
-    purge.type = "button";
-    purge.title = "清除这条记录的翻译缓存和生成结果，记录保留";
-    purge.addEventListener("click", () => purgeJob(job));
-    actions.append(redo, purge);
-  }
-  const del = el("button", "btn sm ghost", "删除");
-  del.type = "button";
-  del.addEventListener("click", () => deleteJob(job));
-  actions.append(del);
+  actions.append(moreMenu(job));
   li.append(actions);
   return li;
 }
@@ -1003,6 +1104,7 @@ function serviceLabel(job) {
 const PAGE_SIZES = [10, 20, 50, 100];
 
 function renderJobs() {
+  if (deferWhileMenuOpen("jobs", renderJobs)) return;
   const all = state.jobs;
   const list = $("history-list");
   const pages = Math.max(1, Math.ceil(all.length / state.pageSize));
@@ -1463,6 +1565,7 @@ function stagePct(job) {
 }
 
 function renderReaderBar(job) {
+  if (deferWhileMenuOpen("reader", () => renderReaderBar(reader.job || job))) return;
   $("reader-name").textContent = job.filename;
   const meta = [langPair(job), serviceLabel(job)];
   if (ACTIVE.has(job.status)) {
@@ -1496,19 +1599,8 @@ function renderReaderBar(job) {
     pause.addEventListener("click", () => pauseJob(job.id, pause));
     actions.append(pause);
   }
-  downloads.append(...previewLinks(job));
-  const curVariant = job.mode === "bilingual" ? "bilingual" : "translated";
-  for (const [i, o] of job.outputs.entries()) {
-    const primary = outputVariant(o.name) === curVariant;
-    const a = el("a", primary ? "btn primary sm" : "btn sm");
-    a.href = o.url;
-    a.download = o.name;
-    a.textContent = downloadLabels(job.outputs)[i];
-    a.title = o.name;
-    downloads.append(a);
-  }
-  const variant = variantButton(job);
-  if (variant) downloads.append(variant);
+  const download = downloadMenu(job, "btn primary sm");
+  if (download) downloads.append(download);
 }
 
 // 把接口返回的原始错误整理成一句人话；原文放在“详细信息”里，排查时还能看到

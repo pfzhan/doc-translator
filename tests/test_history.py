@@ -129,7 +129,7 @@ def test_retry_reuses_cache_and_can_switch_service(app_env):
 
 
 def test_redo_can_ignore_cached_translations(app_env):
-    """重译时选了“全部重新翻译”：已有的译文不用，每一段都重新请求；不选时照常复用。"""
+    """重译时选了“全部重新翻译”：先清掉已有的译文，每一段都重新请求；不选时照常复用。"""
     main = app_env
     calls = []
     from app.translators import MockTranslator

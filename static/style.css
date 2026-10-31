@@ -286,6 +286,35 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 .job-error.interrupted { color: var(--text-2); }
 .job-actions { grid-area: actions; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .job-actions .btn.ghost { color: var(--text-2); }
+/* 下拉按钮右边的小箭头；“更多”是方形图标按钮 */
+.btn.has-caret::after {
+  content: ""; width: 0; height: 0; margin-left: 6px;
+  border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid currentColor; opacity: 0.75;
+}
+.btn.has-caret { display: inline-flex; align-items: center; }
+.btn.more { width: 30px; padding: 0; font-size: 16px; line-height: 1; }
+.btn[aria-expanded="true"] { background: var(--surface-2); }
+.btn.soft[aria-expanded="true"], .btn.primary[aria-expanded="true"] { filter: brightness(0.95); }
+
+/* 下拉菜单 */
+.menu {
+  position: fixed; z-index: 60; min-width: 196px; max-width: 320px; padding: 6px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.16), 0 2px 6px rgba(16, 24, 40, 0.08);
+}
+.menu:focus { outline: none; }
+.menu-heading { padding: 6px 10px 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.menu-item {
+  display: flex; align-items: center; gap: 12px; width: 100%; min-height: 32px; padding: 0 10px;
+  border: 0; border-radius: 6px; background: none; color: var(--text);
+  font: inherit; font-size: 13.5px; text-align: left; text-decoration: none; cursor: pointer;
+}
+.menu-item:hover, .menu-item:focus-visible { background: var(--surface-2); outline: none; }
+.menu-item:disabled { opacity: 0.5; cursor: default; background: none; }
+.menu-item.danger { color: var(--error); }
+.menu-item.danger:hover, .menu-item.danger:focus-visible { background: var(--error-soft); }
+.menu-hint { margin-left: auto; font-size: 12px; color: var(--muted); }
+.menu-sep { height: 1px; margin: 6px 4px; background: var(--border); }
 .empty { text-align: center; padding: 56px 16px; color: var(--muted); }
 .empty-mark {
   display: inline-grid; place-items: center; width: 48px; height: 48px; border-radius: 12px;
