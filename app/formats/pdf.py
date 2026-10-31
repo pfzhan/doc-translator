@@ -1275,6 +1275,42 @@ def _stacked_rows(upper: list[dict], lower: list[dict]) -> bool:
     return abs(baselines[0] - baselines[1]) > size * 0.3
 
 
+def _latin_page(data: dict) -> bool:
+    """页上的字九成以上不是中日韩文字"""
+    text = "".join(
+        span["text"] for block in data.get("blocks", []) if block.get("type") == 0
+        for line in block["lines"] for span in line["spans"]
+    )
+    letters = sum(1 for c in text if c.isalpha())
+    return letters > 0 and len(CJK_RE.findall(text)) < letters * 0.1
+
+
+def _script_parts(line: dict, spans: list[dict]) -> list[tuple]:
+    """西文页上一行里一截中文、空开半个字以上、接着一截西文的，是并排的两栏（左栏中文原句、右栏英译的题词），
+    拆成两截：中文那截按外文留原文，西文接着译。不是这样的行返回空列表"""
+    for k in range(1, len(spans)):
+        if _script_seam(spans[:k], spans[k:]):
+            parts = []
+            for part in (spans[:k], spans[k:]):
+                sub = dict(line, spans=part)
+                parts.append(("".join(s["text"] for s in part), _line_box(sub), part, part))
+            return parts
+    return []
+
+
+def _script_seam(left: list[dict], right: list[dict]) -> bool:
+    """左边一截只有中文、右边一截西文起头，中间空开半个字以上（见 _script_parts）"""
+    left = [span for span in left if str(span.get("text") or "").strip()]
+    right = [span for span in right if str(span.get("text") or "").strip()]
+    if not left or not right:
+        return False
+    text = "".join(str(span.get("text") or "") for span in left)
+    size = float(right[0].get("size") or 10)
+    return (bool(CJK_RE.search(text)) and not re.search(r"[A-Za-z]", text)
+            and re.match(r"\s*[A-Za-z]", str(right[0].get("text") or "")) is not None
+            and float(right[0]["bbox"][0]) - float(left[-1]["bbox"][2]) >= size * 0.5)
+
+
 def _left_to_right(items: list[tuple]) -> list[tuple]:
     """同一可视行的几截按从左到右排。分式的分子常排在分母前面，分母就接不上前面的等号。
     行框用的是墨迹框，上下两行交叠很少，不会被当成一行。"""
@@ -3592,7 +3628,8 @@ def _shares_visual_row(
                 continue
             horizontal = min(a.x1, b.x1) - max(a.x0, b.x0)
             gap = b.x0 - a.x1 if b.x0 >= a.x0 else a.x0 - b.x1
-            if horizontal > 0 or (0 <= gap < 6 and _blocks_share_column(left, right, geometries)):
+            if horizontal > 0 or (0 <= gap < 6 and _blocks_share_column(left, right, geometries)
+                                  and not (b.x0 >= a.x0 and _script_seam(a_spans, b_spans))):
                 return True
     return False
 
@@ -5648,10 +5685,13 @@ def _extract(
         ref_rows = _index_ref_rows(data) if index_page else []
         # 索引页的页码排成几列，条目的词会碰巧对上
         number_columns = [] if index_page else _number_columns(data)
+        latin_page = _latin_page(data)
         for b in data["blocks"]:
             if b.get("type") != 0:
                 continue
             items: list[tuple[str, pymupdf.Rect, list[dict]]] = []
+            # 拆开的中文原句（见 _script_parts）
+            cjk_heads: set[int] = set()
             for ln in b["lines"]:
                 if abs(ln["dir"][1]) > 0.01:  # 旋转 / 竖排文字不处理
                     continue
@@ -5659,8 +5699,12 @@ def _extract(
                 if not text.strip():
                     continue
                 spans = [s for s in ln["spans"] if s["text"].strip()]
-                if spans:
-                    items.append((text, _line_box(ln), spans, ln["spans"]))
+                if not spans:
+                    continue
+                parts = _script_parts(ln, spans) if latin_page else []
+                if parts:
+                    cjk_heads.add(id(parts[0][2]))
+                items.extend(parts or [(text, _line_box(ln), spans, ln["spans"])])
             items = _left_to_right(items)
             items, leaders = _cut_leaders(items, toc_page)
             items = _drop_number_tails(items)
@@ -5672,6 +5716,8 @@ def _extract(
             # 页码折到下一行的条目、词表的一格也是
             cells = _grid_cells(items)
             entry_ends = cells | header_cells | (_index_entry_ends(items, ref_rows) if index_page else set())
+            # 中文原句前后都断开，自成一组
+            entry_ends |= {j for i, item in enumerate(items) if id(item[2]) in cjk_heads for j in (i - 1, i) if j >= 0}
             groups = [part for group in groups for part in _cut_after(group, {*leaders, *entry_ends})]
             groups = [part for group in groups for part in _cut_at_posts(group, items, scans[pno].posts)]
             # 文字分式所在的行自成一组，留原字，不和上下的正文连成一段
@@ -6285,6 +6331,7 @@ def _margin_term(block: TextBlock) -> bool:
 
 # 认外文段落时一段至少要有的字母数。题记里的一个小项只有一两个词，要和旁边的合起来认
 _FOREIGN_LETTERS = 40
+_FOREIGN_CJK = 8
 
 
 def _colored_examples(blocks: list[TextBlock], geometries: list[PageGeometry]) -> set[int]:
@@ -6734,7 +6781,12 @@ def _foreign_ids(blocks: list[TextBlock]) -> set[int]:
     if not doc_lang:
         return set()
 
+    cjk_doc = doc_lang.split("-")[0] in ("zh", "ja", "ko")
+
     def foreign(text: str) -> bool:
+        # 一个汉字顶好几个字母：西文书里十来个字、不夹西文的一句中文（题词的原句）字母数不够也认得出
+        if not cjk_doc and len(CJK_RE.findall(text)) >= _FOREIGN_CJK and not re.search(r"[A-Za-z]", text):
+            return True
         lang = langdetect.detect(text, min_letters=_FOREIGN_LETTERS)
         return bool(lang) and lang.split("-")[0] != doc_lang.split("-")[0]
 

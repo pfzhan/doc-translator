@@ -11287,3 +11287,27 @@ def test_colored_lines_under_a_bullet_stay_original():
     found = _item_example_ids([bullet, first, second, note, plain, prose, loose])
     assert found == {id(first), id(second)}
 
+
+
+def test_a_chinese_line_beside_its_english_rendering_is_kept_apart():
+    """英文书里左栏中文原句、右栏英译排在同一行的题词：两截分开，中文原句留原文。
+    中文后面按正常字距接着的西文不拆。"""
+    from app.formats.pdf import TextBlock, _foreign_ids, _script_seam
+
+    def span(text, x0, x1):
+        return {"text": text, "font": "Times", "size": 10.0, "flags": 0, "bbox": (x0, 206, x1, 216), "origin": (x0, 216)}
+
+    assert _script_seam([span("忘", 262.8, 272.8), span("荃", 272.8, 282.7)], [span("Nets are for fish;", 288.7, 355.4)])
+    assert not _script_seam([span("使用", 100, 120)], [span("Python", 122.5, 150)])
+
+    def blk(text, y):
+        return TextBlock(page=0, rect=pymupdf.Rect(160, y, 490, y + 10), line_rects=[], text=text, size=10,
+                         color="#000", bold=False)
+
+    prose = [blk(text, 300 + 40 * i) for i, text in enumerate([
+        "The asphalt that Los Angeles is famous for occurs mainly on its freeways.",
+        "In this chapter we introduce embeddings, vector representations of the meaning of words.",
+        "The linguistic field that studies embeddings and their meanings is called vector semantics.",
+    ])]
+    quote = blk("荃者所以在鱼，得鱼而忘荃", 206)
+    assert _foreign_ids([quote, *prose]) == {id(quote)}
