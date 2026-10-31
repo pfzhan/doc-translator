@@ -374,6 +374,33 @@ def test_a_bold_label_after_a_finished_sentence_opens_the_next_item():
     assert _split_lines(wrapped) == [[0, 1]]
 
 
+def test_a_bold_label_after_a_short_unfinished_item_opens_the_next_item():
+    """定义列表的条目是半句例句，没有句末标点（mouse² : … a quiet animal like a mouse）。
+    上一条也是粗体标签起头、没写到右缘，下一行的粗体标签是下一条"""
+    from app.formats.pdf import _split_lines
+
+    def item(label, rest, y0, x1):
+        spans = [{"text": label, "size": 10.0, "font": "CMSSBX10", "flags": 20},
+                 {"text": " :" + rest, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 4}]
+        return (label + " :" + rest, pymupdf.Rect(142, y0, x1, y0 + 15), spans)
+
+    rows = [
+        item("mouse1", " .... a mouse controlling a computer system in 1968.", 569, 389),
+        item("mouse2", " .... a quiet animal like a mouse", 581, 307),
+        item("bank1", " ...a bank can hold the investments in a custodial account ...", 593, 412),
+        item("bank2", " ...as agriculture burgeons on the east bank, the river ...", 605, 393),
+    ]
+    assert _split_lines(rows) == [[0], [1], [2], [3]]
+    # 分成两块以后，也不按图注的续行并回去
+    from app.formats.pdf import TextBlock, _merge_caption_fragments
+
+    boxes = [pymupdf.Rect(142, 584, 307, 596), pymupdf.Rect(142, 596, 412, 608)]
+    blocks = [TextBlock(page=0, rect=box, line_rects=[box], text=text, size=10.0, color="#000", bold=False,
+                        span_lines=[spans], line_gap=0.0)
+              for (text, _rect, spans), box in zip(rows[1:3], boxes)]
+    assert len(_merge_caption_fragments(blocks)) == 2
+
+
 def test_a_heading_across_a_narrow_gutter_is_not_joined_to_the_left_line():
     """左栏一行和右栏的节号标题同高，中间只隔一个字宽的栏沟。节号从右栏栏边起笔，不是左边那行的后半截。"""
     doc = pymupdf.open()

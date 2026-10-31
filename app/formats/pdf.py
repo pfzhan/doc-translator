@@ -2413,10 +2413,13 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and 0.5 * psize < rect.x0 - above <= 3 * psize and abs(below - above) <= 0.5 * psize
             and rect.x1 >= max_x1 - 2 * psize
         )
-        # 带编号的定理、引理标签（Lemma 10.3.）总是另起一段，上一行停在式子上也一样
+        # 带编号的定理、引理标签（Lemma 10.3.）总是另起一段，上一行停在式子上也一样。
+        # 这一段也是粗体标签起头、上一行没写到右缘的，是定义列表的下一条，条目是没有句末标点的半句例句
+        # （mouse² : … a quiet animal like a mouse | bank¹ : …）
         labeled = (
             not same_visual_line and _label_lead(items[i][2])
-            and (_ends_sentence(ptext) or ptext.rstrip().endswith(")") or bool(_NUMBERED_LABEL_RE.match(stripped)))
+            and (_ends_sentence(ptext) or ptext.rstrip().endswith(")") or bool(_NUMBERED_LABEL_RE.match(stripped))
+                 or (max_x1 - prect.x1 > 3 * psize and _label_lead(items[cur[0]][2])))
         )
         if not index_tail and (value_column or i in cells or i in row_labels or (
             not same_visual_line and not sec_label and (
@@ -7940,9 +7943,12 @@ def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
                 label = (p.text.rstrip().endswith((":", "：")) and len(p.text) < 30) or _caption_label(p.text)
                 head = b.text.lstrip()[:1]
                 note = bool(head and (head.islower() or CJK_RE.search(head)) and not _caption_label(b.text))
+                # 自己也以粗体标签起头的是定义列表的下一条（mouse² : … like a mouse | bank¹ : …），不是续行
                 continuation = (len(p.text) < 60 and b.text[:1].islower()
                                 and (":" in p.text or "：" in p.text)
-                                and not _ends_sentence(p.text))
+                                and not _ends_sentence(p.text)
+                                and not (b.span_lines and _label_lead(
+                                    [span for span in b.span_lines[0] if str(span.get("text") or "").strip()])))
                 # 定义式的标签后面是一栏值：值有几行、每行都从值的左缘起笔（View ranges:  {…}, | {…}）。
                 # 并进标签的话，译文折回标签下面，栏就没了。图注标签照旧并
                 rows = _visual_lines(b) if b.line_rects else []
