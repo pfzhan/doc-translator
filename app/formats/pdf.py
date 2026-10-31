@@ -8693,6 +8693,7 @@ def _fit_typeset(
     room: float | None = None,
     left_limit: float | None = None,
     lent: bool = False,
+    hang: float = 0.0,
 ) -> tuple[list[TypesetLine], float, float, "pymupdf.Rect", list[tuple[float, float]]]:
     """放得下就按原字号排。放不下先在本栏右扩，再往下伸进空白，再压一点字距，再压行距，最后才缩字号。
     holes 是原文绕开的图，碰到它的行让到一边，另外返回这几行的缩进和宽度。
@@ -8701,7 +8702,8 @@ def _fit_typeset(
     room 是下面一块的上沿（见 _room_below）。下沿往下伸时，末行和下面一块之间留出半行，和分段的空隙一样。
     left_limit 是靠右排的块往左扩能到哪里，给了就往左扩，不往右扩。
     lent 为真时 room 是下面一段借出地方后最低的起笔（见 spare_below），它要挪到末行下面半行，
-    末行下面那截空白就不能伸过框底（见 _glyph_bottom）。"""
+    末行下面那截空白就不能伸过框底（见 _glyph_bottom）。
+    hang 是悬挂缩进（见 _hang_indent）：首行以下各行比盒子左缘缩进多少点。"""
     gap = 1.45 if cjk else 1.2
     reference = block_size * 0.88 if cjk else block_size
     box = rect
@@ -8720,6 +8722,9 @@ def _fit_typeset(
     lanes: list[tuple[float, float]] = []
     for _ in range(24):
         lanes = _hole_lanes(box, holes, em, gap)
+        wrapped = bool(lanes)
+        if hang:
+            lanes = _hang_lanes(box, lanes, hang, em, gap, len(text))
         metrics = _formula_metrics(formulas, block_size, em, reference)
         lines = typeset_lines(text, em, max(box.width, 1.0) * squeeze, metrics, [width for _, width in lanes])
         extra = line_offsets(lines, em, gap)[1]
@@ -8734,7 +8739,8 @@ def _fit_typeset(
         bottom = _glyph_bottom(box.y1, room, em, gap) if relax else box.y1
         too_tall = box.y0 + height > bottom + 1
         if not overflows and not too_tall:
-            if lower is not None and not lanes:
+            # 绕图的行按图的位置算好了，盒子不能再挪；悬挂缩进跟着盒子走
+            if lower is not None and not wrapped:
                 top, floor = lower
                 lowered = min(top, min(box.y1, floor) - height)
                 if lowered > box.y0:
@@ -8917,6 +8923,39 @@ def _hole_lanes(
     return lanes[:keep]
 
 
+# 悬挂缩进的条目起头：题号（3.1、2.）、圆点、(a) 这类编号
+_HANG_NUMBER_RE = re.compile(r"\d+(?:\.\d+)*\.?\s")
+
+
+def _hang_indent(block: TextBlock) -> float:
+    """题号、圆点顶格，下面各行都和题号后面的正文对齐（练习题 3.1 Write out …）：续行比首行缩进多少点。
+    不是这样排的块返回 0"""
+    rows = sorted(_visual_lines(block), key=lambda row: row[0].y0)
+    if len(rows) < 2:
+        return 0.0
+    first = min(rect.x0 for rect in rows[0])
+    rest = [min(rect.x0 for rect in row) for row in rows[1:]]
+    hang = min(rest) - first
+    if max(rest) - min(rest) > block.size * 0.5 or not block.size * 0.5 < hang <= block.size * 5:
+        return 0.0
+    lead = block.text.lstrip()
+    return hang if _list_item(lead) or _HANG_NUMBER_RE.match(lead) else 0.0
+
+
+def _hang_lanes(
+    box: "pymupdf.Rect", lanes: list[tuple[float, float]], hang: float, em: float, gap: float, chars: int,
+) -> list[tuple[float, float]]:
+    """悬挂缩进的各行：首行从盒子左缘写，以下各行缩进 hang，绕图的行再让开图。
+    断行前不知道有几行，每行至少一个字，按字数列满"""
+    out = []
+    for index in range(max(chars, 1)):
+        indent, width = lanes[index] if index < len(lanes) else (0.0, box.width)
+        if index and indent < hang:
+            width, indent = max(width - (hang - indent), em), hang
+        out.append((indent, width))
+    return out
+
+
 def _line_baseline(
     spans: list[dict], line_top: float, line_h: float, em: float, cjk: bool, slot_x: float | None = None,
 ) -> float:
@@ -9056,12 +9095,14 @@ def _place_plain(
     room: float | None = None,
     left_limit: float | None = None,
     lent: bool = False,
+    hang: float = 0.0,
 ) -> float | None:
     """排版器断行，再写入。中文按字形两端对齐；缺字时退回一个 HTML 盒子。
-    lower、room、left_limit、lent 见 _fit_typeset。返回末行行框的下沿，没写时返回 None。"""
+    lower、room、left_limit、lent、hang 见 _fit_typeset。返回末行行框的下沿，没写时返回 None。"""
     text = space_around_latin(separate_after_formula(text))
     lines, em, gap, box, lanes = _fit_typeset(
         text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit, holes, lower, room, left_limit, lent,
+        hang,
     )
     if box.y0 > rect.y0:
         # 起笔挪下来了，首行不再按原文第一行往上提
@@ -9179,11 +9220,13 @@ def _place_typeset(
     room: float | None = None,
     left_limit: float | None = None,
     lent: bool = False,
+    hang: float = 0.0,
 ) -> float:
-    """按行写入文字，公式槽用记录的下沿贴到该行基线。lower、room 和返回值见 _place_plain。"""
+    """按行写入文字，公式槽用记录的下沿贴到该行基线。lower、room、hang 和返回值见 _place_plain。"""
     text = space_around_latin(separate_after_formula(text))
     lines, em, gap, box, lanes = _fit_typeset(
         text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit, holes, lower, room, left_limit, lent,
+        hang,
     )
     if box.y0 > rect.y0:
         first_room = None
@@ -10848,6 +10891,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 left_limit = block.clip[0] + 0.8 if block.clip is not None else bounds.width * 0.1
             # 跨页接过来的半段按上一页的栏宽写，要让开的图可能在块的框外面
             holes = _wrap_holes(block, obstacles, rect | block.rect)
+            # 题号、圆点顶格的条目，续行照原文缩到正文的左缘。续写的后半、挪过位置的副本不按原块的行算
+            hang = (_hang_indent(block) if align == "left" and source is None and formulas is None
+                    and abs(rect.x0 - block.rect.x0) <= 1 else 0.0)
             first_room = None if pushed else _first_row_room(block, rect)
             # 从右往左仍交给 HTML 盒子。其余段落由排版器断行：有公式图时按行落位，
             # 没有公式图时写进一个锁住换行的盒子，避免一行嵌一次整套字体。
@@ -10863,14 +10909,14 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 end = _place_typeset(
                     page, doc, block_size, text, bformulas, rect, size, cjk, align, div_attrs,
                     block.color, weight, beside, limit, forms, page_spans, deferred_png,
-                    justify_last, holes, first_room, lower, room, left_limit, lent,
+                    justify_last, holes, first_room, lower, room, left_limit, lent, hang,
                 )
                 ends[id(source or block)] = (source or block, end, size)
             else:
                 end = _place_plain(
                     page, text, bformulas, rect, size, block_size, cjk, align, div_attrs,
                     block.color, weight, beside, limit, archive, justify_last, holes, first_room, lower, room,
-                    left_limit, lent,
+                    left_limit, lent, hang,
                 )
                 if end is not None:
                     ends[id(source or block)] = (source or block, end, size)

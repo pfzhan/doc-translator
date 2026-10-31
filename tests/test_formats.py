@@ -11289,6 +11289,23 @@ def test_colored_lines_under_a_bullet_stay_original():
 
 
 
+def test_a_numbered_item_with_hanging_lines_keeps_the_hang():
+    """题号顶格、下面各行和题号后的正文对齐的条目，续行按原文缩进；首行缩进的段落和不带编号的块不算。"""
+    from app.formats.pdf import TextBlock, _hang_indent, _hang_lanes
+
+    def blk(text, lefts):
+        rects = [pymupdf.Rect(x0, 170 + 12 * i, 475, 180 + 12 * i) for i, x0 in enumerate(lefts)]
+        return TextBlock(page=0, rect=pymupdf.Rect(min(lefts), 170, 475, 180 + 12 * (len(lefts) - 1)),
+                         line_rects=rects, text=text, size=10, color="#000", bold=False)
+
+    assert _hang_indent(blk("3.1 Write out the equation for trigram probability estimation", [178, 209, 209])) == 31
+    assert _hang_indent(blk("The asphalt that Los Angeles is famous for occurs mainly", [175, 160, 160])) == 0
+    assert _hang_indent(blk("tf-idf weighting of the value for word t in document d", [178, 209])) == 0
+
+    lanes = _hang_lanes(pymupdf.Rect(178, 170, 475, 220), [], 31, 8.8, 1.45, 4)
+    assert lanes[0] == (0.0, 297) and lanes[1:] == [(31, 266)] * 3
+
+
 def test_a_chinese_line_beside_its_english_rendering_is_kept_apart():
     """英文书里左栏中文原句、右栏英译排在同一行的题词：两截分开，中文原句留原文。
     中文后面按正常字距接着的西文不拆。"""
