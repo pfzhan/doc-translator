@@ -28,11 +28,46 @@ class Cache:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.execute("CREATE TABLE IF NOT EXISTS t (k TEXT PRIMARY KEY, v TEXT)")
+        # 条目属于哪些文件（文件内容的摘要）。键是哈希，看不出出自哪份文件，清理任务时按这张表删
+        self.conn.execute("CREATE TABLE IF NOT EXISTS owner (doc TEXT NOT NULL, k TEXT NOT NULL, "
+                          "PRIMARY KEY (doc, k)) WITHOUT ROWID")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS owner_k ON owner (k)")
         self.lock = threading.Lock()
 
     @staticmethod
     def _key(prefix: str, text: str) -> str:
         return hashlib.sha1(f"{prefix}\n{text}".encode()).hexdigest()
+
+    @classmethod
+    def keys(cls, prefix: str, texts) -> set[str]:
+        return {cls._key(prefix, text) for text in texts}
+
+    def claim(self, doc: str, prefix: str, texts: list[str]) -> None:
+        """登记这些条目被文件 doc 用到。写入和命中时都登记，以前存的条目用过一次也就有了归属。"""
+        if not doc or not texts:
+            return
+        with self.lock:
+            self.conn.executemany("INSERT OR IGNORE INTO owner (doc, k) VALUES (?, ?)",
+                                  [(doc, key) for key in self.keys(prefix, texts)])
+            self.conn.commit()
+
+    def owned(self, doc: str, extra: set[str] = frozenset()) -> set[str]:
+        """文件 doc 名下还在缓存里的条目。extra 是按别的线索算出来的键，只留缓存里有的。"""
+        with self.lock:
+            found = {k for (k,) in self.conn.execute(
+                "SELECT owner.k FROM owner JOIN t ON t.k = owner.k WHERE owner.doc=?", (doc,))}
+            found |= {k for k in extra - found if self.conn.execute("SELECT 1 FROM t WHERE k=?", (k,)).fetchone()}
+        return found
+
+    def purge(self, doc: str, keys: set[str]) -> int:
+        """删掉这些条目和文件 doc 的登记，返回删掉的条目数。别的文件对这些条目的登记一并删掉，不留空引用。"""
+        with self.lock:
+            rows = [(k,) for k in keys]
+            removed = self.conn.executemany("DELETE FROM t WHERE k=?", rows).rowcount
+            self.conn.executemany("DELETE FROM owner WHERE k=?", rows)
+            self.conn.execute("DELETE FROM owner WHERE doc=?", (doc,))
+            self.conn.commit()
+        return removed
 
     def get_many(self, prefix: str, texts: list[str]) -> dict[str, str]:
         out = {}
@@ -47,11 +82,10 @@ class Cache:
         """丢掉不该留下的缓存。整句英文回显下次还要再翻。"""
         if not texts:
             return
+        rows = [(self._key(prefix, text),) for text in texts]
         with self.lock:
-            self.conn.executemany(
-                "DELETE FROM t WHERE k=?",
-                [(self._key(prefix, text),) for text in texts],
-            )
+            self.conn.executemany("DELETE FROM t WHERE k=?", rows)
+            self.conn.executemany("DELETE FROM owner WHERE k=?", rows)
             self.conn.commit()
 
     def put_many(self, prefix: str, pairs: dict[str, str]):
@@ -67,6 +101,7 @@ class Cache:
                     "DELETE FROM t WHERE rowid IN (SELECT rowid FROM t ORDER BY rowid LIMIT ?)",
                     (n - self.MAX_ENTRIES + self.MAX_ENTRIES // 10,),
                 )
+                self.conn.execute("DELETE FROM owner WHERE k NOT IN (SELECT k FROM t)")
             self.conn.commit()
 
 
@@ -89,6 +124,8 @@ class Runner:
         self.translator = translator
         self.progress = progress or (lambda done, total: None)
         self.cache = cache if cache is not None else get_cache()
+        # 存取都经过它，顺带登记条目属于哪份文件
+        self.owned_cache = _OwnedCache(self.cache, lambda: self.document)
         # 已经是目标语言的段落不翻（插件的段落语言检测）
         self.skip_same_lang = skip_same_lang
         # 只排版、不请求翻译服务：缺缓存时直接失败，避免用另一套配置悄悄重译
@@ -214,7 +251,7 @@ class Runner:
         listing = "\n".join(terms)
         prefix = tr.cache_key + ":terms"
         keys = ([f"file:{self.document}"] if self.document else []) + [listing]
-        cached = {} if self.fresh else self.cache.get_many(prefix, keys)
+        cached = {} if self.fresh else self.owned_cache.get_many(prefix, keys)
         found = next((cached[key] for key in keys if key in cached), None)
         if found is None:
             if self.cache_only:
@@ -225,9 +262,9 @@ class Runner:
             except TranslatorError:
                 # 服务本身出了问题的话，接下来的翻译请求会报出来
                 return
-            self.cache.put_many(prefix, {key: found for key in keys})
+            self.owned_cache.put_many(prefix, {key: found for key in keys})
         elif keys[0] not in cached:
-            self.cache.put_many(prefix, {keys[0]: found})
+            self.owned_cache.put_many(prefix, {keys[0]: found})
         tr.doc_glossary = glossary.parse(found)
         self.info["terms"] = len(tr.doc_glossary)
 
@@ -274,11 +311,10 @@ class Runner:
         self.translator.notes = note_of
 
         def key(text: str) -> str:
-            note = note_of.get(text)
-            return f"{text}\n\n[note] {note}" if note else text
+            return noted_key(text, note_of.get(text, ""))
 
         # 翻完以后格式自己补翻的译文（见 pdf 的 _retry_lost_placeholders）也按这个键写回
-        self.keyed_cache = cache = _NotedCache(self.cache, key)
+        self.keyed_cache = cache = _NotedCache(self.owned_cache, key)
         # 术语表要在算缓存键之前定下来：它是键的一部分
         await self._prepare_glossary(need)
         prefix = self.translator.cache_key
@@ -425,6 +461,37 @@ def _batch_around(order: list[str], flagged: set[str], limit: int) -> set[str]:
                 out.add(order[other])
                 other += step
     return out
+
+
+def noted_key(text: str, note: str) -> str:
+    """缓存里按什么存这一段：带说明的段落连说明一起算，同一句在不同位置可以译得不同。"""
+    return f"{text}\n\n[note] {note}" if note else text
+
+
+class _OwnedCache:
+    """转给底下的缓存，存进去的和命中的条目登记到当前文件（doc() 是文件内容的摘要）名下。
+    底下的缓存不支持登记（测试里的内存缓存）或者不知道是哪份文件时只转发。"""
+
+    def __init__(self, cache, doc: Callable[[], str]):
+        self.cache = cache
+        self.doc = doc
+
+    def _claim(self, prefix: str, texts: list[str]) -> None:
+        claim = getattr(self.cache, "claim", None)
+        if callable(claim):
+            claim(self.doc(), prefix, texts)
+
+    def get_many(self, prefix: str, texts: list[str]) -> dict[str, str]:
+        found = self.cache.get_many(prefix, texts)
+        self._claim(prefix, list(found))
+        return found
+
+    def put_many(self, prefix: str, pairs: dict[str, str]) -> None:
+        self.cache.put_many(prefix, pairs)
+        self._claim(prefix, list(pairs))
+
+    def drop_many(self, prefix: str, texts: list[str]) -> None:
+        self.cache.drop_many(prefix, texts)
 
 
 class _NotedCache:

@@ -40,7 +40,7 @@ DAY = 24 * 3600
 class Job:
     id: str
     filename: str
-    status: str = "queued"  # queued / running / done / error / interrupted
+    status: str = "queued"  # queued / running / done / error / interrupted / paused / idle（清理后未翻译）
     done: int = 0
     total: int = 0
     error: str = ""
@@ -61,6 +61,8 @@ class Job:
     # 大模型接口返回的 token 用量，跨继续/重试累计；谷歌等接口不提供，保持 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # 原文件内容的摘要，缓存条目按它登记归属。旧记录没有，用到时再算
+    document: str = ""
 
     # 不落盘的运行时字段
     runner: object = field(default=None, repr=False, compare=False)
@@ -74,6 +76,13 @@ class Job:
             # 0 是有效的新计数（重试后全部成功），不能用 or 把 0 当成缺省
             if "failed" in info:
                 self.failed = int(info["failed"])
+
+    def clear_results(self):
+        """清理缓存后回到未翻译：译文、进度、检测结果和用量都不再对应任何缓存，一并清零。"""
+        self.status, self.error = "idle", ""
+        self.done = self.total = self.skipped = self.failed = 0
+        self.prompt_tokens = self.completion_tokens = 0
+        self.outputs, self.finished, self.detected_lang = [], 0.0, ""
 
     def to_dict(self) -> dict:
         self.sync_info()

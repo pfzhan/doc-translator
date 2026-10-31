@@ -12362,6 +12362,17 @@ def _load_plan(path: Path, key: str, src: Path, runner) -> _PdfPlan | None:
     return plan
 
 
+def saved_texts(path: Path) -> list[tuple[str, str]]:
+    """上次分析结果里送翻的 (原文, 说明)，不管代码和模型变没变。清理任务时据此找出登记归属之前存下的译文。"""
+    try:
+        with path.open("rb") as saved:
+            pickle.load(saved)
+            plan, _skipped, _kinds = pickle.loads(zlib.decompress(saved.read()))
+    except Exception:  # noqa: BLE001 - 没有、读不出或格式旧了就当没有
+        return []
+    return list(zip(plan.texts, plan.notes or [""] * len(plan.texts)))
+
+
 def _sound_colors(translation: str, sent: str) -> str:
     """模型弄乱的颜色标记整段去掉，字按块的颜色写：开收对不上，或者用了原文里没有的颜色。
     少一个 {/c}，后半段都会染上色。"""

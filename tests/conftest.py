@@ -40,7 +40,7 @@ def app_env(tmp_path, monkeypatch):
     monkeypatch.setattr(layout_model, "MODELS_DIR", tmp_path / "models")
     monkeypatch.setattr(main, "running", {})
     monkeypatch.setattr(main, "variant_tasks", {})
-    monkeypatch.setattr(main, "deleting", set())
+    monkeypatch.setattr(main, "cleaning", set())
     monkeypatch.setattr(main, "pause_requested", set())
     monkeypatch.setattr(main, "quantizers", {kind: quantize.Quantizer() for kind in main.quantizers})
     return main

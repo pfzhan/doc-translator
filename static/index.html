@@ -438,6 +438,20 @@
   </form>
 </dialog>
 
+<dialog class="dialog" id="purge-dialog" aria-labelledby="purge-title">
+  <form method="dialog">
+    <h3 id="purge-title">清理缓存</h3>
+    <p class="dialog-text" id="purge-text"></p>
+    <dl class="purge-list" id="purge-list" aria-live="polite"></dl>
+    <p class="inline-msg warn purge-shared" id="purge-shared" hidden></p>
+    <label class="check purge-boxes" id="purge-boxes-row" hidden><input type="checkbox" id="purge-boxes"> <span id="purge-boxes-text"></span></label>
+    <div class="dialog-actions">
+      <button type="submit" class="btn" value="cancel">取消</button>
+      <button type="submit" class="btn danger" value="ok" id="purge-ok">清理</button>
+    </div>
+  </form>
+</dialog>
+
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="app.js"></script>

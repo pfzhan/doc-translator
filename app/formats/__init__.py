@@ -23,12 +23,17 @@ def output_variant(name: str) -> str | None:
     return None
 
 
+def document_digest(src: Path) -> str:
+    """文件内容的摘要。术语表和缓存条目的归属都按它记，同一份文件传几次都认作一份。"""
+    return hashlib.sha1(src.read_bytes()).hexdigest()
+
+
 async def translate_file(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str,
                          layout_model: str = "", plan_path: Path | None = None,
                          formula_model: FormulaModel | None = None) -> list[Path]:
     """layout_model、formula_model 和 plan_path 只对 PDF 有用：版面模型文件的路径（空串表示不用），
     公式检测模型的设置（None 表示不用），存版面分析结果的文件（继续翻译时读回）。"""
-    runner.set_document(hashlib.sha1(src.read_bytes()).hexdigest())
+    runner.set_document(document_digest(src))
     ext = src.suffix.lower()
     if ext in (".md", ".markdown"):
         return await translate_markdown(src, out_dir, runner, bilingual)

@@ -157,6 +157,8 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 .btn.sm { height: 30px; padding: 0 10px; font-size: 13px; }
 .btn.ghost { border-color: transparent; background: none; color: var(--text-2); }
 .btn.ghost:hover { background: var(--surface-2); color: var(--text); }
+.btn.danger { background: var(--error); border-color: var(--error); color: var(--surface); }
+.btn.danger:hover { filter: brightness(0.95); }
 .btn.danger-ghost { border-color: transparent; background: none; color: var(--error); }
 .btn.danger-ghost:hover { background: var(--error-soft); }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
@@ -266,6 +268,7 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 .badge.error { color: var(--error); background: var(--error-soft); }
 .badge.interrupted { color: var(--warn); background: var(--warn-soft); }
 .badge.paused { color: var(--text-2); background: var(--surface-2); }
+.badge.idle { color: var(--muted); background: var(--surface-2); }
 .job-progress.paused > div { background: var(--muted); }
 .section-actions, .bulk-actions { display: flex; align-items: center; gap: 8px; }
 /* 左边距和记录行的勾选框对齐（行内边距 16 + 边框 1） */
@@ -427,6 +430,16 @@ body.reading .topbar { display: none; }
 .dialog h3 { margin: 0 0 8px; font-size: 16px; }
 .dialog-text { margin: 0 0 14px; color: var(--text-2); font-size: 13px; line-height: 1.6; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+/* 清理缓存的清单：左边名目，右边数量，数字等宽对齐 */
+.purge-list {
+  display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin: 0;
+  padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface-2); font-size: 13px;
+}
+.purge-list dt { color: var(--text-2); }
+.purge-list dd { margin: 0; text-align: right; color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+.purge-loading { grid-column: 1 / -1; color: var(--muted); }
+.purge-shared { margin-top: 12px; line-height: 1.6; }
+.purge-boxes { margin-top: 14px; }
 
 /* width: max-content：left: 50% 时默认按半屏宽度折行，手机上短句也会被折成两行 */
 .toast {

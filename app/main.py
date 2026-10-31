@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import history, layout_model, quantize
+from . import cleanup, history, layout_model, quantize
 from .formats import PREVIEW_FORMATS, SUPPORTED, output_variant, translate_file
 from .formats.epub import book_outline
 from .formats.pdf import mupdf_turn
@@ -23,7 +23,7 @@ from .formats.pdf_vision import FormulaModel, formula_parallel
 from .history import Job, JobStore
 from .languages import GOOGLE_CODES, LANGUAGES
 from .prompts import default_prompts
-from .runner import Runner
+from .runner import Runner, get_cache
 from .services import PROVIDERS, ServiceError, ServiceStore
 from .settings import Settings, SettingsError
 from .translators import TranslatorError, create_translator
@@ -39,8 +39,9 @@ jobs = JobStore(history.JOBS_DIR)
 running: dict[str, asyncio.Task] = {}
 # 正在补生成另一种版本的请求。删除和过期清理要等它写完，第二次请求直接拒绝。
 variant_tasks: dict[str, asyncio.Future[None]] = {}
-# 过期清理已经决定要删、还没删完的任务。补生成看到它就停，避免删目录时还在写。
-deleting: set[str] = set()
+# 正在清理的任务：过期清理已经决定要删、还没删完的，或者用户点了清理缓存、还没清完的。
+# 补生成、继续翻译看到它就拒绝，避免清理时还在写。
+cleaning: set[str] = set()
 # 用户点了暂停的任务：取消时据此把状态记成“已暂停”，而不是“已中断”
 pause_requested: set[str] = set()
 # 版面模型的下载（同一时间只有一个）
@@ -55,17 +56,18 @@ async def _cleanup() -> None:
     """删过期记录。是否在补生成只在事件循环里判断，不把那个字典交给别的线程。"""
     expired = await asyncio.to_thread(jobs.expired_ids, settings.retention_days)
     for jid in expired:
-        if jid in variant_tasks or jid in running or jid in deleting:
+        if jid in variant_tasks or jid in running or jid in cleaning:
             continue
-        deleting.add(jid)
+        cleaning.add(jid)
         # 登记和再检查之间没有 await，补生成插不进来
         if jid in variant_tasks:
-            deleting.discard(jid)
+            cleaning.discard(jid)
             continue
         try:
+            await _forget_cache(jid)
             await asyncio.to_thread(jobs.delete, jid)
         finally:
-            deleting.discard(jid)
+            cleaning.discard(jid)
 
 
 @asynccontextmanager
@@ -150,6 +152,7 @@ async def _run_job(job: Job, translator, bilingual: bool, fresh: bool = False):
         # 快照可能很大，写盘放到线程里
         await asyncio.to_thread(jobs.save_preview, job)
         job.sync_info()
+        job.document = job.runner.document or job.document
         # 释放 Runner 占用的内存；之后预览接口从 preview.json 快照读
         job.runner = None
         jobs.save(job)
@@ -199,6 +202,8 @@ def _resume(job: Job, service_id: str | None = None, fresh: bool = False) -> Job
     """继续（或重新）翻译同一个文件。已翻好的段落在缓存里，不会重复请求；fresh 为真时重新分析版面、全部重新请求。"""
     if job.status in ACTIVE:
         raise HTTPException(400, "该任务正在翻译")
+    if job.id in cleaning:
+        raise HTTPException(409, "该记录正在清理，请稍后重试")
     if not jobs.source_path(job).exists():
         raise HTTPException(400, "原文件已不存在，无法重新翻译")
     service = store.get(service_id or job.service_id)
@@ -397,12 +402,39 @@ def get_job(job_id: str):
     return _job_or_404(job_id).to_dict()
 
 
+def _service_translator(job: Job):
+    """按记录的服务现在的配置创建引擎，只用来算缓存键，不发请求。服务删了或配置无效时返回 None。"""
+    service = store.get(job.service_id)
+    if not service:
+        return None
+    try:
+        return create_translator(service, job.target_lang, job.source_lang)
+    except TranslatorError:
+        return None
+
+
+async def _forget_cache(job_id: str) -> None:
+    """删除记录前清掉这份文件的缓存（没有别的记录在用时）。清不掉不影响删除，条目等缓存满了会被挤掉。"""
+    job = jobs.get(job_id)
+    if job is None:
+        return
+    translator = _service_translator(job)
+    try:
+        await asyncio.to_thread(cleanup.forget, job, jobs, get_cache(), translator)
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+    finally:
+        if translator is not None:
+            await translator.aclose()
+
+
 async def _delete(job_id: str) -> None:
-    """删除记录，连同原文件、译文和预览。正在翻译的会先停止；正在补生成的等它写完再删。"""
+    """删除记录，连同原文件、译文、预览和这份文件的缓存。正在翻译的会先停止；正在补生成的等它写完再删。"""
     await _cancel(job_id)
     task = variant_tasks.get(job_id)
     if task is not None and task is not asyncio.current_task() and not task.done():
         await asyncio.gather(task, return_exceptions=True)
+    await _forget_cache(job_id)
     jobs.delete(job_id)
 
 
@@ -427,6 +459,51 @@ async def delete_jobs(data: dict = Body(...)):
         await _delete(job_id)
         deleted += 1
     return {"deleted": deleted, "missing": missing}
+
+
+def _check_idle(job: Job) -> None:
+    """清理缓存前确认记录没有在翻译、补生成或清理。"""
+    if job.status in ACTIVE:
+        raise HTTPException(409, "该任务正在翻译，请先暂停")
+    if job.id in variant_tasks:
+        raise HTTPException(409, "正在生成另一种版本，请稍候")
+    if job.id in cleaning:
+        raise HTTPException(409, "该记录正在清理，请稍后重试")
+
+
+@app.get("/api/jobs/{job_id}/cache")
+async def get_job_cache(job_id: str):
+    """清理前列出会清掉什么：缓存条目数、译文文件数、生成文件和版面识别结果的大小、共用同一文件的记录数。"""
+    job = _job_or_404(job_id)
+    translator = _service_translator(job)
+    try:
+        found = await asyncio.to_thread(cleanup.footprint, job, jobs, get_cache(), translator)
+    finally:
+        if translator is not None:
+            await translator.aclose()
+    return found.summary(len(job.outputs))
+
+
+@app.delete("/api/jobs/{job_id}/cache")
+async def clear_job_cache(job_id: str, boxes: bool = False):
+    """清理记录留下的缓存痕迹，记录回到未翻译。boxes=true 时连版面模型的识别结果一起清。"""
+    job = _job_or_404(job_id)
+    _check_idle(job)
+    # 登记和检查之间没有 await，继续翻译、补生成插不进来
+    cleaning.add(job.id)
+    translator = None
+    try:
+        translator = _service_translator(job)
+        removed = await asyncio.to_thread(cleanup.purge, job, jobs, get_cache(), translator, boxes)
+        if jobs.get(job.id) is None:
+            raise HTTPException(404, "翻译记录不存在")
+        job.clear_results()
+        jobs.save(job)
+    finally:
+        cleaning.discard(job.id)
+        if translator is not None:
+            await translator.aclose()
+    return {**job.to_dict(), "removed": removed}
 
 
 @app.post("/api/jobs/pause-all")
@@ -496,7 +573,7 @@ async def build_variant(job_id: str):
     want = "bilingual" if bilingual else "translated"
     if any(output_variant(name) == want for name in job.outputs):
         return job.to_dict()  # 已经生成过
-    if job.id in deleting:
+    if job.id in cleaning:
         raise HTTPException(409, "该记录正在清理，请稍后重试")
     if job.id in variant_tasks:
         raise HTTPException(409, "正在生成另一种版本，请稍候")

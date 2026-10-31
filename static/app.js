@@ -689,7 +689,9 @@ form.addEventListener("submit", async (e) => {
 // ---------- 翻译记录 ----------
 // 记录存在服务端磁盘上：刷新页面、换书、重启服务都不会丢，只有手动删除或超过保留时间才会删
 
-const STATUS_TEXT = { queued: "排队中", running: "翻译中", done: "已完成", error: "失败", interrupted: "已中断", paused: "已暂停" };
+const STATUS_TEXT = {
+  queued: "排队中", running: "翻译中", done: "已完成", error: "失败", interrupted: "已中断", paused: "已暂停", idle: "未翻译",
+};
 // 可以“继续翻译”的状态：已翻好的段落在缓存里，继续时直接复用
 const RESUMABLE = new Set(["paused", "interrupted"]);
 const ACTIVE = new Set(["queued", "running"]);
@@ -920,6 +922,8 @@ function jobRow(job, selectable = false) {
     const err = el("span", `job-error ${job.status}`, explainError(job.error));
     err.title = job.error; // 鼠标悬停看原始错误
     status.append(err);
+  } else if (job.status === "idle") {
+    status.append(el("span", "hint", ["缓存已清理", expiryText(job)].filter(Boolean).join(" · ")));
   } else {
     const parts = [job.total ? `${job.total} 段` : ""];
     if (job.skipped) parts.push(`${job.skipped} 段无需翻译`);
@@ -936,7 +940,7 @@ function jobRow(job, selectable = false) {
   li.append(main, status);
 
   const actions = el("div", "job-actions");
-  if (job.preview && (job.status !== "error" || job.done)) {
+  if (job.preview && job.status !== "idle" && (job.status !== "error" || job.done)) {
     const read = el("button", "btn sm", ACTIVE.has(job.status) ? "查看进度" : "阅读");
     read.type = "button";
     read.addEventListener("click", () => openReader(job.id));
@@ -960,17 +964,26 @@ function jobRow(job, selectable = false) {
     pause.type = "button";
     pause.addEventListener("click", () => pauseJob(job.id, pause));
     actions.append(pause);
+  } else if (job.status === "idle") {
+    const start = el("button", "btn sm soft", "开始翻译");
+    start.type = "button";
+    start.addEventListener("click", () => retryJob(job.id));
+    actions.append(start);
   } else if (RESUMABLE.has(job.status) || job.status === "error") {
     const retry = el("button", "btn sm", job.status === "error" ? "重试" : "继续翻译");
     retry.type = "button";
     retry.addEventListener("click", () => retryJob(job.id));
     actions.append(retry);
   }
-  if (!ACTIVE.has(job.status)) {
+  if (!ACTIVE.has(job.status) && job.status !== "idle") {
     const redo = el("button", "btn sm", "重译");
     redo.type = "button";
     redo.addEventListener("click", () => redoJob(job));
-    actions.append(redo);
+    const purge = el("button", "btn sm ghost", "清理缓存");
+    purge.type = "button";
+    purge.title = "清除这条记录的翻译缓存和生成结果，记录保留";
+    purge.addEventListener("click", () => purgeJob(job));
+    actions.append(redo, purge);
   }
   const del = el("button", "btn sm ghost", "删除");
   del.type = "button";
@@ -1234,6 +1247,66 @@ function redoJob(job) {
     if (dialog.returnValue === "ok") retryJob(job.id, { fresh: $("redo-fresh").checked });
   }, { once: true });
   dialog.showModal();
+}
+
+// 清理缓存：先向服务端要一份清单（缓存条数、文件大小、共用同一文件的记录），确认后再清
+async function purgeJob(job) {
+  const dialog = $("purge-dialog");
+  const list = $("purge-list");
+  const ok = $("purge-ok");
+  $("purge-text").textContent =
+    `「${job.filename}」的翻译缓存和生成结果将被清除，记录保留并回到“未翻译”。之后重新翻译时，所有段落都会重新请求翻译服务。`;
+  list.replaceChildren(el("div", "purge-loading", "正在统计…"));
+  $("purge-shared").hidden = true;
+  $("purge-boxes-row").hidden = true;
+  $("purge-boxes").checked = false;
+  $("purge-boxes").onchange = null;
+  ok.disabled = true;
+  dialog.returnValue = "";
+  dialog.addEventListener("close", () => {
+    if (dialog.returnValue === "ok") clearJobCache(job, $("purge-boxes").checked);
+  }, { once: true });
+  dialog.showModal();
+
+  let info;
+  try {
+    info = await api(`/api/jobs/${job.id}/cache`);
+  } catch (err) {
+    list.replaceChildren(el("div", "purge-loading", `无法统计：${err.message}`));
+    return;
+  }
+  if (!dialog.open) return;
+  const rows = [
+    ["缓存的译文", info.entries ? `${info.entries.toLocaleString()} 条` : "无"],
+    ["生成的文件", info.generated_bytes
+      ? [info.outputs ? `译文 ${info.outputs} 个` : "", `共 ${formatSize(info.generated_bytes)}`].filter(Boolean).join(" · ")
+      : "无"],
+  ];
+  list.replaceChildren(...rows.flatMap(([k, v]) => [el("dt", "", k), el("dd", "", v)]));
+  if (info.shared) {
+    $("purge-shared").textContent = `另有 ${info.shared} 条记录使用同一文件，它们共用这份缓存，之后重译也需要重新请求翻译服务。`;
+    $("purge-shared").hidden = false;
+  }
+  if (info.boxes_bytes) {
+    $("purge-boxes-text").textContent = `同时清除版面识别结果（${formatSize(info.boxes_bytes)}），重新识别需要几分钟`;
+    $("purge-boxes-row").hidden = false;
+  }
+  const empty = () => !info.entries && !info.generated_bytes && !$("purge-boxes").checked;
+  ok.disabled = empty();
+  $("purge-boxes").onchange = () => (ok.disabled = empty());
+}
+
+async function clearJobCache(job, boxes) {
+  try {
+    const result = await api(`/api/jobs/${job.id}/cache${boxes ? "?boxes=true" : ""}`, { method: "DELETE" });
+    const { removed, ...updated } = result;
+    if (reader.jobId === job.id) closeReader();
+    upsertJob(updated);
+    toast(removed ? `已清理 ${removed.toLocaleString()} 条缓存` : "已清理");
+  } catch (err) {
+    toast(`清理失败：${err.message}`);
+    refreshJobs();
+  }
 }
 
 // 保留时间
