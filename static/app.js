@@ -861,36 +861,73 @@ function menuButton(label, cls, items, ariaLabel) {
 
 // ---------- 下载 ----------
 
-const VARIANT_NAMES = { bilingual: "双语对照", translated: "仅译文" };
+const VARIANT_NAMES = { bilingual: "双语", translated: "译文" };
 
-// 下载菜单：每个译文文件一组（当前模式的版本在前），PDF、EPUB 能在新标签页预览；
-// 另一种版本还没生成的，给一项“生成并下载”（服务端按缓存重新排版，几秒）。没有可下载的返回 null
-function downloadMenu(job, cls) {
-  if (!job.outputs.length) return null;
-  return menuButton("下载", `${cls} has-caret`, () => downloadItems(job));
+// 当前模式对应的译文文件：下载按钮直接下的就是它
+function currentOutput(job) {
+  const current = job.mode === "bilingual" ? "bilingual" : "translated";
+  return job.outputs.find((o) => outputVariant(o.name) === current) || job.outputs[0] || null;
 }
 
-function downloadItems(job) {
-  const current = job.mode === "bilingual" ? "bilingual" : "translated";
-  const outputs = [...job.outputs].sort((a, b) => (outputVariant(b.name) === current) - (outputVariant(a.name) === current));
+// 同一版本有多个格式（MOBI 任务的 EPUB+MOBI）时文字带上格式名
+function outputLabel(job, o) {
+  const variant = outputVariant(o.name);
+  const formats = job.outputs.filter((x) => outputVariant(x.name) === variant).length;
+  return `${VARIANT_NAMES[variant] || ""}${formats > 1 ? ` ${fmtOf(o.name).toUpperCase()}` : ""}`;
+}
+
+// PDF 用浏览器自带的阅读器，EPUB 用 epub.html 逐章显示；别的格式不能预览
+function previewHref(job, o) {
+  const fmt = fmtOf(o.name);
+  if (fmt === "pdf") return `${o.url}?inline=1`;
+  if (fmt === "epub") return `epub.html?${new URLSearchParams({ job: job.id, file: o.name })}`;
+  return null;
+}
+
+// 在新标签页打开当前版本的译文文件
+function previewButton(job, cls) {
+  const o = currentOutput(job);
+  const href = o && previewHref(job, o);
+  if (!href) return null;
+  const a = el("a", cls, "预览");
+  a.href = href;
+  a.target = "_blank";
+  a.rel = "noopener";
+  a.title = `在新标签页打开 ${o.name}`;
+  return a;
+}
+
+// 下载是拆分按钮：左边一点就下当前版本，右边的箭头展开其余文件和另一种版本。
+// 没有其余选项时只有左边一个按钮。没有可下载的返回 null
+function downloadButton(job, cls) {
+  const main = currentOutput(job);
+  if (!main) return null;
+  const a = el("a", cls, `下载${outputLabel(job, main)}`);
+  a.href = main.url;
+  a.download = main.name;
+  a.title = main.name;
+  if (!otherDownloads(job, main).length) return a;
+  const group = el("div", "split");
+  group.append(a, menuButton("", `${cls} split-caret`, () => otherDownloads(job, main), "更多下载选项"));
+  return group;
+}
+
+function otherDownloads(job, main) {
   const items = [];
-  for (const o of outputs) {
-    const fmt = fmtOf(o.name);
-    const name = VARIANT_NAMES[outputVariant(o.name)];
-    if (items.length) items.push("sep");
-    items.push({ heading: name ? `${name} · ${fmt.toUpperCase()}` : o.name });
-    if (fmt === "pdf" || fmt === "epub") {
-      const href = fmt === "pdf" ? `${o.url}?inline=1` : `epub.html?${new URLSearchParams({ job: job.id, file: o.name })}`;
-      items.push({ label: "预览", hint: "新标签页", href, newTab: true });
-    }
-    items.push({ label: "下载", href: o.url, download: o.name });
+  for (const o of job.outputs) {
+    if (o === main || o.name === main.name) continue;
+    const label = outputLabel(job, o);
+    items.push({ label: `下载${label}`, href: o.url, download: o.name });
+    const href = previewHref(job, o);
+    if (href) items.push({ label: `预览${label}`, hint: "新标签页", href, newTab: true });
   }
+  const current = job.mode === "bilingual" ? "bilingual" : "translated";
   const other = current === "bilingual" ? "translated" : "bilingual";
   if (job.status === "done" && !job.outputs.some((o) => outputVariant(o.name) === other)) {
     const busy = variantInflight.has(job.id);
-    items.push("sep", { heading: VARIANT_NAMES[other] }, {
-      label: busy ? "生成中…" : "生成并下载", hint: busy ? "" : "约需几秒", disabled: busy,
-      onSelect: () => generateVariant(job, other),
+    items.push({
+      label: busy ? `正在生成${VARIANT_NAMES[other]}…` : `生成并下载${VARIANT_NAMES[other]}`,
+      hint: busy ? "" : "约需几秒", disabled: busy, onSelect: () => generateVariant(job, other),
     });
   }
   return items;
@@ -926,14 +963,11 @@ async function generateVariant(job, marker) {
   }
 }
 
-// 低频和会丢东西的操作收进“更多”：重译、清理缓存、删除。删除放最后，和上面隔开
+// 不常用、会丢东西的操作收进“更多”：清理缓存、删除。删除放最后，和上面隔开
 function moreMenu(job) {
   return menuButton("⋯", "btn sm ghost more", () => {
     const items = [];
-    if (!ACTIVE.has(job.status) && job.status !== "idle") {
-      items.push({ label: "重译…", onSelect: () => redoJob(job) });
-      items.push({ label: "清理缓存…", onSelect: () => purgeJob(job) }, "sep");
-    }
+    if (!ACTIVE.has(job.status) && job.status !== "idle") items.push({ label: "清理缓存…", onSelect: () => purgeJob(job) }, "sep");
     items.push({ label: "删除", danger: true, onSelect: () => deleteJob(job) });
     return items;
   }, "更多操作");
@@ -1067,7 +1101,8 @@ function jobRow(job, selectable = false) {
   // 状态单独一列，宽屏时放在信息和按钮中间，窄了再落到信息下面
   li.append(main, status);
 
-  // 每条记录最多三个按钮：次要操作、主操作、更多。主操作用浅色强调，紧挨着“更多”
+  // 常用操作一次点击：阅读、预览、下载（拆分按钮）、继续或重试、重译；
+  // 清理缓存和删除收进“更多”。主操作用浅色强调
   const actions = el("div", "job-actions");
   const button = (label, cls, onClick) => {
     const b = el("button", cls, label);
@@ -1079,15 +1114,16 @@ function jobRow(job, selectable = false) {
   if (ACTIVE.has(job.status)) {
     if (job.preview) actions.append(button("查看进度", "btn sm", () => openReader(job.id)));
     actions.append(button("暂停", "btn sm", (b) => pauseJob(job.id, b)));
-  } else if (job.status === "done") {
-    if (readable) actions.append(button("阅读", "btn sm", () => openReader(job.id)));
-    const download = downloadMenu(job, "btn sm soft");
-    if (download) actions.append(download);
   } else if (job.status === "idle") {
     actions.append(button("开始翻译", "btn sm soft", () => retryJob(job.id)));
   } else {
     if (readable) actions.append(button("阅读", "btn sm", () => openReader(job.id)));
-    actions.append(button(job.status === "error" ? "重试" : "继续翻译", "btn sm soft", () => retryJob(job.id)));
+    if (job.status === "done") {
+      actions.append(...[previewButton(job, "btn sm"), downloadButton(job, "btn sm soft")].filter(Boolean));
+    } else {
+      actions.append(button(job.status === "error" ? "重试" : "继续翻译", "btn sm soft", () => retryJob(job.id)));
+    }
+    actions.append(button("重译", "btn sm", () => redoJob(job)));
   }
   actions.append(moreMenu(job));
   li.append(actions);
@@ -1599,8 +1635,7 @@ function renderReaderBar(job) {
     pause.addEventListener("click", () => pauseJob(job.id, pause));
     actions.append(pause);
   }
-  const download = downloadMenu(job, "btn primary sm");
-  if (download) downloads.append(download);
+  downloads.append(...[previewButton(job, "btn sm"), downloadButton(job, "btn primary sm")].filter(Boolean));
 }
 
 // 把接口返回的原始错误整理成一句人话；原文放在“详细信息”里，排查时还能看到
