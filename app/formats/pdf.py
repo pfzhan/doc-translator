@@ -1333,6 +1333,8 @@ def _left_to_right(items: list[tuple]) -> list[tuple]:
 
 # 行尾的点线和页码：至少四个点（点之间可以有空格），后面是阿拉伯数字或罗马数字页码
 _LEADER_RE = re.compile(r"(?:[.·…]\s*){4,}([0-9]{1,4}|[ivxlcdm]{1,7})\s*$", re.I)
+# 目录页上标题长、排到页码跟前时，点线只剩两三个点，点之间隔着空格
+_SHORT_LEADER_RE = re.compile(r"\s(?:[.·…]\s+){2,3}([0-9]{1,4}|[ivxlcdm]{1,7})\s*$", re.I)
 _PAGE_NUMBER_RE = re.compile(r"\s*([0-9]{1,4}|[ivxlcdm]{1,7})\s*", re.I)
 _LEADER_DOTS_RE = re.compile(r"[\s.·…]*[.·…][\s.·…]*")
 
@@ -1763,12 +1765,15 @@ def _cut_leaders(items: list[tuple], toc_page: bool = False) -> tuple[list[tuple
 
 
 def _leader_start(pieces: list[tuple[int, dict]], text: str, toc_page: bool) -> int | None:
-    """点线开始的字位置。目录页上没有点线时，看最后一截是不是隔得很远的页码。"""
+    """点线开始的字位置。目录页上点线可以只有两三个点；没有点线时，看最后一截是不是隔得很远的页码。"""
     found = _LEADER_RE.search(text)
     if found is not None:
         return found.start()
     if not toc_page:
         return None
+    found = _SHORT_LEADER_RE.search(text)
+    if found is not None:
+        return found.start()
     visible = [(offset, span) for offset, span in _span_offsets(pieces) if str(span["text"]).strip()]
     if len(visible) < 2:
         return None

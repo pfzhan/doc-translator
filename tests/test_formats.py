@@ -9263,6 +9263,29 @@ def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path):
             assert dots and dots[0]["bbox"][0] - title["bbox"][2] < 8
 
 
+def test_a_long_toc_title_with_two_leader_dots_keeps_its_page_number():
+    """标题长、排到页码跟前时点线只剩两个点。目录页上照样把点线和页码切下来，页码留在原处。
+    别的页上这样的行不动。"""
+    from app.formats.pdf import _cut_leaders
+
+    def span(text, x0, x1, y=278.7):
+        return {"text": text, "size": 10.0, "bbox": (x0, y, x1, y + 12), "origin": (x0, y + 9.5), "color": 0}
+
+    parts = [
+        ("Fine-Tuning for Sequence Labeling:", 203.0, 347.9), (" ", 347.9, 350.9),
+        ("Named Entity Recognition", 350.9, 457.8), (" ", 457.8, 461.6), (".", 461.6, 464.1),
+        (" ", 464.1, 469.0), (".", 469.0, 471.5), (" ", 471.5, 478.3), ("238", 478.3, 493.2),
+    ]
+    spans = [span(*part) for part in parts]
+    item = ("".join(part[0] for part in parts), pymupdf.Rect(203.0, 278.7, 493.2, 290.7),
+            [one for one in spans if one["text"].strip()], spans)
+    [cut], leaders = _cut_leaders([item], toc_page=True)
+    assert cut[0].rstrip() == "Fine-Tuning for Sequence Labeling: Named Entity Recognition"
+    assert leaders[0].number.x0 == 478.3 and leaders[0].pitch > 0
+    [kept], leaders = _cut_leaders([item])
+    assert kept[0] == item[0] and not leaders
+
+
 def _glyph(text, font, size, flags, bbox, ink, math=False):
     span = {"text": text, "font": font, "size": size, "flags": flags, "bbox": bbox, "ink": ink,
             "origin": (bbox[0], ink[3])}
