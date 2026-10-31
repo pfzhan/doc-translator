@@ -242,6 +242,30 @@ def test_variant_generates_other_mode(app_env):
         MockTranslator.translate_batch = original
 
 
+def test_pdf_translated_variant_is_cut_from_the_bilingual_output(app_env, monkeypatch):
+    """PDF 的仅译文版从已有的双语版里取，不重新排版。"""
+    import pymupdf
+
+    main = app_env
+    doc = pymupdf.open()
+    doc.new_page(width=420, height=240).insert_text(
+        (40, 60), "A body paragraph long enough to be translated here.", fontsize=10,
+    )
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client, name="paper.pdf", data=doc.tobytes())["id"])
+        assert job["status"] == "done"
+
+        async def no_render(*args: object, **kwargs: object) -> list[object]:
+            raise AssertionError("不该重新排版")
+
+        monkeypatch.setattr(main, "translate_file", no_render)
+        again = client.post(f"/api/jobs/{job['id']}/variant")
+        assert again.status_code == 200, again.text
+        url = next(o["url"] for o in again.json()["outputs"] if o["name"] == "paper.translated.pdf")
+        page = pymupdf.open("pdf", client.get(url).content)[0]
+        assert page.rect == pymupdf.Rect(0, 0, 420, 240) and "[zh-CN]" in page.get_text()
+
+
 def test_variant_refuses_cache_miss_and_closes_client(app_env):
     """缓存对不上时不要在这次请求里重译，并且无论成败都关掉翻译客户端。"""
     main = app_env

@@ -2775,6 +2775,40 @@ def test_pdf_biblio_skips_on_attention_paper():
     assert not any(skips[viz + 1:])
 
 
+def test_translated_version_cut_from_the_bilingual_one_matches_a_fresh_render(tmp_path):
+    """仅译文版从双语版里取：文字、链接、页码标签和重新排出来的一样。有转过的页就取不了，交给重新排版。"""
+    from app.formats.pdf import translate_pdf, translated_from_bilingual
+
+    doc = pymupdf.open()
+    for n in range(2):
+        doc.new_page(width=420, height=240).insert_text(
+            (40, 60), f"A body paragraph long enough to be translated on page {n + 1}.", fontsize=10,
+        )
+    doc[0].insert_link({"kind": pymupdf.LINK_GOTO, "from": pymupdf.Rect(40, 50, 200, 62), "page": 1,
+                        "to": pymupdf.Point(0, 0)})
+    doc.set_page_labels([{"startpage": 0, "prefix": "A-", "style": "D", "firstpagenum": 1}])
+    src = tmp_path / "paper.pdf"
+    doc.save(src)
+    (tmp_path / "b").mkdir()
+    (tmp_path / "t").mkdir()
+    [both] = run(translate_pdf(src, tmp_path / "b", runner(), True, "zh-CN"))
+    [alone] = run(translate_pdf(src, tmp_path / "t", runner(), False, "zh-CN"))
+    data = translated_from_bilingual(src, both)
+    assert data is not None
+    cut, fresh = pymupdf.open("pdf", data), pymupdf.open(alone)
+    assert len(cut) == len(fresh) == 2 and "[zh-CN]" in cut[0].get_text()
+    for a, b in zip(cut, fresh):
+        assert a.rect == b.rect and a.get_text() == b.get_text()
+        assert [(link["from"], link.get("page")) for link in a.get_links()] == [
+            (link["from"], link.get("page")) for link in b.get_links()]
+        assert a.get_pixmap(dpi=50).samples == b.get_pixmap(dpi=50).samples
+    assert cut[0].get_links() and cut.get_page_labels() == fresh.get_page_labels()
+
+    doc[1].set_rotation(90)
+    doc.save(tmp_path / "turned.pdf")
+    assert translated_from_bilingual(tmp_path / "turned.pdf", both) is None
+
+
 def test_skipped_bibliography_keeps_hanging_indent(tmp_path):
     """跳过的引文留在原页。刊名斜体不能触发擦除重排，否则悬挂缩进和行尾断词会丢。"""
     from app.formats.pdf import translate_pdf

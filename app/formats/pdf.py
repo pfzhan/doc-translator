@@ -11516,6 +11516,59 @@ def _render_side_by_side(src: pymupdf.Document, translated: pymupdf.Document) ->
     return out
 
 
+def translated_from_bilingual(src: Path, bilingual: Path) -> bytes | None:
+    """从双语版取出右半边的译文页，换进原书的副本，得到仅译文版，几秒就好。
+
+    重新排版一本书要几分钟。原书副本里链接、命名目标、页码标签、书签和元数据都在，
+    和重新排出来的一样。页面转过、页面框不从原点起、带裁剪框，或译文页和原页大小不同时返回 None，
+    交给重新排版。"""
+    src_doc, both = pymupdf.open(src), pymupdf.open(bilingual)
+    if len(src_doc) != len(both):
+        return None
+    forms = []
+    for page, side in zip(src_doc, both):
+        box = page.mediabox
+        if (page.rotation or box.x0 or box.y0 or page.cropbox != box
+                or abs(side.rect.width - 2 * box.width) > 0.01 or abs(side.rect.height - box.height) > 0.01):
+            return None
+        form = _translated_form(both, side, box)
+        if form is None:
+            return None
+        forms.append(form)
+    # 并排页只留译文那一半：页面框挪到右半边，内容只画译文页。资源和内容流可能被合并成几页共用，换成新的
+    shown = both.get_new_xref()
+    both.update_object(shown, "<<>>")
+    both.update_stream(shown, b"q /T Do Q")
+    for page, side, form in zip(src_doc, both, forms):
+        both.xref_set_key(side.xref, "Resources", f"<</XObject<</T {form} 0 R>>>>")
+        both.xref_set_key(side.xref, "Contents", f"{shown} 0 R")
+        side.set_mediabox(pymupdf.Rect(page.rect.width, 0, 2 * page.rect.width, page.rect.height))
+    blank = src_doc.get_new_xref()
+    src_doc.update_object(blank, "<<>>")
+    src_doc.update_stream(blank, b"")
+    for i, page in enumerate(src_doc):
+        src_doc.xref_set_key(page.xref, "Resources", "<<>>")
+        src_doc.xref_set_key(page.xref, "Contents", f"{blank} 0 R")
+        page.show_pdf_page(page.rect, both, i)
+    # 双语版已经合并、子集化过，这里只丢掉原书用不到的对象。garbage=3 再比一遍重复对象，一本书要一分钟
+    return src_doc.tobytes(garbage=2, deflate=True)
+
+
+def _translated_form(doc: pymupdf.Document, page: pymupdf.Page, box: pymupdf.Rect) -> int | None:
+    """并排页上画译文页的 Form XObject：show_pdf_page 平移到右半边、和原页一样大的那个。"""
+    kind, value = doc.xref_get_key(page.xref, "Resources/XObject")
+    if kind != "dict":
+        return None
+    found = []
+    for xref in map(int, re.findall(r"(\d+) 0 R", value)):
+        matrix = [float(v) for v in doc.xref_get_key(xref, "Matrix")[1].strip("[]").split()]
+        bbox = [float(v) for v in doc.xref_get_key(xref, "BBox")[1].strip("[]").split()]
+        if (len(matrix) == 6 and len(bbox) == 4 and matrix[:4] == [1, 0, 0, 1] and abs(matrix[4] - box.width) < 0.01
+                and matrix[5] == 0 and all(abs(a - b) < 0.01 for a, b in zip(bbox, box))):
+            found.append(xref)
+    return found[0] if len(found) == 1 else None
+
+
 _BIBLIO_CITE_RE = re.compile(r"\((?:19|20)\d{2}\)|et al\.|doi:|https?://", re.I)
 # 行尾 “, 2016.” 在正文里太常见。确认进入时必须同时是编号条目，或带 arXiv/CoRR/doi。
 _BIBLIO_YEAR_END_RE = re.compile(r",\s*(?:19|20)\d{2}\s*[.]?\s*$")

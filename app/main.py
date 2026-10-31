@@ -19,7 +19,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import cleanup, history, layout_model, quantize
 from .formats import PREVIEW_FORMATS, SUPPORTED, output_variant, translate_file
 from .formats.epub import book_outline
-from .formats.pdf import mupdf_turn
+from .formats.pdf import mupdf_turn, translated_from_bilingual
 from .formats.pdf_vision import FormulaModel, formula_parallel
 from .history import Job, JobStore
 from .languages import GOOGLE_CODES, LANGUAGES
@@ -581,9 +581,27 @@ def _variant_service(job: Job, service: dict) -> dict:
     return pinned
 
 
+async def _cut_from_bilingual(job: Job, stage: Path) -> list[Path] | None:
+    """PDF 已经有双语版时，仅译文版直接从里面取，不重新排版。取不了返回 None。"""
+    src = jobs.source_path(job)
+    made = next((name for name in job.outputs if output_variant(name) == "bilingual"), None)
+    if src.suffix.lower() != ".pdf" or made is None or not (jobs.out_dir(job.id) / made).is_file():
+        return None
+    try:
+        async with mupdf_turn():
+            data = await asyncio.to_thread(translated_from_bilingual, src, jobs.out_dir(job.id) / made)
+    except (RuntimeError, ValueError):  # 双语版读不出来，重新排版
+        return None
+    if data is None:
+        return None
+    dst = stage / f"{src.stem}.translated.pdf"
+    await asyncio.to_thread(dst.write_bytes, data)
+    return [dst]
+
+
 @app.post("/api/jobs/{job_id}/variant")
 async def build_variant(job_id: str):
-    """生成另一种版本（双语 ⇄ 仅译文）。只按当时的缓存重新排版，不请求翻译服务。"""
+    """生成另一种版本（双语 ⇄ 仅译文）。PDF 的仅译文版从双语版里取，其余按当时的缓存重新排版，不请求翻译服务。"""
     job = _job_or_404(job_id)
     if job.status != "done":
         raise HTTPException(400, "翻译完成后才能生成另一种版本")
@@ -605,21 +623,23 @@ async def build_variant(job_id: str):
     try:
         if not jobs.source_path(job).exists():
             raise HTTPException(400, "原文件已不存在，无法生成")
-        service = store.get(job.service_id)
-        if not service:
-            raise HTTPException(400, "原翻译服务已不存在，无法生成")
-        translator = _make_translator(job, _variant_service(job, service))
         if stage.exists():
             shutil.rmtree(stage)
         stage.mkdir(parents=True)
-        try:
-            outputs = await translate_file(
-                jobs.source_path(job), stage, Runner(translator, cache_only=True), bilingual, job.target_lang,
-                layout_model=_model_path("layout"), plan_path=jobs.plan_path(job),
-                formula_model=_formula_model(),
-            )
-        except (TranslatorError, ValueError) as e:
-            raise HTTPException(400, str(e))
+        outputs = await _cut_from_bilingual(job, stage) if want == "translated" else None
+        if outputs is None:
+            service = store.get(job.service_id)
+            if not service:
+                raise HTTPException(400, "原翻译服务已不存在，无法生成")
+            translator = _make_translator(job, _variant_service(job, service))
+            try:
+                outputs = await translate_file(
+                    jobs.source_path(job), stage, Runner(translator, cache_only=True), bilingual, job.target_lang,
+                    layout_model=_model_path("layout"), plan_path=jobs.plan_path(job),
+                    formula_model=_formula_model(),
+                )
+            except (TranslatorError, ValueError) as e:
+                raise HTTPException(400, str(e))
         current = jobs.get(job.id)
         if current is None or not jobs.dir(job.id).exists():
             raise HTTPException(404, "翻译记录不存在")
