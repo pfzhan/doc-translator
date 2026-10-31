@@ -4,7 +4,7 @@ import string
 import pymupdf
 
 from app.formats.pdf import extract_blocks
-from app.formats.pdf_frame import FrameLine, margin_notes, note_groups, text_frames
+from app.formats.pdf_frame import FrameLine, margin_notes, note_groups, note_pitch, text_frames
 
 _LINE = "a body line of running text that is long enough to vote"
 # 正文每行的字都不同；各页同一高度、同一句话的是页眉
@@ -85,6 +85,22 @@ def test_two_line_note_is_one_note_and_neighbours_stay_apart():
         FrameLine(pymupdf.Rect(91, 673, 146, 680), "Heaps' Law", 7.2),
     ]
     assert note_groups(lines) == [[0, 1], [2], [3]]
+
+
+def test_stacked_notes_split_where_the_pitch_is_off():
+    """正文同一行引出两个术语，两条旁注上下挨着排：AED 下面多出一截才是 listen attend / and spell，
+    vector / semantics 和 representation / learning 叠得比行距还紧。同一条里的行距和全文的一样"""
+    def note(y0, text):
+        return FrameLine(pymupdf.Rect(110, y0, 146, y0 + 9.4), text, 7.2)
+
+    regular = [[note(100 + 30 * i, "regular"), note(106.5 + 30 * i, "expressions")] for i in range(12)]
+    pitches = note_pitch(regular, [{0, 1}] * len(regular))
+    assert pitches == {7.2: 6.5}
+    stacked = [note(290.9, "AED"), note(298.9, "listen attend"), note(305.3, "and spell")]
+    assert note_groups(stacked, pitches) == [[0], [1, 2]]
+    tight = [note(636.5, "vector"), note(643.0, "semantics"), note(647.8, "representation"), note(654.3, "learning")]
+    assert note_groups(tight, pitches) == [[0, 1], [2, 3]]
+    assert note_groups(tight) == [[0, 1, 2, 3]]
 
 
 def test_margin_note_on_a_body_line_is_split_off():

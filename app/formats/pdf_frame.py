@@ -29,6 +29,8 @@ _NOTE_SMALL = 0.9     # 旁注字号不超过正文的这个比例
 _LANE_ALIGN = 1.5
 _LANE_MIN = 3         # 同一条边上至少这么多条旁注
 _NOTE_SYMBOL_CHARS = 3  # 和正文一样大的旁注最多这么几个字（ŷ 提出来是 ˆ 和 y 两个字）
+_PITCH_TOL = 0.1      # 旁注里行距和全文的偏开这个比例，是两条旁注的分界
+_PITCH_MIN = 10       # 全文同一字号的旁注至少有这么多处行距，才拿来比
 
 
 @dataclass(frozen=True)
@@ -151,9 +153,51 @@ def margin_notes(pages: Sequence[Sequence[FrameLine]], frames: Sequence[TextFram
     return found
 
 
-def note_groups(lines: Sequence[FrameLine]) -> list[list[int]]:
+def note_pitch(pages: Sequence[Sequence[FrameLine]], notes: Sequence[set[int]]) -> dict[float, float]:
+    """全文旁注里同一条的行距，按字号分开记。见 note_groups。"""
+    counters: dict[float, Counter[float]] = {}
+    for lines, found in zip(pages, notes):
+        picked = [lines[index] for index in sorted(found)]
+        for group in _stacked_notes(picked):
+            for upper, lower in zip(group, group[1:]):
+                above, below = picked[upper], picked[lower]
+                pitch = below.rect.y0 - above.rect.y0
+                if abs(above.size - below.size) < 0.1 and pitch > above.size * 0.5:
+                    counters.setdefault(round(above.size, 1), Counter())[round(pitch * 2) / 2] += 1
+    pitches: dict[float, float] = {}
+    for size, counter in counters.items():
+        pitch, count = counter.most_common(1)[0]
+        if count >= _PITCH_MIN:
+            pitches[size] = pitch
+    return pitches
+
+
+def note_groups(lines: Sequence[FrameLine], pitches: dict[float, float] | None = None) -> list[list[int]]:
     """一页的旁注行合成几条旁注：上下紧挨的两行是同一条（regular / expressions），
-    隔开一行正文行距的是两条（Herdan's Law、Heaps' Law）。返回每条的行下标。"""
+    隔开一行正文行距的是两条（Herdan's Law、Heaps' Law）。返回每条的行下标。
+    正文同一行引出两个术语时，两条旁注上下挨着排，甚至叠得比行距还紧（AED 下面紧跟
+    listen attend / and spell）。同一条里行距都一样，和全文旁注的行距（pitches，见 note_pitch）
+    偏开一截的地方是两条的分界。同一行拆成的几截行距近于零，不算。"""
+    groups = _stacked_notes(lines)
+    if not pitches:
+        return groups
+    parts: list[list[int]] = []
+    for group in groups:
+        parts.append([group[0]])
+        for upper, lower in zip(group, group[1:]):
+            above, below = lines[upper], lines[lower]
+            pitch = below.rect.y0 - above.rect.y0
+            regular = pitches.get(round(above.size, 1))
+            if (regular is not None and abs(above.size - below.size) < 0.1 and pitch > above.size * 0.5
+                    and abs(pitch - regular) > regular * _PITCH_TOL):
+                parts.append([lower])
+            else:
+                parts[-1].append(lower)
+    return parts
+
+
+def _stacked_notes(lines: Sequence[FrameLine]) -> list[list[int]]:
+    """上下紧挨着的旁注行归成一组"""
     order = sorted(range(len(lines)), key=lambda index: (lines[index].rect.y0, lines[index].rect.x0))
     groups: list[list[int]] = []
     for index in order:

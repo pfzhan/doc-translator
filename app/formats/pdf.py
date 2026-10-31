@@ -55,7 +55,7 @@ from .pdf_flow import (
 from .pdf_dedupe import merge_duplicates
 from .pdf_erase import Erasure, erase, restore_glyphs, single_precision, type3_glyphs
 from .pdf_order import ReadingOrder
-from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, text_frames
+from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, note_pitch, text_frames
 from .pdf_layout import (
     ExampleNumber, PageGeometry, PageScan, RuledTable, cell_containing, content_floor, example_numbers,
     interlinear_glosses, is_page_number, light_fill, margin_skips,
@@ -5428,6 +5428,7 @@ def _frame_lines(data: dict) -> tuple[list[FrameLine], list[tuple[dict, dict]]]:
 
 def _detach_margin_notes(
     data: dict, lines: list[FrameLine], refs: list[tuple[dict, dict]], notes: set[int],
+    pitches: dict[float, float] | None = None,
 ) -> None:
     """旁注行移出原来的块，每条旁注自成一块，排在本页最后。
 
@@ -5437,7 +5438,7 @@ def _detach_margin_notes(
         return
     picked = sorted(notes)
     touched: set[int] = set()
-    for group in note_groups([lines[index] for index in picked]):
+    for group in note_groups([lines[index] for index in picked], pitches):
         members = [refs[picked[index]] for index in group]
         rect = pymupdf.Rect()
         for block, line in members:
@@ -5621,11 +5622,12 @@ def _extract(
     page_lines = [_frame_lines(data) for data in pages]
     frames = text_frames([lines for lines, _refs in page_lines])
     notes = margin_notes([lines for lines, _refs in page_lines], frames)
+    pitches = note_pitch([lines for lines, _refs in page_lines], notes)
     for pno, (data, (lines, refs), found, frame) in enumerate(zip(pages, page_lines, notes, frames)):
         # 索引页分好几栏，最左一栏比正文的版心靠外，看着像页边旁注。索引页上没有旁注
         if pno in index_pages:
             continue
-        _detach_margin_notes(data, lines, refs, found - _wide_block_lines(lines, refs, found, frame))
+        _detach_margin_notes(data, lines, refs, found - _wide_block_lines(lines, refs, found, frame), pitches)
     absorbed: set[int] = set()
     for pno, data in enumerate(pages):
         margins = _left_margins(data)
