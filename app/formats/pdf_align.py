@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import pymupdf
 
 from .pdf_flow import open_marks
-from .pdf_typeset import FormulaPiece, TextPiece, TypesetLine, line_offsets
+from .pdf_typeset import FormulaPiece, TextPiece, TypesetLine, line_lead, line_offsets
 
 # htmlbox 首行 origin 相对盒子顶的比例。和它对齐，换写法后行高不变。
 FIRST_BASELINE = 1.108
@@ -422,8 +422,9 @@ def _place_lines(
     for index, line in enumerate(lines):
         baseline = box.y0 + em * FIRST_BASELINE - lift + index * em * gap + offsets[index]
         indent, width = lanes[index] if index < len(lanes) else (0.0, box.width)
+        lead = line_lead(line) if align == "left" else 0.0
         row = _place_line(
-            line, box.x0 + indent, width, em,
+            line, box.x0 + indent - lead, width + lead, em,
             justify=align == "left" and (justify_last or index != last),
             align=align,
             image_indexes=image_indexes,

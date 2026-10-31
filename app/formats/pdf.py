@@ -65,7 +65,9 @@ from .pdf_parts import plan_parts, render_in_parts, worker_count
 from .pdf_roles import LayoutItem, Role, is_size_heading
 from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
 from .pdf_type3 import Type3Reader, broken_type3_names, recover_type3_page
-from .pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, TypesetLine, line_offsets, typeset_lines
+from .pdf_typeset import (
+    FORMULA_PAD, FormulaMetric, FormulaPiece, TextPiece, TypesetLine, line_lead, line_offsets, typeset_lines,
+)
 from .pdf_vision import FormulaDetector, FormulaModel, ModelBoxes, formula_detector, layout_detector
 
 MATH_FONT_RE = re.compile(r"CMMI|CMB?SY|CMEX|MSBM|MSAM|Math|Symbol|StandardSym|STIX|Cambria Math", re.I)
@@ -9000,7 +9002,7 @@ def _paint_formula_parts(
 ) -> None:
     """一个占位符的几片按阅读顺序并排贴。换行切开的后半段不再留在源文横坐标。"""
     scale = float(formula.get("rs") or 1)
-    x = slot_x + 2.0
+    x = slot_x + FORMULA_PAD
     for index, part in enumerate(_formula_parts(formula)):
         if index:
             x += _part_lead(part, scale)
@@ -9247,7 +9249,7 @@ def _place_typeset(
     for index, line in enumerate(lines):
         y = box.y0 + index * line_h + offsets[index]
         indent, width = lanes[index] if index < len(lanes) else (0.0, box.width)
-        origin_x = box.x0 + indent
+        origin_x = box.x0 + indent - (line_lead(line) if align == "left" else 0.0)
         if align != "left" and line.width < width:
             origin_x += width - line.width if align == "right" else (width - line.width) / 2
         # 拉丁字母按 0.5em 估算，i-th 这种窄词会偏宽。公式若跟估算走，就会被推开。
@@ -9361,7 +9363,7 @@ def _formula_slot(
         cap = min(cap, _LINE_FORMULA_EM)
     scale = min(render_size / (reference or block_size), cap * render_size / height)
     gaps = sum(_part_lead(part, scale) for part in parts[1:])
-    width = sum(float(part["w"]) * scale for part in parts) + gaps + 4.0
+    width = sum(float(part["w"]) * scale for part in parts) + gaps + 2 * FORMULA_PAD
     return scale, width, height * scale
 
 

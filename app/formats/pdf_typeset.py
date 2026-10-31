@@ -37,6 +37,13 @@ class FormulaPiece:
 
 
 Piece = TextPiece | FormulaPiece
+# 公式槽左右各空出的宽度（点），公式和两边的字隔开
+FORMULA_PAD = 2.0
+
+
+def line_lead(line: TypesetLine) -> float:
+    """行首是公式槽时，槽左边空出的那一截。左对齐的行往左挪这么多，公式和上下行的字对齐"""
+    return FORMULA_PAD if line.pieces and isinstance(line.pieces[0], FormulaPiece) else 0.0
 # 公式可以伸进上下行距的部分（em）。原来压到 1.35em 的公式都在这个范围里
 _FORMULA_SPILL = 0.2
 

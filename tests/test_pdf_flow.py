@@ -292,3 +292,23 @@ def test_narrow_latin_letters_measure_as_drawn():
     text = ("分布假说的核心思想是: 看到 {i}difficult{/i} 与 {i}hard{/i} 一样, 出现在相似的语境词"
             "({i}decisions, steep hills{/i})附近, 可能会让你了解到, {i}difficult{/i} 的含义与 {i}hard{/i} 相近。")
     assert len(break_lines(text, em=8.8, max_width=335, formula_widths={})) == 2
+
+
+def test_a_formula_at_the_line_start_lines_up_with_the_text_below():
+    """行首是公式时，槽左边空出的那一截不画，公式和下面一行的字从同一左缘起笔。"""
+    import pymupdf
+    import pytest
+
+    from app.formats.pdf_align import draw_cjk_lines
+    from app.formats.pdf_typeset import FORMULA_PAD, FormulaMetric, typeset_lines
+
+    doc = pymupdf.open()
+    page = doc.new_page()
+    box = pymupdf.Rect(100, 100, 300, 200)
+    metrics = {1: FormulaMetric(6 + 2 * FORMULA_PAD, 6, 8.8, 0)}
+    lines = typeset_lines(_SENTINEL + " 个词类型。用各种 n 元语法计数和其他记号来表示估计的公式，后面还有很多字要换到下一行去写",
+                          8.8, box.width, metrics)
+    assert len(lines) >= 2
+    slots = draw_cjk_lines(page, doc, lines, box, 8.8, 1.45, "#000000", "left", frozenset({1}), {})
+    assert slots is not None
+    assert slots[0].x + FORMULA_PAD == pytest.approx(box.x0, abs=0.01)
