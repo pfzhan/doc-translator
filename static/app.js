@@ -1422,7 +1422,8 @@ async function purgeJob(job) {
   ];
   list.replaceChildren(...rows.flatMap(([k, v]) => [el("dt", "", k), el("dd", "", v)]));
   if (info.shared) {
-    $("purge-shared").textContent = `另有 ${info.shared} 条记录使用同一文件，它们共用这份缓存，之后重译也需要重新请求翻译服务。`;
+    $("purge-shared").textContent =
+      `另有 ${info.shared} 条记录使用同一文件，它们共用翻译缓存和版面分析结果，之后重译也需要重新请求翻译服务。`;
     $("purge-shared").hidden = false;
   }
   if (info.boxes_bytes) {

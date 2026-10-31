@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import threading
 import time
@@ -15,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import quote
 
+from .formats import document_digest
 from .langdetect import same_language
 
 
@@ -121,9 +123,15 @@ class Job:
 _PERSISTED = [f for f in Job.__dataclass_fields__ if f != "runner"]
 
 
+# 每本书的版面分析结果放在 layout/<文件摘要>/ 下
+_LAYOUT_FILES = ("plan.pickle", "boxes.json")
+
+
 class JobStore:
-    def __init__(self, root: Path = JOBS_DIR):
+    def __init__(self, root: Path = JOBS_DIR, layout_root: Path | None = None):
         self.root = root
+        # 版面分析只看原文件、代码和两个本地模型，和任务的语言、服务、模式无关，同一本书的记录共用一份
+        self.layout_root = layout_root or root.parent / "layout"
         self.lock = threading.Lock()
         self.jobs: dict[str, Job] = {}
         self._load()
@@ -139,9 +147,64 @@ class JobStore:
     def source_path(self, job: Job) -> Path:
         return self.dir(job.id) / job.filename
 
-    def plan_path(self, job_id: str) -> Path:
-        """PDF 的版面分析结果。继续翻译、生成另一种版本时读回，不用再逐页分析。"""
-        return self.dir(job_id) / "plan.pickle"
+    def document(self, job: Job) -> str:
+        """记录对应文件的摘要。旧记录没存，原文件还在就算一次存下；原文件也没了返回空串。"""
+        if not job.document:
+            source = self.source_path(job)
+            if not source.is_file():
+                return ""
+            job.document = document_digest(source)
+            self.save(job)
+        return job.document
+
+    def share_source(self, job: Job) -> bool:
+        """同一份文件已经有记录存着时，把这条记录的原文件换成指向它的硬链接，同一本书在磁盘上只占一份。
+        原文件上传后只读不写，删掉一条记录只是少一个链接。文件系统不支持硬链接时保留自己的副本。"""
+        path = self.source_path(job)
+        for other in self.list():
+            if other.id == job.id or self.document(other) != job.document:
+                continue
+            existing = self.source_path(other)
+            if not existing.is_file() or existing.stat().st_size != path.stat().st_size:
+                continue
+            if existing.stat().st_ino == path.stat().st_ino:
+                return True
+            link = path.with_name(f"{path.name}.{uuid.uuid4().hex}.link")
+            try:
+                os.link(existing, link)
+                link.replace(path)
+                return True
+            except OSError:
+                link.unlink(missing_ok=True)
+                return False
+        return False
+
+    def share_sources(self) -> int:
+        """把已有记录里重复的原文件都换成硬链接（共用原文件之前上传的），返回处理的记录数。
+        正在翻译的记录读的是已经打开的文件，换掉目录项不影响它。"""
+        return sum(self.share_source(job) for job in self.list() if self.source_path(job).is_file() and self.document(job))
+
+    def layout_dir(self, job: Job) -> Path | None:
+        """这本书的版面分析结果所在的目录，同一本书的记录共用。以前存在记录目录里的，第一次用到时搬过来。"""
+        doc = self.document(job)
+        if not doc:
+            return None
+        folder = self.layout_root / doc
+        folder.mkdir(parents=True, exist_ok=True)
+        for name in _LAYOUT_FILES:
+            local = self.dir(job.id) / name
+            if local.is_file():
+                if (folder / name).exists():
+                    local.unlink()
+                else:
+                    local.replace(folder / name)
+        return folder
+
+    def plan_path(self, job: Job) -> Path | None:
+        """PDF 的版面分析结果。继续翻译、生成另一种版本、同一本书再传一次时读回，不用再逐页分析。
+        模型框出的区域存在旁边的 boxes.json 里。原文件不在时返回 None，不存。"""
+        folder = self.layout_dir(job)
+        return folder / "plan.pickle" if folder else None
 
     # ---------- 读写 ----------
 
@@ -230,6 +293,12 @@ class JobStore:
             return None
 
     def disk_usage(self) -> int:
-        if not self.root.exists():
-            return 0
-        return sum(p.stat().st_size for p in self.root.rglob("*") if p.is_file())
+        """记录和版面分析结果占的磁盘。硬链接共用的原文件只算一次。"""
+        seen: dict[tuple[int, int], int] = {}
+        for root in (self.root, self.layout_root):
+            if root.exists():
+                for p in root.rglob("*"):
+                    if p.is_file():
+                        st = p.stat()
+                        seen[(st.st_dev, st.st_ino)] = st.st_size
+        return sum(seen.values())

@@ -1,5 +1,6 @@
 """Web 服务：上传文档 → 后台翻译 → 边翻边预览 → 下载结果；翻译记录持久化在 data/jobs/。"""
 import asyncio
+import hashlib
 import mimetypes
 import os
 import shutil
@@ -53,7 +54,8 @@ PROGRESS_SAVE_INTERVAL = 5
 
 
 async def _cleanup() -> None:
-    """删过期记录。是否在补生成只在事件循环里判断，不把那个字典交给别的线程。"""
+    """删过期记录，再删没有记录用到的版面分析结果、把重复的原文件换成硬链接。
+    是否在补生成只在事件循环里判断，不把那个字典交给别的线程。"""
     expired = await asyncio.to_thread(jobs.expired_ids, settings.retention_days)
     for jid in expired:
         if jid in variant_tasks or jid in running or jid in cleaning:
@@ -68,6 +70,8 @@ async def _cleanup() -> None:
             await asyncio.to_thread(jobs.delete, jid)
         finally:
             cleaning.discard(jid)
+    await asyncio.to_thread(cleanup.prune_layouts, jobs)
+    await asyncio.to_thread(jobs.share_sources)
 
 
 @asynccontextmanager
@@ -127,7 +131,7 @@ async def _run_job(job: Job, translator, bilingual: bool):
     try:
         outputs = await translate_file(jobs.source_path(job), jobs.out_dir(job.id), job.runner, bilingual,
                                        job.target_lang, layout_model=_model_path("layout"),
-                                       plan_path=jobs.plan_path(job.id), formula_model=_formula_model())
+                                       plan_path=jobs.plan_path(job), formula_model=_formula_model())
         job.outputs = [p.name for p in outputs]
         job.status = "done"
     except asyncio.CancelledError:
@@ -376,18 +380,22 @@ async def create_job(
     jobs.out_dir(job.id).mkdir(parents=True)
     try:
         size = 0
+        # 边写边算摘要：缓存归属、版面分析结果、原文件去重都按它认同一本书
+        digest = hashlib.sha1()
         with jobs.source_path(job).open("wb") as f:
             while chunk := await file.read(1024 * 1024):
                 size += len(chunk)
                 if size > MAX_UPLOAD:
                     raise HTTPException(413, "文件太大（上限 200MB）")
+                digest.update(chunk)
                 # 大文件写盘放到线程里，别卡事件循环
                 await asyncio.to_thread(f.write, chunk)
     except BaseException:
         # 上传中途失败（读异常、超大小等）：清掉孤儿目录再抛出
         shutil.rmtree(jobs.dir(job.id), ignore_errors=True)
         raise
-    job.size = size
+    job.size, job.document = size, digest.hexdigest()
+    await asyncio.to_thread(jobs.share_source, job)
     jobs.add(job)
     _start(job, _make_translator(job, service))
     return job.to_dict()
@@ -606,7 +614,7 @@ async def build_variant(job_id: str):
         try:
             outputs = await translate_file(
                 jobs.source_path(job), stage, Runner(translator, cache_only=True), bilingual, job.target_lang,
-                layout_model=_model_path("layout"), plan_path=jobs.plan_path(job.id),
+                layout_model=_model_path("layout"), plan_path=jobs.plan_path(job),
                 formula_model=_formula_model(),
             )
         except (TranslatorError, ValueError) as e:

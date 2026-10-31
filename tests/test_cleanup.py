@@ -61,7 +61,8 @@ def test_clearing_a_job_removes_its_cache_and_generated_files(app_env):
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
         folder = main.jobs.dir(job["id"])
-        (folder / "boxes.json").write_text("{}")
+        boxes = main.jobs.layout_dir(main.jobs.get(job["id"])) / "boxes.json"
+        boxes.write_text("{}")
         info = client.get(f"/api/jobs/{job['id']}/cache").json()
         assert info["entries"] == 3 and info["outputs"] == 1 and info["shared"] == 0
         assert info["generated_bytes"] > 0 and info["boxes_bytes"] == 2
@@ -72,8 +73,8 @@ def test_clearing_a_job_removes_its_cache_and_generated_files(app_env):
         assert cleared["removed"] == 3 and cleared["status"] == "idle"
         assert cleared["outputs"] == [] and cleared["total"] == 0
         assert _rows(cache) == 0
-        assert sorted(p.name for p in folder.iterdir()) == ["book.md", "boxes.json", "job.json", "out"]
-        assert not any((folder / "out").iterdir())
+        assert sorted(p.name for p in folder.iterdir()) == ["book.md", "job.json", "out"]
+        assert not any((folder / "out").iterdir()) and boxes.is_file()
 
         # 记录还能重新开始翻译
         client.post(f"/api/jobs/{job['id']}/retry")
@@ -85,7 +86,7 @@ def test_clearing_can_include_model_boxes(app_env):
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        boxes = main.jobs.dir(job["id"]) / "boxes.json"
+        boxes = main.jobs.layout_dir(main.jobs.get(job["id"])) / "boxes.json"
         boxes.write_text("{}")
         assert client.delete(f"/api/jobs/{job['id']}/cache?boxes=true").status_code == 200
         assert not boxes.exists()
@@ -154,3 +155,76 @@ def test_redo_from_scratch_clears_stale_entries_first(app_env):
         assert again["status"] == "done" and again["outputs"]
         assert cache.get_many("old-prefix", ["A stale paragraph."]) == {}
         assert _rows(cache) == 3
+
+
+PDF_TEXT = "A body paragraph long enough to be translated here."
+
+
+def _pdf() -> bytes:
+    import pymupdf
+
+    doc = pymupdf.open()
+    doc.new_page(width=420, height=240).insert_text((40, 60), PDF_TEXT, fontsize=10)
+    return doc.tobytes()
+
+
+def test_jobs_of_the_same_book_share_the_layout_analysis(app_env, monkeypatch):
+    from app.formats import pdf
+
+    main = app_env
+    calls = []
+    real_extract = pdf._extract
+    monkeypatch.setattr(pdf, "_extract", lambda *a, **k: calls.append(1) or real_extract(*a, **k))
+    data = _pdf()
+    with TestClient(main.app) as client:
+        a = wait_done(client, submit(client, name="paper.pdf", data=data)["id"])
+        b = wait_done(client, submit(client, name="copy.pdf", data=data, mode="translated")["id"])
+        assert a["status"] == b["status"] == "done" and len(calls) == 1
+        plan = main.jobs.plan_path(main.jobs.get(a["id"]))
+        assert plan == main.jobs.plan_path(main.jobs.get(b["id"])) and plan.is_file()
+        # 删掉一条，另一条还在用，分析结果留着；最后一条也删掉，一起删
+        client.delete(f"/api/jobs/{a['id']}")
+        assert plan.is_file()
+        client.delete(f"/api/jobs/{b['id']}")
+        assert not plan.parent.exists()
+
+
+def test_layout_saved_in_the_job_folder_moves_to_the_shared_place(app_env):
+    main = app_env
+    with TestClient(main.app) as client:
+        job = main.jobs.get(wait_done(client, submit(client)["id"])["id"])
+        folder = main.jobs.dir(job.id)
+        (folder / "plan.pickle").write_bytes(b"plan")
+        (folder / "boxes.json").write_text("{}")
+        plan = main.jobs.plan_path(job)
+        assert plan.read_bytes() == b"plan" and (plan.parent / "boxes.json").is_file()
+        assert not (folder / "plan.pickle").exists() and not (folder / "boxes.json").exists()
+
+
+def test_layouts_no_job_uses_are_pruned(app_env):
+    main = app_env
+    with TestClient(main.app) as client:
+        job = main.jobs.get(wait_done(client, submit(client)["id"])["id"])
+        used = main.jobs.layout_dir(job)
+        stale = main.jobs.layout_root / ("0" * 40)
+        stale.mkdir()
+        (stale / "plan.pickle").write_bytes(b"old")
+        assert cleanup.prune_layouts(main.jobs) == [stale.name]
+        assert used.is_dir() and not stale.exists()
+
+
+def test_the_same_file_uploaded_twice_is_stored_once(app_env):
+    main = app_env
+    with TestClient(main.app) as client:
+        a = wait_done(client, submit(client)["id"])
+        b = wait_done(client, submit(client, name="again.md")["id"])
+        first = main.jobs.source_path(main.jobs.get(a["id"]))
+        second = main.jobs.source_path(main.jobs.get(b["id"]))
+        assert first.stat().st_ino == second.stat().st_ino and second.read_bytes() == MD
+        usage = client.get("/api/jobs").json()["disk_usage"]
+        assert usage == main.jobs.disk_usage()
+        client.delete(f"/api/jobs/{a['id']}")
+        assert second.read_bytes() == MD
+        # 另一份内容不同的文件不受影响
+        c = wait_done(client, submit(client, name="other.md", data=MD + b"\nMore.\n")["id"])
+        assert main.jobs.source_path(main.jobs.get(c["id"])).stat().st_ino != second.stat().st_ino

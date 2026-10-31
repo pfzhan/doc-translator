@@ -171,7 +171,7 @@ def test_redo_from_scratch_analyses_the_pdf_again(app_env, monkeypatch):
     )
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client, name="paper.pdf", data=doc.tobytes())["id"])
-        assert job["status"] == "done" and main.jobs.plan_path(job["id"]).exists() and len(calls) == 1
+        assert job["status"] == "done" and main.jobs.plan_path(main.jobs.get(job["id"])).exists() and len(calls) == 1
         wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={}).json()["id"])
         assert len(calls) == 1
         again = wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={"fresh": True}).json()["id"])
