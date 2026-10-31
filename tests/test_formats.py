@@ -11378,3 +11378,28 @@ def test_the_english_rendering_below_a_chinese_example_stays_original():
     ])]
     found = _foreign_ids([chinese, english, *prose])
     assert id(english) in found and not any(id(block) in found for block in prose)
+
+
+def test_a_wrapped_fraction_piece_sits_on_its_line_baseline():
+    """折到下一行行首的分式（… and λ2 = | 1/2, what is …）按那一行正文的基线量下沉，
+    不按分母的基线量：分子分母一样大，量到分母上，贴的时候整个分式往上抬，分子压到上一行。"""
+    from app.formats.pdf import _placeholderize
+
+    def span(text, font, size, x0, x1, base, top=None):
+        return {"text": text, "font": font, "size": size,
+                "bbox": (x0, top if top is not None else base - size * 0.8, x1, base + size * 0.2),
+                "origin": (x0, base)}
+
+    block = _block_with_spans([
+        [span("unigram model with ", "NimbusRomNo9L-Regu", 10, 40, 400, 676.4),
+         span("λ", "CMMI10", 10, 453.5, 459, 676.4),
+         span("2", "CMR7", 7, 459, 463, 678.0),
+         span("=", "CMR10", 10, 466, 475, 676.4)],
+        [span("1", "CMR7", 7, 168.3, 172, 683.0, top=677.5),
+         span("2", "CMR7", 7, 168.3, 172, 691.7),
+         span(", what is the probability", "NimbusRomNo9L-Regu", 10, 174, 300, 688.4)],
+    ], size=10.0)
+    _sent, formulas = _placeholderize(block)
+    parts = formulas[0]["parts"]
+    assert len(parts) == 2
+    assert parts[1]["d"] == pytest.approx(693.1 - 688.4, abs=0.2)

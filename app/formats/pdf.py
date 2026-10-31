@@ -4310,6 +4310,14 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
     formula_runs: dict[int, FormulaRun] = {}
     first_span: dict[int, int] = {}  # span id → 公式序号
     span_line = {id(s): li for li, line in enumerate(block.span_lines) for s in line}
+
+    def text_baseline(spans: list[dict]) -> float | None:
+        """几截字所在行正文的基线：这几行里正文字号的字 origin 的中位数，不能按全块算"""
+        lines = {span_line.get(id(span)) for span in spans}
+        origins = sorted(span["origin"][1] for li in lines if li is not None for span in block.span_lines[li]
+                         if span["text"].strip() and span.get("origin") and span["size"] >= block.size * 0.9)
+        return origins[len(origins) // 2] if origins else None
+
     line_x0 = [_line_x0(spans) for spans in block.span_lines]
     for n, m in enumerate(merged, 1):
         bbox = pymupdf.Rect(m["bbox"])
@@ -4319,11 +4327,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         # 孤立角标公式（(1−ε_i)² 的 ²）的 origin 是抬高的：渲染时按它所在
         # 正文行的 baseline 高差抬回去，否则平方落到正文基线上像个普通数字。
         # 高差必须相对本行正文（正文行 origin 的中位数），不能相对全块
-        run_lines = {span_line.get(id(s)) for s in m["spans"]}
-        line_origins = sorted(s["origin"][1] for li in run_lines if li is not None
-                              for s in block.span_lines[li]
-                              if s["text"].strip() and s.get("origin") and s["size"] >= block.size * 0.9)
-        own_origin = line_origins[len(line_origins) // 2] if line_origins else baseline
+        own_origin = text_baseline(m["spans"]) or baseline
         raise_dy = max(0.0, own_origin - baseline)
         anchor = min(m["spans"], key=lambda s: s["bbox"][0])
         anchor_line = span_line.get(id(anchor), 0)
@@ -4347,7 +4351,10 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 piece for piece in [record["text"], *(_formula_markup(extra["spans"], block.size).strip() for extra in extras)]
                 if piece
             )
-            record["parts"] = [record, *(_part_record(extra, block.page, f"{formula_run.name[:-4]}_p{i}.png") for i, extra in enumerate(extras, 1))]
+            record["parts"] = [record, *(
+                _part_record(extra, block.page, f"{formula_run.name[:-4]}_p{i}.png", text_baseline(extra["spans"]))
+                for i, extra in enumerate(extras, 1)
+            )]
             for part, before, after in zip(record["parts"][1:], [m, *extras], extras):
                 part["lead"] = _wrap_gap(before["spans"], after["spans"])
         formulas.append(record)
@@ -5126,11 +5133,14 @@ def _join_line_wrapped_formulas(
     return joined
 
 
-def _part_record(run: dict, page: int, name: str) -> dict:
+def _part_record(run: dict, page: int, name: str, baseline: float | None = None) -> dict:
+    """换行切开的公式后面的一片。baseline 是这一片所在行正文的基线；分式的分子分母一样大，
+    按片里最大的字量会量到分母的基线上，贴的时候整个分式往上抬"""
     bbox = pymupdf.Rect(run["bbox"])
     spans = run["spans"]
     main = max(spans, key=lambda span: span["size"])
-    baseline = main["origin"][1] if main.get("origin") else bbox.y1
+    if baseline is None:
+        baseline = main["origin"][1] if main.get("origin") else bbox.y1
     return {
         "page": page,
         "bbox": bbox,
