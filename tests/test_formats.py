@@ -4738,6 +4738,38 @@ def test_a_small_caps_word_at_the_line_start_is_not_a_style_change():
     assert _styled_edge(blk([span("note", 142.4, 8.0), span(" and the rest", 162)]), 0)
 
 
+def test_a_concordance_with_aligned_bold_keywords_stays_original():
+    """每行中间一个粗体词、各行左缘对齐、两边是截下来的前后文的检索结果留原文；
+    正文里零散的粗体术语不算。"""
+    from app.formats.pdf import TextBlock, _concordance_ids
+
+    def span(text, x0, x1, y, bold=False):
+        return {"text": text, "font": "NimbusRomNo9L-Medi" if bold else "NimbusRomNo9L-Regu", "size": 10.0,
+                "flags": 16 if bold else 0, "bbox": (x0, y - 8, x1, y + 2), "origin": (x0, y)}
+
+    def blk(span_lines):
+        return TextBlock(page=0, rect=pymupdf.Rect(161, 108, 492, 157), line_rects=[], text="",
+                         size=10, color="#000", bold=False, span_lines=span_lines)
+
+    concordance = blk([
+        [span("is traditionally followed by", 191.0, 298.9, 117.5), span("cherry", 304.9, 333.1, 117.5, True)],
+        [span("pie, a traditional dessert", 361.6, 456.7, 117.5)],
+        [span("often mixed, such as", 217.2, 298.9, 129.5), span("strawberry", 304.9, 352.5, 129.5, True)],
+        [span("rhubarb pie. Apple pie", 361.6, 451.8, 129.5)],
+        [span("computer peripherals and personal", 161.4, 298.9, 141.4), span("digital", 304.9, 332.0, 141.4, True)],
+        [span("assistants. These devices usually", 361.6, 492.0, 141.4)],
+    ])
+    prose = blk([
+        [span("we call this a", 161.4, 230.0, 117.5), span("vector", 233.0, 260.0, 117.5, True),
+         span("and it is", 263.0, 300.0, 117.5)],
+        [span("a list of numbers, the", 161.4, 260.0, 129.5), span("dimension", 263.0, 310.0, 129.5, True),
+         span("of which is", 313.0, 360.0, 129.5)],
+        [span("the length of the", 161.4, 240.0, 141.4), span("vector space", 243.0, 300.0, 141.4, True),
+         span("below", 303.0, 330.0, 141.4)],
+    ])
+    assert _concordance_ids([concordance, prose]) == {id(concordance)}
+
+
 def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
     """原文段落前几行在图左边让开、图下面恢复整宽。译文碰到图高度的行同样让开，图下面的行写满。
     只有一行在旁边的不算绕排（引文最后一行旁边的出处）。"""

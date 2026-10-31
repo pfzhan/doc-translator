@@ -6686,6 +6686,42 @@ def _role_pattern_ids(blocks: list[TextBlock]) -> set[int]:
     }
 
 
+def _concordance_ids(blocks: list[TextBlock]) -> set[int]:
+    """逐行列出的语料检索结果：每行中间一个粗体的词，各行的这个词左缘对齐，两边是它在语料里的前后文
+    （is traditionally followed by | cherry | pie, a traditional dessert）。
+    前后文是截下来的半句，几行连起来不成句，下文拿中间的词来讲，留原文。"""
+    found: set[int] = set()
+    for block in blocks:
+        if block.clip is not None or block.side_note:
+            continue
+        spans = sorted(
+            (span for line in block.span_lines or [] for span in line
+             if str(span.get("text") or "").strip() and span.get("origin") is not None),
+            key=lambda span: float(span["origin"][1]),
+        )
+        rows: list[list[dict]] = []
+        for span in spans:
+            if rows and float(span["origin"][1]) - float(rows[-1][0]["origin"][1]) <= block.size * 0.3:
+                rows[-1].append(span)
+            else:
+                rows.append([span])
+        if len(rows) < 3:
+            continue
+        lefts = []
+        for row in rows:
+            row.sort(key=lambda span: float(span["bbox"][0]))
+            bold = [i for i, span in enumerate(row)
+                    if emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0)).bold]
+            # 粗体的词连成一截，左右都有前后文
+            if not bold or bold != list(range(bold[0], bold[-1] + 1)) or bold[0] == 0 or bold[-1] == len(row) - 1:
+                break
+            lefts.append(float(row[bold[0]]["bbox"][0]))
+        else:
+            if max(lefts) - min(lefts) <= block.size * 0.2:
+                found.add(id(block))
+    return found
+
+
 def _foreign_ids(blocks: list[TextBlock]) -> set[int]:
     """和全文不是同一种语言的段落：英文书里的西班牙文题记、德文引文、巴斯克语例句。
     作者有意留着原文，旁边多半已经给了译文，留原文。
@@ -12152,7 +12188,7 @@ def _plan_document(
         | _item_example_ids(blocks) | _arc_figure_ids(blocks, scans)
     )
     numbers = {pno: example_numbers(scans[pno].words) for pno in sorted({block.page for block in blocks})}
-    examples = _example_ids(blocks, numbers) | _role_pattern_ids(blocks)
+    examples = _example_ids(blocks, numbers) | _role_pattern_ids(blocks) | _concordance_ids(blocks)
     displayed |= _display_example_ids(blocks, geometries, displayed | examples)
     # 页眉不进大纲，旁注、目录条目不是标题
     kinds = [
