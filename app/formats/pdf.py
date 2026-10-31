@@ -7522,6 +7522,14 @@ def _merge_continuations(
             # 编号后面小写起头的是正文里引用的式子折到行首（(4.5) and (4.6), we have），按正常行距紧贴着就接上；
             # 小写起头的例句（(24.25) her pay jumped …）上面多空出一截
             row_gap = b.rect.y0 - last_y1 - p.line_gap * p.size
+            # 上一行排到右缘、停在等号加号上（… and λ2 = | 1/2, what is …），下一行从同一左缘按正常行距紧贴着起笔，
+            # 是式子的另一半，数字起头也接上。单独排的式子行不到右缘，下面空得多；大写单词、脚注编号起头的是下一句、下一条
+            open_end = (
+                same_size and _open_operator_end(p.text) and row_gap <= 0.3 * p.size
+                and abs(first_x0 - p.rect.x0) <= 0.5 * p.size and last_x1 >= max(p.rect.x1, b.rect.x1) - p.size
+                and bool(p.line_rects) and _row_width(_visual_lines(p)[-1]) >= b.rect.width * 0.8
+                and not _FOOTNOTE_LEAD_RE.match(b.text.lstrip()) and not re.match(r"[A-Z][a-z]", b.text.lstrip())
+            )
             flush_wrap = (
                 same_size and ((indents and row_gap <= 0.5 * p.size) or (space and row_gap <= space / 2))
                 and not _list_item(b.text) and not _LABEL_START_RE.match(b.text)
@@ -7543,7 +7551,8 @@ def _merge_continuations(
                 and (colon_wrap or call_wrap or flush_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
                      or not _ends_sentence(p.text))
                 and (first.islower() or first in ".),;%,；，" or open_paren or math_wrap or formula_tail or centered_end
-                     or dangling or centered_comma or in_fence or full_wrap or flush_wrap or bracketed or word_cut)
+                     or dangling or open_end or centered_comma or in_fence or full_wrap or flush_wrap or bracketed
+                     or word_cut)
                 and not _verbatim_seam(p, b)
                 # 段落首行缩进的文档里，首行比下面几行缩进一两个字宽、大写的词起头的块是新的一段，
                 # 上一块停在 and 上（式子前的半句）也不接。行首是式子（W 1,∞ …）的不算

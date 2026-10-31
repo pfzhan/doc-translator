@@ -11348,3 +11348,18 @@ def test_the_english_rendering_below_a_chinese_example_stays_original():
     ])]
     found = _foreign_ids([chinese, english, *prose])
     assert id(english) in found and not any(id(block) in found for block in prose)
+
+def test_a_line_ending_on_an_equals_sign_runs_on():
+    """上一行停在等号上，下一行数字起头的是式子的另一半，接成一段。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, y0, y1):
+        rect = pymupdf.Rect(167, y0, 475, y1)
+        span = {"text": text, "font": "NimbusRomNo9L-Regu", "size": 10.0, "flags": 0}
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000", bold=False,
+                         span_lines=[[span]])
+
+    head = blk("If we use linear interpolation smoothing between a maximum-likelihood bigram model and a "
+               "maximum-likelihood unigram model with λ1 = 1 2 and λ2 =", 654, 680)
+    tail = blk("2, what is P(Sam|am)? Include <s> and </s> in your counts just like any other token.", 678, 703)
+    assert len(_merge_continuations([head, tail])) == 1
