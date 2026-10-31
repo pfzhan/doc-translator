@@ -2291,8 +2291,14 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         # 打字机字体排的是逐行照录的文字（对话、示例），右缘参差，没到右边距不说明是硬换行。
         # 下一行像新句子开头就是新的一行
         verbatim = _typewriter_line(pspans) and _typewriter_line(items[i][2])
+        # 绕图排的段落：图旁的几行收在同一处，离块的右缘很远。上一行收在这一处、块里还有两行以上
+        # 也收在这里，下一行不往里缩、至少排到这一处，是排满了图旁的窄栏，不是硬换行
+        lane_full = (
+            sum(abs(item[1].x1 - prect.x1) <= 0.5 for item in items) >= 3
+            and row_box.get(i, rect).x1 >= prect.x1 - 0.5 and rect.x0 <= prect.x0 + 0.5 * psize
+        )
         hard_break = (
-            (max_x1 - prect.x1 > 3 * psize or verbatim)
+            (max_x1 - prect.x1 > 3 * psize and not lane_full or verbatim)
             and seg_start
             and not prev_symbol
             and not indent

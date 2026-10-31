@@ -717,6 +717,27 @@ def _line(text: str, x0: float, x1: float, y0: float, size: float = 10) -> tuple
     return (text, pymupdf.Rect(x0, y0, x1, y0 + size + 2), [{"size": size}])
 
 
+def test_lines_wrapping_around_a_figure_stay_in_one_paragraph():
+    """绕图排的段落，图旁的几行收在同一处，离块的右缘很远。排满窄栏的一行下面是大写开头的
+    Smilodon，是折行，不是硬换行。离窄栏右缘还远的一行照旧按硬换行拆。"""
+    from app.formats.pdf import _split_lines
+
+    def line(text, x0, x1, y0):
+        return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"size": 10.0, "font": "Times-Roman", "text": text}])
+
+    items = [
+        line("recognizable by its long canines. Five million years ago or so, a completely different", 160.2, 493.2, 326.9),
+        line("saber-tooth tiger called Thylacosmilus lived", 160.2, 341.5, 338.9),
+        line("in Argentina and other parts of South Amer-", 160.2, 341.5, 350.8),
+        line("ica. Thylacosmilus was a marsupial whereas", 160.2, 341.5, 362.8),
+        line("Smilodon was a placental mammal, but Thy-", 160.2, 341.5, 374.8),
+        line("lacosmilus had the same long upper canines", 160.2, 341.5, 386.7),
+    ]
+    assert _split_lines(items) == [[0, 1, 2, 3, 4, 5]]
+    items[3] = line("ica. Thylacosmilus was a marsupial.", 160.2, 300.0, 362.8)
+    assert _split_lines(items) == [[0, 1, 2, 3], [4, 5]]
+
+
 def test_a_table_row_name_is_cut_from_its_numbers_and_the_rows_around():
     """表格的行名和同一行的几格数、上面的分组名各自成段。挨得近的数照样拆开；
     PyMuPDF 并进行名那一行的几格数从行里拿掉，和别的行的数一样留在原页上。"""
