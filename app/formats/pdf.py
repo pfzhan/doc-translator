@@ -8758,7 +8758,7 @@ def _fit_typeset(
     left_limit 是靠右排的块往左扩能到哪里，给了就往左扩，不往右扩。
     lent 为真时 room 是下面一段借出地方后最低的起笔（见 spare_below），它要挪到末行下面半行，
     末行下面那截空白就不能伸过框底（见 _glyph_bottom）。
-    hang 是悬挂缩进（见 _hang_indent）：首行以下各行比盒子左缘缩进多少点。"""
+    hang 是悬挂缩进的条目里原文正文比题号缩进多少点（见 _hang_indent）。"""
     gap = 1.45 if cjk else 1.2
     reference = block_size * 0.88 if cjk else block_size
     box = rect
@@ -8779,7 +8779,7 @@ def _fit_typeset(
         lanes = _hole_lanes(box, holes, em, gap)
         wrapped = bool(lanes)
         if hang:
-            lanes = _hang_lanes(box, lanes, hang, em, gap, len(text))
+            lanes = _hang_lanes(box, lanes, hang, _label_width(text, em), em, gap, len(text))
         metrics = _formula_metrics(formulas, block_size, em, reference)
         lines = typeset_lines(text, em, max(box.width, 1.0) * squeeze, metrics, [width for _, width in lanes])
         extra = line_offsets(lines, em, gap)[1]
@@ -8985,8 +8985,13 @@ _HANG_NUMBER_RE = re.compile(r"\d+(?:\.\d+)*\.?\s")
 def _hang_indent(block: TextBlock) -> float:
     """题号、圆点顶格，下面各行都和题号后面的正文对齐（练习题 3.1 Write out …）：续行比首行缩进多少点。
     不是这样排的块返回 0"""
+    # 节标题（1.1 What is a Large Language Model?）的编号也和标题空开一截，编号留在原处
+    if block.body_size and block.size > block.body_size * 1.1:
+        return 0.0
     rows = sorted(_visual_lines(block), key=lambda row: row[0].y0)
-    if len(rows) < 2:
+    if len(rows) == 1:
+        return _label_gap(block)
+    if not rows:
         return 0.0
     first = min(rect.x0 for rect in rows[0])
     rest = [min(rect.x0 for rect in row) for row in rows[1:]]
@@ -8997,16 +9002,47 @@ def _hang_indent(block: TextBlock) -> float:
     return hang if _list_item(lead) or _HANG_NUMBER_RE.match(lead) else 0.0
 
 
+def _label_gap(block: TextBlock) -> float:
+    """只有一行的条目：和正文同字号的题号单独一截，和后面的正文之间空出半个字以上（3.8 | Write a program …），
+    正文比题号缩进多少点。不是这样排的返回 0"""
+    spans = sorted((span for line in block.span_lines or [] for span in line
+                    if str(span.get("text") or "").strip() and span.get("bbox") is not None),
+                   key=lambda span: float(span["bbox"][0]))
+    if len(spans) < 2 or not _HANG_NUMBER_RE.match(str(spans[0]["text"]).strip() + " ") and not _list_item(
+            str(spans[0]["text"]).strip() + " x"):
+        return 0.0
+    # 脚注的上标编号后面也空开一截，脚注的续行顶格
+    if float(spans[0].get("size") or 0) < block.size * 0.9:
+        return 0.0
+    gap = float(spans[1]["bbox"][0]) - float(spans[0]["bbox"][2])
+    hang = float(spans[1]["bbox"][0]) - float(spans[0]["bbox"][0])
+    return hang if gap >= block.size * 0.5 and hang <= block.size * 5 else 0.0
+
+
+# 译文开头的题号、圆点连同后面的空白
+_HANG_LABEL_RE = re.compile(r"\s*(?:[•◦▪‣·○■□►»]|[-–—*]|\(?(?:\d+(?:\.\d+)*|[a-zA-Z]|[ivxlc]+)[.)]?)\s+")
+
+
+def _label_width(text: str, em: float) -> float:
+    """译文开头的题号、圆点连同后面的空白有多宽，续行从这里起笔。没有题号时返回 0"""
+    matched = _HANG_LABEL_RE.match(strip_style_marks(text))
+    return measure_width(matched.group(0), em) if matched else 0.0
+
+
 def _hang_lanes(
-    box: "pymupdf.Rect", lanes: list[tuple[float, float]], hang: float, em: float, gap: float, chars: int,
+    box: "pymupdf.Rect", lanes: list[tuple[float, float]], hang: float, label: float, em: float, gap: float,
+    chars: int,
 ) -> list[tuple[float, float]]:
-    """悬挂缩进的各行：首行从盒子左缘写，以下各行缩进 hang，绕图的行再让开图。
-    断行前不知道有几行，每行至少一个字，按字数列满"""
+    """悬挂缩进的各行，绕图的行再让开图。正文对齐在盒子左缘往右 hang 处，和条目下面另起的说明段落同一列；
+    label 是译文题号连同空白的宽度（见 _label_width），首行往右挪，题号后面的正文也从这一列起笔。
+    题号比 hang 宽时这一列跟着往右。断行前不知道有几行，每行至少一个字，按字数列满"""
+    column = max(hang, label)
     out = []
     for index in range(max(chars, 1)):
         indent, width = lanes[index] if index < len(lanes) else (0.0, box.width)
-        if index and indent < hang:
-            width, indent = max(width - (hang - indent), em), hang
+        shift = column - label if index == 0 and label else column if index else 0.0
+        if indent < shift:
+            width, indent = max(width - (shift - indent), em), shift
         out.append((indent, width))
     return out
 
@@ -10946,7 +10982,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 left_limit = block.clip[0] + 0.8 if block.clip is not None else bounds.width * 0.1
             # 跨页接过来的半段按上一页的栏宽写，要让开的图可能在块的框外面
             holes = _wrap_holes(block, obstacles, rect | block.rect)
-            # 题号、圆点顶格的条目，续行照原文缩到正文的左缘。续写的后半、挪过位置的副本不按原块的行算
+            # 题号、圆点顶格的条目，正文照原文对齐在题号右边的一列。续写的后半、挪过位置的副本不按原块的行算
             hang = (_hang_indent(block) if align == "left" and source is None and formulas is None
                     and abs(rect.x0 - block.rect.x0) <= 1 else 0.0)
             first_room = None if pushed else _first_row_room(block, rect)

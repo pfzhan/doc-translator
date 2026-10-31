@@ -11302,8 +11302,11 @@ def test_a_numbered_item_with_hanging_lines_keeps_the_hang():
     assert _hang_indent(blk("The asphalt that Los Angeles is famous for occurs mainly", [175, 160, 160])) == 0
     assert _hang_indent(blk("tf-idf weighting of the value for word t in document d", [178, 209])) == 0
 
-    lanes = _hang_lanes(pymupdf.Rect(178, 170, 475, 220), [], 31, 8.8, 1.45, 4)
-    assert lanes[0] == (0.0, 297) and lanes[1:] == [(31, 266)] * 3
+    # 正文对齐在题号右边 31 点处；译文题号宽 20 点时首行往右挪 11 点，比 31 点宽时这一列跟着往右
+    box = pymupdf.Rect(178, 170, 475, 220)
+    assert _hang_lanes(box, [], 31, 0, 8.8, 1.45, 3) == [(0.0, 297), (31, 266), (31, 266)]
+    assert _hang_lanes(box, [], 31, 20, 8.8, 1.45, 3) == [(11, 286), (31, 266), (31, 266)]
+    assert _hang_lanes(box, [], 31, 40, 8.8, 1.45, 3) == [(0.0, 297), (40, 257), (40, 257)]
 
 
 def test_a_chinese_line_beside_its_english_rendering_is_kept_apart():
@@ -11329,6 +11332,33 @@ def test_a_chinese_line_beside_its_english_rendering_is_kept_apart():
     quote = blk("荃者所以在鱼，得鱼而忘荃", 206)
     assert _foreign_ids([quote, *prose]) == {id(quote)}
 
+
+def test_the_label_width_is_measured_on_the_translation():
+    """译文开头的题号、圆点连同后面的空白有多宽（悬挂缩进时首行按它往右挪）。"""
+    from app.formats.pdf import _label_width
+    from app.formats.pdf_flow import measure_width
+
+    assert _label_width("{b}3.1{/b} 写出三元语法概率估计的方程", 8.8) == pytest.approx(measure_width("3.1 ", 8.8))
+    assert _label_width("• 由训练有素的标注者直接标注", 8.8) == pytest.approx(measure_width("• ", 8.8))
+    assert _label_width("写出三元语法概率估计的方程", 8.8) == 0
+
+
+def test_a_line_ending_on_an_equals_sign_runs_on():
+    """上一行停在等号上，下一行数字起头的是式子的另一半，接成一段。"""
+    from app.formats.pdf import TextBlock, _merge_continuations
+
+    def blk(text, y0, y1):
+        rect = pymupdf.Rect(167, y0, 475, y1)
+        span = {"text": text, "font": "NimbusRomNo9L-Regu", "size": 10.0, "flags": 0}
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000", bold=False,
+                         span_lines=[[span]])
+
+    head = blk("If we use linear interpolation smoothing between a maximum-likelihood bigram model and a "
+               "maximum-likelihood unigram model with λ1 = 1 2 and λ2 =", 654, 680)
+    tail = blk("2, what is P(Sam|am)? Include <s> and </s> in your counts just like any other token.", 678, 703)
+    assert len(_merge_continuations([head, tail])) == 1
+
+
 def test_the_english_rendering_below_a_chinese_example_stays_original():
     """例句框里汉字、拼音下面紧贴着的英译是作者给的，留原文；下面隔开一截、另起左缘的正文照译。"""
     from app.formats.pdf import TextBlock, _foreign_ids
@@ -11348,18 +11378,3 @@ def test_the_english_rendering_below_a_chinese_example_stays_original():
     ])]
     found = _foreign_ids([chinese, english, *prose])
     assert id(english) in found and not any(id(block) in found for block in prose)
-
-def test_a_line_ending_on_an_equals_sign_runs_on():
-    """上一行停在等号上，下一行数字起头的是式子的另一半，接成一段。"""
-    from app.formats.pdf import TextBlock, _merge_continuations
-
-    def blk(text, y0, y1):
-        rect = pymupdf.Rect(167, y0, 475, y1)
-        span = {"text": text, "font": "NimbusRomNo9L-Regu", "size": 10.0, "flags": 0}
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000", bold=False,
-                         span_lines=[[span]])
-
-    head = blk("If we use linear interpolation smoothing between a maximum-likelihood bigram model and a "
-               "maximum-likelihood unigram model with λ1 = 1 2 and λ2 =", 654, 680)
-    tail = blk("2, what is P(Sam|am)? Include <s> and </s> in your counts just like any other token.", 678, 703)
-    assert len(_merge_continuations([head, tail])) == 1
