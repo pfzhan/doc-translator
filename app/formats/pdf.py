@@ -12152,10 +12152,11 @@ def _plan_document(
         for role, edge, block in zip(roles, edges, blocks)
     ]
     cell_ids = {id(block) for block in blocks if _table_cell(block, geometries[block.page])}
+    # 书后的索引留原文：条目按原文字母排序，页码指向原书页，译过来既查不到，也和页码对不上
     skips = [
         bib or role is Role.FIGURE or edge or _garbled_label(block.text) or _code_block(block)
         or _margin_term(block) or id(block) in displayed or id(block) in cell_ids or _equation_block(block)
-        or id(block) in examples
+        or id(block) in examples or block.index
         for bib, role, edge, block in zip(biblio_skips(blocks), roles, edges, blocks)
     ]
     skip_ids = {id(b) for b, s in zip(blocks, skips) if s}

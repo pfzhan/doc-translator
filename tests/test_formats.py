@@ -10071,6 +10071,32 @@ def test_an_index_entry_with_many_page_numbers_is_translated():
     assert "F0, 340" in texts
 
 
+def test_the_index_at_the_back_stays_original(tmp_path):
+    """书后的索引按原文字母排序，页码指向原书页，整页留原文。前面的正文照翻。"""
+    from app.formats.pdf import _plan_pdf
+
+    class Runner:
+        def report_stage(self, *args, **kwargs):
+            pass
+
+        def set_title(self, title):
+            pass
+
+    doc = pymupdf.open()
+    body = doc.new_page(width=500, height=700)
+    body.insert_text((60, 80), "Perplexity measures how well a model predicts a sample of text.", fontsize=10)
+    index = doc.new_page(width=500, height=700)
+    for row in range(16):
+        index.insert_text((60, 80 + 12 * row), f"entry term {row}, {100 + row}", fontsize=8)
+    src = tmp_path / "book.pdf"
+    doc.save(src)
+    plan = _plan_pdf(src, Runner(), "")
+    skipped = {text: skip for text, skip in zip(plan.texts, plan.skips)}
+    assert not skipped["Perplexity measures how well a model predicts a sample of text."]
+    entries = [skip for text, skip in skipped.items() if text.startswith("entry term")]
+    assert len(entries) == 16 and all(entries)
+
+
 def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
     """索引条目折行时续行悬挂缩进。下一行起笔不比这一行靠右就是另一条（see 引用没有页码）；
     页码折到下一行时那一行只有页码，可能分在另一块里；两端对齐拆开的一行按整行看。"""
