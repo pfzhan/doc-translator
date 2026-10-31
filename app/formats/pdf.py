@@ -7449,13 +7449,15 @@ def _all_styled(block: TextBlock) -> bool:
 
 
 def _styled_edge(block: TextBlock, index: int) -> bool:
-    """第一截（index=0）或最后一截（-1）是粗体、斜体，或者字号和块的不一样。"""
+    """第一截（index=0）或最后一截（-1）是粗体、斜体，或者字号和块的不一样。
+    小型大写的词（MUC (Vilain et al., 1995) and …）按正文字号算，是句中的缩写，不是小标题"""
     spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
     if not spans:
         return False
     span = spans[index]
     mark = emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0))
-    return mark.bold or mark.italic or abs(float(span.get("size") or block.size) - block.size) > block.size * 0.05
+    size = _small_caps_sizes(block.span_lines or []).get(id(span), float(span.get("size") or block.size))
+    return mark.bold or mark.italic or abs(size - block.size) > block.size * 0.05
 
 
 def _body_measure(blocks: list[TextBlock]) -> float:

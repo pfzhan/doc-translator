@@ -4720,6 +4720,24 @@ def test_a_larger_heading_below_a_title_is_not_its_wrapped_line():
     assert len(_merge_continuations([title, section])) == 2
 
 
+def test_a_small_caps_word_at_the_line_start_is_not_a_style_change():
+    """行首小一号的全大写词是小型大写的缩写（MUC (Vilain et al., 1995) and …），按正文字号算；
+    粗体、小一号的正文起头仍算换了样式。"""
+    from app.formats.pdf import TextBlock, _styled_edge
+
+    def span(text, x0, size=10.0, font="NimbusRomNo9L-Regu", flags=0):
+        return {"text": text, "font": font, "size": size, "flags": flags,
+                "bbox": (x0, 433, x0 + 20, 444), "origin": (x0, 441.5)}
+
+    def blk(spans):
+        return TextBlock(page=0, rect=pymupdf.Rect(142, 433, 475, 480), line_rects=[], text="",
+                         size=10, color="#000", bold=False, span_lines=[spans])
+
+    assert not _styled_edge(blk([span("MUC", 142.4, 8.0), span(" (Vilain et al., 1995) and", 162)]), 0)
+    assert _styled_edge(blk([span("Lemma 2.3.", 142.4, font="NimbusRomNo9L-Medi", flags=16), span(" Let x be", 190)]), 0)
+    assert _styled_edge(blk([span("note", 142.4, 8.0), span(" and the rest", 162)]), 0)
+
+
 def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
     """原文段落前几行在图左边让开、图下面恢复整宽。译文碰到图高度的行同样让开，图下面的行写满。
     只有一行在旁边的不算绕排（引文最后一行旁边的出处）。"""
