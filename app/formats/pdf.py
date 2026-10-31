@@ -2291,11 +2291,18 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         # 打字机字体排的是逐行照录的文字（对话、示例），右缘参差，没到右边距不说明是硬换行。
         # 下一行像新句子开头就是新的一行
         verbatim = _typewriter_line(pspans) and _typewriter_line(items[i][2])
-        # 绕图排的段落：图旁的几行收在同一处，离块的右缘很远。上一行收在这一处、块里还有两行以上
-        # 也收在这里，下一行不往里缩、至少排到这一处，是排满了图旁的窄栏，不是硬换行
+        # 绕图排的段落：图旁的几行收在同一处，离块的右缘很远。上一行和它上面或下面紧挨的一行收在同一处，
+        # 另一行至少排到这一处，下一行又不往里缩，是排满了图旁的窄栏，不是硬换行。
+        # 图旁的第一行上面是排满整行的，最后一行下面回到整行。隔着几行碰巧收在同一处的短行（例题的答案）不算
+        head = ref
+        while head in justified:
+            head -= 1
+        above = row_box.get(head - 1, items[head - 1][1]) if head > 0 else None
+        below = row_box.get(i, rect)
         lane_full = (
-            sum(abs(item[1].x1 - prect.x1) <= 0.5 for item in items) >= 3
-            and row_box.get(i, rect).x1 >= prect.x1 - 0.5 and rect.x0 <= prect.x0 + 0.5 * psize
+            above is not None and above.y0 < prect.y0 - 0.5 * psize and rect.x0 <= prect.x0 + 0.5 * psize
+            and (abs(above.x1 - prect.x1) <= 0.5 and below.x1 >= prect.x1 - 0.5
+                 or abs(below.x1 - prect.x1) <= 0.5 and above.x1 >= prect.x1 - 0.5)
         )
         hard_break = (
             (max_x1 - prect.x1 > 3 * psize and not lane_full or verbatim)

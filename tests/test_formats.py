@@ -736,6 +736,25 @@ def test_lines_wrapping_around_a_figure_stay_in_one_paragraph():
     assert _split_lines(items) == [[0, 1, 2, 3, 4, 5]]
     items[3] = line("ica. Thylacosmilus was a marsupial.", 160.2, 300.0, 362.8)
     assert _split_lines(items) == [[0, 1, 2, 3], [4, 5]]
+    # 图旁的第一行以句号收尾，上面一行排满整行，下面一行收在同一处
+    first = [
+        line("one of the earliest goals of computer language processing. In fact, speech processing", 160.2, 493.2, 298.1),
+        line("predates the computer by many decades!", 160.2, 324.5, 310.0),
+        line("The first machine that recognized speech", 160.2, 324.5, 322.0),
+        line("was a toy from the 1920s.", 160.2, 324.5, 333.9),
+    ]
+    assert _split_lines(first) == [[0, 1, 2, 3]]
+    # 例题的答案各占一行，隔着几行碰巧收在同一处，下一道题另起一段
+    answers = [
+        line("The pronoun in the sentence above refers to", 82.2, 260.0, 294.8),
+        line("Tom", 82.2, 102.1, 307.7),
+        line("He said the manuscript was never published, so he wanted it back before anyone", 82.2, 513.1, 318.8),
+        line("saw it.", 82.2, 112.1, 330.7),
+        line("The pronoun in the sentence above refers to", 82.2, 260.0, 342.7),
+        line("Manuscript", 82.2, 102.1, 354.6),
+        line("Many years later the young man crossed the river to meet the bride he had chosen", 82.2, 513.1, 366.6),
+    ]
+    assert _split_lines(answers)[-1] == [6]
 
 
 def test_a_table_row_name_is_cut_from_its_numbers_and_the_rows_around():
