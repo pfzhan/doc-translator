@@ -45,6 +45,8 @@ one title line, followed by that item's source text. The source list ends with
 exactly one [[source_end]] line. Process every item independently according to
 the active task instructions, using the other items only as context. Return each
 supplied id exactly once in any order, followed by only its processed text.
+An item may be a single word, a label, or an unfinished sentence; process it as
+given and never ask for more context or the full text.
 After all output blocks, processed text may span multiple lines. Preserve every id
 title byte-for-byte.
 
@@ -52,8 +54,11 @@ Do not wrap the entire response or protocol envelope in a Markdown fence.
 Fenced code blocks that belong to an item's processed content may be preserved.
 Do not include explanations outside processed text."""
 
-# 只有一段时附加的说明
+# 只有一段时附加的说明。书里故意写半截的例句（"IBM, a company with a long..."）单独送去时，
+# 模型会回一句「请提供完整的原文」
 SINGLE_ITEM_SUFFIX = """
+The text may be a single word, a label, or an unfinished sentence; process it as
+given and never ask for more context or the full text.
 Return only the processed text, without source text, markers, titles,
 explanations, or an enclosing Markdown fence. Preserve fenced code blocks that
 belong to the processed content."""

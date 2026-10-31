@@ -436,3 +436,30 @@ def test_single_item_note_is_written_into_the_system_prompt():
     assert user.endswith("log") and "Note" not in user
     system, _ = build_messages(["log"], "zh-CN", notes=[""])
     assert "## Item notes" not in system
+
+
+def test_a_reply_asking_for_the_full_text_is_not_kept():
+    """书里故意写半截的例句单独重翻时，模型回「请提供完整的原文」。按这一批的常见长度比看得出来，
+    再问一次仍是这样就回空，由 Runner 回填原文"""
+    fragment = "IBM, a company with a long..."
+    asks = []
+
+    async def handler(request):
+        body = json.loads(request.content)
+        user = body["messages"][-1]["content"]
+        if "[[source_end]]" in user:
+            content = "[[p0]]\n{v1} 串位的译文。\n[[p1]]\n第二段。\n[[p2]]\n第三段。\n[[p3]]\n第四段。"
+        elif fragment in user:
+            asks.append(body["messages"][0]["content"])
+            content = ("我需要您提供完整的源文本才能进行翻译。您提到\"IBM, a company with a long...\", "
+                       "但这句话似乎未完成。请提供完整的 source item(源文本内容), 我将按照您的要求将其翻译为简体中文。")
+        else:
+            content = "单独重翻的译文，长度和原文相称。"
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    tr = make_openai(handler)
+    long = "This sentence is long enough for the length ratio to be compared with the rest of the batch."
+    out = run(tr.translate_batch([long, fragment, long + " Again.", long + " Once more."]))
+    assert out[1] == "" and out[0] == out[2] == out[3] == "单独重翻的译文，长度和原文相称。"
+    assert len(asks) == 2 and "never ask for more context" in asks[0]
+    run(tr.aclose())

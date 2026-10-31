@@ -383,6 +383,13 @@ class LLMTranslator(Translator):
             redone = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in missing))
             for i, [text] in zip(missing, redone):
                 found[i] = text
+            # 单独重翻的回复也可能不是译文（「请提供完整的原文」），按重翻后这一批的常见长度比再查一遍。
+            # 再问一次仍不对就回空，由 Runner 回填原文，不写进缓存
+            typical = typical_ratio((texts[i], found[i]) for i in found)
+            wrong = [i for i in missing if misplaced(texts[i], found[i], typical)]
+            again = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in wrong))
+            for i, [text] in zip(wrong, again):
+                found[i] = "" if misplaced(texts[i], text, typical) else text
         return [found[i] for i in range(len(texts))]
 
     async def aclose(self):
