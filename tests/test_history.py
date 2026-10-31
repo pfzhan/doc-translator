@@ -169,6 +169,8 @@ def test_redo_from_scratch_analyses_the_pdf_again(app_env, monkeypatch):
     doc.new_page(width=420, height=240).insert_text(
         (40, 60), "A body paragraph long enough to be translated here.", fontsize=10,
     )
+    doc[0].insert_text((40, 120), "Closing Remarks", fontsize=14)
+    doc.set_toc([[1, "Closing Remarks", 1]])
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client, name="paper.pdf", data=doc.tobytes())["id"])
         assert job["status"] == "done" and main.jobs.plan_path(main.jobs.get(job["id"])).exists() and len(calls) == 1
@@ -243,7 +245,7 @@ def test_variant_generates_other_mode(app_env):
 
 
 def test_pdf_translated_variant_is_cut_from_the_bilingual_output(app_env, monkeypatch):
-    """PDF 的仅译文版从已有的双语版里取，不重新排版。"""
+    """PDF 的仅译文版从已有的双语版里取，不重新排版，书签按预览快照换成译文。"""
     import pymupdf
 
     main = app_env
@@ -251,6 +253,8 @@ def test_pdf_translated_variant_is_cut_from_the_bilingual_output(app_env, monkey
     doc.new_page(width=420, height=240).insert_text(
         (40, 60), "A body paragraph long enough to be translated here.", fontsize=10,
     )
+    doc[0].insert_text((40, 120), "Closing Remarks", fontsize=14)
+    doc.set_toc([[1, "Closing Remarks", 1]])
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client, name="paper.pdf", data=doc.tobytes())["id"])
         assert job["status"] == "done"
@@ -262,8 +266,9 @@ def test_pdf_translated_variant_is_cut_from_the_bilingual_output(app_env, monkey
         again = client.post(f"/api/jobs/{job['id']}/variant")
         assert again.status_code == 200, again.text
         url = next(o["url"] for o in again.json()["outputs"] if o["name"] == "paper.translated.pdf")
-        page = pymupdf.open("pdf", client.get(url).content)[0]
-        assert page.rect == pymupdf.Rect(0, 0, 420, 240) and "[zh-CN]" in page.get_text()
+        cut = pymupdf.open("pdf", client.get(url).content)
+        assert cut[0].rect == pymupdf.Rect(0, 0, 420, 240) and "[zh-CN]" in cut[0].get_text()
+        assert cut.get_toc() == [[1, "[zh-CN] Closing Remarks", 1]]
 
 
 def test_variant_refuses_cache_miss_and_closes_client(app_env):

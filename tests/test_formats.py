@@ -2776,7 +2776,8 @@ def test_pdf_biblio_skips_on_attention_paper():
 
 
 def test_translated_version_cut_from_the_bilingual_one_matches_a_fresh_render(tmp_path):
-    """仅译文版从双语版里取：文字、链接、页码标签和重新排出来的一样。有转过的页就取不了，交给重新排版。"""
+    """仅译文版从双语版里取：文字、链接、页码标签、书签和重新排出来的一样。
+    有转过的页、有书签而没有预览快照时取不了，交给重新排版。"""
     from app.formats.pdf import translate_pdf, translated_from_bilingual
 
     doc = pymupdf.open()
@@ -2784,16 +2785,20 @@ def test_translated_version_cut_from_the_bilingual_one_matches_a_fresh_render(tm
         doc.new_page(width=420, height=240).insert_text(
             (40, 60), f"A body paragraph long enough to be translated on page {n + 1}.", fontsize=10,
         )
+    doc[1].insert_text((40, 120), "2 Second Part", fontsize=14)
     doc[0].insert_link({"kind": pymupdf.LINK_GOTO, "from": pymupdf.Rect(40, 50, 200, 62), "page": 1,
                         "to": pymupdf.Point(0, 0)})
     doc.set_page_labels([{"startpage": 0, "prefix": "A-", "style": "D", "firstpagenum": 1}])
+    doc.set_toc([[1, "Second Part", 2]])
     src = tmp_path / "paper.pdf"
     doc.save(src)
     (tmp_path / "b").mkdir()
     (tmp_path / "t").mkdir()
-    [both] = run(translate_pdf(src, tmp_path / "b", runner(), True, "zh-CN"))
+    first = runner()
+    [both] = run(translate_pdf(src, tmp_path / "b", first, True, "zh-CN"))
     [alone] = run(translate_pdf(src, tmp_path / "t", runner(), False, "zh-CN"))
-    data = translated_from_bilingual(src, both)
+    assert translated_from_bilingual(src, both, None) is None
+    data = translated_from_bilingual(src, both, first.preview(-1))
     assert data is not None
     cut, fresh = pymupdf.open("pdf", data), pymupdf.open(alone)
     assert len(cut) == len(fresh) == 2 and "[zh-CN]" in cut[0].get_text()
@@ -2803,10 +2808,31 @@ def test_translated_version_cut_from_the_bilingual_one_matches_a_fresh_render(tm
             (link["from"], link.get("page")) for link in b.get_links()]
         assert a.get_pixmap(dpi=50).samples == b.get_pixmap(dpi=50).samples
     assert cut[0].get_links() and cut.get_page_labels() == fresh.get_page_labels()
+    assert cut.get_toc() == fresh.get_toc() == [[1, "[zh-CN] Second Part", 2]]
+    assert pymupdf.open(both).get_toc() == [[1, "Second Part", 2]]  # 双语版的书签不换
 
     doc[1].set_rotation(90)
     doc.save(tmp_path / "turned.pdf")
-    assert translated_from_bilingual(tmp_path / "turned.pdf", both) is None
+    assert translated_from_bilingual(tmp_path / "turned.pdf", both, first.preview(-1)) is None
+
+
+def test_bookmarks_take_the_translation_shown_on_the_page_they_point_to():
+    """同一标题译法不同（目录页和正文各译一次）时，用指向页或下一页上的那种，原书签没有节号就去掉节号。
+    译文和原文相同、整段跳过的书签保留原文。"""
+    from app.formats.pdf import translate_bookmarks
+
+    doc = pymupdf.open()
+    for text in ["Ways", "", "2 Approaches"]:
+        doc.new_page().insert_text((50, 50), text)
+    doc.set_toc([[1, "Methods", 2], [1, "Results", 3], [1, "Notes", 3]])
+    preview = {
+        "segments": [{"s": "Methods", "k": "p"}, {"s": "Methods", "k": "h2"},
+                     {"s": "Results", "k": "h2"}, {"s": "Notes", "k": "h2"}],
+        "updates": [[0, "Ways", 0], [1, "Approaches", 0], [1, "2 Approaches", 0],
+                    [2, "Results", 0], [3, "Notes", 1]],
+    }
+    translate_bookmarks(doc, preview)
+    assert doc.get_toc() == [[1, "Approaches", 2], [1, "Results", 3], [1, "Notes", 3]]
 
 
 def test_skipped_bibliography_keeps_hanging_indent(tmp_path):

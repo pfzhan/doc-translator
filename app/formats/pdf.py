@@ -11516,14 +11516,15 @@ def _render_side_by_side(src: pymupdf.Document, translated: pymupdf.Document) ->
     return out
 
 
-def translated_from_bilingual(src: Path, bilingual: Path) -> bytes | None:
+def translated_from_bilingual(src: Path, bilingual: Path, preview: dict | None) -> bytes | None:
     """从双语版取出右半边的译文页，换进原书的副本，得到仅译文版，几秒就好。
 
     重新排版一本书要几分钟。原书副本里链接、命名目标、页码标签、书签和元数据都在，
-    和重新排出来的一样。页面转过、页面框不从原点起、带裁剪框，或译文页和原页大小不同时返回 None，
-    交给重新排版。"""
+    和重新排出来的一样，书签按 preview（任务的预览快照）换成译文（见 translate_bookmarks）。
+    页面转过、页面框不从原点起、带裁剪框，译文页和原页大小不同，或原书有书签而没有预览快照时
+    返回 None，交给重新排版。"""
     src_doc, both = pymupdf.open(src), pymupdf.open(bilingual)
-    if len(src_doc) != len(both):
+    if len(src_doc) != len(both) or (preview is None and src_doc.get_toc()):
         return None
     forms = []
     for page, side in zip(src_doc, both):
@@ -11550,8 +11551,57 @@ def translated_from_bilingual(src: Path, bilingual: Path) -> bytes | None:
         src_doc.xref_set_key(page.xref, "Resources", "<<>>")
         src_doc.xref_set_key(page.xref, "Contents", f"{blank} 0 R")
         page.show_pdf_page(page.rect, both, i)
+    translate_bookmarks(src_doc, preview)
     # 双语版已经合并、子集化过，这里只丢掉原书用不到的对象。garbage=3 再比一遍重复对象，一本书要一分钟
     return src_doc.tobytes(garbage=2, deflate=True)
+
+
+def translate_bookmarks(doc: pymupdf.Document, preview: dict | None) -> None:
+    """把仅译文版的书签标题换成正文里那个标题的译文。preview 是 Runner.preview(-1) 的结果。
+
+    书签标题和某段原文去掉节号、不计大小写后相同，就用那段的译文。同一个标题有几种译法时
+    （书前目录页和正文各译一次），用书签指向页或下一页上出现的那种：hyperref 的锚点常落在标题前一页的页底。
+    对不上的、译文里有公式的保留原文。原书签不带节号时，译文开头的节号也去掉。"""
+    toc = doc.get_toc()
+    if not toc or not preview:
+        return
+    latest: dict[int, str | None] = {}
+    for i, text, kept in preview.get("updates") or []:
+        latest[i] = None if kept else text
+    choices: dict[str, list[str]] = {}
+    for i, segment in enumerate(preview.get("segments") or []):
+        text = latest.get(i)
+        if text is None:
+            continue
+        text = strip_style_marks(text).strip()
+        if text and text != segment["s"].strip() and not re.search(r"[\x00-\x1f]|\{[a-z]\d+\}", text):
+            choices.setdefault(_bookmark_key(segment["s"]), []).append(text)
+    page_texts: dict[int, str] = {}
+
+    def on_page(pno: int, text: str) -> bool:
+        if not 1 <= pno <= len(doc):
+            return False
+        if pno not in page_texts:
+            page_texts[pno] = re.sub(r"\s+", "", doc[pno - 1].get_text())
+        return re.sub(r"\s+", "", text) in page_texts[pno]
+
+    for xref, (_, title, pno) in zip(doc.get_outline_xrefs(), toc):
+        found = list(dict.fromkeys(choices.get(_bookmark_key(title), ())))
+        if len(found) > 1:
+            found = [text for q in (pno, pno + 1) for text in found if on_page(q, text)]
+        if not found:
+            continue
+        text = found[0]
+        if not _NUMBER_LABEL_RE.match(title.strip()) and (number := _NUMBER_LABEL_RE.match(text)):
+            text = text[number.end():].strip()
+        doc.xref_set_key(xref, "Title", pymupdf.get_pdf_str(text))
+
+
+def _bookmark_key(text: str) -> str:
+    text = strip_style_marks(text).strip().replace("’", "'")
+    if number := _NUMBER_LABEL_RE.match(text):
+        text = text[number.end():]
+    return " ".join(text.split()).casefold()
 
 
 def _translated_form(doc: pymupdf.Document, page: pymupdf.Page, box: pymupdf.Rect) -> int | None:
@@ -12886,6 +12936,8 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
             output = translated
         if toc:
             output.set_toc(toc)  # 并排页和原页一一对应，书签页码不用映射
+            if not bilingual and hasattr(runner, "preview"):
+                translate_bookmarks(output, runner.preview(-1))
         _drop_mupdf_cache()
         dst.write_bytes(_compact(output))
         return dst

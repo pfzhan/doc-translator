@@ -589,7 +589,9 @@ async def _cut_from_bilingual(job: Job, stage: Path) -> list[Path] | None:
         return None
     try:
         async with mupdf_turn():
-            data = await asyncio.to_thread(translated_from_bilingual, src, jobs.out_dir(job.id) / made)
+            data = await asyncio.to_thread(
+                translated_from_bilingual, src, jobs.out_dir(job.id) / made, jobs.load_preview(job),
+            )
     except (RuntimeError, ValueError):  # 双语版读不出来，重新排版
         return None
     if data is None:
