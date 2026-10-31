@@ -54,7 +54,7 @@ PROGRESS_SAVE_INTERVAL = 5
 
 
 async def _cleanup() -> None:
-    """删过期记录，再删没有记录用到的版面分析结果、把重复的原文件换成硬链接。
+    """删过期记录；把记录目录里的版面分析结果搬到共用目录，删掉没有记录用到的；把重复的原文件换成硬链接。
     是否在补生成只在事件循环里判断，不把那个字典交给别的线程。"""
     expired = await asyncio.to_thread(jobs.expired_ids, settings.retention_days)
     for jid in expired:
@@ -70,6 +70,7 @@ async def _cleanup() -> None:
             await asyncio.to_thread(jobs.delete, jid)
         finally:
             cleaning.discard(jid)
+    await asyncio.to_thread(jobs.adopt_layouts)
     await asyncio.to_thread(cleanup.prune_layouts, jobs)
     await asyncio.to_thread(jobs.share_sources)
 

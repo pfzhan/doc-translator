@@ -200,6 +200,15 @@ class JobStore:
                     local.replace(folder / name)
         return folder
 
+    def adopt_layouts(self) -> int:
+        """把还存在记录目录里的版面分析结果都搬到共用目录，返回搬过的记录数。
+        同一本书的新记录这样才找得到旧记录分析过的结果。"""
+        moved = 0
+        for job in self.list():
+            if any((self.dir(job.id) / name).is_file() for name in _LAYOUT_FILES) and self.layout_dir(job):
+                moved += 1
+        return moved
+
     def plan_path(self, job: Job) -> Path | None:
         """PDF 的版面分析结果。继续翻译、生成另一种版本、同一本书再传一次时读回，不用再逐页分析。
         模型框出的区域存在旁边的 boxes.json 里。原文件不在时返回 None，不存。"""

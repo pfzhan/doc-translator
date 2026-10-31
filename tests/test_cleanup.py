@@ -228,3 +228,14 @@ def test_the_same_file_uploaded_twice_is_stored_once(app_env):
         # 另一份内容不同的文件不受影响
         c = wait_done(client, submit(client, name="other.md", data=MD + b"\nMore.\n")["id"])
         assert main.jobs.source_path(main.jobs.get(c["id"])).stat().st_ino != second.stat().st_ino
+
+
+def test_layouts_left_in_job_folders_are_adopted_for_new_jobs(app_env):
+    main = app_env
+    with TestClient(main.app) as client:
+        old = main.jobs.get(wait_done(client, submit(client)["id"])["id"])
+        # 共用目录之前的旧记录：版面结果还在记录目录里
+        (main.jobs.dir(old.id) / "boxes.json").write_text("{}")
+        shared = main.jobs.layout_root / old.document
+        assert main.jobs.adopt_layouts() == 1
+        assert (shared / "boxes.json").is_file() and not (main.jobs.dir(old.id) / "boxes.json").exists()
