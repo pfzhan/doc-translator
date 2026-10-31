@@ -11328,3 +11328,23 @@ def test_a_chinese_line_beside_its_english_rendering_is_kept_apart():
     ])]
     quote = blk("荃者所以在鱼，得鱼而忘荃", 206)
     assert _foreign_ids([quote, *prose]) == {id(quote)}
+
+def test_the_english_rendering_below_a_chinese_example_stays_original():
+    """例句框里汉字、拼音下面紧贴着的英译是作者给的，留原文；下面隔开一截、另起左缘的正文照译。"""
+    from app.formats.pdf import TextBlock, _foreign_ids
+
+    def blk(text, x0, y0, y1, first=None):
+        span = {"text": first or text, "font": "Times", "size": 10.0, "flags": 0}
+        return TextBlock(page=0, rect=pymupdf.Rect(x0, y0, 470, y1), line_rects=[], text=text, size=10,
+                         color="#000", bold=False, span_lines=[[span]])
+
+    chinese = blk("在我的后园，可以看见墙外有两株树，一株是 zài wǒ de hòu yuán", 164, 412, 437,
+                  first="在我的后园，可以看见墙外有两株树，一株是")
+    english = blk("In my backyard, you can see two trees beyond the fence. One is a ...", 164, 436, 448)
+    prose = [blk(text, 160, 454 + 40 * i, 490 + 40 * i) for i, text in enumerate([
+        "Here you might expect that a language model should assign a high probability to continuations.",
+        "Fig. 1.2 shows this idea of a probability distribution more clearly than the text does.",
+        "What good is it to assign probabilities to words? One intuition is that a model can predict text.",
+    ])]
+    found = _foreign_ids([chinese, english, *prose])
+    assert id(english) in found and not any(id(block) in found for block in prose)

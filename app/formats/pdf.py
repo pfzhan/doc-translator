@@ -6334,6 +6334,8 @@ def _margin_term(block: TextBlock) -> bool:
 # 认外文段落时一段至少要有的字母数。题记里的一个小项只有一两个词，要和旁边的合起来认
 _FOREIGN_LETTERS = 40
 _FOREIGN_CJK = 8
+_HAN_RE = re.compile(r"[㐀-鿿]")
+_KANA_HANGUL_RE = re.compile(r"[぀-ヿ가-힯]")
 
 
 def _colored_examples(blocks: list[TextBlock], geometries: list[PageGeometry]) -> set[int]:
@@ -6814,7 +6816,49 @@ def _foreign_ids(blocks: list[TextBlock]) -> set[int]:
         for group in groups:
             if len(group) > 1 and foreign("\n".join(block.text for block in group)):
                 found.update(id(block) for block in group)
+    if not cjk_doc:
+        found |= _rendering_ids(blocks, found)
     return found
+
+
+def _han_line(block: TextBlock) -> bool:
+    """块的第一行是一句中文：八个以上汉字，不夹西文字母、假名、谚文。下面可以跟着拼音"""
+    first = "".join(str(span.get("text") or "") for span in block.span_lines[0]) if block.span_lines else block.text
+    return (len(_HAN_RE.findall(first)) >= _FOREIGN_CJK and not re.search(r"[A-Za-z]", first)
+            and not _KANA_HANGUL_RE.search(first))
+
+
+def _rendering_ids(blocks: list[TextBlock], found: set[int]) -> set[int]:
+    """中文原句（见 _han_line）旁边作者给的西文译文：同一行右边起笔的（题词 荃者所以在鱼 | Nets are for fish;），
+    或者紧贴在下面、左缘对齐的（例句框里汉字、拼音下面的 In my backyard, …），连同下面左缘对齐的续行。
+    原句就在旁边，再译回中文没有意义，留原文。"""
+    sources = [block for block in blocks if _han_line(block)]
+    out: set[int] = set()
+    for source in sources:
+        for block in blocks:
+            if block.page != source.page or id(block) in found or id(block) in out:
+                continue
+            r, s = block.rect, source.rect
+            beside = (min(r.y1, s.y1) - max(r.y0, s.y0) > min(r.height, s.height) * 0.5
+                      and 0 <= r.x0 - s.x1 <= 3 * source.size)
+            below = 0 <= r.y0 - s.y1 + 1 <= source.size * 0.5 and abs(r.x0 - s.x0) <= source.size
+            if beside or below:
+                out.add(id(block))
+    # 续行：紧贴在下面、左缘对齐、同字号
+    grown = True
+    while grown:
+        grown = False
+        for block in blocks:
+            if id(block) in found or id(block) in out:
+                continue
+            for other in blocks:
+                if (id(other) in out and other.page == block.page and abs(block.rect.x0 - other.rect.x0) <= 1
+                        and 0 <= block.rect.y0 - other.rect.y1 + 1 <= block.size * 0.5
+                        and abs(block.size - other.size) <= 0.3):
+                    out.add(id(block))
+                    grown = True
+                    break
+    return out
 
 
 def _latin_chars(text: str) -> int:
