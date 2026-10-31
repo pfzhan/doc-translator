@@ -4,6 +4,10 @@
 
 ## 启动
 
+需要 Python 3.12 或更高版本。macOS 自带的 `python3` 是 3.9，可用 `brew install python@3.12` 安装；Linux 可用发行版自带的 3.12（如 Ubuntu 24.04），或用 pyenv 安装。默认的 `python3` 低于 3.12 时，把下面第一条命令里的 `python3` 换成 `python3.12`。Debian、Ubuntu 上还要先安装 `python3-venv`。
+
+macOS、Linux 上执行：
+
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
@@ -11,6 +15,8 @@ python3 -m venv .venv
 ```
 
 启动后打开 http://127.0.0.1:8765 。
+
+关闭终端后服务也会退出。需要在后台一直运行时，用 `nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 > server.log 2>&1 &` 启动，输出写在 `server.log`。
 
 服务只接受 `127.0.0.1`、`localhost` 等本机地址的访问。需要通过局域网 IP 或域名访问时，用环境变量 `ALLOWED_HOSTS` 追加（逗号分隔），例如 `ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8765`。
 
