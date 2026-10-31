@@ -5675,6 +5675,7 @@ def _extract(
             formula_rows = {i for i, item in enumerate(items) if any(id(span) in fractions for span in item[2])}
             groups = [part for group in groups for part in _cut_runs(group, formula_rows)]
             groups = [part for group in groups for part in _cut_line_list(group, items, row_ends)]
+            groups = [part for group in groups for part in _cut_item_breaks(group, items, row_ends)]
             for group in groups:
                 texts = [items[i][0] for i in group]
                 line_rects = [items[i][1] for i in group]
@@ -6082,6 +6083,14 @@ def _wraps_from_above(
 def _column_right(x0: float, size: float, rows: Sequence[pymupdf.Rect], frame: TextFrame | None) -> float:
     """从 x0 起笔的块所在那一栏的右缘：本页和它同一左缘起笔的行有四成以上止于同一处（两端对齐）。
     索引、代码这类参差的行对不出这条缘，用版心右缘。"""
+    edge = _voted_right(x0, size, rows)
+    if edge is not None:
+        return edge
+    return frame.x1 if frame is not None else float("inf")
+
+
+def _voted_right(x0: float, size: float, rows: Sequence[pymupdf.Rect]) -> float | None:
+    """本页从 x0 起笔的行有四成以上止于同一处时，那一处就是右缘。对不出来返回 None"""
     ends = Counter(round(row.x1) for row in rows if abs(row.x0 - x0) <= size)
     total = sum(ends.values())
     if ends:
@@ -6089,7 +6098,7 @@ def _column_right(x0: float, size: float, rows: Sequence[pymupdf.Rect], frame: T
         votes = _near_votes(ends, edge)
         if votes >= 3 and votes >= total * 0.4:
             return float(edge)
-    return frame.x1 if frame is not None else float("inf")
+    return None
 
 
 def _near_votes(counter: Counter[int], value: int, near: int = 1) -> int:
@@ -6389,14 +6398,97 @@ def _colored_example(block: TextBlock, frame: TextFrame) -> bool:
     colors = {int(span.get("color") or 0) for span in spans}
     if len(colors) != 1:
         return False
-    color = colors.pop()
-    rgb = [(color >> shift) & 0xFF for shift in (16, 8, 0)]
-    if max(rgb) - min(rgb) < 0x60:
+    if not _vivid(colors.pop()):
         return False
     if sum(len(span["text"]) for span in spans if int(span.get("flags") or 0) & 2) * 2 > sum(len(span["text"]) for span in spans):
         return False
     indent = block.rect.x0 - frame.x0
     return block.size * 1.5 <= indent <= block.size * 4 and block.rect.x1 <= frame.x1 + 2
+
+
+def _vivid(color: int) -> bool:
+    """鲜明的颜色：RGB 三个分量拉得开。黑、灰不算"""
+    rgb = [(color >> shift) & 0xFF for shift in (16, 8, 0)]
+    return max(rgb) - min(rgb) >= 0x60
+
+
+# 模式和例句按颜色对应时至少用几种颜色。正文的链接、强调只用一两种
+_KEY_COLORS = 3
+
+
+def _color_keys(block: TextBlock) -> list[tuple[pymupdf.Rect, tuple[int, ...]]]:
+    """块里每一行（同一基线的几截并起来）的框，和行里鲜明颜色先后出现的顺序"""
+    rows: list[tuple[pymupdf.Rect, list[int]]] = []
+    gap = max(block.size * 0.4, 2.0)
+    for rect, spans in zip(block.line_rects, block.span_lines or []):
+        colors = [int(span.get("color") or 0) for span in spans if str(span.get("text") or "").strip()]
+        colors = [color for color in colors if _vivid(color)]
+        if rows and abs(rect.y0 - rows[-1][0].y0) <= gap:
+            rows[-1] = (rows[-1][0] | rect, rows[-1][1] + colors)
+        else:
+            rows.append((pymupdf.Rect(rect), colors))
+    return [(rect, tuple(dict.fromkeys(colors))) for rect, colors in rows]
+
+
+def _color_keyed_ids(blocks: list[TextBlock]) -> set[int]:
+    """模式和例句上下两行排，用同几种颜色按同样的先后标出对应的部分
+    （PER, POSITION of ORG: 下面是 George Marshall, Secretary of State of the United States，
+    PER 和 George Marshall 同是蓝色）。译了语序一变，颜色就对不上了，两行都留原文。"""
+    rows: dict[int, list[tuple[pymupdf.Rect, tuple[int, ...], TextBlock]]] = {}
+    for block in blocks:
+        if block.clip is None and not block.side_note:
+            rows.setdefault(block.page, []).extend((rect, key, block) for rect, key in _color_keys(block))
+    found: set[int] = set()
+    for page_rows in rows.values():
+        page_rows.sort(key=lambda row: row[0].y0)
+        for (upper, key, block), (lower, other, below) in zip(page_rows, page_rows[1:]):
+            if (len(key) >= _KEY_COLORS and key == other and _x_overlap(upper, lower)
+                    and -2 <= lower.y0 - upper.y1 <= block.size * 1.5):
+                found |= {id(block), id(below)}
+    return found
+
+
+def _item_example_ids(blocks: list[TextBlock]) -> set[int]:
+    """列表项下面另起一行列的例子（Bag-of-words in M1 and M2 下面的 American, Airlines, Tim …，
+    M2: -1 spokesman）：缩在弹点右边，字母大半用鲜明的颜色标着，是从例句里摘出来的词，留原文。
+    同一项下面接连几行都算。和条目折下来的行分开见 _cut_item_breaks，也只看弹点起头的条目。"""
+    by_page: dict[int, list[TextBlock]] = {}
+    for block in blocks:
+        if block.clip is None and not block.side_note:
+            by_page.setdefault(block.page, []).append(block)
+    found: set[int] = set()
+    for page_blocks in by_page.values():
+        page_blocks.sort(key=lambda block: (block.rect.y0, block.rect.x0))
+        # 已经认出的例子行挂在哪一项下面：项的左缘
+        roots: dict[int, float] = {}
+        for index, block in enumerate(page_blocks):
+            if len(_visual_lines(block)) != 1 or _MARK_ITEM_RE.match(block.text) or not _vivid_letters(block):
+                continue
+            above = [
+                other for other in page_blocks[:index]
+                if _x_overlap(other.rect, block.rect) and -2 <= block.rect.y0 - other.rect.y1 <= block.size * 1.5
+            ]
+            if not above:
+                continue
+            nearest = max(above, key=lambda other: other.rect.y1)
+            root = roots.get(id(nearest), nearest.rect.x0 if _MARK_ITEM_RE.match(nearest.text) else None)
+            if root is not None and block.rect.x0 > root + block.size * 0.3:
+                roots[id(block)] = root
+                found.add(id(block))
+    return found
+
+
+def _vivid_letters(block: TextBlock) -> bool:
+    """块里一半以上的字母是鲜明的颜色"""
+    return _vivid_share(_block_spans(block)) > 0.5
+
+
+def _vivid_share(spans: Sequence[dict]) -> float:
+    """字母里鲜明颜色的占比，没有字母时为 0"""
+    letters = sum(char.isalpha() for span in spans for char in str(span.get("text") or ""))
+    vivid = sum(char.isalpha() for span in spans if _vivid(int(span.get("color") or 0))
+                for char in str(span.get("text") or ""))
+    return vivid / letters if letters else 0.0
 
 
 def _arc_figure_ids(blocks: list[TextBlock], scans: Sequence[PageScan]) -> set[int]:
@@ -7062,6 +7154,52 @@ def _cut_line_list(group: list[int], items: list[tuple], page_rows: Sequence[pym
             parts[-1].extend(row)
         else:
             parts.append(list(row))
+    return parts
+
+
+def _cut_item_breaks(group: list[int], items: list[tuple], page_rows: Sequence[pymupdf.Rect]) -> list[list[int]]:
+    """列表项没写到栏的右缘就换了行，下一行的第一个词明明放得下：下一行是另起的一行
+    （条目下面列的例子 American, Airlines, Tim, Wagner …），拆开。自动折行是上一行放不下才折下来的。
+    栏的右缘按列表项左边三个字宽以内段落的起笔投票（见 _voted_right）。条目的行参差、投不出来的不拆：
+    版心右缘在两栏的页上是另一栏的右缘，按它量每一行都像没写满。
+    条目写满了一行时看不出早换行。上面的行没有一个彩色的字，这一行字母大半是鲜明的颜色，
+    也是另起一行列的例子（M1: NAME [it or he would be PRONOUN]），拆开。
+    只看弹点起头的条目：A.、12. 起头的可能是参考文献，姓名缩写像字母编号，题名常是彩色的链接，行尾也参差。"""
+    if len(group) < 2 or not _MARK_ITEM_RE.match(items[group[0]][0]):
+        return [group]
+    rows: list[list[int]] = []
+    for i in group:
+        rect = items[i][1]
+        if rows:
+            top = pymupdf.Rect(items[rows[-1][0]][1])
+            for j in rows[-1][1:]:
+                top |= items[j][1]
+            if top.y0 < (rect.y0 + rect.y1) / 2 < top.y1:
+                rows[-1].append(i)
+                continue
+        rows.append([i])
+    if len(rows) < 2:
+        return [group]
+    first = items[group[0]][1]
+    size = max(float(span["size"]) for span in items[group[0]][2])
+    lefts = sorted({round(row.x0) for row in page_rows if first.x0 - 3 * size <= row.x0 <= first.x0 + 1})
+    right = next((edge for left in lefts if (edge := _voted_right(left, size, page_rows)) is not None), None)
+
+    def spans(row: list[int]) -> list[dict]:
+        return [span for i in row for span in items[i][2]]
+
+    parts = [list(rows[0])]
+    for upper, row in zip(rows, rows[1:]):
+        rect = pymupdf.Rect(items[upper[0]][1])
+        for j in upper[1:]:
+            rect |= items[j][1]
+        lower = (items[row[0]][1], items[row[0]][0], size)
+        early = right is not None and _breaks_early([(rect, "", size), lower], lambda _rect, _size: right)
+        colored = _vivid_share(spans(parts[-1])) == 0 and _vivid_share(spans(row)) > 0.5
+        if early or colored:
+            parts.append(list(row))
+        else:
+            parts[-1].extend(row)
     return parts
 
 
@@ -12002,7 +12140,8 @@ def _plan_document(
     displayed = (
         _display_formula_ids(blocks, geometries) | _isolated_formula_ids(blocks, formulas, roles)
         | _gloss_ids(blocks, glosses) | _code_panel_ids(blocks, scans)
-        | _foreign_ids(blocks) | _colored_examples(blocks, geometries) | _arc_figure_ids(blocks, scans)
+        | _foreign_ids(blocks) | _colored_examples(blocks, geometries) | _color_keyed_ids(blocks)
+        | _item_example_ids(blocks) | _arc_figure_ids(blocks, scans)
     )
     numbers = {pno: example_numbers(scans[pno].words) for pno in sorted({block.page for block in blocks})}
     examples = _example_ids(blocks, numbers) | _role_pattern_ids(blocks)

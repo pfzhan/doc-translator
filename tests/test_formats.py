@@ -11142,3 +11142,72 @@ def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_
     # 和图框的线空开，不贴着
     assert max(box[3] for box in chars) < 541.5 - 5
     assert "偏导数" in out[1].get_text()
+
+
+def test_patterns_keyed_to_examples_by_color_stay_original():
+    """模式下面一行是例句，同几种颜色按同样的先后标出对应的部分（PER 和 George Marshall 同是蓝色）。
+    译了语序一变颜色就对不上，两行都留原文。颜色先后不同的、只用一两种颜色的照翻"""
+    from app.formats.pdf import TextBlock, _color_keyed_ids
+
+    blue, green, red = 0x0000FF, 0x008000, 0xB30000
+
+    def blk(parts, y0):
+        rect = pymupdf.Rect(178, y0, 400, y0 + 12)
+        text = "".join(text for text, _color in parts)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000000", bold=False,
+                         span_lines=[[{"text": text, "size": 10.0, "color": color} for text, color in parts]])
+
+    pattern = blk([("PER,", blue), (" POSITION", green), (" of", blue), (" ORG", red), (":", blue)], 268)
+    example = blk([("George Marshall", blue), (",", 0), (" Secretary of State", green), (" of", 0),
+                   (" the United States", red)], 280)
+    shuffled = blk([("Truman", green), (" appointed", 0), (" Marshall", blue), (" Secretary", red)], 330)
+    linked = blk([("see", 0), (" Hearst", blue), (" and", 0), (" Fig. 21.4", red)], 342)
+    assert _color_keyed_ids([pattern, example, shuffled, linked]) == {id(pattern), id(example)}
+
+
+def test_examples_listed_under_a_bullet_get_their_own_line():
+    """弹点条目没写到栏的右缘就换行，下一行的第一个词明明放得下：下一行是条目下面列的例子，拆开。
+    条目写满了一行时，下一行字母大半是彩色、上面一个彩色字也没有的，也拆开。
+    写满一行折下来的续行不拆，姓名缩写起头的参考文献不拆"""
+    from app.formats.pdf import _cut_item_breaks
+
+    def item(text, rect, color=0):
+        return (text, pymupdf.Rect(rect), [{"text": text, "size": 10.0, "color": color}])
+
+    body = [pymupdf.Rect(142, 100 + 12 * i, 475, 110 + 12 * i) for i in range(5)]
+    listed = [item("• Bag-of-words and bigrams in M1 and M2", (159, 234, 334, 246)),
+              item("American, Airlines, Tim, Wagner, American Airlines, Tim Wagner", (167, 246, 433, 258), 0x0000FF)]
+    assert _cut_item_breaks([0, 1], listed, body + [item[1] for item in listed]) == [[0], [1]]
+    full = [item("• Entity Level of M1 and M2 (from the set NAME, NOMINAL, PRONOUN)", (159, 367, 469, 379)),
+            item("M1: NAME [it or he would be PRONOUN]", (167, 379, 343, 391), 0x0000FF)]
+    assert _cut_item_breaks([0, 1], full, body) == [[0], [1]]
+    wrapped = [item("• Number of entities between the two arguments of the relation, counted", (159, 404, 475, 416)),
+               item("over the whole sentence", (167, 416, 280, 428))]
+    assert _cut_item_breaks([0, 1], wrapped, body) == [[0, 1]]
+    reference = [item("E. H. Hovy, V. Ng, and M. Strube.", (159, 404, 330, 416)),
+                 item("Scoring coreference partitions", (167, 416, 330, 428), 0x0000FF)]
+    assert _cut_item_breaks([0, 1], reference, body) == [[0, 1]]
+
+
+def test_colored_lines_under_a_bullet_stay_original():
+    """弹点条目下面另起一行列的例子，字母大半是彩色（M2: -1 spokesman），是从例句里摘的词，留原文；
+    同一项下面接连几行都算。黑字的说明、不在条目下面的彩色行照翻"""
+    from app.formats.pdf import TextBlock, _item_example_ids
+
+    def blk(parts, rect):
+        rect = pymupdf.Rect(rect)
+        text = "".join(text for text, _color in parts)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000000", bold=False,
+                         span_lines=[[{"text": text, "size": 10.0, "color": color} for text, color in parts]])
+
+    blue = 0x0000FF
+    bullet = blk([("• Words or bigrams in particular positions", 0)], (159, 260, 328, 272))
+    first = blk([("M2:", 0), (" -1 spokesman", blue)], (167, 272, 242, 284))
+    second = blk([("M2:", 0), (" +1 said", blue)], (167, 284, 216, 296))
+    note = blk([("• Number of entities between the arguments", 0)], (159, 404, 439, 416))
+    plain = blk([("in this case one, for AMR", 0)], (167, 416, 300, 428))
+    prose = blk([("The features are described in", 0)], (142, 500, 475, 512))
+    loose = blk([("Zhang et al., 2017", blue)], (167, 512, 300, 524))
+    found = _item_example_ids([bullet, first, second, note, plain, prose, loose])
+    assert found == {id(first), id(second)}
+
