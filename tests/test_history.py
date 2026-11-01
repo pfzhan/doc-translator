@@ -47,13 +47,13 @@ def test_records_persist_across_restart(app_env, tmp_path):
         listed = client.get("/api/jobs").json()
         assert [j["id"] for j in listed["jobs"]] == [job["id"]] and listed["disk_usage"] > 0
 
-    # 模拟重启：重新从磁盘加载
+    # Simulate a restart: load again from disk
     store = JobStore(tmp_path / "jobs")
     main.jobs = store
     with TestClient(main.app) as client:
         again = client.get(f"/api/jobs/{job['id']}").json()
         assert again["status"] == "done" and again["outputs"] == job["outputs"]
-        # 下载和预览（来自快照）都还能用
+        # Downloads and the preview (from the snapshot) still work
         assert client.get(job["outputs"][0]["url"]).status_code == 200
         p = client.get(f"/api/jobs/{job['id']}/preview").json()
         assert p["ready"] and len(p["updates"]) == 3 and p["segments"][0]["k"] == "h1"
@@ -69,12 +69,13 @@ def test_interrupted_job_after_restart_can_resume(tmp_path):
     store = JobStore(root)
     job = store.get("abc")
     assert job.status == "interrupted" and "中断" in job.error
-    # 状态也写回了磁盘
+    # The status was written back to disk too
     assert json.loads((root / "abc" / "job.json").read_text())["status"] == "interrupted"
 
 
 def test_concurrent_saves_of_one_job_do_not_collide(tmp_path):
-    """翻译线程更新进度和接口请求同时保存同一条记录，不能因为临时文件撞名而报错。"""
+    """The translation thread updating progress and an API request may save the same record at the same time; a
+    temporary file name collision must not raise an error."""
     import threading
 
     store = JobStore(tmp_path / "jobs")
@@ -87,7 +88,7 @@ def test_concurrent_saves_of_one_job_do_not_collide(tmp_path):
         for _ in range(200):
             try:
                 store.save(job)
-            except Exception as exc:  # noqa: BLE001 - 收集起来断言
+            except Exception as exc:  # noqa: BLE001 - collected for the assertion
                 errors.append(exc)
 
     threads = [threading.Thread(target=hammer) for _ in range(4)]
@@ -117,7 +118,7 @@ def test_retry_reuses_cache_and_can_switch_service(app_env):
             job = wait_done(client, submit(client)["id"])
             first = sum(calls)
             again = wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={}).json()["id"])
-            assert again["status"] == "done" and sum(calls) == first  # 同一服务命中缓存
+            assert again["status"] == "done" and sum(calls) == first  # Same service hits the cache
 
             main.store.services.append(
                 {"id": "mock2", "provider": "mock", "builtin": True, "name": "Mock 2", "enabled": True}
@@ -125,13 +126,14 @@ def test_retry_reuses_cache_and_can_switch_service(app_env):
             switched = client.post(f"/api/jobs/{job['id']}/retry", json={"service_id": "mock2"}).json()
             assert switched["service_name"] == "Mock 2"
             wait_done(client, job["id"])
-            assert sum(calls) > first  # 换了服务重新翻译
+            assert sum(calls) > first  # A different service translates again
     finally:
         MockTranslator.translate_batch = original
 
 
 def test_redo_can_ignore_cached_translations(app_env):
-    """重译时选了“全部重新翻译”：先清掉已有的译文，每一段都重新请求；不选时照常复用。"""
+    """Retranslating with "全部重新翻译" (retranslate everything) checked clears the existing translations first and
+    requests every paragraph again; without it the existing translations are reused."""
     main = app_env
     calls = []
     from app.translators import MockTranslator
@@ -158,7 +160,8 @@ def test_redo_can_ignore_cached_translations(app_env):
 
 
 def test_redo_from_scratch_analyses_the_pdf_again(app_env, monkeypatch):
-    """PDF 的版面分析存在任务目录里，继续、重译时读回；选了“全部重新翻译”就重新分析。"""
+    """The PDF layout analysis is stored in the job directory and read back on resume and retranslation; with
+    "全部重新翻译" checked the layout is analysed again."""
     import pymupdf
 
     from app.formats import pdf_units
@@ -185,7 +188,8 @@ def test_redo_from_scratch_analyses_the_pdf_again(app_env, monkeypatch):
 
 
 def test_delete_several_records_at_once(app_env):
-    """批量删除：选中的几条连同文件一起删掉，没选的留着；已经不存在的 id 报出来，不影响其他的。"""
+    """Bulk delete: the selected records are deleted together with their files and unselected ones stay; ids that no
+    longer exist are reported without affecting the others."""
     main = app_env
     with TestClient(main.app) as client:
         ids = [wait_done(client, submit(client, name=f"b{i}.md")["id"])["id"] for i in range(3)]
@@ -198,12 +202,13 @@ def test_delete_several_records_at_once(app_env):
 
 
 def test_retry_recomputes_preview_flag_for_legacy_jobs(app_env):
-    """加预览功能之前创建的记录存的是 preview=False，重新翻译时应按格式重新计算。"""
+    """Records created before the preview feature store preview=False; retranslation must recompute it from the
+    format."""
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
         assert job["status"] == "done"
-        # 模拟旧记录：preview=False，没有预览快照
+        # Simulate an old record: preview=False and no preview snapshot
         legacy = main.jobs.get(job["id"])
         legacy.preview = False
         main.jobs.save(legacy)
@@ -216,7 +221,8 @@ def test_retry_recomputes_preview_flag_for_legacy_jobs(app_env):
 
 
 def test_variant_generates_other_mode(app_env):
-    """已完成的任务可以补生成另一种版本（双语 ⇄ 仅译文），不重复请求翻译服务。"""
+    """A finished job can generate the other version later (bilingual <-> translated-only) without requesting the
+    translation service again."""
     main = app_env
     from app.translators import MockTranslator
 
@@ -230,7 +236,7 @@ def test_variant_generates_other_mode(app_env):
     MockTranslator.translate_batch = counting
     try:
         with TestClient(main.app) as client:
-            job = wait_done(client, submit(client)["id"])  # 默认双语
+            job = wait_done(client, submit(client)["id"])  # Bilingual by default
             assert job["status"] == "done"
             assert any("bilingual" in o["name"] for o in job["outputs"])
             first = sum(calls)
@@ -238,18 +244,19 @@ def test_variant_generates_other_mode(app_env):
             again = client.post(f"/api/jobs/{job['id']}/variant").json()
             names = [o["name"] for o in again["outputs"]]
             assert any("translated" in n for n in names) and any("bilingual" in n for n in names)
-            assert sum(calls) == first  # 全部命中缓存
+            assert sum(calls) == first  # Everything hits the cache
             url = next(o["url"] for o in again["outputs"] if "translated" in o["name"])
             assert client.get(url).status_code == 200
 
             once_more = client.post(f"/api/jobs/{job['id']}/variant").json()
-            assert [o["name"] for o in once_more["outputs"]] == names  # 幂等
+            assert [o["name"] for o in once_more["outputs"]] == names  # Idempotent
     finally:
         MockTranslator.translate_batch = original
 
 
 def test_pdf_translated_variant_is_cut_from_the_bilingual_output(app_env, monkeypatch):
-    """PDF 的仅译文版从已有的双语版里取，不重新排版，书签按预览快照换成译文。"""
+    """The translated-only version of a PDF is taken from the existing bilingual version without typesetting again,
+    and the bookmarks are replaced with translations from the preview snapshot."""
     import pymupdf
 
     main = app_env
@@ -278,7 +285,8 @@ def test_pdf_translated_variant_is_cut_from_the_bilingual_output(app_env, monkey
 
 
 def test_variant_refuses_cache_miss_and_closes_client(app_env):
-    """缓存对不上时不要在这次请求里重译，并且无论成败都关掉翻译客户端。"""
+    """When the cache does not match, the request does not retranslate, and the translation client is closed whether
+    it succeeds or fails."""
     main = app_env
     from app.runner import get_cache
     from app.translators import MockTranslator
@@ -318,7 +326,8 @@ def test_variant_refuses_cache_miss_and_closes_client(app_env):
 
 
 def test_variant_pins_the_model_that_produced_the_job(app_env, monkeypatch):
-    """补生成用任务记录里的模型对缓存，不用服务现在选中的模型。"""
+    """Generating the other version looks up the cache with the model stored in the job record, not the model the
+    service has selected now."""
     main = app_env
     seen: list[str] = []
     original = main._make_translator
@@ -342,7 +351,8 @@ def test_variant_pins_the_model_that_produced_the_job(app_env, monkeypatch):
 
 
 def test_variant_matches_marker_at_extension(app_env):
-    """原文件名本身带 .bilingual. 时，仍要能生成另一种版本，不能把子串当成已生成。"""
+    """When the original file name itself contains .bilingual., the other version can still be generated; the
+    substring does not count as an existing output."""
     main = app_env
     from app.formats import output_variant
 
@@ -359,11 +369,12 @@ def test_variant_matches_marker_at_extension(app_env):
 
 
 def test_variant_rejects_second_request_and_discards_partial(app_env, monkeypatch):
-    """生成进行中拒绝第二个请求；写到一半失败时不改记录，临时目录也会清掉。"""
+    """A second request is rejected while generation is running; a failure halfway through writing leaves the record
+    unchanged and removes the temporary directory."""
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        main.variant_tasks[job["id"]] = object()  # 只检查是否在生成，不需要真正的 Task
+        main.variant_tasks[job["id"]] = object()  # Only checks whether generation is running; no real Task is needed
         busy = client.post(f"/api/jobs/{job['id']}/variant")
         assert busy.status_code == 409
         main.variant_tasks.pop(job["id"])
@@ -419,8 +430,8 @@ def test_cleanup_respects_retention(tmp_path):
             finished=0 if status == "running" else now - age_days * DAY,
         )
         store.add(job)
-    assert store.cleanup(0, now) == []  # 0 = 永久保留
-    assert store.cleanup(30, now, busy=frozenset({"old"})) == []  # 正在补生成的不删
+    assert store.cleanup(0, now) == []  # 0 = keep forever
+    assert store.cleanup(30, now, busy=frozenset({"old"})) == []  # Busy generating another version, so not deleted
     assert store.get("old")
     assert store.cleanup(30, now) == ["old"]
     assert not store.dir("old").exists() and store.get("new") and store.get("busy")
@@ -430,7 +441,7 @@ def test_settings(tmp_path):
     s = Settings(tmp_path / "settings.json")
     assert s.retention_days == 30
     s.update({"retention_days": 7})
-    assert Settings(tmp_path / "settings.json").retention_days == 7  # 落盘
+    assert Settings(tmp_path / "settings.json").retention_days == 7  # Persisted to disk
     s.update({"retention_days": 0})
     assert s.retention_days == 0
     for bad in (-1, 99999, "x"):
@@ -441,7 +452,7 @@ def test_settings(tmp_path):
 
 
 def test_cleanup_skips_inflight_variant(app_env):
-    """过期清理不能删掉正在补生成的记录。"""
+    """Expiry cleanup does not delete a record whose other version is being generated."""
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
@@ -473,7 +484,7 @@ LONG_MD = "\n\n".join(f"Paragraph number {i} of the long test document goes here
 
 @pytest.fixture
 def slow_mock(app_env, monkeypatch):
-    """每批慢一点，并记下每次请求用的模型（mock 服务的 model 字段）。"""
+    """Slows down each batch and records the model used by each request (the model field of the mock service)."""
     import asyncio
 
     from app.translators import MockTranslator
@@ -482,7 +493,8 @@ def slow_mock(app_env, monkeypatch):
     original = MockTranslator.translate_batch
 
     async def slow(self, texts):
-        # 太快的话整本在发出暂停请求前就翻完了，机器负载高时尤其明显
+        # If it is too fast the whole document is translated before the pause request is sent, especially under high
+        # machine load
         await asyncio.sleep(0.2)
         calls.append((getattr(self, "model", ""), len(texts)))
         return await original(self, texts)
@@ -521,11 +533,11 @@ def test_pause_then_resume_with_current_model(app_env, slow_mock):
         assert paused["status"] == "paused" and 0 < paused["done"] < paused["total"] and paused["model"] == "m-old"
         translated_before, calls_before = sum(n for _, n in slow_mock), len(slow_mock)
         time.sleep(0.2)
-        assert client.get(f"/api/jobs/{job_id}").json()["done"] == paused["done"]  # 真的停了
+        assert client.get(f"/api/jobs/{job_id}").json()["done"] == paused["done"]  # It really stopped
         assert sum(n for _, n in slow_mock) == translated_before
-        assert client.post(f"/api/jobs/{job_id}/pause").status_code == 400  # 已暂停不能再暂停
+        assert client.post(f"/api/jobs/{job_id}/pause").status_code == 400  # A paused job cannot be paused again
 
-        # 暂停期间换了模型：继续翻译用新模型，翻好的段落不再请求
+        # The model changed while paused: resuming uses the new model and does not request translated paragraphs again
         main.store.get("mock")["model"] = "m-new"
         resumed = client.post(f"/api/jobs/{job_id}/retry", json={}).json()
         assert resumed["model"] == "m-new"
@@ -533,7 +545,7 @@ def test_pause_then_resume_with_current_model(app_env, slow_mock):
         assert done["status"] == "done" and done["model"] == "m-new"
         assert {m for m, _ in slow_mock[:calls_before]} == {"m-old"}
         assert {m for m, _ in slow_mock[calls_before:]} == {"m-new"}
-        assert sum(n for _, n in slow_mock) == done["total"]  # 每段只翻了一次
+        assert sum(n for _, n in slow_mock) == done["total"]  # Each paragraph was translated once
 
 
 def test_pause_all_and_resume_all(app_env, slow_mock):
@@ -546,7 +558,7 @@ def test_pause_all_and_resume_all(app_env, slow_mock):
         assert {client.get(f"/api/jobs/{i}").json()["status"] for i in ids} == {"paused"}
         assert client.post("/api/jobs/pause-all").json() == {"paused": 0}
 
-        # 暂停的记录重启后还是暂停，不会变成“中断”
+        # A paused record is still paused after a restart and does not become "interrupted"
         reloaded = JobStore(main.jobs.root)
         assert {reloaded.get(i).status for i in ids} == {"paused"}
 
@@ -564,7 +576,7 @@ def test_pause_queued_job(app_env):
         job = Job(id="q1", filename="x.md", status="queued")
         main.jobs.dir(job.id).mkdir(parents=True)
         main.jobs.add(job)
-        main.running[job.id] = asyncio.create_task(asyncio.sleep(10))  # 还没进入 _run_job 的任务
+        main.running[job.id] = asyncio.create_task(asyncio.sleep(10))  # A job that has not entered _run_job yet
         assert await main._pause(job)
         return job
 
@@ -574,11 +586,12 @@ def test_pause_queued_job(app_env):
 
 
 def test_runner_released_after_finish(app_env):
-    """任务结束后 Runner 释放内存，预览改从 preview.json 快照读。"""
+    """After a job finishes the Runner releases its memory and the preview is read from the preview.json snapshot."""
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        # 状态先变成 done，写完快照才释放 Runner，中间隔着一次线程调度
+        # The status becomes done first and the Runner is released only after the snapshot is written, one thread
+        # switch later
         deadline = time.monotonic() + 10
         while main.jobs.get(job["id"]).runner is not None and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -588,7 +601,8 @@ def test_runner_released_after_finish(app_env):
 
 
 def test_resume_with_invalid_service_keeps_result(app_env):
-    """继续翻译时配置失效：报 400，但旧译文和任务状态都不能丢。"""
+    """The configuration is invalid on resume: the response is 400, and the old translations and the job status are
+    kept."""
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
@@ -611,7 +625,7 @@ def test_resume_with_invalid_service_keeps_result(app_env):
 
 
 def test_failed_upload_leaves_no_orphan_dir(app_env):
-    """上传中途读失败：目录要清理掉，不能留孤儿目录。"""
+    """A read fails halfway through an upload: the directory is removed and no orphan directory is left."""
     import asyncio
 
     main = app_env
@@ -639,14 +653,15 @@ def test_download_rejects_path_traversal(app_env):
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
         record = main.jobs.get(job["id"])
-        record.outputs.append("../job.json")  # 模拟被篡改的 job.json
+        record.outputs.append("../job.json")  # Simulate a tampered job.json
         with pytest.raises(HTTPException) as e:
             main.download(job["id"], "../job.json")
         assert e.value.status_code == 404
 
 
 def test_download_url_encodes_hash_and_question_mark(app_env):
-    """文件名带 # 或 ? 时下载链接要编码，否则浏览器只请求到 # 之前的部分。"""
+    """When the file name contains # or ?, the download link is encoded; otherwise the browser requests only the part
+    before #."""
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client, name="C# 入门?.md")["id"])
@@ -656,7 +671,8 @@ def test_download_url_encodes_hash_and_question_mark(app_env):
 
 
 def test_inline_file_opens_in_the_browser(app_env):
-    """inline=1 时响应头是 inline，浏览器直接打开；默认仍是附件下载。"""
+    """With inline=1 the response header is inline and the browser opens the file; by default it is still an
+    attachment download."""
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
@@ -702,7 +718,8 @@ def _small_epub() -> bytes:
 
 
 def test_epub_output_is_previewed_chapter_by_chapter(app_env):
-    """EPUB 预览：目录和阅读顺序从书里读，章节按 zip 里的路径取，书里的脚本不让跑。"""
+    """EPUB preview: the table of contents and reading order are read from the book, chapters are fetched by their
+    path in the zip, and scripts in the book are not allowed to run."""
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client, name="small.epub", data=_small_epub())["id"])
@@ -725,14 +742,15 @@ def test_epub_output_is_previewed_chapter_by_chapter(app_env):
 
 
 def test_oversized_upload_rejected_before_reading_body(app_env, monkeypatch):
-    """Content-Length 超过上限时直接 413，请求进不了 create_job（不用等整个文件写进临时文件）。"""
+    """A Content-Length above the limit returns 413 at once and the request never reaches create_job (without waiting
+    for the whole file to be written to a temporary file)."""
     main = app_env
     monkeypatch.setattr(main, "MAX_UPLOAD", 1000)
     entered = []
     real_get = main.store.get
 
     def get(sid):
-        entered.append(sid)  # create_job 一进来就查翻译服务
+        entered.append(sid)  # create_job looks up the translation service as soon as it is entered
         return real_get(sid)
 
     monkeypatch.setattr(main.store, "get", get)

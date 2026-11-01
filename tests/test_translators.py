@@ -1,4 +1,5 @@
-"""翻译器修复的回归测试：并发上限、错误消息容错、限流重试、标记碰撞。"""
+"""Regression tests for translator fixes: concurrency cap, error message tolerance, rate limit retries, marker
+collisions."""
 
 import asyncio
 import json
@@ -36,7 +37,8 @@ def make_openai(handler, **kw):
 
 
 def test_concurrency_cap_covers_missing_segment_recovery():
-    """补翻漏掉的段落也要过并发信号量：峰值并发不得超过 concurrency=2。"""
+    """Requests that recover missing paragraphs also go through the concurrency semaphore: peak concurrency must not
+    exceed concurrency=2."""
     current = 0
     peak = 0
 
@@ -45,10 +47,11 @@ def test_concurrency_cap_covers_missing_segment_recovery():
         current += 1
         peak = max(peak, current)
         try:
-            await asyncio.sleep(0.02)  # 让并发的请求有时间重叠
+            await asyncio.sleep(0.02)  # Give concurrent requests time to overlap
             user = json.loads(request.content)["messages"][-1]["content"]
             if "[[source_end]]" in user:
-                # 批量响应故意只回前两段，剩下的触发补翻 gather
+                # The batch response deliberately returns only the first two paragraphs; the rest trigger the recovery
+                # gather
                 content = "[[p0]]\nA\n[[p1]]\nB"
             else:
                 content = "T:single"
@@ -59,12 +62,13 @@ def test_concurrency_cap_covers_missing_segment_recovery():
     tr = make_openai(handler, concurrency=2)
     out = run(tr.translate_batch(["a", "b", "c", "d", "e"]))
     assert out == ["A", "B", "T:single", "T:single", "T:single"]
-    assert peak == 2  # 确实发生了并行，且没有越过上限
+    assert peak == 2  # Requests did run in parallel and did not exceed the cap
     run(tr.aclose())
 
 
 def test_shifted_batch_items_are_retranslated_one_by_one():
-    """模型把两段并成一段、后面整体错一位时标记数量仍对得上。有数字对不上的段落，这一批逐段重翻。"""
+    """When the model merges two paragraphs into one and everything after shifts by one, the marker count still
+    matches. If some paragraph has mismatched numbers, the batch is retranslated one paragraph at a time."""
     singles = []
 
     async def handler(request):
@@ -89,15 +93,18 @@ def test_shifted_batch_items_are_retranslated_one_by_one():
             ]
         )
     )
-    # 第 2、3 段数字对不上。第 1 段的译文是第 1、2 段并成的，看不出来，跟着一起重翻
+    # Paragraphs 2 and 3 have mismatched numbers. The translation of paragraph 1 is paragraphs 1 and 2 merged, which
+    # cannot be detected, so it is retranslated with them
     assert out == ["单独重翻，1975 年", "单独重翻，1975 年", "单独重翻，1994 年"]
     assert len(singles) == 3
     run(tr.aclose())
 
 
 def test_items_holding_a_neighbors_translation_are_retranslated():
-    """模型漏了一段、后面几段串了位：译文带着原文没有的公式占位符，或者长度比远离同批的常见值。
-    这一批逐段重翻：第 1 段的译文碰巧对得上也不能信，第 4 段之前挪了位的段落不一定都看得出来"""
+    """The model dropped a paragraph and the following ones shifted: a translation carries formula placeholders the
+    source does not have, or its length ratio is far from the usual value of the batch. The batch is retranslated one
+    paragraph at a time: the translation of paragraph 1 happens to match but cannot be trusted, and not every shifted
+    paragraph before paragraph 4 can be detected"""
     singles = []
 
     async def handler(request):
@@ -132,14 +139,15 @@ def test_items_holding_a_neighbors_translation_are_retranslated():
             ]
         )
     )
-    # 第 0、2 段带着别段的占位符，第 3 段只译出一个词
+    # Paragraphs 0 and 2 carry placeholders of other paragraphs, and paragraph 3 is translated as a single word
     assert all(text == "单独重翻" for text in out)
     assert len(singles) == 5
     run(tr.aclose())
 
 
 def test_a_short_heading_holding_the_next_paragraph_shifts_the_batch():
-    """三个词的标题拿到了下一段的译文，后面一段又拿到再下一段的。短句不比长度比，只看译文长得离谱"""
+    """A three-word heading got the translation of the next paragraph, and that paragraph got the one after it. Short
+    sentences are not checked by length ratio, only by a translation that is absurdly long"""
     singles = []
     following = (
         "下一步是提取加窗信号的频谱信息；我们需要知道信号在不同频带上包含多少能量。"
@@ -166,9 +174,11 @@ def test_a_short_heading_holding_the_next_paragraph_shifts_the_batch():
                 "Discrete Fourier Transform",
                 "The next step is to extract spectral information for our windowed signal; we need to know how much "
                 "energy the signal contains at different frequency bands. The tool for extracting spectral information "
-                "for discrete frequency bands for a discrete-time (sampled) signal is the discrete Fourier transform or DFT.",
+                "for discrete frequency bands for a discrete-time (sampled) signal is the discrete Fourier transform "
+                "or DFT.",
                 "The input to the DFT is a windowed signal, and the output, for each of N discrete frequency bands, "
-                "is a complex number representing the magnitude and phase of that frequency component in the original signal.",
+                "is a complex number representing the magnitude and phase of that frequency component in the "
+                "original signal.",
                 "We do not introduce the mathematical details of the DFT here, except to note that Fourier analysis "
                 "relies on Euler's formula, with j as the imaginary unit.",
             ]
@@ -180,7 +190,8 @@ def test_a_short_heading_holding_the_next_paragraph_shifts_the_batch():
 
 
 def test_error_text_tolerates_non_dict_json():
-    """中转站的错误响应可能是 JSON 数组 / 纯字符串 / HTML，都不能抛 AttributeError。"""
+    """An error response from a relay service may be a JSON array, a plain string or HTML; none of them may raise
+    AttributeError."""
     resp = httpx.Response(500, json=[{"error": "upstream boom"}])
     assert "upstream boom" in _error_text(resp)
     resp = httpx.Response(500, json="plain string failure")
@@ -199,7 +210,8 @@ def test_non_dict_error_body_surfaces_as_translator_error(monkeypatch):
 
 
 def test_google_200_html_treated_as_rate_limit(monkeypatch):
-    """Google 被限流时偶尔 200 返回 HTML 验证码页：按限流退避重试，用尽后抛 TranslatorError。"""
+    """A rate-limited Google sometimes returns an HTML captcha page with status 200: retry with rate limit backoff and
+    raise TranslatorError once the retries are used up."""
     monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
     calls = []
 
@@ -210,13 +222,13 @@ def test_google_200_html_treated_as_rate_limit(monkeypatch):
     tr = GoogleTranslator("zh-CN", transport=httpx.MockTransport(handler))
     with pytest.raises(TranslatorError, match="不是 JSON"):
         run(tr.translate_batch(["hello", "world"]))
-    assert len(calls) == tr.retries  # 每次尝试都重发，用尽后才报错
+    assert len(calls) == tr.retries  # Every attempt resends; the error is raised only after all are used up
     run(tr.aclose())
 
 
 @pytest.mark.parametrize("retry_after,expected", [("2", 2.0), ("70", 60.0)])
 def test_retry_after_header_drives_backoff(monkeypatch, retry_after, expected):
-    """429 带 Retry-After 时按它等待（上限 60s），不用默认的指数退避。"""
+    """A 429 with Retry-After waits for that long (at most 60 s) instead of the default exponential backoff."""
     delays = []
 
     async def record_sleep(seconds):
@@ -240,7 +252,8 @@ def test_retry_after_header_drives_backoff(monkeypatch, retry_after, expected):
 
 
 def test_temperature_strip_does_not_mask_real_error(monkeypatch):
-    """只剩最后一次尝试时不再剥离 temperature：抛出带真实消息的 400，而不是“已达到最大重试次数”。"""
+    """On the last remaining attempt temperature is no longer stripped: the 400 with the real message is raised
+    instead of "已达到最大重试次数" (maximum retries reached)."""
     monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
     calls = []
 
@@ -249,7 +262,7 @@ def test_temperature_strip_does_not_mask_real_error(monkeypatch):
         return httpx.Response(400, json={"error": {"message": "Unsupported value: 'temperature' is not supported"}})
 
     tr = make_openai(handler, temperature=0)
-    tr.retries = 1  # 只有一次尝试，temperature 剥离分支进不去
+    tr.retries = 1  # Only one attempt, so the temperature stripping branch is never reached
     with pytest.raises(TranslatorError) as e:
         run(tr.translate_batch(["good"]))
     assert e.value.status == 400
@@ -267,29 +280,31 @@ def test_pick_marker_avoids_collision():
 
 
 def test_marker_collision_end_to_end():
-    """原文有独占一行的 [[p1]] 时请求改用 [[qN]]，解析时原文的 [[p1]] 行不被当成协议标记。"""
+    """When the source has [[p1]] on a line of its own, the request uses [[qN]] instead, and parsing does not treat
+    the [[p1]] line of the source as a protocol marker."""
     bodies = []
 
     def handler(request):
         user = json.loads(request.content)["messages"][-1]["content"]
         bodies.append(user)
-        # 译文里保留了原文的 [[p1]] 行
+        # The translation keeps the [[p1]] line of the source
         content = "[[q0]]\n译A\n[[p1]]\n译A 续\n[[q1]]\n译B"
         return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
     tr = make_openai(handler)
     texts = ["第一段\n[[p1]]\n还是第一段", "第二段"]
     assert run(tr.translate_batch(texts)) == ["译A\n[[p1]]\n译A 续", "译B"]
-    assert len(bodies) == 1  # 协议标记没有错位，不需要补翻
+    assert len(bodies) == 1  # Protocol markers did not shift, so no recovery is needed
     assert re.search(r"^\[\[q0\]\]$", bodies[0], re.M)
     assert re.search(r"^\[\[q1\]\]$", bodies[0], re.M)
-    # 请求体里没有 [[pN]] 协议标记（原文的 [[p1]] 只是内容，不是分隔符）
+    # The request body has no [[pN]] protocol markers (the [[p1]] of the source is content, not a separator)
     assert not re.search(r"^\[\[p0\]\]$", bodies[0], re.M)
     run(tr.aclose())
 
 
 def test_google_splits_html_and_plain_batches():
-    """混合批：带标签的段落走 format=html，纯文本走 format=text，结果按原顺序重组。"""
+    """Mixed batch: paragraphs with tags go through format=html, plain text through format=text, and the results are
+    reassembled in the original order."""
     from urllib.parse import parse_qs
 
     formats = []
@@ -305,19 +320,19 @@ def test_google_splits_html_and_plain_batches():
     out = run(tr.translate_batch(["plain one", "x <b>bold</b> y", "plain two"]))
     assert out == ["text:plain one", "html:x <b>bold</b> y", "text:plain two"]
     assert sorted(formats) == ["html", "text"]
-    # 正文里的尖括号不是富文本，不能因为长得像标签就改成 format=html
+    # Angle brackets in body text are not rich text and must not switch to format=html because they look like tags
     formats.clear()
     out = run(tr.translate_batch(["see <Note> and <b>"]))
     assert out == ["text:see <Note> and <b>"]
     assert formats == ["text"]
-    # 全是纯文本时不拆组
+    # No split into groups when everything is plain text
     out = run(tr.translate_batch(["a", "b"]))
     assert out == ["text:a", "text:b"]
     run(tr.aclose())
 
 
 def test_llm_token_usage_accumulated():
-    """接口返回的 usage 累计到 translator.usage：批量、补翻的请求都算。"""
+    """The usage returned by the API accumulates into translator.usage, counting both batch and recovery requests."""
 
     def handler(request):
         return httpx.Response(
@@ -336,7 +351,7 @@ def test_llm_token_usage_accumulated():
 
 
 def test_gemini_token_usage_mapping():
-    """Gemini 的 usageMetadata 字段名映射到 prompt/completion。"""
+    """The field names of Gemini usageMetadata map to prompt/completion."""
 
     def handler(request):
         return httpx.Response(
@@ -358,7 +373,8 @@ def test_gemini_token_usage_mapping():
 
 
 def test_reply_without_content_is_asked_again():
-    """中转站偶尔回一条没有 content 的消息（finish_reason 仍是 stop）。原样再问一次，不让整本书失败。"""
+    """A relay service sometimes replies with a message without content (finish_reason is still stop). The same
+    request is sent again so the whole book does not fail."""
     calls = 0
 
     async def handler(request):
@@ -377,7 +393,8 @@ def test_reply_without_content_is_asked_again():
 
 
 def test_reply_that_stays_empty_is_an_empty_translation():
-    """一直回空时返回空译文：Runner 回填原文，空的段落多了才判整本失败。"""
+    """A reply that stays empty returns an empty translation: the Runner fills in the source text, and the whole
+    document fails only when there are many empty paragraphs."""
 
     async def handler(request):
         return httpx.Response(200, json={"choices": [{"message": {"role": "assistant"}}]})
@@ -388,22 +405,24 @@ def test_reply_that_stays_empty_is_an_empty_translation():
 
 
 def test_braces_the_model_added_around_marks_are_dropped():
-    """原文有 {n,m} 时，模型把标记也套上花括号。原文同样位置没有的才去掉。"""
+    """When the source has {n,m}, the model wraps the marks in braces too. Only braces absent at the same position in
+    the source are removed."""
     src = "include {b}disjunction{/b} of symbols, {b}counters{/b} (*, +, and {n,m})"
     assert drop_added_braces(src, "包括{{b}析取{/b}}, {{b}计数器{/b}}(*, + 和 {n,m})") == (
         "包括{b}析取{/b}, {b}计数器{/b}(*, + 和 {n,m})"
     )
     assert drop_added_braces("a {b}x{/b} b", "叫做{b}断裂{/b}}和{{/b}") == "叫做{b}断裂{/b}和{/b}"
     assert drop_added_braces("as {c0000ff}Chen{/c} notes", "正如{{c0000ff}Chen{/c}}所说") == "正如{c0000ff}Chen{/c}所说"
-    # 原文就有的集合括号留着
+    # Set braces already in the source stay
     src = "samples a group {{i}o{/i}{v1}, {i}o{/i}{v2}}"
     assert drop_added_braces(src, "采样一组 {{i}o{/i}{v1}, {i}o{/i}{v2}}") == "采样一组 {{i}o{/i}{v1}, {i}o{/i}{v2}}"
-    # 不贴着标记的花括号不动
+    # Braces not adjacent to a mark are left alone
     assert drop_added_braces("{b}x{/b}", "{b}x{/b} 和 {n,m}") == "{b}x{/b} 和 {n,m}"
 
 
 def test_marks_written_with_spaces_inside_are_restored():
-    """模型偶尔写成 { i}m{/i}、{ |}，认不出是标记。原文有的标记改回标准写法，原文没有的不动。"""
+    """The model sometimes writes { i}m{/i} or { |}, which are not recognised as marks. Marks present in the source
+    are restored to the standard form; others are left alone."""
     from app.prompts import tidy_marks
 
     src = "a simplified model {i}m{/i} between models{v1} and{v2}, the {|} lower"
@@ -411,7 +430,7 @@ def test_marks_written_with_spaces_inside_are_restored():
     assert tidy_marks(src, dst) == "简化模型{i}m{/i}, 在两个模型{v1}和{v2}之间较{|}低 {/i}"
     assert tidy_marks("a set {n,m} of {b}x{/b}", "集合 { b} 和 { n,m}") == "集合 {b} 和 { n,m}"
     assert tidy_marks("plain text", "字面的 { i} 不动") == "字面的 { i} 不动"
-    # 零宽字符、问号、方括号、写错的收尾、带色号的收尾
+    # Zero-width characters, question marks, square brackets, a misspelt closing mark, a closing mark with a color code
     src = "if {i}surprised{/i} or {i}just{/i} is {b}hot{/b} for {cb30000}POSITION{/c}"
     dst = "如果{\u200b\u200bi}surprised{/i}或{ i? }just{/i}中的[i]x{/i}是{b}热点{/b>, {cb30000}职务{/cb30000}"
     assert tidy_marks(src, dst) == "如果{i}surprised{/i}或{i}just{/i}中的{i}x{/i}是{b}热点{/b}, {cb30000}职务{/c}"
@@ -419,7 +438,8 @@ def test_marks_written_with_spaces_inside_are_restored():
 
 
 def test_stray_chars_marks_text_neither_language_uses():
-    """译文夹着原文和目标语言都不用的文字算坏译文；原文本来就有的、目标语言用的、公式里的希腊字母不算。"""
+    """A translation containing a script used by neither the source nor the target language is bad; text already in
+    the source, text the target language uses and Greek letters in formulas do not count."""
     from app.translators import stray_chars
 
     assert stray_chars("Please take a moment to convince yourself", "请花一点时间 убед自己", "zh-CN")
@@ -432,7 +452,8 @@ def test_stray_chars_marks_text_neither_language_uses():
 
 
 def test_items_with_stray_chars_are_retranslated():
-    """批量里夹带外文的段落单独重翻；单独重翻仍夹带时再问一次。"""
+    """A paragraph in a batch containing foreign script is retranslated on its own; if the single retranslation still
+    contains it, the request is sent again."""
     singles = []
 
     async def handler(request):
@@ -452,7 +473,8 @@ def test_items_with_stray_chars_are_retranslated():
 
 
 def test_stray_chars_marks_symbols_absent_from_source():
-    """译文多出原文没有的杂项符号、表情或私用区字符算坏译文；原文本来就有的不算。"""
+    """A translation with miscellaneous symbols, emoji or private use area characters absent from the source is bad;
+    those already in the source do not count."""
     from app.translators import stray_chars
 
     src = "How AI Risks Differ from Traditional Software Risks"
@@ -464,7 +486,8 @@ def test_stray_chars_marks_symbols_absent_from_source():
 
 
 def test_single_item_note_is_written_into_the_system_prompt():
-    """只有一段时说明写在系统提示词末尾，原文照旧只放在用户消息里。"""
+    """With a single paragraph the note is written at the end of the system prompt, and the source text stays only in
+    the user message."""
     from app.prompts import build_messages
 
     system, user = build_messages(["log"], "zh-CN", notes=["An entry in the subject index."])
@@ -475,8 +498,9 @@ def test_single_item_note_is_written_into_the_system_prompt():
 
 
 def test_a_reply_asking_for_the_full_text_is_not_kept():
-    """书里故意写半截的例句单独重翻时，模型回「请提供完整的原文」。按这一批的常见长度比看得出来，
-    再问一次仍是这样就回空，由 Runner 回填原文"""
+    """When an example sentence the book leaves unfinished on purpose is retranslated on its own, the model replies
+    "请提供完整的原文" (please provide the full source text). The usual length ratio of the batch reveals it; if asking
+    again gives the same reply, the result is empty and the Runner fills in the source text"""
     fragment = "IBM, a company with a long..."
     asks = []
 

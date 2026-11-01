@@ -32,7 +32,8 @@ class MemCache:
 
 
 class RecordingTranslator(MockTranslator):
-    """记录每批翻译的顺序，可以在批次之间插入回调（模拟用户在翻译过程中跳转）。"""
+    """Records the order of translated batches and can run a callback between batches (simulating a user who jumps
+    elsewhere during translation)."""
 
     max_batch_items = 2
     concurrency = 1
@@ -62,9 +63,9 @@ def test_preview_incremental_and_duplicates():
 
     full = runner.preview()
     assert [s["k"] for s in full["segments"]] == ["h1", "p", "p", "p"]
-    # 同一句出现两次，两个位置都会更新；空段落不出现在更新里
+    # The same sentence appears twice and both positions are updated; empty paragraphs do not appear in the updates
     assert sorted(u[0] for u in full["updates"]) == [0, 1, 3]
-    assert full["version"] == 2  # 两条不同的原文
+    assert full["version"] == 2  # Two distinct source texts
 
     assert runner.preview(since=full["version"])["updates"] == []
     partial = runner.preview(since=1)
@@ -88,7 +89,7 @@ def test_cached_and_skipped_segments_show_immediately():
     runner = Runner(MockTranslator("zh-CN"), cache=MemCache({"Cached sentence here": "已缓存"}))
     asyncio.run(runner.translate_all(texts, preview=True))
     log = runner._log
-    # 缓存命中和已是目标语言的段落排在最前面，不用等翻译
+    # Cache hits and paragraphs already in the target language come first without waiting for translation
     assert set(log[:2]) == {texts[0], texts[1]}
     updates = {u[0]: u for u in runner.preview()["updates"]}
     assert updates[0][1] == "已缓存" and updates[1][2] == 1 and updates[2][1].startswith("[zh-CN]")
@@ -107,27 +108,28 @@ def test_focus_reorders_remaining_batches():
 
     def jump(n):
         if n == 1:
-            runner.focus(14)  # 第一批翻译时用户跳到了第 14 段
+            runner.focus(14)  # The user jumped to paragraph 14 during the first batch
 
     tr = RecordingTranslator("zh-CN", on_batch=jump)
     runner = Runner(tr, cache=MemCache(), skip_same_lang=False)
     out = asyncio.run(runner.translate_all(texts, preview=True))
     order = [texts.index(b[0]) for b in tr.batches]
     assert order[0] == 0
-    assert order[1] == 14  # 跳转后先翻关注位置
-    assert order[1:4] == [14, 16, 18]  # 然后顺着往后翻
-    assert all(o.startswith("[zh-CN]") for o in out)  # 最终全部翻完
+    assert order[1] == 14  # After the jump the focused position is translated first
+    assert order[1:4] == [14, 16, 18]  # Then translation continues forward from there
+    assert all(o.startswith("[zh-CN]") for o in out)  # Everything is translated in the end
     assert sum(len(b) for b in tr.batches) == 20
 
 
 def test_preview_endpoints(app_env):
     md = b"# Title here\n\nFirst paragraph of the document.\n\n- item one in list\n"
-    # with 块里共用一个事件循环，后台翻译任务才能在两次请求之间继续跑
+    # The with block shares one event loop, so the background translation job keeps running between two requests
     with TestClient(main.app) as client:
         r = client.post("/api/jobs", files={"file": ("a.md", md)}, data={"service_id": "mock", "target_lang": "zh-CN"})
         job = r.json()
         assert job["preview"] is True
-        # 等到任务结束（最多 30 秒），整套测试一起跑时机器负载高，不能用很短的固定超时
+        # Wait until the job ends (at most 30 seconds); machine load is high when the whole suite runs, so a short
+        # fixed timeout does not work
         deadline = time.monotonic() + 30
         status = None
         while time.monotonic() < deadline:
@@ -160,8 +162,9 @@ def test_epub_preview_kinds_in_reading_order():
     segs = runner.preview()["segments"]
     kinds = {s["k"] for s in segs}
     assert "toc" in kinds and "p" in kinds
-    # MOBI7 的裸文本段落按阅读顺序排列：正文第一句出现在“CHAPTER I”之后
-    # 富文本段的 s 带行内标签，匹配前剥掉（前端预览同样处理）
+    # Plain-text MOBI7 paragraphs are in reading order: the first body sentence comes after "CHAPTER I"
+    # The s of a rich-text segment carries inline tags, which are stripped before matching (the frontend preview
+    # does the same)
     texts = [__import__("re").sub(r"<[^>]+>", "", s["s"]).strip() for s in segs]
     ch1 = next(i for i, t in enumerate(texts) if t.startswith("CHAPTER I.") and "Rabbit" in t)
     alice = next(i for i, t in enumerate(texts) if t.startswith("Alice was beginning"))
@@ -169,7 +172,7 @@ def test_epub_preview_kinds_in_reading_order():
 
 
 def _heading_pdf() -> bytes:
-    """正文 10pt，标题 17pt，章节名 12pt 粗体，一句 12pt 非粗体，作者名 10pt 粗体。"""
+    """Body 10pt, title 17pt, section name 12pt bold, one sentence 12pt non-bold, author name 10pt bold."""
     doc = pymupdf.open()
     page = doc.new_page(width=500, height=700)
     page.insert_text((40, 40), "Attention Is All You Need", fontsize=17, fontname="hebo")
@@ -189,7 +192,8 @@ def _heading_pdf() -> bytes:
 
 
 def test_pdf_preview_marks_section_headings(tmp_path):
-    """略大于正文的粗体短块是小标题；同字号的非粗体、以及不大于正文的粗体仍是段落。"""
+    """A short bold block slightly larger than body text is a section heading; non-bold text of the same size and bold
+    text no larger than body text are still paragraphs."""
     from app.formats import translate_file
 
     src = tmp_path / "paper.pdf"
@@ -233,7 +237,8 @@ def test_pdf_preview_headings_survive_the_job(app_env, tmp_path):
 
 
 def test_failed_pdf_stays_previewable_but_not_ready(app_env):
-    """加密或没有文字的 PDF 预览标记为真，但不会有段落；客户端不该为此继续轮询。"""
+    """An encrypted PDF or one without text has the preview flag set but no paragraphs; the client must not keep
+    polling for them."""
     main = app_env
     empty = pymupdf.open()
     empty.new_page()
@@ -261,8 +266,8 @@ def test_normalize_numbered_units():
         "第3卷　论三种政体的原则",
         "第卷26　论法律应当与其所规范的事物秩序具有的关系",
         "第一章",
-        "《Science》307卷第5708期（2005）：414–16",  # 不以“第”开头，不动
-        "第4卷　" + "很长的条目" * 10,  # 超长不动
+        "《Science》307卷第5708期（2005）：414–16",  # Does not start with "第", left alone
+        "第4卷　" + "很长的条目" * 10,  # Too long, left alone
     ]
     fixed = norm(texts, results, "zh-CN")
     assert fixed["h1"] == "第二卷"
@@ -278,7 +283,7 @@ def test_normalize_numbered_units():
     assert fix("第1010章", "zh-CN") == "第一千零一十章"
     assert fix("第1110章", "zh-CN") == "第一千一百一十章"
     assert fix("第10章", "zh-CN") == "第十章"
-    # 卷期页号保留阿拉伯数字
+    # Volume, issue and page numbers keep Arabic digits
     for cite in ("第25卷第1期", "第25卷第1期（2005）：414–16", "第307卷第5708期", "第2章第3页"):
         assert fix(cite, "zh-CN") == cite
 
@@ -293,16 +298,17 @@ def test_normalize_numbered_units_updates_cache():
     runner = Runner(DictTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
     out = asyncio.run(runner.translate_all(["BOOK 2", "para one"], kinds=["h1", "p"], preview=True))
     assert out[0] == "第二卷"
-    # 缓存里也写成归一化后的版本，预览和历史快照都一致
+    # The cache also stores the normalized version, so the preview and the history snapshot agree
     assert runner.cache.get_many("x", []) == {}
     assert runner._done["BOOK 2"] == "第二卷"
-    # 正文即使译文是「第2卷」也不改、不写进被改过的缓存
+    # Body text is not changed even when the translation is "第2卷", and no rewritten cache entry is written
     body = Runner(DictTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
     assert asyncio.run(body.translate_all(["BOOK 2"], kinds=["p"], preview=True)) == ["第2卷"]
 
 
 def test_normalize_applies_to_cache_hits():
-    """缓存里的旧样式译文（归一化之前翻的）：命中时就地改写，预览立即是新样式。"""
+    """Old-style translations in the cache (translated before normalization) are rewritten in place on a hit, and the
+    preview shows the new style at once."""
     from app.runner import Runner
 
     class NeverCalled(MockTranslator):
@@ -320,23 +326,25 @@ def test_normalize_applies_to_cache_hits():
 
 
 def test_normalize_punctuation():
-    """中文译文的全角标点统一半角（逗号类补空格）：句号、书名号、引号保持全角；
-    新翻译和缓存命中都改写，其他语言不动。"""
+    """Full-width punctuation in Chinese translations becomes half-width (comma-like marks get a following space);
+    full stops, title marks and quotation marks stay full-width. New translations and cache hits are both rewritten;
+    other languages are left alone."""
     from app.runner import Runner, clean_translation, normalize_punctuation
 
     assert normalize_punctuation("词元（token）的概率", "zh-CN") == "词元(token)的概率"
     assert normalize_punctuation("训练时，我们随机决定，是否采样", "zh-CN") == "训练时, 我们随机决定, 是否采样"
     assert normalize_punctuation("已有空格， 不重复", "zh-CN") == "已有空格, 不重复"
     assert normalize_punctuation("甲、乙；丙：丁？戊！己", "zh-CN") == "甲, 乙; 丙: 丁? 戊! 己"
-    # 句号、书名号、引号保持全角
+    # Full stops, title marks and quotation marks stay full-width
     assert normalize_punctuation("完了。《论文》里说“保持”。", "zh-CN") == "完了。《论文》里说“保持”。"
-    # 句末标点补的空格不留尾巴
+    # The space added after sentence-final punctuation does not remain at the end
     assert normalize_punctuation("结束了吗？", "zh-CN") == "结束了吗?"
     assert normalize_punctuation("（保持），不变", "en") == "（保持），不变"
-    # 读成中文的节号按原文改回数字
+    # Section numbers read out in Chinese are restored to the digits of the source
     assert clean_translation("introduced in Section 2.1", "我们将在第二点一节介绍", "zh-CN") == "我们将在第2.1节介绍"
     assert clean_translation("Section 2.2 Hadoop", "第二点二节 Hadoop", "zh-CN") == "第2.2节 Hadoop"
-    # 夹在列表分隔符、运算符中间的是数学省略号，只写一个；句尾、话尾的「……」不动
+    # An ellipsis between list separators or operators is a mathematical ellipsis and is written once; "……" at the
+    # end of a sentence or utterance is left alone
     assert (
         normalize_punctuation("引用表{v1}{i}, {/i}{v2}{i}, ……, {/i}{v3}", "zh-CN")
         == "引用表{v1}{i}, {/i}{v2}{i}, …, {/i}{v3}"
@@ -364,7 +372,8 @@ def test_normalize_punctuation():
 
 
 def test_fix_numbered_unit_inside_html():
-    """富文本译文：数字被 <small> 包住或嵌在 <a> 里时，按文本节点改写，标签原样保留。"""
+    """Rich-text translations: when a number is wrapped in <small> or nested in <a>, the text nodes are rewritten and
+    the tags are kept as they are."""
     from app.runner import fix_numbered_unit
 
     html = '<a class="c1" href="part0015.html">第<small class="c2">1</small>卷</a>  论一般的法律'
@@ -373,7 +382,8 @@ def test_fix_numbered_unit_inside_html():
     assert re.sub(r"<[^>]+>", "", out).startswith("第一卷")
     inv = '<a href="x">第<small>卷26</small></a>　论法律'
     assert re.sub(r"<[^>]+>", "", fix_numbered_unit(inv, "zh-CN", html=True)).startswith("第二十六卷")
-    # 脚注号和页码不并进章节号；尖括号纯文本不送进解析器
+    # Footnote numbers and page numbers are not merged into the chapter number; plain text with angle brackets is
+    # not sent to the parser
     assert fix_numbered_unit("第2<sup>1</sup>章", "zh-CN", html=True) == "第二<sup>1</sup>章"
     page = '<span epub:type="pagebreak" id="page7" role="doc-pagebreak">7</span>第2章'
     assert fix_numbered_unit(page, "zh-CN", html=True) == page.replace("第2章", "第二章")
@@ -381,23 +391,24 @@ def test_fix_numbered_unit_inside_html():
     assert fix_numbered_unit(mid, "zh-CN", html=True) == mid.replace("第2", "第二")
     assert fix_numbered_unit("第2章 <vector>", "zh-CN") == "第二章 <vector>"
     assert fix_numbered_unit("第2章</div>标题还在", "zh-CN", html=True) == "第2章</div>标题还在"
-    # 长段和引文格式不动
+    # Long paragraphs and citation formats are left alone
     cite = '<a href="x">参考文献</a>：《Science》307卷第5708期'
     assert fix_numbered_unit(cite, "zh-CN", html=True) == cite
 
 
 def test_fix_numbered_unit_with_selfclosed_anchor():
-    """自闭合锚点（<a id="x"/>、<span id="x"/>）旁的编号也要归一，且锚点结构不被吞。"""
+    """Numbers next to self-closing anchors (<a id="x"/>, <span id="x"/>) are normalized too, and the anchor structure
+    is not swallowed."""
     from app.runner import fix_numbered_unit as fix
 
     h = '<a class="calibre1" id="chapter15"/>第<small class="calibre5">15</small>卷'
     out = fix(h, "zh-CN", html=True)
     assert re.sub(r"<[^>]+>", "", out) == "第十五卷"
     assert 'id="chapter15"' in out
-    # 锚点仍然是空元素，不能把编号吞进 <a> 里
+    # The anchor is still an empty element; the number must not be swallowed into the <a>
     assert re.search(r"<a [^>]*></a>", out) or "/>" in out
     assert fix('<span id="pg"/>第2卷', "zh-CN", html=True) != '<span id="pg"/>第2卷'
-    # 斜杠前有空白时也要展开干净，编号不能留着不改
+    # With whitespace before the slash it also expands cleanly, and the number does not stay unchanged
     spaced = '<a class="calibre1" id="chapter15" />第<small class="calibre5">15</small>卷'
     sout = fix(spaced, "zh-CN", html=True)
     assert re.sub(r"<[^>]+>", "", sout) == "第十五卷"
@@ -408,7 +419,8 @@ def test_fix_numbered_unit_with_selfclosed_anchor():
 
 
 def test_empty_translations_backfilled_below_threshold():
-    """个别空译文回填原文，任务照常完成并计数；超过阈值才判失败。"""
+    """An occasional empty translation is filled with the source text, and the job finishes as usual and counts it;
+    only above the threshold does it fail."""
 
     class FlakyEmpty(MockTranslator):
         def __init__(self, target_lang, empty_at):
@@ -421,7 +433,7 @@ def test_empty_translations_backfilled_below_threshold():
     texts = [f"Sentence number {i} here." for i in range(20)]
     runner = Runner(FlakyEmpty("zh-CN", empty_at={texts[3]}), cache=MemCache(), skip_same_lang=False)
     out = asyncio.run(runner.translate_all(texts))
-    assert out[3] == texts[3]  # 回填原文
+    assert out[3] == texts[3]  # Filled with the source text
     assert runner.info["failed"] == 1
     assert out[4].startswith("[zh-CN]")
 
@@ -431,7 +443,8 @@ def test_empty_translations_backfilled_below_threshold():
 
 
 def test_echo_translations_retried_individually():
-    """批量里整段回显（译文仍是源语言）的段落单独重翻一次；仍回显才保留。"""
+    """A paragraph echoed whole in a batch (the translation is still in the source language) is retranslated once on
+    its own; it is kept only if it still echoes."""
     calls = []
 
     def handler(request):
@@ -439,7 +452,7 @@ def test_echo_translations_retried_individually():
 
         n = len(_json.loads(request.content)["messages"][1]["content"].split("[[p"))
         calls.append(n)
-        if n > 2:  # 批量：回显原文
+        if n > 2:  # Batch: echo the source text
             return httpx.Response(
                 200,
                 json={
@@ -461,12 +474,14 @@ def test_echo_translations_retried_individually():
     long_text = "This is a fairly long sentence that should really be translated."
     runner = Runner(tr, cache=MemCache(), skip_same_lang=False)
     out = asyncio.run(runner.translate_all([long_text, "LSTM"]))
-    assert out[0] == "这是一个相当长的句子, 确实应该被翻译出来。"  # 回显被单独重翻修好了（逗号归一化为半角）
-    assert out[1] == "LSTM"  # 专有名词不受影响
+    # The echo was fixed by the single retranslation (the comma normalized to half-width)
+    assert out[0] == "这是一个相当长的句子, 确实应该被翻译出来。"
+    assert out[1] == "LSTM"  # Proper nouns are not affected
 
 
 def test_cached_prose_echo_is_dropped_and_retried():
-    """整句英文回显不留在缓存里。下次重排会再翻，而不是一直贴回英文。"""
+    """A whole English sentence echoed back does not stay in the cache. The next re-layout translates it again
+    instead of pasting the English back every time."""
     src = (
         "To obtain a better coverage across the different systems, we used a larger "
         "benchmark so the comparison stays fair for every engine involved."
@@ -482,7 +497,8 @@ def test_cached_prose_echo_is_dropped_and_retried():
                 "choices": [
                     {
                         "message": {
-                            "content": "为了在不同系统之间获得更好的覆盖, 我们使用了更大的基准, 让每个引擎的比较都公平。"
+                            "content": "为了在不同系统之间获得更好的覆盖, 我们使用了更大的基准, "
+                            "让每个引擎的比较都公平。"
                         }
                     }
                 ]
@@ -498,7 +514,8 @@ def test_cached_prose_echo_is_dropped_and_retried():
 
 
 def test_stray_placeholders_cleaned_from_formula_free_blocks():
-    """没有公式的块：模型错配/幻觉产生的 {vN} 占位符一律剥掉，不漏进输出。"""
+    """Blocks without formulas: {vN} placeholders from model mismatches or hallucinations are always stripped and do
+    not leak into the output."""
     from app.formats.pdf_restore import _STRAY_PLACEHOLDER_RE
 
     t = "其中{v1}从{v2}到{v3}进行线性递减"
@@ -507,7 +524,8 @@ def test_stray_placeholders_cleaned_from_formula_free_blocks():
 
 
 def test_finished_job_preview_returns_updates_after_last_poll(app_env):
-    """最后一批在两次拉取之间翻完、任务随即结束时，下一次增量拉取要拿到这批译文。"""
+    """When the last batch finishes between two polls and the job ends right after, the next incremental poll gets
+    the translations of that batch."""
     job = main.Job(id="snap1", filename="a.md", preview=True, status="done")
     main.jobs.out_dir(job.id).mkdir(parents=True)
     main.jobs.add(job)
@@ -526,9 +544,10 @@ def test_finished_job_preview_returns_updates_after_last_poll(app_env):
 
 
 def test_dotted_section_numbers_stay_in_digits():
-    """原文以 7.4、1.2.3 开头，模型照着「章节号写中文数字」写成了「七点四」「四.11」，或给没写
-    Chapter 的裸章号加上「第十二章」：改回原样，缓存里的旧译文命中时也改写。原文写了单位的、
-    读法对不上的不动。"""
+    """The source starts with 7.4 or 1.2.3, and the model, following "章节号写中文数字" (write section numbers in
+    Chinese numerals), wrote "七点四" or "四.11", or added "第十二章" to a bare chapter number without Chapter: these
+    are restored to the original, and old translations in the cache are rewritten on a hit too. Sources that spell out
+    the unit and readings that do not match are left alone."""
     from app.runner import Runner
     from app.runner import keep_section_number as keep
 
@@ -542,7 +561,7 @@ def test_dotted_section_numbers_stay_in_digits():
     assert keep("2 words were found", "找到了两个词", "zh-CN") == "找到了两个词"
     assert keep("1.1 What", "一点十一 什么", "zh-CN") == "一点十一 什么"
     assert keep("7.4 The input", "七点四 输入", "en") == "七点四 输入"
-    # 句中引用的节号、图号、小数也一样
+    # The same holds for section numbers, figure numbers and decimals cited in a sentence
     assert (
         keep("introduced in Section {c0000ff}7.6{/c}", "在第 {c0000ff}七点六节{/c}中介绍", "zh-CN")
         == "在第 {c0000ff}7.6节{/c}中介绍"
@@ -562,7 +581,8 @@ def test_dotted_section_numbers_stay_in_digits():
 
 
 def test_cached_translation_with_stray_script_is_dropped_and_retried():
-    """缓存里夹带外文的译文丢掉重翻；只排版时没法重翻，照用。"""
+    """A cached translation containing foreign script is dropped and retranslated; when only typesetting, it cannot
+    be retranslated and is used as is."""
     src = "Please take a moment to convince yourself."
     cache = MemCache({src: "请花一点时间 убед自己。"})
 
@@ -579,7 +599,8 @@ def test_cached_translation_with_stray_script_is_dropped_and_retried():
 
 
 def test_notes_reach_the_prompt_and_key_the_cache():
-    """带说明的段落：说明随批次写进系统提示词，缓存按原文加说明存，以前没说明时存的译文不再命中。"""
+    """Paragraphs with notes: the note goes into the system prompt with the batch, the cache key is the source text
+    plus the note, and translations stored earlier without the note no longer hit."""
     systems = []
 
     def handler(request):

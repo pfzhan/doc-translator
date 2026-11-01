@@ -21,8 +21,10 @@ def _two_columns() -> PageGeometry:
 
 
 def test_a_plot_on_a_white_ground_covers_its_title_and_axis_labels():
-    """matplotlib 的图先铺白底，标题、坐标轴名写在曲线外面的白底上。白底装着曲线、又不比曲线大出一倍的是图，
-    只算到曲线外面一圈。比里面的图大得多的白底不是图；网格认成表时，比表大一圈的白底仍是图。"""
+    """A matplotlib plot first lays down a white ground, and the title and axis labels sit on the white ground outside
+    the curves. A white ground that holds curves and is less than twice their size is a figure, counted only to a
+    margin around the curves. A white ground much larger than the plot inside is not a figure; when the grid is taken
+    as a table, a white ground slightly larger than the table is still a figure."""
     from app.formats.pdf_layout import PageGeometry, RuledTable, _figure_rects
 
     page = pymupdf.open().new_page(width=400, height=500)
@@ -31,7 +33,7 @@ def test_a_plot_on_a_white_ground_covers_its_title_and_axis_labels():
     rects = _figure_rects(page)
     assert pymupdf.Rect(46, 36, 260, 194) in rects
 
-    # 白底一直铺到下面的正文里，只算到曲线外面 24pt
+    # The white ground extends into the body text below; only 24pt beyond the curves counts
     tall = pymupdf.open().new_page(width=400, height=500)
     tall.draw_rect(pymupdf.Rect(40, 30, 260, 230), fill=(1, 1, 1), color=None, width=0)
     tall.draw_polyline([(70, 170), (120, 120), (170, 140), (240, 60)], color=(0, 0, 1), width=1)
@@ -50,13 +52,14 @@ def test_a_plot_on_a_white_ground_covers_its_title_and_axis_labels():
 
 
 def test_a_framed_panel_with_circled_words_is_a_figure():
-    """框起来的白底上一段示例文字，词上圈着彩色椭圆、连着虚线（ed3book 的 Figure 4.2）：
-    白底是一幅图，里面的字留原文。同样的记号铺在没框的白底上不算。"""
+    """Sample text on a framed white ground, with colored ovals around words joined by dashed lines (Figure 4.2 of
+    ed3book): the white ground is a figure and its text keeps the original. The same marks on an unframed white ground
+    do not count."""
     from app.formats.pdf_layout import _figure_rects
 
     def panel(framed):
         page = pymupdf.open().new_page(width=612, height=792)
-        if framed:  # 框是四条单独的线
+        if framed:  # The frame is four separate lines
             for start, end in (
                 ((160, 510), (493, 510)),
                 ((160, 623), (493, 623)),
@@ -86,7 +89,8 @@ def test_a_framed_panel_with_circled_words_is_a_figure():
 
 
 def test_white_rectangle_fill_is_not_a_figure():
-    """近白矩形是底色。盖住它的正文不能被当成图内文字跳过。描边框和图片仍是图。"""
+    """A near-white rectangle is a background fill. Body text covering it must not be skipped as text inside a figure.
+    Stroked boxes and images are still figures."""
     from app.formats.pdf_layout import _figure_rects
     from app.formats.pdf_roles import HeuristicLayout, LayoutItem, Role
 
@@ -157,14 +161,16 @@ def test_expand_right_honors_column_limit():
     rect = pymupdf.Rect(40, 40, 90, 54)
     widened = _expand_right(rect, 400, [], right_limit=150)
     assert widened.x1 == 150
-    # 栏缘比原框还左时不缩小
+    # A column edge left of the original box does not shrink it
     kept = _expand_right(pymupdf.Rect(40, 40, 200, 54), 400, [], right_limit=150)
     assert kept.x1 == 200
 
 
 def test_the_indented_next_line_does_not_stop_widening():
-    """索引条目下一行是缩进的子条目，写入框比原文行多出的留白探进下一行，不是并排的障碍。
-    算法框和段落首行并排十几点，就算比段落高很多也要让开。"""
+    """The line below an index entry is an indented subentry. The write box is taller than the source row and its
+    extra space reaches into that line, but the subentry is not an obstacle beside the box. An algorithm box that
+    sits beside the first line of a paragraph over a dozen points must be avoided even when it is much taller than
+    the paragraph."""
     from app.formats.pdf_write import _beside_rows
 
     entry_row = pymupdf.Rect(197, 130.4, 234, 140.8)
@@ -175,14 +181,15 @@ def test_the_indented_next_line_does_not_stop_widening():
     rows = [pymupdf.Rect(72, 651 + 12 * i, 303, 662 + 12 * i) for i in range(6)]
     algorithm = pymupdf.Rect(308, 497, 543, 665)
     assert _beside_rows([algorithm], pymupdf.Rect(72, 650.7, 303, 723), rows) == [algorithm]
-    # 框往下多出两行，那里的障碍也算
+    # The box extends two rows further down, and obstacles there count too
     low = pymupdf.Rect(310, 735, 400, 746)
     assert _beside_rows([low], pymupdf.Rect(72, 650.7, 303, 750), rows) == [low]
 
 
 def test_an_equation_number_between_two_rows_is_beside_them():
-    """分情况的行间公式，右边的式号夹在「if …」「otherwise」两行中间，和每一行都只交叠一小半，
-    也在这两行旁边，右扩要让开。在最后一行下面的不算。"""
+    """In a display formula with cases, the equation number on the right sits between the "if …" and "otherwise"
+    rows and overlaps less than half of each; it is still beside those rows, and widening to the right must avoid it.
+    One below the last row does not count."""
     from app.formats.pdf_write import _beside_rows, _on_rows
 
     rows = [pymupdf.Rect(351.4, 215.1, 422.0, 227.1), pymupdf.Rect(351.4, 229.4, 390.1, 241.4)]
@@ -223,7 +230,7 @@ def test_cross_page_joins_the_right_column_end_to_the_next_left_column():
     left = _block("well on this split.", 1, pymupdf.Rect(40, 60, 150, 72))
     merged = _cross_page_units([right, left], 10.0, geometries=[geo, geo])
     assert any(len(unit) == 2 for unit in merged)
-    # 不传几何时仍按原来的页末/页首规则合并
+    # Without geometry the original page end/page start rule still merges them
     assert any(len(unit) == 2 for unit in _cross_page_units([right, left], 10.0))
 
     same = _block("the model performs quite", 0, pymupdf.Rect(40, 700, 150, 712))
@@ -237,8 +244,9 @@ def test_cross_page_joins_the_right_column_end_to_the_next_left_column():
 
 
 def test_a_table_column_with_body_text_below_does_not_continue_on_the_next_page():
-    """图里的表格右边一列格子左缘对齐，分栏时认成了一栏；这一列底下接着通栏的正文，末一格不是页末，
-    不接到下一页页首的段落上。"""
+    """The right column of cells of a table inside a figure is left-aligned and is taken as a column when splitting
+    columns; full-width body text follows below it, so its last cell is not the page end and does not continue into
+    the paragraph at the top of the next page."""
 
     def blk(page, text, rows, size=10.0):
         rects = [pymupdf.Rect(row) for row in rows]
@@ -320,7 +328,8 @@ def test_a_table_column_with_body_text_below_does_not_continue_on_the_next_page(
 
 
 def test_a_paragraph_continues_below_a_figure_at_the_top_of_the_next_page():
-    """下一页先排了一张图和图注，被页边界切断的那段接在图注下面。"""
+    """The next page starts with a figure and its caption; the paragraph cut by the page break continues below the
+    caption."""
     end = _block("you can see the ex-", 0, pymupdf.Rect(40, 700, 300, 712))
     caption = _block("Windowing, showing a 25 ms window.", 1, pymupdf.Rect(60, 260, 300, 272))
     rest = _block("tracted windowed signal looks just like the original.", 1, pymupdf.Rect(40, 300, 300, 312))
@@ -331,7 +340,8 @@ def test_a_paragraph_continues_below_a_figure_at_the_top_of_the_next_page():
 
 
 def test_the_left_column_end_skips_the_author_name_over_the_right_column():
-    """右栏顶上是比正文大的署名，左栏末句接到署名下面的右栏正文，不接署名。"""
+    """The top of the right column holds an author name larger than body text; the last sentence of the left column
+    continues into the right column body below the name, not into the name."""
     geo = _two_columns()
     left = [
         _block("Training deep networks is hard because the inputs change.", 0, pymupdf.Rect(40, 200, 150, 240)),
@@ -347,8 +357,9 @@ def test_the_left_column_end_skips_the_author_name_over_the_right_column():
 
 
 def test_index_entries_hold_their_place_at_the_column_top():
-    """索引条目不接上下文，但照样占着栏顶：右栏底一个没页码的词头（BERT）不能越过下一页
-    栏顶的一串条目，接到栏中间另一个没页码的词头（broadcast news）上。"""
+    """Index entries do not join their context but still occupy the column top: a headword without a page number at
+    the bottom of the right column (BERT) must not skip the run of entries at the top of the next page's column and
+    join another headword without a page number in the middle of that column (broadcast news)."""
     geo = _two_columns()
     above = _block("Bayes", 0, pymupdf.Rect(250, 680, 280, 690), size=8)
     head = _block("BERT", 0, pymupdf.Rect(250, 700, 280, 710), size=8)
@@ -368,7 +379,8 @@ def test_index_entries_hold_their_place_at_the_column_top():
 
 
 def test_spanning_footer_does_not_steal_the_next_page_join():
-    """跨栏页脚排在页末时，右栏末行仍接到下一页左栏，不被页脚抢走。"""
+    """With a spanning footer at the page end, the last line of the right column still continues into the left column
+    of the next page and is not taken by the footer."""
     geo = _two_columns()
     right = _block("the model performs quite", 0, pymupdf.Rect(250, 500, 360, 512))
     footer = _block("the notes continue", 0, pymupdf.Rect(40, 700, 360, 712))
@@ -379,7 +391,8 @@ def test_spanning_footer_does_not_steal_the_next_page_join():
 
 
 def test_two_column_translation_stops_at_the_gutter(tmp_path):
-    """左栏短行的长译文可以右扩，但旁边的右栏即使纵向错开也不能被盖住。"""
+    """A long translation of a short left-column line may widen to the right, but must not cover the right column
+    beside it, even when that column is offset vertically."""
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=400)
     page.insert_text((40, 52), "Short left", fontsize=12)
@@ -410,7 +423,8 @@ def test_two_column_translation_stops_at_the_gutter(tmp_path):
 
 
 def test_translation_stops_before_a_ruled_box_on_the_right(tmp_path):
-    """栏间空白太窄没分出栏时，右边算法框的外框也挡住右扩。"""
+    """When the column gap is too narrow to split columns, the frame of an algorithm box on the right still stops
+    widening."""
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=400)
     page.insert_text((40, 52), "Short left", fontsize=12)
@@ -445,7 +459,7 @@ def test_translation_stops_before_a_ruled_box_on_the_right(tmp_path):
 
 
 def test_translation_stops_before_text_left_in_place_on_the_right(tmp_path):
-    """不属于任何块、原处留着的字（式号）也挡住右扩。"""
+    """Text that belongs to no block and stays in place (an equation number) also stops widening."""
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=400)
     page.insert_text((40, 52), "Short left", fontsize=12)
@@ -506,7 +520,8 @@ def _cjk_line(page: pymupdf.Page) -> dict | None:
 
 
 def test_centered_table_cell_keeps_the_translation_centered(tmp_path):
-    """原文在格子中线上时，更短的译文也要落在格子中线上，不能从原文字左缘起排。"""
+    """When the source is centered in a cell, a shorter translation is also centered in the cell instead of starting
+    at the left edge of the source text."""
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=160)
     page.insert_text((80, 60), "Baseline", fontsize=10)
@@ -560,7 +575,8 @@ def test_left_aligned_table_cell_stays_left(tmp_path):
 
 
 def test_cell_bottom_line_keeps_the_table_font_size(tmp_path):
-    """贴着格子下沿的一行，字号要和同格上一行一样，不能被裁矮后单独缩小。"""
+    """A line touching the bottom edge of a cell keeps the font size of the line above it in the same cell instead of
+    being clipped shorter and shrunk on its own."""
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=160)
     page.insert_text((50, 48), "Baseline", fontsize=10)
@@ -569,7 +585,8 @@ def test_cell_bottom_line_keeps_the_table_font_size(tmp_path):
     doc.save(src)
     doc.close()
 
-    # 下沿几乎贴着第二行字形。旧逻辑会把这一行的下沿余量裁掉，行框矮过一行。
+    # The bottom edge nearly touches the glyphs of the second line. The old logic clipped the bottom margin of this
+    # line, leaving a line box shorter than one line.
     clip = (40.0, 30.0, 220.0, 93.0)
     top = TextBlock(
         page=0,
@@ -628,7 +645,8 @@ def test_ruled_cells_are_separate_blocks_and_keep_the_translation_inside(tmp_pat
 
 
 def test_reading_order_joins_a_column_before_the_other_column():
-    """另一栏插在中间时，本栏被拆开的两行仍要按栏接上。没有文字栏沟则保持原顺序。"""
+    """When the other column is interleaved, two split lines of this column are still joined by column. Without a text
+    gutter the original order is kept."""
     geo = _two_columns()
     left_a = _block("the training set is given like a", 0, pymupdf.Rect(40, 40, 150, 52))
     right_a = _block("The other column starts here.", 0, pymupdf.Rect(250, 40, 360, 52))
@@ -657,7 +675,8 @@ def test_reading_order_joins_a_column_before_the_other_column():
 
 
 def test_reading_order_keeps_spanning_title_and_table_between_bands():
-    """跨栏标题和整表留在纵向位置。表内格子保持原顺序，不按页面分栏拆开。"""
+    """Spanning titles and whole tables stay at their vertical position. Table cells keep their original order and are
+    not split by the page columns."""
     title = _block("3 Methods", 0, pymupdf.Rect(40, 120, 360, 136), size=14)
     left_above = _block("Left above.", 0, pymupdf.Rect(40, 40, 150, 52))
     right_above = _block("Right above.", 0, pymupdf.Rect(250, 40, 360, 52))
@@ -717,7 +736,8 @@ def test_reading_order_keeps_spanning_title_and_table_between_bands():
 
 
 def test_extract_reads_two_columns_down_each_column(tmp_path):
-    """提取顺序左右交错时，写回前的块序仍是先左栏后右栏，拆开的段落能接上。"""
+    """When the extraction order alternates between left and right, the block order before writing is still the left
+    column then the right column, and split paragraphs are joined."""
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=320)
     lines = [
@@ -760,7 +780,8 @@ def test_text_alignment_is_not_a_table():
 
 
 def test_nested_boxes_of_a_diagram_are_not_a_table():
-    """流程图的框套框：find_tables 认出的格子互相包含，这不是表。当表的话框里的字全并成一格。"""
+    """Nested boxes of a flowchart: the cells find_tables finds contain each other, so this is not a table. Taken as a
+    table, all the text in the boxes would merge into one cell."""
     from app.formats.pdf_layout import ruled_tables
 
     doc = pymupdf.open()
@@ -777,9 +798,10 @@ def test_nested_boxes_of_a_diagram_are_not_a_table():
 
 
 def test_ruled_tables_read_only_the_text_near_the_lines_and_find_the_same_tables():
-    """find_tables 只取线所在一带的字时，找出的表和取整页的字一样。
-    几条线连成的一片缺右边和下边，find_tables 看到片里有字才补上外框，比的是上下翻过来的位置，
-    所以翻过来那一带的字也要取。只取线附近的字就少了这张表。"""
+    """When find_tables reads only the text in the band around the lines, it finds the same tables as with the text of
+    the whole page. For a patch of connected lines missing its right and bottom sides, find_tables adds the frame
+    only when it sees text inside the patch, and it compares vertically flipped positions, so the text in the flipped
+    band is read too. Reading only the text near the lines misses this table."""
     from app.formats.pdf_layout import _page_drawings, _table_clip, ruled_tables
 
     def found(page, clip):
@@ -812,7 +834,8 @@ def test_ruled_tables_read_only_the_text_near_the_lines_and_find_the_same_tables
 
 
 def test_unruled_short_cells_stay_inside_and_do_not_vote_as_columns(tmp_path):
-    """没有线的短格子按列缘对齐认成表，译文不越出格子，也不把页面拆成分栏。"""
+    """Short unruled cells are recognized as a table by their aligned column edges; translations stay inside the cells,
+    and the page is not split into columns."""
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=240)
     rows = [("Name", "Alice"), ("Age", "30"), ("City", "Beijing"), ("Role", "Editor")]
@@ -866,7 +889,8 @@ def test_repeated_header_and_page_number_stay_untranslated():
 
 
 def test_rotated_page_geometry_uses_the_unrotated_size():
-    """旋转页的文字坐标没转。页宽页高也按没转的算，和不旋转的同一页一样。"""
+    """Text coordinates of a rotated page are unrotated. Page width and height are also taken unrotated, the same as
+    for the same page without rotation."""
     geos = []
     for rotation in (0, 90):
         doc = pymupdf.open()
@@ -880,7 +904,8 @@ def test_rotated_page_geometry_uses_the_unrotated_size():
 
 
 def _rule_page() -> pymupdf.Page:
-    """格子之间有线、没有外框的表：横线伸出竖线，竖线伸过上下两条横线。"""
+    """A table with lines between cells and no outer frame: the horizontal lines extend past the vertical lines, and
+    the vertical lines extend past the top and bottom horizontal lines."""
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=300)
     for y in (100, 130, 160):
@@ -906,7 +931,8 @@ def test_open_edged_table_gets_its_header_row_and_outer_columns():
 
 
 def test_table_cells_never_continue_into_each_other():
-    """格子的列看起来像栏，上一列的末格不能接到下一列的表头上。"""
+    """Columns of cells look like text columns, but the last cell of one column must not continue into the header of
+    the next."""
     from app.formats.pdf_merge import _can_continue
 
     def cell(text, x0, y0, clip):
@@ -940,7 +966,7 @@ def _algorithm_page(caption_below: bool) -> pymupdf.Page:
 
 
 def test_algorithm_box_lines_become_cells():
-    """伪代码一行一格，图注在框上方、在框下方都认。"""
+    """Each pseudocode line is one cell, and the caption is recognized both above and below the box."""
     from app.formats.pdf_layout import algorithm_tables
 
     for below in (False, True):
@@ -952,7 +978,8 @@ def test_algorithm_box_lines_become_cells():
 
 
 def test_algorithm_boxes_are_looked_for_only_on_pages_naming_one():
-    """给了本页的词时，词里有 Algorithm 才逐行找图注；找出的框和不给词时一样。"""
+    """When the words of the page are given, captions are searched line by line only if the words include Algorithm;
+    the boxes found are the same as without the words."""
     from app.formats.pdf_layout import algorithm_tables, page_words
 
     page = _algorithm_page(False)
@@ -977,7 +1004,8 @@ def test_algorithm_lines_are_translated_one_by_one():
 
 
 def test_table_cells_stay_original_but_algorithm_lines_are_translated(tmp_path):
-    """表格里的字一律留原文，图注照翻。算法框的伪代码也切成格子，仍逐行翻译。"""
+    """Text in tables always keeps the original and captions are translated. Pseudocode in algorithm boxes is also cut
+    into cells but is still translated line by line."""
     from app.formats.pdf import _plan_pdf
 
     class Runner:
@@ -1002,7 +1030,8 @@ def test_table_cells_stay_original_but_algorithm_lines_are_translated(tmp_path):
 
 
 def test_side_by_side_algorithm_boxes_are_both_found():
-    """两个算法框并排时，图注在 PyMuPDF 的同一行里；另一个框的线在旁边，不算。"""
+    """With two algorithm boxes side by side, both captions are in the same PyMuPDF line; the lines of the other box
+    beside it do not count."""
     from app.formats.pdf_layout import algorithm_tables
 
     doc = pymupdf.open()
@@ -1019,7 +1048,8 @@ def test_side_by_side_algorithm_boxes_are_both_found():
 
 
 def test_algorithm_rows_ignore_radical_origins():
-    """根号的起笔点在字形顶上，不能当成一行的基线另切出一格。"""
+    """The origin of a radical sign is at the top of the glyph and must not be taken as the baseline of a row that gets
+    its own cell."""
     from app.formats.pdf_layout import _code_rows
 
     def line(y, *spans):
@@ -1033,7 +1063,8 @@ def test_algorithm_rows_ignore_radical_origins():
 
 
 def test_algorithm_rows_ignore_fraction_numerators_and_denominators():
-    """行间公式的分子分母和正文一样大，起笔点在基线上下大半个字高。贴着分数线的不另切一格。"""
+    """Numerators and denominators of a display formula are as large as body text, with origins most of a character
+    height above and below the baseline. Text touching a fraction bar does not get its own cell."""
     from app.formats.pdf_layout import _code_rows
 
     def span(text, font, x0, x1, y):
@@ -1054,7 +1085,8 @@ def test_algorithm_rows_ignore_fraction_numerators_and_denominators():
 
 
 def test_unnumbered_algorithm_rows_join_full_width_wraps():
-    """没有行号的算法里，排到框右缘、句子没完的行折到下一行，两行是一格。"""
+    """In an algorithm without line numbers, a line that reaches the right edge of the box with an unfinished sentence
+    wraps to the next line, and the two lines are one cell."""
     from app.formats.pdf_layout import _code_rows
 
     def line(y, text, x1):
@@ -1080,7 +1112,8 @@ def test_unnumbered_algorithm_rows_join_full_width_wraps():
 
 
 def test_a_numbered_algorithm_statement_is_one_unit():
-    """行号小一号、句子折成两行时，一格还是一句话；两行各自送翻会剩下半句英文。"""
+    """When the line number is one size smaller and the statement wraps onto two lines, one cell is still one
+    sentence; translating the two lines separately would leave half a sentence of English."""
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=300)
     for y in (50, 66, 150):
@@ -1105,8 +1138,9 @@ def test_a_numbered_algorithm_statement_is_one_unit():
 
 
 def test_a_displayed_formula_inside_an_algorithm_step_keeps_its_glyphs():
-    """一步下面单独居中一行式子：句子照翻，式子留原字，不并进句子里当词翻。
-    紧接句子写、不缩进的式子行仍是句子的一部分。"""
+    """A formula centered on its own line below a step: the sentence is translated, the formula keeps its glyphs and
+    is not merged into the sentence to be translated as words. A formula line written right after the sentence
+    without indentation is still part of the sentence."""
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=300)
     for y in (50, 66, 170):
@@ -1132,8 +1166,9 @@ def test_a_displayed_formula_inside_an_algorithm_step_keeps_its_glyphs():
 
 
 def test_an_algorithm_formula_beside_a_distant_comment_keeps_its_glyphs():
-    """算法一步的行间公式和右边远处的注释在同一格：注释照翻，公式留原字，不压成一行高塞进注释里。
-    紧挨着正文的式子仍是句子的一部分。"""
+    """A display formula of an algorithm step shares a cell with a comment far to its right: the comment is
+    translated, and the formula keeps its glyphs instead of being squeezed to one line height into the comment. A
+    formula right next to the text is still part of the sentence."""
     from app.formats.pdf_extract import _merge_cells
 
     clip = (307.7, 576.4, 543.5, 608.1)
@@ -1154,7 +1189,8 @@ def test_an_algorithm_formula_beside_a_distant_comment_keeps_its_glyphs():
 
 
 def test_far_apart_labels_in_one_box_stay_separate():
-    """框里隔开的几个节点标签不是一句话，各翻各的、各写回各的位置。挨着的换行仍并成一句。"""
+    """Separated node labels in a box are not one sentence; each is translated and written back at its own position.
+    Adjacent wrapped lines are still merged into one sentence."""
     from app.formats.pdf_extract import _merge_cells
 
     clip = (388.0, 163.0, 687.0, 373.0)
@@ -1181,8 +1217,9 @@ def test_far_apart_labels_in_one_box_stay_separate():
 
 
 def test_book_headers_above_the_text_frame_are_margins():
-    """页眉在 y=84，比固定的页顶窄带低。页码和章号每页不同；只出现一次的小节页眉
-    和其他页眉落在同一高度。版心里的标题不算。"""
+    """The running header is at y=84, below the fixed narrow band at the page top. Page and chapter numbers differ on
+    every page; a section header that appears only once is at the same height as the other headers. Headings inside
+    the text frame do not count."""
     from app.formats.pdf_frame import TextFrame
 
     frame = TextFrame(142, 475, 111, 719, 10)
@@ -1217,7 +1254,8 @@ def test_word_by_word_gloss_is_found_but_a_table_is_not():
 
 
 def test_indented_examples_are_not_a_column_that_ends_the_page():
-    """缩进的例句落在正文栏中间，不是另一栏。它没有句末标点，也不能接下一页的段首。"""
+    """Indented examples fall inside the body column and are not another column. They have no sentence-final
+    punctuation and must not continue into the paragraph at the top of the next page either."""
 
     def body(text: str, page: int, y0: float, x0: float = 160, x1: float = 493) -> TextBlock:
         return _block(text, page, pymupdf.Rect(x0, y0, x1, y0 + 30))
@@ -1239,7 +1277,8 @@ def test_indented_examples_are_not_a_column_that_ends_the_page():
 
 
 def test_short_and_morpheme_glosses_are_found():
-    """三个词的汉字对译，和逐语素对译（带 1SG、PFV 这样的缩写）。两行英文短句碰巧对齐不算。"""
+    """A three-word gloss of Chinese characters, and a morpheme-by-morpheme gloss (with abbreviations such as 1SG and
+    PFV). Two short English lines that happen to align do not count."""
     from app.formats.pdf_layout import interlinear_glosses
 
     doc = pymupdf.open()
@@ -1258,8 +1297,9 @@ def test_short_and_morpheme_glosses_are_found():
 
 
 def test_pinyin_under_a_line_of_hanzi_is_a_gloss():
-    """汉字一行、拼音一行，一字一音节，声调抽成单独的修饰字母。下面的英文意译照翻。
-    汉字下面接一句音节数对不上的英文不算。"""
+    """A line of Chinese characters over a line of pinyin, one syllable per character, with tones extracted as separate
+    modifier letters. The English free translation below is translated. An English sentence below the characters
+    whose syllable count does not match does not count."""
     from app.formats.pdf_layout import _TextWord, interlinear_glosses
 
     def row(y: float, *texts: str) -> list[_TextWord]:
@@ -1282,9 +1322,10 @@ def test_pinyin_under_a_line_of_hanzi_is_a_gloss():
 
 
 def test_role_labels_under_an_example_are_a_gloss():
-    """例句词下面标着小一号的角色（John 下面 AGENT）：例句和标签两行都留原文。
-    编号对着两行中间排的（(22.27)）并进例句那行。标签的框被下标撑高（ARG0）也算。
-    旁注里的缩写、下标、标题下面的 TBD 不算。"""
+    """Roles one size smaller under the words of an example (AGENT under John): both the example and the label line
+    keep the original. A number set between the two lines ((22.27)) is merged into the example line. A label whose
+    box is made taller by a subscript (ARG0) also counts. Abbreviations in margin notes, subscripts and the TBD below
+    a heading do not count."""
     from app.formats.pdf_layout import _TextWord, interlinear_glosses
 
     def word(x0: float, y0: float, x1: float, y1: float, text: str) -> _TextWord:
@@ -1310,15 +1351,15 @@ def test_role_labels_under_an_example_are_a_gloss():
         word(142, 436, 170, 446, "(22.28)"),
         word(177, 441, 197, 452, "ARG0"),
         word(292, 443, 316, 451, "TARGET"),
-        # 小一号的标签离例句稍远一点
+        # A label one size smaller sits a little further from the example
         word(208, 604, 216, 615.5, "a."),
         word(219, 604, 240, 615.5, "Doris"),
         word(220, 618.1, 246, 626.7, "AGENT"),
-        # 正文一行旁边的旁注，旁注下一行的缩写对着旁注里的词
+        # A margin note beside a body line, with an abbreviation on the next line aligned with a word of the note
         word(160, 500, 480, 512, "signal is the discrete Fourier transform or"),
         word(100, 501, 130, 509, "Fourier"),
         word(100, 511, 120, 519, "DFT"),
-        # 标题下面一行 TBD
+        # A TBD line below a heading
         word(160, 680, 260, 695, "Reinforcement"),
         word(160, 700, 180, 710, "TBD"),
     ]
@@ -1329,7 +1370,8 @@ def test_role_labels_under_an_example_are_a_gloss():
 
 
 def test_example_numbers_standing_apart_from_the_sentence():
-    """行首的 (22.9)、(22.11) 是例句编号，记下编号后面的字从哪里起笔。正文里引到的 (22.9) 不算"""
+    """(22.9) and (22.11) at the start of a line are example numbers, and the position where the text after the number
+    starts is recorded. A (22.9) cited in body text does not count"""
     from app.formats.pdf_layout import _TextWord, example_numbers
 
     words = [
@@ -1354,8 +1396,10 @@ def test_example_numbers_standing_apart_from_the_sentence():
 
 
 def test_columns_with_empty_cells_are_a_table():
-    """没有线、有的行空一格的三列表（ArgM 表：REC 没有问句，ADV 没有例子）：按各格左缘落在哪几列认出来。
-    表下面行距相同的图注不算进表。几栏排的索引条目以页码收尾，双栏页上左栏的表和右栏正文，不算表"""
+    """An unruled three-column table where some rows leave a cell empty (the ArgM table: REC has no question, ADV has
+    no example) is recognized by the columns the left edges of its cells fall in. A caption below the table with the
+    same line spacing is not part of the table. Index entries set in several columns and ending in page numbers, and a
+    table in the left column next to body text in the right column of a two-column page, are not tables"""
     from app.formats.pdf_layout import _sparse_grid, _TextCell, _TextWord, unruled_tables
 
     rows = [
@@ -1400,7 +1444,8 @@ def test_columns_with_empty_cells_are_a_table():
             ]
     assert unruled_tables(page, (), index) == ()
 
-    # 双栏论文：左栏表格的几行和右栏图注挨着排，隔着栏间空档，不连成一张表
+    # Two-column paper: rows of a table in the left column sit next to a caption in the right column across the
+    # column gap and do not form one table
     def cell(x0, x1, y, words, text):
         return _TextCell(x0, y, x1, y + 9.0, words, text)
 
@@ -1432,7 +1477,8 @@ def test_columns_with_empty_cells_are_a_table():
 
 
 def test_page_without_two_ruled_lines_each_way_skips_the_table_search(monkeypatch):
-    """凑不出两横两竖的线就围不出格子：脚注线、色块背景不值得逐字解析一遍整页。"""
+    """Without two horizontal and two vertical lines no cell can be enclosed: footnote rules and colored backgrounds
+    are not worth parsing the whole page character by character."""
     from app.formats.pdf_layout import ruled_tables
 
     doc = pymupdf.open()
@@ -1472,7 +1518,7 @@ def test_table_drawn_with_dashed_rules_is_still_found():
 
 
 def test_table_ruled_with_one_pixel_images_is_found():
-    """老 TeX 用拉伸的一像素图片画表格线，页面上没有矢量线。"""
+    """Old TeX draws table rules with stretched one-pixel images, and the page has no vector lines."""
     from app.formats.pdf_layout import ruled_tables
 
     doc = pymupdf.open()
@@ -1492,7 +1538,8 @@ def test_table_ruled_with_one_pixel_images_is_found():
 
 
 def test_rows_without_rules_between_them_are_split_into_cells():
-    """只画了列线的表，表身几行叠在一格里，按对齐的行切开。折行的表头有的格只有一行，不切。"""
+    """In a table with only column rules, several body rows stack in one cell and are cut at the aligned rows. A
+    wrapped header where some cells hold only one line is not cut."""
     from app.formats.pdf_layout import page_tables
 
     doc = pymupdf.open()
@@ -1520,7 +1567,8 @@ def test_rows_without_rules_between_them_are_split_into_cells():
 
 
 def test_header_between_top_and_mid_rules_joins_the_unruled_table():
-    """三线表的表头比数据列宽，左右缘对不上。顶线和中线之间的字按列分格并进表里。"""
+    """The header of a three-line table is wider than the data columns, so their left and right edges do not line up.
+    Text between the top rule and the middle rule is split into cells by column and merged into the table."""
     from app.formats.pdf_layout import page_tables
 
     doc = pymupdf.open()
@@ -1543,7 +1591,8 @@ def test_header_between_top_and_mid_rules_joins_the_unruled_table():
 
 
 def test_rows_of_one_shaded_column_split_by_blanks_are_a_table():
-    """逐行底色的一列表：每行是例句、填空横线和答案，隔着大空档。每行一句连着排的底纹不是表。"""
+    """A one-column table shaded row by row: each row holds an example sentence, a blank line to fill in and the
+    answer, separated by large gaps. Shading behind rows that each hold one continuous sentence is not a table."""
     from app.formats.pdf_layout import filled_tables, page_words
 
     blue = (0.77, 0.86, 0.99)
@@ -1575,7 +1624,8 @@ def test_rows_of_one_shaded_column_split_by_blanks_are_a_table():
 
 
 def test_a_table_ruled_only_between_columns_is_found():
-    """没有外框、只有列间竖线的表，数字居中排。两栏正文中间的竖线两边是长句，不是表。"""
+    """A table without an outer frame and with vertical rules only between columns, with centered numbers. A vertical
+    rule between two columns of body text has long sentences on both sides and is not a table."""
     from app.formats.pdf_layout import page_tables
 
     doc = pymupdf.open()
@@ -1607,8 +1657,9 @@ def test_a_table_ruled_only_between_columns_is_found():
 
 
 def test_a_three_rule_table_is_found_whole():
-    """顶线、中线、底线一样长的三线表：表头折行，几组数据之间还隔着横线，整张表都认出来。
-    三条线之间排的是正文、伪代码的，不是表。"""
+    """A three-line table whose top, middle and bottom rules have the same length: the header wraps and horizontal
+    rules also separate groups of data, and the whole table is recognized. Body text or pseudocode set between three
+    rules is not a table."""
     from app.formats.pdf_layout import page_tables
 
     doc = pymupdf.open()
@@ -1645,7 +1696,8 @@ def test_a_three_rule_table_is_found_whole():
 
 
 def test_a_three_rule_table_with_group_names_is_found():
-    """几组数据各有一行组名、组名下面是横线隔开的数据，组名只占一格，整张仍是表。"""
+    """Each group of data has a row with the group name followed by data separated by a horizontal rule; the group name
+    takes only one cell, and the whole is still a table."""
     from app.formats.pdf_layout import page_tables
 
     page = pymupdf.open().new_page(width=600, height=400)
@@ -1666,7 +1718,8 @@ def test_a_three_rule_table_with_group_names_is_found():
 
 
 def test_a_two_column_three_rule_table_with_long_row_names_is_found():
-    """两列的三线表，行名占了大半宽也是表。线间排着图注的不是表，图注照常翻。"""
+    """A two-column three-line table is a table even when the row names take most of the width. Rules with a caption
+    set between them are not a table, and the caption is translated as usual."""
     from app.formats.pdf_layout import page_tables
 
     page = pymupdf.open().new_page(width=600, height=400)
@@ -1700,7 +1753,8 @@ def test_a_two_column_three_rule_table_with_long_row_names_is_found():
 
 
 def test_table_of_abutting_filled_cells_is_found():
-    """每格一块底色、只有上下横线的表。一整块底色的文本框、白底的图、压着跨格图注的格子都不是表。"""
+    """A table with one fill per cell and only top and bottom horizontal rules. A text box on one large fill, a figure
+    on a white ground and cells covered by a caption spanning them are not tables."""
     from app.formats.pdf_layout import filled_tables, page_words
 
     doc = pymupdf.open()
@@ -1732,8 +1786,9 @@ def test_table_of_abutting_filled_cells_is_found():
 
 
 def test_filled_cells_overlapping_along_their_edges_are_a_table():
-    """逐格上色的表，上下两格沿边叠着一点（LaTeX 多铺一点免得露白缝），每行都叠，面积加起来多出近一成，
-    照样是表。框里再套几块底色的不算"""
+    """In a table colored cell by cell, vertically adjacent cells overlap slightly along their edges (LaTeX paints a
+    little extra to avoid white seams); every row overlaps and the total area is almost a tenth larger, and it is
+    still a table. A box with several fills nested inside does not count"""
     from app.formats.pdf_layout import filled_tables, page_words
 
     doc = pymupdf.open()
@@ -1770,7 +1825,7 @@ def test_filled_cells_overlapping_along_their_edges_are_a_table():
 
 
 def test_short_margin_terms_stay_original():
-    """页边的术语留原文；成句的旁注照常翻译。"""
+    """Terms in the margin keep the original; margin notes that form sentences are translated as usual."""
     from app.formats.pdf_units import _margin_term
 
     def note(text):
@@ -1783,7 +1838,8 @@ def test_short_margin_terms_stay_original():
 
 
 def test_an_epigraph_in_another_language_stays_original():
-    """英文书里的西班牙文题记分两列排，一项只有一两个词。合起来认出是外文，整组留原文。"""
+    """A Spanish epigraph in an English book is set in two columns, with only one or two words per item. Taken
+    together it is recognized as a foreign language, and the whole group keeps the original."""
     from app.formats.pdf_skip import _foreign_ids
 
     body = [
@@ -1825,8 +1881,9 @@ def test_an_epigraph_in_another_language_stays_original():
 
 
 def test_header_rows_above_a_three_line_table_join_it():
-    """三线表的表头和表身隔着横线，按线只找得到表身。紧贴在上面、词都落在表的列里的行是表头；
-    再往上的说明是连着排的句子，会跨过列线，不算。"""
+    """The header and body of a three-line table are separated by a rule, so the rules find only the body. Rows right
+    above it whose words all fall in the table columns are the header; the description further up is continuous
+    sentences that cross the column lines and does not count."""
     from app.formats.pdf_layout import RuledTable, _TextWord, _with_header_rows
 
     columns = [(115, 213), (213, 266), (266, 320), (320, 373), (373, 426), (426, 480)]
@@ -1871,7 +1928,8 @@ def test_header_rows_above_a_three_line_table_join_it():
 
 
 def test_a_combining_accent_is_drawn_over_its_letter(tmp_path):
-    """没有合成字的 P̂：字体里没有组合字形，画成独立的 ˆ，中线对着 P，不落回 HTML 排版。"""
+    """P̂ without a precomposed character: the font has no combined glyph, so a separate ˆ is drawn with its center line
+    over the P, without falling back to HTML typesetting."""
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=200)
     page.insert_text((40, 52), "The estimated precision P is the fraction", fontsize=11)
@@ -1896,7 +1954,8 @@ def test_a_combining_accent_is_drawn_over_its_letter(tmp_path):
 
 
 def test_image_box_is_clipped_to_what_shows():
-    """图片只露出剪裁路径里的一块，框按看得见的部分算，压在被剪掉部分上的正文不算图里的字。"""
+    """Only the part of the image inside the clipping path shows; the box covers the visible part, and body text over
+    the clipped-away part is not text inside the figure."""
     import pymupdf
 
     from app.formats.pdf_layout import _image_infos, scan_page
@@ -1907,7 +1966,7 @@ def test_image_box_is_clipped_to_what_shows():
     pix.set_rect(pix.irect, (200, 30, 30))
     page.insert_image(pymupdf.Rect(100, 100, 400, 400), pixmap=pix)
     xref = page.get_contents()[0]
-    # 只露出上面 60 点：PDF 坐标从页底往上量
+    # Only the top 60 points show: PDF coordinates are measured up from the page bottom
     doc.update_stream(xref, b"q 100 640 300 60 re W n\n" + doc.xref_stream(xref) + b"\nQ")
     page.insert_text((110, 300), "Body text written below the part that shows.", fontsize=10)
     [info] = _image_infos(page)
@@ -1916,8 +1975,9 @@ def test_image_box_is_clipped_to_what_shows():
 
 
 def test_two_list_items_with_the_same_opening_are_not_a_gloss():
-    """两条列表项开头一样（Else search from right to left for ...），逐词左缘对得上，但同一处是同一个词。
-    对译行写的是另一种语言，不会这样，两条照常送翻。"""
+    """Two list items start the same way (Else search from right to left for ...) and the left edges of their words
+    line up, but each position holds the same word. A gloss line is written in another language, so this does not
+    happen, and both items are sent for translation as usual."""
     from app.formats.pdf_layout import _TextWord, interlinear_glosses
 
     def row(y: float, *texts: str) -> list[_TextWord]:

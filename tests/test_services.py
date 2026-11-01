@@ -23,7 +23,7 @@ def run(coro):
 
 
 def fake_llm(provider: str, log: list):
-    """按各家接口格式返回“译文 = 原文前加 T:”的假服务器。"""
+    """A fake server that answers in each provider's API format with "translation = source prefixed with T:"."""
 
     def handler(request: httpx.Request):
         log.append(request)
@@ -60,8 +60,9 @@ def fake_llm(provider: str, log: list):
 
 
 def fake_marker_reply(user: str) -> str:
-    """模拟模型：按 [[pN]] 协议逆序返回，单段时直接返回译文。"""
-    body = user.split("\n\n", 1)[1]  # 去掉 "翻译为简体中文：" 这一行
+    """A simulated model: replies in reverse order following the [[pN]] protocol, and returns the translation
+    directly for a single paragraph."""
+    body = user.split("\n\n", 1)[1]  # Drop the "翻译为简体中文：" line
     if "[[source_end]]" not in body:
         return "T:" + body
     items = re.findall(r"\[\[(p\d+)\]\]\n(.*?)(?=\n\[\[)", body, re.S)
@@ -102,7 +103,7 @@ def test_providers_request_format(provider, cls, url):
         assert req.headers["authorization"] == "Bearer sk-test"
         assert body["messages"][0]["role"] == "system"
         system = body["messages"][0]["content"]
-    # 沉浸式的简体中文专用提示词 + 多段协议
+    # The Immersive Translate prompt dedicated to Simplified Chinese + the multi-item protocol
     assert system.startswith("你是专业的简体中文母语译者")
     assert "[[source_end]]" in system
     run(tr.aclose())
@@ -150,14 +151,14 @@ def test_build_messages_and_custom_prompt():
     )
     assert system.startswith("Be a Simplified Chinese poet.")
     assert "[[source_end]]" not in system and "Return only the processed text" in system
-    assert user == "Render:\n\nonly {{to}} literal"  # 原文里的 {{to}} 不能被替换
+    assert user == "Render:\n\nonly {{to}} literal"  # {{to}} in the source text must not be replaced
 
 
 def test_marker_parse_missing_item_is_retranslated():
     from app.prompts import parse_markers
 
     assert parse_markers("```\n[[p1]]\nB\n[[p0]]\nA\nmore\n[[end]]\nignored\n```", 2) == {0: "A\nmore", 1: "B"}
-    # 收尾标记写成大写、或者接在最后一行后面，都不能留在译文里
+    # An end marker written in upper case or appended to the last line must not remain in the translation
     assert parse_markers("[[p0]]\n甲\n[[p1]]\n乙。\n[[END]]", 2) == {0: "甲", 1: "乙。"}
     assert parse_markers("[[p0]]\n甲\n[[p1]]\n乙。[[END]]\n多余", 2) == {0: "甲", 1: "乙。"}
 
@@ -166,7 +167,7 @@ def test_marker_parse_missing_item_is_retranslated():
     def handler(request):
         user = json.loads(request.content)["messages"][-1]["content"]
         calls.append(user)
-        # 批量时故意漏掉 p1
+        # The batch reply deliberately omits p1
         content = "[[p0]]\nA\n[[p2]]\nC" if "[[source_end]]" in user else "B-single"
         return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
@@ -208,7 +209,8 @@ def test_domain_only_base_url_gets_version_path(provider, base, expected):
 
 
 def test_html_response_gives_readable_error():
-    # 中转站把未知路径返回成首页（200 + HTML），以前会抛 JSONDecodeError 变成 500
+    # A relay service answers an unknown path with its home page (200 + HTML), which used to raise JSONDecodeError
+    # and become a 500
     tr = create_translator(
         {"provider": "openai", "api_key": "k", "model": "m", "base_url": "https://relay.example.com/x"},
         "zh-CN",
@@ -221,7 +223,8 @@ def test_html_response_gives_readable_error():
 
 
 def test_transient_400_from_relay_is_retried(monkeypatch):
-    # 中转站把上游的偶发故障包装成 400 INVALID_MODEL_ID，同样的请求过几秒就成功
+    # A relay service wraps an occasional upstream failure as 400 INVALID_MODEL_ID, and the same request succeeds a
+    # few seconds later
     monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
     calls = []
 
@@ -254,11 +257,12 @@ def test_config_errors_fail_fast(monkeypatch, status):
     )
     with pytest.raises(TranslatorError, match=str(status)):
         run(tr.translate_batch(["good"]))
-    assert len(calls) == 1  # Key 错、没权限、地址错，重试没用，立即报错
+    assert len(calls) == 1  # Wrong key, no permission, wrong URL: retrying does not help, fail at once
 
 
 def test_batch_rejected_by_relay_is_split(monkeypatch):
-    # 实测：某个 8 段的批次每次都被中转站 400 拒绝，拆开后每一部分都能翻
+    # Measured: a batch of 8 paragraphs was rejected by a relay service with 400 every time, and each part translated
+    # after splitting
     monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
     sizes = []
 
@@ -275,7 +279,7 @@ def test_batch_rejected_by_relay_is_split(monkeypatch):
     )
     texts = [f"para {i}" for i in range(8)]
     assert run(tr.translate_batch(texts)) == [f"T:para {i}" for i in range(8)]
-    assert sizes == [8, 8, 4, 4]  # 原样重试一次，然后拆成两半
+    assert sizes == [8, 8, 4, 4]  # Retry once unchanged, then split in half
 
 
 def test_single_segment_400_still_fails(monkeypatch):
@@ -318,9 +322,10 @@ def test_cache_key_follows_model_and_prompt():
         return create_translator({"id": sid, "provider": "openai", "api_key": "k", "model": "a", **kw}, "zh-CN")
 
     a, b, c, d, e = tr("s1"), tr("s1"), tr("s1", model="b"), tr("s1", prompt="x"), tr("s2")
-    # 同服务、同模型、同提示词：共用缓存，继续翻译时直接复用
+    # Same service, model and prompt: the cache is shared and reused on resume
     assert a.cache_key == b.cache_key
-    # 换模型、换提示词、换服务：缓存键都不同，整本按新配置重翻
+    # A different model, prompt or service: every cache key differs, and the whole document is retranslated with
+    # the new configuration
     assert len({a.cache_key, c.cache_key, d.cache_key, e.cache_key}) == 4
 
 
@@ -342,11 +347,11 @@ def test_switching_model_retranslates_and_switching_back_hits_cache(tmp_path):
         return run(Runner(tr, cache=cache).translate_all([text]))
 
     run_with("a")
-    run_with("a")  # 同模型命中缓存
+    run_with("a")  # Same model hits the cache
     assert calls == ["a"]
-    run_with("b")  # 换模型：整本重翻
+    run_with("b")  # Different model: the whole document is retranslated
     assert calls == ["a", "b"]
-    assert run_with("a") == ["新译文"]  # 换回旧模型：命中它自己的缓存
+    assert run_with("a") == ["新译文"]  # Back to the old model: hits its own cache
     assert calls == ["a", "b"]
 
 
@@ -370,7 +375,7 @@ def test_cache_reused_only_for_same_service_id():
         return httpx.Response(200, json={"choices": [{"message": {"content": "译文"}}]})
 
     def svc(sid):
-        # 两个服务除了 id 完全相同（同一个中转站、同一个模型）
+        # The two services are identical except for the id (same relay service, same model)
         return {"id": sid, "provider": "openai", "api_key": "k", "model": "m", "base_url": "https://r.example.com/v1"}
 
     cache = Cache()
@@ -378,13 +383,14 @@ def test_cache_reused_only_for_same_service_id():
     for sid in ("svc-a", "svc-a", "svc-b"):
         tr = create_translator(svc(sid), "zh-CN", transport=httpx.MockTransport(handler))
         run(Runner(tr, cache=cache).translate_all(text))
-    # 第二次同一服务命中缓存；换了服务 id 就重新翻译
+    # The second run with the same service hits the cache; a different service id translates again
     assert len(calls) == 2
     assert {k[0].split(":")[0] for k in cache.d} == {"svc-a", "svc-b"}
 
 
 def test_leaked_end_marker_is_cleaned_from_cached_translations():
-    """旧缓存里的译文带着模型多写的 [[END]]。命中缓存时去掉，并写回缓存。"""
+    """Translations in an old cache carry an extra [[END]] written by the model. On a cache hit it is removed and
+    the result is written back to the cache."""
     from app.runner import Runner
 
     class Cache:
@@ -415,9 +421,9 @@ def test_store_crud(tmp_path):
     assert [s["id"] for s in store.services] == ["google"]
     svc = store.create({"provider": "claude", "name": "my-claude", "api_key": "sk-ant-1234567890"})
     assert "api_key" not in svc and svc["api_key_hint"] == "sk-…7890"
-    assert svc["model"]  # 有预置模型时自动选第一个
+    assert svc["model"]  # With preset models the first one is selected
 
-    # Key 留空不覆盖
+    # An empty key does not overwrite the stored one
     store.update(svc["id"], {"api_key": "", "model": "claude-x"})
     assert store.get(svc["id"])["api_key"] == "sk-ant-1234567890"
     assert store.get(svc["id"])["model"] == "claude-x"
@@ -428,7 +434,7 @@ def test_store_crud(tmp_path):
     with pytest.raises(ServiceError):
         store.delete("google")
 
-    # 重新加载后仍在，文件权限是 600
+    # Still present after reloading, and the file mode is 600
     store2 = ServiceStore(tmp_path / "s.json")
     assert store2.default_id == svc["id"]
     assert (tmp_path / "s.json").stat().st_mode & 0o777 == 0o600
@@ -449,13 +455,14 @@ def test_api_endpoints(tmp_path, monkeypatch):
     assert all("api_key" not in s for s in listed["services"])
     assert client.post(f"/api/services/{sid}/default").json()["default"] == sid
     assert client.post("/api/services", json={"provider": "nope"}).status_code == 400
-    # 缺 Key 时测试接口返回 400 和可读的错误
+    # Without a key the test endpoint returns 400 with a readable error
     r = client.post("/api/services/test", json={"provider": "claude", "model": "m"})
     assert r.status_code == 400 and "API Key" in r.json()["detail"]
 
 
 def test_corrupted_services_json_falls_back(tmp_path):
-    """services.json 损坏时回退到空配置，内置谷歌翻译仍在，不影响启动。"""
+    """A corrupted services.json falls back to an empty configuration; the built-in Google Translate remains and
+    startup is not affected."""
     path = tmp_path / "s.json"
     path.write_text("{not json", encoding="utf-8")
     store = ServiceStore(path)
@@ -465,17 +472,19 @@ def test_corrupted_services_json_falls_back(tmp_path):
 
 
 def test_ccswitch_default_unreadable_db_falls_back(tmp_path):
-    """默认服务是 CC Switch 的但数据库暂时读不到：配置保留，实际生效的默认退回谷歌翻译。"""
+    """The default service comes from CC Switch but its database is temporarily unreadable: the setting is kept, and
+    the effective default falls back to Google Translate."""
     path = tmp_path / "s.json"
     path.write_text(json.dumps({"default": "ccswitch-claude", "services": [], "ccswitch": {}}), encoding="utf-8")
     store = ServiceStore(path, ccswitch_db=tmp_path / "missing.db")
-    assert store.default_id == "ccswitch-claude"  # 原值保留，数据库恢复后仍是默认
+    assert store.default_id == "ccswitch-claude"  # Stored value kept; it is the default again once the database is back
     assert store.effective_default() == "google"
     assert store.list()["default"] == "google"
 
 
 def test_empty_translation_is_not_cached(tmp_path):
-    """空译文不写缓存、回填原文（低于失败阈值），重试时空的段落重新请求。"""
+    """An empty translation is not cached and the source text is filled in (below the failure threshold); on retry
+    the empty paragraphs are requested again."""
     from app.runner import Cache, Runner
 
     class SometimesEmpty:
@@ -492,24 +501,24 @@ def test_empty_translation_is_not_cached(tmp_path):
         async def translate_batch(self, texts):
             self.calls += 1
             if self.calls == 1 and len(texts) > 1:
-                return ["译:" + texts[0]] + [""] * (len(texts) - 1)  # 第一段正常，其余返回空
+                return ["译:" + texts[0]] + [""] * (len(texts) - 1)  # First paragraph normal, the rest empty
             return ["译:" + t for t in texts]
 
     cache = Cache(tmp_path / "c.sqlite3")
     tr = SometimesEmpty()
     runner = Runner(tr, cache=cache)
     out = run(runner.translate_all(["good one", "bad one"]))
-    # 低于阈值：空译文回填原文，不计入缓存
+    # Below the threshold: empty translations are filled with the source text and not cached
     assert out == ["译:good one", "bad one"]
     assert runner.info["failed"] == 1
     assert cache.get_many("t", ["good one", "bad one"]) == {"good one": "译:good one"}
-    # 重试：缓存命中的不再请求，空译文重新翻译
+    # Retry: cache hits are not requested again, empty translations are translated again
     assert run(Runner(tr, cache=cache).translate_all(["good one", "bad one"])) == ["译:good one", "译:bad one"]
     assert tr.calls == 2
 
 
 def test_all_empty_translations_fail_on_short_doc(tmp_path):
-    """不超过 3 段时，整批空译文也要失败，不能当成翻译完成。"""
+    """With at most 3 paragraphs, an all-empty batch also fails and does not count as a finished translation."""
     from app.runner import Cache, Runner
 
     class AlwaysEmpty:
@@ -530,7 +539,8 @@ def test_all_empty_translations_fail_on_short_doc(tmp_path):
 
 
 def test_rejects_requests_for_other_host_names():
-    """DNS 重绑定：恶意网页的域名解析到 127.0.0.1 后，Host 头还是它自己的域名，要拒绝。"""
+    """DNS rebinding: after the domain of a malicious page resolves to 127.0.0.1, the Host header still carries that
+    domain, and the request is rejected."""
     with TestClient(main.app, base_url="http://evil.example") as client:
         assert client.get("/api/services").status_code == 400
     with TestClient(main.app, base_url="http://127.0.0.1:8765") as client:
@@ -538,7 +548,8 @@ def test_rejects_requests_for_other_host_names():
 
 
 def test_a_marker_the_model_made_up_is_dropped():
-    """模型照着协议标记编出 [[toolong]] 接在译文后面。原文里没有的 [[词]] 去掉，原文有的留着。"""
+    """Imitating the protocol markers, the model makes up [[toolong]] after the translation. A [[word]] absent from
+    the source is removed, one present in the source stays."""
     from app.prompts import drop_invented_marks
 
     assert drop_invented_marks("The derivative of tanh is:", "tanh 的导数为: [[toolong]]") == "tanh 的导数为:"
@@ -548,8 +559,10 @@ def test_a_marker_the_model_made_up_is_dropped():
 
 
 def test_a_cached_translation_of_a_neighbor_is_retranslated():
-    """以前批量翻译串了位的译文进过缓存：带着原文没有的公式占位符，或者长度远离同篇常见值。
-    连同前后一批篇幅以内的段落丢掉重翻，同一批里的邻段多半也跟着挪了位。离得远的照用缓存"""
+    """Shifted translations from earlier batch translation got into the cache: they carry formula placeholders the
+    source does not have, or their length is far from the usual value of the document. They are dropped and
+    retranslated together with the paragraphs within one batch size before and after, since neighbors in the same batch
+    were most likely shifted too. Paragraphs further away still use the cache"""
     from app.runner import Runner
 
     class Cache:
@@ -575,13 +588,19 @@ def test_a_cached_translation_of_a_neighbor_is_retranslated():
 
     svc = {"id": "svc-a", "provider": "openai", "api_key": "k", "model": "m", "base_url": "https://r.example.com/v1"}
     tr = create_translator(svc, "zh-CN", "en", transport=httpx.MockTransport(handler))
-    # 一批只容得下一段，前后各一段在一批篇幅以内
+    # A batch holds only one paragraph, and one paragraph on each side is within one batch size
     tr.max_batch_chars = 100
     cache = Cache()
     good = {
-        "The hidden layer from the previous time step provides a form of memory, or context.": "前一个时间步的隐藏层提供了一种记忆或上下文。",
-        "Critically, this approach does not impose a fixed-length limit on this prior context.": "关键在于, 这种方法不会对先前的上下文施加固定长度的限制。",
-        "Given an input vector and the values for the hidden layer from the previous time step.": "给定一个输入向量和前一个时间步隐藏层的值。",
+        "The hidden layer from the previous time step provides a form of memory, or context.": (
+            "前一个时间步的隐藏层提供了一种记忆或上下文。"
+        ),
+        "Critically, this approach does not impose a fixed-length limit on this prior context.": (
+            "关键在于, 这种方法不会对先前的上下文施加固定长度的限制。"
+        ),
+        "Given an input vector and the values for the hidden layer from the previous time step.": (
+            "给定一个输入向量和前一个时间步隐藏层的值。"
+        ),
     }
     shifted = "Adding this temporal dimension makes RNNs appear to be more complex than before."
     cut = "After putting in place the structures, systems, processes, and teams described above."
