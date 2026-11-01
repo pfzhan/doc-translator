@@ -1,20 +1,27 @@
-"""译文插回原文在内容流里的位置，拖选、复制时按阅读顺序走。
+"""Insert translations at the original text's position in the content stream, so that selecting and copying
+follow the reading order.
 
-译文原来都追加在页面内容流的最后。浏览器、阅读器拖选文字按内容流的顺序：没翻的表格、页眉、
-旁注排在前面，译文排在后面，从正文往下拖进表格，选区会往回跳。原页的内容流本来就是阅读顺序。
+Translations used to be appended at the end of the page content stream. Browsers and readers select text in
+content stream order: untranslated tables, running headers and margin notes come first and the translations
+last, so dragging from the body down into a table makes the selection jump back. The content stream of the
+original page is already in reading order.
 
-擦除之前，在每串要重写的字的位置放一个标记（/DTrN MP，什么也不画）。标记放在两个文本对象之间，
-或者文本对象里一个换行定位操作（Td、TD、Tm、T*、'、"）前面：在那里先结束文本对象，放标记，
-再开始一个文本对象，用 Tm 恢复当时的文本行矩阵，后面的字位置不变。字在 Form 里的段落（插图里的
-标签）在顶层流里找不到字，标记放在画这个 Form 的 Do 后面。擦除时 MuPDF 重写内容流，
-标记留在原处。整页写完后在标记处把原页的流切开，把这些段落写出的流插进去。
+Before erasing, a marker (/DTrN MP, which draws nothing) is placed where each run of text to rewrite starts.
+It goes between two text objects, or inside a text object before a line positioning operator (Td, TD, Tm, T*,
+', "): the text object is ended there, the marker placed, and a new text object begun, with Tm restoring the
+text line matrix so the following glyphs keep their positions. A paragraph whose text is in a Form (labels in
+a figure) has no glyphs in the top-level stream, and its marker goes after the Do that draws the Form. MuPDF
+rewrites the content stream while erasing and the markers stay in place. After the page is written, the
+original stream is cut at the markers and the streams written for these paragraphs are inserted.
 
-插进去的流套一层：当时的 CTM 取逆，回到页面坐标；文字状态、颜色、透明度复位。
-写出的位置按这一段自己写出的字形轮廓算。下列情况这一串不挪，照旧画在最后：
-- 后面还有不透明的填充、图片、Form、渐变压在写出的位置上，挪了会被盖住。画的范围和当时
-  裁剪路径的外接框取交集；
-- 当时的裁剪不是矩形，或者没有盖住写出的位置。
-自己解析出的字形数和 MuPDF 的对不上、字体编码认不出、页面旋转过时整页不挪。
+Each inserted stream is wrapped: the inverse of the CTM at that point returns to page coordinates, and text
+state, color and transparency are reset. The written area is computed from the glyph outlines the paragraph
+itself wrote. A run is not moved, and is drawn at the end as before, when:
+- opaque fills, images, Forms or shadings drawn later overlap the written area and would cover it. Their
+  extent is intersected with the bounding box of the clipping path in effect;
+- the clip in effect is not a rectangle, or does not cover the written area.
+Nothing on the page moves when the glyph count parsed here differs from MuPDF's, a font encoding is not
+recognized, or the page is rotated.
 """
 
 from __future__ import annotations
@@ -34,9 +41,9 @@ _POSITION = {b"Td", b"TD", b"Tm", b"T*"}
 _SHOW = {b"Tj", b"TJ", b"'", b'"'}
 _FILLS = {b"f", b"F", b"f*", b"B", b"B*", b"b", b"b*"}
 _PATH_END = _FILLS | {b"S", b"s", b"n"}
-# 查字形归属时行框按纵坐标分桶的高度（点）
+# Height in points of the vertical buckets of line boxes used to find which line a glyph belongs to
 _ROW = 10
-# 比这细的填充、图片是表格线、分数线，压不住字
+# Fills and images thinner than this are table rules or fraction bars and do not cover text
 _THIN = 1.5
 _GS_NAME = "DTrGS"
 _GS = "<< /Type /ExtGState /CA 1 /ca 1 /BM /Normal /SMask /None /AIS false /OP false /op false /OPM 0 >>"
@@ -44,7 +51,7 @@ _RESET = "0 Tc 0 Tw 100 Tz 0 Ts 0 Tr 0 g 0 G 1 w 0 J 0 j [] 0 d"
 
 
 class _Probe(mupdf.PdfSanitizeFilterOptions2):
-    """只读一遍顶层内容流：每个文本对象里各个字形的起笔点（页面坐标）。"""
+    """Read the top-level content stream once: the origin of each glyph in each text object (page coordinates)."""
 
     def __init__(self, page: pymupdf.Page):
         super().__init__()
@@ -59,7 +66,7 @@ class _Probe(mupdf.PdfSanitizeFilterOptions2):
     def text_filter(self, ctx, ucsbuf, ucslen, trm, ctm, bbox, *_rest):
         try:
             self.objects[-1].append(_page_point(trm.e, trm.f, ctm, self.to_page))
-        except BaseException as exc:  # noqa: BLE001 - 回调里的异常 MuPDF 接不住，记下来再抛
+        except BaseException as exc:  # noqa: BLE001 - MuPDF cannot handle exceptions in the callback; keep and reraise
             self.error = self.error or exc
         return 0
 
@@ -97,7 +104,7 @@ def _probe(page: pymupdf.Page) -> list[list[tuple[float, float]]]:
 
 
 def _literal_length(data: bytes, start: int) -> tuple[int, int]:
-    """data[start] 是 ( 的字面字符串：解码后的字节数和字符串之后的位置。"""
+    """A literal string whose ( is at data[start]: the decoded byte count and the position after the string."""
     count, pos, depth = 0, start + 1, 1
     while pos < len(data):
         char = data[pos]
@@ -125,7 +132,7 @@ def _literal_length(data: bytes, start: int) -> tuple[int, int]:
 
 
 def _string_bytes(operands: bytes) -> int:
-    """操作数里各个字符串解码后的字节数之和。"""
+    """Total decoded byte count of the strings among the operands."""
     total, pos = 0, 0
     while pos < len(operands):
         char = operands[pos]
@@ -146,13 +153,13 @@ def _string_bytes(operands: bytes) -> int:
 
 
 def _num(value: float) -> str:
-    """PDF 里的数不能写成科学计数法。"""
+    """Numbers in PDF cannot use scientific notation."""
     text = f"{value:.5f}".rstrip("0").rstrip(".")
     return "0" if text in ("", "-0") else text
 
 
 def _box_of(corners: list[tuple[float, float]]) -> pymupdf.Rect | None:
-    """四个点（可以回到起点）围成横平竖直的矩形时返回它。"""
+    """The rectangle formed by four points (possibly returning to the start) when it is axis-aligned."""
     if corners and corners[-1] == corners[0]:
         corners = corners[:-1]
     if len(corners) != 4:
@@ -161,7 +168,7 @@ def _box_of(corners: list[tuple[float, float]]) -> pymupdf.Rect | None:
     ys = sorted({round(y, 3) for _, y in corners})
     if len(xs) != 2 or len(ys) != 2:
         return None
-    # 相邻两点只差一个坐标：是框，不是交叉的折线
+    # Adjacent points differ in one coordinate only: a box, not a crossing polyline
     for (x0, y0), (x1, y1) in zip(corners, corners[1:] + corners[:1]):
         if (round(x0, 3) != round(x1, 3)) == (round(y0, 3) != round(y1, 3)):
             return None
@@ -174,40 +181,41 @@ def _numbers(operands: bytes) -> list[float]:
 
 @dataclass
 class _Op:
-    """顶层流里的一个操作符：位置、在哪个文本对象里、执行前的状态。"""
+    """An operator in the top-level stream: its position, its text object and the state before it runs."""
 
     name: bytes
     start: int
     group: int | None = None
     glyphs: int = 0
-    line: pymupdf.Matrix | None = None  # 执行前的文本行矩阵
+    line: pymupdf.Matrix | None = None  # text line matrix before it runs
     ctm: pymupdf.Matrix | None = None
-    clips: list[pymupdf.Rect] | None = None  # 页面坐标；None 表示有不是矩形的裁剪
-    bounds: pymupdf.Rect | None = None  # 各层裁剪路径外接框的交集，页面坐标
+    clips: list[pymupdf.Rect] | None = None  # page coordinates; None when a clip is not a rectangle
+    bounds: pymupdf.Rect | None = None  # intersection of the bounding boxes of all clip levels, page coordinates
 
 
 @dataclass
 class _Mark:
     number: int
-    at: int  # 在原流里的字节位置
-    inside: bool  # 在文本对象里面，要先结束再开始
-    line: pymupdf.Matrix | None  # 在里面时，当时的文本行矩阵
+    at: int  # byte position in the original stream
+    inside: bool  # inside a text object, which must be ended and begun again
+    line: pymupdf.Matrix | None  # when inside, the text line matrix at that point
     blocks: list[int] = field(default_factory=list)
 
 
 @dataclass
 class _Cut:
-    """擦除后的流里一个标记处的状态。MuPDF 重写时会把 cm 这类状态推迟到要画时才写，
-    标记处的 CTM 要在重写后的流上算。"""
+    """State at a marker in the stream after erasing. When rewriting, MuPDF defers state such as cm until
+    something is drawn, so the CTM at the marker must be computed on the rewritten stream."""
 
-    end: int  # 标记之后的字节位置
+    end: int  # byte position after the marker
     ctm: pymupdf.Matrix
     clips: list[pymupdf.Rect] | None
-    paints: list[pymupdf.Rect]  # 标记之后画的不透明区域，页面坐标
+    paints: list[pymupdf.Rect]  # opaque areas drawn after the marker, page coordinates
 
 
 class ReadingOrder:
-    """一页的阅读顺序：擦除前 mark()，写每段时 record()，整页写完 assemble()。"""
+    """Reading order of one page: mark() before erasing, record() when writing each paragraph, assemble() after the
+    page is written."""
 
     def __init__(self, page: pymupdf.Page, moved: Iterable, enabled: bool = True):
         self.page = page
@@ -220,13 +228,13 @@ class ReadingOrder:
             return
         try:
             self._mark(list(moved))
-        except Exception:  # noqa: BLE001 - 解析不了的页照旧把译文画在最后
+        except Exception:  # noqa: BLE001 - a page that cannot be parsed keeps the translations at the end
             self.marks = []
 
-    # ---- 擦除前：找位置、放标记 ----
+    # ---- Before erasing: find positions, place markers ----
 
     def _fonts(self) -> dict[str, int | None]:
-        """页面字体资源名 → 每个字的编码字节数；认不出的编码记 None。"""
+        """Page font resource name → bytes per character code; None for an unrecognized encoding."""
         widths: dict[str, int | None] = {}
         for _xref, _ext, kind, _base, name, encoding, *_rest in self.page.get_fonts(full=True):
             if kind == "Type0":
@@ -236,8 +244,9 @@ class ReadingOrder:
         return widths
 
     def _xobjects(self) -> dict[str, tuple[pymupdf.Rect, bool]]:
-        """页面这一层的 XObject 资源名 → 在用户空间里画的范围（图片是单位方块）、是不是 Form。
-        Form 里面的资源也会列出来，名字可能和页面这一层的重复，不算。"""
+        """XObject resource name at the page level → the area drawn in user space (the unit square for images) and
+        whether it is a Form. Resources inside Forms are listed too and may reuse names of the page level; they
+        are ignored."""
         out: dict[str, tuple[pymupdf.Rect, bool]] = {}
         for img in self.page.get_images(full=True):
             if img[9] == 0:
@@ -255,14 +264,15 @@ class ReadingOrder:
         return out
 
     def _walk(self, raw: bytes, strict: bool = True) -> list[_Op] | None:
-        """走一遍顶层流，记下每个操作符执行前的状态和每个 show 画几个字。
-        strict 时认不出的字体、操作数返回 None；否则不数字形，只跟状态。"""
+        """Walk the top-level stream, recording the state before each operator and how many glyphs each show
+        operator draws. With strict, an unrecognized font or operand returns None; otherwise glyphs are not
+        counted and only the state is tracked."""
         fonts = self._fonts()
         xobjects = self._xobjects()
         to_page = self.page.transformation_matrix
         whole = self.page.rect
         ops: list[_Op] = []
-        # 图形状态栈：CTM、裁剪、裁剪的外接框、TL、Tr
+        # Graphics state stack: CTM, clip, clip bounding box, TL, Tr
         ctm = pymupdf.Matrix(1, 0, 0, 1, 0, 0)
         clips: list[pymupdf.Rect] | None = []
         bounds = pymupdf.Rect(whole)
@@ -272,18 +282,19 @@ class ReadingOrder:
         groups = 0
         line = pymupdf.Matrix(1, 0, 0, 1, 0, 0)
         width: int | None = 1
-        # 路径的范围按坐标记：一个点的 Rect 是空的，PyMuPDF 取并集时会把它丢掉
+        # Path extent kept as coordinates: a Rect of one point is empty and PyMuPDF drops it from unions
         path: list[float] | None = None  # [x0, y0, x1, y1]
-        path_rect: pymupdf.Rect | None = None  # 路径只有一个 re 时是它
-        corners: list[tuple[float, float]] = []  # 只有 m、l 时的各个点，四点围成横平竖直的框也算矩形
+        path_rect: pymupdf.Rect | None = None  # the rectangle when the path is a single re
+        corners: list[tuple[float, float]] = []  # points of a path of only m and l; four forming an axis-aligned box
+        # count as a rectangle
         path_parts = 0
         clipping = False
         self.paints: list[tuple[int, pymupdf.Rect]] = []
-        self.forms: list[tuple[int, pymupdf.Rect]] = []  # 画 Form 的 Do 和画的范围
+        self.forms: list[tuple[int, pymupdf.Rect]] = []  # Do operators drawing Forms, and the area drawn
         self.unsplittable: set[int] = set()
 
         def paint(area: pymupdf.Rect) -> None:
-            # 裁剪外面画不出来；裁空了、太细的不算
+            # Nothing is drawn outside the clip; empty or very thin results do not count
             area = area & bounds
             if not area.is_empty and min(area.width, area.height) >= _THIN:
                 self.paints.append((len(ops) - 1, area))
@@ -350,7 +361,7 @@ class ReadingOrder:
                 op.glyphs = _string_bytes(operands) // width
                 if render >= 4:
                     self.unsplittable.add(group)
-            # 路径和裁剪
+            # Paths and clipping
             if name in (b"m", b"l", b"c", b"v", b"y", b"re"):
                 values = _numbers(operands)
                 if name == b"re" and len(values) == 4:
@@ -407,14 +418,14 @@ class ReadingOrder:
         if ops is None:
             return
         objects = _probe(self.page)
-        # 每个文本对象自己数出的字形数要和 MuPDF 的一样，字形才能对到操作符上
+        # The glyph count of each text object must match MuPDF's for glyphs to map onto operators
         counted: dict[int, int] = {}
         for op in ops:
             if op.group is not None:
                 counted[op.group] = counted.get(op.group, 0) + op.glyphs
         if len(objects) != len(counted) or any(counted.get(i, 0) != len(pts) for i, pts in enumerate(objects)):
             return
-        # 行框按纵坐标分桶，一页几千个字形逐个查归属
+        # Line boxes bucketed by y, for looking up the line of each of the thousands of glyphs on a page
         rows: dict[int, list[tuple[pymupdf.Rect, int]]] = {}
         for block in moved:
             for r in block.line_rects or [block.rect]:
@@ -425,14 +436,15 @@ class ReadingOrder:
         def owner(x: float, y: float, bounds: pymupdf.Rect) -> int | None:
             for area, key in rows.get(int(y // _ROW), ()):
                 if area.x0 <= x <= area.x1 and area.y0 <= y <= area.y1:
-                    # 起笔点在裁剪外面超过一行高的字原页上看不见，抽取时也不算，不是这一段的字
+                    # A glyph whose origin is more than a line height outside the clip is invisible on the
+                    # original page and not extracted, so it does not belong to this paragraph
                     pad = area.height
                     if bounds.x0 - pad <= x <= bounds.x1 + pad and bounds.y0 - pad <= y <= bounds.y1 + pad:
                         return key
                     return None
             return None
 
-        # 按流的顺序排成一串字：(操作符序号, 归属)
+        # Glyphs in stream order: (operator index, owner)
         glyphs: list[tuple[int, int | None]] = []
         cursor = iter(objects)
         points: list[tuple[float, float]] = []
@@ -445,10 +457,10 @@ class ReadingOrder:
             taken += op.glyphs
 
         def between(left: int, right: int) -> int | None:
-            """glyphs[left] 和 glyphs[right] 之间能放标记的操作符序号。"""
+            """Index of an operator between glyphs[left] and glyphs[right] where a marker can go."""
             a, b = glyphs[left][0], glyphs[right][0]
             if ops[a].group != ops[b].group:
-                # 后一个文本对象的 BT 前面
+                # Before the BT of the later text object
                 return next(i for i in range(b, -1, -1) if ops[i].name == b"BT")
             if ops[a].group in self.unsplittable:
                 return None
@@ -457,7 +469,8 @@ class ReadingOrder:
                     return i
             return None
 
-        # 两个字之间画过东西就断开：插在前一个字的位置，后一段会落到这些东西下面
+        # Break when something is drawn between two glyphs: inserted at the earlier glyph, the later part would
+        # end up under what was drawn
         painted = sorted(index for index, _rect in self.paints)
 
         def paints_between(a: int, b: int) -> bool:
@@ -490,7 +503,8 @@ class ReadingOrder:
                 self._add(ops, at, len(raw), run)
                 assigned.update(run)
             i = j + 1
-        # 顶层流里没有字的段落，字在 Form 里：标记放在最后一个盖住段落中心的 Form 的 Do 后面
+        # A paragraph with no glyphs in the top-level stream has its text in a Form: the marker goes after the Do
+        # of the last Form covering the paragraph's center
         in_stream = {key for _, key in glyphs}
         after: dict[int, list[int]] = {}
         for block in moved:
@@ -529,10 +543,11 @@ class ReadingOrder:
         self.doc.update_stream(stream, b"".join(pieces))
         self.doc.xref_set_key(self.page.xref, "Contents", f"{stream} 0 R")
 
-    # ---- 写回时：记下每段写出的流 ----
+    # ---- While writing: record the stream written for each paragraph ----
 
     def after_erase(self) -> None:
-        """擦完、写之前调用。先把流包平衡：insert_htmlbox 第一次写时会补 q/Q，补的流不算哪一段的。"""
+        """Called after erasing and before writing. Balances the stream first: insert_htmlbox adds q/Q on its first
+        write, and that added stream belongs to no paragraph."""
         if not self.marks:
             return
         self.page.wrap_contents()
@@ -548,11 +563,13 @@ class ReadingOrder:
         self.streams.setdefault(id(block), []).extend(added)
         self.rects.setdefault(id(block), []).append(pymupdf.Rect(rect))
 
-    # ---- 整页写完：在标记处插回 ----
+    # ---- After the page is written: insert at the markers ----
 
     def _extent(self, key: int) -> list[pymupdf.Rect]:
-        """这一段写出的各个字的范围，按字形轮廓算。写入框按能写到的最远处给，比字大；按位置取
-        页面上的字又会混进别的段落。这里把页面内容流临时换成这一段的流来取。没写出字时退回写入框。"""
+        """Extent of each glyph written for this paragraph, from the glyph outlines. The write box extends as far
+        as writing may reach and is larger than the text, and taking page text by position would pick up other
+        paragraphs, so the page content stream is temporarily replaced by this paragraph's stream. Falls back to
+        the write box when nothing was written."""
         streams = self.streams.get(key)
         if not streams:
             return list(self.rects.get(key, []))
@@ -573,7 +590,8 @@ class ReadingOrder:
         return found or list(self.rects.get(key, []))
 
     def _movable(self, key: int, cut: _Cut) -> bool:
-        """这一段写出的字插到 cut 处不会被裁掉、不会被后面画的东西盖住。"""
+        """Text written for this paragraph, inserted at cut, would be neither clipped nor covered by what is drawn
+        later."""
         rects = self._extent(key)
         if not rects or cut.clips is None or abs(cut.ctm.a * cut.ctm.d - cut.ctm.b * cut.ctm.c) < 1e-9:
             return False
@@ -601,7 +619,7 @@ class ReadingOrder:
         moving: dict[int, tuple[list[int], _Cut]] = {}
         for index, op in enumerate(ops):
             found = _MARK_RE.match(data, op.start) if op.name == b"MP" else None
-            # 标记要在文本对象外面才能切开
+            # The stream can be cut at a marker only outside text objects
             if found is None or op.group is not None:
                 continue
             mark = by_number.get(int(found.group(1)))
@@ -651,7 +669,7 @@ class ReadingOrder:
         return xref
 
     def _ensure_state(self) -> None:
-        """页面资源里加一个复位用的 ExtGState。"""
+        """Add an ExtGState used for resetting to the page resources."""
         kind, value = self.doc.xref_get_key(self.page.xref, "Resources")
         found = re.match(r"(\d+) 0 R", value) if kind == "xref" else None
         res, prefix = (int(found.group(1)), "") if found else (self.page.xref, "Resources/")
