@@ -1,0 +1,18 @@
+# Commits that only reformat code (ruff format). Use with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# Format app modules outside formats/ with ruff
+76fd06a1b9b2a55cd839151a399d2f4da9315d67
+# Format EPUB, MOBI and Markdown modules with ruff
+61dce3c47228b0ceaeb3dfafbcc9ea3cb1524246
+# Format PDF layout, typesetting and model modules with ruff
+e909d997fd1dd3c2a7b46ff8fa49edcf94b00b7e
+# Format the PDF reading modules with ruff
+a8a502e9cacfba5475d295843c99a66fbd6da269
+# Format the PDF writing and output modules with ruff
+6539e1171159236de055f9b7ac308a03e47061d9
+# Format the other test modules with ruff
+db130775834dcbaba3b6cbc3d44c99417a445530
+# Format tests/test_formats.py with ruff
+3a4bd7c97195f081c85e877ce3da82ca8c55e9ef
+# Format eval scripts with ruff
+a52a5c0b9af8e9399394c6febdb9bebf88f65833
