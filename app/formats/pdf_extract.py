@@ -77,18 +77,22 @@ MONO_FONT_RE = re.compile(
     re.I,
 )
 NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
-# 式子折行时留在行尾的运算符、关系符。表里当空值的连字符、数字不算
+# Operators and relations left at the end of a line when an expression wraps. Hyphens used as empty values
+# in tables, and digits, do not count
 _OPERATOR_RE = re.compile(r"[=+−±×·<>≤≥≈≃≅∼≡≠→←⇒⇔∈∉⊂⊆∝]+")
-# 单个字母加句点，像 "a. " 也像换行后的 "Q. The cost"。后者不是列表项。
+# A single letter and a period, as in "a. ", which also matches "Q. The cost" after a line break. The latter
+# is not a list item.
 _LETTER_BULLET_RE = re.compile(r"^[a-zA-Z][.)]\s+")
 _DASH_BULLET_RE = re.compile(r"^[-–—]\s+")
-# 书里按章编号的例句：(1.2) It was difficult ...
+# Example sentences numbered by chapter in a book: (1.2) It was difficult ...
 _EXAMPLE_NUMBER_RE = re.compile(r"^\(\d+\.\d+[a-z]?\)\s+\S")
-# 单独一截的编号：例句、式子的 (25.4)、(3)，列表的 (a)
+# A number standing alone as one piece: (25.4) or (3) for an example or an expression, (a) for a list
 _PAREN_LABEL_RE = re.compile(r"\((?:[a-zA-Z]|\d+(?:\.\d+)*)\)")
 _LIST_INTRO_END = (".", "?", "!", "。", "！", "？", ":", ";", "：", "；")
-# 新段落的开头：大写字母、数字、引号/括号（小写字母开头多半是自动换行的续行）。
-# CJK 不在其中：CJK 行首无法区分新句子和续行，只有上行以句末标点结尾才算新段落（见下）
+# Start of a new paragraph: capital letter, digit, quote or bracket (a lowercase start is usually a line that
+# continues after automatic wrapping).
+# CJK is not included: at the start of a CJK line a new sentence cannot be told from a continuation line, so
+# it counts as a new paragraph only when the line above ends with sentence-final punctuation (see below)
 SEG_START_RE = re.compile(r"^[A-Z0-9À-Þ(\"'“‘\[（【]")
 CJK_START_RE = re.compile(r"^[぀-ヿ㐀-鿿가-힯]")
 
@@ -100,7 +104,8 @@ def _same_line_word(
     rect: pymupdf.Rect,
     size: float,
 ) -> bool:
-    """同一基线上、词距内的下一个词。按词拆行时，行内大写词仍是这一句。"""
+    """The next word on the same baseline, within word spacing. When a line is split by word, a capitalized
+    word inside the line still belongs to this sentence."""
     height = min(prev_rect.height, rect.height)
     overlap = min(prev_rect.y1, rect.y1) - max(prev_rect.y0, rect.y0)
     if height <= 0 or overlap <= height * 0.5:
@@ -108,7 +113,8 @@ def _same_line_word(
     gap = rect.x0 - prev_rect.x1
     if not (-1 <= gap < max(size * 1.4, 12)):
         return False
-    # 编号是标签，不连进右边的句子：连上以后块的左缘退到编号上，例句的悬挂缩进就接不上了
+    # A number is a label and is not joined to the sentence on its right: once joined, the left edge of the
+    # block moves back to the number and the hanging indent of the example no longer lines up
     if _ends_sentence(prev) or _PAREN_LABEL_RE.fullmatch(prev.strip()):
         return False
     head = nxt.lstrip()[:1]
@@ -121,15 +127,16 @@ def _same_line_word(
     return True
 
 
-# 定理、引理、定义一类的编号标签：Lemma 10.3.、Theorem 4.1.、Definition 2.
+# Numbered labels of theorems, lemmas, definitions and the like: Lemma 10.3., Theorem 4.1., Definition 2.
 _NUMBERED_LABEL_RE = re.compile(r"[A-Z][a-z]+\s+\d+(?:\.\d+)*\.\s")
 
 
 def _label_lead(spans: list[dict]) -> bool:
-    """行首是粗体标签，冒号或句号收尾，后面接着非粗体正文（Speaker demographics: What…、
-    On the Optimality of the Level Schedule. Recall…）。粗体的一个词后面跟着编号的是定理一类的标签
-    （Proposition 5 (Efficiency …). Under…），编号常用别的字体排。粗体的 Q2、RQ1 是编号条目"""
-    # 按词拆开的 span 之间没有空格 span，隔开的按空格补上
+    """The line starts with a bold label ending in a colon or period, followed by body text that is not bold
+    (Speaker demographics: What..., On the Optimality of the Level Schedule. Recall...). One bold word followed
+    by a number is a label of the theorem kind (Proposition 5 (Efficiency ...). Under...); the number is often
+    set in another font. A bold Q2 or RQ1 is a numbered item"""
+    # Spans split by word have no space span between them; where they are apart, add a space
     texts = [str(span.get("text") or "") for span in spans]
     for k in range(1, len(spans)):
         before, after = spans[k - 1].get("bbox"), spans[k].get("bbox")
@@ -146,7 +153,7 @@ def _label_lead(spans: list[dict]) -> bool:
             return False
         rest = "".join(texts[index:]).strip()
         phrase = label.strip()
-        # 研究问题、假设这样的编号条目（Q2 Which…、RQ1 How…、H3 …）也是
+        # Numbered items such as research questions and hypotheses (Q2 Which..., RQ1 How..., H3 ...) also count
         numbered = re.fullmatch(r"[A-Z]{1,3}\d+", phrase) is not None or (
             re.fullmatch(r"[A-Z][a-z]+(?:\s+\d+(?:\.\d+)*)?", phrase) is not None
             and (any(ch.isdigit() for ch in phrase) or re.match(r"\d+(?:\.\d+)*\b", rest) is not None)
@@ -156,7 +163,7 @@ def _label_lead(spans: list[dict]) -> bool:
         if rest[:1] in ":.":
             label, rest = label + rest[0], rest[1:].strip()
         phrase = label.strip()
-        # 标签后面这一行可能只剩一个词就折行了（… Batch Instances. A | batch consists of …）
+        # The line after the label may wrap with only one word left (... Batch Instances. A | batch consists of ...)
         return (
             phrase.endswith((":", "."))
             and len(phrase.split()) <= _LABEL_WORDS
@@ -165,18 +172,23 @@ def _label_lead(spans: list[dict]) -> bool:
     return False
 
 
-# 行首粗体标签最多这么多个词。再长的是整句加粗的强调
+# Maximum number of words in a bold label at the start of a line. Anything longer is a whole sentence set in
+# bold for emphasis
 _LABEL_WORDS = 10
 
 
 def _justified_joins(items: list[tuple], max_x1: float, whole_rows: bool = False) -> set[int]:
-    """两端对齐的一行被 PyMuPDF 按词拆开时，后面几个词的下标。
+    """Indices of the later words when PyMuPDF splits a justified line by word.
 
-    窄栏里的标题两端对齐，词距能拉到两个字宽，按词距拆就成了一词一段。
-    认法：同一基线、同一字体字号，最后一词顶到块的右缘，词距差不多一样大。
-    只拆成两截的另看 _full_row。
-    并排的格子、侧标不是这样：格子之间的空档大小不一，也不会恰好铺满一行。
-    whole_rows 为真时（索引页，一块就是一栏，没有格子和侧标），同一行的几截都是一行。
+    A justified heading in a narrow column can have word spacing stretched to two ems; splitting by word
+    spacing then gives one word per piece.
+    How it is recognized: same baseline, same font and size, the last word reaches the right edge of the
+    block, and the word gaps are about equal.
+    A line split into only two pieces is checked by _full_row.
+    Cells side by side and side labels differ: the gaps between cells vary in size and do not fill a line
+    exactly.
+    When whole_rows is true (an index page, where one block is one column with no cells or side labels), the
+    pieces on the same row are all one line.
     """
     joins: set[int] = set()
     start = 0
@@ -199,9 +211,11 @@ def _justified_joins(items: list[tuple], max_x1: float, whole_rows: bool = False
 
 
 def _full_row(row: list[tuple], items: list[tuple], max_x1: float) -> bool:
-    """两截拼起来是段落里的一整行：前一截从段落左缘起，后一截顶到右缘，中间只隔一个宽空格，
-    块里还有从同一左缘铺到同一右缘的整行。两端对齐时句号后的空格拉得宽，PyMuPDF 会在那里拆开。
-    单独一行的两截可能是侧标和正文，不算。"""
+    """The two pieces together are one full line of a paragraph: the first starts at the left edge of the
+    paragraph, the second reaches the right edge, only one wide space lies between them, and the block has
+    other full lines from the same left edge to the same right edge. In justified text the space after a
+    period is stretched wide and PyMuPDF splits there.
+    Two pieces on a line of their own may be a side label and body text, and do not count."""
     left, right = row[0][1], row[1][1]
     size = max((float(s.get("size") or 0) for s in row[0][2]), default=10.0)
     if right.x1 < max_x1 - 1 or not 0 < right.x0 - left.x1 <= size * 1.5:
@@ -219,7 +233,8 @@ def _same_row(left: tuple, right: tuple) -> bool:
     if overlap < min(a.height, b.height) * 0.7 or b.x0 <= a.x1:
         return False
 
-    # 同一字号、用着同一种字体。一截里夹着斜体的变量（AVG(E)）也算，并排格子的字体字号常整个不同
+    # Same size, sharing a font. A piece with an italic variable inside it (AVG(E)) also counts; cells side by
+    # side often differ entirely in font and size
     def styles(item: tuple) -> set[tuple]:
         return {
             (s.get("font"), round(float(s.get("size") or 0), 1)) for s in item[2] if str(s.get("text") or "").strip()
@@ -234,7 +249,8 @@ def _spread_evenly(row: list[tuple], max_x1: float) -> bool:
     if row[-1][1].x1 < max_x1 - 1:
         return False
     gaps = [b[1].x0 - a[1].x1 for a, b in zip(row, row[1:])]
-    # 节号后面的空档另算：“2  Towards”的距离是排版定的，不随两端对齐拉伸
+    # The gap after a section number is left out: the distance in "2  Towards" is set by the typesetting and
+    # is not stretched by justification
     if re.fullmatch(r"\d+(?:\.\d+)*\.?", row[0][0].strip()):
         gaps = gaps[1:]
     if not gaps or max(gaps) > size * 3:
@@ -243,29 +259,35 @@ def _spread_evenly(row: list[tuple], max_x1: float) -> bool:
 
 
 def _text_box(span: dict) -> pymupdf.Rect:
-    """span 占的那一行的高度。数学字体按字形墨迹算，其余照 PyMuPDF 的框。
+    """The height of the line the span occupies. Math fonts are measured by glyph ink, the rest by PyMuPDF's
+    box.
 
-    根号、大括号的起笔点在字形顶上，不在基线上，只能看墨迹。"""
+    Radical signs and large braces have their origin at the top of the glyph instead of on the baseline, so
+    only the ink can be used."""
     return pymupdf.Rect(_text_bounds(span))
 
 
-# 栏边：至少这么多条、每条至少这么多字宽的行从同一处起笔
+# Column edge: at least this many lines, each at least this many ems long, start at the same x
 _COLUMN_LINES = 3
 _COLUMN_LINE_EMS = 15
 
 
 def _rejoin_split_lines(data: dict) -> None:
-    """PyMuPDF 有时把一行字从中间切开，后半截分进另一个块（常在上下标处）。
-    把后半截挪回前半截所在的块、紧跟在那一行后面。
+    """PyMuPDF sometimes cuts a line in the middle and puts the second half into another block (often at
+    superscripts and subscripts). Move the second half back into the block of the first half, right after that
+    line.
 
-    不挪的话，行尾“and β₂ᵗ”这样的半截单看像公式行，会被当成公式跳过：
-    句子少了几个词，原文也留在页面上。两截要在同一行上首尾相接；
-    段落的各行都止于栏沟前时，右边是隔壁栏，窄栏沟也不接；字号大一截的也不接。
+    Left in place, a half such as "and β₂ᵗ" at the end of a line looks like a formula line on its own and is
+    skipped as a formula: the sentence loses a few words and the original text stays on the page. The two
+    halves must meet end to start on the same line. When every line of the paragraph stops before the column
+    gap, what lies to the right is the next column and is not joined, even across a narrow gap; a piece with a
+    clearly larger font size is not joined either.
     """
     blocks = [block for block in data.get("blocks", []) if block.get("type") == 0]
     if len(blocks) < 2:
         return
-    # 每一行都要和整页的行比一遍，行框每次现算要几十秒。行只换块、内容不变，框算一次
+    # Every line is compared with all lines on the page, and computing line boxes each time takes tens of
+    # seconds. Lines only change blocks and their content stays the same, so each box is computed once
     boxes: dict[int, pymupdf.Rect] = {}
 
     def line_box(line: dict) -> pymupdf.Rect:
@@ -275,7 +297,8 @@ def _rejoin_split_lines(data: dict) -> None:
         return box
 
     starts = _column_starts(blocks)
-    # 挪走一截以后，留在原块里的分子才没了同伴，下一轮才找得到去处
+    # Only after one piece has moved does a numerator left in the original block lose its companion, so it
+    # finds its destination in the next pass
     for _ in range(3):
         if not _rejoin_pass(blocks, line_box, starts):
             break
@@ -283,7 +306,7 @@ def _rejoin_split_lines(data: dict) -> None:
 
 
 def _column_starts(blocks: list[dict]) -> list[float]:
-    """好几条长行一齐起笔的左缘：各栏的栏边。"""
+    """Left edges where several long lines start together: the edges of the columns."""
     counter: Counter[int] = Counter()
     for block in blocks:
         for line in block["lines"]:
@@ -307,7 +330,8 @@ def _rejoin_pass(blocks: list[dict], line_box=None, starts: Sequence[float] = ()
             host_block, host_line = host
             block["lines"].remove(line)
             index = host_block["lines"].index(host_line) + 1
-            # 同一行已经挪过来几截时，接在它们后面。按字体框比，分子分母和标点都算这一行的
+            # When pieces of the same line have already moved here, go after them. Compared by font box, so
+            # numerators, denominators and punctuation all belong to this line
             while index < len(host_block["lines"]) and _same_band(host_block["lines"][index], host_line, _font_box):
                 index += 1
             host_block["lines"].insert(index, line)
@@ -317,10 +341,13 @@ def _rejoin_pass(blocks: list[dict], line_box=None, starts: Sequence[float] = ()
 
 
 def _embed_math_blocks(blocks: list[dict], line_box) -> None:
-    """块里同一行高的几截都是式子（分子，或连着分子的半截式子），叠在别的块某一行的式子上，
-    又和那块里的正文行同高：是那一行里的式子被 PyMuPDF 分了出来，一起挪回去。
-    逐行挪接不上：几截互相是上下标，单看每一截都有同块的行贴着。留在原块里的会当成公式行
-    留原字，同一行的其余部分译完挪走以后，它孤零零留在原处，公式也缺了一截。"""
+    """The pieces at one line height in a block are all math (a numerator, or half an expression joined to a
+    numerator), they overlap the math on a line of another block, and they share the height of a body line in
+    that block: PyMuPDF has split the math out of that line, so move them back together.
+    Moving line by line does not work: the pieces are superscripts and subscripts of one another, so each one
+    on its own has a line of the same block next to it. Pieces left in the original block are treated as a
+    formula line and keep the original text; after the rest of the line is translated and moved, they remain
+    alone in the old place and the formula is missing a piece."""
     for block in blocks:
         shown = [
             line
@@ -334,7 +361,7 @@ def _embed_math_blocks(blocks: list[dict], line_box) -> None:
             box = pymupdf.Rect()
             for line in group:
                 box |= line_box(line)
-            # 同一行里还有本块的正文，是本块自己的式子
+            # The same line also has body text of this block, so the math belongs to this block
             if any(_band_overlap(line_box(line), box) for line in shown if not any(line is member for member in group)):
                 continue
             spans = [span for line in group for span in line["spans"] if span["text"].strip()]
@@ -355,8 +382,9 @@ def _math_host(
     box: pymupdf.Rect,
     line_box,
 ) -> tuple[dict, dict] | None:
-    """box 叠在哪一块的式子行上，那一块在同一行高上有一行正文（三个以上正文词）。
-    只和公式行同高的不挪：行间公式里拆开的大括号挪到另一截公式里没有用处。"""
+    """The block with a math line that box lies on, where that block also has a body line (three or more body
+    words) at the same line height. A box level with formula lines only is not moved: moving a split brace of a
+    display formula into another piece of the formula is of no use."""
     size = max(float(span["size"]) for span in spans)
     for host in blocks:
         if host is own or not any(
@@ -372,15 +400,18 @@ def _math_host(
 
 
 def _stacked_rows(upper: list[dict], lower: list[dict]) -> bool:
-    """两截都是同字号的正文字、基线错开小半个字号以上：是挨得很近的上下两行，不是同一行
-    （图里的操作行压在图注上，墨迹框交叠过半）。上下标字号小，公式拆出的几截用公式字体，都不算。"""
+    """Both pieces are body text of the same size and their baselines differ by more than about a third of the
+    font size: they are two lines close above each other, not one line (an action line in a figure pressed onto
+    the caption, with ink boxes overlapping by more than half). Superscripts and subscripts are smaller, and
+    pieces split from a formula use a math font; neither counts."""
     pieces = [[span for span in spans if str(span.get("text") or "").strip()] for spans in (upper, lower)]
     if not all(pieces) or any("origin" not in span or _span_is_math(span) for part in pieces for span in part):
         return False
     size = max(span["size"] for span in pieces[0])
     if abs(max(span["size"] for span in pieces[1]) - size) > size * 0.1:
         return False
-    # 基线按这一截主字号的字算，行内分式的小号分子分母在别的基线上
+    # The baseline is taken from characters at the main size of the piece; the small numerators and
+    # denominators of inline fractions sit on other baselines
     baselines = [
         float(_by_chars([span for span in part if span["size"] >= size * 0.9], lambda span: span["origin"][1]))
         for part in pieces
@@ -389,7 +420,7 @@ def _stacked_rows(upper: list[dict], lower: list[dict]) -> bool:
 
 
 def _latin_page(data: dict) -> bool:
-    """页上的字九成以上不是中日韩文字"""
+    """More than 90% of the characters on the page are not CJK"""
     text = "".join(
         span["text"]
         for block in data.get("blocks", [])
@@ -402,8 +433,9 @@ def _latin_page(data: dict) -> bool:
 
 
 def _left_to_right(items: list[tuple]) -> list[tuple]:
-    """同一可视行的几截按从左到右排。分式的分子常排在分母前面，分母就接不上前面的等号。
-    行框用的是墨迹框，上下两行交叠很少，不会被当成一行。"""
+    """Sort the pieces of one visual line from left to right. The numerator of a fraction often comes before
+    the denominator, which then no longer follows the equals sign before it.
+    Line boxes are ink boxes, so two lines above each other overlap little and are not taken as one line."""
     out: list[tuple] = []
     run: list[tuple] = []
     for item in items:
@@ -419,9 +451,11 @@ def _left_to_right(items: list[tuple]) -> list[tuple]:
     return out
 
 
-# 行尾的点线和页码：至少四个点（点之间可以有空格），后面是阿拉伯数字或罗马数字页码
+# Leader and page number at the end of a line: at least four dots (spaces allowed between them), followed by
+# an Arabic or Roman page number
 _LEADER_RE = re.compile(r"(?:[.·…]\s*){4,}([0-9]{1,4}|[ivxlcdm]{1,7})\s*$", re.I)
-# 目录页上标题长、排到页码跟前时，点线只剩两三个点，点之间隔着空格
+# When a title on a contents page is long and runs up to the page number, the leader has only two or three
+# dots left, with spaces between them
 _SHORT_LEADER_RE = re.compile(r"\s(?:[.·…]\s+){2,3}([0-9]{1,4}|[ivxlcdm]{1,7})\s*$", re.I)
 _PAGE_NUMBER_RE = re.compile(r"\s*([0-9]{1,4}|[ivxlcdm]{1,7})\s*", re.I)
 _LEADER_DOTS_RE = re.compile(r"[\s.·…]*[.·…][\s.·…]*")
@@ -435,31 +469,34 @@ def _has_leader_line(data: dict) -> bool:
     )
 
 
-# 目录页的标题
+# Title of a contents page
 _TOC_TITLE_RE = re.compile(r"(?:(?:table|summary) of )?contents|list of (?:figures|tables)|目\s*录", re.I)
-# 页码一列至少这么多条才算目录
+# A page needs at least this many entries in its page number column to count as contents
 _TOC_MIN_ENTRIES = 5
 
 
-# 索引条目以页码收尾：「fully-connected, 157」「linear chain CRF, 414, 415」「Kleene *, 50–52」
+# Index entries end with page numbers: "fully-connected, 157", "linear chain CRF, 414, 415", "Kleene *, 50–52"
 _INDEX_REF_RE = re.compile(r",\s*\d+(?:\s*[-–]\s*\d+)?(?:\s*,\s*\d+(?:\s*[-–]\s*\d+)?)*\s*$")
-# 条目太长时页码折到下一行，那一行只有页码：「BNF (Backus-Naur form),」下一行缩进写「426」
+# When an entry is too long, its page numbers wrap to the next line, which has only page numbers:
+# "BNF (Backus-Naur form)," with "426" indented on the next line
 _INDEX_REFS_ONLY_RE = re.compile(r"^\d+(?:\s*[-–]\s*\d+)?(?:\s*,\s*\d+(?:\s*[-–]\s*\d+)?)*,?$")
-# 一页至少这么多行、这么大比例的行以页码收尾，才是索引页
+# A page is an index page only when it has at least this many lines and this share of them end with page numbers
 _INDEX_MIN_LINES = 15
 _INDEX_SHARE = 0.4
 
 
-# 词表：至少这么多行，几列各有这么多行从同一处起笔
+# Word grid: at least this many lines, and several columns each with this many lines starting at the same x
 _GRID_LINES = 9
 _GRID_COLUMNS = 3
 _GRID_ROWS = 3
 
 
 def _grid_cells(items: list[tuple]) -> set[int]:
-    """一块里一格一个词的词表（FrameNet 的 VERBS: dwindle move soar …）的格子：一两个词的短行，
-    左缘落在三列以上、每列好几行的列上，上下在这几列的范围以内。按行并成段会把同一排的几格
-    连成一句，译文各列叠在一起。同一块里表上下的图注、标签（Figure 2.4）不算格子。"""
+    """Cells of a word grid inside one block, one word per cell (FrameNet's VERBS: dwindle move soar ...):
+    short lines of one or two words whose left edges fall on three or more columns of several lines each, and
+    which lie vertically within the range of those columns. Merging lines into paragraphs would join the cells
+    of one row into one sentence and stack the translated columns on top of each other. Captions and labels
+    above or below the grid in the same block (Figure 2.4) are not cells."""
     if len(items) < _GRID_LINES:
         return set()
     short = [index for index, item in enumerate(items) if _grid_cell(item[0])]
@@ -476,12 +513,14 @@ def _grid_cells(items: list[tuple]) -> set[int]:
 
 
 def _grid_cell(text: str) -> bool:
-    """词表的一格：一两个词。同一块里的图注、行名照常分段。"""
+    """One cell of a word grid: one or two words. Captions and row labels in the same block are split into
+    paragraphs as usual."""
     return len(text.split()) <= 2 and len(text.strip()) <= 25
 
 
 def _index_page(data: dict) -> bool:
-    """书后的索引页：四成以上的行以「, 页码」收尾。正文的行很少停在逗号加数字上。"""
+    """An index page at the back of a book: 40% or more of the lines end with ", page number". Body lines
+    rarely stop at a comma followed by a number."""
     texts = [
         "".join(span["text"] for span in line["spans"]).strip()
         for block in data.get("blocks", [])
@@ -495,7 +534,8 @@ def _index_page(data: dict) -> bool:
 
 
 def _index_ref_rows(data: dict) -> list[pymupdf.Rect]:
-    """索引页上只有页码的行。PyMuPDF 常把它和上一行的条目分在两块里，按整页收。"""
+    """Lines on an index page that hold only page numbers. PyMuPDF often puts such a line and the entry on the
+    line above into two blocks, so they are collected across the whole page."""
     return [
         _line_box(line)
         for block in data.get("blocks", [])
@@ -506,12 +546,15 @@ def _index_ref_rows(data: dict) -> list[pymupdf.Rect]:
 
 
 def _index_entry_ends(items: list[tuple], ref_rows: Sequence[pymupdf.Rect]) -> set[int]:
-    """索引页一块里每个条目的末行（下标）。条目折行时，续行比条目的首行缩进得深，
-    几行续行缩进一样：下一行起笔不比这一条的首行靠右，或者从续行往回退（退到子条目），
-    这一行就收住了一条（「CFG, see context-free gram-」「mar」后面的「chain rule」）。
-    以页码收尾的行、只有页码的行也收住一条。页码折到下一行时，同一块里的页码行跟着条目，
-    别的块里的页码行收不进来，在折行的那一行收住。
-    两端对齐把一行拆成几截（collaborative | completion,），按整行看。"""
+    """The last line (index) of each entry in a block of an index page. When an entry wraps, its continuation
+    lines are indented deeper than its first line, all by the same amount: when the next line starts no
+    further right than the first line of this entry, or steps back from the continuation indent (to a
+    subentry), this line closes an entry ("chain rule" after "CFG, see context-free gram-" "mar").
+    A line ending with page numbers, or holding only page numbers, also closes an entry. When page numbers
+    wrap to the next line, a page number line in the same block goes with the entry; one in another block
+    cannot be taken in, and the entry closes at the line that wraps.
+    A line that justification splits into several pieces (collaborative | completion,) is treated as a whole
+    line."""
     rows: list[list[int]] = []
     for index, item in enumerate(items):
         box = item[1]
@@ -536,16 +579,20 @@ def _index_entry_ends(items: list[tuple], ref_rows: Sequence[pymupdf.Rect]) -> s
             below = pymupdf.Rect()
             for index in nxt:
                 below |= items[index][1]
-        # 页码折到了下一行，那一行在同一块里：条目连着页码一起送翻，到页码那一行才收住。
-        # 只剩页码的一行单独留着，译文里这一条就没有页码
+        # The page numbers wrapped to the next line, which is in the same block: the entry is sent for
+        # translation together with its page numbers and closes only at the page number line.
+        # If the line with only page numbers were left on its own, this entry would have no page numbers in the
+        # translation
         refs_next = (
             text.endswith(",")
             and below is not None
             and below.y0 - rect.y1 <= size * 0.5
             and _INDEX_REFS_ONLY_RE.match(" ".join(items[index][0].strip() for index in nxt)) is not None
         )
-        # 停在连字符断开的半个词上，下一行小写起头，是同一个词的后半（resolu- | tion, 566）。
-        # 块从一条的续行起头时，这一行不是条目的首行，下一行和它对齐也收不住
+        # The line stops at half a word broken by a hyphen and the next line starts in lowercase: it is the
+        # second half of the same word (resolu- | tion, 566).
+        # When the block starts with a continuation line of an entry, this line is not the first line of the
+        # entry, and the entry does not close even when the next line aligns with it
         broken = (
             re.search(r"[A-Za-z]-$", text) is not None
             and below is not None
@@ -570,17 +617,22 @@ def _index_entry_ends(items: list[tuple], ref_rows: Sequence[pymupdf.Rect]) -> s
 
 
 def _refs_below(rect: pymupdf.Rect, ref_rows: Sequence[pymupdf.Rect], size: float) -> bool:
-    """条目的页码折到了下一行：只有页码的一行紧贴在下面，起笔落在这一行的左右缘之间。
-    这一行本身是续行时，页码和它缩进一样（branching factor, | 77）。"""
+    """The page numbers of the entry wrapped to the next line: a line with only page numbers sits right below
+    and starts between the left and right edges of this line.
+    When this line is itself a continuation line, the page numbers have the same indent (branching factor, |
+    77)."""
     return any(
         -size * 0.3 <= box.y0 - rect.y1 <= size * 0.5 and rect.x0 - size * 0.5 <= box.x0 < rect.x1 for box in ref_rows
     )
 
 
 def _toc_pages(pages: list[dict]) -> set[int]:
-    """没有点线的目录页：标题行和每行行尾隔得很远、右缘对齐、往下递增的页码。
-    目录跨页时，后面几页没有标题，接在目录页后面、页码一列照样排的也算。
-    只认页码一列容易把整数列的表格当成目录，所以要有标题或者接在目录页后面。"""
+    """Contents pages without leaders: a title line, and page numbers far from the rest of each line,
+    right-aligned and increasing down the page.
+    When the contents span several pages, the later pages have no title; a page that follows a contents page
+    and has the same page number column also counts.
+    A page number column alone easily mistakes a table with a column of integers for contents, so a title or a
+    preceding contents page is required."""
     found: set[int] = set()
     previous = False
     for pno, data in enumerate(pages):
@@ -601,8 +653,10 @@ def _toc_pages(pages: list[dict]) -> set[int]:
 
 
 def _page_number_column(lines: list[dict]) -> bool:
-    """行尾的页码：一行只有一个数，同一行左边隔着两个字宽以上有别的字。
-    这样的页码有一列右缘对齐、自上而下大体不减。目录后面接着表目录时页码从头再来，允许少数几次回落。"""
+    """Page numbers at the end of lines: a line holding only one number, with other text more than two ems to
+    its left on the same row.
+    Such page numbers form a right-aligned column that mostly does not decrease from top to bottom. When a
+    list of tables follows the contents, the page numbers start over, so a few drops are allowed."""
     found: list[tuple[float, float, int]] = []
     for line in lines:
         text = "".join(span["text"] for span in line["spans"]).strip()
@@ -628,7 +682,7 @@ def _page_number_column(lines: list[dict]) -> bool:
     return len(numbers) >= _TOC_MIN_ENTRIES and drops <= len(numbers) // 5
 
 
-# 表格里一格数：1.5、-、86.2%、12.0/15、93.1†
+# One number cell in a table: 1.5, -, 86.2%, 12.0/15, 93.1†
 _NUMBER_CELL_RE = re.compile(r"(?:[-–—−]|[±+−-]?\d[\d.,/]*%?[*†‡]*)(?:\s+(?:[-–—−]|[±+−-]?\d[\d.,/]*%?[*†‡]*))*")
 
 
@@ -637,8 +691,9 @@ def _number_cell(text: str) -> bool:
 
 
 def _number_cells(items: list[tuple]) -> set[int]:
-    """表格里只有数的几截：左缘或右缘和另外两行的数对齐（同一列），或者和这样的数并排在一行。
-    句号收尾的数（参考文献的年份 2015.）不算。"""
+    """Pieces of a table that hold only numbers: the left or right edge aligns with numbers on two other lines
+    (the same column), or the piece sits on one row beside such a number.
+    A number ending with a period (a year in references, 2015.) does not count."""
     numbers = [
         index for index, item in enumerate(items) if _number_cell(item[0]) and not item[0].rstrip().endswith(".")
     ]
@@ -656,7 +711,7 @@ def _number_cells(items: list[tuple]) -> set[int]:
             if len(mates) >= 2:
                 found.add(index)
                 break
-    # 同一行里和这些数并排的数（只出现两行的 -）也是这一行的格子
+    # Numbers on the same row beside these (a - that appears on only two lines) are also cells of that row
     for index in numbers:
         rect = items[index][1]
         if index not in found and any(
@@ -669,7 +724,7 @@ def _number_cells(items: list[tuple]) -> set[int]:
 
 
 def _row_labels(items: list[tuple], cells: Collection[int]) -> set[int]:
-    """表格的行名：同一行右边隔着一个字宽以上有一格数。"""
+    """Row labels of a table: a number cell lies more than one em to the right on the same row."""
     found: set[int] = set()
     for index, (text, rect, spans, *_rest) in enumerate(items):
         if index in cells or not re.search(r"[^\W\d_]", text):
@@ -687,7 +742,8 @@ def _row_labels(items: list[tuple], cells: Collection[int]) -> set[int]:
 
 
 def _number_columns(data: dict) -> list[float]:
-    """本页表格里一列列数的中线：三格以上的数中线落在同一处（差一磅以内）。"""
+    """Center lines of the number columns in tables on this page: three or more number cells whose centers
+    fall at the same x (within one point)."""
     centers = sorted(
         (float(span["bbox"][0]) + float(span["bbox"][2])) / 2
         for block in data.get("blocks", [])
@@ -711,15 +767,19 @@ def _number_columns(data: dict) -> list[float]:
     return columns
 
 
-# 表头一格最多几个词。两端对齐的正文行词距拉宽，也能拆成几截，每截都是半句
+# Maximum number of words in one header cell. A justified body line with stretched word spacing can also be
+# split into several pieces, each half a sentence
 _HEADER_CELL_WORDS = 3
 
 
 def _cut_header_cells(items: list[tuple], columns: Sequence[float]) -> tuple[list[tuple], set[int]]:
-    """表头一行几格（Fine-tune Fine-tune Feature-based）挨得近，PyMuPDF 并成一行，译文就挤在左边，
-    对不上下面的列。一行按半个字宽以上的空拆成几截，每截都正对着下面不同的一列数时，各截自成一条。
-    行首一截可以不对着数（行名那一列的表头）。
-    返回新的行和这些格子的下标。正文的行拆不出几截，每截都对着一列数的更没有。"""
+    """The cells of a header row (Fine-tune Fine-tune Feature-based) are close together and PyMuPDF merges
+    them into one line, so the translation is squeezed to the left and does not line up with the columns
+    below. Split the line at gaps of half an em or more; when each piece sits directly over a different
+    number column below, each piece becomes a line of its own.
+    The first piece may have no number below it (the header of the row label column).
+    Returns the new lines and the indices of these cells. Body lines rarely split into several pieces, and
+    pieces that each sit over a number column are rarer still."""
     if len(columns) < 2:
         return items, set()
     rows: list[list[int]] = []
@@ -749,7 +809,7 @@ def _cut_header_cells(items: list[tuple], columns: Sequence[float]) -> tuple[lis
                 if abs(column - center) <= max(2.0, float(piece[0]["size"]) * 0.25)
             ]
             hits.append(near[0] if near else None)
-        # 行首一截是行名那一列的表头（System），下面没有数
+        # The first piece is the header of the row label column (System), with no numbers below it
         aligned = hits[1:] if hits and hits[0] is None else hits
         texts = [" ".join(str(span["text"]).strip() for span in piece) for piece in pieces]
         if (
@@ -777,9 +837,11 @@ def _cut_header_cells(items: list[tuple], columns: Sequence[float]) -> tuple[lis
 
 
 def _drop_number_tails(items: list[tuple]) -> list[tuple]:
-    """行名太长，PyMuPDF 把后面几格数并进了同一行（BERT (Ens.+TriviaQA) 86.2 92.2 …）。
-    后半截全是数、第一格的左缘和别的行里单独的一格数对齐时，从行里拿掉，留在原页上，
-    和别的行的数一样不送翻。只认隔开小半个字宽以上的：句中的词距没有这么宽。"""
+    """The row label is too long and PyMuPDF has merged the following number cells into the same line
+    (BERT (Ens.+TriviaQA) 86.2 92.2 ...). When the rest of the line is all numbers and the left edge of its
+    first cell aligns with a standalone number cell on another line, remove it from the line and leave it on
+    the original page, not sent for translation, like the numbers on other lines. Only gaps of nearly half an em
+    or more count: word spacing in a sentence is never that wide."""
     starts = [items[index][1].x0 for index in _number_cells(items)]
     if not starts:
         return items
@@ -822,13 +884,19 @@ def _drop_number_tails(items: list[tuple]) -> list[tuple]:
 
 
 def _cut_leaders(items: list[tuple], toc_page: bool = False) -> tuple[list[tuple], dict[int, Leader]]:
-    """目录条目的点线和页码从行里拿掉，只留标题送翻。返回新的行和 {行下标: 点线}。
-    toc_page 时（这一页有点线条目），没有点线、页码隔着两个字宽以上靠右排的（卷名一行）也算，
-    只是不补点。别的页上这样的行是表格和图里的数值，不动。
+    """Remove the leaders and page numbers of contents entries from their lines so that only the titles are
+    sent for translation. Returns the new lines and {line index: leader}.
+    With toc_page (the page has entries with leaders), a line without a leader whose page number sits to the
+    right more than two ems away (a part title line) also counts, only no dots are added. On other pages such
+    lines are values in tables and figures and are left alone.
 
-    点线和页码整段送翻时，模型连点带页码一起重排，页码不再靠右对齐；标题短、点多的条目
-    字母占比太低，整条被当成符号行留下原文，同一页有译有不译。拿掉以后它们留在原页上不动。
-    同一可视行可能被拆成几截（标题一截，点线和页码一截），按整行找。"""
+    When the leader and page number are sent for translation with the title, the model rearranges the dots
+    and page number along with the text and the page number is no longer right-aligned; an entry with a short
+    title and many dots has too low a share of letters, the whole entry is taken as a symbol line and keeps
+    the original text, and the same page ends up partly translated. Once removed, they stay on the original
+    page unchanged.
+    One visual line may be split into several pieces (the title in one, the leader and page number in
+    another), so the search runs over whole lines."""
     rows: list[list[int]] = []
     for index, item in enumerate(items):
         if rows:
@@ -860,7 +928,8 @@ def _cut_leaders(items: list[tuple], toc_page: bool = False) -> tuple[list[tuple
                 left, right = _split_span(span, cut - offset)
                 kept[index].append(left)
                 dropped.append(right)
-                # 切开的框是按字数估的，擦的时候按原来整个 span 认字
+                # The boxes of the cut halves are estimated from character counts; erasing identifies the
+                # characters by the whole original span
                 shared.append(span)
             offset += len(body)
         leader = _leader_of(dropped, shared)
@@ -895,7 +964,8 @@ def _cut_leaders(items: list[tuple], toc_page: bool = False) -> tuple[list[tuple
 
 
 def _leader_start(pieces: list[tuple[int, dict]], text: str, toc_page: bool) -> int | None:
-    """点线开始的字位置。目录页上点线可以只有两三个点；没有点线时，看最后一截是不是隔得很远的页码。"""
+    """Character position where the leader starts. On a contents page a leader may have only two or three
+    dots; without a leader, check whether the last piece is a page number far from the rest."""
     found = _LEADER_RE.search(text)
     if found is not None:
         return found.start()
@@ -925,7 +995,8 @@ def _span_offsets(pieces: list[tuple[int, dict]]) -> list[tuple[int, dict]]:
 
 
 def _split_span(span: dict, at: int) -> tuple[dict, dict]:
-    """span 在第 at 个字处切成两截，框按字数比例分。点线和标题排在同一个 span 里时用。"""
+    """Cut span in two at character at, dividing the box in proportion to character counts. Used when the
+    leader and the title are in the same span."""
     body = str(span["text"])
     box = pymupdf.Rect(span["bbox"])
     middle = box.x0 + box.width * at / max(len(body), 1)
@@ -935,7 +1006,8 @@ def _split_span(span: dict, at: int) -> tuple[dict, dict]:
 
 
 def _leader_of(spans: list[dict], shared: list[dict]) -> Leader | None:
-    """spans 是切下来的点线和页码，shared 是和标题排在同一个 span 里、被切开的原 span。"""
+    """spans are the leader and page number cut off; shared are the original spans that held the title as
+    well and were cut."""
     visible = [span for span in spans if str(span["text"]).strip()]
     if not visible:
         return None
@@ -954,7 +1026,8 @@ def _leader_of(spans: list[dict], shared: list[dict]) -> Leader | None:
     if gaps:
         pitch, dot_x = gaps[len(gaps) // 2], xs[-1]
     elif dotted:
-        # 点排在一个 span 里：按框宽和点数算点距，最右一个点在框的末尾
+        # The dots are in one span: compute the dot pitch from the box width and the dot count; the rightmost
+        # dot is at the end of the box
         run = max(dotted, key=lambda span: len(str(span["text"])))
         box = pymupdf.Rect(run["bbox"])
         count = max(1, sum(str(run["text"]).count(mark) for mark in ".·…"))
@@ -963,7 +1036,7 @@ def _leader_of(spans: list[dict], shared: list[dict]) -> Leader | None:
     else:
         pitch, dot_x = 0.0, number.x0
     origin = first.get("origin") or (number.x0, number.y1)
-    # 页码常是蓝色链接，点按点线自己的颜色
+    # The page number is often a blue link; the dots use the leader's own color
     color = int((dotted[0] if dotted else first).get("color") or 0)
     return Leader(
         number,
@@ -992,10 +1065,12 @@ def _line_host(
     line_box=None,
     starts: Sequence[float] = (),
 ) -> tuple[dict, dict] | None:
-    """紧挨在 line 左边的那一截。它本来就在 line 的块里时不挪：
-    取第一个找到的，两个块里各有一截能接时，line 每一轮都会挪到另一个块去。
-    line 从某一栏的栏边起笔、和左边隔着半个字宽以上时，是隔壁栏的字（4.2.3 节号），
-    行内切开的后半截不会正好落在栏边上。"""
+    """The piece right next to the left of line. Nothing moves when it is already in line's block:
+    taking the first one found, when two blocks each have a piece that could join, line would move to the
+    other block on every pass.
+    When line starts at the edge of a column and is more than half an em from the piece on its left, it is
+    text of the neighbouring column (a section number 4.2.3); the second half of a line cut in the middle does
+    not fall exactly on a column edge."""
     line_box = line_box or _line_box
     box = pymupdf.Rect(line["bbox"])
     size = max((span["size"] for span in line["spans"]), default=10.0)
@@ -1008,17 +1083,21 @@ def _line_host(
         for other in block["lines"]:
             if other is line or abs(other["dir"][1]) > 0.01:
                 continue
-            # 先按横向位置筛，纵向交叠要算行框，慢。每行都和整页的行比，直接读坐标，不建 Rect
+            # Filter by horizontal position first, since vertical overlap needs line boxes and is slow. Every
+            # line is compared with all lines on the page, so read coordinates directly without building a Rect
             left_x0, _, left_x1, _ = other["bbox"]
             gap = box.x0 - left_x1
-            # 整截是式子的小分式、上下限比正文小一号，和左边式子的空按两边大的字号算
+            # Small fractions and limits that make up a whole piece of math are one size smaller than body
+            # text; the gap to the math on the left is measured with the larger size of the two
             reach = max(size, max((span["size"] for span in other["spans"]), default=size)) if all_math else size
             if left_x0 >= box.x0 or gap < -size or gap > reach:
                 continue
             if not _same_band(other, line, line_box):
                 continue
-            # 上下标会让两截在接口处叠上一个字宽；词距以外的空档是栏沟。
-            # 等号、分式两边的空比词距宽，有一边是式子时放到一个字宽
+            # Superscripts and subscripts can make the two pieces overlap by one em where they meet; a gap
+            # wider than word spacing is a column gap.
+            # Gaps around equals signs and fractions are wider than word spacing, so when one side is math the
+            # limit is relaxed to one em
             if _past_column(block, other, box.x0, size, line_box) or _larger_text(line, other):
                 continue
             if column_edge and gap > size * 0.5:
@@ -1039,9 +1118,11 @@ def _line_host(
 
 
 def _column_font(line: dict, own: dict, size: float) -> str:
-    """块里上一行或下一行和它左缘对齐、上下紧挨、字体相同时，这一栏的字体。
-    换了字体的左边那行不是它的前半截：幻灯片右边一栏等宽字排的示例，和左边正文同高。
-    逐词对照的例句上下两行字体不同，不算。"""
+    """The font of this column, when the line above or below in the block aligns with it on the left, sits
+    right against it and uses the same font.
+    A line on the left in a different font is not its first half: an example set in a monospaced font in the
+    right column of a slide sits at the same height as the body text on the left.
+    An interlinear glossed example has different fonts on its two lines and does not count."""
     x0, y0, _, y1 = line["bbox"]
     font = _main_font(line)
     for other in own["lines"]:
@@ -1067,10 +1148,12 @@ def _font_box(line: dict) -> pymupdf.Rect:
 
 
 def _past_column(block: dict, line: dict, x: float, size: float, line_box=None) -> bool:
-    """line 所在段落的其他行都止于 x 之前，并且有一行和 line 止于同一右缘（两端对齐的栏）：
-    x 在栏外，是隔壁栏的字。行内切开的地方在栏中间，上下行会越过去。
-    只看和 line 同一左缘起笔、够宽的整行：分子分母那样的小行不算；段落的短末行
-    对不上右缘，单靠它不算。"""
+    """All other lines of line's paragraph stop before x, and one of them stops at the same right edge as line
+    (a justified column): x is outside the column and the text there belongs to the neighbouring column. A
+    line cut in the middle is cut inside the column, and the lines above and below extend past that point.
+    Only full lines wide enough and starting at the same left edge as line are considered: small lines such
+    as numerators and denominators do not count; the short last line of a paragraph does not reach the right
+    edge and is not enough on its own."""
     box = pymupdf.Rect(line["bbox"])
     rows = [
         pymupdf.Rect(other["bbox"])
@@ -1084,8 +1167,10 @@ def _past_column(block: dict, line: dict, x: float, size: float, line_box=None) 
 
 
 def _larger_text(line: dict, host: dict) -> bool:
-    """line 里的正文字号比 host 大一截：是隔壁栏和它同一基线的标题，切开的后半截字号不变。
-    只有标点的一截不算：式子后面跟的句号用正文字号，接在小一号的分母后面（Σ_j e^{S·T_j} .）。"""
+    """The body text in line is clearly larger than in host: it is a heading in the neighbouring column on the
+    same baseline, since the second half of a cut line keeps its size.
+    A piece with only punctuation does not count: the period after an expression is at body size and follows
+    a denominator one size smaller (Σ_j e^{S·T_j} .)."""
     sizes = [
         float(span["size"])
         for span in line["spans"]
@@ -1096,13 +1181,17 @@ def _larger_text(line: dict, host: dict) -> bool:
 
 
 def _stack_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] | None:
-    """分子、分母、求和上下限这类叠在式子上下的小块：整块都是公式，横向落在某个式子行
-    的范围里，上下贴着它。上一行、下一行的正文横向也盖得住，但那里不是式子。
+    """Small blocks stacked above or below math, such as numerators, denominators and summation limits: the
+    whole block is formula, it falls horizontally within the extent of a math line, and it sits right above
+    or below that line. Body lines above and below also cover it horizontally, but they are not math.
 
-    单独剩在一个块里的小块照这样收。和别的行在一起的，块里有贴着它的式子就是自己的上下标，
-    不去抢；块里没有、又比宿主行小一号的，是被分到下一行那个块里的分母（count(w)/N 的 N）。
-    正文用 Times 的书，变量是正文斜体，按字体认不出是式子。小一号的斜体叠在正文字号行里的
-    小一号斜体上，也是分子分母。正文字体排的数字分式（24000/75）同样按小一号、居中认。"""
+    A small block left alone in a block is collected this way. One that shares its block with other lines is
+    a superscript or subscript of that block when math in the block sits against it, and is left there; when
+    the block has none and it is one size smaller than the host line, it is a denominator that was put into
+    the block of the next line (the N of count(w)/N).
+    In books set in Times, variables are body italics and cannot be recognized as math by font. Smaller
+    italics stacked on smaller italics in a line of body size are also numerators and denominators. Numeric
+    fractions in the body font (24000/75) are likewise recognized by the smaller size and centering."""
     spans = [span for span in line["spans"] if span["text"].strip()]
     if not spans or not all(_span_is_math(span) or _italic_span(span) or _numeral_span(span) for span in spans):
         return None
@@ -1137,7 +1226,8 @@ def _line_size(line: dict) -> float:
 
 
 def _stacked_on(block: dict, line: dict, box: pymupdf.Rect, size: float, italic: bool) -> dict | None:
-    """block 里正上方或正下方贴着 line 的式子行。要有式子里的字，不能只是行的范围盖得住。"""
+    """The math line in block directly above or below line and touching it. It must have math characters over
+    line; covering it with the line's extent is not enough."""
     for other in block["lines"]:
         if other is line or abs(other["dir"][1]) > 0.01:
             continue
@@ -1145,7 +1235,8 @@ def _stacked_on(block: dict, line: dict, box: pymupdf.Rect, size: float, italic:
         for span in other["spans"]:
             if not span["text"].strip() or "bbox" not in span:
                 continue
-            # 斜体的一行只认小一号的分子分母，求和号这样的大算子上下的 K、n 不挪
+            # For an italic line only smaller numerators and denominators count; the K and n above and below a
+            # large operator such as a summation sign are not moved
             if italic and not (
                 float(span["size"]) < small and (_span_is_math(span) or _italic_span(span) or _numeral_span(span))
             ):
@@ -1157,7 +1248,8 @@ def _stacked_on(block: dict, line: dict, box: pymupdf.Rect, size: float, italic:
                 continue
             if max(under.y0 - box.y1, box.y0 - under.y1) > size * 0.5:
                 continue
-            # 斜体的分子分母上下左右居中。w^i_{i-k+1} 的上标和下标左缘对齐，不是分式
+            # Italic numerators and denominators are centered on each other. The superscript and subscript of
+            # w^i_{i-k+1} are aligned on the left and are not a fraction
             if italic:
                 band = _small_band({"spans": other["spans"]}, box, small)
                 if band is None or abs((box.x0 + box.x1) - (band.x0 + band.x1)) / 2 > max(
@@ -1169,8 +1261,10 @@ def _stacked_on(block: dict, line: dict, box: pymupdf.Rect, size: float, italic:
 
 
 def _math_seam(left: list[dict], right: list[dict]) -> bool:
-    """接口处是式子：左边以公式收尾，或右边以公式起头，或有一边全是符号。
-    只看接口：左栏一行以公式开头、以正文收尾，接不到右栏去。"""
+    """The seam is math: the left side ends with a formula, the right side starts with one, or one side is all
+    symbols.
+    Only the seam is checked: a line in the left column that starts with a formula and ends with body text
+    does not join the right column."""
     left = [span for span in left if str(span.get("text") or "").strip()]
     right = [span for span in right if str(span.get("text") or "").strip()]
     if not left or not right:
@@ -1181,8 +1275,10 @@ def _math_seam(left: list[dict], right: list[dict]) -> bool:
 
 
 def _same_band(a: dict, b: dict, box=None) -> bool:
-    """纵向交叠够多。分式的分母、大括号把框往下拉，同一行的两截交叠不到一半。
-    默认按字高比：数学字体的字体框伸到下一行，会和下一行交叠，一截字在两行之间来回挪。"""
+    """Enough vertical overlap. Denominators of fractions and large braces pull the box down, so two pieces of
+    the same line overlap by less than half.
+    By default the comparison uses glyph height: the font box of a math font reaches into the next line and
+    overlaps it, and a piece would move back and forth between the two lines."""
     box = box or _line_box
     return _band_overlap(box(a), box(b))
 
@@ -1193,7 +1289,8 @@ def _band_overlap(ra: pymupdf.Rect, rb: pymupdf.Rect) -> bool:
 
 
 def _typewriter_line(spans: list[dict]) -> bool:
-    """整行都是等宽的拉丁字。中日文字体也常标成等宽，不算。"""
+    """The whole line is monospaced Latin text. Chinese and Japanese fonts are also often marked monospaced and
+    do not count."""
     visible = [span for span in spans if str(span.get("text") or "").strip()]
     if not visible or any(CJK_RE.search(str(span["text"])) for span in visible):
         return False
@@ -1201,13 +1298,16 @@ def _typewriter_line(spans: list[dict]) -> bool:
 
 
 def _verbatim_block(block: TextBlock) -> bool:
-    """整块都是等宽字照录的文字（示例对话、代码），单独排成几行。"""
+    """The whole block is verbatim text in a monospaced font (example dialogue, code), set as separate
+    lines."""
     return bool(block.span_lines) and all(_typewriter_line(spans) for spans in block.span_lines)
 
 
 def _verbatim_seam(host: TextBlock, guest: TextBlock) -> bool:
-    """一边是单独排的等宽照录文字，一边贴着它的一行是正文。照录的一行没有句末标点，
-    下面接着的小写正文也不是它的续行。正文里夹的代码碰巧落在行首行尾的，照常接上。"""
+    """One side is verbatim monospaced text set on its own, and the line touching it on the other side is body
+    text. A verbatim line has no sentence-final punctuation, yet the lowercase body text below it is not its
+    continuation. Code inside body text that happens to fall at the start or end of a line is joined as
+    usual."""
     if not host.span_lines or not guest.span_lines:
         return False
     return (
@@ -1219,8 +1319,9 @@ def _verbatim_seam(host: TextBlock, guest: TextBlock) -> bool:
 
 
 def _row_style(spans: list[dict]) -> tuple[bool, bool]:
-    """一行字的样式：是否整行粗体、是否整行等宽。只看带字母的正文 span，名字后面的角标星号、
-    邮箱外面公式字体的花括号不算。"""
+    """Style of a line: whether the whole line is bold, and whether it is all monospaced. Only body spans with
+    letters are considered; superscript asterisks after names and braces in a math font around email
+    addresses do not count."""
     words = [
         span for span in spans if any(ch.isalpha() for ch in str(span.get("text") or "")) and not _span_is_math(span)
     ]
@@ -1236,7 +1337,7 @@ def _row_style(spans: list[dict]) -> tuple[bool, bool]:
 
 
 def _row_boxes(rects: Sequence[pymupdf.Rect]) -> list[pymupdf.Rect]:
-    """按上下交叠把几截并成可视行。"""
+    """Merge pieces into visual lines by vertical overlap."""
     rows: list[pymupdf.Rect] = []
     for rect in rects:
         if rows:
@@ -1250,9 +1351,12 @@ def _row_boxes(rects: Sequence[pymupdf.Rect]) -> list[pymupdf.Rect]:
 
 
 def _centered_rows(rows: Sequence[pymupdf.Rect], size: float) -> bool:
-    """几行共用一条中线、宽窄不一：居中排的一摞（作者名、单位、邮箱）。
-    两端对齐的正文行左右缘都相同；只有两行时宽窄碰巧一样，要看整摞。
-    排满的正文行左缘也会差一两磅（行首的引号、连字号往外伸），宽窄差不出小半个字。"""
+    """Several lines share one center line and differ in width: a centered stack (author names, affiliations,
+    email addresses).
+    Justified body lines share both left and right edges; with only two lines the widths may match by chance,
+    so the whole stack is checked.
+    Full body lines can also differ by a point or two on the left (a quote or hyphen at the start of a line
+    sticks out), but their widths differ by less than a fifth of a character."""
     if len(rows) < 2:
         return False
     mids = [(row.x0 + row.x1) / 2 for row in rows]
@@ -1265,14 +1369,18 @@ def _centered_rows(rows: Sequence[pymupdf.Rect], size: float) -> bool:
 
 
 def _new_voice(host: TextBlock, guest: TextBlock) -> bool:
-    """下一块字号差一成以上、颜色也换了：幻灯片标题下面的例句、正文下面的图注，不是同一段的折行。
-    同一段里正文的字号、颜色不变，夹着的强调词、公式占不了多数。"""
+    """The next block differs in size by more than 10% and also changes color: an example under a slide title,
+    or a caption under body text, and not a wrapped line of the same paragraph.
+    Within one paragraph the body size and color stay the same, and emphasized words and formulas inside it
+    never make up the majority."""
     return abs(guest.size - host.size) > host.size * 0.12 and guest.color != host.color
 
 
 def _restyled_seam(host: TextBlock, guest: TextBlock) -> bool:
-    """两块是同一摞居中排的行，接缝处的上下两行换了样式：粗体的作者名下面接常规字体的单位，
-    单位下面接等宽字的邮箱。是一行一项，不是一段话的折行。一行拆成几截的按整行比。"""
+    """The two blocks are part of one centered stack of lines, and the lines on either side of the seam change
+    style: bold author names followed by an affiliation in a regular font, an affiliation followed by an email
+    address in a monospaced font. Each line is one item, not a wrapped line of a paragraph. A line split into
+    several pieces is compared as a whole line."""
     if not host.span_lines or not guest.span_lines or not host.line_rects or not guest.line_rects:
         return False
     if len(host.span_lines) != len(host.line_rects) or len(guest.span_lines) != len(guest.line_rects):
@@ -1294,13 +1402,14 @@ def _restyled_seam(host: TextBlock, guest: TextBlock) -> bool:
     return _row_style(upper) != _row_style(lower)
 
 
-# 行尾停在这些符号上，式子还没写完
+# A line that stops at one of these symbols has an unfinished expression
 _OPERATOR_ENDS = ("(", "+", "*", "/", "=", "<", ">", "≤", "≥")
 
 
 def _open_operator_end(text: str) -> bool:
-    """行尾停在运算符或左括号上。尖括号前面要有空格，<Workflow> 这样的标签不算；
-    ===Instructions=== 这样连写的一串是分隔标记，句号后面单独的星号是脚注标记，也不算。"""
+    """The line stops at an operator or an opening parenthesis. An angle bracket needs a space before it, so a
+    tag such as <Workflow> does not count; a run written together such as ===Instructions=== is a separator,
+    and a lone asterisk after a period is a footnote mark; neither counts."""
     text = text.rstrip()
     if not text.endswith(_OPERATOR_ENDS) or text[-2:-1] == text[-1]:
         return False
@@ -1313,7 +1422,7 @@ _PAREN_ENUM_RE = re.compile(r"\(([a-z]|\d{1,2})\)\s")
 
 
 def _follows_inline_enum(text: str, before: list[str]) -> bool:
-    """text 以 (b) 起头，前面的行里在行中间出现过 (a)。"""
+    """text starts with (b), and (a) has appeared in the middle of one of the lines before."""
     match = _PAREN_ENUM_RE.match(text)
     if not match:
         return False
@@ -1324,13 +1433,15 @@ def _follows_inline_enum(text: str, before: list[str]) -> bool:
     return any(f"({prev})" in line.strip()[1:] for line in before)
 
 
-# 下一行的字号比这一段大这么多倍，是另一段。一行至少这么多字才算这一段的字号
+# A next line whose size is this many times that of the paragraph starts another paragraph. A line needs at
+# least this many characters for its size to count as the paragraph's size
 _SIZE_RISE = 1.15
 _SIZE_ROW_CHARS = 6
 
 
 def _row_left(items: list[tuple], index: int) -> float:
-    """第 index 截所在那一行的左缘：和它上下交叠过半的几截里最靠左的。"""
+    """Left edge of the line that piece index is on: the leftmost of the pieces overlapping it vertically by
+    more than half."""
     box = items[index][1]
     return min(
         other[1].x0
@@ -1340,28 +1451,38 @@ def _row_left(items: list[tuple], index: int) -> float:
 
 
 def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]]:
-    """把一个文本块里的行分成独立段落（返回每组的行下标）。
+    """Split the lines of one text block into separate paragraphs (returns the line indices of each group).
 
-    幻灯片里多个列表项、甚至不同的图注标签常被 PyMuPDF 归进同一块，整段翻译会把
-    项目符号变成行内文字、把不相干的内容拼在一起。三处拆段：
-    - 行首带列表标记；
-    - 纯符号行（“=”“→”等）单独成段，之后被过滤器跳过、原样保留；
-    - 左跳超过约 3 个字号、且两行没有都撑满右边距（并列标签）。1–2em 是首行缩进，
-      不管上一行有没有撑满，都不拆。
-    - 上行明显没到右边距（硬换行而非自动换行）且下行像新句子开头；上行以逗号等
-      连接标点结尾、左跳只是缩进、或仍是同一条列表项的续行，都不算硬换行。
-    自动换行的续行（小写开头、上行撑满）仍并入上一段。
-    标题行下面字号明显更小、又是完整句子的正文单独成段；字号明显变大的一行也单独成段。
-    角标拆出的短行字数不够，不拆。whole_rows 见 _justified_joins。
-    左跳/硬换行的比较基准是"上一条正文字号的行"（参考行）：上下标拆出的 dict
-    小行会把左跳量算飞，让段落在公式处被切碎。
-    items 的元素是 (行文本, 行 rect, 行 span, ...) 的元组，只用前三个。
+    On slides PyMuPDF often puts several list items, or even unrelated caption labels, into one block;
+    translating the block as one paragraph turns bullets into inline text and joins unrelated content.
+    Three places to split:
+    - a line that starts with a list marker;
+    - a pure symbol line ("=", "→" and the like) becomes its own paragraph, which the filter later skips and
+      keeps as it is;
+    - a jump to the left of more than about 3 font sizes, where the two lines do not both reach the right
+      margin (labels side by side). 1-2 em is a first-line indent and is never split, whether or not the line
+      above is full.
+    - the line above clearly stops short of the right margin (a hard line break, not automatic wrapping) and
+      the next line looks like the start of a new sentence; it is not a hard break when the line above ends
+      with a comma or other joining punctuation, when the jump to the left is only an indent, or when the line
+      continues the same list item.
+    Continuation lines of automatic wrapping (lowercase start, full line above) still join the paragraph
+    above.
+    Body text under a heading line that is clearly smaller and is a complete sentence becomes its own
+    paragraph; a line that is clearly larger also becomes its own paragraph.
+    Short lines split off by superscripts have too few characters and are not split. For whole_rows see
+    _justified_joins.
+    The jump to the left and the hard break are measured against "the last line at body size" (the reference
+    line): small line dicts split off by superscripts and subscripts would throw off the jump and chop the
+    paragraph up at formulas.
+    Elements of items are tuples (line text, line rect, line spans, ...); only the first three are used.
     """
     if not items:
         return []
     max_x1 = max(it[1].x1 for it in items)
     justified = _justified_joins(items, max_x1, whole_rows)
-    # 拆开的一行按整行比较左跳和右缘，不按行尾那个词
+    # A split line is compared as a whole line for the jump to the left and the right edge, not by its last
+    # word
     row_box: dict[int, pymupdf.Rect] = {}
     for index in sorted(justified):
         head = index - 1
@@ -1370,31 +1491,38 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         box = row_box.get(head, pymupdf.Rect(items[head][1])) | items[index][1]
         for member in range(head, index + 1):
             row_box[member] = box
-    # 表格的一格数和行名各自成段：行名短、数挨得近时，会和上下的行名、同一行的数并成一句
+    # Number cells and row labels of a table each become their own paragraph: with short row labels and
+    # numbers close together, they would join the row labels above and below and the numbers on the same row
+    # into one sentence
     cells = _number_cells(items)
     row_labels = _row_labels(items, cells)
-    # 整块是居中排的一摞短行时，换了样式的下一行是另一项
+    # When the whole block is a centered stack of short lines, a next line in another style is another item
     first_size = max((s["size"] for s in items[0][2]), default=10)
     stacked = _centered_rows(_row_boxes([item[1] for item in items]), first_size)
     groups, cur = [], [0]
-    row_rect = pymupdf.Rect(items[0][1])  # 当前可视行已经接上的部分
+    row_rect = pymupdf.Rect(items[0][1])  # The part of the current visual line joined so far
     row_spans = list(items[0][2])
-    # 这一段第一行的左缘、已有几行。一行常被拆成几截，按行比，不按截比
+    # Left edge of this paragraph's first line, and the number of lines so far. A line is often split into
+    # several pieces, so the comparison is by line, not by piece
     group_x0, group_rows = row_rect.x0, 1
-    ref = 0  # 参考行：上一条正文字号的行。上下标拆出的 dict 小行不能当参考，
-    # 否则左跳量相对小行算，段落会在公式处被切碎（"(like a | sequence)"）
+    ref = 0  # Reference line: the last line at body size. Small line dicts split off by scripts cannot serve,
+    # or the jump to the left is measured against a small line and the paragraph is chopped up at formulas
+    # ("(like a | sequence)")
     ref_size = max((s["size"] for s in items[0][2]), default=10)
     group_size = ref_size if len("".join(items[0][0].split())) >= _SIZE_ROW_CHARS else 0
-    # 排满的一行没说完，折到下一行行首的数（range from 0.01 to | 0.1.）是句尾，不是符号行。
-    # 左缘和上一行对齐也算：段落首行缩进，第二行以后才是左缘（13 tokens: 11865, … | 885, 220, …）。
-    # 上一行停在句中的缩写上（Tanikawa et al. | 2012).）也没说完
+    # When a full line leaves its sentence unfinished, a number wrapped to the start of the next line
+    # (range from 0.01 to | 0.1.) is the end of the sentence, not a symbol line.
+    # Aligning with the left edge of the line above also counts: with a first-line indent, the left edge only
+    # starts from the second line (13 tokens: 11865, ... | 885, 220, ...).
+    # A line above that stops at an abbreviation inside a sentence (Tanikawa et al. | 2012).) is also
+    # unfinished
     number_tails: set[int] = set()
     for i in range(1, len(items)):
         text, rect = items[i][0], items[i][1]
         ptext, prect, pspans = items[ref][0], row_box.get(ref, items[ref][1]), items[ref][2]
         psize = max((s["size"] for s in pspans), default=10)
         stripped = text.lstrip()
-        # 纯符号行独立成段，后面的内容不和它拼
+        # A pure symbol line is its own paragraph; what follows is not joined to it
         prev_symbol = bool(NO_TEXT_RE.match(ptext.strip())) and ref not in number_tails
         if (
             NO_TEXT_RE.match(stripped)
@@ -1406,9 +1534,11 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and rect.y0 >= prect.y1 - 0.5 * psize
             and (i + 1 == len(items) or items[i + 1][1].y0 >= rect.y1 - 0.5 * psize)
         ):
-            # 这个数独占一行。同一行后面还有字的是行首的节号（9.6 Summary）
+            # The number has a line to itself. One followed by more text on the same line is a section number
+            # at the start of the line (9.6 Summary)
             number_tails.add(i)
-        # 索引条目停在逗号上，页码折到下一行：页码跟着条目（见 _index_entry_ends），缩进多深都不拆
+        # An index entry stops at a comma and its page numbers wrap to the next line: the page numbers go with
+        # the entry (see _index_entry_ends) and are not split off however deep the indent
         index_tail = (
             whole_rows
             and ptext.rstrip().endswith(",")
@@ -1418,17 +1548,20 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         if index_tail:
             number_tails.add(i)
         jump = prect.x0 - rect.x0
-        # 1–2em 左跳是首行缩进，不是新段落。首行缩进只缩一行：这一段已有两行以上、上一行不是第一行，
-        # 再往左起笔是列表项、例句的悬挂续行完了。块从续行起头时第一行也是缩着的（datasheet 的条目）。
-        # 只看成句的文字行，公式拆出来的几截不算行
+        # A 1-2 em jump to the left is a first-line indent, not a new paragraph. A first-line indent covers
+        # only one line: when the paragraph already has two or more lines and the line above is not the first,
+        # starting further left means the hanging continuation lines of a list item or example have ended.
+        # When a block starts with a continuation line, its first line is also indented (datasheet entries).
+        # Only lines of sentence text count; pieces split from formulas are not lines
         hanging_end = (
             group_rows >= 2
             and rect.x0 < row_rect.x0 - 0.5 * psize
             and _prose_units(stripped) >= 3
             and _prose_units(items[i - 1][0]) >= 2
         )
-        # 首行缩进的第一行排到右缘。块里第一行没排满、以句号收尾，下一行又是新句子起头的，
-        # 是上一段（例句的悬挂续行）的末行
+        # The first line of a first-line indent runs to the right edge. A first line in the block that is not
+        # full, ends with a period and is followed by the start of a new sentence is the last line of the
+        # paragraph before (the hanging continuation of an example)
         closed = (
             group_rows == 1
             and max_x1 - prect.x1 > 3 * psize
@@ -1436,8 +1569,10 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and _ends_sentence(ptext)
             and bool(SEG_START_RE.match(stripped))
         )
-        # 缩进起笔、没排到右缘的第一行，下一行回到左边：单独排开的一行（例句 The green witch arrived），
-        # 下一行接着写正文。段落的首行缩进排到右缘；绕图排的段落各行收在同一处，首行不比下一行短
+        # A first line that starts indented and does not reach the right edge, with the next line back on the
+        # left: a line set off on its own (the example The green witch arrived), with body text continuing on
+        # the next line. The indented first line of a paragraph runs to the right edge; in a paragraph set
+        # around a figure all lines end at the same x, and the first line is no shorter than the next
         displayed = (
             group_rows == 1
             and row_rect.x0 - rect.x0 > 0.5 * psize
@@ -1446,16 +1581,23 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and _prose_units(items[i - 1][0]) >= 2
         )
         indent = 0 < jump <= 3 * psize and not hanging_end and not closed and not displayed
-        # 列表项的续行：缩进在弹点之后的悬挂对齐。同 x0 或左跳的不是续行，可能是下一段
+        # Continuation line of a list item: hanging alignment indented past the bullet. A line at the same x0
+        # or jumping left is no continuation and may be the next paragraph
         continuing_list = _list_item(ptext) and not _list_item(text) and rect.x0 > prect.x0
-        # CJK 行首分不出新句子和续行，要求上行以句末标点结尾才算新段落
+        # At the start of a CJK line a new sentence cannot be told from a continuation, so a new paragraph
+        # needs the line above to end with sentence-final punctuation
         seg_start = bool(SEG_START_RE.match(stripped)) or (bool(CJK_START_RE.match(stripped)) and _ends_sentence(ptext))
-        # 打字机字体排的是逐行照录的文字（对话、示例），右缘参差，没到右边距不说明是硬换行。
-        # 下一行像新句子开头就是新的一行
+        # Text in a typewriter font is verbatim text line by line (dialogue, examples) with a ragged right
+        # edge, so stopping short of the right margin does not mean a hard break.
+        # A next line that looks like the start of a new sentence is a new line
         verbatim = _typewriter_line(pspans) and _typewriter_line(items[i][2])
-        # 绕图排的段落：图旁的几行收在同一处，离块的右缘很远。上一行和它上面或下面紧挨的一行收在同一处，
-        # 另一行至少排到这一处，下一行又不往里缩，是排满了图旁的窄栏，不是硬换行。
-        # 图旁的第一行上面是排满整行的，最后一行下面回到整行。隔着几行碰巧收在同一处的短行（例题的答案）不算
+        # A paragraph set around a figure: the lines beside the figure end at the same x, far from the right
+        # edge of the block. When the line above ends at the same x as the line right above or below it, the
+        # other line reaches at least that x, and the next line is not indented, the line fills the narrow
+        # column beside the figure and is not a hard break.
+        # Above the first line beside the figure is a full-width line, and below the last line the text
+        # returns to full width. Short lines several lines apart that end at the same x by chance (answers to
+        # exercises) do not count
         head = ref
         while head in justified:
             head -= 1
@@ -1481,11 +1623,14 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and not ptext.rstrip().endswith((",", "，", "、", ";", "；", "(", "+", "*", "/", "=", "<", ">"))
         )
         both_full = max_x1 - prect.x1 <= 3 * psize and max_x1 - rect.x1 <= 3 * psize
-        # 列表项的折行缩在条目号右边、比第一行的正文靠左：条目号后面隔着宽空档时，正文另成一截
+        # A wrapped line of a list item is indented right of the item number and lies left of the first line's
+        # body text: when a wide gap follows the item number, the body text is a separate piece
         hanging_wrap = _list_item(items[cur[0]][0]) and group_x0 < rect.x0 <= group_x0 + 3 * psize
-        # 图注的标签（Figure 4.12）单独一截，和后面的正文隔着一段空。第一行排满，折到下一行、回到标签的左缘：
-        # 是图注的折行，不是左跳。按正文那一截量，左跳有好几个字宽。只看块里的行，排满的一列短行
-        # （右缘就是块的右缘）和它分不开，所以要第一截是图注标签
+        # The caption label (Figure 4.12) is a piece of its own, separated from the following text by a gap.
+        # When the first line is full and wraps to the next line back at the label's left edge, it is a
+        # wrapped caption line, not a jump to the left. Measured from the body piece, the jump is several ems.
+        # From the lines of the block alone, a column of full short lines (whose right edge is the block's
+        # right edge) cannot be told apart from it, so the first piece must be a caption label
         wrap_back = (
             group_rows == 1
             and bool(_CAPTION_SPAN_RE.match(items[cur[0]][0].strip()))
@@ -1494,24 +1639,32 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and rect.y0 >= prect.y1 - 0.5 * psize
         )
         left_jump = jump > 3 * psize and not both_full and not hanging_wrap and not wrap_back
-        # 两行纵向交叠超过一半、且横向区间相交：是同一可视行被上下标/公式拆出来的
-        # （y_1^T 的 1 和 T 各算一行，x 区间是交错咬合的），不能在这里拆段。
-        # 并排标签横向是分开的（无横向交叠），left_jump 照常拆开。
+        # The two lines overlap vertically by more than half and their x ranges intersect: one visual line
+        # split by superscripts, subscripts or a formula (the 1 and T of y_1^T each count as a line, with
+        # interlocking x ranges), so no paragraph split here.
+        # Labels side by side are apart horizontally (no horizontal overlap), and left_jump splits them as usual.
         qrect = items[i - 1][1]
         overlap = min(qrect.y1, rect.y1) - max(qrect.y0, rect.y0)
         h_overlap = min(qrect.x1, rect.x1) - max(qrect.x0, rect.x0)
-        # 同一基线上、词距内的下一个词。按词拆行时，行内大写词（DXL）不是新段落。
-        # 句末、标记语言和图内标签仍拆开，避免把侧标或格子并进正文。
-        # 词距和接口空档按上一截的字号算。上一截比这一截大一倍多时（章首的大号数字，
-        # 离标题一个大字宽，中间还隔着竖线）按这一截算。分式里的小号上下标仍按正文字号
+        # The next word on the same baseline, within word spacing. When a line is split by word, a capitalized
+        # word inside the line (DXL) is not a new paragraph.
+        # Sentence ends, markup and labels inside figures are still split, so that side labels and cells are
+        # not merged into body text.
+        # Word spacing and the seam gap are measured with the size of the previous piece. When the previous
+        # piece is more than twice as large as this one (a large chapter number one large em from the title,
+        # with a vertical rule between), this piece's size is used. Small scripts in fractions still use the
+        # body size
         piece_size = max((s["size"] for s in items[i][2]), default=psize)
         seam_gap = piece_size if psize > piece_size * 1.6 else psize
         same_word = _same_line_word(items[i - 1][0], text, qrect, rect, seam_gap) or i in justified
-        # 式子被拆成几截（分式、大括号、根号）时，首尾相接的几截是同一可视行，
-        # 纯符号的那一截不能把行切开。上下交叠按这一行已经接上的部分算：
-        # 大括号和分母各自的框只擦到一点边。两截都是正文的，仍按上面的句末规则拆。
+        # When an expression is split into several pieces (fraction, large brace, radical), pieces meeting end
+        # to start are one visual line, and a pure symbol piece must not cut the line. Vertical overlap is
+        # measured against the part of the line joined so far:
+        # the boxes of a brace and of a denominator on their own barely touch. When both pieces are body
+        # text, the sentence-end rule above still splits them.
         row_overlap = min(row_rect.y1, rect.y1) - max(row_rect.y0, rect.y0)
-        # 顶到右缘的运算符所在的行是排满、两端对齐拉开的，等号两边的空比词距拉得更多
+        # A line with an operator reaching the right edge is full and stretched by justification; the gaps
+        # around the equals sign are stretched more than word spacing
         operator = bool(_OPERATOR_RE.fullmatch(stripped.rstrip()))
         seam_reach = seam_gap * 1.5 if operator and rect.x1 >= max_x1 - 1 else seam_gap
         touching = (
@@ -1528,8 +1681,9 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             or same_word
             or touching
         )
-        # 同一行上隔开三个字宽以上、又不是两端对齐拉开的词距：并排的标签（图注和图里的节点）。
-        # 接口是式子的不算，分式的几截可能分在别的块里，留下一段空。
+        # More than three ems apart on the same row, and not word spacing stretched by justification: labels
+        # side by side (a caption and nodes in a figure).
+        # A math seam does not count; pieces of a fraction may sit in another block and leave a gap.
         side_by_side = (
             not same_visual_line
             and i not in justified
@@ -1537,26 +1691,33 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5
             and rect.x0 - qrect.x1 > 3 * psize
         )
-        # 章节号和标题是同一行的整体（'2.2 Training'）：纯数字的上行不当符号行，
-        # 也不按硬换行拆开，否则数字被过滤不遮罩、标题单独翻，基线对不齐
-        # 章首比标题大一倍多的数字是单独的装饰，标题按原位写，不跟着数字挪
+        # A section number and its title form one line ('2.2 Training'): a line above that is only digits is
+        # not a symbol line and is not split off as a hard break, or the number is filtered out and not masked,
+        # the title is translated alone, and the baselines do not line up
+        # A chapter number more than twice the size of the title is separate decoration; the title is written
+        # in its original place and does not move with the number
         line_size = max((s["size"] for s in items[i][2]), default=10)
         sec_label = (
             bool(re.fullmatch(r"\d+(?:\.\d+)*\.?", ptext.strip()))
             and overlap > min(prect.y1 - prect.y0, rect.y1 - rect.y0) * 0.5
             and psize <= line_size * 1.6
         )
-        # 12pt 标题下的 9pt 导语左缘只差一截节号，看起来像缩进。字号落下才是新段。
-        # 上下标拆出的短行和上一行上下交叠；自成一行的两个词也算（作者名下面的单位），
-        # 比的是上一行多数字的字号，行首的大号星号不算
+        # A 9pt lead-in under a 12pt heading differs on the left only by the section number and looks like an
+        # indent. The drop in size is what makes it a new paragraph.
+        # Short lines split off by scripts overlap the line above vertically; two words on a line of their own
+        # also count (the affiliation under author names),
+        # compared with the size of most characters on the line above, so a large asterisk at its start does
+        # not count
         own_row = row_overlap <= min(row_rect.height, rect.height) * 0.2
         size_drop = not same_visual_line and (
             (line_size < ref_size * 0.85 and _prose_units(stripped) >= 4)
             or (own_row and line_size < _text_size(items[i - 1][2]) * 0.85 and _prose_units(stripped) >= 2)
         )
-        # 比这一段已有各行的字号都明显大的一行自成一段：幻灯片里式子下面的小标题，左缘比缩进的
-        # 式子靠左一点，按首行缩进算会并进去。小型大写的词（KNOWREF、GOVERN 1:）后面回到正文字号不算；
-        # 上下标拆出的小行、几个字的碎片（块从角标 u 起头）不计入这一段的字号。小写起头的是接着写的半句
+        # A line clearly larger than every line of the paragraph so far is its own paragraph: a subheading
+        # under an expression on a slide sits slightly left of the indented expression and would be merged as
+        # a first-line indent. Small-caps words (KNOWREF, GOVERN 1:) followed by body size do not count;
+        # small lines split off by scripts and fragments of a few characters (a block starting with a
+        # superscript u) do not count toward the paragraph's size. A lowercase start is a sentence continuing
         size_rise = (
             not same_visual_line
             and own_row
@@ -1565,9 +1726,12 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and _prose_units(stripped) >= 2
         )
         body_line = line_size >= ref_size * 0.79 and len("".join(stripped.split())) >= _SIZE_ROW_CHARS
-        # 照录的等宽行后面换回正文字体、像新句子开头的一行：照录的文字到此为止，正文另起一段。
-        # 正文首行缩进和等宽行的左缘只差一点，按缩进算会并进去。
-        # 行首还是等宽字的，是上一行的网址、代码折下来的尾巴（...BaBao | 1). This ...），没换回正文
+        # A line after verbatim monospaced lines that switches back to the body font and looks like the start
+        # of a new sentence: the verbatim text ends here and the body text starts a new paragraph.
+        # The first-line indent of the body differs only slightly from the left edge of the monospaced lines,
+        # and would be merged as an indent.
+        # A line still starting in monospace is the wrapped tail of a URL or code from the line above
+        # (...BaBao | 1). This ...) and has not switched back to body text
         leaves_verbatim = (
             own_row
             and seg_start
@@ -1576,13 +1740,18 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and not _typewriter_line(items[i][2][:1])
             and _prose_units(stripped) >= 4
         )
-        # 作者栏一行一项：名字、单位、邮箱居中排，换了字体就是下一项。
-        # 一行可能拆成几截（并排的几个作者名），按整行比
+        # The author block has one item per line: names, affiliations and email addresses are centered, and a
+        # change of font starts the next item.
+        # A line may be split into several pieces (several author names side by side), so whole lines are
+        # compared
         restyled = stacked and not same_visual_line and _row_style(row_spans) != _row_style(items[i][2])
-        # 撑满的上一行没有句末，下一行的 "Q. " 是换行，不是 "a. " 这种列表项。
-        # 行首的破折号也可能是句中的（... 2024 (URL) | - a performance that ...）：和这一段的首行同字号
-        # （上一行可能是大一号的等宽网址），不往里缩，这一段也不是破折号起头的一项。
-        # 缩进、换了字号的是下一级弹点，接着上一项的是同级的下一项
+        # When the full line above has no sentence end, "Q. " on the next line is a wrapped line, not a list
+        # item like "a. ".
+        # A dash at the start of a line can also be inside a sentence (... 2024 (URL) | - a performance that
+        # ...): same size as the first line of the paragraph (the line above may be a monospaced URL one size
+        # larger), not indented, and the paragraph is not itself an item starting with a dash.
+        # An indented dash in another size is a lower-level bullet; one following an item is the next item at
+        # the same level
         dash_wrap = (
             bool(_DASH_BULLET_RE.match(stripped))
             and abs(_text_size(items[i][2]) - _text_size(items[cur[0]][2])) <= psize * 0.05
@@ -1594,22 +1763,29 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and max_x1 - prect.x1 <= 3 * psize
             and not ptext.rstrip().endswith(_LIST_INTRO_END)
         )
-        # 段中列举 (a) … (b) …，前一项写在行中间，这一项碰巧落到行首，上一行又排满：是折行，不是列表
+        # An inline enumeration (a) ... (b) ...: the previous item is mid-line, this one happens to fall at the
+        # start of a line, and the line above is full: a wrapped line, not a list
         inline_enum = max_x1 - prect.x1 <= 3 * psize and _follows_inline_enum(stripped, [items[j][0] for j in cur])
-        # 证明分项 (iii) Let … 的上一行停在式子或句末，没排满。上一行排满的是段中列举碰巧折到行首
+        # Before a proof case (iii) Let ..., the line above stops at an expression or a sentence end and is not
+        # full. A full line above means an inline enumeration happened to wrap to the start of the line
         roman_wrap = bool(_ROMAN_ITEM_RE.match(stripped)) and max_x1 - row_rect.x1 <= 3 * psize
         bullet = _list_item(text) and not wrapped_letter and not inline_enum and not roman_wrap
-        # 右括号起头的一行是上一行括号里的内容折下来的（(* + ? . [ | ]) need to…），行尾的 [ 不是符号行
+        # A line starting with a closing bracket is bracketed content wrapped from the line above
+        # ((* + ? . [ | ]) need to...), and the [ at the end of the line is not a symbol line
         closing = stripped[:1] in ")]}" and _prose_units(stripped) >= 2
-        # 上一行停在运算符、左括号上，式子没写完，折到下一行行首：下一行的 100) 是式子的后半截，
-        # 不是编号，也不是符号行。单独排的式子里，分子从等号右边起笔，不是折行
+        # The line above stops at an operator or opening parenthesis with the expression unfinished, wrapping
+        # to the start of the next line: the 100) on the next line is the second half of the expression, not a
+        # number label and not a symbol line. In a display expression the numerator starts right of the equals
+        # sign, which is not a wrap
         open_end = (
             not prev_symbol and _open_operator_end(ptext) and not same_visual_line and rect.x0 <= row_rect.x0 + psize
         )
-        # 标签和值分两栏排（View ranges:   {l_partkey, …} ∈ (150, +∞), | {o_custkey} …）：值和标签隔着
-        # 一个字宽以上，值的下一行从值的左缘起笔，不回到标签下面。值是另一栏，另成一段
+        # Label and value set in two columns (View ranges:   {l_partkey, ...} ∈ (150, +∞), | {o_custkey} ...):
+        # the value is more than one em from the label, and the value's next line starts at the value's left
+        # edge instead of returning under the label. The value is another column and its own paragraph
         next_row = items[i + 1][1] if i + 1 < len(items) else None
-        # 条目号（2.1、a.）后面的悬挂缩进是列表项，不在这里拆，标签要是词
+        # A hanging indent after an item number (2.1, a.) is a list item and is not split here; the label must
+        # be a word
         value_column = (
             overlap > min(qrect.height, rect.height) * 0.5
             and not touching
@@ -1621,12 +1797,15 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and next_row.y0 >= rect.y0 + rect.height * 0.5
             and abs(next_row.x0 - rect.x0) <= 1.0
         )
-        # 上一句说完，下一行以例句编号开头：一行一个例句
+        # The previous sentence has ended and the next line starts with an example number: one example per line
         example = bool(_EXAMPLE_NUMBER_RE.match(stripped)) and _ends_sentence(ptext)
-        # 上一句（或句末括起来的例词）说完，下一行以粗体标签起头：定义列表的下一条。
-        # 单行的条目排得差不多满，按硬换行看不出来
-        # 单独一行、两边都缩进三个字宽以上、只有数学字体、带关系符号的一行是单独排的式子，
-        # 上一行停在逗号上也不接。分式拆出来的求和号、分母那几截没有关系符号，不算
+        # The previous sentence (or a bracketed example word at its end) has ended and the next line starts
+        # with a bold label: the next entry of a definition list.
+        # Single-line entries are nearly full, so the hard break rule does not catch them
+        # A line of its own, indented more than three ems on both sides, only in math fonts and with a
+        # relation symbol, is a display expression, and is not joined even when the line above stops at a
+        # comma. Summation signs and denominators split from a fraction have no relation symbol and do not
+        # count
         display_math = (
             own_row
             and rect.x0 - group_x0 > 3 * psize
@@ -1634,9 +1813,12 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and all(_span_is_math(span) for span in items[i][2] if str(span["text"]).strip())
             and bool(_RELATION_RE.search(stripped))
         )
-        # 缩进排开的一行（例句的译文）下面另起一段：这一行比上一行靠左，下一行又比它靠左一两个字宽，
-        # 这一行是下一段的首行缩进，不是上一行的续行。两端对齐的行拆成几截，按整行的左缘比。
-        # 三行对着同一条中线是居中排的（作者单位），越往下越宽，不是缩进
+        # A new paragraph below an indented line set off on its own (the translation of an example): this line
+        # is left of the line above and the next line is one or two ems further left, so this line is the
+        # first-line indent of the next paragraph, not a continuation of the line above. A justified line split
+        # into several pieces is compared by the left edge of the whole line.
+        # Three lines on the same center line are centered (author affiliations), wider further down, and not
+        # indented
         above = _row_left(items, i - 1)
         below = _row_left(items, i + 1) if i + 1 < len(items) and items[i + 1][1].y0 >= rect.y1 - 0.5 * psize else None
         centered_rows = below is not None and all(
@@ -1651,8 +1833,10 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and 0.5 * psize < rect.x0 - below <= 3 * psize
             and not ptext.rstrip().endswith((",", "，", "、", ";", "；", ":", "："))
         )
-        # 上一行在句末收住（哪怕排满了），这一行缩进一两个字宽、排到右缘，下一行又回到上一行的左缘：
-        # 是新一段的首行缩进。上下是编号条目的是悬挂缩进的续行（46. Fuller … | Monthly Notices … | 47. …）
+        # The line above ends a sentence (even when full), this line is indented one or two ems and runs to the
+        # right edge, and the next line returns to the left edge of the line above: the first-line indent of a
+        # new paragraph. Between numbered entries it is a hanging continuation line
+        # (46. Fuller ... | Monthly Notices ... | 47. ...)
         indent_after_end = (
             own_row
             and seg_start
@@ -1665,9 +1849,11 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and abs(below - above) <= 0.5 * psize
             and rect.x1 >= max_x1 - 2 * psize
         )
-        # 带编号的定理、引理标签（Lemma 10.3.）总是另起一段，上一行停在式子上也一样。
-        # 这一段也是粗体标签起头、上一行没写到右缘的，是定义列表的下一条，条目是没有句末标点的半句例句
-        # （mouse² : … a quiet animal like a mouse | bank¹ : …）
+        # A numbered theorem or lemma label (Lemma 10.3.) always starts a new paragraph, even when the line
+        # above stops at an expression.
+        # When this paragraph also starts with a bold label and the line above stops short of the right edge,
+        # it is the next entry of a definition list whose entries are partial example sentences without
+        # sentence-final punctuation (mouse² : ... a quiet animal like a mouse | bank¹ : ...)
         labeled = (
             not same_visual_line
             and _label_lead(items[i][2])
@@ -1719,8 +1905,10 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         row_rect = row_rect | rect if same_visual_line else pymupdf.Rect(rect)
         row_spans = row_spans + items[i][2] if same_visual_line else list(items[i][2])
         isize = max((s["size"] for s in items[i][2]), default=10)
-        # 字号落下拆出的新段，基准改成这一行。否则后面的同字号续行仍对着标题拆。
-        # 角标短行不在这里更新，避免左跳量相对小行算飞。接在行尾的等号也不当参考行
+        # For a new paragraph split off by a drop in size, this line becomes the reference. Otherwise the
+        # following continuation lines of the same size are still split against the heading.
+        # Short superscript lines do not update it here, so the jump to the left is not thrown off by a small
+        # line. An equals sign joined at the end of a line is not used as the reference line either
         if size_drop or isize >= ref_size * 0.79 and not (same_visual_line and operator):
             ref, ref_size = i, isize
     groups.append(cur)
@@ -1728,14 +1916,15 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
 
 
 def _is_formula_char(c: str) -> bool:
-    """字符级公式判定：希腊字母、数学符号/修饰符、私用区。"""
+    """Per-character formula test: Greek letters, math symbols and modifiers, Private Use Area."""
     if 0x370 <= ord(c) <= 0x3FF:
         return True
     return unicodedata.category(c) in ("Sm", "Sk", "Mn", "Co")
 
 
 def _math_chars(spans: list[dict]) -> int:
-    """块里公式字符数：公式字体的全部字符 + 正文字体里的公式字符。"""
+    """Number of formula characters in a block: all characters in math fonts plus formula characters in body
+    fonts."""
     n = 0
     for s in spans:
         if _span_is_math(s):
@@ -1746,8 +1935,10 @@ def _math_chars(spans: list[dict]) -> int:
 
 
 def _caption_opens(spans: list[dict], above: list[dict]) -> bool:
-    """这一行以单独排版的图注标签开头（粗体或换了字体的 Figure 21.17），是图注的第一行。
-    宽图的图注左缘比图里的字靠外，看起来像缩进，按左跳拆不开。正文里的 Figure 3.8 shows 不算。"""
+    """The line starts with a caption label set apart (Figure 21.17 in bold or in another font): the first line
+    of a caption.
+    The caption of a wide figure sits further out on the left than the text in the figure, which looks like
+    an indent, so the jump-left rule cannot split it. Figure 3.8 shows in body text does not count."""
     shown = [span for span in spans if str(span.get("text") or "").strip()]
     prior = [span for span in above if str(span.get("text") or "").strip()]
     if not shown or not prior or not _CAPTION_SPAN_RE.match(shown[0]["text"].strip()):
@@ -1760,8 +1951,10 @@ def _caption_label(text: str) -> bool:
     return bool(_CAPTION_LABEL_RE.match(text.strip()))
 
 
-# 脚注比正文小一号，又以编号开头（1 Although / 2Note / 4https://）。
-# 节号 1. / 2.2 不是脚注。它贴在页末时不能占跨页的页尾，否则 quite 接不上 well。
+# A footnote is one size smaller than body text and starts with a number (1 Although / 2Note / 4https://).
+# Section numbers 1. / 2.2 are not footnotes. A footnote at the bottom of the page must not take the place of
+# the page end of a paragraph carried over to the next page, or a paragraph broken after "quite" would not join
+# "well" on the next page.
 _FOOTNOTE_LEAD_RE = re.compile(r"^\d{1,2}(?!\.\d)(?:https?://|\s*[A-Za-z])", re.I)
 
 
@@ -1776,7 +1969,7 @@ def _unclosed_bracket(text: str) -> bool:
 
 
 def _closes_first(text: str) -> bool:
-    """块的第一句之内有一个多出来的右括号。"""
+    """The first sentence of the block contains an unmatched closing bracket."""
     depth = 0
     for match in re.finditer(r"[()\[\]]|[.!?](?=\s+[A-Z])", text[:300]):
         mark = match.group()
@@ -1791,8 +1984,9 @@ def _closes_first(text: str) -> bool:
     return False
 
 
-# 栏顶的图注、清单不占续句的位置。正文里的 Figure 3 shows、Figure 8(a) shows 不是图注：编号后面接着小写的词。
-# 编号也可以是罗马数字（IEEE 的 TABLE IV）或带附录字母（Table A1、Figure S3、Figure B.6）
+# A caption or listing at the top of a column does not take the place of the continued sentence. Figure 3 shows
+# and Figure 8(a) shows in body text are not captions: a lowercase word follows the number.
+# The number may also be Roman (IEEE's TABLE IV) or carry an appendix letter (Table A1, Figure S3, Figure B.6)
 _FLOAT_HEAD_RE = re.compile(
     r"^(?:Figure|Fig\.?|Table|Tab\.?|Listing|List\.?|Scheme|Plate|Algorithm|图|表|清单)"
     r"\s*(?:(?-i:[A-Z])?\.?\d++(?:\.\d+)*+|(?-i:[IVXLC]++))\b"
@@ -1802,7 +1996,8 @@ _FLOAT_HEAD_RE = re.compile(
 
 
 def _is_float_text(text: str) -> bool:
-    """栏顶的图注或清单标题。后面的正文才是上一段的续句。"""
+    """A caption or listing title at the top of a column. The body text after it is what continues the
+    paragraph before."""
     return _FLOAT_HEAD_RE.match(text.strip()) is not None
 
 
@@ -1821,7 +2016,8 @@ def _blocks_share_column(
     right: TextBlock,
     geometries: dict[int, PageGeometry] | None,
 ) -> bool:
-    """间隙小于栏沟时，仍要确认两块落在同一栏。没有栏信息时只靠间隙本身。"""
+    """Even with a gap narrower than the column gap, confirm that the two blocks are in the same column.
+    Without column information, rely on the gap alone."""
     if not geometries or left.page not in geometries:
         return True
     geo = geometries[left.page]
@@ -1831,7 +2027,8 @@ def _blocks_share_column(
 
 
 def _line_spans(block: TextBlock) -> list[list[dict]]:
-    """逐行的 span，和 line_rects 一一对应。对不上时每行给空表，不按 span 判断。"""
+    """Spans per line, one entry for each of line_rects. When they do not match, each line gets an empty list
+    and no decision is made by span."""
     rows = len(block.line_rects) or 1
     if block.span_lines and len(block.span_lines) == rows:
         return [list(line) for line in block.span_lines]
@@ -1843,10 +2040,11 @@ def _shares_visual_row(
     right: TextBlock,
     geometries: dict[int, PageGeometry] | None,
 ) -> bool:
-    """两块有没有落在同一基线上、并且横向挨着。
+    """Whether the two blocks sit on the same baseline and are adjacent horizontally.
 
-    用行框，不用块的并集。左边的短标题只和正文第一行并排，并集会盖住它，
-    整段就会把标题吞进去。栏沟至少 12pt，6pt 的间隙接不上另一栏。
+    Line boxes are used, not the union of the blocks. A short heading on the left sits beside only the first
+    body line; the union would cover it and the paragraph would swallow the heading. A column gap is at least
+    12pt, so a 6pt gap cannot reach another column.
     """
     left_lines = list(zip(left.line_rects or [left.rect], _line_spans(left)))
     right_lines = list(zip(right.line_rects or [right.rect], _line_spans(right)))
@@ -1870,9 +2068,10 @@ def _merge_visual_lines(
     blocks: list[TextBlock],
     geometries: dict[int, PageGeometry] | None = None,
 ) -> list[TextBlock]:
-    """合并其实是同一可视行的相邻块（字体在公式处切换时，PyMuPDF 会把一行拆成两块）。
+    """Merge adjacent blocks that are really one visual line (PyMuPDF splits a line into two blocks where the
+    font switches at a formula).
 
-    不合并的话，两块译文会写进互相交叠的矩形里叠在一起。
+    Unmerged, the two translations would be written into overlapping rectangles on top of each other.
     """
     out: list[TextBlock] = []
     for b in blocks:
@@ -1896,9 +2095,9 @@ def _merge_visual_lines(
     return out
 
 
-# 自成一个 span 的图注标签，带小节式的编号
+# A caption label that is a span of its own, with a section-style number
 _CAPTION_SPAN_RE = re.compile(r"^(?:Figure|Fig\.?|Table|Tab\.?)\s*\d+(?:[.\-]\d+)*\s*[:.]?$", re.I)
-# 图注标签可以没有冒号：图 2、Fig. 1.
+# A caption label may have no colon: "图 2", "Fig. 1."
 _CAPTION_LABEL_RE = re.compile(
     r"^(?:(?:Figure|Fig\.?|Table|Tab\.?|Scheme|Plate)\s*\d+|(?:图|表)\s*\d+)\s*[:.。：]?\s*$",
     re.I,
@@ -1908,16 +2107,19 @@ _OPERATOR_NAMES = (
 )
 
 
-# 不用数学字体排的式子（老论文用 Times-Italic 写变量、Symbol 写算子）：正文斜体的变量、括号、算子。
-# 变量是单个字母或两个大写字母（PE）。If、op 这样的两字母词要和括号、算子在一起（op c)）才算，
-# 定理正文整段是斜体，If、In 贴着公式也是正文
+# Expressions not set in a math font (older papers use Times-Italic for variables and Symbol for operators):
+# variables in body italics, brackets, operators.
+# A variable is a single letter or two capital letters (PE). Two-letter words such as If and op count only
+# together with brackets or operators (op c)); theorem bodies are italic throughout, and If or In next to a
+# formula is still body text
 _ITALIC_FONT_RE = re.compile(r"Italic|Oblique", re.I)
 _NUMERAL_RE = re.compile(r"\d+(?:[.,]\d+)*")
 
 
 def _block_size(main: dict, span_lines: list[list[dict]]) -> float:
-    """块的字号：最长那一截的字号。小型大写的标题（INITIALIZATION 首字母大一号）最长的一截是
-    小号的那部分，按大写的字号算。大写字母和它同一条基线才算，往下错开的是下标（BERT_LARGE）。"""
+    """Font size of the block: the size of its longest piece. In a small-caps heading (INITIALIZATION, with a
+    larger initial) the longest piece is the small part, so the size of the capitals is used. The capitals
+    count only on the same baseline; one offset downward is a subscript (BERT_LARGE)."""
     size = float(main["size"])
     big = _small_caps_sizes(span_lines).get(id(main))
     if big is None or main.get("origin") is None:
@@ -1937,7 +2139,8 @@ def _block_size(main: dict, span_lines: list[list[dict]]) -> float:
 
 
 def _small_band(run: dict, over: pymupdf.Rect, small: float) -> pymupdf.Rect | None:
-    """run 里横向落在 over 下面或上面的那一截小字号（分母、分子），整截取出来。"""
+    """The whole band of small text in run that falls horizontally below or above over (a denominator or a
+    numerator)."""
     spans = [span for span in run["spans"] if str(span.get("text") or "").strip() and float(span["size"]) < small]
     seeds = [
         pymupdf.Rect(span["bbox"])
@@ -1956,7 +2159,7 @@ def _small_band(run: dict, over: pymupdf.Rect, small: float) -> pymupdf.Rect | N
 
 
 def _text_size(spans: list[dict]) -> float:
-    """一行里字数最多的字号。"""
+    """The font size with the most characters in a line."""
     count: dict[float, int] = {}
     for span in spans:
         count[span["size"]] = count.get(span["size"], 0) + len(span.get("text", "").strip())
@@ -1964,10 +2167,13 @@ def _text_size(spans: list[dict]) -> float:
 
 
 def _donate_punct_rects(prev: TextBlock, line_rects: list[pymupdf.Rect]) -> None:
-    """标点碎片贴在上一块某一行的行尾时，把矩形并进那一行去遮罩。
+    """When a punctuation fragment sits at the end of a line of the previous block, add its rectangles to that
+    line for masking.
 
-    间隙相对该行的 x1，不用整块并集：并集会把右侧公式擦掉，而公式行不会重画。
-    碎片要在行尾附近：隔壁栏图上和这一行同高的刻度数字不是这一行的，并进来写入框会伸到隔壁栏。
+    The gap is measured from that line's x1, not from the union of the block: the union would erase the
+    formula on the right, and formula lines are not redrawn.
+    The fragment must be near the end of the line: tick numbers on a figure in the neighbouring column at the
+    same height do not belong to this line, and merging them would stretch the write box into that column.
     """
     if not line_rects or not prev.line_rects:
         return
@@ -1989,7 +2195,8 @@ def _clip_key(cell: pymupdf.Rect | None) -> tuple[float, float, float, float] | 
 
 
 def _split_table_blocks(blocks: list[TextBlock], tables: tuple[RuledTable, ...]) -> list[TextBlock]:
-    """一行里并排的格子拆成独立块。小写开头的邻格不会被硬换行规则切开。"""
+    """Split cells side by side in one line into separate blocks. A neighbouring cell that starts in lowercase
+    would not be cut by the hard break rule."""
     if not tables:
         return blocks
     out: list[TextBlock] = []
@@ -2010,7 +2217,8 @@ def _split_one_table_block(block: TextBlock, tables: tuple[RuledTable, ...]) -> 
         cell_order: list[tuple[float, float, float, float] | None] = []
         for span in spans:
             if not str(span.get("text", "")).strip():
-                # 两端对齐的行，词间空格常是单独的 span，跟着前一截进同一格，丢了词就粘在一起
+                # In justified lines the space between words is often a span of its own; it goes into the same
+                # cell as the piece before it, and without it the words run together
                 if cell_order:
                     by_cell[cell_order[-1]].append(span)
                 continue
@@ -2072,13 +2280,14 @@ def _remember_cell(
     grouped[key].append((line_rect, spans))
 
 
-# 宽块里和旁注位置的行对齐的容差。表格首列常比图注标签缩进一点（99 对 96）
+# Tolerance for aligning lines in a wide block with the position of margin notes. The first column of a table
+# is often indented slightly more than the caption label (99 against 96)
 _WIDE_ALIGN = 4.0
 _LIST_ITEM_RE = re.compile(r"^\d+[\.,]\s+[A-Za-z]")
 
 
 def _numbered_list_item(text: str) -> bool:
-    """'5. part (0.2M)' 字母占比低，但仍是列表项，不是公式行。"""
+    """'5. part (0.2M)' has a low share of letters but is still a list item, not a formula line."""
     stripped = text.strip()
     if not _LIST_ITEM_RE.match(stripped) or len(stripped) > 80:
         return False
@@ -2086,7 +2295,7 @@ def _numbered_list_item(text: str) -> bool:
 
 
 def _frame_lines(data: dict) -> tuple[list[FrameLine], list[tuple[dict, dict]]]:
-    """版心投票用的行，以及每行所在的块和行字典。"""
+    """Lines used to vote on the text frame, and the block and line dict of each line."""
     lines: list[FrameLine] = []
     refs: list[tuple[dict, dict]] = []
     for block in data.get("blocks", []):
@@ -2111,9 +2320,11 @@ def _detach_margin_notes(
     notes: set[int],
     pitches: dict[float, float] | None = None,
 ) -> None:
-    """旁注行移出原来的块，每条旁注自成一块，排在本页最后。
+    """Move margin note lines out of their original blocks; each margin note becomes its own block, placed at
+    the end of the page.
 
-    排在原处会把被它隔开的两截正文分开，两截就接不回一段。
+    Left in place, a note would separate the two pieces of body text it sits between, and the two pieces could
+    not be joined back into one paragraph.
     """
     if not notes:
         return
@@ -2148,7 +2359,8 @@ def _detach_margin_notes(
     data["blocks"] = kept
 
 
-# 这么长的行才算正文行，至少这么多行从同一处（差不过 _EDGE_NEAR）起笔，才是本页正文的边
+# A line this long counts as a body line; at least this many of them starting at the same x (within
+# _EDGE_NEAR) make an edge of the body text on this page
 _WIDE_TEXT = 40
 _WIDE_ROWS = 3
 _EDGE_NEAR = 2
@@ -2160,14 +2372,17 @@ def _wide_block_lines(
     notes: set[int],
     frame: TextFrame | None,
 ) -> set[int]:
-    """伸进页边的宽表、宽图注里落在旁注位置的行。块里另有一行从同一条边起笔、一直写进版心，
-    这一行就是块的一部分（Figure 3.7 的标签，下面一行图注从同一处起笔），不是旁注。
-    另一行从页边深处起笔、写进版心也是：正文不从页边起笔，这一块整个伸进了页边
-    （Figure 6.17 的标签后面接着图注，下一行的 tion of 也在页边）。"""
+    """Lines of wide tables and wide captions reaching into the margin that fall where margin notes would be.
+    When another line in the block starts at the same edge and runs into the text frame, this line is part of
+    the block (the label of Figure 3.7, with the next caption line starting at the same x), not a margin note.
+    The same holds when another line starts deep in the margin and runs into the text frame: body text does
+    not start in the margin, so the whole block reaches into the margin (the label of Figure 6.17 followed by
+    the caption, with the tion of on the next line also in the margin)."""
     if frame is None:
         return set()
     note_lines = {id(refs[index][1]) for index in notes}
-    # 本页正文起笔、收笔最靠外的地方（好几行都在这里）。版心按同侧页投票，个别页的正文比它往外
+    # The outermost x where body text on this page starts and ends (several lines are there). The text frame
+    # is voted across pages on the same side, and the body text of some pages extends beyond it
     long_lines = [line.rect for line in lines if len(line.text.strip()) >= _WIDE_TEXT]
     starts = Counter(round(rect.x0) for rect in long_lines)
     ends = Counter(round(rect.x1) for rect in long_lines)
@@ -2191,8 +2406,10 @@ def _wide_block_lines(
                 break
         if index in kept:
             continue
-        # 行内式子把图注的一行切成几块时，留在页边的那截（that w[1]）自成一块。
-        # 紧挨着的上一行或下一行从同一处起笔、写进版心，这一截也是图注的一行
+        # When an inline expression cuts a caption line into several blocks, the piece left in the margin
+        # (that w[1]) is a block of its own.
+        # When the line right above or below starts at the same x and runs into the text frame, this piece is
+        # also a caption line
         pitch = lines[index].size * 0.6
         for other_index, other in enumerate(lines):
             if other_index in notes:
@@ -2210,9 +2427,10 @@ def _wide_block_lines(
 
 
 def _rejoin_note_cuts(data: dict, touched: set[int]) -> None:
-    """PyMuPDF 常在旁注所在的行把一段正文切成两块。旁注拿走以后，上下紧挨、
-    切在句子中间的两块接回一块：大写开头的换行（Standard / Code for ...）
-    按块合并认不出来。上一块以句末收尾，或下一块缩进起笔的，是两段。"""
+    """PyMuPDF often cuts a paragraph into two blocks at the line where a margin note sits. Once the notes are
+    removed, two blocks right above each other and cut mid-sentence are joined back into one: a line break
+    before a capital (Standard / Code for ...) is not recognized by block merging. When the upper block ends
+    with a sentence end, or the lower block starts indented, they are two paragraphs."""
     blocks = [block for block in data["blocks"] if block.get("type") == 0 and not block.get("side_note")]
     index = 0
     while index < len(blocks) - 1:
@@ -2239,14 +2457,17 @@ def _note_cut(upper: dict, lower: dict) -> bool:
         return False
     if not -size * 0.3 <= first.y0 - last.y1 <= size * 0.6:
         return False
-    # 下一块往右缩进是新段；往左回到栏边可以是首行缩进的那一行接着写
+    # A lower block indented to the right is a new paragraph; one back to the left at the column edge can be
+    # the continuation of a line with a first-line indent
     if not last.x0 - size * 3 <= first.x0 <= last.x0 + 2:
         return False
-    # 列表项的续行和条目文字对齐，下一块比它靠左起笔，是列表完了以后的正文
+    # Continuation lines of a list item align with the item text; a lower block starting further left is body
+    # text after the list has ended
     head = min(above, key=lambda line: line["bbox"][1])
     if _list_item("".join(span["text"] for span in head["spans"])) and first.x0 < last.x0 - size * 0.5:
         return False
-    # 下一块自己首行缩进（第一行比下面几行靠右）是另起的一段：例句的译文下面接着新段落
+    # A lower block with its own first-line indent (the first line right of the lines below) is a new
+    # paragraph: a new paragraph following the translation of an example
     rest = [line["bbox"][0] for line in below if line["bbox"][1] >= first.y1 - 1 and line["bbox"][2] > first.x0]
     if rest and first.x0 > min(rest) + size * 0.5:
         return False
@@ -2263,8 +2484,10 @@ def _extract(
     on_page: Callable[[int, int], None] | None = None,
     formulas: FormulaDetector | None = None,
 ) -> tuple[list[TextBlock], list[TextFrame | None], list[PageScan]]:
-    """文本块，以及每页的版心和表格、图、词。on_page(已读页数, 总页数) 在逐页读完一页后调用。
-    formulas 是公式检测模型，给了时它框出的行内公式标到字上。模型在后台线程里提前推下一页（见 FormulaDetector.pages）。"""
+    """Text blocks, and for each page the text frame and the tables, figures and words. on_page(pages read,
+    total pages) is called after each page is read.
+    formulas is the formula detection model; when given, the inline formulas it boxes are marked on the
+    characters. The model runs ahead on the next page in a background thread (see FormulaDetector.pages)."""
     blocks = []
     scans: list[PageScan] = []
     tables_by_page: list[tuple[RuledTable, ...]] = []
@@ -2286,20 +2509,24 @@ def _extract(
             if detected is not None:
                 _mark_detected_formulas(page_chars, data, next(detected))
             _mark_visible_spaces(page_chars, data, scans[-1].visible_spaces)
-            # 自造编码的点阵字提出来是字符码。认成字母后再走后面的分段。
+            # Bitmap glyphs with a custom encoding extract as character codes. They are recognized as letters
+            # before the paragraph splitting below.
             recover_type3_page(page, data, type3)
             pages.append(data)
             if on_page is not None:
                 on_page(len(pages), doc.page_count)
     finally:
         if detected is not None:
-            # 停掉后台推理。中途停下（见 background.check_stop）时也在这个线程里等它推完手上的页
+            # Stop background inference. When stopped midway (see background.check_stop), this thread also
+            # waits for it to finish the page in hand
             detected.close()
     _mark_math_roman(pages)
     _mark_math_alphabet(pages)
     _mark_formula_only_fonts(pages)
-    # 目录页上不找表：页码一列和节号一列对齐，短条目会被认成格子表，格子不翻。
-    # 索引页也是：几栏短条目行首对齐，凑出几行就像无线的格子表
+    # No table search on contents pages: the page number column and the section number column align, short
+    # entries would be taken as a cell table, and cells are not translated.
+    # The same for index pages: several columns of short entries align at their starts, and a few rows of
+    # them look like a table without rules
     toc_pages = _toc_pages(pages)
     index_pages = {pno for pno, data in enumerate(pages) if _index_page(data)}
     for pno in toc_pages | index_pages:
@@ -2314,15 +2541,17 @@ def _extract(
     notes = margin_notes([lines for lines, _refs in page_lines], frames)
     pitches = note_pitch([lines for lines, _refs in page_lines], notes)
     for pno, (data, (lines, refs), found, frame) in enumerate(zip(pages, page_lines, notes, frames)):
-        # 索引页分好几栏，最左一栏比正文的版心靠外，看着像页边旁注。索引页上没有旁注
+        # An index page has several columns, and the leftmost lies outside the body text frame, looking like
+        # margin notes. Index pages have no margin notes
         if pno in index_pages:
             continue
         _detach_margin_notes(data, lines, refs, found - _wide_block_lines(lines, refs, found, frame), pitches)
     absorbed: set[int] = set()
     for pno, data in enumerate(pages):
         margins = _left_margins(data)
-        # 本页各行的起止，用来找一行所在那一栏的右缘
-        # 本页留原字的式子行，压在里面的碎片（分母 dx）也是式子
+        # Start and end of each line on this page, used to find the right edge of the column a line is in
+        # Math lines on this page that keep the original text; fragments inside them (the denominator dx) are
+        # math too
         kept_rows: list[pymupdf.Rect] = []
         page_start = len(blocks)
         row_ends = [
@@ -2336,17 +2565,17 @@ def _extract(
         toc_page = _has_leader_line(data) or pno in toc_pages
         index_page = _index_page(data)
         ref_rows = _index_ref_rows(data) if index_page else []
-        # 索引页的页码排成几列，条目的词会碰巧对上
+        # Page numbers on an index page form several columns, and words of entries happen to line up with them
         number_columns = [] if index_page else _number_columns(data)
         latin_page = _latin_page(data)
         for b in data["blocks"]:
             if b.get("type") != 0:
                 continue
             items: list[tuple[str, pymupdf.Rect, list[dict]]] = []
-            # 拆开的中文原句（见 _script_parts）
+            # Chinese source sentences split off (see _script_parts)
             cjk_heads: set[int] = set()
             for ln in b["lines"]:
-                if abs(ln["dir"][1]) > 0.01:  # 旋转 / 竖排文字不处理
+                if abs(ln["dir"][1]) > 0.01:  # Rotated or vertical text is not handled
                     continue
                 text = "".join(s["text"] for s in ln["spans"])
                 if not text.strip():
@@ -2363,17 +2592,19 @@ def _extract(
             items = _drop_number_tails(items)
             items, header_cells = _cut_header_cells(items, number_columns)
             side_note = bool(b.get("side_note"))
-            # 一条旁注就是一块，不按正文的规则拆
+            # One margin note is one block and is not split by the body text rules
             groups = [list(range(len(items)))] if side_note and items else _split_lines(items, index_page)
-            # 带点线的一行是一个目录条目的末行，下一行是另一条。索引页上以页码收尾的一行、
-            # 页码折到下一行的条目、词表的一格也是
+            # A line with a leader is the last line of a contents entry, and the next line is another entry. The
+            # same goes for a line ending with page numbers on an index page, an entry whose page numbers wrap
+            # to the next line, and one cell of a word grid
             cells = _grid_cells(items)
             entry_ends = cells | header_cells | (_index_entry_ends(items, ref_rows) if index_page else set())
-            # 中文原句前后都断开，自成一组
+            # A Chinese source sentence is cut off on both sides and forms its own group
             entry_ends |= {j for i, item in enumerate(items) if id(item[2]) in cjk_heads for j in (i - 1, i) if j >= 0}
             groups = [part for group in groups for part in _cut_after(group, {*leaders, *entry_ends})]
             groups = [part for group in groups for part in _cut_at_posts(group, items, scans[pno].posts)]
-            # 文字分式所在的行自成一组，留原字，不和上下的正文连成一段
+            # A line holding a text fraction forms its own group, keeps the original text, and is not joined
+            # with the body text above and below
             formula_rows = {i for i, item in enumerate(items) if any(id(span) in fractions for span in item[2])}
             groups = [part for group in groups for part in _cut_runs(group, formula_rows)]
             groups = [part for group in groups for part in _cut_line_list(group, items, row_ends)]
@@ -2387,15 +2618,19 @@ def _extract(
                 rect = pymupdf.Rect()
                 for r in line_rects:
                     rect |= r
-                # 落在格子里的碎片先留着：一格的几截并起来以后再看是不是公式
+                # Fragments inside a cell are kept for now: whether they are a formula is decided after the
+                # pieces of the cell are merged
                 in_cell = cell_containing(rect, tables_by_page[pno]) is not None
-                # 居中的单行式子（定义、if and only if）里的几个连接词不成句，留原字：
-                # 模型重排这种行常把数学意思改掉
+                # The few connecting words in a centered single-line expression (a definition, if and only if)
+                # do not form a sentence, so the original text is kept:
+                # the model often changes the mathematical meaning when it rearranges such lines
                 displayed = len(group) == 1 and _displayed(rect, spans, margins)
                 fraction = group[0] in formula_rows
-                # 索引条目后面的一串页码不算进字母占比：perplexity, 27, 76, 88, 203 是一条词目，不是一行数
+                # The page numbers after an index entry do not count toward the share of letters:
+                # perplexity, 27, 76, 88, 203 is one entry, not a row of numbers
                 judged = _INDEX_REF_RE.sub("", text) if index_page else text
-                # 以页码收尾的索引条目字母再少（F0, 340）也是一条，成块留原文，索引重排时跟着挪
+                # An index entry ending with page numbers is still an entry however few letters it has (F0, 340);
+                # it stays a block with the original text and moves along when the index is rearranged
                 entry = index_page and judged != text and bool(judged.strip()) and not fraction
                 if (
                     not in_cell
@@ -2403,15 +2638,17 @@ def _extract(
                     and (fraction or _untranslatable(spans, judged, _DISPLAY_PROSE if displayed else 3, displayed))
                     and not _wraps_from_above(blocks, pno, rect, text, row_ends, frames[pno], index_page)
                 ):
-                    # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
-                    # 捐了会被擦掉，而这些行没有占位符、不会重画。
+                    # Only punctuation fragments are donated. Formula lines and lines with few letters are not
+                    # sent for translation, and their rectangles must not be donated either:
+                    # donated rectangles are erased, and these lines have no placeholder and are not redrawn.
                     if NO_TEXT_RE.match(text) and blocks and blocks[-1].page == pno:
                         _donate_punct_rects(blocks[-1], line_rects)
                     else:
                         kept_rows.append(rect)
                     continue
-                # 字号取最长的 span。颜色、粗细按字数取占多数的：逐词一个 span 的书里，
-                # 最长的一截常是黑底白字的图注标签 Figure 10.3，整条图注会写成白字
+                # The size comes from the longest span. Color and weight come from the majority by character
+                # count: in books with one span per word, the longest piece is often the caption label Figure
+                # 10.3 in white on black, and the whole caption would be written in white
                 main = _main_span([items[i][2] for i in group])
                 main_size = _block_size(main, span_lines)
                 color = _by_chars(spans, lambda s: s["color"])
@@ -2449,7 +2686,9 @@ def _extract(
             unchecked.update(id(part) for part in parts)
         split.extend(parts)
     split = _merge_cells(split, unchecked)
-    # 栏沟明确时先排成阅读顺序。同页续段只看相邻块，另一栏插在中间就接不上本栏的下一行。
+    # When the column gaps are clear, sort into reading order first. Continuation within a page looks only at
+    # adjacent blocks, and another column in between would keep a block from joining the next line of its
+    # own column.
     ordered: list[TextBlock] = []
     by_page: dict[int, list[TextBlock]] = {}
     geometries: dict[int, PageGeometry] = {}
@@ -2461,9 +2700,11 @@ def _extract(
         geometries[pno] = geo
         ordered.extend(reading_order(page_blocks, geo))
     lines_first = _merge_caption_fragments(_merge_visual_lines(ordered, geometries))
-    # 页眉页脚不和正文的半句相接：书的页眉靠右排、不带句号，像一行的后半句；
-    # 论文的页眉停在 et al. 上，像没写完的半句。
-    # 页眉常在页顶窄带以下、版心以上，要带上版心才认得出
+    # Running headers and footers are not joined to half sentences of body text: a book's running header is
+    # set on the right without a period and looks like the second half of a line;
+    # a paper's running header stops at et al. and looks like an unfinished sentence.
+    # A running header often lies below the narrow strip at the top of the page and above the text frame, so it
+    # is only recognized with the text frame
     margin_geometries = [
         PageGeometry.from_page(doc[pno], [block.rect for block in by_page.get(pno, [])], frames[pno], scans[pno])
         for pno in range(doc.page_count)
@@ -2478,12 +2719,13 @@ def _extract(
 _DISPLAY_PROSE = 8
 
 
-# 量行距至少要这么多对相邻的正文行
+# Measuring the line spacing needs at least this many pairs of adjacent body lines
 _LINE_GAP_PAIRS = 20
 
 
 def _sized_lines(pages: list[dict]) -> list[list[tuple[pymupdf.Rect, float, int]]]:
-    """每页的横排文字行、按字数占多数的字号和字数，自上而下。"""
+    """The horizontal text lines of each page, with the size holding most characters and the character count,
+    from top to bottom."""
     rows: list[list[tuple[pymupdf.Rect, float, int]]] = []
     for data in pages:
         row: list[tuple[pymupdf.Rect, float, int]] = []
@@ -2501,7 +2743,7 @@ def _sized_lines(pages: list[dict]) -> list[list[tuple[pymupdf.Rect, float, int]
 
 
 def _body_size(rows: list[list[tuple[pymupdf.Rect, float, int]]]) -> float:
-    """正文字号：字数最多的字号。没有字时是 0。"""
+    """Body font size: the size with the most characters. 0 when there are no characters."""
     chars: dict[float, int] = {}
     for row in rows:
         for _box, size, count in row:
@@ -2510,9 +2752,10 @@ def _body_size(rows: list[list[tuple[pymupdf.Rect, float, int]]]) -> float:
 
 
 def _line_gap(pages: list[dict]) -> float:
-    """全文正文相邻两行之间的空，以字号计，取众数。行框高随字体的升部、降部变，
-    同样紧排的两行，有的字体量出来差 0.2 个字，有的叠上 0.2 个字。
-    判断下一行是不是紧接着排的，先扣掉这一份。"""
+    """The gap between adjacent body lines across the document, in units of font size, taking the mode. Line
+    box height varies with the font's ascender and descender: for two lines set equally tight, some fonts
+    measure a gap of 0.2 em and others an overlap of 0.2 em.
+    This amount is subtracted first when deciding whether the next line follows directly."""
     rows = _sized_lines(pages)
     body = _body_size(rows)
     if body <= 0:
@@ -2521,7 +2764,8 @@ def _line_gap(pages: list[dict]) -> float:
     for row in rows:
         lines = [box for box, size, _count in row if abs(size - body) <= 0.3]
         for index, box in enumerate(lines):
-            # 同一栏紧挨着的下一行：横向交叠过半，不和这一行同排
+            # The next line right below in the same column: overlapping horizontally by more than half, not on
+            # the same row as this line
             for below in lines[index + 1 :]:
                 if below.y0 > box.y1 + body * 3:
                     break
@@ -2538,7 +2782,7 @@ def _line_gap(pages: list[dict]) -> float:
 
 
 def _left_margins(data: dict) -> list[float]:
-    """这一页正文行的左缘（每栏一个）：至少三行长句从这里起笔。"""
+    """Left edges of body lines on this page (one per column): at least three long lines start there."""
     starts: list[float] = []
     for block in data.get("blocks", []):
         for line in block.get("lines", []):
@@ -2552,7 +2796,8 @@ def _left_margins(data: dict) -> list[float]:
 
 
 def _displayed(rect: pymupdf.Rect, spans: list[dict], margins: list[float]) -> bool:
-    """离开本栏左缘两个多字宽单独成行的式子。段落里接着上一行写的式子从左缘起笔。"""
+    """An expression on a line of its own, more than two ems from the left edge of its column. An expression
+    continuing the line above within a paragraph starts at the left edge."""
     left = [m for m in margins if m <= rect.x0 + 2]
     if not left:
         return False
@@ -2560,13 +2805,15 @@ def _displayed(rect: pymupdf.Rect, spans: list[dict], margins: list[float]) -> b
     return rect.x0 - max(left) > size * 2.5
 
 
-# 行间公式的关系符。加减乘号要是公式字体：正文字体的常是 Phoenix + Calcite 这种标题。
-# 箭头不算，幻灯片常用箭头连几个词
+# Relation symbols of display formulas. Plus, minus and times signs must be in a math font: in a body font
+# they are often in headings such as Phoenix + Calcite.
+# Arrows do not count; slides often use arrows to link a few words
 _RELATION_RE = re.compile(r"[=≤≥≈≡≠∝∈∉⊂⊆⊇≜]|(?:^|\s)[<>](?=\s|$)")
 
 
 def _cut_at_posts(group: list[int], items: list[tuple], posts: Sequence[pymupdf.Rect]) -> list[list[int]]:
-    """同一行上隔着一条竖线的两截不连成一句：章首的大号章号和标题挨得近，中间隔着竖线。"""
+    """Two pieces on the same row with a vertical rule between them are not joined into one sentence: a large
+    chapter number at the start of a chapter sits close to the title, with a vertical rule between."""
     parts = [group[:1]]
     for prev, cur in zip(group, group[1:]):
         left, right = items[prev][1], items[cur][1]
@@ -2585,7 +2832,7 @@ def _cut_at_posts(group: list[int], items: list[tuple], posts: Sequence[pymupdf.
 
 
 def _cut_runs(group: list[int], marked: set[int]) -> list[list[int]]:
-    """按是否在 marked 里切成连续的几段。"""
+    """Cut into consecutive runs by whether each index is in marked."""
     runs: list[list[int]] = []
     for index in group:
         if runs and (runs[-1][-1] in marked) == (index in marked):
@@ -2596,8 +2843,9 @@ def _cut_runs(group: list[int], marked: set[int]) -> list[list[int]]:
 
 
 def _main_span(lines: list[list[dict]]) -> dict:
-    """定块字号、颜色用的那一截：基线上正文字体里最长的一截。式子多的行里最长的常是下标
-    （d_model 的 model 用正文字体排成小字），按它算字号只有正文的一半，和上一行接不上。"""
+    """The piece that sets the block's size and color: the longest body-font piece on the baseline. In lines
+    with much math the longest piece is often a subscript (the model of d_model, set small in the body font);
+    a size taken from it is half the body size and does not join the line above."""
     kept: list[dict] = []
     for spans in lines:
         weights: Counter[int] = Counter()
@@ -2613,8 +2861,10 @@ def _main_span(lines: list[list[dict]]) -> dict:
 
 
 def _inside_kept_formula(block: TextBlock, kept: Sequence[pymupdf.Rect]) -> bool:
-    """一行、没有三个字母以上的词的碎片，大半落在留原字的式子行的框里：是式子的一截
-    （分数的分母 dx），不单独送翻。式子下面花括号上的标注（prior）是词，照翻。"""
+    """A one-line fragment with no word of three or more letters, mostly inside the box of a math line that
+    keeps the original text: it is a piece of the expression (the denominator dx of a fraction) and is not
+    sent for translation on its own. An annotation on a brace below an expression (prior) is a word and is
+    translated."""
     if len(block.line_rects) != 1 or re.search(r"[A-Za-z]{3,}", block.text) or CJK_RE.search(block.text):
         return False
     area = block.rect.get_area()
@@ -2622,7 +2872,8 @@ def _inside_kept_formula(block: TextBlock, kept: Sequence[pymupdf.Rect]) -> bool
 
 
 def _index_refs_tail(block: TextBlock, rect: pymupdf.Rect) -> bool:
-    """rect 是 block 末行折下来的一行页码：紧贴在末行下面，起笔落在末行的左右缘之间。"""
+    """rect is a line of page numbers wrapped from the last line of block: right below the last line, starting
+    between its left and right edges."""
     last = block.line_rects[-1]
     return (
         -block.size * 0.3 <= rect.y0 - last.y1 <= block.size * 0.5 and last.x0 - block.size * 0.5 <= rect.x0 < last.x1
@@ -2638,13 +2889,18 @@ def _wraps_from_above(
     frame: TextFrame | None,
     index_page: bool = False,
 ) -> bool:
-    """以小写正文词起头、从上一行正文的左缘接着写的式子行（and W^O ∈ ℝ^{hd_v×d_model}.）是上一句
-    折下来的，不是单独排的式子：上一行写到本栏右缘、没写完一句，这一行紧贴在它下面。
-    上一行以连字符断开的半个词收尾时，这一行是那个词的后半截。索引页上比上一行缩进得深的
-    是上一条的续行（pipe in regular expressions | as, 51）。
-    居中排的图注末行（significant (t-test with p ≤ 0.01).）和上一行中线对齐。
-    叠着排的几行式子（e_t = Ex_t、h_t = g(…)）写不到右缘。
-    索引条目停在逗号上，页码折到下一行、分在下一块里：只有页码的一行紧贴在下面，也接上去。"""
+    """A math line that starts with a lowercase body word and continues from the left edge of the body line
+    above (and W^O ∈ ℝ^{hd_v×d_model}.) is wrapped from the sentence above, not a display expression: the line
+    above runs to the right edge of the column without finishing a sentence, and this line sits right below
+    it.
+    When the line above ends with half a word broken by a hyphen, this line is the second half of that word. On
+    an index page, a line indented deeper than the line above is a continuation of the previous entry (pipe in
+    regular expressions | as, 51).
+    The last line of a centered caption (significant (t-test with p ≤ 0.01).) shares the center line of the
+    line above.
+    Stacked expression lines (e_t = Ex_t, h_t = g(...)) do not reach the right edge.
+    An index entry stops at a comma and its page numbers wrap to the next line, in the next block: a line of
+    only page numbers right below is joined as well."""
     page_blocks = [block for block in blocks if block.page == pno and block.line_rects]
     if index_page and _INDEX_REFS_ONLY_RE.match(text.strip()):
         return any(block.text.rstrip().endswith(",") and _index_refs_tail(block, rect) for block in page_blocks[-1:])
@@ -2652,23 +2908,27 @@ def _wraps_from_above(
     for block in reversed(page_blocks):
         last = block.line_rects[-1]
         if rect.y0 - last.y1 > 0.6 * block.size:
-            # 块按阅读顺序排，再往前的都在更上面或者在别的栏
+            # Blocks are in reading order; earlier ones are all higher up or in another column
             continue
-        # 折下来的是一行：底下再叠几行的是另排的式子。行内分式的分子分母叠着，比一行高
+        # What wraps is one line: with more lines stacked below, it is a separately set expression. The
+        # stacked numerator and denominator of an inline fraction are taller than one line
         if (
             rect.height > block.size * (1.6 if worded else 2.5)
             or rect.y0 - last.y1 < -0.5 * block.size
             or _ends_sentence(block.text)
         ):
             continue
-        # 靠左排的上一行写到本栏右缘。居中排的段落逐行成块，上一行和它上面那行一样宽，是排满的行
+        # The left-aligned line above runs to the right edge of the column. In a centered paragraph each line
+        # is a block, and a line above as wide as the line above it is a full line
         left = (
             abs(block.rect.x0 - rect.x0) <= block.size * 0.5
             and last.x1 >= _column_right(block.rect.x0, block.size, rows, frame) - block.size
         )
         if not worded:
-            # 不以词起头的只认分子分母叠着的行内分式，靠左、紧贴着上一行（the odds ratio | p/(1−p):）。
-            # 单独排的式子上面留着空。一行高的数字、记号是表格、图里的
+            # A line not starting with a word is accepted only as an inline fraction with stacked numerator
+            # and denominator, left-aligned and right below the line above (the odds ratio | p/(1−p):).
+            # A display expression has space above it. Numbers and symbols one line tall belong to tables and
+            # figures
             if left and rect.height > block.size * 1.6 and rect.y0 - last.y1 <= 0.3 * block.size:
                 return True
             continue
@@ -2680,8 +2940,10 @@ def _wraps_from_above(
             for line in other.line_rects
             if line is not last
         )
-        # 上一行停在连字符断开的半个词上（expres- | sions, 50, 65）：不管缩进多少都是接着写的。
-        # 索引条目的续行悬挂缩进，剩下的半个词带着页码，字母少，像一行页码
+        # The line above stops at half a word broken by a hyphen (expres- | sions, 50, 65): it continues
+        # whatever the indent.
+        # A continuation line of an index entry has a hanging indent, and the remaining half word with its page
+        # numbers has few letters and looks like a line of page numbers
         broken = (
             re.search(r"[A-Za-z]-$", block.text.rstrip()) is not None
             and block.rect.x0 - block.size * 0.5 <= rect.x0 < last.x1
@@ -2693,8 +2955,9 @@ def _wraps_from_above(
 
 
 def _column_right(x0: float, size: float, rows: Sequence[pymupdf.Rect], frame: TextFrame | None) -> float:
-    """从 x0 起笔的块所在那一栏的右缘：本页和它同一左缘起笔的行有四成以上止于同一处（两端对齐）。
-    索引、代码这类参差的行对不出这条缘，用版心右缘。"""
+    """Right edge of the column of a block starting at x0: 40% or more of the lines on this page starting at
+    the same left edge end at the same x (justified).
+    Ragged lines such as indexes and code give no such edge, and the right edge of the text frame is used."""
     edge = _voted_right(x0, size, rows)
     if edge is not None:
         return edge
@@ -2702,7 +2965,8 @@ def _column_right(x0: float, size: float, rows: Sequence[pymupdf.Rect], frame: T
 
 
 def _voted_right(x0: float, size: float, rows: Sequence[pymupdf.Rect]) -> float | None:
-    """本页从 x0 起笔的行有四成以上止于同一处时，那一处就是右缘。对不出来返回 None"""
+    """When 40% or more of the lines on this page starting at x0 end at the same x, that x is the right edge.
+    Returns None when there is none"""
     ends = Counter(round(row.x1) for row in rows if abs(row.x0 - x0) <= size)
     total = sum(ends.values())
     if ends:
@@ -2718,26 +2982,30 @@ def _near_votes(counter: Counter[int], value: int, near: int = 1) -> int:
 
 
 def _untranslatable(spans: list[dict], text: str, min_prose: int = 3, displayed: bool = False) -> bool:
-    """纯符号、纯公式、几乎没有字母的行不送翻，留原字。
+    """Lines that are pure symbols, pure formula, or have almost no letters are not sent for translation and
+    keep the original text.
 
-    只跳过"纯公式行"：数学字符多且几乎没有正文词。公式外面有三个正文词就是一句话
-    （If … then … Otherwise …），照翻，公式走占位符。公式里的字母不算词：
-    点阵字的数学符号认出来的字母是乱的。
+    Only "pure formula lines" are skipped: many math characters and almost no body words. Three body words
+    outside the formula make a sentence (If ... then ... Otherwise ...), which is translated, with the formula
+    going through a placeholder. Letters inside a formula are not words:
+    letters recognized from math symbols in bitmap fonts are garbage.
 
-    单独排的一行带算符、没有一个正文词的也是式子。用正文斜体写变量的书
-    （Q = H_dec W^Q、ŷ = argmax_{w∈V} P(w|w_<t)）按字体认不出公式字符。
+    A line set on its own with an operator and not a single body word is also an expression. In books that set
+    variables in body italics (Q = H_dec W^Q, ŷ = argmax_{w∈V} P(w|w_<t)), formula characters cannot be
+    recognized by font.
     """
     if NO_TEXT_RE.match(text):
         return True
     if displayed and _OPERATOR_RE.search(text) and not _prose_words(spans, text):
         return True
     total = sum(len(span["text"]) for span in spans)
-    # 空白 span 已经滤掉，拼的时候补上空格，不然 It、follows 会拼成一个词
+    # Blank spans have been filtered out, so join with spaces, or It and follows would become one word
     prose = _prose_units(" ".join(span["text"] for span in spans if not _span_is_math(span)))
     if _math_chars(spans) > total * 0.3 and prose < min_prose:
         return True
-    # 正文词够数就是句子（Therefore, … It follows），公式再多、字母占比再低也照翻。
-    # 字母少的规则是给标签、数字行用的
+    # Enough body words make a sentence (Therefore, ... It follows), translated however much formula it has and
+    # however low its share of letters.
+    # The few-letters rule is meant for labels and lines of numbers
     if prose >= max(min_prose, 3):
         return False
     letters = sum(c.isalpha() for c in text)
@@ -2748,9 +3016,10 @@ _MATH_NAMES = frozenset(_OPERATOR_NAMES.split("|")) | {"argmax", "argmin", "soft
 
 
 def _prose_words(spans: list[dict], text: str) -> list[str]:
-    """行里前后有空格隔开、正文字体写的词（带小写字母、两个字母以上）。
-    和符号连写的（H_dec、argmax_{char∈Alphabet}）、全大写的矩阵名（HU）、
-    算子名（argmax、log）不算。"""
+    """Words in the line separated by spaces on both sides and written in a body font (with lowercase letters,
+    two or more letters).
+    Words written together with symbols (H_dec, argmax_{char∈Alphabet}), all-capital matrix names (HU) and
+    operator names (argmax, log) do not count."""
     upright = set()
     for span in spans:
         if not _span_is_math(span):
@@ -2771,11 +3040,15 @@ def _prose_words(spans: list[dict], text: str) -> list[str]:
 
 
 def _merge_cells(blocks: list[TextBlock], unchecked: set[int]) -> list[TextBlock]:
-    """同一格里的几块并成一块，按从上到下、从左到右排。格子是一个翻译单元。
+    """Merge the blocks in one cell into one block, ordered top to bottom and left to right. A cell is one
+    translation unit.
 
-    PyMuPDF 会把一格里的字分进几个块（行号小一号、公式另成一块）。分开送翻时半句里
-    正文词太少，被当成公式留下英文。unchecked 里的块还没判断过是不是公式，并完再判断。
-    一格是一句完整的话，有一个正文词就翻（for k = 1 … K do），纯公式、纯数字的格子留原字。
+    PyMuPDF splits the text of a cell into several blocks (line numbers one size smaller, formulas in a block
+    of their own). Sent for translation separately, each half sentence has too few body words and is taken as
+    a formula, leaving the English. Blocks in unchecked have not been tested for formulas yet; the test runs
+    after merging.
+    A cell is one complete sentence and is translated when it has a single body word (for k = 1 ... K do);
+    cells of pure formula or pure numbers keep the original text.
     """
     cells: dict[tuple, list[TextBlock]] = {}
     for block in blocks:
@@ -2807,8 +3080,9 @@ def _merge_cells(blocks: list[TextBlock], unchecked: set[int]) -> list[TextBlock
 
 
 def _cell_groups(parts: list[TextBlock]) -> list[list[TextBlock]]:
-    """格子里挨着的几截是一句话。隔开两个字宽、或空出一行的是另一句：
-    流程图的框被认成格子时，框里的几个节点标签不能并成一句。"""
+    """Adjacent pieces in a cell are one sentence. A piece two ems away, or a blank line apart, is another
+    sentence: when the boxes of a flowchart are taken as cells, the node labels in a box must not be merged
+    into one sentence."""
     groups: list[list[TextBlock]] = []
     for part in parts:
         near = [group for group in groups if any(_close_in_cell(part, other) for other in group)]
@@ -2830,9 +3104,11 @@ def _close_in_cell(a: TextBlock, b: TextBlock) -> bool:
 
 
 def _displayed_in_cell(part: TextBlock, parts: list[TextBlock]) -> bool:
-    """格子里自成一体的式子：单独占一行、比格子里的字缩进两个多字宽（算法一步下面居中的公式），
-    或者和同一行的字隔着两个字宽以上（算法一步的式子和右边的注释）。
-    留原字，不并进句子里：并进去以后 E、Var 这些字母被当成词翻，行间公式也被压成一行高。"""
+    """A self-contained expression in a cell: on a line of its own and indented more than two ems from the
+    text in the cell (a centered formula under an algorithm step), or more than two ems from the text on the
+    same row (the expression of an algorithm step and the comment to its right).
+    It keeps the original text and is not merged into the sentence: once merged, letters such as E and Var are
+    translated as words, and the display formula is squeezed to one line height."""
     others = [other for other in parts if other is not part]
     if not others or not _untranslatable(_block_spans(part), part.text):
         return False
@@ -2843,7 +3119,7 @@ def _displayed_in_cell(part: TextBlock, parts: list[TextBlock]) -> bool:
         > min(other.rect.height, part.rect.height) * 0.35
     ]
     if beside:
-        # 行号也不成句，但不是式子，留在这一步里
+        # A line number is not a sentence either, but it is not an expression, so it stays in this step
         if not any(_span_is_math(span) for span in _block_spans(part)):
             return False
         texts = [other for other in beside if not _untranslatable(_block_spans(other), other.text)]
@@ -2855,7 +3131,8 @@ def _displayed_in_cell(part: TextBlock, parts: list[TextBlock]) -> bool:
 
 
 def _reading_sorted(parts: list[TextBlock]) -> list[TextBlock]:
-    """同一行的几截按左右排，不同行按上下排。小一号的行号框顶低一点，不能按框顶排。"""
+    """Pieces on the same row are ordered left to right, different rows top to bottom. The box of a smaller
+    line number has a slightly lower top, so box tops cannot be used for ordering."""
     rows: list[list[TextBlock]] = []
     for part in sorted(parts, key=lambda item: (item.rect.y0 + item.rect.y1) / 2):
         center = (part.rect.y0 + part.rect.y1) / 2
@@ -2889,13 +3166,13 @@ def _block_spans(block: TextBlock) -> list[dict]:
 
 
 def _vivid(color: int) -> bool:
-    """鲜明的颜色：RGB 三个分量拉得开。黑、灰不算"""
+    """A vivid color: the three RGB components are far apart. Black and grey do not count"""
     rgb = [(color >> shift) & 0xFF for shift in (16, 8, 0)]
     return max(rgb) - min(rgb) >= 0x60
 
 
 def _vivid_share(spans: Sequence[dict]) -> float:
-    """字母里鲜明颜色的占比，没有字母时为 0"""
+    """Share of letters in vivid colors, 0 when there are no letters"""
     letters = sum(char.isalpha() for span in spans for char in str(span.get("text") or ""))
     vivid = sum(
         char.isalpha() for span in spans if _vivid(int(span.get("color") or 0)) for char in str(span.get("text") or "")
@@ -2904,12 +3181,13 @@ def _vivid_share(spans: Sequence[dict]) -> float:
 
 
 def _mono_span(span: dict) -> bool:
-    """等宽字体：按字体名认，也认 PDF 里的等宽标志（txtt 这类名字不带 Mono 的字体）。"""
+    """Monospaced font: recognized by font name, and also by the monospace flag in the PDF (fonts such as txtt
+    whose names lack Mono)."""
     return bool(MONO_FONT_RE.search(str(span.get("font") or "")) or int(span.get("flags") or 0) & 8)
 
 
 def _plain_words(block: TextBlock) -> int:
-    """公式外的正文词数。"""
+    """Number of body words outside formulas."""
     return _prose_units(
         " ".join(
             str(span.get("text") or "") for line in block.span_lines or [] for span in line if not _span_is_math(span)
@@ -2944,7 +3222,7 @@ def _block_slice(block: TextBlock, start: int, end: int) -> TextBlock:
 
 
 def _affiliation_neighbor(blocks: list[TextBlock], block: TextBlock, line: pymupdf.Rect) -> bool:
-    """这一行右边有没有并排的短单位行。"""
+    """Whether a short affiliation line sits beside this line on its right."""
     for other in blocks:
         if other is block or other.page != block.page or other.clip is not None:
             continue
@@ -2960,7 +3238,8 @@ def _affiliation_neighbor(blocks: list[TextBlock], block: TextBlock, line: pymup
 
 
 def _split_affiliation_tails(blocks: list[TextBlock]) -> list[TextBlock]:
-    """作者行末尾的单位如果和旁边的单位并排，拆成独立块。否则译文会盖住它们。"""
+    """When the affiliation at the end of an author block sits beside other affiliations, split it into a
+    separate block. Otherwise the translation would cover them."""
     out: list[TextBlock] = []
     for block in blocks:
         spans = block.span_lines
@@ -2995,14 +3274,15 @@ def _absorb_block(p: TextBlock, b: TextBlock):
         p.span_lines.extend(b.span_lines)
     else:
         p.span_lines = None
-    if len(b.text) > len(p.text) - len(b.text):  # 风格跟随占多的片段
+    if len(b.text) > len(p.text) - len(b.text):  # Style follows the larger fragment
         p.size, p.color, p.bold = b.size, b.color, b.bold
-    # 并好的块在 b 的末行收住：b 是一个索引条目的末行，合起来也是
+    # The merged block ends at b's last line: when b is the last line of an index entry, so is the merged block
     p.entry = b.entry
 
 
 def _cjk_wrap(prev: TextBlock, nxt: TextBlock) -> bool:
-    """中文换行不分大小写，也不按词数计。新段有约 2em 缩进，短标签宽度不够。"""
+    """Chinese line breaks have no letter case and are not counted in words. A new paragraph has an indent of
+    about 2 em, and a short label is not wide enough."""
     head = nxt.text.lstrip()[:1]
     if not head or CJK_RE.search(head) is None:
         return False
@@ -3015,15 +3295,18 @@ def _cjk_wrap(prev: TextBlock, nxt: TextBlock) -> bool:
     return len(CJK_RE.findall(prev.text)) >= 8 or prev.rect.width >= prev.size * 12
 
 
-# 一行一句的清单：至少这么多行
+# A list with one sentence per line: at least this many lines
 _LIST_RUN = 3
 
 
 def _line_lists(blocks: list[TextBlock], frames: Sequence[TextFrame | None]) -> set[int]:
-    """一行一句的清单（幻灯片上的例句）里的块。几块各占一行、左缘对齐、行距一样，
-    一半以上的换行处，上一行后面还放得下下一行的第一个词，或者每行同一个词起头：是逐行排的，不是一段折出来的。
-    段落按行折，上一行放得下的词不会挪到下一行。绕图排的几行止于图边，同一处止笔的行够多，
-    栏的右缘按图边算（见 _column_right）。"""
+    """Blocks in a list with one sentence per line (examples on a slide). Several blocks, one line each,
+    aligned on the left with equal line spacing, where at more than half of the line breaks the first word of
+    the next line would still fit after the line above, or every line starts with the same word: set line by
+    line, not wrapped from one paragraph.
+    A paragraph wraps line by line, and a word that fits on the line above is not moved to the next. Lines set
+    around a figure end at the figure's edge; enough lines end at the same x that the column's right edge is
+    taken at the figure's edge (see _column_right)."""
     rows_of: dict[int, list[pymupdf.Rect]] = {}
     for block in blocks:
         rows_of.setdefault(block.page, []).extend(block.line_rects or [block.rect])
@@ -3069,8 +3352,9 @@ def _breaks_early(
     right_of: Callable[[pymupdf.Rect, float], float],
     at_least: int = 1,
 ) -> bool:
-    """一行一行（框、文字、字号）里，一半以上、至少 at_least 处换行，上一行后面还放得下下一行的第一个词。
-    right_of 给出一行能排到的右缘。"""
+    """Over rows of (box, text, size), at more than half of the line breaks, and at least at_least of them, the
+    first word of the next line would still fit after the line above.
+    right_of gives the right edge a line can reach."""
     early = 0
     for (upper, _text, size), (_rect, text, _size) in zip(rows, rows[1:]):
         right = right_of(upper, size)
@@ -3081,13 +3365,19 @@ def _breaks_early(
 
 
 def _cut_line_list(group: list[int], items: list[tuple], page_rows: Sequence[pymupdf.Rect]) -> list[list[int]]:
-    """PyMuPDF 常把一行一句的清单（例句、查询）归成一块。和跨块的清单同一个判法（见 _line_lists）：
-    几行各占一行、左缘对齐、同字号、行距一样，一半以上的换行处上一行还放得下下一行的第一个词，按行拆开。
-    右缘按这一块最长的一行算：栏宽从别的行估，图边、表格里、两栏里的段落都会估宽；
-    按块里最长的行算，自动折出来的段落一处也不会早换行。绕图排的几行止于图边：本页同一左缘起笔、
-    同一处止笔的行不止一行，算排满。
-    同一行分成几条的（表格的行名和后面几格）先并成一行再比。各行同一处另起一列（hen | +female），
-    或者每行同一个词起头（x_i contains ..., x_i's word shape），是表格和清单，也按行拆开。"""
+    """PyMuPDF often puts a list with one sentence per line (examples, queries) into one block. The test is
+    the same as for lists across blocks (see _line_lists): several lines, one per row, aligned on the left,
+    same size, equal line spacing, and at more than half of the line breaks the first word of the next line
+    would still fit after the line above; such a block is split by line.
+    The right edge is taken from the longest line of this block: a column width estimated from other lines
+    comes out too wide for paragraphs at figure edges, inside tables and in two-column layouts;
+    measured against the block's longest line, an automatically wrapped paragraph never breaks early. Lines set
+    around a figure end at the figure's edge: when more than one line on the page starts at the same left
+    edge and ends at the same x, the line counts as full.
+    A row split into several pieces (a table's row label and the cells after it) is merged into one line
+    before comparing. When every line starts another column at the same x (hen | +female), or every line
+    starts with the same word (x_i contains ..., x_i's word shape), it is a table or list and is also split by
+    line."""
     if len(group) < _LIST_RUN:
         return [group]
     rows: list[list[int]] = []
@@ -3126,12 +3416,14 @@ def _cut_line_list(group: list[int], items: list[tuple], page_rows: Sequence[pym
         return sum(1 for row in page_rows if abs(row.x1 - rect.x1) <= 1 and abs(row.x0 - rect.x0) <= size) >= 2
 
     texts = [" ".join(items[i][0].strip() for i in row) for row in rows]
-    # 一块里只有一处早换行的，多半是段末短行接着下一段、下一个小标题
+    # A block with only one early line break is usually the short last line of a paragraph followed by the next
+    # paragraph or the next subheading
     lines = [(rect, text, size) for rect, text in zip(rects, texts)]
     early = _breaks_early(lines, lambda rect, _size: rect.x1 if full(rect) else widest, at_least=2)
     if not (early or _column_rows(rows, items, size) or _same_opening(texts)):
         return [group]
-    # 排满的一行后面是句中折行，接着；其余换行处都拆开
+    # After a full line comes a wrap inside a sentence, so the lines stay together; every other line break is
+    # split
     parts = [list(rows[0])]
     for rect, row in zip(rects, rows[1:]):
         if full(rect):
@@ -3142,13 +3434,19 @@ def _cut_line_list(group: list[int], items: list[tuple], page_rows: Sequence[pym
 
 
 def _cut_item_breaks(group: list[int], items: list[tuple], page_rows: Sequence[pymupdf.Rect]) -> list[list[int]]:
-    """列表项没写到栏的右缘就换了行，下一行的第一个词明明放得下：下一行是另起的一行
-    （条目下面列的例子 American, Airlines, Tim, Wagner …），拆开。自动折行是上一行放不下才折下来的。
-    栏的右缘按列表项左边三个字宽以内段落的起笔投票（见 _voted_right）。条目的行参差、投不出来的不拆：
-    版心右缘在两栏的页上是另一栏的右缘，按它量每一行都像没写满。
-    条目写满了一行时看不出早换行。上面的行没有一个彩色的字，这一行字母大半是鲜明的颜色，
-    也是另起一行列的例子（M1: NAME [it or he would be PRONOUN]），拆开。
-    只看弹点起头的条目：A.、12. 起头的可能是参考文献，姓名缩写像字母编号，题名常是彩色的链接，行尾也参差。"""
+    """A list item breaks the line before reaching the right edge of the column although the first word of the
+    next line would fit: the next line is a new line of its own (examples listed under an entry, American,
+    Airlines, Tim, Wagner ...), so split it. Automatic wrapping only moves a word down when the line above
+    cannot hold it.
+    The right edge of the column is voted from the starts of paragraphs within three ems left of the list item
+    (see _voted_right). When the entry's lines are ragged and no edge comes out of the vote, nothing is split:
+    on a two-column page the right edge of the text frame is the right edge of the other column, and measured
+    against it every line looks short.
+    When an entry fills a whole line, an early break cannot be seen. When the lines above have not a single
+    colored character and most letters on this line are in a vivid color, it is also an example listed on a
+    line of its own (M1: NAME [it or he would be PRONOUN]), so split it.
+    Only entries starting with a bullet are considered: one starting with A. or 12. may be a reference, where
+    name initials look like letter labels, titles are often colored links, and line ends are ragged too."""
     if len(group) < 2 or not _MARK_ITEM_RE.match(items[group[0]][0]):
         return [group]
     rows: list[list[int]] = []
@@ -3188,8 +3486,10 @@ def _cut_item_breaks(group: list[int], items: list[tuple], page_rows: Sequence[p
 
 
 def _column_rows(rows: list[list[int]], items: list[tuple], size: float) -> bool:
-    """每一行在同一处另起一段字（行首以外），至少一行在那儿前面空出一个字宽以上：是表格的列。
-    段落折出来的几行，词的起点不会每行都落在同一处，词间也只有一个空格宽。"""
+    """Every line starts a new run of text at the same x (other than the line start), and at least one line has
+    a gap of more than one em before it: a table column.
+    In lines wrapped from a paragraph, word starts do not fall at the same x on every line, and the space
+    between words is only one space wide."""
     starts: list[list[tuple[float, float]]] = []
     for row in rows:
         spans = sorted((span for i in row for span in items[i][2]), key=lambda span: span["bbox"][0])
@@ -3213,7 +3513,8 @@ def _column_rows(rows: list[list[int]], items: list[tuple], size: float) -> bool
 
 
 def _same_opening(texts: Sequence[str]) -> bool:
-    """每行开头是同一个词（只比词里的字母数字，x_i 和 x_i's 算同一个）：是逐行排的清单。"""
+    """Every line starts with the same word (comparing only letters and digits, so x_i and x_i's are the
+    same): a list set line by line."""
     heads = []
     for text in texts:
         match = re.match(r"\w+", text.strip())
@@ -3228,15 +3529,21 @@ def _merge_continuations(
     listed: Collection[int] = frozenset(),
     margins: Collection[int] = frozenset(),
 ) -> list[TextBlock]:
-    """合并同页内被公式/碎片拆断的段落续行：上行无句末标点、下行小写（或闭括号）
-    开头、同左 margin、行距正常，就是同一段被拆开的两行。各翻各的会产出半截译文，
-    渲染时在断点强制换行（'（如 | 序列）'）。中文换行左缘对齐、上行够长时同样接上。
-    英文大写开头的换行仍分开，那和下一句分不开；上一行停在 and、of、the 这类词上的除外。
-    段落绕着图排时，图注在阅读顺序里会夹在两半中间。夹着的这块在上一半下面、
-    下一半旁边时，跳过它和再前面一块比。margins 是页眉页脚，不和上下的块相接。"""
+    """Merge continuation lines of a paragraph that formulas or fragments broke apart within a page: when the
+    line above has no sentence-final punctuation, the line below starts in lowercase (or with a closing
+    bracket), the left margin is the same and the line spacing is normal, they are two lines of one paragraph
+    split apart. Translated separately they produce half translations, and rendering forces a line break at
+    the cut ("（如 | 序列）"). Chinese line breaks are joined the same way when the left edges align and the
+    line above is long enough.
+    English line breaks before a capital stay separate, since they cannot be told from the next sentence;
+    the exception is a line above that stops at a word such as and, of or the.
+    When a paragraph is set around a figure, the caption falls between the two halves in reading order. When
+    that block lies below the first half and beside the second, it is skipped and the block before it is
+    compared. margins are running headers and footers, which are not joined to the blocks above and below."""
     out: list[TextBlock] = []
     indents = _indents_paragraphs(blocks)
-    # 段首缩进的文档里，句末下面齐平起笔的是图注、例句、式子后面的半句，量不出段间空白
+    # In documents with paragraph indents, a line starting flush below a sentence end is a caption, an example
+    # or the half sentence after an expression, so no paragraph spacing can be measured
     space = 0.0 if indents else _paragraph_space(blocks)
     measure = _body_measure(blocks) if indents or space else 0.0
     for index, b in enumerate(blocks):
@@ -3245,14 +3552,20 @@ def _merge_continuations(
             hosts.append(out[-2])
         for p in hosts:
             first = b.text[:1]
-            # 大字号标题碎片（'…with' + 'Recurrent Neural Networks'）：换行的第二行
-            # 往往大写开头、也不带句读。仅当两行左边界明显漂移（居中对齐的标题行）
-            # 才并：左对齐的大字号块（小标题、署名行）各自独立。
-            # 署名在标题下面隔开将近一行，左缘也会漂移，不能当成标题的下一行。
-            # 带列表标记的是幻灯片的下一项，左缘随层级变，也不是标题的下一行。
-            # 标题换行的两行左右总有交叠，横向错开的是旁边的标签。
-            # 大字号比这份文档的正文字号算：幻灯片的正文就有三十来磅，子项缩进排，不是标题换行。
-            # 换行的标题两行一样大。紧接着大一号的是下一级标题（8.4.4 小节名下面的 8.5 Summary）
+            # Fragments of a large heading ('...with' + 'Recurrent Neural Networks'): the second line of the
+            # wrap often starts with a capital and has no punctuation. Merge only when the left edges of the two
+            # lines clearly shift (centered heading lines): left-aligned large blocks (subheadings, byline
+            # lines) stay separate.
+            # A byline sits almost a line below the title and its left edge also shifts, but it is not the
+            # title's next line.
+            # A line with a list marker is the next item of a slide, whose left edge changes with the level; it
+            # is not the title's next line either.
+            # The two lines of a wrapped heading always overlap horizontally; one offset sideways is a label
+            # beside it.
+            # Large is measured against this document's body size: slide body text is around thirty points,
+            # and indented subitems are not a wrapped heading.
+            # Both lines of a wrapped heading are the same size. One size larger right after is the next
+            # heading level (8.5 Summary under the 8.4.4 subsection name)
             title_frag = (
                 p.size >= max(12, p.body_size * 1.1)
                 and p.size * 0.7 <= b.size <= p.size * 1.1
@@ -3264,13 +3577,16 @@ def _merge_continuations(
                 and not _ends_sentence(b.text)
             )
             y_close = -0.9 * p.size <= b.rect.y0 - p.rect.y1 - p.line_gap * p.size < 1.4 * p.size
-            # 悬挂缩进大约 2–3em。2em 卡太紧时，特征列表的续行拆成两段，
-            # 短行再被单独缩小。向左跳仍用 2em，避免把另一栏接进来。
+            # A hanging indent is about 2-3 em. With a tight 2 em limit, continuation lines of a feature list are
+            # split into two paragraphs and the short line is then shrunk on its own. A jump to the left still
+            # uses 2 em, so that another column is not joined.
             x_jump = b.rect.x0 - p.rect.x0
             x_close = abs(x_jump) < 2 * p.size or 0 < x_jump <= max(4 * p.size, 36)
-            # 居中排的段落（表格说明）末行短，两边都缩进，和上一行中线对齐，按正常行距紧贴着上一行。
-            # 段落下面居中的公式行上下空得多，也不止一行或者不成句。只剩一两个词的末行
-            # （图注的 learning.）全是正文词、以句号收尾，也不是公式
+            # The last line of a centered paragraph (a table note) is short, indented on both sides, shares the
+            # center line of the line above, and sits right below it at normal line spacing.
+            # A centered formula line below a paragraph has more space around it, and spans more than one line
+            # or is no sentence. A last line of only one or two words (the learning. of a caption) that is all
+            # body words and ends with a period is not a formula either
             last_y1 = p.line_rects[-1].y1 if p.line_rects else p.rect.y1
             words = b.text.split()
             centered_tail = (
@@ -3282,8 +3598,9 @@ def _merge_continuations(
                 and not _list_item(b.text)
                 and (_prose_units(b.text) >= 3 or (_ends_sentence(b.text) and _prose_units(b.text) == len(words)))
             )
-            # 行尾冒号的上下两行都撑到右缘，是句中换行（"is called interpolation: | computing ..."）。
-            # 下一行没撑满的是冒号引出的例句、列表
+            # When the lines on both sides of a colon at a line end reach the right edge, it is a wrap inside a
+            # sentence ("is called interpolation: | computing ...").
+            # A next line that is not full is an example or list introduced by the colon
             last_x1 = p.line_rects[-1].x1 if p.line_rects else p.rect.x1
             next_x1 = b.line_rects[0].x1 if b.line_rects else b.rect.x1
             colon_wrap = (
@@ -3291,12 +3608,16 @@ def _merge_continuations(
                 and abs(last_x1 - next_x1) <= p.size
                 and last_x1 >= max(p.rect.x1, b.rect.x1) - p.size
             )
-            # 以 f(x) 收尾算句末，是为了单独排的式子下面的 where 不接上来。
-            # 末行从下一行的左缘一直排到右缘、下一行又是正文词起头的，是句中折行，式子只是落在行尾
+            # Ending with f(x) counts as a sentence end so that a where below a display expression is not joined.
+            # When the last line runs from the next line's left edge to the right edge and the next line starts
+            # with a body word, it is a wrap inside a sentence and the expression just falls at the line end
             call_wrap = _ends_in_call(p.text.rstrip()) and _opens_with_word(b) and _wraps_into(p, b)
-            # 以行内式子起头、后面接着正文的一行（Adam with | 1/√t decay on its stepsize）是句中折行：
-            # 从栏边起笔，或者行首的式子碎片另成了块，剩下的排到右缘、下一行回到栏边。
-            # 单独排的式子缩进、不到右缘，也没有几个正文词；上标编号起头的脚注字号小一号
+            # A line that starts with an inline expression followed by body text (Adam with | 1/√t decay on its
+            # stepsize) is a wrap inside a sentence: it starts at the column edge, or the expression fragment at
+            # its start became a block of its own while the rest runs to the right edge and the next line
+            # returns to the column edge.
+            # A display expression is indented, does not reach the right edge and has few body words; a footnote
+            # starting with a superscript number is one size smaller
             first_x0 = b.line_rects[0].x0 if b.line_rects else b.rect.x0
             rows = sorted(_visual_lines(b), key=lambda row: row[0].y0) if b.line_rects else []
             math_wrap = (
@@ -3312,8 +3633,10 @@ def _merge_continuations(
                     )
                 )
             )
-            # 句子最后的行内分式折到下一行行首，后面没有正文词（the odds ratio | p/(1−p):）：
-            # 分子分母叠着比一行高，从栏边起笔，紧贴着排到右缘的上一行。单独排的式子缩进，上面也留着空
+            # An inline fraction at the end of a sentence wraps to the start of the next line with no body words
+            # after it (the odds ratio | p/(1−p):): the stacked numerator and denominator are taller than one
+            # line, start at the column edge, and sit right below a line above that runs to the right edge. A
+            # display expression is indented and has space above it
             formula_tail = (
                 bool(b.line_rects)
                 and _plain_words(b) == 0
@@ -3322,18 +3645,23 @@ def _merge_continuations(
                 and last_x1 >= p.rect.x1 - p.size
                 and b.rect.y0 - last_y1 <= 0.3 * p.size
             )
-            # 句中的缩写（Brants et al. | (2007)）不是句末。左括号起头的续行是引文年份、插入语，
-            # 不比上一段最左的一行靠右（首行缩进的段落），或者和其中一行同一左缘（悬挂缩进的条目续行），
-            # 或者居中接在居中段落后面。
-            # (a) 这样的编号是下一项，(2.11) 是例句、公式的编号；
-            # 缩进的是单独排的式子（LUNAR 的逻辑式），往右错开的是表头一列列的 (Acc)。
-            # 粗体标签起头的条目只有一行时，没有续行可比，悬挂缩进一两个字宽的也是它的续行
+            # An abbreviation inside a sentence (Brants et al. | (2007)) is not a sentence end. A continuation
+            # line starting with an opening parenthesis is a citation year or a parenthetical when it is no
+            # further right than the leftmost line of the paragraph above (a paragraph with a first-line
+            # indent), shares a left edge with one of its lines (continuation of an entry with a hanging indent),
+            # or is centered below a centered paragraph.
+            # A label such as (a) is the next item, and (2.11) is the number of an example or formula;
+            # an indented one is a display expression (a LUNAR logical form), and one offset to the right is a
+            # column header such as (Acc).
+            # When an entry starting with a bold label has only one line, there is no continuation line to
+            # compare with, and a line with a hanging indent of one or two ems is also its continuation
             label_hang = (
                 bool(p.span_lines)
                 and 0 < b.rect.x0 - p.rect.x0 <= 3 * p.size
                 and _label_lead([span for span in p.span_lines[0] if str(span.get("text") or "").strip()])
             )
-            # 括号还没合上，下一行在第一句里合上它（(see e.g. | Ghosal et al., 2000)、(Chérief- | Abdellatif …)）
+            # The bracket is still open and the next line closes it in its first sentence
+            # ((see e.g. | Ghosal et al., 2000), (Chérief- | Abdellatif ...))
             bracketed = _unclosed_bracket(p.text) and _closes_first(b.text)
             open_paren = (
                 first == "("
@@ -3346,13 +3674,15 @@ def _merge_continuations(
                     or any(abs(b.rect.x0 - rect.x0) <= p.size * 0.5 for rect in p.line_rects)
                 )
             )
-            # 上一行停在 and、of 上，下一行哪怕大写起头也是接着写的。下一行是另一个列表项（…; and | • …）
-            # 或者小一号的脚注时不算
+            # When the line above stops at and or of, the next line continues even when it starts with a capital.
+            # Not when the next line is another list item (...; and | • ...) or a footnote one size smaller
             same_size = abs(b.size - p.size) <= p.size * 0.05
             dangling = _dangling(p.text) and not _list_item(b.text) and not _opens_with_math(b) and same_size
-            # 居中段落的末行大写起头（Rates.、MATH dataset.）也接上；题词下面小一号的出处不接
+            # The last line of a centered paragraph is joined even when it starts with a capital (Rates., MATH
+            # dataset.); the smaller attribution under an epigraph is not
             centered_end = centered_tail and same_size
-            # 居中排的一段（作者名单）在逗号处折行，下一行大写起头也是接着写的。整摞共用一条中线、字体不变
+            # A centered paragraph (a list of authors) that wraps at a comma continues even when the next line
+            # starts with a capital. The whole stack shares one center line and the font stays the same
             centered_comma = (
                 same_size
                 and p.text.rstrip().endswith((",", "，"))
@@ -3361,18 +3691,24 @@ def _merge_continuations(
                 and bool(b.line_rects)
                 and _centered_rows(_row_boxes(p.line_rects + b.line_rects), p.size)
             )
-            # 段落缩进的首行和页边旁注挤在一块里，被单拆出来：这一行排到右缘、没有句末标点，
-            # 下一行比它靠左一个缩进，是句中折行，大写起头（专名）也接上
+            # The indented first line of a paragraph shared a block with a margin note and was split off on its
+            # own: when this line runs to the right edge without sentence-final punctuation and the next line is
+            # one indent further left, it is a wrap inside a sentence, joined even when the next line starts
+            # with a capital (a proper noun)
             full_wrap = (
                 same_size and not _list_item(b.text) and len(_visual_lines(p)) == 1 and _wraps_into(p, b, indented=True)
             )
-            # 列表项后面第一行比它还靠左起笔的是列表完了以后的正文。续行和条目文字对齐或者悬挂缩进，不会往左
+            # A first line after a list item that starts even further left is body text after the list has
+            # ended. Continuation lines align with the item text or have a hanging indent and never move left
             list_end = _list_item(p.text) and first_x0 < p.rect.x0 - p.size * 0.5
-            # 上一块停在断开的半个词上（retrieval-augmented genera- | tion, 267），下一行小写接着写完这个词。
-            # 连字符后面是数字的是折开的型号（VE- | 8. Both …、GPT- | 4），不是下一行的编号。
-            # 只有两个词也接上：标题、标签不会停在连字符上
-            # 跟在行内标签、行内式子后面的半行（Backbones. | Models are … at temper-、… This no longer
-            # agrees with the MLE under）从它们右边起笔，下一行回到栏边。这一行和下一块右缘对齐就是同一栏
+            # The block above stops at half a broken word (retrieval-augmented genera- | tion, 267), and the next
+            # line finishes the word in lowercase.
+            # A digit after the hyphen is a model name broken across lines (VE- | 8. Both ..., GPT- | 4), not a
+            # number label on the next line.
+            # Joined even with only two words: headings and labels do not stop at a hyphen
+            # A half line after an inline label or inline expression (Backbones. | Models are ... at temper-,
+            # ... This no longer agrees with the MLE under) starts to their right, and the next line returns to
+            # the column edge. When this line and the next block share a right edge, they are in the same column
             row_tail = len(_visual_lines(p)) == 1 and abs(p.rect.x1 - b.rect.x1) <= p.size and first_x0 < p.rect.x0
             word_cut = (
                 same_size
@@ -3383,26 +3719,42 @@ def _merge_continuations(
                 and (p.rect.x0 - p.size <= first_x0 or row_tail)
             )
             row_wrap = same_size and row_tail and first.islower() and not _ends_sentence(p.text)
-            # 单独排开的一行（缩进的例句 The green witch arrived），下一行回到左边接着写正文，不是它的续行。
-            # 段首缩进的首行被旁注切成一块时撑到右缘，和下一行一样宽
+            # A line set off on its own (the indented example The green witch arrived): the next line returns to
+            # the left to continue the body text and is not its continuation.
+            # An indented first line cut into a block by a margin note reaches the right edge and is as wide as
+            # the next line
             displayed_line = (
                 len(_visual_lines(p)) == 1 and p.rect.x0 > first_x0 + p.size and p.rect.x1 < b.rect.x1 - p.size
             )
-            # 段落首行缩进的文档里，排到右缘的一行下面齐平起笔的一行是同一段的续行，
-            # 上一行恰好在句末断开、下一行大写起头也一样（双倍行距的稿子每行各成一块）。
-            # 上一块只有段首缩进的那一行（被页边旁注切开）时，下一行比它靠左一个缩进，也是续行。
-            # 行首换了粗体、斜体、字号的是不缩进的小标题（Execution Accuracy (EX) We…、Lemma 2.3.）
-            # 「排到右缘」按正文一整行的宽度比，表格里的一格、短标题对着自己的窄框也是满的。
-            # 带编号的标签（EXAMPLE 2.1、Table 3:）也另起。
-            # 下一行要按正常行距紧贴着：隔着一行的是悬挂缩进的参考文献，中间的续行另成了块。
-            # 下一块自己往下悬挂缩进的是参考文献的下一条；上一行几截之间空开好几个字宽的是表格的一行。
-            # 靠段间空白分段的文档里，新段上面多空出一截：只按正常行距紧贴着的才是同一段。
-            # 编号起头的（(21.15) Ok, we fly …）是例句、式子，齐平排在引出它的一行下面，自成一块，也不接下面的正文。
-            # 编号后面小写起头的是正文里引用的式子折到行首（(4.5) and (4.6), we have），按正常行距紧贴着就接上；
-            # 小写起头的例句（(24.25) her pay jumped …）上面多空出一截
+            # In documents with first-line paragraph indents, a line starting flush below a line that runs to the
+            # right edge continues the same paragraph,
+            # even when the line above happens to break at a sentence end and the next line starts with a
+            # capital (in double-spaced manuscripts each line is a block of its own).
+            # When the block above holds only the indented first line of a paragraph (cut off by a margin note),
+            # a next line one indent further left is also a continuation.
+            # A line starting with a change to bold, italic or another size is an unindented subheading
+            # (Execution Accuracy (EX) We..., Lemma 2.3.)
+            # "Runs to the right edge" is compared with the width of a full body line; a table cell or a short
+            # heading would be full against its own narrow box.
+            # Numbered labels (EXAMPLE 2.1, Table 3:) also start anew.
+            # The next line must sit right below at normal line spacing: one a line further down is a reference
+            # with a hanging indent whose continuation line between became a block of its own.
+            # A next block with its own hanging indent below is the next reference; a line above whose pieces
+            # are several ems apart is a table row.
+            # In documents that separate paragraphs by spacing, a new paragraph has extra space above it: only a
+            # line right below at normal line spacing is in the same paragraph.
+            # A line starting with a number ((21.15) Ok, we fly ...) is an example or an expression, set flush
+            # below the line that introduces it as a block of its own, and is not joined with the body text
+            # below either.
+            # A number followed by a lowercase start is an expression cited in body text wrapped to the line
+            # start ((4.5) and (4.6), we have), joined when it sits right below at normal line spacing;
+            # an example starting in lowercase ((24.25) her pay jumped ...) has extra space above it
             row_gap = b.rect.y0 - last_y1 - p.line_gap * p.size
-            # 上一行排到右缘、停在等号加号上（… and λ2 = | 1/2, what is …），下一行从同一左缘按正常行距紧贴着起笔，
-            # 是式子的另一半，数字起头也接上。单独排的式子行不到右缘，下面空得多；大写单词、脚注编号起头的是下一句、下一条
+            # The line above runs to the right edge and stops at an equals or plus sign (... and λ2 = | 1/2, what
+            # is ...), and the next line starts at the same left edge right below at normal line spacing:
+            # it is the other half of the expression, joined even when it starts with a digit. A display
+            # expression line does not reach the right edge and has more space below; a line starting with a
+            # capitalized word or a footnote number is the next sentence or the next entry
             open_end = (
                 same_size
                 and _open_operator_end(p.text)
@@ -3431,15 +3783,17 @@ def _merge_continuations(
                 and not _hangs(b, blocks[index + 1] if index + 1 < len(blocks) else None)
                 and _row_gap(_visual_lines(p)[-1]) <= 1.5 * p.size
             )
-            # 上一块停在没收口的代码围栏里（```sql 开了还没关），下一行是代码的接续，大写起头也接上
+            # The block above stops inside an unclosed code fence (```sql opened and not closed), and the next
+            # line continues the code, joined even when it starts with a capital
             in_fence = len(_FENCE_RE.findall(p.text)) % 2 == 1 and same_size
             latin = (
                 y_close
                 and (x_close or centered_tail or math_wrap or centered_comma or word_cut or row_wrap)
                 and not list_end
                 and not displayed_line
-                and (len(p.text.split()) >= 3 or word_cut)  # 一两个词的无标点短块是标题/标签，不是段落
-                and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
+                and (len(p.text.split()) >= 3 or word_cut)  # 1-2 unpunctuated words: heading or label, not a paragraph
+                # A continuation has the size of the line above; small text under a large heading is in a figure
+                and p.size * 0.7 <= b.size <= p.size / 0.7
                 and (
                     colon_wrap
                     or call_wrap
@@ -3464,8 +3818,10 @@ def _merge_continuations(
                     or word_cut
                 )
                 and not _verbatim_seam(p, b)
-                # 段落首行缩进的文档里，首行比下面几行缩进一两个字宽、大写的词起头的块是新的一段，
-                # 上一块停在 and 上（式子前的半句）也不接。行首是式子（W 1,∞ …）的不算
+                # In documents with first-line paragraph indents, a block whose first line is indented one or
+                # two ems more than the lines below and starts with a capitalized word is a new paragraph, not
+                # joined even when the block above stops at and (half a sentence before an expression). A line
+                # starting with an expression (W 1,∞ ...) does not count
                 and not (
                     indents
                     and re.match(r"[A-Z][a-z]", b.text.lstrip()) is not None
@@ -3474,7 +3830,8 @@ def _merge_continuations(
                     and _first_line_indented(b)
                 )
             )
-            # 索引条目停在逗号上，页码折到下一块里（见 _wraps_from_above）：条目收在页码上
+            # An index entry stops at a comma and its page numbers wrap into the next block (see
+            # _wraps_from_above): the entry ends at the page numbers
             if (
                 p.index
                 and p.page == b.page
@@ -3485,7 +3842,8 @@ def _merge_continuations(
             ):
                 _absorb_block(p, b)
                 break
-            # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
+            # A contents entry is complete at its leader and page number and is not merged with the entries or
+            # part titles above and below
             if (
                 p.page == b.page
                 and p.clip == b.clip
@@ -3508,8 +3866,9 @@ def _merge_continuations(
 
 
 def _body_measure(blocks: list[TextBlock]) -> float:
-    """正文一整行的宽度：多行块里不是末行的那些行，最常见的宽度（取整到点）。
-    行内式子把一行切成几截，按整行量"""
+    """Width of a full body line: the most common width (rounded to points) of the lines in multi-line blocks
+    other than their last lines.
+    Inline expressions cut a line into several pieces, so whole lines are measured"""
     widths: Counter[int] = Counter()
     for block in blocks:
         rows = _visual_lines(block)
@@ -3523,14 +3882,16 @@ def _row_width(row: list[pymupdf.Rect]) -> float:
 
 
 def _row_gap(row: list[pymupdf.Rect]) -> float:
-    """一行里相邻两截之间最宽的空白。"""
+    """The widest gap between two adjacent pieces of a line."""
     pieces = sorted(row, key=lambda rect: rect.x0)
     return max((b.x0 - a.x1 for a, b in zip(pieces, pieces[1:])), default=0.0)
 
 
 def _hangs(block: TextBlock, nxt: TextBlock | None = None) -> bool:
-    """首行顶格、下面的行往右缩进的悬挂缩进（参考文献的一条）。
-    只有一行时看紧贴在下面的 nxt：续行另成了块。这一行在句末收住的是段落的末行，下面是缩进的新段"""
+    """A hanging indent with the first line flush and the lines below indented to the right (one reference
+    entry).
+    With only one line, look at nxt right below: the continuation lines became a block of their own. A line
+    ending at a sentence end is the last line of a paragraph, with an indented new paragraph below"""
     rows = sorted(_visual_lines(block), key=lambda row: row[0].y0)
     if not rows:
         return False
@@ -3549,8 +3910,10 @@ def _hangs(block: TextBlock, nxt: TextBlock | None = None) -> bool:
 
 
 def _paragraph_space(blocks: list[TextBlock]) -> float:
-    """靠段间空白分段的文档里，新段比正常行距多空出的那一截（点）。不是这样排的返回 0。
-    看段落的末行（句末收住、没排到右缘）下面齐平起笔的一块，多数都空出半个字高以上才算"""
+    """In documents that separate paragraphs by spacing, the extra space above a new paragraph beyond normal
+    line spacing (in points). Returns 0 for documents not set this way.
+    Looks at blocks starting flush below the last line of a paragraph (ending a sentence, short of the right
+    edge); it counts only when most of them have extra space of about half a character height or more"""
     gaps: list[tuple[float, float]] = []
     for p, b in zip(blocks, blocks[1:]):
         if p.page != b.page or not p.line_rects or not b.line_rects or abs(p.size - b.size) > p.size * 0.05:
@@ -3573,13 +3936,14 @@ def _paragraph_space(blocks: list[TextBlock]) -> float:
     return space if space >= 0.4 * size else 0.0
 
 
-# 至少这么多段落末行下面量得到段间空白
+# Paragraph spacing must be measurable below at least this many last lines of paragraphs
 _SPACED_PARAGRAPHS = 3
-# 以式子起头的续行里至少这么多正文词
+# Minimum number of body words in a continuation line that starts with an expression
 _MATH_WRAP_WORDS = 3
-# Markdown 代码围栏。LaTeX 把 ``` 排成弯引号 “‘
+# Markdown code fence. LaTeX sets ``` as curly quotes “‘
 _FENCE_RE = re.compile(r"```|“‘|‘‘‘")
-# 句子不会停在这些词上：行尾是它们，下一行哪怕大写起头（专名）也是接着写的
+# Sentences do not stop at these words: when a line ends with one, the next line continues even when it starts
+# with a capital (a proper noun)
 _DANGLING_WORDS = frozenset(
     "a an the and or of to in for with by from on at as that which whose than its their our his her".split()
 )
@@ -3591,13 +3955,14 @@ def _dangling(text: str) -> bool:
 
 
 def _opens_with_math(block: TextBlock) -> bool:
-    """第一截是公式字体。"""
+    """The first piece is in a math font."""
     spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
     return bool(spans) and _span_is_math(spans[0])
 
 
 def _opens_with_word(block: TextBlock) -> bool:
-    """第一截不是公式字体，以小写单词起头。下一行的式子（t3 = t2 + x、hi = t5 + t3）不算。"""
+    """The first piece is not in a math font and starts with a lowercase word. An expression on the next line
+    (t3 = t2 + x, hi = t5 + t3) does not count."""
     spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
     return (
         bool(spans) and not _span_is_math(spans[0]) and bool(re.match(r"[a-z]{2,}\b(?!\s*[\[(←=∈<>≤≥+])", block.text))
@@ -3605,8 +3970,10 @@ def _opens_with_word(block: TextBlock) -> bool:
 
 
 def _wraps_into(block: TextBlock, nxt: TextBlock, indented: bool = False) -> bool:
-    """block 的末行（连同同一行的分子分母、上下限）和 nxt 的首行同一左缘，并且排到两块的右缘。
-    indented 时 block 的末行是段落缩进的第一行，nxt 的首行要比它靠左一个缩进。"""
+    """The last line of block (with the numerators, denominators and limits on the same row) shares a left
+    edge with the first line of nxt and runs to the right edge of both blocks.
+    With indented, the last line of block is the indented first line of a paragraph, and the first line of
+    nxt must be one indent further left."""
     lines = block.line_rects or [block.rect]
     tail = lines[-1]
     row = [
@@ -3621,13 +3988,14 @@ def _wraps_into(block: TextBlock, nxt: TextBlock, indented: bool = False) -> boo
     return lead and max(rect.x1 for rect in row) >= max(block.rect.x1, nxt.rect.x1) - block.size * 0.5
 
 
-# 几乎只在句中出现的缩写。etc. 常在句末，不算
+# Abbreviations that appear almost only inside sentences. etc. often ends a sentence and is not included
 _MID_ABBREV_RE = re.compile(r"(?:\bet al|\be\.g|\bi\.e|\bcf|\bvs)\.$")
 
 
 def _beside_wrap(other: TextBlock, head: TextBlock, tail: TextBlock) -> bool:
-    """other 在段落上一半 head 的下面、下一半 tail 的旁边，横向落在 head 的宽度里，
-    是段落让开的那块地方（图注）。表格里同一行右边的格子和 head 并排，不算。"""
+    """other lies below head, the first half of the paragraph, and beside tail, the second half, horizontally
+    within the width of head: the space the paragraph makes room for (a caption). A cell to the right on the
+    same table row sits beside head and does not count."""
     if other.page != tail.page or other.rect.y0 < head.rect.y1 - 1:
         return False
     if other.rect.x0 >= tail.rect.x1:
@@ -3638,7 +4006,8 @@ def _beside_wrap(other: TextBlock, head: TextBlock, tail: TextBlock) -> bool:
 
 
 def _is_line_tail(block: TextBlock, earlier: list[TextBlock]) -> bool:
-    """这一行贴在左边某块的行尾右侧，是半句，不是新起的一段。"""
+    """This line sits right after the end of a line of a block to its left: half a sentence, not a new
+    paragraph."""
     if len(block.line_rects) > 1 or _ends_sentence(block.text) or block.side_note:
         return False
     for other in earlier:
@@ -3657,7 +4026,8 @@ def _is_line_tail(block: TextBlock, earlier: list[TextBlock]) -> bool:
 
 
 def _earlier_on_page(blocks: list[TextBlock]) -> list[list[TextBlock]]:
-    """每一块之前、同一页的块。半句只和本页的行比；整本一起切片，几百页的书要算很久。"""
+    """For each block, the blocks before it on the same page. Half sentences are compared only with lines on
+    their own page; slicing the whole book at once takes a long time for books of several hundred pages."""
     seen: dict[int, list[TextBlock]] = {}
     out: list[list[TextBlock]] = []
     for block in blocks:
@@ -3668,7 +4038,8 @@ def _earlier_on_page(blocks: list[TextBlock]) -> list[list[TextBlock]]:
 
 
 def _line_tail_blocked(nxt: TextBlock, fragment: TextBlock, blocks: list[TextBlock]) -> bool:
-    """续写这一行还挨着另一块时不并。并进去写回会盖住那一块。"""
+    """Do not merge when the continuing line also touches another block. Merged, the writing would cover that
+    block."""
     for other in blocks:
         if other is nxt or other is fragment or other.page != nxt.page:
             continue
@@ -3680,7 +4051,8 @@ def _line_tail_blocked(nxt: TextBlock, fragment: TextBlock, blocks: list[TextBlo
 
 
 def _line_tail_match(block: TextBlock, nxt: TextBlock) -> bool:
-    """下一行回到栏边、小写开头，才是这半句的续写。"""
+    """Only a next line that returns to the column edge and starts in lowercase continues this half
+    sentence."""
     if nxt.page != block.page or nxt.clip != block.clip or nxt.side_note:
         return False
     if abs(nxt.size - block.size) > block.size * 0.2:
@@ -3708,8 +4080,9 @@ def _line_tail_continuation(
 
 
 def _merge_line_tails(blocks: list[TextBlock], edges: Collection[int] = ()) -> list[TextBlock]:
-    """同一行右侧的半句，和下一行回到栏边的续写，接成一段。不并进左边那句。
-    edges 是页眉页脚，不当半句，也不当续写。"""
+    """Join a half sentence on the right of a line with its continuation on the next line back at the column
+    edge into one paragraph. It is not merged into the sentence on its left.
+    edges are running headers and footers, used neither as half sentences nor as continuations."""
     used: set[int] = set()
     out: list[TextBlock] = []
     earlier = _earlier_on_page(blocks)
@@ -3727,7 +4100,8 @@ def _merge_line_tails(blocks: list[TextBlock], edges: Collection[int] = ()) -> l
 
 
 def _returns_to_margin(host: TextBlock, guest: TextBlock) -> bool:
-    """后面几行回到宿主的栏左缘，才是同一段。并排的单位行不会回来。"""
+    """Only when the later lines return to the host's column left edge is it the same paragraph. Affiliation
+    lines side by side do not return."""
     rest = guest.line_rects[1:]
     if not rest:
         return True
@@ -3737,14 +4111,15 @@ def _returns_to_margin(host: TextBlock, guest: TextBlock) -> bool:
 
 
 def _sits_on_last_line(host: TextBlock, guest: TextBlock) -> bool:
-    """下一句从上一句最后一行的右侧起写。两栏论文里这仍是同一段。"""
+    """The next sentence starts to the right of the last line of the previous sentence. In two-column papers
+    this is still the same paragraph."""
     if host.page != guest.page or host.clip != guest.clip:
         return False
     if not host.line_rects or not guest.line_rects or host.size <= 0:
         return False
     if abs(host.size - guest.size) > host.size * 0.2:
         return False
-    # 先比位置再看文字：一页里两两比较，大多数块对在这里就排除了
+    # Compare positions before text: blocks on a page are compared pairwise, and most pairs are ruled out here
     last = host.line_rects[-1]
     first = guest.line_rects[0]
     height = min(last.height, first.height) or 1.0
@@ -3762,9 +4137,11 @@ def _sits_on_last_line(host: TextBlock, guest: TextBlock) -> bool:
 
 
 def _continues_fragment(host: TextBlock, guest: TextBlock) -> bool:
-    """行尾半句的下一行回到栏边、小写开头。即使这一行右侧还有下一句，也先接上。
+    """The line after a half sentence at a line end returns to the column edge and starts in lowercase. It is
+    joined first, even when the next sentence sits to the right on this line.
 
-    右半行已经到句末就不是半句。公式条件行的 otherwise. 不能把下面的正文接上来。
+    A right half line that already reaches a sentence end is no half sentence. The otherwise. of a formula
+    condition line must not pull in the body text below.
     """
     if host.page != guest.page or host.clip != guest.clip:
         return False
@@ -3781,8 +4158,9 @@ def _continues_fragment(host: TextBlock, guest: TextBlock) -> bool:
     first = guest.line_rects[0]
     if first.x0 > last.x0 - max(host.size * 3.5, 28):
         return False
-    # 行尾半句折到下一行，这一行排到了栏的右缘。单独排的式子两边都空着，下面的正文另起一段；
-    # 式子下面的上下限是几截短的式子，仍接上
+    # A half sentence at a line end wraps to the next line, and this line runs to the right edge of the column.
+    # A display expression has space on both sides, and the body text below starts a new paragraph;
+    # limits under an expression are short pieces of math and are still joined
     if last.x1 < first.x1 - host.size * 3 and _prose_units(guest.text) >= 4:
         return False
     gap = first.y0 - last.y1 - host.line_gap * host.size
@@ -3795,12 +4173,15 @@ def _continues_fragment(host: TextBlock, guest: TextBlock) -> bool:
 
 
 def _merge_same_line_sentences(blocks: list[TextBlock], edges: Collection[int] = ()) -> list[TextBlock]:
-    """上一句在行中结束、下一句从这一行右侧起写时，并成一段，按栏宽排开。
+    """When a sentence ends mid-line and the next sentence starts to its right on the same line, merge them
+    into one paragraph laid out at the column width.
 
-    短粗体侧标和图内标签不并。续行即使和后一句共基线，也先接上，后一句再并进来。
-    阅读顺序会把左半行排到右半行后面，所以不能只看相邻块。
-    只在同一页里找。整本书一起两两比较，几百页的书要算很久。
-    edges 是页眉页脚，不参与。
+    Short bold side labels and labels inside figures are not merged. A continuation line is joined first even
+    when it shares a baseline with the following sentence, which is merged after it.
+    Reading order can put the left half line after the right half, so adjacent blocks alone are not enough.
+    The search stays within one page. Comparing the whole book pairwise takes a long time for books of several
+    hundred pages.
+    edges are running headers and footers and take no part.
     """
     by_page: dict[int, list[TextBlock]] = {}
     for block in blocks:
@@ -3813,16 +4194,18 @@ def _merge_same_line_sentences(blocks: list[TextBlock], edges: Collection[int] =
 
 
 def _same_line_sentence(host: TextBlock, guest: TextBlock) -> bool:
-    # 旁注、索引条目、词表的一格都自成一条
+    # Margin notes, index entries and word grid cells each stand on their own
     if host.side_note or guest.side_note or host.entry or guest.entry:
         return False
     return _sits_on_last_line(host, guest) or _continues_fragment(host, guest)
 
 
 def _merge_page_line_sentences(blocks: list[TextBlock]) -> set[int]:
-    """一页里按顺序找宿主，各取第一个能并进来的块。返回被并掉的块。
+    """Go through the hosts on a page in order, each taking the first block that can be merged into it.
+    Returns the blocks merged away.
 
-    并完不从头找。前面的宿主原来都没有可并的块，只有刚变过的这一块可能接到它们后面。
+    After a merge the search does not restart from the beginning. The earlier hosts had no block to merge,
+    and only the block that just changed may join after one of them.
     """
     out = list(blocks)
     absorbed: set[int] = set()
@@ -3853,21 +4236,26 @@ def _merge_page_line_sentences(blocks: list[TextBlock]) -> set[int]:
 
 
 def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
-    """合并被拆碎的图注/表注：'Figure 2:'、'Examples of decay'、'schedules.' 三个
-    碎片各翻各的，再塞回各自小框里换行丑陋。拼回一个块后整句翻译、一行排下。
-    规则保守，只拼三类：a) 同一视觉行上短标签后紧跟的片段，标签可以是冒号，
-    也可以是「图 2」「Fig. 1.」；b) 这种标签正下方的一行注记；c) 带冒号的
-    图注组内、以左对齐小写开头且上行无句末标点的短续行。表格行和标题不并。"""
+    """Merge figure and table captions broken into fragments: 'Figure 2:', 'Examples of decay' and
+    'schedules.' translated separately and put back into their own small boxes wrap badly. Joined back into
+    one block, the sentence is translated whole and laid out on one line.
+    The rules are conservative and join only three kinds: a) a fragment right after a short label on the same
+    visual line, where the label may end with a colon or be "图 2" or "Fig. 1."; b) a one-line note right
+    below such a label; c) within a caption group with a colon, a short continuation line that is
+    left-aligned, starts in lowercase, and follows a line without sentence-final punctuation. Table rows and
+    headings are not merged."""
     out: list[TextBlock] = []
     for b in blocks:
         if out:
             p = out[-1]
-            # 索引条目到页码就完了（perplexity:coined by, 89 带冒号，也不是图注标签）
+            # An index entry ends at its page numbers (perplexity:coined by, 89 has a colon but is no caption
+            # label)
             if p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note or p.entry):
                 y_ov = min(p.rect.y1, b.rect.y1) - max(p.rect.y0, b.rect.y0)
                 same_line = y_ov > 0.5 * min(p.rect.y1 - p.rect.y0, b.rect.y1 - b.rect.y0)
                 gap = b.rect.x0 - p.rect.x1
-                # 注记和续行与图注同字号。大标题下面的小字是图里的框
+                # Notes and continuation lines have the caption's size. Small text under a large heading is a
+                # box in a figure
                 below = (
                     -0.1 * p.size <= b.rect.y0 - p.rect.y1 - p.line_gap * p.size < 1.1 * p.size
                     and abs(b.rect.x0 - p.rect.x0) < p.size
@@ -3876,7 +4264,8 @@ def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
                 label = (p.text.rstrip().endswith((":", "：")) and len(p.text) < 30) or _caption_label(p.text)
                 head = b.text.lstrip()[:1]
                 note = bool(head and (head.islower() or CJK_RE.search(head)) and not _caption_label(b.text))
-                # 自己也以粗体标签起头的是定义列表的下一条（mouse² : … like a mouse | bank¹ : …），不是续行
+                # A line that itself starts with a bold label is the next entry of a definition list
+                # (mouse² : ... like a mouse | bank¹ : ...), not a continuation line
                 continuation = (
                     len(p.text) < 60
                     and b.text[:1].islower()
@@ -3887,8 +4276,10 @@ def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
                         and _label_lead([span for span in b.span_lines[0] if str(span.get("text") or "").strip()])
                     )
                 )
-                # 定义式的标签后面是一栏值：值有几行、每行都从值的左缘起笔（View ranges:  {…}, | {…}）。
-                # 并进标签的话，译文折回标签下面，栏就没了。图注标签照旧并
+                # A definition-style label is followed by a column of values: several lines, each starting at
+                # the values' left edge (View ranges:  {...}, | {...}).
+                # Merged into the label, the translation would wrap back under the label and the column would
+                # be lost. Caption labels are merged as before
                 rows = _visual_lines(b) if b.line_rects else []
                 column = (
                     not _caption_label(p.text)
