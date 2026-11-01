@@ -13,6 +13,7 @@ from 是 auto 或当前源语言、to 是 auto 或当前目标语言时生效，
 占位符：{{to}} 目标语言，{{from}} 源语言，{{text}} 原文，{{title_prompt}} 文档标题上下文，
 {{summary_prompt}} / {{terms_prompt}} / {{imt_style_guide}} 暂未使用（留空），方便以后加摘要和术语表。
 """
+
 import re
 
 from .languages import LANG_OVERRIDES, LANGUAGES
@@ -152,6 +153,8 @@ def pick_marker(texts: list[str]) -> str:
         if not any(re.search(rf"^\[\[{prefix}\d+\]\]$", t, re.M) for t in texts):
             return prefix
     return "p"  # 三种前缀都被占用的极端情况，维持默认
+
+
 # 插件的 removeResRegexs：去掉推理模型输出的 <think> 段
 THINK_RE = re.compile(r"^\s*<think>[\s\S]*?</think>\s*|^\s*</think>\s*")
 
@@ -187,9 +190,18 @@ def fill(template: str, values: dict) -> str:
     return template
 
 
-def build_messages(texts: list[str], target_lang: str, *, source_lang: str = "auto", title: str = "",
-                   system_template: str = "", user_template: str = "", contains_html: bool = False,
-                   glossary: str = "", notes: list[str] | None = None) -> tuple[str, str]:
+def build_messages(
+    texts: list[str],
+    target_lang: str,
+    *,
+    source_lang: str = "auto",
+    title: str = "",
+    system_template: str = "",
+    user_template: str = "",
+    contains_html: bool = False,
+    glossary: str = "",
+    notes: list[str] | None = None,
+) -> tuple[str, str]:
     """返回 (system, user)。自定义模板为空时用默认模板。source_lang 是用户选的或检测出的源语言。
     notes 与 texts 对齐，是各段在文档里所处位置的说明，空串表示没有。"""
     defaults = default_prompts(target_lang, source_lang)
@@ -237,8 +249,9 @@ def build_messages(texts: list[str], target_lang: str, *, source_lang: str = "au
     return system, user
 
 
-def build_terms_messages(terms: list[str], target_lang: str, *, source_lang: str = "auto", title: str = "",
-                         excerpt: str = "") -> tuple[str, str]:
+def build_terms_messages(
+    terms: list[str], target_lang: str, *, source_lang: str = "auto", title: str = "", excerpt: str = ""
+) -> tuple[str, str]:
     """定术语译名的 (system, user)。"""
     values = {
         "to": lang_name(target_lang),
@@ -352,8 +365,9 @@ def drop_added_braces(src: str, dst: str) -> str:
 def parse_markers(content: str, count: int, marker: str = "p") -> dict[int, str]:
     """解析 [[pN]] 格式的回复，返回 {序号: 译文}；缺失的序号不在结果里。marker 需与 build_messages 用的一致。"""
     marker_re = MARKER_RE if marker == "p" else re.compile(rf"^\[\[({marker}\d+)\]\]$", re.I)
-    control_re = CONTROL_RE if marker == "p" else re.compile(
-        rf"^\[\[(?:{marker}\d+|source_end|terms|term|end)\]\]$", re.I)
+    control_re = (
+        CONTROL_RE if marker == "p" else re.compile(rf"^\[\[(?:{marker}\d+|source_end|terms|term|end)\]\]$", re.I)
+    )
     result: dict[int, str] = {}
     current: int | None = None
     buf: list[str] = []
@@ -374,7 +388,7 @@ def parse_markers(content: str, count: int, marker: str = "p") -> dict[int, str]
         elif current is not None:
             tail = TAIL_CONTROL_RE.search(line)
             if tail:
-                buf.append(line[:tail.start()])
+                buf.append(line[: tail.start()])
                 flush()
                 current = None
                 continue

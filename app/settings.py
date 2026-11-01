@@ -8,6 +8,7 @@
 
 可以在页面上改，也可以直接改这个文件后重启服务。
 """
+
 import json
 import threading
 from pathlib import Path
@@ -20,8 +21,14 @@ DEFAULTS = {
     "retention_days": 30,
     "layout_model": {"enabled": False, "path": "", "precision": PRECISIONS[0]},
     # workers、threads 是公式检测模型同时推理几页、每页几个线程，0 表示按核数定
-    "formula_model": {"enabled": True, "path": "", "size": FORMULA_SIZES[0], "precision": PRECISIONS[0],
-                      "workers": 0, "threads": 0},
+    "formula_model": {
+        "enabled": True,
+        "path": "",
+        "size": FORMULA_SIZES[0],
+        "precision": PRECISIONS[0],
+        "workers": 0,
+        "threads": 0,
+    },
 }
 MAX_RETENTION_DAYS = 3650
 # 公式检测模型同时推理的页数、每页推理线程数的上限
@@ -113,8 +120,10 @@ class Settings:
                 conf["precision"] = merged.get("precision")
                 if conf["precision"] not in PRECISIONS:
                     raise SettingsError("精度只能是 " + " 或 ".join(PRECISIONS))
-            for name, label, limit in (("workers", "同时推理的页数", MAX_FORMULA_WORKERS),
-                                       ("threads", "每页推理线程数", MAX_FORMULA_THREADS)):
+            for name, label, limit in (
+                ("workers", "同时推理的页数", MAX_FORMULA_WORKERS),
+                ("threads", "每页推理线程数", MAX_FORMULA_THREADS),
+            ):
                 if name not in DEFAULTS[key]:
                     continue
                 count = merged.get(name)

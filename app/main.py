@@ -1,4 +1,5 @@
 """Web 服务：上传文档 → 后台翻译 → 边翻边预览 → 下载结果；翻译记录持久化在 data/jobs/。"""
+
 import asyncio
 import hashlib
 import mimetypes
@@ -79,6 +80,7 @@ async def _cleanup() -> None:
 @asynccontextmanager
 async def lifespan(_app):
     """启动时清理一次过期记录，之后每小时检查一次。"""
+
     async def loop():
         while True:
             try:
@@ -97,8 +99,12 @@ async def lifespan(_app):
 app = FastAPI(title="Doc Translator", lifespan=lifespan)
 # 只接受本机地址访问。否则恶意网页把自己的域名解析到 127.0.0.1（DNS 重绑定），就能以同源身份调用这些接口，
 # 比如用已保存的 Key 去测一个它指定的 API 地址。在局域网里用 IP 访问时，把地址加到环境变量 ALLOWED_HOSTS，逗号分隔
-ALLOWED_HOSTS = ["127.0.0.1", "localhost", "[::1]",
-                 *(h.strip() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip())]
+ALLOWED_HOSTS = [
+    "127.0.0.1",
+    "localhost",
+    "[::1]",
+    *(h.strip() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip()),
+]
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 
@@ -131,9 +137,16 @@ async def _run_job(job: Job, translator, bilingual: bool):
     job.runner = Runner(translator, progress)
     jobs.save(job)
     try:
-        outputs = await translate_file(jobs.source_path(job), jobs.out_dir(job.id), job.runner, bilingual,
-                                       job.target_lang, layout_model=_model_path("layout"),
-                                       plan_path=jobs.plan_path(job), formula_model=_formula_model())
+        outputs = await translate_file(
+            jobs.source_path(job),
+            jobs.out_dir(job.id),
+            job.runner,
+            bilingual,
+            job.target_lang,
+            layout_model=_model_path("layout"),
+            plan_path=jobs.plan_path(job),
+            formula_model=_formula_model(),
+        )
         job.outputs = [p.name for p in outputs]
         job.status = "done"
     except asyncio.CancelledError:
@@ -247,6 +260,7 @@ def languages():
 
 # ---------- 翻译服务管理 ----------
 
+
 @app.get("/api/providers")
 def providers():
     return PROVIDERS
@@ -347,6 +361,7 @@ async def fetch_models(data: dict = Body(...)):
 
 # ---------- 翻译任务 / 翻译记录 ----------
 
+
 def _job_or_404(job_id: str) -> Job:
     job = jobs.get(job_id)
     if not job:
@@ -376,9 +391,16 @@ async def create_job(
     except TranslatorError as e:
         raise HTTPException(400, str(e)) from e
 
-    job = Job(id=uuid.uuid4().hex[:12], filename=name, source_lang=source_lang, target_lang=target_lang,
-              mode="translated" if mode == "translated" else "bilingual", service_id=service["id"],
-              service_name=service.get("name", ""), preview=ext in PREVIEW_FORMATS)
+    job = Job(
+        id=uuid.uuid4().hex[:12],
+        filename=name,
+        source_lang=source_lang,
+        target_lang=target_lang,
+        mode="translated" if mode == "translated" else "bilingual",
+        service_id=service["id"],
+        service_name=service.get("name", ""),
+        preview=ext in PREVIEW_FORMATS,
+    )
     jobs.out_dir(job.id).mkdir(parents=True)
     try:
         size = 0
@@ -407,8 +429,7 @@ async def create_job(
 async def list_jobs():
     # 遍历所有任务目录算大小，放到线程里避免卡事件循环
     usage = await asyncio.to_thread(jobs.disk_usage)
-    return {"jobs": [j.to_dict() for j in jobs.list()], "disk_usage": usage,
-            "retention_days": settings.retention_days}
+    return {"jobs": [j.to_dict() for j in jobs.list()], "disk_usage": usage, "retention_days": settings.retention_days}
 
 
 @app.get("/api/jobs/{job_id}")
@@ -591,7 +612,10 @@ async def _cut_from_bilingual(job: Job, stage: Path) -> list[Path] | None:
     try:
         async with mupdf_turn():
             data = await asyncio.to_thread(
-                translated_from_bilingual, src, jobs.out_dir(job.id) / made, jobs.load_preview(job),
+                translated_from_bilingual,
+                src,
+                jobs.out_dir(job.id) / made,
+                jobs.load_preview(job),
             )
     except (RuntimeError, ValueError):  # 双语版读不出来，重新排版
         return None
@@ -637,8 +661,13 @@ async def build_variant(job_id: str):
             translator = _make_translator(job, _variant_service(job, service))
             try:
                 outputs = await translate_file(
-                    jobs.source_path(job), stage, Runner(translator, cache_only=True), bilingual, job.target_lang,
-                    layout_model=_model_path("layout"), plan_path=jobs.plan_path(job),
+                    jobs.source_path(job),
+                    stage,
+                    Runner(translator, cache_only=True),
+                    bilingual,
+                    job.target_lang,
+                    layout_model=_model_path("layout"),
+                    plan_path=jobs.plan_path(job),
                     formula_model=_formula_model(),
                 )
             except (TranslatorError, ValueError) as e:
@@ -757,6 +786,7 @@ def epub_member(job_id: str, name: str, member: str):
 
 # ---------- 设置 ----------
 
+
 @app.get("/api/settings")
 def get_settings():
     return settings.public()
@@ -809,8 +839,11 @@ def _model_status(kind: str) -> dict:
     int8 = quantize.int8_path(path)
     extra = {
         "int8": {
-            "path": str(int8), "file": layout_model.file_status(int8), "available": quantize.available(),
-            "install_hint": quantize.INSTALL_HINT, "state": dict(quantizers[kind].state),
+            "path": str(int8),
+            "file": layout_model.file_status(int8),
+            "available": quantize.available(),
+            "install_hint": quantize.INSTALL_HINT,
+            "state": dict(quantizers[kind].state),
         },
         "in_use": _model_file(str(path), conf["precision"]),
     }
@@ -840,7 +873,13 @@ def get_model(kind: str):
 def update_model(kind: str, data: dict = Body(...)):
     spec = _spec(kind)
     try:
-        settings.update({spec.key: {k: data[k] for k in ("enabled", "path", "size", "precision", "workers", "threads") if k in data}})
+        settings.update(
+            {
+                spec.key: {
+                    k: data[k] for k in ("enabled", "path", "size", "precision", "workers", "threads") if k in data
+                }
+            }
+        )
     except SettingsError as e:
         raise HTTPException(400, str(e)) from e
     return _model_status(kind)
@@ -880,13 +919,17 @@ async def quantize_model(kind: str):
     """用翻译过的 PDF 抽页校准，生成模型的 int8 版。页面轮询 GET 看进度。"""
     spec = _spec(kind)
     if not quantize.available():
-        raise HTTPException(400, f"生成 int8 模型需要先安装 onnx：请在项目目录运行 {quantize.INSTALL_HINT}，安装后重启服务")
+        raise HTTPException(
+            400, f"生成 int8 模型需要先安装 onnx：请在项目目录运行 {quantize.INSTALL_HINT}，安装后重启服务"
+        )
     src = spec.resolve(settings.model(spec.key)["path"])
     if not src.is_file():
         raise HTTPException(400, f"找不到{MODEL_NAMES[kind]}文件：{src}，请先下载模型")
     # 一次只生成一个：校准时每页的中间结果都留在内存里，两个一起生成要多占一倍
     if any(quantizer.running for quantizer in quantizers.values()):
-        raise HTTPException(400, "int8 模型正在生成" if quantizers[kind].running else "另一个模型的 int8 版本正在生成，请在完成后重试")
+        raise HTTPException(
+            400, "int8 模型正在生成" if quantizers[kind].running else "另一个模型的 int8 版本正在生成，请在完成后重试"
+        )
     pdfs = [path for job in jobs.list() if (path := jobs.source_path(job)).suffix.lower() == ".pdf" and path.is_file()]
     quant = quantize.SPECS[kind]
     async with mupdf_turn():  # 抽页要用 MuPDF 画，和正在跑的任务错开

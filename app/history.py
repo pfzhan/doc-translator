@@ -4,6 +4,7 @@
 - 服务重启后从磁盘恢复记录；重启前没跑完的任务标记为“已中断”，可以重新翻译（已翻好的段落在缓存里）。
 - 预览：运行中的任务从 Runner 实时读取；已完成的任务把预览快照存成 preview.json，之后随时能打开。
 """
+
 from __future__ import annotations
 
 import json
@@ -32,6 +33,7 @@ def _write_atomic(path: Path, text: str) -> None:
         tmp.replace(path)
     except FileNotFoundError:
         tmp.unlink(missing_ok=True)
+
 
 ROOT = Path(__file__).resolve().parent.parent
 JOBS_DIR = ROOT / "data" / "jobs"
@@ -182,7 +184,9 @@ class JobStore:
     def share_sources(self) -> int:
         """把已有记录里重复的原文件都换成硬链接（共用原文件之前上传的），返回处理的记录数。
         正在翻译的记录读的是已经打开的文件，换掉目录项不影响它。"""
-        return sum(self.share_source(job) for job in self.list() if self.source_path(job).is_file() and self.document(job))
+        return sum(
+            self.share_source(job) for job in self.list() if self.source_path(job).is_file() and self.document(job)
+        )
 
     def layout_dir(self, job: Job) -> Path | None:
         """这本书的版面分析结果所在的目录，同一本书的记录共用。以前存在记录目录里的，第一次用到时搬过来。"""
@@ -266,13 +270,12 @@ class JobStore:
         now = now or time.time()
         with self.lock:  # 在调用方的线程里跑，遍历要和 add/delete 互斥
             return [
-                j.id for j in list(self.jobs.values())
-                if j.status not in ("queued", "running")
-                and now - (j.finished or j.created) > retention_days * DAY
+                j.id
+                for j in list(self.jobs.values())
+                if j.status not in ("queued", "running") and now - (j.finished or j.created) > retention_days * DAY
             ]
 
-    def cleanup(self, retention_days: int, now: float | None = None,
-                busy: frozenset[str] | None = None) -> list[str]:
+    def cleanup(self, retention_days: int, now: float | None = None, busy: frozenset[str] | None = None) -> list[str]:
         """删除超过保留时间的记录（运行中的、以及 busy 里的不删）。retention_days=0 表示永久保留。"""
         busy = busy or frozenset()
         expired = [jid for jid in self.expired_ids(retention_days, now) if jid not in busy]

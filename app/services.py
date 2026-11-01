@@ -3,6 +3,7 @@
 一个“服务”就是一份引擎配置（类型、名称、Key、地址、模型、并发等），
 同一种类型可以添加多个，比如两个不同 Key 的 OpenAI、或者一个走代理地址的 Claude。
 """
+
 import json
 import threading
 import uuid
@@ -99,8 +100,18 @@ def _mask(key: str) -> str:
 
 
 # CC Switch 服务可以在本项目里调整的字段；连接信息（地址、Key）始终以 CC Switch 为准
-CCSWITCH_LOCAL_FIELDS = {"enabled", "model", "concurrency", "max_items", "max_chars", "temperature",
-                         "prompt", "user_prompt", "glossary", "auto_glossary"}
+CCSWITCH_LOCAL_FIELDS = {
+    "enabled",
+    "model",
+    "concurrency",
+    "max_items",
+    "max_chars",
+    "temperature",
+    "prompt",
+    "user_prompt",
+    "glossary",
+    "auto_glossary",
+}
 
 
 def public(service: dict) -> dict:
@@ -170,8 +181,11 @@ class ServiceStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(
-            json.dumps({"default": self.default_id, "services": self.services, "ccswitch": self.ccswitch_settings},
-                       ensure_ascii=False, indent=2),
+            json.dumps(
+                {"default": self.default_id, "services": self.services, "ccswitch": self.ccswitch_settings},
+                ensure_ascii=False,
+                indent=2,
+            ),
             encoding="utf-8",
         )
         tmp.chmod(0o600)  # 里面有 API Key，只允许当前用户读写
@@ -221,8 +235,11 @@ class ServiceStore:
 
     def list(self) -> dict:
         all_services = self._all()
-        return {"default": self.effective_default(), "services": [public(s) for s in all_services],
-                "ccswitch": {"db": str(self.ccswitch_db), "found": self.ccswitch_db.exists()}}
+        return {
+            "default": self.effective_default(),
+            "services": [public(s) for s in all_services],
+            "ccswitch": {"db": str(self.ccswitch_db), "found": self.ccswitch_db.exists()},
+        }
 
     def _update_ccswitch(self, svc: dict, data: dict) -> dict:
         changes = {k: v for k, v in _clean(data).items() if k in CCSWITCH_LOCAL_FIELDS}
@@ -280,8 +297,9 @@ class ServiceStore:
             if not svc:
                 raise ServiceError("服务不存在")
             if svc.get("builtin"):
-                raise ServiceError("内置服务不能删除" if svc.get("source") != "ccswitch" else
-                                   "CC Switch 的服务不能删除，可将其关闭")
+                raise ServiceError(
+                    "内置服务不能删除" if svc.get("source") != "ccswitch" else "CC Switch 的服务不能删除，可将其关闭"
+                )
             self.services.remove(svc)
             if self.default_id == sid:
                 self.default_id = "google"
@@ -297,9 +315,13 @@ class ServiceStore:
                 raise ServiceError("本地服务无需复制，可直接编辑")
             if not svc["available"]:
                 raise ServiceError(f"无法复制：{svc['unavailable_reason']}")
-            clone = {"id": uuid.uuid4().hex[:8], "provider": svc["provider"], "builtin": False,
-                     **{k: svc.get(k, v) for k, v in FIELDS.items()},
-                     "name": f"{svc['name']}（本地）"}
+            clone = {
+                "id": uuid.uuid4().hex[:8],
+                "provider": svc["provider"],
+                "builtin": False,
+                **{k: svc.get(k, v) for k, v in FIELDS.items()},
+                "name": f"{svc['name']}（本地）",
+            }
             # api_format/auth_style 不在 FIELDS 里，但创建引擎时要用（Claude 系走 Responses/Bearer 的情况）
             for k in ("api_format", "auth_style"):
                 if svc.get(k):

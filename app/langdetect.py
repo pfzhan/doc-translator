@@ -6,6 +6,7 @@
 用 py3langid（离线、无需网络）。它不区分简繁中文，再用 GB2312 能否编码来判断：
 繁体特有的字在 GB2312 里没有。
 """
+
 import re
 
 from py3langid.langid import MODEL_FILE, LanguageIdentifier

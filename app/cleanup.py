@@ -10,6 +10,7 @@
 同一份文件可以传成几条记录，翻译缓存和版面分析结果都是它们共用的。清理一条时照样删，
 界面上提示共用的条数；删除记录时只在没有别的记录用这份文件时才删，免得删掉一条重复的连累另一条。
 """
+
 from __future__ import annotations
 
 import shutil
@@ -28,6 +29,7 @@ _GENERATED = ("preview.json", ".variant")
 @dataclass
 class Footprint:
     """一条记录留下的痕迹。keys 是缓存里还在的条目。"""
+
     doc: str
     keys: set[str] = field(default_factory=set)
     generated: list[Path] = field(default_factory=list)
@@ -80,8 +82,10 @@ def footprint(job: Job, jobs: JobStore, cache: Cache, translator=None) -> Footpr
     doc = jobs.document(job)
     found = Footprint(doc)
     outputs = jobs.out_dir(job.id)
-    found.generated = [*(outputs.iterdir() if outputs.is_dir() else ()),
-                       *(path for name in _GENERATED if (path := jobs.dir(job.id) / name).exists())]
+    found.generated = [
+        *(outputs.iterdir() if outputs.is_dir() else ()),
+        *(path for name in _GENERATED if (path := jobs.dir(job.id) / name).exists()),
+    ]
     if not doc:
         return found
     found.keys = cache.owned(doc, _legacy_keys(job, jobs, cache, translator, doc))

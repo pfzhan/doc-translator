@@ -4,6 +4,7 @@
 PDF 翻译时怎么用模型在 formats/pdf_vision.py。这里不引入新依赖：下载用 httpx，
 推理要的 onnxruntime 由用户自己装，没装时页面上提示，翻译照常只用规则。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -24,6 +25,7 @@ MODELS_DIR = ROOT / "data" / "models"
 @dataclass(frozen=True)
 class ModelSpec:
     """一个模型：设置里的键、默认文件名、文件的 SHA3-256（下载完核对，传坏了不留下）、下载来源。"""
+
     key: str
     file: str
     sha3: str
@@ -49,9 +51,11 @@ LAYOUT = ModelSpec(
     sources={
         "huggingface": ("Hugging Face", f"https://huggingface.co/{_LAYOUT_REPO}/resolve/main/{_LAYOUT_FILE}"),
         "hf-mirror": ("HF-Mirror（国内镜像）", f"https://hf-mirror.com/{_LAYOUT_REPO}/resolve/main/{_LAYOUT_FILE}"),
-        "modelscope": ("ModelScope（魔搭）",
-                       f"https://www.modelscope.cn/models/AI-ModelScope/DocLayout-YOLO-DocStructBench-onnx"
-                       f"/resolve/master/{_LAYOUT_FILE}"),
+        "modelscope": (
+            "ModelScope（魔搭）",
+            f"https://www.modelscope.cn/models/AI-ModelScope/DocLayout-YOLO-DocStructBench-onnx"
+            f"/resolve/master/{_LAYOUT_FILE}",
+        ),
     },
 )
 _FORMULA_FILE = "pix2text-mfd-1.5.onnx"
@@ -153,7 +157,9 @@ def check(spec: ModelSpec, path: Path, size: int | None = None) -> dict:
     if spec is FORMULA:
         if size not in pdf_vision.FORMULA_SIZES:
             size = pdf_vision.FORMULA_SIZES[0]
-        detector = pdf_vision.formula_detector(doc, pdf_vision.FormulaModel(str(path), size, workers=1, threads=threads))
+        detector = pdf_vision.formula_detector(
+            doc, pdf_vision.FormulaModel(str(path), size, workers=1, threads=threads)
+        )
         if detector is None:
             raise LayoutModelError("该文件不是公式检测模型：类别中没有行内公式（embedding）")
         regions = detector.regions(0)
@@ -172,8 +178,10 @@ def sample_page() -> pymupdf.Document:
     doc = pymupdf.open()
     page = doc.new_page(width=595, height=842)
     page.insert_text((72, 90), "1 Introduction", fontsize=16, fontname="hebo")
-    body = ("Decision support applications involve complex queries on very large databases. "
-            "Since response times should be small, query optimization is critical. ") * 3
+    body = (
+        "Decision support applications involve complex queries on very large databases. "
+        "Since response times should be small, query optimization is critical. "
+    ) * 3
     page.insert_textbox(pymupdf.Rect(72, 110, 523, 230), body, fontsize=10, fontname="tiro")
     figure = pymupdf.Rect(150, 260, 445, 460)
     page.draw_rect(figure, color=(0, 0, 0), width=1)

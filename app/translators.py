@@ -4,6 +4,7 @@
 提示词和 [[pN]] 标记协议取自沉浸式翻译（见 prompts.py）。模型漏掉的段落会单独补翻。
 各家只在请求格式上不同，由子类实现 _complete。
 """
+
 import asyncio
 import hashlib
 import re
@@ -138,12 +139,38 @@ def misplaced(source: str, translation: str, typical: float | None) -> bool:
 
 # 判断夹带外文用的文字系统，取字符 Unicode 名称的第一个词。拉丁字母、希腊字母不在其中：
 # 代码、人名、公式符号（μ律、λ）在任何语言的译文里都可能出现
-_SCRIPTS = frozenset({
-    "CYRILLIC", "ARMENIAN", "HEBREW", "ARABIC", "SYRIAC", "THAANA", "DEVANAGARI", "BENGALI",
-    "GURMUKHI", "GUJARATI", "ORIYA", "TAMIL", "TELUGU", "KANNADA", "MALAYALAM", "SINHALA", "THAI",
-    "LAO", "TIBETAN", "MYANMAR", "GEORGIAN", "HANGUL", "ETHIOPIC", "KHMER", "MONGOLIAN",
-    "HIRAGANA", "KATAKANA", "CJK",
-})
+_SCRIPTS = frozenset(
+    {
+        "CYRILLIC",
+        "ARMENIAN",
+        "HEBREW",
+        "ARABIC",
+        "SYRIAC",
+        "THAANA",
+        "DEVANAGARI",
+        "BENGALI",
+        "GURMUKHI",
+        "GUJARATI",
+        "ORIYA",
+        "TAMIL",
+        "TELUGU",
+        "KANNADA",
+        "MALAYALAM",
+        "SINHALA",
+        "THAI",
+        "LAO",
+        "TIBETAN",
+        "MYANMAR",
+        "GEORGIAN",
+        "HANGUL",
+        "ETHIOPIC",
+        "KHMER",
+        "MONGOLIAN",
+        "HIRAGANA",
+        "KATAKANA",
+        "CJK",
+    }
+)
 # 本地名里看不出的文字系统：日文的假名
 _EXTRA_SCRIPTS = {"ja": {"HIRAGANA", "KATAKANA"}}
 _NATIVE_NAMES = {code: native for code, _, native in LANGUAGES}
@@ -161,8 +188,7 @@ def _scripts(text: str) -> set[str]:
 
 def _symbols(text: str) -> set[str]:
     """杂项符号、装饰符号、表情和私用区字符。译文里的这类字符应当都来自原文。"""
-    return {ch for ch in text if 0x2600 <= ord(ch) <= 0x27BF or ord(ch) >= 0x1F000
-            or unicodedata.category(ch) == "Co"}
+    return {ch for ch in text if 0x2600 <= ord(ch) <= 0x27BF or ord(ch) >= 0x1F000 or unicodedata.category(ch) == "Co"}
 
 
 def stray_chars(source: str, translation: str, target_lang: str) -> bool:
@@ -198,7 +224,11 @@ def _json_or_error(resp: httpx.Response, url: str) -> dict:
         data = resp.json()
     except ValueError:
         ctype = resp.headers.get("content-type", "")
-        hint = "，请检查 API 地址是否完整（通常以 /v1 结尾）" if "html" in ctype or resp.text.lstrip().startswith("<") else ""
+        hint = (
+            "，请检查 API 地址是否完整（通常以 /v1 结尾）"
+            if "html" in ctype or resp.text.lstrip().startswith("<")
+            else ""
+        )
         raise TranslatorError(f"接口返回的不是 JSON（{ctype or '未知类型'}）：{url}{hint}") from None
     if not isinstance(data, dict):
         raise TranslatorError(f"返回格式异常: {str(data)[:200]}")
@@ -221,9 +251,26 @@ class LLMTranslator(Translator):
     provider = ""
     retries = 4
 
-    def __init__(self, target_lang, source_lang="auto", *, api_key="", base_url="", model="",
-                 concurrency=4, max_items=20, max_chars=3000, temperature=0.0, prompt="", user_prompt="",
-                 api_format="", auth_style="", transport=None, glossary="", auto_glossary=True):
+    def __init__(
+        self,
+        target_lang,
+        source_lang="auto",
+        *,
+        api_key="",
+        base_url="",
+        model="",
+        concurrency=4,
+        max_items=20,
+        max_chars=3000,
+        temperature=0.0,
+        prompt="",
+        user_prompt="",
+        api_format="",
+        auth_style="",
+        transport=None,
+        glossary="",
+        auto_glossary=True,
+    ):
         super().__init__(target_lang, source_lang)
         if not model:
             raise TranslatorError("未设置模型")
@@ -255,8 +302,7 @@ class LLMTranslator(Translator):
         # 模型、提示词、术语表进缓存键：换了就自动整本重翻，换回来仍命中该配置自己的缓存。
         # 源语言影响提示词（{{from}}、wyw2zh-CN 这类覆盖），用检测后的实际源语言
         p = hashlib.sha1(f"{self.prompt}\0{self.user_prompt}\0{self.glossary}".encode()).hexdigest()[:8]
-        key = (f"{self.service_id}:{self.provider}:{self.model}:{p}:"
-               f"{self.effective_source}:{self.target_lang}")
+        key = f"{self.service_id}:{self.provider}:{self.model}:{p}:{self.effective_source}:{self.target_lang}"
         # 文档术语表也影响译文。没有时键不变，以前的缓存照样命中
         if self.doc_glossary:
             key += ":g" + hashlib.sha1(glossary_mod.render(self.doc_glossary).encode()).hexdigest()[:8]
@@ -275,7 +321,11 @@ class LLMTranslator(Translator):
     async def define_terms(self, terms: list[str], excerpt: str = "") -> list[glossary_mod.Entry]:
         """一次请求定下候选术语的译名。模型删掉的、改了写法的候选不收。"""
         system, user = prompts.build_terms_messages(
-            terms, self.target_lang, source_lang=self.effective_source, title=self.title, excerpt=excerpt,
+            terms,
+            self.target_lang,
+            source_lang=self.effective_source,
+            title=self.title,
+            excerpt=excerpt,
         )
         async with self._sem:
             content = await self._complete(system, user)
@@ -288,10 +338,15 @@ class LLMTranslator(Translator):
 
     def build_messages(self, texts: list[str]) -> tuple[str, str]:
         return prompts.build_messages(
-            texts, self.target_lang, source_lang=self.effective_source, title=self.title,
-            system_template=self.prompt, user_template=self.user_prompt,
+            texts,
+            self.target_lang,
+            source_lang=self.effective_source,
+            title=self.title,
+            system_template=self.prompt,
+            user_template=self.user_prompt,
             contains_html=any(self.is_html_item(t) for t in texts),
-            glossary=self.glossary_for(texts), notes=[self.notes.get(t, "") for t in texts],
+            glossary=self.glossary_for(texts),
+            notes=[self.notes.get(t, "") for t in texts],
         )
 
     async def _complete(self, system: str, user: str) -> str:
@@ -316,8 +371,7 @@ class LLMTranslator(Translator):
                 return _json_or_error(resp, url)
             msg = _error_text(resp)
             # 最后一次尝试不再剥离 temperature 重发，让真实错误抛出来
-            if (resp.status_code == 400 and "temperature" in msg.lower()
-                    and self.temperature is not None and not last):
+            if resp.status_code == 400 and "temperature" in msg.lower() and self.temperature is not None and not last:
                 self.temperature = None
                 payload = {k: v for k, v in payload.items() if k != "temperature"}
                 gen = payload.get("generationConfig")
@@ -377,8 +431,11 @@ class LLMTranslator(Translator):
         # 后面几段跟着整体挪一格，看得出来的只是其中长短悬殊的一段，这一批逐段重翻
         typical = typical_ratio((texts[i], found[i]) for i in found)
         shifted = any(_numbers_mismatch(texts[i], found[i]) or misplaced(texts[i], found[i], typical) for i in found)
-        missing = [i for i in range(len(texts))
-                   if shifted or i not in found or stray_chars(texts[i], found[i], self.target_lang)]
+        missing = [
+            i
+            for i in range(len(texts))
+            if shifted or i not in found or stray_chars(texts[i], found[i], self.target_lang)
+        ]
         if missing:
             redone = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in missing))
             for i, [text] in zip(missing, redone):
@@ -441,7 +498,9 @@ class OpenAITranslator(LLMTranslator):
             if c.get("type") in ("output_text", "text")
         ]
         if not texts and data.get("status") not in (None, "completed"):
-            raise TranslatorError(f"返回状态异常: {data.get('status')} {str(data.get('incomplete_details') or '')[:200]}")
+            raise TranslatorError(
+                f"返回状态异常: {data.get('status')} {str(data.get('incomplete_details') or '')[:200]}"
+            )
         return "".join(texts)
 
     async def list_models(self):
@@ -542,7 +601,9 @@ class GoogleTranslator(Translator):
         if target_lang not in GOOGLE_CODES:
             raise TranslatorError(f"谷歌翻译不支持目标语言「{prompts.lang_name(target_lang)}」，请换用 AI 翻译服务")
         if source_lang != "auto" and source_lang not in GOOGLE_CODES:
-            raise TranslatorError(f"谷歌翻译不支持源语言「{prompts.lang_name(source_lang)}」，请改为自动检测或换用 AI 翻译服务")
+            raise TranslatorError(
+                f"谷歌翻译不支持源语言「{prompts.lang_name(source_lang)}」，请改为自动检测或换用 AI 翻译服务"
+            )
         self.tl = GOOGLE_CODES[target_lang]
         self.sl = "auto" if source_lang == "auto" else GOOGLE_CODES[source_lang]
         # 和 LLM 引擎一样，实际发请求都过同一个信号量
@@ -603,7 +664,9 @@ class GoogleTranslator(Translator):
                 continue
             # 302 跳到验证码页 / 429 都是限流，退避重试
             if resp.status_code not in (302, 429, 500, 503) or last:
-                raise TranslatorError(f"Google 接口错误 {resp.status_code}（可能已被限流，请稍后重试或改用 AI 翻译服务）")
+                raise TranslatorError(
+                    f"Google 接口错误 {resp.status_code}（可能已被限流，请稍后重试或改用 AI 翻译服务）"
+                )
             await asyncio.sleep(_retry_delay(resp, min(2 ** (attempt + 1), 30)))
         raise TranslatorError("已达到最大重试次数")
 

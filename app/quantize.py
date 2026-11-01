@@ -17,6 +17,7 @@
 - 版面模型：分段和 fp32 相同，框和 fp32 的对上 98.6%；每页推理 1.05 s → 0.66 s。
 评测脚本见 eval/README.md。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -47,6 +48,7 @@ class QuantizeError(Exception):
 @dataclass(frozen=True)
 class QuantSpec:
     """一个模型怎么量化：校准时页面画成多大（长边），生成后核对时怎么从输出里数出分够的框。"""
+
     size: int
     boxes: Callable[[np.ndarray], int]
 
@@ -100,8 +102,9 @@ def pick_pages(pdfs: list[Path], count: int = CALIBRATION_PAGES, seed: int = 0) 
     return sorted(picks, key=lambda pick: (str(pick[0]), pick[1]))
 
 
-def calibration_images(picks: list[tuple[Path, int]], fallback: Callable[[], pymupdf.Document],
-                       size: int) -> list[np.ndarray]:
+def calibration_images(
+    picks: list[tuple[Path, int]], fallback: Callable[[], pymupdf.Document], size: int
+) -> list[np.ndarray]:
     """抽到的页按翻译时的样子画成长边为 size 的模型输入，存成 8 位省内存（64 页约 160 MB）。
     没有页可抽时用 fallback 的样例页。要用 MuPDF，调用方先拿到 mupdf_turn。"""
     images = []
@@ -125,8 +128,7 @@ def decode_nodes(names: list[str]) -> list[str]:
     head = f"/model.{max(blocks)}/"
     branch = re.compile(r"/(?:one2one_)?cv[23]\.\d+/")
     last_conv = re.compile(r"/(?:one2one_)?cv[23]\.\d+/(?:one2one_)?cv[23]\.\d+\.2/")
-    return [name for name in names
-            if name.startswith(head) and (not branch.search(name) or last_conv.search(name))]
+    return [name for name in names if name.startswith(head) and (not branch.search(name) or last_conv.search(name))]
 
 
 class Quantizer:
@@ -181,9 +183,15 @@ class Quantizer:
             graph = onnx.load(str(pre), load_external_data=False).graph
             names = [node.name for node in graph.node]
             quantize_static(
-                str(pre), str(out), Pages(graph.input[0].name), quant_format=QuantFormat.QDQ,
-                activation_type=QuantType.QUInt8, weight_type=QuantType.QInt8, per_channel=True,
-                reduce_range=True, nodes_to_exclude=decode_nodes(names),
+                str(pre),
+                str(out),
+                Pages(graph.input[0].name),
+                quant_format=QuantFormat.QDQ,
+                activation_type=QuantType.QUInt8,
+                weight_type=QuantType.QInt8,
+                per_channel=True,
+                reduce_range=True,
+                nodes_to_exclude=decode_nodes(names),
                 extra_options={"ActivationSymmetric": False, "CalibMovingAverage": True},
             )
             _check(src, out, images[:4], spec)

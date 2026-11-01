@@ -5,6 +5,7 @@ asyncio.to_thread 起的线程取消不了：任务被暂停时协程停了，�
 run 在任务被取消时通知线程停下，等它真的停了才往外抛。线程里逐页、逐段的循环调用 check_stop，
 报进度的 Runner.report_stage 也会调用。
 """
+
 from __future__ import annotations
 
 import asyncio

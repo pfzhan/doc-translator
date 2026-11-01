@@ -3,6 +3,7 @@
 并发用固定数量的 worker 从待翻批次里取活：默认按文档顺序，预览里用户滚动或跳转后，
 优先取关注位置之后的批次（类似沉浸式翻译“翻译可视区域”的思路，但整本书最终都会翻完）。
 """
+
 import asyncio
 import hashlib
 import re
@@ -29,8 +30,9 @@ class Cache:
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.execute("CREATE TABLE IF NOT EXISTS t (k TEXT PRIMARY KEY, v TEXT)")
         # 条目属于哪些文件（文件内容的摘要）。键是哈希，看不出出自哪份文件，清理任务时按这张表删
-        self.conn.execute("CREATE TABLE IF NOT EXISTS owner (doc TEXT NOT NULL, k TEXT NOT NULL, "
-                          "PRIMARY KEY (doc, k)) WITHOUT ROWID")
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS owner (doc TEXT NOT NULL, k TEXT NOT NULL, PRIMARY KEY (doc, k)) WITHOUT ROWID"
+        )
         self.conn.execute("CREATE INDEX IF NOT EXISTS owner_k ON owner (k)")
         self.lock = threading.Lock()
 
@@ -47,15 +49,20 @@ class Cache:
         if not doc or not texts:
             return
         with self.lock:
-            self.conn.executemany("INSERT OR IGNORE INTO owner (doc, k) VALUES (?, ?)",
-                                  [(doc, key) for key in self.keys(prefix, texts)])
+            self.conn.executemany(
+                "INSERT OR IGNORE INTO owner (doc, k) VALUES (?, ?)", [(doc, key) for key in self.keys(prefix, texts)]
+            )
             self.conn.commit()
 
     def owned(self, doc: str, extra: set[str] = frozenset()) -> set[str]:
         """文件 doc 名下还在缓存里的条目。extra 是按别的线索算出来的键，只留缓存里有的。"""
         with self.lock:
-            found = {k for (k,) in self.conn.execute(
-                "SELECT owner.k FROM owner JOIN t ON t.k = owner.k WHERE owner.doc=?", (doc,))}
+            found = {
+                k
+                for (k,) in self.conn.execute(
+                    "SELECT owner.k FROM owner JOIN t ON t.k = owner.k WHERE owner.doc=?", (doc,)
+                )
+            }
             found |= {k for k in extra - found if self.conn.execute("SELECT 1 FROM t WHERE k=?", (k,)).fetchone()}
         return found
 
@@ -119,8 +126,14 @@ class Runner:
     # 第一批只发几段，让预览尽快出现；之后恢复正常批量
     first_batch_items = 4
 
-    def __init__(self, translator: Translator, progress: Callable[[int, int], None] | None = None, cache=None,
-                 skip_same_lang: bool = True, cache_only: bool = False):
+    def __init__(
+        self,
+        translator: Translator,
+        progress: Callable[[int, int], None] | None = None,
+        cache=None,
+        skip_same_lang: bool = True,
+        cache_only: bool = False,
+    ):
         self.translator = translator
         self.progress = progress or (lambda done, total: None)
         self.cache = cache if cache is not None else get_cache()
@@ -266,9 +279,15 @@ class Runner:
         tr.doc_glossary = glossary.parse(found)
         self.info["terms"] = len(tr.doc_glossary)
 
-    async def translate_all(self, texts: list[str], kinds: list[str] | None = None,
-                            preview: bool = False, html: list[bool] | None = None,
-                            skip: list[bool] | None = None, notes: list[str] | None = None) -> list[str]:
+    async def translate_all(
+        self,
+        texts: list[str],
+        kinds: list[str] | None = None,
+        preview: bool = False,
+        html: list[bool] | None = None,
+        skip: list[bool] | None = None,
+        notes: list[str] | None = None,
+    ) -> list[str]:
         """按原顺序返回译文；空白文本和已是目标语言的段落原样返回。
 
         preview=True 时记录段落供预览接口读取；kinds 是每段的类型（h1~h6 / p / li / quote / td / toc），
@@ -298,9 +317,7 @@ class Runner:
             return bool(text.strip()) and (skip_flags[i] or text in lang_skipped)
 
         self.info["skipped"] = sum(1 for i in range(n) if kept(i))
-        self.translator.html_texts = {
-            texts[i] for i in range(n) if html_flags[i] and texts[i].strip() and not kept(i)
-        }
+        self.translator.html_texts = {texts[i] for i in range(n) if html_flags[i] and texts[i].strip() and not kept(i)}
         need = list(dict.fromkeys(texts[i] for i in range(n) if texts[i].strip() and not kept(i)))
         note_of: dict[str, str] = {}
         for text, note in zip(texts, notes or []):
@@ -325,10 +342,12 @@ class Runner:
         if not self.cache_only:
             typical = typical_ratio(done_map.items())
             shifted = {src for src, dst in done_map.items() if src not in echoed and misplaced(src, dst, typical)}
-            shifted |= {src for src in _batch_around(need, shifted, self.translator.max_batch_chars)
-                        if src in done_map}
-            echoed += [src for src, dst in done_map.items() if src not in echoed
-                       and (src in shifted or stray_chars(src, dst, tl))]
+            shifted |= {src for src in _batch_around(need, shifted, self.translator.max_batch_chars) if src in done_map}
+            echoed += [
+                src
+                for src, dst in done_map.items()
+                if src not in echoed and (src in shifted or stray_chars(src, dst, tl))
+            ]
         if echoed:
             done_map = {src: dst for src, dst in done_map.items() if src not in set(echoed)}
             if callable(getattr(self.cache, "drop_many", None)):
@@ -402,12 +421,20 @@ class Runner:
                 # 逐段重翻一次；仍是源语言才保留（专有名词、代码段不会更差）
                 from .translators import LLMTranslator
 
-                src_lang = (getattr(self.translator, "detected_source", "")
-                            or getattr(self.translator, "source_lang", ""))
-                if (isinstance(self.translator, LLMTranslator) and src_lang
-                        and src_lang != self.translator.target_lang and src_lang != "auto"):
-                    echoes = [s for s, d in pairs.items()
-                              if d and d.strip() and len(d) > 20 and langdetect.detect(d) == src_lang]
+                src_lang = getattr(self.translator, "detected_source", "") or getattr(
+                    self.translator, "source_lang", ""
+                )
+                if (
+                    isinstance(self.translator, LLMTranslator)
+                    and src_lang
+                    and src_lang != self.translator.target_lang
+                    and src_lang != "auto"
+                ):
+                    echoes = [
+                        s
+                        for s, d in pairs.items()
+                        if d and d.strip() and len(d) > 20 and langdetect.detect(d) == src_lang
+                    ]
                     if echoes:
                         retried = await asyncio.gather(*(self.translator.translate_batch([s]) for s in echoes))
                         for s, (rt,) in zip(echoes, retried):
@@ -415,10 +442,7 @@ class Runner:
                                 pairs[s] = rt
                 # 空译文不写缓存、不计入完成（否则会永久缓存空结果），按失败处理。
                 # 标题和目录的「第2卷」在入库前改成中文数字
-                good = {
-                    s: fixed(s, d) for s, d in pairs.items()
-                    if d and d.strip() and not _is_prose_echo(s, d)
-                }
+                good = {s: fixed(s, d) for s, d in pairs.items() if d and d.strip() and not _is_prose_echo(s, d)}
                 empty = [s for s in batch if s not in good]
                 if good:
                     cache.put_many(prefix, good)
@@ -440,10 +464,7 @@ class Runner:
         self.info["failed"] = len(failed)
         if failed and (len(failed) == total or len(failed) > max(3, total // 10)):
             raise TranslatorError(f"翻译服务持续返回空译文（{len(failed)} / {total} 段），请重试或更换服务")
-        return [
-            texts[i] if not texts[i].strip() or kept(i) else done_map.get(texts[i], texts[i])
-            for i in range(n)
-        ]
+        return [texts[i] if not texts[i].strip() or kept(i) else done_map.get(texts[i], texts[i]) for i in range(n)]
 
 
 def _batch_around(order: list[str], flagged: set[str], limit: int) -> set[str]:

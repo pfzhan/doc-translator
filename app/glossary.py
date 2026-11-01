@@ -5,6 +5,7 @@
 再把候选一次交给模型，按文档标题定下译名，普通词由它删掉。
 翻译时每一批只带这一批原文里出现了的条目，提示词不随术语表变长。
 """
+
 from __future__ import annotations
 
 import re
@@ -16,9 +17,7 @@ Entry = tuple[str, str]
 # 送翻文本里的占位符（{v1}、{b}、{|}）和电子书片段的标签，数词时去掉
 _MARKUP_RE = re.compile(r"\{[^{}\s]{1,8}\}|<[^<>]+>")
 # 句内的停顿处断开，术语不跨标点。撇号只在词边上才是引号，夹在字母中间是词的一部分（don't）
-_CLAUSE_RE = re.compile(
-    r"[.,;:!?()\[\]{}\"“”‘/|=+*<>…—–]+|(?<![^\W\d_])['’]|['’](?![^\W\d_])|\s-\s|\n"
-)
+_CLAUSE_RE = re.compile(r"[.,;:!?()\[\]{}\"“”‘/|=+*<>…—–]+|(?<![^\W\d_])['’]|['’](?![^\W\d_])|\s-\s|\n")
 # 所有格 view's set：在这里断开，不让 s 和后面的词连成一条
 _POSSESSIVE_RE = re.compile(r"(?<=[^\W\d_])['’]s\b")
 _WORD_RE = re.compile(r"[^\W\d_][\w’'-]*[^\W_]|[^\W\d_]")
@@ -26,7 +25,8 @@ _WORD_RE = re.compile(r"[^\W\d_][\w’'-]*[^\W_]|[^\W\d_]")
 _CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 
 # 英文虚词和论文里的套话。术语里不含这些词，它们也不单独成词
-_STOPWORDS = frozenset("""
+_STOPWORDS = frozenset(
+    """
 a an the and or nor but if then else when while where which who whom whose what that this these those
 of in on at by for to from with without within into onto over under about above below between among
 through during before after since until upon via per as than so such too very also only even just
@@ -39,15 +39,16 @@ let lets let's use used using uses given give gives show shows shown see seen sa
 example examples figure section table chapter paper case cases way ways part parts number numbers
 first second third last next new old good best well better large small high low simple
 e.g i.e etc vs al fig eq ref
-""".split())
+""".split()
+)
 
-_MIN_PHRASE = 3     # 多词术语至少出现几次
-_MIN_ACRONYM = 2    # 缩写至少出现几次
-_MIN_WORD = 6       # 单个词至少出现几次
-_MIN_WORD_LEN = 4   # 单个词至少几个字母，更短的多是普通词
-_MAX_WORDS = 4      # 多词术语最长几个词
-_LIMIT = 80         # 交给模型的候选上限
-_EXCERPT = 1500     # 给模型看的开头一段（字符）
+_MIN_PHRASE = 3  # 多词术语至少出现几次
+_MIN_ACRONYM = 2  # 缩写至少出现几次
+_MIN_WORD = 6  # 单个词至少出现几次
+_MIN_WORD_LEN = 4  # 单个词至少几个字母，更短的多是普通词
+_MAX_WORDS = 4  # 多词术语最长几个词
+_LIMIT = 80  # 交给模型的候选上限
+_EXCERPT = 1500  # 给模型看的开头一段（字符）
 # 在这么大比例的段落里都出现的短词按虚词算（法语、德语等没有内置虚词表的语言靠它）
 _COMMON_SHARE = 0.3
 
@@ -116,7 +117,7 @@ def excerpt(texts: Sequence[str]) -> str:
         text = " ".join(_MARKUP_RE.sub(" ", text).split())
         if len(text) < 80:
             continue
-        out.append(text[:_EXCERPT - size])
+        out.append(text[: _EXCERPT - size])
         size += len(out[-1])
         if size >= _EXCERPT:
             break
@@ -131,10 +132,7 @@ def candidates(texts: Sequence[str]) -> list[str]:
     joined = "".join(clean)
     if len(_CJK_RE.findall(joined)) > len(joined) * 0.2:
         return []
-    clauses = [
-        [word for word in _WORD_RE.findall(clause)]
-        for text in clean for clause in _CLAUSE_RE.split(text)
-    ]
+    clauses = [[word for word in _WORD_RE.findall(clause)] for text in clean for clause in _CLAUSE_RE.split(text)]
     common = _common_words(clean)
 
     def plain(word: str) -> bool:
@@ -145,7 +143,7 @@ def candidates(texts: Sequence[str]) -> list[str]:
     for words in clauses:
         for start in range(len(words)):
             for size in range(1, _MAX_WORDS + 1):
-                gram = words[start:start + size]
+                gram = words[start : start + size]
                 if len(gram) < size or not all(plain(word) for word in gram):
                     continue
                 if size > 1 and any(_is_acronym(word) for word in gram):
@@ -218,14 +216,11 @@ def _drop_covered(terms: list[str], counts: Counter[str]) -> list[str]:
         words = keys[other].split()
         for size in range(1, len(words)):
             for start in range(len(words) - size + 1):
-                holders[" ".join(words[start:start + size])].append(other)
+                holders[" ".join(words[start : start + size])].append(other)
     out: list[str] = []
     for term in terms:
         key = keys[term]
-        if any(
-            len(other) > len(term) and counts[keys[other]] >= counts[key] * 0.8
-            for other in holders.get(key, ())
-        ):
+        if any(len(other) > len(term) and counts[keys[other]] >= counts[key] * 0.8 for other in holders.get(key, ())):
             continue
         out.append(term)
     return out

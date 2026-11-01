@@ -10,6 +10,7 @@ grokbuild）有一条 is_current=1 的记录，settings_config 是该应用的�
 每次使用时现读数据库（只读打开），所以在 CC Switch 里切换供应商后立即生效，Key 也不会复制到本项目里。
 官方账号登录（OAuth）的配置没有 API Key，不能直接用于翻译，会标记为不可用。
 """
+
 import json
 import os
 import re
@@ -56,8 +57,19 @@ def _parse_claude(cfg: dict, common: dict) -> dict:
     key = env.get("ANTHROPIC_API_KEY", "")
     if not (token or key):
         raise Unavailable("当前以 Claude 官方账号登录，没有 API Key")
-    model = next((env[k] for k in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
-                                    "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL") if env.get(k)), "")
+    model = next(
+        (
+            env[k]
+            for k in (
+                "ANTHROPIC_MODEL",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            )
+            if env.get(k)
+        ),
+        "",
+    )
     return {
         "base_url": _append_path(env.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com", "/v1"),
         "api_key": token or key,
