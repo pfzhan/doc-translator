@@ -1,17 +1,17 @@
-/* ============ 设计变量 ============ */
+/* ============ Design tokens ============ */
 :root {
   --bg: #f5f6f8;
   --surface: #ffffff;
   --surface-2: #eef0f3;
   --text: #1b1f27;
   --text-2: #4a5160;
-  /* 次要文字（元数据、提示）在白底和页面底色上都要过 4.5:1 */
+  /* Secondary text (metadata, hints) must reach 4.5:1 on both white and the page background */
   --muted: #667085;
   --border: #e2e5ea;
   --border-strong: #c9ced6;
   --accent: #3a55d6;
   --accent-soft: #eceffd;
-  /* 浅色强调底上的文字，比 --accent 再深一档 */
+  /* Text on the light accent background, one step darker than --accent */
   --accent-strong: #2c45b8;
   --accent-text: #ffffff;
   --link: #3a55d6;
@@ -26,7 +26,7 @@
   --fmt-epub: #2b7a4b;
   --fmt-md: #3b5bb5;
   --fmt-mobi: #a3610f;
-  /* 分段选择器选中项的底色 */
+  /* Background of the selected item of a segmented control */
   --seg-on: #ffffff;
   --radius: 10px;
   --radius-sm: 7px;
@@ -85,7 +85,7 @@ code { font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-r
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .hint { color: var(--muted); font-size: 13px; }
 
-/* ============ 顶栏 ============ */
+/* ============ Top bar ============ */
 .topbar {
   position: sticky; top: 0; z-index: 20;
   display: flex; align-items: center; gap: 28px;
@@ -96,7 +96,7 @@ code { font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-r
 }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 15px; white-space: nowrap; }
 .brand-mark { display: block; flex: none; width: 28px; height: 28px; }
-/* 窄屏放不下时横向滚动，不把标签文字折成竖排 */
+/* Scroll horizontally on narrow screens instead of wrapping tab labels into a vertical column */
 .nav { display: flex; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .tab {
   position: relative; display: inline-flex; align-items: center; gap: 6px;
@@ -110,7 +110,7 @@ code { font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-r
   background: var(--accent); color: var(--accent-text); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
 }
 
-/* ============ 页面骨架 ============ */
+/* ============ Page layout ============ */
 .page { margin: 32px auto 64px; padding: 0 16px; }
 .page.narrow { max-width: 760px; }
 .page.wide { max-width: 1120px; }
@@ -124,7 +124,7 @@ code { font-size: 12px; background: var(--surface-2); padding: 1px 5px; border-r
   box-shadow: var(--shadow);
 }
 
-/* ============ 表单控件 ============ */
+/* ============ Form controls ============ */
 .field { display: flex; flex-direction: column; gap: 6px; flex: 1; min-width: 0; font-size: 13px; color: var(--text-2); font-weight: 500; }
 fieldset.field { border: 0; padding: 0; margin: 0; }
 fieldset.field legend { padding: 0; margin-bottom: 6px; }
@@ -136,7 +136,7 @@ select, input, textarea {
 select:hover, input:hover, textarea:hover { border-color: var(--muted); }
 textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.5; }
 input[readonly] { background: var(--surface-2); color: var(--text-2); }
-/* 文字折行时勾选框对齐第一行，不跑到两行中间 */
+/* When the text wraps, the checkbox aligns with the first line instead of sitting between the lines */
 label.check { display: flex; align-items: flex-start; gap: 8px; font-size: 13px; color: var(--text-2); cursor: pointer; }
 label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin: 2px 0 0; accent-color: var(--accent); }
 
@@ -150,7 +150,8 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 .btn:hover { background: var(--surface-2); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .btn.primary:hover { filter: brightness(0.95); }
-/* 次一级的推荐操作：列表里每行都有一个，用实心主色会和页面主按钮抢 */
+/* Secondary recommended action: every list row has one, and a solid primary color would compete with the page's
+   main button */
 .btn.soft { background: var(--accent-soft); border-color: transparent; color: var(--accent-strong); font-weight: 600; }
 .btn.soft:hover { background: color-mix(in srgb, var(--accent) 18%, var(--surface)); }
 .btn.lg { height: 42px; padding: 0 22px; font-size: 15px; }
@@ -168,7 +169,7 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 .link.small { font-size: 12px; color: var(--muted); }
 .link:disabled { opacity: 0.45; cursor: default; text-decoration: none; }
 
-/* 分段选择器 */
+/* Segmented control */
 .segmented {
   display: inline-flex; padding: 3px; gap: 2px; border-radius: var(--radius-sm);
   background: var(--surface-2); border: 1px solid var(--border);
@@ -182,7 +183,7 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 .segmented input:checked + span { background: var(--seg-on); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
 .segmented input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: 1px; }
 .segmented.compact span { padding: 4px 10px; }
-/* 放在表单字段里时撑满整行、和旁边的下拉框等高 */
+/* Inside a form field it fills the row and matches the height of the select next to it */
 .field > .segmented { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; min-height: 38px; }
 .field > .segmented span { display: flex; align-items: center; justify-content: center; height: 100%; padding: 4px 14px; }
 
@@ -190,8 +191,9 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 .inline-msg.warn { background: var(--warn-soft); color: var(--warn); }
 .inline-msg.error { background: var(--error-soft); color: var(--error); }
 
-/* ============ 翻译页 ============ */
-/* 上传区不需要太宽，多给右边：目标语言“简体中文 Simplified Chinese”在 1024 宽时也能显示完整 */
+/* ============ Translate page ============ */
+/* The upload area need not be wide, so the right side gets more room: the target language
+   "简体中文 Simplified Chinese" fits even at a width of 1024 */
 .form-card { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 7fr); gap: 24px; padding: 24px; }
 .form-side { min-width: 0; }
 .drop {
@@ -200,7 +202,8 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
   background: var(--surface-2); cursor: pointer; text-align: center;
   transition: border-color 0.15s, background 0.15s;
 }
-/* 选好文件后换成实线白底；放在悬停规则前面，悬停和拖入时仍有反馈 */
+/* After a file is chosen, switch to a solid border on white; placed before the hover rules so hovering and
+   dragging still give feedback */
 .drop.has-file { border-style: solid; border-color: var(--accent); background: var(--surface); }
 .drop:hover, .drop.over, .drop:focus-within { border-color: var(--accent); background: var(--accent-soft); }
 .drop input { position: absolute; opacity: 0; width: 1px; height: 1px; }
@@ -223,7 +226,7 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 .form-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--border); }
 .form-foot .hint { margin: 0; }
 
-/* ============ 任务列表（最近翻译 / 翻译记录） ============ */
+/* ============ Job lists (recent translations / translation records) ============ */
 .job-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px 24px; margin-top: 16px; }
 .pager .hint { margin: 0; }
@@ -254,7 +257,8 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 .job-name:hover { color: var(--accent); }
 .job-name:disabled { cursor: default; color: var(--text); }
 .job-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 2px; font-size: 12.5px; color: var(--muted); }
-/* 分隔点跟在前一项后面，换行时留在行尾，不会甩到下一行开头 */
+/* The separator dot follows the previous item and stays at the line end when wrapping, never starting the next
+   line */
 .job-meta > span:not(:last-child)::after { content: "·"; margin-left: 10px; }
 .job-id { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; opacity: 0.75; user-select: all; }
 .job-status { grid-area: status; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; font-size: 12.5px; }
@@ -271,7 +275,7 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 .badge.idle { color: var(--muted); background: var(--surface-2); }
 .job-progress.paused > div { background: var(--muted); }
 .section-actions, .bulk-actions { display: flex; align-items: center; gap: 8px; }
-/* 左边距和记录行的勾选框对齐（行内边距 16 + 边框 1） */
+/* Left margin aligned with the checkbox of record rows (row padding 16 + border 1) */
 .bulk-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; min-height: 30px; margin: 0 0 10px; padding: 0 17px; }
 .bulk-bar .hint { margin: 0; }
 .bulk-info { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; min-width: 0; }
@@ -282,11 +286,12 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 .job-progress { flex: none; width: 100%; max-width: 240px; height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
 .job-progress > div { height: 100%; background: var(--link); border-radius: 2px; transition: width 0.4s; }
 .job-error { max-width: 100%; color: var(--error); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* 中断不是出错（多半是服务重启），说明文字不用红色 */
+/* An interruption is not an error (usually a server restart), so its text is not red */
 .job-error.interrupted { color: var(--text-2); }
 .job-actions { grid-area: actions; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
 .job-actions .btn.ghost { color: var(--text-2); }
-/* 拆分按钮：左边直接执行，右边的箭头展开其余选项，两半之间一条细线 */
+/* Split button: the left part acts directly, the arrow on the right opens the other options, with a thin line
+   between the halves */
 .split { display: inline-flex; }
 .split > .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .split > .split-caret {
@@ -296,12 +301,12 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 .split-caret::after {
   content: ""; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 5px solid currentColor; opacity: 0.8;
 }
-/* “更多”是方形图标按钮 */
+/* "更多" is a square icon button */
 .btn.more { width: 30px; padding: 0; font-size: 16px; line-height: 1; }
 .btn[aria-expanded="true"] { background: var(--surface-2); }
 .btn.soft[aria-expanded="true"], .btn.primary[aria-expanded="true"] { filter: brightness(0.95); }
 
-/* 下拉菜单 */
+/* Drop-down menu */
 .menu {
   position: fixed; z-index: 60; min-width: 196px; max-width: 320px; padding: 6px;
   border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
@@ -335,7 +340,7 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 .retention-form select { width: auto; }
 .retention-form input { width: 90px; }
 
-/* ============ 阅读器 ============ */
+/* ============ Reader ============ */
 body.reading { overflow: hidden; }
 body.reading .topbar { display: none; }
 .reader { position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column; background: var(--bg); }
@@ -374,10 +379,11 @@ body.reading .topbar { display: none; }
 .reader-notice {
   max-width: 1084px; margin: 24px auto 0; padding: 12px 16px; border-radius: var(--radius);
   font-size: 13.5px; background: var(--warn-soft); color: var(--warn);
-  /* 和正文对齐：正文内容区左右各留 48px */
+  /* Aligned with the body text: the content area has 48px on each side */
   width: calc(100% - 96px);
 }
-/* 带操作的提示（失败 / 中断 / 暂停）：左侧色条区分语气，暂停不用红色 */
+/* Notices with actions (failed / interrupted / paused): a colored bar on the left sets the tone, and paused is not
+   red */
 .reader-notice.is-action {
   display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
   background: var(--surface); color: var(--text); border: 1px solid var(--border); border-left: 3px solid var(--error);
@@ -395,11 +401,11 @@ body.reading .topbar { display: none; }
 }
 .notice-actions { display: flex; align-items: center; gap: 8px; }
 .notice-actions select { width: auto; max-width: 220px; min-height: 30px; padding: 4px 8px; font-size: 13px; }
-/* 任务已停止：未翻译的段落去掉闪烁，显示一条安静的占位 */
+/* Job stopped: untranslated paragraphs stop blinking and show a quiet placeholder */
 .reader-content.stopped .seg.pending .dst { animation: none; background: none; border-left: 2px dashed var(--border-strong); min-height: 1.4em; }
 .reader-content.stopped .seg.pending .dst::after { content: "未翻译"; font-family: var(--ui-font); font-size: 12px; color: var(--muted); padding-left: 10px; }
 
-/* 段落：宽屏左右对照，窄屏上下排列 */
+/* Paragraphs: side by side on wide screens, stacked on narrow ones */
 .seg {
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 48px;
   padding: 8px 0; scroll-margin-top: 24px; font-family: var(--read-font); font-size: 16.5px; line-height: 1.8;
@@ -411,7 +417,8 @@ body.reading .topbar { display: none; }
 .view-dst .seg .src, .view-src .seg .dst { display: none; }
 .view-src .seg .src { color: var(--text); }
 
-/* 未翻译的段落：骨架条，不打断阅读节奏。亮色下 surface-2 和底色几乎一样，用 border 色才看得出 */
+/* Untranslated paragraphs: skeleton bars that do not interrupt reading. In light mode surface-2 is almost the
+   background color, so the border color is used to make them visible */
 .seg.pending .dst {
   align-self: start; border-radius: 4px; min-height: 1.1em; margin-top: 0.35em;
   background: linear-gradient(90deg, var(--border) 25%, color-mix(in srgb, var(--border) 40%, var(--bg)) 50%, var(--border) 75%);
@@ -422,7 +429,7 @@ body.reading .topbar { display: none; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 .seg.fresh .dst { animation: arrive 1.4s ease-out; }
 @keyframes arrive { from { background: var(--accent-soft); } to { background: transparent; } }
-/* 已是目标语言、无需翻译的段落：只显示一份 */
+/* Paragraphs already in the target language that need no translation: shown once */
 .seg.skipped { grid-template-columns: minmax(0, 1fr); }
 .seg.skipped .dst { display: none; }
 .view-dst .seg.skipped .src { display: block; color: var(--text); }
@@ -447,7 +454,7 @@ body.reading .topbar { display: none; }
 .toc-block .seg { font-family: var(--ui-font); font-size: 14px; line-height: 1.6; padding: 3px 0; }
 
 .reader-fab { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 31; }
-/* 有目录栏时放在正文中间，不是整屏中间 */
+/* With the outline shown, centered on the text rather than on the whole screen */
 .reader:not(.no-outline) .reader-fab { left: calc(50% + 130px); }
 .pill {
   height: 36px; padding: 0 16px; border-radius: 18px; border: 0;
@@ -464,7 +471,7 @@ body.reading .topbar { display: none; }
 .dialog h3 { margin: 0 0 8px; font-size: 16px; }
 .dialog-text { margin: 0 0 14px; color: var(--text-2); font-size: 13px; line-height: 1.6; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
-/* 清理缓存的清单：左边名目，右边数量，数字等宽对齐 */
+/* Clear-cache list: item names on the left, counts on the right, with tabular digits */
 .purge-list {
   display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; margin: 0;
   padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface-2); font-size: 13px;
@@ -475,14 +482,15 @@ body.reading .topbar { display: none; }
 .purge-shared { margin-top: 12px; line-height: 1.6; }
 .purge-boxes { margin-top: 14px; }
 
-/* width: max-content：left: 50% 时默认按半屏宽度折行，手机上短句也会被折成两行 */
+/* width: max-content: with left: 50% the default wraps at half the screen width, splitting even short sentences
+   into two lines on phones */
 .toast {
   position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%); z-index: 50;
   width: max-content; max-width: min(520px, calc(100vw - 32px)); padding: 10px 16px; border-radius: var(--radius-sm);
   background: var(--text); color: var(--bg); font-size: 13.5px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
 }
 
-/* ============ 翻译服务页 ============ */
+/* ============ Services page ============ */
 .add-service { display: flex; gap: 8px; }
 .add-service select { width: auto; }
 .services { display: grid; grid-template-columns: 300px minmax(0, 1fr); overflow: hidden; }
@@ -497,7 +505,8 @@ body.reading .topbar { display: none; }
 .service-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tag { padding: 0 7px; border: 1px solid var(--border-strong); border-radius: 9px; font-size: 11.5px; line-height: 18px; color: var(--text-2); white-space: nowrap; }
 .service-item .set-default { color: var(--link); }
-/* 设为默认只在指到这一行时出现，免得每行都挤掉服务名；触屏没有悬停，一直显示 */
+/* "设为默认" appears only when hovering the row, so it does not crowd out the service name in every row;
+   touch screens have no hover and always show it */
 @media (hover: hover) {
   .service-item:not(:hover):not(:focus-within):not(.active) .set-default { display: none; }
 }
@@ -518,7 +527,7 @@ body.reading .topbar { display: none; }
 .switch:disabled { opacity: 0.45; cursor: not-allowed; }
 .svc-detail { padding: 24px 28px; min-width: 0; }
 .svc-detail .field { margin-bottom: 14px; }
-/* 下拉框下面的选项说明，贴着下拉框 */
+/* Option description right below the select */
 .svc-detail .field:has(+ .field-hint) { margin-bottom: 6px; }
 .field-hint { margin: 0 0 14px; }
 .svc-detail label.check { margin: -6px 0 14px; }
@@ -543,7 +552,7 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-
 .layout-card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .layout-info { min-width: 0; padding-right: 32px; }
 .layout-settings { min-width: 0; padding-left: 32px; border-left: 1px solid var(--border); }
-/* 是否启用是这页最主要的设置，做成整块可点的一行 */
+/* Enabling is the main setting of this page, made a fully clickable row */
 .svc-detail .layout-settings > label.check:first-child {
   margin: 0 0 18px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm);
   background: var(--surface-2); color: var(--text); font-size: 14px; font-weight: 500;
@@ -555,22 +564,22 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-
 .layout-status code { padding: 0; background: none; font-size: 12.5px; word-break: break-all; }
 .layout-status dd.is-ok::before { content: "✓"; margin-right: 6px; color: var(--ok); font-weight: 700; }
 .layout-status .warn { color: var(--error); }
-/* 状态列表下面是下载：选来源、点下载 */
+/* Below the status list is the download: choose a source, click download */
 .layout-download { margin-top: 4px; padding-top: 18px; border-top: 1px solid var(--border); }
-/* int8 模型那一行：状态在左，生成按钮靠右 */
+/* The int8 model row: status on the left, generate button on the right */
 .layout-status dd.int8-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .layout-status dd.int8-row::before { flex: none; margin-right: -6px; }
 .int8-row span { flex: 1; min-width: 0; color: var(--text-2); }
 .int8-row span.warn { color: var(--error); }
-/* 按钮比文字高，上下收进去，这一行和别的行一样高 */
+/* The button is taller than the text, so it is pulled in vertically to keep the row as tall as the others */
 .int8-row .btn { flex: none; margin: -5px 0; }
 .layout-download .field { margin-bottom: 0; }
-/* 不常改的设置收起来，改过时自动展开（见 renderModel） */
+/* Rarely changed settings are collapsed, and expand automatically when changed (see renderModel) */
 .model-advanced { margin: 4px 0 18px; }
 .model-advanced[open] summary { margin-bottom: 14px; }
 .model-advanced .hint { margin-top: -6px; }
 .layout-download .btn { height: 38px; }
-/* 两个模型各占一个标签，标签上标出开没开 */
+/* Each model has its own tab, marked with whether it is enabled */
 .model-tabs { display: flex; width: fit-content; max-width: 100%; margin-bottom: 16px; }
 .model-tab {
   display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border: 0; border-radius: 5px;
@@ -587,7 +596,7 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-
 .actions { display: flex; align-items: center; gap: 12px; margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border); }
 .actions .danger-ghost { margin-left: auto; margin-right: -14px; }
 
-/* ============ 响应式 ============ */
+/* ============ Responsive ============ */
 @media (max-width: 1100px) {
   .reader-main { grid-template-columns: 220px minmax(0, 1fr); }
   .reader-content { padding: 32px 32px 120px; }
@@ -606,7 +615,7 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-
   .layout-card { grid-template-columns: minmax(0, 1fr); }
   .layout-info { padding-right: 0; }
   .layout-settings { margin-top: 6px; padding: 18px 0 0; border-left: 0; border-top: 1px solid var(--border); }
-  /* 窄屏：目录收起，对照改为上下排列 */
+  /* Narrow screens: the outline collapses, and side-by-side becomes stacked */
   .reader-main { grid-template-columns: minmax(0, 1fr); }
   .outline { display: none; }
   .reader:not(.no-outline) .reader-fab { left: 50%; }
@@ -626,19 +635,20 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-
   .lang-row { flex-wrap: wrap; }
   .lang-row .field { flex: 1 1 calc(50% - 30px); }
   .field-row { flex-direction: column; align-items: stretch; }
-  /* 两个标签并排放不下时折行，不横向撑出页面 */
+  /* When the two tabs do not fit side by side they wrap instead of widening the page */
   .model-tab { flex: 1 1 0; min-width: 0; flex-wrap: wrap; justify-content: center; gap: 2px 8px; white-space: normal; }
   .form-foot { flex-direction: column-reverse; align-items: stretch; }
   .form-foot .btn { width: 100%; }
   .job { grid-template-columns: 32px minmax(0, 1fr); grid-template-areas: "fmt main" "fmt status" "actions actions"; }
   .job.selectable { grid-template-columns: 16px 32px minmax(0, 1fr); grid-template-areas: "check fmt main" "check fmt status" "actions actions actions"; }
   .job-fmt { width: 32px; height: 40px; font-size: 9px; }
-  /* 行在手机上有三四行高，图标和勾选框放顶部，不悬在中间 */
+  /* Rows are three or four lines tall on phones, so icons and checkboxes sit at the top, not in the middle */
   .job-fmt, .job-check { align-self: start; }
   .job-check { margin-top: 12px; }
   .job-actions { justify-content: flex-end; flex-wrap: wrap; }
   .job-actions .btn.sm, .bulk-bar .btn.sm { height: 34px; }
-  /* 标题独占第一行，显示方式和下载放第二行，按钮文字不用省掉 */
+  /* The title takes the first line and display mode and download the second, so button labels need not be
+     dropped */
   .reader-bar { flex-wrap: wrap; height: auto; gap: 4px 8px; padding: 6px 8px 8px; }
   .reader-bar::after { content: ""; flex-basis: 100%; order: 1; }
   .reader-bar .segmented { order: 2; margin-right: auto; }
@@ -652,13 +662,13 @@ summary { cursor: pointer; font-size: 14px; font-weight: 500; color: var(--text-
   .services { grid-template-columns: minmax(0, 1fr); }
   .service-list { border-right: 0; border-bottom: 1px solid var(--border); }
   .svc-detail { padding: 16px; }
-  /* 高级设置的四个数字框两两一行，不必各占一整行 */
+  /* The four number fields of the advanced settings go two per row instead of one each */
   .svc-detail .field-row.four { flex-direction: row; gap: 0 12px; }
   .svc-detail .field-row.four .field { flex: 1 1 calc(50% - 6px); min-width: 0; }
 }
 
 
-/* ============ EPUB 预览（epub.html） ============ */
+/* ============ EPUB preview (epub.html) ============ */
 body.book-view { height: 100vh; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
 .book-bar { display: flex; align-items: center; gap: 10px; padding: 8px 16px; background: var(--surface); border-bottom: 1px solid var(--border); }
 .book-title { flex: 1; min-width: 0; }
@@ -671,7 +681,7 @@ body.book-view { height: 100vh; height: 100dvh; display: flex; flex-direction: c
 .book-toc a:hover { background: var(--surface-2); color: var(--text); }
 .book-toc a.active { background: var(--accent-soft); color: var(--accent-strong); font-weight: 600; }
 .book-page { flex: 1; min-width: 0; display: flex; }
-/* 书的页面按白纸排版，暗色模式下也保留白底 */
+/* Book pages are laid out as white paper and keep the white background in dark mode */
 .book-page iframe { flex: 1; border: 0; background: #fff; }
 .book-error { margin: auto; padding: 16px; color: var(--error); }
 #book-toc-toggle { display: none; }

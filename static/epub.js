@@ -1,6 +1,7 @@
 "use strict";
 
-// EPUB 在线预览：章节从 /api/jobs/{id}/epub/{文件}/{成员名} 取，图片、样式按相对路径跟着取
+// EPUB online preview: chapters are fetched from /api/jobs/{id}/epub/{file}/{member}, and images and styles follow
+// by relative path
 const params = new URLSearchParams(location.search);
 const jobId = params.get("job") || "";
 const fileName = params.get("file") || "";
@@ -33,7 +34,8 @@ function setToc(shown) {
   document.getElementById("book-toc-toggle").setAttribute("aria-expanded", String(shown));
 }
 
-// 读者在书里点了链接也要跟上：高亮所在章节，地址栏记住位置，刷新后回到这一章
+// Follow links clicked inside the book: highlight the current chapter and keep the position in the address bar, so
+// a reload returns to this chapter
 function onLoad() {
   let path = "";
   try {
@@ -48,7 +50,7 @@ function onLoad() {
   document.getElementById("book-next").disabled = index < 0 || index >= state.spine.length - 1;
   document.getElementById("book-meta").textContent =
     index >= 0 ? `${fileName} · 第 ${index + 1} / ${state.spine.length} 部分` : fileName;
-  // 点的是小节就高亮小节，否则高亮这一章的第一条
+  // Highlight the section when a section was clicked, otherwise the first entry of the chapter
   const anchor = decodeURIComponent(frame.contentWindow.location.hash.slice(1));
   const here = state.links.filter((link) => link.dataset.path === path);
   const active = here.find((link) => link.dataset.anchor === anchor) || here[0] || null;
@@ -58,7 +60,8 @@ function onLoad() {
     active.scrollIntoView({ block: "nearest" });
   }
   history.replaceState(null, "", `${location.pathname}${location.search}#${encodeURIComponent(path)}`);
-  // 书没给页边距时正文贴着窗口边，加一点留白，图片不超出页面
+  // Without margins from the book the text touches the window edge, so some padding is added, and images stay
+  // within the page
   const doc = frame.contentDocument;
   if (doc && doc.head && !doc.getElementById("book-view-style")) {
     const style = doc.createElementNS("http://www.w3.org/1999/xhtml", "style");
@@ -94,7 +97,7 @@ async function init() {
   const title = outline.title || fileName;
   document.title = `${title} · 预览`;
   document.getElementById("book-name").textContent = title;
-  // 没有目录的书按阅读顺序列出文件名
+  // A book without a table of contents lists file names in reading order
   const entries = outline.toc.length
     ? outline.toc
     : outline.spine.map((path) => ({ label: path.split("/").pop(), path, anchor: "", depth: 0 }));

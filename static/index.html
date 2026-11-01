@@ -18,7 +18,7 @@
   </nav>
 </header>
 
-<!-- ============ 翻译 ============ -->
+<!-- ============ Translate ============ -->
 <main id="view-translate" class="page wide">
   <div class="page-head">
     <h1>翻译文档</h1>
@@ -78,7 +78,7 @@
   </section>
 </main>
 
-<!-- ============ 翻译记录 ============ -->
+<!-- ============ Translation records ============ -->
 <main id="view-history" class="page wide" hidden>
   <div class="page-head row-head">
     <div>
@@ -107,7 +107,7 @@
     </div>
   </div>
 
-  <!-- 有记录就一直显示：勾选时只换内容，不把下面的列表往下推 -->
+  <!-- Always shown when there are records: ticking only changes its content and does not push the list down -->
   <div class="bulk-bar" id="history-bar" hidden>
     <span class="bulk-info">
       <label class="check"><input type="checkbox" id="select-all"><span id="history-select-text">全选</span></label>
@@ -143,7 +143,7 @@
   </div>
 </main>
 
-<!-- ============ 阅读器（边翻边预览） ============ -->
+<!-- ============ Reader (preview while translating) ============ -->
 <section id="reader" class="reader" hidden aria-label="阅读">
   <header class="reader-bar">
     <button type="button" class="btn ghost icon-btn" id="reader-back" aria-label="返回">←</button>
@@ -177,7 +177,7 @@
   </div>
 </section>
 
-<!-- ============ 翻译服务 ============ -->
+<!-- ============ Translation services ============ -->
 <main id="view-services" class="page wide" hidden>
   <div class="page-head row-head">
     <div>
@@ -279,7 +279,7 @@
   </div>
 </main>
 
-<!-- ============ 版面模型 ============ -->
+<!-- ============ Layout models ============ -->
 <main id="view-layout" class="page wide" hidden>
   <div class="page-head">
     <h1>版面模型</h1>
@@ -304,7 +304,7 @@
       <p class="desc">识别为图或行间公式的区域，其中的文字保留原文：图表中的图例、没有图注的图和 Word 排版的公式不再被翻译。CPU 上每页推理约 1 秒。模型采用 AGPL-3.0 许可，约 75 MB。</p>
       <div id="layout-test-result" class="test-result" hidden></div>
 
-      <!-- 左栏是模型本身：装好没有、下载、生成 int8，点了就生效，不用保存 -->
+      <!-- The left column is the model itself: status, download, int8 generation; changes apply at once -->
       <dl class="layout-status">
         <dt>运行环境</dt>
         <dd id="layout-runtime">—</dd>
@@ -326,7 +326,7 @@
       <p class="hint download-status" id="layout-download-status" aria-live="polite"></p>
     </div>
 
-    <!-- 右栏是翻译时怎么用，改了要保存 -->
+    <!-- The right column is how translation uses the model; changes must be saved -->
     <div class="layout-settings">
       <label class="check"><input type="checkbox" name="enabled" id="layout-enabled"> 翻译 PDF 时使用版面模型</label>
 
@@ -361,7 +361,7 @@
       <p class="desc">识别出的行内公式整体保留原样，斜体变量和 P(y = 1) 等式子在译文中保持完整，正文使用 Times 等字体排版的论文改善最明显。6 核 CPU 上，分析版面时每页约增加 1 秒。模型约 80 MB，模型卡注明 MIT 许可，文件元数据注明 AGPL-3.0。</p>
       <div id="formula-test-result" class="test-result" hidden></div>
 
-      <!-- 左栏是模型本身：装好没有、下载、生成 int8，点了就生效，不用保存 -->
+      <!-- The left column is the model itself: status, download, int8 generation; changes apply at once -->
       <dl class="layout-status">
         <dt>运行环境</dt>
         <dd id="formula-runtime">—</dd>
