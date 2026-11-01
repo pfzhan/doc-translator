@@ -1,12 +1,14 @@
-"""应用设置，保存在 data/settings.json。
+"""Application settings, saved in data/settings.json.
 
-- retention_days：翻译记录的保留时间，0 表示永久保留。
-- layout_model：PDF 版面模型，{"enabled": 是否使用, "path": 模型文件，空串表示默认位置,
-  "precision": 用 int8 还是 fp32}。precision 默认 int8：生成了 int8 文件就用它（见 quantize.py），没生成时用 fp32。
-- formula_model：PDF 公式检测模型，格式同上，另有 "size": 输入边长（1024 或 768）。默认开启、用 1024：
-  行内公式认得准不准直接影响译文，模型文件下好了就用，没下时只用规则。
+- retention_days: how long translation records are kept; 0 keeps them forever.
+- layout_model: the PDF layout model, {"enabled": whether to use it, "path": model file, empty for the default
+  location, "precision": int8 or fp32}. precision defaults to int8: the int8 file is used once generated (see
+  quantize.py), fp32 otherwise.
+- formula_model: the PDF formula detection model, in the same format plus "size": the input side (1024 or 768).
+  Enabled by default at 1024: recognizing inline formulas correctly directly affects the translation, so the model
+  is used once downloaded, and only the rules are used before that.
 
-可以在页面上改，也可以直接改这个文件后重启服务。
+The settings can be changed on the page, or by editing this file and restarting the server.
 """
 
 import json
@@ -20,7 +22,8 @@ PATH = Path(__file__).resolve().parent.parent / "data" / "settings.json"
 DEFAULTS = {
     "retention_days": 30,
     "layout_model": {"enabled": False, "path": "", "precision": PRECISIONS[0]},
-    # workers、threads 是公式检测模型同时推理几页、每页几个线程，0 表示按核数定
+    # workers and threads are how many pages the formula detection model infers at once and with how many threads
+    # each; 0 decides by core count
     "formula_model": {
         "enabled": True,
         "path": "",
@@ -31,7 +34,7 @@ DEFAULTS = {
     },
 }
 MAX_RETENTION_DAYS = 3650
-# 公式检测模型同时推理的页数、每页推理线程数的上限
+# Upper limits for the pages inferred at once by the formula detection model and the threads per page
 MAX_FORMULA_WORKERS = 8
 MAX_FORMULA_THREADS = 64
 
@@ -51,7 +54,7 @@ class Settings:
                 if isinstance(loaded, dict):
                     self.data.update(loaded)
             except (ValueError, OSError):
-                pass  # 文件损坏时用默认值，不影响启动
+                pass  # a damaged file falls back to the defaults and does not block startup
 
     @property
     def retention_days(self) -> int:
@@ -69,7 +72,7 @@ class Settings:
         return self.model("formula_model")
 
     def model(self, key: str) -> dict:
-        """layout_model 或 formula_model 的设置。"""
+        """Settings of layout_model or formula_model."""
         value = self.data.get(key)
         if not isinstance(value, dict):
             value = {}
@@ -87,7 +90,8 @@ class Settings:
         return conf
 
     def public(self) -> dict:
-        # 两个模型有自己的页面和接口（/api/layout-model、/api/formula-model），这里不带
+        # The two models have their own pages and endpoints (/api/layout-model, /api/formula-model) and are not
+        # included here
         return {"retention_days": self.retention_days}
 
     def update(self, changes: dict) -> dict:

@@ -1,8 +1,10 @@
-"""PDF 用的两个模型的管理：状态、下载、测试。版面模型（DocLayout-YOLO）框图、行间公式、标题、图注，
-公式检测模型（Pix2Text MFD）框行内公式。设置（开没开、文件在哪）存在 data/settings.json。
+"""Management of the two PDF models: status, download, test. The layout model (DocLayout-YOLO) boxes figures,
+display formulas, headings and captions; the formula detection model (Pix2Text MFD) boxes inline formulas. Settings
+(enabled or not, file location) are stored in data/settings.json.
 
-PDF 翻译时怎么用模型在 formats/pdf_vision.py。这里不引入新依赖：下载用 httpx，
-推理要的 onnxruntime 由用户自己装，没装时页面上提示，翻译照常只用规则。
+How PDF translation uses the models is in formats/pdf_vision.py. No new dependency is introduced here: downloads
+use httpx, and the onnxruntime needed for inference is installed by the user. Without it the page shows a hint and
+translation uses only the rules, as usual.
 """
 
 from __future__ import annotations
@@ -24,7 +26,8 @@ MODELS_DIR = ROOT / "data" / "models"
 
 @dataclass(frozen=True)
 class ModelSpec:
-    """一个模型：设置里的键、默认文件名、文件的 SHA3-256（下载完核对，传坏了不留下）、下载来源。"""
+    """A model: its key in the settings, default file name, SHA3-256 of the file (checked after download, so a
+    corrupted download is not kept) and download sources."""
 
     key: str
     file: str
@@ -35,7 +38,8 @@ class ModelSpec:
         return MODELS_DIR / self.file
 
     def resolve(self, path: str) -> Path:
-        """设置里的路径。留空用默认位置，相对路径按项目目录算。"""
+        """Path from the settings. Empty means the default location; relative paths are relative to the project
+        directory."""
         if not path.strip():
             return self.default_path()
         candidate = Path(path.strip()).expanduser()
@@ -60,7 +64,7 @@ LAYOUT = ModelSpec(
 )
 _FORMULA_FILE = "pix2text-mfd-1.5.onnx"
 _FORMULA_REPO = "breezedeus/pix2text-mfd-1.5"
-# ModelScope 上没有这个模型
+# This model is not on ModelScope
 FORMULA = ModelSpec(
     key="formula_model",
     file=_FORMULA_FILE,
@@ -94,7 +98,8 @@ def file_status(path: Path) -> dict:
 
 
 class Downloader:
-    """同一时间只下一份。进度给页面轮询；写到 .part，核对通过才换成正式文件。"""
+    """Download one model at a time, with progress polled by the page; writes to .part and replaces the real file
+    only after the check passes."""
 
     def __init__(self, spec: ModelSpec, transport: httpx.AsyncBaseTransport | None = None):
         self.spec = spec
@@ -140,17 +145,19 @@ class Downloader:
 
 
 def check(spec: ModelSpec, path: Path, size: int | None = None) -> dict:
-    """加载模型，在一张自造的页面上跑一遍，报出耗时和框出来的类别。size 是公式检测模型的输入边长。"""
+    """Load the model, run it once on a generated page, and report the time taken and the classes boxed. size is
+    the input side of the formula detection model."""
     if not runtime_version():
         raise LayoutModelError(f"未安装 onnxruntime，请在项目目录运行：{INSTALL_HINT}")
     if not path.is_file():
         raise LayoutModelError(f"找不到模型文件：{path}")
     start = time.monotonic()
     try:
-        # 公式检测模型按自动定的线程数加载，和翻译时的第一份一样
+        # The formula detection model is loaded with the automatic thread count, like the first session during
+        # translation
         threads = pdf_vision.formula_parallel()[1] if spec is FORMULA else 0
         session = pdf_vision.load_session(str(path), threads, spin=spec is not FORMULA)
-    except Exception as e:  # noqa: BLE001  模型文件不对时 onnxruntime 抛的异常类型不固定
+    except Exception as e:  # noqa: BLE001 - onnxruntime raises various exception types for a bad model file
         raise LayoutModelError(f"模型加载失败：{e}") from e
     loaded = time.monotonic()
     doc = sample_page()
@@ -174,7 +181,8 @@ def check(spec: ModelSpec, path: Path, size: int | None = None) -> dict:
 
 
 def sample_page() -> pymupdf.Document:
-    """一页小论文：标题、两段正文、一张带图注的图，一行带行内公式的句子。"""
+    """A small one-page paper: a title, two body paragraphs, a figure with a caption, and a sentence with an inline
+    formula."""
     doc = pymupdf.open()
     page = doc.new_page(width=595, height=842)
     page.insert_text((72, 90), "1 Introduction", fontsize=16, fontname="hebo")

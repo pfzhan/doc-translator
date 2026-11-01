@@ -1,10 +1,12 @@
-"""语言检测，对应沉浸式翻译的 sameLangCheck / 段落语言检测。
+"""Language detection, matching sameLangCheck and paragraph language detection of Immersive Translate.
 
-- 文档级：抽样检测文档语言。源语言设为“自动检测”时用来填 {{from}}，与目标语言相同时给出提示。
-- 段落级：已经是目标语言的段落跳过不翻（例如英文书里引用的中文，翻成中文时就不用再翻）。
+- Document level: detect the document language from a sample. Fills {{from}} when the source language is set to
+  "自动检测", and warns when it equals the target language.
+- Paragraph level: paragraphs already in the target language are not translated (Chinese quoted in an English
+  book needs no translation into Chinese).
 
-用 py3langid（离线、无需网络）。它不区分简繁中文，再用 GB2312 能否编码来判断：
-繁体特有的字在 GB2312 里没有。
+Uses py3langid (offline, no network). It does not tell Simplified from Traditional Chinese, which is decided by
+whether the text can be encoded in GB2312: characters specific to Traditional Chinese are not in GB2312.
 """
 
 import re
@@ -13,9 +15,10 @@ from py3langid.langid import MODEL_FILE, LanguageIdentifier
 
 _identifier: LanguageIdentifier | None = None
 
-# py3langid 代码 → 插件语言代码
+# py3langid code → language code of the extension
 CODE_MAP = {"jv": "jw", "tl": "fil", "nb": "no", "nn": "no", "iw": "he", "zh": "zh-CN"}
-# 段落太短时检测不可靠，不做判断（插件里本地检测也要求至少 50 个字符）
+# Detection is unreliable on very short paragraphs, which are not judged (local detection in the extension also
+# requires at least 50 characters)
 MIN_LETTERS = 20
 MIN_CONFIDENCE = 0.9
 
@@ -40,18 +43,19 @@ def _chinese_variant(text: str) -> str:
             ch.encode("gb2312")
         except UnicodeEncodeError:
             traditional += 1
-    # 有一定比例的繁体特有字就当繁体；简繁通用的字不影响判断
+    # A certain share of characters specific to Traditional Chinese makes the text Traditional; characters shared
+    # by both do not count
     return "zh-TW" if han and traditional / len(han) > 0.05 else "zh-CN"
 
 
 def detect(text: str, min_letters: int = MIN_LETTERS, min_confidence: float = MIN_CONFIDENCE) -> str | None:
-    """返回插件格式的语言代码；文本太短或不确定时返回 None。"""
+    """Return a language code in the extension's format; None when the text is too short or the result uncertain."""
     letters = len(LETTER_RE.findall(text))
     han = len(HAN_RE.findall(text))
-    # 中日韩文字一个字信息量大，按 3 倍算
+    # A CJK character carries more information and counts three times
     if letters + 2 * han < min_letters:
         return None
-    # 中日韩先按文字系统判断：统计模型在短中文上容易误判成吴语、粤语
+    # CJK is decided by script first: on short Chinese text the statistical model often guesses Wu or Cantonese
     kana = len(KANA_RE.findall(text))
     hangul = len(HANGUL_RE.findall(text))
     if kana and kana + han > letters * 0.5:
@@ -68,7 +72,7 @@ def detect(text: str, min_letters: int = MIN_LETTERS, min_confidence: float = MI
 
 
 def detect_document(texts: list[str], sample_chars: int = 4000) -> str | None:
-    """从文档里均匀抽样一部分段落检测整体语言。"""
+    """Detect the overall language from paragraphs sampled evenly across the document."""
     candidates = [t for t in texts if len(t) >= 20] or texts
     if not candidates:
         return None
@@ -83,11 +87,13 @@ def detect_document(texts: list[str], sample_chars: int = 4000) -> str | None:
 
 
 def same_language(detected: str | None, target: str) -> bool:
-    """段落语言是否已经是目标语言。简繁互译（插件的 translationLanguagePairs）不算相同。"""
+    """Whether the paragraph is already in the target language. Simplified and Traditional Chinese translated into
+    each other (translationLanguagePairs in the extension) do not count as the same."""
     if not detected:
         return False
     base = target.split("-")[0].lower()
     if detected in ("zh-CN", "zh-TW") or target.startswith("zh") or target in ("yue", "wyw"):
-        # 中文各变体（简体、繁体、粤语、文言文、东北话）只在代码完全一致时才算相同
+        # Chinese variants (Simplified, Traditional, Cantonese, Classical Chinese, Northeastern Mandarin) count as
+        # the same only when the codes are identical
         return detected == target or (target == "zh-HK" and detected == "zh-TW")
     return detected.split("-")[0].lower() == base

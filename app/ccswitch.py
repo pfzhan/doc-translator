@@ -1,14 +1,15 @@
-"""读取 CC Switch 里当前生效的供应商配置，作为翻译服务使用。
+"""Read the provider configuration currently active in CC Switch and use it as a translation service.
 
-CC Switch 把配置存在 ~/.cc-switch/cc-switch.db 的 providers 表里，每个应用（claude / codex / gemini /
-grokbuild）有一条 is_current=1 的记录，settings_config 是该应用的原始配置：
-- claude：env 里的 ANTHROPIC_BASE_URL、ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY、ANTHROPIC_MODEL
-- codex：auth.OPENAI_API_KEY + config.toml（model_provider、model、model_providers.<id>.base_url / wire_api）
-- gemini：env 里的 GOOGLE_GEMINI_BASE_URL、GEMINI_API_KEY、GEMINI_MODEL（可来自通用配置）
-- grokbuild：config.toml 的 [models].default 和 [model."<name>"] 里的 base_url / api_key / api_backend
+CC Switch stores its configuration in the providers table of ~/.cc-switch/cc-switch.db. Each app (claude / codex /
+gemini / grokbuild) has one record with is_current=1, and settings_config is the app's raw configuration:
+- claude: ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY and ANTHROPIC_MODEL in env
+- codex: auth.OPENAI_API_KEY + config.toml (model_provider, model, model_providers.<id>.base_url / wire_api)
+- gemini: GOOGLE_GEMINI_BASE_URL, GEMINI_API_KEY and GEMINI_MODEL in env (possibly from the common configuration)
+- grokbuild: base_url / api_key / api_backend in [models].default and [model."<name>"] of config.toml
 
-每次使用时现读数据库（只读打开），所以在 CC Switch 里切换供应商后立即生效，Key 也不会复制到本项目里。
-官方账号登录（OAuth）的配置没有 API Key，不能直接用于翻译，会标记为不可用。
+The database is read (opened read-only) on each use, so switching providers in CC Switch takes effect at once,
+and keys are never copied into this project. Configurations logged in with an official account (OAuth) have no
+API key, cannot be used for translation directly, and are marked unavailable.
 """
 
 import json
@@ -21,7 +22,7 @@ from urllib.parse import urlparse
 
 DB_PATH = Path(os.environ.get("CC_SWITCH_DB", "~/.cc-switch/cc-switch.db")).expanduser()
 
-# CC Switch 应用 → (本项目服务 id, 引擎类型, 显示名)
+# CC Switch app → (service id in this project, engine type, display name)
 APPS = {
     "claude": ("ccswitch-claude", "claude", "Claude"),
     "codex": ("ccswitch-codex", "openai", "ChatGPT"),
@@ -29,7 +30,7 @@ APPS = {
     "grokbuild": ("ccswitch-grok", "grok", "Grok"),
 }
 
-# Claude Code 的模型名后缀，如 claude-opus-5.5[1M] 表示 1M 上下文，接口不认
+# Claude Code model name suffix, such as claude-opus-5.5[1M] for a 1M context, which the API does not accept
 MODEL_SUFFIX_RE = re.compile(r"\[[^\]]*\]$")
 
 
@@ -38,7 +39,7 @@ class Unavailable(Exception):
 
 
 def _append_path(url: str, suffix: str, keep: tuple[str, ...] = ()) -> str:
-    """SDK 会在 base url 后面拼版本号；这里补成本项目需要的“带版本号”的地址。"""
+    """SDKs append a version to the base URL; this completes it to the versioned URL this project needs."""
     url = url.rstrip("/")
     if url.endswith((suffix, *keep)):
         return url
@@ -46,7 +47,7 @@ def _append_path(url: str, suffix: str, keep: tuple[str, ...] = ()) -> str:
 
 
 def _openai_base(url: str) -> str:
-    # OpenAI 兼容地址通常带 /v1；只有域名没有路径时补上
+    # OpenAI-compatible URLs usually end in /v1; add it when there is only a host without a path
     url = url.rstrip("/")
     return url + "/v1" if not urlparse(url).path else url
 
@@ -73,7 +74,7 @@ def _parse_claude(cfg: dict, common: dict) -> dict:
     return {
         "base_url": _append_path(env.get("ANTHROPIC_BASE_URL") or "https://api.anthropic.com", "/v1"),
         "api_key": token or key,
-        # ANTHROPIC_AUTH_TOKEN 走 Authorization: Bearer，ANTHROPIC_API_KEY 走 x-api-key，和 Claude Code 一致
+        # ANTHROPIC_AUTH_TOKEN is sent as Authorization: Bearer and ANTHROPIC_API_KEY as x-api-key, as in Claude Code
         "auth_style": "bearer" if token else "",
         "model": MODEL_SUFFIX_RE.sub("", model) or "claude-sonnet-5-5",
         "api_format": "",
@@ -94,13 +95,13 @@ def _parse_codex(cfg: dict, common_toml: str, use_common: bool) -> dict:
         "api_key": key,
         "auth_style": "",
         "model": conf.get("model") or "gpt-4.1-mini",
-        # Codex 默认 wire_api 是 responses
+        # The default wire_api of Codex is responses
         "api_format": "chat" if mp.get("wire_api") == "chat" else "responses",
     }
 
 
 def _parse_gemini(cfg: dict, common: dict, use_common: bool) -> dict:
-    # Gemini 的通用配置就是一组环境变量
+    # The common configuration of Gemini is a set of environment variables
     common_env = (common.get("env", common) if use_common else {}) or {}
     env = {**common_env, **cfg.get("env", {})}
     key = env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY") or ""
@@ -140,7 +141,7 @@ def _common_configs(con) -> dict:
 
 
 def read_current(db_path: Path | None = None) -> list[dict]:
-    """返回各应用当前生效的配置。数据库不存在时返回空列表。"""
+    """Return the active configuration of each app. An empty list when the database does not exist."""
     path = Path(db_path or DB_PATH)
     if not path.exists():
         return []
