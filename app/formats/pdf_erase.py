@@ -1,12 +1,15 @@
-"""擦掉要重排的原文：按字形归属删内容流里的绘制指令，不按矩形挖。
+"""Erase the original text to be reflowed: drawing operators in the content stream are removed by glyph
+ownership rather than cut out by rectangles.
 
-矩形擦除会连带删掉压在框边上的别人的字（上一行的降部、图里的标签），框留小了
-又会漏掉自己的字。这里让 MuPDF 重写内容流，逐个字形问它属于谁：起笔点落在要重排的
-span 的基线上、宽度范围内，就是这个 span 的字。点阵字这类没有可靠字体框的，span 直接
-带上每个字形的起笔点（origins），按点认。
+Rectangle erasing also removes other text touching the box edge (descenders of the line above, labels in a
+figure), and a box that is too small misses some of its own text. Here MuPDF rewrites the content stream and is
+asked, glyph by glyph, who owns it: a glyph whose origin lies on the baseline of a span being reflowed, within
+its width, belongs to that span. Spans without a reliable font box, such as bitmap glyphs, carry the origin of
+each glyph (origins) and are matched by point.
 
-线和图不归哪个 span。整个落在要重排的行里的线（\\_ 的下划线、行内分数线）、
-紧贴在行基线下的下划线和一像素高的细图跟着删，背景、表格线、插图都不动。
+Lines and images belong to no span. Lines lying entirely within a line being reflowed (the underline of \\_,
+inline fraction bars), underlines right below the line's baseline and one-pixel-high thin images are removed
+with the text; backgrounds, table rules and figures stay.
 """
 
 from __future__ import annotations
@@ -20,30 +23,36 @@ from dataclasses import dataclass, field
 import pymupdf
 import pymupdf.mupdf as mupdf
 
-# 起笔点和基线的允许偏差（字号的比例）。同一个 span 的字基线完全一致，
-# 上下标是另外的 span，另一行至少差一个字号。
+# Allowed distance between an origin and the baseline (as a share of the font size). Glyphs of one span share
+# exactly one baseline, superscripts and subscripts are separate spans, and another line is at least one font
+# size away.
 _BASELINE_TOLERANCE = 0.15
-# 起笔点在 span 左缘外的余量（点）。粗体模拟会把同一个字错开一点再画一遍。
+# Allowance (points) for origins left of the span's left edge. Simulated bold draws the same glyph again slightly
+# offset.
 _X_TOLERANCE = 0.5
-# 起笔点按这个精度对比，内容流里的坐标和 PyMuPDF 报的坐标只差浮点误差
+# Precision for comparing origins; content stream coordinates and those reported by PyMuPDF differ only by
+# floating-point error
 _ORIGIN_DIGITS = 1
-# 细图：老 Ghostscript 把 \_ 和行内分数线画成一像素高的图片
+# Thin images: old Ghostscript draws \_ and inline fraction bars as one-pixel-high images
 _RULE_IMAGE_HEIGHT = 1.5
-# 下划线在基线下多深以内（字号的比例），左右可以比字多出多少（点）
+# Maximum depth of an underline below the baseline (as a share of the font size), and how far (points) it may
+# extend beyond the text on either side
 _UNDERLINE_DEPTH = 0.45
 _UNDERLINE_REACH = 1.0
-# 同一串正文词之间的空档上限（字号的比例）。两端对齐拉宽的空格也在这以内
+# Maximum gap between words of one run of body text (as a share of the font size). Spaces widened by
+# justification stay within it
 _WORD_GAP = 0.8
 
 _PAINTED_PATHS = {mupdf.FZ_CULL_PATH_FILL, mupdf.FZ_CULL_PATH_STROKE, mupdf.FZ_CULL_PATH_FILL_STROKE}
 
-# 内容流的词法单元。字符串可以嵌套括号，另外按字扫
+# Lexical tokens of a content stream. Strings may contain nested parentheses and are scanned separately
 _TOKEN_RE = re.compile(rb"\s+|%[^\r\n]*|<<|>>|<[^>]*>|[\[\]{}]|/[^\s()<>\[\]{}/%]*|[^\s()<>\[\]{}/%]+|\(")
 _NUMBER_RE = re.compile(rb"[+-]?(?:\d+\.?\d*|\.\d+)")
 _INLINE_END_RE = re.compile(rb"\sEI(?=\s|$)")
-# 流里可能有 cs、CS 操作符：前后是空白、分隔符或流的两头。_operators 认出的 cs、CS 都在这里面
+# The stream may contain cs or CS operators: preceded and followed by whitespace, a delimiter or the stream
+# boundary. Every cs or CS found by _operators matches this
 _COLOR_SPACE_RE = re.compile(rb"(?<![^\s()<>\[\]{}/%])(?:cs|CS)(?![^\s()<>\[\]{}/%])")
-# 设颜色的操作符：填充色、描边色
+# Color-setting operators: fill color, stroke color
 _FILL_COLOR = {b"g", b"rg", b"k", b"sc", b"scn"}
 _STROKE_COLOR = {b"G", b"RG", b"K", b"SC", b"SCN"}
 _PAINT_OPS = {b"f", b"F", b"f*", b"B", b"B*", b"b", b"b*", b"S", b"s", b"Tj", b"TJ", b"'", b'"', b"Do", b"EI"}
@@ -59,12 +68,13 @@ class _Line:
 
 @dataclass
 class Erasure:
-    """一页上要擦的东西。lines 是要重排的行框：没有 span 的块按它认字，线和细图也按它删。"""
+    """What to erase on a page. lines are the line boxes being reflowed: blocks without spans match glyphs by
+    them, and lines and thin images are removed by them too."""
 
     spans: list[dict] = field(default_factory=list)
     lines: list[pymupdf.Rect] = field(default_factory=list)
     spanless: list[pymupdf.Rect] = field(default_factory=list)
-    # 判断一个 span 是不是公式字。公式字下面的横线不当下划线擦
+    # Tells whether a span is formula text. A horizontal line below formula text is not erased as an underline
     math: Callable[[dict], bool] = lambda span: False
 
     def add_block(self, span_lines: Sequence[Sequence[dict]] | None, line_rects: Iterable[pymupdf.Rect]) -> None:
@@ -79,16 +89,17 @@ class Erasure:
                 self.spans.extend(shown)
             elif index < len(rects):
                 self.spanless.append(rects[index])
-        # 并进来的标点碎片只带了行框，没有 span
+        # Merged punctuation fragments carry only line boxes, no spans
         if len(rects) > len(span_lines):
             self.spanless.extend(rects[len(span_lines) :])
 
 
 class _Owners:
-    """chars 是页面上每个 span 里各个字的起笔点，按 span 的框查。
+    """chars holds the origins of the characters in each span on the page, looked up by span box.
 
-    span 自己的 origin 只是第一个字的起笔点。第一个字是空格时，它可能落在前面下标的
-    基线上，和这一行的字差一点多，拿它当基线会漏擦整段。查得到逐字起笔点的 span 按点认。
+    A span's own origin is only that of its first character. When the first character is a space, it may sit on
+    the baseline of a preceding subscript, a little off from the rest of the line, and using it as the baseline
+    would leave a whole paragraph unerased. Spans whose per-character origins are found are matched by point.
     """
 
     def __init__(self, erasure: Erasure, chars: dict[tuple[float, ...], list[tuple[float, float]]] | None = None):
@@ -113,18 +124,22 @@ class _Owners:
             if found:
                 self.points.update(_key(x, y) for x, y in found)
                 baseline = statistics.median(y for _x, y in found)
-            # 按基线认仍然要：粗体模拟错开一点再画一遍的字，起笔点和 PyMuPDF 报的不一样
+            # Baseline matching is still needed: a glyph drawn again slightly offset for simulated bold has an
+            # origin different from the one PyMuPDF reports
             self.lines.append(_Line(baseline, size, bbox.x0, bbox.x1))
             lined.append(span)
         self.boxes.extend(erasure.spanless)
-        # 每个字形都要和这些框比一遍。按 MuPDF 存矩形的单精度先换好，比的结果和 Rect.contains 一样
+        # Every glyph is compared with these boxes. Converting them first to the single precision MuPDF stores
+        # rectangles in gives the same results as Rect.contains
         self._box_bounds = [single_precision(box) for box in self.boxes]
         self.runs = _prose_runs([line for line, span in zip(self.lines, lined) if not erasure.math(span)])
 
     def underlines(self, rect: pymupdf.Rect) -> bool:
-        """细横线在一串正文词的基线下、降部以内，横向不出这串词：是这些字的下划线（链接常这样画），
-        字擦了线也要擦。字体框的下沿常比下划线高一点，按行框认不到。
-        公式字下面的横线是分数线、根号线，分母还在原处时擦了分式就断了，不算。"""
+        """A thin horizontal line below the baseline of a run of body words, within the descender depth and not
+        extending horizontally beyond the run, is their underline (links are often drawn this way) and is erased
+        with the text. The bottom of the font box is often a little above the underline, so line boxes miss it.
+        A line below formula text is a fraction bar or radical line; with the denominator still in place,
+        erasing it would break the fraction, so it does not count."""
         if rect.height > _RULE_IMAGE_HEIGHT:
             return False
         return any(
@@ -136,25 +151,26 @@ class _Owners:
         )
 
     def owns(self, x: float, y: float) -> bool:
-        """x、y 是 MuPDF 换算出的页面坐标，本来就是单精度的值。"""
+        """x and y are page coordinates computed by MuPDF, already single-precision values."""
         if _key(x, y) in self.points:
             return True
         for line in self.lines:
             if abs(y - line.baseline) <= line.size * _BASELINE_TOLERANCE and line.x0 - _X_TOLERANCE <= x < line.x1:
                 return True
-        # 和 MuPDF 判断点在矩形里一样：左、上边算在里面，右、下边不算
+        # Same as MuPDF's point-in-rectangle test: the left and top edges are inside, the right and bottom are not
         return any(x0 <= x < x1 and y0 <= y < y1 for x0, y0, x1, y1 in self._box_bounds)
 
 
 def single_precision(box: pymupdf.Rect) -> tuple[float, float, float, float]:
-    """矩形按 MuPDF 存的单精度取值。拿它和单精度的点比，结果和 Rect.contains 一样，省掉每次的换算。"""
+    """The rectangle in the single precision MuPDF stores. Comparing single-precision points with it gives the same
+    result as Rect.contains without converting each time."""
     rect = mupdf.FzRect(box.x0, box.y0, box.x1, box.y1)
     return rect.x0, rect.y0, rect.x1, rect.y1
 
 
 def _prose_runs(lines: list[_Line]) -> list[_Line]:
-    """同一基线上挨着的正文 span 连成一串：下划线在词间的空格下面也有一段。
-    中间隔着公式（空出一大段）就断开。"""
+    """Join adjacent body spans on the same baseline into runs: an underline also runs below the spaces between
+    words. A formula in between (leaving a wide gap) breaks the run."""
     runs: list[_Line] = []
     for line in sorted(lines, key=lambda item: (round(item.baseline, 1), item.x0)):
         last = runs[-1] if runs else None
@@ -181,7 +197,8 @@ _BLANKS = frozenset(" \t\n\u00a0\u2002\u2003\u2009\u3000")
 
 
 def _char_origins(page: pymupdf.Page) -> dict[tuple[float, ...], list[tuple[float, float]]]:
-    """页面上每个 span 的逐字起笔点（空白不算），按 span 框查。和提取时用同一组参数。"""
+    """Per-character origins of each span on the page (whitespace excluded), looked up by span box. Uses the same
+    parameters as extraction."""
     data = page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
     out: dict[tuple[float, ...], list[tuple[float, float]]] = {}
     for block in data["blocks"]:
@@ -189,7 +206,8 @@ def _char_origins(page: pymupdf.Page) -> dict[tuple[float, ...], list[tuple[floa
             continue
         for line in block["lines"]:
             for span in line["spans"]:
-                # 只跳过真的空格。\r 这类控制字符是没有 Unicode 的字形（CMEX 的大号范数线），照样要擦
+                # Skip only real spaces. Control characters such as \r are glyphs without Unicode (the large norm
+                # bars of CMEX) and must be erased too
                 points = [
                     tuple(char["origin"])
                     for char in span.get("chars") or []
@@ -201,9 +219,10 @@ def _char_origins(page: pymupdf.Page) -> dict[tuple[float, ...], list[tuple[floa
 
 
 def _page_point(x: float, y: float, ctm, to_page: mupdf.FzMatrix) -> tuple[float, float]:
-    """内容流里的点换成页面坐标。和 Point * Matrix 调同一个 MuPDF 函数、结果相同，
-    但每个字形都要换一次，省掉 PyMuPDF 包装的那几层参数处理。ctm 是回调给的底层矩阵，直接传，
-    不逐项读出来再建一个。"""
+    """Convert a content stream point to page coordinates. Calls the same MuPDF function as Point * Matrix with
+    the same result, but it runs for every glyph, so the argument handling of the PyMuPDF wrappers is skipped.
+    ctm is the low-level matrix given to the callback and is passed directly instead of being read entry by
+    entry into a new one."""
     point = mupdf.ll_fz_transform_point_xy(x, y, ctm)
     point = mupdf.ll_fz_transform_point_xy(point.x, point.y, to_page.internal())
     return point.x, point.y
@@ -216,7 +235,7 @@ def _rect(r) -> pymupdf.Rect:
 class _Sanitizer(mupdf.PdfSanitizeFilterOptions2):
     def __init__(self, page: pymupdf.Page, erasure: Erasure):
         super().__init__()
-        # 每个回调都明确开或关，不靠构造函数的默认值
+        # Every callback is explicitly enabled or disabled instead of relying on constructor defaults
         self.use_virtual_text_filter()
         self.use_virtual_culler()
         self.use_virtual_image_filter()
@@ -226,7 +245,7 @@ class _Sanitizer(mupdf.PdfSanitizeFilterOptions2):
         self.owners = _Owners(erasure, _char_origins(page))
         self.lines = erasure.lines
         self.removed = 0
-        # 回调里的异常 MuPDF 只当成「保留」，记下来再抛
+        # MuPDF treats an exception in the callback as "keep", so it is recorded and raised again
         self.error: BaseException | None = None
 
     def text_filter(self, ctx, ucsbuf, ucslen, trm, ctm, bbox, *_rest):
@@ -239,7 +258,8 @@ class _Sanitizer(mupdf.PdfSanitizeFilterOptions2):
         return 0
 
     def image_filter(self, ctx, ctm, name, image, scissor):
-        # 图片一律原样保留，细图在 culler 里按框删。返回值归 MuPDF 释放，先加一次引用
+        # Images are always kept; thin images are removed by box in the culler. MuPDF releases the return value,
+        # so a reference is added first
         return mupdf.ll_fz_keep_image(image)
 
     def culler(self, ctx, bbox, kind):
@@ -270,7 +290,8 @@ class _Factory(mupdf.PdfFilterFactory2):
     def __init__(self, sanitizer: _Sanitizer):
         super().__init__()
         self.use_virtual_filter()
-        # 不能叫 options：基类有同名字段，赋值会改掉 C 结构里的指针
+        # Must not be named options: the base class has a field of that name, and assigning it would change the
+        # pointer in the C structure
         self.sanitizer = sanitizer
 
     def filter(self, ctx, doc, chain, struct_parents, transform, options):
@@ -280,10 +301,11 @@ class _Factory(mupdf.PdfFilterFactory2):
 
 
 def erase(page: pymupdf.Page, erasure: Erasure) -> int:
-    """按归属删掉这一页要重排的字形和线，返回删掉的字形数。
+    """Remove the glyphs and lines of this page that are being reflowed, by ownership, and return the number of
+    glyphs removed.
 
-    重写的是页面自己的内容流；用到的表单（Form XObject）按页复制一份再改，
-    别的页共用的表单不受影响。
+    The page's own content stream is rewritten; Form XObjects it uses are copied per page before being changed,
+    so Forms shared with other pages are not affected.
     """
     if not erasure.spans and not erasure.lines:
         return 0
@@ -295,7 +317,8 @@ def erase(page: pymupdf.Page, erasure: Erasure) -> int:
     sanitizer = _Sanitizer(page, erasure)
     factory = _Factory(sanitizer)
     options = mupdf.PdfFilterOptions()
-    # 构造函数不保证把字段清零，no_update 碰上脏值时过滤结果会被悄悄丢掉
+    # The constructor does not guarantee zeroed fields, and a garbage value in no_update would silently discard
+    # the filter result
     options.recurse = 1
     options.instance_forms = 1
     options.ascii = 0
@@ -306,7 +329,8 @@ def erase(page: pymupdf.Page, erasure: Erasure) -> int:
     restore_glyphs(doc, glyphs)
     if sanitizer.error is not None:
         raise sanitizer.error
-    # 重写出来的页面流和表单都是新对象。原流里有不给颜色就画的，补色会改掉它的初始色，整页不补
+    # The rewritten page stream and Forms are new objects. When the original stream draws without setting a color,
+    # restoring colors would change its initial color, so nothing on the page is restored
     if not bare:
         for xref in range(first_new, doc.xref_length()):
             data = doc.xref_stream(xref) if doc.xref_is_stream(xref) else None
@@ -317,7 +341,7 @@ def erase(page: pymupdf.Page, erasure: Erasure) -> int:
 
 
 def _operators(data: bytes) -> Iterable[tuple[bytes, int, int]]:
-    """内容流里的操作符，带上它的操作数起点和它自己的终点。"""
+    """Operators in a content stream, with the start of their operands and their own end."""
     pos, end, start = 0, len(data), -1
     while pos < end:
         match = _TOKEN_RE.match(data, pos)
@@ -348,14 +372,15 @@ def _operators(data: bytes) -> Iterable[tuple[bytes, int, int]]:
         yield token, start, pos
         start = -1
         if token == b"ID":
-            # 内联图的数据是二进制，跳到 EI
+            # Inline image data is binary; skip to EI
             inline = _INLINE_END_RE.search(data, pos)
             pos = end if inline is None else inline.start() + 1
 
 
 def _paints_in_bare_space(data: bytes) -> bool:
-    """换了色彩空间不给颜色就画：按规范画的是这个空间的初始色。"""
-    # 大多数流不换色彩空间，不用逐个操作符过一遍
+    """Draws after a color space change without setting a color, which by the specification uses the space's
+    initial color."""
+    # Most streams never change the color space and need no pass over every operator
     if _COLOR_SPACE_RE.search(data) is None:
         return False
     fill = stroke = False
@@ -372,8 +397,9 @@ def _paints_in_bare_space(data: bytes) -> bool:
 
 
 def _restore_dropped_colors(data: bytes) -> bytes:
-    """MuPDF 重写内容流时，换了色彩空间后的颜色值若和换之前的相同就省掉，可换色彩空间会把
-    颜色重置成初始色，白底就画成了黑块。每个后面没跟颜色的 cs、CS 后补回换之前的颜色值。"""
+    """When MuPDF rewrites a content stream, it omits a color after a color space change if the value equals the
+    one before, but changing the color space resets the color to the initial color, so a white background is
+    drawn as a black block. The previous color value is restored after every cs or CS not followed by a color."""
     if _COLOR_SPACE_RE.search(data) is None:
         return data
     ops = list(_operators(data))
@@ -402,8 +428,10 @@ def _restore_dropped_colors(data: bytes) -> bytes:
 
 
 def type3_glyphs(page: pymupdf.Page) -> dict[int, bytes]:
-    """这一页用到的 Type3 字体的字形流。MuPDF 递归过滤内容流时也进到字形里，按字形自己的坐标
-    问归属，删掉的是全文共用的字形：别的页、贴公式用的原页上同一个字都跟着没了。过滤完原样写回。"""
+    """Glyph streams of the Type3 fonts used on this page. When filtering recursively, MuPDF also enters glyphs and
+    asks for ownership in the glyph's own coordinates, removing parts of glyphs shared by the whole document: the
+    same character would vanish from other pages and from the original page used for pasting formulas. They are
+    written back unchanged after filtering."""
     doc = page.parent
     glyphs: dict[int, bytes] = {}
     for xref, _ext, kind, *_rest in page.get_fonts(full=True):
