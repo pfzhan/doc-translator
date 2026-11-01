@@ -191,7 +191,8 @@ def test_epub2_outline_reads_the_ncx(tmp_path):
         outline = book_outline(z)
     assert outline["title"] == "Test Book" and outline["spine"] == ["OEBPS/ch1.xhtml"]
     assert [(e["label"], e["anchor"], e["depth"]) for e in outline["toc"]] == [
-        ("Chapter One", "", 0), ("A Section", "s1", 1),
+        ("Chapter One", "", 0),
+        ("A Section", "s1", 1),
     ]
 
 
@@ -216,7 +217,6 @@ def test_epub_chapter_with_internal_dtd_not_dropped(tmp_path):
     assert "[zh-CN] Chapter one text here" in text
 
 
-
 def test_epub_named_entities_survive_xml_parsing(tmp_path):
     """XHTML 1.1 章节里的 &rsquo;、&nbsp;、&mdash; 不能被 lxml-xml 删掉，原文和译文都要保留这些字符。"""
     chapter = (
@@ -232,15 +232,18 @@ def test_epub_named_entities_survive_xml_parsing(tmp_path):
     assert "Don\u2019t stop\u00a0now \u2014 ok & done" in text
     assert "[zh-CN] Don\u2019t stop" in text
 
+
 def test_epub_html_style_void_tags_and_bare_ampersands_keep_text(tmp_path):
     """EPUB2 里常见 <br>、<img ...> 不闭合和裸 &。lxml-xml 容错解析会从出错处起删掉 &amp;、&lt;，
     段落还会互相嵌套；这里先补成良构 XML 再解析，SVG 的 viewBox 这种大小写敏感的属性也不受影响。"""
     from lxml import etree
 
-    body = ('<p>First line<br>second &amp; line &lt;tag&gt;</p>'
-            '<p>AT&T bought <img src="a.png" alt="logo"> it.</p>'
-            '<p>Third paragraph.</p>'
-            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>')
+    body = (
+        "<p>First line<br>second &amp; line &lt;tag&gt;</p>"
+        '<p>AT&T bought <img src="a.png" alt="logo"> it.</p>'
+        "<p>Third paragraph.</p>"
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>'
+    )
     src = tmp_path / "book.epub"
     _one_epub(src, {"ch1.xhtml": _xhtml(body)})
     [out] = run(translate_epub(src, tmp_path, runner(), True, "zh-CN"))
@@ -249,7 +252,9 @@ def test_epub_html_style_void_tags_and_bare_ampersands_keep_text(tmp_path):
     texts = ["".join(p.itertext()) for p in root.iter("{http://www.w3.org/1999/xhtml}p")]
     assert texts[:2] == ["First linesecond & line <tag>", "[zh-CN] First line\nsecond & line <tag>".replace("\n", "")]
     assert "AT&T bought  it." in texts and "Third paragraph." in texts
-    assert not any(p.find("{http://www.w3.org/1999/xhtml}p") is not None for p in root.iter("{http://www.w3.org/1999/xhtml}p"))
+    assert not any(
+        p.find("{http://www.w3.org/1999/xhtml}p") is not None for p in root.iter("{http://www.w3.org/1999/xhtml}p")
+    )
     assert b'viewBox="0 0 10 10"' in data
 
 
@@ -312,6 +317,7 @@ def test_mobi_temp_dir_removed_after_cancelled_unpack(tmp_path, monkeypatch):
     run(scenario())
     assert not work.exists()
 
+
 def test_cancelled_calibre_conversion_is_killed(tmp_path, monkeypatch):
     """转 MOBI 时任务被暂停或删除：ebook-convert 要跟着停，不能在后台接着往输出目录写。"""
     import os
@@ -373,8 +379,10 @@ def test_markdown_quote_keeps_paragraphs_alerts_and_lists():
     texts = collect_segments(blocks)
     assert texts == ["Useful information on two lines.", "Second paragraph.", "first point"]
     out = render(blocks, ["T:" + x for x in texts], bilingual=False)
-    assert out == ("> [!NOTE]\n> T:Useful information on two lines.\n>\n> T:Second paragraph.\n"
-                   "> - T:first point\n> ```\n> code here\n> ```")
+    assert out == (
+        "> [!NOTE]\n> T:Useful information on two lines.\n>\n> T:Second paragraph.\n"
+        "> - T:first point\n> ```\n> code here\n> ```"
+    )
     both = render(blocks, ["T:" + x for x in texts], bilingual=True)
     assert "> Second paragraph.\n>\n> T:Second paragraph." in both
     assert "> - first point  \n>   T:first point" in both
@@ -383,16 +391,30 @@ def test_markdown_quote_keeps_paragraphs_alerts_and_lists():
 def test_markdown_lazy_quote_continuation_stays_in_the_quote():
     """引用段落后面不带 > 的续行还属于这一段（CommonMark 懒续行），一句话不能拆成两段翻译。
     标题、列表、引用里的代码块后面的行不是续行。"""
-    src = ("> This is a quote that\ncontinues lazily here.\n> - point one\nstill point one\n\nAfter.\n\n"
-           "> quote\n# Heading\n\n> ```\n> code\nnot code\n\n> # Title\nplain")
+    src = (
+        "> This is a quote that\ncontinues lazily here.\n> - point one\nstill point one\n\nAfter.\n\n"
+        "> quote\n# Heading\n\n> ```\n> code\nnot code\n\n> # Title\nplain"
+    )
     blocks = split_blocks(src)
     texts = collect_segments(blocks)
-    assert texts == ["This is a quote that continues lazily here.", "point one still point one", "After.",
-                     "quote", "Heading", "not code", "Title", "plain"]
+    assert texts == [
+        "This is a quote that continues lazily here.",
+        "point one still point one",
+        "After.",
+        "quote",
+        "Heading",
+        "not code",
+        "Title",
+        "plain",
+    ]
     out = render(blocks, ["T:" + x for x in texts], bilingual=False)
-    assert out.startswith("> T:This is a quote that continues lazily here.\n> - T:point one still point one\n\nT:After.")
+    assert out.startswith(
+        "> T:This is a quote that continues lazily here.\n> - T:point one still point one\n\nT:After."
+    )
     both = render(blocks, ["T:" + x for x in texts], bilingual=True)
-    assert both.startswith("> This is a quote that\ncontinues lazily here.\n>\n> T:This is a quote that continues lazily here.")
+    assert both.startswith(
+        "> This is a quote that\ncontinues lazily here.\n>\n> T:This is a quote that continues lazily here."
+    )
     assert out.endswith("> # T:Title\nT:plain") and "> # Title\n> # T:Title\n" in both
 
 
@@ -420,6 +442,7 @@ def test_markdown_setext_headings():
     texts = collect_segments(blocks)
     assert texts == ["Main Title", "Section Name", "Body text."]
     from app.formats.markdown import segment_kinds
+
     assert segment_kinds(blocks) == ["h1", "h2", "p"]
     out = render(blocks, ["T:" + x for x in texts], bilingual=False)
     assert out == "T:Main Title\n==========\n\nT:Section Name\n---\n\nT:Body text."
@@ -445,14 +468,18 @@ def test_markdown_long_fence_not_closed_by_inner_fence():
 
 def test_markdown_loose_list_continuation_translated_in_place():
     """松散列表里缩进的续段属于列表项，照常翻译并保留缩进；多缩进 4 格的才是代码块。"""
-    src = ("- item one\n\n    continued paragraph of item one.\n\n        code_in_item()\n\n"
-           "Outside paragraph.\n\n    real_code()")
+    src = (
+        "- item one\n\n    continued paragraph of item one.\n\n        code_in_item()\n\n"
+        "Outside paragraph.\n\n    real_code()"
+    )
     blocks = split_blocks(src)
     texts = collect_segments(blocks)
     assert texts == ["item one", "continued paragraph of item one.", "Outside paragraph."]
     out = render(blocks, ["T:" + x for x in texts], bilingual=False)
-    assert out == ("- T:item one\n\n    T:continued paragraph of item one.\n\n        code_in_item()\n\n"
-                   "T:Outside paragraph.\n\n    real_code()")
+    assert out == (
+        "- T:item one\n\n    T:continued paragraph of item one.\n\n        code_in_item()\n\n"
+        "T:Outside paragraph.\n\n    real_code()"
+    )
 
 
 def test_markdown_tab_indented_code_kept_verbatim():
@@ -467,8 +494,10 @@ def test_markdown_tab_indented_code_kept_verbatim():
 
 def test_markdown_paragraph_starting_with_inline_tag_is_translated():
     """行首是行内标签或自动链接的段落照常翻译；块级标签和整行单个标签仍按 HTML 块原样保留。"""
-    src = ("<kbd>Ctrl</kbd> copies the selection.\n\n<https://example.com> is our site.\n\n"
-           '<div align="center">\nCentered text\n</div>\n\n<img src="logo.png">\n\n<!-- note -->')
+    src = (
+        "<kbd>Ctrl</kbd> copies the selection.\n\n<https://example.com> is our site.\n\n"
+        '<div align="center">\nCentered text\n</div>\n\n<img src="logo.png">\n\n<!-- note -->'
+    )
     blocks = split_blocks(src)
     assert collect_segments(blocks) == ["<kbd>Ctrl</kbd> copies the selection.", "<https://example.com> is our site."]
 
@@ -493,12 +522,15 @@ def test_markdown_references_kept_original(tmp_path):
 def test_markdown_repeated_text_in_body_and_references(tmp_path):
     """同一句在正文和参考文献里都有：按位置写回，正文那处照常翻译，参考文献那处保留原文。"""
     src = tmp_path / "paper.md"
-    src.write_text("# Intro\n\nDeep learning. MIT Press, 2016.\n\n## References\n\nDeep learning. MIT Press, 2016.\n",
-                   encoding="utf-8")
+    src.write_text(
+        "# Intro\n\nDeep learning. MIT Press, 2016.\n\n## References\n\nDeep learning. MIT Press, 2016.\n",
+        encoding="utf-8",
+    )
     [out] = run(translate_file(src, tmp_path, runner(), False, "zh-CN"))
     assert out.read_text(encoding="utf-8") == (
         "# [zh-CN] Intro\n\n[zh-CN] Deep learning. MIT Press, 2016.\n\n"
-        "## [zh-CN] References\n\nDeep learning. MIT Press, 2016.\n")
+        "## [zh-CN] References\n\nDeep learning. MIT Press, 2016.\n"
+    )
 
 
 def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
@@ -509,8 +541,10 @@ def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
 
 def test_markdown_display_math_kept_verbatim():
     """$$ 公式块原样保留：不送去翻译，块里 + / - 开头的行也不是列表项。"""
-    src = ("Energy is given by\n$$\nL = a\n+ b\n- c\n$$\nwhere m is mass.\n\n"
-           "$$ E = mc^2 $$\n\n$$x$$ alone is not a block here.\n\nCosts $$5 today.")
+    src = (
+        "Energy is given by\n$$\nL = a\n+ b\n- c\n$$\nwhere m is mass.\n\n"
+        "$$ E = mc^2 $$\n\n$$x$$ alone is not a block here.\n\nCosts $$5 today."
+    )
     blocks = split_blocks(src)
     texts = collect_segments(blocks)
     assert texts == ["Energy is given by", "where m is mass.", "$$x$$ alone is not a block here.", "Costs $$5 today."]
@@ -542,7 +576,7 @@ def test_epub_nav_in_spine_parsed_once(tmp_path):
     """EPUB3 的 nav 文档同时在 spine 里：只走 label 翻译路径一次，不重复解析、译文不丢。"""
     nav = (
         '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">'
-        '<head><title>Nav</title></head><body>'
+        "<head><title>Nav</title></head><body>"
         '<nav epub:type="toc"><ol><li><a href="ch1.xhtml">Chapter One</a></li></ol></nav>'
         "</body></html>"
     )
@@ -569,7 +603,7 @@ def test_epub_nav_in_spine_parsed_once(tmp_path):
         ch_html = z.read("OEBPS/ch1.xhtml").decode()
     # 目录项恰好翻译一次，没有重复也没有丢回原文
     assert nav_html.count("[zh-CN] Chapter One") == 1
-    assert "<a href=\"ch1.xhtml\">" in nav_html  # 链接结构不变
+    assert '<a href="ch1.xhtml">' in nav_html  # 链接结构不变
     assert "[zh-CN] Body paragraph" in ch_html
 
 
@@ -582,6 +616,7 @@ def test_pdf_hyphen_joins_uppercase_word():
     assert _join_lines(["Donau-", "Dampfschiff"]) == "Donau-Dampfschiff"
     # TeX 在大写字母前断开的 McCallum：全文别处写的是 McCallum，连字符去掉
     from app.formats.pdf_blocks import _CAMEL_WORDS
+
     token = _CAMEL_WORDS.set(frozenset({"McCallum"}))
     try:
         assert _join_lines(["({c0000ff}Mc-", "Callum and"]) == "({c0000ff}McCallum and"
@@ -619,7 +654,8 @@ def test_a_mark_closed_at_a_line_end_and_reopened_continues():
 def _pdf_with_text(text: str, fontname: str = "helv") -> "pymupdf.Document":
     doc = pymupdf.open()
     doc.new_page(width=400, height=300).insert_textbox(
-        pymupdf.Rect(30, 30, 370, 250), text, fontsize=12, fontname=fontname)
+        pymupdf.Rect(30, 30, 370, 250), text, fontsize=12, fontname=fontname
+    )
     return doc
 
 
@@ -713,7 +749,9 @@ def test_pdf_hard_break_splits_lines():
     assert texts == ["Short Name", "A Much Longer Affiliation Line Here"]
 
 
-def _line(text: str, x0: float, x1: float, y0: float, size: float = 10) -> tuple[str, pymupdf.Rect, list[dict[str, float]]]:
+def _line(
+    text: str, x0: float, x1: float, y0: float, size: float = 10
+) -> tuple[str, pymupdf.Rect, list[dict[str, float]]]:
     return (text, pymupdf.Rect(x0, y0, x1, y0 + size + 2), [{"size": size}])
 
 
@@ -726,7 +764,12 @@ def test_lines_wrapping_around_a_figure_stay_in_one_paragraph():
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"size": 10.0, "font": "Times-Roman", "text": text}])
 
     items = [
-        line("recognizable by its long canines. Five million years ago or so, a completely different", 160.2, 493.2, 326.9),
+        line(
+            "recognizable by its long canines. Five million years ago or so, a completely different",
+            160.2,
+            493.2,
+            326.9,
+        ),
         line("saber-tooth tiger called Thylacosmilus lived", 160.2, 341.5, 338.9),
         line("in Argentina and other parts of South Amer-", 160.2, 341.5, 350.8),
         line("ica. Thylacosmilus was a marsupial whereas", 160.2, 341.5, 362.8),
@@ -738,7 +781,9 @@ def test_lines_wrapping_around_a_figure_stay_in_one_paragraph():
     assert _split_lines(items) == [[0, 1, 2, 3], [4, 5]]
     # 图旁的第一行以句号收尾，上面一行排满整行，下面一行收在同一处
     first = [
-        line("one of the earliest goals of computer language processing. In fact, speech processing", 160.2, 493.2, 298.1),
+        line(
+            "one of the earliest goals of computer language processing. In fact, speech processing", 160.2, 493.2, 298.1
+        ),
         line("predates the computer by many decades!", 160.2, 324.5, 310.0),
         line("The first machine that recognized speech", 160.2, 324.5, 322.0),
         line("was a toy from the 1920s.", 160.2, 324.5, 333.9),
@@ -774,15 +819,33 @@ def test_a_table_row_name_is_cut_from_its_numbers_and_the_rows_around():
     rows = [
         item([("Top Leaderboard Systems (Dec 10th, 2018)", 102.8, 259.5)], 328.6),
         item([("Human", 81.4, 107.8)], 338.6),
-        item([("86.3", 198.5, 214.2), (" ", 214.2, 220.7), ("89.0", 220.7, 236.4), (" ", 236.4, 243.0),
-              ("86.9", 243.0, 258.7), (" ", 258.7, 265.2), ("89.5", 265.2, 280.9)], 338.6),
+        item(
+            [
+                ("86.3", 198.5, 214.2),
+                (" ", 214.2, 220.7),
+                ("89.0", 220.7, 236.4),
+                (" ", 236.4, 243.0),
+                ("86.9", 243.0, 258.7),
+                (" ", 258.7, 265.2),
+                ("89.5", 265.2, 280.9),
+            ],
+            338.6,
+        ),
         item([("#1 Single - MIR-MRC (F-Net)", 81.4, 192.0)], 348.6),
         item([("-", 204.8, 207.8)], 348.6),
         item([("74.8", 243.0, 258.7), (" ", 258.7, 265.2), ("78.0", 265.2, 280.9)], 348.6),
         item([("#2 Single - nlnet", 81.4, 140.9)], 358.5),
         item([("74.2", 243.0, 258.7), (" ", 258.7, 265.2), ("77.1", 265.2, 280.9)], 358.5),
-        item([("BERT (Ens.+TriviaQA)", 81.4, 190.5), (" ", 190.5, 198.5), ("86.2", 198.5, 214.2),
-              (" ", 214.2, 220.7), ("92.2", 220.7, 236.4)], 368.5),
+        item(
+            [
+                ("BERT (Ens.+TriviaQA)", 81.4, 190.5),
+                (" ", 190.5, 198.5),
+                ("86.2", 198.5, 214.2),
+                (" ", 214.2, 220.7),
+                ("92.2", 220.7, 236.4),
+            ],
+            368.5,
+        ),
     ]
     rows = _drop_number_tails(rows)
     assert rows[-1][0] == "BERT (Ens.+TriviaQA)"
@@ -805,16 +868,32 @@ def test_header_cells_over_number_columns_are_cut_apart():
         return (text, rect, [one for one in spans if one["text"].strip()], spans)
 
     columns = [411.8, 452.7, 501.6]
-    header = item([span("Fine-tune", 394.6, 429.0), span(" ", 429.0, 435.5), span("Fine-tune", 435.5, 469.9),
-                   span(" ", 469.9, 476.5), span("Feature-based", 476.5, 526.7)])
+    header = item(
+        [
+            span("Fine-tune", 394.6, 429.0),
+            span(" ", 429.0, 435.5),
+            span("Fine-tune", 435.5, 469.9),
+            span(" ", 469.9, 476.5),
+            span("Feature-based", 476.5, 526.7),
+        ]
+    )
     items, cells = _cut_header_cells([header], columns)
     assert [one[0] for one in items] == ["Fine-tune", "Fine-tune", "Feature-based"] and cells == {0, 1, 2}
-    stub = [item([span("System", 317.0, 343.4)]), item([span("Dev F1", 395.0, 428.6), span(" ", 428.6, 435.2),
-                                                         span("Test F1", 439.4, 466.0)])]
+    stub = [
+        item([span("System", 317.0, 343.4)]),
+        item([span("Dev F1", 395.0, 428.6), span(" ", 428.6, 435.2), span("Test F1", 439.4, 466.0)]),
+    ]
     items, cells = _cut_header_cells(stub, columns)
     assert [one[0] for one in items] == ["System", "Dev F1", "Test F1"]
-    prose = item([span("Second,", 380.0, 406.8), span("there", 412.6, 434.4), span("are", 439.6, 452.9),
-                  span("major", 458.1, 483.6), span("computational", 488.7, 551.2)])
+    prose = item(
+        [
+            span("Second,", 380.0, 406.8),
+            span("there", 412.6, 434.4),
+            span("are", 439.6, 452.9),
+            span("major", 458.1, 483.6),
+            span("computational", 488.7, 551.2),
+        ]
+    )
     items, cells = _cut_header_cells([prose], [393.4, 470.0])
     assert len(items) == 1 and not cells
 
@@ -825,19 +904,32 @@ def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces():
     from app.formats.pdf_units import _join_line_wrapped_formulas
 
     def span(text, x0, x1, y, font="LMMono10-Regular"):
-        return {"text": text, "size": 12.0, "font": font, "flags": 0, "bbox": (x0, y, x1, y + 12),
-                "origin": (x0, y + 9)}
+        return {
+            "text": text,
+            "size": 12.0,
+            "font": font,
+            "flags": 0,
+            "bbox": (x0, y, x1, y + 12),
+            "origin": (x0, y + 9),
+        }
 
     def lines(head_x0, tail_x1):
         return [
-            [span("Olympiad ", 70.9, head_x0, 420.0, "URWPalladioL"), span("https://example.org/wiki/AMC_", head_x0, 524.4, 420.0)],
-            [span("results?srsltid=AfmBOoqQ6pQic5NCan", 70.9, tail_x1, 433.5),
-             span(" positions DeepSeek-R1", tail_x1, 524.4, 433.5, "URWPalladioL")],
+            [
+                span("Olympiad ", 70.9, head_x0, 420.0, "URWPalladioL"),
+                span("https://example.org/wiki/AMC_", head_x0, 524.4, 420.0),
+            ],
+            [
+                span("results?srsltid=AfmBOoqQ6pQic5NCan", 70.9, tail_x1, 433.5),
+                span(" positions DeepSeek-R1", tail_x1, 524.4, 433.5, "URWPalladioL"),
+            ],
         ]
 
     def runs(span_lines):
-        return [{"spans": [span_lines[0][1]], "bbox": pymupdf.Rect(span_lines[0][1]["bbox"]), "pos": (0, 1, 1)},
-                {"spans": [span_lines[1][0]], "bbox": pymupdf.Rect(span_lines[1][0]["bbox"]), "pos": (1, 0, 0)}]
+        return [
+            {"spans": [span_lines[0][1]], "bbox": pymupdf.Rect(span_lines[0][1]["bbox"]), "pos": (0, 1, 1)},
+            {"spans": [span_lines[1][0]], "bbox": pymupdf.Rect(span_lines[1][0]["bbox"]), "pos": (1, 0, 0)},
+        ]
 
     short = lines(400.0, 200.0)
     assert len(_join_line_wrapped_formulas(runs(short), short, 12.0)) == 1
@@ -865,23 +957,50 @@ def test_a_numbered_lemma_and_a_displayed_formula_start_their_own_paragraphs():
     from app.formats.pdf_extract import _split_lines
 
     def line(text, x0, x1, y, font="NimbusRomNo9L-Regu", flags=0):
-        return (text, pymupdf.Rect(x0, y, x1, y + 11),
-                [{"text": text, "size": 9.7, "font": font, "flags": flags, "bbox": (x0, y, x1, y + 11)}])
+        return (
+            text,
+            pymupdf.Rect(x0, y, x1, y + 11),
+            [{"text": text, "size": 9.7, "font": font, "flags": flags, "bbox": (x0, y, x1, y + 11)}],
+        )
 
     lemma = [
-        line("that contains the ith dimension of the gradients over all iterations till t, g1:t,i = [g1,i, g2,i]",
-             105.0, 485.6, 300.0),
-        ("Lemma 10.3. Let gt = ∇ft(θt) and g1:t be defined as above and bounded,", pymupdf.Rect(105.0, 314.0, 490.3, 325.0),
-         [{"text": "Lemma 10.3.", "size": 9.7, "font": "NimbusRomNo9L-Medi", "flags": 16, "bbox": (105, 314, 160, 325)},
-          {"text": " Let gt = ∇ft(θt) and g1:t be defined as above and bounded,", "size": 9.7,
-           "font": "NimbusRomNo9L-Regu", "flags": 0, "bbox": (160, 314, 490.3, 325)}]),
+        line(
+            "that contains the ith dimension of the gradients over all iterations till t, g1:t,i = [g1,i, g2,i]",
+            105.0,
+            485.6,
+            300.0,
+        ),
+        (
+            "Lemma 10.3. Let gt = ∇ft(θt) and g1:t be defined as above and bounded,",
+            pymupdf.Rect(105.0, 314.0, 490.3, 325.0),
+            [
+                {
+                    "text": "Lemma 10.3.",
+                    "size": 9.7,
+                    "font": "NimbusRomNo9L-Medi",
+                    "flags": 16,
+                    "bbox": (105, 314, 160, 325),
+                },
+                {
+                    "text": " Let gt = ∇ft(θt) and g1:t be defined as above and bounded,",
+                    "size": 9.7,
+                    "font": "NimbusRomNo9L-Regu",
+                    "flags": 0,
+                    "bbox": (160, 314, 490.3, 325),
+                },
+            ],
+        ),
     ]
     assert _split_lines(lemma) == [[0], [1]]
     display = [
         line("Lemma 10.2. If a function f : Rd → R is convex, then for all x, y ∈ Rd,", 105.0, 391.0, 209.9),
         line("f(y) ≥ f(x) + ∇f(x)T (y − x)", 235.1, 360.2, 226.0, font="CMMI10"),
-        line("The above lemma can be used to upper bound the regret and our proof for the main theorem is",
-             105.0, 490.3, 248.0),
+        line(
+            "The above lemma can be used to upper bound the regret and our proof for the main theorem is",
+            105.0,
+            490.3,
+            248.0,
+        ),
     ]
     assert _split_lines(display) == [[0], [1], [2]]
 
@@ -916,11 +1035,21 @@ def test_a_dash_after_a_full_line_continues_the_sentence():
     from app.formats.pdf_extract import _split_lines
 
     wrapped = [
-        _line("performance of 80%. Most notably, the model attains a score of 143.7/150 in AMC 12 2024",
-              70.5, 524.4, 366.6, size=11),
+        _line(
+            "performance of 80%. Most notably, the model attains a score of 143.7/150 in AMC 12 2024",
+            70.5,
+            524.4,
+            366.6,
+            size=11,
+        ),
         _line("(https://artofproblemsolving.com/wiki/index.php/2024_AMC_12B_Problems)", 70.5, 525.5, 379.3, size=12),
-        _line("- a performance that, when combined with its AIME results, yields a score exceeding the",
-              69.4, 524.4, 393.7, size=11),
+        _line(
+            "- a performance that, when combined with its AIME results, yields a score exceeding the",
+            69.4,
+            524.4,
+            393.7,
+            size=11,
+        ),
     ]
     assert _split_lines(wrapped) == [[0, 1, 2]]
     items = [
@@ -939,11 +1068,15 @@ def test_justified_rows_are_not_a_centered_stack():
     """排满的正文行左缘差一两磅，宽窄几乎一样，不是居中排的一摞。作者名、单位、邮箱宽窄不一。"""
     from app.formats.pdf_extract import _centered_rows
 
-    paragraph = [pymupdf.Rect(x0, y, x1, y + 11) for x0, x1, y in (
-        (70.9, 524.4, 285.5), (70.4, 524.4, 326.0), (70.5, 525.5, 379.3), (69.4, 524.4, 393.7))]
+    paragraph = [
+        pymupdf.Rect(x0, y, x1, y + 11)
+        for x0, x1, y in ((70.9, 524.4, 285.5), (70.4, 524.4, 326.0), (70.5, 525.5, 379.3), (69.4, 524.4, 393.7))
+    ]
     assert not _centered_rows(paragraph, 11.0)
-    authors = [pymupdf.Rect(x0, y, x1, y + 10) for x0, x1, y in (
-        (424.3, 497.2, 233.5), (424.5, 492.9, 246.0), (422.1, 495.3, 257.2))]
+    authors = [
+        pymupdf.Rect(x0, y, x1, y + 10)
+        for x0, x1, y in ((424.3, 497.2, 233.5), (424.5, 492.9, 246.0), (422.1, 495.3, 257.2))
+    ]
     assert _centered_rows(authors, 10.0)
 
 
@@ -952,19 +1085,29 @@ def test_the_tail_of_a_wrapped_url_does_not_end_the_verbatim_text():
     from app.formats.pdf_extract import _split_lines
 
     def span(text, mono):
-        return {"text": text, "size": 12.0 if mono else 11.0, "font": "LMMono10-Regular" if mono else "URWPalladioL-Roma",
-                "flags": 0}
+        return {
+            "text": text,
+            "size": 12.0 if mono else 11.0,
+            "font": "LMMono10-Regular" if mono else "URWPalladioL-Roma",
+            "flags": 0,
+        }
 
     lines = [
-        ("Olympiad https://artofproblemsolving.com/wiki/index.php/AMC_historical_",
-         pymupdf.Rect(70.9, 420.0, 525.0, 432.0),
-         [span("Olympiad ", False), span("https://artofproblemsolving.com/wiki/index.php/AMC_historical_", True)]),
-        ("results?srsltid=AfmBOoqQ6pQic5NCan_NX1wYgr-aoHgJ33hsq7KSekF-rUwY8TBaBao",
-         pymupdf.Rect(70.9, 433.5, 524.4, 445.5),
-         [span("results?srsltid=AfmBOoqQ6pQic5NCan_NX1wYgr-aoHgJ33hsq7KSekF-rUwY8TBaBao", True)]),
-        ("1). This performance positions DeepSeek-R1 among the nation’s top-tier high school students.",
-         pymupdf.Rect(70.6, 447.1, 524.0, 459.1),
-         [span("1).", True), span(" This performance positions DeepSeek-R1 among the nation’s top-tier", False)]),
+        (
+            "Olympiad https://artofproblemsolving.com/wiki/index.php/AMC_historical_",
+            pymupdf.Rect(70.9, 420.0, 525.0, 432.0),
+            [span("Olympiad ", False), span("https://artofproblemsolving.com/wiki/index.php/AMC_historical_", True)],
+        ),
+        (
+            "results?srsltid=AfmBOoqQ6pQic5NCan_NX1wYgr-aoHgJ33hsq7KSekF-rUwY8TBaBao",
+            pymupdf.Rect(70.9, 433.5, 524.4, 445.5),
+            [span("results?srsltid=AfmBOoqQ6pQic5NCan_NX1wYgr-aoHgJ33hsq7KSekF-rUwY8TBaBao", True)],
+        ),
+        (
+            "1). This performance positions DeepSeek-R1 among the nation’s top-tier high school students.",
+            pymupdf.Rect(70.6, 447.1, 524.0, 459.1),
+            [span("1).", True), span(" This performance positions DeepSeek-R1 among the nation’s top-tier", False)],
+        ),
     ]
     assert _split_lines(lines) == [[0, 1, 2]]
 
@@ -978,13 +1121,22 @@ def test_an_equals_sign_at_the_end_of_a_list_item_line_keeps_the_item_whole():
 
     items = [
         piece("1. Intractability:", 131.4, 199.1, 474.5),
-        ("the case where the integral of the marginal likelihood p(x)", pymupdf.Rect(210.4, 474.5, 485.9, 485.3), [
-            {"size": 10.0, "font": "Times-Roman", "text": "the case where the integral of the marginal likelihood"},
-            {"size": 10.0, "font": "CMR10", "text": "p(x)"},
-        ]),
+        (
+            "the case where the integral of the marginal likelihood p(x)",
+            pymupdf.Rect(210.4, 474.5, 485.9, 485.3),
+            [
+                {"size": 10.0, "font": "Times-Roman", "text": "the case where the integral of the marginal likelihood"},
+                {"size": 10.0, "font": "CMR10", "text": "p(x)"},
+            ],
+        ),
         piece("=", 496.3, 504.0, 474.5, font="CMR10"),
         piece("R", 143.9, 148.6, 484.6, font="CMEX10"),
-        piece("p(z)p(x|z) dz is intractable (so we cannot evaluate or differentiate the marginal like-", 152.2, 504.0, 485.3),
+        piece(
+            "p(z)p(x|z) dz is intractable (so we cannot evaluate or differentiate the marginal like-",
+            152.2,
+            504.0,
+            485.3,
+        ),
     ]
     assert _split_lines(items) == [[0, 1, 2, 3, 4]]
     # 等号没顶到右缘，这一行没排满，隔一个字宽以上的不接
@@ -1094,8 +1246,15 @@ def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
 
     def block(y0: float) -> TextBlock:
         rows = [pymupdf.Rect(40, y, 360, y + 12) for y in (y0, y0 + 12, y0 + 24)]
-        return TextBlock(page=0, rect=pymupdf.Rect(40, y0, 360, y0 + 36), line_rects=rows,
-                         text="x " * 60 + "end.", size=10, color="#000000", bold=False)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(40, y0, 360, y0 + 36),
+            line_rects=rows,
+            text="x " * 60 + "end.",
+            size=10,
+            color="#000000",
+            bold=False,
+        )
 
     blocks = [block(40), block(76), block(112)]
     full = "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 4
@@ -1103,8 +1262,11 @@ def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
     # 原文的块没有 span，擦不掉，只看中文的行
     rows = sorted(
         (line["spans"][0]["origin"][1], line["spans"][0]["size"], text)
-        for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0 for line in item["lines"]
-        for text in ["".join(span["text"] for span in line["spans"])] if re.search(r"[一-鿿]", text)
+        for item in out[0].get_text("dict")["blocks"]
+        if item.get("type") == 0
+        for line in item["lines"]
+        for text in ["".join(span["text"] for span in line["spans"])]
+        if re.search(r"[一-鿿]", text)
     )
     assert len(rows) == 6 and all(abs(size - 8.8) < 0.1 for _, size, _ in rows)
     baselines = [baseline for baseline, _, _ in rows]
@@ -1119,22 +1281,60 @@ def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
         page.insert_text((40, y + 9), "x " * 10, fontsize=10)
     src.save(tmp_path / "list.pdf")
     # 中间一条带下标，框比行距高，伸到下一条里
-    rows = [TextBlock(page=0, rect=pymupdf.Rect(40, y, 160, y + h), line_rects=[pymupdf.Rect(40, y, 160, y + h)],
-                      text="x " * 10 + "end.", size=10, color="#000000", bold=False)
-            for y, h in ((200, 12), (212, 16), (224, 12))]
-    out = _render_translated(tmp_path / "list.pdf", rows, ["施事/主语, 主题/宾语", "工具/主语, 主题/宾语", "主题/主语"], "zh-CN")
-    listed = sorted(line["spans"][0]["origin"][1] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
-                    for line in item["lines"] if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"])))
+    rows = [
+        TextBlock(
+            page=0,
+            rect=pymupdf.Rect(40, y, 160, y + h),
+            line_rects=[pymupdf.Rect(40, y, 160, y + h)],
+            text="x " * 10 + "end.",
+            size=10,
+            color="#000000",
+            bold=False,
+        )
+        for y, h in ((200, 12), (212, 16), (224, 12))
+    ]
+    out = _render_translated(
+        tmp_path / "list.pdf", rows, ["施事/主语, 主题/宾语", "工具/主语, 主题/宾语", "主题/主语"], "zh-CN"
+    )
+    listed = sorted(
+        line["spans"][0]["origin"][1]
+        for item in out[0].get_text("dict")["blocks"]
+        if item.get("type") == 0
+        for line in item["lines"]
+        if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
+    )
     assert len(listed) == 3
     assert all(lower - upper > 11 for upper, lower in zip(listed, listed[1:]))
 
     # 表格里上下相邻的格子旁边还有别的格子，各自对着原来的行。页边的旁注不算
-    cell = TextBlock(page=0, rect=pymupdf.Rect(40, 40, 90, 52), line_rects=[pymupdf.Rect(40, 40, 90, 52)],
-                     text="rise", size=10, color="#000000", bold=False)
-    other = TextBlock(page=0, rect=pymupdf.Rect(110, 40, 160, 52), line_rects=[pymupdf.Rect(110, 40, 160, 52)],
-                      text="fall", size=10, color="#000000", bold=False)
-    note = TextBlock(page=0, rect=pymupdf.Rect(0, 40, 30, 52), line_rects=[pymupdf.Rect(0, 40, 30, 52)],
-                     text="term", size=7, color="#000000", bold=False, side_note=True)
+    cell = TextBlock(
+        page=0,
+        rect=pymupdf.Rect(40, 40, 90, 52),
+        line_rects=[pymupdf.Rect(40, 40, 90, 52)],
+        text="rise",
+        size=10,
+        color="#000000",
+        bold=False,
+    )
+    other = TextBlock(
+        page=0,
+        rect=pymupdf.Rect(110, 40, 160, 52),
+        line_rects=[pymupdf.Rect(110, 40, 160, 52)],
+        text="fall",
+        size=10,
+        color="#000000",
+        bold=False,
+    )
+    note = TextBlock(
+        page=0,
+        rect=pymupdf.Rect(0, 40, 30, 52),
+        line_rects=[pymupdf.Rect(0, 40, 30, 52)],
+        text="term",
+        size=7,
+        color="#000000",
+        bold=False,
+        side_note=True,
+    )
     assert _row_neighbor(cell, [cell, other], None)
     assert not _row_neighbor(blocks[0], [*blocks, note], None)
 
@@ -1154,13 +1354,24 @@ def test_a_paragraph_borrows_the_spare_height_of_the_next_one(tmp_path):
 
     def block(y0: float, count: int, size: float = 10) -> TextBlock:
         rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
-        return TextBlock(page=0, rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count), line_rects=rows,
-                         text="x " * 60 + "end.", size=size, color="#000000", bold=False, body_size=10)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count),
+            line_rects=rows,
+            text="x " * 60 + "end.",
+            size=size,
+            color="#000000",
+            bold=False,
+            body_size=10,
+        )
 
     def baselines(doc) -> list[float]:
         return sorted(
-            line["spans"][0]["origin"][1] for item in doc[0].get_text("dict")["blocks"] if item.get("type") == 0
-            for line in item["lines"] if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
+            line["spans"][0]["origin"][1]
+            for item in doc[0].get_text("dict")["blocks"]
+            if item.get("type") == 0
+            for line in item["lines"]
+            if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
         )
 
     long = "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 5
@@ -1193,13 +1404,24 @@ def test_a_chain_of_paragraphs_moves_down_together(tmp_path):
 
     def block(y0: float, count: int) -> TextBlock:
         rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
-        return TextBlock(page=0, rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count), line_rects=rows,
-                         text="x " * 60 + "end.", size=10, color="#000000", bold=False, body_size=10)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count),
+            line_rects=rows,
+            text="x " * 60 + "end.",
+            size=10,
+            color="#000000",
+            bold=False,
+            body_size=10,
+        )
 
     def baselines(doc) -> list[float]:
         return sorted(
-            line["spans"][0]["origin"][1] for item in doc[0].get_text("dict")["blocks"] if item.get("type") == 0
-            for line in item["lines"] if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
+            line["spans"][0]["origin"][1]
+            for item in doc[0].get_text("dict")["blocks"]
+            if item.get("type") == 0
+            for line in item["lines"]
+            if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
         )
 
     long = "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 5
@@ -1213,9 +1435,14 @@ def test_a_chain_of_paragraphs_moves_down_together(tmp_path):
 
     # 一行高的列表项：第一项多出一行，第二项挪下去的起笔低过了第三项的顶，第三项仍跟着挪，不压在一起
     items = [block(40, 1), block(52, 1), block(64, 1), block(76, 8)]
-    rows = baselines(_render_translated(
-        src_path, items, [full[:60], "第二项。", full[:60], "第四段原文八行，译文一行。"], "zh-CN",
-    ))
+    rows = baselines(
+        _render_translated(
+            src_path,
+            items,
+            [full[:60], "第二项。", full[:60], "第四段原文八行，译文一行。"],
+            "zh-CN",
+        )
+    )
     assert len(rows) == 6
     assert all(lower - upper > 8.8 * 1.4 for upper, lower in zip(rows, rows[1:]))
 
@@ -1234,17 +1461,30 @@ def test_a_paragraph_moves_up_into_the_space_left_above(tmp_path):
 
     def block(y0: float, count: int) -> TextBlock:
         rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
-        return TextBlock(page=0, rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count), line_rects=rows,
-                         text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count),
+            line_rects=rows,
+            text="x " * 40 + "end.",
+            size=10,
+            color="#000000",
+            bold=False,
+            body_size=10,
+        )
 
     def baselines(doc) -> list[float]:
         return sorted(
-            line["spans"][0]["origin"][1] for item in doc[0].get_text("dict")["blocks"] if item.get("type") == 0
-            for line in item["lines"] if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
+            line["spans"][0]["origin"][1]
+            for item in doc[0].get_text("dict")["blocks"]
+            if item.get("type") == 0
+            for line in item["lines"]
+            if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
         )
 
     long = "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 5
-    rows = baselines(_render_translated(src_path, [block(40, 4), block(88, 3)], ["第一段原文四行，译文一行。", long], "zh-CN"))
+    rows = baselines(
+        _render_translated(src_path, [block(40, 4), block(88, 3)], ["第一段原文四行，译文一行。", long], "zh-CN")
+    )
     assert len(rows) == 5
     pitches = [lower - upper for upper, lower in zip(rows[1:], rows[2:])]
     assert all(abs(pitch - 8.8 * 1.45) < 0.2 for pitch in pitches)
@@ -1264,16 +1504,34 @@ def test_the_first_paragraph_under_a_heading_moves_up(tmp_path):
         page.insert_text((40, y + 9), "x " * 40, fontsize=10)
     src_path = tmp_path / "src.pdf"
     src.save(src_path)
-    heading = TextBlock(page=0, rect=pymupdf.Rect(40, 40, 120, 56), line_rects=[pymupdf.Rect(40, 40, 120, 56)],
-                        text="Heading", size=14, color="#000000", bold=True, body_size=10)
+    heading = TextBlock(
+        page=0,
+        rect=pymupdf.Rect(40, 40, 120, 56),
+        line_rects=[pymupdf.Rect(40, 40, 120, 56)],
+        text="Heading",
+        size=14,
+        color="#000000",
+        bold=True,
+        body_size=10,
+    )
     rows = [pymupdf.Rect(40, 88 + 12 * index, 360, 100 + 12 * index) for index in range(3)]
-    body = TextBlock(page=0, rect=pymupdf.Rect(40, 88, 360, 124), line_rects=rows,
-                     text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+    body = TextBlock(
+        page=0,
+        rect=pymupdf.Rect(40, 88, 360, 124),
+        line_rects=rows,
+        text="x " * 40 + "end.",
+        size=10,
+        color="#000000",
+        bold=False,
+        body_size=10,
+    )
     long = "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 5
     out = _render_translated(src_path, [heading, body], ["标题", long], "zh-CN")
     lines = sorted(
-        (line["spans"][0]["origin"][1], line["spans"][0]["size"]) for item in out[0].get_text("dict")["blocks"]
-        if item.get("type") == 0 for line in item["lines"]
+        (line["spans"][0]["origin"][1], line["spans"][0]["size"])
+        for item in out[0].get_text("dict")["blocks"]
+        if item.get("type") == 0
+        for line in item["lines"]
         if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
     )
     rows = [y for y, size in lines if abs(size - 8.8) < 0.1]
@@ -1295,18 +1553,45 @@ def test_a_paragraph_does_not_move_up_past_a_heading_that_touches_it(tmp_path):
         page.insert_text((40, y + 9), "x " * 40, fontsize=10)
     src_path = tmp_path / "src.pdf"
     src.save(src_path)
-    above = TextBlock(page=0, rect=pymupdf.Rect(40, 20, 360, 32), line_rects=[pymupdf.Rect(40, 20, 360, 32)],
-                      text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
-    heading = TextBlock(page=0, rect=pymupdf.Rect(40, 58, 120, 75), line_rects=[pymupdf.Rect(40, 58, 120, 75)],
-                        text="Heading", size=14, color="#000000", bold=True, body_size=10)
+    above = TextBlock(
+        page=0,
+        rect=pymupdf.Rect(40, 20, 360, 32),
+        line_rects=[pymupdf.Rect(40, 20, 360, 32)],
+        text="x " * 40 + "end.",
+        size=10,
+        color="#000000",
+        bold=False,
+        body_size=10,
+    )
+    heading = TextBlock(
+        page=0,
+        rect=pymupdf.Rect(40, 58, 120, 75),
+        line_rects=[pymupdf.Rect(40, 58, 120, 75)],
+        text="Heading",
+        size=14,
+        color="#000000",
+        bold=True,
+        body_size=10,
+    )
     rows = [pymupdf.Rect(40, 72 + 12 * index, 360, 84 + 12 * index) for index in range(3)]
-    body = TextBlock(page=0, rect=pymupdf.Rect(40, 72, 360, 108), line_rects=rows,
-                     text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+    body = TextBlock(
+        page=0,
+        rect=pymupdf.Rect(40, 72, 360, 108),
+        line_rects=rows,
+        text="x " * 40 + "end.",
+        size=10,
+        color="#000000",
+        bold=False,
+        body_size=10,
+    )
     long = "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 5
     out = _render_translated(src_path, [above, heading, body], ["短。", "标题", long], "zh-CN")
     tops = [
-        line["bbox"][1] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
-        for line in item["lines"] if "这一卷" in "".join(span["text"] for span in line["spans"])
+        line["bbox"][1]
+        for item in out[0].get_text("dict")["blocks"]
+        if item.get("type") == 0
+        for line in item["lines"]
+        if "这一卷" in "".join(span["text"] for span in line["spans"])
     ]
     assert tops and min(tops) > 72
 
@@ -1323,8 +1608,16 @@ def test_an_empty_tail_above_does_not_stop_a_paragraph_moving_up(tmp_path):
         rows = [pymupdf.Rect(x0, y0 + 12 * index, x0 + 160, y0 + 12 * index + 12) for index in range(count)]
         for row in rows:
             page.insert_text((row.x0, row.y0 + 9), "x " * 15, fontsize=size)
-        return TextBlock(page=0, rect=pymupdf.Rect(x0, y0, x0 + 160, y0 + 12 * count), line_rects=rows,
-                         text=text, size=size, color="#000000", bold=False, body_size=10)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(x0, y0, x0 + 160, y0 + 12 * count),
+            line_rects=rows,
+            text=text,
+            size=size,
+            color="#000000",
+            bold=False,
+            body_size=10,
+        )
 
     host = block(20, 200, 5, text="x " * 30 + "and")
     tail = block(220, 20, 1)
@@ -1334,11 +1627,20 @@ def test_an_empty_tail_above_does_not_stop_a_paragraph_moving_up(tmp_path):
     src_path = tmp_path / "src.pdf"
     src.save(src_path)
     long = "这一卷讲的是这个激动人心的构想如何实现。" * 3
-    out = _render_translated(src_path, [host, tail, short, body, label], ["宿主短。", SPILL_TAIL, "短。", long, "标注"],
-                             "zh-CN", continuations={id(host): tail})
+    out = _render_translated(
+        src_path,
+        [host, tail, short, body, label],
+        ["宿主短。", SPILL_TAIL, "短。", long, "标注"],
+        "zh-CN",
+        continuations={id(host): tail},
+    )
     rows = sorted(
-        line["spans"][0]["origin"][1] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
-        for line in item["lines"] if line["bbox"][0] > 200 and "标注" not in line["spans"][0]["text"]
+        line["spans"][0]["origin"][1]
+        for item in out[0].get_text("dict")["blocks"]
+        if item.get("type") == 0
+        for line in item["lines"]
+        if line["bbox"][0] > 200
+        and "标注" not in line["spans"][0]["text"]
         and abs(line["spans"][0]["size"] - 8.8) < 0.1
     )
     assert len(rows) == 5
@@ -1360,16 +1662,27 @@ def test_a_paragraph_moves_up_when_the_next_box_overlaps_its_bottom(tmp_path):
         rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
         for row in rows:
             page.insert_text((40, row.y0 + 9), "x " * 40, fontsize=size)
-        return TextBlock(page=0, rect=pymupdf.Rect(40, y0, 360, y1 or y0 + 12 * count), line_rects=rows,
-                         text="x " * 40 + "end.", size=size, color="#000000", bold=False, body_size=10)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(40, y0, 360, y1 or y0 + 12 * count),
+            line_rects=rows,
+            text="x " * 40 + "end.",
+            size=size,
+            color="#000000",
+            bold=False,
+            body_size=10,
+        )
 
     short, body, below, label = block(20, 1), block(64, 3, y1=106), block(101, 3), block(139, 1, size=8)
     src_path = tmp_path / "src.pdf"
     src.save(src_path)
     out = _render_translated(src_path, [short, body, below, label], ["短。", _LONG_ZH * 3, _LONG_ZH, "标注"], "zh-CN")
     rows = sorted(
-        line["spans"][0]["origin"][1] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
-        for line in item["lines"] if abs(line["spans"][0]["size"] - 8.8) < 0.1 and "短" not in line["spans"][0]["text"]
+        line["spans"][0]["origin"][1]
+        for item in out[0].get_text("dict")["blocks"]
+        if item.get("type") == 0
+        for line in item["lines"]
+        if abs(line["spans"][0]["size"] - 8.8) < 0.1 and "短" not in line["spans"][0]["text"]
     )
     assert len(rows) == 6
     assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows[:3], rows[1:4]))
@@ -1389,23 +1702,47 @@ def test_a_cross_page_paragraph_keeps_its_lines_when_lifting_more_does_not_help(
         rows = [pymupdf.Rect(40, y0 + 12 * index, x1, y0 + 12 * index + 12) for index in range(count)]
         for row in rows:
             page.insert_text((40, row.y0 + 9), "x " * 40, fontsize=10)
-        return TextBlock(page=page.number, rect=pymupdf.Rect(40, y0, x1, y0 + 12 * count), line_rects=rows,
-                         text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+        return TextBlock(
+            page=page.number,
+            rect=pymupdf.Rect(40, y0, x1, y0 + 12 * count),
+            line_rects=rows,
+            text="x " * 40 + "end.",
+            size=10,
+            color="#000000",
+            bold=False,
+            body_size=10,
+        )
 
     first = doc.new_page(width=400, height=300)
     above, host = block(first, 40, 3), block(first, 124, 3)
     second = doc.new_page(width=400, height=300)
     tail = block(second, 40, 1, x1=200)
     second.insert_text((250, 49), "side " * 5, fontsize=10)
-    side = TextBlock(page=1, rect=pymupdf.Rect(250, 40, 360, 52), line_rects=[pymupdf.Rect(250, 40, 360, 52)],
-                     text="side " * 5, size=10, color="#000000", bold=False, body_size=10)
+    side = TextBlock(
+        page=1,
+        rect=pymupdf.Rect(250, 40, 360, 52),
+        line_rects=[pymupdf.Rect(250, 40, 360, 52)],
+        text="side " * 5,
+        size=10,
+        color="#000000",
+        bold=False,
+        body_size=10,
+    )
     doc.save(src)
     doc.close()
-    out = _render_translated(src, [above, host, tail, side], ["短。", _LONG_ZH * 6, SPILL_TAIL, "旁边"], "zh-CN",
-                             continuations={id(host): tail})
+    out = _render_translated(
+        src,
+        [above, host, tail, side],
+        ["短。", _LONG_ZH * 6, SPILL_TAIL, "旁边"],
+        "zh-CN",
+        continuations={id(host): tail},
+    )
     rows = [
-        line["spans"][0]["origin"][1] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
-        for line in item["lines"] if "短" not in line["spans"][0]["text"]
+        line["spans"][0]["origin"][1]
+        for item in out[0].get_text("dict")["blocks"]
+        if item.get("type") == 0
+        for line in item["lines"]
+        if "短" not in line["spans"][0]["text"]
     ]
     assert len(rows) >= 2
     assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows, rows[1:]))
@@ -1423,8 +1760,16 @@ def test_a_cross_page_paragraph_below_moves_down_to_make_room(tmp_path):
         rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
         for row in rows:
             page.insert_text((40, row.y0 + 9), "x " * 40, fontsize=10)
-        return TextBlock(page=page.number, rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count), line_rects=rows,
-                         text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+        return TextBlock(
+            page=page.number,
+            rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count),
+            line_rects=rows,
+            text="x " * 40 + "end.",
+            size=10,
+            color="#000000",
+            bold=False,
+            body_size=10,
+        )
 
     first = doc.new_page(width=400, height=300)
     body, host = block(first, 104, 3), block(first, 140, 3)
@@ -1432,10 +1777,17 @@ def test_a_cross_page_paragraph_below_moves_down_to_make_room(tmp_path):
     tail, after = block(second, 40, 2), block(second, 66, 6)
     doc.save(src)
     doc.close()
-    out = _render_translated(src, [body, host, tail, after], [_LONG_ZH * 3, _LONG_ZH * 2, SPILL_TAIL, "短。"],
-                             "zh-CN", continuations={id(host): tail})
+    out = _render_translated(
+        src,
+        [body, host, tail, after],
+        [_LONG_ZH * 3, _LONG_ZH * 2, SPILL_TAIL, "短。"],
+        "zh-CN",
+        continuations={id(host): tail},
+    )
     rows = [
-        line["spans"][0]["origin"][1] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
+        line["spans"][0]["origin"][1]
+        for item in out[0].get_text("dict")["blocks"]
+        if item.get("type") == 0
         for line in item["lines"]
     ]
     assert len(rows) == 5
@@ -1455,8 +1807,16 @@ def test_the_last_paragraph_continues_on_the_next_page(tmp_path):
         rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
         for row in rows:
             page.insert_text((40, row.y0 + 9), "x " * 40, fontsize=10)
-        return TextBlock(page=page.number, rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count), line_rects=rows,
-                         text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+        return TextBlock(
+            page=page.number,
+            rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count),
+            line_rects=rows,
+            text="x " * 40 + "end.",
+            size=10,
+            color="#000000",
+            bold=False,
+            body_size=10,
+        )
 
     first = doc.new_page(width=400, height=300)
     above, last = block(first, 40, 5), block(first, 104, 3)
@@ -1469,7 +1829,9 @@ def test_the_last_paragraph_continues_on_the_next_page(tmp_path):
     def rows(page: pymupdf.Page) -> list[tuple[float, str]]:
         return [
             (line["spans"][0]["origin"][1], "".join(span["text"] for span in line["spans"]))
-            for item in page.get_text("dict")["blocks"] if item.get("type") == 0 for line in item["lines"]
+            for item in page.get_text("dict")["blocks"]
+            if item.get("type") == 0
+            for line in item["lines"]
         ]
 
     first_rows, second_rows = rows(out[0]), rows(out[1])
@@ -1481,8 +1843,11 @@ def test_the_last_paragraph_continues_on_the_next_page(tmp_path):
 def _zh_rows(page: pymupdf.Page, size: float = 8.8) -> list[float]:
     """译文各行的基线，从上到下"""
     return sorted(
-        line["spans"][0]["origin"][1] for item in page.get_text("dict")["blocks"] if item.get("type") == 0
-        for line in item["lines"] if abs(line["spans"][0]["size"] - size) < 0.1
+        line["spans"][0]["origin"][1]
+        for item in page.get_text("dict")["blocks"]
+        if item.get("type") == 0
+        for line in item["lines"]
+        if abs(line["spans"][0]["size"] - size) < 0.1
     )
 
 
@@ -1490,8 +1855,16 @@ def _x_block(page: pymupdf.Page, y0: float, count: int, size: float = 10, row: f
     rows = [pymupdf.Rect(40, y0 + row * index, 360, y0 + row * index + row) for index in range(count)]
     for rect in rows:
         page.insert_text((40, rect.y0 + 9), "x " * 40, fontsize=size)
-    return TextBlock(page=page.number, rect=pymupdf.Rect(40, y0, 360, y0 + row * count), line_rects=rows,
-                     text="x " * 40 + "end.", size=size, color="#000000", bold=False, body_size=10)
+    return TextBlock(
+        page=page.number,
+        rect=pymupdf.Rect(40, y0, 360, y0 + row * count),
+        line_rects=rows,
+        text="x " * 40 + "end.",
+        size=size,
+        color="#000000",
+        bold=False,
+        body_size=10,
+    )
 
 
 def test_the_blank_under_the_last_line_may_pass_the_box_bottom(tmp_path):
@@ -1550,8 +1923,11 @@ def test_a_page_number_left_below_the_text_is_not_part_of_the_body(tmp_path):
     src.save(src_path)
     out = _render_translated(src_path, [body], ["测" * 140], "zh-CN")
     bottoms = [
-        line["bbox"][3] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
-        for line in item["lines"] if "测" in line["spans"][0]["text"]
+        line["bbox"][3]
+        for item in out[0].get_text("dict")["blocks"]
+        if item.get("type") == 0
+        for line in item["lines"]
+        if "测" in line["spans"][0]["text"]
     ]
     assert bottoms and max(bottoms) < 85
 
@@ -1566,25 +1942,40 @@ def test_a_flush_right_attribution_widens_to_the_left(tmp_path):
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
     right = 475.0
-    page.insert_text((right - pymupdf.get_text_length("Samuel Johnson", "tiro", 9), 240), "Samuel Johnson",
-                     fontsize=9, fontname="tiro")
+    page.insert_text(
+        (right - pymupdf.get_text_length("Samuel Johnson", "tiro", 9), 240),
+        "Samuel Johnson",
+        fontsize=9,
+        fontname="tiro",
+    )
     body_line = "x" * 55
     for index in range(3):
-        page.insert_text((right - pymupdf.get_text_length(body_line, "cour", 10), 300 + index * 12), body_line,
-                         fontsize=10, fontname="cour")
+        page.insert_text(
+            (right - pymupdf.get_text_length(body_line, "cour", 10), 300 + index * 12),
+            body_line,
+            fontsize=10,
+            fontname="cour",
+        )
     path = tmp_path / "src.pdf"
     doc.save(path)
     page = pymupdf.open(path)[0]
     row = page.search_for("Samuel Johnson")[0]
-    author = TextBlock(page=0, rect=row, line_rects=[row], text="Samuel Johnson", size=9.0, color="#000000",
-                       bold=False)
-    body = TextBlock(page=0, rect=pymupdf.Rect(page.search_for(body_line)[0]) | page.search_for(body_line)[-1],
-                     line_rects=page.search_for(body_line), text=body_line * 3, size=10.0, color="#000000", bold=False)
+    author = TextBlock(page=0, rect=row, line_rects=[row], text="Samuel Johnson", size=9.0, color="#000000", bold=False)
+    body = TextBlock(
+        page=0,
+        rect=pymupdf.Rect(page.search_for(body_line)[0]) | page.search_for(body_line)[-1],
+        line_rects=page.search_for(body_line),
+        text=body_line * 3,
+        size=10.0,
+        color="#000000",
+        bold=False,
+    )
     frame = TextFrame(body.rect.x0, body.rect.x1, 100, 720, 10)
     geo = PageGeometry.from_rects(612, [author.rect, body.rect], height=792, frame=frame)
     out = _render_translated(path, [author, body], ["塞缪尔·约翰逊，《闲人》", "正文" * 40], "zh-CN", geometries=[geo])
     lines = [
-        line for block in out[0].get_text("dict", clip=pymupdf.Rect(200, 225, 500, 255))["blocks"]
+        line
+        for block in out[0].get_text("dict", clip=pymupdf.Rect(200, 225, 500, 255))["blocks"]
         for line in block.get("lines", [])
     ]
     assert len(lines) == 1
@@ -1605,8 +1996,13 @@ def test_a_last_line_of_one_character_is_pulled_back_by_tightening_the_letter_sp
     rows = _zh_rows(out[0])
     assert len(rows) == 3
     assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows, rows[1:]))
-    right = max(line["bbox"][2] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
-                for line in item["lines"] if abs(line["spans"][0]["size"] - 8.8) < 0.1)
+    right = max(
+        line["bbox"][2]
+        for item in out[0].get_text("dict")["blocks"]
+        if item.get("type") == 0
+        for line in item["lines"]
+        if abs(line["spans"][0]["size"] - 8.8) < 0.1
+    )
     assert right < 362.5
 
 
@@ -1626,18 +2022,32 @@ def test_a_cross_page_paragraph_moves_up_to_keep_its_line_spacing(tmp_path):
 
     def block(page: int, y0: float, count: int) -> TextBlock:
         rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
-        return TextBlock(page=page, rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count), line_rects=rows,
-                         text="x " * 40 + "end.", size=10, color="#000000", bold=False, body_size=10)
+        return TextBlock(
+            page=page,
+            rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count),
+            line_rects=rows,
+            text="x " * 40 + "end.",
+            size=10,
+            color="#000000",
+            bold=False,
+            body_size=10,
+        )
 
     above, host, tail = block(0, 40, 15), block(0, 220, 3), block(1, 40, 2)
     paragraph = "在实验研究中我们首先比较旧优化器与新优化器的计划质量，并说明新优化器在大规模数据上的收益。" * 4
     out = _render_translated(
-        src, [above, host, tail], ["上面一段原文十五行，译文一行。", paragraph, SPILL_TAIL], "zh-CN",
+        src,
+        [above, host, tail],
+        ["上面一段原文十五行，译文一行。", paragraph, SPILL_TAIL],
+        "zh-CN",
         continuations={id(host): tail},
     )
     rows = sorted(
-        line["spans"][0]["origin"][1] for item in out[0].get_text("dict")["blocks"] if item.get("type") == 0
-        for line in item["lines"] if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
+        line["spans"][0]["origin"][1]
+        for item in out[0].get_text("dict")["blocks"]
+        if item.get("type") == 0
+        for line in item["lines"]
+        if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
     )[1:]
     assert len(rows) >= 3
     assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows, rows[1:]))
@@ -1722,9 +2132,13 @@ def test_apply_translation_html_keeps_tags_and_strips_script():
     soup = hb.parse(RICH_CHAPTER, xml=True)
     el, _, html = hb.find_blocks(soup)[1]
     hb.apply_translation_html(
-        soup, el, html,
+        soup,
+        el,
+        html,
         '带有<b>粗体</b>和<a href="https://example.com">链接</a><script>alert(1)</script>。',
-        False, "zh-CN")
+        False,
+        "zh-CN",
+    )
     p = soup.find_all("p")[1]
     assert p.find("b").get_text() == "粗体"
     assert p.find("a")["href"] == "https://example.com"
@@ -1771,9 +2185,13 @@ def test_sanitize_drops_event_handlers_and_script_urls():
     soup = hb.parse(RICH_CHAPTER, xml=True)
     el, _, html = hb.find_blocks(soup)[1]
     hb.apply_translation_html(
-        soup, el, html,
+        soup,
+        el,
+        html,
         '<a href="javascript:alert(1)" onclick="alert(1)">链接</a><b onerror="x">粗体</b>',
-        False, "zh-CN")
+        False,
+        "zh-CN",
+    )
     p = soup.find_all("p")[1]
     link = p.find("a")
     assert link is not None and "href" not in link.attrs and "onclick" not in link.attrs
@@ -1790,7 +2208,6 @@ def test_epub_rich_paragraphs_keep_inline_formatting(tmp_path):
     assert "[zh-CN]" in html
 
 
-
 def test_epub_kbd_text_kept_in_translation_only_mode(tmp_path):
     """段落里只有 <kbd> 这类行内标签时，按键文字要发给翻译服务，仅译文模式下也不能丢。"""
     src = tmp_path / "book.epub"
@@ -1802,10 +2219,13 @@ def test_epub_kbd_text_kept_in_translation_only_mode(tmp_path):
     assert "[zh-CN]" in p.get_text() and "Ctrl+C" in p.get_text()
     assert "<kbd>Ctrl</kbd>" in html
 
+
 def test_epub_bilingual_translation_has_no_duplicate_ids(tmp_path):
     """双语模式下译文段落不能带原文的 id 和分页锚点，否则 id 重复、页码显示两遍。"""
-    body = ('<p id="para1"><a id="p12"/>Some <b>bold</b> text and <a id="note3" href="#n3">a note</a> here.</p>'
-            '<ul><li><span epub:type="pagebreak" id="p13">13</span>Item with <em>emphasis</em> inside.</li></ul>')
+    body = (
+        '<p id="para1"><a id="p12"/>Some <b>bold</b> text and <a id="note3" href="#n3">a note</a> here.</p>'
+        '<ul><li><span epub:type="pagebreak" id="p13">13</span>Item with <em>emphasis</em> inside.</li></ul>'
+    )
     src = tmp_path / "book.epub"
     _one_epub(src, {"ch1.xhtml": _xhtml(body)})
     [out] = run(translate_epub(src, tmp_path, runner(), True, "zh-CN"))
@@ -1814,6 +2234,7 @@ def test_epub_bilingual_translation_has_no_duplicate_ids(tmp_path):
         assert html.count(f'id="{ident}"') == 1, ident
     assert html.count(">13<") == 1
     assert "[zh-CN]" in html and 'href="#n3"' in html
+
 
 def test_sanitize_rejects_anchor_only_translation():
     """原文有文字、译文只剩锚点（模型抽风）：判不合格回退，不能清空原段落。"""
@@ -1865,7 +2286,8 @@ def test_sanitize_keeps_raster_data_image_but_strips_script_url():
         src,
         '文字 {v1} <img src="data:image/png;base64,AAAA" onerror="alert(1)"/>'
         '<img src="data:image/svg+xml;base64,PHN2Zw=="/> 和 '
-        '<a href="javascript:alert(1)">坏链接</a><a href="https://x">链接</a>')
+        '<a href="javascript:alert(1)">坏链接</a><a href="https://x">链接</a>',
+    )
     soup = BeautifulSoup("<p></p>", "lxml")
     for n in nodes:
         soup.p.append(n)
@@ -1878,8 +2300,10 @@ def test_sanitize_keeps_raster_data_image_but_strips_script_url():
     assert hb._unsafe_url("data:image/svg+xml,<svg></svg>", "image") is True
 
 
-MATH_PARA = ('<p>Let <math xmlns="http://www.w3.org/1998/Math/MathML"><mi>x</mi></math> be a variable '
-             'and <img src="eq1.png" alt="y=2x"/> holds.</p>')
+MATH_PARA = (
+    '<p>Let <math xmlns="http://www.w3.org/1998/Math/MathML"><mi>x</mi></math> be a variable '
+    'and <img src="eq1.png" alt="y=2x"/> holds.</p>'
+)
 
 
 def _order(p) -> list[str]:
@@ -1911,8 +2335,10 @@ def test_rich_paragraph_sends_placeholders_instead_of_mathml():
     """富文本段落里的 MathML 不发给模型（<mtext> 会被翻掉），和纯文本路径一样换成占位符。"""
     from app.formats import html_blocks as hb
 
-    body = ('<p>Let <em>f</em> be <math xmlns="http://www.w3.org/1998/Math/MathML">'
-            '<mrow><mi>x</mi><mtext>for all</mtext></mrow></math> here.</p>')
+    body = (
+        '<p>Let <em>f</em> be <math xmlns="http://www.w3.org/1998/Math/MathML">'
+        "<mrow><mi>x</mi><mtext>for all</mtext></mrow></math> here.</p>"
+    )
     soup = hb.parse(_xhtml(body), xml=True)
     [(el, text, html)] = hb.find_blocks(soup)
     assert html == "Let <em>f</em> be {v1} here." and text == "Let f be {v1} here."
@@ -1958,15 +2384,20 @@ def test_literal_placeholder_text_is_not_a_slot():
 
 def test_source_line_wraps_are_spaces_not_line_breaks(tmp_path):
     """排版过的 XHTML 段落里文字跨行写，换行只是空白；只有 <br> 才是换行。"""
-    body = ("<p>Alice was beginning to get very tired of sitting\n    by her sister on the bank,<br/>\n    and of having nothing to do.</p>"
-            "<p>\n<br/>First stanza line,<br/>\nsecond line.<br/>\n<br/>\nNext stanza here.<br/>\n</p>")
+    body = (
+        "<p>Alice was beginning to get very tired of sitting\n    by her sister on the bank,<br/>\n    and of having nothing to do.</p>"
+        "<p>\n<br/>First stanza line,<br/>\nsecond line.<br/>\n<br/>\nNext stanza here.<br/>\n</p>"
+    )
     src = tmp_path / "book.epub"
     _one_epub(src, {"ch1.xhtml": _xhtml(body)})
     r = runner()
     [out] = run(translate_epub(src, tmp_path, r, False, "zh-CN"))
     p, poem = BeautifulSoup(zipfile.ZipFile(out).read("OEBPS/ch1.xhtml"), "lxml-xml").find_all("p")
     assert len(p.find_all("br")) == 1
-    assert p.get_text("|") == "[zh-CN] Alice was beginning to get very tired of sitting by her sister on the bank,|and of having nothing to do."
+    assert (
+        p.get_text("|")
+        == "[zh-CN] Alice was beginning to get very tired of sitting by her sister on the bank,|and of having nothing to do."
+    )
     # 诗节之间连着两个 <br>，空行要留着；段首段尾的 <br> 不算
     assert poem.get_text("|") == "[zh-CN] First stanza line,|second line.|Next stanza here."
     assert [c.name for c in poem.contents if c.name] == ["br", "br", "br"]
@@ -2026,14 +2457,19 @@ def test_pdf_cjk_straight_quote_ends_sentence():
 
 # --- 参考文献章节保留原文 ---
 
+
 def _biblio_epub(path):
-    ch1 = ('<html xmlns="http://www.w3.org/1999/xhtml"><body>'
-           "<h1>Chapter One</h1><p>Normal paragraph here.</p>"
-           "<h2>Bibliography</h2><p>Smith, J. (2020). Some book. Press.</p>"
-           "<h3>Primary sources</h3><p>Jones, A. (2019). Another book.</p>"
-           "<h2>Appendix</h2><p>Appendix paragraph here.</p></body></html>")
-    biblio = ('<html xmlns="http://www.w3.org/1999/xhtml"><body>'
-              "<h1>References</h1><p>Doe, B. (2018). Cited work.</p></body></html>")
+    ch1 = (
+        '<html xmlns="http://www.w3.org/1999/xhtml"><body>'
+        "<h1>Chapter One</h1><p>Normal paragraph here.</p>"
+        "<h2>Bibliography</h2><p>Smith, J. (2020). Some book. Press.</p>"
+        "<h3>Primary sources</h3><p>Jones, A. (2019). Another book.</p>"
+        "<h2>Appendix</h2><p>Appendix paragraph here.</p></body></html>"
+    )
+    biblio = (
+        '<html xmlns="http://www.w3.org/1999/xhtml"><body>'
+        "<h1>References</h1><p>Doe, B. (2018). Cited work.</p></body></html>"
+    )
     _write_epub(
         path,
         '<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>'
@@ -2070,8 +2506,9 @@ def test_pdf_biblio_skips_alpha_labels_at_uniform_size():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size=10):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=False)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=False
+        )
 
     blocks = [
         blk("We thank our colleagues for help with the experiments."),
@@ -2090,6 +2527,7 @@ def test_pdf_biblio_skips_alpha_labels_at_uniform_size():
     tail = blocks[:3] + [blk("Appendix"), blk("Appendix body text continues here.")]
     assert biblio_skips(tail) == [False, False, True, False, False]
 
+
 def test_pdf_biblio_skips_weigh_sizes_by_text():
     """表格里成串的小字格子按块数比正文多，按块数取的中位落到小字号上，同字号的引文就像标题了。
     中位按字数取。标题比正文小一号、整节参考文献都小一号的（ICASSP），加粗又不比引文小，也是标题。"""
@@ -2097,21 +2535,30 @@ def test_pdf_biblio_skips_weigh_sizes_by_text():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
-    body = [blk("Learning widely applicable representations of words has been an active area of research " * 4, 10)
-            for _ in range(3)]
+    body = [
+        blk("Learning widely applicable representations of words has been an active area of research " * 4, 10)
+        for _ in range(3)
+    ]
     cells = [blk(f"{80 + n}.5", 9) for n in range(20)]
-    entries = [blk("Alan Akbik, Duncan Blythe, and Roland Vollgraf. 2018.", 10),
-               blk("Contextual string embeddings for sequence labeling.", 10),
-               blk("Rami Al-Rfou, Dokook Choe, and Llion Jones. 2018.", 10),
-               blk("Character-level language modeling with deeper self-attention.", 10)]
+    entries = [
+        blk("Alan Akbik, Duncan Blythe, and Roland Vollgraf. 2018.", 10),
+        blk("Contextual string embeddings for sequence labeling.", 10),
+        blk("Rami Al-Rfou, Dokook Choe, and Llion Jones. 2018.", 10),
+        blk("Character-level language modeling with deeper self-attention.", 10),
+    ]
     skips = biblio_skips([*body, *cells, blk("References", 12), *entries])
     assert skips[-4:] == [True] * 4
-    small = [blk("[1] R. Xu and Q. Liu, \u201cX-Voice,\u201d in Proc. Interspeech, 2023, pp. 1\u20135.", 8),
-             blk("[2] M. Yang and J. Hansen, \u201cActivation steering,\u201d in Proc. ICASSP, 2024.", 8)]
-    skips = biblio_skips([*[blk("Body text of the paper. " * 20, 9) for _ in range(5)], blk("8. REFERENCES", 8, True), *small])
+    small = [
+        blk("[1] R. Xu and Q. Liu, \u201cX-Voice,\u201d in Proc. Interspeech, 2023, pp. 1\u20135.", 8),
+        blk("[2] M. Yang and J. Hansen, \u201cActivation steering,\u201d in Proc. ICASSP, 2024.", 8),
+    ]
+    skips = biblio_skips(
+        [*[blk("Body text of the paper. " * 20, 9) for _ in range(5)], blk("8. REFERENCES", 8, True), *small]
+    )
     assert skips[-2:] == [True, True]
 
 
@@ -2120,8 +2567,9 @@ def test_pdf_biblio_skips_follows_font_size():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, page=0, bold=False):
-        return TextBlock(page=page, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=page, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     blocks = [
         blk("Chapter body text.", 10),
@@ -2167,8 +2615,9 @@ def test_pdf_biblio_entry_needs_a_citation_not_a_year_in_prose():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     prose = [
         blk("Chapter body text.", 11),
@@ -2203,8 +2652,15 @@ def test_a_proof_mark_after_the_full_stop_still_ends_the_paragraph():
     from app.formats.pdf_merge import _can_continue
 
     def blk(text, page):
-        return TextBlock(page=page, rect=pymupdf.Rect(318, 700, 558, 729), line_rects=[],
-                         text=text, size=10, color="#000000", bold=False)
+        return TextBlock(
+            page=page,
+            rect=pymupdf.Rect(318, 700, 558, 729),
+            line_rects=[],
+            text=text,
+            size=10,
+            color="#000000",
+            bold=False,
+        )
 
     end = blk("Consequently, the query output can be computed from the view. \x00", 0)
     assert _ends_sentence(end.text) and _ends_sentence("which proves the claim. □")
@@ -2221,8 +2677,15 @@ def test_a_column_break_inside_brackets_or_after_et_al_continues():
     from app.formats.pdf_merge import _can_continue
 
     def blk(text, page):
-        return TextBlock(page=page, rect=pymupdf.Rect(318, 700, 558, 729), line_rects=[],
-                         text=text, size=10, color="#000000", bold=False)
+        return TextBlock(
+            page=page,
+            rect=pymupdf.Rect(318, 700, 558, 729),
+            line_rects=[],
+            text=text,
+            size=10,
+            color="#000000",
+            bold=False,
+        )
 
     def joins(prev, nxt):
         return _can_continue(blk(prev, 0), blk(nxt, 1), 10, None, allow_capital=True)
@@ -2239,25 +2702,54 @@ def test_a_column_break_inside_brackets_or_after_et_al_continues():
     # 冒号后面的行间公式跳过了，下一页小写起头的 where 接着写
     assert joins("into a biaffine scoring function:", "where U, W, and b are weights learned by the model.")
     assert not joins("into a biaffine scoring function:", "We use U, W, and b as weights learned by the model.")
-    assert not _can_continue(blk("the context window from that instance:", 0),
-                             blk("is traditionally followed by cherry pie, a traditional dessert", 1), 10, None,
-                             allow_capital=True, at_edge=False)
+    assert not _can_continue(
+        blk("the context window from that instance:", 0),
+        blk("is traditionally followed by cherry pie, a traditional dessert", 1),
+        10,
+        None,
+        allow_capital=True,
+        at_edge=False,
+    )
     assert joins("closed-loop reasoning in later work (Fu et al., 2024b;", "Mao et al., 2024) share the same confound.")
-    assert not joins("closed-loop reasoning in later work (Fu et al., 2024b;", "Results differ. Both (a) and (b) fail).")
+    assert not joins(
+        "closed-loop reasoning in later work (Fu et al., 2024b;", "Results differ. Both (a) and (b) fail)."
+    )
     assert joins("with a dual success metric and scripted certificates", "(§5.3). Urban probes stress the agent.")
     assert joins("Stress-tested on the held-out pool", "(Tables S32–S35), the port scores lower.")
     assert not joins("The scores are combined as shown below.", "(Tables S32–S35), the port scores lower.")
     formula = blk("D(·||·) between the data generating process and the model.", 1)
-    formula.span_lines = [[{"text": "D", "font": "CMMI10", "flags": 2, "size": 10},
-                           {"text": "(·||·) between the data generating process and the model.", "font": "Times", "flags": 0, "size": 10}]]
+    formula.span_lines = [
+        [
+            {"text": "D", "font": "CMMI10", "flags": 2, "size": 10},
+            {
+                "text": "(·||·) between the data generating process and the model.",
+                "font": "Times",
+                "flags": 0,
+                "size": 10,
+            },
+        ]
+    ]
     assert _can_continue(blk("results from trying to minimise a divergence,", 0), formula, 10, None)
     assert not _can_continue(blk("results from trying to minimise a divergence.", 0), formula, 10, None)
     bullet = blk("• We introduce finite-transition modeling for accelerated MRI.", 1)
-    bullet.span_lines = [[{"text": "•", "font": "CMSY7", "flags": 0, "size": 7},
-                          {"text": " We introduce finite-transition modeling for accelerated MRI.", "font": "Times", "flags": 0, "size": 10}]]
+    bullet.span_lines = [
+        [
+            {"text": "•", "font": "CMSY7", "flags": 0, "size": 7},
+            {
+                "text": " We introduce finite-transition modeling for accelerated MRI.",
+                "font": "Times",
+                "flags": 0,
+                "size": 10,
+            },
+        ]
+    ]
     assert not _can_continue(blk("loss broadly across the image. At", 0), bullet, 10, None)
-    assert joins("similarity recovery comes with higher mean GOP (4.750 vs. 4.733)", "and lower mean WER on the test set.")
-    assert not joins("similarity recovery comes with higher mean GOP (4.750 vs. 4.733)", "On the item-matched test set, C wins.")
+    assert joins(
+        "similarity recovery comes with higher mean GOP (4.750 vs. 4.733)", "and lower mean WER on the test set."
+    )
+    assert not joins(
+        "similarity recovery comes with higher mean GOP (4.750 vs. 4.733)", "On the item-matched test set, C wins."
+    )
     heading = blk("E. Energy-Detection Characterization", 0)
     heading.line_rects = [pymupdf.Rect(49, 661, 204, 671)]
     heading.span_lines = [[{"text": heading.text, "font": "NimbusRomNo9L-ReguItal", "flags": 2, "size": 10}]]
@@ -2280,9 +2772,13 @@ def test_a_block_at_the_text_edge_starts_where_the_body_lines_start():
             rect |= line
         return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=10.0, color="#000", bold=False)
 
-    body = [blk("Apple pie computer peripherals and personal digital assistants. These dimensions", [175, 160, 160], 300),
-            blk("Figure 5.3 A spatial visualization of word vectors in two dimensions", [160, 210], 400)]
-    example = blk("is traditionally followed by cherry pie, a traditional dessert often mixed", [191, 217, 161], 108, x1=457)
+    body = [
+        blk("Apple pie computer peripherals and personal digital assistants. These dimensions", [175, 160, 160], 300),
+        blk("Figure 5.3 A spatial visualization of word vectors in two dimensions", [160, 210], 400),
+    ]
+    example = blk(
+        "is traditionally followed by cherry pie, a traditional dessert often mixed", [191, 217, 161], 108, x1=457
+    )
     resumed = blk("then the same kinds of training data would lead the language model to assign", [160, 160, 160], 108)
     assert not _at_text_edge(example, [example, resumed, *body])
     assert _at_text_edge(resumed, [resumed, *body])
@@ -2295,7 +2791,8 @@ def test_a_number_heavy_results_paragraph_is_prose():
 
     assert not _is_code_line(
         "and lower mean WER (0.009 vs. 0.013); paired differences are +0.017 [−0.043, 0.077] "
-        "and −0.004 [−0.012, 0.004] (n = 1200/arm), 95% CI.")
+        "and −0.004 [−0.012, 0.004] (n = 1200/arm), 95% CI."
+    )
     assert _is_code_line("0.1 0.2 0.3 0.4 0.5 0.6 (s)")
 
 
@@ -2332,8 +2829,16 @@ def test_table_cells_do_not_set_the_column_body_size():
     from app.formats.pdf_merge import _column_body
 
     def blk(text, y, size, clip=None):
-        return TextBlock(page=0, rect=pymupdf.Rect(54, y, 290, y + 20), line_rects=[],
-                         text=text, size=size, color="#000000", bold=False, clip=clip)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(54, y, 290, y + 20),
+            line_rects=[],
+            text=text,
+            size=size,
+            color="#000000",
+            bold=False,
+            clip=clip,
+        )
 
     cells = [blk(f"AR + VMD {k}", 100 + 12 * k, 11.1, clip=(54, 100, 290, 200)) for k in range(7)]
     body = [blk("Overall, every proposed component helps.", 400 + 60 * k, 10) for k in range(4)]
@@ -2349,8 +2854,9 @@ def test_pdf_biblio_numbered_entries_without_a_heading():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size=9.0, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     blocks = [
         blk("In future work we will present a more detailed exposition of our methods.", 10),
@@ -2367,8 +2873,9 @@ def test_pdf_biblio_numbered_entries_without_a_heading():
         blk("The leading multipole moments take the form below.", 10),
     ]
     assert biblio_skips(blocks) == [False, True, True, True, True, True, False, False, True, True, False, False]
-    assert biblio_skips([blk("[1] We first fix the gauge, Phys. Rev. D 59 (1999).", 10),
-                         blk("The second step follows.", 10)]) == [False, False]
+    assert biblio_skips(
+        [blk("[1] We first fix the gauge, Phys. Rev. D 59 (1999).", 10), blk("The second step follows.", 10)]
+    ) == [False, False]
 
 
 def test_a_table_with_its_caption_above_is_skipped_at_the_column_top():
@@ -2379,8 +2886,15 @@ def test_a_table_with_its_caption_above_is_skipped_at_the_column_top():
 
     def blk(text, y, x1, rows=1):
         lines = [pymupdf.Rect(318, y + 11 * i, x1, y + 11 * i + 9) for i in range(rows)]
-        return TextBlock(page=0, rect=pymupdf.Rect(318, y, x1, lines[-1].y1), line_rects=lines,
-                         text=text, size=9.0, color="#000", bold=False)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(318, y, x1, lines[-1].y1),
+            line_rects=lines,
+            text=text,
+            size=9.0,
+            color="#000",
+            bold=False,
+        )
 
     def page(caption_text):
         caption = blk(caption_text, 359, 560, rows=2)
@@ -2401,14 +2915,17 @@ def test_pdf_biblio_bold_heading_as_large_as_the_entries():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=10.0, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=10.0, color="#000000", bold=bold
+        )
 
     blocks = [
         blk("This work was supported by the National Science Foundation under Grant 2200000."),
         blk("References", bold=True),
         blk("Ahmed M. Alaa, Zaid Ahmad, and Mark van der Laan."),
-        blk("Conformal meta-learners for predictive inference of treatment effects. arXiv preprint arXiv:2308.14895, 2023."),
+        blk(
+            "Conformal meta-learners for predictive inference of treatment effects. arXiv preprint arXiv:2308.14895, 2023."
+        ),
         blk("Anastasios N Angelopoulos, Stephen Bates, Adam"),
         blk("Fisch, Lihua Lei, and Tal Schuster. Conformal risk control. In ICLR, 2024."),
         blk("Jean-Yves Audibert, Sébastien Bubeck, and Rémi"),
@@ -2442,15 +2959,26 @@ def test_a_column_does_not_continue_under_a_heading_at_its_top():
     from app.formats.pdf_merge import _column_continuations
 
     def blk(text, x0, y, rows=3):
-        return TextBlock(page=0, rect=pymupdf.Rect(x0, y, x0 + 245, y + 12 * rows), line_rects=[],
-                         text=text, size=10.0, color="#000000", bold=False)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(x0, y, x0 + 245, y + 12 * rows),
+            line_rects=[],
+            text=text,
+            size=10.0,
+            color="#000000",
+            bold=False,
+        )
 
-    left = [blk("The arm is described in the next section of this paper in full detail.", 54, 100),
-            blk("Our solution is a novel tendon-actuated arm that we describe below.", 54, 200),
-            blk("The arm is mechanically simpler than comparative actuators [17], [18],", 54, 600)]
+    left = [
+        blk("The arm is described in the next section of this paper in full detail.", 54, 100),
+        blk("Our solution is a novel tendon-actuated arm that we describe below.", 54, 200),
+        blk("The arm is mechanically simpler than comparative actuators [17], [18],", 54, 600),
+    ]
     heading = blk("A. Materials", 313, 89, rows=1)
-    right = [blk("the soft structure including the chambers is cast in one piece.", 313, 105),
-             blk("To facilitate free sliding of the tendon the ribbon is coated.", 313, 300)]
+    right = [
+        blk("the soft structure including the chambers is cast in one piece.", 313, 105),
+        blk("To facilitate free sliding of the tendon the ribbon is coated.", 313, 300),
+    ]
 
     def pairs(extra):
         blocks = [*left, heading, *extra, *right]
@@ -2473,16 +3001,33 @@ def test_the_page_end_is_not_in_a_column_with_body_text_to_its_right(monkeypatch
     from app.formats.pdf_merge import _column_continuations
 
     def blk(text, x0, y, page=0):
-        return TextBlock(page=page, rect=pymupdf.Rect(x0, y, x0 + 245, y + 36), line_rects=[],
-                         text=text, size=10.0, color="#000000", bold=False)
+        return TextBlock(
+            page=page,
+            rect=pymupdf.Rect(x0, y, x0 + 245, y + 36),
+            line_rects=[],
+            text=text,
+            size=10.0,
+            color="#000000",
+            bold=False,
+        )
 
-    left = [blk("Text-to-SQL systems allow users to query structured databases in plain", 54, 100),
-            blk("language, and most evaluation focuses on the final generated query and", 54, 600)]
-    right = [blk("Even when benchmark performance is relatively strong, generated queries fail.", 313, 100),
-             blk("This framing is relevant to uncertainty-aware generation, and we treat the", 313, 600)]
+    left = [
+        blk("Text-to-SQL systems allow users to query structured databases in plain", 54, 100),
+        blk("language, and most evaluation focuses on the final generated query and", 54, 600),
+    ]
+    right = [
+        blk("Even when benchmark performance is relatively strong, generated queries fail.", 313, 100),
+        blk("This framing is relevant to uncertainty-aware generation, and we treat the", 313, 600),
+    ]
     head = blk("results under the conversational-history condition in the rest of the paper.", 54, 80, page=1)
-    monkeypatch.setattr(pdf_merge, "_assigned_columns", lambda blocks, anchors: (
-        [[block for block in blocks if block.rect.x0 < 300]], [block for block in blocks if block.rect.x0 >= 300]))
+    monkeypatch.setattr(
+        pdf_merge,
+        "_assigned_columns",
+        lambda blocks, anchors: (
+            [[block for block in blocks if block.rect.x0 < 300]],
+            [block for block in blocks if block.rect.x0 >= 300],
+        ),
+    )
     pairs = _column_continuations({0: [*left, *right], 1: [head]}, 10.0, set(), set(), set())
     assert id(left[-1]) not in pairs
 
@@ -2495,13 +3040,25 @@ def test_a_flush_paragraph_under_a_table_continues_the_column_above():
     from app.formats.pdf_merge import _column_continuations
 
     def blk(text, x0, y, rows=3, size=10.0, indent=0.0):
-        lines = [pymupdf.Rect(x0 + (indent if i == 0 else 0), y + 12 * i, x0 + 245, y + 12 * i + 10)
-                 for i in range(rows)]
-        return TextBlock(page=0, rect=pymupdf.Rect(x0, y, x0 + 245, y + 12 * rows), line_rects=lines,
-                         text=text, size=size, color="#000000", bold=False)
+        lines = [
+            pymupdf.Rect(x0 + (indent if i == 0 else 0), y + 12 * i, x0 + 245, y + 12 * i + 10) for i in range(rows)
+        ]
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(x0, y, x0 + 245, y + 12 * rows),
+            line_rects=lines,
+            text=text,
+            size=size,
+            color="#000000",
+            bold=False,
+        )
 
-    host = blk("Ablation studies on fastMRI examine the principal design elements; "
-               "the support-restricted objective also degrades performance.", 54, 600)
+    host = blk(
+        "Ablation studies on fastMRI examine the principal design elements; "
+        "the support-restricted objective also degrades performance.",
+        54,
+        600,
+    )
     left = [blk("Table V compares inference time and peak GPU memory across methods here.", 54, 300), host]
     caption = blk("TABLE IV: Cross-dataset generalization. Models were trained on M4Raw.", 313, 100, rows=1)
     cells = [blk("PSNR", 361, 130, rows=1, size=7.3), blk("FLEX-MRI", 315, 160, rows=1, size=7.3)]
@@ -2526,8 +3083,9 @@ def test_pdf_biblio_author_year_entries_after_the_heading():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=False)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=False
+        )
 
     book = [
         blk("A potential DAMSL labeling of the conversational fragment.", 9),
@@ -2553,18 +3111,28 @@ def test_pdf_biblio_numbered_entry_ending_with_pages():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     blocks = [
         blk("Body text of the conclusion.", 9),
         blk("8. References", 12, bold=True),
-        blk("[1] S. Agrawal, S. Chaudhuri, V. R. Narasayya: Automated Selection of "
-            "Materialized Views and Indexes in SQL Databases. VLDB 2000: 496-505", 8),
-        blk("[4] S. Chaudhuri, S. Krishnamurthy, S. Potamianos, K. Shim, Optimizing "
-            "Queries with Materialized Views, ICDE 1995, 190-200.", 8),
-        blk("[6] G. Graefe, The Cascades Framework for Query Optimization, Data "
-            "Engineering Bulletin, 18(3), 1995, 19-29.", 8),
+        blk(
+            "[1] S. Agrawal, S. Chaudhuri, V. R. Narasayya: Automated Selection of "
+            "Materialized Views and Indexes in SQL Databases. VLDB 2000: 496-505",
+            8,
+        ),
+        blk(
+            "[4] S. Chaudhuri, S. Krishnamurthy, S. Potamianos, K. Shim, Optimizing "
+            "Queries with Materialized Views, ICDE 1995, 190-200.",
+            8,
+        ),
+        blk(
+            "[6] G. Graefe, The Cascades Framework for Query Optimization, Data "
+            "Engineering Bulletin, 18(3), 1995, 19-29.",
+            8,
+        ),
     ]
     assert biblio_skips(blocks) == [False, False, True, True, True]
     # 不带编号的正文即使以 年份, 页码 收尾也不算
@@ -2583,8 +3151,9 @@ def test_pdf_biblio_same_size_citations_do_not_exit():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     same = [
         blk("Intro paragraph.", 11),
@@ -2632,8 +3201,9 @@ def test_pdf_biblio_author_lists_and_url_halves_stay_in():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     acl = [
         blk("Body text of the paper.", 10),
@@ -2646,7 +3216,10 @@ def test_pdf_biblio_author_lists_and_url_halves_stay_in():
     larger = [
         *[blk("Body text of the paper.", 10) for _ in range(5)],
         blk("References", 13, bold=True),
-        blk("E. Akyurek, M. Damani, L. Qiu, H. Guo, Y. Kim, and J. Andreas. The surprising effectiveness. arXiv, 2024.", 10.8),
+        blk(
+            "E. Akyurek, M. Damani, L. Qiu, H. Guo, Y. Kim, and J. Andreas. The surprising effectiveness. arXiv, 2024.",
+            10.8,
+        ),
         blk("Y. Bai, A. Jones, K. Ndousse, A. Askell, A. Chen, N. DasSarma, D. Drain, S. Fort", 11),
         blk("H. Face. Open r1: A fully open reproduction of deepseek-r1, January 2025. URL https:", 11),
         blk("//github.com/huggingface/open-r1.", 12),
@@ -2658,8 +3231,7 @@ def test_pdf_biblio_author_lists_and_url_halves_stay_in():
 
 def _one_epub(path, docs: dict[str, str]):
     items = "".join(
-        f'<item id="d{i}" href="{name}" media-type="application/xhtml+xml"/>'
-        for i, name in enumerate(docs)
+        f'<item id="d{i}" href="{name}" media-type="application/xhtml+xml"/>' for i, name in enumerate(docs)
     )
     spine = "".join(f'<itemref idref="d{i}"/>' for i in range(len(docs)))
     _write_epub(path, items, spine, docs)
@@ -2675,11 +3247,16 @@ def _xhtml(body: str) -> str:
 def test_epub_chapter_titled_papers_ends_bibliography(tmp_path):
     """平铺文档里 h2 Papers 是下一章，不能因为单词像小标题就留成原文。"""
     src = tmp_path / "book.epub"
-    _one_epub(src, {"book.xhtml": _xhtml(
-        "<h1>References</h1><p>Doe, B. (2018). Cited work.</p>"
-        "<h2>Papers</h2><p>Papers chapter paragraph.</p>"
-        "<h2>Appendix</h2><p>Appendix paragraph here.</p>"
-    )})
+    _one_epub(
+        src,
+        {
+            "book.xhtml": _xhtml(
+                "<h1>References</h1><p>Doe, B. (2018). Cited work.</p>"
+                "<h2>Papers</h2><p>Papers chapter paragraph.</p>"
+                "<h2>Appendix</h2><p>Appendix paragraph here.</p>"
+            )
+        },
+    )
     text = _epub_texts(run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))[0])
     assert "Doe, B. (2018). Cited work." in text and "[zh-CN] Doe" not in text
     assert "[zh-CN] Papers chapter paragraph." in text
@@ -2692,12 +3269,17 @@ def test_epub_deeper_heading_ends_flat_bibliography(tmp_path):
     包在后一个 section 里的更深标题同样结束，不靠标题数字单独判断。
     """
     src = tmp_path / "book.epub"
-    _one_epub(src, {"book.xhtml": _xhtml(
-        "<h1>References</h1><p>Doe, B. (2018). Cited work.</p>"
-        "<h2>Appendix</h2><p>Appendix paragraph here.</p>"
-        "<section><h1>References</h1><p>Lee, C. (2017). Third work.</p></section>"
-        "<section><h2>Appendix</h2><p>Second appendix paragraph.</p></section>"
-    )})
+    _one_epub(
+        src,
+        {
+            "book.xhtml": _xhtml(
+                "<h1>References</h1><p>Doe, B. (2018). Cited work.</p>"
+                "<h2>Appendix</h2><p>Appendix paragraph here.</p>"
+                "<section><h1>References</h1><p>Lee, C. (2017). Third work.</p></section>"
+                "<section><h2>Appendix</h2><p>Second appendix paragraph.</p></section>"
+            )
+        },
+    )
     text = _epub_texts(run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))[0])
     assert "Doe, B. (2018). Cited work." in text and "[zh-CN] Doe" not in text
     assert "[zh-CN] Appendix paragraph here." in text
@@ -2707,10 +3289,13 @@ def test_epub_deeper_heading_ends_flat_bibliography(tmp_path):
 
 def test_epub_filename_substring_does_not_skip_chapter(tmp_path):
     src = tmp_path / "book.epub"
-    _one_epub(src, {
-        "chapter-references.xhtml": _xhtml("<h1>Cross References in Plato</h1><p>Normal paragraph here.</p>"),
-        "bibliographical-notes.xhtml": _xhtml("<h1>Notes</h1><p>Another normal paragraph.</p>"),
-    })
+    _one_epub(
+        src,
+        {
+            "chapter-references.xhtml": _xhtml("<h1>Cross References in Plato</h1><p>Normal paragraph here.</p>"),
+            "bibliographical-notes.xhtml": _xhtml("<h1>Notes</h1><p>Another normal paragraph.</p>"),
+        },
+    )
     text = _epub_texts(run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))[0])
     assert "[zh-CN] Cross References in Plato" in text
     assert "[zh-CN] Normal paragraph here." in text
@@ -2719,10 +3304,14 @@ def test_epub_filename_substring_does_not_skip_chapter(tmp_path):
 
 def test_epub_bibliography_file_still_exits_on_next_heading(tmp_path):
     src = tmp_path / "book.epub"
-    _one_epub(src, {"bibliography.xhtml": _xhtml(
-        "<h1>References</h1><p>Doe, B. (2018). Cited work.</p>"
-        "<h1>Index</h1><p>Index entry text here.</p>"
-    )})
+    _one_epub(
+        src,
+        {
+            "bibliography.xhtml": _xhtml(
+                "<h1>References</h1><p>Doe, B. (2018). Cited work.</p><h1>Index</h1><p>Index entry text here.</p>"
+            )
+        },
+    )
     text = _epub_texts(run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))[0])
     assert "Doe, B. (2018). Cited work." in text and "[zh-CN] Doe" not in text
     assert "[zh-CN] Index entry text here." in text
@@ -2730,12 +3319,15 @@ def test_epub_bibliography_file_still_exits_on_next_heading(tmp_path):
 
 def test_epub_bibliography_continues_across_spine(tmp_path):
     src = tmp_path / "book.epub"
-    _one_epub(src, {
-        "ch1.xhtml": _xhtml("<h2>Bibliography</h2><p>Smith, J. (2020). Some book. Press.</p>"),
-        "index_split_002.xhtml": _xhtml(
-            "<p>Jones, A. (2019). Another book.</p><h1>Appendix</h1><p>Appendix paragraph here.</p>"
-        ),
-    })
+    _one_epub(
+        src,
+        {
+            "ch1.xhtml": _xhtml("<h2>Bibliography</h2><p>Smith, J. (2020). Some book. Press.</p>"),
+            "index_split_002.xhtml": _xhtml(
+                "<p>Jones, A. (2019). Another book.</p><h1>Appendix</h1><p>Appendix paragraph here.</p>"
+            ),
+        },
+    )
     text = _epub_texts(run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))[0])
     assert "Smith, J. (2020). Some book. Press." in text and "[zh-CN] Smith" not in text
     assert "Jones, A. (2019). Another book." in text and "[zh-CN] Jones" not in text
@@ -2745,10 +3337,14 @@ def test_epub_bibliography_continues_across_spine(tmp_path):
 def test_epub_repeated_citation_in_body_is_translated(tmp_path):
     src = tmp_path / "book.epub"
     cite = "Smith, J. (2020). Some book. Press."
-    _one_epub(src, {"ch1.xhtml": _xhtml(
-        f"<p>{cite}</p><h2>Bibliography</h2><p>{cite}</p>"
-        "<h2>Appendix</h2><p>Appendix paragraph here.</p>"
-    )})
+    _one_epub(
+        src,
+        {
+            "ch1.xhtml": _xhtml(
+                f"<p>{cite}</p><h2>Bibliography</h2><p>{cite}</p><h2>Appendix</h2><p>Appendix paragraph here.</p>"
+            )
+        },
+    )
     r = runner()
     text = _epub_texts(run(translate_epub(src, tmp_path, r, False, "zh-CN"))[0])
     assert f"[zh-CN] {cite}" in text
@@ -2763,18 +3359,23 @@ def test_epub_repeated_citation_in_body_is_translated(tmp_path):
 
 def test_epub_styled_heading_colon_and_epub_type(tmp_path):
     src = tmp_path / "book.epub"
-    _one_epub(src, {"ch1.xhtml": _xhtml(
-        '<p class="heading">Bibliography</p><p>Smith, J. (2020). Some book. Press.</p>'
-        "<h2>Appendix</h2><p>Appendix paragraph here.</p>"
-        '<h2>参考文献：</h2><p>Doe, B. (2018). Cited work.</p>'
-        "<h2>Index</h2><p>Index entry text here.</p>"
-        '<section epub:type="bibliography"><h2>Notes</h2>'
-        "<p>Lee, C. (2017). Third work.</p></section>"
-        "<h2>Afterword</h2><p>Afterword paragraph here.</p>"
-        "<p>Bibliography</p><p>This sentence mentions Bibliography but is body text.</p>"
-        "<h2>12. References</h2><p>Ng, D. (2016). Fourth work.</p>"
-        "<h2>Glossary</h2><p>Glossary paragraph here.</p>"
-    )})
+    _one_epub(
+        src,
+        {
+            "ch1.xhtml": _xhtml(
+                '<p class="heading">Bibliography</p><p>Smith, J. (2020). Some book. Press.</p>'
+                "<h2>Appendix</h2><p>Appendix paragraph here.</p>"
+                "<h2>参考文献：</h2><p>Doe, B. (2018). Cited work.</p>"
+                "<h2>Index</h2><p>Index entry text here.</p>"
+                '<section epub:type="bibliography"><h2>Notes</h2>'
+                "<p>Lee, C. (2017). Third work.</p></section>"
+                "<h2>Afterword</h2><p>Afterword paragraph here.</p>"
+                "<p>Bibliography</p><p>This sentence mentions Bibliography but is body text.</p>"
+                "<h2>12. References</h2><p>Ng, D. (2016). Fourth work.</p>"
+                "<h2>Glossary</h2><p>Glossary paragraph here.</p>"
+            )
+        },
+    )
     text = _epub_texts(run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))[0])
     assert "Smith, J. (2020). Some book. Press." in text and "[zh-CN] Smith" not in text
     assert "[zh-CN] Appendix paragraph here." in text
@@ -2801,9 +3402,9 @@ def test_pdf_biblio_skips_on_attention_paper():
     viz = next(i for i, b in enumerate(blocks) if b.text.strip() == "Attention Visualizations")
     assert skips.index(True) == refs + 1
     assert blocks[refs + 1].text.strip().startswith("[")
-    assert all(skips[refs + 1:viz])
+    assert all(skips[refs + 1 : viz])
     assert not skips[viz]
-    assert not any(skips[viz + 1:])
+    assert not any(skips[viz + 1 :])
 
 
 def test_translated_version_cut_from_the_bilingual_one_matches_a_fresh_render(tmp_path):
@@ -2815,11 +3416,14 @@ def test_translated_version_cut_from_the_bilingual_one_matches_a_fresh_render(tm
     doc = pymupdf.open()
     for n in range(2):
         doc.new_page(width=420, height=240).insert_text(
-            (40, 60), f"A body paragraph long enough to be translated on page {n + 1}.", fontsize=10,
+            (40, 60),
+            f"A body paragraph long enough to be translated on page {n + 1}.",
+            fontsize=10,
         )
     doc[1].insert_text((40, 120), "2 Second Part", fontsize=14)
-    doc[0].insert_link({"kind": pymupdf.LINK_GOTO, "from": pymupdf.Rect(40, 50, 200, 62), "page": 1,
-                        "to": pymupdf.Point(0, 0)})
+    doc[0].insert_link(
+        {"kind": pymupdf.LINK_GOTO, "from": pymupdf.Rect(40, 50, 200, 62), "page": 1, "to": pymupdf.Point(0, 0)}
+    )
     doc.set_page_labels([{"startpage": 0, "prefix": "A-", "style": "D", "firstpagenum": 1}])
     doc.set_toc([[1, "Second Part", 2]])
     src = tmp_path / "paper.pdf"
@@ -2837,7 +3441,8 @@ def test_translated_version_cut_from_the_bilingual_one_matches_a_fresh_render(tm
     for a, b in zip(cut, fresh):
         assert a.rect == b.rect and a.get_text() == b.get_text()
         assert [(link["from"], link.get("page")) for link in a.get_links()] == [
-            (link["from"], link.get("page")) for link in b.get_links()]
+            (link["from"], link.get("page")) for link in b.get_links()
+        ]
         assert a.get_pixmap(dpi=50).samples == b.get_pixmap(dpi=50).samples
     assert cut[0].get_links() and cut.get_page_labels() == fresh.get_page_labels()
     assert cut.get_toc() == fresh.get_toc() == [[1, "[zh-CN] Second Part", 2]]
@@ -2858,10 +3463,13 @@ def test_bookmarks_take_the_translation_shown_on_the_page_they_point_to():
         doc.new_page().insert_text((50, 50), text)
     doc.set_toc([[1, "Methods", 2], [1, "Results", 3], [1, "Notes", 3]])
     preview = {
-        "segments": [{"s": "Methods", "k": "p"}, {"s": "Methods", "k": "h2"},
-                     {"s": "Results", "k": "h2"}, {"s": "Notes", "k": "h2"}],
-        "updates": [[0, "Ways", 0], [1, "Approaches", 0], [1, "2 Approaches", 0],
-                    [2, "Results", 0], [3, "Notes", 1]],
+        "segments": [
+            {"s": "Methods", "k": "p"},
+            {"s": "Methods", "k": "h2"},
+            {"s": "Results", "k": "h2"},
+            {"s": "Notes", "k": "h2"},
+        ],
+        "updates": [[0, "Ways", 0], [1, "Approaches", 0], [1, "2 Approaches", 0], [2, "Results", 0], [3, "Notes", 1]],
     }
     translate_bookmarks(doc, preview)
     assert doc.get_toc() == [[1, "Approaches", 2], [1, "Results", 3], [1, "Notes", 3]]
@@ -2903,7 +3511,8 @@ def test_skipped_bibliography_keeps_hanging_indent(tmp_path):
     assert abs(kept_proc[0].x0 - proceedings[0].x0) < 0.8
     fonts = {
         span["font"]
-        for block in page.get_text("dict")["blocks"] if block.get("type") == 0
+        for block in page.get_text("dict")["blocks"]
+        if block.get("type") == 0
         for line in block["lines"]
         for span in line["spans"]
         if "Proceedings" in span["text"] or "national" in span["text"]
@@ -2918,8 +3527,9 @@ def test_pdf_biblio_entry_with_bold_subheadings():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000", bold=bold
+        )
 
     blocks = [
         blk("Body paragraph.", 10),
@@ -2940,8 +3550,9 @@ def test_pdf_biblio_section_title_stops_lookahead():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     blocks = [
         blk("Chapter body text.", 10),
@@ -2962,8 +3573,9 @@ def test_pdf_biblio_journal_line_does_not_end_numbered_entry():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     blocks = [
         blk("Intro paragraph.", 11),
@@ -2984,8 +3596,9 @@ def test_pdf_biblio_chapter_titled_books_or_paper_does_not_enter():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     books = [
         blk("Body paragraph.", 10),
@@ -3020,8 +3633,9 @@ def test_pdf_biblio_chinese_gbt_citations():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     blocks = [
         blk("这是正文段落。", 11),
@@ -3041,8 +3655,9 @@ def test_pdf_biblio_type_mark_does_not_swallow_headings():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     prose = [
         blk("Chapter body text.", 10),
@@ -3088,8 +3703,9 @@ def test_pdf_biblio_numbered_publisher_entry_without_space():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     tight = [
         blk("这是正文段落。", 11),
@@ -3123,8 +3739,9 @@ def test_pdf_biblio_edition_heading_exits():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     year = [
         blk("这是正文段落。", 11),
@@ -3150,8 +3767,9 @@ def test_pdf_biblio_type_mark_in_prose_does_not_enter():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     blocks = [
         blk("Body text.", 11),
@@ -3176,8 +3794,9 @@ def test_pdf_biblio_type_mark_year_on_next_block_enters():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     volume = [
         blk("这是正文段落。", 11),
@@ -3214,15 +3833,18 @@ def test_pdf_biblio_year_continuation_tightened():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     def scenario(second: str):
-        return biblio_skips([
-            blk("参考文献", 14, bold=True),
-            blk("见某书[M]。如下。", 11),
-            blk(second, 11),
-        ])
+        return biblio_skips(
+            [
+                blk("参考文献", 14, bold=True),
+                blk("见某书[M]。如下。", 11),
+                blk(second, 11),
+            ]
+        )
 
     assert scenario("2020, we showed more.") == [False, False, False]
     assert scenario("2020, volume were higher than expected.") == [False, False, False]
@@ -3248,15 +3870,18 @@ def test_pdf_biblio_vol_abbreviation_also_needs_digit():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     def scenario(second: str):
-        return biblio_skips([
-            blk("参考文献", 14, bold=True),
-            blk("见某书[M]。如下。", 11),
-            blk(second, 11),
-        ])
+        return biblio_skips(
+            [
+                blk("参考文献", 14, bold=True),
+                blk("见某书[M]。如下。", 11),
+                blk(second, 11),
+            ]
+        )
 
     assert scenario("2020, Vol were higher than expected.") == [False, False, False]
     assert scenario("2020, Vol of the series was larger.") == [False, False, False]
@@ -3275,8 +3900,9 @@ def test_pdf_biblio_volume_lines_protected_at_same_size():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     blocks = [
         blk("Body text.", 12),
@@ -3299,21 +3925,24 @@ def test_pdf_biblio_year_prefixed_chapter_still_exits():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     def scenario(line: str, *, bold: bool = False) -> list[bool]:
         body = (
             "这是后续正文，需要被翻译，不能因为上一行像年份就留在参考文献里。"
             "这里再补上一整句，让整段明显超过六十个字，避免它本身被当成同字号短标题。"
         )
-        return biblio_skips([
-            blk("Body text.", 12),
-            blk("References", 12, bold=True),
-            blk("Smith, J. (2020). Some book.", 12),
-            blk(line, 12, bold=bold),
-            blk(body, 12),
-        ])
+        return biblio_skips(
+            [
+                blk("Body text.", 12),
+                blk("References", 12, bold=True),
+                blk("Smith, J. (2020). Some book.", 12),
+                blk(line, 12, bold=bold),
+                blk(body, 12),
+            ]
+        )
 
     assert scenario("2020, 1. Introduction") == [False, False, True, False, False]
     assert scenario("2020, 3. Results") == [False, False, True, False, False]
@@ -3322,7 +3951,11 @@ def test_pdf_biblio_year_prefixed_chapter_still_exits():
     assert scenario("2020, p < 0.05.") == [False, False, True, False, False]
     assert scenario("2020, 3 days later.") == [False, False, True, False, False]
     assert scenario("2020, 1. Introduction to machine translation systems", bold=True) == [
-        False, False, True, False, False,
+        False,
+        False,
+        True,
+        False,
+        False,
     ]
     assert scenario("2020, 3(2): 1-10.") == [False, False, True, True, True]
     assert scenario("2020, Vol. III") == [False, False, True, True, True]
@@ -3334,8 +3967,9 @@ def test_pdf_biblio_long_bold_chapter_title_exits():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     body = "这是后续正文，需要被翻译，这里再补上一整句，让整段明显超过六十个字，避免被当成短标题。"
     blocks = [
@@ -3354,8 +3988,9 @@ def test_pdf_biblio_long_bold_citation_stays():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=bold)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
+        )
 
     gbt = (
         "张三. 某某研究的题目在这里继续写长，把期刊论文的背景、方法和结论都写进题名，"
@@ -3392,8 +4027,9 @@ def test_scan_status_detection():
     # 纯图片扫描件
     doc = pymupdf.open()
     for _ in range(2):
-        doc.new_page().insert_image(pymupdf.Rect(10, 10, 60, 60),
-                                    pixmap=pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 5, 5)))
+        doc.new_page().insert_image(
+            pymupdf.Rect(10, 10, 60, 60), pixmap=pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 5, 5))
+        )
     assert _scan_status(doc) == "scanned"
 
 
@@ -3402,8 +4038,9 @@ def test_pdf_scanned_error_guides_ocr(tmp_path):
 
     src = tmp_path / "scan.pdf"
     doc = pymupdf.open()
-    doc.new_page().insert_image(pymupdf.Rect(10, 10, 60, 60),
-                                pixmap=pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 5, 5)))
+    doc.new_page().insert_image(
+        pymupdf.Rect(10, 10, 60, 60), pixmap=pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 5, 5))
+    )
     doc.save(src)
     with pytest.raises(ValueError, match="OCR"):
         run(translate_pdf(src, tmp_path, runner(), False, "zh-CN"))
@@ -3439,6 +4076,7 @@ def test_typesetting_ladder_expands_before_shrinking():
     src = doc.tobytes()
 
     import tempfile
+
     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
         f.write(src)
         src_path = Path(f.name)
@@ -3482,8 +4120,16 @@ def test_formula_font_and_char_rules():
 def _block_with_spans(span_lines, size=12.0):
     from app.formats.pdf_blocks import TextBlock
 
-    return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                     text="", size=size, color="#000", bold=False, span_lines=span_lines)
+    return TextBlock(
+        page=0,
+        rect=pymupdf.Rect(0, 0, 1, 1),
+        line_rects=[],
+        text="",
+        size=size,
+        color="#000",
+        bold=False,
+        span_lines=span_lines,
+    )
 
 
 def test_italic_letters_between_math_brackets_are_a_formula():
@@ -3496,8 +4142,14 @@ def test_italic_letters_between_math_brackets_are_a_formula():
     def span(text, font, flags=4, math=False):
         x0 = x[0]
         x[0] += 5.0 * len(text)
-        out = {"text": text, "font": font, "size": 10.0, "flags": flags,
-               "bbox": (x0, 100.0, x[0], 110.0), "origin": (x0, 108.0)}
+        out = {
+            "text": text,
+            "font": font,
+            "size": 10.0,
+            "flags": flags,
+            "bbox": (x0, 100.0, x[0], 110.0),
+            "origin": (x0, 108.0),
+        }
         return {**out, "math": True} if math else out
 
     def italic(text):
@@ -3506,21 +4158,39 @@ def test_italic_letters_between_math_brackets_are_a_formula():
     def cm(text):
         return span(text, "CMR10", math=True)
 
-    line = [span("the two cases,", "NimbusRomNo9L-Regu"), italic(" P"), cm("("), italic("y"), cm(" ="),
-            span(" 1", "NimbusRomNo9L-Regu"), cm(")"), span(" and the word", "NimbusRomNo9L-Regu"),
-            italic(" great"), span(" here.", "NimbusRomNo9L-Regu")]
+    line = [
+        span("the two cases,", "NimbusRomNo9L-Regu"),
+        italic(" P"),
+        cm("("),
+        italic("y"),
+        cm(" ="),
+        span(" 1", "NimbusRomNo9L-Regu"),
+        cm(")"),
+        span(" and the word", "NimbusRomNo9L-Regu"),
+        italic(" great"),
+        span(" here.", "NimbusRomNo9L-Regu"),
+    ]
     sent, formulas = _placeholderize(_block_with_spans([line], size=10.0), 0)
     assert sent == "the two cases,{v1} and the word {i}great{/i} here."
     assert [formula["text"] for formula in formulas] == ["P(y = 1)"]
 
     x[0] = 0.0
-    line = [span("probability", "NimbusRomNo9L-Regu"), italic(" P"), cm("("), italic("to"),
-            span("|", "CMSY10", flags=6), italic("want"), cm(")"), span(" decreases.", "NimbusRomNo9L-Regu")]
+    line = [
+        span("probability", "NimbusRomNo9L-Regu"),
+        italic(" P"),
+        cm("("),
+        italic("to"),
+        span("|", "CMSY10", flags=6),
+        italic("want"),
+        cm(")"),
+        span(" decreases.", "NimbusRomNo9L-Regu"),
+    ]
     sent, formulas = _placeholderize(_block_with_spans([line], size=10.0), 0)
     assert sent == "probability{v1} decreases."
     assert [formula["text"] for formula in formulas] == ["P(to|want)"]
     # 无衬线粗体的向量 w、x（CMSSBX10）在 Times 排的书里也只出现在公式里
     from app.formats.pdf_math import _CM_UPRIGHT_RE
+
     assert _CM_UPRIGHT_RE.match("CMSSBX10") and _CM_UPRIGHT_RE.match("ABCDEF+CMSS10")
 
 
@@ -3565,8 +4235,9 @@ def test_blocks_inside_a_display_formula_box_are_kept():
     def block(text, rect, page=0):
         rect = pymupdf.Rect(rect)
         spans = [{"text": text, "font": "TimesNewRomanPSMT", "size": 10.0, "flags": 0}]
-        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False,
-                         span_lines=[spans])
+        return TextBlock(
+            page=page, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False, span_lines=[spans]
+        )
 
     inside = block("otherwise,", (300, 210, 340, 222))
     # 式子右下角外面的一个词，只有一角碰到框
@@ -3614,8 +4285,7 @@ def test_placeholderize_and_restore_roundtrip():
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0=0, y0=0):
-        return {"text": text, "font": font, "size": size, "bbox": (x0, y0, x0 + 10, y0 + 10),
-                "origin": (x0, y0 + 8)}
+        return {"text": text, "font": font, "size": size, "bbox": (x0, y0, x0 + 10, y0 + 10), "origin": (x0, y0 + 8)}
 
     spans = [
         span("The formula ", "TimesNewRomanPSMT", 12.0),
@@ -3640,22 +4310,36 @@ def test_placeholderize_marks_mixed_emphasis_only():
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font="TimesNewRomanPSMT", flags=0, x0=0):
-        return {"text": text, "font": font, "size": 12.0, "flags": flags,
-                "bbox": (x0, 0, x0 + 20, 12), "origin": (x0, 10)}
+        return {
+            "text": text,
+            "font": font,
+            "size": 12.0,
+            "flags": flags,
+            "bbox": (x0, 0, x0 + 20, 12),
+            "origin": (x0, 10),
+        }
 
-    mixed = _block_with_spans([[
-        span("See "),
-        span("this", flags=16, x0=20),
-        span(" word", x0=40),
-    ]])
+    mixed = _block_with_spans(
+        [
+            [
+                span("See "),
+                span("this", flags=16, x0=20),
+                span(" word", x0=40),
+            ]
+        ]
+    )
     sent, formulas = _placeholderize(mixed)
     assert sent == "See {b}this{/b} word" and formulas == []
 
-    italic = _block_with_spans([[
-        span("A "),
-        span("term", font="TimesNewRomanPS-ItalicMT", x0=12),
-        span(" here", x0=30),
-    ]])
+    italic = _block_with_spans(
+        [
+            [
+                span("A "),
+                span("term", font="TimesNewRomanPS-ItalicMT", x0=12),
+                span(" here", x0=30),
+            ]
+        ]
+    )
     assert _placeholderize(italic)[0] == "A {i}term{/i} here"
 
     uniform = _block_with_spans([[span("All bold words here", flags=16)]])
@@ -3670,8 +4354,14 @@ def test_formulas_set_in_text_italic_stay_whole():
 
     def span(text, x0, x1, font="Times-Italic", size=9.0, y0=652.5):
         y1 = y0 + (11.2 if size > 8 else 7.7)
-        return {"text": text, "font": font, "size": size, "flags": 2 if "Italic" in font else 0,
-                "bbox": (x0, y0, x1, y1), "origin": (x0, y0 + (8.5 if size > 8 else 5.7))}
+        return {
+            "text": text,
+            "font": font,
+            "size": size,
+            "flags": 2 if "Italic" in font else 0,
+            "bbox": (x0, y0, x1, y1),
+            "origin": (x0, y0 + (8.5 if size > 8 else 5.7)),
+        }
 
     def sub(text, x0, x1, y0=656.9):
         return span(text, x0, x1, size=6.0, y0=y0)
@@ -3679,14 +4369,26 @@ def test_formulas_set_in_text_italic_stay_whole():
     roman = "Times-Roman"
     line = [
         span("form ", 30.0, 54.0, roman),
-        span("(T", 54.0, 61.9), sub("i", 62.0, 63.6), span(".C", 63.6, 71.9), sub("p", 71.9, 74.9),
-        span(" ", 74.9, 77.8), span("=", 77.8, 83.9), span(" ", 83.9, 86.8),
-        span("T", 86.8, 91.8), sub("j", 91.8, 93.5), span(".C", 93.5, 101.8), sub("r", 101.8, 104.1),
+        span("(T", 54.0, 61.9),
+        sub("i", 62.0, 63.6),
+        span(".C", 63.6, 71.9),
+        sub("p", 71.9, 74.9),
+        span(" ", 74.9, 77.8),
+        span("=", 77.8, 83.9),
+        span(" ", 83.9, 86.8),
+        span("T", 86.8, 91.8),
+        sub("j", 91.8, 93.5),
+        span(".C", 93.5, 101.8),
+        sub("r", 101.8, 104.1),
         span(")", 104.1, 107.1),
         span(", where ", 107.1, 134.1, roman),
-        span("C", 136.9, 143.0), sub("p", 142.9, 145.9),
-        span(" ", 145.9, 148.0, roman), span("is", 148.0, 154.0), span(" a column, and ", 154.0, 230.0, roman),
-        span("c", 230.0, 234.0), span(" is a constant.", 234.0, 290.0, roman),
+        span("C", 136.9, 143.0),
+        sub("p", 142.9, 145.9),
+        span(" ", 145.9, 148.0, roman),
+        span("is", 148.0, 154.0),
+        span(" a column, and ", 154.0, 230.0, roman),
+        span("c", 230.0, 234.0),
+        span(" is a constant.", 234.0, 290.0, roman),
     ]
     sent, formulas = _placeholderize(_block_with_spans([line], size=9.0))
     assert sent == "form {v1}, where {v2} {i}is{/i} a column, and {i}c{/i} is a constant."
@@ -3694,17 +4396,25 @@ def test_formulas_set_in_text_italic_stay_whole():
 
     y = 697.5
     display = [
-        span("(PE", 54.0, 69.5, y0=y), sub("q", 69.5, 72.5, y0=y + 4.4),
-        span(" \u2227", 71.8, 83.9, "Symbol", y0=y), span("PR", 83.0, 95.2, y0=y), sub("q", 95.2, 98.2, y0=y + 4.4),
-        span(" \u21d2", 121.9, 137.6, "Symbol", y0=y), span("PE", 136.7, 148.9, y0=y), sub("v", 148.9, 151.8, y0=y + 4.4),
-        span(" )", 151.8, 156.8, y0=y), span(" \u2227", 155.8, 168.7, "Symbol", y0=y),
+        span("(PE", 54.0, 69.5, y0=y),
+        sub("q", 69.5, 72.5, y0=y + 4.4),
+        span(" \u2227", 71.8, 83.9, "Symbol", y0=y),
+        span("PR", 83.0, 95.2, y0=y),
+        sub("q", 95.2, 98.2, y0=y + 4.4),
+        span(" \u21d2", 121.9, 137.6, "Symbol", y0=y),
+        span("PE", 136.7, 148.9, y0=y),
+        sub("v", 148.9, 151.8, y0=y + 4.4),
+        span(" )", 151.8, 156.8, y0=y),
+        span(" \u2227", 155.8, 168.7, "Symbol", y0=y),
     ]
     sent, formulas = _placeholderize(_block_with_spans([display], size=9.0))
     assert re.sub(r"\{v\d+\}|\s", "", sent) == ""
 
     # 定理正文整段斜体：贴着公式的 If 是词，不是变量
     theorem = [
-        span("If", 54.0, 60.0), span(" ", 60.0, 62.5), span("G", 62.5, 69.0, "CMMI10"),
+        span("If", 54.0, 60.0),
+        span(" ", 60.0, 62.5),
+        span("G", 62.5, 69.0, "CMMI10"),
         span(" and D have capacity", 69.0, 150.0),
     ]
     sent, _ = _placeholderize(_block_with_spans([theorem], size=9.0))
@@ -3729,11 +4439,23 @@ def test_punctuation_alone_does_not_switch_the_font_size():
     from app.formats.pdf_units import _placeholderize
 
     def span(text, size=9.0, font="Times-Roman", x0=0.0):
-        return {"text": text, "font": font, "size": size, "flags": 2 if "Italic" in font else 0,
-                "bbox": (x0, 0, x0 + 10, size + 2), "origin": (x0, size)}
+        return {
+            "text": text,
+            "font": font,
+            "size": size,
+            "flags": 2 if "Italic" in font else 0,
+            "bbox": (x0, 0, x0 + 10, size + 2),
+            "origin": (x0, size),
+        }
 
-    line = [span("predicates in", x0=0), span(" PE", font="Times-Italic", x0=60), span(".", size=6.0, x0=72),
-            span(" An equivalence class is a set of", x0=75), span(" small", size=7.5, x0=200), span(" words.", x0=230)]
+    line = [
+        span("predicates in", x0=0),
+        span(" PE", font="Times-Italic", x0=60),
+        span(".", size=6.0, x0=72),
+        span(" An equivalence class is a set of", x0=75),
+        span(" small", size=7.5, x0=200),
+        span(" words.", x0=230),
+    ]
     sent, _ = _placeholderize(_block_with_spans([line], size=9.0))
     assert "{z" not in sent.split("An equivalence")[0]
     assert "{z" in sent.split("An equivalence")[1]
@@ -3742,8 +4464,10 @@ def test_punctuation_alone_does_not_switch_the_font_size():
 def test_placeholderize_no_formula_keeps_text_identical():
     from app.formats.pdf_units import _placeholderize
 
-    spans = [{"text": "Plain sentence ", "font": "TimesNewRomanPSMT", "size": 12.0},
-             {"text": "without any math.", "font": "ArialMT", "size": 12.0}]
+    spans = [
+        {"text": "Plain sentence ", "font": "TimesNewRomanPSMT", "size": 12.0},
+        {"text": "without any math.", "font": "ArialMT", "size": 12.0},
+    ]
     b = _block_with_spans([spans])
     b.text = "Plain sentence without any math."
     sent, formulas = _placeholderize(b)
@@ -3772,8 +4496,14 @@ def test_a_display_formula_set_in_text_italic_is_left_as_it_is(tmp_path):
     page.insert_text((40, 60), "The implication test can be split into three separate tests:", fontsize=10)
     x, y = 60.0, 90.0
     for text, font, size, dy in [
-        ("(PE", "tiit", 10, 0), ("q", "tiit", 6.5, 1.6), (" \u2227 ", "symb", 10, 0), ("PR", "tiit", 10, 0),
-        ("q", "tiit", 6.5, 1.6), (" \u21d2 ", "symb", 10, 0), ("PE", "tiit", 10, 0), ("v", "tiit", 6.5, 1.6),
+        ("(PE", "tiit", 10, 0),
+        ("q", "tiit", 6.5, 1.6),
+        (" \u2227 ", "symb", 10, 0),
+        ("PR", "tiit", 10, 0),
+        ("q", "tiit", 6.5, 1.6),
+        (" \u21d2 ", "symb", 10, 0),
+        ("PE", "tiit", 10, 0),
+        ("v", "tiit", 6.5, 1.6),
         (")", "tiit", 10, 0),
     ]:
         page.insert_text((x, y + dy), text, fontname=font, fontsize=size)
@@ -3805,11 +4535,15 @@ def test_display_equations_and_text_fractions_are_left_as_they_are(tmp_path):
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=400)
     page.insert_text((40, 40), "We measure the parser with labeled recall and labeled precision.", fontsize=10)
-    page.insert_text((127 - pymupdf.get_text_length("labeled recall: =", fontsize=10), 78), "labeled recall: =", fontsize=10)
+    page.insert_text(
+        (127 - pymupdf.get_text_length("labeled recall: =", fontsize=10), 78), "labeled recall: =", fontsize=10
+    )
     numerator, denominator = "# of correct constituents in the parse", "# of total constituents in the parse"
     width = pymupdf.get_text_length(numerator, fontsize=10)
     page.insert_text((130, 73), numerator, fontsize=10)
-    page.insert_text((130 + (width - pymupdf.get_text_length(denominator, fontsize=10)) / 2, 86), denominator, fontsize=10)
+    page.insert_text(
+        (130 + (width - pymupdf.get_text_length(denominator, fontsize=10)) / 2, 86), denominator, fontsize=10
+    )
     page.draw_line((130, 76), (130 + width, 76), width=0.4)
     page.insert_text((150, 120), "T = argmax s(T)", fontsize=10)
     page.insert_text((40, 160), "The scores are listed in the appendix of the paper, see the", fontsize=10)
@@ -3904,6 +4638,7 @@ def test_lost_large_placeholder_falls_back_and_counts_as_failed(tmp_path):
     assert "greedy" in pymupdf.open(out)[0].get_text()
     assert r.info["failed"] == 1
 
+
 def test_attention_formula_placeholders_end_to_end(tmp_path):
     src = SAMPLES / "attention.pdf"
     if not src.exists():
@@ -3926,8 +4661,15 @@ def test_cross_page_units_merge_continuation():
     from app.formats.pdf_merge import _cross_page_units
 
     def blk(text, page, size=10.0, y=0):
-        return TextBlock(page=page, rect=pymupdf.Rect(0, y, 100, y + 10), line_rects=[],
-                         text=text, size=size, color="#000", bold=False)
+        return TextBlock(
+            page=page,
+            rect=pymupdf.Rect(0, y, 100, y + 10),
+            line_rects=[],
+            text=text,
+            size=size,
+            color="#000",
+            bold=False,
+        )
 
     blocks = [
         blk("It can be seen that the model performs quite", 0, y=700),
@@ -3967,8 +4709,11 @@ def test_equation_vs_prose_with_formula():
     doc = pymupdf.open()
     page = doc.new_page(width=500, height=200)
     # 含公式的句子：正文词多，必须翻
-    page.insert_textbox(pymupdf.Rect(30, 20, 480, 45),
-                        "The sequence y_1, y_2, ..., y_T has a variable number of tokens here", fontsize=11)
+    page.insert_textbox(
+        pymupdf.Rect(30, 20, 480, 45),
+        "The sequence y_1, y_2, ..., y_T has a variable number of tokens here",
+        fontsize=11,
+    )
     # 公式行：几乎没正文词，跳过
     page.insert_textbox(pymupdf.Rect(30, 60, 480, 85), "x + y = z", fontsize=11)
     blocks = extract_blocks(doc)
@@ -3983,28 +4728,41 @@ def test_formula_runs_merge_requires_deep_x_overlap():
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, y0, x1=None, y1=None):
-        return {"text": text, "font": font, "size": size,
-                "bbox": (x0, y0, x1 if x1 is not None else x0 + 10,
-                         y1 if y1 is not None else y0 + 10),
-                "origin": (x0, (y1 if y1 is not None else y0 + 10) - 2)}
+        return {
+            "text": text,
+            "font": font,
+            "size": size,
+            "bbox": (x0, y0, x1 if x1 is not None else x0 + 10, y1 if y1 is not None else y0 + 10),
+            "origin": (x0, (y1 if y1 is not None else y0 + 10) - 2),
+        }
 
     # y 和上标 T 拆在两行，x 几乎全叠 → 并成一个
-    b = _block_with_spans([
-        [span("see ", "TimesNewRomanPSMT", 10, 0, 50), span("y", "CMMI10", 10, 50, 50)],
-        [span("T", "CMR7", 7, 55, 44, x1=59, y1=50)],
-    ], size=10.0)
+    b = _block_with_spans(
+        [
+            [span("see ", "TimesNewRomanPSMT", 10, 0, 50), span("y", "CMMI10", 10, 50, 50)],
+            [span("T", "CMR7", 7, 55, 44, x1=59, y1=50)],
+        ],
+        size=10.0,
+    )
     sent, formulas = _placeholderize(b, 0)
     assert len(formulas) == 1 and sent.count("{v1}") == 1
 
     # θ⋆ 在第一行末、X^i 在第二行，x 只沾 1pt → 两个独立公式
-    b2 = _block_with_spans([
-        [span("use ", "TimesNewRomanPSMT", 10, 0, 50),
-         span("θ", "CMMI10", 10, 50, 50, x1=58),
-         span(" then", "TimesNewRomanPSMT", 10, 62, 50)],
-        [span("and ", "TimesNewRomanPSMT", 10, 0, 65),
-         span("X", "CMMI10", 10, 57, 65, x1=65, y1=75),
-         span("i", "CMR7", 7, 60, 62, x1=63, y1=68)],
-    ], size=10.0)
+    b2 = _block_with_spans(
+        [
+            [
+                span("use ", "TimesNewRomanPSMT", 10, 0, 50),
+                span("θ", "CMMI10", 10, 50, 50, x1=58),
+                span(" then", "TimesNewRomanPSMT", 10, 62, 50),
+            ],
+            [
+                span("and ", "TimesNewRomanPSMT", 10, 0, 65),
+                span("X", "CMMI10", 10, 57, 65, x1=65, y1=75),
+                span("i", "CMR7", 7, 60, 62, x1=63, y1=68),
+            ],
+        ],
+        size=10.0,
+    )
     sent2, formulas2 = _placeholderize(b2, 1)
     assert len(formulas2) == 2
     assert "{v1}" in sent2 and "{v2}" in sent2
@@ -4050,12 +4808,18 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
     r2 = d[0].search_for("EPSILON")[0]
 
     def record(name, mid, rect):
-        return {"bbox": rect, "name": name, "mid": mid,
-                "w": round(rect.width, 1), "h": round(rect.height, 1), "d": 2.0,
-                "text": "x", "has_img": True,
-                "png": d[0].get_pixmap(dpi=150, clip=rect).tobytes("png"),
-                "spans": [{"bbox": tuple(rect), "text": "x", "size": 10,
-                           "origin": (rect.x0, rect.y1 - 2)}]}
+        return {
+            "bbox": rect,
+            "name": name,
+            "mid": mid,
+            "w": round(rect.width, 1),
+            "h": round(rect.height, 1),
+            "d": 2.0,
+            "text": "x",
+            "has_img": True,
+            "png": d[0].get_pixmap(dpi=150, clip=rect).tobytes("png"),
+            "spans": [{"bbox": tuple(rect), "text": "x", "size": 10, "origin": (rect.x0, rect.y1 - 2)}],
+        }
 
     f1, f2 = record("a_1.png", 0, r1), record("b_1.png", 1, r2)
     d.close()
@@ -4065,13 +4829,11 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
 
     def blk(text, y):
         rect = pymupdf.Rect(40, y, 200, y + 15)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text,
-                         size=10, color="#000", bold=False)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000", bold=False)
 
     b1, b2 = blk("alpha BETA gamma", 40), blk("delta EPSILON zeta", 90)
     t1, t2 = "译文 \x01i\x021\x01/i\x02 甲", "译文 \x01i\x021\x01/i\x02 乙"
-    out = _render_translated(src, [b1, b2], [t1, t2], "zh-CN",
-                             {id(b1): [f1], id(b2): [f2]}, archive)
+    out = _render_translated(src, [b1, b2], [t1, t2], "zh-CN", {id(b1): [f1], id(b2): [f2]}, archive)
     page = out[0]
     streams = [out.xref_stream(x) or b"" for x in page.get_contents()]
     assert sum(s.count(b"/FmF_a_1_png Do") for s in streams) == 1
@@ -4080,11 +4842,23 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
     assert [w for w in words if w in ("BETA", "EPSILON", "甲", "乙")] == ["BETA", "甲", "EPSILON", "乙"]
 
     # 译成英文时每片文字一个 HTML 盒子，公式流插在前一片文字的流后面
-    out = _render_translated(src, [b1, b2], ["start \x01i\x021\x01/i\x02 one", "second \x01i\x021\x01/i\x02 two"],
-                             "en", {id(b1): [f1], id(b2): [f2]}, archive)
+    out = _render_translated(
+        src,
+        [b1, b2],
+        ["start \x01i\x021\x01/i\x02 one", "second \x01i\x021\x01/i\x02 two"],
+        "en",
+        {id(b1): [f1], id(b2): [f2]},
+        archive,
+    )
     words = [w[4] for w in out[0].get_text("words", sort=False)]
     assert [w for w in words if w in ("start", "BETA", "one", "second", "EPSILON", "two")] == [
-        "start", "BETA", "one", "second", "EPSILON", "two"]
+        "start",
+        "BETA",
+        "one",
+        "second",
+        "EPSILON",
+        "two",
+    ]
     # 原文被 redact 后公式 glyph 由透传补回：各出现一次，槽位不同
     assert len(page.search_for("BETA")) == 1
     assert len(page.search_for("EPSILON")) == 1
@@ -4216,10 +4990,13 @@ def test_formula_glyphs_stay_in_place_after_a_size_change_on_their_line():
     doc.xref_set_key(page.xref, "Resources", f"<< /Font << /F1 {font} 0 R >> >>")
     stream = doc.get_new_xref()
     doc.update_object(stream, "<<>>")
-    doc.update_stream(stream, (
-        b"BT /F1 10 Tf 40 150 Td [(see the)]TJ /F1 6 Tf [(SMALL CAPITALS)]TJ /F1 10 Tf [( here )]TJ [(X)]TJ ET "
-        b"BT /F1 10 Tf 40 130 Td [(next line)]TJ ET"
-    ))
+    doc.update_stream(
+        stream,
+        (
+            b"BT /F1 10 Tf 40 150 Td [(see the)]TJ /F1 6 Tf [(SMALL CAPITALS)]TJ /F1 10 Tf [( here )]TJ [(X)]TJ ET "
+            b"BT /F1 10 Tf 40 130 Td [(next line)]TJ ET"
+        ),
+    )
     doc.xref_set_key(page.xref, "Contents", f"{stream} 0 R")
     target = page.search_for("X")[0]
     form = _keep_marks(doc, _page_form(doc, page), [_pdf_rect(page, target + (-1, -1, 1, 1))])
@@ -4279,20 +5056,24 @@ def test_formula_passthrough_follows_a_shifted_crop_box(tmp_path):
 
     d = pymupdf.open(src)
     rect = d[0].search_for("BETA")[0]
-    formula = {"bbox": rect, "name": "a_1.png", "mid": 0,
-               "w": round(rect.width, 1), "h": round(rect.height, 1), "d": 2.0,
-               "text": "x", "has_img": True,
-               "png": d[0].get_pixmap(dpi=150, clip=rect).tobytes("png"),
-               "spans": [{"bbox": tuple(rect), "text": "x", "size": 10,
-                          "origin": (rect.x0, rect.y1 - 2)}]}
+    formula = {
+        "bbox": rect,
+        "name": "a_1.png",
+        "mid": 0,
+        "w": round(rect.width, 1),
+        "h": round(rect.height, 1),
+        "d": 2.0,
+        "text": "x",
+        "has_img": True,
+        "png": d[0].get_pixmap(dpi=150, clip=rect).tobytes("png"),
+        "spans": [{"bbox": tuple(rect), "text": "x", "size": 10, "origin": (rect.x0, rect.y1 - 2)}],
+    }
     line = pymupdf.Rect(rect.x0 - 45, rect.y0 - 2, rect.x1 + 60, rect.y1 + 3)
     d.close()
     archive = pymupdf.Archive()
     archive.add(_marker_png(0), "ph_a_1.png")
-    block = TextBlock(page=0, rect=line, line_rects=[line], text="alpha BETA gamma",
-                      size=10, color="#000", bold=False)
-    out = _render_translated(src, [block], ["译文 \x01i\x021\x01/i\x02 甲"], "zh-CN",
-                             {id(block): [formula]}, archive)
+    block = TextBlock(page=0, rect=line, line_rects=[line], text="alpha BETA gamma", size=10, color="#000", bold=False)
+    out = _render_translated(src, [block], ["译文 \x01i\x021\x01/i\x02 甲"], "zh-CN", {id(block): [formula]}, archive)
     hits = out[0].search_for("BETA")
     assert len(hits) == 1
     assert pymupdf.Rect(line.x0 - 10, line.y0 - 10, line.x1 + 10, line.y1 + 10).contains(hits[0])
@@ -4317,52 +5098,68 @@ def test_formula_clip_ignores_tall_bitmap_glyph_boxes(tmp_path):
     glyphs = " ".join(f"/a{i}" for i in range(10))
     charprocs = " ".join(f"/a{i} {xref} 0 R" for i, xref in enumerate(procs))
     font = doc.get_new_xref()
-    doc.update_object(font, (
-        "<< /Type /Font /Subtype /Type3 /Name /BitmapF /FontBBox [0 -200 500 1800] "
-        f"/FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << {charprocs} >> "
-        f"/Encoding << /Type /Encoding /Differences [65 {glyphs}] >> "
-        f"/FirstChar 65 /LastChar 74 /Widths [{' '.join(['500'] * 10)}] /Resources << >> >>"
-    ))
-    doc.xref_set_key(page.xref, "Resources",
-                     f"<< /Font << /T3 {font} 0 R /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >>")
+    doc.update_object(
+        font,
+        (
+            "<< /Type /Font /Subtype /Type3 /Name /BitmapF /FontBBox [0 -200 500 1800] "
+            f"/FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << {charprocs} >> "
+            f"/Encoding << /Type /Encoding /Differences [65 {glyphs}] >> "
+            f"/FirstChar 65 /LastChar 74 /Widths [{' '.join(['500'] * 10)}] /Resources << >> >>"
+        ),
+    )
+    doc.xref_set_key(
+        page.xref,
+        "Resources",
+        f"<< /Font << /T3 {font} 0 R /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> >> >>",
+    )
     codes = "".join(f"{65 + i % 10:02X}" for i in range(20))
     content = doc.get_new_xref()
     doc.update_object(content, "<<>>")
-    doc.update_stream(content, (
-        "BT /F1 10 Tf 50 200 Td (alpha BETA gamma) Tj ET\n"
-        f"BT /T3 12 Tf 50 182 Td <{codes}> Tj ET"
-    ).encode())
+    doc.update_stream(
+        content, (f"BT /F1 10 Tf 50 200 Td (alpha BETA gamma) Tj ET\nBT /T3 12 Tf 50 182 Td <{codes}> Tj ET").encode()
+    )
     doc.xref_set_key(page.xref, "Contents", f"{content} 0 R")
     doc.save(src)
     doc.close()
 
     d = pymupdf.open(src)
     rect = d[0].search_for("BETA")[0]
-    bitmap = next(span for block in d[0].get_text("dict")["blocks"] for line in block.get("lines", [])
-                  for span in line["spans"] if span["font"] == "BitmapF")
+    bitmap = next(
+        span
+        for block in d[0].get_text("dict")["blocks"]
+        for line in block.get("lines", [])
+        for span in line["spans"]
+        if span["font"] == "BitmapF"
+    )
     assert bitmap["bbox"][1] < rect.y1  # 点阵字的框确实伸进了 BETA 的下半截
+
     def ink_share(pix):
         return sum(1 for v in pix.samples if v < 128) / len(pix.samples)
 
     ink = ink_share(d[0].get_pixmap(dpi=150, clip=rect, colorspace=pymupdf.csGRAY))
-    formula = {"bbox": rect, "name": "a_1.png", "mid": 0,
-               "w": round(rect.width, 1), "h": round(rect.height, 1), "d": 2.0,
-               "text": "x", "has_img": True,
-               "png": d[0].get_pixmap(dpi=150, clip=rect).tobytes("png"),
-               "spans": [{"bbox": tuple(rect), "text": "x", "size": 10,
-                          "origin": (rect.x0, rect.y1 - 2)}]}
+    formula = {
+        "bbox": rect,
+        "name": "a_1.png",
+        "mid": 0,
+        "w": round(rect.width, 1),
+        "h": round(rect.height, 1),
+        "d": 2.0,
+        "text": "x",
+        "has_img": True,
+        "png": d[0].get_pixmap(dpi=150, clip=rect).tobytes("png"),
+        "spans": [{"bbox": tuple(rect), "text": "x", "size": 10, "origin": (rect.x0, rect.y1 - 2)}],
+    }
     line = pymupdf.Rect(45, rect.y0 - 2, 200, rect.y1 + 3)
     d.close()
     archive = pymupdf.Archive()
     archive.add(_marker_png(0), "ph_a_1.png")
-    block = TextBlock(page=0, rect=line, line_rects=[line], text="alpha BETA gamma",
-                      size=10, color="#000", bold=False)
-    out = _render_translated(src, [block], ["译文 \x01i\x021\x01/i\x02 甲"], "zh-CN",
-                             {id(block): [formula]}, archive)
+    block = TextBlock(page=0, rect=line, line_rects=[line], text="alpha BETA gamma", size=10, color="#000", bold=False)
+    out = _render_translated(src, [block], ["译文 \x01i\x021\x01/i\x02 甲"], "zh-CN", {id(block): [formula]}, archive)
     slot = out[0].search_for("BETA")[0]
     # 译文行按 0.88 倍字号排，公式跟着缩小，按墨迹占比比较。裁掉下半截时只剩一半左右
     drawn = ink_share(out[0].get_pixmap(dpi=150, clip=slot, colorspace=pymupdf.csGRAY))
     assert drawn >= ink * 0.65
+
 
 def test_body_font_symbols_and_script_bases_become_formulas():
     """Times 里的希腊字母是公式。贴在角标上的单字母并进角标。
@@ -4370,53 +5167,79 @@ def test_body_font_symbols_and_script_bases_become_formulas():
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, y0, x1=None, y1=None, flags=0):
-        return {"text": text, "font": font, "size": size, "flags": flags,
-                "bbox": (x0, y0, x1 if x1 is not None else x0 + 8,
-                         y1 if y1 is not None else y0 + 10),
-                "origin": (x0, (y1 if y1 is not None else y0 + 10) - 2)}
+        return {
+            "text": text,
+            "font": font,
+            "size": size,
+            "flags": flags,
+            "bbox": (x0, y0, x1 if x1 is not None else x0 + 8, y1 if y1 is not None else y0 + 10),
+            "origin": (x0, (y1 if y1 is not None else y0 + 10) - 2),
+        }
 
-    greek = _block_with_spans([[
-        span("see ", "TimesNewRomanPSMT", 10, 0, 50),
-        span("α", "TimesNewRomanPSMT", 10, 28, 50, x1=36),
-        span(" here", "TimesNewRomanPSMT", 10, 38, 50),
-    ]], size=10.0)
+    greek = _block_with_spans(
+        [
+            [
+                span("see ", "TimesNewRomanPSMT", 10, 0, 50),
+                span("α", "TimesNewRomanPSMT", 10, 28, 50, x1=36),
+                span(" here", "TimesNewRomanPSMT", 10, 38, 50),
+            ]
+        ],
+        size=10.0,
+    )
     sent, formulas = _placeholderize(greek)
     assert sent == "see {v1} here" and len(formulas) == 1
 
-    base = _block_with_spans([
-        [span("let ", "TimesNewRomanPSMT", 10, 0, 50),
-         span("x", "TimesNewRomanPSMT", 10, 30, 50, x1=36)],
-        [span("i", "TimesNewRomanPSMT", 7, 34, 44, x1=38, y1=50)],
-    ], size=10.0)
+    base = _block_with_spans(
+        [
+            [span("let ", "TimesNewRomanPSMT", 10, 0, 50), span("x", "TimesNewRomanPSMT", 10, 30, 50, x1=36)],
+            [span("i", "TimesNewRomanPSMT", 7, 34, 44, x1=38, y1=50)],
+        ],
+        size=10.0,
+    )
     sent_b, formulas_b = _placeholderize(base)
     assert sent_b == "let {v1}" and len(formulas_b) == 1
     assert "x" not in sent_b
 
-    cite = _block_with_spans([[
-        span("a", "TimesNewRomanPSMT", 10, 0, 50, x1=6),
-        span("1", "TimesNewRomanPSMT", 7, 8, 46, x1=12, y1=52),
-        span(" word", "TimesNewRomanPSMT", 10, 14, 50),
-    ]], size=10.0)
+    cite = _block_with_spans(
+        [
+            [
+                span("a", "TimesNewRomanPSMT", 10, 0, 50, x1=6),
+                span("1", "TimesNewRomanPSMT", 7, 8, 46, x1=12, y1=52),
+                span(" word", "TimesNewRomanPSMT", 10, 14, 50),
+            ]
+        ],
+        size=10.0,
+    )
     sent_c, _ = _placeholderize(cite)
     assert sent_c.startswith("a") and "{v1}" in sent_c
 
     # 角标后面接着箭头，同一个 run 里有正常大小的字：字母仍是角标的底
-    arrow = _block_with_spans([[
-        span("Set ", "Times-Roman", 10, 300, 456.4, x1=322.4, y1=466.9),
-        span("N", "Times-Roman", 10, 327.5, 456.4, x1=335.2, y1=466.9),
-        {**span("inf", "CMR7", 7, 335.2, 457.5, x1=344.6, y1=462.7), "math": True},
-        {**span("BN", "CMR7", 7, 335.2, 464.2, x1=345.6, y1=469.4), "math": True},
-        span(" ←", "CMSY10", 10, 346.6, 459.4, x1=359.2, y1=469.4),
-        span(" N now", "Times-Roman", 10, 359.2, 456.4, x1=390, y1=466.9),
-    ]], size=10.0)
+    arrow = _block_with_spans(
+        [
+            [
+                span("Set ", "Times-Roman", 10, 300, 456.4, x1=322.4, y1=466.9),
+                span("N", "Times-Roman", 10, 327.5, 456.4, x1=335.2, y1=466.9),
+                {**span("inf", "CMR7", 7, 335.2, 457.5, x1=344.6, y1=462.7), "math": True},
+                {**span("BN", "CMR7", 7, 335.2, 464.2, x1=345.6, y1=469.4), "math": True},
+                span(" ←", "CMSY10", 10, 346.6, 459.4, x1=359.2, y1=469.4),
+                span(" N now", "Times-Roman", 10, 359.2, 456.4, x1=390, y1=466.9),
+            ]
+        ],
+        size=10.0,
+    )
     sent_a, formulas_a = _placeholderize(arrow)
     assert sent_a.startswith("Set {v1}") and len(formulas_a) == 1
 
-    equals = _block_with_spans([[
-        span("E ", "TimesNewRomanPSMT", 10, 0, 50),
-        span("=", "TimesNewRomanPSMT", 10, 14, 50, x1=22),
-        span(" mc", "TimesNewRomanPSMT", 10, 24, 50),
-    ]], size=10.0)
+    equals = _block_with_spans(
+        [
+            [
+                span("E ", "TimesNewRomanPSMT", 10, 0, 50),
+                span("=", "TimesNewRomanPSMT", 10, 14, 50, x1=22),
+                span(" mc", "TimesNewRomanPSMT", 10, 24, 50),
+            ]
+        ],
+        size=10.0,
+    )
     assert "=" in _placeholderize(equals)[0]
 
 
@@ -4426,18 +5249,24 @@ def test_a_script_on_the_next_line_does_not_join_the_letter_above_it():
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, y0, x1, y1, base):
-        return {"text": text, "font": font, "size": size, "flags": 0,
-                "bbox": (x0, y0, x1, y1), "origin": (x0, base)}
+        return {"text": text, "font": font, "size": size, "flags": 0, "bbox": (x0, y0, x1, y1), "origin": (x0, base)}
 
     for x_font in ("CMSSBX10", "CMBX10"):
-        block = _block_with_spans([
-            [span("is", "NimbusRomNo9L-Regu", 10, 160, 464, 167, 476, 473.3),
-             span(" X", x_font, 10, 167, 466, 177, 476, 473.3),
-             span(", in cross attention the input is", "NimbusRomNo9L-Regu", 10, 177, 464, 421, 476, 473.3)],
-            [span("H", "CMSSBX10", 10, 160, 477, 168, 487, 485.3),
-             span("enc", "NimbusRomNo9L-ReguItal", 7.4, 168, 475, 178, 484, 481.7),
-             span(" is of shape", "NimbusRomNo9L-Regu", 10, 178, 476, 226, 488, 485.3)],
-        ], size=10.0)
+        block = _block_with_spans(
+            [
+                [
+                    span("is", "NimbusRomNo9L-Regu", 10, 160, 464, 167, 476, 473.3),
+                    span(" X", x_font, 10, 167, 466, 177, 476, 473.3),
+                    span(", in cross attention the input is", "NimbusRomNo9L-Regu", 10, 177, 464, 421, 476, 473.3),
+                ],
+                [
+                    span("H", "CMSSBX10", 10, 160, 477, 168, 487, 485.3),
+                    span("enc", "NimbusRomNo9L-ReguItal", 7.4, 168, 475, 178, 484, 481.7),
+                    span(" is of shape", "NimbusRomNo9L-Regu", 10, 178, 476, 226, 488, 485.3),
+                ],
+            ],
+            size=10.0,
+        )
         sent, formulas = _placeholderize(block)
         assert not any("X" in f["text"] and "enc" in f["text"] for f in formulas), x_font
         assert any(f["text"] == "enc" for f in formulas), x_font
@@ -4450,36 +5279,52 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, y0, x1, y1=None):
-        return {"text": text, "font": font, "size": size,
-                "bbox": (x0, y0, x1, y1 if y1 is not None else y0 + size),
-                "origin": (x0, (y1 if y1 is not None else y0 + size) - 2)}
+        return {
+            "text": text,
+            "font": font,
+            "size": size,
+            "bbox": (x0, y0, x1, y1 if y1 is not None else y0 + size),
+            "origin": (x0, (y1 if y1 is not None else y0 + size) - 2),
+        }
 
-    equation = _block_with_spans([[
-        span("When", "NimbusRomNo9L-Regu", 10, 0, 50, 28),
-        span("ε", "CMMI10", 10, 30, 50, 36),
-        span("i", "CMMI7", 7, 36, 53, 40, 60),
-        span("=", "CMR10", 10, 44, 50, 52),
-        span(" ", "CMR10", 10, 52, 50, 56),
-        span("1", "CMR10", 10, 56, 50, 62),
-        span(",", "NimbusRomNo9L-Regu", 10, 62, 50, 66),
-    ]], size=10.0)
+    equation = _block_with_spans(
+        [
+            [
+                span("When", "NimbusRomNo9L-Regu", 10, 0, 50, 28),
+                span("ε", "CMMI10", 10, 30, 50, 36),
+                span("i", "CMMI7", 7, 36, 53, 40, 60),
+                span("=", "CMR10", 10, 44, 50, 52),
+                span(" ", "CMR10", 10, 52, 50, 56),
+                span("1", "CMR10", 10, 56, 50, 62),
+                span(",", "NimbusRomNo9L-Regu", 10, 62, 50, 66),
+            ]
+        ],
+        size=10.0,
+    )
     sent, formulas = _placeholderize(equation)
     assert len(formulas) == 1
     assert sent == "When{v1},"
     assert "1" in formulas[0]["text"]
 
-    wrapped = _block_with_spans([
-        [span("taken as the ", "NimbusRomNo9L-Regu", 10, 40, 80, 130),
-         span("arg max", "CMR10", 10, 130, 80, 180),
-         span("s", "CMMI7", 7, 180, 84, 186, 90),
-         span("P", "CMMI10", 10, 188, 80, 196),
-         span("(", "CMR10", 10, 197, 80, 203),
-         span("y", "CMMI10", 10, 203, 80, 210),
-         span("=", "CMR10", 10, 220, 80, 228)],
-        [span("s", "CMMI10", 10, 40, 94, 46),
-         span(")", "CMR10", 10, 48, 94, 54),
-         span(". This", "NimbusRomNo9L-Regu", 10, 56, 94, 90)],
-    ], size=10.0)
+    wrapped = _block_with_spans(
+        [
+            [
+                span("taken as the ", "NimbusRomNo9L-Regu", 10, 40, 80, 130),
+                span("arg max", "CMR10", 10, 130, 80, 180),
+                span("s", "CMMI7", 7, 180, 84, 186, 90),
+                span("P", "CMMI10", 10, 188, 80, 196),
+                span("(", "CMR10", 10, 197, 80, 203),
+                span("y", "CMMI10", 10, 203, 80, 210),
+                span("=", "CMR10", 10, 220, 80, 228),
+            ],
+            [
+                span("s", "CMMI10", 10, 40, 94, 46),
+                span(")", "CMR10", 10, 48, 94, 54),
+                span(". This", "NimbusRomNo9L-Regu", 10, 56, 94, 90),
+            ],
+        ],
+        size=10.0,
+    )
     sent_w, formulas_w = _placeholderize(wrapped)
     assert sent_w.count("{v") == 1
     assert "arg" not in sent_w and "P" not in sent_w
@@ -4494,16 +5339,23 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
         item["ink"] = (item["bbox"][0], top, item["bbox"][2], bottom)
         return item
 
-    union = _block_with_spans([
-        [span("the parameters ", "NimbusRomNo9L-Regu", 10, 40, 430.4, 510, 443.7),
-         ink(span("Θ", "CMR10", 10, 518.8, 433.4, 526.5, 443.4), 433.8, 440.9),
-         span(" ", "CMSY10", 10, 526.5, 433.4, 533.4, 450.4),
-         ink(span("∪", "CMSY10", 10, 533.4, 433.4, 540, 450.4), 434.2, 440.9)],
-        [ink(span("{", "CMSY10", 10, 40, 443.9, 45, 460.9), 445.3, 455.3),
-         ink(span("γ", "CMMI10", 10, 45, 445.3, 51, 455.3), 448.0, 455.3),
-         ink(span("}", "CMSY10", 10, 51, 443.9, 56, 460.9), 445.3, 455.3),
-         span(" to train", "NimbusRomNo9L-Regu", 10, 58, 442.4, 100, 455.7)],
-    ], size=10.0)
+    union = _block_with_spans(
+        [
+            [
+                span("the parameters ", "NimbusRomNo9L-Regu", 10, 40, 430.4, 510, 443.7),
+                ink(span("Θ", "CMR10", 10, 518.8, 433.4, 526.5, 443.4), 433.8, 440.9),
+                span(" ", "CMSY10", 10, 526.5, 433.4, 533.4, 450.4),
+                ink(span("∪", "CMSY10", 10, 533.4, 433.4, 540, 450.4), 434.2, 440.9),
+            ],
+            [
+                ink(span("{", "CMSY10", 10, 40, 443.9, 45, 460.9), 445.3, 455.3),
+                ink(span("γ", "CMMI10", 10, 45, 445.3, 51, 455.3), 448.0, 455.3),
+                ink(span("}", "CMSY10", 10, 51, 443.9, 56, 460.9), 445.3, 455.3),
+                span(" to train", "NimbusRomNo9L-Regu", 10, 58, 442.4, 100, 455.7),
+            ],
+        ],
+        size=10.0,
+    )
     sent_u, formulas_u = _placeholderize(union)
     assert sent_u.count("{v") == 1
     assert len(formulas_u[0]["parts"]) == 2
@@ -4511,97 +5363,146 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
     assert formulas_u[0]["parts"][1]["bbox"].x1 <= 56
 
     # 行内分式 1/√dk：分子分母都是小字号，分子那一行排在块的最后，仍是同一个式子
-    fraction = _block_with_spans([
-        [span("we scale the dot products by ", "Times-Roman", 10, 300, 606, 438, 616),
-         span("√", "CMSY7", 7, 440.7, 606.2, 447, 619.3),
-         span("dk", "CMMI7", 7, 447, 606.2, 455.2, 619.3),
-         span(".", "Times-Roman", 10, 456, 606, 459, 616)],
-        [span("1", "CMR7", 7, 446.3, 603.6, 450.2, 610.6)],
-    ], size=10.0)
+    fraction = _block_with_spans(
+        [
+            [
+                span("we scale the dot products by ", "Times-Roman", 10, 300, 606, 438, 616),
+                span("√", "CMSY7", 7, 440.7, 606.2, 447, 619.3),
+                span("dk", "CMMI7", 7, 447, 606.2, 455.2, 619.3),
+                span(".", "Times-Roman", 10, 456, 606, 459, 616),
+            ],
+            [span("1", "CMR7", 7, 446.3, 603.6, 450.2, 610.6)],
+        ],
+        size=10.0,
+    )
     sent_f, formulas_f = _placeholderize(fraction)
     assert sent_f.count("{v") == 1 and sent_f.endswith("{v1}.")
     assert formulas_f[0]["bbox"].y0 < 604
 
     # 相邻两行行首的脚注记号也是小字号、上下对齐，隔着一行，各是各的
-    notes = _block_with_spans([
-        [span("†", "CMSY6", 6, 108, 680, 112, 686), span("Work performed at A.", "Times-Roman", 9, 113, 679, 220, 689)],
-        [span("‡", "CMSY6", 6, 108, 691, 112, 697), span("Work performed at B.", "Times-Roman", 9, 113, 690, 220, 700)],
-    ], size=9.0)
+    notes = _block_with_spans(
+        [
+            [
+                span("†", "CMSY6", 6, 108, 680, 112, 686),
+                span("Work performed at A.", "Times-Roman", 9, 113, 679, 220, 689),
+            ],
+            [
+                span("‡", "CMSY6", 6, 108, 691, 112, 697),
+                span("Work performed at B.", "Times-Roman", 9, 113, 690, 220, 700),
+            ],
+        ],
+        size=9.0,
+    )
     sent_n, _ = _placeholderize(notes)
     assert sent_n.count("{v") == 2
 
-    ordinal = _block_with_spans([[
-        span("of the ", "NimbusRomNo9L-Regu", 10, 0, 50, 40),
-        span("i", "CMMI10", 10, 40, 50, 44),
-        span("th", "CMMI7", 7, 44, 44, 54, 51),
-        span(" mini-batch", "NimbusRomNo9L-Regu", 10, 56, 50, 120),
-    ]], size=10.0)
+    ordinal = _block_with_spans(
+        [
+            [
+                span("of the ", "NimbusRomNo9L-Regu", 10, 0, 50, 40),
+                span("i", "CMMI10", 10, 40, 50, 44),
+                span("th", "CMMI7", 7, 44, 44, 54, 51),
+                span(" mini-batch", "NimbusRomNo9L-Regu", 10, 56, 50, 120),
+            ]
+        ],
+        size=10.0,
+    )
     sent_o, formulas_o = _placeholderize(ordinal)
     assert formulas_o == []
     assert sent_o == "of the i-th mini-batch"
 
-    distant = _block_with_spans([[
-        span("x", "CMMI10", 10, 0, 50, 8),
-        span(" see page ", "NimbusRomNo9L-Regu", 10, 10, 50, 70),
-        span("1", "CMR10", 10, 80, 50, 86),
-    ]], size=10.0)
+    distant = _block_with_spans(
+        [
+            [
+                span("x", "CMMI10", 10, 0, 50, 8),
+                span(" see page ", "NimbusRomNo9L-Regu", 10, 10, 50, 70),
+                span("1", "CMR10", 10, 80, 50, 86),
+            ]
+        ],
+        size=10.0,
+    )
     sent_d, formulas_d = _placeholderize(distant)
     assert len(formulas_d) == 1 and "1" in sent_d
 
-    times_digit = _block_with_spans([[
-        span("x", "CMMI10", 10, 0, 50, 8),
-        span("1", "TimesNewRomanPSMT", 10, 10, 50, 16),
-    ]], size=10.0)
+    times_digit = _block_with_spans(
+        [
+            [
+                span("x", "CMMI10", 10, 0, 50, 8),
+                span("1", "TimesNewRomanPSMT", 10, 10, 50, 16),
+            ]
+        ],
+        size=10.0,
+    )
     sent_t, _ = _placeholderize(times_digit)
     assert "1" in sent_t
 
     # 式子收尾的「 + 1」「 = 20」CMR 排成一个 span，Latin Modern 的也一样
     for roman in ("CMR10", "LMRoman10-Regular"):
-        tail = _block_with_spans([[
-            span("takes only ", roman, 10, 0, 50, 46),
-            span("A", "CMMI10", 10, 47, 50, 54),
-            span(" + 1", roman, 10, 54, 50, 73),
-            span(" values, so ", roman, 10, 77, 50, 120),
-            span("A", "CMMI10", 10, 121, 50, 128),
-            span(" = 20", roman, 10, 128, 50, 151),
-            span(" draws", roman, 10, 154, 50, 180),
-        ]], size=10.0)
+        tail = _block_with_spans(
+            [
+                [
+                    span("takes only ", roman, 10, 0, 50, 46),
+                    span("A", "CMMI10", 10, 47, 50, 54),
+                    span(" + 1", roman, 10, 54, 50, 73),
+                    span(" values, so ", roman, 10, 77, 50, 120),
+                    span("A", "CMMI10", 10, 121, 50, 128),
+                    span(" = 20", roman, 10, 128, 50, 151),
+                    span(" draws", roman, 10, 154, 50, 180),
+                ]
+            ],
+            size=10.0,
+        )
         sent_a, formulas_a = _placeholderize(tail)
         assert sent_a == "takes only {v1} values, so {v2} draws"
         assert [f["text"].replace(" ", "") for f in formulas_a] == ["A+1", "A=20"]
 
     # 小数点是 CMMI 的「.」，后半个数和正文排在一个 span 里：「= 0」不收，免得把 0.31 拆开
-    decimal = _block_with_spans([[
-        span("gives a slightly higher", "CMR10", 10, 0, 50, 100),
-        span(" B/T", "CMMI10", 10, 100, 50, 120),
-        span(" ", "CMR10", 10, 120, 50, 123),
-        span("= 0", "CMR10", 10, 123, 50, 141),
-        span(".", "CMMI10", 10, 141, 50, 144),
-        span("31 likely", "CMR10", 10, 144, 50, 180),
-    ]], size=10.0)
+    decimal = _block_with_spans(
+        [
+            [
+                span("gives a slightly higher", "CMR10", 10, 0, 50, 100),
+                span(" B/T", "CMMI10", 10, 100, 50, 120),
+                span(" ", "CMR10", 10, 120, 50, 123),
+                span("= 0", "CMR10", 10, 123, 50, 141),
+                span(".", "CMMI10", 10, 141, 50, 144),
+                span("31 likely", "CMR10", 10, 144, 50, 180),
+            ]
+        ],
+        size=10.0,
+    )
     sent_dec, _ = _placeholderize(decimal)
     assert sent_dec == "gives a slightly higher{v1} = 0.31 likely"
 
     # 单独的 CMMI「>」贴着后面的「= 10¹¹」，一起收进公式
-    bound = _block_with_spans([[
-        span("of stellar mass", "CMR10", 10, 0, 50, 70),
-        span(" >", "CMMI10", 10, 70, 50, 81),
-        span("= 10", "CMR10", 10, 81, 50, 101),
-        span("11", "CMR7", 7, 101, 48, 108, 55),
-        span(" in the nearby", "CMR10", 10, 108, 50, 160),
-    ]], size=10.0)
+    bound = _block_with_spans(
+        [
+            [
+                span("of stellar mass", "CMR10", 10, 0, 50, 70),
+                span(" >", "CMMI10", 10, 70, 50, 81),
+                span("= 10", "CMR10", 10, 81, 50, 101),
+                span("11", "CMR7", 7, 101, 48, 108, 55),
+                span(" in the nearby", "CMR10", 10, 108, 50, 160),
+            ]
+        ],
+        size=10.0,
+    )
     sent_b, formulas_b = _placeholderize(bound)
     assert sent_b == "of stellar mass{v1} in the nearby"
     assert formulas_b[0]["text"].replace(" ", "").startswith(">=10")
 
     # Times 排的式子：斜体 L 后面贴着正体的下标 CE，L 照样收进 ∂ 的式子
-    partial = _block_with_spans([[
-        span("the derivative ", "Times-Roman", 10, 0, 50, 60),
-        span("∂", "CMSY10", 10, 60, 50, 65),
-        span("L", "Times-Italic", 10, 65, 50, 71),
-        span("CE", "Times-Roman", 10, 71, 50, 84),
-        span(" is", "Times-Roman", 10, 84, 50, 96),
-    ]], size=10.0)
+    partial = _block_with_spans(
+        [
+            [
+                span("the derivative ", "Times-Roman", 10, 0, 50, 60),
+                span("∂", "CMSY10", 10, 60, 50, 65),
+                span("L", "Times-Italic", 10, 65, 50, 71),
+                span("CE", "Times-Roman", 10, 71, 50, 84),
+                span(" is", "Times-Roman", 10, 84, 50, 96),
+            ]
+        ],
+        size=10.0,
+    )
     _, formulas_p = _placeholderize(partial)
     assert formulas_p[0]["text"].replace(" ", "").startswith("∂L")
 
@@ -4695,17 +5596,25 @@ def test_line_wrapped_formula_is_one_placeholder():
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, y0, x1, y1=None):
-        return {"text": text, "font": font, "size": size,
-                "bbox": (x0, y0, x1, y1 if y1 is not None else y0 + size),
-                "origin": (x0, (y1 if y1 is not None else y0 + size) - 2)}
+        return {
+            "text": text,
+            "font": font,
+            "size": size,
+            "bbox": (x0, y0, x1, y1 if y1 is not None else y0 + size),
+            "origin": (x0, (y1 if y1 is not None else y0 + size) - 2),
+        }
 
-    wrapped = _block_with_spans([
-        [span("take arg max ", "TimesNewRomanPSMT", 10, 40, 80, 150),
-         span("y", "CMMI10", 10, 470, 80, 478),
-         span("=", "CMR10", 10, 490, 80, 504)],
-        [span("s|h", "CMMI10", 10, 40, 92, 70),
-         span(").", "TimesNewRomanPSMT", 10, 72, 92, 90)],
-    ], size=10.0)
+    wrapped = _block_with_spans(
+        [
+            [
+                span("take arg max ", "TimesNewRomanPSMT", 10, 40, 80, 150),
+                span("y", "CMMI10", 10, 470, 80, 478),
+                span("=", "CMR10", 10, 490, 80, 504),
+            ],
+            [span("s|h", "CMMI10", 10, 40, 92, 70), span(").", "TimesNewRomanPSMT", 10, 72, 92, 90)],
+        ],
+        size=10.0,
+    )
     sent, formulas = _placeholderize(wrapped)
     assert sent.count("{v") == 1
     assert "s|h" not in sent and "y=" not in sent.replace(" ", "")
@@ -4716,13 +5625,17 @@ def test_line_wrapped_formula_is_one_placeholder():
     assert parts[1]["bbox"].x0 <= 40
     assert parts[0]["bbox"].x1 < 510 and parts[1]["bbox"].width < 40
 
-    separate = _block_with_spans([
-        [span("see ", "TimesNewRomanPSMT", 10, 40, 80, 70),
-         span("x", "CMMI10", 10, 80, 80, 90),
-         span(" then more words here", "TimesNewRomanPSMT", 10, 92, 80, 220)],
-        [span("y", "CMMI10", 10, 40, 92, 50),
-         span(" follows", "TimesNewRomanPSMT", 10, 54, 92, 110)],
-    ], size=10.0)
+    separate = _block_with_spans(
+        [
+            [
+                span("see ", "TimesNewRomanPSMT", 10, 40, 80, 70),
+                span("x", "CMMI10", 10, 80, 80, 90),
+                span(" then more words here", "TimesNewRomanPSMT", 10, 92, 80, 220),
+            ],
+            [span("y", "CMMI10", 10, 40, 92, 50), span(" follows", "TimesNewRomanPSMT", 10, 54, 92, 110)],
+        ],
+        size=10.0,
+    )
     sent2, formulas2 = _placeholderize(separate)
     assert len(formulas2) == 2
     assert "{v1}" in sent2 and "{v2}" in sent2
@@ -4747,8 +5660,15 @@ def test_wrapped_formula_parts_stay_in_order(tmp_path):
 
     def part(name, rect, text):
         return {
-            "bbox": rect, "name": name, "w": round(rect.width, 1), "h": round(rect.height, 1),
-            "d": 2.0, "raise": 0.0, "text": text, "has_img": True, "page": 0,
+            "bbox": rect,
+            "name": name,
+            "w": round(rect.width, 1),
+            "h": round(rect.height, 1),
+            "d": 2.0,
+            "raise": 0.0,
+            "text": text,
+            "has_img": True,
+            "page": 0,
             "png": pymupdf.open(src)[0].get_pixmap(clip=rect, dpi=72).tobytes("png"),
             "spans": [{"bbox": tuple(rect), "text": text, "size": 10, "origin": (rect.x0, rect.y1 - 2)}],
         }
@@ -4760,8 +5680,13 @@ def test_wrapped_formula_parts_stay_in_order(tmp_path):
     first["mid"] = 0
     rect = pymupdf.Rect(40, 40, 360, 80)
     block = TextBlock(
-        page=0, rect=rect, line_rects=[rect, pymupdf.Rect(y_box), pymupdf.Rect(sh_box)],
-        text="take arg max", size=10, color="#000", bold=False,
+        page=0,
+        rect=rect,
+        line_rects=[rect, pymupdf.Rect(y_box), pymupdf.Rect(sh_box)],
+        text="take arg max",
+        size=10,
+        color="#000",
+        bold=False,
     )
     sentinel = "\x01i\x021\x01/i\x02"
     out = _render_translated(src, [block], [f"也可以取 arg max({sentinel})。"], "zh-CN", {id(block): [first]})
@@ -4780,48 +5705,67 @@ def test_placeholderize_absorbs_accent_over_formula():
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, y0, x1=None, y1=None):
-        return {"text": text, "font": font, "size": size,
-                "bbox": (x0, y0, x1 if x1 is not None else x0 + 10,
-                         y1 if y1 is not None else y0 + 10),
-                "origin": (x0, (y1 if y1 is not None else y0 + 10) - 2)}
+        return {
+            "text": text,
+            "font": font,
+            "size": size,
+            "bbox": (x0, y0, x1 if x1 is not None else x0 + 10, y1 if y1 is not None else y0 + 10),
+            "origin": (x0, (y1 if y1 is not None else y0 + 10) - 2),
+        }
 
-    b = _block_with_spans([
-        [span("an estimate ", "TimesNewRomanPSMT", 10, 0, 50),
-         span("y", "CMMI10", 10, 40, 50, x1=48, y1=60),
-         span(" coming", "TimesNewRomanPSMT", 10, 60, 50)],
-        [{**span("^", "CMR10", 10, 41, 42, x1=45, y1=48), "origin": (41, 56)}],  # 帽子是独立 dict 行，基线抬高一点
-    ], size=10.0)
+    b = _block_with_spans(
+        [
+            [
+                span("an estimate ", "TimesNewRomanPSMT", 10, 0, 50),
+                span("y", "CMMI10", 10, 40, 50, x1=48, y1=60),
+                span(" coming", "TimesNewRomanPSMT", 10, 60, 50),
+            ],
+            [{**span("^", "CMR10", 10, 41, 42, x1=45, y1=48), "origin": (41, 56)}],  # 帽子是独立 dict 行，基线抬高一点
+        ],
+        size=10.0,
+    )
     sent, formulas = _placeholderize(b, 0)
     assert "^" not in sent
     assert len(formulas) == 1
     assert formulas[0]["bbox"].y0 <= 42  # 符头顶部包进裁剪区域
     # 短音符 M̆、小波浪 Ẽ 也一样
     for accent in ("˘", "˜"):
-        b1 = _block_with_spans([
-            [span("costs at least ", "TimesNewRomanPSMT", 10, 0, 50),
-             span("M", "CMMI10", 10, 40, 50, x1=48, y1=60),
-             span(" over", "TimesNewRomanPSMT", 10, 60, 50)],
-            [{**span(accent, "CMR10", 10, 41, 42, x1=46, y1=48), "origin": (41, 56)}],
-        ], size=10.0)
+        b1 = _block_with_spans(
+            [
+                [
+                    span("costs at least ", "TimesNewRomanPSMT", 10, 0, 50),
+                    span("M", "CMMI10", 10, 40, 50, x1=48, y1=60),
+                    span(" over", "TimesNewRomanPSMT", 10, 60, 50),
+                ],
+                [{**span(accent, "CMR10", 10, 41, 42, x1=46, y1=48), "origin": (41, 56)}],
+            ],
+            size=10.0,
+        )
         sent1, formulas1 = _placeholderize(b1, 0)
         assert accent not in sent1 and len(formulas1) == 1
     # 远离公式的 ^ 不吸收（如正文里确实有个符号）
-    b2 = _block_with_spans([
-        [span("y", "CMMI10", 10, 0, 50, x1=8, y1=60),
-         span(" then ^ alone", "TimesNewRomanPSMT", 10, 100, 50)],
-    ], size=10.0)
+    b2 = _block_with_spans(
+        [
+            [span("y", "CMMI10", 10, 0, 50, x1=8, y1=60), span(" then ^ alone", "TimesNewRomanPSMT", 10, 100, 50)],
+        ],
+        size=10.0,
+    )
     sent2, _ = _placeholderize(b2, 0)
     assert "^" in sent2
     # 上一行 naïve 的两点不算到下一行的公式上
-    b3 = _block_with_spans([
-        [span("usual (na", "TimesNewRomanPSMT", 10, 0, 40, x1=40, y1=50),
-         {**span("\u00a8", "TimesNewRomanPSMT", 10, 40, 40, x1=44, y1=50), "origin": (40, 48)},
-         span("\u0131ve)", "TimesNewRomanPSMT", 10, 40, 40, x1=60, y1=50)],
-        [span("\u2207", "CMSY10", 10, 38, 50, x1=48, y1=62)],
-    ], size=10.0)
+    b3 = _block_with_spans(
+        [
+            [
+                span("usual (na", "TimesNewRomanPSMT", 10, 0, 40, x1=40, y1=50),
+                {**span("\u00a8", "TimesNewRomanPSMT", 10, 40, 40, x1=44, y1=50), "origin": (40, 48)},
+                span("\u0131ve)", "TimesNewRomanPSMT", 10, 40, 40, x1=60, y1=50),
+            ],
+            [span("\u2207", "CMSY10", 10, 38, 50, x1=48, y1=62)],
+        ],
+        size=10.0,
+    )
     sent3, _ = _placeholderize(b3, 0)
     assert "\u00a8" in sent3
-
 
 
 def test_same_line_gap_stays_inside_one_column():
@@ -4832,8 +5776,7 @@ def test_same_line_gap_stays_inside_one_column():
 
     def blk(text, x0, x1, y=100.0):
         rect = pymupdf.Rect(x0, y, x1, y + 11)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text,
-                         size=10, color="#000", bold=False)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000", bold=False)
 
     one = PageGeometry(400, (Column(30, 380),), ())
     merged = _merge_visual_lines(
@@ -4881,8 +5824,9 @@ def test_a_larger_heading_below_a_title_is_not_its_wrapped_line():
 
     def blk(text, x0, y0, x1, y1, size):
         rect = pymupdf.Rect(x0, y0, x1, y1)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=True,
-                         body_size=10)
+        return TextBlock(
+            page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=True, body_size=10
+        )
 
     title = blk("8.4.4 Limitations of Preference-Based Learning", 160.2, 515.9, 410.3, 531.4, 12)
     section = blk("8.5 Summary", 95.4, 539.6, 201.1, 560.4, 17.2)
@@ -4895,15 +5839,31 @@ def test_a_small_caps_word_at_the_line_start_is_not_a_style_change():
     from app.formats.pdf_blocks import TextBlock, _styled_edge
 
     def span(text, x0, size=10.0, font="NimbusRomNo9L-Regu", flags=0):
-        return {"text": text, "font": font, "size": size, "flags": flags,
-                "bbox": (x0, 433, x0 + 20, 444), "origin": (x0, 441.5)}
+        return {
+            "text": text,
+            "font": font,
+            "size": size,
+            "flags": flags,
+            "bbox": (x0, 433, x0 + 20, 444),
+            "origin": (x0, 441.5),
+        }
 
     def blk(spans):
-        return TextBlock(page=0, rect=pymupdf.Rect(142, 433, 475, 480), line_rects=[], text="",
-                         size=10, color="#000", bold=False, span_lines=[spans])
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(142, 433, 475, 480),
+            line_rects=[],
+            text="",
+            size=10,
+            color="#000",
+            bold=False,
+            span_lines=[spans],
+        )
 
     assert not _styled_edge(blk([span("MUC", 142.4, 8.0), span(" (Vilain et al., 1995) and", 162)]), 0)
-    assert _styled_edge(blk([span("Lemma 2.3.", 142.4, font="NimbusRomNo9L-Medi", flags=16), span(" Let x be", 190)]), 0)
+    assert _styled_edge(
+        blk([span("Lemma 2.3.", 142.4, font="NimbusRomNo9L-Medi", flags=16), span(" Let x be", 190)]), 0
+    )
     assert _styled_edge(blk([span("note", 142.4, 8.0), span(" and the rest", 162)]), 0)
 
 
@@ -4914,29 +5874,59 @@ def test_a_concordance_with_aligned_bold_keywords_stays_original():
     from app.formats.pdf_skip import _concordance_ids
 
     def span(text, x0, x1, y, bold=False):
-        return {"text": text, "font": "NimbusRomNo9L-Medi" if bold else "NimbusRomNo9L-Regu", "size": 10.0,
-                "flags": 16 if bold else 0, "bbox": (x0, y - 8, x1, y + 2), "origin": (x0, y)}
+        return {
+            "text": text,
+            "font": "NimbusRomNo9L-Medi" if bold else "NimbusRomNo9L-Regu",
+            "size": 10.0,
+            "flags": 16 if bold else 0,
+            "bbox": (x0, y - 8, x1, y + 2),
+            "origin": (x0, y),
+        }
 
     def blk(span_lines):
-        return TextBlock(page=0, rect=pymupdf.Rect(161, 108, 492, 157), line_rects=[], text="",
-                         size=10, color="#000", bold=False, span_lines=span_lines)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(161, 108, 492, 157),
+            line_rects=[],
+            text="",
+            size=10,
+            color="#000",
+            bold=False,
+            span_lines=span_lines,
+        )
 
-    concordance = blk([
-        [span("is traditionally followed by", 191.0, 298.9, 117.5), span("cherry", 304.9, 333.1, 117.5, True)],
-        [span("pie, a traditional dessert", 361.6, 456.7, 117.5)],
-        [span("often mixed, such as", 217.2, 298.9, 129.5), span("strawberry", 304.9, 352.5, 129.5, True)],
-        [span("rhubarb pie. Apple pie", 361.6, 451.8, 129.5)],
-        [span("computer peripherals and personal", 161.4, 298.9, 141.4), span("digital", 304.9, 332.0, 141.4, True)],
-        [span("assistants. These devices usually", 361.6, 492.0, 141.4)],
-    ])
-    prose = blk([
-        [span("we call this a", 161.4, 230.0, 117.5), span("vector", 233.0, 260.0, 117.5, True),
-         span("and it is", 263.0, 300.0, 117.5)],
-        [span("a list of numbers, the", 161.4, 260.0, 129.5), span("dimension", 263.0, 310.0, 129.5, True),
-         span("of which is", 313.0, 360.0, 129.5)],
-        [span("the length of the", 161.4, 240.0, 141.4), span("vector space", 243.0, 300.0, 141.4, True),
-         span("below", 303.0, 330.0, 141.4)],
-    ])
+    concordance = blk(
+        [
+            [span("is traditionally followed by", 191.0, 298.9, 117.5), span("cherry", 304.9, 333.1, 117.5, True)],
+            [span("pie, a traditional dessert", 361.6, 456.7, 117.5)],
+            [span("often mixed, such as", 217.2, 298.9, 129.5), span("strawberry", 304.9, 352.5, 129.5, True)],
+            [span("rhubarb pie. Apple pie", 361.6, 451.8, 129.5)],
+            [
+                span("computer peripherals and personal", 161.4, 298.9, 141.4),
+                span("digital", 304.9, 332.0, 141.4, True),
+            ],
+            [span("assistants. These devices usually", 361.6, 492.0, 141.4)],
+        ]
+    )
+    prose = blk(
+        [
+            [
+                span("we call this a", 161.4, 230.0, 117.5),
+                span("vector", 233.0, 260.0, 117.5, True),
+                span("and it is", 263.0, 300.0, 117.5),
+            ],
+            [
+                span("a list of numbers, the", 161.4, 260.0, 129.5),
+                span("dimension", 263.0, 310.0, 129.5, True),
+                span("of which is", 313.0, 360.0, 129.5),
+            ],
+            [
+                span("the length of the", 161.4, 240.0, 141.4),
+                span("vector space", 243.0, 300.0, 141.4, True),
+                span("below", 303.0, 330.0, 141.4),
+            ],
+        ]
+    )
     assert _concordance_ids([concordance, prose]) == {id(concordance)}
 
 
@@ -4952,30 +5942,60 @@ def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
     narrow = [pymupdf.Rect(160, y, 370, y + 12) for y in range(385, 445, 12)]
     wide = [pymupdf.Rect(160, y, 493, y + 12) for y in range(445, 517, 12)]
     lines = narrow + wide
-    block = TextBlock(page=0, rect=pymupdf.Rect(160, 385, 493, 517), line_rects=lines,
-                      text="x", size=10, color="#000000", bold=False)
+    block = TextBlock(
+        page=0, rect=pymupdf.Rect(160, 385, 493, 517), line_rects=lines, text="x", size=10, color="#000000", bold=False
+    )
     holes = _wrap_holes(block, [image, caption, pymupdf.Rect(131, 471, 146, 480)])
     assert sorted(map(tuple, holes)) == sorted([tuple(image), tuple(caption)])
 
     quote = [pymupdf.Rect(167, y, 475, y + 12) for y in (210, 222, 234)] + [pymupdf.Rect(167, 246, 203, 258)]
-    quoted = TextBlock(page=0, rect=pymupdf.Rect(167, 210, 475, 258), line_rects=quote,
-                       text="x", size=10, color="#000000", bold=False)
+    quoted = TextBlock(
+        page=0, rect=pymupdf.Rect(167, 210, 475, 258), line_rects=quote, text="x", size=10, color="#000000", bold=False
+    )
     assert _wrap_holes(quoted, [pymupdf.Rect(411, 246, 475, 258)]) == []
 
     # 跨页接过来的半段按上一页的栏宽写。图在块的框外、写入范围以内，同样让开
     figure = pymupdf.Rect(347, 103, 493, 253)
     tail_lines = [pymupdf.Rect(160, y, 337, y + 12) for y in range(110, 170, 12)]
-    tail = TextBlock(page=0, rect=pymupdf.Rect(160, 110, 337, 170), line_rects=tail_lines,
-                     text="x", size=10, color="#000000", bold=False)
+    tail = TextBlock(
+        page=0,
+        rect=pymupdf.Rect(160, 110, 337, 170),
+        line_rects=tail_lines,
+        text="x",
+        size=10,
+        color="#000000",
+        bold=False,
+    )
     assert _wrap_holes(tail, [figure]) == []
     assert _wrap_holes(tail, [figure], pymupdf.Rect(160, 110, 493, 168)) == [figure]
 
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
-    _place_plain(page, "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 8, [], pymupdf.Rect(160, 386, 495, 521),
-                 8.8, 10, True, "left", "", "#000000", "normal", [], None, None, False, holes)
-    spans = [span for block in page.get_text("dict")["blocks"] for line in block.get("lines", [])
-             for span in line["spans"] if span["text"].strip()]
+    _place_plain(
+        page,
+        "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 8,
+        [],
+        pymupdf.Rect(160, 386, 495, 521),
+        8.8,
+        10,
+        True,
+        "left",
+        "",
+        "#000000",
+        "normal",
+        [],
+        None,
+        None,
+        False,
+        holes,
+    )
+    spans = [
+        span
+        for block in page.get_text("dict")["blocks"]
+        for line in block.get("lines", [])
+        for span in line["spans"]
+        if span["text"].strip()
+    ]
     assert spans
     for span in spans:
         box = pymupdf.Rect(span["bbox"])
@@ -4989,12 +6009,25 @@ def test_a_running_head_does_not_run_into_the_first_line_below():
     from app.formats.pdf_extract import _merge_continuations
 
     def blocks():
-        head = TextBlock(page=1, rect=pymupdf.Rect(51, 42, 344, 54), line_rects=[pymupdf.Rect(51, 42, 344, 54)],
-                         text="2 Sarkar et al.", size=10.0, color="#000", bold=False)
+        head = TextBlock(
+            page=1,
+            rect=pymupdf.Rect(51, 42, 344, 54),
+            line_rects=[pymupdf.Rect(51, 42, 344, 54)],
+            text="2 Sarkar et al.",
+            size=10.0,
+            color="#000",
+            bold=False,
+        )
         lines = [pymupdf.Rect(51, 67 + 12.5 * i, 292, 77 + 12.5 * i) for i in range(3)]
-        body = TextBlock(page=1, rect=pymupdf.Rect(51, 67, 292, 102), line_rects=lines,
-                         text="rounded by an outer, extended low surface brightness envelope. This came into light.",
-                         size=10.0, color="#000", bold=False)
+        body = TextBlock(
+            page=1,
+            rect=pymupdf.Rect(51, 67, 292, 102),
+            line_rects=lines,
+            text="rounded by an outer, extended low surface brightness envelope. This came into light.",
+            size=10.0,
+            color="#000",
+            bold=False,
+        )
         return head, body
 
     head, body = blocks()
@@ -5009,13 +6042,25 @@ def test_a_word_cut_after_a_run_in_label_continues_at_the_column_edge():
     from app.formats.pdf_extract import _merge_continuations
 
     def blocks(x1=522):
-        half = TextBlock(page=0, rect=pymupdf.Rect(163, 620, x1, 631), line_rects=[pymupdf.Rect(163, 620, x1, 631)],
-                         text="Models are served through OpenRouter (OpenRouter, 2026) at temper-",
-                         size=10.9, color="#000", bold=False)
+        half = TextBlock(
+            page=0,
+            rect=pymupdf.Rect(163, 620, x1, 631),
+            line_rects=[pymupdf.Rect(163, 620, x1, 631)],
+            text="Models are served through OpenRouter (OpenRouter, 2026) at temper-",
+            size=10.9,
+            color="#000",
+            bold=False,
+        )
         lines = [pymupdf.Rect(90, 634 + 13 * i, 522, 645 + 13 * i) for i in range(3)]
-        below = TextBlock(page=0, rect=pymupdf.Rect(90, 634, 522, 672), line_rects=lines,
-                          text="ature 0 with fixed seeds: all scenarios and every memory design.",
-                          size=10.9, color="#000", bold=False)
+        below = TextBlock(
+            page=0,
+            rect=pymupdf.Rect(90, 634, 522, 672),
+            line_rects=lines,
+            text="ature 0 with fixed seeds: all scenarios and every memory design.",
+            size=10.9,
+            color="#000",
+            bold=False,
+        )
         return [half, below]
 
     assert len(_merge_continuations(blocks())) == 1
@@ -5029,12 +6074,27 @@ def test_a_line_inside_an_open_bracket_runs_on_below():
 
     def blk(text, y, rows=2):
         lines = [pymupdf.Rect(72, y + 24 * i, 540, y + 24 * i + 12) for i in range(rows)]
-        return TextBlock(page=0, rect=pymupdf.Rect(72, y, 540, y + 24 * rows - 12), line_rects=lines,
-                         text=text, size=12.0, color="#000", bold=False)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(72, y, 540, y + 24 * rows - 12),
+            line_rects=lines,
+            text=text,
+            size=12.0,
+            color="#000",
+            bold=False,
+        )
 
     head = "the influence of the prior decreases with sample size (see e.g."
-    assert len(_merge_continuations([blk(head, 100), blk("Ghosal et al., 2000; Walker, 2004). The density follows.", 148)])) == 1
-    assert len(_merge_continuations([blk(head, 100), blk("Ghosal et al. Then the second sentence starts here.", 148)])) == 2
+    assert (
+        len(
+            _merge_continuations([blk(head, 100), blk("Ghosal et al., 2000; Walker, 2004). The density follows.", 148)])
+        )
+        == 1
+    )
+    assert (
+        len(_merge_continuations([blk(head, 100), blk("Ghosal et al. Then the second sentence starts here.", 148)]))
+        == 2
+    )
 
 
 def test_a_line_after_an_inline_formula_wraps_to_the_column_edge():
@@ -5043,12 +6103,25 @@ def test_a_line_after_an_inline_formula_wraps_to_the_column_edge():
     from app.formats.pdf_extract import _merge_continuations
 
     def blocks(x1=521, text="This no longer agrees with the asymptotic distribution of the MLE under"):
-        half = TextBlock(page=0, rect=pymupdf.Rect(154, 414, x1, 425), line_rects=[pymupdf.Rect(154, 414, x1, 425)],
-                         text=text, size=10.9, color="#000", bold=False)
+        half = TextBlock(
+            page=0,
+            rect=pymupdf.Rect(154, 414, x1, 425),
+            line_rects=[pymupdf.Rect(154, 414, x1, 425)],
+            text=text,
+            size=10.9,
+            color="#000",
+            bold=False,
+        )
         lines = [pymupdf.Rect(89, 434 + 22 * i, 522, 445 + 22 * i) for i in range(3)]
-        below = TextBlock(page=0, rect=pymupdf.Rect(89, 434, 522, 489), line_rects=lines,
-                          text="model misspecification, which although still centered at the same point.",
-                          size=10.9, color="#000", bold=False)
+        below = TextBlock(
+            page=0,
+            rect=pymupdf.Rect(89, 434, 522, 489),
+            line_rects=lines,
+            text="model misspecification, which although still centered at the same point.",
+            size=10.9,
+            color="#000",
+            bold=False,
+        )
         return [half, below]
 
     assert len(_merge_continuations(blocks())) == 1
@@ -5066,8 +6139,15 @@ def test_layout_model_regions_join_a_paragraph_cut_by_a_formula():
 
     def blk(text, y, rows=3, x0=72):
         lines = [pymupdf.Rect(x0, y + 12 * i, 540, y + 12 * i + 10) for i in range(rows)]
-        return TextBlock(page=0, rect=pymupdf.Rect(x0, y, 540, lines[-1].y1), line_rects=lines,
-                         text=text, size=10.0, color="#000", bold=False)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(x0, y, 540, lines[-1].y1),
+            line_rects=lines,
+            text=text,
+            size=10.0,
+            color="#000",
+            bold=False,
+        )
 
     box = [pymupdf.Rect(70, 500, 545, 600)]
 
@@ -5083,8 +6163,13 @@ def test_layout_model_regions_join_a_paragraph_cut_by_a_formula():
     assert not joined(head, tail, regions=[])
     near = blk("1E is the indicator function of that set, and we let the map act on it.", 541, rows=2)
     assert not joined(head, near)
-    near.span_lines = [[{"text": "1E", "font": "CMMI10", "flags": 0, "size": 10},
-                        {"text": " is the indicator function of that set,", "font": "Times", "flags": 0, "size": 10}], []]
+    near.span_lines = [
+        [
+            {"text": "1E", "font": "CMMI10", "flags": 0, "size": 10},
+            {"text": " is the indicator function of that set,", "font": "Times", "flags": 0, "size": 10},
+        ],
+        [],
+    ]
     assert joined(head, near)
     ended = blk("We show that the dimension remains similar over time under fixed conditions.", 505)
     assert not joined(ended, blk("We demonstrate that aging changes the dimension of the data.", 552, rows=2))
@@ -5130,12 +6215,16 @@ def test_an_indented_first_line_cut_by_a_margin_note_runs_on_after_a_full_stop()
         return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=10.0, color="#000", bold=False)
 
     body = "Words of a paragraph run across the column and wrap onto the next line. It ends here."
-    paragraphs = [blk(body, 100 + 48 * i, [(175.1, 493.2), (160.2, 493.2), (160.2, 493.2), (160.2, 300)])
-                  for i in range(4)]
+    paragraphs = [
+        blk(body, 100 + 48 * i, [(175.1, 493.2), (160.2, 493.2), (160.2, 493.2), (160.2, 300)]) for i in range(4)
+    ]
     assert _indents_paragraphs(paragraphs)
     head = blk("For example in batch training we compute the gradient over the entire dataset.", 292, [(175.1, 493.2)])
-    tail = blk("By seeing so many examples, batch training offers a superb estimate of the direction.", 304,
-               [(160.2, 493.2), (160.2, 493.2), (160.2, 426.5)])
+    tail = blk(
+        "By seeing so many examples, batch training offers a superb estimate of the direction.",
+        304,
+        [(160.2, 493.2), (160.2, 493.2), (160.2, 426.5)],
+    )
     merged = _merge_continuations([*paragraphs, head, tail])
     assert len(merged) == 5 and merged[-1].text.startswith("For example") and merged[-1].text.endswith("direction.")
 
@@ -5156,29 +6245,59 @@ def test_a_numbered_example_under_a_full_line_stays_on_its_own():
         return TextBlock(page=page, rect=rect, line_rects=lines, text=text, size=10.0, color="#000", bold=False)
 
     body = "Words of a paragraph run across the column and wrap onto the next line. It ends here."
-    paragraphs = [blk(body, 100 + 48 * i, [(157.1, 475.2), (142.2, 475.2), (142.2, 475.2), (142.2, 300)])
-                  for i in range(4)]
-    lead = blk("The relation between tenses and time is not simple. The present tense can be used to refer "
-               "to a future event, as in this example:", 292, [(157.1, 475.2), (142.2, 475.2)])
+    paragraphs = [
+        blk(body, 100 + 48 * i, [(157.1, 475.2), (142.2, 475.2), (142.2, 475.2), (142.2, 300)]) for i in range(4)
+    ]
+    lead = blk(
+        "The relation between tenses and time is not simple. The present tense can be used to refer "
+        "to a future event, as in this example:",
+        292,
+        [(157.1, 475.2), (142.2, 475.2)],
+    )
     example = blk("(21.15) Ok, we fly from San Francisco to Boston at 10.", 320, [(142.2, 364.1)])
-    after = blk("Here the present tense refers to an event that will happen later, and the sentence is fine.", 337,
-                [(142.2, 475.2), (142.2, 475.2), (142.2, 300)])
+    after = blk(
+        "Here the present tense refers to an event that will happen later, and the sentence is fine.",
+        337,
+        [(142.2, 475.2), (142.2, 475.2), (142.2, 300)],
+    )
     merged = _merge_continuations([*paragraphs, lead, example, after])
     assert [block.text[:7] for block in merged[-3:]] == ["The rel", "(21.15)", "Here th"]
     # 正文里引用的式子折到行首，后面小写接着写，按正常行距紧贴着上一行：是同一段
-    cited = blk("For the odd generators we put a = 2j − 1 and b = 2j and then apply the two relations. By", 292,
-                [(157.1, 475.2), (142.2, 475.2)])
-    wrapped = blk("(4.5) and (4.6), we have the identity that the paper needs in the next section.", 316,
-                  [(142.2, 475.2), (142.2, 300)])
+    cited = blk(
+        "For the odd generators we put a = 2j − 1 and b = 2j and then apply the two relations. By",
+        292,
+        [(157.1, 475.2), (142.2, 475.2)],
+    )
+    wrapped = blk(
+        "(4.5) and (4.6), we have the identity that the paper needs in the next section.",
+        316,
+        [(142.2, 475.2), (142.2, 300)],
+    )
     assert len(_merge_continuations([*paragraphs, cited, wrapped])) == 5
 
-    ended = blk("(24.31) IBM announced a new machine translation product yesterday. They have been working on it "
-                "for 20 years.", 660, [(142.2, 475.2), (174.1, 400)])
-    second = blk("Second, singular they has become much more common, in which they is used to describe singular "
-                 "individuals.", 110, [(142.2, 475.2), (142.2, 475.2), (142.2, 300)], page=1)
+    ended = blk(
+        "(24.31) IBM announced a new machine translation product yesterday. They have been working on it for 20 years.",
+        660,
+        [(142.2, 475.2), (174.1, 400)],
+    )
+    second = blk(
+        "Second, singular they has become much more common, in which they is used to describe singular individuals.",
+        110,
+        [(142.2, 475.2), (142.2, 475.2), (142.2, 300)],
+        page=1,
+    )
     assert not _can_continue(ended, second, 10, None, flush=True)
-    assert _can_continue(blk("However, algorithms cannot enforce number agreement too strictly, as the "
-                             "example shows.", 660, [(142.2, 475.2), (142.2, 400)]), second, 10, None, flush=True)
+    assert _can_continue(
+        blk(
+            "However, algorithms cannot enforce number agreement too strictly, as the example shows.",
+            660,
+            [(142.2, 475.2), (142.2, 400)],
+        ),
+        second,
+        10,
+        None,
+        flush=True,
+    )
 
 
 def test_a_cross_page_unit_with_a_display_in_between_is_written_apart():
@@ -5203,8 +6322,15 @@ def test_a_cross_page_unit_with_a_display_in_between_is_written_apart():
 
     def apart(page0, page1, words0, shown=frozenset(), covered=frozenset()):
         by_page = {0: [host, *page0], 1: [tail, *page1]}
-        return _seam_apart([host, tail], by_page, [geo, geo], {id(header), *covered}, set(shown), 10.0,
-                           lambda pno: words0 if pno == 0 else [])
+        return _seam_apart(
+            [host, tail],
+            by_page,
+            [geo, geo],
+            {id(header), *covered},
+            set(shown),
+            10.0,
+            lambda pno: words0 if pno == 0 else [],
+        )
 
     assert not apart([note], [header], [page_number])
     assert apart([], [header], [display, page_number])
@@ -5224,11 +6350,13 @@ def test_a_document_that_spaces_paragraphs_joins_blocks_at_the_normal_line_gap()
     size, pitch = 10.9, 21.0
 
     def blk(text, y, rows=3, last_x1=522):
-        lines = [pymupdf.Rect(89, y + pitch * i, 522 if i < rows - 1 else last_x1, y + pitch * i + 11)
-                 for i in range(rows)]
+        lines = [
+            pymupdf.Rect(89, y + pitch * i, 522 if i < rows - 1 else last_x1, y + pitch * i + 11) for i in range(rows)
+        ]
         rect = pymupdf.Rect(89, y, 522, lines[-1].y1)
-        return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=size, color="#000",
-                         bold=False, line_gap=10 / size)
+        return TextBlock(
+            page=0, rect=rect, line_rects=lines, text=text, size=size, color="#000", bold=False, line_gap=10 / size
+        )
 
     def page(gap):
         blocks, y = [], 60.0
@@ -5236,8 +6364,9 @@ def test_a_document_that_spaces_paragraphs_joins_blocks_at_the_normal_line_gap()
             blocks.append(blk("This paragraph discusses the prior and the likelihood in turn.", y, last_x1=300))
             y = blocks[-1].rect.y1 + 16
         blocks.append(blk("These assumptions are almost never satisfied in practice.", y))
-        blocks.append(blk("As a result, such Bayesian analyses are conducted with care.", blocks[-1].rect.y1 + gap,
-                          last_x1=300))
+        blocks.append(
+            blk("As a result, such Bayesian analyses are conducted with care.", blocks[-1].rect.y1 + gap, last_x1=300)
+        )
         return blocks
 
     assert len(_merge_continuations(page(gap=10))) == 5
@@ -5252,8 +6381,11 @@ def test_a_full_line_in_a_document_that_indents_paragraphs_runs_on_below():
 
     def blk(text, y, rows):
         # 一行可以是几截：[(x0, x1), ...]
-        lines = [pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 12)
-                 for i, row in enumerate(rows) for x0, x1 in (row if isinstance(row, list) else [row])]
+        lines = [
+            pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 12)
+            for i, row in enumerate(rows)
+            for x0, x1 in (row if isinstance(row, list) else [row])
+        ]
         rect = pymupdf.Rect(lines[0])
         for line in lines:
             rect |= line
@@ -5286,16 +6418,23 @@ def test_theorem_labels_do_not_count_as_flush_paragraphs():
     from app.formats.pdf_extract import _body_measure
 
     def blk(text, y, rows):
-        lines = [pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 12)
-                 for i, row in enumerate(rows) for x0, x1 in (row if isinstance(row, list) else [row])]
+        lines = [
+            pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 12)
+            for i, row in enumerate(rows)
+            for x0, x1 in (row if isinstance(row, list) else [row])
+        ]
         rect = pymupdf.Rect(lines[0])
         for line in lines:
             rect |= line
         return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=10.0, color="#000", bold=False)
 
     body = "Words of a paragraph run across the column and wrap onto the next line. It ends here."
-    labels = ["Lemma 3.4. Let U be a span.", "Proposition 2.4. Let T be bounded.", "2.1. Bosonic Fourier transform.",
-              "Theorem 3.3. Suppose that T is linear."]
+    labels = [
+        "Lemma 3.4. Let U be a span.",
+        "Proposition 2.4. Let T be bounded.",
+        "2.1. Bosonic Fourier transform.",
+        "Theorem 3.3. Suppose that T is linear.",
+    ]
     blocks = []
     for i in range(3):
         blocks.append(blk(body, 100 + 96 * i, [(87, 540), (72, 300)]))
@@ -5325,8 +6464,10 @@ def test_one_query_per_line_in_one_block_is_cut_into_lines():
     assert _cut_line_list([0, 1, 2, 3], queries, [item[1] for item in queries]) == [[0], [1], [2], [3]]
     # 绕图、表格里的段落比栏窄，参差地折行，下一行的第一个词都放不进最长的那一行
     paragraph = [
-        item("Policies, processes,", 100, 240), item("procedures, and", 111, 225),
-        item("practices across the", 122, 238), item("organization related", 133, 236),
+        item("Policies, processes,", 100, 240),
+        item("procedures, and", 111, 225),
+        item("practices across the", 122, 238),
+        item("organization related", 133, 236),
     ]
     assert _cut_line_list([0, 1, 2, 3], paragraph, [item[1] for item in paragraph]) == [[0, 1, 2, 3]]
     # 绕着右边的图排的几行止于图边，下面一行排满全栏
@@ -5355,8 +6496,15 @@ def test_rows_of_a_table_or_a_list_with_one_opening_are_cut_into_lines():
     table = [
         item("hen", 178.1, 414.7, 192.5),
         row([("+female,", 212.4, 250.1), ("+chicken,", 259.5, 302.9), ("+adult", 311.8, 343.2)], 416.0),
-        row([("rooster", 178.1, 209.4), ("-female,", 212.4, 250.1), ("+chicken,", 259.5, 302.9),
-             ("+adult", 311.8, 343.2)], 426.7),
+        row(
+            [
+                ("rooster", 178.1, 209.4),
+                ("-female,", 212.4, 250.1),
+                ("+chicken,", 259.5, 302.9),
+                ("+adult", 311.8, 343.2),
+            ],
+            426.7,
+        ),
         item("chick", 178.1, 438.6, 198.8),
         row([("+chicken,", 212.4, 255.8), ("-adult", 264.7, 296.1)], 439.9),
     ]
@@ -5380,37 +6528,48 @@ def test_cjk_wrap_merges_and_short_labels_stay():
 
     def blk(text, y, x0=40.0, x1=280.0, page=0, size=10.0):
         rect = pymupdf.Rect(x0, y, x1, y + 12)
-        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text,
-                         size=size, color="#000", bold=False)
+        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
 
-    wrapped = _merge_continuations([
-        blk("这是一行已经写到栏边还没有句号的正文", 100),
-        blk("下一行从左缘接着写。", 114, x1=180),
-    ])
+    wrapped = _merge_continuations(
+        [
+            blk("这是一行已经写到栏边还没有句号的正文", 100),
+            blk("下一行从左缘接着写。", 114, x1=180),
+        ]
+    )
     assert len(wrapped) == 1
     assert wrapped[0].text.endswith("接着写。")
 
-    labels = _merge_continuations([
-        blk("姓名", 100, x1=70),
-        blk("年龄", 114, x1=70),
-    ])
+    labels = _merge_continuations(
+        [
+            blk("姓名", 100, x1=70),
+            blk("年龄", 114, x1=70),
+        ]
+    )
     assert len(labels) == 2
 
-    indented = _merge_continuations([
-        blk("这是一行已经写到栏边还没有句号的正文", 100),
-        blk("新的一段从缩进开始写起。", 114, x0=62, x1=220),
-    ])
+    indented = _merge_continuations(
+        [
+            blk("这是一行已经写到栏边还没有句号的正文", 100),
+            blk("新的一段从缩进开始写起。", 114, x0=62, x1=220),
+        ]
+    )
     assert len(indented) == 2
 
-    pages = _cross_page_units([
-        blk("上一页在这里被切断还没写完", 700, page=0),
-        blk("下一页从同一边距继续。", 60, page=1),
-    ], 10.0)
+    pages = _cross_page_units(
+        [
+            blk("上一页在这里被切断还没写完", 700, page=0),
+            blk("下一页从同一边距继续。", 60, page=1),
+        ],
+        10.0,
+    )
     assert any(len(unit) == 2 for unit in pages)
-    heading = _cross_page_units([
-        blk("上一页在这里被切断还没写完", 700, page=0),
-        blk("1 引言", 60, page=1),
-    ], 10.0)
+    heading = _cross_page_units(
+        [
+            blk("上一页在这里被切断还没写完", 700, page=0),
+            blk("1 引言", 60, page=1),
+        ],
+        10.0,
+    )
     assert all(len(unit) == 1 for unit in heading)
 
 
@@ -5421,26 +6580,31 @@ def test_caption_label_without_colon_merges():
 
     def blk(text, x0, y0, x1, size=10.0):
         rect = pymupdf.Rect(x0, y0, x1, y0 + 10)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text,
-                         size=size, color="#000", bold=False)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
 
-    zh = _merge_caption_fragments([
-        blk("图 2", 60, 100, 88),
-        blk("衰减曲线示意。", 60, 112, 160),
-    ])
+    zh = _merge_caption_fragments(
+        [
+            blk("图 2", 60, 100, 88),
+            blk("衰减曲线示意。", 60, 112, 160),
+        ]
+    )
     assert len(zh) == 1
     assert zh[0].text == "图 2衰减曲线示意。"
 
-    fig = _merge_caption_fragments([
-        blk("Fig. 1.", 60, 100, 98),
-        blk("Examples of decay", 104, 100, 220),
-    ])
+    fig = _merge_caption_fragments(
+        [
+            blk("Fig. 1.", 60, 100, 98),
+            blk("Examples of decay", 104, 100, 220),
+        ]
+    )
     assert len(fig) == 1
 
-    title = _merge_caption_fragments([
-        blk("Introduction", 40, 100, 130, size=12.0),
-        blk("Scholarly works.", 40, 130, 150, size=10.0),
-    ])
+    title = _merge_caption_fragments(
+        [
+            blk("Introduction", 40, 100, 130, size=12.0),
+            blk("Scholarly works.", 40, 130, 150, size=10.0),
+        ]
+    )
     assert len(title) == 2
 
 
@@ -5451,9 +6615,15 @@ def test_caption_fragments_merge_into_one_block():
     from app.formats.pdf_extract import _merge_caption_fragments
 
     def blk(text, x0, y0, x1, size=10.0):
-        return TextBlock(page=0, rect=pymupdf.Rect(x0, y0, x1, y0 + 10),
-                         line_rects=[pymupdf.Rect(x0, y0, x1, y0 + 10)],
-                         text=text, size=size, color="#000", bold=False)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(x0, y0, x1, y0 + 10),
+            line_rects=[pymupdf.Rect(x0, y0, x1, y0 + 10)],
+            text=text,
+            size=size,
+            color="#000",
+            bold=False,
+        )
 
     blocks = [
         blk("Figure 2:", 60, 100, 105),
@@ -5466,14 +6636,15 @@ def test_caption_fragments_merge_into_one_block():
     assert len(merged[0].line_rects) == 3
 
     # 标题 + 正文（无冒号、大写开头）不合并
-    b2 = [blk("Introduction", 40, 100, 130, size=12.0),
-          blk("Scholarly works.", 40, 130, 130, size=10.0)]
+    b2 = [blk("Introduction", 40, 100, 130, size=12.0), blk("Scholarly works.", 40, 130, 130, size=10.0)]
     assert len(_merge_caption_fragments(b2)) == 2
 
     # 表格行（大写开头、无冒号）不合并
-    b3 = [blk("Always Sampling", 60, 100, 160),
-          blk("Scheduled Sampling 1", 60, 112, 190),
-          blk("Baseline LSTM", 60, 124, 150)]
+    b3 = [
+        blk("Always Sampling", 60, 100, 160),
+        blk("Scheduled Sampling 1", 60, 112, 190),
+        blk("Baseline LSTM", 60, 124, 150),
+    ]
     assert len(_merge_caption_fragments(b3)) == 3
 
 
@@ -5483,13 +6654,18 @@ def test_heading_beside_the_first_line_is_not_absorbed():
     from app.formats.pdf_extract import _merge_visual_lines
 
     memo_line = pymupdf.Rect(40, 100, 72, 111)
-    memo = TextBlock(page=0, rect=memo_line, line_rects=[memo_line], text="Memo.",
-                     size=9, color="#000", bold=False)
+    memo = TextBlock(page=0, rect=memo_line, line_rects=[memo_line], text="Memo.", size=9, color="#000", bold=False)
     first = pymupdf.Rect(80, 100, 220, 111)
     later = pymupdf.Rect(40, 114, 220, 125)
-    para = TextBlock(page=0, rect=first | later, line_rects=[first, later],
-                     text="The space of plan alternatives is large.",
-                     size=9, color="#000", bold=False)
+    para = TextBlock(
+        page=0,
+        rect=first | later,
+        line_rects=[first, later],
+        text="The space of plan alternatives is large.",
+        size=9,
+        color="#000",
+        bold=False,
+    )
     assert len(_merge_visual_lines([memo, para])) == 2
 
 
@@ -5499,14 +6675,35 @@ def test_right_fragment_joins_the_following_line():
     from app.formats.pdf_extract import _merge_line_tails
 
     left_lines = [pymupdf.Rect(40, 100, 180, 112), pymupdf.Rect(40, 112, 90, 124)]
-    left = TextBlock(page=0, rect=left_lines[0] | left_lines[1], line_rects=left_lines,
-                     text="The paragraph already ended.", size=9, color="#000", bold=False)
+    left = TextBlock(
+        page=0,
+        rect=left_lines[0] | left_lines[1],
+        line_rects=left_lines,
+        text="The paragraph already ended.",
+        size=9,
+        color="#000",
+        bold=False,
+    )
     frag_line = pymupdf.Rect(100, 112, 180, 124)
-    fragment = TextBlock(page=0, rect=frag_line, line_rects=[frag_line],
-                         text="It is distinguished from", size=9, color="#000", bold=False)
+    fragment = TextBlock(
+        page=0,
+        rect=frag_line,
+        line_rects=[frag_line],
+        text="It is distinguished from",
+        size=9,
+        color="#000",
+        bold=False,
+    )
     next_line = pymupdf.Rect(40, 126, 170, 138)
-    nxt = TextBlock(page=0, rect=next_line, line_rects=[next_line],
-                    text="other optimizers in several ways:", size=9, color="#000", bold=False)
+    nxt = TextBlock(
+        page=0,
+        rect=next_line,
+        line_rects=[next_line],
+        text="other optimizers in several ways:",
+        size=9,
+        color="#000",
+        bold=False,
+    )
     merged = _merge_line_tails([left, fragment, nxt])
     assert len(merged) == 2
     assert merged[0].text == "The paragraph already ended."
@@ -5514,15 +6711,26 @@ def test_right_fragment_joins_the_following_line():
     assert merged[1].text.endswith("several ways:")
 
     shared_lines = [pymupdf.Rect(40, 126, 200, 138), pymupdf.Rect(40, 140, 200, 152)]
-    shared = TextBlock(page=0, rect=shared_lines[0] | shared_lines[1], line_rects=shared_lines,
-                       text="For example the next sentence starts here.",
-                       size=9, color="#000", bold=False)
-    short = TextBlock(page=0, rect=pymupdf.Rect(40, 126, 110, 138),
-                      line_rects=[pymupdf.Rect(40, 126, 110, 138)],
-                      text="expression-specific.", size=9, color="#000", bold=False)
+    shared = TextBlock(
+        page=0,
+        rect=shared_lines[0] | shared_lines[1],
+        line_rects=shared_lines,
+        text="For example the next sentence starts here.",
+        size=9,
+        color="#000",
+        bold=False,
+    )
+    short = TextBlock(
+        page=0,
+        rect=pymupdf.Rect(40, 126, 110, 138),
+        line_rects=[pymupdf.Rect(40, 126, 110, 138)],
+        text="expression-specific.",
+        size=9,
+        color="#000",
+        bold=False,
+    )
     blocked = _merge_line_tails([left, fragment, shared, short])
-    assert all(block.text != "expression-specific." or "distinguished" not in block.text
-               for block in blocked)
+    assert all(block.text != "expression-specific." or "distinguished" not in block.text for block in blocked)
     assert any(block.text == "expression-specific." for block in blocked)
 
 
@@ -5533,40 +6741,60 @@ def test_same_line_sentence_joins_the_paragraph_and_keeps_side_labels():
 
     def line(text, x0, y0, x1, y1, bold=False):
         rect = pymupdf.Rect(x0, y0, x1, y1)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text,
-                         size=9, color="#000", bold=bold)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=9, color="#000", bold=bold)
 
     def para(text, boxes, bold=False):
         rects = [pymupdf.Rect(*box) for box in boxes]
         union = rects[0]
         for rect in rects[1:]:
             union |= rect
-        return TextBlock(page=0, rect=union, line_rects=rects, text=text,
-                         size=9, color="#000", bold=bold)
+        return TextBlock(page=0, rect=union, line_rects=rects, text=text, size=9, color="#000", bold=bold)
 
-    intro = para("In this paper we describe Orca for demanding analytics workloads.",
-                 [(316.8, 307.0, 555.9, 316.0), (316.8, 338.4, 448.3, 347.3)])
-    distinguished = para("It is distinguished from other optimizers in several important ways:",
-                         [(457.3, 338.4, 555.9, 347.3), (316.8, 348.8, 491.7, 357.8)])
-    extensibility = para("Extensibility. Certain optimizations are dealt with as an afterthought.",
-                         [(316.8, 441.9, 555.9, 450.9), (339.2, 483.8, 384.5, 492.7)])
-    multiphase = para("Multi-phase optimizers are notoriously difficult to extend.",
-                      [(394.4, 483.8, 556.0, 492.7), (339.2, 494.2, 555.9, 503.2)])
-    ended = para("In order to derive statistics.",
-                 [(316.8, 386.0, 556.0, 396.0), (316.8, 406.9, 406.2, 415.9)])
+    intro = para(
+        "In this paper we describe Orca for demanding analytics workloads.",
+        [(316.8, 307.0, 555.9, 316.0), (316.8, 338.4, 448.3, 347.3)],
+    )
+    distinguished = para(
+        "It is distinguished from other optimizers in several important ways:",
+        [(457.3, 338.4, 555.9, 347.3), (316.8, 348.8, 491.7, 357.8)],
+    )
+    extensibility = para(
+        "Extensibility. Certain optimizations are dealt with as an afterthought.",
+        [(316.8, 441.9, 555.9, 450.9), (339.2, 483.8, 384.5, 492.7)],
+    )
+    multiphase = para(
+        "Multi-phase optimizers are notoriously difficult to extend.",
+        [(394.4, 483.8, 556.0, 492.7), (339.2, 494.2, 555.9, 503.2)],
+    )
+    ended = para("In order to derive statistics.", [(316.8, 386.0, 556.0, 396.0), (316.8, 406.9, 406.2, 415.9)])
     promise = line("Statistics promise computation is", 416.0, 406.9, 556.0, 415.9)
     specific = line("expression-specific.", 316.8, 417.4, 392.7, 426.4)
-    example = para("For example the next sentence starts here.",
-                   [(401.6, 417.4, 555.9, 426.4), (316.8, 428.0, 556.0, 438.0)])
+    example = para(
+        "For example the next sentence starts here.", [(401.6, 417.4, 555.9, 426.4), (316.8, 428.0, 556.0, 438.0)]
+    )
     label = line("Property Enforcement.", 316.8, 350.0, 426.7, 359.0, bold=True)
-    body = para("Orca includes an extensible framework for describing query requirements.",
-                [(438.2, 350.0, 555.9, 359.0), (316.8, 360.5, 555.9, 369.5)])
+    body = para(
+        "Orca includes an extensible framework for describing query requirements.",
+        [(438.2, 350.0, 555.9, 359.0), (316.8, 360.5, 555.9, 369.5)],
+    )
     diagram = line("Get(T1)%", 360.0, 200.0, 381.0, 209.0)
     diagram2 = line("Get(T2)%", 394.6, 200.0, 416.0, 209.0)
-    merged = _merge_same_line_sentences([
-        intro, distinguished, extensibility, multiphase, label, body,
-        ended, promise, example, specific, diagram, diagram2,
-    ])
+    merged = _merge_same_line_sentences(
+        [
+            intro,
+            distinguished,
+            extensibility,
+            multiphase,
+            label,
+            body,
+            ended,
+            promise,
+            example,
+            specific,
+            diagram,
+            diagram2,
+        ]
+    )
     texts = [block.text for block in merged]
     assert any(text.startswith("In this paper") and "distinguished" in text for text in texts)
     assert any(text.startswith("Extensibility.") and "Multi-phase" in text for text in texts)
@@ -5580,14 +6808,19 @@ def test_same_line_sentence_joins_the_paragraph_and_keeps_side_labels():
     assert any(text == "Get(T2)%" for text in texts)
 
     lead = TextBlock(
-        page=0, rect=pymupdf.Rect(40, 40, 200, 52),
+        page=0,
+        rect=pymupdf.Rect(40, 40, 200, 52),
         line_rects=[pymupdf.Rect(40, 40, 200, 52)],
         text="Modularity. Using a highly extensible abstraction.",
-        size=9, color="#000", bold=False,
-        span_lines=[[
-            {"text": "Modularity.", "font": "CMBX9", "flags": 16},
-            {"text": " Using a highly extensible abstraction.", "font": "CMR9", "flags": 4},
-        ]],
+        size=9,
+        color="#000",
+        bold=False,
+        span_lines=[
+            [
+                {"text": "Modularity.", "font": "CMBX9", "flags": 16},
+                {"text": " Using a highly extensible abstraction.", "font": "CMR9", "flags": 4},
+            ]
+        ],
     )
     assert _with_source_bold(lead, "模块化。借助高度可扩展的抽象。") == "{b}模块化。{/b}借助高度可扩展的抽象。"
     assert _with_source_bold(lead, "{b}模块化。{/b}借助。") == "{b}模块化。{/b}借助。"
@@ -5596,8 +6829,12 @@ def test_same_line_sentence_joins_the_paragraph_and_keeps_side_labels():
     assert _with_source_bold(memo, "备忘录。") == "{b}备忘录。{/b}"
     # 粗体名字后面跟着公式字体的星号角标，整行仍是粗体
     author = line("Jimmy Lei Ba∗", 40, 120, 100, 132, bold=True)
-    author.span_lines = [[{"text": "Jimmy Lei Ba", "font": "NimbusRomNo9L-Medi", "flags": 20},
-                          {"text": "∗", "font": "CMSY7", "flags": 7}]]
+    author.span_lines = [
+        [
+            {"text": "Jimmy Lei Ba", "font": "NimbusRomNo9L-Medi", "flags": 20},
+            {"text": "∗", "font": "CMSY7", "flags": 7},
+        ]
+    ]
     assert _with_source_bold(author, "Jimmy Lei Ba{v1}") == "{b}Jimmy Lei Ba{v1}{/b}"
 
 
@@ -5630,8 +6867,13 @@ def _random_line_blocks(seed: int):
     from app.formats.pdf_blocks import TextBlock
 
     rng = random.Random(seed)
-    texts = ["Alpha beta gamma delta.", "alpha beta gamma delta", "and the model keeps going",
-             "Results are shown here.", "with more words after it"]
+    texts = [
+        "Alpha beta gamma delta.",
+        "alpha beta gamma delta",
+        "and the model keeps going",
+        "Results are shown here.",
+        "with more words after it",
+    ]
     blocks = []
     for _ in range(rng.randint(4, 30)):
         page = rng.choice([0, 1, 2])
@@ -5647,8 +6889,9 @@ def _random_line_blocks(seed: int):
         union = pymupdf.Rect(rects[0])
         for rect in rects[1:]:
             union |= rect
-        blocks.append(TextBlock(page=page, rect=union, line_rects=rects, text=rng.choice(texts),
-                                size=9, color="#000", bold=False))
+        blocks.append(
+            TextBlock(page=page, rect=union, line_rects=rects, text=rng.choice(texts), size=9, color="#000", bold=False)
+        )
     return blocks
 
 
@@ -5695,14 +6938,23 @@ def test_a_displayed_formula_does_not_swallow_the_prose_below_it():
 
     lines = [pymupdf.Rect(117, 145, 173, 158), pymupdf.Rect(178, 145, 253, 165), pymupdf.Rect(254, 157, 257, 164)]
     host = TextBlock(
-        page=0, rect=lines[0] | lines[1] | lines[2], line_rects=lines,
-        text="dNorm(x, X)/dx and dNorm(x, X)/dX ;", size=10, color="#000", bold=False,
+        page=0,
+        rect=lines[0] | lines[1] | lines[2],
+        line_rects=lines,
+        text="dNorm(x, X)/dx and dNorm(x, X)/dX ;",
+        size=10,
+        color="#000",
+        bold=False,
     )
     guest_lines = [pymupdf.Rect(72, 175, 301, 188), pymupdf.Rect(72, 187, 301, 200)]
     guest = TextBlock(
-        page=0, rect=guest_lines[0] | guest_lines[1], line_rects=guest_lines,
+        page=0,
+        rect=guest_lines[0] | guest_lines[1],
+        line_rects=guest_lines,
         text="ignoring the latter term would lead to the explosion described above.",
-        size=10, color="#000", bold=False,
+        size=10,
+        color="#000",
+        bold=False,
     )
     assert not _continues_fragment(host, guest)
 
@@ -5715,15 +6967,23 @@ def test_finished_condition_line_does_not_swallow_the_next_paragraph():
     formula = pymupdf.Rect(254.4, 329.7, 333.6, 340.5)
     condition = pymupdf.Rect(343.5, 329.9, 384.8, 339.9)
     host = TextBlock(
-        page=0, rect=formula | condition, line_rects=[formula, condition],
-        text="f(ht-1, yt-1, xt; θ) otherwise.", size=10, color="#000", bold=False,
+        page=0,
+        rect=formula | condition,
+        line_rects=[formula, condition],
+        text="f(ht-1, yt-1, xt; θ) otherwise.",
+        size=10,
+        color="#000",
+        bold=False,
     )
-    guest_lines = [pymupdf.Rect(108.0, 349.4, 504.0, 361.1),
-                   pymupdf.Rect(108.0, 360.6, 305.0, 370.5)]
+    guest_lines = [pymupdf.Rect(108.0, 349.4, 504.0, 361.1), pymupdf.Rect(108.0, 360.6, 305.0, 370.5)]
     guest = TextBlock(
-        page=0, rect=guest_lines[0] | guest_lines[1], line_rects=guest_lines,
+        page=0,
+        rect=guest_lines[0] | guest_lines[1],
+        line_rects=guest_lines,
         text="where oh is a vector of 0's with same dimensionality as ht's.",
-        size=10, color="#000", bold=False,
+        size=10,
+        color="#000",
+        bold=False,
     )
     assert not _continues_fragment(host, guest)
     merged = _merge_same_line_sentences([host, guest])
@@ -5733,14 +6993,23 @@ def test_finished_condition_line_does_not_swallow_the_next_paragraph():
     left = pymupdf.Rect(316.8, 406.9, 406.2, 415.9)
     right = pymupdf.Rect(416.0, 406.9, 556.0, 415.9)
     open_host = TextBlock(
-        page=0, rect=left | right, line_rects=[left, right],
+        page=0,
+        rect=left | right,
+        line_rects=[left, right],
         text="derive statistics. Statistics promise computation is",
-        size=9, color="#000", bold=False,
+        size=9,
+        color="#000",
+        bold=False,
     )
     next_line = pymupdf.Rect(316.8, 417.4, 392.7, 426.4)
     nxt = TextBlock(
-        page=0, rect=next_line, line_rects=[next_line],
-        text="expression-specific.", size=9, color="#000", bold=False,
+        page=0,
+        rect=next_line,
+        line_rects=[next_line],
+        text="expression-specific.",
+        size=9,
+        color="#000",
+        bold=False,
     )
     assert _continues_fragment(open_host, nxt)
     joined = _merge_same_line_sentences([open_host, nxt])
@@ -5761,13 +7030,19 @@ def test_cjk_bold_strokes_once(tmp_path):
     doc.close()
     rect = pymupdf.Rect(40, 40, 280, 80)
     block = TextBlock(
-        page=0, rect=rect, line_rects=[rect],
+        page=0,
+        rect=rect,
+        line_rects=[rect],
         text="Modularity. Using a highly extensible abstraction of metadata.",
-        size=9, color="#000000", bold=False,
-        span_lines=[[
-            {"text": "Modularity.", "font": "CMBX9", "flags": 16},
-            {"text": " Using a highly extensible abstraction of metadata.", "font": "CMR9", "flags": 4},
-        ]],
+        size=9,
+        color="#000000",
+        bold=False,
+        span_lines=[
+            [
+                {"text": "Modularity.", "font": "CMBX9", "flags": 16},
+                {"text": " Using a highly extensible abstraction of metadata.", "font": "CMR9", "flags": 4},
+            ]
+        ],
     )
     out = _render_translated(src, [block], ["模块化。借助高度可扩展的抽象来描述元数据。"], "zh-CN")
     text = out[0].get_text()
@@ -5784,35 +7059,34 @@ def test_shared_baseline_continuation_is_one_translation():
 
     def line(text, x0, y0, x1, y1):
         rect = pymupdf.Rect(x0, y0, x1, y1)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text,
-                         size=9, color="#000", bold=False)
+        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=9, color="#000", bold=False)
 
     def para(text, lines):
         rects = [pymupdf.Rect(*box) for box in lines]
         union = rects[0]
         for rect in rects[1:]:
             union |= rect
-        return TextBlock(page=0, rect=union, line_rects=rects, text=text,
-                         size=9, color="#000", bold=False)
+        return TextBlock(page=0, rect=union, line_rects=rects, text=text, size=9, color="#000", bold=False)
 
-    ended = para("In order to derive statistics.", [(316.8, 386.0, 556.0, 396.0),
-                                                    (316.8, 406.9, 406.2, 415.9)])
+    ended = para("In order to derive statistics.", [(316.8, 386.0, 556.0, 396.0), (316.8, 406.9, 406.2, 415.9)])
     promise = line("Statistics promise computation is", 416.0, 406.9, 556.0, 415.9)
     specific = line("expression-specific.", 316.8, 417.4, 392.7, 426.4)
-    example = para("For example the next sentence starts here.",
-                   [(401.6, 417.4, 555.9, 426.4), (316.8, 428.0, 556.0, 438.0)])
+    example = para(
+        "For example the next sentence starts here.", [(401.6, 417.4, 555.9, 426.4), (316.8, 428.0, 556.0, 438.0)]
+    )
     figure = para("Figure 5 ends.", [(316.8, 616.0, 556.0, 626.0), (316.8, 626.6, 346.0, 635.6)])
     requests = line("For example, InnerJoin(T1,T2) on (a=b) requests", 353.5, 626.6, 555.9, 635.6)
     histograms = line("histograms on T1.a and T2.b.", 316.8, 637.1, 441.3, 646.0)
-    requested = para("The requested histograms are used later.",
-                     [(449.4, 637.1, 555.9, 646.0), (316.8, 648.0, 556.0, 658.0)])
+    requested = para(
+        "The requested histograms are used later.", [(449.4, 637.1, 555.9, 646.0), (316.8, 648.0, 556.0, 658.0)]
+    )
     heading = line("(2) Statistics Derivation.", 316.8, 200.0, 435.3, 212.0)
-    beside = para("At the end of exploration the optimizer stops.",
-                  [(444.4, 200.0, 556.0, 212.0), (316.8, 214.0, 556.0, 226.0)])
+    beside = para(
+        "At the end of exploration the optimizer stops.", [(444.4, 200.0, 556.0, 212.0), (316.8, 214.0, 556.0, 226.0)]
+    )
     # 另一栏会插在半句和续行中间，而且已经写到更下面。不能因此把续行丢掉。
     other_column = line("ORDER BY T1.a where the distribution is hashed.", 53.8, 434.7, 280.0, 446.0)
-    blocks = [heading, beside, ended, promise, example, other_column, specific,
-              figure, requests, requested, histograms]
+    blocks = [heading, beside, ended, promise, example, other_column, specific, figure, requests, requested, histograms]
     merged = _merge_line_tails(blocks)
     assert any(block.text == "expression-specific." for block in merged)
     assert any(block.text == "histograms on T1.a and T2.b." for block in merged)
@@ -5833,8 +7107,7 @@ def test_column_wrap_joins_when_geometry_misses_the_gutter():
 
     def blk(text, x0, y, page=0, x1=None):
         rect = pymupdf.Rect(x0, y, x1 if x1 is not None else x0 + 180, y + 12)
-        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text,
-                         size=9, color="#000", bold=False)
+        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text, size=9, color="#000", bold=False)
 
     wide = PageGeometry(600, (Column(40, 560),), ())
     filler = blk("Earlier sentence in the left column ends.", 40, 660)
@@ -5845,18 +7118,24 @@ def test_column_wrap_joins_when_geometry_misses_the_gutter():
     units = _cross_page_units([filler, host, caption, tail, later], 9.0, geometries=[wide])
     assert [unit for unit in units if len(unit) == 2] == [[host, tail]]
     # 不传几何时，同页两栏仍按原来的规则分开
-    assert all(len(unit) == 1 for unit in _cross_page_units(
-        [filler, host, caption, tail, later], 9.0,
-    ))
+    assert all(
+        len(unit) == 1
+        for unit in _cross_page_units(
+            [filler, host, caption, tail, later],
+            9.0,
+        )
+    )
 
-    listing = blk("<dxl:Metadata SystemIds=\"0\">", 40, 40, page=1)
+    listing = blk('<dxl:Metadata SystemIds="0">', 40, 40, page=1)
     code = blk("1 0x000e8106df gpos::CException::Raise", 40, 56, page=1)
     prose = blk("tomer issues in the optimizer.", 40, 80, page=1)
     prose2 = blk("The dump can be replayed later.", 40, 96, page=1)
     cus = blk("reproduce and debug cus-", 300, 700)
     cus2 = blk("The tool captures the optimizer state.", 300, 660)
     joined = _cross_page_units(
-        [cus2, cus, listing, code, prose, prose2], 9.0, geometries=[wide, wide],
+        [cus2, cus, listing, code, prose, prose2],
+        9.0,
+        geometries=[wide, wide],
     )
     assert [unit for unit in joined if len(unit) == 2] == [[cus, prose]]
 
@@ -5874,10 +7153,15 @@ def test_a_column_continues_below_the_table_at_the_top_of_the_next_column():
         return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=10, color="#000", bold=False)
 
     two = PageGeometry(600, (Column(72, 290), Column(307, 526)), (), reads_in_columns=True)
-    left = [blk("Following standard practice, we formulate this as a tagging task", 72, 600, 290, rows=6),
-            blk("include the maximal context and do not use a CRF", 72, 670, 290, rows=4)]
-    table = [blk("System", 317, 67, 343), blk("Fine-tuning approach", 317, 118, 394),
-             blk("Feature-based approach (BERT)", 317, 153, 450)]
+    left = [
+        blk("Following standard practice, we formulate this as a tagging task", 72, 600, 290, rows=6),
+        blk("include the maximal context and do not use a CRF", 72, 670, 290, rows=4),
+    ]
+    table = [
+        blk("System", 317, 67, 343),
+        blk("Fine-tuning approach", 317, 118, 394),
+        blk("Feature-based approach (BERT)", 317, 153, 450),
+    ]
     caption = blk("Table 7: CoNLL-2003 Named Entity Recognition results.", 307, 236, 526, rows=4)
     tail = blk("layer in the output. We use the representation of the first sub-token", 307, 290, 526, rows=3)
     later = blk("To ablate the fine-tuning approach, we apply the feature-based approach", 307, 330, 526, rows=5)
@@ -5898,15 +7182,19 @@ def test_a_column_of_one_paragraph_still_continues_into_the_next_column():
 
     abstract = blk("Oddly satisfying videos can evoke strong viewer responses in many ways.", 83, 240, 280, rows=20)
     intro = blk("Accordingly, Oddly Satisfying Video Emotion Anal-", 63, 530, 290, rows=17)
-    right = [blk("ysis (OSVEA) requires models to move beyond recognizing objects.", 307, 220, 526, rows=20),
-             blk("To address the lack of a dataset, we construct one and annotate it.", 307, 430, 526, rows=20)]
+    right = [
+        blk("ysis (OSVEA) requires models to move beyond recognizing objects.", 307, 220, 526, rows=20),
+        blk("To address the lack of a dataset, we construct one and annotate it.", 307, 430, 526, rows=20),
+    ]
     units = _cross_page_units([abstract, intro, *right], 10.0, geometries=[])
     assert [unit for unit in units if len(unit) == 2] == [[intro, right[0]]]
 
     author = blk("Shixiang Zhu", 376, 162, 442)
     office = blk("Carnegie Mellon University", 350, 174, 468)
-    left = [blk("Generative conformal prediction builds uncertainty sets from samples.", 83, 240, 280, rows=30),
-            blk("allowing the set to reflect complex or multimodal predictive distributions", 63, 623, 290, rows=10)]
+    left = [
+        blk("Generative conformal prediction builds uncertainty sets from samples.", 83, 240, 280, rows=30),
+        blk("allowing the set to reflect complex or multimodal predictive distributions", 63, 623, 290, rows=10),
+    ]
     tail = blk("(Wang et al., 2023b). Probabilistic conformal prediction samples outputs.", 307, 209, 526, rows=6)
     later = blk("This efficiency, however, depends on drawing enough samples per input.", 307, 275, 526, rows=20)
     units = _cross_page_units([author, office, *left, tail, later], 10.0, geometries=[])
@@ -5934,10 +7222,24 @@ def test_column_tail_drawn_before_its_host_keeps_the_paragraph(tmp_path):
 
     para(320, 80, ["continues the gamma sentence on the right side", "with more words that end with a stop."])
     para(320, 200, ["Delta paragraph in the right column is here", "and finishes with a final stop."])
-    para(50, 80, ["Alpha paragraph text that fills the left column", "and keeps going for a few more words here.",
-                  "It ends with a full stop at the end."])
-    para(50, 200, ["Beta paragraph text that also fills the column", "and keeps going for several more words.",
-                   "It also ends properly with a stop."])
+    para(
+        50,
+        80,
+        [
+            "Alpha paragraph text that fills the left column",
+            "and keeps going for a few more words here.",
+            "It ends with a full stop at the end.",
+        ],
+    )
+    para(
+        50,
+        200,
+        [
+            "Beta paragraph text that also fills the column",
+            "and keeps going for several more words.",
+            "It also ends properly with a stop.",
+        ],
+    )
     para(50, 320, ["Gamma begins and we write a short line"])
     src = tmp_path / "right_first.pdf"
     doc.save(src)
@@ -5952,8 +7254,10 @@ def test_rotated_pages_lay_out_like_unrotated_ones(tmp_path):
     """旋转 90 度的页面，跨页段落的译文排法和不旋转时一样：不提前停笔，字号不缩。"""
     from app.formats.pdf import translate_pdf
 
-    words = ("lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod "
-             "tempor incididunt ut labore et dolore magna aliqua ").split()
+    words = (
+        "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod "
+        "tempor incididunt ut labore et dolore magna aliqua "
+    ).split()
     layouts = []
     for rotation in (0, 90):
         doc = pymupdf.open()
@@ -5973,14 +7277,18 @@ def test_rotated_pages_lay_out_like_unrotated_ones(tmp_path):
         src = tmp_path / f"rot{rotation}.pdf"
         doc.save(src)
         [out] = run(translate_pdf(src, tmp_path, runner(), False, "zh-CN"))
-        layouts.append([
-            sorted(
-                (round(span["bbox"][1]), round(span["size"], 1))
-                for blk in page.get_text("dict")["blocks"] if blk.get("type") == 0
-                for ln in blk["lines"] for span in ln["spans"]
-            )
-            for page in pymupdf.open(out)
-        ])
+        layouts.append(
+            [
+                sorted(
+                    (round(span["bbox"][1]), round(span["size"], 1))
+                    for blk in page.get_text("dict")["blocks"]
+                    if blk.get("type") == 0
+                    for ln in blk["lines"]
+                    for span in ln["spans"]
+                )
+                for page in pymupdf.open(out)
+            ]
+        )
     plain, rotated = layouts
     assert rotated == plain
 
@@ -5993,8 +7301,7 @@ def test_page_end_does_not_take_a_block_already_paired_to_the_next_column():
 
     def blk(text, x0, y, page, size=9.0):
         rect = pymupdf.Rect(x0, y, x0 + 180, y + 12)
-        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text,
-                         size=size, color="#000", bold=False)
+        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
 
     wide = PageGeometry(600, (Column(40, 560),), ())
     end = blk("The optimizer then rewrites the", 40, 700, 0)
@@ -6017,8 +7324,7 @@ def test_capital_continuation_joins_across_columns_only():
 
     def blk(text, x0, y, page=0):
         rect = pymupdf.Rect(x0, y, x0 + 180, y + 12)
-        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text,
-                         size=9, color="#000", bold=False)
+        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text, size=9, color="#000", bold=False)
 
     wide = PageGeometry(600, (Column(40, 560),), ())
     host = blk("query engines that allow", 300, 700)
@@ -6033,17 +7339,18 @@ def test_capital_continuation_joins_across_columns_only():
     assert all(len(unit) == 1 for unit in units)
     assert all(len(unit) == 1 for unit in _cross_page_units([host2, host, tail, tail2], 9.0))
 
-    same_column = _merge_continuations([
-        blk("the previous line does not end", 40, 100),
-        blk("SQL-based processing starts a new sentence.", 40, 114),
-    ])
+    same_column = _merge_continuations(
+        [
+            blk("the previous line does not end", 40, 100),
+            blk("SQL-based processing starts a new sentence.", 40, 114),
+        ]
+    )
     assert len(same_column) == 2
 
     # 另一栏没形成左缘时，页末左栏也不能把下一页大写开头的新段接进来。
     def edge(text, x0, y, page, x1=280.0):
         rect = pymupdf.Rect(x0, y, x1, y + 12)
-        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text,
-                         size=9, color="#000", bold=False)
+        return TextBlock(page=page, rect=rect, line_rects=[rect], text=text, size=9, color="#000", bold=False)
 
     two = PageGeometry(612, (Column(40, 290), Column(316, 560)), ())
     host = edge("tunately even with this setting, we were", 53.8, 700, 0)
@@ -6051,12 +7358,16 @@ def test_capital_continuation_joins_across_columns_only():
     nxt = edge("For queries where HAWQ has the most speedups.", 53.8, 56, 1)
     nxt2 = edge("Impala joins the fact tables first.", 53.8, 72, 1)
     units = _cross_page_units(
-        [earlier, host, nxt, nxt2], 9.0, geometries=[two, two],
+        [earlier, host, nxt, nxt2],
+        9.0,
+        geometries=[two, two],
     )
     assert all(len(unit) == 1 for unit in units)
     lower = edge("and the sentence goes on", 53.8, 56, 1)
     joined = _cross_page_units(
-        [earlier, host, lower, nxt2], 9.0, geometries=[two, two],
+        [earlier, host, lower, nxt2],
+        9.0,
+        geometries=[two, two],
     )
     assert [unit for unit in joined if len(unit) == 2] == [[host, lower]]
 
@@ -6068,9 +7379,15 @@ def test_same_page_continuations_merge():
     from app.formats.pdf_extract import _merge_continuations
 
     def blk(text, y, x0=108.0, size=10.0, nwords_pad=0):
-        return TextBlock(page=0, rect=pymupdf.Rect(x0, y, 504, y + 11),
-                         line_rects=[pymupdf.Rect(x0, y, 504, y + 11)],
-                         text=text, size=size, color="#000", bold=False)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(x0, y, 504, y + 11),
+            line_rects=[pymupdf.Rect(x0, y, 504, y + 11)],
+            text=text,
+            size=size,
+            color="#000",
+            bold=False,
+        )
 
     blocks = [
         blk("We are considering supervised tasks where the training set is given (like a", 280),
@@ -6085,8 +7402,10 @@ def test_same_page_continuations_merge():
     assert merged[1].text == "2.1 Model"
 
     # 上行有句末标点 → 不并
-    b2 = [blk("This is a full sentence with several words.", 100),
-          blk("another paragraph starts here with lowercase", 112)]
+    b2 = [
+        blk("This is a full sentence with several words.", 100),
+        blk("another paragraph starts here with lowercase", 112),
+    ]
     assert len(_merge_continuations(b2)) == 2
 
     # 悬挂缩进大约 2.5em。2em 卡太紧时，特征列表的续行拆成两段并单独缩小。
@@ -6195,7 +7514,10 @@ def test_heading_does_not_turn_the_following_sentence_into_a_formula():
 
     def span(text: str, size: float, x0: float, y0: float, font: str) -> dict[str, object]:
         return {
-            "text": text, "font": font, "size": size, "flags": 16 if size >= 12 else 0,
+            "text": text,
+            "font": font,
+            "size": size,
+            "flags": 16 if size >= 12 else 0,
             "bbox": (x0, y0, x0 + max(8, len(text) * size * 0.45), y0 + size),
             "origin": (x0, y0 + size * 0.8),
         }
@@ -6225,8 +7547,12 @@ def test_section_number_stays_with_heading():
     # 页码和正文不在同一可视行（纵向不重叠），照常拆
     items2 = [
         ("3", pymupdf.Rect(300, 760, 308, 770), [{"text": "3", "size": 10.0}], None),
-        ("Next paragraph starts here", pymupdf.Rect(108, 700, 500, 712),
-         [{"text": "Next paragraph starts here", "size": 10.0}], None),
+        (
+            "Next paragraph starts here",
+            pymupdf.Rect(108, 700, 500, 712),
+            [{"text": "Next paragraph starts here", "size": 10.0}],
+            None,
+        ),
     ]
     assert _split_lines(items2) == [[0], [1]]
 
@@ -6237,8 +7563,12 @@ def test_a_chapter_number_across_a_rule_is_not_joined_to_the_title():
 
     items = [
         ("10", pymupdf.Rect(98.4, 132.0, 158.2, 204.1), [{"text": "10", "size": 59.8}], None),
-        ("Interpretability", pymupdf.Rect(167.3, 137.3, 331.9, 169.6),
-         [{"text": "Interpretability", "size": 24.8}], None),
+        (
+            "Interpretability",
+            pymupdf.Rect(167.3, 137.3, 331.9, 169.6),
+            [{"text": "Interpretability", "size": 24.8}],
+            None,
+        ),
     ]
     post = pymupdf.Rect(161.2, 110.8, 162.4, 200.8)
     groups = [part for group in _split_lines(items) for part in _cut_at_posts(group, items, [post])]
@@ -6280,8 +7610,13 @@ def test_section_and_item_numbers_are_not_sent_for_translation():
     assert _peel_number("{b}3{/b} {b}Method{/b}", "h2") == ("{b}3{/b}", "{b}Method{/b}")
     # 粗体从编号延续到文字：编号关上，文字重开
     assert _peel_number("{b}17.2.1 The Encoder{/b} ENCODEC {b}model{/b}", "h3") == (
-        "{b}17.2.1{/b}", "{b}The Encoder{/b} ENCODEC {b}model{/b}")
-    assert _peel_number("1.{i} Intractability{/i}: the case where", "p") == ("1.", "{i} Intractability{/i}: the case where")
+        "{b}17.2.1{/b}",
+        "{b}The Encoder{/b} ENCODEC {b}model{/b}",
+    )
+    assert _peel_number("1.{i} Intractability{/i}: the case where", "p") == (
+        "1.",
+        "{i} Intractability{/i}: the case where",
+    )
     assert _peel_number("(a) Let u be the view of least cost.", "p") == ("(a)", "Let u be the view of least cost.")
     assert _peel_number("2 samples were drawn from each model and we report the mean.", "p")[0] == ""
     assert _peel_number("1.5 times faster than the baseline, a large gain.", "p")[0] == ""
@@ -6331,7 +7666,10 @@ def test_heading_number_skips_body_blocks():
     assert _heading_number_for("p", "2.1 Model", "模型") == "模型"
     # 模型写成"第二节"（没有"章"）也改回
     assert _heading_number_for("h2", "2 Proposed Approach", "第二节 所提方法") == "2 所提方法"
-    assert _heading_number_for("h2", "2.1 Massively Parallel Processing", "第二点一节 大规模并行处理") == "2.1 大规模并行处理"
+    assert (
+        _heading_number_for("h2", "2.1 Massively Parallel Processing", "第二点一节 大规模并行处理")
+        == "2.1 大规模并行处理"
+    )
     assert _heading_number_for("h2", "4.2 Parallel Query Optimization", "四点二 并行查询优化") == "4.2 并行查询优化"
     assert _heading_number_for("h2", "8. RELATED WORK", "八, 相关工作") == "8. 相关工作"
     assert _heading_number_for("h2", "9. SUMMARY", "九, 总结") == "9. 总结"
@@ -6341,8 +7679,14 @@ def test_heading_number_skips_body_blocks():
     assert _heading_number_for("h2", "1.3 Related Work", "一.三. 相关工作") == "1.3 相关工作"
     assert _heading_number_for("h2", "2.5 Composite Lattices", "二．五 复合格") == "2.5 复合格"
     # 三级节号，各级之间可能空一格
-    assert _heading_number_for("h2", "3.1.3 Dealing with scale", "第三章第一节第三小节 处理规模问题") == "3.1.3 处理规模问题"
-    assert _heading_number_for("h2", "10.1.2 Contextual Embeddings", "第十章 第一节 第二小节 上下文嵌入") == "10.1.2 上下文嵌入"
+    assert (
+        _heading_number_for("h2", "3.1.3 Dealing with scale", "第三章第一节第三小节 处理规模问题")
+        == "3.1.3 处理规模问题"
+    )
+    assert (
+        _heading_number_for("h2", "10.1.2 Contextual Embeddings", "第十章 第一节 第二小节 上下文嵌入")
+        == "10.1.2 上下文嵌入"
+    )
 
 
 def test_punct_fragment_uses_line_end_not_union():
@@ -6352,8 +7696,15 @@ def test_punct_fragment_uses_line_end_not_union():
 
     line1 = pymupdf.Rect(72, 80, 400, 92)
     line2 = pymupdf.Rect(72, 96, 200, 108)
-    prev = TextBlock(page=0, rect=line1 | line2, line_rects=[line1, line2],
-                     text="scale the dot products by", size=11, color="#000", bold=False)
+    prev = TextBlock(
+        page=0,
+        rect=line1 | line2,
+        line_rects=[line1, line2],
+        text="scale the dot products by",
+        size=11,
+        color="#000",
+        bold=False,
+    )
     far = pymupdf.Rect(210, 96, 240, 108)
     _donate_punct_rects(prev, [far])
     assert len(prev.line_rects) == 2
@@ -6371,8 +7722,15 @@ def test_cross_page_does_not_merge_numbered_heading():
     from app.formats.pdf_merge import _cross_page_units
 
     def blk(text, page, size=10.0, y=0, bold=False):
-        return TextBlock(page=page, rect=pymupdf.Rect(0, y, 200, y + 12), line_rects=[],
-                         text=text, size=size, color="#000", bold=bold)
+        return TextBlock(
+            page=page,
+            rect=pymupdf.Rect(0, y, 200, y + 12),
+            line_rects=[],
+            text=text,
+            size=size,
+            color="#000",
+            bold=bold,
+        )
 
     blocks = [
         blk("The previous section ends without a period", 0, y=700),
@@ -6416,16 +7774,31 @@ def test_cross_page_paragraph_continues_on_the_next_page(tmp_path):
     doc.save(src)
     doc.close()
     host = TextBlock(
-        page=0, rect=pymupdf.Rect(40, 140, 300, 174), line_rects=[pymupdf.Rect(40, 156, 180, 174)],
-        text="performs quite", size=10, color="#000000", bold=False,
+        page=0,
+        rect=pymupdf.Rect(40, 140, 300, 174),
+        line_rects=[pymupdf.Rect(40, 156, 180, 174)],
+        text="performs quite",
+        size=10,
+        color="#000000",
+        bold=False,
     )
     note = TextBlock(
-        page=0, rect=pymupdf.Rect(40, 188, 180, 206), line_rects=[pymupdf.Rect(40, 188, 140, 206)],
-        text="1 Note here.", size=8, color="#000000", bold=False,
+        page=0,
+        rect=pymupdf.Rect(40, 188, 180, 206),
+        line_rects=[pymupdf.Rect(40, 188, 140, 206)],
+        text="1 Note here.",
+        size=8,
+        color="#000000",
+        bold=False,
     )
     tail = TextBlock(
-        page=1, rect=pymupdf.Rect(40, 36, 300, 80), line_rects=[pymupdf.Rect(40, 36, 220, 54)],
-        text="well. We hypothesize.", size=10, color="#000000", bold=False,
+        page=1,
+        rect=pymupdf.Rect(40, 36, 300, 80),
+        line_rects=[pymupdf.Rect(40, 36, 220, 54)],
+        text="well. We hypothesize.",
+        size=10,
+        color="#000000",
+        bold=False,
     )
     paragraph = (
         "对于这个问题，模型的表现相当不错。我们推测这与数据集的性质有关，"
@@ -6433,7 +7806,8 @@ def test_cross_page_paragraph_continues_on_the_next_page(tmp_path):
         "后面这几行放不进页末的空隙，就从下一页的栏首继续，脚注仍留在原来的位置。"
     )
     out = _render_translated(
-        src, [host, note, tail],
+        src,
+        [host, note, tail],
         [paragraph, "脚注仍在原处。", SPILL_TAIL],
         "zh-CN",
         continuations={id(host): tail},
@@ -6443,8 +7817,13 @@ def test_cross_page_paragraph_continues_on_the_next_page(tmp_path):
     assert "相当不错" in page0 + page1
     assert "well" not in page1
     assert out[0].rect.height == 220
-    assert all(span["bbox"][3] <= 221 for block in out[0].get_text("dict")["blocks"]
-               if block.get("type") == 0 for line in block["lines"] for span in line["spans"])
+    assert all(
+        span["bbox"][3] <= 221
+        for block in out[0].get_text("dict")["blocks"]
+        if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
+    )
     note_top = None
     for block in out[0].get_text("dict")["blocks"]:
         if block.get("type") != 0:
@@ -6486,7 +7865,15 @@ def test_split_filled_lines_fills_the_last_lines_of_the_page():
     text = "上界不匹配，因此必须强制执行谓词，这可以简化为一个等值谓词。" * 8
     roomy, _ = _split_filled_lines(text, [], em=7.92, block_size=9, width=240, cjk=True, y0=664.1, limit=722.5)
     capped, _ = _split_filled_lines(
-        text, [], em=7.92, block_size=9, width=240, cjk=True, y0=664.1, limit=722.5, page_bottom=722.5,
+        text,
+        [],
+        em=7.92,
+        block_size=9,
+        width=240,
+        cjk=True,
+        y0=664.1,
+        limit=722.5,
+        page_bottom=722.5,
     )
     assert roomy.count("\n") == 5
     assert capped.count("\n") == 4
@@ -6517,8 +7904,9 @@ def test_hyphen_bridge_keeps_the_page_boundary():
     from app.formats.pdf_units import _prepare_unit
 
     def blk(text, page):
-        return TextBlock(page=page, rect=pymupdf.Rect(40, 40, 200, 52), line_rects=[],
-                         text=text, size=9, color="#000", bold=False)
+        return TextBlock(
+            page=page, rect=pymupdf.Rect(40, 40, 200, 52), line_rects=[], text=text, size=9, color="#000", bold=False
+        )
 
     sent, formulas, name_i = _prepare_unit([blk("debug cus-", 0), blk("tomer issues later", 1)], 0)
     assert "customer" in sent
@@ -6543,21 +7931,32 @@ def test_fitted_cross_page_paragraph_keeps_body_size(tmp_path):
     doc.save(src)
     doc.close()
     host = TextBlock(
-        page=0, rect=pymupdf.Rect(40, 200, 280, 230),
+        page=0,
+        rect=pymupdf.Rect(40, 200, 280, 230),
         line_rects=[pymupdf.Rect(40, 208, 220, 222), pymupdf.Rect(40, 222, 180, 234)],
-        text="In our experimental study we", size=10, color="#000000", bold=False,
+        text="In our experimental study we",
+        size=10,
+        color="#000000",
+        bold=False,
     )
     tail = TextBlock(
-        page=1, rect=pymupdf.Rect(40, 36, 280, 70),
+        page=1,
+        rect=pymupdf.Rect(40, 36, 280, 70),
         line_rects=[pymupdf.Rect(40, 36, 220, 50)],
-        text="first compare the systems.", size=10, color="#000000", bold=False,
+        text="first compare the systems.",
+        size=10,
+        color="#000000",
+        bold=False,
     )
     paragraph = (
         "在实验研究中我们首先比较旧优化器与新优化器的计划质量，"
         "并说明新优化器在大规模数据上的收益，这一段应该保持正文字号。"
     )
     out = _render_translated(
-        src, [host, tail], [paragraph, SPILL_TAIL], "zh-CN",
+        src,
+        [host, tail],
+        [paragraph, SPILL_TAIL],
+        "zh-CN",
         continuations={id(host): tail},
     )
     sizes = [
@@ -6589,8 +7988,16 @@ def test_a_cross_page_paragraph_borrows_on_the_next_page(tmp_path):
 
     def block(page: int, y0: float, count: int, text: str) -> TextBlock:
         rows = [pymupdf.Rect(40, y0 + 12 * index, 360, y0 + 12 * index + 12) for index in range(count)]
-        return TextBlock(page=page, rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count), line_rects=rows,
-                         text=text, size=10, color="#000000", bold=False, body_size=10)
+        return TextBlock(
+            page=page,
+            rect=pymupdf.Rect(40, y0, 360, y0 + 12 * count),
+            line_rects=rows,
+            text=text,
+            size=10,
+            color="#000000",
+            bold=False,
+            body_size=10,
+        )
 
     above = block(0, 40, 15, "x " * 60 + "end.")
     host = block(0, 220, 3, "x " * 60)
@@ -6598,22 +8005,31 @@ def test_a_cross_page_paragraph_borrows_on_the_next_page(tmp_path):
     below = block(1, 64, 5, "x " * 60 + "end.")
     paragraph = "在实验研究中我们首先比较旧优化器与新优化器的计划质量，并说明新优化器在大规模数据上的收益。" * 4
     out = _render_translated(
-        src, [above, host, tail, below], ["上面一段。", paragraph, SPILL_TAIL, "下面一段原文五行，译文一行。"], "zh-CN",
+        src,
+        [above, host, tail, below],
+        ["上面一段。", paragraph, SPILL_TAIL, "下面一段原文五行，译文一行。"],
+        "zh-CN",
         continuations={id(host): tail},
     )
 
     def baselines(page) -> list[float]:
         return sorted(
-            line["spans"][0]["origin"][1] for item in page.get_text("dict")["blocks"] if item.get("type") == 0
-            for line in item["lines"] if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
+            line["spans"][0]["origin"][1]
+            for item in page.get_text("dict")["blocks"]
+            if item.get("type") == 0
+            for line in item["lines"]
+            if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
             and line["spans"][0]["origin"][1] > 200
         )
 
     first = baselines(out[0])
     assert first and all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(first, first[1:]))
     second = sorted(
-        line["spans"][0]["origin"][1] for item in out[1].get_text("dict")["blocks"] if item.get("type") == 0
-        for line in item["lines"] if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
+        line["spans"][0]["origin"][1]
+        for item in out[1].get_text("dict")["blocks"]
+        if item.get("type") == 0
+        for line in item["lines"]
+        if re.search(r"[一-鿿]", "".join(span["text"] for span in line["spans"]))
     )
     pitches = [lower - upper for upper, lower in zip(second, second[1:])]
     assert len(second) >= 3
@@ -6633,18 +8049,29 @@ def test_carried_lines_keep_the_host_size(tmp_path):
     doc.save(src)
     doc.close()
     host = TextBlock(
-        page=0, rect=pymupdf.Rect(40, 230, 375, 262),
+        page=0,
+        rect=pymupdf.Rect(40, 230, 375, 262),
         line_rects=[pymupdf.Rect(40, 230, 375, 246), pymupdf.Rect(40, 246, 375, 262)],
-        text="In our experimental study we", size=10.8, color="#000000", bold=False,
+        text="In our experimental study we",
+        size=10.8,
+        color="#000000",
+        bold=False,
     )
     tail = TextBlock(
-        page=1, rect=pymupdf.Rect(40, 40, 375, 120),
+        page=1,
+        rect=pymupdf.Rect(40, 40, 375, 120),
         line_rects=[pymupdf.Rect(40, 40 + 16 * k, 375, 56 + 16 * k) for k in range(5)],
-        text="first compare the systems.", size=11.0, color="#000000", bold=False,
+        text="first compare the systems.",
+        size=11.0,
+        color="#000000",
+        bold=False,
     )
     paragraph = "在实验研究中我们首先比较旧优化器与新优化器的计划质量，并说明新优化器在大规模数据上的收益。" * 4
     out = _render_translated(
-        src, [host, tail], [paragraph, SPILL_TAIL], "zh-CN",
+        src,
+        [host, tail],
+        [paragraph, SPILL_TAIL],
+        "zh-CN",
         continuations={id(host): tail},
     )
     rows: dict[float, str] = {}
@@ -6671,18 +8098,29 @@ def test_narrow_fragment_is_written_at_the_continuation_width(tmp_path):
     doc.save(src)
     doc.close()
     host = TextBlock(
-        page=0, rect=pymupdf.Rect(250, 250, 290, 262),
+        page=0,
+        rect=pymupdf.Rect(250, 250, 290, 262),
         line_rects=[pymupdf.Rect(250, 250, 290, 262)],
-        text="An opti-", size=10, color="#000000", bold=False,
+        text="An opti-",
+        size=10,
+        color="#000000",
+        bold=False,
     )
     tail = TextBlock(
-        page=1, rect=pymupdf.Rect(40, 40, 280, 90),
+        page=1,
+        rect=pymupdf.Rect(40, 40, 280, 90),
         line_rects=[pymupdf.Rect(40, 40, 280, 54)],
-        text="mization stage continues here.", size=10, color="#000000", bold=False,
+        text="mization stage continues here.",
+        size=10,
+        color="#000000",
+        bold=False,
     )
     paragraph = "优化阶段在满足下列任一条件时结束，资源受限的系统也可以在这里停下来。"
     out = _render_translated(
-        src, [host, tail], [paragraph, SPILL_TAIL], "zh-CN",
+        src,
+        [host, tail],
+        [paragraph, SPILL_TAIL],
+        "zh-CN",
         continuations={id(host): tail},
     )
     sizes = [
@@ -6711,23 +8149,37 @@ def test_shared_baseline_continuation_stays_in_its_lines(tmp_path):
     doc.save(src)
     doc.close()
     host = TextBlock(
-        page=0, rect=pymupdf.Rect(160, 100, 300, 112),
+        page=0,
+        rect=pymupdf.Rect(160, 100, 300, 112),
         line_rects=[pymupdf.Rect(160, 100, 300, 112)],
-        text="Statistics promise computation is", size=9, color="#000000", bold=False,
+        text="Statistics promise computation is",
+        size=9,
+        color="#000000",
+        bold=False,
     )
     tail = TextBlock(
-        page=0, rect=pymupdf.Rect(40, 114, 130, 126),
+        page=0,
+        rect=pymupdf.Rect(40, 114, 130, 126),
         line_rects=[pymupdf.Rect(40, 114, 130, 126)],
-        text="expression-specific.", size=9, color="#000000", bold=False,
+        text="expression-specific.",
+        size=9,
+        color="#000000",
+        bold=False,
     )
     neighbor_lines = [pymupdf.Rect(140, 114, 300, 126), pymupdf.Rect(40, 128, 300, 140)]
     neighbor = TextBlock(
-        page=0, rect=neighbor_lines[0] | neighbor_lines[1], line_rects=neighbor_lines,
-        text="For example the next sentence starts here.", size=9, color="#000000", bold=False,
+        page=0,
+        rect=neighbor_lines[0] | neighbor_lines[1],
+        line_rects=neighbor_lines,
+        text="For example the next sentence starts here.",
+        size=9,
+        color="#000000",
+        bold=False,
     )
     paragraph = "统计承诺所描述的计算过程只对特定表达式成立。"
     out = _render_translated(
-        src, [host, neighbor, tail],
+        src,
+        [host, neighbor, tail],
         [paragraph, neighbor.text, SPILL_TAIL],
         "zh-CN",
         continuations={id(host): tail},
@@ -6758,12 +8210,10 @@ def test_cross_page_formulas_keep_own_page_and_name():
     from app.formats.pdf_units import _prepare_unit
 
     def span(text, font, size, x0, y0):
-        return {"text": text, "font": font, "size": size, "bbox": (x0, y0, x0 + 12, y0 + 10),
-                "origin": (x0, y0 + 8)}
+        return {"text": text, "font": font, "size": size, "bbox": (x0, y0, x0 + 12, y0 + 10), "origin": (x0, y0 + 8)}
 
     def block(page, prose):
-        spans = [span(prose, "TimesNewRomanPSMT", 12, 0, 0),
-                 span("E", "CMMI10", 12, 40, 0)]
+        spans = [span(prose, "TimesNewRomanPSMT", 12, 0, 0), span("E", "CMMI10", 12, 40, 0)]
         b = _block_with_spans([spans])
         b.page = page
         b.text = prose + "E"
@@ -6779,6 +8229,7 @@ def test_cross_page_formulas_keep_own_page_and_name():
     restored = sent.replace("{v1}", "\x01i\x021\x01/i\x02").replace("{v2}", "\x01i\x022\x01/i\x02")
     parts, lists = _assign_restored_parts(restored, unit, formulas)
     from app.formats.pdf_blocks import SPILL_TAIL
+
     assert parts[1] == SPILL_TAIL and lists[1] == []
     assert [f["page"] for f in lists[0]] == [0, 1]
     assert parts[0].count("\x01i\x021\x01/i\x02") == 1
@@ -6794,7 +8245,10 @@ def test_boundary_echo_keeps_repeated_cells_and_short_phrases():
     cur = "序列），而目标输出才是下一段"
     assert _strip_boundary_echo("alpha beta", "gamma delta", prev, cur) == "才是下一段"
     # 标题后另起一段，开头就是标题里的词
-    head_src, para_src = "4.7.2 Applying softmax in logistic regression", "When we apply softmax for logistic regression"
+    head_src, para_src = (
+        "4.7.2 Applying softmax in logistic regression",
+        "When we apply softmax for logistic regression",
+    )
     head_t, para_t = "4.7.2 在逻辑回归中应用 softmax", "在逻辑回归中应用 softmax 时, 输入与 sigmoid 一样"
     assert _strip_boundary_echo(head_src, para_src, head_t, para_t) == para_t
 
@@ -6862,16 +8316,22 @@ def test_save_after_redact_keeps_resources_indirect(tmp_path):
     doc.save(src)
     doc.close()
 
-    lines = ["First block here"] + [
-        f"Body line number {n} with enough text to matter" for n in range(8)
-    ]
+    lines = ["First block here"] + [f"Body line number {n} with enough text to matter" for n in range(8)]
     blocks = []
     for index, line in enumerate(lines):
         y = 48 + index * 12
         rect = pm.Rect(40, y, 360, y + 12)
-        blocks.append(TextBlock(
-            page=0, rect=rect, line_rects=[rect], text=line, size=11, color="#000000", bold=False,
-        ))
+        blocks.append(
+            TextBlock(
+                page=0,
+                rect=rect,
+                line_rects=[rect],
+                text=line,
+                size=11,
+                color="#000000",
+                bold=False,
+            )
+        )
     trans = [f"译文第{i}段的内容写在这里测试保存" for i in range(len(blocks))]
     out = _render_translated(src, blocks, trans, "zh-CN")
     kind, value = out.xref_get_key(out[0].xref, "Resources")
@@ -6887,19 +8347,29 @@ def test_wrapped_formula_tail_stays_one_placeholder_without_a_wide_box():
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, y0, x1=None, y1=None):
-        return {"text": text, "font": font, "size": size,
-                "bbox": (x0, y0, x1 if x1 is not None else x0 + 10,
-                         y1 if y1 is not None else y0 + 10),
-                "origin": (x0, (y1 if y1 is not None else y0 + 10) - 2)}
+        return {
+            "text": text,
+            "font": font,
+            "size": size,
+            "bbox": (x0, y0, x1 if x1 is not None else x0 + 10, y1 if y1 is not None else y0 + 10),
+            "origin": (x0, (y1 if y1 is not None else y0 + 10) - 2),
+        }
 
-    b = _block_with_spans([
-        [span("taken as ", "TimesNewRomanPSMT", 10, 100, 100),
-         span("y", "CMMI10", 10, 400, 100, x1=405, y1=110),
-         span("t−1 =", "CMR7", 7, 405, 104, x1=415, y1=110)],
-        [span("s|h", "CMMI10", 10, 108, 114, x1=120, y1=124),
-         span("t−1", "CMR7", 7, 120, 117, x1=128, y1=124),
-         span("). This", "TimesNewRomanPSMT", 10, 130, 114)],
-    ], size=10.0)
+    b = _block_with_spans(
+        [
+            [
+                span("taken as ", "TimesNewRomanPSMT", 10, 100, 100),
+                span("y", "CMMI10", 10, 400, 100, x1=405, y1=110),
+                span("t−1 =", "CMR7", 7, 405, 104, x1=415, y1=110),
+            ],
+            [
+                span("s|h", "CMMI10", 10, 108, 114, x1=120, y1=124),
+                span("t−1", "CMR7", 7, 120, 117, x1=128, y1=124),
+                span("). This", "TimesNewRomanPSMT", 10, 130, 114),
+            ],
+        ],
+        size=10.0,
+    )
     sent, formulas = _placeholderize(b, 0)
     assert len(formulas) == 1
     assert sent.count("{v") == 1
@@ -6960,7 +8430,10 @@ def test_snake_case_identifiers_are_one_word():
     assert not any(can_stretch(a, b) for a, b in zip(email, email[1:]))
     assert tokenize("多伦多大学 jimmy@psi.utoronto.ca 获取")[6] == email
     assert tokenize("见 http://www.github.com/goodfeli/adversarial).")[2:] == [
-        "http://www.github.com/goodfeli/adversarial", ")", "."]
+        "http://www.github.com/goodfeli/adversarial",
+        ")",
+        ".",
+    ]
 
 
 def test_a_centered_title_breaks_after_a_clause_mark():
@@ -6992,7 +8465,9 @@ def test_an_opening_bracket_does_not_end_a_line():
     assert all(not line.rstrip().endswith(("{", "(", "[", "（")) for line in lines), lines
     assert "".join(lines).replace(" ", "") == "视图范围:{l_partkey},{o_custkey}"
     # 左引号同样跟着下一个词走，右引号不起行
-    quoted = break_lines("这里, Victoria 有多种不同的指称方式: “Victoria Chen”“Megabucks Banking 的首席财务官”", 9.5, 300.0, {})
+    quoted = break_lines(
+        "这里, Victoria 有多种不同的指称方式: “Victoria Chen”“Megabucks Banking 的首席财务官”", 9.5, 300.0, {}
+    )
     assert all(not line.rstrip().endswith("“") and not line.startswith("”") for line in quoted), quoted
 
 
@@ -7019,8 +8494,13 @@ def test_right_fragment_stays_on_its_own_line():
     fragment = pymupdf.Rect(190, 40, 360, 52)
     nxt = pymupdf.Rect(40, 56, 360, 68)
     block = TextBlock(
-        page=0, rect=fragment | nxt, line_rects=[fragment, nxt],
-        text="At the end of exploration.", size=9, color="#000", bold=False,
+        page=0,
+        rect=fragment | nxt,
+        line_rects=[fragment, nxt],
+        text="At the end of exploration.",
+        size=9,
+        color="#000",
+        bold=False,
     )
     assert _flow_y0(block, True) == pytest.approx(40 + 0.9, abs=0.01)
     first, rest = _inset_write_boxes(block, True)
@@ -7030,8 +8510,13 @@ def test_right_fragment_stays_on_its_own_line():
     indent = pymupdf.Rect(52, 40, 360, 52)
     body = pymupdf.Rect(40, 56, 360, 68)
     indented = TextBlock(
-        page=0, rect=indent | body, line_rects=[indent, body],
-        text="A normal indented paragraph.", size=9, color="#000", bold=False,
+        page=0,
+        rect=indent | body,
+        line_rects=[indent, body],
+        text="A normal indented paragraph.",
+        size=9,
+        color="#000",
+        bold=False,
     )
     assert _flow_y0(indented, False) == 40
     assert _inset_write_boxes(indented, False) is None
@@ -7043,8 +8528,13 @@ def test_right_fragment_stays_on_its_own_line():
         pymupdf.Rect(53.8, 605.7, 292.9, 614.7),
     ]
     torn = TextBlock(
-        page=0, rect=fragments[0] | fragments[-1], line_rects=fragments,
-        text="is an extensible optimizer framework.", size=9, color="#000", bold=False,
+        page=0,
+        rect=fragments[0] | fragments[-1],
+        line_rects=fragments,
+        text="is an extensible optimizer framework.",
+        size=9,
+        color="#000",
+        bold=False,
     )
     torn_first, torn_rest = _inset_write_boxes(torn, True)
     assert torn_first.x0 == pytest.approx(127.9)
@@ -7063,15 +8553,23 @@ def test_affiliation_tails_split_and_stack():
         pymupdf.Rect(116, 160, 180, 172),
     ]
     author = TextBlock(
-        page=0, rect=names[0] | names[2], line_rects=names,
+        page=0,
+        rect=names[0] | names[2],
+        line_rects=names,
         text="Zhongxian Gu Entong Shen ∗Pivotal Inc.",
-        size=12, color="#000", bold=False,
+        size=12,
+        color="#000",
+        bold=False,
         span_lines=[[{"text": "Zhongxian Gu"}], [{"text": "Entong Shen"}], [{"text": "∗Pivotal Inc."}]],
     )
     datometry = TextBlock(
-        page=0, rect=pymupdf.Rect(210, 160, 300, 184),
+        page=0,
+        rect=pymupdf.Rect(210, 160, 300, 184),
         line_rects=[pymupdf.Rect(210, 160, 300, 172), pymupdf.Rect(210, 172, 300, 184)],
-        text="‡ Datometry Inc. San Francisco", size=10, color="#000", bold=False,
+        text="‡ Datometry Inc. San Francisco",
+        size=10,
+        color="#000",
+        bold=False,
     )
     split = _split_affiliation_tails([author, datometry])
     assert len(split) == 3
@@ -7095,20 +8593,37 @@ def test_write_helpers_only_need_the_blocks_on_their_page():
     )
 
     rng = random.Random(5)
-    texts = ["∗University of Somewhere", "†Institute of Elsewhere", "Memo.", "(2) Statistics Derivation.",
-             "The body line runs on and on", "and the model keeps going.", "Results are shown here."]
+    texts = [
+        "∗University of Somewhere",
+        "†Institute of Elsewhere",
+        "Memo.",
+        "(2) Statistics Derivation.",
+        "The body line runs on and on",
+        "and the model keeps going.",
+        "Results are shown here.",
+    ]
     blocks = []
     for _ in range(90):
         x0 = rng.choice([40.0, 60.0, 120.0, 200.0, 320.0])
         y0 = rng.choice([30.0, 60.0, 100.0, 300.0, 700.0, 760.0]) + rng.randint(0, 3) * 12
-        lines = [pymupdf.Rect(x0, y0 + i * 12, x0 + rng.choice([60, 140, 240]), y0 + i * 12 + 10)
-                 for i in range(rng.choice([1, 1, 2]))]
+        lines = [
+            pymupdf.Rect(x0, y0 + i * 12, x0 + rng.choice([60, 140, 240]), y0 + i * 12 + 10)
+            for i in range(rng.choice([1, 1, 2]))
+        ]
         union = pymupdf.Rect(lines[0])
         for line in lines[1:]:
             union |= line
-        blocks.append(TextBlock(page=rng.choice([0, 1, 2]), rect=union, line_rects=lines,
-                                text=rng.choice(texts), size=rng.choice([8.0, 10.0]), color="#000",
-                                bold=rng.random() < 0.4))
+        blocks.append(
+            TextBlock(
+                page=rng.choice([0, 1, 2]),
+                rect=union,
+                line_rects=lines,
+                text=rng.choice(texts),
+                size=rng.choice([8.0, 10.0]),
+                color="#000",
+                bold=rng.random() < 0.4,
+            )
+        )
 
     def fixed(pno, text, lines, bold=False):
         rects = [pymupdf.Rect(*line) for line in lines]
@@ -7165,17 +8680,27 @@ def test_side_label_stays_beside_the_first_line(tmp_path):
     fragment = pymupdf.Rect(190, 40, 360, 52)
     nxt = pymupdf.Rect(40, 56, 360, 68)
     heading = TextBlock(
-        page=0, rect=heading_line, line_rects=[heading_line],
-        text="(2) Statistics Derivation.", size=9, color="#000000", bold=True,
+        page=0,
+        rect=heading_line,
+        line_rects=[heading_line],
+        text="(2) Statistics Derivation.",
+        size=9,
+        color="#000000",
+        bold=True,
         span_lines=[[{"text": "(2) Statistics Derivation.", "font": "CMBX9", "flags": 16}]],
     )
     body = TextBlock(
-        page=0, rect=fragment | nxt, line_rects=[fragment, nxt],
+        page=0,
+        rect=fragment | nxt,
+        line_rects=[fragment, nxt],
         text="At the end of exploration the memo keeps the space.",
-        size=9, color="#000000", bold=False,
+        size=9,
+        color="#000000",
+        bold=False,
     )
     out = _render_translated(
-        src, [body, heading],
+        src,
+        [body, heading],
         ["探索结束时备忘录保存完整的逻辑空间并且继续写下一段说明，后面这几个字回到栏左缘。", "(2) 统计信息推导。"],
         "zh-CN",
     )
@@ -7200,10 +8725,7 @@ def test_inset_rest_reflows_at_the_column_width():
     预先断好的换行会在续行让开图时留下半截短行。"""
     from app.formats.pdf_write import _split_own_lines
 
-    text = (
-        "Orca 包含一个可扩展框架, 用于基于形式化的属性规范描述查询需求和计划特征。"
-        "属性有不同类型, 包括逻辑属性。"
-    )
+    text = "Orca 包含一个可扩展框架, 用于基于形式化的属性规范描述查询需求和计划特征。属性有不同类型, 包括逻辑属性。"
     head, rest = _split_own_lines(text, [], 7.92, 9.0, 120.0)
     assert head and rest and "\n" not in rest
     assert "框架用于" not in head + rest
@@ -7220,7 +8742,10 @@ def test_a_word_too_wide_for_the_shared_line_moves_whole_to_the_next_line():
     """同一行剩下的半截只有一个短词宽，放不下 BERT 时整个词留给续行，不切成 BER / T。"""
     from app.formats.pdf_write import _split_own_lines
 
-    assert _split_own_lines("BERT 和 GPT 在所有任务上的表现", [], 8.8, 10.0, 20.0) == ("", "BERT 和 GPT 在所有任务上的表现")
+    assert _split_own_lines("BERT 和 GPT 在所有任务上的表现", [], 8.8, 10.0, 20.0) == (
+        "",
+        "BERT 和 GPT 在所有任务上的表现",
+    )
     assert _split_own_lines("{b}BERT{/b} 在所有任务上", [], 8.8, 10.0, 20.0)[0] == ""
     head, rest = _split_own_lines("在所有任务上 BERT 都更好", [], 8.8, 10.0, 20.0)
     assert head == "在所" and rest.startswith("有任务")
@@ -7240,14 +8765,23 @@ def test_inset_continuation_fills_the_column(tmp_path):
     first = pymupdf.Rect(190, 40, 360, 52)
     later = [pymupdf.Rect(40, 56 + i * 12, 360, 68 + i * 12) for i in range(8)]
     heading = TextBlock(
-        page=0, rect=heading_line, line_rects=[heading_line],
-        text="(2) Statistics Derivation.", size=9, color="#000000", bold=True,
+        page=0,
+        rect=heading_line,
+        line_rects=[heading_line],
+        text="(2) Statistics Derivation.",
+        size=9,
+        color="#000000",
+        bold=True,
         span_lines=[[{"text": "(2) Statistics Derivation.", "font": "CMBX9", "flags": 16}]],
     )
     body = TextBlock(
-        page=0, rect=first | later[-1], line_rects=[first, *later],
+        page=0,
+        rect=first | later[-1],
+        line_rects=[first, *later],
         text="At the end of exploration the memo keeps the space and continues.",
-        size=9, color="#000000", bold=False,
+        size=9,
+        color="#000000",
+        bold=False,
     )
     text = (
         "探索结束时备忘录保存完整的逻辑空间并且继续写下一段很长的说明"
@@ -7264,7 +8798,8 @@ def test_inset_continuation_fills_the_column(tmp_path):
     assert full, [(line[0][1], line[-1][2], "".join(item[0] for item in line)) for line in body_lines]
     sizes = [
         span["size"]
-        for block in out[0].get_text("dict")["blocks"] if block.get("type") == 0
+        for block in out[0].get_text("dict")["blocks"]
+        if block.get("type") == 0
         for line in block["lines"]
         for span in line["spans"]
         if span["bbox"][1] > 58 and span["bbox"][0] < 80 and span["text"].strip()
@@ -7292,13 +8827,22 @@ def test_same_baseline_fragments_do_not_cover_the_lead(tmp_path):
         pymupdf.Rect(40, 70, 280, 82),
     ]
     cascades = TextBlock(
-        page=0, rect=lead, line_rects=[lead], text="Cascades",
-        size=9, color="#000000", bold=False,
+        page=0,
+        rect=lead,
+        line_rects=[lead],
+        text="Cascades",
+        size=9,
+        color="#000000",
+        bold=False,
     )
     body = TextBlock(
-        page=0, rect=fragments[0] | fragments[-1], line_rects=fragments,
+        page=0,
+        rect=fragments[0] | fragments[-1],
+        line_rects=fragments,
         text="is an extensible optimizer framework whose principles have been used.",
-        size=9, color="#000000", bold=False,
+        size=9,
+        color="#000000",
+        bold=False,
     )
     text = "是一个可扩展的优化器框架，其原则已被用于构建查询优化器，并且继续写到下一行。"
     out = _render_translated(src, [cascades, body], ["Cascades", text], "zh-CN")
@@ -7325,19 +8869,25 @@ def test_cross_page_stops_above_the_page_number(tmp_path):
     doc.save(src)
     doc.close()
     host = TextBlock(
-        page=0, rect=pymupdf.Rect(316.8, 699.8, 556, 719.3),
+        page=0,
+        rect=pymupdf.Rect(316.8, 699.8, 556, 719.3),
         line_rects=[
             pymupdf.Rect(325.8, 699.8, 556, 708.8),
             pymupdf.Rect(316.8, 710.3, 556, 719.3),
         ],
         text="Several efforts have addressed interactive processing on Hadoop by creating specialized query engines that allow",
-        size=9, color="#000000", bold=False,
+        size=9,
+        color="#000000",
+        bold=False,
     )
     tail = TextBlock(
-        page=1, rect=pymupdf.Rect(53.8, 56.8, 293, 180),
+        page=1,
+        rect=pymupdf.Rect(53.8, 56.8, 293, 180),
         line_rects=[pymupdf.Rect(53.8, 56.8, 293, 66)],
         text="SQL-based processing of data in HDFS.",
-        size=9, color="#000000", bold=False,
+        size=9,
+        color="#000000",
+        bold=False,
     )
     paragraph = (
         "一些研究通过创建专用查询引擎来解决交互式处理问题，使得无需使用 MapReduce 即可基于 SQL 处理数据。"
@@ -7345,13 +8895,17 @@ def test_cross_page_stops_above_the_page_number(tmp_path):
         "后面这几行放不进页末，就从下一页接着写，不能压到页码上。"
     )
     out = _render_translated(
-        src, [host, tail], [paragraph, SPILL_TAIL], "zh-CN",
+        src,
+        [host, tail],
+        [paragraph, SPILL_TAIL],
+        "zh-CN",
         continuations={id(host): tail},
     )
     floor = content_floor(792)
     bottoms = [
         ch["bbox"][3]
-        for block in out[0].get_text("rawdict")["blocks"] if block.get("type") == 0
+        for block in out[0].get_text("rawdict")["blocks"]
+        if block.get("type") == 0
         for line in block["lines"]
         for span in line["spans"]
         for ch in span["chars"]
@@ -7362,9 +8916,13 @@ def test_cross_page_stops_above_the_page_number(tmp_path):
     assert max(bottoms) < 745
     assert out[1].get_text().strip()
     note = TextBlock(
-        page=0, rect=pymupdf.Rect(53, 750, 200, 762),
+        page=0,
+        rect=pymupdf.Rect(53, 750, 200, 762),
         line_rects=[pymupdf.Rect(53, 750, 200, 762)],
-        text="1 Note.", size=8, color="#000", bold=False,
+        text="1 Note.",
+        size=8,
+        color="#000",
+        bold=False,
     )
     kept = _room_below(out[0], note, 750, 53, 200, [note])
     assert kept > 780
@@ -7396,13 +8954,19 @@ def test_cross_column_host_stops_above_kept_formula(tmp_path):
     lower = block((311, 300, 540, 400), "While stochastic gradient is simple and effective, it needs tuning.")
     paragraph = "其中训练数据集按小批量逐步处理，每一步都用小批量来近似损失函数的梯度。" * 6
     out = _render_translated(
-        src, [host, tail, lower], [paragraph, SPILL_TAIL, "随机梯度下降简单而有效，但需要仔细调节。"], "zh-CN",
+        src,
+        [host, tail, lower],
+        [paragraph, SPILL_TAIL, "随机梯度下降简单而有效，但需要仔细调节。"],
+        "zh-CN",
         continuations={id(host): tail},
     )
     chars = [
         pymupdf.Rect(ch["bbox"])
-        for b in out[0].get_text("rawdict")["blocks"] if b.get("type") == 0
-        for line in b["lines"] for span in line["spans"] for ch in span["chars"]
+        for b in out[0].get_text("rawdict")["blocks"]
+        if b.get("type") == 0
+        for line in b["lines"]
+        for span in line["spans"]
+        for ch in span["chars"]
         if "\u4e00" <= ch["c"] <= "\u9fff"
     ]
     left = [rect for rect in chars if rect.x1 < 306]
@@ -7424,26 +8988,47 @@ def test_page_margins_stay_with_the_source(tmp_path):
     top = pymupdf.Rect(53.8, 56.8, 293.0, 90.0)
     bottom = pymupdf.Rect(53.8, 690.0, 293.0, 719.3)
     blocks = [
-        TextBlock(page=0, rect=top, line_rects=[top], text="During query execution, data can be distributed.",
-                  size=9, color="#000000", bold=False),
-        TextBlock(page=0, rect=bottom, line_rects=[bottom],
-                  text="DXL. Decoupling the optimizer from the database system requires a communication mechanism.",
-                  size=9, color="#000000", bold=False),
+        TextBlock(
+            page=0,
+            rect=top,
+            line_rects=[top],
+            text="During query execution, data can be distributed.",
+            size=9,
+            color="#000000",
+            bold=False,
+        ),
+        TextBlock(
+            page=0,
+            rect=bottom,
+            line_rects=[bottom],
+            text="DXL. Decoupling the optimizer from the database system requires a communication mechanism.",
+            size=9,
+            color="#000000",
+            bold=False,
+        ),
     ]
     long = "在查询执行期间，数据可以通过多种方式分布到各个分段节点，包括广播、哈希和复制。" * 6
     out = _render_translated(src, blocks, ["查询执行期间数据会分布到分段节点。", long], "zh-CN")
     chars = [
-        ch for block in out[0].get_text("rawdict")["blocks"] if block.get("type") == 0
-        for line in block["lines"] for span in line["spans"] for ch in span["chars"]
+        ch
+        for block in out[0].get_text("rawdict")["blocks"]
+        if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
+        for ch in span["chars"]
         if "\u4e00" <= ch["c"] <= "\u9fff"
     ]
     assert chars
     assert min(ch["bbox"][1] for ch in chars) <= 57.6
     assert max(ch["bbox"][3] for ch in chars) <= 719.5
     note = TextBlock(
-        page=0, rect=pymupdf.Rect(53, 750, 200, 762),
+        page=0,
+        rect=pymupdf.Rect(53, 750, 200, 762),
         line_rects=[pymupdf.Rect(53, 750, 200, 762)],
-        text="1 Note.", size=8, color="#000", bold=False,
+        text="1 Note.",
+        size=8,
+        color="#000",
+        bold=False,
     )
     assert _room_below(out[0], note, 750, 53, 200, [note]) > 780
 
@@ -7464,27 +9049,49 @@ def test_last_short_line_keeps_body_size(tmp_path):
     heading = pymupdf.Rect(72, 640.0, 280, 652.0)
     pair = pymupdf.Rect(72, 685.5, 540, 710.0)
     blocks = [
-        TextBlock(page=0, rect=above, line_rects=[above],
-                  text="Copying data on every read and write access slows the DBMS.",
-                  size=10.9, color="#000000", bold=False),
-        TextBlock(page=0, rect=last, line_rects=[last],
-                  text="Default libc malloc is slow. Never use it.",
-                  size=10.9, color="#000000", bold=False),
-        TextBlock(page=1, rect=heading, line_rects=[heading],
-                  text="Optimistic Concurrency Control.",
-                  size=12, color="#000000", bold=True),
         TextBlock(
-            page=1, rect=pair,
+            page=0,
+            rect=above,
+            line_rects=[above],
+            text="Copying data on every read and write access slows the DBMS.",
+            size=10.9,
+            color="#000000",
+            bold=False,
+        ),
+        TextBlock(
+            page=0,
+            rect=last,
+            line_rects=[last],
+            text="Default libc malloc is slow. Never use it.",
+            size=10.9,
+            color="#000000",
+            bold=False,
+        ),
+        TextBlock(
+            page=1,
+            rect=heading,
+            line_rects=[heading],
+            text="Optimistic Concurrency Control.",
+            size=12,
+            color="#000000",
+            bold=True,
+        ),
+        TextBlock(
+            page=1,
+            rect=pair,
             line_rects=[
                 pymupdf.Rect(72, 685.5, 540, 696.4),
                 pymupdf.Rect(72, 699.1, 265, 710.0),
             ],
             text="Store all changes in a private workspace and merge them at commit time.",
-            size=10.9, color="#000000", bold=False,
+            size=10.9,
+            color="#000000",
+            bold=False,
         ),
     ]
     out = _render_translated(
-        src, blocks,
+        src,
+        blocks,
         [
             "每次读和写都会复制数据，因此数据库会变慢。",
             "默认的 libc malloc 速度很慢。永远不要使用它。",
@@ -7497,7 +9104,8 @@ def test_last_short_line_keeps_body_size(tmp_path):
     def sizes(page: pymupdf.Page, y0: float) -> list[float]:
         found = [
             span["size"]
-            for block in page.get_text("dict")["blocks"] if block.get("type") == 0
+            for block in page.get_text("dict")["blocks"]
+            if block.get("type") == 0
             for line in block["lines"]
             for span in line["spans"]
             if span["text"].strip() and span["bbox"][1] >= y0
@@ -7511,7 +9119,8 @@ def test_last_short_line_keeps_body_size(tmp_path):
     bottoms = [
         ch["bbox"][3]
         for page in out
-        for block in page.get_text("rawdict")["blocks"] if block.get("type") == 0
+        for block in page.get_text("rawdict")["blocks"]
+        if block.get("type") == 0
         for line in block["lines"]
         for span in line["spans"]
         for ch in span["chars"]
@@ -7533,8 +9142,13 @@ def test_cjk_lines_share_the_right_edge(tmp_path):
     doc.close()
     rect = pymupdf.Rect(40, 40, 360, 140)
     block = TextBlock(
-        page=0, rect=rect, line_rects=[rect],
-        text="source paragraph that differs", size=12, color="#111111", bold=False,
+        page=0,
+        rect=rect,
+        line_rects=[rect],
+        text="source paragraph that differs",
+        size=12,
+        color="#111111",
+        bold=False,
     )
     text = "我们在此提出一种采样机制，在训练过程中随机决定使用真实的前一个词元，还是来自模型本身的估计值。"
     out = _render_translated(src, [block], [text], "zh-CN")
@@ -7563,8 +9177,13 @@ def test_em_dash_line_stays_inside_the_box(tmp_path):
     doc.close()
     rect = pymupdf.Rect(40, 40, 280, 160)
     block = TextBlock(
-        page=0, rect=rect, line_rects=[rect],
-        text="source paragraph that differs", size=12, color="#111111", bold=False,
+        page=0,
+        rect=rect,
+        line_rects=[rect],
+        text="source paragraph that differs",
+        size=12,
+        color="#111111",
+        bold=False,
     )
     text = "标准配置——每一帧都经过 HMM 对齐，破折号不能再多挤出一个字到栏外去。"
     out = _render_translated(src, [block], [text], "zh-CN")
@@ -7591,10 +9210,17 @@ def test_italic_marks_still_justify_the_line(tmp_path):
     doc.close()
     rect = pymupdf.Rect(40, 40, 360, 140)
     block = TextBlock(
-        page=0, rect=rect, line_rects=[rect],
-        text="source paragraph that differs", size=12, color="#111111", bold=False,
+        page=0,
+        rect=rect,
+        line_rects=[rect],
+        text="source paragraph that differs",
+        size=12,
+        color="#111111",
+        bold=False,
     )
-    text = "我们在此提出一种{i}均匀计划采样{/i}机制，在训练过程中随机决定使用真实的前一个词元，还是来自模型本身的估计值。"
+    text = (
+        "我们在此提出一种{i}均匀计划采样{/i}机制，在训练过程中随机决定使用真实的前一个词元，还是来自模型本身的估计值。"
+    )
     out = _render_translated(src, [block], [text], "zh-CN")
     grouped = _group_chars(_cjk_chars(out[0]))
     assert len(grouped) >= 2
@@ -7619,15 +9245,28 @@ def test_formula_does_not_jump_to_the_line_above(tmp_path):
     box = d[0].search_for("t")[0]
     d.close()
     formula = {
-        "bbox": box, "name": "f0_1.png", "w": round(box.width, 1), "h": round(box.height, 1),
-        "d": 2.0, "raise": 0.0, "text": "t", "has_img": True, "page": 0, "mid": 0,
+        "bbox": box,
+        "name": "f0_1.png",
+        "w": round(box.width, 1),
+        "h": round(box.height, 1),
+        "d": 2.0,
+        "raise": 0.0,
+        "text": "t",
+        "has_img": True,
+        "page": 0,
+        "mid": 0,
         "png": pymupdf.open(src)[0].get_pixmap(clip=box, dpi=72).tobytes("png"),
         "spans": [{"bbox": tuple(box), "text": "t", "size": 10, "origin": (box.x0, box.y1 - 2)}],
     }
     rect = pymupdf.Rect(40, 40, 360, 160)
     block = TextBlock(
-        page=0, rect=rect, line_rects=[rect],
-        text="source paragraph", size=11, color="#000", bold=False,
+        page=0,
+        rect=rect,
+        line_rects=[rect],
+        text="source paragraph",
+        size=11,
+        color="#000",
+        bold=False,
     )
     sentinel = "\x01i\x021\x01/i\x02"
     # 零宽空格让字形写入失败，改走会测量右缘的 HTML 盒子。
@@ -7659,30 +9298,52 @@ def test_italic_run_does_not_open_a_wide_gap_before_the_formula(tmp_path):
     y_box = d[0].search_for("y=")[0]
     d.close()
     formula = {
-        "bbox": y_box, "name": "f0_1.png", "w": round(y_box.width, 1), "h": round(y_box.height, 1),
-        "d": 2.0, "raise": 0.0, "text": "y=", "has_img": True, "page": 0, "mid": 0,
+        "bbox": y_box,
+        "name": "f0_1.png",
+        "w": round(y_box.width, 1),
+        "h": round(y_box.height, 1),
+        "d": 2.0,
+        "raise": 0.0,
+        "text": "y=",
+        "has_img": True,
+        "page": 0,
+        "mid": 0,
         "png": pymupdf.open(src)[0].get_pixmap(clip=y_box, dpi=72).tobytes("png"),
         "spans": [{"bbox": tuple(y_box), "text": "y=", "size": 10, "origin": (y_box.x0, y_box.y1 - 2)}],
     }
     rect = pymupdf.Rect(40, 40, 460, 120)
     block = TextBlock(
-        page=0, rect=rect, line_rects=[rect],
-        text="the i-th token", size=11, color="#000", bold=False,
+        page=0,
+        rect=rect,
+        line_rects=[rect],
+        text="the i-th token",
+        size=11,
+        color="#000",
+        bold=False,
     )
     sentinel = "\x01i\x021\x01/i\x02"
     out = _render_translated(
-        src, [block], [f"第{{i}} i-th{{/i}}个词元{sentinel}。"], "zh-CN", {id(block): [formula]},
+        src,
+        [block],
+        [f"第{{i}} i-th{{/i}}个词元{sentinel}。"],
+        "zh-CN",
+        {id(block): [formula]},
     )
     page = out[0]
     spans = [
         span
-        for blk in page.get_text("dict")["blocks"] if blk.get("type") == 0
-        for ln in blk["lines"] for span in ln["spans"]
+        for blk in page.get_text("dict")["blocks"]
+        if blk.get("type") == 0
+        for ln in blk["lines"]
+        for span in ln["spans"]
     ]
     chars = [
         ch
-        for blk in page.get_text("rawdict")["blocks"] if blk.get("type") == 0
-        for ln in blk["lines"] for span in ln["spans"] for ch in span["chars"]
+        for blk in page.get_text("rawdict")["blocks"]
+        if blk.get("type") == 0
+        for ln in blk["lines"]
+        for span in ln["spans"]
+        for ch in span["chars"]
     ]
     di = next(ch for ch in chars if ch["c"] == "第")
     ith = next(ch for ch in chars if ch["c"] == "i" and ch["bbox"][0] > di["bbox"][2])
@@ -7713,19 +9374,36 @@ def test_formula_keeps_a_space_before_following_text(tmp_path):
     y_box = d[0].search_for("y=")[0]
     d.close()
     formula = {
-        "bbox": y_box, "name": "f0_1.png", "w": round(y_box.width, 1), "h": round(y_box.height, 1),
-        "d": 2.0, "raise": 0.0, "text": "y=", "has_img": True, "page": 0, "mid": 0,
+        "bbox": y_box,
+        "name": "f0_1.png",
+        "w": round(y_box.width, 1),
+        "h": round(y_box.height, 1),
+        "d": 2.0,
+        "raise": 0.0,
+        "text": "y=",
+        "has_img": True,
+        "page": 0,
+        "mid": 0,
         "png": pymupdf.open(src)[0].get_pixmap(clip=y_box, dpi=72).tobytes("png"),
         "spans": [{"bbox": tuple(y_box), "text": "y=", "size": 10, "origin": (y_box.x0, y_box.y1 - 2)}],
     }
     rect = pymupdf.Rect(40, 50, 420, 110)
     block = TextBlock(
-        page=0, rect=rect, line_rects=[rect, pymupdf.Rect(y_box)],
-        text="take the value", size=11, color="#000", bold=False,
+        page=0,
+        rect=rect,
+        line_rects=[rect, pymupdf.Rect(y_box)],
+        text="take the value",
+        size=11,
+        color="#000",
+        bold=False,
     )
     sentinel = "\x01i\x021\x01/i\x02"
     out = _render_translated(
-        src, [block], [f"前面{sentinel}后面还有一段说明文字。"], "zh-CN", {id(block): [formula]},
+        src,
+        [block],
+        [f"前面{sentinel}后面还有一段说明文字。"],
+        "zh-CN",
+        {id(block): [formula]},
     )
     page = out[0]
     y_hit = page.search_for("y=")
@@ -7735,7 +9413,11 @@ def test_formula_keeps_a_space_before_following_text(tmp_path):
     assert gap >= 2.5
     # 标点仍然贴着公式，不在 ) 前加空格
     close = _render_translated(
-        src, [block], [f"取{sentinel})。"], "zh-CN", {id(block): [formula]},
+        src,
+        [block],
+        [f"取{sentinel})。"],
+        "zh-CN",
+        {id(block): [formula]},
     )
     paren = close[0].search_for(")")
     painted = close[0].search_for("y=")
@@ -7775,20 +9457,36 @@ def test_block_of_typewriter_lines_is_code_and_inline_names_are_not():
     def span(text, font):
         return {"text": text, "font": font, "size": 10.0, "bbox": (0, 0, 10, 10), "origin": (0, 8)}
 
-    sql = _block_with_spans([
-        [span("SELECT Part, Customer, SUM(SP) ", "Courier"), span("AS ", "Times-Roman"), span("TotalSales", "Courier")],
-        [span("FROM R", "Times-Roman")],
-    ])
+    sql = _block_with_spans(
+        [
+            [
+                span("SELECT Part, Customer, SUM(SP) ", "Courier"),
+                span("AS ", "Times-Roman"),
+                span("TotalSales", "Courier"),
+            ],
+            [span("FROM R", "Times-Roman")],
+        ]
+    )
     assert _code_block(sql)
-    prose = _block_with_spans([[
-        span("There are three dimensions we are interested in: ", "Times-Roman"),
-        span("part, supplier, ", "Courier"), span("and customer.", "Times-Roman"),
-    ]])
+    prose = _block_with_spans(
+        [
+            [
+                span("There are three dimensions we are interested in: ", "Times-Roman"),
+                span("part, supplier, ", "Courier"),
+                span("and customer.", "Times-Roman"),
+            ]
+        ]
+    )
     assert not _code_block(prose)
     # 表格一行：斜体的行名后面是几格等宽记号
-    row = _block_with_spans([[
-        span("rooster", "NimbusRomNo9L-ReguItal"), span(" -female, +chicken, +adult", "Courier"),
-    ]])
+    row = _block_with_spans(
+        [
+            [
+                span("rooster", "NimbusRomNo9L-ReguItal"),
+                span(" -female, +chicken, +adult", "Courier"),
+            ]
+        ]
+    )
     assert _code_block(row)
 
 
@@ -7799,9 +9497,16 @@ def test_lone_relation_symbol_from_a_symbol_font_stays_a_formula():
     def span(text, font, x0):
         return {"text": text, "font": font, "size": 10.0, "bbox": (x0, 0, x0 + 20, 10), "origin": (x0, 8)}
 
-    block = _block_with_spans([[
-        span("Thus (part) ", "Times-Roman", 0), span("<", "CMSY10", 60), span(" (part, customer).", "Times-Roman", 70),
-    ]], size=10.0)
+    block = _block_with_spans(
+        [
+            [
+                span("Thus (part) ", "Times-Roman", 0),
+                span("<", "CMSY10", 60),
+                span(" (part, customer).", "Times-Roman", 70),
+            ]
+        ],
+        size=10.0,
+    )
     sent, formulas = _placeholderize(block)
     assert sent == "Thus (part) {v1} (part, customer)." and len(formulas) == 1
 
@@ -7812,8 +9517,9 @@ def test_pdf_biblio_bare_label_line_does_not_exit():
     from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size=10.7):
-        return TextBlock(page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[],
-                         text=text, size=size, color="#000000", bold=False)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=False
+        )
 
     blocks = [
         blk("We thank the reviewers for help with the experiments."),
@@ -7833,10 +9539,16 @@ def test_inline_typewriter_words_keep_their_glyphs():
     def span(text, font, x0):
         return {"text": text, "font": font, "size": 10.0, "bbox": (x0, 0, x0 + 40, 10), "origin": (x0, 8)}
 
-    block = _block_with_spans([[
-        span("the total sales of ", "Times-Roman", 0), span("part", "Courier", 90),
-        span(" that was bought", "Times-Roman", 120),
-    ]], size=10.0)
+    block = _block_with_spans(
+        [
+            [
+                span("the total sales of ", "Times-Roman", 0),
+                span("part", "Courier", 90),
+                span(" that was bought", "Times-Roman", 120),
+            ]
+        ],
+        size=10.0,
+    )
     sent, formulas = _placeholderize(block)
     assert sent == "the total sales of {v1} that was bought" and len(formulas) == 1
 
@@ -7849,7 +9561,6 @@ def test_list_number_keeps_its_point():
     assert _list_number("Plain sentence.", "1。不动") == "1。不动"
     assert _list_number("Figure 1: The eight views", "图一: 八个视图") == "图 1: 八个视图"
     assert _list_number("Figure 12: Bars", "图 12: 条") == "图 12: 条"
-
 
 
 def test_sentence_around_formulas_is_translated_and_bare_formula_line_is_not():
@@ -7865,8 +9576,18 @@ def test_sentence_around_formulas_is_translated_and_bare_formula_line_is_not():
             page.insert_text((x, y), text, fontsize=10, fontname=font)
             x += pymupdf.get_text_length(text, fontname=font, fontsize=10)
 
-    write(60, [("(b) If ", "Times-Roman"), ("C(v) < C(u)", "Symbol"), (", then ", "Times-Roman"),
-               ("B = C(v) - C(u)", "Symbol"), (". Otherwise, ", "Times-Roman"), ("B = 0", "Symbol"), (".", "Times-Roman")])
+    write(
+        60,
+        [
+            ("(b) If ", "Times-Roman"),
+            ("C(v) < C(u)", "Symbol"),
+            (", then ", "Times-Roman"),
+            ("B = C(v) - C(u)", "Symbol"),
+            (". Otherwise, ", "Times-Roman"),
+            ("B = 0", "Symbol"),
+            (".", "Times-Roman"),
+        ],
+    )
     write(120, [("For all ", "Times-Roman"), ("i: b - x - x - y < a + a + a + a", "Symbol"), (".", "Times-Roman")])
     texts = [block.text for block in extract_blocks(doc)]
     assert any("Otherwise" in text for text in texts)
@@ -7875,9 +9596,16 @@ def test_sentence_around_formulas_is_translated_and_bare_formula_line_is_not():
 
 def _page_data(*lines):
     """get_text("dict") 的最小结构：每个参数是一行的 span 列表 (字体, 文字)。"""
-    return {"blocks": [{"type": 0, "lines": [
-        {"spans": [{"font": font, "text": text, "size": 10.0} for font, text in spans]} for spans in lines
-    ]}]}
+    return {
+        "blocks": [
+            {
+                "type": 0,
+                "lines": [
+                    {"spans": [{"font": font, "text": text, "size": 10.0} for font, text in spans]} for spans in lines
+                ],
+            }
+        ]
+    }
 
 
 def test_computer_modern_upright_is_math_when_the_body_is_times():
@@ -7903,7 +9631,12 @@ def test_a_font_that_writes_math_alphabet_letters_is_math():
     from app.formats.pdf_math import _mark_math_alphabet
 
     data = _page_data(
-        [("Cochineal-Roman", "fitted a hyperbola "), ("zxcMI", "𝑁("), ("zxcMI", "𝑡"), ("Cochineal-Roman", " to two millennia")],
+        [
+            ("Cochineal-Roman", "fitted a hyperbola "),
+            ("zxcMI", "𝑁("),
+            ("zxcMI", "𝑡"),
+            ("Cochineal-Roman", " to two millennia"),
+        ],
         [("Cochineal-Roman", "where 𝑥 is the count of " * 3)],
     )
     _mark_math_alphabet([data])
@@ -7924,8 +9657,12 @@ def test_a_line_split_into_two_blocks_is_put_back_together():
     tail = line(398, 440, 150, 163, "1 and β")
     nxt = line(100, 300, 162, 174, "we denote the power t.")
     other = line(100, 400, 200, 212, "Require: a step size")
-    data = {"blocks": [{"type": 0, "bbox": (100, 150, 400, 162), "lines": [head]},
-                       {"type": 0, "bbox": (100, 150, 440, 212), "lines": [tail, nxt, other]}]}
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": (100, 150, 400, 162), "lines": [head]},
+            {"type": 0, "bbox": (100, 150, 440, 212), "lines": [tail, nxt, other]},
+        ]
+    }
     _rejoin_split_lines(data)
     assert data["blocks"][0]["lines"] == [head, tail]
     assert data["blocks"][1]["lines"] == [nxt, other]
@@ -7938,8 +9675,12 @@ def test_a_two_column_gutter_is_not_a_split_line():
         return {"bbox": (x0, 150, x1, 162), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
 
     left, right = line(60, 290, "left column text"), line(305, 540, "right column text")
-    data = {"blocks": [{"type": 0, "bbox": (60, 150, 290, 162), "lines": [left]},
-                       {"type": 0, "bbox": (305, 150, 540, 162), "lines": [right]}]}
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": (60, 150, 290, 162), "lines": [left]},
+            {"type": 0, "bbox": (305, 150, 540, 162), "lines": [right]},
+        ]
+    }
     _rejoin_split_lines(data)
     assert data["blocks"][0]["lines"] == [left] and data["blocks"][1]["lines"] == [right]
 
@@ -7952,15 +9693,20 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
         box = (x0, y0, x1, y1 if y1 is not None else y0 + 13)
         return {"bbox": box, "dir": (1, 0), "spans": [{"text": text, "font": font, "size": size, "bbox": box}]}
 
-    para = [line(72, 301.3, 638 + 12 * i, "ducing internal covariate shift, and in doing so dramati-")
-            for i in range(4)]
+    para = [
+        line(72, 301.3, 638 + 12 * i, "ducing internal covariate shift, and in doing so dramati-") for i in range(4)
+    ]
     formula = line(311, 540, 650, "x = u + b", "CMMI10")
     rest = line(311, 540, 662, "the training set, and E[x] is the mean")
     number = line(311, 326, 659, "3.2", "Times-Bold", 14.3)
     title = line(337.9, 540, 659, "Batch-Normalized Convolutional Net-", "Times-Bold", 14.3)
-    data = {"blocks": [{"type": 0, "bbox": (72, 638, 301.3, 687), "lines": list(para)},
-                       {"type": 0, "bbox": (311, 650, 540, 675), "lines": [formula, rest]},
-                       {"type": 0, "bbox": (311, 659, 540, 672), "lines": [number, title]}]}
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": (72, 638, 301.3, 687), "lines": list(para)},
+            {"type": 0, "bbox": (311, 650, 540, 675), "lines": [formula, rest]},
+            {"type": 0, "bbox": (311, 659, 540, 672), "lines": [number, title]},
+        ]
+    }
     _rejoin_split_lines(data)
     assert [block["lines"] for block in data["blocks"]] == [para, [formula, rest], [number, title]]
 
@@ -7969,8 +9715,12 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
     second = line(72, 301.1, 337.5, "dimension of x = Wu, with a separate pair of learned")
     last = line(72, 219.2, 345.9, "parameters per dimension.", y1=362.8)
     tall = line(311, 539.0, 329.1, "JJT . Thus, JJT = I, and so all singular values of J", "CMMI10", y1=346.0)
-    data = {"blocks": [{"type": 0, "bbox": (72, 325.6, 301.1, 362.8), "lines": [first, second, last]},
-                       {"type": 0, "bbox": (311, 329.1, 539, 346.0), "lines": [tall]}]}
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": (72, 325.6, 301.1, 362.8), "lines": [first, second, last]},
+            {"type": 0, "bbox": (311, 329.1, 539, 346.0), "lines": [tall]},
+        ]
+    }
     _rejoin_split_lines(data)
     assert data["blocks"][1]["lines"] == [tall]
 
@@ -7978,18 +9728,28 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
     numerator = line(414.3, 418.2, 82.5, "1", "CMR7", 7.0, 89.4)
     denominator = line(413.5, 419.0, 89.8, "L", "CMMI7", 7.0, 96.8)
     total = line(421.8, 437.8, 81.4, "PL", "CMEX10")
-    data = {"blocks": [{"type": 0, "bbox": (413.5, 82.5, 419.0, 102.8), "lines": [numerator, denominator]},
-                       {"type": 0, "bbox": (421.8, 81.4, 437.8, 94.4), "lines": [total]}]}
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": (413.5, 82.5, 419.0, 102.8), "lines": [numerator, denominator]},
+            {"type": 0, "bbox": (421.8, 81.4, 437.8, 94.4), "lines": [total]},
+        ]
+    }
     _rejoin_split_lines(data)
     assert total in data["blocks"][0]["lines"]
 
     # 栏顶的大号标题和左栏段落同一基线，左栏只剩一整行可比：字号大一截，不是那一行的后半截
     top = line(72, 301.1, 35.5, "not have to readjust to compensate for the change in the")
     tail = line(72, 138.8, 47.5, "distribution of x.")
-    heading = [line(311, 318.2, 31, "2", "Times-Bold", 14.3, 50.9),
-               line(332.5, 385.3, 31, "Towards", "Times-Bold", 14.3, 50.9)]
-    data = {"blocks": [{"type": 0, "bbox": (72, 35.5, 301.1, 60.8), "lines": [top, tail]},
-                       {"type": 0, "bbox": (311, 31, 385.3, 50.9), "lines": list(heading)}]}
+    heading = [
+        line(311, 318.2, 31, "2", "Times-Bold", 14.3, 50.9),
+        line(332.5, 385.3, 31, "Towards", "Times-Bold", 14.3, 50.9),
+    ]
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": (72, 35.5, 301.1, 60.8), "lines": [top, tail]},
+            {"type": 0, "bbox": (311, 31, 385.3, 50.9), "lines": list(heading)},
+        ]
+    }
     _rejoin_split_lines(data)
     assert data["blocks"][1]["lines"] == heading
 
@@ -8002,8 +9762,11 @@ def test_the_hole_for_a_neighbour_stays_inside_its_font_box():
     def box(span):
         return tuple(round(v, 1) for v in _hole_ink(span))
 
-    url = {"text": " https://artofproblemsolving.com", "bbox": (121.2, 420.0, 525.0, 432.0),
-           "ink": (121.2, 420.0, 525.0, 437.5)}
+    url = {
+        "text": " https://artofproblemsolving.com",
+        "bbox": (121.2, 420.0, 525.0, 432.0),
+        "ink": (121.2, 420.0, 525.0, 437.5),
+    }
     assert box(url) == (121.2, 420.0, 525.0, 432.0)
     arrow = {"text": "←", "bbox": (130.2, 214.0, 139.9, 232.0), "ink": (130.2, 221.3, 139.9, 226.4)}
     assert box(arrow) == (130.2, 221.3, 139.9, 226.4)
@@ -8028,17 +9791,27 @@ def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line():
         return {"bbox": tuple(box), "dir": (1, 0), "spans": list(spans)}
 
     lead = line(span("Equation (10) reveals that we must predict (", "Times-Roman", 10.0, (108, 187.2, 305, 199.9)))
-    minus = line(span("x", "CMBX10", 10.0, (307.6, 187.3, 314, 206.1), (307.6, 190.5, 314, 197.2)),
-                 span(" −", "CMSY10", 10.0, (314, 187.3, 327.1, 206.1), (318, 192.8, 327.1, 193.6)))
+    minus = line(
+        span("x", "CMBX10", 10.0, (307.6, 187.3, 314, 206.1), (307.6, 190.5, 314, 197.2)),
+        span(" −", "CMSY10", 10.0, (314, 187.3, 327.1, 206.1), (318, 192.8, 327.1, 193.6)),
+    )
     numerator = line(span("β", "CMMI7", 7.0, (339.2, 185.3, 344, 192.8), (339.2, 185.6, 344, 191.9)))
-    denominator = line(span("√", "CMSY7", 7.0, (330.5, 187.2, 337, 205.7), (330.5, 193.3, 337, 200.0)),
-                       span("α", "CMMI7", 7.0, (337, 187.2, 341, 205.7), (337, 195.4, 341, 199.8)),
-                       span(" ϵ", "CMMIB10", 10.0, (355.2, 187.2, 361.7, 205.7), (355.2, 194.0, 361.7, 198.4)))
+    denominator = line(
+        span("√", "CMSY7", 7.0, (330.5, 187.2, 337, 205.7), (330.5, 193.3, 337, 200.0)),
+        span("α", "CMMI7", 7.0, (337, 187.2, 341, 205.7), (337, 195.4, 341, 199.8)),
+        span(" ϵ", "CMMIB10", 10.0, (355.2, 187.2, 361.7, 205.7), (355.2, 194.0, 361.7, 198.4)),
+    )
     given = line(span("given x. Since x is available as", "Times-Roman", 10.0, (370.2, 187.4, 504, 198.9)))
-    nxt = line(span("input to the model, we may choose the parameterization", "Times-Roman", 10.0, (108, 201.7, 331.3, 211.7)))
-    data = {"blocks": [{"type": 0, "bbox": (108, 187.2, 305, 199.9), "lines": [lead]},
-                       {"type": 0, "bbox": (307.6, 185.3, 361.7, 206.1), "lines": [minus, numerator, denominator]},
-                       {"type": 0, "bbox": (108, 187.4, 504, 211.7), "lines": [given, nxt]}]}
+    nxt = line(
+        span("input to the model, we may choose the parameterization", "Times-Roman", 10.0, (108, 201.7, 331.3, 211.7))
+    )
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": (108, 187.2, 305, 199.9), "lines": [lead]},
+            {"type": 0, "bbox": (307.6, 185.3, 361.7, 206.1), "lines": [minus, numerator, denominator]},
+            {"type": 0, "bbox": (108, 187.4, 504, 211.7), "lines": [given, nxt]},
+        ]
+    }
     _rejoin_split_lines(data)
     host = next(block for block in data["blocks"] if lead in block["lines"])
     assert denominator in host["lines"] and numerator in host["lines"]
@@ -8057,9 +9830,13 @@ def test_a_split_line_goes_to_its_nearest_left_neighbour():
     far = line(72, 262, 96, "the rule is", "Times-Roman")
     near = line(250, 264, 104, "c =")
     piece = line(265, 300, 100, "d − e")
-    data = {"blocks": [{"type": 0, "bbox": (72, 96, 262, 106), "lines": [far]},
-                       {"type": 0, "bbox": (250, 104, 264, 114), "lines": [near]},
-                       {"type": 0, "bbox": (265, 100, 300, 110), "lines": [piece]}]}
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": (72, 96, 262, 106), "lines": [far]},
+            {"type": 0, "bbox": (250, 104, 264, 114), "lines": [near]},
+            {"type": 0, "bbox": (265, 100, 300, 110), "lines": [piece]},
+        ]
+    }
     _rejoin_split_lines(data)
     assert data["blocks"][1]["lines"] == [near, piece]
 
@@ -8073,8 +9850,11 @@ def test_a_justified_heading_split_word_by_word_stays_one_paragraph():
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 20), [span])
 
     items = [
-        item("2", 311, 318, 31), item("Towards", 333, 385, 31), item("Reducing", 408, 466, 31),
-        item("Internal", 490, 540, 31), item("Covariate Shift", 333, 426, 49),
+        item("2", 311, 318, 31),
+        item("Towards", 333, 385, 31),
+        item("Reducing", 408, 466, 31),
+        item("Internal", 490, 540, 31),
+        item("Covariate Shift", 333, 426, 49),
     ]
     assert _split_lines(items) == [[0, 1, 2, 3, 4]]
 
@@ -8119,8 +9899,12 @@ def test_a_block_is_sized_by_its_base_line_text_not_a_subscript():
     def span(text, font, size, y):
         return {"text": text, "font": font, "size": size, "origin": (0, y)}
 
-    line = [span("and", "NimbusRomNo9L-Regu", 10, 225.0), span(" W", "CMMI10", 10, 225.0),
-            span("model", "NimbusRomNo9L-Regu", 5, 227.6), span(".", "NimbusRomNo9L-Regu", 10, 225.0)]
+    line = [
+        span("and", "NimbusRomNo9L-Regu", 10, 225.0),
+        span(" W", "CMMI10", 10, 225.0),
+        span("model", "NimbusRomNo9L-Regu", 5, 227.6),
+        span(".", "NimbusRomNo9L-Regu", 10, 225.0),
+    ]
     assert _main_span([line])["text"] == "and"
 
 
@@ -8133,8 +9917,15 @@ def test_a_formula_line_wrapped_from_a_full_line_is_kept():
 
     frame = TextFrame(108, 504, 72, 720, 10)
     line = pymupdf.Rect(107.5, 203.1, 502.8, 217.6)
-    above = TextBlock(page=4, rect=line, line_rects=[line], text="Where the projections are parameter matrices W Q",
-                      size=10, color="#000000", bold=False)
+    above = TextBlock(
+        page=4,
+        rect=line,
+        line_rects=[line],
+        text="Where the projections are parameter matrices W Q",
+        size=10,
+        color="#000000",
+        bold=False,
+    )
     tail = pymupdf.Rect(108, 215.6, 201.2, 227.9)
     rows = [pymupdf.Rect(108, y, 503, y + 12) for y in (100, 112, 124, 136)]
     assert _wraps_from_above([above], 4, tail, "and W O ∈Rhdv×dmodel.", rows, frame)
@@ -8143,16 +9934,25 @@ def test_a_formula_line_wrapped_from_a_full_line_is_kept():
     assert not _wraps_from_above([stacked], 4, tail, "ht = g(Uht−1 + Wet)", rows, frame)
     # 两栏排时上一行写到的是左栏的右缘，不是版心右缘
     column = pymupdf.Rect(108, 203.1, 297.5, 217.6)
-    left = TextBlock(page=4, rect=column, line_rects=[column], text="where the mean is computed over",
-                     size=10, color="#000000", bold=False)
+    left = TextBlock(
+        page=4,
+        rect=column,
+        line_rects=[column],
+        text="where the mean is computed over",
+        size=10,
+        color="#000000",
+        bold=False,
+    )
     rows = [pymupdf.Rect(108, y, 298, y + 12) for y in (100, 112, 124, 136)]
     assert _wraps_from_above([left], 4, tail, "and x̂ = (x − µ)/σ.", rows, frame)
     # 居中排的图注，末行和上面的整行中线对齐
     first, second = pymupdf.Rect(83.2, 135.0, 511.7, 147.1), pymupdf.Rect(87.9, 149.7, 507.8, 160.6)
     caption = [
         TextBlock(page=4, rect=line, line_rects=[line], text=text, size=10.9, color="#000000", bold=False)
-        for line, text in ((first, "Table 15 | Comparison of models on"),
-                           (second, "Numbers in bold denote the performance is statistically"))
+        for line, text in (
+            (first, "Table 15 | Comparison of models on"),
+            (second, "Numbers in bold denote the performance is statistically"),
+        )
     ]
     end = pymupdf.Rect(219.6, 161.2, 375.7, 174.2)
     assert _wraps_from_above(caption, 4, end, "significant (t−test with 𝑝< 0.01).", [], frame)
@@ -8203,11 +10003,25 @@ def test_small_caps_heading_is_sent_without_size_marks():
     from app.formats.pdf_units import _placeholderize
 
     def span(text, size, x0):
-        return {"text": text, "font": "NimbusRomNo9L-Regu", "size": size, "flags": 0,
-                "bbox": (x0, 100, x0 + 8 * len(text), 112), "origin": (x0, 110)}
+        return {
+            "text": text,
+            "font": "NimbusRomNo9L-Regu",
+            "size": size,
+            "flags": 0,
+            "bbox": (x0, 100, x0 + 8 * len(text), 112),
+            "origin": (x0, 110),
+        }
 
-    spans = [span("2.1", 12.5, 100), span(" ", 12.5, 120), span("A", 12.5, 125), span("DAM", 10.0, 133),
-             span("’", 12.5, 157), span("S", 10.0, 161), span(" ", 10.0, 169), span("UPDATE", 10.0, 173)]
+    spans = [
+        span("2.1", 12.5, 100),
+        span(" ", 12.5, 120),
+        span("A", 12.5, 125),
+        span("DAM", 10.0, 133),
+        span("’", 12.5, 157),
+        span("S", 10.0, 161),
+        span(" ", 10.0, 169),
+        span("UPDATE", 10.0, 173),
+    ]
     rect = pymupdf.Rect(100, 100, 230, 112)
     block = TextBlock(0, rect, [rect], "2.1 ADAM’S UPDATE", 10.0, "#000", False, span_lines=[spans])
     sent, _ = _placeholderize(block, 0)
@@ -8220,11 +10034,23 @@ def test_small_caps_words_in_body_text_take_the_body_size():
     from app.formats.pdf_units import _placeholderize
 
     def span(text, size, x0, base=110):
-        return {"text": text, "font": "NimbusRomNo9L-Regu", "size": size, "flags": 0,
-                "bbox": (x0, base - 10, x0 + 5 * len(text), base + 2), "origin": (x0, base)}
+        return {
+            "text": text,
+            "font": "NimbusRomNo9L-Regu",
+            "size": size,
+            "flags": 0,
+            "bbox": (x0, base - 10, x0 + 5 * len(text), base + 2),
+            "origin": (x0, base),
+        }
 
-    spans = [span("roles like", 9.96, 100), span(" ", 7.97, 150), span("AGENT", 7.97, 154),
-             span(", or the", 9.96, 180), span("TM", 7.97, 220, base=106), span(" x", 9.96, 232)]
+    spans = [
+        span("roles like", 9.96, 100),
+        span(" ", 7.97, 150),
+        span("AGENT", 7.97, 154),
+        span(", or the", 9.96, 180),
+        span("TM", 7.97, 220, base=106),
+        span(" x", 9.96, 232),
+    ]
     rect = pymupdf.Rect(100, 100, 245, 112)
     block = TextBlock(0, rect, [rect], "roles like AGENT, or theTM x", 9.96, "#000", False, span_lines=[spans])
     sent, _ = _placeholderize(block, 0)
@@ -8250,8 +10076,12 @@ def test_fraction_pieces_rejoin_their_line_with_less_overlap():
 
     root = line(188, 202.4, 259.0, 271.2, "√αt")
     paren = line(205.8, 211.7, 253.9, 263.8, "(")
-    data = {"blocks": [{"type": 0, "bbox": (108, 258, 202, 274), "lines": [line(108, 184, 258, 274, "to compute x ="), root]},
-                       {"type": 0, "bbox": (205, 253, 212, 264), "lines": [paren]}]}
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": (108, 258, 202, 274), "lines": [line(108, 184, 258, 274, "to compute x ="), root]},
+            {"type": 0, "bbox": (205, 253, 212, 264), "lines": [paren]},
+        ]
+    }
     _rejoin_split_lines(data)
     assert data["blocks"][0]["lines"][-1] is paren
 
@@ -8261,10 +10091,22 @@ def test_math_line_box_follows_glyph_ink():
     from app.formats.pdf_extract import _text_box
     from app.formats.pdf_math import _line_box
 
-    arrow = {"text": "←", "font": "CMSY10", "size": 9.7, "bbox": (130.2, 218.8, 139.9, 235.6),
-             "origin": (130.2, 226.3), "ink": (130.2, 221.3, 139.9, 226.4)}
-    word = {"text": "(Initialize", "font": "NimbusRomNo9L-Regu", "size": 9.7, "bbox": (147.4, 217.3, 194.8, 229.0),
-            "origin": (147.4, 226.3), "ink": (147.4, 219.7, 194.8, 228.0)}
+    arrow = {
+        "text": "←",
+        "font": "CMSY10",
+        "size": 9.7,
+        "bbox": (130.2, 218.8, 139.9, 235.6),
+        "origin": (130.2, 226.3),
+        "ink": (130.2, 221.3, 139.9, 226.4),
+    }
+    word = {
+        "text": "(Initialize",
+        "font": "NimbusRomNo9L-Regu",
+        "size": 9.7,
+        "bbox": (147.4, 217.3, 194.8, 229.0),
+        "origin": (147.4, 226.3),
+        "ink": (147.4, 219.7, 194.8, 228.0),
+    }
     assert [round(v, 1) for v in _text_box(arrow)] == [130.2, 220.7, 139.9, 227.0]
     assert _text_box(word) == pymupdf.Rect(147.4, 217.3, 194.8, 229.0)
     line = {"bbox": (130.2, 217.3, 194.8, 235.6), "spans": [arrow, word]}
@@ -8285,8 +10127,15 @@ def test_formula_pieces_touching_on_one_line_stay_one_paragraph():
         item("√αt", 187.9, 202.4, 263.5, 271.1, ("√αt", "CMSY7", 7.0)),
         item("(", 205.8, 211.7, 253.9, 263.8, ("(", "CMEX10", 10.0)),
         item("xt −", 211.8, 231.3, 260.5, 267.7),
-        item("+σz, where the sampling", 303, 504, 258, 268,
-             ("+σz", "CMMI10", 10.0), (", where the sampling", "NimbusRomNo9L-Regu", 9.9)),
+        item(
+            "+σz, where the sampling",
+            303,
+            504,
+            258,
+            268,
+            ("+σz", "CMMI10", 10.0),
+            (", where the sampling", "NimbusRomNo9L-Regu", 9.9),
+        ),
     ]
     assert _split_lines(items) == [[0, 1, 2, 3, 4, 5]]
 
@@ -8298,9 +10147,15 @@ def test_a_line_with_three_words_among_formulas_is_translated():
     def span(text, font):
         return {"text": text, "font": font}
 
-    spans = [span("p(ϵ)", "CMMI10"), span("Therefore", "Times-Roman"), span(",", "Times-Roman"),
-             span("∫q(z|x)f(z)dz = ∫p(ϵ)f(z)dϵ = ∫p(ϵ)f(g(ϵ,x))dϵ", "CMMI10"), span(".", "Times-Roman"),
-             span("It", "Times-Roman"), span("follows", "Times-Roman")]
+    spans = [
+        span("p(ϵ)", "CMMI10"),
+        span("Therefore", "Times-Roman"),
+        span(",", "Times-Roman"),
+        span("∫q(z|x)f(z)dz = ∫p(ϵ)f(z)dϵ = ∫p(ϵ)f(g(ϵ,x))dϵ", "CMMI10"),
+        span(".", "Times-Roman"),
+        span("It", "Times-Roman"),
+        span("follows", "Times-Roman"),
+    ]
     text = "p(ϵ) Therefore, ∫q(z|x)f(z)dz = ∫p(ϵ)f(z)dϵ = ∫p(ϵ)f(g(ϵ,x))dϵ. It follows"
     assert not _untranslatable(spans, text)
     assert _untranslatable(spans[:4], "p(ϵ) Therefore, ∫q(z|x)f(z)dz = ∫p(ϵ)f(z)dϵ")
@@ -8313,14 +10168,23 @@ def test_an_inline_fraction_rejoins_its_line_in_reading_order():
 
     def line(x0, x1, y0, y1, *spans):
         # Times 正文里的 CMR 提取时已经标成公式
-        return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [
-            {"text": text, "font": font, "size": 10.0, "math": font.startswith("CM")} for text, font in spans]}
+        return {
+            "bbox": (x0, y0, x1, y1),
+            "dir": (1, 0),
+            "spans": [
+                {"text": text, "font": font, "size": 10.0, "math": font.startswith("CM")} for text, font in spans
+            ],
+        }
 
     host = line(72, 219.4, 136, 149.3, ("rameters to be learned, and", "Times-Roman"), ("g(x) =", "CMR10"))
     numerator = line(243.2, 247.2, 137.3, 143.2, ("1", "CMR7"))
     denominator = line(225.6, 301, 136, 151.7, ("1+exp(−x)", "CMR10"), (". As", "Times-Roman"))
-    data = {"blocks": [{"type": 0, "bbox": (72, 136, 247, 149), "lines": [host, numerator]},
-                       {"type": 0, "bbox": (225, 136, 301, 152), "lines": [denominator]}]}
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": (72, 136, 247, 149), "lines": [host, numerator]},
+            {"type": 0, "bbox": (225, 136, 301, 152), "lines": [denominator]},
+        ]
+    }
     _rejoin_split_lines(data)
     assert sorted(map(id, data["blocks"][0]["lines"])) == sorted(map(id, [host, numerator, denominator]))
 
@@ -8332,7 +10196,11 @@ def test_pieces_of_one_row_are_read_left_to_right():
     def item(text, x0, y0, x1, y1):
         return (text, pymupdf.Rect(x0, y0, x1, y1), [])
 
-    host, numerator, denominator = item("g(x) =", 72, 136, 219, 149), item("1", 243, 137, 247, 143), item("1+exp(−x)", 225, 136, 301, 151)
+    host, numerator, denominator = (
+        item("g(x) =", 72, 136, 219, 149),
+        item("1", 243, 137, 247, 143),
+        item("1+exp(−x)", 225, 136, 301, 151),
+    )
     nxt = item("increases, g′(x) tends to zero", 72, 149.7, 301, 163)
     assert _left_to_right([host, numerator, denominator, nxt]) == [host, denominator, numerator, nxt]
 
@@ -8341,11 +10209,19 @@ def test_plain_words_a_wide_gap_apart_are_not_rejoined():
     from app.formats.pdf_extract import _rejoin_split_lines
 
     def line(x0, x1, text):
-        return {"bbox": (x0, 136, x1, 149), "dir": (1, 0), "spans": [{"text": text, "font": "Times-Roman", "size": 10.0}]}
+        return {
+            "bbox": (x0, 136, x1, 149),
+            "dir": (1, 0),
+            "spans": [{"text": text, "font": "Times-Roman", "size": 10.0}],
+        }
 
     left, right = line(72, 219, "learned, and the"), line(227, 301, "output of the layer")
-    data = {"blocks": [{"type": 0, "bbox": (72, 136, 219, 149), "lines": [left]},
-                       {"type": 0, "bbox": (227, 136, 301, 149), "lines": [right]}]}
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": (72, 136, 219, 149), "lines": [left]},
+            {"type": 0, "bbox": (227, 136, 301, 149), "lines": [right]},
+        ]
+    }
     _rejoin_split_lines(data)
     assert data["blocks"][1]["lines"] == [right]
 
@@ -8359,10 +10235,13 @@ def test_a_centred_definition_line_keeps_its_glyphs():
     data = {"blocks": [{"type": 0, "lines": [body] * 4}]}
     margins = _left_margins(data)
     assert margins == [72]
-    spans = [{"text": "(a1, …, an) ⪯ (b1, …, bn)", "font": "CMMI10", "size": 10.0},
-             {"text": "if and only if", "font": "Times-Roman", "size": 10.0},
-             {"text": "ai ⪯ bi", "font": "CMMI10", "size": 10.0},
-             {"text": "for all", "font": "Times-Roman", "size": 10.0}, {"text": "i", "font": "CMMI10", "size": 10.0}]
+    spans = [
+        {"text": "(a1, …, an) ⪯ (b1, …, bn)", "font": "CMMI10", "size": 10.0},
+        {"text": "if and only if", "font": "Times-Roman", "size": 10.0},
+        {"text": "ai ⪯ bi", "font": "CMMI10", "size": 10.0},
+        {"text": "for all", "font": "Times-Roman", "size": 10.0},
+        {"text": "i", "font": "CMMI10", "size": 10.0},
+    ]
     text = "(a1, …, an) ⪯ (b1, …, bn) if and only if ai ⪯ bi for all i"
     assert _displayed(pymupdf.Rect(215, 100, 400, 112), spans, margins)
     assert not _displayed(pymupdf.Rect(72, 100, 400, 112), spans, margins)
@@ -8375,16 +10254,24 @@ def test_a_lone_numerator_goes_back_to_its_fraction():
     from app.formats.pdf_extract import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, *spans):
-        return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [
-            {"text": text, "font": font, "size": size, "bbox": box, "ink": box}
-            for text, font, size, box in spans]}
+        return {
+            "bbox": (x0, y0, x1, y1),
+            "dir": (1, 0),
+            "spans": [
+                {"text": text, "font": font, "size": size, "bbox": box, "ink": box} for text, font, size, box in spans
+            ],
+        }
 
     above = line(108, 504, 243, 262, ("where the model predicts noise", "Times-Roman", 9.9, (108, 243, 504, 262)))
     denominator = line(235, 296, 258, 276, ("√1−αt", "CMSY7", 7.0, (235, 264.4, 260, 270.2)))
     numerator = line(243, 251, 256, 263, ("βt", "CMMI7", 7.0, (243.4, 256.2, 250.7, 262.5)))
-    data = {"blocks": [{"type": 0, "bbox": (108, 243, 504, 262), "lines": [above]},
-                       {"type": 0, "bbox": (235, 258, 296, 276), "lines": [denominator]},
-                       {"type": 0, "bbox": (243, 256, 251, 263), "lines": [numerator]}]}
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": (108, 243, 504, 262), "lines": [above]},
+            {"type": 0, "bbox": (235, 258, 296, 276), "lines": [denominator]},
+            {"type": 0, "bbox": (243, 256, 251, 263), "lines": [numerator]},
+        ]
+    }
     _rejoin_split_lines(data)
     together = [block["lines"] for block in data["blocks"] if numerator in block["lines"]]
     assert len(together) == 1 and sorted(map(id, together[0])) == sorted(map(id, [denominator, numerator]))
@@ -8414,6 +10301,7 @@ def test_fraction_bars_drawn_as_one_pixel_images_are_formula_curves():
     assert stroke.y0 < 263.1 < stroke.y1 and stroke.height >= 0.39
 
     from app.formats.pdf_runs import intersecting_curves
+
     assert intersecting_curves(pymupdf.Rect(234.7, 255.9, 295.8, 276.6), rects)
 
 
@@ -8425,8 +10313,14 @@ def test_a_formula_only_takes_the_rules_its_glyphs_touch():
         spans = [{"text": "x", "ink": ink} for ink in inks]
         return {"bbox": pymupdf.Rect(bbox), "d": 3.0, "spans": spans}
 
-    above = formula((334.3, 131.1, 395.7, 175.0), [(334.3, 133.6, 364.0, 145.2), (364.7, 133.9, 373.2, 145.6), (380.0, 135.9, 395.7, 141.2)])
-    below = formula((355.1, 143.0, 433.7, 179.1), [(355.1, 145.6, 390.0, 157.7), (391.5, 150.6, 413.0, 158.4), (414.0, 148.9, 433.7, 155.1)])
+    above = formula(
+        (334.3, 131.1, 395.7, 175.0),
+        [(334.3, 133.6, 364.0, 145.2), (364.7, 133.9, 373.2, 145.6), (380.0, 135.9, 395.7, 141.2)],
+    )
+    below = formula(
+        (355.1, 143.0, 433.7, 179.1),
+        [(355.1, 145.6, 390.0, 157.7), (391.5, 150.6, 413.0, 158.4), (414.0, 148.9, 433.7, 155.1)],
+    )
     own_radical = pymupdf.Rect(364.7, 138.2, 373.2, 138.6)
     next_radical = pymupdf.Rect(391.5, 150.0, 413.0, 150.4)
     _absorb_one_box(above, [own_radical, next_radical])
@@ -8458,8 +10352,11 @@ def test_a_formula_leaves_the_edge_of_a_proof_box():
     g = {"text": "g", "origin": (493.0, 571.0), "ink": (493.0, 566.5, 496.9, 574.6)}
     paren = {"text": ")", "origin": (497.6, 569.5), "ink": (497.6, 562.5, 501.5, 572.0)}
     top = pymupdf.Rect(496.9, 575.2, 503.3, 575.6)
-    sides = [pymupdf.Rect(496.7, 575.0, 497.1, 582.1), pymupdf.Rect(503.1, 575.0, 503.5, 582.1),
-             pymupdf.Rect(496.9, 581.5, 503.3, 581.9)]
+    sides = [
+        pymupdf.Rect(496.7, 575.0, 497.1, 582.1),
+        pymupdf.Rect(503.1, 575.0, 503.5, 582.1),
+        pymupdf.Rect(496.9, 581.5, 503.3, 581.9),
+    ]
     formula = {"bbox": pymupdf.Rect(461.7, 561.9, 501.5, 573.0), "d": 3.0, "spans": [g, paren]}
     _absorb_one_box(formula, [top, *sides], [g, paren])
     assert formula["curves"] == []
@@ -8507,8 +10404,11 @@ def test_a_formula_cut_from_a_text_span_is_not_holed_by_that_span():
     sigma = {"text": "σ", "bbox": (272.0, 213.2, 277.4, 222.2), "source": whole}
     square = {"text": "2", "bbox": (277.6, 206.0, 280.0, 214.0)}
     formula = {"bbox": pymupdf.Rect(272.0, 206.0, 280.0, 222.2), "spans": [sigma, square]}
-    source = {"text": " σ", "bbox": whole,
-              "chars": [(" ", pymupdf.Rect(269.5, 213.2, 272.0, 222.2)), ("σ", pymupdf.Rect(272.0, 213.2, 277.4, 222.2))]}
+    source = {
+        "text": " σ",
+        "bbox": whole,
+        "chars": [(" ", pymupdf.Rect(269.5, 213.2, 272.0, 222.2)), ("σ", pymupdf.Rect(272.0, 213.2, 277.4, 222.2))],
+    }
     above = {"text": "p", "bbox": (273.0, 196.0, 276.0, 205.5)}
 
     def clip_rects(page_spans):
@@ -8580,11 +10480,15 @@ def test_epigraph_and_attribution_at_the_frame_right_edge_are_written_flush_righ
             rect |= row
         return TextBlock(page=128, rect=rect, line_rects=rects, text=text, size=size, color="#000", bold=False)
 
-    quote = blk("Numquam ponenda est pluralitas sine necessitate ‘Plurality should never be proposed unless needed’",
-                [(296.0, 545.3, 493.2, 557.2), (290.0, 557.2, 493.2, 569.2)])
+    quote = blk(
+        "Numquam ponenda est pluralitas sine necessitate ‘Plurality should never be proposed unless needed’",
+        [(296.0, 545.3, 493.2, 557.2), (290.0, 557.2, 493.2, 569.2)],
+    )
     author = blk("William of Occam", [(426.8, 570.1, 493.2, 580.9)], 9.0)
-    body = blk("There is a problem with learning weights that make the model perfectly match the training data.",
-               [(160.2, 611.8, 493.2, 623.8)])
+    body = blk(
+        "There is a problem with learning weights that make the model perfectly match the training data.",
+        [(160.2, 611.8, 493.2, 623.8)],
+    )
     frame = TextFrame(160.2, 493.2, 100, 720, 10)
     geo = PageGeometry.from_rects(612, [quote.rect, author.rect, body.rect], height=792, frame=frame)
     items = [(quote, ""), (author, ""), (body, "")]
@@ -8597,8 +10501,10 @@ def test_epigraph_and_attribution_at_the_frame_right_edge_are_written_flush_righ
     tail = blk("and the second half", [(300, 700, 493.2, 712)])
     assert _write_rect(tail, [*items, (left, ""), (tail, "")], True, False, geo)[1] == "left"
     # 图在前一页，绕图的正文左边空着，几行起笔对齐
-    wrap = blk("Probably the most common visualization method, however, is to project the 100 dimensions",
-               [(270, 218, 493.2, 230), (255, 230, 493.2, 242), (255, 242, 493.2, 254)])
+    wrap = blk(
+        "Probably the most common visualization method, however, is to project the 100 dimensions",
+        [(270, 218, 493.2, 230), (255, 230, 493.2, 242), (255, 242, 493.2, 254)],
+    )
     assert _write_rect(wrap, [*items, (wrap, "")], True, False, geo)[1] == "left"
     # 栏的右缘只有这一块排到，是它自己撑出来的
     lone = blk("1 request", [(300, 300, 493.2, 312)])
@@ -8639,15 +10545,21 @@ def test_attribution_short_of_the_frame_edge_by_a_trailing_space_is_written_flus
         geo = PageGeometry.from_rects(612, [other.rect for other, _ in items], height=792, frame=frame)
         return _write_rect(block, items, True, False, geo)[1]
 
-    quote = blk("You are uniformly charming! cried he, with a smile of associating and now and then I bowed",
-                [(167.1, 218, 475.2, 230), (167.1, 230, 431.4, 242)])
+    quote = blk(
+        "You are uniformly charming! cried he, with a smile of associating and now and then I bowed",
+        [(167.1, 218, 475.2, 230), (167.1, 230, 431.4, 242)],
+    )
     author = blk("Random sentence generated from a Jane Austen trigram model", [(246.8, 243, 472.4, 252)], 9.0)
-    body = blk("Predicting is difficult, especially about the future, as the old quip goes.",
-               [(142.2, 280, 475.2, 292), (142.2, 292, 475.2, 304)])
+    body = blk(
+        "Predicting is difficult, especially about the future, as the old quip goes.",
+        [(142.2, 280, 475.2, 292), (142.2, 292, 475.2, 304)],
+    )
     assert align(author, [quote, body]) == "right"
     # 署名和引语末行同在一行
-    babbage = blk("On two occasions I have been asked, Pray, Mr. Babbage, if you put into the machine wrong figures",
-                  [(167.1, 210, 475.2, 222), (167.1, 222, 203.4, 234)])
+    babbage = blk(
+        "On two occasions I have been asked, Pray, Mr. Babbage, if you put into the machine wrong figures",
+        [(167.1, 210, 475.2, 222), (167.1, 222, 203.4, 234)],
+    )
     signed = blk("Babbage (1864)", [(411.3, 222, 475.2, 234)])
     assert align(signed, [babbage, body]) == "right"
     # 两端对齐时一行里拆出来的末一个词，左边隔着一个拉开的词距
@@ -8675,8 +10587,12 @@ def test_two_line_attribution_is_split_like_the_source_and_written_flush_right(t
         page.insert_text((right - pymupdf.get_text_length(text, "tiro", 9), y), text, fontsize=9, fontname="tiro")
     body_line = "x" * 55
     for index in range(3):
-        page.insert_text((right - pymupdf.get_text_length(body_line, "cour", 10), 300 + index * 12), body_line,
-                         fontsize=10, fontname="cour")
+        page.insert_text(
+            (right - pymupdf.get_text_length(body_line, "cour", 10), 300 + index * 12),
+            body_line,
+            fontsize=10,
+            fontname="cour",
+        )
     path = tmp_path / "src.pdf"
     doc.save(path)
     page = pymupdf.open(path)[0]
@@ -8689,12 +10605,20 @@ def test_two_line_attribution_is_split_like_the_source_and_written_flush_right(t
         return TextBlock(page=0, rect=rect, line_rects=rects, text=text, size=size, color="#000000", bold=False)
 
     author = blk("Time will explain. Jane Austen, Persuasion", ["Time will explain.", "Jane Austen, Persuasion"], 9.0)
-    body = TextBlock(page=0, rect=pymupdf.Rect(page.search_for(body_line)[0]) | page.search_for(body_line)[-1],
-                     line_rects=page.search_for(body_line), text=body_line * 3, size=10.0, color="#000000", bold=False)
+    body = TextBlock(
+        page=0,
+        rect=pymupdf.Rect(page.search_for(body_line)[0]) | page.search_for(body_line)[-1],
+        line_rects=page.search_for(body_line),
+        text=body_line * 3,
+        size=10.0,
+        color="#000000",
+        bold=False,
+    )
     frame = TextFrame(body.rect.x0, body.rect.x1, 100, 720, 10)
     geo = PageGeometry.from_rects(612, [author.rect, body.rect], height=792, frame=frame)
-    out = _render_translated(path, [author, body], ["时间会说明一切。简·奥斯汀，《劝导》", "正文" * 40], "zh-CN",
-                             geometries=[geo])
+    out = _render_translated(
+        path, [author, body], ["时间会说明一切。简·奥斯汀，《劝导》", "正文" * 40], "zh-CN", geometries=[geo]
+    )
     lines = [
         (line["bbox"], "".join(span["text"] for span in line["spans"]))
         for block in out[0].get_text("dict", clip=pymupdf.Rect(300, 215, 500, 250))["blocks"]
@@ -8716,8 +10640,15 @@ def test_header_cells_near_the_column_middle_are_not_all_centred_on_it():
         rect = pymupdf.Rect(x0, y0, x1, y0 + 11.6)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=True)
 
-    body = TextBlock(page=0, rect=pymupdf.Rect(160.2, 600, 493.2, 660), line_rects=[pymupdf.Rect(160.2, 600, 493.2, 612)],
-                     text="Let us see how the cosine computes which of the words is closer", size=10.0, color="#000", bold=False)
+    body = TextBlock(
+        page=0,
+        rect=pymupdf.Rect(160.2, 600, 493.2, 660),
+        line_rects=[pymupdf.Rect(160.2, 600, 493.2, 612)],
+        text="Let us see how the cosine computes which of the words is closer",
+        size=10.0,
+        color="#000",
+        bold=False,
+    )
     cells = [blk("pie", 313.4, 324.9), blk("data", 332.3, 349.3), blk("computer", 355.7, 392.6)]
     frame = TextFrame(160.0, 493.0, 100, 720, 10)
     items = [(body, ""), *((cell, "") for cell in cells)]
@@ -8742,11 +10673,25 @@ def test_a_paragraph_with_an_overfull_line_is_written_to_the_frame_edge():
         rect = pymupdf.Rect(rects[0])
         for row in rects[1:]:
             rect |= row
-        return TextBlock(page=75, rect=rect, line_rects=rects, text="This probabilistic knowledge " * 8,
-                         size=10.0, color="#000", bold=False)
+        return TextBlock(
+            page=75,
+            rect=rect,
+            line_rects=rects,
+            text="This probabilistic knowledge " * 8,
+            size=10.0,
+            color="#000",
+            bold=False,
+        )
 
-    para = blk([(157.1, 600, 475.2, 612), (142.2, 612, 475.2, 624), (142.2, 624, 489.5, 636),
-                (142.2, 636, 475.2, 648), (142.2, 648, 262.0, 660)])
+    para = blk(
+        [
+            (157.1, 600, 475.2, 612),
+            (142.2, 612, 475.2, 624),
+            (142.2, 624, 489.5, 636),
+            (142.2, 636, 475.2, 648),
+            (142.2, 648, 262.0, 660),
+        ]
+    )
     wide = blk([(142.2, 400, 520.0, 412), (142.2, 412, 520.0, 424), (142.2, 424, 300.0, 436)])
     frame = TextFrame(142.0, 475.0, 100, 720, 10)
     geo = PageGeometry.from_rects(612, [para.rect, wide.rect], height=792, frame=frame)
@@ -8800,8 +10745,11 @@ def test_two_line_title_centered_on_the_page_is_written_centered():
     assert abs((rect.x0 + rect.x1) / 2 - 360) < 1
 
     widest_title = blk("Calcite Planning Process", 122, 25, 599, 76, 44)
-    labels = [blk("Planner", 198, 104, 235, 115, 10), blk("Logical Plan", 97, 213, 151, 224, 10),
-              blk("Best RelNode Graph", 451, 356, 543, 367, 10)]
+    labels = [
+        blk("Planner", 198, 104, 235, 115, 10),
+        blk("Logical Plan", 97, 213, 151, 224, 10),
+        blk("Best RelNode Graph", 451, 356, 543, 367, 10),
+    ]
     geo = PageGeometry.from_rects(720, [widest_title.rect, *(label.rect for label in labels)], height=405)
     items = [(widest_title, ""), *((label, "") for label in labels)]
     _, align = _write_rect(widest_title, items, True, False, geo)
@@ -8828,8 +10776,7 @@ def test_title_page_centered_off_the_page_middle_is_written_centered():
         blk("University of Colorado at Boulder", 202.5, 416.0, 399.8, 433.1, 14.3),
         blk("Draft of August 19, 2026. Comments and typos welcome!", 100.2, 644.4, 501.0, 665.2, 17.2),
     ]
-    geo = PageGeometry.from_rects(612, [b.rect for b in blocks], height=792,
-                                  frame=TextFrame(203, 493, 110, 719, 10))
+    geo = PageGeometry.from_rects(612, [b.rect for b in blocks], height=792, frame=TextFrame(203, 493, 110, 719, 10))
     items = [(b, "") for b in blocks]
     for block in blocks:
         rect, align = _write_rect(block, items, True, False, geo)
@@ -8847,8 +10794,9 @@ def test_body_lines_beside_margin_notes_do_not_make_a_centered_page():
         rect = pymupdf.Rect(x0, y0, x1, y0 + 12)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
 
-    body = [blk("Words don't appear out of nowhere. Any particular piece of text", 160, 253 + 12 * i, 493)
-            for i in range(6)]
+    body = [
+        blk("Words don't appear out of nowhere. Any particular piece of text", 160, 253 + 12 * i, 493) for i in range(6)
+    ]
     note = blk("code switching", 101, 530, 146, size=8)
     example = blk("[he was and will remain a friend ... don't worry ... but have faith]", 192, 619, 465)
     title = blk("Corpora", 134, 213, 191, size=14)
@@ -8869,8 +10817,12 @@ def test_white_label_on_a_black_box_is_pasted_back_as_is(tmp_path):
 
     [out] = run(translate_file(src, tmp_path, runner(), False, "zh-CN"))
     spans = [
-        span for block in pymupdf.open(out)[0].get_text("dict")["blocks"] if block.get("type") == 0
-        for line in block["lines"] for span in line["spans"] if span["text"].strip()
+        span
+        for block in pymupdf.open(out)[0].get_text("dict")["blocks"]
+        if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
+        if span["text"].strip()
     ]
     text = "".join(span["text"] for span in spans)
     assert "[zh-CN]" in text and "Some selected ASCII codes" in text
@@ -8918,8 +10870,7 @@ def test_left_aligned_dialogue_lines_are_not_centered():
 
     first = blk("User: I need some help, that much seems certain.", 189, 453)
     second = blk("ELIZA: WHAT WOULD IT MEAN TO YOU IF YOU GOT SOME HELP", 200, 471)
-    geo = PageGeometry.from_rects(612, [first.rect, second.rect], height=792,
-                                  frame=TextFrame(160, 493, 111, 719, 10))
+    geo = PageGeometry.from_rects(612, [first.rect, second.rect], height=792, frame=TextFrame(160, 493, 111, 719, 10))
     rect, align = _write_rect(first, [(first, ""), (second, "")], True, False, geo)
     assert align == "left" and rect.x0 == first.rect.x0
 
@@ -9009,10 +10960,9 @@ def test_pdf_reports_its_preparation_and_writing_stages(tmp_path):
     assert stages[:4] == [("分析版面", n, 3, "页") for n in (1, 2, 3)] + [("整理段落", 0, 0, "")]
     assert stages[4][0] == "准备译文" and stages[4][1] == 0 and stages[4][3] == "段"
     # 开始翻译时清掉准备阶段；译文到齐后逐页写回
-    after = stages[stages.index(("", 0, 0, "")):]
+    after = stages[stages.index(("", 0, 0, "")) :]
     assert [stage for stage in after if stage[0] == "写回译文"] == [("写回译文", n, 3, "页") for n in (0, 1, 2)]
     assert after[-1] == ("生成文件", 0, 0, "")
-
 
 
 def test_the_layout_model_reports_each_page_it_reads(tmp_path, monkeypatch):
@@ -9049,7 +10999,9 @@ def test_the_layout_model_reports_each_page_it_reads(tmp_path, monkeypatch):
     src = tmp_path / "pages.pdf"
     doc.save(src)
     session = NoBoxes()
-    monkeypatch.setattr(pdf_units, "layout_detector", lambda doc, path, boxes=None: pdf_vision.ModelLayout(doc, session))
+    monkeypatch.setattr(
+        pdf_units, "layout_detector", lambda doc, path, boxes=None: pdf_vision.ModelLayout(doc, session)
+    )
     stages: list[tuple] = []
 
     class R:
@@ -9061,7 +11013,7 @@ def test_the_layout_model_reports_each_page_it_reads(tmp_path, monkeypatch):
 
     pdf._plan_pdf(src, R(), "layout.onnx")
     start = stages.index(("版面模型分析", 1, 3, "页"))
-    assert stages[start:start + 4] == [("版面模型分析", n, 3, "页") for n in (1, 2, 3)] + [("整理段落", 0, 0, "")]
+    assert stages[start : start + 4] == [("版面模型分析", n, 3, "页") for n in (1, 2, 3)] + [("整理段落", 0, 0, "")]
     assert session.runs == 3
 
 
@@ -9101,7 +11053,9 @@ def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path, monkeyp
             top = (height - round(self.page.rect.height * zoom)) // 2
             r = self.page.search_for("Q7")[0]
             x0, y0, x1, y1 = r.x0 * zoom + left, r.y0 * zoom + top, r.x1 * zoom + left, r.y1 * zoom + top
-            return [np.array([[[(x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0, 0.9, 0.0]]], np.float32).transpose(0, 2, 1)]
+            return [
+                np.array([[[(x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0, 0.9, 0.0]]], np.float32).transpose(0, 2, 1)
+            ]
 
     class Layout:
         def get_modelmeta(self):
@@ -9123,8 +11077,11 @@ def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path, monkeyp
     for name in ("mfd.onnx", "layout.onnx"):
         (tmp_path / name).write_bytes(b"x")
     shown = pymupdf.open(src)[0]
-    monkeypatch.setattr(pdf_vision, "_usable_sessions",
-                        lambda path, *args, **kwargs: [Formula(shown) if path.endswith("mfd.onnx") else Layout()])
+    monkeypatch.setattr(
+        pdf_vision,
+        "_usable_sessions",
+        lambda path, *args, **kwargs: [Formula(shown) if path.endswith("mfd.onnx") else Layout()],
+    )
 
     class R:
         def report_stage(self, *args, **kwargs):
@@ -9142,7 +11099,10 @@ def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path, monkeyp
     again = pdf._saved_plan(src, R(), str(tmp_path / "layout.onnx"), plan_path, model)
     assert runs == {"mfd": 2, "layout": 2}
     assert again.texts == first.texts and again.skips == first.skips
-    assert [[f.get("text") for f in fs] for fs in again.formulas] == [[f.get("text") for f in fs] for fs in first.formulas]
+    assert [[f.get("text") for f in fs] for fs in again.formulas] == [
+        [f.get("text") for f in fs] for fs in first.formulas
+    ]
+
 
 def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monkeypatch):
     """同时跑的两个任务不能一起用 MuPDF（find_tables 会改进程全局的字框开关）；
@@ -9174,6 +11134,7 @@ def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monk
                 return real(*args, **kwargs)
             finally:
                 inside -= 1
+
         return wrapper
 
     real_geometry = pdf_units.PageGeometry
@@ -9197,9 +11158,9 @@ def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monk
         runners = [runner() for _ in "ab"]
         for r in runners:
             r.report_stage = lambda name, done=0, total=0, unit="": stages.append((name, done, total, unit))
-        return await asyncio.gather(*(
-            pdf.translate_pdf(src, tmp_path / name, r, False, "zh-CN") for name, r in zip("ab", runners)
-        ))
+        return await asyncio.gather(
+            *(pdf.translate_pdf(src, tmp_path / name, r, False, "zh-CN") for name, r in zip("ab", runners))
+        )
 
     outs = run(scenario())
     # 后到的任务等的时候任务页上显示在等
@@ -9252,14 +11213,20 @@ def test_shaded_panel_of_monospace_text_is_kept_whole():
 
     def block(y, *spans):
         rect = pymupdf.Rect(160, y, 380, y + 10)
-        span_lines = [[{"text": text, "font": font, "flags": flags, "size": 10.0, "bbox": tuple(rect)}
-                       for text, font, flags in spans]]
+        span_lines = [
+            [
+                {"text": text, "font": font, "flags": flags, "size": 10.0, "bbox": tuple(rect)}
+                for text, font, flags in spans
+            ]
+        ]
         return TextBlock(0, rect, [rect], "".join(text for text, _f, _g in spans), 10.0, "#000000", False, span_lines)
 
-    table = [block(372, ("U+0061 a LATIN SMALL LETTER A", "txtt", 8)),
-             block(384, ("GRINNING FACE", "txtt", 8))]
+    table = [block(372, ("U+0061 a LATIN SMALL LETTER A", "txtt", 8)), block(384, ("GRINNING FACE", "txtt", 8))]
     plain = block(600, ("Men are all alike.", "txtt", 8))
-    mixed = [block(452, ("/woodchuck/", "txtt", 8)), block(464, ("interesting links to woodchucks", "NimbusRomNo9L-Regu", 4))]
+    mixed = [
+        block(452, ("/woodchuck/", "txtt", 8)),
+        block(464, ("interesting links to woodchucks", "NimbusRomNo9L-Regu", 4)),
+    ]
     chinese = block(532, ("进远违连", "gbsnu8f", 8))
     shades = (pymupdf.Rect(157, 370, 411, 396), pymupdf.Rect(157, 450, 411, 476), pymupdf.Rect(157, 530, 411, 544))
     found = _code_panel_ids([*table, plain, *mixed, chinese], [PageScan((), (), (), shades)])
@@ -9341,7 +11308,15 @@ def test_cjk_line_keeps_bold_across_a_formula():
     text = "前面{b}粗体\x01i\x021\x01/i\x02还是粗体{/b}后面"
     lines = typeset_lines(text, 10, 400, {1: FormulaMetric(10, 10, 8, 2)})
     commands, _slots, _fonts = _place_lines(
-        lines, pymupdf.Rect(0, 0, 400, 100), 10, 1.4, "#000000", "left", frozenset({1}), {}, 800,
+        lines,
+        pymupdf.Rect(0, 0, 400, 100),
+        10,
+        1.4,
+        "#000000",
+        "left",
+        frozenset({1}),
+        {},
+        800,
     )
     stroked, bold = [], False
     for op in commands.splitlines():
@@ -9366,7 +11341,15 @@ def test_cjk_lines_rise_to_stay_inside_a_tight_first_line_box():
 
     def baseline(first_room):
         _commands, slots, _fonts = _place_lines(
-            lines, pymupdf.Rect(0, 100, 400, 200), 10, 1.4, "#000000", "left", frozenset(), {}, 800,
+            lines,
+            pymupdf.Rect(0, 100, 400, 200),
+            10,
+            1.4,
+            "#000000",
+            "left",
+            frozenset(),
+            {},
+            800,
             first_room=first_room,
         )
         commands = _commands.splitlines()
@@ -9432,7 +11415,9 @@ def test_pdf_keeps_inline_colors_in_the_translation(tmp_path):
                 elif "broken" in text:
                     out.append("前面的字{c0000ff}没有收尾的蓝色，后面的字也会被染成蓝色吗")
                 else:
-                    out.append("开头的一些普通文字，" + "{c0000ff}" + long_blue + "{/c}" + "，以及{cff0000}红字{/c}结尾。")
+                    out.append(
+                        "开头的一些普通文字，" + "{c0000ff}" + long_blue + "{/c}" + "，以及{cff0000}红字{/c}结尾。"
+                    )
             return out
 
     src = tmp_path / "colors.pdf"
@@ -9440,14 +11425,21 @@ def test_pdf_keeps_inline_colors_in_the_translation(tmp_path):
     page = doc.new_page(width=300, height=300)
     for y, middle in ((60, "Weizenbaum (1966)"), (140, "broken link")):
         x = 40
-        for text, color in (("We cite ", (0, 0, 0)), (middle, (0, 0, 1)), (" and ", (0, 0, 0)),
-                            ("xxxxxx", (1, 0, 0)), (" in this body text.", (0, 0, 0))):
+        for text, color in (
+            ("We cite ", (0, 0, 0)),
+            (middle, (0, 0, 1)),
+            (" and ", (0, 0, 0)),
+            ("xxxxxx", (1, 0, 0)),
+            (" in this body text.", (0, 0, 0)),
+        ):
             page.insert_text((x, y), text, fontsize=10, color=color)
             x += pymupdf.get_text_length(text, fontsize=10)
     doc.save(src)
 
     [out] = run(translate_pdf(src, tmp_path, Runner(Colored("zh-CN"), cache=MemCache()), False, "zh-CN"))
-    spans = [s for b in pymupdf.open(out)[0].get_text("dict")["blocks"] for line in b.get("lines", []) for s in line["spans"]]
+    spans = [
+        s for b in pymupdf.open(out)[0].get_text("dict")["blocks"] for line in b.get("lines", []) for s in line["spans"]
+    ]
     blue = "".join(s["text"] for s in spans if s["color"] == 0x0000FF)
     red = "".join(s["text"] for s in spans if s["color"] == 0xFF0000)
     assert blue.replace(" ", "") == long_blue
@@ -9465,7 +11457,15 @@ def test_cjk_line_keeps_colors_across_a_formula():
     text = "前面{c0000ff}蓝色\x01i\x021\x01/i\x02还是蓝色{/c}后面"
     lines = typeset_lines(text, 10, 400, {1: FormulaMetric(10, 10, 8, 2)})
     commands, _slots, _fonts = _place_lines(
-        lines, pymupdf.Rect(0, 0, 400, 100), 10, 1.4, "#000000", "left", frozenset({1}), {}, 800,
+        lines,
+        pymupdf.Rect(0, 0, 400, 100),
+        10,
+        1.4,
+        "#000000",
+        "left",
+        frozenset({1}),
+        {},
+        800,
     )
     painted, now = [], None
     for op in commands.splitlines():
@@ -9510,10 +11510,15 @@ def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path):
     before = {w[4]: (round(w[0], 1), round(w[1], 1)) for w in pymupdf.open(src)[0].get_text("words") if w[4].isdigit()}
 
     [out] = run(translate_pdf(src, tmp_path, Runner(Short("zh-CN"), cache=MemCache()), False, "zh-CN"))
-    assert sorted(sent) == sorted([
-        "Part One: Foundations of Language", "What is a Large Language Model", "Tokens",
-        "Historical Notes", "Exercises",
-    ])
+    assert sorted(sent) == sorted(
+        [
+            "Part One: Foundations of Language",
+            "What is a Large Language Model",
+            "Tokens",
+            "Historical Notes",
+            "Exercises",
+        ]
+    )
     result = pymupdf.open(out)[0]
     words = result.get_text("words")
     after = {w[4]: (round(w[0], 1), round(w[1], 1)) for w in words if w[4].isdigit()}
@@ -9537,13 +11542,23 @@ def test_a_long_toc_title_with_two_leader_dots_keeps_its_page_number():
         return {"text": text, "size": 10.0, "bbox": (x0, y, x1, y + 12), "origin": (x0, y + 9.5), "color": 0}
 
     parts = [
-        ("Fine-Tuning for Sequence Labeling:", 203.0, 347.9), (" ", 347.9, 350.9),
-        ("Named Entity Recognition", 350.9, 457.8), (" ", 457.8, 461.6), (".", 461.6, 464.1),
-        (" ", 464.1, 469.0), (".", 469.0, 471.5), (" ", 471.5, 478.3), ("238", 478.3, 493.2),
+        ("Fine-Tuning for Sequence Labeling:", 203.0, 347.9),
+        (" ", 347.9, 350.9),
+        ("Named Entity Recognition", 350.9, 457.8),
+        (" ", 457.8, 461.6),
+        (".", 461.6, 464.1),
+        (" ", 464.1, 469.0),
+        (".", 469.0, 471.5),
+        (" ", 471.5, 478.3),
+        ("238", 478.3, 493.2),
     ]
     spans = [span(*part) for part in parts]
-    item = ("".join(part[0] for part in parts), pymupdf.Rect(203.0, 278.7, 493.2, 290.7),
-            [one for one in spans if one["text"].strip()], spans)
+    item = (
+        "".join(part[0] for part in parts),
+        pymupdf.Rect(203.0, 278.7, 493.2, 290.7),
+        [one for one in spans if one["text"].strip()],
+        spans,
+    )
     [cut], leaders = _cut_leaders([item], toc_page=True)
     assert cut[0].rstrip() == "Fine-Tuning for Sequence Labeling: Named Entity Recognition"
     assert leaders[0].number.x0 == 478.3 and leaders[0].pitch > 0
@@ -9552,8 +11567,15 @@ def test_a_long_toc_title_with_two_leader_dots_keeps_its_page_number():
 
 
 def _glyph(text, font, size, flags, bbox, ink, math=False):
-    span = {"text": text, "font": font, "size": size, "flags": flags, "bbox": bbox, "ink": ink,
-            "origin": (bbox[0], ink[3])}
+    span = {
+        "text": text,
+        "font": font,
+        "size": size,
+        "flags": flags,
+        "bbox": bbox,
+        "ink": ink,
+        "origin": (bbox[0], ink[3]),
+    }
     if math:
         span["math"] = True
     return span
@@ -9566,7 +11588,14 @@ def test_a_formula_at_a_line_start_keeps_its_opening_glue():
 
     reg, ital, cmsy, cmr = "NimbusRomNo9L-Regu", "NimbusRomNo9L-ReguItal", "CMSY10", "CMR10"
     above = [
-        _glyph("examples of a particular trigram ", reg, 10.0, 4, (142.2, 191.2, 306.7, 203.2), (142.2, 193.6, 306.7, 200.6)),
+        _glyph(
+            "examples of a particular trigram ",
+            reg,
+            10.0,
+            4,
+            (142.2, 191.2, 306.7, 203.2),
+            (142.2, 193.6, 306.7, 200.6),
+        ),
         _glyph("w", ital, 10.0, 6, (309.7, 191.2, 316.3, 203.1), (309.7, 196.0, 316.3, 200.6)),
         _glyph("n", ital, 7.4, 6, (316.3, 195.1, 320.0, 203.9), (316.3, 198.7, 320.0, 202.0)),
         _glyph("−", cmsy, 7.4, 6, (320.0, 196.2, 325.8, 209.0), (320.0, 200.0, 325.8, 200.3)),
@@ -9577,10 +11606,19 @@ def test_a_formula_at_a_line_start_keeps_its_opening_glue():
         _glyph("1", reg, 7.4, 4, (346.0, 195.1, 349.7, 204.0), (346.0, 197.0, 349.7, 201.9)),
         _glyph("w", ital, 10.0, 6, (350.2, 191.2, 356.8, 203.1), (350.2, 196.0, 356.8, 200.6)),
         _glyph("n", ital, 7.4, 6, (356.8, 195.1, 360.5, 203.9), (356.8, 198.7, 360.5, 202.0)),
-        _glyph(", we can instead estimate its", reg, 10.0, 4, (361.0, 191.2, 475.2, 203.2), (361.0, 193.6, 475.2, 201.8)),
+        _glyph(
+            ", we can instead estimate its", reg, 10.0, 4, (361.0, 191.2, 475.2, 203.2), (361.0, 193.6, 475.2, 201.8)
+        ),
     ]
     below = [
-        _glyph("probability by using the bigram probability", reg, 10.0, 4, (142.2, 203.2, 313.8, 215.2), (142.2, 205.6, 313.8, 214.6)),
+        _glyph(
+            "probability by using the bigram probability",
+            reg,
+            10.0,
+            4,
+            (142.2, 203.2, 313.8, 215.2),
+            (142.2, 205.6, 313.8, 214.6),
+        ),
         _glyph(" P", ital, 10.0, 6, (313.8, 203.2, 322.3, 215.1), (313.8, 205.9, 322.3, 212.4)),
         _glyph("(", cmr, 10.0, 4, (322.3, 204.9, 326.2, 214.9), (322.3, 204.9, 326.2, 214.9), math=True),
         _glyph("w", ital, 10.0, 6, (326.2, 203.2, 332.9, 215.1), (326.2, 208.0, 332.9, 212.6)),
@@ -9591,7 +11629,9 @@ def test_a_formula_at_a_line_start_keeps_its_opening_glue():
         _glyph("−", cmsy, 7.4, 6, (350.1, 208.2, 355.9, 221.0), (350.1, 211.9, 355.9, 212.2)),
         _glyph("1", reg, 7.4, 4, (355.9, 207.1, 359.5, 216.0), (355.9, 208.9, 359.5, 213.9)),
         _glyph(")", cmr, 10.0, 4, (360.0, 204.9, 363.9, 214.9), (360.0, 204.9, 363.9, 214.9), math=True),
-        _glyph(". Similarly, if we don’t have", reg, 10.0, 4, (363.9, 203.2, 475.2, 215.2), (363.9, 205.6, 475.2, 214.6)),
+        _glyph(
+            ". Similarly, if we don’t have", reg, 10.0, 4, (363.9, 203.2, 475.2, 215.2), (363.9, 205.6, 475.2, 214.6)
+        ),
     ]
     sent, formulas = _placeholderize(_block_with_spans([above, below], size=10.0))
     assert len(formulas) == 2
@@ -9616,8 +11656,14 @@ def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
 
     def data(numerator):
         score = line(
-            _glyph("The backoff terminates in the unigram, which has score", reg, 10.0, 4,
-                   (160.2, 307.0, 378.1, 319.1), (160.2, 309.4, 378.1, 316.4)),
+            _glyph(
+                "The backoff terminates in the unigram, which has score",
+                reg,
+                10.0,
+                4,
+                (160.2, 307.0, 378.1, 319.1),
+                (160.2, 309.4, 378.1, 316.4),
+            ),
             _glyph(" S", ital, 10.0, 6, (378.1, 307.0, 385.2, 318.9), (378.1, 309.6, 385.2, 316.4)),
             _glyph(") =", cmr, 10.0, 4, (395.8, 308.8, 409.2, 318.7), (395.8, 308.8, 409.2, 318.7), math=True),
             _glyph("count", ital, numerator, 7, (412.2, 304.5, 428.4, 313.3), (412.2, 307.3, 428.4, 311.4)),
@@ -9627,10 +11673,22 @@ def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
         )
         denominator = line(_glyph("N", ital, 7.4, 6, (423.2, 312.9, 428.1, 321.7), (423.2, 314.9, 428.1, 319.8)))
         tail = line(_glyph(". Brants et al.", reg, 10.0, 4, (440.7, 307.0, 493.2, 319.1), (440.7, 309.4, 493.2, 316.4)))
-        rest = line(_glyph("(2007) find that a value of 0.4 worked well", reg, 10.0, 4,
-                           (160.2, 319.0, 344.6, 331.0), (160.2, 321.4, 344.6, 328.4)))
-        return {"blocks": [{"type": 0, "bbox": score["bbox"], "lines": [score]},
-                           {"type": 0, "bbox": (160.2, 307.0, 493.2, 331.0), "lines": [denominator, tail, rest]}]}
+        rest = line(
+            _glyph(
+                "(2007) find that a value of 0.4 worked well",
+                reg,
+                10.0,
+                4,
+                (160.2, 319.0, 344.6, 331.0),
+                (160.2, 321.4, 344.6, 328.4),
+            )
+        )
+        return {
+            "blocks": [
+                {"type": 0, "bbox": score["bbox"], "lines": [score]},
+                {"type": 0, "bbox": (160.2, 307.0, 493.2, 331.0), "lines": [denominator, tail, rest]},
+            ]
+        }
 
     split = data(7.4)
     score, (denominator, tail, rest) = split["blocks"][0]["lines"][0], split["blocks"][1]["lines"]
@@ -9663,23 +11721,38 @@ def test_a_citation_year_after_et_al_continues_the_sentence():
         rect = pymupdf.Rect(160, y, x1, y + 12)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False)
 
-    cite = [blk("The backoff terminates in the unigram, which has score S(w). Brants et al.", 307),
-            blk("(2007) find that a value of 0.4 worked well for λ.", 319, x1=356)]
+    cite = [
+        blk("The backoff terminates in the unigram, which has score S(w). Brants et al.", 307),
+        blk("(2007) find that a value of 0.4 worked well for λ.", 319, x1=356),
+    ]
     assert len(_merge_continuations(cite)) == 1
-    item = [blk("the model is trained in two stages, described below", 307),
-            blk("(a) pretraining on unlabeled text", 319, x1=320)]
+    item = [
+        blk("the model is trained in two stages, described below", 307),
+        blk("(a) pretraining on unlabeled text", 319, x1=320),
+    ]
     assert len(_merge_continuations(item)) == 2
-    indented = [blk("It could answer questions by parsing them into a logical form", 307),
-                TextBlock(page=0, rect=pymupdf.Rect(182, 319, 470, 343),
-                          line_rects=[pymupdf.Rect(182, 319, 470, 331), pymupdf.Rect(196, 331, 440, 343)],
-                          text="(TEST (FOR SOME X16 / (SEQ SAMPLES) : T ; (CONTAIN’ X16 (NPR* X17 / (QUOTE AL203))",
-                          size=10.0, color="#000", bold=False)]
+    indented = [
+        blk("It could answer questions by parsing them into a logical form", 307),
+        TextBlock(
+            page=0,
+            rect=pymupdf.Rect(182, 319, 470, 343),
+            line_rects=[pymupdf.Rect(182, 319, 470, 331), pymupdf.Rect(196, 331, 440, 343)],
+            text="(TEST (FOR SOME X16 / (SEQ SAMPLES) : T ; (CONTAIN’ X16 (NPR* X17 / (QUOTE AL203))",
+            size=10.0,
+            color="#000",
+            bold=False,
+        ),
+    ]
     assert len(_merge_continuations(indented)) == 2
-    tag = [blk("where we’ve explicitly marked the spaces between words: _", 307),
-           blk("(2.11) set new new renew reset renew", 319, x1=330)]
+    tag = [
+        blk("where we’ve explicitly marked the spaces between words: _", 307),
+        blk("(2.11) set new new renew reset renew", 319, x1=330),
+    ]
     assert len(_merge_continuations(tag)) == 2
-    ended = [blk("This algorithm does not produce a probability distribution.", 307),
-             blk("(Unlike interpolation, the weights are fixed.)", 319, x1=380)]
+    ended = [
+        blk("This algorithm does not produce a probability distribution.", 307),
+        blk("(Unlike interpolation, the weights are fixed.)", 319, x1=380),
+    ]
     assert len(_merge_continuations(ended)) == 2
 
 
@@ -9708,11 +11781,28 @@ def test_a_contents_page_without_leader_dots_is_found_by_its_page_numbers():
             lines += [line(entry, 90, 90 + 6 * len(entry), y), line(str(number), 522 - 6 * len(str(number)), 522, y)]
         return {"blocks": [{"type": 0, "lines": lines}]}
 
-    entries = [("Executive Summary", 1), ("1 Framing Risk", 4), ("1.1 Understanding Risks", 4), ("1.2 Challenges", 5),
-               ("2 Audience", 9), ("3 AI Risks", 12), ("Appendix D", 42), ("Table 1 GOVERN", 22), ("Table 2 MAP", 26)]
+    entries = [
+        ("Executive Summary", 1),
+        ("1 Framing Risk", 4),
+        ("1.1 Understanding Risks", 4),
+        ("1.2 Challenges", 5),
+        ("2 Audience", 9),
+        ("3 AI Risks", 12),
+        ("Appendix D", 42),
+        ("Table 1 GOVERN", 22),
+        ("Table 2 MAP", 26),
+    ]
     contents = page("Table of Contents", entries)
-    following = page("", [("Figure 1 Harms", 5), ("Figure 2 Lifecycle", 10), ("Figure 3 Actors", 11),
-                          ("Figure 4 Characteristics", 12), ("Figure 5 Functions", 20)])
+    following = page(
+        "",
+        [
+            ("Figure 1 Harms", 5),
+            ("Figure 2 Lifecycle", 10),
+            ("Figure 3 Actors", 11),
+            ("Figure 4 Characteristics", 12),
+            ("Figure 5 Functions", 20),
+        ],
+    )
     counts = page("", [("Romeo", 1), ("salad", 2), ("Falstaff", 4), ("forest", 12), ("battle", 21)])
     assert _toc_pages([counts, contents, following]) == {1, 2}
 
@@ -9726,15 +11816,26 @@ def test_the_short_centered_last_line_of_a_caption_continues_it():
         rect = pymupdf.Rect(x0, y, x1, y + 12)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.9, color="#000", bold=False)
 
-    caption = [blk("Table 3 | Experimental results at each stage of DeepSeek-R1. Numbers in bold denote the", 84.0, 510.9, 85.5),
-               blk("performance is statistically significant (t-test with p < 0.01).", 153.5, 441.5, 98.2)]
+    caption = [
+        blk(
+            "Table 3 | Experimental results at each stage of DeepSeek-R1. Numbers in bold denote the", 84.0, 510.9, 85.5
+        ),
+        blk("performance is statistically significant (t-test with p < 0.01).", 153.5, 441.5, 98.2),
+    ]
     assert len(_merge_continuations(caption)) == 1
     # 中线不对齐的缩进行是别的东西
     offset = [caption[0], blk("performance is statistically significant (t-test with p < 0.01).", 200.0, 488.0, 98.2)]
     assert len(_merge_continuations(offset)) == 2
     # 只剩一个词的末行全是正文词、以句号收尾，也接上
-    short = [blk("Figure 7 | The experiment results of Language Consistency (LC) Reward during reinforcement",
-                 71.0, 524.0, 439.0), blk("learning.", 276.0, 319.0, 452.5)]
+    short = [
+        blk(
+            "Figure 7 | The experiment results of Language Consistency (LC) Reward during reinforcement",
+            71.0,
+            524.0,
+            439.0,
+        ),
+        blk("learning.", 276.0, 319.0, 452.5),
+    ]
     assert len(_merge_continuations(short)) == 1
 
 
@@ -9746,23 +11847,47 @@ def test_a_line_ending_on_a_function_word_continues_into_a_capital():
 
     def blk(text, x0, x1, y, size=10.9):
         rect = pymupdf.Rect(x0, y, x1, y + 11)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False,
-                         span_lines=[[{"text": text, "font": "Palatino", "size": size}]])
+        return TextBlock(
+            page=0,
+            rect=rect,
+            line_rects=[rect],
+            text=text,
+            size=size,
+            color="#000",
+            bold=False,
+            span_lines=[[{"text": text, "font": "Palatino", "size": size}]],
+        )
 
     def head():
-        return blk("safe answers to questions, rather than simply declining to respond). For DeepSeek-V3 and",
-                   80, 515, 141)
+        return blk(
+            "safe answers to questions, rather than simply declining to respond). For DeepSeek-V3 and", 80, 515, 141
+        )
 
-    assert len(_merge_continuations([head(), blk("DeepSeek-R1, we report results under two configurations", 85, 510, 154)])) == 1
-    assert len(_merge_continuations([head(), blk("• DeepSeek-R1 is reported under two configurations", 85, 510, 154)])) == 2
-    assert len(_merge_continuations([head(), blk("Available at the project page of the authors", 85, 510, 154, size=9.0)])) == 2
-    caption = blk("Table 6 | DeepSeek-R1 Distilled Models, their corresponding Base Models, and Initial Learning",
-                  71, 524, 275)
+    assert (
+        len(
+            _merge_continuations([head(), blk("DeepSeek-R1, we report results under two configurations", 85, 510, 154)])
+        )
+        == 1
+    )
+    assert (
+        len(_merge_continuations([head(), blk("• DeepSeek-R1 is reported under two configurations", 85, 510, 154)]))
+        == 2
+    )
+    assert (
+        len(_merge_continuations([head(), blk("Available at the project page of the authors", 85, 510, 154, size=9.0)]))
+        == 2
+    )
+    caption = blk(
+        "Table 6 | DeepSeek-R1 Distilled Models, their corresponding Base Models, and Initial Learning", 71, 524, 275
+    )
     assert len(_merge_continuations([caption, blk("Rates.", 282, 313, 288)])) == 1
     poem = blk("Dim as an evening shadow in a brook,", 274, 433, 250, size=10.0)
     assert len(_merge_continuations([poem, blk("Thomas Lovell Beddoes, 1851", 298, 408, 263, size=9.0)])) == 2
     words = blk("we counted some representative reflective words, including wait, mistake, however", 71, 524, 300)
-    assert len(_merge_continuations([words, blk(". These reflective words were selected by 3 experts", 71, 524, 313)])) == 1
+    assert (
+        len(_merge_continuations([words, blk(". These reflective words were selected by 3 experts", 71, 524, 313)]))
+        == 1
+    )
 
 
 def test_a_centered_formula_or_a_hanging_item_line_keeps_its_place():
@@ -9777,26 +11902,48 @@ def test_a_centered_formula_or_a_hanging_item_line_keeps_its_place():
             rect |= r
         return TextBlock(page=0, rect=rect, line_rects=rects, text=text, size=10.0, color="#000", bold=False)
 
-    formula = [blk("states that if the language is regular in certain ways (to be exact, if it is both stationary and", 160, 493, 300),
-               blk("lim -1/n log p(w1:n)", 270, 383, 318)]
+    formula = [
+        blk(
+            "states that if the language is regular in certain ways (to be exact, if it is both stationary and",
+            160,
+            493,
+            300,
+        ),
+        blk("lim -1/n log p(w1:n)", 270, 383, 318),
+    ]
     assert len(_merge_continuations(formula)) == 2
     # 成句的公式行也上下空着：rel(A,B) = log(max(|in(A)|,|in(B)|)) ...
     spaced = [formula[0], blk("rel(A,B) = log(max(in(A), in(B))) - log(in(A) and in(B))", 215, 438, 318)]
     assert len(_merge_continuations(spaced)) == 2
-    indent = [blk("A hidden Markov model (HMM) allows us to talk about both observed events", 157, 475, 300),
-              blk("(like words that we see in the input) and hidden events", 142, 475, 312)]
+    indent = [
+        blk("A hidden Markov model (HMM) allows us to talk about both observed events", 157, 475, 300),
+        blk("(like words that we see in the input) and hidden events", 142, 475, 312),
+    ]
     assert len(_merge_continuations(indent)) == 1
-    item = [blk("brand new NPs: these introduce entities that are discourse-new and hearer-old", 142, 475, 300,
-                [pymupdf.Rect(142, 300, 475, 312), pymupdf.Rect(157, 312, 475, 324)]),
-            blk("(like Hong Kong, Marie Curie, or the New York Times.", 157, 380, 324)]
+    item = [
+        blk(
+            "brand new NPs: these introduce entities that are discourse-new and hearer-old",
+            142,
+            475,
+            300,
+            [pymupdf.Rect(142, 300, 475, 312), pymupdf.Rect(157, 312, 475, 324)],
+        ),
+        blk("(like Hong Kong, Marie Curie, or the New York Times.", 157, 380, 324),
+    ]
     assert len(_merge_continuations(item)) == 1
     # 条目只有一行，没有续行可比：粗体标签起头的条目，悬挂缩进的左括号行也是它的续行
     label = blk("unused NPs: these introduce entities that are discourse-new but hearer-old", 185, 493, 656)
-    label.span_lines = [[
-        {"text": "unused NPs:", "font": "NimbusRomNo9L-Medi", "flags": 16},
-        {"text": " ", "font": "NimbusRomNo9L-Regu", "flags": 0},
-        {"text": "these introduce entities that are discourse-new but hearer-old", "font": "NimbusRomNo9L-Regu", "flags": 0},
-    ]]
+    label.span_lines = [
+        [
+            {"text": "unused NPs:", "font": "NimbusRomNo9L-Medi", "flags": 16},
+            {"text": " ", "font": "NimbusRomNo9L-Regu", "flags": 0},
+            {
+                "text": "these introduce entities that are discourse-new but hearer-old",
+                "font": "NimbusRomNo9L-Regu",
+                "flags": 0,
+            },
+        ]
+    ]
     single = [label, blk("(like Hong Kong, Marie Curie, or the New York Times.", 207, 425, 668)]
     assert len(_merge_continuations(single)) == 1
 
@@ -9807,14 +11954,27 @@ def test_a_block_inside_an_open_code_fence_continues_with_a_capital():
     from app.formats.pdf_extract import _merge_continuations
 
     def blk(text, y):
-        return TextBlock(page=0, rect=pymupdf.Rect(82, y, 514, y + 10), line_rects=[pymupdf.Rect(82, y, 514, y + 10)],
-                         text=text, size=10.0, color="#000", bold=False)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(82, y, 514, y + 10),
+            line_rects=[pymupdf.Rect(82, y, 514, y + 10)],
+            text=text,
+            size=10.0,
+            color="#000",
+            bold=False,
+        )
 
-    fenced = [blk("the query would look like this: “‘sql SELECT * FROM table1 AS t1 JOIN table2 ON t1.code = table2.code", 332),
-              blk("JOIN table3 ON t1.code = table3.code; “‘ This query first selects the top 10 rows", 344)]
+    fenced = [
+        blk(
+            "the query would look like this: “‘sql SELECT * FROM table1 AS t1 JOIN table2 ON t1.code = table2.code", 332
+        ),
+        blk("JOIN table3 ON t1.code = table3.code; “‘ This query first selects the top 10 rows", 344),
+    ]
     assert len(_merge_continuations(fenced)) == 1
-    closed = [blk("Extract the code wrapped by “‘python“‘ in the response and run the test cases", 332),
-              blk("Judge whether the answer passes the test cases from the problem statement", 344)]
+    closed = [
+        blk("Extract the code wrapped by “‘python“‘ in the response and run the test cases", 332),
+        blk("Judge whether the answer passes the test cases from the problem statement", 344),
+    ]
     assert len(_merge_continuations(closed)) == 2
 
 
@@ -9826,9 +11986,18 @@ def test_a_line_opening_with_an_inline_formula_continues_the_sentence():
     def blk(spans, x0, x1, y):
         rect = pymupdf.Rect(x0, y, x1, y + 12)
         text = "".join(text for text, _font in spans)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=9.7, color="#000", bold=False,
-                         span_lines=[[{"text": text, "font": font, "size": 9.7, "math": font.startswith("CM")}
-                                      for text, font in spans]])
+        return TextBlock(
+            page=0,
+            rect=rect,
+            line_rects=[rect],
+            text=text,
+            size=9.7,
+            color="#000",
+            bold=False,
+            span_lines=[
+                [{"text": text, "font": font, "size": 9.7, "math": font.startswith("CM")} for text, font in spans]
+            ],
+        )
 
     # 正文是 Times，CMR 的 1/ 是公式（提取时标上 math）
     def head():
@@ -9839,13 +12008,19 @@ def test_a_line_opening_with_an_inline_formula_continues_the_sentence():
     display = blk([("x", "CMMI10"), (" = y + z for all inputs", "Times-Roman")], 160, 300, 694)
     assert len(_merge_continuations([head(), display])) == 2
     # 行首的分式碎片另成了块，剩下的从分母起头、排到右缘，下一行回到栏边
-    rest = blk([("1−α", "CMR7"), (" had similar results. The first choice is optimal for", "Times-Roman")], 164, 490, 694)
+    rest = blk(
+        [("1−α", "CMR7"), (" had similar results. The first choice is optimal for", "Times-Roman")], 164, 490, 694
+    )
     rest.line_rects = [pymupdf.Rect(164, 694, 490, 706), pymupdf.Rect(105, 706, 490, 718)]
     rest.rect = pymupdf.Rect(105, 694, 490, 718)
     assert len(_merge_continuations([head(), rest])) == 1
     # 上标编号起头的脚注字号小一号，不是折行
-    note = blk([("2", "CMR6"), ("The analysis assumes that every possible cell of the data cube exists.", "Times-Roman")],
-               164, 490, 694)
+    note = blk(
+        [("2", "CMR6"), ("The analysis assumes that every possible cell of the data cube exists.", "Times-Roman")],
+        164,
+        490,
+        694,
+    )
     note.line_rects, note.rect, note.size = rest.line_rects, rest.rect, 8.0
     assert len(_merge_continuations([head(), note])) == 2
 
@@ -9857,8 +12032,11 @@ def test_the_line_gap_is_measured_from_the_documents_body_lines():
 
     def page(count, top=100.0, height=13.3, pitch=11.0, size=10.0):
         lines = [
-            {"dir": (1, 0), "bbox": (72, top + pitch * k, 520, top + pitch * k + height),
-             "spans": [{"text": "words of the body text", "size": size}]}
+            {
+                "dir": (1, 0),
+                "bbox": (72, top + pitch * k, 520, top + pitch * k + height),
+                "spans": [{"text": "words of the body text", "size": size}],
+            }
             for k in range(count)
         ]
         return {"blocks": [{"type": 0, "lines": lines}]}
@@ -9877,12 +12055,15 @@ def test_a_line_far_below_by_the_documents_own_spacing_is_not_a_continuation():
 
     def blk(text, y0, y1, size, line_gap):
         rect = pymupdf.Rect(114, y0, 1122, y1)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False,
-                         line_gap=line_gap)
+        return TextBlock(
+            page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False, line_gap=line_gap
+        )
 
     def slide(line_gap):
-        return [blk("Out of 9222 sentences", 150, 205, 45.0, line_gap),
-                blk("i want to eat chinese food lunch spend", 263, 304, 31.9, line_gap)]
+        return [
+            blk("Out of 9222 sentences", 150, 205, 45.0, line_gap),
+            blk("i want to eat chinese food lunch spend", 263, 304, 31.9, line_gap),
+        ]
 
     assert len(_merge_continuations(slide(0.1))) == 1
     assert len(_merge_continuations(slide(-0.15))) == 2
@@ -9895,10 +12076,14 @@ def test_a_line_tail_pair_measures_its_gap_against_the_documents_line_gap():
 
     def pair(line_gap):
         def blk(text, rect):
-            return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False,
-                             line_gap=line_gap)
-        return (blk("which we call the", pymupdf.Rect(300, 100, 480, 112)),
-                blk("unigram model of the text", pymupdf.Rect(72, 127, 480, 139)))
+            return TextBlock(
+                page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False, line_gap=line_gap
+            )
+
+        return (
+            blk("which we call the", pymupdf.Rect(300, 100, 480, 112)),
+            blk("unigram model of the text", pymupdf.Rect(72, 127, 480, 139)),
+        )
 
     assert _same_page_line_pair(*pair(0.1))
     assert not _same_page_line_pair(*pair(-0.2))
@@ -9911,15 +12096,31 @@ def test_a_running_head_does_not_take_the_first_line_below_it():
     from app.formats.pdf_extract import _merge_same_line_sentences
 
     def blocks():
-        head = [pymupdf.Rect(378, 82.8, 391.6, 94.8), pymupdf.Rect(401.8, 82.8, 405.3, 94.8),
-                pymupdf.Rect(415.5, 82.8, 466.1, 94.8)]
+        head = [
+            pymupdf.Rect(378, 82.8, 391.6, 94.8),
+            pymupdf.Rect(401.8, 82.8, 405.3, 94.8),
+            pymupdf.Rect(415.5, 82.8, 466.1, 94.8),
+        ]
         body = [pymupdf.Rect(160, 104, 493, 116), pymupdf.Rect(160, 116, 493, 128)]
         return [
-            TextBlock(page=0, rect=pymupdf.Rect(378, 82.8, 466.1, 94.8), line_rects=head, text="5.5 • WORD2VEC",
-                      size=10.0, color="#000", bold=False),
-            TextBlock(page=0, rect=pymupdf.Rect(160, 104, 493, 128), line_rects=body,
-                      text="automobile are distinct and unrelated; sparse vectors may thus fail to capture",
-                      size=10.0, color="#000", bold=False),
+            TextBlock(
+                page=0,
+                rect=pymupdf.Rect(378, 82.8, 466.1, 94.8),
+                line_rects=head,
+                text="5.5 • WORD2VEC",
+                size=10.0,
+                color="#000",
+                bold=False,
+            ),
+            TextBlock(
+                page=0,
+                rect=pymupdf.Rect(160, 104, 493, 128),
+                line_rects=body,
+                text="automobile are distinct and unrelated; sparse vectors may thus fail to capture",
+                size=10.0,
+                color="#000",
+                bold=False,
+            ),
         ]
 
     assert len(_merge_same_line_sentences(blocks())) == 1
@@ -9936,10 +12137,21 @@ def test_a_slide_sub_point_is_not_a_wrapped_title():
     def slide(body_size):
         def blk(text, x0, y0, x1, y1):
             rect = pymupdf.Rect(x0, y0, x1, y1)
-            return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=27.0, color="#000", bold=False,
-                             body_size=body_size)
-        return [blk("Example: Deterministic language L = {red,blue, green}", 77, 229, 672, 262),
-                blk("Branching factor = 3, any word can be followed by red, blue, green", 163, 272, 903, 305)]
+            return TextBlock(
+                page=0,
+                rect=rect,
+                line_rects=[rect],
+                text=text,
+                size=27.0,
+                color="#000",
+                bold=False,
+                body_size=body_size,
+            )
+
+        return [
+            blk("Example: Deterministic language L = {red,blue, green}", 77, 229, 672, 262),
+            blk("Branching factor = 3, any word can be followed by red, blue, green", 163, 272, 903, 305),
+        ]
 
     assert len(_merge_continuations(slide(38.0))) == 2
     assert len(_merge_continuations(slide(0.0))) == 1
@@ -9951,7 +12163,9 @@ def test_a_block_cut_by_a_margin_note_does_not_take_an_indented_new_paragraph():
     from app.formats.pdf_extract import _note_cut
 
     def block(*lines):
-        return {"lines": [{"dir": (1, 0), "bbox": bbox, "spans": [{"text": text, "size": 10.0}]} for text, bbox in lines]}
+        return {
+            "lines": [{"dir": (1, 0), "bbox": bbox, "spans": [{"text": text, "size": 10.0}]} for text, bbox in lines]
+        }
 
     gloss = block(("He said the biggest house in the country was this one", (174.1, 307.2, 396.9, 319.1)))
     paragraph = block(
@@ -9959,16 +12173,22 @@ def test_a_block_cut_by_a_margin_note_does_not_take_an_indented_new_paragraph():
         ("spoken in the northern part of the Kamchatka peninsula in Russia, a single", (142.2, 335.1, 475.2, 347.1)),
     )
     assert not _note_cut(gloss, paragraph)
-    upper = block(("Alternatively, in languages like Koryak, a Chukotko-Kamchatkan language", (142.2, 307.2, 475.2, 319.1)))
+    upper = block(
+        ("Alternatively, in languages like Koryak, a Chukotko-Kamchatkan language", (142.2, 307.2, 475.2, 319.1))
+    )
     lower = block(
         ("spoken in the northern part of the Kamchatka peninsula in Russia, a single", (142.2, 323.1, 475.2, 335.1)),
         ("word may have very many morphemes", (142.2, 335.1, 400.0, 347.1)),
     )
     assert _note_cut(upper, lower)
     # 列表项悬挂缩进的续行下面，比续行靠左起笔的一行是列表完了以后的正文
-    item = block(("2. embeddings, vectors that represent the meanings of tokens and concepts in-", (173.0, 234.0, 493.0, 247.0)),
-                 ("side the network", (185.0, 247.0, 251.0, 259.0)))
-    after = block(("Neural networks are the fundamental computational tool for language pro-", (175.0, 262.0, 493.0, 275.0)))
+    item = block(
+        ("2. embeddings, vectors that represent the meanings of tokens and concepts in-", (173.0, 234.0, 493.0, 247.0)),
+        ("side the network", (185.0, 247.0, 251.0, 259.0)),
+    )
+    after = block(
+        ("Neural networks are the fundamental computational tool for language pro-", (175.0, 262.0, 493.0, 275.0))
+    )
     assert not _note_cut(item, after)
 
 
@@ -9987,8 +12207,10 @@ def test_a_bracket_or_quote_closes_a_sentence_only_after_its_end_mark():
         rect = pymupdf.Rect(x0, y, 475.2, y + 12)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False)
 
-    citation = [blk("Let’s just explore two of the metrics. The MUC F-measure (Vilain et al., 1995)", 484),
-                blk("is based on the number of coreference links (pairs of mentions) common to H and R.", 496)]
+    citation = [
+        blk("Let’s just explore two of the metrics. The MUC F-measure (Vilain et al., 1995)", 484),
+        blk("is based on the number of coreference links (pairs of mentions) common to H and R.", 496),
+    ]
     assert len(_merge_continuations(citation)) == 1
     formula = [blk("yi = softmax(hL i WK)", 179, x0=262), blk("ti = argmaxk(yi)", 194, x0=263)]
     assert len(_merge_continuations(formula)) == 2
@@ -10003,12 +12225,21 @@ def test_a_list_ends_where_the_next_block_starts_left_of_the_item():
         rect = pymupdf.Rect(x0, y0, x1, y1)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False)
 
-    after = [blk("8. none (1)", 85, 264, 139, 276),
-             blk("none indicates that there are no attributes in the GROUP BY clause.", 71, 289, 540, 301)]
+    after = [
+        blk("8. none (1)", 85, 264, 139, 276),
+        blk("none indicates that there are no attributes in the GROUP BY clause.", 71, 289, 540, 301),
+    ]
     assert len(_merge_continuations(after)) == 2
-    item = [blk("2. fluency: how fluent the translation is in the target language (is it grammatical,",
-                172.7, 267.9, 493.2, 280.9),
-            blk("clear, readable, natural).", 185.1, 280.2, 281.2, 292.2)]
+    item = [
+        blk(
+            "2. fluency: how fluent the translation is in the target language (is it grammatical,",
+            172.7,
+            267.9,
+            493.2,
+            280.9,
+        ),
+        blk("clear, readable, natural).", 185.1, 280.2, 281.2, 292.2),
+    ]
     assert len(_merge_continuations(item)) == 1
 
 
@@ -10016,8 +12247,13 @@ def test_an_example_number_stays_apart_from_its_sentence():
     """例句编号 (25.4) 是标签，不连进右边的句子：连上以后块的左缘退到编号上，悬挂缩进的第三行就接不上了。"""
     from app.formats.pdf_extract import _same_line_word
 
-    assert not _same_line_word("(25.4)", "Before winter I built a chimney",
-                               pymupdf.Rect(142.2, 556.9, 166.3, 568.9), pymupdf.Rect(179.1, 556.6, 458.9, 569.5), 10.0)
+    assert not _same_line_word(
+        "(25.4)",
+        "Before winter I built a chimney",
+        pymupdf.Rect(142.2, 556.9, 166.3, 568.9),
+        pymupdf.Rect(179.1, 556.6, 458.9, 569.5),
+        10.0,
+    )
 
 
 def test_numbered_examples_in_one_block_are_split_apart():
@@ -10027,10 +12263,15 @@ def test_numbered_examples_in_one_block_are_split_apart():
     def item(text, bbox):
         return (text, pymupdf.Rect(bbox), [{"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}])
 
-    items = [item("(1.2) It was difficult to make it up the steep hill.", (142.2, 595.0, 335.0, 607.0)),
-             item("(1.3) What a difficult decision!", (142.2, 609.0, 268.0, 621.0))]
+    items = [
+        item("(1.2) It was difficult to make it up the steep hill.", (142.2, 595.0, 335.0, 607.0)),
+        item("(1.3) What a difficult decision!", (142.2, 609.0, 268.0, 621.0)),
+    ]
     assert _split_lines(items) == [[0], [1]]
-    wrapped = [item("as derived in the two equations", (142.2, 595.0, 335.0, 607.0)), item("(2.3) we see", (142.2, 609.0, 268.0, 621.0))]
+    wrapped = [
+        item("as derived in the two equations", (142.2, 595.0, 335.0, 607.0)),
+        item("(2.3) we see", (142.2, 609.0, 268.0, 621.0)),
+    ]
     assert _split_lines(wrapped) == [[0, 1]]
 
 
@@ -10041,12 +12282,16 @@ def test_a_paragraph_after_a_hanging_list_line_is_split_off():
     def item(text, bbox):
         return (text, pymupdf.Rect(bbox), [{"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}])
 
-    items = [item("4. If one word in the question is changed, the human-preferred answer changes", (155, 202, 475, 214)),
-             item("to the other party", (167, 214, 235, 226)),
-             item("The kind of world knowledge that might be needed to solve the problems", (157, 229, 475, 241))]
+    items = [
+        item("4. If one word in the question is changed, the human-preferred answer changes", (155, 202, 475, 214)),
+        item("to the other party", (167, 214, 235, 226)),
+        item("The kind of world knowledge that might be needed to solve the problems", (157, 229, 475, 241)),
+    ]
     assert _split_lines(items) == [[0, 1], [2]]
-    paragraph = [item("The first line of a paragraph is set to the full measure and", (157, 202, 475, 214)),
-                 item("The second line goes back to the margin", (142, 214, 475, 226))]
+    paragraph = [
+        item("The first line of a paragraph is set to the full measure and", (157, 202, 475, 214)),
+        item("The second line goes back to the margin", (142, 214, 475, 226)),
+    ]
     assert _split_lines(paragraph) == [[0, 1]]
 
 
@@ -10060,8 +12305,17 @@ def test_a_colored_example_sentence_stays_original_but_an_epigraph_does_not():
 
     def blk(text, rect, color=0x0000FF, size=10.0, flags=0):
         rect = pymupdf.Rect(rect)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#0000ff", bold=False,
-                         body_size=10.0, span_lines=[[{"text": text, "size": size, "color": color, "flags": flags}]])
+        return TextBlock(
+            page=0,
+            rect=rect,
+            line_rects=[rect],
+            text=text,
+            size=size,
+            color="#0000ff",
+            bold=False,
+            body_size=10.0,
+            span_lines=[[{"text": text, "size": size, "color": color, "flags": flags}]],
+        )
 
     example = blk("Victoria Chen, CFO of Megabucks Banking, saw her pay jump to $2.3 million.", (167, 456, 475, 480))
     assert _colored_example(example, frame)
@@ -10070,7 +12324,9 @@ def test_a_colored_example_sentence_stays_original_but_an_epigraph_does_not():
     assert not _colored_example(blk(example.text, (142.2, 456, 475, 480)), frame)
     quote = blk("On two occasions I have been asked, will the right answers come out?", (167, 210, 475, 258))
     assert _attribution(quote, blk("Babbage (1864)", (411, 246, 475, 258)))
-    assert not _attribution(example, blk("Here Victoria is referred to by many different phrases", (142, 484, 475, 520)))
+    assert not _attribution(
+        example, blk("Here Victoria is referred to by many different phrases", (142, 484, 475, 520))
+    )
 
 
 def test_numbered_and_bracket_labeled_examples_stay_original():
@@ -10085,20 +12341,59 @@ def test_numbered_and_bracket_labeled_examples_stay_original():
         for row in rects[1:]:
             rect |= row
         text = "".join(text for text, _size in spans)
-        return TextBlock(page=0, rect=rect, line_rects=rects, text=text, size=10.0, color="#000000", bold=False,
-                         span_lines=[[{"text": text, "size": size} for text, size in spans]])
+        return TextBlock(
+            page=0,
+            rect=rect,
+            line_rects=rects,
+            text=text,
+            size=10.0,
+            color="#000000",
+            bold=False,
+            span_lines=[[{"text": text, "size": size} for text, size in spans]],
+        )
 
-    example = blk([("(24.3) AMD agreed to [buy] Markham, Ontario-based ATI for around $5.4 billion", 10.0),
-                   (" in cash and stock, the companies announced Monday.", 10.0)],
-                  [(160, 491, 490, 504), (185, 504, 399, 516)])
-    reference = blk([("(2.4) follows from the definition of the loss and the bound on the", 10.0),
-                     (" gradient given above.", 10.0)], [(160, 491, 490, 504), (160, 504, 300, 516)])
-    labeled = blk([("[", 10.0), ("Arg0", 7.0), (" The group] ", 10.0), ("agreed", 10.0), (" [", 10.0), ("Arg1", 7.0),
-                   (" it wouldn’t make an offer].", 10.0)], [(185, 300, 400, 312)])
-    layers = blk([("We use W", 10.0), ("[", 7.0), ("1", 7.0), ("] and W", 10.0), ("[", 7.0), ("2", 7.0),
-                  ("] for the weights.", 10.0)], [(160, 300, 400, 312)])
-    tokens = blk([("Then we append an [", 10.0), ("EOS", 7.0), ("] and [", 10.0), ("BOS", 7.0), ("] token.", 10.0)],
-                 [(160, 300, 400, 312)])
+    example = blk(
+        [
+            ("(24.3) AMD agreed to [buy] Markham, Ontario-based ATI for around $5.4 billion", 10.0),
+            (" in cash and stock, the companies announced Monday.", 10.0),
+        ],
+        [(160, 491, 490, 504), (185, 504, 399, 516)],
+    )
+    reference = blk(
+        [
+            ("(2.4) follows from the definition of the loss and the bound on the", 10.0),
+            (" gradient given above.", 10.0),
+        ],
+        [(160, 491, 490, 504), (160, 504, 300, 516)],
+    )
+    labeled = blk(
+        [
+            ("[", 10.0),
+            ("Arg0", 7.0),
+            (" The group] ", 10.0),
+            ("agreed", 10.0),
+            (" [", 10.0),
+            ("Arg1", 7.0),
+            (" it wouldn’t make an offer].", 10.0),
+        ],
+        [(185, 300, 400, 312)],
+    )
+    layers = blk(
+        [
+            ("We use W", 10.0),
+            ("[", 7.0),
+            ("1", 7.0),
+            ("] and W", 10.0),
+            ("[", 7.0),
+            ("2", 7.0),
+            ("] for the weights.", 10.0),
+        ],
+        [(160, 300, 400, 312)],
+    )
+    tokens = blk(
+        [("Then we append an [", 10.0), ("EOS", 7.0), ("] and [", 10.0), ("BOS", 7.0), ("] token.", 10.0)],
+        [(160, 300, 400, 312)],
+    )
     found = _example_ids([example, reference, labeled, layers, tokens])
     assert found == {id(example), id(labeled)}
 
@@ -10110,12 +12405,23 @@ def test_a_verbatim_line_does_not_run_into_the_prose_below():
 
     def blk(text, rect, font):
         rect = pymupdf.Rect(rect)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False,
-                         span_lines=[[{"text": text, "size": 10.0, "font": font, "flags": 8 if font == "txtt" else 0}]])
+        return TextBlock(
+            page=0,
+            rect=rect,
+            line_rects=[rect],
+            text=text,
+            size=10.0,
+            color="#000",
+            bold=False,
+            span_lines=[[{"text": text, "size": 10.0, "font": font, "flags": 8 if font == "txtt" else 0}]],
+        )
 
     answer = blk("A: Charles", (376, 111, 429, 121), "txtt")
-    prose = blk("then the same kinds of training data would lead the language model to", (142, 126, 475, 138),
-                "NimbusRomNo9L-Regu")
+    prose = blk(
+        "then the same kinds of training data would lead the language model to",
+        (142, 126, 475, 138),
+        "NimbusRomNo9L-Regu",
+    )
     assert not _line_tail_match(answer, prose)
     tail = blk("A: Charles", (376, 111, 429, 121), "NimbusRomNo9L-Regu")
     assert _line_tail_match(tail, prose)
@@ -10132,16 +12438,32 @@ def test_a_line_in_a_column_of_its_own_font_stays_in_its_block():
     from app.formats.pdf_extract import _rejoin_split_lines
 
     def line(text, bbox, font):
-        return {"dir": (1, 0), "bbox": bbox,
-                "spans": [{"text": text, "bbox": bbox, "size": 29.0, "font": font, "flags": 0, "color": 0,
-                           "origin": (bbox[0], bbox[3] - 7)}]}
+        return {
+            "dir": (1, 0),
+            "bbox": bbox,
+            "spans": [
+                {
+                    "text": text,
+                    "bbox": bbox,
+                    "size": 29.0,
+                    "font": font,
+                    "flags": 0,
+                    "color": 0,
+                    "origin": (bbox[0], bbox[3] - 7),
+                }
+            ],
+        }
 
     def page(with_mate):
         prose = line("according to its probability p(w|<s>)", (38, 221, 523, 256), "Calibri")
         sample = line("I want", (520, 232, 693, 265), "CourierNewPSMT")
         column = [line("<s> I", (520, 194, 607, 227), "CourierNewPSMT")] if with_mate else []
-        return {"blocks": [{"type": 0, "bbox": (38, 221, 523, 256), "lines": [prose]},
-                           {"type": 0, "bbox": (520, 194, 693, 265), "lines": [*column, sample]}]}
+        return {
+            "blocks": [
+                {"type": 0, "bbox": (38, 221, 523, 256), "lines": [prose]},
+                {"type": 0, "bbox": (520, 194, 693, 265), "lines": [*column, sample]},
+            ]
+        }
 
     data = page(True)
     _rejoin_split_lines(data)
@@ -10164,8 +12486,12 @@ def test_a_small_fraction_after_a_relation_joins_the_line():
     numerator = line(414, 418, 82, 89, "1", "CMR7", 7.0)
     numerator["spans"][0]["math"] = True  # _mark_math_roman 给式子里的正体数字打的标
     denominator = line(414, 419, 90, 97, "L", "CMMI7", 7.0)
-    data = {"blocks": [{"type": 0, "bbox": (108, 84, 406, 95), "lines": [head, rel]},
-                       {"type": 0, "bbox": (414, 82, 419, 97), "lines": [numerator, denominator]}]}
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": (108, 84, 406, 95), "lines": [head, rel]},
+            {"type": 0, "bbox": (414, 82, 419, 97), "lines": [numerator, denominator]},
+        ]
+    }
     _rejoin_split_lines(data)
     assert data["blocks"][0]["lines"] == [head, rel, numerator, denominator]
 
@@ -10178,8 +12504,16 @@ def test_a_full_line_ending_in_a_call_runs_on_into_the_next_line():
 
     def blk(text, y, font="NimbusRomNo9L-Regu"):
         rect = pymupdf.Rect(108, y, 504, y + 11)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000", bold=False,
-                         span_lines=[[{"text": text, "font": font, "size": 10.0}]])
+        return TextBlock(
+            page=0,
+            rect=rect,
+            line_rects=[rect],
+            text=text,
+            size=10,
+            color="#000",
+            bold=False,
+            span_lines=[[{"text": text, "font": font, "size": 10.0}]],
+        )
 
     head = blk("that a differentiable estimator can be constructed: q(z|x)f(z) dz ≃ f(g(x, e))", 84)
     tail = blk("where e ∼ p(e). In section 2.3 we applied this trick.", 96)
@@ -10198,15 +12532,33 @@ def test_table_split_keeps_space_spans():
     def span(text, x0, x1):
         return {"text": text, "bbox": (x0, 100, x1, 110), "origin": (x0, 108), "font": "Times", "size": 10.0}
 
-    first = [span("Sample", 140, 170), span(" ", 170, 176), span("minibatch", 176, 220),
-             span(" ", 220, 226), span("rule.", 226, 250)]
-    second = [{**item, "bbox": (item["bbox"][0], 112, item["bbox"][2], 122),
-               "origin": (item["origin"][0], 120)} for item in (span("We", 140, 152), span(" ", 152, 158), span("used", 158, 180))]
+    first = [
+        span("Sample", 140, 170),
+        span(" ", 170, 176),
+        span("minibatch", 176, 220),
+        span(" ", 220, 226),
+        span("rule.", 226, 250),
+    ]
+    second = [
+        {**item, "bbox": (item["bbox"][0], 112, item["bbox"][2], 122), "origin": (item["origin"][0], 120)}
+        for item in (span("We", 140, 152), span(" ", 152, 158), span("used", 158, 180))
+    ]
     rects = [pymupdf.Rect(140, 100, 250, 110), pymupdf.Rect(140, 112, 180, 122)]
-    block = TextBlock(page=0, rect=rects[0] | rects[1], line_rects=rects, text="",
-                      size=10, color="#000", bold=False, span_lines=[first, second])
-    table = RuledTable(pymupdf.Rect(100, 98, 300, 124),
-                       (pymupdf.Rect(100, 98, 300, 111), pymupdf.Rect(100, 111, 300, 124)), algorithm=True)
+    block = TextBlock(
+        page=0,
+        rect=rects[0] | rects[1],
+        line_rects=rects,
+        text="",
+        size=10,
+        color="#000",
+        bold=False,
+        span_lines=[first, second],
+    )
+    table = RuledTable(
+        pymupdf.Rect(100, 98, 300, 124),
+        (pymupdf.Rect(100, 98, 300, 111), pymupdf.Rect(100, 111, 300, 124)),
+        algorithm=True,
+    )
     parts = _split_table_blocks([block], (table,))
     assert [part.text for part in parts] == ["Sample minibatch rule.", "We used"]
 
@@ -10215,8 +12567,13 @@ def test_a_split_off_period_keeps_its_own_baseline():
     """「 .」的空格落在根号里下标的基线上，切开后句点要用自己的起笔点，擦除时才认得到。"""
     from app.formats.pdf_math import _split_covered
 
-    span = {"text": " .", "font": "NimbusRomNo9L-Regu", "size": 10.0, "bbox": (455.2, 605.4, 459.5, 620.7),
-            "origin": (455.2, 618.3)}
+    span = {
+        "text": " .",
+        "font": "NimbusRomNo9L-Regu",
+        "size": 10.0,
+        "bbox": (455.2, 605.4, 459.5, 620.7),
+        "origin": (455.2, 618.3),
+    }
     chars = {(" .", 455.2, 618.3): [(455.2, 457.0, (455.2, 618.3)), (457.0, 459.5, (457.0, 613.0))]}
     bar = pymupdf.Rect(440.5, 610.3, 456.0, 610.7)
     pieces = _split_covered(span, [bar], chars, ([440.7, 455.2, 457.0], [455.2, 457.0, 459.5]), "math")
@@ -10238,17 +12595,35 @@ def test_a_numerator_left_in_its_own_block_rejoins_the_paragraph():
         return {"bbox": tuple(box), "dir": (1, 0), "spans": list(spans)}
 
     lead = line(_glyph("From,", reg, 9.7, 4, (105.0, 558.9, 128.4, 570.6), (105.0, 561.0, 128.4, 569.9)))
-    denominator = line(_glyph("4∥g", cmmi, 6.8, 0, (209.1, 566.4, 220.8, 573.2), (209.1, 566.4, 220.8, 573.2), math=True))
-    tail = line(_glyph("T,i", cmmi, 6.8, 0, (312.9, 565.5, 323.1, 572.2), (312.9, 565.5, 323.1, 571.0), math=True),
-                _glyph(", we can take square root of both side and", reg, 9.7, 4,
-                       (323.6, 558.9, 490.3, 570.6), (323.6, 561.0, 490.3, 569.9)))
-    g4 = line(_glyph("g", cmmi, 6.8, 0, (219.6, 556.9, 223.3, 563.7), (219.6, 558.9, 223.3, 563.7), math=True),
-              _glyph("4", "CMR5", 4.8, 0, (223.6, 555.4, 226.9, 560.3), (223.6, 555.4, 226.9, 559.1), math=True))
+    denominator = line(
+        _glyph("4∥g", cmmi, 6.8, 0, (209.1, 566.4, 220.8, 573.2), (209.1, 566.4, 220.8, 573.2), math=True)
+    )
+    tail = line(
+        _glyph("T,i", cmmi, 6.8, 0, (312.9, 565.5, 323.1, 572.2), (312.9, 565.5, 323.1, 571.0), math=True),
+        _glyph(
+            ", we can take square root of both side and",
+            reg,
+            9.7,
+            4,
+            (323.6, 558.9, 490.3, 570.6),
+            (323.6, 561.0, 490.3, 569.9),
+        ),
+    )
+    g4 = line(
+        _glyph("g", cmmi, 6.8, 0, (219.6, 556.9, 223.3, 563.7), (219.6, 558.9, 223.3, 563.7), math=True),
+        _glyph("4", "CMR5", 4.8, 0, (223.6, 555.4, 226.9, 560.3), (223.6, 555.4, 226.9, 559.1), math=True),
+    )
     sub = line(_glyph("T,i", "CMMI5", 4.8, 0, (223.3, 560.3, 232.7, 565.1), (223.3, 560.3, 232.7, 563.9), math=True))
-    data = {"blocks": [{"type": 0, "bbox": (105.0, 558.9, 490.3, 573.2), "lines": [lead, denominator, tail]},
-                       {"type": 0, "bbox": (219.6, 555.4, 232.7, 565.1), "lines": [g4, sub]}]}
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": (105.0, 558.9, 490.3, 573.2), "lines": [lead, denominator, tail]},
+            {"type": 0, "bbox": (219.6, 555.4, 232.7, 565.1), "lines": [g4, sub]},
+        ]
+    }
     _rejoin_split_lines(data)
-    assert {id(item) for item in data["blocks"][0]["lines"]} == {id(item) for item in (lead, denominator, tail, g4, sub)}
+    assert {id(item) for item in data["blocks"][0]["lines"]} == {
+        id(item) for item in (lead, denominator, tail, g4, sub)
+    }
     assert data["blocks"][1]["lines"] == []
 
 
@@ -10274,14 +12649,21 @@ def test_a_formula_clip_reaches_into_its_own_gaps_beside_a_comma():
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
     fms = _page_form(doc, page)
-    spans = [{"text": "x", "bbox": (407.1, 490.1, 413.0, 500.1)}, {"text": "∼N", "bbox": (424.5, 489.9, 444.3, 498.1)},
-             {"text": "(", "bbox": (445.8, 490.1, 449.7, 500.1)}, {"text": ")", "bbox": (464.2, 490.1, 468.0, 500.1)}]
+    spans = [
+        {"text": "x", "bbox": (407.1, 490.1, 413.0, 500.1)},
+        {"text": "∼N", "bbox": (424.5, 489.9, 444.3, 498.1)},
+        {"text": "(", "bbox": (445.8, 490.1, 449.7, 500.1)},
+        {"text": ")", "bbox": (464.2, 490.1, 468.0, 500.1)},
+    ]
     formula = {"bbox": pymupdf.Rect(407.1, 489.9, 468.0, 500.1), "spans": spans}
     # 前面的 for 和后面的逗号都紧挨着公式
     word = {"text": "for", "bbox": (395.2, 489.9, 407.0, 500.0)}
     comma = {"text": ",", "bbox": (468.0, 489.9, 470.6, 500.0)}
     xref = _formula_form(doc, page, fms, formula, "/Fx", [dict(span) for span in spans] + [word, comma])
-    rects = [tuple(map(float, found)) for found in re.findall(r"([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) re", doc.xref_stream(xref).decode())]
+    rects = [
+        tuple(map(float, found))
+        for found in re.findall(r"([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) re", doc.xref_stream(xref).decode())
+    ]
 
     def inside(x, y):
         y = page.rect.height - y
@@ -10297,18 +12679,51 @@ def test_a_displayed_formula_set_in_the_text_italic_is_kept():
     from app.formats.pdf_extract import _untranslatable
 
     def spans(*parts):
-        return [{"text": text, "font": font, "size": 10.0, "flags": 2 if "Ital" in font else 0}
-                for text, font in parts]
+        return [{"text": text, "font": font, "size": 10.0, "flags": 2 if "Ital" in font else 0} for text, font in parts]
 
     roman, italic, sans, cmr = "NimbusRomNo9L-Regu", "NimbusRomNo9L-ReguItal", "CMSSBX10", "CMR10"
-    line = spans(("Q", sans), (" =", cmr), (" H", sans), ("dec", italic), ("W", sans), ("Q", sans), (";", roman),
-                 ("K", sans), (" =", cmr), (" H", sans), ("enc", italic), ("W", sans), ("K", sans))
+    line = spans(
+        ("Q", sans),
+        (" =", cmr),
+        (" H", sans),
+        ("dec", italic),
+        ("W", sans),
+        ("Q", sans),
+        (";", roman),
+        ("K", sans),
+        (" =", cmr),
+        (" H", sans),
+        ("enc", italic),
+        ("W", sans),
+        ("K", sans),
+    )
     assert _untranslatable(line, "Q = HdecWQ; K = HencWK", 8, True)
-    line = spans(("ˆ", roman), ("y", italic), ("i", italic), ("=", cmr), ("argmax", roman), ("char", roman),
-                 ("∈", "CMSY10"), ("Alphabet", roman), ("P", italic), ("(", cmr), ("char", roman), (")", cmr))
+    line = spans(
+        ("ˆ", roman),
+        ("y", italic),
+        ("i", italic),
+        ("=", cmr),
+        ("argmax", roman),
+        ("char", roman),
+        ("∈", "CMSY10"),
+        ("Alphabet", roman),
+        ("P", italic),
+        ("(", cmr),
+        ("char", roman),
+        (")", cmr),
+    )
     assert _untranslatable(line, "ˆyi = argmaxchar∈AlphabetP(char)", 8, True)
-    line = spans(("L", italic), ("(", cmr), ("y", italic), (")", cmr), ("=", cmr), ("How much", roman),
-                 ("y", italic), (" differs from the true", roman), (" y", italic))
+    line = spans(
+        ("L", italic),
+        ("(", cmr),
+        ("y", italic),
+        (")", cmr),
+        ("=", cmr),
+        ("How much", roman),
+        ("y", italic),
+        (" differs from the true", roman),
+        (" y", italic),
+    )
     assert not _untranslatable(line, "L(y) = How much y differs from the true y", 8, True)
     line = spans(("convolution with width-1 kernel:", italic), ("z", sans), ("j", italic), ("=", cmr), ("x", sans))
     assert not _untranslatable(line, "convolution with width-1 kernel: zj = x", 8, True)
@@ -10337,10 +12752,19 @@ def test_text_under_a_big_cmex_radical_is_part_of_the_formula():
     page.insert_text((188.4, 123.8), "Var", fontname="tiro", fontsize=9.96)
     data = page.get_text("dict")
     line = data["blocks"][0]["lines"][0]
-    line["spans"].insert(0, {
-        "text": "p", "font": "CMEX10", "size": 9.96, "flags": 0, "color": 0,
-        "bbox": (177.2, 107.7, 188.4, 138.6), "origin": (177.2, 115.1), "ink": (177.2, 114.7, 188.4, 126.6),
-    })
+    line["spans"].insert(
+        0,
+        {
+            "text": "p",
+            "font": "CMEX10",
+            "size": 9.96,
+            "flags": 0,
+            "color": 0,
+            "bbox": (177.2, 107.7, 188.4, 138.6),
+            "origin": (177.2, 115.1),
+            "ink": (177.2, 114.7, 188.4, 126.6),
+        },
+    )
     right = line["spans"][1]["bbox"][2]
     _mark_radicands(_PageChars(page), data, [pymupdf.Rect(188.4, 114.6, right, 115.1)])
     marked = [span for span in line["spans"] if span["text"] == "Var"]
@@ -10355,10 +12779,26 @@ def test_a_smaller_line_in_another_colour_does_not_continue_a_title():
     title = pymupdf.Rect(97.9, 63.0, 859.0, 125.3)
     item = pymupdf.Rect(112.3, 151.7, 1087.7, 198.1)
     blocks = [
-        TextBlock(page=0, rect=title, line_rects=[title], text="Berkeley Restaurant Project sentences",
-                  size=51.0, color="#404040", bold=False, body_size=38.0),
-        TextBlock(page=0, rect=item, line_rects=[item], text="can you tell me about any good cantonese restaurants",
-                  size=38.0, color="#330099", bold=False, body_size=38.0),
+        TextBlock(
+            page=0,
+            rect=title,
+            line_rects=[title],
+            text="Berkeley Restaurant Project sentences",
+            size=51.0,
+            color="#404040",
+            bold=False,
+            body_size=38.0,
+        ),
+        TextBlock(
+            page=0,
+            rect=item,
+            line_rects=[item],
+            text="can you tell me about any good cantonese restaurants",
+            size=38.0,
+            color="#330099",
+            bold=False,
+            body_size=38.0,
+        ),
     ]
     assert len(_merge_continuations(blocks)) == 2
 
@@ -10371,16 +12811,29 @@ def test_an_index_entry_ends_at_its_page_numbers():
     def page(lines):
         return {"blocks": [{"type": 0, "lines": [{"spans": [{"text": line}]} for line in lines]}]}
 
-    entries = [f"term number {i}, {100 + i}" for i in range(12)] + ["sub entry", "linear chain CRF, 414, 415",
-                                                                       "Kleene *, 50–52", "fully-connected, 157"]
+    entries = [f"term number {i}, {100 + i}" for i in range(12)] + [
+        "sub entry",
+        "linear chain CRF, 414, 415",
+        "Kleene *, 50–52",
+        "fully-connected, 157",
+    ]
     assert _index_page(page(entries))
     prose = [f"this is line {i} of an ordinary paragraph that wraps" for i in range(16)]
     assert not _index_page(page(prose))
 
     def blk(text, y, entry):
         rect = pymupdf.Rect(80, y, 200, y + 9)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=8.0, color="#000", bold=False,
-                         span_lines=[[{"text": text, "font": "Times", "size": 8.0}]], entry=entry)
+        return TextBlock(
+            page=0,
+            rect=rect,
+            line_rects=[rect],
+            text=text,
+            size=8.0,
+            color="#000",
+            bold=False,
+            span_lines=[[{"text": text, "font": "Times", "size": 8.0}]],
+            entry=entry,
+        )
 
     blocks = [blk("Frump, 497", 100, True), blk("fully-connected, 157", 110, True)]
     assert len(_merge_continuations(blocks)) == 2
@@ -10464,15 +12917,22 @@ def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
     def item(text, x0, y0, x1):
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 9.6), [{"text": text, "size": 8.0}], [])
 
-    see = [item("CFG, see context-free gram-", 179.3, 111.8, 271.3), item("mar", 203.3, 121.2, 215.6),
-           item("chain rule, 123, 171", 179.3, 130.4, 242.9)]
+    see = [
+        item("CFG, see context-free gram-", 179.3, 111.8, 271.3),
+        item("mar", 203.3, 121.2, 215.6),
+        item("chain rule, 123, 171", 179.3, 130.4, 242.9),
+    ]
     assert _index_entry_ends(see, []) == {1, 2}
     head = [item("Chinese", 179.3, 206.6, 205.0), item("as verb-framed language,", 187.3, 216.1, 271.3)]
     assert 0 not in _index_entry_ends(head, [])
     # 续行几行缩进一样，到下一条从首行的左缘起笔才收住
-    long = [item("Transformations and Dis-", 77.4, 518.7, 169.4), item("course Analysis", 101.3, 528.2, 169.4),
-            item("Project (TDAP),", 101.3, 537.7, 169.4), item("422", 101.3, 547.1, 113.3),
-            item("transition probability", 77.4, 556.6, 144.5)]
+    long = [
+        item("Transformations and Dis-", 77.4, 518.7, 169.4),
+        item("course Analysis", 101.3, 528.2, 169.4),
+        item("Project (TDAP),", 101.3, 537.7, 169.4),
+        item("422", 101.3, 547.1, 113.3),
+        item("transition probability", 77.4, 556.6, 144.5),
+    ]
     assert _index_entry_ends(long, []) == {3}
     split = [item("collaborative", 179.3, 652.4, 220.6), item("completion,", 233.5, 652.4, 271.3)]
     numbers = [pymupdf.Rect(203.3, 661.6, 215.2, 671.9)]
@@ -10482,8 +12942,11 @@ def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
     wrapped = [item("as weighted average", 187.3, 225.6, 271.3), item("branching factor,", 203.3, 235.0, 271.3)]
     assert _index_entry_ends(wrapped, [pymupdf.Rect(203.3, 244.5, 211.2, 254.1)]) == {1}
     # 块从一条的续行起头，停在断开的半个词上，下一行和它对齐也是同一条
-    broken = [item("for pronoun resolu-", 203.3, 456.0, 271.3), item("tion, 566", 203.3, 465.5, 231.6),
-              item("hold, 597", 179.3, 475.0, 210.0)]
+    broken = [
+        item("for pronoun resolu-", 203.3, 456.0, 271.3),
+        item("tion, 566", 203.3, 465.5, 231.6),
+        item("hold, 597", 179.3, 475.0, 210.0),
+    ]
     assert _index_entry_ends(broken, []) == {1, 2}
 
 
@@ -10493,21 +12956,34 @@ def test_a_paragraph_indented_under_an_inset_line_starts_on_its_own():
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1):
-        return (text, pymupdf.Rect(x0, y0, x1, y0 + 12),
-                [{"text": text, "size": 10.0, "bbox": (x0, y0, x1, y0 + 12), "font": "Times", "flags": 0}], [])
+        return (
+            text,
+            pymupdf.Rect(x0, y0, x1, y0 + 12),
+            [{"text": text, "size": 10.0, "bbox": (x0, y0, x1, y0 + 12), "font": "Times", "flags": 0}],
+            [],
+        )
 
-    items = [item("Soak the preserved vegetable in water until soft, remove, drain, and chop", 192.1, 463.4, 482.6),
-             item("We generally distinguish two broad classes of morphemes: roots, the central", 175.1, 479.9, 493.2),
-             item("morpheme of the word, supplying the main meaning, and affixes, adding", 160.2, 491.9, 493.2),
-             item("additional meanings of various kinds.", 160.2, 504.2, 320.0)]
+    items = [
+        item("Soak the preserved vegetable in water until soft, remove, drain, and chop", 192.1, 463.4, 482.6),
+        item("We generally distinguish two broad classes of morphemes: roots, the central", 175.1, 479.9, 493.2),
+        item("morpheme of the word, supplying the main meaning, and affixes, adding", 160.2, 491.9, 493.2),
+        item("additional meanings of various kinds.", 160.2, 504.2, 320.0),
+    ]
     assert _split_lines(items) == [[0], [1, 2, 3]]
-    entry = [item("carbon footprints of machine learn-", 223.3, 238.6, 339.3), item("ing.", 223.3, 247.1, 235.5),
-             item("Journal of Machine Learning", 242.0, 247.1, 339.3), item("Research, 21(248):1-43.", 223.3, 255.6, 301.9),
-             item("Henderson, P., X. Li, D. Jurafsky,", 213.3, 266.7, 339.3)]
+    entry = [
+        item("carbon footprints of machine learn-", 223.3, 238.6, 339.3),
+        item("ing.", 223.3, 247.1, 235.5),
+        item("Journal of Machine Learning", 242.0, 247.1, 339.3),
+        item("Research, 21(248):1-43.", 223.3, 255.6, 301.9),
+        item("Henderson, P., X. Li, D. Jurafsky,", 213.3, 266.7, 339.3),
+    ]
     assert any({2, 3} <= set(group) for group in _split_lines(entry))
     # 居中排的作者单位越往下越宽，三行对着同一条中线，不是缩进
-    author = [item("Machine Learning Group", 339.9, 182.1, 441.1), item("Universiteit van Amsterdam", 334.4, 193.0, 446.6),
-              item("Welling Max at the institute of", 327.7, 203.5, 453.3)]
+    author = [
+        item("Machine Learning Group", 339.9, 182.1, 441.1),
+        item("Universiteit van Amsterdam", 334.4, 193.0, 446.6),
+        item("Welling Max at the institute of", 327.7, 203.5, 453.3),
+    ]
     assert _split_lines(author) == [[0, 1, 2]]
 
 
@@ -10517,18 +12993,26 @@ def test_an_indented_line_after_a_full_line_that_ends_a_sentence_starts_a_paragr
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1):
-        return (text, pymupdf.Rect(x0, y0, x1, y0 + 12),
-                [{"text": text, "size": 10.0, "bbox": (x0, y0, x1, y0 + 12), "font": "Times", "flags": 0}], [])
+        return (
+            text,
+            pymupdf.Rect(x0, y0, x1, y0 + 12),
+            [{"text": text, "size": 10.0, "bbox": (x0, y0, x1, y0 + 12), "font": "Times", "flags": 0}],
+            [],
+        )
 
-    items = [item("This ordering reverses by 10 dB, and the residual advantage", 315.2, 428.9, 559.0),
-             item("10 dB, and the residual advantage grows to 4.08 dB at 25 dB.", 315.2, 440.9, 559.0),
-             item("The correction target in (9) provides an interpretation of", 330.2, 453.6, 559.0),
-             item("this crossover. For slowly varying channels and weak obser-", 315.2, 465.5, 559.0),
-             item("baseline achieves lower mean NMSE than both variants.", 315.2, 477.5, 539.5)]
+    items = [
+        item("This ordering reverses by 10 dB, and the residual advantage", 315.2, 428.9, 559.0),
+        item("10 dB, and the residual advantage grows to 4.08 dB at 25 dB.", 315.2, 440.9, 559.0),
+        item("The correction target in (9) provides an interpretation of", 330.2, 453.6, 559.0),
+        item("this crossover. For slowly varying channels and weak obser-", 315.2, 465.5, 559.0),
+        item("baseline achieves lower mean NMSE than both variants.", 315.2, 477.5, 539.5),
+    ]
     assert _split_lines(items) == [[0, 1], [2, 3, 4]]
-    entry = [item("46. Jim Fuller, Anthony L Piro, and Adam S Jermyn. Slowing the spins of cores.", 114.0, 100.0, 474.0),
-             item("Monthly Notices of the Royal Astronomical Society, 485(3):3661, 2019.", 129.0, 112.0, 474.0),
-             item("47. Ilya Mandel and Alison Farmer. Merging stellar-mass binary black holes.", 114.0, 124.0, 474.0)]
+    entry = [
+        item("46. Jim Fuller, Anthony L Piro, and Adam S Jermyn. Slowing the spins of cores.", 114.0, 100.0, 474.0),
+        item("Monthly Notices of the Royal Astronomical Society, 485(3):3661, 2019.", 129.0, 112.0, 474.0),
+        item("47. Ilya Mandel and Alison Farmer. Merging stellar-mass binary black holes.", 114.0, 124.0, 474.0),
+    ]
     assert [0, 1] in _split_lines(entry)
 
 
@@ -10538,20 +13022,28 @@ def test_numbers_wrapped_under_an_indented_first_line_stay_in_the_paragraph():
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1):
-        return (text, pymupdf.Rect(x0, y0, x1, y0 + 12),
-                [{"text": text, "size": 10.0, "bbox": (x0, y0, x1, y0 + 12), "font": "Times", "flags": 0}], [])
+        return (
+            text,
+            pymupdf.Rect(x0, y0, x1, y0 + 12),
+            [{"text": text, "size": 10.0, "bbox": (x0, y0, x1, y0 + 12), "font": "Times", "flags": 0}],
+            [],
+        )
 
-    items = [item("The visualization shows colors to separate out words, but of course the true out-", 157.0, 169.0, 475.0),
-             item("put of the tokenizer is simply a sequence of unique token ids. (In case you're in-", 142.0, 181.0, 475.0),
-             item("terested, they were the following 13 tokens: 11865, 8923, 11, 31211, 6177, 23919,", 142.0, 193.0, 475.0),
-             item("885, 220, 19427, 7633, 18887, 147065, 0)", 142.0, 205.0, 310.0),
-             item("Notice that most words are their own token, usually including the leading space.", 157.0, 217.0, 475.0),
-             item("Clitics like 's are segmented off when they appear on proper nouns like Jane, but", 142.0, 229.0, 475.0)]
+    items = [
+        item("The visualization shows colors to separate out words, but of course the true out-", 157.0, 169.0, 475.0),
+        item("put of the tokenizer is simply a sequence of unique token ids. (In case you're in-", 142.0, 181.0, 475.0),
+        item("terested, they were the following 13 tokens: 11865, 8923, 11, 31211, 6177, 23919,", 142.0, 193.0, 475.0),
+        item("885, 220, 19427, 7633, 18887, 147065, 0)", 142.0, 205.0, 310.0),
+        item("Notice that most words are their own token, usually including the leading space.", 157.0, 217.0, 475.0),
+        item("Clitics like 's are segmented off when they appear on proper nouns like Jane, but", 142.0, 229.0, 475.0),
+    ]
     assert _split_lines(items) == [[0, 1, 2, 3], [4, 5]]
     # 上一行停在句中的 et al. 上，下一行的年份是引文的后半截
-    cited = [item("least another star and/or BH in close proximity to carry away", 303.3, 728.3, 558.4),
-             item("the excess energy and momentum (Heggie 1975; Tanikawa et al.", 303.3, 739.7, 558.4),
-             item("2012).", 303.3, 750.6, 329.0)]
+    cited = [
+        item("least another star and/or BH in close proximity to carry away", 303.3, 728.3, 558.4),
+        item("the excess energy and momentum (Heggie 1975; Tanikawa et al.", 303.3, 739.7, 558.4),
+        item("2012).", 303.3, 750.6, 329.0),
+    ]
     assert _split_lines(cited) == [[0, 1, 2]]
 
 
@@ -10561,14 +13053,19 @@ def test_caption_lines_wrapped_back_under_the_label_stay_in_the_caption():
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1, font="NimbusRomNo9L-Regu"):
-        return (text, pymupdf.Rect(x0, y0, x1, y0 + 11),
-                [{"text": text, "size": 9.0, "bbox": (x0, y0, x1, y0 + 11), "font": font, "flags": 0}], [])
+        return (
+            text,
+            pymupdf.Rect(x0, y0, x1, y0 + 11),
+            [{"text": text, "size": 9.0, "bbox": (x0, y0, x1, y0 + 11), "font": font, "flags": 0}],
+            [],
+        )
 
     label = item("Figure 4.12", 143.2, 254.2, 186.4, "NimbusRomNo9L-Medi")
     first = item("A version of the paired bootstrap algorithm after Berg-Kirkpatrick et al.", 196.3, 254.5, 475.2)
     assert _split_lines([label, first, item("(2012).", 142.2, 265.5, 168.3)]) == [[0, 1, 2]]
-    assert _split_lines([label, first, item("(2012), resampling the test set with replacement.", 142.2, 265.5, 380.0)]) \
-        == [[0, 1, 2]]
+    assert _split_lines(
+        [label, first, item("(2012), resampling the test set with replacement.", 142.2, 265.5, 380.0)]
+    ) == [[0, 1, 2]]
 
 
 def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
@@ -10577,12 +13074,20 @@ def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
     from app.formats.pdf_extract import _index_entry_ends, _split_lines
 
     def item(text, x0, y0, x1):
-        return (text, pymupdf.Rect(x0, y0, x1, y0 + 9.6),
-                [{"text": text, "size": 8.0, "bbox": (x0, y0, x1, y0 + 9.6)}], [])
+        return (
+            text,
+            pymupdf.Rect(x0, y0, x1, y0 + 9.6),
+            [{"text": text, "size": 8.0, "bbox": (x0, y0, x1, y0 + 9.6)}],
+            [],
+        )
 
-    items = [item("Switchboard, 359", 401.2, 130.6, 457.5), item("Switchboard Corpus,", 401.2, 140.5, 472.4),
-             item("338,", 479.3, 140.5, 493.2), item("339, 348, 349, 359", 425.1, 149.7, 484.9),
-             item("sycophantic, 29", 401.2, 159.2, 451.3)]
+    items = [
+        item("Switchboard, 359", 401.2, 130.6, 457.5),
+        item("Switchboard Corpus,", 401.2, 140.5, 472.4),
+        item("338,", 479.3, 140.5, 493.2),
+        item("339, 348, 349, 359", 425.1, 149.7, 484.9),
+        item("sycophantic, 29", 401.2, 159.2, 451.3),
+    ]
     groups = _split_lines(items, True)
     assert [1, 2, 3] in groups or any({1, 2, 3} <= set(group) for group in groups)
     ends = _index_entry_ends(items, [])
@@ -10597,15 +13102,15 @@ def test_page_numbers_in_the_next_block_join_the_index_entry():
 
     def blk(text, x0, y0, x1, entry=False):
         rect = pymupdf.Rect(x0, y0, x1, y0 + 9.6)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=8.0, color="#000", bold=False,
-                         entry=entry, index=True)
+        return TextBlock(
+            page=0, rect=rect, line_rects=[rect], text=text, size=8.0, color="#000", bold=False, entry=entry, index=True
+        )
 
     host = blk("Berkeley Restaurant Project,", 401.2, 643.0, 493.2, entry=True)
     refs = pymupdf.Rect(425.1, 652.5, 433.1, 662.1)
     assert _wraps_from_above([host], 0, refs, "72", [], None, index_page=True)
     assert not _wraps_from_above([host], 0, refs, "72", [], None, index_page=False)
-    merged = _merge_continuations([host, blk("72", 425.1, 652.5, 433.1, entry=True),
-                                   blk("BERT", 401.2, 662.0, 421.1)])
+    merged = _merge_continuations([host, blk("72", 425.1, 652.5, 433.1, entry=True), blk("BERT", 401.2, 662.0, 421.1)])
     assert [block.text for block in merged] == ["Berkeley Restaurant Project, 72", "BERT"]
 
 
@@ -10619,8 +13124,18 @@ def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down():
     def blk(text, x0, row):
         rect = pymupdf.Rect(x0, 100 + row * 9.6, x0 + 60, 110 + row * 9.6)
         span = {"text": text, "size": 8.0, "font": "Times-Roman", "flags": 0, "color": 0, "bbox": tuple(rect)}
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=8.0, color="#000", bold=False,
-                         span_lines=[[span]], entry=True, index=True)
+        return TextBlock(
+            page=0,
+            rect=rect,
+            line_rects=[rect],
+            text=text,
+            size=8.0,
+            color="#000",
+            bold=False,
+            span_lines=[[span]],
+            entry=True,
+            index=True,
+        )
 
     left = [blk(f"entry {n}, {n}", 80, n) for n in range(10)]
     right = [blk(f"other {n}, {n}", 180, n) for n in range(10)]
@@ -10638,8 +13153,9 @@ def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down():
     # 第 5 条提取时丢了，原字留在原处。上面四条挤不下多出来的一行，不挪，也不压到原字上
     dropped = left[4].rect
     rest = [b for n, b in enumerate(left) if n != 4]
-    moved = _index_reflow([item for item in items if item[0] is not left[4]], rest, geo, True, {}, set(),
-                          bottom, [dropped])
+    moved = _index_reflow(
+        [item for item in items if item[0] is not left[4]], rest, geo, True, {}, set(), bottom, [dropped]
+    )
     assert not any(id(b) in moved for b in rest)
 
 
@@ -10651,10 +13167,18 @@ def test_an_index_entry_is_never_centered():
 
     geo = PageGeometry(612, (Column(80, 280), Column(300, 500)), ())
     rect = pymupdf.Rect(150, 100, 210, 110)
-    plain = TextBlock(page=0, rect=rect, line_rects=[rect], text="in NER, 241, 419", size=8.0, color="#000",
-                      bold=False)
-    entry = TextBlock(page=0, rect=rect, line_rects=[rect], text="in NER, 241, 419", size=8.0, color="#000",
-                      bold=False, entry=True, index=True)
+    plain = TextBlock(page=0, rect=rect, line_rects=[rect], text="in NER, 241, 419", size=8.0, color="#000", bold=False)
+    entry = TextBlock(
+        page=0,
+        rect=rect,
+        line_rects=[rect],
+        text="in NER, 241, 419",
+        size=8.0,
+        color="#000",
+        bold=False,
+        entry=True,
+        index=True,
+    )
     assert _write_rect(plain, [(plain, "")], True, False, geo)[1] == "center"
     assert _write_rect(entry, [(entry, "")], True, False, geo)[1] == "left"
 
@@ -10689,16 +13213,20 @@ def test_one_sentence_per_line_is_not_joined_into_a_paragraph():
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
 
     frame = TextFrame(97.9, 1088.0, 11.0, 600.0, 38.0)
-    examples = [blk("can you tell me about any good cantonese restaurants close by", 151.7, 1087.7),
-                blk("tell me about chez panisse", 210.8, 524.4),
-                blk("i’m looking for a good place to eat breakfast", 269.8, 795.0),
-                blk("when is caffe venezia open during the day", 329.8, 764.4)]
+    examples = [
+        blk("can you tell me about any good cantonese restaurants close by", 151.7, 1087.7),
+        blk("tell me about chez panisse", 210.8, 524.4),
+        blk("i’m looking for a good place to eat breakfast", 269.8, 795.0),
+        blk("when is caffe venezia open during the day", 329.8, 764.4),
+    ]
     listed = _line_lists(examples, [frame])
     assert len(_merge_continuations(examples, listed)) == 4
-    paragraph = [blk("the model is trained on a large corpus of text and then it is", 151.7, 1087.7),
-                 blk("evaluated on a held out set of sentences that were never seen", 210.8, 1085.0),
-                 blk("during training so that the estimate of its quality is fair", 269.8, 1080.0),
-                 blk("and unbiased", 329.8, 400.0)]
+    paragraph = [
+        blk("the model is trained on a large corpus of text and then it is", 151.7, 1087.7),
+        blk("evaluated on a held out set of sentences that were never seen", 210.8, 1085.0),
+        blk("during training so that the estimate of its quality is fair", 269.8, 1080.0),
+        blk("and unbiased", 329.8, 400.0),
+    ]
     assert _line_lists(paragraph, [frame]) == set()
 
 
@@ -10738,18 +13266,24 @@ def test_a_word_grid_is_translated_cell_by_cell():
     """一格一个词的词表：各格自成一条，同一排的几格不连成一句。表下面同一块里的图注标签不算格子。"""
     from app.formats.pdf_extract import _grid_cells
 
-    words = [["dwindle", "move", "soar", "shift"], ["advance", "edge", "swell", "tumble"],
-             ["climb", "explode", "swing", "fall"]]
+    words = [
+        ["dwindle", "move", "soar", "shift"],
+        ["advance", "edge", "swell", "tumble"],
+        ["climb", "explode", "swing", "fall"],
+    ]
     items = [
         (word, pymupdf.Rect(184 + 60 * col, 180 + 10 * row, 230 + 60 * col, 190 + 10 * row), [], [])
-        for row, line in enumerate(words) for col, word in enumerate(line)
+        for row, line in enumerate(words)
+        for col, word in enumerate(line)
     ]
     items.append(("Figure 2.4", pymupdf.Rect(80, 240, 120, 250), [], []))
     items.append(("Some selected ASCII codes for some English letters", pymupdf.Rect(130, 240, 400, 250), [], []))
     cells = _grid_cells(items)
     assert cells == set(range(12))
-    prose = [(f"line {i} of an ordinary paragraph that wraps", pymupdf.Rect(80, 100 + 10 * i, 400, 110 + 10 * i), [], [])
-             for i in range(12)]
+    prose = [
+        (f"line {i} of an ordinary paragraph that wraps", pymupdf.Rect(80, 100 + 10 * i, 400, 110 + 10 * i), [], [])
+        for i in range(12)
+    ]
     assert not _grid_cells(prose)
 
 
@@ -10770,11 +13304,21 @@ def test_a_word_broken_at_the_block_end_continues_in_the_next_block():
 
     def blk(text, x0, y0, x1, entry=False):
         rect = pymupdf.Rect(x0, y0, x1, y0 + 9.6)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=8.0, color="#000", bold=False,
-                         span_lines=[[{"text": text, "font": "Times", "size": 8.0}]], entry=entry)
+        return TextBlock(
+            page=0,
+            rect=rect,
+            line_rects=[rect],
+            text=text,
+            size=8.0,
+            color="#000",
+            bold=False,
+            span_lines=[[{"text": text, "font": "Times", "size": 8.0}]],
+            entry=entry,
+        )
 
-    merged = _merge_continuations([blk("retrieval-augmented genera-", 95.4, 217.0, 187.4),
-                                   blk("tion, 267", 119.3, 226.2, 147.7, entry=True)])
+    merged = _merge_continuations(
+        [blk("retrieval-augmented genera-", 95.4, 217.0, 187.4), blk("tion, 267", 119.3, 226.2, 147.7, entry=True)]
+    )
     assert [block.text for block in merged] == ["retrieval-augmented generation, 267"]
     # 两个词的标签后面不是断开的词，不接
     kept = _merge_continuations([blk("Figure label", 95.4, 217.0, 150.0), blk("tion, 267", 119.3, 226.2, 147.7)])
@@ -10789,13 +13333,26 @@ def test_a_model_name_broken_at_its_hyphen_continues_with_the_number():
 
     def blk(text, y0, x1):
         rect = pymupdf.Rect(54.0, y0, x1, y0 + 10.0)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False,
-                         span_lines=[[{"text": text, "font": "Times", "size": 10.0}]])
+        return TextBlock(
+            page=0,
+            rect=rect,
+            line_rects=[rect],
+            text=text,
+            size=10.0,
+            color="#000",
+            bold=False,
+            span_lines=[[{"text": text, "font": "Times", "size": 10.0}]],
+        )
 
-    merged = _merge_continuations([blk("Table 5: Out-of-distribution evaluation on VCE and VE-", 226.0, 292.0),
-                                   blk("8. Both datasets are evaluated after re-annotation.", 237.0, 280.0)])
+    merged = _merge_continuations(
+        [
+            blk("Table 5: Out-of-distribution evaluation on VCE and VE-", 226.0, 292.0),
+            blk("8. Both datasets are evaluated after re-annotation.", 237.0, 280.0),
+        ]
+    )
     assert [block.text for block in merged] == [
-        "Table 5: Out-of-distribution evaluation on VCE and VE-8. Both datasets are evaluated after re-annotation."]
+        "Table 5: Out-of-distribution evaluation on VCE and VE-8. Both datasets are evaluated after re-annotation."
+    ]
     assert _join_lines(["control system) and GPT-", "4o (2024-05-13)"]) == "control system) and GPT-4o (2024-05-13)"
 
 
@@ -10808,7 +13365,9 @@ def test_the_left_column_of_an_index_page_is_not_a_side_note():
         page = doc.new_page(width=500, height=700)
         for row in range(40):
             word = "abcdefghij"[number] + "klmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz"[row]
-            page.insert_text((140, 80 + 14 * row), f"ordinary body text {word} that runs across the column", fontsize=10)
+            page.insert_text(
+                (140, 80 + 14 * row), f"ordinary body text {word} that runs across the column", fontsize=10
+            )
     page = doc.new_page(width=500, height=700)
     for column, x in enumerate((40, 200, 330)):
         for row in range(30):
@@ -10829,10 +13388,13 @@ def test_the_rest_of_a_numbered_example_stays_original():
         spans = [{"text": text, "bbox": tuple(rect), "size": 10.0}]
         if label:
             cut = rect.x0 + 30
-            spans = [{"text": label, "bbox": (rect.x0, rect.y0, cut, rect.y1), "size": 10.0},
-                     {"text": text[len(label) + 1:], "bbox": (cut + 2, rect.y0, rect.x1, rect.y1), "size": 10.0}]
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False,
-                         span_lines=[spans])
+            spans = [
+                {"text": label, "bbox": (rect.x0, rect.y0, cut, rect.y1), "size": 10.0},
+                {"text": text[len(label) + 1 :], "bbox": (cut + 2, rect.y0, rect.x1, rect.y1), "size": 10.0},
+            ]
+        return TextBlock(
+            page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False, span_lines=[spans]
+        )
 
     head = blk("(24.14) I just bought a copy of Thoreau’s Walden.", (160.2, 222.1, 491.1, 234.1), "(24.14)")
     second = blk("That one had been very tattered.", (192.1, 234.1, 474.9, 246.1))
@@ -10860,10 +13422,12 @@ def test_sentences_after_a_separate_example_number_stay_original():
     glossed = blk("姚明进入总决赛", (190.0, 380.0, 280.0, 392.0))
     free = blk("“Yao Ming reaches the finals”", (190.0, 392.5, 300.0, 404.5))
     cited = blk("as shown in (22.9) the instrument can be the subject.", (142.2, 440.0, 400.0, 452.0))
-    numbers = {0: (
-        ExampleNumber(pymupdf.Rect(142.2, 352.2, 166.3, 364.2), pymupdf.Rect(142.2, 352.2, 340.0, 364.2), 190.1),
-        ExampleNumber(pymupdf.Rect(160.0, 380.0, 180.0, 392.0), pymupdf.Rect(160.0, 380.0, 280.0, 392.0), 190.0),
-    )}
+    numbers = {
+        0: (
+            ExampleNumber(pymupdf.Rect(142.2, 352.2, 166.3, 364.2), pymupdf.Rect(142.2, 352.2, 340.0, 364.2), 190.1),
+            ExampleNumber(pymupdf.Rect(160.0, 380.0, 180.0, 392.0), pymupdf.Rect(160.0, 380.0, 280.0, 392.0), 190.0),
+        )
+    }
     found = _example_ids([first, second, glossed, free, prose, cited], numbers)
     assert found == {id(first), id(second), id(glossed), id(free)}
 
@@ -10879,22 +13443,30 @@ def test_lines_under_a_number_row_without_a_block_stay_original():
         rect = pymupdf.Rect(rect)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False)
 
-    roles = [blk("Arg1: Logical subject, patient, thing falling", (188.1, 466.5, 364.0, 478.5)),
-             blk("Arg2: Extent, amount fallen", (188.1, 478.5, 303.0, 490.5))]
+    roles = [
+        blk("Arg1: Logical subject, patient, thing falling", (188.1, 466.5, 364.0, 478.5)),
+        blk("Arg2: Extent, amount fallen", (188.1, 478.5, 303.0, 490.5)),
+    ]
     label = blk("Ex1:", (188.1, 500.0, 207.0, 512.0))
     note = blk("Note that there is no Arg0 role for fall.", (175.1, 514.0, 400.0, 526.0))
-    body = blk("Here the body text goes on across the whole column with no indent at all.", (160.2, 540.0, 493.0, 564.0))
-    numbers = {0: (
-        ExampleNumber(pymupdf.Rect(160.2, 455.4, 189.3, 467.4), pymupdf.Rect(160.2, 455.4, 221.0, 467.4), 194.2),
-        ExampleNumber(pymupdf.Rect(160.2, 596.4, 189.3, 608.4), pymupdf.Rect(160.2, 596.4, 330.0, 608.4), 194.2),
-    )}
+    body = blk(
+        "Here the body text goes on across the whole column with no indent at all.", (160.2, 540.0, 493.0, 564.0)
+    )
+    numbers = {
+        0: (
+            ExampleNumber(pymupdf.Rect(160.2, 455.4, 189.3, 467.4), pymupdf.Rect(160.2, 455.4, 221.0, 467.4), 194.2),
+            ExampleNumber(pymupdf.Rect(160.2, 596.4, 189.3, 608.4), pymupdf.Rect(160.2, 596.4, 330.0, 608.4), 194.2),
+        )
+    }
     found = _example_ids([*roles, label, note, body], numbers)
     assert found == {id(block) for block in (*roles, label)}
 
     # (5.6) 编号短，句子从 185 起笔；正文段首缩进 15，一行的段落从 175 起笔
     short = ExampleNumber(pymupdf.Rect(160.2, 377.0, 179.0, 389.0), pymupdf.Rect(160.2, 377.0, 361.0, 389.0), 185.0)
     head = _ExampleHead(0, short.row, short.rect.x0, short.text_x0, 0.0, None)
-    paragraph = blk("And suppose that you had seen many of these context words in other contexts:", (175.1, 393.0, 493.0, 405.0))
+    paragraph = blk(
+        "And suppose that you had seen many of these context words in other contexts:", (175.1, 393.0, 493.0, 405.0)
+    )
     assert _example_tails([paragraph], [head], {0: (short,)}, indent=15.0) == set()
 
 
@@ -10906,12 +13478,16 @@ def test_a_displayed_line_inside_a_block_is_its_own_paragraph():
     def item(text, x0, y0, x1):
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"text": text, "size": 10.0}], [])
 
-    witch = [item("The green witch arrived", 185.1, 473.7, 280.2),
-             item("and must translate it into the Spanish sentence:", 160.2, 488.6, 347.0)]
+    witch = [
+        item("The green witch arrived", 185.1, 473.7, 280.2),
+        item("and must translate it into the Spanish sentence:", 160.2, 488.6, 347.0),
+    ]
     assert _split_lines(witch) == [[0], [1]]
-    wrapped = [item("This volume is about the implementation and im-", 175.1, 384.7, 369.9),
-               item("plications of that exciting idea, as realized in large", 160.2, 396.3, 369.9),
-               item("language models, and the vibrant interdisciplinary field", 160.2, 408.2, 493.2)]
+    wrapped = [
+        item("This volume is about the implementation and im-", 175.1, 384.7, 369.9),
+        item("plications of that exciting idea, as realized in large", 160.2, 396.3, 369.9),
+        item("language models, and the vibrant interdisciplinary field", 160.2, 408.2, 493.2),
+    ]
     assert _split_lines(wrapped) == [[0, 1, 2]]
 
 
@@ -10923,9 +13499,17 @@ def test_a_colored_example_on_its_own_line_needs_no_period():
 
     frame = TextFrame(160.2, 493.2, 82.0, 719.0, 10.0)
     rect = pymupdf.Rect(185.1, 473.7, 280.2, 485.7)
-    block = TextBlock(page=0, rect=rect, line_rects=[rect], text="The green witch arrived", size=10.0,
-                      color="#0000ff", bold=False, body_size=10.0,
-                      span_lines=[[{"text": "The green witch arrived", "size": 10.0, "color": 0x0000FF, "flags": 0}]])
+    block = TextBlock(
+        page=0,
+        rect=rect,
+        line_rects=[rect],
+        text="The green witch arrived",
+        size=10.0,
+        color="#0000ff",
+        bold=False,
+        body_size=10.0,
+        span_lines=[[{"text": "The green witch arrived", "size": 10.0, "color": 0x0000FF, "flags": 0}]],
+    )
     assert _colored_example(block, frame)
 
 
@@ -10965,19 +13549,26 @@ def test_a_wrapped_formula_with_tall_glyph_boxes_is_split_by_baseline():
         return out
 
     italic, roman, symbol, body = "NimbusRomNo9L-ReguItal", "CMR10", "CMSY10", "NimbusRomNo9L-Regu"
-    b = _block_with_spans([
-        [span("move from the simple assertion ", body, 10, (142.2, 140.1, 450.0, 152.1), 149.3),
-         span("(", roman, 10, (453.4, 141.8, 457.2, 151.8), 149.3, (453.4, 141.8, 457.2, 151.8)),
-         span("o", italic, 10, (457.2, 140.1, 462.2, 152.0), 149.3),
-         span("i", italic, 7.4, (462.2, 144.0, 464.3, 152.8), 150.8),
-         span("≻", symbol, 10, (467.5, 141.6, 475.2, 158.9), 149.3, (467.5, 143.9, 475.2, 149.7))],
-        [span("o", italic, 10, (142.2, 152.1, 147.2, 163.9), 161.3),
-         span(" j", italic, 7.4, (147.2, 154.4, 150.3, 164.7), 161.3),
-         span("|", symbol, 10, (151.0, 153.5, 153.8, 170.8), 161.3, (151.0, 153.8, 153.8, 163.8)),
-         span("x", italic, 10, (153.8, 152.1, 158.2, 163.9), 161.3),
-         span(")", roman, 10, (158.2, 153.8, 162.1, 163.8), 161.3, (158.2, 153.8, 162.1, 163.8)),
-         span(" to knowing the value", body, 10, (162.1, 152.1, 300.0, 164.1), 161.3)],
-    ], size=10.0)
+    b = _block_with_spans(
+        [
+            [
+                span("move from the simple assertion ", body, 10, (142.2, 140.1, 450.0, 152.1), 149.3),
+                span("(", roman, 10, (453.4, 141.8, 457.2, 151.8), 149.3, (453.4, 141.8, 457.2, 151.8)),
+                span("o", italic, 10, (457.2, 140.1, 462.2, 152.0), 149.3),
+                span("i", italic, 7.4, (462.2, 144.0, 464.3, 152.8), 150.8),
+                span("≻", symbol, 10, (467.5, 141.6, 475.2, 158.9), 149.3, (467.5, 143.9, 475.2, 149.7)),
+            ],
+            [
+                span("o", italic, 10, (142.2, 152.1, 147.2, 163.9), 161.3),
+                span(" j", italic, 7.4, (147.2, 154.4, 150.3, 164.7), 161.3),
+                span("|", symbol, 10, (151.0, 153.5, 153.8, 170.8), 161.3, (151.0, 153.8, 153.8, 163.8)),
+                span("x", italic, 10, (153.8, 152.1, 158.2, 163.9), 161.3),
+                span(")", roman, 10, (158.2, 153.8, 162.1, 163.8), 161.3, (158.2, 153.8, 162.1, 163.8)),
+                span(" to knowing the value", body, 10, (162.1, 152.1, 300.0, 164.1), 161.3),
+            ],
+        ],
+        size=10.0,
+    )
     sent, formulas = _placeholderize(b, 0)
     assert sent.count("{v") == 1
     parts = formulas[0].get("parts") or []
@@ -10990,7 +13581,10 @@ def test_formula_pieces_keep_their_source_order():
     from app.formats.pdf_restore import _keep_formula_chains
 
     source = "compute the value of each{v1} as{v2} {b}W{/b}{v3}."
-    assert _keep_formula_chains("计算每个{v1}的值, 即 {b}W{/b}{v3}{v2}。", source) == "计算每个{v1}的值, 即 {v2} {b}W{/b}{v3}。"
+    assert (
+        _keep_formula_chains("计算每个{v1}的值, 即 {b}W{/b}{v3}{v2}。", source)
+        == "计算每个{v1}的值, 即 {v2} {b}W{/b}{v3}。"
+    )
     assert _keep_formula_chains("即 {v2} {b}W{/b}{v3}。", source) == "即 {v2} {b}W{/b}{v3}。"
     assert _keep_formula_chains("{v3} 是 {v2} 的一部分", source) == "{v3} 是 {v2} 的一部分"
 
@@ -10999,8 +13593,13 @@ def test_a_period_after_a_small_denominator_does_not_make_it_a_heading():
     """分母 Σ_j e^{S·T_j} 后面跟着正文字号的句号。句号不算正文字号的字，分母照样接回分式所在的行。"""
     from app.formats.pdf_extract import _larger_text
 
-    denominator = {"spans": [{"text": "j", "font": "CMMI6", "size": 6.0}, {"text": "e", "font": "CMMI8", "size": 8.0},
-                             {"text": " .", "font": "NimbusRomNo9L-Regu", "size": 10.9}]}
+    denominator = {
+        "spans": [
+            {"text": "j", "font": "CMMI6", "size": 6.0},
+            {"text": "e", "font": "CMMI8", "size": 8.0},
+            {"text": " .", "font": "NimbusRomNo9L-Regu", "size": 10.9},
+        ]
+    }
     sigma = {"spans": [{"text": "P", "font": "CMEX8", "size": 8.0}]}
     assert not _larger_text(denominator, sigma)
     heading = {"spans": [{"text": "4.2 SQuAD", "font": "NimbusRomNo9L-Medi", "size": 12.0}]}
@@ -11051,16 +13650,20 @@ def test_index_entries_get_notes_with_their_parent_entry():
 
     units = [
         block("Index", 72, 50, index=False),
-        block("MT, {b}276{/b}", 72, 100), block("divergences, {b}278{/b}", 82, 110),
-        block("post-editing, 293", 82, 120), block("multinomial logistic regression, 108", 72, 130),
-        block("why used for probabilities,", 322, 100), block("log", 312, 90),
+        block("MT, {b}276{/b}", 72, 100),
+        block("divergences, {b}278{/b}", 82, 110),
+        block("post-editing, 293", 82, 120),
+        block("multinomial logistic regression, 108", 72, 130),
+        block("why used for probabilities,", 322, 100),
+        block("log", 312, 90),
     ]
     units = [units[0], units[1], units[2], units[3], units[4], units[6], units[5]]
     texts = [unit[0].text for unit in units]
     notes = _index_notes(units, texts, [False] * len(units))
     assert notes[0] == ""
-    assert notes[1] == ("An entry in the subject index at the back of the book; "
-                        "its sub-entries include “divergences”, “post-editing”.")
+    assert notes[1] == (
+        "An entry in the subject index at the back of the book; its sub-entries include “divergences”, “post-editing”."
+    )
     assert notes[2] == "An entry in the subject index at the back of the book, listed under the entry “MT”."
     assert notes[4] == "An entry in the subject index at the back of the book."
     assert "listed under the entry “log”" in notes[6]
@@ -11075,12 +13678,19 @@ def test_wrapped_monospace_phrase_keeps_its_word_space():
     def span(text, x0, x1):
         return {"text": text, "font": "NimbusMonL-Regu", "size": 9.0, "bbox": (x0, 0, x1, 9)}
 
-    line = [span("my", 477.1, 487.9), span(" ", 487.9, 493.3), span("dog", 493.3, 509.4),
-            span(" ", 509.4, 514.8), span("is", 514.8, 525.5)]
+    line = [
+        span("my", 477.1, 487.9),
+        span(" ", 487.9, 493.3),
+        span("dog", 493.3, 509.4),
+        span(" ", 509.4, 514.8),
+        span("is", 514.8, 525.5),
+    ]
     assert abs(_wrap_gap(line, [span("hairy", 307.3, 334.2)]) - 5.4) < 0.05
     url = [span("https://artofproblemsolving.com/wiki/index.php/202", 300, 525)]
     assert _wrap_gap(url, [span("5_AIME_II_Problems", 307, 400)]) == _PART_GAP
-    assert _wrap_gap([span("a", 500, 505), span(" ", 505, 508), span("+", 508, 515)], [span("b", 307, 312)]) == _PART_GAP
+    assert (
+        _wrap_gap([span("a", 500, 505), span(" ", 505, 508), span("+", 508, 515)], [span("b", 307, 312)]) == _PART_GAP
+    )
 
 
 def test_inline_formulas_keep_their_size_next_to_chinese():
@@ -11123,8 +13733,13 @@ def test_a_bold_run_in_label_starts_a_paragraph():
     from app.formats.pdf_extract import _label_lead, _split_lines
 
     def span(text, x0, x1, bold=False):
-        return {"text": text, "size": 10.0, "bbox": (x0, 0, x1, 10), "font": "Times-Bold" if bold else "Times",
-                "flags": 20 if bold else 4}
+        return {
+            "text": text,
+            "size": 10.0,
+            "bbox": (x0, 0, x1, 10),
+            "font": "Times-Bold" if bold else "Times",
+            "flags": 20 if bold else 4,
+        }
 
     def words(text, x0, bold_words=0):
         out, x = [], x0
@@ -11143,10 +13758,12 @@ def test_a_bold_run_in_label_starts_a_paragraph():
     def item(text, x0, y0, x1, bold_words=0):
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), words(text, x0, bold_words), [])
 
-    items = [item("units. Finally, we return to the batch and state when the", 313.2, 190.0, 558.0),
-             item("resulting schedule is also optimal for the whole batch.", 313.2, 201.9, 536.2),
-             item("Parallelization Across Batches and Batch Instances. A", 313.2, 216.0, 558.0, 6),
-             item("batch consists of B evaluations of the same function at dif-", 313.2, 227.9, 558.0)]
+    items = [
+        item("units. Finally, we return to the batch and state when the", 313.2, 190.0, 558.0),
+        item("resulting schedule is also optimal for the whole batch.", 313.2, 201.9, 536.2),
+        item("Parallelization Across Batches and Batch Instances. A", 313.2, 216.0, 558.0, 6),
+        item("batch consists of B evaluations of the same function at dif-", 313.2, 227.9, 558.0),
+    ]
     assert _split_lines(items) == [[0, 1], [2, 3]]
 
 
@@ -11168,8 +13785,9 @@ def test_an_indented_paragraph_start_is_not_a_continuation():
 
     def plan(text):
         blocks = [blk(body, 100 + 36 * i, para) for i in range(4)]
-        return _merge_continuations([*blocks, blk("The forward pass gives its overlap, and", 244, [(54, 299)]),
-                                     blk(text, 256, para)])
+        return _merge_continuations(
+            [*blocks, blk("The forward pass gives its overlap, and", 244, [(54, 299)]), blk(text, 256, para)]
+        )
 
     assert len(plan("The adjoint state carries the sensitivity of the final error to the control.")) == 6
     assert len(plan("the adjoint state carries the sensitivity of the final error to the control.")) == 5
@@ -11206,11 +13824,30 @@ def test_a_font_that_only_writes_single_marks_beside_formulas_is_math():
     def span(font, text, x0, x1):
         return {"font": font, "text": text, "size": 10.0, "bbox": (x0, 50, x1, 60)}
 
-    data = {"blocks": [{"type": 0, "lines": [
-        {"spans": [span("CMR10", "the set is", 0, 40), span("CMMI10", "A", 42, 49), span("F74", "1", 49, 55),
-                   span("CMSY10", "{", 55, 60)]},
-        {"spans": [span("CMR10", "see note", 0, 40), span("F99", "2", 41, 45), span("CMR10", " below", 46, 80)]},
-    ]}]}
+    data = {
+        "blocks": [
+            {
+                "type": 0,
+                "lines": [
+                    {
+                        "spans": [
+                            span("CMR10", "the set is", 0, 40),
+                            span("CMMI10", "A", 42, 49),
+                            span("F74", "1", 49, 55),
+                            span("CMSY10", "{", 55, 60),
+                        ]
+                    },
+                    {
+                        "spans": [
+                            span("CMR10", "see note", 0, 40),
+                            span("F99", "2", 41, 45),
+                            span("CMR10", " below", 46, 80),
+                        ]
+                    },
+                ],
+            }
+        ]
+    }
     _mark_formula_only_fonts([data])
     first, second = (line["spans"] for line in data["blocks"][0]["lines"])
     assert _span_is_math(first[2])
@@ -11224,8 +13861,9 @@ def test_a_roman_numbered_item_does_not_continue_the_paragraph_above():
     from app.formats.pdf_merge import _can_continue
 
     def blk(text):
-        return TextBlock(page=0, rect=pymupdf.Rect(72, 500, 540, 530), line_rects=[],
-                         text=text, size=10, color="#000000", bold=False)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(72, 500, 540, 530), line_rects=[], text=text, size=10, color="#000000", bold=False
+        )
 
     prev = blk("The partition statement is the expansion {v11}")
     assert not _can_continue(prev, blk("(iii) Let {v1} be the sum."), 10, None)
@@ -11235,10 +13873,19 @@ def test_a_roman_numbered_item_does_not_continue_the_paragraph_above():
     from app.formats.pdf_extract import _split_lines
 
     # 上一行停在式子上、没排满，(iii) 另起一项；上一行排满的是段中列举折到了行首
-    assert _split_lines([_line("is the expansion = 1", 102, 152, 127), _line("(iii) Let the sum of the first n terms of the series be", 102, 505, 140),
-                         _line("written as a product of independent exponentials", 102, 400, 154)]) == [[0], [1, 2]]
-    assert _split_lines([_line("the intervening low-density region, regardless of r.", 63, 297, 134),
-                         _line("(ii) Such misses propagate through calibration. Be-", 63, 297, 146)]) == [[0, 1]]
+    assert _split_lines(
+        [
+            _line("is the expansion = 1", 102, 152, 127),
+            _line("(iii) Let the sum of the first n terms of the series be", 102, 505, 140),
+            _line("written as a product of independent exponentials", 102, 400, 154),
+        ]
+    ) == [[0], [1, 2]]
+    assert _split_lines(
+        [
+            _line("the intervening low-density region, regardless of r.", 63, 297, 134),
+            _line("(ii) Such misses propagate through calibration. Be-", 63, 297, 146),
+        ]
+    ) == [[0, 1]]
 
 
 def test_the_margin_piece_of_a_wide_caption_line_is_not_a_side_note():
@@ -11276,8 +13923,14 @@ def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator():
     from app.formats.pdf_extract import _rejoin_split_lines
 
     def span(text, x0, y0, x1, y1, size, base):
-        return {"text": text, "bbox": (x0, y0, x1, y1), "origin": (x0, base), "size": size,
-                "font": "NimbusRomNo9L-Regu", "flags": 4}
+        return {
+            "text": text,
+            "bbox": (x0, y0, x1, y1),
+            "origin": (x0, base),
+            "size": size,
+            "font": "NimbusRomNo9L-Regu",
+            "flags": 4,
+        }
 
     def line(*spans):
         box = pymupdf.Rect()
@@ -11285,12 +13938,18 @@ def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator():
             box |= pymupdf.Rect(item["bbox"])
         return {"bbox": tuple(box), "dir": (1, 0), "spans": list(spans)}
 
-    head = line(span("this is a downsampling of", 77.4, 623.9, 368.9, 634.7, 9.0, 631.8),
-                span("24000", 372.6, 622.2, 390.0, 630.6, 7.0, 627.7))
+    head = line(
+        span("this is a downsampling of", 77.4, 623.9, 368.9, 634.7, 9.0, 631.8),
+        span("24000", 372.6, 622.2, 390.0, 630.6, 7.0, 627.7),
+    )
     denominator = line(span("75", 377.8, 628.9, 384.8, 637.3, 7.0, 634.4))
     nxt = line(span("the encoder and decoder is a quantization step producing", 77.4, 634.9, 352.1, 645.7, 9.0, 642.6))
-    data = {"blocks": [{"type": 0, "bbox": head["bbox"], "lines": [head]},
-                       {"type": 0, "bbox": (77.4, 628.9, 384.8, 645.7), "lines": [denominator, nxt]}]}
+    data = {
+        "blocks": [
+            {"type": 0, "bbox": head["bbox"], "lines": [head]},
+            {"type": 0, "bbox": (77.4, 628.9, 384.8, 645.7), "lines": [denominator, nxt]},
+        ]
+    }
     _rejoin_split_lines(data)
     assert data["blocks"][0]["lines"] == [head, denominator]
     assert data["blocks"][1]["lines"] == [nxt]
@@ -11300,11 +13959,17 @@ def test_a_script_left_of_a_letter_is_not_its_script():
     """行内分式的分子（小一号）和同一行后面的斜体 x 上下交叠，中间隔着 . Each token in，x 不是它的底。"""
     from app.formats.pdf_units import _script_base
 
-    x = {"text": " x", "bbox": (223.9, 596.6, 230.4, 608.5), "origin": (223.9, 606.0), "size": 10.0,
-         "font": "NimbusRomNo9L-ReguItal"}
+    x = {
+        "text": " x",
+        "bbox": (223.9, 596.6, 230.4, 608.5),
+        "origin": (223.9, 606.0),
+        "size": 10.0,
+        "font": "NimbusRomNo9L-ReguItal",
+    }
     assert not _script_base(x, pymupdf.Rect(146.5, 593.3, 159.8, 607.2), 10.0, math=True, script_y=600.0)
-    assert _script_base({**x, "bbox": (140.0, 596.6, 146.5, 608.5)}, pymupdf.Rect(146.5, 600, 149, 609), 10.0,
-                        math=True, script_y=607.0)
+    assert _script_base(
+        {**x, "bbox": (140.0, 596.6, 146.5, 608.5)}, pymupdf.Rect(146.5, 600, 149, 609), 10.0, math=True, script_y=607.0
+    )
 
 
 def test_a_fraction_wrapped_to_the_line_start_ends_the_sentence_above():
@@ -11317,12 +13982,26 @@ def test_a_fraction_wrapped_to_the_line_start_ends_the_sentence_above():
     frame = TextFrame(142, 475, 72, 720, 10)
     rows = [pymupdf.Rect(142.2, y, 475.2, y + 12) for y in (488.8, 500.8, 512.8, 524.7)]
     line = pymupdf.Rect(142.2, 524.7, 475.2, 536.7)
-    host = TextBlock(page=0, rect=pymupdf.Rect(142.2, 500.8, 475.2, 536.7), line_rects=rows[1:],
-                     text="This is because the logit function is the inverse of the sigmoid. "
-                          "The logit function is the log of the odds ratio",
-                     size=10, color="#000000", bold=False,
-                     span_lines=[[{"text": "The logit function is the log of the odds ratio", "size": 10.0,
-                                   "font": "NimbusRomNo9L-Regu", "bbox": tuple(line)}]])
+    host = TextBlock(
+        page=0,
+        rect=pymupdf.Rect(142.2, 500.8, 475.2, 536.7),
+        line_rects=rows[1:],
+        text="This is because the logit function is the inverse of the sigmoid. "
+        "The logit function is the log of the odds ratio",
+        size=10,
+        color="#000000",
+        bold=False,
+        span_lines=[
+            [
+                {
+                    "text": "The logit function is the log of the odds ratio",
+                    "size": 10.0,
+                    "font": "NimbusRomNo9L-Regu",
+                    "bbox": tuple(line),
+                }
+            ]
+        ],
+    )
     tail = pymupdf.Rect(143.4, 534.5, 161.0, 556.4)
     assert _wraps_from_above([host], 0, tail, "p 1−p:", rows, frame)
     displayed = pymupdf.Rect(243.8, 548.0, 338.1, 570.0)
@@ -11333,10 +14012,24 @@ def test_a_fraction_wrapped_to_the_line_start_ends_the_sentence_above():
     def span(text, font):
         return {"text": text, "size": 7.4, "font": font, "bbox": tuple(tail)}
 
-    fraction = TextBlock(page=0, rect=tail, line_rects=[tail], text="1−p: p", size=7.4, color="#000000", bold=False,
-                         span_lines=[[span("1", "NimbusRomNo9L-Regu"), span("−", "CMSY10"),
-                                      span("p", "NimbusRomNo9L-ReguItal"), span(":", "NimbusRomNo9L-Regu")],
-                                     [span("p", "NimbusRomNo9L-ReguItal")]])
+    fraction = TextBlock(
+        page=0,
+        rect=tail,
+        line_rects=[tail],
+        text="1−p: p",
+        size=7.4,
+        color="#000000",
+        bold=False,
+        span_lines=[
+            [
+                span("1", "NimbusRomNo9L-Regu"),
+                span("−", "CMSY10"),
+                span("p", "NimbusRomNo9L-ReguItal"),
+                span(":", "NimbusRomNo9L-Regu"),
+            ],
+            [span("p", "NimbusRomNo9L-ReguItal")],
+        ],
+    )
     merged = _merge_continuations([host, fraction])
     assert len(merged) == 1 and merged[0].text.endswith("odds ratio 1−p: p")
 
@@ -11420,8 +14113,10 @@ def test_a_one_line_paragraph_is_written_from_the_column_edge():
         return TextBlock(page=0, rect=rect, line_rects=rects, text=text, size=10.0, color="#000000", bold=False)
 
     paragraphs = [
-        blk([(157, 110 + 24 * k, 475, 122 + 24 * k), (142, 122 + 24 * k, 300, 134 + 24 * k)],
-            "The softmax function takes a vector of arbitrary values. It is an exponential function.")
+        blk(
+            [(157, 110 + 24 * k, 475, 122 + 24 * k), (142, 122 + 24 * k, 300, 134 + 24 * k)],
+            "The softmax function takes a vector of arbitrary values. It is an exponential function.",
+        )
         for k in range(5)
     ]
     geo = PageGeometry(612, (Column(142, 475),), (), 792, frame=TextFrame(142, 475, 109, 718, 10))
@@ -11435,8 +14130,13 @@ def test_a_one_line_paragraph_is_written_from_the_column_edge():
     assert _indent_edge(item, geo, indent) is None
     row = blk([(157, 390, 260, 402)], "BiDAF+ELMo (Single)")
     assert _indent_edge(row, geo, indent) is None
-    flush = [blk([(142, 110 + 30 * k, 475, 122 + 30 * k), (142, 122 + 30 * k, 300, 134 + 30 * k)],
-                 "Paragraphs here are set apart by space. They start flush.") for k in range(5)]
+    flush = [
+        blk(
+            [(142, 110 + 30 * k, 475, 122 + 30 * k), (142, 122 + 30 * k, 300, 134 + 30 * k)],
+            "Paragraphs here are set apart by space. They start flush.",
+        )
+        for k in range(5)
+    ]
     assert _paragraph_indent(flush) is None
 
 
@@ -11449,8 +14149,11 @@ def test_role_pattern_lines_keep_the_original():
         rect = pymupdf.Rect(189, 510, 417, 522)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000000", bold=False)
 
-    patterns = [block("AGENT/Subject, THEME/Object"), block("AGENT/Subject, THEME/Object, INSTRUMENT/PPwith"),
-                block("THEME/Subject")]
+    patterns = [
+        block("AGENT/Subject, THEME/Object"),
+        block("AGENT/Subject, THEME/Object, INSTRUMENT/PPwith"),
+        block("THEME/Subject"),
+    ]
     prose = block("These examples suggest that break has AGENT, THEME, and INSTRUMENT.")
     found = _role_pattern_ids([*patterns, prose])
     assert found == {id(b) for b in patterns}
@@ -11470,8 +14173,9 @@ def test_a_displayed_example_line_keeps_the_original():
         rect = pymupdf.Rect(rects[0])
         for row in rects[1:]:
             rect |= row
-        return TextBlock(page=0, rect=rect, line_rects=rects, text=text, size=size, color="#000000", bold=False,
-                         body_size=10.0)
+        return TextBlock(
+            page=0, rect=rect, line_rects=rects, text=text, size=size, color="#000000", bold=False, body_size=10.0
+        )
 
     def para(y, text="For example WordNet has the is-a or hypernym relation between classes."):
         return blk([(175, y, 493, y + 12), (160, y + 12, 400, y + 24)], text)
@@ -11492,12 +14196,39 @@ def test_a_displayed_example_line_keeps_the_original():
     pinyin = line(436, 290, 400, "yáo míng jìn rù zǒng jué sài")
     free = line(448, 188, 320, "“Yao Ming reaches the finals”")
     formula = line(488, 200, 440, "convolution with width-1 kernel: z = x w")
-    blocks += [example, para(198), lead, para(238), source, para(278), caption, para(318), item, folded, para(370),
-               gloss, para(410), hanzi, pinyin, free, para(462), formula, para(502)]
+    blocks += [
+        example,
+        para(198),
+        lead,
+        para(238),
+        source,
+        para(278),
+        caption,
+        para(318),
+        item,
+        folded,
+        para(370),
+        gloss,
+        para(410),
+        hanzi,
+        pinyin,
+        free,
+        para(462),
+        formula,
+        para(502),
+    ]
     found = _display_example_ids(blocks, [geo], set())
     assert id(example) in found
-    for name, block in (("lead", lead), ("source", source), ("caption", caption), ("folded", folded), ("item", item),
-                        ("gloss", gloss), ("free", free), ("formula", formula)):
+    for name, block in (
+        ("lead", lead),
+        ("source", source),
+        ("caption", caption),
+        ("folded", folded),
+        ("item", item),
+        ("gloss", gloss),
+        ("free", free),
+        ("formula", formula),
+    ):
         assert id(block) not in found, name
     assert not found & {id(block) for block in blocks if len(block.line_rects) > 1}
 
@@ -11524,10 +14255,19 @@ def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_
     doc.new_page(width=612, height=792)
     doc.save(src)
     doc.close()
-    host = blk(0, [(157.1, 517.0, 475.2, 529.0)], "Formally, then, the gradient of a multi-variable function f is a vector in which")
-    tail = blk(1, [(160.2, 109.9, 493.2, 121.9), (160.2, 121.9, 493.2, 134.2)],
-               "each component expresses the partial derivative of f with respect to one of the variables.")
-    even = PageGeometry(612, (Column(77.4, 261.0), Column(278.6, 475.2)), (), 792, frame=TextFrame(142.0, 475.0, 109, 718, 10))
+    host = blk(
+        0,
+        [(157.1, 517.0, 475.2, 529.0)],
+        "Formally, then, the gradient of a multi-variable function f is a vector in which",
+    )
+    tail = blk(
+        1,
+        [(160.2, 109.9, 493.2, 121.9), (160.2, 121.9, 493.2, 134.2)],
+        "each component expresses the partial derivative of f with respect to one of the variables.",
+    )
+    even = PageGeometry(
+        612, (Column(77.4, 261.0), Column(278.6, 475.2)), (), 792, frame=TextFrame(142.0, 475.0, 109, 718, 10)
+    )
     odd = PageGeometry(612, (Column(160.2, 493.2),), (), 792, frame=TextFrame(160.0, 493.0, 109, 718, 10))
     assert _indented_start(host, tail, [even, odd]) == 142.0
     item = blk(1, [(175.2, 109.9, 493.2, 121.9)], "expresses the partial derivative of f.")
@@ -11538,12 +14278,20 @@ def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_
         "我们将使用倒置的希腊字母 delta 符号来表示梯度，并以此更明显地体现它对参数的依赖关系。"
     )
     out = _render_translated(
-        src, [host, tail], [paragraph, SPILL_TAIL], "zh-CN", geometries=[even, odd], continuations={id(host): tail},
+        src,
+        [host, tail],
+        [paragraph, SPILL_TAIL],
+        "zh-CN",
+        geometries=[even, odd],
+        continuations={id(host): tail},
     )
     chars = [
         ch["bbox"]
-        for block in out[0].get_text("rawdict")["blocks"] if block.get("type") == 0
-        for line in block["lines"] for span in line["spans"] for ch in span["chars"]
+        for block in out[0].get_text("rawdict")["blocks"]
+        if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
+        for ch in span["chars"]
         if "一" <= ch["c"] <= "鿿"
     ]
     assert chars
@@ -11564,12 +14312,22 @@ def test_patterns_keyed_to_examples_by_color_stay_original():
     def blk(parts, y0):
         rect = pymupdf.Rect(178, y0, 400, y0 + 12)
         text = "".join(text for text, _color in parts)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000000", bold=False,
-                         span_lines=[[{"text": text, "size": 10.0, "color": color} for text, color in parts]])
+        return TextBlock(
+            page=0,
+            rect=rect,
+            line_rects=[rect],
+            text=text,
+            size=10.0,
+            color="#000000",
+            bold=False,
+            span_lines=[[{"text": text, "size": 10.0, "color": color} for text, color in parts]],
+        )
 
     pattern = blk([("PER,", blue), (" POSITION", green), (" of", blue), (" ORG", red), (":", blue)], 268)
-    example = blk([("George Marshall", blue), (",", 0), (" Secretary of State", green), (" of", 0),
-                   (" the United States", red)], 280)
+    example = blk(
+        [("George Marshall", blue), (",", 0), (" Secretary of State", green), (" of", 0), (" the United States", red)],
+        280,
+    )
     shuffled = blk([("Truman", green), (" appointed", 0), (" Marshall", blue), (" Secretary", red)], 330)
     linked = blk([("see", 0), (" Hearst", blue), (" and", 0), (" Fig. 21.4", red)], 342)
     assert _color_keyed_ids([pattern, example, shuffled, linked]) == {id(pattern), id(example)}
@@ -11585,17 +14343,25 @@ def test_examples_listed_under_a_bullet_get_their_own_line():
         return (text, pymupdf.Rect(rect), [{"text": text, "size": 10.0, "color": color}])
 
     body = [pymupdf.Rect(142, 100 + 12 * i, 475, 110 + 12 * i) for i in range(5)]
-    listed = [item("• Bag-of-words and bigrams in M1 and M2", (159, 234, 334, 246)),
-              item("American, Airlines, Tim, Wagner, American Airlines, Tim Wagner", (167, 246, 433, 258), 0x0000FF)]
+    listed = [
+        item("• Bag-of-words and bigrams in M1 and M2", (159, 234, 334, 246)),
+        item("American, Airlines, Tim, Wagner, American Airlines, Tim Wagner", (167, 246, 433, 258), 0x0000FF),
+    ]
     assert _cut_item_breaks([0, 1], listed, body + [item[1] for item in listed]) == [[0], [1]]
-    full = [item("• Entity Level of M1 and M2 (from the set NAME, NOMINAL, PRONOUN)", (159, 367, 469, 379)),
-            item("M1: NAME [it or he would be PRONOUN]", (167, 379, 343, 391), 0x0000FF)]
+    full = [
+        item("• Entity Level of M1 and M2 (from the set NAME, NOMINAL, PRONOUN)", (159, 367, 469, 379)),
+        item("M1: NAME [it or he would be PRONOUN]", (167, 379, 343, 391), 0x0000FF),
+    ]
     assert _cut_item_breaks([0, 1], full, body) == [[0], [1]]
-    wrapped = [item("• Number of entities between the two arguments of the relation, counted", (159, 404, 475, 416)),
-               item("over the whole sentence", (167, 416, 280, 428))]
+    wrapped = [
+        item("• Number of entities between the two arguments of the relation, counted", (159, 404, 475, 416)),
+        item("over the whole sentence", (167, 416, 280, 428)),
+    ]
     assert _cut_item_breaks([0, 1], wrapped, body) == [[0, 1]]
-    reference = [item("E. H. Hovy, V. Ng, and M. Strube.", (159, 404, 330, 416)),
-                 item("Scoring coreference partitions", (167, 416, 330, 428), 0x0000FF)]
+    reference = [
+        item("E. H. Hovy, V. Ng, and M. Strube.", (159, 404, 330, 416)),
+        item("Scoring coreference partitions", (167, 416, 330, 428), 0x0000FF),
+    ]
     assert _cut_item_breaks([0, 1], reference, body) == [[0, 1]]
 
 
@@ -11608,8 +14374,16 @@ def test_colored_lines_under_a_bullet_stay_original():
     def blk(parts, rect):
         rect = pymupdf.Rect(rect)
         text = "".join(text for text, _color in parts)
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000000", bold=False,
-                         span_lines=[[{"text": text, "size": 10.0, "color": color} for text, color in parts]])
+        return TextBlock(
+            page=0,
+            rect=rect,
+            line_rects=[rect],
+            text=text,
+            size=10.0,
+            color="#000000",
+            bold=False,
+            span_lines=[[{"text": text, "size": 10.0, "color": color} for text, color in parts]],
+        )
 
     blue = 0x0000FF
     bullet = blk([("• Words or bigrams in particular positions", 0)], (159, 260, 328, 272))
@@ -11623,7 +14397,6 @@ def test_colored_lines_under_a_bullet_stay_original():
     assert found == {id(first), id(second)}
 
 
-
 def test_a_numbered_item_with_hanging_lines_keeps_the_hang():
     """题号顶格、下面各行和题号后的正文对齐的条目，续行按原文缩进；首行缩进的段落和不带编号的块不算。"""
     from app.formats.pdf_blocks import TextBlock
@@ -11632,8 +14405,15 @@ def test_a_numbered_item_with_hanging_lines_keeps_the_hang():
 
     def blk(text, lefts):
         rects = [pymupdf.Rect(x0, 170 + 12 * i, 475, 180 + 12 * i) for i, x0 in enumerate(lefts)]
-        return TextBlock(page=0, rect=pymupdf.Rect(min(lefts), 170, 475, 180 + 12 * (len(lefts) - 1)),
-                         line_rects=rects, text=text, size=10, color="#000", bold=False)
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(min(lefts), 170, 475, 180 + 12 * (len(lefts) - 1)),
+            line_rects=rects,
+            text=text,
+            size=10,
+            color="#000",
+            bold=False,
+        )
 
     assert _hang_indent(blk("3.1 Write out the equation for trigram probability estimation", [178, 209, 209])) == 31
     assert _hang_indent(blk("The asphalt that Los Angeles is famous for occurs mainly", [175, 160, 160])) == 0
@@ -11654,20 +14434,35 @@ def test_a_chinese_line_beside_its_english_rendering_is_kept_apart():
     from app.formats.pdf_skip import _foreign_ids
 
     def span(text, x0, x1):
-        return {"text": text, "font": "Times", "size": 10.0, "flags": 0, "bbox": (x0, 206, x1, 216), "origin": (x0, 216)}
+        return {
+            "text": text,
+            "font": "Times",
+            "size": 10.0,
+            "flags": 0,
+            "bbox": (x0, 206, x1, 216),
+            "origin": (x0, 216),
+        }
 
-    assert _script_seam([span("忘", 262.8, 272.8), span("荃", 272.8, 282.7)], [span("Nets are for fish;", 288.7, 355.4)])
+    assert _script_seam(
+        [span("忘", 262.8, 272.8), span("荃", 272.8, 282.7)], [span("Nets are for fish;", 288.7, 355.4)]
+    )
     assert not _script_seam([span("使用", 100, 120)], [span("Python", 122.5, 150)])
 
     def blk(text, y):
-        return TextBlock(page=0, rect=pymupdf.Rect(160, y, 490, y + 10), line_rects=[], text=text, size=10,
-                         color="#000", bold=False)
+        return TextBlock(
+            page=0, rect=pymupdf.Rect(160, y, 490, y + 10), line_rects=[], text=text, size=10, color="#000", bold=False
+        )
 
-    prose = [blk(text, 300 + 40 * i) for i, text in enumerate([
-        "The asphalt that Los Angeles is famous for occurs mainly on its freeways.",
-        "In this chapter we introduce embeddings, vector representations of the meaning of words.",
-        "The linguistic field that studies embeddings and their meanings is called vector semantics.",
-    ])]
+    prose = [
+        blk(text, 300 + 40 * i)
+        for i, text in enumerate(
+            [
+                "The asphalt that Los Angeles is famous for occurs mainly on its freeways.",
+                "In this chapter we introduce embeddings, vector representations of the meaning of words.",
+                "The linguistic field that studies embeddings and their meanings is called vector semantics.",
+            ]
+        )
+    ]
     quote = blk("荃者所以在鱼，得鱼而忘荃", 206)
     assert _foreign_ids([quote, *prose]) == {id(quote)}
 
@@ -11690,11 +14485,16 @@ def test_a_line_ending_on_an_equals_sign_runs_on():
     def blk(text, y0, y1):
         rect = pymupdf.Rect(167, y0, 475, y1)
         span = {"text": text, "font": "NimbusRomNo9L-Regu", "size": 10.0, "flags": 0}
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000", bold=False,
-                         span_lines=[[span]])
+        return TextBlock(
+            page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000", bold=False, span_lines=[[span]]
+        )
 
-    head = blk("If we use linear interpolation smoothing between a maximum-likelihood bigram model and a "
-               "maximum-likelihood unigram model with λ1 = 1 2 and λ2 =", 654, 680)
+    head = blk(
+        "If we use linear interpolation smoothing between a maximum-likelihood bigram model and a "
+        "maximum-likelihood unigram model with λ1 = 1 2 and λ2 =",
+        654,
+        680,
+    )
     tail = blk("2, what is P(Sam|am)? Include <s> and </s> in your counts just like any other token.", 678, 703)
     assert len(_merge_continuations([head, tail])) == 1
 
@@ -11706,17 +14506,35 @@ def test_the_english_rendering_below_a_chinese_example_stays_original():
 
     def blk(text, x0, y0, y1, first=None):
         span = {"text": first or text, "font": "Times", "size": 10.0, "flags": 0}
-        return TextBlock(page=0, rect=pymupdf.Rect(x0, y0, 470, y1), line_rects=[], text=text, size=10,
-                         color="#000", bold=False, span_lines=[[span]])
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(x0, y0, 470, y1),
+            line_rects=[],
+            text=text,
+            size=10,
+            color="#000",
+            bold=False,
+            span_lines=[[span]],
+        )
 
-    chinese = blk("在我的后园，可以看见墙外有两株树，一株是 zài wǒ de hòu yuán", 164, 412, 437,
-                  first="在我的后园，可以看见墙外有两株树，一株是")
+    chinese = blk(
+        "在我的后园，可以看见墙外有两株树，一株是 zài wǒ de hòu yuán",
+        164,
+        412,
+        437,
+        first="在我的后园，可以看见墙外有两株树，一株是",
+    )
     english = blk("In my backyard, you can see two trees beyond the fence. One is a ...", 164, 436, 448)
-    prose = [blk(text, 160, 454 + 40 * i, 490 + 40 * i) for i, text in enumerate([
-        "Here you might expect that a language model should assign a high probability to continuations.",
-        "Fig. 1.2 shows this idea of a probability distribution more clearly than the text does.",
-        "What good is it to assign probabilities to words? One intuition is that a model can predict text.",
-    ])]
+    prose = [
+        blk(text, 160, 454 + 40 * i, 490 + 40 * i)
+        for i, text in enumerate(
+            [
+                "Here you might expect that a language model should assign a high probability to continuations.",
+                "Fig. 1.2 shows this idea of a probability distribution more clearly than the text does.",
+                "What good is it to assign probabilities to words? One intuition is that a model can predict text.",
+            ]
+        )
+    ]
     found = _foreign_ids([chinese, english, *prose])
     assert id(english) in found and not any(id(block) in found for block in prose)
 
@@ -11727,19 +14545,30 @@ def test_a_wrapped_fraction_piece_sits_on_its_line_baseline():
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, x1, base, top=None):
-        return {"text": text, "font": font, "size": size,
-                "bbox": (x0, top if top is not None else base - size * 0.8, x1, base + size * 0.2),
-                "origin": (x0, base)}
+        return {
+            "text": text,
+            "font": font,
+            "size": size,
+            "bbox": (x0, top if top is not None else base - size * 0.8, x1, base + size * 0.2),
+            "origin": (x0, base),
+        }
 
-    block = _block_with_spans([
-        [span("unigram model with ", "NimbusRomNo9L-Regu", 10, 40, 400, 676.4),
-         span("λ", "CMMI10", 10, 453.5, 459, 676.4),
-         span("2", "CMR7", 7, 459, 463, 678.0),
-         span("=", "CMR10", 10, 466, 475, 676.4)],
-        [span("1", "CMR7", 7, 168.3, 172, 683.0, top=677.5),
-         span("2", "CMR7", 7, 168.3, 172, 691.7),
-         span(", what is the probability", "NimbusRomNo9L-Regu", 10, 174, 300, 688.4)],
-    ], size=10.0)
+    block = _block_with_spans(
+        [
+            [
+                span("unigram model with ", "NimbusRomNo9L-Regu", 10, 40, 400, 676.4),
+                span("λ", "CMMI10", 10, 453.5, 459, 676.4),
+                span("2", "CMR7", 7, 459, 463, 678.0),
+                span("=", "CMR10", 10, 466, 475, 676.4),
+            ],
+            [
+                span("1", "CMR7", 7, 168.3, 172, 683.0, top=677.5),
+                span("2", "CMR7", 7, 168.3, 172, 691.7),
+                span(", what is the probability", "NimbusRomNo9L-Regu", 10, 174, 300, 688.4),
+            ],
+        ],
+        size=10.0,
+    )
     _sent, formulas = _placeholderize(block)
     parts = formulas[0]["parts"]
     assert len(parts) == 2
