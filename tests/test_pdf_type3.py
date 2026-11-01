@@ -42,7 +42,7 @@ SIZE = 10.0
 
 
 def _box(ch: str, x: float, baseline: float, size: float) -> tuple[pymupdf.Rect, float]:
-    """按 Computer Modern 的比例摆一个字的墨迹框，返回框和字宽。"""
+    """Place the ink box of a character with Computer Modern proportions and return the box and the advance width."""
     if ch in "acemnorsuvwxz":
         top, bottom = 0.45, 0.0
     elif ch in "gpqy":
@@ -71,7 +71,8 @@ def _set(
     size: float = SIZE,
     shift: float = 0.0,
 ) -> list[Glyph]:
-    """一行字。family 是位图那一套：正文、数学斜体、等宽。字距 0.05 个字号，词距 0.4 个字号。"""
+    """One line of text. family is the set of bitmaps: text, math italic, monospace. Letter spacing 0.05 font sizes,
+    word spacing 0.4 font sizes."""
     glyphs: list[Glyph] = []
     for text, family in words:
         for ch in text:
@@ -101,7 +102,7 @@ def _reader(labels: dict, roles: dict, mono: dict | None = None) -> Type3Reader:
 
 
 def _styled(line: _Line, reader: Type3Reader) -> str:
-    """公式字形加方括号，看哪些进了公式。"""
+    """Bracket formula glyphs to show which ones went into formulas."""
     styles = _glyph_styles(line, reader)
     out = []
     for token in line.tokens:
@@ -132,7 +133,8 @@ def test_hocr_gives_words_with_letter_boxes():
 
 
 def test_votes_pair_letters_and_give_a_ligature_its_letters():
-    """字数和字形数对上的词逐个配对。office 少两个字形：o、c、e 已认定，剩下的 ffi 归连字。"""
+    """Words whose letter count matches the glyph count are paired letter by letter. office has two glyphs fewer: o, c
+    and e are known, so the remaining glyph is the ffi ligature."""
 
     def glyph(key: int, x0: float) -> Glyph:
         return Glyph((1, key), pymupdf.Rect(x0, 90, x0 + 5, 100))
@@ -169,7 +171,8 @@ def _roles(lines: list[list[tuple[str, int]]], labels: dict, shapes=None) -> dic
 
 
 def test_letters_that_never_join_a_word_are_variables():
-    """数学斜体的 p、s 只单独出现；正文的 p、s 在 price、sales 里。冠词 a 和词里的 a 是同一张位图。"""
+    """Math italic p and s occur only alone; text p and s occur in price and sales. The article a and the a inside
+    words are the same bitmap."""
     labels: dict = {}
     sentence = [
         ("each", ROMAN),
@@ -192,7 +195,8 @@ def test_letters_that_never_join_a_word_are_variables():
 
 
 def test_ligature_and_short_word_capitals_count_as_text():
-    """ff 认得不稳，W 只出现在 We 里。同词的其他字母是正文，它们也是。"""
+    """ff is recognized inconsistently, and W occurs only in We. The other letters of the word are text, so these are
+    too."""
     labels: dict = {(ROMAN, ord("F")): Label("ff", 0.6)}
     labels[(ROMAN, ord("W"))] = Label("W", 1.0)
     sentence = [("We", ROMAN), ("diFer", ROMAN), ("from", ROMAN), ("others", ROMAN)]
@@ -202,14 +206,15 @@ def test_ligature_and_short_word_capitals_count_as_text():
 
 
 def test_plural_of_a_variable_is_not_a_word():
-    """the v’s：v 后面跟着正文的 s，仍是变量。"""
+    """the v’s: v followed by a text s is still a variable."""
     labels: dict = {}
     roles = _roles([[("the", ROMAN), ("v’s", MATH), ("and", ROMAN), ("v", MATH), ("only", ROMAN)]] * 3, labels)
     assert roles[(MATH, ord("v"))] == "math"
 
 
 def test_unsteady_digit_is_a_number_only_inside_numbers():
-    """粗体 1 认得不稳，但在 1.1、1.2 里是节号。b 被认成 6，后面跟逗号也不算数。"""
+    """Bold 1 is recognized inconsistently but is a section number in 1.1 and 1.2. b recognized as 6 does not count as a
+    number even when followed by a comma."""
     labels: dict = {(ROMAN, ord("1")): Label("1", 0.75), (MATH, ord("6")): Label("6", 0.6)}
     roles = _roles([[("1.1", ROMAN), ("The", ROMAN), ("cube", ROMAN), ("6,", MATH), ("then", ROMAN)]] * 3, labels)
     assert roles[(ROMAN, ord("1"))] == "neutral"
@@ -217,7 +222,8 @@ def test_unsteady_digit_is_a_number_only_inside_numbers():
 
 
 def test_article_a_starts_a_sentence_and_variable_a_does_not():
-    """长得像正文 A 的单字母：句首是冠词，句中是变量。斜体正文和数学斜体光看位图分不出来。"""
+    """A single letter that looks like text A: an article at the start of a sentence, a variable inside one. Italic
+    text and math italic cannot be told apart from the bitmap alone."""
     labels: dict = {}
     same = lambda keys: {key: np.ones(4) / 2 for key in keys}  # noqa: E731
     lines = [
@@ -230,7 +236,7 @@ def test_article_a_starts_a_sentence_and_variable_a_does_not():
 
 
 def test_minus_is_math_and_dashes_in_prose_are_not():
-    """OCR 把减号、破折号都认成 —。减号宽 0.6 个字号，长破折号 1 个字号。"""
+    """OCR reads both minus signs and dashes as —. A minus sign is 0.6 font sizes wide, an em dash 1."""
     labels: dict = {(5, 1): Label("—", 1.0), (5, 2): Label("—", 1.0)}
     glyphs = _set([("cost", ROMAN), ("of", ROMAN), ("views", ROMAN)], labels)
     x = glyphs[-1].rect.x1 + 4
@@ -246,7 +252,7 @@ def test_minus_is_math_and_dashes_in_prose_are_not():
 
 
 def test_filled_square_at_line_starts_is_a_bullet():
-    """项目符号总在行首单独一个，墨迹填满方框。OCR 认成 e 也不信。"""
+    """A bullet is always alone at the start of a line with ink filling its box. OCR reading it as e is not trusted."""
     labels: dict = {(6, 1): Label("e", 1.0)}
     lines = []
     for row in range(3):
@@ -258,7 +264,8 @@ def test_filled_square_at_line_starts_is_a_bullet():
 
 
 def test_line_follows_baselines_not_the_fraction_order():
-    """内容流先画分母（笔头退回分数左边），再接着写正文。正文仍在同一行、分数之后。"""
+    """The content stream draws the denominator (moving back to the left of the fraction) and then continues with
+    text. The text is still on the same line, after the fraction."""
     labels: dict = {}
     head = _set([("we", ROMAN), ("conclude", ROMAN), ("that", ROMAN), ("a", MATH), ("=", MATH)], labels)
     x = head[-1].rect.x1 + 2
@@ -274,7 +281,7 @@ def test_line_follows_baselines_not_the_fraction_order():
 
 
 def test_lowered_full_size_letters_are_a_subscript():
-    """N 下面的 supplier 和正文一样大，只是整体往下沉。"""
+    """supplier below N is the same size as the text, only lowered as a whole."""
     labels: dict = {}
     line = _build_lines(
         [
@@ -293,7 +300,8 @@ def test_lowered_full_size_letters_are_a_subscript():
 
 
 def test_variable_with_a_typewriter_subscript_stays_a_formula():
-    """N 的下标 supplier 是等宽字。下标不让 N 变成等宽字，也不让 N 像单词。"""
+    """The subscript supplier of N is monospace. The subscript neither makes N monospace nor makes N look like a
+    word."""
     labels: dict = {}
     glyphs = [
         *_set([("where", ROMAN), ("N", MATH)], labels),
@@ -354,7 +362,7 @@ def test_formula_keeps_inner_commas_and_brackets_and_leaves_the_period():
 
 
 def test_comma_outside_brackets_separates_two_formulas():
-    """⟨L, ⪯⟩, a ≺ b：括号外的逗号是句子的，两边是两个公式。"""
+    """⟨L, ⪯⟩, a ≺ b: the comma outside the brackets belongs to the sentence, with one formula on each side."""
     labels: dict = {}
     glyphs = _set(
         [("lattice", ROMAN), ("(L,", MATH), ("<),", MATH), ("a", MATH), ("<", MATH), ("b", MATH), ("means", ROMAN)],
@@ -412,7 +420,8 @@ def test_comma_outside_brackets_separates_two_formulas():
 
 
 def test_typewriter_letters_are_learned_from_even_words_with_narrow_letters():
-    """等宽词里 l、逗号也占满一格。latter、each 字距也匀，但只有 0.4 个字号，不算。"""
+    """In monospace words l and commas also fill a whole cell. latter and each are evenly spaced too, but at only 0.4
+    font sizes they do not count."""
     labels: dict = {}
     words = [("TotalSales", TYPE), ("supplier", TYPE), ("Customer,", TYPE), ("latter", ROMAN), ("each,", ROMAN)]
     page = [
@@ -424,7 +433,8 @@ def test_typewriter_letters_are_learned_from_even_words_with_narrow_letters():
 
 
 def test_lines_join_by_baseline_even_when_their_boxes_overlap():
-    """行内的高括号把行框撑到上一行里，按基线距仍是同一段。"""
+    """A tall inline bracket stretches the line box into the line above, but by baseline distance it is still the same
+    paragraph."""
 
     def line(y: float, top: float) -> dict:
         span = {
@@ -471,7 +481,8 @@ def test_inserted_text_is_not_treated_as_bitmap_font():
 
 
 def test_centered_author_is_not_a_title_fragment():
-    """标题下面隔开一行的居中署名，左缘也会漂移。不能并进标题。贴着的下一行仍并。"""
+    """A centered byline one line below the title also has a drifting left edge. It must not join the title. A next
+    line right below still joins."""
     from app.formats.pdf_extract import _merge_continuations
 
     def blk(text: str, y: float, x0: float, x1: float, size: float) -> TextBlock:
@@ -506,7 +517,8 @@ _LETTERS = "bdhklbdhkl"
 
 
 def _bitmap_font_pdf(path: Path) -> None:
-    """第一页全是自造编码的点阵字（没有 ToUnicode，字形名是 /a0 这种），第二页是普通文字。"""
+    """The first page is all bitmap glyphs with a custom encoding (no ToUnicode, glyph names like /a0), the second page
+    ordinary text."""
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=300)
     procs = []
@@ -544,7 +556,7 @@ def _bitmap_font_pdf(path: Path) -> None:
 
 
 def _fake_ocr(path: Path, scale: float = 3.0) -> list[OcrWord]:
-    """每行一个词：字形宽 4.8、间距 6，基线在 50 + 16 × 行号。"""
+    """One word per line: glyphs 4.8 wide at a pitch of 6, baseline at 50 + 16 × line number."""
     words = []
     for row in range(6):
         baseline = 50 + 16 * row
@@ -557,7 +569,7 @@ def _fake_ocr(path: Path, scale: float = 3.0) -> list[OcrWord]:
 
 
 def test_bitmap_page_reads_back_its_letters(tmp_path, monkeypatch):
-    """OCR 只用来给字形定名；字的位置、行、字号都来自点阵字本身。"""
+    """OCR only names the glyphs; position, lines and font size all come from the bitmap glyphs themselves."""
     monkeypatch.setattr(pdf_type3, "ocr_image", _fake_ocr)
     monkeypatch.setattr(pdf_type3.shutil, "which", lambda name: "/usr/bin/" + name)
     src = tmp_path / "bitmap.pdf"
@@ -571,7 +583,8 @@ def test_bitmap_page_reads_back_its_letters(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("failure", ["no_words", "timeout"])
 def test_unreadable_bitmap_page_keeps_its_glyphs(tmp_path, monkeypatch, failure):
-    """一页点阵字识别超时或认不出字时，这一页留原样，其他页照常翻译，不让整本书失败。"""
+    """When recognizing a page of bitmap glyphs times out or finds no letters, that page stays as it is and the others
+    are translated as usual, so the whole book does not fail."""
 
     def broken(path, scale=3.0):
         if failure == "timeout":
@@ -609,7 +622,8 @@ def test_paper_reads_as_english_with_exact_words():
     assert "1 Introduction" in texts and "1.1 The Data Cube" in texts
     assert "BusinessObjects [X94]" in joined
     assert "differ only in the GROUP-BY clause" in joined
-    # 旧做法把数学斜体的 R 认成 FR 送去翻译。现在它是公式，贴回原字形
+    # The old approach recognized the math italic R as FR and sent it for translation. Now it is a formula and the
+    # original glyph is pasted back
     here = next(block for block in blocks if "refers to the raw-data relation" in block.text)
     spans = [span for line in here.span_lines for span in line]
     index = next(i for i, span in enumerate(spans) if span["text"].endswith("Here, "))

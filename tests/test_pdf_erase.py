@@ -29,7 +29,8 @@ def _erase_spans(page, spans, line_rects=None):
 
 
 def test_a_neighbor_reaching_into_the_line_box_is_kept():
-    """上一行的降部、旁边的标号压进行框也不是这一行的字。按矩形擦会把它们一起删掉。"""
+    """Descenders of the line above and an adjacent label reaching into the line box are not glyphs of this line.
+    Erasing by rectangle would remove them too."""
     doc = pymupdf.open()
     page = doc.new_page(width=300, height=200)
     page.insert_text((50, 80), "translate me", fontsize=12)
@@ -38,13 +39,13 @@ def test_a_neighbor_reaching_into_the_line_box_is_kept():
     spans = _spans(page)
     target = next(span for span in spans if span["text"] == "translate me")
     box = pymupdf.Rect(target["bbox"])
-    # 行框比字宽，盖住了标号和上一行的降部
+    # The line box is wider than the text and covers the label and the descenders of the line above
     _erase_spans(page, [target], [pymupdf.Rect(box.x0, box.y0 - 4, box.x1 + 20, box.y1)])
     assert _words(page) == ["x2", "gyp"]
 
 
 def test_bold_drawn_twice_is_erased_with_its_span():
-    """粗体模拟把同一个字错开一点再画一遍。PyMuPDF 只报一份，两份都要擦。"""
+    """Simulated bold draws the same glyph again slightly offset. PyMuPDF reports only one, and both must be erased."""
     doc = pymupdf.open()
     page = doc.new_page(width=300, height=200)
     page.insert_text((50, 80), "Bold", fontsize=12)
@@ -55,7 +56,8 @@ def test_bold_drawn_twice_is_erased_with_its_span():
 
 
 def test_glyphs_are_found_through_the_content_transform():
-    """内容流里先 cm 缩放再写字，起笔点要乘上 CTM 才和 PyMuPDF 的坐标对得上。"""
+    """The content stream scales with cm before drawing text, so origins must be multiplied by the CTM to match
+    PyMuPDF's coordinates."""
     doc = pymupdf.open()
     page = doc.new_page(width=300, height=200)
     page.insert_text((50, 60), "Hi there", fontsize=12)
@@ -67,7 +69,8 @@ def test_glyphs_are_found_through_the_content_transform():
 
 
 def test_bitmap_glyphs_are_erased_by_their_origins():
-    """点阵字的字体框不可信，span 带上起笔点，按点认。框外的字不动。"""
+    """Font boxes of bitmap glyphs are unreliable, so the span carries origins and is matched by point. Glyphs outside
+    the box stay."""
     doc = pymupdf.open()
     page = doc.new_page(width=300, height=200)
     page.insert_text((50, 80), "ab", fontsize=12)
@@ -81,7 +84,8 @@ def test_bitmap_glyphs_are_erased_by_their_origins():
 
 
 def test_rules_inside_a_rewritten_line_are_erased():
-    """老 Ghostscript 把 \\_ 画成一像素高的小图片。重排的行里的要擦掉，行外的不动。"""
+    """Old Ghostscript draws \\_ as a small one-pixel-high image. Those in lines being reflowed are erased, others
+    stay."""
     doc = pymupdf.open()
     page = doc.new_page(width=300, height=200)
     bar = pymupdf.Pixmap(pymupdf.csGRAY, pymupdf.IRect(0, 0, 8, 1), False)
@@ -99,7 +103,8 @@ def test_rules_inside_a_rewritten_line_are_erased():
 
 
 def test_only_lines_wholly_inside_the_line_box_are_erased():
-    """行内分数线整个在行里，跟着擦。穿过行的表格线、插图边框不动。"""
+    """An inline fraction bar lies entirely within the line and is erased with it. Table rules and figure borders
+    crossing the line stay."""
     doc = pymupdf.open()
     page = doc.new_page(width=300, height=200)
     page.draw_line((100, 58), (120, 58), width=0.4)
@@ -112,8 +117,8 @@ def test_only_lines_wholly_inside_the_line_box_are_erased():
 
 
 def test_an_underline_below_the_line_box_goes_with_its_words():
-    """链接的下划线在基线下面，比字体框的下沿还低一点，按行框认不到。字擦了，线也要擦；
-    再往下的表格线不动。"""
+    """A link underline is below the baseline, slightly lower than the bottom of the font box, so line boxes miss
+    it. When the text is erased the line must go too; a table rule further down stays."""
     doc = pymupdf.open()
     page = doc.new_page(width=300, height=200)
     page.insert_text((50, 80), "Long Papers", fontsize=10)
@@ -129,7 +134,7 @@ def test_an_underline_below_the_line_box_goes_with_its_words():
     page.draw_line((50, 90), (110, 90), width=0.4)
     page = doc.reload_page(page)
     spans = _spans(page)
-    # 分子是公式字，下面那条是分数线，分母留在原处，线不擦
+    # The numerator is formula text and the line below it a fraction bar; the denominator stays, so the line is kept
     erasure = Erasure(math=lambda span: span["text"] == "dNorm")
     numerator = [span for span in spans if span["text"] == "dNorm"]
     erasure.add_block([spans[:1], numerator], [pymupdf.Rect(spans[0]["bbox"]), pymupdf.Rect(numerator[0]["bbox"])])
@@ -139,7 +144,7 @@ def test_an_underline_below_the_line_box_goes_with_its_words():
 
 
 def test_a_form_shared_with_another_page_is_left_alone():
-    """两页共用的表单（页眉、模板）在这一页擦，另一页还是原样。"""
+    """A Form shared by two pages (running header, template) is erased on this page and unchanged on the other."""
     src = pymupdf.open()
     src.new_page(width=300, height=200).insert_text((50, 80), "shared", fontsize=12)
     doc = pymupdf.open()
@@ -157,8 +162,9 @@ def _erasure_for(page):
 
 
 def test_a_span_starting_with_a_space_is_found_by_its_glyphs():
-    """span 的 origin 是第一个字的起笔点。开头的空格落在前面下标的基线上时，
-    和这一行差一点多，按它认基线会漏掉整段。按逐字起笔点认。"""
+    """A span's origin is that of its first character. When a leading space sits on the baseline of a preceding
+    subscript, a little off from the line, using it as the baseline misses the whole paragraph. Per-character
+    origins are used instead."""
     doc = pymupdf.open()
     page = doc.new_page(width=300, height=200)
     page.insert_text((100, 80), "not converged", fontsize=10)
@@ -169,7 +175,8 @@ def test_a_span_starting_with_a_space_is_found_by_its_glyphs():
 
 
 def test_shared_type3_glyphs_are_left_alone():
-    """MuPDF 递归过滤时也进到 Type3 字体的字形里。字形是全文共用的，删了别处的同一个字也没了。"""
+    """When filtering recursively, MuPDF also enters the glyphs of Type3 fonts. Glyphs are shared by the whole
+    document, and deleting from them would remove the same character elsewhere."""
     doc = pymupdf.open()
     page = doc.new_page(width=300, height=200)
     glyph = doc.get_new_xref()
@@ -197,8 +204,9 @@ def test_shared_type3_glyphs_are_left_alone():
 
 
 def test_a_color_repeated_in_a_new_color_space_survives():
-    """换了色彩空间再给同样的颜色值，MuPDF 重写时把颜色省掉，换空间又把颜色重置成黑色，
-    图里的白底成了黑块。没给颜色就画的原流照旧画初始色。"""
+    """When the color space changes and the same color value follows, MuPDF omits the color when rewriting, while
+    the space change resets the color to black, turning a white background in a figure into a black block. An
+    original stream that draws without setting a color still draws the initial color."""
     lab = "[/Lab <</WhitePoint [0.9505 1 1.089]>>]"
     shades = {}
     for name, stream in {

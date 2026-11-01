@@ -35,27 +35,29 @@ def test_cjk_wraps_by_character():
 
 
 def test_first_lines_take_their_own_widths():
-    """让开图的开头几行按各自的宽度断，其余各行按整宽。"""
+    """The first lines making room for a figure break at their own widths, the other lines at the full width."""
     lines = break_lines("甲" * 12, em=10, max_width=50, formula_widths={}, first_widths=[20, 30])
     assert lines == ["甲甲", "甲甲甲", "甲甲甲甲甲", "甲甲"]
 
 
 def test_a_paren_group_wider_than_a_narrow_line_still_breaks():
-    """括号组按最窄的一行锁。整宽放得下、窄行放不下的组不能来回回滚。"""
+    """Bracket groups are locked against the narrowest line. A group that fits the full width but not a narrow line
+    must not roll back repeatedly."""
     lines = break_lines("甲（乙丙）丁", em=10, max_width=60, formula_widths={}, first_widths=[30])
     assert "".join(lines) == "甲（乙丙）丁"
 
 
 def test_decimal_number_is_not_split_at_its_point():
-    """2.07 秒：断行不能落在小数点后面。"""
+    """The line must not break after the decimal point of "2.07 秒"."""
     lines = break_lines("甲乙丙丁戊 2.07 秒", em=10, max_width=70, formula_widths={})
     assert any("2.07" in line for line in lines)
     assert not any(line.rstrip().endswith("2.") for line in lines)
 
 
 def test_a_long_hyphenated_word_breaks_after_its_hyphen():
-    """(Super-NaturalInstructions 整个放不下时，前一行只能早早折断，汉字被拉开。连字符两边都是
-    三个字母以上的词时可以在连字符后折行；GPT-4、x-axis 不折。"""
+    """When (Super-NaturalInstructions does not fit, the previous line breaks early and the Chinese is spread out.
+    A line may break after a hyphen with words of three or more letters on both sides; GPT-4 and x-axis do not
+    break."""
     text = "由于许多任务彼此相似(Super-NaturalInstructions 包含 25 个数据集"
     lines = break_lines(text, em=10, max_width=200, formula_widths={})
     assert lines[0].endswith("(Super-") and "".join(lines) == text
@@ -164,7 +166,8 @@ def _write(spans: list[dict]) -> str:
 
 
 def test_a_bold_label_before_body_split_into_short_spans_keeps_its_mark():
-    """正文按引用切成许多小段时，最长的一段是粗体标签。粗体只靠 {b} 写回，底色不能取粗体。"""
+    """When citations cut the body into many short spans, the longest one is the bold label. Bold is written only
+    through {b}, so the base style must not be bold."""
     spans = [
         _span("•"),
         _span(" ", bold=True),
@@ -176,7 +179,7 @@ def test_a_bold_label_before_body_split_into_short_spans_keeps_its_mark():
         _span("]"),
     ]
     assert _write(spans) == "• {b}Commonsense Reasoning (0-shot):{/b} Hellaswag [28], Winogrande [21]"
-    # 粗体比正文多一个字也照样标出来
+    # Bold is marked even when it has one character more than the body
     spans = [
         _span("• N-gram"),
         _span(" language models", bold=True),
@@ -189,7 +192,7 @@ def test_a_bold_label_before_body_split_into_short_spans_keeps_its_mark():
         _write(spans)
         == "• N-gram {b}language models{/b} can be evaluated on a {b}test set{/b} using {b}perplexity.{/b}"
     )
-    # 整块粗体以粗体为底，不写标记
+    # A fully bold block has a bold base and no markers
     assert _write([_span("Bold title", bold=True), _span(" 3")]) == "Bold title 3"
 
 
@@ -205,7 +208,7 @@ def test_spaces_do_not_open_a_mark_and_close_the_one_that_ends():
 
 
 def test_a_mostly_italic_statement_keeps_italic_as_base():
-    """斜体的定理正文以斜体为底，不逐段标 {i}。"""
+    """The italic body of a theorem has an italic base, without {i} on every span."""
     writer = writer_for(
         [_span("Theorem 1.", bold=True), _span(" Assume that the function has bounded gradients", italic=True)]
     )
@@ -213,7 +216,8 @@ def test_a_mostly_italic_statement_keeps_italic_as_base():
 
 
 def test_paren_group_at_width_edge_terminates():
-    """括号组宽度落在容差带内时不能死循环：锁组条件必须和填充溢出判定一致。"""
+    """A bracket group whose width falls in the tolerance band must not loop forever: the locking condition must match
+    the overflow test of filling."""
     text = "前面占位" + "（一二三四五六七）" + "尾巴"
     for width in (7.7, 7.8, 7.9, 8.0, 8.1):
         lines = break_lines(text, em=1.0, max_width=width, formula_widths={})
@@ -221,7 +225,7 @@ def test_paren_group_at_width_edge_terminates():
 
 
 def test_oversize_word_split_to_fit():
-    """长 URL 这类超宽词按字符硬切，不能 nowrap 越出右缘。"""
+    """Overwide words such as long URLs are cut by character instead of running past the right edge with nowrap."""
     text = "见 http://example.com/very/long/path 结束"
     lines = break_lines(text, em=1.0, max_width=8.0, formula_widths={})
     assert "".join(lines).replace(" ", "") == text.replace(" ", "")
@@ -229,12 +233,13 @@ def test_oversize_word_split_to_fit():
 
 
 def test_restore_emphasis_keeps_italic_tag():
-    """斜体保持 <i>。回退字体没有汉字粗体，改成 <b> 不能强调汉字，还会丢掉拉丁斜体。"""
+    """Italic stays <i>. The fallback font has no bold Chinese, so <b> would neither emphasize the Chinese nor keep the
+    Latin italic."""
     assert restore_emphasis("正常{i}强调{/i}文字") == "正常<i>强调</i>文字"
 
 
 def test_space_around_latin_balances_both_sides():
-    """汉字和 i-th 之间各留一个空格。标记里的空格挪出来，英文句子不动。"""
+    """One space each between Chinese and i-th. Spaces inside markers move out, and English sentences are unchanged."""
     from app.formats.pdf_flow import space_around_latin
 
     assert space_around_latin("第{i} i-th{/i}个") == "第 {i}i-th{/i} 个"
@@ -245,7 +250,8 @@ def test_space_around_latin_balances_both_sides():
 
 
 def test_separate_after_formula_adds_one_space():
-    """公式后面直接接文字时补一个空格。标点、已有空格、样式标记都不重复补。"""
+    """A space is added when text directly follows a formula. Not before punctuation, existing spaces or style
+    markers, and never twice."""
     from app.formats.pdf_flow import separate_after_formula
 
     sent = "\x01i\x021\x01/i\x02"
@@ -257,15 +263,15 @@ def test_separate_after_formula_adds_one_space():
 
 
 def test_fullwidth_punctuation_measures_one_em():
-    """全角标点（，。（）等）不在 CJK 正则里，按 east_asian_width 也得算 1em。
-    按 0.5em 低估行宽，两端对齐时会把行推出右缘。"""
+    """Full-width punctuation (，。（） and so on) is not in the CJK regex but still counts as 1em by
+    east_asian_width. Underestimating the line width at 0.5em would push justified lines past the right edge."""
     assert measure_token("，", 10.0, {}) == 10.0
     assert measure_token("（", 10.0, {}) == 10.0
     assert measure_token("a", 10.0, {}) >= 5.0
 
 
 def test_wide_glyphs_wrap_before_they_pass_the_edge():
-    """破折号和 M 比 0.5em 宽。按半字宽估算时，这两个字会多挤在行尾外面。"""
+    """Dashes and M are wider than 0.5em. Estimated at half a character, they would stick out past the line end."""
     assert measure_token("—", 10.0, {}) >= 10.0
     assert measure_token("M", 10.0, {}) > 5.0
     assert break_lines("甲乙丙丁——", em=10, max_width=50, formula_widths={}) != ["甲乙丙丁——"]
@@ -275,7 +281,8 @@ def test_wide_glyphs_wrap_before_they_pass_the_edge():
 
 
 def test_a_word_split_by_style_marks_is_not_broken_at_the_mark():
-    """{b}R{/b}epresentations 是一个词，加粗的首字母后面不能断行；词前的左括号跟着词走。"""
+    """{b}R{/b}epresentations is one word, so the line must not break after the bold initial; an opening bracket
+    before the word moves with it."""
     from app.formats.pdf_flow import break_lines
 
     text = "双向编码器表示”({b}B{/b}idirectional {b}E{/b}ncoder {b}R{/b}epresentations from {b}T{/b}ransformers)的缩写"
@@ -289,8 +296,9 @@ def test_a_word_split_by_style_marks_is_not_broken_at_the_mark():
 
 
 def test_slack_before_a_long_word_is_shared_with_the_line_above():
-    """下一行行首的长词放不下，这一行空出好几个字宽。上一行行尾的汉字挪下来，两行各空一点，
-    两端对齐时字距都只拉开一点。末行不管空多少。"""
+    """A long word at the start of the next line did not fit, leaving this line several characters short. Chinese
+    characters move down from the end of the line above, so both lines are a little short and justification
+    spreads each only slightly. The last line is left however short it is."""
     from app.formats.pdf_flow import _break_lines, measure_width
 
     text = (
@@ -300,14 +308,15 @@ def test_slack_before_a_long_word_is_shared_with_the_line_above():
     )
     lines = _break_lines(text, 10, 230, {})
     assert "".join(lines).replace(" ", "") == text.replace(" ", "")
-    # 不匀开时 Transformer 上面那一行空出将近六个字宽
+    # Without balancing, the line above Transformer is nearly six characters short
     slack = [230 - measure_width(line, 10) for line in lines[:-1]]
     assert max(slack) < 30
 
 
 def test_narrow_latin_letters_measure_as_drawn():
-    """i、l、逗号按写出的字宽量，不按 0.5em 兜底。量宽了，中英混排的段落没写满就折行，
-    两端对齐拉到上限也够不着右缘。量出的宽度不小于实际写出的宽度，行不会出右缘。"""
+    """i, l and commas are measured at their written width, not the 0.5em default. Measured too wide, mixed Chinese
+    and English paragraphs break before lines are full, and justification at its limit still falls short of the
+    right edge. Measured widths are never less than the written ones, so lines stay within the right edge."""
     from app.formats.pdf_align import _segments
     from app.formats.pdf_flow import measure_width
 
@@ -322,7 +331,8 @@ def test_narrow_latin_letters_measure_as_drawn():
 
 
 def test_a_formula_at_the_line_start_lines_up_with_the_text_below():
-    """行首是公式时，槽左边空出的那一截不画，公式和下面一行的字从同一左缘起笔。"""
+    """With a formula at the start of a line, the blank left part of its slot is not drawn, so the formula and the
+    text of the next line start at the same left edge."""
     import pymupdf
     import pytest
 
