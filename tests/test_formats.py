@@ -110,7 +110,8 @@ def test_ebooks(tmp_path, name, bilingual):
     epub = next(p for p in outputs if p.suffix == ".epub")
     text = _epub_texts(epub)
     assert "[zh-CN] Alice was beginning to get very tired" in text
-    # 双语保留原文；仅译文模式下原文只会以“[zh-CN] 原文”形式出现
+    # The bilingual version keeps the original text; in the translated-only version the original only appears as
+    # "[zh-CN] <original>"
     plain = text.replace("[zh-CN] Alice was beginning", "")
     assert ("Alice was beginning to get very tired" in plain) == bilingual
 
@@ -138,11 +139,11 @@ def test_llm_unparseable_batch_falls_back_to_single():
         return "garbage" if len(calls) == 1 else "你好"
 
     tr._complete = fake_complete
-    assert run(tr.translate_batch(["a", "b"])) == ["你好", "你好"]  # 批量结果无法解析，逐条补翻
+    assert run(tr.translate_batch(["a", "b"])) == ["你好", "你好"]  # Batch result unparseable, translate one by one
     assert len(calls) == 3
 
 
-# --- 第二批：格式修复的回归测试（EPUB/MOBI/Markdown/PDF 样本全部内联构造） ---
+# --- Second batch: regression tests for format fixes (EPUB/MOBI/Markdown/PDF samples are all built inline) ---
 
 CONTAINER_XML = (
     '<?xml version="1.0"?>'
@@ -153,7 +154,7 @@ CONTAINER_XML = (
 
 
 def _write_epub(path, manifest: str, spine: str, docs: dict[str, str]):
-    """构造最小 EPUB：mimetype 第一个且不压缩，OEBPS/content.opf + 给定文档。"""
+    """Build a minimal EPUB: mimetype first and uncompressed, OEBPS/content.opf plus the given documents."""
     opf = (
         '<?xml version="1.0"?>'
         '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">'
@@ -170,7 +171,7 @@ def _write_epub(path, manifest: str, spine: str, docs: dict[str, str]):
 
 
 def test_epub2_outline_reads_the_ncx(tmp_path):
-    """没有 nav 文档的 EPUB2 按 toc.ncx 列目录，层级跟着 navPoint 嵌套。"""
+    """An EPUB2 without a nav document takes its table of contents from toc.ncx, nested by navPoint."""
     from app.formats.epub import book_outline
 
     ncx = (
@@ -197,7 +198,8 @@ def test_epub2_outline_reads_the_ncx(tmp_path):
 
 
 def test_epub_chapter_with_internal_dtd_not_dropped(tmp_path):
-    """带内部 DTD 子集的 XHTML 章节：lxml-xml 解析会静默产出空文档，回退后内容必须保留。"""
+    """XHTML chapter with an internal DTD subset: lxml-xml silently produces an empty document, so the fallback must
+    keep the content."""
     chapter = (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         '<!DOCTYPE html [<!ENTITY nbsp "&#160;">]>\n'
@@ -213,12 +215,13 @@ def test_epub_chapter_with_internal_dtd_not_dropped(tmp_path):
     )
     [out] = run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))
     text = _epub_texts(out)
-    # 章节没有被清空，原文段落照常翻译（&nbsp; 归并成普通空格）
+    # The chapter is not emptied and its paragraphs are translated as usual (&nbsp; collapses to a plain space)
     assert "[zh-CN] Chapter one text here" in text
 
 
 def test_epub_named_entities_survive_xml_parsing(tmp_path):
-    """XHTML 1.1 章节里的 &rsquo;、&nbsp;、&mdash; 不能被 lxml-xml 删掉，原文和译文都要保留这些字符。"""
+    """lxml-xml must not drop &rsquo;, &nbsp; and &mdash; in an XHTML 1.1 chapter; both the original and the
+    translation keep these characters."""
     chapter = (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">\n'
@@ -234,8 +237,9 @@ def test_epub_named_entities_survive_xml_parsing(tmp_path):
 
 
 def test_epub_html_style_void_tags_and_bare_ampersands_keep_text(tmp_path):
-    """EPUB2 里常见 <br>、<img ...> 不闭合和裸 &。lxml-xml 容错解析会从出错处起删掉 &amp;、&lt;，
-    段落还会互相嵌套；这里先补成良构 XML 再解析，SVG 的 viewBox 这种大小写敏感的属性也不受影响。"""
+    """EPUB2 files often have unclosed <br> and <img ...> tags and bare &. lxml-xml's recovering parser drops &amp;
+    and &lt; from the first error on and nests paragraphs inside each other. The markup is first repaired into
+    well-formed XML and then parsed; case-sensitive attributes such as the SVG viewBox are not affected."""
     from lxml import etree
 
     body = (
@@ -259,18 +263,18 @@ def test_epub_html_style_void_tags_and_bare_ampersands_keep_text(tmp_path):
 
 
 def test_mobi7_cp1252_decoding(tmp_path):
-    """老 MOBI7 的 book.html 按 cp1252 解码：é 等字符不能变成 U+FFFD。"""
+    """book.html of an old MOBI7 file is decoded as cp1252: characters such as é must not become U+FFFD."""
     html_file = tmp_path / "book.html"
     html_file.write_bytes("<html><body><p>café et naïve</p></body></html>".encode("cp1252"))
     text = _read_mobi7_html(html_file)
     assert "café et naïve" in text
     assert "\ufffd" not in text
-    # 转成 XHTML 后字符也保留
+    # The characters survive the conversion to XHTML too
     assert "café et naïve" in _xhtml_from_mobi7(text).decode("utf-8")
 
 
 def test_mobi_temp_dir_removed_when_unpack_fails(tmp_path, monkeypatch):
-    """解包失败（DRM、坏文件）时临时目录也要删掉。"""
+    """The temporary directory is removed when unpacking fails (DRM, broken file) too."""
     from app.formats import mobi as mobi_format
 
     work = tmp_path / "mobiex-fail"
@@ -289,7 +293,8 @@ def test_mobi_temp_dir_removed_when_unpack_fails(tmp_path, monkeypatch):
 
 
 def test_mobi_temp_dir_removed_after_cancelled_unpack(tmp_path, monkeypatch):
-    """解包中途任务被取消：等解包线程写完再删目录，不能留下线程后来写的文件。"""
+    """Job cancelled during unpacking: the directory is removed after the unpacking thread finishes writing, so no
+    file written later by the thread is left behind."""
     import time
 
     from app.formats import mobi as mobi_format
@@ -319,7 +324,8 @@ def test_mobi_temp_dir_removed_after_cancelled_unpack(tmp_path, monkeypatch):
 
 
 def test_cancelled_calibre_conversion_is_killed(tmp_path, monkeypatch):
-    """转 MOBI 时任务被暂停或删除：ebook-convert 要跟着停，不能在后台接着往输出目录写。"""
+    """Job paused or deleted during MOBI conversion: ebook-convert stops too and does not keep writing to the output
+    directory in the background."""
     import os
 
     from app.formats import mobi as mobi_format
@@ -356,14 +362,16 @@ def test_cancelled_calibre_conversion_is_killed(tmp_path, monkeypatch):
 
 
 def test_markdown_list_does_not_swallow_following_blocks():
-    """列表后没有空行时，紧跟的标题 / 引用是独立的块，不能并进最后一个列表项。"""
+    """A heading or quote right after a list without a blank line is a separate block and is not merged into the last
+    list item."""
     blocks = split_blocks("- item\n# Heading\n> quote")
     assert [b.kind for b in blocks] == ["list", "heading", "quote"]
     assert collect_segments(blocks) == ["item", "Heading", "quote"]
 
 
 def test_markdown_list_and_quote_interrupt_paragraph():
-    """段落后紧跟列表或引用、中间没有空行时，列表和引用是独立的块，不能并进段落。"""
+    """A list or quote right after a paragraph without a blank line is a separate block and is not merged into the
+    paragraph."""
     blocks = split_blocks("Steps to install:\n- download\n- run setup\n\nSee below:\n> note here")
     assert [b.kind for b in blocks if b.kind != "raw"] == ["para", "list", "para", "quote"]
     texts = collect_segments(blocks)
@@ -373,8 +381,12 @@ def test_markdown_list_and_quote_interrupt_paragraph():
 
 
 def test_markdown_quote_keeps_paragraphs_alerts_and_lists():
-    """引用里的提示框标记、空行分段、列表、代码块都保留，每段单独翻译。"""
-    src = "> [!NOTE]\n> Useful information\n> on two lines.\n>\n> Second paragraph.\n> - first point\n> ```\n> code here\n> ```"
+    """Admonition markers, blank-line paragraph breaks, lists and code blocks inside a quote are kept, and each
+    paragraph is translated separately."""
+    src = (
+        "> [!NOTE]\n> Useful information\n> on two lines.\n>\n> Second paragraph.\n"
+        "> - first point\n> ```\n> code here\n> ```"
+    )
     blocks = split_blocks(src)
     texts = collect_segments(blocks)
     assert texts == ["Useful information on two lines.", "Second paragraph.", "first point"]
@@ -389,8 +401,9 @@ def test_markdown_quote_keeps_paragraphs_alerts_and_lists():
 
 
 def test_markdown_lazy_quote_continuation_stays_in_the_quote():
-    """引用段落后面不带 > 的续行还属于这一段（CommonMark 懒续行），一句话不能拆成两段翻译。
-    标题、列表、引用里的代码块后面的行不是续行。"""
+    """A line without > after a quoted paragraph still belongs to that paragraph (CommonMark lazy continuation), so
+    one sentence is not translated as two. Lines after a heading, a list or a code block inside a quote are not
+    continuation lines."""
     src = (
         "> This is a quote that\ncontinues lazily here.\n> - point one\nstill point one\n\nAfter.\n\n"
         "> quote\n# Heading\n\n> ```\n> code\nnot code\n\n> # Title\nplain"
@@ -419,8 +432,12 @@ def test_markdown_lazy_quote_continuation_stays_in_the_quote():
 
 
 def test_markdown_link_definitions_kept_verbatim():
-    """链接引用定义原样保留，不能并成一行；脚注定义有正文，照常翻译。"""
-    src = "See [docs][d] and ![ci][c].\n\n[d]: https://example.com/docs\n[c]: https://img.shields.io/ci.svg\n\n[^1]: A footnote here."
+    """Link reference definitions are kept as they are and not joined into one line; footnote definitions have body
+    text and are translated as usual."""
+    src = (
+        "See [docs][d] and ![ci][c].\n\n[d]: https://example.com/docs\n[c]: https://img.shields.io/ci.svg\n\n"
+        "[^1]: A footnote here."
+    )
     blocks = split_blocks(src)
     texts = collect_segments(blocks)
     assert texts == ["See [docs][d] and ![ci][c].", "[^1]: A footnote here."]
@@ -429,7 +446,8 @@ def test_markdown_link_definitions_kept_verbatim():
 
 
 def test_markdown_title_skips_heading_without_text(tmp_path):
-    """第一个一级标题只有数字时没有可翻译片段，取标题不能越界。"""
+    """A first level-1 heading made only of digits has no translatable segment; taking the title must not index out of
+    range."""
     src = tmp_path / "notes.md"
     src.write_text("# 2024\n\nSome body text here.\n", encoding="utf-8")
     [out] = run(translate_file(src, tmp_path, runner(), False, "zh-CN"))
@@ -437,7 +455,8 @@ def test_markdown_title_skips_heading_without_text(tmp_path):
 
 
 def test_markdown_setext_headings():
-    """Setext 标题的下划线不送去翻译，译文下面保留原来的下划线。"""
+    """The underline of a Setext heading is not sent for translation; the original underline stays below the
+    translation."""
     blocks = split_blocks("Main Title\n==========\n\nSection Name\n---\n\nBody text.")
     texts = collect_segments(blocks)
     assert texts == ["Main Title", "Section Name", "Body text."]
@@ -451,7 +470,7 @@ def test_markdown_setext_headings():
 
 
 def test_markdown_toml_front_matter_kept():
-    """Hugo 的 +++ front matter 和 YAML 一样原样保留，不送去翻译。"""
+    """Hugo +++ front matter is kept as it is, like YAML, and not sent for translation."""
     blocks = split_blocks('+++\ntitle = "Demo post"\ndraft = false\n+++\n\nBody text.')
     texts = collect_segments(blocks)
     assert texts == ["Body text."]
@@ -459,7 +478,7 @@ def test_markdown_toml_front_matter_kept():
 
 
 def test_markdown_long_fence_not_closed_by_inner_fence():
-    """四个反引号的围栏里的 ``` 是内容，不能提前结束代码块。"""
+    """``` inside a four-backtick fence is content and does not end the code block early."""
     src = "````markdown\n```python\nprint(1)\n```\n````\n\nAfter the block."
     blocks = split_blocks(src)
     assert collect_segments(blocks) == ["After the block."]
@@ -467,7 +486,8 @@ def test_markdown_long_fence_not_closed_by_inner_fence():
 
 
 def test_markdown_loose_list_continuation_translated_in_place():
-    """松散列表里缩进的续段属于列表项，照常翻译并保留缩进；多缩进 4 格的才是代码块。"""
+    """An indented continuation paragraph in a loose list belongs to the list item and is translated as usual with its
+    indentation kept; only a paragraph indented 4 more spaces is a code block."""
     src = (
         "- item one\n\n    continued paragraph of item one.\n\n        code_in_item()\n\n"
         "Outside paragraph.\n\n    real_code()"
@@ -483,7 +503,8 @@ def test_markdown_loose_list_continuation_translated_in_place():
 
 
 def test_markdown_tab_indented_code_kept_verbatim():
-    """Tab 缩进和四个空格一样是代码块；列表项里 Tab 缩进的续段还是正文。"""
+    """Tab indentation makes a code block like four spaces; a tab-indented continuation paragraph in a list item is
+    still body text."""
     src = "Run this:\n\n\tpip install foo\n\tfoo --help\n\nDone.\n\n- item one\n\n\tcontinued paragraph."
     blocks = split_blocks(src)
     texts = collect_segments(blocks)
@@ -493,7 +514,8 @@ def test_markdown_tab_indented_code_kept_verbatim():
 
 
 def test_markdown_paragraph_starting_with_inline_tag_is_translated():
-    """行首是行内标签或自动链接的段落照常翻译；块级标签和整行单个标签仍按 HTML 块原样保留。"""
+    """A paragraph starting with an inline tag or an autolink is translated as usual; block-level tags and a single tag
+    on its own line are still kept as HTML blocks."""
     src = (
         "<kbd>Ctrl</kbd> copies the selection.\n\n<https://example.com> is our site.\n\n"
         '<div align="center">\nCentered text\n</div>\n\n<img src="logo.png">\n\n<!-- note -->'
@@ -503,7 +525,8 @@ def test_markdown_paragraph_starting_with_inline_tag_is_translated():
 
 
 def test_markdown_references_kept_original(tmp_path):
-    """参考文献章节保留原文：模型原样返回的引文会被当成回显算失败，条目一多整本书就报错。"""
+    """The references section keeps the original text: a citation the model returns unchanged counts as an echo and
+    fails, and with many entries the whole book fails."""
     src = tmp_path / "paper.md"
     src.write_text(
         "# Paper\n\nBody paragraph here.\n\n## References\n\n"
@@ -520,7 +543,8 @@ def test_markdown_references_kept_original(tmp_path):
 
 
 def test_markdown_repeated_text_in_body_and_references(tmp_path):
-    """同一句在正文和参考文献里都有：按位置写回，正文那处照常翻译，参考文献那处保留原文。"""
+    """The same sentence appears in the body and in the references: writing goes by position, so the body occurrence
+    is translated and the references occurrence keeps the original text."""
     src = tmp_path / "paper.md"
     src.write_text(
         "# Intro\n\nDeep learning. MIT Press, 2016.\n\n## References\n\nDeep learning. MIT Press, 2016.\n",
@@ -534,13 +558,15 @@ def test_markdown_repeated_text_in_body_and_references(tmp_path):
 
 
 def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
-    """有序列表只有从 1 开始才能打断段落，正文里换行后的年份不是列表。"""
+    """An ordered list interrupts a paragraph only when it starts at 1; a year after a line break in body text is not a
+    list."""
     blocks = split_blocks("It happened in\n1990. Then more text.")
     assert [b.kind for b in blocks] == ["para"]
 
 
 def test_markdown_display_math_kept_verbatim():
-    """$$ 公式块原样保留：不送去翻译，块里 + / - 开头的行也不是列表项。"""
+    """$$ formula blocks are kept as they are: not sent for translation, and lines starting with + or - inside them are
+    not list items."""
     src = (
         "Energy is given by\n$$\nL = a\n+ b\n- c\n$$\nwhere m is mass.\n\n"
         "$$ E = mc^2 $$\n\n$$x$$ alone is not a block here.\n\nCosts $$5 today."
@@ -553,13 +579,14 @@ def test_markdown_display_math_kept_verbatim():
 
 
 def test_markdown_unclosed_display_math_is_text():
-    """没闭合的 $$ 遇到空行就不算公式，后面的段落照常翻译。"""
+    """An unclosed $$ stops being a formula at a blank line, and the following paragraphs are translated as usual."""
     blocks = split_blocks("$$ broken formula\n\nNext paragraph.")
     assert collect_segments(blocks) == ["$$ broken formula", "Next paragraph."]
 
 
 def test_markdown_tables_with_short_or_aligned_separators():
-    """GFM 分隔行每格一个 - 就够，可以带冒号对齐；列数和表头不一样的不是表格。"""
+    """One - per cell is enough for a GFM delimiter row, and colons may set alignment; a delimiter row whose column
+    count differs from the header is not a table."""
     for sep in ("|-|-|", "| :-: | -: |", ":--|--:"):
         blocks = split_blocks(f"| Name | Value |\n{sep}\n| alpha | one |")
         assert [b.kind for b in blocks] == ["table"], sep
@@ -567,13 +594,14 @@ def test_markdown_tables_with_short_or_aligned_separators():
         assert texts == ["Name", "Value", "alpha", "one"]
         out = render(blocks, ["T:" + x for x in texts], bilingual=False)
         assert out == f"| T:Name | T:Value |\n{sep}\n| T:alpha | T:one |"
-    # 表头两列、分隔行一列：是 Setext 二级标题
+    # Two header columns and one delimiter column: a Setext level-2 heading
     blocks = split_blocks("Name | Value\n---")
     assert [b.kind for b in blocks] == ["setext"]
 
 
 def test_epub_nav_in_spine_parsed_once(tmp_path):
-    """EPUB3 的 nav 文档同时在 spine 里：只走 label 翻译路径一次，不重复解析、译文不丢。"""
+    """The EPUB3 nav document is also in the spine: it goes through the label translation path once, without being
+    parsed again or losing translations."""
     nav = (
         '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">'
         "<head><title>Nav</title></head><body>"
@@ -595,26 +623,27 @@ def test_epub_nav_in_spine_parsed_once(tmp_path):
     with zipfile.ZipFile(src) as z:
         docs, nav_href, _, _ = _content_docs(z, "OEBPS/content.opf")
     assert nav_href == "OEBPS/nav.xhtml"
-    assert "OEBPS/nav.xhtml" not in docs  # nav 不作为正文再解析一遍
+    assert "OEBPS/nav.xhtml" not in docs  # nav is not parsed again as a body document
 
     [out] = run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))
     with zipfile.ZipFile(out) as z:
         nav_html = z.read("OEBPS/nav.xhtml").decode()
         ch_html = z.read("OEBPS/ch1.xhtml").decode()
-    # 目录项恰好翻译一次，没有重复也没有丢回原文
+    # Each TOC entry is translated exactly once, with no duplicates and no fallback to the original
     assert nav_html.count("[zh-CN] Chapter One") == 1
-    assert '<a href="ch1.xhtml">' in nav_html  # 链接结构不变
+    assert '<a href="ch1.xhtml">' in nav_html  # Link structure unchanged
     assert "[zh-CN] Body paragraph" in ch_html
 
 
 def test_pdf_hyphen_joins_uppercase_word():
-    """行尾连字符断词接回去，全大写的词也一样。数字后面的、小写字母接大写的是名字里本来的连字符，留着。"""
+    """Words hyphenated at a line end are joined back, all-caps words too. A hyphen after a digit, or between a
+    lowercase and an uppercase letter, belongs to the name and stays."""
     assert _join_lines(["word-", "wrap"]) == "wordwrap"
     assert _join_lines(["INTER-", "NATIONAL"]) == "INTERNATIONAL"
     assert _join_lines(["Claude-3.7-", "Sonnet"]) == "Claude-3.7-Sonnet"
     assert _join_lines(["DeepSeek-R1-Distill-", "Qwen-7B"]) == "DeepSeek-R1-Distill-Qwen-7B"
     assert _join_lines(["Donau-", "Dampfschiff"]) == "Donau-Dampfschiff"
-    # TeX 在大写字母前断开的 McCallum：全文别处写的是 McCallum，连字符去掉
+    # McCallum broken by TeX before the capital letter: elsewhere the text writes McCallum, so the hyphen goes
     from app.formats.pdf_blocks import _CAMEL_WORDS
 
     token = _CAMEL_WORDS.set(frozenset({"McCallum"}))
@@ -623,13 +652,14 @@ def test_pdf_hyphen_joins_uppercase_word():
         assert _join_lines(["Witten-", "Bell discounting"]) == "Witten-Bell discounting"
     finally:
         _CAMEL_WORDS.reset(token)
-    assert _join_lines(["hello", "world"]) == "hello world"  # 非断词只是换行
+    assert _join_lines(["hello", "world"]) == "hello world"  # Without hyphenation it is just a line break
     assert _join_lines(["the {v1}", ". This"]) == "the {v1}. This"
     assert _join_lines(["end", ", next"]) == "end, next"
 
 
 def test_a_url_broken_across_lines_is_joined_without_a_space():
-    """网址在 / 处、协议名后面折行，接回来中间没有空格；网址写完了、下一行是普通词的照常加空格。"""
+    """A URL wrapped at a / or after the scheme is joined back without a space; when the URL has ended and the next
+    line is an ordinary word, a space is added as usual."""
     assert _join_lines(["available at https://github.com/", "tensorflow/tensor2tensor."]) == (
         "available at https://github.com/tensorflow/tensor2tensor."
     )
@@ -641,12 +671,13 @@ def test_a_url_broken_across_lines_is_joined_without_a_space():
 
 
 def test_a_mark_closed_at_a_line_end_and_reopened_continues():
-    """每行各自收起标记。下一行原样打开的接着上一行，断词的连字符才认得出来。"""
+    """Each line closes its own marks. A next line that reopens the same marks continues the previous one, so the
+    hyphen of a broken word can be recognized."""
     assert _join_lines(["In {i}Proceedings of the 2006 confer-{/i}", "{i}ence on methods{/i}, pages"]) == (
         "In {i}Proceedings of the 2006 conference on methods{/i}, pages"
     )
     assert _join_lines(["{c0000ff}Supervised{/c}", "{c0000ff}learning{/c} of"]) == "{c0000ff}Supervised learning{/c} of"
-    # 换了字号、换了强调的不接
+    # Lines with a different size or emphasis are not joined
     assert _join_lines(["{z80}{b}A{/b}{/z}", "{z90}{b}B{/b}{/z}"]) == "{z80}{b}A{/b}{/z} {z90}{b}B{/b}{/z}"
     assert _join_lines(["a {b}x{/b}", "{i}y{/i}"]) == "a {b}x{/b} {i}y{/i}"
 
@@ -660,7 +691,8 @@ def _pdf_with_text(text: str, fontname: str = "helv") -> "pymupdf.Document":
 
 
 def test_pdf_list_items_split_into_segments():
-    """同一块里的列表项各自成为独立翻译单元（幻灯片常见）；换行续行仍并入上一项。"""
+    """List items in one block each become a separate translation unit (common in slides); wrapped continuation
+    lines still join the previous item."""
     from app.formats.pdf_extract import extract_blocks
 
     doc = _pdf_with_text("- First item here\n- Second item continues\nonto next line\n- Third item")
@@ -669,7 +701,8 @@ def test_pdf_list_items_split_into_segments():
 
 
 def test_mid_line_capital_stays_in_the_sentence():
-    """按词拆行时，行内大写词仍是这一句。句末之后的下一句、标记语言仍分开。"""
+    """When a line is split into words, a capitalized word inside the line stays in the sentence. The next sentence
+    after a sentence end, and markup, are still split off."""
     from app.formats.pdf_extract import _split_lines
 
     items = [
@@ -701,8 +734,10 @@ def test_mid_line_capital_stays_in_the_sentence():
 
 
 def test_a_full_row_split_after_a_sentence_stays_in_the_paragraph():
-    """两端对齐的段落里，句号后的宽空格让 PyMuPDF 把一整行拆成两截：前一截从段落左缘起，
-    后一截顶到右缘，上下都是整行。这是同一行，不是新段落（摘要第三行 “bles.  To realize”）。"""
+    """In a justified paragraph the wide space after a period makes PyMuPDF split a full line into two pieces: the
+    first starts at the left edge of the paragraph, the second reaches the right edge, and the lines above and
+    below are full. This is one line and does not start a new paragraph (third line of the abstract,
+    "bles.  To realize")."""
     from app.formats.pdf_extract import _split_lines
 
     def line(text, x0, x1, y0):
@@ -715,12 +750,14 @@ def test_a_full_row_split_after_a_sentence_stays_in_the_paragraph():
         line("how and when to exploit materialized views. This paper presents a", 54.0, 293.8, 210.6),
     ]
     assert _split_lines(items) == [[0, 1, 2, 3]]
-    # 单独一行的两截可能是侧标和正文，照旧按句末拆开
+    # Two pieces on a line of their own may be a side label and body text, so they are still split at the sentence end
     assert _split_lines(items[1:3]) == [[0], [1]]
 
 
 def test_a_number_wrapped_to_its_own_line_ends_the_sentence():
-    """排满的一行没说完，折下来独占一行的数是句尾，不按符号行拆出去。行首的节号后面还有标题，照旧拆开。"""
+    """After a full line with an unfinished sentence, a number wrapped onto its own line ends the sentence and is not
+    split off as a symbol line. A section number at the start of a line is followed by a heading and is still
+    split off."""
     from app.formats.pdf_extract import _split_lines
 
     def line(text, x0, x1, y0):
@@ -741,7 +778,8 @@ def test_a_number_wrapped_to_its_own_line_ends_the_sentence():
 
 
 def test_pdf_hard_break_splits_lines():
-    """无项目符号的硬换行（上行远短于块最宽行、下行大写开头、左对齐）也拆成两段。"""
+    """A hard line break without a bullet (upper line much shorter than the widest line of the block, lower line
+    starting with a capital, left-aligned) also splits into two paragraphs."""
     from app.formats.pdf_extract import extract_blocks
 
     doc = _pdf_with_text("Short Name\nA Much Longer Affiliation Line Here")
@@ -756,8 +794,9 @@ def _line(
 
 
 def test_lines_wrapping_around_a_figure_stay_in_one_paragraph():
-    """绕图排的段落，图旁的几行收在同一处，离块的右缘很远。排满窄栏的一行下面是大写开头的
-    Smilodon，是折行，不是硬换行。离窄栏右缘还远的一行照旧按硬换行拆。"""
+    """In a paragraph set around a figure, the lines beside the figure end at the same x, far from the right edge of
+    the block. Smilodon, starting with a capital below a line that fills the narrow column, is a wrapped line and
+    no hard break. A line ending well before the right edge of the narrow column is still split as a hard break."""
     from app.formats.pdf_extract import _split_lines
 
     def line(text, x0, x1, y0):
@@ -779,7 +818,8 @@ def test_lines_wrapping_around_a_figure_stay_in_one_paragraph():
     assert _split_lines(items) == [[0, 1, 2, 3, 4, 5]]
     items[3] = line("ica. Thylacosmilus was a marsupial.", 160.2, 300.0, 362.8)
     assert _split_lines(items) == [[0, 1, 2, 3], [4, 5]]
-    # 图旁的第一行以句号收尾，上面一行排满整行，下面一行收在同一处
+    # The first line beside the figure ends with a period, the line above fills the full width, and the line below
+    # ends at the same x
     first = [
         line(
             "one of the earliest goals of computer language processing. In fact, speech processing", 160.2, 493.2, 298.1
@@ -789,7 +829,8 @@ def test_lines_wrapping_around_a_figure_stay_in_one_paragraph():
         line("was a toy from the 1920s.", 160.2, 324.5, 333.9),
     ]
     assert _split_lines(first) == [[0, 1, 2, 3]]
-    # 例题的答案各占一行，隔着几行碰巧收在同一处，下一道题另起一段
+    # The answers of the exercises take one line each and a few lines apart happen to end at the same x; the next
+    # exercise starts a new paragraph
     answers = [
         line("The pronoun in the sentence above refers to", 82.2, 260.0, 294.8),
         line("Tom", 82.2, 102.1, 307.7),
@@ -803,8 +844,9 @@ def test_lines_wrapping_around_a_figure_stay_in_one_paragraph():
 
 
 def test_a_table_row_name_is_cut_from_its_numbers_and_the_rows_around():
-    """表格的行名和同一行的几格数、上面的分组名各自成段。挨得近的数照样拆开；
-    PyMuPDF 并进行名那一行的几格数从行里拿掉，和别的行的数一样留在原页上。"""
+    """A table row name, the number cells in the same row and the group name above each become a paragraph of their
+    own. Numbers close together are split as well; the number cells PyMuPDF merged into the row-name line are taken
+    out of the line and stay on the original page like the numbers of the other rows."""
     from app.formats.pdf_extract import _drop_number_tails, _split_lines
 
     def span(text, x0, x1, y):
@@ -855,8 +897,9 @@ def test_a_table_row_name_is_cut_from_its_numbers_and_the_rows_around():
 
 
 def test_header_cells_over_number_columns_are_cut_apart():
-    """表头一行的几格挨得近，并成了一行。每截正对着下面一列数时拆开，行首行名那一列的表头可以不对。
-    两端对齐的正文行拆出来的是半句，不拆。"""
+    """The cells of a header row sit close together and were merged into one line. They are split when each piece is
+    right above a column of numbers; the header of the leading row-name column need not line up. Splitting a
+    justified body line would give half sentences, so it is not split."""
     from app.formats.pdf_extract import _cut_header_cells
 
     def span(text, x0, x1, y=238.1):
@@ -899,8 +942,10 @@ def test_header_cells_over_number_columns_are_cut_apart():
 
 
 def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces():
-    """换行切开的式子并成一个占位符的多片。几片并排比一行还宽（跨两行的长网址）时不并：
-    一个占位符只能排在一行里，放不下就把整段缩小；分开的两片能在原来的断处换行。"""
+    """Pieces of a formula cut by a line break are joined into one placeholder. When the pieces side by side are wider
+    than a line (a long URL across two lines) they are not joined: one placeholder must fit on a single line, so a
+    placeholder that does not fit shrinks the whole paragraph, while two separate pieces can break at the original
+    break point."""
     from app.formats.pdf_units import _join_line_wrapped_formulas
 
     def span(text, x0, x1, y, font="LMMono10-Regular"):
@@ -938,8 +983,9 @@ def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces():
 
 
 def test_a_small_caps_heading_takes_the_size_of_its_capitals():
-    """小型大写的标题首字母大一号，其余小一号，最长的一截是小号的。块的字号按大写算，
-    不然译文比正文还小。往下错开的下标（BERT_LARGE）不算小型大写。"""
+    """In a small-caps heading the initial is one size larger and the rest one size smaller, so the longest piece is
+    the small one. The block size follows the capitals, otherwise the translation would be smaller than the body
+    text. A lowered subscript (BERT_LARGE) is not small caps."""
     from app.formats.pdf_extract import _block_size
 
     def span(text, x0, size, base):
@@ -952,8 +998,9 @@ def test_a_small_caps_heading_takes_the_size_of_its_capitals():
 
 
 def test_a_numbered_lemma_and_a_displayed_formula_start_their_own_paragraphs():
-    """带编号的引理标签另起一段，上一行停在式子上也一样。两边缩进、只有数学字体、带关系符号的一行
-    是单独排的式子，上一行停在逗号上也不接。分式拆出来的求和号那一截不算。"""
+    """A numbered lemma label starts a new paragraph, also when the previous line ends in a formula. A line indented
+    on both sides, with only math fonts and a relation symbol, is a displayed formula and is not joined even when
+    the previous line ends with a comma. The summation piece split out of a fraction does not count."""
     from app.formats.pdf_extract import _split_lines
 
     def line(text, x0, x1, y, font="NimbusRomNo9L-Regu", flags=0):
@@ -1006,7 +1053,8 @@ def test_a_numbered_lemma_and_a_displayed_formula_start_their_own_paragraphs():
 
 
 def test_wrapped_letter_period_stays_in_the_paragraph():
-    """撑满的上一行没有句末时，下一行的 Q. 是换行，不是列表项。句末之后的 a. 仍拆开。"""
+    """When the full previous line has no sentence end, Q. on the next line is a wrapped line and no list item. a.
+    after a sentence end is still split off."""
     from app.formats.pdf_extract import _split_lines
 
     wrapped = [
@@ -1030,8 +1078,10 @@ def test_wrapped_letter_period_stays_in_the_paragraph():
 
 
 def test_a_dash_after_a_full_line_continues_the_sentence():
-    """排满的上一行没说完，下一行行首的破折号是句中的，不是弹点。上一行是大一号的等宽网址也一样。
-    破折号起头的一项下面的破折号是同级的下一项，缩进、换了字号的是下一级弹点。"""
+    """When the full previous line has an unfinished sentence, a dash at the start of the next line belongs to the
+    sentence and is no bullet. The same holds when the previous line is a monospace URL one size larger. A dash
+    below an item that starts with a dash is the next item at the same level; an indented dash or one in another
+    font size is a bullet one level down."""
     from app.formats.pdf_extract import _split_lines
 
     wrapped = [
@@ -1065,7 +1115,8 @@ def test_a_dash_after_a_full_line_continues_the_sentence():
 
 
 def test_justified_rows_are_not_a_centered_stack():
-    """排满的正文行左缘差一两磅，宽窄几乎一样，不是居中排的一摞。作者名、单位、邮箱宽窄不一。"""
+    """Full body lines whose left edges differ by a point or two have almost the same width and are no stack of
+    centered lines. Author names, affiliations and emails vary in width."""
     from app.formats.pdf_extract import _centered_rows
 
     paragraph = [
@@ -1081,7 +1132,8 @@ def test_justified_rows_are_not_a_centered_stack():
 
 
 def test_the_tail_of_a_wrapped_url_does_not_end_the_verbatim_text():
-    """折行的网址尾巴落在下一行行首，后面接着正文。行首还是等宽字，没换回正文，不拆段。"""
+    """The tail of a wrapped URL lands at the start of the next line and body text follows it. The line start is still
+    monospace and has not switched back to the body font, so the paragraph is not split."""
     from app.formats.pdf_extract import _split_lines
 
     def span(text, mono):
@@ -1113,7 +1165,8 @@ def test_the_tail_of_a_wrapped_url_does_not_end_the_verbatim_text():
 
 
 def test_an_equals_sign_at_the_end_of_a_list_item_line_keeps_the_item_whole():
-    """两端对齐把行尾等号前的空拉到一个字宽以上，等号仍接在这一行，下一行缩在条目号右边的是条目的续行。"""
+    """Justification stretches the space before an equals sign at the line end to more than one em; the equals sign
+    still joins this line, and the next line indented to the right of the entry number continues the entry."""
     from app.formats.pdf_extract import _split_lines
 
     def piece(text, x0, x1, y0, font="Times-Roman"):
@@ -1139,13 +1192,15 @@ def test_an_equals_sign_at_the_end_of_a_list_item_line_keeps_the_item_whole():
         ),
     ]
     assert _split_lines(items) == [[0, 1, 2, 3, 4]]
-    # 等号没顶到右缘，这一行没排满，隔一个字宽以上的不接
+    # The equals sign does not reach the right edge, so the line is not full and a piece more than one em away is
+    # not joined
     loose = [items[1], items[2], piece("where the prior is fixed and the posterior is not", 131.4, 540.0, 500.0)]
     assert _split_lines(loose)[0] == [0]
 
 
 def test_pdf_left_jump_keeps_full_width_wrap():
-    """首行缩进、两行都撑到右边距，是自动换行，不能拆成两段。"""
+    """An indented first line with both lines reaching the right margin is an automatic wrap and is not split into two
+    paragraphs."""
     from app.formats.pdf_extract import _split_lines
 
     items = [
@@ -1156,7 +1211,8 @@ def test_pdf_left_jump_keeps_full_width_wrap():
 
 
 def test_pdf_short_indent_stays_one_segment():
-    """第一行又短又缩进、续行更长，仍是自动换行，不能拆。中文续行也不因为像新句子就拆。"""
+    """A short indented first line followed by a longer continuation line is still an automatic wrap and is not split.
+    A Chinese continuation line is not split just because it looks like a new sentence."""
     from app.formats.pdf_extract import _split_lines
 
     latin = [
@@ -1172,7 +1228,8 @@ def test_pdf_short_indent_stays_one_segment():
 
 
 def test_pdf_list_continuation_keeps_capital():
-    """列表项的续行即使大写开头，也还是这一项，不是新段落。"""
+    """A continuation line of a list item belongs to the item even when it starts with a capital, and does not start a
+    new paragraph."""
     from app.formats.pdf_extract import _split_lines
 
     items = [
@@ -1183,7 +1240,7 @@ def test_pdf_list_continuation_keeps_capital():
 
 
 def test_pdf_cjk_indent_wrap_stays_one_segment():
-    """2em 首行缩进、续行没撑满，仍是同一段。"""
+    """A 2em first-line indent with a continuation line that is not full is still one paragraph."""
     from app.formats.pdf_extract import _split_lines
 
     items = [
@@ -1194,7 +1251,8 @@ def test_pdf_cjk_indent_wrap_stays_one_segment():
 
 
 def test_pdf_left_jump_splits_stacked_labels():
-    """上行没撑满、下行明显左跳，是并列短标签，要拆开。"""
+    """An upper line that is not full and a lower line jumping clearly to the left are parallel short labels and are
+    split."""
     from app.formats.pdf_extract import _split_lines
 
     items = [
@@ -1205,7 +1263,8 @@ def test_pdf_left_jump_splits_stacked_labels():
 
 
 def test_pdf_far_apart_labels_on_one_row_split():
-    """同一行上隔开好几个字宽的两截是并排的标签（幻灯片的图注和图里的节点），要拆开。"""
+    """Two pieces on the same line several em apart are side-by-side labels (a slide caption and a node in the
+    figure) and are split."""
     from app.formats.pdf_extract import _split_lines
 
     items = [
@@ -1216,7 +1275,7 @@ def test_pdf_far_apart_labels_on_one_row_split():
 
 
 def test_pdf_wrapped_body_on_attention_sample():
-    """论文正文的首行缩进不能把句子从中间切开。"""
+    """A first-line indent in the body of a paper must not cut a sentence in the middle."""
     src = SAMPLES / "attention.pdf"
     if not src.exists():
         pytest.skip("sample missing")
@@ -1233,7 +1292,9 @@ def test_pdf_wrapped_body_on_attention_sample():
 
 
 def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
-    """上一段译文写满了框，末行贴着下一段的起笔。下一段写不满时起笔往下挪，两段之间留出半行"""
+    """The translation of the previous paragraph fills its box and its last line touches the start of the next
+    paragraph. When the next paragraph does not fill its box, its start moves down to leave half a line between the
+    two"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated, _row_neighbor
 
@@ -1259,7 +1320,7 @@ def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
     blocks = [block(40), block(76), block(112)]
     full = "这一卷讲的是这个激动人心的构想如何实现、带来什么影响。" * 4
     out = _render_translated(src_path, blocks, [full, "第二段只有一行。", full[:60]], "zh-CN")
-    # 原文的块没有 span，擦不掉，只看中文的行
+    # The source blocks have no spans and cannot be erased, so only the Chinese lines are checked
     rows = sorted(
         (line["spans"][0]["origin"][1], line["spans"][0]["size"], text)
         for item in out[0].get_text("dict")["blocks"]
@@ -1273,14 +1334,16 @@ def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
     pitch = baselines[1] - baselines[0]
     assert rows[3][2].startswith("第二段")
     assert baselines[3] - baselines[2] >= pitch * 1.4
-    # 第二段写得短，和第三段之间本来就空着，第三段照原位写
+    # The second paragraph is short and already leaves space before the third, which is written at its original
+    # position
     assert baselines[4] < 112 + 12
 
-    # 一行一条、行距和原文一样紧的几条：下面一条要挪，就碰到再下面一条，不挪
+    # One-line items spaced as tightly as the original: moving an item down would hit the one below it, so nothing
+    # moves
     for y in (200, 212, 224):
         page.insert_text((40, y + 9), "x " * 10, fontsize=10)
     src.save(tmp_path / "list.pdf")
-    # 中间一条带下标，框比行距高，伸到下一条里
+    # The middle item has a subscript, so its box is taller than the line pitch and reaches into the next item
     rows = [
         TextBlock(
             page=0,
@@ -1306,7 +1369,8 @@ def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
     assert len(listed) == 3
     assert all(lower - upper > 11 for upper, lower in zip(listed, listed[1:]))
 
-    # 表格里上下相邻的格子旁边还有别的格子，各自对着原来的行。页边的旁注不算
+    # Vertically adjacent table cells have other cells beside them, each aligned with its original row. A side note
+    # in the page margin does not count
     cell = TextBlock(
         page=0,
         rect=pymupdf.Rect(40, 40, 90, 52),
@@ -1340,8 +1404,10 @@ def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
 
 
 def test_a_paragraph_borrows_the_spare_height_of_the_next_one(tmp_path):
-    """译文比原文多出一行：下一段写得短、还空着，这一段伸进去，照正常行距写，下一段跟着往下挪半行。
-    下一段自己也写满了，借不到，这一段才压行距。下一块不是正文字号（图里的标签）也不挪"""
+    """The translation is one line longer than the original: the next paragraph is short and has spare room, so this
+    paragraph extends into it at normal line spacing and the next paragraph moves down half a line. Only when the
+    next paragraph fills its own box and has nothing to lend does this paragraph tighten its line spacing. A next
+    block that is not at body size (a label in a figure) does not move either"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -1391,7 +1457,8 @@ def test_a_paragraph_borrows_the_spare_height_of_the_next_one(tmp_path):
 
 
 def test_a_chain_of_paragraphs_moves_down_together(tmp_path):
-    """下一段自己也写满了，再下一段还空着：两段一起往下挪，上面两段都照正常行距写"""
+    """The next paragraph fills its own box and the one after it has spare room: both move down together, and the two
+    upper paragraphs are written at normal line spacing"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -1433,7 +1500,8 @@ def test_a_chain_of_paragraphs_moves_down_together(tmp_path):
     assert len(pitches) == 5 and all(abs(pitch - 8.8 * 1.45) < 0.2 for pitch in pitches)
     assert rows[7] - rows[6] >= 8.8 * 1.45 * 1.4
 
-    # 一行高的列表项：第一项多出一行，第二项挪下去的起笔低过了第三项的顶，第三项仍跟着挪，不压在一起
+    # One-line list items: the first item gains a line and the moved start of the second falls below the top of the
+    # third; the third still moves along so the items do not overlap
     items = [block(40, 1), block(52, 1), block(64, 1), block(76, 8)]
     rows = baselines(
         _render_translated(
@@ -1448,7 +1516,8 @@ def test_a_chain_of_paragraphs_moves_down_together(tmp_path):
 
 
 def test_a_paragraph_moves_up_into_the_space_left_above(tmp_path):
-    """下面没有地方借，上一段译文短、空着一截：这一段往上提，照正常行距写，和上一段隔开半行"""
+    """Nothing below to borrow from, and the translation of the previous paragraph is short and leaves space: this
+    paragraph moves up, is written at normal line spacing and stays half a line below the previous one"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -1493,7 +1562,8 @@ def test_a_paragraph_moves_up_into_the_space_left_above(tmp_path):
 
 
 def test_the_first_paragraph_under_a_heading_moves_up(tmp_path):
-    """标题下面第一段写不下、下面没有地方借：往上提，最多提到标题末行下面半行"""
+    """The first paragraph under a heading does not fit and there is nothing below to borrow from: it moves up, at
+    most to half a line below the last line of the heading"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -1541,7 +1611,8 @@ def test_the_first_paragraph_under_a_heading_moves_up(tmp_path):
 
 
 def test_a_paragraph_does_not_move_up_past_a_heading_that_touches_it(tmp_path):
-    """标题的行框和下面一段的顶边叠着一点，往上提时也算上面的东西，不提到标题上"""
+    """The line box of the heading overlaps the top edge of the paragraph below a little. When moving up, the heading
+    still counts as content above, so the paragraph does not move onto it"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -1597,7 +1668,8 @@ def test_a_paragraph_does_not_move_up_past_a_heading_that_touches_it(tmp_path):
 
 
 def test_an_empty_tail_above_does_not_stop_a_paragraph_moving_up(tmp_path):
-    """栏顶的续块译文全写进了宿主，轮到它时不写字。它不算还没写的块，下面的段落照样往上提"""
+    """The translation of the tail block at the column top was written entirely into the host, so nothing is written
+    when its turn comes. It does not count as an unwritten block, and the paragraph below still moves up"""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -1651,7 +1723,8 @@ _LONG_ZH = "在实验研究中我们首先比较旧优化器与新优化器的�
 
 
 def test_a_paragraph_moves_up_when_the_next_box_overlaps_its_bottom(tmp_path):
-    """下一段的框和这一段底下叠着一截，它跟着挪，不算这一段框里不动的东西：这一段照样往上提"""
+    """The box of the next paragraph overlaps the bottom of this one. It moves along and does not count as fixed
+    content inside this box, so this paragraph still moves up"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -1690,8 +1763,10 @@ def test_a_paragraph_moves_up_when_the_next_box_overlaps_its_bottom(tmp_path):
 
 
 def test_a_cross_page_paragraph_keeps_its_lines_when_lifting_more_does_not_help(tmp_path):
-    """跨页段落在页底照正常行距放不下，续块旁边并排着别的块、接不住：提上去多放的行照样挤，
-    就保持原来的行数，提到这几行照正常行距放得下的地方"""
+    """A paragraph carried over to the next page does not fit at the page bottom at normal line spacing, and its tail
+    block has other blocks beside it and cannot take more. Moving up to hold extra lines would still be cramped,
+    so the paragraph keeps its original number of lines and moves up to where those lines fit at normal line
+    spacing"""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -1749,7 +1824,8 @@ def test_a_cross_page_paragraph_keeps_its_lines_when_lifting_more_does_not_help(
 
 
 def test_a_cross_page_paragraph_below_moves_down_to_make_room(tmp_path):
-    """一段写不下，下面一段跨到下一页、续块那里还有地方：下面一段往下挪，留在这一页的行少了，多出的写到续块那里"""
+    """A paragraph does not fit, and the paragraph below is carried over to the next page with room left at its tail
+    block: the paragraph below moves down, fewer of its lines stay on this page, and the rest go to the tail block"""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -1796,7 +1872,8 @@ def test_a_cross_page_paragraph_below_moves_down_to_make_room(tmp_path):
 
 
 def test_the_last_paragraph_continues_on_the_next_page(tmp_path):
-    """页底最后一段照正常行距放不下，上下都没有空：末几行接到下一页页首那一段前面，那一段往下让"""
+    """The last paragraph at the page bottom does not fit at normal line spacing and there is no room above or below:
+    its last lines continue in front of the first paragraph on the next page, which moves down to make room"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -1841,7 +1918,7 @@ def test_the_last_paragraph_continues_on_the_next_page(tmp_path):
 
 
 def _zh_rows(page: pymupdf.Page, size: float = 8.8) -> list[float]:
-    """译文各行的基线，从上到下"""
+    """Baselines of the translated lines, top to bottom"""
     return sorted(
         line["spans"][0]["origin"][1]
         for item in page.get_text("dict")["blocks"]
@@ -1868,7 +1945,9 @@ def _x_block(page: pymupdf.Page, y0: float, count: int, size: float = 10, row: f
 
 
 def test_the_blank_under_the_last_line_may_pass_the_box_bottom(tmp_path):
-    """按整行距量差一点放不下，末行字形在框里、离下面的标注还有半截行距：照正常行距写，不压行距"""
+    """Measured by full line pitch the text falls just short of fitting, but the glyphs of the last line are inside
+    the box and half a line pitch away from the label below: it is written at normal line spacing without
+    tightening"""
     from app.formats.pdf_write import _render_translated
 
     src = pymupdf.open()
@@ -1883,7 +1962,8 @@ def test_the_blank_under_the_last_line_may_pass_the_box_bottom(tmp_path):
 
 
 def test_a_single_line_still_tightens_inside_its_box():
-    """只有一行时没有行距要保：按框底量，压行距放进框里，末行行框下沿高一些，下面一段能往上提"""
+    """A single line has no line spacing to keep: it is measured against the box bottom and fitted into the box with
+    tighter spacing, so the bottom of the last line box is higher and the paragraph below can move up"""
     from app.formats.pdf_place import _fit_typeset
 
     page = pymupdf.open().new_page(width=400, height=300)
@@ -1896,7 +1976,8 @@ def test_a_single_line_still_tightens_inside_its_box():
 
 
 def test_a_display_formula_left_at_the_page_bottom_is_part_of_the_body(tmp_path):
-    """页底留在原处的行间公式也是正文：上面一段往下伸到公式上面，不停在自己原来的下沿"""
+    """A display formula left in place at the page bottom is body content too: the paragraph above extends down to
+    just above the formula and does not stop at its own original bottom edge"""
     from app.formats.pdf_write import _render_translated
 
     src = pymupdf.open()
@@ -1912,7 +1993,8 @@ def test_a_display_formula_left_at_the_page_bottom_is_part_of_the_body(tmp_path)
 
 
 def test_a_page_number_left_below_the_text_is_not_part_of_the_body(tmp_path):
-    """提取时丢掉的页码留在原处，它不算正文：上面一段不往下伸到页码上面"""
+    """A page number dropped during extraction stays in place and is not body content: the paragraph above does not
+    extend down to it"""
     from app.formats.pdf_write import _render_translated
 
     src = pymupdf.open()
@@ -1933,7 +2015,8 @@ def test_a_page_number_left_below_the_text_is_not_part_of_the_body(tmp_path):
 
 
 def test_a_flush_right_attribution_widens_to_the_left(tmp_path):
-    """署名靠右排，译文比原文宽一点：往左扩成一行，仍收在原来的右缘，不折行也不缩字号"""
+    """A right-aligned byline whose translation is slightly wider than the original widens to the left as one line,
+    still ending at the original right edge, without wrapping or a smaller font size"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
@@ -1984,7 +2067,9 @@ def test_a_flush_right_attribution_widens_to_the_left(tmp_path):
 
 
 def test_a_last_line_of_one_character_is_pulled_back_by_tightening_the_letter_spacing(tmp_path):
-    """末行只剩一个字，上下都没有空：字距压一点收回这一行，照正常行距写，各行不出右缘"""
+    """The last line holds a single character and there is no room above or below: the character spacing tightens a
+    little to pull it back into the previous line, the text is written at normal line spacing, and no line goes
+    past the right edge"""
     from app.formats.pdf_write import _render_translated
 
     src = pymupdf.open()
@@ -2007,7 +2092,9 @@ def test_a_last_line_of_one_character_is_pulled_back_by_tightening_the_letter_sp
 
 
 def test_a_cross_page_paragraph_moves_up_to_keep_its_line_spacing(tmp_path):
-    """跨页段落这一页照正常行距放不下、下一页也接不住：上面一段译文短、空着，整段往上提"""
+    """A paragraph carried over to the next page does not fit on this page at normal line spacing and the next page
+    cannot take more: the translation of the paragraph above is short and leaves space, so the whole paragraph
+    moves up"""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -2055,7 +2142,8 @@ def test_a_cross_page_paragraph_moves_up_to_keep_its_line_spacing(tmp_path):
 
 
 def test_pdf_cjk_lines_do_not_overlap(tmp_path):
-    """中日韩译文缩小并下移，两行不重叠；非中日韩仍用原字号。"""
+    """CJK translations are shrunk and moved down so the two lines do not overlap; non-CJK text keeps the original
+    font size."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -2091,14 +2179,14 @@ def test_pdf_cjk_lines_do_not_overlap(tmp_path):
     for lang in ("yue", "wyw"):
         sized = line_boxes(lang, ["第一行", "第二行"])
         assert sized and abs(sized[0][1] - 12 * 0.88) < 0.2
-    # 下移之后，字形仍落在为溢出留出的扩展框里（允许 1pt 字面溢出）
+    # After moving down, the glyphs still fall inside the box extended for overflow (1pt of glyph overflow allowed)
     expanded_y0 = 28 + 12 * 0.1
     expanded_y1 = 42 + 12 * 0.3
     assert cjk[0][0].y0 >= expanded_y0 - 1
     assert cjk[0][0].y1 <= expanded_y1 + 1
 
 
-# --- 行内格式（富文本段落）保留 ---
+# --- Inline formatting in rich-text paragraphs is kept ---
 
 RICH_CHAPTER = (
     '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>c1</title></head><body>'
@@ -2146,7 +2234,8 @@ def test_apply_translation_html_keeps_tags_and_strips_script():
 
 
 def test_apply_translation_html_falls_back_when_tags_lost():
-    """译文把行内标签全丢了（模型不守规矩时）：回退纯文本，不写入空壳。"""
+    """The translation lost all inline tags (when the model ignores the rules): fall back to plain text and do not
+    write an empty shell."""
     from app.formats import html_blocks as hb
 
     soup = hb.parse(RICH_CHAPTER, xml=True)
@@ -2159,7 +2248,8 @@ def test_apply_translation_html_falls_back_when_tags_lost():
 
 
 def test_pagebreak_anchor_kept_without_rich_tags():
-    """只有分页锚点的段落也走富文本路径；译文丢掉锚点时补回去。"""
+    """A paragraph whose only markup is a page-break anchor also takes the rich-text path; the anchor is restored when
+    the translation drops it."""
     from app.formats import html_blocks as hb
 
     chapter = (
@@ -2209,7 +2299,8 @@ def test_epub_rich_paragraphs_keep_inline_formatting(tmp_path):
 
 
 def test_epub_kbd_text_kept_in_translation_only_mode(tmp_path):
-    """段落里只有 <kbd> 这类行内标签时，按键文字要发给翻译服务，仅译文模式下也不能丢。"""
+    """When a paragraph has only inline tags such as <kbd>, the key text is sent to the translation service and is not
+    lost in the translated-only version either."""
     src = tmp_path / "book.epub"
     _one_epub(src, {"ch1.xhtml": _xhtml("<p>Press <kbd>Ctrl</kbd>+C to copy the selected text.</p>")})
     [out] = run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))
@@ -2221,7 +2312,8 @@ def test_epub_kbd_text_kept_in_translation_only_mode(tmp_path):
 
 
 def test_epub_bilingual_translation_has_no_duplicate_ids(tmp_path):
-    """双语模式下译文段落不能带原文的 id 和分页锚点，否则 id 重复、页码显示两遍。"""
+    """In the bilingual version the translated paragraph must not carry the original id and page-break anchor,
+    otherwise the id is duplicated and the page number shows twice."""
     body = (
         '<p id="para1"><a id="p12"/>Some <b>bold</b> text and <a id="note3" href="#n3">a note</a> here.</p>'
         '<ul><li><span epub:type="pagebreak" id="p13">13</span>Item with <em>emphasis</em> inside.</li></ul>'
@@ -2237,19 +2329,21 @@ def test_epub_bilingual_translation_has_no_duplicate_ids(tmp_path):
 
 
 def test_sanitize_rejects_anchor_only_translation():
-    """原文有文字、译文只剩锚点（模型抽风）：判不合格回退，不能清空原段落。"""
+    """The original has text and the translation has only the anchor (model misbehaving): the translation is rejected
+    and falls back without emptying the original paragraph."""
     from app.formats import html_blocks as hb
 
     soup = hb.parse('<html><body><p><a id="page42"/>Anchor and plain text here.</p></body></html>', xml=False)
     el, _, html = hb.find_blocks(soup)[0]
-    assert html is not None  # 锚点段落走富文本路径
+    assert html is not None  # The anchor paragraph takes the rich-text path
     hb.apply_translation_html(soup, el, html, '<a id="page42"/>', False, "zh-CN")
     p = soup.find("p")
-    assert p.get_text()  # 回退后仍有内容（译文不合格时原文或纯文本译文，不能是空壳）
+    assert p.get_text()  # Fallback keeps content: the original or a plain-text translation, never an empty shell
 
 
 def test_sanitize_rejects_numbered_pagebreak_as_only_text():
-    """带页码的 pagebreak 不是幸存译文。只回锚点、<br>、或空标签加页码，都不能把正文清成页码。"""
+    """A pagebreak with a page number is not a surviving translation. A reply with only the anchor, a <br>, or empty
+    tags plus the page number must not reduce the body text to the page number."""
     from app.formats import html_blocks as hb
 
     def chapter(body: str) -> str:
@@ -2280,7 +2374,8 @@ def test_sanitize_rejects_numbered_pagebreak_as_only_text():
 def test_sanitize_keeps_raster_data_image_but_strips_script_url():
     from app.formats import html_blocks as hb
 
-    # 图片平时换成占位符不发给模型；原文自带 {vN} 时才跟着 HTML 走，这里直接查清洗
+    # Images are normally replaced by placeholders and not sent to the model; they go with the HTML only when the
+    # original already contains {vN}, so sanitizing is checked directly here
     src = 'Text {v1} <img src="data:image/png;base64,AAAA"/> with <a href="https://x">link</a>'
     nodes = hb._sanitize_translation(
         src,
@@ -2307,12 +2402,13 @@ MATH_PARA = (
 
 
 def _order(p) -> list[str]:
-    """段落里文字和媒体元素的先后：文字取原样，媒体元素取标签名。"""
+    """Order of text and media elements in a paragraph: text as it is, media elements by tag name."""
     return [c.name if getattr(c, "name", None) else str(c) for c in p.contents]
 
 
 def test_epub_inline_math_and_images_stay_in_place(tmp_path):
-    """段落里的 MathML 和图片换成 {vN} 发给模型，译完放回原来的位置；双语译文里也有。"""
+    """MathML and images in a paragraph are sent to the model as {vN} and put back at their original positions after
+    translation; the bilingual version has them too."""
     from app.formats import html_blocks as hb
 
     soup = hb.parse(_xhtml(MATH_PARA), xml=True)
@@ -2332,7 +2428,8 @@ def test_epub_inline_math_and_images_stay_in_place(tmp_path):
 
 
 def test_rich_paragraph_sends_placeholders_instead_of_mathml():
-    """富文本段落里的 MathML 不发给模型（<mtext> 会被翻掉），和纯文本路径一样换成占位符。"""
+    """MathML in a rich-text paragraph is not sent to the model (<mtext> would get translated); it is replaced by a
+    placeholder as on the plain-text path."""
     from app.formats import html_blocks as hb
 
     body = (
@@ -2349,7 +2446,8 @@ def test_rich_paragraph_sends_placeholders_instead_of_mathml():
 
 
 def test_lost_or_repeated_placeholders_keep_every_formula():
-    """模型漏掉、重复或编错占位符：多余的删掉，没放回去的公式按原顺序补在段尾，一个都不丢。"""
+    """The model drops, repeats or misnumbers placeholders: extra ones are removed, and formulas not put back are
+    appended to the paragraph end in their original order, so none is lost."""
     from app.formats import html_blocks as hb
 
     soup = hb.parse(_xhtml(MATH_PARA), xml=True)
@@ -2360,7 +2458,7 @@ def test_lost_or_repeated_placeholders_keep_every_formula():
 
 
 def test_identical_images_get_their_own_placeholders():
-    """两张一样的图各占一个编号：bs4 的 Tag 相等比的是内容，不能按相等找。"""
+    """Two identical images get a number each: bs4 Tag equality compares content, so lookup cannot use equality."""
     from app.formats import html_blocks as hb
 
     soup = hb.parse(_xhtml('<p>A <img src="x.png"/> and B <img src="x.png"/> end.</p>'), xml=True)
@@ -2371,7 +2469,8 @@ def test_identical_images_get_their_own_placeholders():
 
 
 def test_literal_placeholder_text_is_not_a_slot():
-    """原文本来就写着 {v1}（模板语法）时不用占位符，原文的 {v1} 原样翻译。"""
+    """When the original already contains {v1} (template syntax), no placeholders are used and the original {v1} is
+    translated as it is."""
     from app.formats import html_blocks as hb
 
     soup = hb.parse(_xhtml('<p>Use {v1} in the template <img src="x.png"/> here.</p>'), xml=True)
@@ -2383,9 +2482,11 @@ def test_literal_placeholder_text_is_not_a_slot():
 
 
 def test_source_line_wraps_are_spaces_not_line_breaks(tmp_path):
-    """排版过的 XHTML 段落里文字跨行写，换行只是空白；只有 <br> 才是换行。"""
+    """In a typeset XHTML paragraph the text spans several source lines and newlines are only whitespace; only <br>
+    is a line break."""
     body = (
-        "<p>Alice was beginning to get very tired of sitting\n    by her sister on the bank,<br/>\n    and of having nothing to do.</p>"
+        "<p>Alice was beginning to get very tired of sitting\n    by her sister on the bank,<br/>\n"
+        "    and of having nothing to do.</p>"
         "<p>\n<br/>First stanza line,<br/>\nsecond line.<br/>\n<br/>\nNext stanza here.<br/>\n</p>"
     )
     src = tmp_path / "book.epub"
@@ -2394,17 +2495,19 @@ def test_source_line_wraps_are_spaces_not_line_breaks(tmp_path):
     [out] = run(translate_epub(src, tmp_path, r, False, "zh-CN"))
     p, poem = BeautifulSoup(zipfile.ZipFile(out).read("OEBPS/ch1.xhtml"), "lxml-xml").find_all("p")
     assert len(p.find_all("br")) == 1
-    assert (
-        p.get_text("|")
-        == "[zh-CN] Alice was beginning to get very tired of sitting by her sister on the bank,|and of having nothing to do."
+    assert p.get_text("|") == (
+        "[zh-CN] Alice was beginning to get very tired of sitting by her sister on the bank,|"
+        "and of having nothing to do."
     )
-    # 诗节之间连着两个 <br>，空行要留着；段首段尾的 <br> 不算
+    # Two consecutive <br> between stanzas keep the blank line; <br> at the start or end of the paragraph does not
+    # count
     assert poem.get_text("|") == "[zh-CN] First stanza line,|second line.|Next stanza here."
     assert [c.name for c in poem.contents if c.name] == ["br", "br", "br"]
 
 
 def test_body_with_only_bare_text_is_translated(tmp_path):
-    """<body> 里直接是文字、没有任何块级元素（MOBI 转出来的章节常见）：照样翻译。"""
+    """Text directly inside <body> without any block-level element (common in chapters converted from MOBI) is
+    translated as well."""
     src = tmp_path / "book.epub"
     _one_epub(src, {"ch1.xhtml": _xhtml("Some chapter text.<br/>More <i>text</i>.")})
     [out] = run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))
@@ -2413,7 +2516,7 @@ def test_body_with_only_bare_text_is_translated(tmp_path):
 
 
 def test_paragraph_with_only_a_formula_is_not_sent():
-    """只有一个公式、没有文字的段落不送去翻译。"""
+    """A paragraph with a single formula and no text is not sent for translation."""
     from app.formats import html_blocks as hb
 
     soup = hb.parse(_xhtml('<p><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>x</mi></math></p>'), xml=True)
@@ -2421,7 +2524,8 @@ def test_paragraph_with_only_a_formula_is_not_sent():
 
 
 def test_pdf_list_continuation_must_be_indented():
-    """列表项后同 x0 的新行不是续行（可能是下一段）；缩进的悬挂对齐行才是续行。"""
+    """A new line at the same x0 after a list item is not a continuation line (it may be the next paragraph); only an
+    indented line with hanging alignment is."""
     from app.formats.pdf_extract import extract_blocks
 
     doc = _pdf_with_text("- Short item\nNew paragraph at same indent")
@@ -2429,10 +2533,12 @@ def test_pdf_list_continuation_must_be_indented():
 
 
 def test_pdf_cjk_continuation_needs_sentence_end():
-    """CJK 行首：上行不以句末标点结尾视为续行；以句末标点结尾才拆段。"""
+    """CJK line starts: when the previous line does not end with sentence-final punctuation the line is a
+    continuation; the paragraph splits only after sentence-final punctuation."""
     from app.formats.pdf_extract import extract_blocks
 
-    # 第一行明显短于第二行（硬换行特征），但上行不是句末 → 不拆
+    # The first line is clearly shorter than the second (a sign of a hard break), but it does not end a sentence,
+    # so there is no split
     doc = _pdf_with_text("这是一个短行\n而这是一行明显更长的内容用来撑满整行的宽度", fontname="china-s")
     assert len(extract_blocks(doc)) == 1
     doc = _pdf_with_text("这是完整的一句。\n而这是一行明显更长的内容用来撑满整行的宽度", fontname="china-s")
@@ -2440,7 +2546,8 @@ def test_pdf_cjk_continuation_needs_sentence_end():
 
 
 def test_pdf_cjk_straight_quote_ends_sentence():
-    """句末 ASCII 直引号和弯引号一样算句末；分号是连接标点，不拆段。"""
+    """An ASCII straight quote at a sentence end counts as a sentence end like a curly quote; a semicolon joins
+    clauses and does not split the paragraph."""
     from app.formats.pdf_extract import _split_lines
 
     def pair(end: str) -> list[tuple[str, pymupdf.Rect, list[dict[str, float]]]]:
@@ -2455,7 +2562,7 @@ def test_pdf_cjk_straight_quote_ends_sentence():
     assert _split_lines(pair("；")) == [[0, 1]]
 
 
-# --- 参考文献章节保留原文 ---
+# --- The references section keeps the original text ---
 
 
 def _biblio_epub(path):
@@ -2485,13 +2592,14 @@ def test_epub_bibliography_kept_original(tmp_path):
     r = runner()
     [out] = run(translate_epub(src, tmp_path, r, False, "zh-CN"))
     text = _epub_texts(out)
-    # 正文和附录照翻；参考文献标题照翻；引文条目保留原文
+    # Body and appendix are translated; the references heading is translated; citation entries keep the original
+    # text
     assert "[zh-CN] Normal paragraph here." in text
     assert "[zh-CN] Appendix paragraph here." in text
     assert "Smith, J. (2020). Some book. Press." in text and "[zh-CN] Smith" not in text
     assert "Jones, A. (2019). Another book." in text
     assert "Doe, B. (2018). Cited work." in text and "[zh-CN] Doe" not in text
-    # 预览里标成跳过
+    # Marked as skipped in the preview
     updates = {u[0]: u for u in r.preview()["updates"]}
     segs = r.preview()["segments"]
     skipped_srcs = {segs[u[0]]["s"] for u in updates.values() if u[2] == 1}
@@ -2500,8 +2608,9 @@ def test_epub_bibliography_kept_original(tmp_path):
 
 
 def test_pdf_biblio_skips_alpha_labels_at_uniform_size():
-    """作者缩写标签的参考文献，字号和正文一样（点阵字 OCR 后会统一）：OCR 认丢了 [ 的标签、
-    单独一行的标签、句号收尾的短续行都不能被当成下一章，整节保留原文。"""
+    """References with author-abbreviation labels at the body size (OCR of bitmap fonts makes the sizes uniform): a
+    label whose [ was lost by OCR, a label on its own line and a short continuation line ending with a period must
+    not be taken for the next chapter, and the whole section keeps the original text."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -2523,14 +2632,17 @@ def test_pdf_biblio_skips_alpha_labels_at_uniform_size():
         blk("[YL95] W. P. Yan and P. A. Larson. Eager Aggregation and Lazy Aggregation. In VLDB, 1995."),
     ]
     assert biblio_skips(blocks) == [False, False] + [True] * 8
-    # 句号收尾不影响没有句号的下一章标题退出
+    # Entries ending with a period do not keep the next chapter heading, which has no period, from ending the
+    # section
     tail = blocks[:3] + [blk("Appendix"), blk("Appendix body text continues here.")]
     assert biblio_skips(tail) == [False, False, True, False, False]
 
 
 def test_pdf_biblio_skips_weigh_sizes_by_text():
-    """表格里成串的小字格子按块数比正文多，按块数取的中位落到小字号上，同字号的引文就像标题了。
-    中位按字数取。标题比正文小一号、整节参考文献都小一号的（ICASSP），加粗又不比引文小，也是标题。"""
+    """Runs of small-text table cells outnumber the body blocks, so a median by block count lands on the small size
+    and citations at body size look like headings. The median is taken by character count. A heading one size
+    smaller than the body, in a references section that is one size smaller throughout (ICASSP), is bold and no
+    smaller than the citations, so it is a heading too."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -2580,7 +2692,8 @@ def test_pdf_biblio_skips_follows_font_size():
         blk("Index entry text.", 10),
     ]
     assert biblio_skips(blocks) == [False, False, True, True, False, False]
-    # 页眉不能把阈值改小；同等字号的引文不是退出标题；略小的下一章标题要退出
+    # A running header must not lower the threshold; a citation of the same size is no exit heading; a slightly
+    # smaller next chapter heading ends the section
     mixed = [
         blk("Chapter body text.", 11),
         blk("References", 16),
@@ -2591,14 +2704,15 @@ def test_pdf_biblio_skips_follows_font_size():
         blk("Appendix paragraph here.", 11),
     ]
     assert biblio_skips(mixed) == [False, False, True, True, True, False, False]
-    # 目录里的 References 后面没有引文，不进入
+    # References in a table of contents has no citations after it, so the section is not entered
     toc = [
         blk("References", 14),
         blk("A normal chapter paragraph without a citation year.", 11),
         blk("More body text here.", 11),
     ]
     assert biblio_skips(toc) == [False, False, False]
-    # 标题和引文同字号时，引文仍保留原文，下一标题退出
+    # When the heading and the citations have the same size, the citations still keep the original text and the
+    # next heading ends the section
     same = [
         blk("Intro paragraph.", 11),
         blk("参考文献：", 12),
@@ -2610,7 +2724,8 @@ def test_pdf_biblio_skips_follows_font_size():
 
 
 def test_pdf_biblio_entry_needs_a_citation_not_a_year_in_prose():
-    """正文里的年份、arXiv 字样，以及更小的下一标题，都不能确认进入。"""
+    """Years and the word arXiv in body text, and a smaller next heading, do not confirm entering the references
+    section."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -2635,7 +2750,8 @@ def test_pdf_biblio_entry_needs_a_citation_not_a_year_in_prose():
         blk("后续正文还在这里。", 11),
     ]
     assert biblio_skips(zh) == [False, False, False, False]
-    # 14pt 目录标题后面是更小的加粗章节，前瞻必须停，不能把这一章吞掉
+    # A 14pt table-of-contents heading followed by a smaller bold chapter: the lookahead must stop and not swallow
+    # the chapter
     toc = [
         blk("Contents line.", 11),
         blk("References", 14),
@@ -2647,7 +2763,8 @@ def test_pdf_biblio_entry_needs_a_citation_not_a_year_in_prose():
 
 
 def test_a_proof_mark_after_the_full_stop_still_ends_the_paragraph():
-    """段末的证毕号从 Symbol 字体里取出来是 \x00，句号在它前面。下一页大写起头的是新段，不接上来。"""
+    """The end-of-proof mark at the paragraph end comes out of the Symbol font as \x00, with the period before it. A
+    paragraph starting with a capital on the next page is a new paragraph and is not joined."""
     from app.formats.pdf_blocks import TextBlock, _ends_sentence
     from app.formats.pdf_merge import _can_continue
 
@@ -2666,13 +2783,15 @@ def test_a_proof_mark_after_the_full_stop_still_ends_the_paragraph():
     assert _ends_sentence(end.text) and _ends_sentence("which proves the claim. □")
     nxt = blk("As this example illustrated, to correctly test availability of output columns", 1)
     assert not _can_continue(end, nxt, 10, None, allow_capital=True)
-    # 公式哨兵的分隔符不当证毕号剥掉
+    # The separators of formula sentinels are not stripped as end-of-proof marks
     assert not _ends_sentence("f\x01s\x02i\x01/s\x02(")
 
 
 def test_a_column_break_inside_brackets_or_after_et_al_continues():
-    """换栏、换页处圆括号起头的看括号里的字，句中的 et al. 不算句末，分号、冒号后面小写的接着写。编号、音标、引文另起，
-    栏底整行斜体的小标题也不往下接。"""
+    """At a column or page change, a line starting with a parenthesis is judged by the text inside it, et al. inside
+    a sentence is no sentence end, and a lowercase line after a semicolon or colon continues the text. Numbered
+    items, phonetic transcriptions and citations start anew, and an all-italic subheading at the column bottom is
+    not continued either."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_merge import _can_continue
 
@@ -2699,7 +2818,8 @@ def test_a_column_break_inside_brackets_or_after_et_al_continues():
     assert not joins("The scores are combined as shown below.", "(RMS) loudness to describe the trajectory.")
     assert joins("the policy is confused on BC trials;", "an explanation that also fails to cover the rest.")
     assert not joins("the policy is confused on BC trials;", "An explanation that also fails to cover the rest.")
-    # 冒号后面的行间公式跳过了，下一页小写起头的 where 接着写
+    # The display formula after the colon is skipped, and where, starting lowercase on the next page, continues the
+    # text
     assert joins("into a biaffine scoring function:", "where U, W, and b are weights learned by the model.")
     assert not joins("into a biaffine scoring function:", "We use U, W, and b as weights learned by the model.")
     assert not _can_continue(
@@ -2760,8 +2880,10 @@ def test_a_column_break_inside_brackets_or_after_et_al_continues():
 
 
 def test_a_block_at_the_text_edge_starts_where_the_body_lines_start():
-    """冒号下面接着写的半句从正文的左缘起笔；引出的例句、式子缩进或者居中排。
-    左缘按同一栏里各段除首行以外的行算，首行缩进的段落不影响，图注居中的续行不算。"""
+    """A half sentence continuing below a colon starts at the left edge of the body text; introduced examples and
+    formulas are indented or centered. The left edge comes from all lines except the first of each paragraph in
+    the same column, so first-line indents have no effect, and centered continuation lines of captions do not
+    count."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_merge import _at_text_edge
 
@@ -2786,7 +2908,8 @@ def test_a_block_at_the_text_edge_starts_where_the_body_lines_start():
 
 
 def test_a_number_heavy_results_paragraph_is_prose():
-    """数字多的结果段字母占比低，仍是正文，能当换栏续句的栏顶。刻度数字那样的短行不是。"""
+    """A results paragraph full of numbers has a low share of letters but is still body text and can be the column top
+    that continues a sentence. Short lines such as axis tick numbers are not."""
     from app.formats.pdf_merge import _is_code_line
 
     assert not _is_code_line(
@@ -2797,7 +2920,8 @@ def test_a_number_heavy_results_paragraph_is_prose():
 
 
 def test_a_body_sentence_that_starts_with_figure_is_not_a_caption():
-    """编号后面接小写词的是正文（Figure 8(a) shows that …），编号后面是冒号、句点或大写的是图注。"""
+    """A number followed by a lowercase word is body text (Figure 8(a) shows that …); a number followed by a colon,
+    a period or a capital is a caption."""
     from app.formats.pdf_extract import _is_float_text
 
     assert not _is_float_text("Figure 8(a) shows that the fidelity converges.")
@@ -2810,7 +2934,8 @@ def test_a_body_sentence_that_starts_with_figure_is_not_a_caption():
 
 
 def test_roman_and_appendix_numbers_are_captions():
-    """IEEE 的表号是罗马数字（TABLE IV: …），附录的图表号带字母（Figure S1: …）；后面接小写词的仍是正文。"""
+    """IEEE table numbers are Roman numerals (TABLE IV: …) and appendix figure and table numbers carry a letter
+    (Figure S1: …); followed by a lowercase word they are still body text."""
     from app.formats.pdf_extract import _is_float_text
 
     assert _is_float_text("TABLE II: For different values of the number of observed e-folds")
@@ -2824,7 +2949,8 @@ def test_roman_and_appendix_numbers_are_captions():
 
 
 def test_table_cells_do_not_set_the_column_body_size():
-    """栏顶一张表一格一块、字号比正文大，正文字号仍按正文块算，栏底的正文段不被当成小一号的脚注。"""
+    """A table at the column top has one block per cell at a size larger than the body; the body size still comes from
+    the body blocks, so the body paragraph at the column bottom is not taken for a smaller footnote."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_merge import _column_body
 
@@ -2848,8 +2974,9 @@ def test_table_cells_do_not_set_the_column_body_size():
 
 
 def test_pdf_biblio_numbered_entries_without_a_heading():
-    """revtex 的期刊版式不印 References：[1] 起头、编号挨着往下排的一串是参考文献。
-    碰到标题停住，另一栏接着排的下一个编号从那里续上。正文里一句 [1] 起头的不算。"""
+    """The revtex journal layout does not print References: a run starting at [1] with consecutive numbers below is
+    the references section. It stops at a heading and resumes at the next number continuing in another column. A
+    body sentence starting with [1] does not count."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -2879,8 +3006,9 @@ def test_pdf_biblio_numbered_entries_without_a_heading():
 
 
 def test_a_table_with_its_caption_above_is_skipped_at_the_column_top():
-    """表的图注排在表上面时，紧接在图注下面的短行是表格，续句是下面第一块排满栏宽的段落。
-    图的图注排在图下面，图注下面的短行（式子后面的 subject to）是正文。"""
+    """When a table caption is set above the table, the short lines right below the caption are the table, and the
+    continuing sentence is the first block below that fills the column width. A figure caption is set below the
+    figure, so short lines below it (subject to after a formula) are body text."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_merge import _float_contents
 
@@ -2909,8 +3037,8 @@ def test_a_table_with_its_caption_above_is_skipped_at_the_column_top():
 
 
 def test_pdf_biblio_bold_heading_as_large_as_the_entries():
-    """条目首行折断成的一串作者名、接在作者名后面的题名短行都不是下一章，哪怕和标题一样大；
-    后面加粗的附录标题才是。"""
+    """A run of author names from the broken first line of an entry, and short title lines after the author names,
+    are not the next chapter even at heading size; the bold appendix heading after them is."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -2924,7 +3052,8 @@ def test_pdf_biblio_bold_heading_as_large_as_the_entries():
         blk("References", bold=True),
         blk("Ahmed M. Alaa, Zaid Ahmad, and Mark van der Laan."),
         blk(
-            "Conformal meta-learners for predictive inference of treatment effects. arXiv preprint arXiv:2308.14895, 2023."
+            "Conformal meta-learners for predictive inference of treatment effects. "
+            "arXiv preprint arXiv:2308.14895, 2023."
         ),
         blk("Anastasios N Angelopoulos, Stephen Bates, Adam"),
         blk("Fisch, Lihua Lei, and Tal Schuster. Conformal risk control. In ICLR, 2024."),
@@ -2940,8 +3069,8 @@ def test_pdf_biblio_bold_heading_as_large_as_the_entries():
 
 
 def test_ieee_section_headings_are_headings():
-    """IEEE 的节标题和正文一样大：罗马数字后面全大写（小型大写）、字母编号整行斜体的是标题。
-    正文里的人名缩写、带逗号的作者行不是。"""
+    """IEEE section headings have the body size: all caps (small caps) after a Roman numeral, or a whole italic line
+    with a letter number, is a heading. Name initials in body text and author lines with commas are not."""
     from app.formats.pdf_roles import _is_lettered_title
 
     assert _is_lettered_title("II. METHODS", styled=False)
@@ -2953,8 +3082,9 @@ def test_ieee_section_headings_are_headings():
 
 
 def test_a_column_does_not_continue_under_a_heading_at_its_top():
-    """右栏顶上紧挨着本栏的小标题时，右栏是新的一节，左栏末句不往下接；
-    小标题和栏顶之间还隔着别的字（图里认成标题的大字）时照常接。"""
+    """When a subheading of the right column sits right at its top, the right column starts a new section and the last
+    sentence of the left column is not continued there; when other text lies between the subheading and the column
+    top (large text in a figure recognized as a heading), it is continued as usual."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_merge import _column_continuations
 
@@ -2989,13 +3119,15 @@ def test_a_column_does_not_continue_under_a_heading_at_its_top():
     label = blk("Reward Model", 313, 80, rows=1)
     label.rect = pymupdf.Rect(330, 80, 380, 90)
     assert pairs([label]).get(id(left[-1])) is right[0]
-    # 小节号悬在栏边左面（1.4 Related work）的也是栏顶的小标题
+    # A subheading whose number hangs left of the column edge (1.4 Related work) is also a column-top subheading
     heading.rect = pymupdf.Rect(290, 89, 420, 101)
     assert id(left[-1]) not in pairs([])
 
 
 def test_the_page_end_is_not_in_a_column_with_body_text_to_its_right(monkeypatch):
-    """右栏没分出来、块都没归栏时，最后一栏是左栏：右边还排着正文，左栏栏底不是页末，不接下一页的页首。"""
+    """When the right column was not detected and no block was assigned to a column, the last column is the left one:
+    body text still runs on the right, so the bottom of the left column is not the page end and does not continue at
+    the top of the next page."""
     from app.formats import pdf_merge
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_merge import _column_continuations
@@ -3033,9 +3165,11 @@ def test_the_page_end_is_not_in_a_column_with_body_text_to_its_right(monkeypatch
 
 
 def test_a_flush_paragraph_under_a_table_continues_the_column_above():
-    """段落首行缩进的文档里，栏顶的表下面齐平起笔的一段是左栏末段的续段，左栏恰好在句末断开、
-    续段大写起头也接上。续段首行缩进的是新的一段；正上方是正文字号的短行（PROMPT、漏认的小标题）的
-    是新起的一段；文档不缩进段首时不接"""
+    """In a document with first-line indents, a paragraph starting flush below a table at the column top continues
+    the last paragraph of the left column; it is joined even when the left column breaks exactly at a sentence end
+    and the continuation starts with a capital. A continuation with a first-line indent is a new paragraph; one
+    right below a short body-size line (PROMPT, a missed subheading) starts a new paragraph; in a document without
+    first-line indents it is not joined"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_merge import _column_continuations
 
@@ -3077,8 +3211,9 @@ def test_a_flush_paragraph_under_a_table_continues_the_column_above():
 
 
 def test_pdf_biblio_author_year_entries_after_the_heading():
-    """作者-年份体的条目不带编号和括号年份。标题后面连着几条「姓, 名缩写.」起头的就进入参考文献；
-    正文里只一句这样开头的不算。"""
+    """Author-year entries have no numbers and no parenthesized years. Several consecutive entries starting with
+    "Surname, Initials." after the heading enter the references section; a single body sentence starting this way
+    does not count."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3106,7 +3241,8 @@ def test_pdf_biblio_author_year_entries_after_the_heading():
 
 
 def test_pdf_biblio_numbered_entry_ending_with_pages():
-    """老数据库论文的条目是 会议 年份, 页码。，行尾是页码不是年份，也要进入。"""
+    """Entries in old database papers read "venue year, pages", so the line ends with pages instead of a year; they
+    also enter the references section."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3135,7 +3271,7 @@ def test_pdf_biblio_numbered_entry_ending_with_pages():
         ),
     ]
     assert biblio_skips(blocks) == [False, False, True, True, True]
-    # 不带编号的正文即使以 年份, 页码 收尾也不算
+    # Unnumbered body text does not count even when it ends with "year, pages"
     prose = [
         blk("Body text.", 9),
         blk("References", 12, bold=True),
@@ -3146,7 +3282,8 @@ def test_pdf_biblio_numbered_entry_ending_with_pages():
 
 
 def test_pdf_biblio_same_size_citations_do_not_exit():
-    """行尾裸年份、CoRR、编号条目和换行续行都不是下一章；正文字号的加粗标题要退出。"""
+    """A bare year at the line end, CoRR, numbered entries and wrapped continuation lines are not the next chapter; a
+    bold heading at body size ends the section."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3196,7 +3333,8 @@ def test_pdf_biblio_same_size_citations_do_not_exit():
 
 
 def test_pdf_biblio_author_lists_and_url_halves_stay_in():
-    """ACL 体（作者. 年份. 题名. In 出处）进得去；条目字号比正文大一号时，作者一行、折行的网址半截都不是下一章。"""
+    """ACL style (Author. Year. Title. In Venue) enters the references section; when the entries are one size larger
+    than the body, an author line and half of a wrapped URL are not the next chapter."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3245,7 +3383,8 @@ def _xhtml(body: str) -> str:
 
 
 def test_epub_chapter_titled_papers_ends_bibliography(tmp_path):
-    """平铺文档里 h2 Papers 是下一章，不能因为单词像小标题就留成原文。"""
+    """In a flat document h2 Papers is the next chapter and must not keep the original text because the word looks
+    like a subheading."""
     src = tmp_path / "book.epub"
     _one_epub(
         src,
@@ -3264,9 +3403,10 @@ def test_epub_chapter_titled_papers_ends_bibliography(tmp_path):
 
 
 def test_epub_deeper_heading_ends_flat_bibliography(tmp_path):
-    """单文件里 h1 参考文献后的 h2 附录是下一章，不能把后面整篇留成原文。
+    """In a single file the h2 appendix after the h1 references is the next chapter, so the rest of the document
+    must not keep the original text.
 
-    包在后一个 section 里的更深标题同样结束，不靠标题数字单独判断。
+    A deeper heading wrapped in the following section ends it too, without relying on heading numbers alone.
     """
     src = tmp_path / "book.epub"
     _one_epub(
@@ -3389,7 +3529,8 @@ def test_epub_styled_heading_colon_and_epub_type(tmp_path):
 
 
 def test_pdf_biblio_skips_on_attention_paper():
-    """arXiv 风格引文（年份在行尾不带括号）也要识别：attention.pdf 的 References 整节跳过。"""
+    """arXiv-style citations (year at the line end without parentheses) are recognized too: the whole References
+    section of attention.pdf is skipped."""
     src = SAMPLES / "attention.pdf"
     if not src.exists():
         pytest.skip("sample missing")
@@ -3408,8 +3549,9 @@ def test_pdf_biblio_skips_on_attention_paper():
 
 
 def test_translated_version_cut_from_the_bilingual_one_matches_a_fresh_render(tmp_path):
-    """仅译文版从双语版里取：文字、链接、页码标签、书签和重新排出来的一样。
-    有转过的页、有书签而没有预览快照时取不了，交给重新排版。"""
+    """The translated-only version is taken from the bilingual version: text, links, page labels and bookmarks match
+    a fresh layout. With rotated pages, or with bookmarks but no preview snapshot, it cannot be taken and a fresh
+    layout is used."""
     from app.formats.pdf import translate_pdf
     from app.formats.pdf_output import translated_from_bilingual
 
@@ -3446,7 +3588,7 @@ def test_translated_version_cut_from_the_bilingual_one_matches_a_fresh_render(tm
         assert a.get_pixmap(dpi=50).samples == b.get_pixmap(dpi=50).samples
     assert cut[0].get_links() and cut.get_page_labels() == fresh.get_page_labels()
     assert cut.get_toc() == fresh.get_toc() == [[1, "[zh-CN] Second Part", 2]]
-    assert pymupdf.open(both).get_toc() == [[1, "Second Part", 2]]  # 双语版的书签不换
+    assert pymupdf.open(both).get_toc() == [[1, "Second Part", 2]]  # Bilingual version keeps its bookmarks
 
     doc[1].set_rotation(90)
     doc.save(tmp_path / "turned.pdf")
@@ -3454,8 +3596,10 @@ def test_translated_version_cut_from_the_bilingual_one_matches_a_fresh_render(tm
 
 
 def test_bookmarks_take_the_translation_shown_on_the_page_they_point_to():
-    """同一标题译法不同（目录页和正文各译一次）时，用指向页或下一页上的那种，原书签没有节号就去掉节号。
-    译文和原文相同、整段跳过的书签保留原文。"""
+    """When the same heading has different translations (translated once on the contents page and once in the body),
+    the one on the target page or the page after it is used, and the section number is dropped when the original
+    bookmark has none. Bookmarks whose translation equals the original, or whose paragraph was skipped, keep the
+    original text."""
     from app.formats.pdf_output import translate_bookmarks
 
     doc = pymupdf.open()
@@ -3476,7 +3620,8 @@ def test_bookmarks_take_the_translation_shown_on_the_page_they_point_to():
 
 
 def test_skipped_bibliography_keeps_hanging_indent(tmp_path):
-    """跳过的引文留在原页。刊名斜体不能触发擦除重排，否则悬挂缩进和行尾断词会丢。"""
+    """Skipped citations stay on the original page. An italic journal name must not trigger erasing and re-layout,
+    otherwise the hanging indent and line-end hyphenation are lost."""
     from app.formats.pdf import translate_pdf
 
     doc = pymupdf.open()
@@ -3522,7 +3667,7 @@ def test_skipped_bibliography_keeps_hanging_indent(tmp_path):
 
 
 def test_pdf_biblio_entry_with_bold_subheadings():
-    """References 下先出现加粗小标题（Books/Articles）再出现引文，也要进入参考文献。"""
+    """Bold subheadings (Books/Articles) under References followed by citations also enter the references section."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3545,7 +3690,8 @@ def test_pdf_biblio_entry_with_bold_subheadings():
 
 
 def test_pdf_biblio_section_title_stops_lookahead():
-    """更大的 References 不能穿过 Endnotes 进入，否则正文字号的下一标题退不出去。"""
+    """A larger References must not enter through Endnotes, otherwise the next heading at body size cannot end the
+    section."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3568,7 +3714,8 @@ def test_pdf_biblio_section_title_stops_lookahead():
 
 
 def test_pdf_biblio_journal_line_does_not_end_numbered_entry():
-    """引文里单独一行 Journal 不是小标题，后面的小写续行仍留在参考文献里。"""
+    """Journal on a line of its own inside a citation is no subheading, and the lowercase continuation lines after it
+    stay in the references section."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3591,7 +3738,8 @@ def test_pdf_biblio_journal_line_does_not_end_numbered_entry():
 
 
 def test_pdf_biblio_chapter_titled_books_or_paper_does_not_enter():
-    """同字号或更大的 Books、论文是下一章。更小的 Paper 仍是内部小标题。"""
+    """Books and "论文" at the same size or larger are the next chapter. A smaller Paper is still an inner
+    subheading."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3628,7 +3776,8 @@ def test_pdf_biblio_chapter_titled_books_or_paper_does_not_enter():
 
 
 def test_pdf_biblio_chinese_gbt_citations():
-    """中文 GB/T 引文（[J][M] 类型标记）：小一号“论文”是分组，引文跳过，正文提出版社不进入。"""
+    """Chinese GB/T citations ([J][M] type markers): a smaller "论文" is a group heading, the citations are skipped,
+    and body text mentioning a publisher does not enter the references section."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3650,7 +3799,8 @@ def test_pdf_biblio_chinese_gbt_citations():
 
 
 def test_pdf_biblio_type_mark_does_not_swallow_headings():
-    """行内 [J]/[M] 不是引文。含标记的下一章标题要退出，标题本身不跳过。"""
+    """Inline [J]/[M] is no citation. A next chapter heading containing a marker ends the section, and the heading
+    itself is not skipped."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3698,7 +3848,8 @@ def test_pdf_biblio_type_mark_does_not_swallow_headings():
 
 
 def test_pdf_biblio_numbered_publisher_entry_without_space():
-    """[1] 后没有空格，或出版社在下一块，仍进入。无编号正文里的出版社不进入。"""
+    """No space after [1], or the publisher in the next block, still enters. A publisher in unnumbered body text does
+    not."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3734,7 +3885,8 @@ def test_pdf_biblio_numbered_publisher_entry_without_space():
 
 
 def test_pdf_biblio_edition_heading_exits():
-    """以年版结尾的编号短标题是下一章，标题本身不跳过。真正的著录行仍跳过。"""
+    """A short numbered heading ending with an edition year ("年版") is the next chapter, and the heading itself is not
+    skipped. Real bibliographic lines are still skipped."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3762,7 +3914,8 @@ def test_pdf_biblio_edition_heading_exits():
 
 
 def test_pdf_biblio_type_mark_in_prose_does_not_enter():
-    """正文句子中间的 [M]。 不是引文（没有年份），不能把后面的正文留成原文。"""
+    """A "[M]。" in the middle of a body sentence is no citation (no year), so the body text after it must not keep
+    the original text."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3789,7 +3942,8 @@ def test_pdf_biblio_type_mark_in_prose_does_not_enter():
 
 
 def test_pdf_biblio_type_mark_year_on_next_block_enters():
-    """类型标记和年份被拆开时仍进入。下一块要是卷期或出版社，不能是任意后文。"""
+    """A type marker and year split apart still enter. The next block must be a volume/issue or a publisher, not any
+    following text."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3828,7 +3982,8 @@ def test_pdf_biblio_type_mark_year_on_next_block_enters():
 
 
 def test_pdf_biblio_year_continuation_tightened():
-    """拆行的年份确认不能松到正文：年份开头的英文句子、提到出版社和年份的正文都不算续行。"""
+    """Confirming a year on a split line must not be loose enough to accept body text: an English sentence starting
+    with a year and body text mentioning a publisher and a year are not continuation lines."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3851,7 +4006,7 @@ def test_pdf_biblio_year_continuation_tightened():
     assert scenario("2020, Volume of the series was larger.") == [False, False, False]
     assert scenario("这项研究2020年发表于某出版社。") == [False, False, False]
     assert scenario("人民出版社, 2019年出版.") == [False, False, False]
-    # 卷期页码、第N期，以及以「年」或中文句号收尾的出版社行仍算
+    # Volume/issue pages, "第N期", and publisher lines ending with "年" or a Chinese full stop still count
     assert scenario("2020, 3(2): 1-10.") == [False, True, True]
     assert scenario("2020, Vol. 3") == [False, True, True]
     assert scenario("2020, Volume 3") == [False, True, True]
@@ -3865,7 +4020,7 @@ def test_pdf_biblio_year_continuation_tightened():
 
 
 def test_pdf_biblio_vol_abbreviation_also_needs_digit():
-    """Vol 缩写和 Volume 全拼一样：后面必须是数字，“2020, Vol were…” 是正文。"""
+    """The abbreviation Vol works like the full Volume: a number must follow, so "2020, Vol were…" is body text."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3895,7 +4050,8 @@ def test_pdf_biblio_vol_abbreviation_also_needs_digit():
 
 
 def test_pdf_biblio_volume_lines_protected_at_same_size():
-    """参考文献标题和正文同字号时，卷期/出版社续行也不能被误判为下一章。"""
+    """When the references heading has the body size, volume/issue and publisher continuation lines must not be taken
+    for the next chapter either."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3920,7 +4076,8 @@ def test_pdf_biblio_volume_lines_protected_at_same_size():
 
 
 def test_pdf_biblio_year_prefixed_chapter_still_exits():
-    """行首是年份的下一章不是卷期续行。加粗的长标题同样退出。"""
+    """A next chapter starting with a year is no volume/issue continuation line. A long bold heading ends the section
+    too."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3962,7 +4119,8 @@ def test_pdf_biblio_year_prefixed_chapter_still_exits():
 
 
 def test_pdf_biblio_long_bold_chapter_title_exits():
-    """超过 80 字的加粗长章节标题也要退出（heading_like 的加粗分支有 80 字上限，不能靠它兜底）。"""
+    """A bold chapter heading longer than 80 characters also ends the section (the bold branch of heading_like has an
+    80-character limit and cannot be relied on)."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -3983,7 +4141,8 @@ def test_pdf_biblio_long_bold_chapter_title_exits():
 
 
 def test_pdf_biblio_long_bold_citation_stays():
-    """超过 80 字的加粗著录行不是下一章。类型标记或行尾年份仍要跳过。"""
+    """A bold bibliographic line longer than 80 characters is not the next chapter. Lines with a type marker or a year
+    at the end are still skipped."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -4015,16 +4174,16 @@ def test_pdf_biblio_long_bold_citation_stays():
 def test_scan_status_detection():
     from app.formats.pdf_units import _scan_status
 
-    # 正常 PDF
+    # Normal PDF
     doc = _pdf_with_text("Visible paragraph text here.")
     assert _scan_status(doc) == "ok"
-    # 带隐藏 OCR 文本层（render mode 3）
+    # With a hidden OCR text layer (render mode 3)
     doc = pymupdf.open()
     for _ in range(4):
         p = doc.new_page()
         p.insert_text((50, 50), "hidden layer text here", fontsize=12, render_mode=3)
     assert _scan_status(doc) == "hidden_text"
-    # 纯图片扫描件
+    # Image-only scan
     doc = pymupdf.open()
     for _ in range(2):
         doc.new_page().insert_image(
@@ -4065,7 +4224,8 @@ def test_subset_fonts_safe_returns_valid_doc():
 
 
 def test_typesetting_ladder_expands_before_shrinking():
-    """放不下时先向右扩（避开右侧文本块）：扩出去后字号比直接缩更大，且不盖住右侧块。"""
+    """When the text does not fit, the box first widens to the right (avoiding the text block on the right): the font
+    size after widening is larger than after shrinking directly, and the right block is not covered."""
     from app.formats.pdf_extract import extract_blocks
     from app.formats.pdf_write import _render_translated
 
@@ -4089,9 +4249,10 @@ def test_typesetting_ladder_expands_before_shrinking():
     zh = [ln for ln in spans if "译文" in "".join(s["text"] for s in ln["spans"])]
     assert zh
     zh_rect = zh[0]["bbox"]
-    # 译文越过了原块的右边界（发生了右扩），且没有盖住右侧块
+    # The translation goes past the right edge of the original block (it widened to the right) without covering
+    # the right block
     assert zh_rect[2] > left.rect.x1 + 1 and zh_rect[2] <= right.rect.x0
-    # 右侧块原文还在
+    # The original text of the right block is still there
     assert "Right block" in out[0].get_text()
 
 
@@ -4101,12 +4262,12 @@ def test_formula_font_and_char_rules():
 
     assert _font_is_math("CMMI10") and _font_is_math("STIXTwoMath")
     assert _font_is_math("LibertinusMath-Regular")
-    # 正文字体配套的数学字体、newtx 的数学字体
+    # Math fonts that come with a text font, and the newtx math fonts
     assert _font_is_math("XCharterMathMI") and _font_is_math("txmiaX") and _font_is_math("ABCDEF+txsys")
     assert not _font_is_math("XCharter-Roman") and not _font_is_math("txtt")
     assert not _font_is_math("TimesNewRomanPSMT") and not _font_is_math("ArialMT")
     assert not _font_is_math("NotoSansCJK-Regular")
-    # 黑名单优先：Noto 系正文字体不匹配宽泛 *Sans* 启发式
+    # The blocklist comes first: Noto text fonts do not match the broad *Sans* heuristic
     assert _is_formula_char("α") and _is_formula_char("∑") and _is_formula_char("∂")
     assert not _is_formula_char("a") and not _is_formula_char("中")
     spans = [
@@ -4114,7 +4275,7 @@ def test_formula_font_and_char_rules():
         {"text": "αβγ", "font": "TimesNewRomanPSMT"},
         {"text": " + more text here", "font": "ArialMT"},
     ]
-    assert _math_chars(spans) == 5  # αβγ 三个，加上 = 和 +（Sm 类数学符号）
+    assert _math_chars(spans) == 5  # Three for αβγ, plus = and + (category Sm math symbols)
 
 
 def _block_with_spans(span_lines, size=12.0):
@@ -4133,8 +4294,10 @@ def _block_with_spans(span_lines, size=12.0):
 
 
 def test_italic_letters_between_math_brackets_are_a_formula():
-    """正文是 Times 的书里，P(y = 1) 的 P、y 是正文的斜体，括号、等号是标了 math 的 CMR：单看都不成公式，
-    连起来是一个行内公式。括号里的斜体词（P(to|want)）也在公式里。只有斜体词、没有公式标点的不算"""
+    """In a book set in Times, the P and y of P(y = 1) are body-font italics and the parentheses and equals sign are
+    CMR marked as math: none is a formula on its own, together they form one inline formula. Italic words inside
+    the parentheses (P(to|want)) are part of the formula too. Italic words without formula punctuation do not
+    count"""
     from app.formats.pdf_units import _placeholderize
 
     x = [0.0]
@@ -4188,15 +4351,16 @@ def test_italic_letters_between_math_brackets_are_a_formula():
     sent, formulas = _placeholderize(_block_with_spans([line], size=10.0), 0)
     assert sent == "probability{v1} decreases."
     assert [formula["text"] for formula in formulas] == ["P(to|want)"]
-    # 无衬线粗体的向量 w、x（CMSSBX10）在 Times 排的书里也只出现在公式里
+    # The sans-serif bold vectors w and x (CMSSBX10) also appear only in formulas in a book set in Times
     from app.formats.pdf_math import _CM_UPRIGHT_RE
 
     assert _CM_UPRIGHT_RE.match("CMSSBX10") and _CM_UPRIGHT_RE.match("ABCDEF+CMSS10")
 
 
 def test_detected_formula_boxes_mark_their_letters():
-    """公式检测模型框出的 x、y = 1 是行内公式，y = 1 全是正文的正体字，按字体认不出来。
-    框把后面的逗号也框进去时，逗号留在正文里；只框着 0 的框不算公式"""
+    """x and y = 1 boxed by the formula detection model are inline formulas; y = 1 is set entirely in the upright body
+    font and cannot be recognized by font. When the box also covers the comma after it, the comma stays in the
+    body text; a box around just 0 is not a formula"""
     from app.formats.pdf_extract import _extract
     from app.formats.pdf_units import _placeholderize
 
@@ -4217,7 +4381,8 @@ def test_detected_formula_boxes_mark_their_letters():
     sent, formulas = _placeholderize(block, 0)
     assert sent == "We call the input {v1}, and set {v2}, then 0 and 1."
     assert [formula["text"] for formula in formulas] == ["x", "y = 1"]
-    # y = 1 是从一整段正文 span 里切出来的，记着页面上原来那个 span，裁公式时按它认（见 _outside_formula）
+    # y = 1 was cut out of a whole body span, so it records the original span on the page, which cropping uses to
+    # recognize it (see _outside_formula)
     [line] = page.get_text("dict")["blocks"][0]["lines"][-1:]
     [y_span] = formulas[1]["spans"]
     assert pymupdf.Rect(y_span["source"]) == pymupdf.Rect(line["spans"][-1]["bbox"])
@@ -4226,8 +4391,9 @@ def test_detected_formula_boxes_mark_their_letters():
 
 
 def test_blocks_inside_a_display_formula_box_are_kept():
-    """公式检测模型框成行间公式的块留原文（align 里的 s.t.、otherwise、\\text{...}）。
-    只有一角碰到框的块照翻；框里的说明句（有三个虚词）、标题也照翻"""
+    """Blocks the formula detection model boxes as a display formula keep the original text (s.t., otherwise and
+    \\text{...} in an align). A block touching the box with only one corner is translated; an explanatory sentence
+    inside the box (with three function words) and a heading are translated too"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_roles import Role
     from app.formats.pdf_skip import _isolated_formula_ids
@@ -4240,7 +4406,7 @@ def test_blocks_inside_a_display_formula_box_are_kept():
         )
 
     inside = block("otherwise,", (300, 210, 340, 222))
-    # 式子右下角外面的一个词，只有一角碰到框
+    # A word outside the lower right corner of the formula touches the box with only one corner
     below = block("and", (390, 230, 450, 242))
     other_page = block("s.t.", (300, 210, 340, 222), page=1)
 
@@ -4252,7 +4418,7 @@ def test_blocks_inside_a_display_formula_box_are_kept():
     assert _isolated_formula_ids([inside], None) == set()
     note = block("(where c is the correct class)", (300, 210, 390, 222))
     title = block("Phoenix + Calcite", (100, 205, 380, 230))
-    # 式子里的 perplexity、red、blue 是实词，没有虚词，不是句子
+    # perplexity, red and blue in the formula are content words without function words, so this is no sentence
     words = block("perplexityA(T) = PA(red red red red blue)−1/5", (100, 205, 380, 225))
     blocks = [note, title, inside, words]
     found = _isolated_formula_ids(blocks, Detector(), [Role.BODY, Role.HEADING, Role.BODY, Role.BODY])
@@ -4260,13 +4426,14 @@ def test_blocks_inside_a_display_formula_box_are_kept():
 
 
 def test_accent_on_its_own_line_joins_the_formula_once():
-    """ŝ 的 ˆ 单成一行，排在 s 那一行后面，自己也判成了式子。并进它盖着的式子以后不再单列一个占位符。"""
+    """The ˆ of ŝ forms a line of its own after the line with s and is judged a formula by itself. Once merged into the
+    formula it covers, it no longer gets a placeholder of its own."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, x1, y0, y1, base):
         return {"text": text, "font": font, "size": size, "flags": 0, "bbox": (x0, y0, x1, y1), "origin": (x0, base)}
 
-    # 前面认出它在式子里，标了 math
+    # Recognized earlier as part of the formula and marked math
     hat = [{**span("\u02c6", "CMR10", 10.0, 311.9, 317.4, 242.0, 252.9, 250.5), "math": True}]
     line = [
         span("span ", "NimbusRomNo9L-Regu", 10.0, 280.0, 307.0, 242.2, 253.1, 250.5),
@@ -4290,7 +4457,7 @@ def test_placeholderize_and_restore_roundtrip():
     spans = [
         span("The formula ", "TimesNewRomanPSMT", 12.0),
         span("E=mc", "CMMI10", 12.0, x0=60),
-        span("2", "CMR10", 8.5, x0=80, y0=-2),  # 上标并入公式 run
+        span("2", "CMR10", 8.5, x0=80, y0=-2),  # The superscript joins the formula run
         span(" shows energy", "TimesNewRomanPSMT", 12.0, x0=90),
     ]
     b = _block_with_spans([spans])
@@ -4301,7 +4468,7 @@ def test_placeholderize_and_restore_roundtrip():
     assert f["name"] == "f0_1.png" and f["h"] > 0 and f["bbox"].width > 0
     out = _restore_placeholders("公式 { v 1 } 说明了能量", formulas)
     assert out == "公式 \x01i\x021\x01/i\x02 说明了能量"
-    # 占位符丢失 → None（回退原文）；幻觉占位符被删掉
+    # Lost placeholder gives None (fall back to the original); hallucinated placeholders are removed
     assert _restore_placeholders("没有占位符", formulas) is None
     assert _restore_placeholders("公式 {v1} {v9}", formulas) == "公式 \x01i\x021\x01/i\x02 "
 
@@ -4347,9 +4514,10 @@ def test_placeholderize_marks_mixed_emphasis_only():
 
 
 def test_formulas_set_in_text_italic_stay_whole():
-    """老论文用 Times-Italic 写变量、Symbol 写算子，只有小号角标和 Symbol 字形算公式。
-    贴着公式的斜体变量、括号、等号也是式子：(T_i.C_p = T_j.C_r) 整个是一个公式，不能拆成
-    一半图一半字。离公式远的斜体字母、小写的斜体词（is）仍是正文。"""
+    """Old papers set variables in Times-Italic and operators in Symbol, so only small scripts and Symbol glyphs count
+    as formulas. Italic variables, parentheses and equals signs next to a formula are part of it too:
+    (T_i.C_p = T_j.C_r) is one whole formula and must not be split into half image, half text. Italic letters far
+    from a formula and lowercase italic words (is) are still body text."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text, x0, x1, font="Times-Italic", size=9.0, y0=652.5):
@@ -4410,7 +4578,7 @@ def test_formulas_set_in_text_italic_stay_whole():
     sent, formulas = _placeholderize(_block_with_spans([display], size=9.0))
     assert re.sub(r"\{v\d+\}|\s", "", sent) == ""
 
-    # 定理正文整段斜体：贴着公式的 If 是词，不是变量
+    # The theorem body is all italic: If next to a formula is a word, not a variable
     theorem = [
         span("If", 54.0, 60.0),
         span(" ", 60.0, 62.5),
@@ -4420,7 +4588,8 @@ def test_formulas_set_in_text_italic_stay_whole():
     sent, _ = _placeholderize(_block_with_spans([theorem], size=9.0))
     assert sent.startswith("If {v1}")
 
-    # 序数 t-th 的 t 是数学字体，PyMuPDF 也标斜体。放回正文的序数不能再被收进旁边的公式
+    # The t of the ordinal t-th is in a math font, and PyMuPDF marks it italic too. An ordinal put back into the body
+    # text must not be pulled into the formula next to it again
     ordinal = [
         span("and to predict the", 108.0, 176.3, "NimbusRomNo9L-Regu", 9.9, 206.5),
         {**span(" t", 176.3, 182.4, "CMMI10", 10.0, 206.5), "flags": 2},
@@ -4435,7 +4604,8 @@ def test_formulas_set_in_text_italic_stay_whole():
 
 
 def test_punctuation_alone_does_not_switch_the_font_size():
-    """“in PE.” 的句号排成了角标字号。单个标点换字号没有意义，标出来模型会把 {z65} 套到半句话上。"""
+    """The period of "in PE." is set at script size. A size change on a single punctuation mark carries no meaning, and
+    if marked, the model applies {z65} to half a sentence."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text, size=9.0, font="Times-Roman", x0=0.0):
@@ -4475,7 +4645,7 @@ def test_placeholderize_no_formula_keeps_text_identical():
 
 
 def _symbol_pdf(path, symbol: str):
-    """正文中间夹一段 Symbol 字体的字形，提取时变成 {v1} 公式占位符。"""
+    """A run of Symbol-font glyphs in the middle of body text becomes a {v1} formula placeholder on extraction."""
     doc = pymupdf.open()
     page = doc.new_page(width=500, height=300)
     head = "For the case where the parameter k "
@@ -4488,8 +4658,9 @@ def _symbol_pdf(path, symbol: str):
 
 
 def test_a_display_formula_set_in_text_italic_is_left_as_it_is(tmp_path):
-    """Times-Italic 写变量、Symbol 写算子的独立公式行：占位以后没有字可译，整行留原样，
-    不送翻、不擦掉重排（两行的式子重排时会被当成一个高公式缩小）。"""
+    """A standalone formula line with variables in Times-Italic and operators in Symbol: after placeholders there is
+    no text to translate, so the line is kept as it is, not sent for translation and not erased and laid out again
+    (a two-line formula would be shrunk as one tall formula on re-layout)."""
     src = tmp_path / "italic_math.pdf"
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=300)
@@ -4524,13 +4695,14 @@ def test_a_display_formula_set_in_text_italic_is_left_as_it_is(tmp_path):
     [out] = run(translate_file(src, tmp_path, Runner(tr, cache=MemCache(), skip_same_lang=False), False, "zh-CN"))
     assert not any("PE" in text or "{v" in text for text in sent), sent
     words = [w[4] for w in pymupdf.open(out)[0].get_text("words") if 80 <= w[1] <= 95]
-    # 原字还在原处（取词时角标并进前面的词）
+    # The original glyphs are still in place (scripts join the preceding word when words are extracted)
     assert words[0].startswith("(PE") and not any("[zh-CN]" in w for w in words)
 
 
 def test_display_equations_and_text_fractions_are_left_as_they_are(tmp_path):
-    """分子分母是文字的分式、只有关系符和一两个名字的式子留原样不送翻。
-    链接下划线下面接着写的正文、带等号的图注照翻。"""
+    """A fraction with words as numerator and denominator, and a formula with only a relation symbol and one or two
+    names, are kept as they are and not sent for translation. Body text continuing below a link underline and a
+    caption with an equals sign are translated."""
     src = tmp_path / "equations.pdf"
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=400)
@@ -4569,7 +4741,8 @@ def test_display_equations_and_text_fractions_are_left_as_they_are(tmp_path):
 
 
 def test_an_equation_in_an_algorithm_box_or_a_caption_is_translated():
-    """算法框里的一行有一个词也照翻；图注带编号，等号再多也是图注。"""
+    """A line in an algorithm box with a single word is translated; a caption with a number is a caption no matter how
+    many equals signs it has."""
     from app.formats.pdf_units import _equation_block
 
     def spans(*texts):
@@ -4585,7 +4758,8 @@ def test_an_equation_in_an_algorithm_box_or_a_caption_is_translated():
 
 
 class _PlaceholderDropper(MockTranslator):
-    """批量请求时把 {v1} 写成文字丢掉；keep_on_retry 为真时单段重翻会保留占位符。"""
+    """A batch request writes {v1} out as text and loses it; with keep_on_retry set, retranslating the single segment
+    keeps the placeholder."""
 
     def __init__(self, *a, keep_on_retry=False, **kw):
         super().__init__(*a, **kw)
@@ -4605,7 +4779,8 @@ class _PlaceholderDropper(MockTranslator):
 
 
 def test_lost_placeholder_is_retried_once(tmp_path):
-    """模型丢了 {v1}：单段再翻一次，补上占位符的译文写进缓存，公式照常贴回。"""
+    """The model lost {v1}: the segment is translated once more on its own, the translation with the placeholder
+    restored goes into the cache, and the formula is put back as usual."""
     src = tmp_path / "sym.pdf"
     _symbol_pdf(src, "abcd")
     tr = _PlaceholderDropper("zh-CN", keep_on_retry=True)
@@ -4619,7 +4794,8 @@ def test_lost_placeholder_is_retried_once(tmp_path):
 
 
 def test_lost_small_placeholder_keeps_the_translation(tmp_path):
-    """丢的只是一个字形的小公式（模型把它写成了文字）：收下译文，不退回原文。"""
+    """Only a one-glyph formula was lost (the model wrote it out as text): the translation is accepted without falling
+    back to the original."""
     src = tmp_path / "sym.pdf"
     _symbol_pdf(src, "a")
     r = Runner(_PlaceholderDropper("zh-CN"), cache=MemCache(), skip_same_lang=False)
@@ -4630,7 +4806,8 @@ def test_lost_small_placeholder_keeps_the_translation(tmp_path):
 
 
 def test_lost_large_placeholder_falls_back_and_counts_as_failed(tmp_path):
-    """丢的是较长的公式：整段退回原文，并算进失败段数，任务页才会提示。"""
+    """A longer formula was lost: the whole segment falls back to the original and counts as a failed segment, so the
+    job page shows a warning."""
     src = tmp_path / "sym.pdf"
     _symbol_pdf(src, "abcd")
     r = Runner(_PlaceholderDropper("zh-CN"), cache=MemCache(), skip_same_lang=False)
@@ -4649,14 +4826,15 @@ def test_attention_formula_placeholders_end_to_end(tmp_path):
     blocks = extract_blocks(pymupdf.open(src))
     sent_meta = [_placeholderize(b) for b in blocks]
     n_ph = sum(len(f) for _, f in sent_meta)
-    assert n_ph > 50  # 论文里有大量行内公式和角标
+    assert n_ph > 50  # The paper has many inline formulas and scripts
     [out] = run(translate_file(src, tmp_path, runner(), False, "zh-CN"))
     text = pymupdf.open(out)[0].get_text() + pymupdf.open(out)[1].get_text()
-    assert "{v" not in text  # 全部恢复成功
+    assert "{v" not in text  # All restored
 
 
 def test_cross_page_units_merge_continuation():
-    """跨页续段合并：上页末块不以句末标点结尾、下页首块小写开头 → 合成一个翻译单元。"""
+    """Merging a paragraph carried over to the next page: when the last block on a page does not end with sentence-final
+    punctuation and the first block on the next page starts lowercase, they form one translation unit."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_merge import _cross_page_units
 
@@ -4674,7 +4852,7 @@ def test_cross_page_units_merge_continuation():
     blocks = [
         blk("It can be seen that the model performs quite", 0, y=700),
         blk("1 Although one could also use another projection.", 0, size=9.0, y=740),
-        blk("4https://example.com/footnote", 0, size=9.0, y=760),  # 小一号脚注，不占页尾
+        blk("4https://example.com/footnote", 0, size=9.0, y=760),  # A smaller footnote does not count as the page end
         blk("well. We hypothesize that this has to do with it.", 1, y=60),
         blk("A new section starts here.", 1, y=90),
     ]
@@ -4682,7 +4860,7 @@ def test_cross_page_units_merge_continuation():
     merged = [u for u in units if len(u) == 2]
     assert len(merged) == 1
     assert merged[0][0].text.endswith("quite") and merged[0][1].text.startswith("well")
-    # 完整句子不合并
+    # Complete sentences are not merged
     blocks2 = [
         blk("This sentence is complete.", 0, y=700),
         blk("another paragraph starts here.", 1, y=60),
@@ -4697,24 +4875,25 @@ def test_split_translation_at_clause_boundary():
     a, b = _split_translation(t, 0.6)
     assert a.endswith(("。", "，", "；")) and len(a) > len(b) * 0.8
     assert a + b == t
-    # 拉丁文本按空格切
+    # Latin text is split at spaces
     a2, b2 = _split_translation("the quick brown fox jumps over the lazy dog", 0.5)
     assert a2.endswith("fox") and a2 + b2 == "the quick brown fox jumps over the lazy dog"
 
 
 def test_equation_vs_prose_with_formula():
-    """公式行（数学字符多、正文词少）跳过；含公式的正常句子照翻。"""
+    """Formula lines (many math characters, few body words) are skipped; ordinary sentences containing formulas are
+    translated."""
     from app.formats.pdf_extract import extract_blocks
 
     doc = pymupdf.open()
     page = doc.new_page(width=500, height=200)
-    # 含公式的句子：正文词多，必须翻
+    # A sentence with a formula: many body words, so it must be translated
     page.insert_textbox(
         pymupdf.Rect(30, 20, 480, 45),
         "The sequence y_1, y_2, ..., y_T has a variable number of tokens here",
         fontsize=11,
     )
-    # 公式行：几乎没正文词，跳过
+    # A formula line: almost no body words, so it is skipped
     page.insert_textbox(pymupdf.Rect(30, 60, 480, 85), "x + y = z", fontsize=11)
     blocks = extract_blocks(doc)
     texts = [b.text for b in blocks]
@@ -4723,8 +4902,8 @@ def test_equation_vs_prose_with_formula():
 
 
 def test_formula_runs_merge_requires_deep_x_overlap():
-    """跨 dict 行的 run 归并：上下标（x 深度交叠）并成一个公式；
-    相邻两行各自的公式（x 只沾 1pt 边）不能并。"""
+    """Merging runs across dict lines: scripts (deep overlap in x) merge into one formula; separate formulas on two
+    adjacent lines (touching by only 1pt in x) must not merge."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, y0, x1=None, y1=None):
@@ -4736,7 +4915,7 @@ def test_formula_runs_merge_requires_deep_x_overlap():
             "origin": (x0, (y1 if y1 is not None else y0 + 10) - 2),
         }
 
-    # y 和上标 T 拆在两行，x 几乎全叠 → 并成一个
+    # y and the superscript T are on two lines and almost fully overlap in x, so they merge into one
     b = _block_with_spans(
         [
             [span("see ", "TimesNewRomanPSMT", 10, 0, 50), span("y", "CMMI10", 10, 50, 50)],
@@ -4747,7 +4926,7 @@ def test_formula_runs_merge_requires_deep_x_overlap():
     sent, formulas = _placeholderize(b, 0)
     assert len(formulas) == 1 and sent.count("{v1}") == 1
 
-    # θ⋆ 在第一行末、X^i 在第二行，x 只沾 1pt → 两个独立公式
+    # θ⋆ ends the first line and X^i is on the second, touching by only 1pt in x, so they are two separate formulas
     b2 = _block_with_spans(
         [
             [
@@ -4769,27 +4948,30 @@ def test_formula_runs_merge_requires_deep_x_overlap():
 
 
 def test_marker_png_unique_per_formula():
-    """标记像素按全局序号编码：同色标记会被 MuPDF 去重成同一 xref，落位全串。"""
+    """Marker pixels encode a global index: markers of the same color would be deduplicated by MuPDF into one xref and
+    every formula would land in the wrong slot."""
     from app.formats.pdf_crop import _marker_png
 
     def decode(png):
         pix = pymupdf.Pixmap(png)
         p = pix.pixel(0, 0)
-        assert p[2] == 200  # 标记签名
+        assert p[2] == 200  # Marker signature
         return p[0] + (p[1] << 8) - 1
 
     assert decode(_marker_png(0)) == 0
     assert decode(_marker_png(255)) == 255
-    assert decode(_marker_png(300)) == 300  # 超过单字节上限也能区分
+    assert decode(_marker_png(300)) == 300  # Values beyond one byte are still distinguished
     assert len({_marker_png(i) for i in range(300)}) == 300
 
 
 def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
-    """矢量透传端到端：两个块的公式各落各的槽位、只画一次，画在内容流里前后两段字中间，
-    按内容流的顺序读（拖选、复制）时公式夹在原位。
+    """End-to-end vector passthrough: the formulas of two blocks each land in their own slot, are drawn once, and sit
+    between the text before and after them in the content stream, so reading in content stream order (drag
+    selection, copying) finds each formula in its place.
 
-    回归场景：块内序号命名的标记图互相去重，所有块的公式 #1 全堆到第一个块的槽位；
-    公式全画在整页最后一条内容流里，拖选正文时选不中公式。
+    Regression: marker images named by per-block index were deduplicated against each other, so formula #1 of
+    every block piled up in the slot of the first block; all formulas were drawn in the last content stream of the
+    page, so selecting body text by dragging missed the formulas.
     """
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_crop import _marker_png
@@ -4841,7 +5023,8 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
     words = [w[4] for w in page.get_text("words", sort=False)]
     assert [w for w in words if w in ("BETA", "EPSILON", "甲", "乙")] == ["BETA", "甲", "EPSILON", "乙"]
 
-    # 译成英文时每片文字一个 HTML 盒子，公式流插在前一片文字的流后面
+    # When translating into English each text piece is one HTML box, and the formula stream goes after the stream of
+    # the preceding text piece
     out = _render_translated(
         src,
         [b1, b2],
@@ -4859,22 +5042,25 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
         "EPSILON",
         "two",
     ]
-    # 原文被 redact 后公式 glyph 由透传补回：各出现一次，槽位不同
+    # After the original is redacted, passthrough restores the formula glyphs: each appears once, in different slots
     assert len(page.search_for("BETA")) == 1
     assert len(page.search_for("EPSILON")) == 1
     hit1, hit2 = page.search_for("BETA")[0], page.search_for("EPSILON")[0]
-    # 各落各的槽位（块 rect 附近）：带缩放的 cm 平移量算错会让公式整体往下漂
+    # Each lands in its own slot (near the block rect): a wrong translation in a scaled cm would make the formulas
+    # drift down as a whole
     assert pymupdf.Rect(30, 30, 210, 75).contains(hit1)
     assert pymupdf.Rect(30, 80, 210, 125).contains(hit2)
-    # 透传只带公式自己的字。整页原文叠在每个公式底下（哪怕在页面外），浏览器拖选会选中一大片
+    # Passthrough carries only the glyphs of the formula itself. With the whole original page stacked under each
+    # formula (even outside the page), drag selection in a browser selects a large area
     words = [w[4] for w in page.get_text("words", flags=pymupdf.TEXTFLAGS_WORDS & ~pymupdf.TEXT_MEDIABOX_CLIP)]
     assert not set(words) & {"alpha", "gamma", "delta", "zeta"}
     assert words.count("BETA") == 1 and words.count("EPSILON") == 1
 
 
 def test_formulas_on_a_page_filter_their_own_lines():
-    """一页的公式按上下对半分，每一份只留自己所在的行，每个公式在最小的一份上过滤，
-    留下的字和在整页上过滤一样。没有登记的公式也能找到盖住它的一份。"""
+    """The formulas of a page are halved top and bottom repeatedly, each part keeping only its own lines, and each
+    formula is filtered on the smallest part; the glyphs kept are the same as when filtering on the whole page. A
+    formula that was not registered still finds the part that covers it."""
     from app.formats.pdf_place import _FormulaSources, _keep_marks, _pdf_rect
     from app.formats.pdf_write import _page_form
 
@@ -4908,8 +5094,9 @@ def test_formulas_on_a_page_filter_their_own_lines():
 
 
 def test_glyph_places_match_when_a_column_jitters_in_the_last_digits():
-    """过滤后重写的内容流里数字少几位，同一列上下几行行首的字横坐标差万分之几，
-    按坐标排序后先后不同。各字仍在原处，位置核对要通过；真偏了的不通过。"""
+    """The content stream rewritten after filtering has numbers with fewer digits, so the x of the first glyph on
+    lines in the same column differs by ten-thousandths and the order after sorting by position changes. Each
+    glyph is still in place, so the position check passes; a glyph that really moved fails it."""
     from app.formats.pdf_place import _same_places
 
     before = [(72.0001, 500.9), (71.9999, 169.0), (72.0, 181.0), (80.0, 169.0)]
@@ -4921,7 +5108,8 @@ def test_glyph_places_match_when_a_column_jitters_in_the_last_digits():
 
 
 def test_a_formula_bitmap_is_rendered_only_when_used(monkeypatch):
-    """裁公式图时只记下从哪里裁；矢量贴回失败、要贴位图时才渲染，只渲染一次。"""
+    """Cropping a formula image only records where to crop; it is rendered only when vector placement fails and a
+    bitmap is needed, and only once."""
     from app.formats.pdf_blocks import _FormulaImage
     from app.formats.pdf_place import _formula_png
 
@@ -4939,8 +5127,9 @@ def test_a_formula_bitmap_is_rendered_only_when_used(monkeypatch):
 
 
 def test_formula_bitmaps_rendered_in_forked_workers_read_their_own_copy(tmp_path):
-    """写回的子进程是 fork 出来的，和父进程共用原文件的读写位置。几个子进程同时用父进程打开的
-    文档渲染公式位图，会读到别处的字节，渲染错或报错。子进程要用自己打开的那份。"""
+    """The writing subprocesses are forked and share the file position of the original file with the parent. Several
+    subprocesses rendering formula bitmaps from the document the parent opened at the same time read bytes from
+    other places and render wrongly or fail. Each subprocess must use a document it opened itself."""
     import multiprocessing
 
     from app.formats.pdf_blocks import _FormulaImage
@@ -4963,7 +5152,7 @@ def test_formula_bitmaps_rendered_in_forked_workers_read_their_own_copy(tmp_path
         try:
             got = [pymupdf.Pixmap(images[k].png()).samples == expected[k] for k in range(part, len(images), 4)]
             out.put(all(got))
-        except Exception:  # noqa: BLE001 - 读坏的文档会报错，算渲染错
+        except Exception:  # noqa: BLE001 - a corrupted read raises, which counts as a wrong render
             out.put(False)
 
     context = multiprocessing.get_context("fork")
@@ -4978,8 +5167,8 @@ def test_formula_bitmaps_rendered_in_forked_workers_read_their_own_copy(tmp_path
 
 
 def test_formula_glyphs_stay_in_place_after_a_size_change_on_their_line():
-    """同一行中途换过字号（小型大写），MuPDF 删掉前面的字后会把公式算偏。
-    偏了就整行留下，别的行照样删掉。"""
+    """When a line changes font size midway (small caps), MuPDF misplaces the formula after deleting the glyphs before
+    it. If it is misplaced the whole line is kept, and the other lines are still deleted."""
     from app.formats.pdf_place import _keep_marks, _pdf_rect
     from app.formats.pdf_write import _page_form
 
@@ -5015,7 +5204,8 @@ def test_formula_glyphs_stay_in_place_after_a_size_change_on_their_line():
 
 @pytest.mark.parametrize("box", ["CropBox", "MediaBox"])
 def test_cjk_lines_follow_a_shifted_page_box(tmp_path, box):
-    """裁剪框或媒体框不从原点起时，逐字写出的中文仍落在原文的位置上。"""
+    """When the crop box or media box does not start at the origin, Chinese written glyph by glyph still lands at the
+    position of the original text."""
     from app.formats.pdf_extract import extract_blocks
     from app.formats.pdf_write import _render_translated
 
@@ -5041,7 +5231,8 @@ def test_cjk_lines_follow_a_shifted_page_box(tmp_path, box):
 
 
 def test_formula_passthrough_follows_a_shifted_crop_box(tmp_path):
-    """裁剪框偏移时，公式仍从原位裁出、贴回自己的槽位。"""
+    """With an offset crop box, formulas are still cropped from their original position and placed back in their own
+    slots."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_crop import _marker_png
     from app.formats.pdf_write import _render_translated
@@ -5080,8 +5271,9 @@ def test_formula_passthrough_follows_a_shifted_crop_box(tmp_path):
 
 
 def test_formula_clip_ignores_tall_bitmap_glyph_boxes(tmp_path):
-    """下一行是没有 Unicode 的点阵字时，它报的字体框比墨迹高，会伸进公式的下半截。
-    这种框不能拿来挖洞，否则公式的下半截被裁掉。"""
+    """When the next line is a bitmap font without Unicode, its reported font box is taller than its ink and reaches
+    into the lower half of the formula. Such a box must not be used to cut holes, otherwise the lower half of the
+    formula is cropped off."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_crop import _marker_png
     from app.formats.pdf_write import _render_translated
@@ -5131,7 +5323,7 @@ def test_formula_clip_ignores_tall_bitmap_glyph_boxes(tmp_path):
         for span in line["spans"]
         if span["font"] == "BitmapF"
     )
-    assert bitmap["bbox"][1] < rect.y1  # 点阵字的框确实伸进了 BETA 的下半截
+    assert bitmap["bbox"][1] < rect.y1  # The bitmap glyph box does reach into the lower half of BETA
 
     def ink_share(pix):
         return sum(1 for v in pix.samples if v < 128) / len(pix.samples)
@@ -5156,14 +5348,15 @@ def test_formula_clip_ignores_tall_bitmap_glyph_boxes(tmp_path):
     block = TextBlock(page=0, rect=line, line_rects=[line], text="alpha BETA gamma", size=10, color="#000", bold=False)
     out = _render_translated(src, [block], ["译文 \x01i\x021\x01/i\x02 甲"], "zh-CN", {id(block): [formula]}, archive)
     slot = out[0].search_for("BETA")[0]
-    # 译文行按 0.88 倍字号排，公式跟着缩小，按墨迹占比比较。裁掉下半截时只剩一半左右
+    # Translated lines are set at 0.88 times the font size and the formula shrinks with them, so ink shares are
+    # compared. With the lower half cropped off only about half remains
     drawn = ink_share(out[0].get_pixmap(dpi=150, clip=slot, colorspace=pymupdf.csGRAY))
     assert drawn >= ink * 0.65
 
 
 def test_body_font_symbols_and_script_bases_become_formulas():
-    """Times 里的希腊字母是公式。贴在角标上的单字母并进角标。
-    斜体单词、孤立等号、引用上标前的 a 仍留在正文。"""
+    """Greek letters in Times are formulas. A single letter touching a script joins the script. Italic words, an
+    isolated equals sign and the a before a citation superscript stay in the body text."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, y0, x1=None, y1=None, flags=0):
@@ -5213,7 +5406,8 @@ def test_body_font_symbols_and_script_bases_become_formulas():
     sent_c, _ = _placeholderize(cite)
     assert sent_c.startswith("a") and "{v1}" in sent_c
 
-    # 角标后面接着箭头，同一个 run 里有正常大小的字：字母仍是角标的底
+    # The script is followed by an arrow, and the same run has normal-size text: the letter is still the base of the
+    # script
     arrow = _block_with_spans(
         [
             [
@@ -5244,8 +5438,9 @@ def test_body_font_symbols_and_script_bases_become_formulas():
 
 
 def test_a_script_on_the_next_line_does_not_join_the_letter_above_it():
-    """下一行行首 H^enc 的 enc 字框碰到上一行的 X，基线低了大半行：它是 H 的上标，
-    不是 X 的下标。X 是正文时不收成角标的底，X 是公式时也不并成一个式子。"""
+    """The glyph box of enc in H^enc at the start of the next line touches the X on the line above, with a baseline
+    most of a line lower: it is the superscript of H, not a subscript of X. When X is body text it is not taken as
+    the base of the script, and when X is a formula the two are not merged into one formula."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, y0, x1, y1, base):
@@ -5274,8 +5469,8 @@ def test_a_script_on_the_next_line_does_not_join_the_letter_above_it():
 
 
 def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
-    """贴着公式的 CMR 数字、括号、算子名并进同一占位符。
-    i^{th} 留在正文，送翻成 i-th。远处的数字、Times 里的数字不收。"""
+    """CMR digits, parentheses and operator names touching a formula join the same placeholder. i^{th} stays in the
+    body text and is sent for translation as i-th. Distant digits and digits in Times are not taken in."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, y0, x1, y1=None):
@@ -5334,7 +5529,8 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
     assert formulas_w[0]["parts"][0]["bbox"].x0 >= 130
     assert formulas_w[0]["parts"][1]["bbox"].x0 <= 40
 
-    # 行末的 ∪ 按 CMSY 的字体框伸到下一行，和下一行行首的 {γ} 交叠：仍是折行的两片
+    # The ∪ at the line end reaches into the next line by its CMSY font box and overlaps the {γ} at the start of
+    # that line: they are still two pieces of a wrapped formula
     def ink(item, top, bottom):
         item["ink"] = (item["bbox"][0], top, item["bbox"][2], bottom)
         return item
@@ -5362,7 +5558,8 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
     assert formulas_u[0]["parts"][0]["bbox"].x0 >= 518
     assert formulas_u[0]["parts"][1]["bbox"].x1 <= 56
 
-    # 行内分式 1/√dk：分子分母都是小字号，分子那一行排在块的最后，仍是同一个式子
+    # Inline fraction 1/√dk: numerator and denominator are both small, and the numerator line comes last in the
+    # block; it is still one formula
     fraction = _block_with_spans(
         [
             [
@@ -5379,7 +5576,8 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
     assert sent_f.count("{v") == 1 and sent_f.endswith("{v1}.")
     assert formulas_f[0]["bbox"].y0 < 604
 
-    # 相邻两行行首的脚注记号也是小字号、上下对齐，隔着一行，各是各的
+    # Footnote marks at the start of two lines are also small and vertically aligned, one line apart; each is
+    # separate
     notes = _block_with_spans(
         [
             [
@@ -5436,7 +5634,7 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
     sent_t, _ = _placeholderize(times_digit)
     assert "1" in sent_t
 
-    # 式子收尾的「 + 1」「 = 20」CMR 排成一个 span，Latin Modern 的也一样
+    # The closing " + 1" and " = 20" of a formula are set as one CMR span, and the same holds for Latin Modern
     for roman in ("CMR10", "LMRoman10-Regular"):
         tail = _block_with_spans(
             [
@@ -5456,7 +5654,8 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
         assert sent_a == "takes only {v1} values, so {v2} draws"
         assert [f["text"].replace(" ", "") for f in formulas_a] == ["A+1", "A=20"]
 
-    # 小数点是 CMMI 的「.」，后半个数和正文排在一个 span 里：「= 0」不收，免得把 0.31 拆开
+    # The decimal point is a CMMI ".", and the second half of the number shares a span with body text: "= 0" is not
+    # taken in, so 0.31 is not split
     decimal = _block_with_spans(
         [
             [
@@ -5473,7 +5672,7 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
     sent_dec, _ = _placeholderize(decimal)
     assert sent_dec == "gives a slightly higher{v1} = 0.31 likely"
 
-    # 单独的 CMMI「>」贴着后面的「= 10¹¹」，一起收进公式
+    # A lone CMMI ">" touching the following "= 10¹¹" is taken into the formula with it
     bound = _block_with_spans(
         [
             [
@@ -5490,7 +5689,8 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
     assert sent_b == "of stellar mass{v1} in the nearby"
     assert formulas_b[0]["text"].replace(" ", "").startswith(">=10")
 
-    # Times 排的式子：斜体 L 后面贴着正体的下标 CE，L 照样收进 ∂ 的式子
+    # A formula set in Times: the italic L is followed by the upright subscript CE, and L is still taken into the ∂
+    # formula
     partial = _block_with_spans(
         [
             [
@@ -5508,8 +5708,8 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
 
 
 def test_formula_crop_trims_side_whitespace_to_the_ink():
-    """字框里的前导空格不再留在公式图两侧。式子内部的空格还在。
-    左边叠进来的邻字不算本公式的墨迹。"""
+    """Leading spaces inside glyph boxes no longer remain on either side of the formula image. Spaces inside the
+    formula stay. A neighboring glyph overlapping from the left does not count as ink of this formula."""
     from app.formats.pdf_crop import _tighten_formula_sides
 
     doc = pymupdf.open()
@@ -5542,7 +5742,7 @@ def test_formula_crop_trims_side_whitespace_to_the_ink():
     assert tight.x1 <= wide.x1 + 0.2
     assert abs(tight.width - part["w"]) < 0.15
     assert part["dx"] == round(tight.x0 - wide.x0, 1)
-    # 字母还在框里，左右空白都收到窄边
+    # The letters are still in the box, and the blank space on both sides shrinks to a narrow margin
     letter = next(
         pymupdf.Rect(char["bbox"])
         for span in page.get_text("rawdict")["blocks"]
@@ -5591,8 +5791,9 @@ def test_formula_crop_trims_side_whitespace_to_the_ink():
 
 
 def test_line_wrapped_formula_is_one_placeholder():
-    """行末 y_{t-1}= 和下一行行首 s|h_{t-1} 是同一式子。一个占位符、两片，
-    不并成横跨整行的大框。行中的公式不和下一行行首的公式并。"""
+    """y_{t-1}= at the line end and s|h_{t-1} at the start of the next line are one formula: one placeholder, two
+    pieces, not merged into a large box spanning the whole line. A formula in the middle of a line is not merged
+    with a formula at the start of the next line."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, y0, x1, y1=None):
@@ -5642,7 +5843,8 @@ def test_line_wrapped_formula_is_one_placeholder():
 
 
 def test_wrapped_formula_parts_stay_in_order(tmp_path):
-    """两片按阅读顺序并排，后半段不再留在下一行行首的源文横坐标。"""
+    """The two pieces sit side by side in reading order, and the second half no longer stays at the source x at the
+    start of the next line."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -5700,8 +5902,9 @@ def test_wrapped_formula_parts_stay_in_order(tmp_path):
 
 
 def test_placeholderize_absorbs_accent_over_formula():
-    """ŷ 的 ^ 常是独立 span（正文字体、不被判为公式），留在正文会在公式图边
-    多出一个孤符号：落在公式 bbox 上的重音符要并进公式、正文里删掉。"""
+    """The ^ of ŷ is often a separate span (body font, not judged a formula); left in the body text it adds a stray
+    symbol next to the formula image. An accent that falls on the formula bbox joins the formula and is removed
+    from the body text."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, y0, x1=None, y1=None):
@@ -5720,15 +5923,15 @@ def test_placeholderize_absorbs_accent_over_formula():
                 span("y", "CMMI10", 10, 40, 50, x1=48, y1=60),
                 span(" coming", "TimesNewRomanPSMT", 10, 60, 50),
             ],
-            [{**span("^", "CMR10", 10, 41, 42, x1=45, y1=48), "origin": (41, 56)}],  # 帽子是独立 dict 行，基线抬高一点
+            [{**span("^", "CMR10", 10, 41, 42, x1=45, y1=48), "origin": (41, 56)}],  # Hat: own dict line, raised base
         ],
         size=10.0,
     )
     sent, formulas = _placeholderize(b, 0)
     assert "^" not in sent
     assert len(formulas) == 1
-    assert formulas[0]["bbox"].y0 <= 42  # 符头顶部包进裁剪区域
-    # 短音符 M̆、小波浪 Ẽ 也一样
+    assert formulas[0]["bbox"].y0 <= 42  # The top of the accent is inside the crop area
+    # The same for the breve in M̆ and the tilde in Ẽ
     for accent in ("˘", "˜"):
         b1 = _block_with_spans(
             [
@@ -5743,7 +5946,7 @@ def test_placeholderize_absorbs_accent_over_formula():
         )
         sent1, formulas1 = _placeholderize(b1, 0)
         assert accent not in sent1 and len(formulas1) == 1
-    # 远离公式的 ^ 不吸收（如正文里确实有个符号）
+    # A ^ far from any formula is not absorbed (the body text may really contain the symbol)
     b2 = _block_with_spans(
         [
             [span("y", "CMMI10", 10, 0, 50, x1=8, y1=60), span(" then ^ alone", "TimesNewRomanPSMT", 10, 100, 50)],
@@ -5752,7 +5955,7 @@ def test_placeholderize_absorbs_accent_over_formula():
     )
     sent2, _ = _placeholderize(b2, 0)
     assert "^" in sent2
-    # 上一行 naïve 的两点不算到下一行的公式上
+    # The diaeresis of naïve on the line above does not count toward the formula on the next line
     b3 = _block_with_spans(
         [
             [
@@ -5769,7 +5972,8 @@ def test_placeholderize_absorbs_accent_over_formula():
 
 
 def test_same_line_gap_stays_inside_one_column():
-    """公式把一行拆成两块时，间隙小于栏沟就接上。另一栏即使只隔 4pt 也不接。"""
+    """When a formula splits a line into two blocks, they are joined if the gap is narrower than the column gap. A block
+    in the other column is not joined even 4pt away."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_visual_lines
     from app.formats.pdf_layout import Column, PageGeometry
@@ -5795,8 +5999,9 @@ def test_same_line_gap_stays_inside_one_column():
 
 
 def test_paragraph_split_by_a_caption_beside_it_is_joined():
-    """段落绕着图排，图注在阅读顺序里夹在两半中间。图注在上一半下面、下一半旁边，
-    两半接成一段。表格同一行右边的格子和上一格并排，下一行的格子不接上去。"""
+    """A paragraph set around a figure has the caption between its two halves in reading order. With the caption
+    below the first half and beside the second, the two halves are joined into one paragraph. A cell to the right
+    in the same table row sits beside the previous cell, and a cell in the next row is not joined to it."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -5818,7 +6023,8 @@ def test_paragraph_split_by_a_caption_beside_it_is_joined():
 
 
 def test_a_larger_heading_below_a_title_is_not_its_wrapped_line():
-    """小节名下面紧接着的大一号的是下一节的标题，不是小节名换行的第二行。"""
+    """A line one size larger right below a subsection name is the heading of the next section, not the second line of
+    a wrapped subsection name."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -5834,8 +6040,9 @@ def test_a_larger_heading_below_a_title_is_not_its_wrapped_line():
 
 
 def test_a_small_caps_word_at_the_line_start_is_not_a_style_change():
-    """行首小一号的全大写词是小型大写的缩写（MUC (Vilain et al., 1995) and …），按正文字号算；
-    粗体、小一号的正文起头仍算换了样式。"""
+    """An all-caps word one size smaller at the line start is a small-caps abbreviation (MUC (Vilain et al., 1995)
+    and …) and counts at the body size; body text starting in bold or one size smaller still counts as a style
+    change."""
     from app.formats.pdf_blocks import TextBlock, _styled_edge
 
     def span(text, x0, size=10.0, font="NimbusRomNo9L-Regu", flags=0):
@@ -5868,8 +6075,8 @@ def test_a_small_caps_word_at_the_line_start_is_not_a_style_change():
 
 
 def test_a_concordance_with_aligned_bold_keywords_stays_original():
-    """每行中间一个粗体词、各行左缘对齐、两边是截下来的前后文的检索结果留原文；
-    正文里零散的粗体术语不算。"""
+    """Search results with one bold word in the middle of each line, aligned left edges and cut-off context on both
+    sides keep the original text; scattered bold terms in body text do not count."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import _concordance_ids
 
@@ -5931,8 +6138,10 @@ def test_a_concordance_with_aligned_bold_keywords_stays_original():
 
 
 def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
-    """原文段落前几行在图左边让开、图下面恢复整宽。译文碰到图高度的行同样让开，图下面的行写满。
-    只有一行在旁边的不算绕排（引文最后一行旁边的出处）。"""
+    """The first lines of the original paragraph make room left of a figure and return to full width below it.
+    Translated lines at the height of the figure make room the same way, and lines below the figure are written
+    full width. A single line beside a figure is not wrapping around it (the source beside the last line of a
+    quotation)."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_place import _place_plain
     from app.formats.pdf_write import _wrap_holes
@@ -5954,7 +6163,8 @@ def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
     )
     assert _wrap_holes(quoted, [pymupdf.Rect(411, 246, 475, 258)]) == []
 
-    # 跨页接过来的半段按上一页的栏宽写。图在块的框外、写入范围以内，同样让开
+    # The half paragraph carried over from the previous page is written at the column width of that page. A figure
+    # outside the block box but inside the writing area gets room too
     figure = pymupdf.Rect(347, 103, 493, 253)
     tail_lines = [pymupdf.Rect(160, y, 337, y + 12) for y in range(110, 170, 12)]
     tail = TextBlock(
@@ -6004,7 +6214,8 @@ def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
 
 
 def test_a_running_head_does_not_run_into_the_first_line_below():
-    """页眉停在 et al. 上，像没写完的半句。认成页眉的块不和下面小写起头的正文相接。"""
+    """A running header ending on et al. looks like an unfinished sentence. A block recognized as a running header is
+    not joined to the body text below that starts lowercase."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -6037,7 +6248,8 @@ def test_a_running_head_does_not_run_into_the_first_line_below():
 
 
 def test_a_word_cut_after_a_run_in_label_continues_at_the_column_edge():
-    """行内标签后面的半行从标签右边起笔，行尾断开的词（temper-）在下一行栏边接着写。"""
+    """The half line after an inline label starts right of the label, and the word broken at the line end (temper-)
+    continues at the column edge on the next line."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -6068,7 +6280,8 @@ def test_a_word_cut_after_a_run_in_label_continues_at_the_column_edge():
 
 
 def test_a_line_inside_an_open_bracket_runs_on_below():
-    """括号还没合上就换行，下一行大写或数字起头、在第一句里合上括号，仍是同一句。"""
+    """A line break inside an open parenthesis, with the next line starting with a capital or digit and closing the
+    parenthesis in its first sentence, is still the same sentence."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -6098,7 +6311,8 @@ def test_a_line_inside_an_open_bracket_runs_on_below():
 
 
 def test_a_line_after_an_inline_formula_wraps_to_the_column_edge():
-    """一行里左边是式子、右边接着写正文，这半行撑到右缘、没写完，下一行回到栏边小写接着写。"""
+    """A line with a formula on the left and body text continuing on the right: this half line reaches the right edge
+    unfinished, and the next line continues lowercase at the column edge."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -6130,9 +6344,10 @@ def test_a_line_after_an_inline_formula_wraps_to_the_column_edge():
 
 
 def test_layout_model_regions_join_a_paragraph_cut_by_a_formula():
-    """开了版面模型时，前后两个单元落在模型框出的同一段正文里、切口上又有式子，就是被式子切开的同一段。
-    没有模型、上一块句末收住而下一块大写起头（一串列表）、上一块是一行作者名、
-    切口上没有式子的（幻灯片上一条条要点）、题词和下面的出处，都不并。"""
+    """With the layout model enabled, two consecutive units inside the same body paragraph box of the model, with a
+    formula at the cut, are one paragraph cut by the formula. No merge without the model, when the previous block
+    ends a sentence and the next starts with a capital (a list), when the previous block is a line of author
+    names, without a formula at the cut (bullet points on a slide), or for an epigraph and its source below."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_merge import _region_joins
     from app.formats.pdf_roles import HeuristicLayout
@@ -6181,8 +6396,10 @@ def test_layout_model_regions_join_a_paragraph_cut_by_a_formula():
 
 
 def test_a_full_line_wraps_into_a_capitalized_next_line():
-    """段落缩进的首行和页边旁注挤在一块里被单拆出来。它排到右缘、没有句末标点，下一行回到左缘、
-    以专名大写起头（RNNs, one where…），仍是同一句。末行没排满、或者有句号的不接。"""
+    """The indented first line of a paragraph, crowded into one block with a side note in the margin, is split out on
+    its own. It reaches the right edge without sentence-final punctuation, and the next line returns to the left
+    edge starting with a capitalized proper name (RNNs, one where…): still the same sentence. A last line that is
+    not full, or that has a period, is not joined."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -6201,9 +6418,11 @@ def test_a_full_line_wraps_into_a_capitalized_next_line():
 
 
 def test_an_indented_first_line_cut_by_a_margin_note_runs_on_after_a_full_stop():
-    """段落首行缩进的文档，行框比行距高，上下两行的框叠上一点（ed3book 行距 12pt、行框 12.9pt），
-    照样认得出段首缩进。段首缩进的一行被页边旁注切成一块，排到右缘、恰好在句末断开，
-    下面回到左缘起笔的一行是同一段的续行。"""
+    """In a document with first-line indents whose line boxes are taller than the line pitch, so the boxes of
+    adjacent lines overlap a little (ed3book: 12pt pitch, 12.9pt line box), the first-line indent is still
+    recognized. An indented first line cut into a block of its own by a side note, reaching the right edge and
+    breaking exactly at a sentence end, is followed by a line back at the left edge that continues the same
+    paragraph."""
     from app.formats.pdf_blocks import TextBlock, _indents_paragraphs
     from app.formats.pdf_extract import _merge_continuations
 
@@ -6230,9 +6449,10 @@ def test_an_indented_first_line_cut_by_a_margin_note_runs_on_after_a_full_stop()
 
 
 def test_a_numbered_example_under_a_full_line_stays_on_its_own():
-    """段落首行缩进的文档里，编号起头的例句齐平排在引出它的一行下面，空得比行距多一点。
-    它自成一块，不并进上面那段，下面齐平接着写的正文也不并进它。跨页时也一样：
-    页末是例句，下一页齐平起笔的一段不接在例句后面。"""
+    """In a document with first-line indents, a numbered example sits flush below the line introducing it, with a
+    little more space than the line pitch. It forms a block of its own and is not merged into the paragraph above,
+    and the body text continuing flush below is not merged into it. The same across pages: when the page ends with
+    an example, a paragraph starting flush on the next page is not joined after it."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
     from app.formats.pdf_merge import _can_continue
@@ -6262,7 +6482,8 @@ def test_a_numbered_example_under_a_full_line_stays_on_its_own():
     )
     merged = _merge_continuations([*paragraphs, lead, example, after])
     assert [block.text[:7] for block in merged[-3:]] == ["The rel", "(21.15)", "Here th"]
-    # 正文里引用的式子折到行首，后面小写接着写，按正常行距紧贴着上一行：是同一段
+    # A formula reference in body text wrapped to the line start, continuing lowercase and sitting at normal line
+    # pitch below the previous line: the same paragraph
     cited = blk(
         "For the odd generators we put a = 2j − 1 and b = 2j and then apply the two relations. By",
         292,
@@ -6301,8 +6522,10 @@ def test_a_numbered_example_under_a_full_line_stays_on_its_own():
 
 
 def test_a_cross_page_unit_with_a_display_in_between_is_written_apart():
-    """跨页的两块中间隔着行间公式（抽字时丢掉、只剩不在块里的字）或者跳过的例句，写回时按分界切开。
-    上一块下面只有脚注和页码、下一块上面只有页眉和图注时，只是换页，排满再接。"""
+    """Two blocks across a page break separated by a display formula (dropped during text extraction, leaving only
+    glyphs outside any block) or a skipped example are cut at the boundary when writing. When only footnotes and
+    the page number lie below the previous block and only the running header and captions above the next, it is
+    just a page change: fill the page, then continue."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import Column, PageGeometry
@@ -6336,14 +6559,17 @@ def test_a_cross_page_unit_with_a_display_in_between_is_written_apart():
     assert apart([], [header], [display, page_number])
     example = blk("(24.31) IBM announced a new machine translation product yesterday.", 0, 695, 718)
     assert apart([example], [header], [], {id(example)})
-    # 版面模型把例句、公式认成图（covered）时也一样，没认出是例句的图才不算
+    # The same when the layout model recognizes examples and formulas as figures (covered); only a figure not
+    # recognized as an example does not count
     assert apart([example], [header], [], {id(example)}, {id(example)})
     assert not apart([example], [header], [], set(), {id(example)})
 
 
 def test_a_document_that_spaces_paragraphs_joins_blocks_at_the_normal_line_gap():
-    """新段齐平起笔、上面多空出一截的文档里，按正常行距紧贴着、上一行排满的下一块是同一段，
-    上一行恰好在句末断开也一样（双倍行距的稿子一段常切成几块）。空出那一截的另起一段。"""
+    """In a document where new paragraphs start flush with extra space above, a next block at normal line pitch below
+    a full line is the same paragraph, also when that line breaks exactly at a sentence end (double-spaced
+    manuscripts often cut one paragraph into several blocks). A block with the extra space above starts a new
+    paragraph."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -6374,13 +6600,15 @@ def test_a_document_that_spaces_paragraphs_joins_blocks_at_the_normal_line_gap()
 
 
 def test_a_full_line_in_a_document_that_indents_paragraphs_runs_on_below():
-    """段落首行缩进的文档里，排满一整行、恰好在句末断开的一行，下面齐平起笔的一行是同一段的续行。
-    带编号的标签、隔着一行的、自己往下悬挂缩进的（续行另成一块也算）、上一行是表格几格的，都另起。"""
+    """In a document with first-line indents, after a full line breaking exactly at a sentence end, a line starting
+    flush below continues the same paragraph. A numbered label, a line one line apart, a line with its own hanging
+    indent below (also when the continuation forms a separate block), and a line below table cells each start a
+    new paragraph."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
     def blk(text, y, rows):
-        # 一行可以是几截：[(x0, x1), ...]
+        # A row may have several pieces: [(x0, x1), ...]
         lines = [
             pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 12)
             for i, row in enumerate(rows)
@@ -6394,7 +6622,7 @@ def test_a_full_line_in_a_document_that_indents_paragraphs_runs_on_below():
     body = "Words of a paragraph run across the column and wrap onto the next line. It ends here."
     head = "The first line opens indented and the second fills the measure to the margin."
 
-    # 并段会改动上一块，每次重新排
+    # Merging changes the previous block, so the blocks are rebuilt each time
     def plan(text, y=316, rows=((72, 400),), tail=(), last=((72, 540),)):
         paragraphs = [blk(body, 100 + 48 * i, [(87, 540), (72, 540), (72, 540), (72, 300)]) for i in range(4)]
         return _merge_continuations([*paragraphs, blk(head, 292, [(87, 540), *last]), blk(text, y, list(rows)), *tail])
@@ -6407,13 +6635,15 @@ def test_a_full_line_in_a_document_that_indents_paragraphs_runs_on_below():
     merged = plan(entry + ",", rows=((72, 540),), tail=[blk("under its first line.", 328, [(90, 300)])])
     assert [block.text[:14] for block in merged[-2:]] == ["The first line", "The next entry"]
     assert len(plan("The next sentence goes on in the same paragraph.", last=([(72, 200), (300, 540)],))) == 6
-    # 只有一行、在句末收住，下面紧贴着缩进的新段：是这一段的末行，不是悬挂缩进
+    # A single line ending a sentence, with an indented new paragraph right below: it is the last line of the
+    # paragraph, not a hanging indent
     merged = plan("The paragraph ends on this line.", rows=((72, 300),), tail=[blk(body, 328, [(87, 540), (72, 300)])])
     assert len(merged) == 6 and merged[-2].text.endswith("on this line.")
 
 
 def test_theorem_labels_do_not_count_as_flush_paragraphs():
-    """定理、证明的标签本来就齐平起笔，不算段落不缩进的证据。正文一行的宽度按整行量，行内式子切开的几截并起来。"""
+    """Theorem and proof labels always start flush and are no evidence of unindented paragraphs. The width of a body
+    line is measured over the whole line, joining the pieces cut by inline formulas."""
     from app.formats.pdf_blocks import TextBlock, _indents_paragraphs
     from app.formats.pdf_extract import _body_measure
 
@@ -6447,8 +6677,8 @@ def test_theorem_labels_do_not_count_as_flush_paragraphs():
 
 
 def test_one_query_per_line_in_one_block_is_cut_into_lines():
-    """PyMuPDF 把一行一句的查询归成一块。每行都早早换行（下一行的第一个词放得下），按行拆开。
-    排满的段落照旧是一段。"""
+    """PyMuPDF groups queries of one sentence per line into one block. Every line breaks early (the first word of the
+    next line would fit), so the block is split by line. A full paragraph stays one paragraph."""
     from app.formats.pdf_extract import _cut_line_list
 
     def item(text, y, x1):
@@ -6462,7 +6692,8 @@ def test_one_query_per_line_in_one_block_is_cut_into_lines():
         item("when is caffe venezia open during the day", 389.1, 317.9),
     ]
     assert _cut_line_list([0, 1, 2, 3], queries, [item[1] for item in queries]) == [[0], [1], [2], [3]]
-    # 绕图、表格里的段落比栏窄，参差地折行，下一行的第一个词都放不进最长的那一行
+    # Paragraphs around figures or inside tables are narrower than the column and wrap raggedly; the first word of
+    # the next line never fits on the longest line
     paragraph = [
         item("Policies, processes,", 100, 240),
         item("procedures, and", 111, 225),
@@ -6470,7 +6701,7 @@ def test_one_query_per_line_in_one_block_is_cut_into_lines():
         item("organization related", 133, 236),
     ]
     assert _cut_line_list([0, 1, 2, 3], paragraph, [item[1] for item in paragraph]) == [[0, 1, 2, 3]]
-    # 绕着右边的图排的几行止于图边，下面一行排满全栏
+    # Lines around a figure on the right stop at the figure edge, and the line below fills the whole column
     around = [
         item("the first full-sentence speech synthesizer, shown partially to the right. His", 100, 475),
         item("device consisted of a bellows to simulate the lungs, a rub-", 111, 380),
@@ -6481,8 +6712,9 @@ def test_one_query_per_line_in_one_block_is_cut_into_lines():
 
 
 def test_rows_of_a_table_or_a_list_with_one_opening_are_cut_into_lines():
-    """同一行分成几条的先并成一行。各行同一处另起一列（行名和特征），或者每行同一个词起头
-    （特征模板），哪怕长短差不多，也按行拆开。"""
+    """A line split into several pieces is first joined into one line. When every line starts a new column at the
+    same x (row name and features), or every line starts with the same word (feature templates), the block is split
+    by line even if the lines have similar lengths."""
     from app.formats.pdf_extract import _cut_line_list
 
     def item(text, x0, y, x1, size=9.96):
@@ -6521,7 +6753,8 @@ def test_rows_of_a_table_or_a_list_with_one_opening_are_cut_into_lines():
 
 
 def test_cjk_wrap_merges_and_short_labels_stay():
-    """左缘对齐、上行够长的中文换行接回一段。短标签和缩进的新段不接。"""
+    """Chinese lines with aligned left edges and a long enough previous line are joined back into one paragraph. Short
+    labels and indented new paragraphs are not joined."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
     from app.formats.pdf_merge import _cross_page_units
@@ -6574,7 +6807,7 @@ def test_cjk_wrap_merges_and_short_labels_stay():
 
 
 def test_caption_label_without_colon_merges():
-    """「图 2」「Fig. 1.」后面的注记要接上。标题和表格行不接。"""
+    """The note after "图 2" or "Fig. 1." is joined. Headings and table rows are not."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_caption_fragments
 
@@ -6609,8 +6842,9 @@ def test_caption_label_without_colon_merges():
 
 
 def test_caption_fragments_merge_into_one_block():
-    """'Figure 2:' + 'Examples of decay' + 'schedules.' 三个碎片要拼回一个块：
-    各翻各的再塞回小框会换行丑陋、译文也断。标题和无冒号的块不受影响。"""
+    """The fragments 'Figure 2:' + 'Examples of decay' + 'schedules.' are joined back into one block: translated
+    separately and put back into small boxes they wrap badly and the translation is broken up. Headings and blocks
+    without a colon are not affected."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_caption_fragments
 
@@ -6635,11 +6869,11 @@ def test_caption_fragments_merge_into_one_block():
     assert merged[0].text == "Figure 2: Examples of decay schedules."
     assert len(merged[0].line_rects) == 3
 
-    # 标题 + 正文（无冒号、大写开头）不合并
+    # Heading plus body text (no colon, starting with a capital) is not merged
     b2 = [blk("Introduction", 40, 100, 130, size=12.0), blk("Scholarly works.", 40, 130, 130, size=10.0)]
     assert len(_merge_caption_fragments(b2)) == 2
 
-    # 表格行（大写开头、无冒号）不合并
+    # Table rows (starting with a capital, no colon) are not merged
     b3 = [
         blk("Always Sampling", 60, 100, 160),
         blk("Scheduled Sampling 1", 60, 112, 190),
@@ -6649,7 +6883,8 @@ def test_caption_fragments_merge_into_one_block():
 
 
 def test_heading_beside_the_first_line_is_not_absorbed():
-    """短标题只和正文第一行并排。用块的并集会把它吞进正文。"""
+    """A short heading sits beside only the first body line. Using the union of the blocks would swallow it into the
+    body text."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_visual_lines
 
@@ -6670,7 +6905,7 @@ def test_heading_beside_the_first_line_is_not_absorbed():
 
 
 def test_right_fragment_joins_the_following_line():
-    """同一行右侧的半句接回下一行，不并进左边已经结束的那句。"""
+    """A half sentence on the right of a line joins the next line, not the finished sentence on the left."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_line_tails
 
@@ -6735,7 +6970,8 @@ def test_right_fragment_joins_the_following_line():
 
 
 def test_same_line_sentence_joins_the_paragraph_and_keeps_side_labels():
-    """行尾起的下一句并进上一段。短粗体侧标和图内标签不并。续行即使被后一句挡住也先接上。"""
+    """A next sentence starting at the line end joins the previous paragraph. Short bold side labels and labels inside
+    figures do not. A continuation line is joined first even when a following sentence is in the way."""
     from app.formats.pdf_blocks import TextBlock, _with_source_bold
     from app.formats.pdf_extract import _merge_same_line_sentences
 
@@ -6827,7 +7063,7 @@ def test_same_line_sentence_joins_the_paragraph_and_keeps_side_labels():
     memo = line("Memo.", 40, 100, 72, 112, bold=True)
     memo.span_lines = [[{"text": "Memo.", "font": "CMBX9", "flags": 16}]]
     assert _with_source_bold(memo, "备忘录。") == "{b}备忘录。{/b}"
-    # 粗体名字后面跟着公式字体的星号角标，整行仍是粗体
+    # A bold name followed by an asterisk script in a formula font: the whole line is still bold
     author = line("Jimmy Lei Ba∗", 40, 120, 100, 132, bold=True)
     author.span_lines = [
         [
@@ -6839,7 +7075,7 @@ def test_same_line_sentence_joins_the_paragraph_and_keeps_side_labels():
 
 
 def _reference_same_line_merge(blocks):
-    """改成按页合并之前的写法。每并一次就从头再找。"""
+    """The implementation before merging by page. Each merge restarts the search from the beginning."""
     from app.formats.pdf_extract import _absorb_block, _continues_fragment, _sits_on_last_line
 
     out = list(blocks)
@@ -6896,7 +7132,8 @@ def _random_line_blocks(seed: int):
 
 
 def test_same_line_merge_by_page_matches_the_rescan():
-    """按页分开、并完接着找，结果和每次从头重扫一样。"""
+    """Splitting by page and continuing the search after each merge gives the same result as rescanning from the start
+    every time."""
     import copy
 
     from app.formats.pdf_blocks import TextBlock
@@ -6913,7 +7150,8 @@ def test_same_line_merge_by_page_matches_the_rescan():
         merges += len(blocks) - len(expected)
     assert merges > 300
 
-    # 中间那块先接上下一行、回到栏边，才能并进前面那段。并完要回头看前面的块。
+    # The middle block must first join the next line and return to the column edge before it can merge into the
+    # paragraph before it. After merging, the earlier blocks are checked again.
     def para(text, boxes):
         rects = [pymupdf.Rect(*box) for box in boxes]
         union = pymupdf.Rect(rects[0])
@@ -6932,7 +7170,8 @@ def test_same_line_merge_by_page_matches_the_rescan():
 
 
 def test_a_displayed_formula_does_not_swallow_the_prose_below_it():
-    """单独排的式子两边都空着，分子分母、分号各是一截，最后一截落在右边。下面回到栏边的正文另起一段。"""
+    """A displayed formula has space on both sides; numerator, denominator and semicolon are separate pieces, and the
+    last piece lands on the right. Body text below at the column edge starts a new paragraph."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _continues_fragment
 
@@ -6960,7 +7199,8 @@ def test_a_displayed_formula_does_not_swallow_the_prose_below_it():
 
 
 def test_finished_condition_line_does_not_swallow_the_next_paragraph():
-    """公式条件行以句号结束时，不把下面回到栏边的正文接进来。没写完的右半句仍接下一行。"""
+    """When a formula condition line ends with a period, the body text below at the column edge is not joined to it.
+    An unfinished right half sentence still joins the next line."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _continues_fragment, _merge_same_line_sentences
 
@@ -7019,7 +7259,7 @@ def test_finished_condition_line_does_not_swallow_the_next_paragraph():
 
 
 def test_cjk_bold_strokes_once(tmp_path):
-    """汉字粗体描边，提取出来仍是一个字。"""
+    """A Chinese character made bold by stroking is still one character after extraction."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -7051,7 +7291,9 @@ def test_cjk_bold_strokes_once(tmp_path):
 
 
 def test_shared_baseline_continuation_is_one_translation():
-    """下一行和后一段共基线时不并成外框，但仍成对送翻，不插分界，也不接左边已经结束的句子。"""
+    """When the next line shares a baseline with the following paragraph, they are not merged into one outer box but
+    are still sent for translation as a pair, without a boundary between them and without joining the finished
+    sentence on the left."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_line_tails
     from app.formats.pdf_merge import _cross_page_units
@@ -7084,7 +7326,8 @@ def test_shared_baseline_continuation_is_one_translation():
     beside = para(
         "At the end of exploration the optimizer stops.", [(444.4, 200.0, 556.0, 212.0), (316.8, 214.0, 556.0, 226.0)]
     )
-    # 另一栏会插在半句和续行中间，而且已经写到更下面。不能因此把续行丢掉。
+    # The other column comes between the half sentence and its continuation line and already reaches further down.
+    # The continuation line must not be lost because of that.
     other_column = line("ORDER BY T1.a where the distribution is hashed.", 53.8, 434.7, 280.0, 446.0)
     blocks = [heading, beside, ended, promise, example, other_column, specific, figure, requests, requested, histograms]
     merged = _merge_line_tails(blocks)
@@ -7100,7 +7343,8 @@ def test_shared_baseline_continuation_is_one_translation():
 
 
 def test_column_wrap_joins_when_geometry_misses_the_gutter():
-    """几何栏不准时，仍按正文左缘把左栏页尾接到右栏页首。图注不占这个位置。"""
+    """When the geometric columns are inaccurate, the end of the left column is still joined to the top of the right
+    column by the left edge of the body text. A caption does not take this position."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_layout import Column, PageGeometry
     from app.formats.pdf_merge import _cross_page_units
@@ -7117,7 +7361,7 @@ def test_column_wrap_joins_when_geometry_misses_the_gutter():
     later = blk("Parallelizing the optimizer is crucial.", 300, 100)
     units = _cross_page_units([filler, host, caption, tail, later], 9.0, geometries=[wide])
     assert [unit for unit in units if len(unit) == 2] == [[host, tail]]
-    # 不传几何时，同页两栏仍按原来的规则分开
+    # Without geometry, two columns on the same page are still kept apart by the original rules
     assert all(
         len(unit) == 1
         for unit in _cross_page_units(
@@ -7141,8 +7385,9 @@ def test_column_wrap_joins_when_geometry_misses_the_gutter():
 
 
 def test_a_column_continues_below_the_table_at_the_top_of_the_next_column():
-    """右栏顶上是一张表，表注在表下面。表头、行名都是短行，左栏没写完的句子接在表注下面的正文上。
-    栏顶是排满的段落时照常接上。"""
+    """The right column starts with a table with its caption below it. Header and row names are short lines, and the
+    unfinished sentence of the left column continues in the body text below the caption. When the column top is a
+    full paragraph, it is joined as usual."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_layout import Column, PageGeometry
     from app.formats.pdf_merge import _cross_page_units
@@ -7170,8 +7415,10 @@ def test_a_column_continues_below_the_table_at_the_top_of_the_next_column():
 
 
 def test_a_column_of_one_paragraph_still_continues_into_the_next_column():
-    """左栏上面是缩进排的摘要、下面只有一整段，没有两块同一左缘，这一整段也算一栏，接到右栏顶。
-    右栏顶居中排在第二位作者名下面的单位不是栏顶。页上没有一栏是两块对齐的（幻灯片），不另起栏。"""
+    """The left column has an indented abstract on top and a single paragraph below, so no two blocks share a left
+    edge; that paragraph still counts as a column and joins the top of the right column. An affiliation centered
+    below the second author name at the top of the right column is not the column top. When no column on the page
+    has two aligned blocks (slides), no column is formed."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_merge import _cross_page_units
 
@@ -7210,7 +7457,8 @@ def test_a_column_of_one_paragraph_still_continues_into_the_next_column():
 
 
 def test_column_tail_drawn_before_its_host_keeps_the_paragraph(tmp_path):
-    """内容流先画右栏时，右栏顶的续块排在左栏宿主前面。整段译文仍要写出来。"""
+    """When the content stream draws the right column first, the tail block at the top of the right column comes before
+    its host in the left column. The whole translation must still be written."""
     from app.formats.pdf import translate_pdf
 
     doc = pymupdf.open()
@@ -7251,7 +7499,8 @@ def test_column_tail_drawn_before_its_host_keeps_the_paragraph(tmp_path):
 
 
 def test_rotated_pages_lay_out_like_unrotated_ones(tmp_path):
-    """旋转 90 度的页面，跨页段落的译文排法和不旋转时一样：不提前停笔，字号不缩。"""
+    """On a page rotated by 90 degrees, a paragraph carried over to the next page is laid out as on an unrotated page:
+    writing does not stop early and the font size does not shrink."""
     from app.formats.pdf import translate_pdf
 
     words = (
@@ -7294,7 +7543,8 @@ def test_rotated_pages_lay_out_like_unrotated_ones(tmp_path):
 
 
 def test_page_end_does_not_take_a_block_already_paired_to_the_next_column():
-    """下一页左栏的块已经接到右栏顶时，上一页页末不能再把它拿走。否则右栏那块不在任何单元里。"""
+    """When a left-column block on the next page is already joined to the top of the right column, the end of the
+    previous page must not take it as well. Otherwise the right-column block would be in no unit."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_layout import Column, PageGeometry
     from app.formats.pdf_merge import _cross_page_units
@@ -7316,7 +7566,7 @@ def test_page_end_does_not_take_a_block_already_paired_to_the_next_column():
 
 
 def test_capital_continuation_joins_across_columns_only():
-    """换栏可以接在专有名词上。同一栏的大写换行仍分开。"""
+    """A column change may continue with a proper noun. A capitalized line break within the same column still splits."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
     from app.formats.pdf_layout import Column, PageGeometry
@@ -7333,7 +7583,8 @@ def test_capital_continuation_joins_across_columns_only():
     tail2 = blk("The exchange avoids another platform.", 40, 80, page=1)
     units = _cross_page_units([host2, host, tail, tail2], 9.0, geometries=[wide, wide])
     assert [unit for unit in units if len(unit) == 2] == [[host, tail]]
-    # 行尾断词（fine-）后半截只会是小写，换栏碰上大写起头的是表头或标题。
+    # The second half of a word hyphenated at the line end (fine-) is always lowercase; a capitalized start after a
+    # column change is a table header or heading.
     broken = blk("score. Without TriviaQA fine-", 300, 700)
     units = _cross_page_units([host2, broken, tail, tail2], 9.0, geometries=[wide, wide])
     assert all(len(unit) == 1 for unit in units)
@@ -7347,7 +7598,8 @@ def test_capital_continuation_joins_across_columns_only():
     )
     assert len(same_column) == 2
 
-    # 另一栏没形成左缘时，页末左栏也不能把下一页大写开头的新段接进来。
+    # When the other column has no left edge, the left column at the page end must not take in a new paragraph
+    # starting with a capital on the next page either.
     def edge(text, x0, y, page, x1=280.0):
         rect = pymupdf.Rect(x0, y, x1, y + 12)
         return TextBlock(page=page, rect=rect, line_rects=[rect], text=text, size=9, color="#000", bold=False)
@@ -7373,8 +7625,9 @@ def test_capital_continuation_joins_across_columns_only():
 
 
 def test_same_page_continuations_merge():
-    """被公式碎行拆断的段落（'…(like a' | 'sequence)…' | 'that belong…'）要并回
-    一个块：各翻各的会产出半截译文、在断点强制换行。标题、表格行不受影响。"""
+    """A paragraph broken up by formula fragment lines ('…(like a' | 'sequence)…' | 'that belong…') is merged back
+    into one block: translated separately the pieces give half translations with forced line breaks at the cuts.
+    Headings and table rows are not affected."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -7401,14 +7654,15 @@ def test_same_page_continuations_merge():
     assert merged[0].text.endswith("fixed known dictionary.")
     assert merged[1].text == "2.1 Model"
 
-    # 上行有句末标点 → 不并
+    # The previous line has sentence-final punctuation, so no merge
     b2 = [
         blk("This is a full sentence with several words.", 100),
         blk("another paragraph starts here with lowercase", 112),
     ]
     assert len(_merge_continuations(b2)) == 2
 
-    # 悬挂缩进大约 2.5em。2em 卡太紧时，特征列表的续行拆成两段并单独缩小。
+    # The hanging indent is about 2.5em. With a 2em limit, which is too tight, continuation lines of a feature list
+    # split into two paragraphs that shrink separately.
     hanging = [
         blk("Modularity. Using a highly extensible abstraction meta-", 100, x0=40),
         blk("data and system description stay together.", 112, x0=62),
@@ -7422,7 +7676,8 @@ def test_same_page_continuations_merge():
 
 
 def test_line_end_colon_inside_a_sentence_merges():
-    """行尾冒号上下两行都撑满是句中换行，要并成一段；下一行是短的例句、表头就不并。"""
+    """A colon at the line end with full lines above and below is a line break inside a sentence and is merged into one
+    paragraph; when the next line is a short example or a table header, it is not merged."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -7448,7 +7703,8 @@ def test_line_end_colon_inside_a_sentence_merges():
 
 
 def test_slide_sub_item_is_not_a_title_fragment():
-    """幻灯片上一级列表项后面的下一级项字号大、左缘也不同，不是标题的第二行。"""
+    """On a slide, a second-level item after a first-level list item has a larger font size and a different left edge,
+    and is not the second line of a heading."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -7467,7 +7723,8 @@ def test_slide_sub_item_is_not_a_title_fragment():
 
 
 def test_smaller_body_under_a_heading_splits():
-    """12pt 标题和 9pt 导语常在同一 dict 块。导语左缘只让出节号，不能当成缩进留在标题里。"""
+    """A 12pt heading and a 9pt lead paragraph are often in the same dict block. The left edge of the lead only makes
+    room for the section number and must not be taken as an indent that keeps it in the heading."""
     from app.formats.pdf_extract import _split_lines
 
     items = [
@@ -7477,7 +7734,8 @@ def test_smaller_body_under_a_heading_splits():
         _line("We then show how the process can be conducted in parallel.", 317, 556, 700, size=9),
     ]
     assert _split_lines(items) == [[0, 1], [2, 3]]
-    # 角标短行字数不够，即使更小也不拆。纯数字行本来就会按符号行拆开，这里用序数后缀。
+    # A short script line has too few characters and is not split even though it is smaller. A digits-only line is
+    # split as a symbol line anyway, so an ordinal suffix is used here.
     script = [
         _line("the i", 40, 80, 10, size=12),
         _line("th", 82, 94, 6, size=7),
@@ -7486,8 +7744,10 @@ def test_smaller_body_under_a_heading_splits():
 
 
 def test_affiliation_under_an_author_name_splits():
-    """题名页上作者名下面小一号的单位自成一行，只有两个词也单独成段。
-    行首星号比后面的字大一号时，按多数字的字号比，下一行的同字号续行不拆。"""
+    """On a title page, an affiliation one size smaller below an author name forms a line of its own and becomes a
+    separate paragraph even with only two words. When an asterisk at the line start is one size larger than the
+    text after it, the comparison uses the size of the majority of characters, and a continuation line of the same
+    size on the next line is not split."""
     from app.formats.pdf_extract import _split_lines
 
     author = [
@@ -7509,7 +7769,8 @@ def test_affiliation_under_an_author_name_splits():
 
 
 def test_heading_does_not_turn_the_following_sentence_into_a_formula():
-    """就算标题和导语还在一块里，9pt 正文也不能因为小于 12pt 就被裁成公式图。"""
+    """Even when the heading and the lead paragraph are still in one block, 9pt body text must not be cropped as a
+    formula image for being smaller than 12pt."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text: str, size: float, x0: float, y0: float, font: str) -> dict[str, object]:
@@ -7535,8 +7796,9 @@ def test_heading_does_not_turn_the_following_sentence_into_a_formula():
 
 
 def test_section_number_stays_with_heading():
-    """'2.2' + 'Training' 两条 dict 行不能拆：纯数字被当符号行拆开后，数字被过滤
-    不遮罩（原文残留）、标题单独翻，两者基线对不齐。"""
+    """The dict lines '2.2' + 'Training' must not be split: once the digits-only line is split off as a symbol line,
+    the number is filtered out and not masked (the original stays visible), the heading is translated alone, and
+    the baselines of the two do not line up."""
     from app.formats.pdf_extract import _split_lines
 
     items = [
@@ -7544,7 +7806,8 @@ def test_section_number_stays_with_heading():
         ("Training", pymupdf.Rect(130, 84, 167, 94), [{"text": "Training", "size": 10.0}], None),
     ]
     assert _split_lines(items) == [[0, 1]]
-    # 页码和正文不在同一可视行（纵向不重叠），照常拆
+    # The page number and body text are not on the same visual line (no vertical overlap), so they are split as
+    # usual
     items2 = [
         ("3", pymupdf.Rect(300, 760, 308, 770), [{"text": "3", "size": 10.0}], None),
         (
@@ -7558,7 +7821,9 @@ def test_section_number_stays_with_heading():
 
 
 def test_a_chapter_number_across_a_rule_is_not_joined_to_the_title():
-    """章首的两位数章号和标题挨得近，按词距会连成一句，整行重写时压过中间的竖线。隔着竖线就拆开。"""
+    """A two-digit chapter number at the chapter start sits close to the heading, so word spacing would join them into
+    one sentence and rewriting the line would cover the vertical bar between them. A vertical bar between them
+    splits them."""
     from app.formats.pdf_extract import _cut_at_posts, _split_lines
 
     items = [
@@ -7573,42 +7838,45 @@ def test_a_chapter_number_across_a_rule_is_not_joined_to_the_title():
     post = pymupdf.Rect(161.2, 110.8, 162.4, 200.8)
     groups = [part for group in _split_lines(items) for part in _cut_at_posts(group, items, [post])]
     assert groups == [[0], [1]]
-    # 竖线不在两截之间（表格外框），照常相连
+    # The vertical bar is not between the two pieces (a table border), so they are joined as usual
     assert _cut_at_posts([0, 1], items, [pymupdf.Rect(90, 110, 91, 200)]) == [[0, 1]]
 
 
 def test_heading_number_kept_in_source_form():
-    """标题章节号保留原文形式：模型按提示词译成中文数字（'第二章第一节'），
-    学术论文里要回 '2.1'。段落里以数字开头的句子不受影响。"""
+    """Heading section numbers keep their original form: the model follows the prompt and writes Chinese numerals
+    ("第二章第一节"), which academic papers need back as '2.1'. Sentences in paragraphs that start with a number are
+    not affected."""
     from app.formats.pdf_restore import _normalize_heading_number as norm
 
     assert norm("2 Proposed Approach", "第二章 所提方法") == "2 所提方法"
     assert norm("2.1 Model", "第二章第一节 模型") == "2.1 模型"
     assert norm("4.3 Speech Recognition", "第四章第三节 语音识别") == "4.3 语音识别"
-    assert norm("2.1 Model", "2.1 模型") == "2.1 模型"  # 幂等
-    # 长段落以数字开头：不动
+    assert norm("2.1 Model", "2.1 模型") == "2.1 模型"  # Idempotent
+    # A long paragraph starting with a number: unchanged
     para = "40 dimensional log Mel filter banks and their first and second order derivatives were used"
     assert norm(para, "使用了 40 维对数 Mel 滤波器组") == "使用了 40 维对数 Mel 滤波器组"
-    # 有句末标点的短句：不动
+    # A short sentence with sentence-final punctuation: unchanged
     assert norm("3 states remain.", "还剩 3 个状态。") == "还剩 3 个状态。"
-    # 译文没有章节号时不加前缀；跳过块原文必须原样返回
+    # No prefix when the translation has no section number; for a skipped block the original must come back
+    # unchanged
     assert norm("10 epochs were used", "使用了 10 个轮次") == "使用了 10 个轮次"
     assert norm("2.5 hours later", "两个半小时后") == "两个半小时后"
     assert norm("2. Smith 2019", "2. Smith 2019") == "2. Smith 2019"
     assert norm("2 Smith 2019", "2. Smith 2019") == "2 Smith 2019"
-    # 原文编号带点的，点也留着
+    # When the original number has a trailing period, the period stays
     assert norm("1. Exploited the sortedness of join input", "1. 利用了连接输入的有序性") == "1. 利用了连接输入的有序性"
 
 
 def test_section_and_item_numbers_are_not_sent_for_translation():
-    """节号、条目号摘下来不送翻，写回时原样接回去。正文句首的数不摘。"""
+    """Section and item numbers are taken off before translation and put back unchanged when writing. A number at the
+    start of a body sentence is not taken off."""
     from app.formats.pdf_restore import _with_label
     from app.formats.pdf_units import _peel_number
 
     assert _peel_number("B.3.2. DeepSeek-R1 Cold Start", "p") == ("B.3.2.", "DeepSeek-R1 Cold Start")
     assert _peel_number("4 Experiments", "h2") == ("4", "Experiments")
     assert _peel_number("{b}3{/b} {b}Method{/b}", "h2") == ("{b}3{/b}", "{b}Method{/b}")
-    # 粗体从编号延续到文字：编号关上，文字重开
+    # Bold runs from the number into the text: it is closed on the number and reopened on the text
     assert _peel_number("{b}17.2.1 The Encoder{/b} ENCODEC {b}model{/b}", "h3") == (
         "{b}17.2.1{/b}",
         "{b}The Encoder{/b} ENCODEC {b}model{/b}",
@@ -7627,8 +7895,10 @@ def test_section_and_item_numbers_are_not_sent_for_translation():
 
 
 def test_a_bitmap_glyph_without_its_own_box_is_kept_by_its_extent():
-    """点阵字不报自己的框（宽为 0），只有整套字体的上下界，算出的中心离墨迹半行。
-    横向看起笔点、纵向看上下界和保留框交叠，上标仍留下；起笔点在框外的照旧删掉。"""
+    """Bitmap glyphs report no box of their own (width 0), only the vertical bounds of the whole font, so the computed
+    center is half a line away from the ink. Horizontally the origin is checked and vertically the overlap of the
+    bounds with the keep box, so superscripts still stay; a glyph whose origin is outside the box is deleted as
+    before."""
     from types import SimpleNamespace as NS
 
     from app.formats.pdf_place import _GlyphKeeper
@@ -7640,13 +7910,13 @@ def test_a_bitmap_glyph_without_its_own_box_is_kept_by_its_extent():
     assert keeper.text_filter(None, None, 0, trm, ctm, font_box) == 0
     beside = NS(a=0.1, b=0.0, c=0.0, d=-0.1, e=495.3, f=249.8)
     assert keeper.text_filter(None, None, 0, beside, ctm, font_box) == 1
-    # 报了自己的框的字仍按中心算
+    # Glyphs that report their own box are still judged by their center
     own_box = NS(x0=0.0, y0=-65.0, x1=60.0, y1=126.0)
     assert keeper.text_filter(None, None, 0, trm, ctm, own_box) == 1
 
 
 def test_stray_braces_around_marks_are_dropped():
-    """模型在标记外面多套的花括号去掉。原文本来有花括号（集合 {k=1}）的不动。"""
+    """Extra braces the model puts around marks are removed. Braces present in the original (the set {k=1}) stay."""
     from app.formats.pdf_restore import _drop_stray_braces
 
     sent = "called a {b}fragment{/b}. {c0000ff}Fox Tree{/c} showed {v1}"
@@ -7660,11 +7930,11 @@ def test_heading_number_skips_body_blocks():
 
     assert _heading_number_for("p", "2 samples", "第二章 样本") == "第二章 样本"
     assert _heading_number_for("h2", "2 Proposed Approach", "第二章 所提方法") == "2 所提方法"
-    # 与正文同字号的节标题（kind 是 p）：带点节号照样改回
+    # A section heading at body size (kind is p): a dotted section number is changed back as well
     assert _heading_number_for("p", "2.1 Model", "第二章第一节 模型") == "2.1 模型"
-    # 正文尺寸的标题但译文没有章节号：不加前缀
+    # A heading at body size whose translation has no section number: no prefix
     assert _heading_number_for("p", "2.1 Model", "模型") == "模型"
-    # 模型写成"第二节"（没有"章"）也改回
+    # Also changed back when the model writes "第二节" (without "章")
     assert _heading_number_for("h2", "2 Proposed Approach", "第二节 所提方法") == "2 所提方法"
     assert (
         _heading_number_for("h2", "2.1 Massively Parallel Processing", "第二点一节 大规模并行处理")
@@ -7678,7 +7948,7 @@ def test_heading_number_skips_body_blocks():
     assert _heading_number_for("h2", "2.2 SQL on Hadoop", "第2.2节 Hadoop 上的 SQL") == "2.2 Hadoop 上的 SQL"
     assert _heading_number_for("h2", "1.3 Related Work", "一.三. 相关工作") == "1.3 相关工作"
     assert _heading_number_for("h2", "2.5 Composite Lattices", "二．五 复合格") == "2.5 复合格"
-    # 三级节号，各级之间可能空一格
+    # Three-level section numbers, possibly with a space between levels
     assert (
         _heading_number_for("h2", "3.1.3 Dealing with scale", "第三章第一节第三小节 处理规模问题")
         == "3.1.3 处理规模问题"
@@ -7690,7 +7960,8 @@ def test_heading_number_skips_body_blocks():
 
 
 def test_punct_fragment_uses_line_end_not_union():
-    """公式碎片落在整块并集内、但离上一行行尾超过 2pt 时不能捐出去遮罩。"""
+    """A formula fragment inside the block union but more than 2pt from the end of the previous line must not be
+    donated for masking."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _donate_punct_rects
 
@@ -7708,7 +7979,8 @@ def test_punct_fragment_uses_line_end_not_union():
     far = pymupdf.Rect(210, 96, 240, 108)
     _donate_punct_rects(prev, [far])
     assert len(prev.line_rects) == 2
-    # 隔壁栏图上和这一行同高的刻度数字在行尾左边很远，也不是这一行的
+    # A tick number on a figure in the neighboring column, at the height of this line but far left of its end, does
+    # not belong to this line either
     tick = pymupdf.Rect(20, 96, 28, 106)
     _donate_punct_rects(prev, [tick])
     assert len(prev.line_rects) == 2
@@ -7738,7 +8010,7 @@ def test_cross_page_does_not_merge_numbered_heading():
         blk("3.1 Encoder layers follow", 1, y=80),
     ]
     assert all(len(u) == 1 for u in _cross_page_units(blocks, 10.0))
-    # 小写续段仍然合并
+    # A lowercase continuation paragraph is still merged
     cont = [
         blk("performs quite", 0, y=700),
         blk("well on this split.", 1, y=60),
@@ -7760,7 +8032,8 @@ def test_split_translation_does_not_break_sentinel():
 
 
 def test_cross_page_paragraph_continues_on_the_next_page(tmp_path):
-    """跨页译文按满行排。这一页排满就接到下一页，行不画出页边，脚注留在原处。"""
+    """A translation carried over to the next page is set in full lines. Once this page is full it continues on the
+    next page, lines are not drawn past the page margin, and footnotes stay in place."""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -7838,7 +8111,8 @@ def test_cross_page_paragraph_continues_on_the_next_page(tmp_path):
 
 
 def test_split_filled_lines_keeps_breaks_when_the_page_has_room():
-    """这一页放得下时返回已经断好的行。返回原文会让调用方按一行去缩字号。"""
+    """When the text fits on this page, the lines already broken are returned. Returning the original text would make
+    the caller shrink the font size to fit one line."""
     from app.formats.pdf_write import _split_filled_lines
 
     text = "在实验研究中我们首先比较旧优化器与新优化器的计划质量并说明新优化器的收益"
@@ -7848,7 +8122,9 @@ def test_split_filled_lines_keeps_breaks_when_the_page_has_room():
 
 
 def test_split_filled_lines_fills_the_last_lines_of_the_page():
-    """页底剩原文一两行的高度。译文按原行距放不下，压紧行距、末行的行距伸出去，仍留在本页。"""
+    """The page bottom has room for one or two original lines. The translation does not fit at the original line
+    spacing, so the spacing tightens and the line spacing of the last line extends past the box, keeping the text
+    on this page."""
     from app.formats.pdf_write import _filled_bottom, _split_filled_lines
 
     text = "人工智能领域的一项名为发展的研究计划的成员，并发表了一篇论文。" * 3
@@ -7861,7 +8137,8 @@ def test_split_filled_lines_fills_the_last_lines_of_the_page():
     bottom = _filled_bottom(700, 1, 8.8, True, 712, 792)
     assert bottom - 700 >= 8.8 * 1.45 + 8.8 * 0.3 - 0.1
     assert bottom <= 712 + 0.45 * 8.8 + 0.01
-    # 写入框裁在原文正文下沿，limit 就是这条线时，末行的行距伸不出去：少留一行，不让整段缩小
+    # When the writing box is clipped at the bottom of the original body text and limit is that line, the line
+    # spacing of the last line cannot extend: one line fewer stays here and the paragraph is not shrunk
     text = "上界不匹配，因此必须强制执行谓词，这可以简化为一个等值谓词。" * 8
     roomy, _ = _split_filled_lines(text, [], em=7.92, block_size=9, width=240, cjk=True, y0=664.1, limit=722.5)
     capped, _ = _split_filled_lines(
@@ -7880,7 +8157,8 @@ def test_split_filled_lines_fills_the_last_lines_of_the_page():
 
 
 def test_split_filled_lines_keeps_the_line_gap_when_the_continuation_has_room():
-    """页底按正常行距放一行、压紧放两行。续块写得下余下的行时本页不压行距，写不下才压。"""
+    """The page bottom holds one line at normal line spacing or two when tightened. When the tail block can hold the
+    remaining lines this page does not tighten; it tightens only when they do not fit."""
     from app.formats.pdf_write import _split_filled_lines
 
     text = "人工智能领域的一项名为发展的研究计划的成员，并发表了一篇论文。" * 3
@@ -7891,7 +8169,7 @@ def test_split_filled_lines_keeps_the_line_gap_when_the_continuation_has_room():
     assert roomy and "\n" not in roomy and rest
     short, _ = _split_filled_lines(text, [], **args, next_room=12)
     assert short == tight
-    # 压紧以后整段放得下，续块有地方时也接过去
+    # When the whole paragraph fits after tightening, it still carries over if the tail block has room
     two = "人工智能领域的一项名为发展的研究计划的成员，并发表了一篇论文。" * 2
     whole, rest = _split_filled_lines(two, [], **args)
     assert whole.count("\n") == 1 and rest == ""
@@ -7918,7 +8196,8 @@ def test_hyphen_bridge_keeps_the_page_boundary():
 
 
 def test_fitted_cross_page_paragraph_keeps_body_size(tmp_path):
-    """跨页译文这一页放得下时保持原字号，不再整段挤进一行高的框里。"""
+    """A translation carried over to the next page keeps the original font size when it fits on this page and is no
+    longer squeezed into a box one line high."""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -7972,8 +8251,9 @@ def test_fitted_cross_page_paragraph_keeps_body_size(tmp_path):
 
 
 def test_a_cross_page_paragraph_borrows_on_the_next_page(tmp_path):
-    """跨页段落的续块下面紧挨着一段，那一段还空着：本页照正常行距少放一行，多出来的写到下一页，
-    续块伸进下面那一段，那一段跟着往下挪"""
+    """The tail block of a paragraph carried over to the next page has a paragraph right below it with spare room:
+    this page holds one line fewer at normal line spacing, the extra goes to the next page, and the tail block
+    extends into the paragraph below, which moves down"""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -8038,7 +8318,9 @@ def test_a_cross_page_paragraph_borrows_on_the_next_page(tmp_path):
 
 
 def test_carried_lines_keep_the_host_size(tmp_path):
-    """续页的块抽出来字号稍大。接过去的行按上一块的字号断好，也按它写：按续块的字号写，行末会单挤出一个字，放不下又缩字号。"""
+    """The block on the continuation page is extracted with a slightly larger font size. Lines carried over are broken
+    at the size of the previous block and written at that size too: written at the size of the tail block, one
+    character would be pushed out at the line end, and the text would not fit and shrink."""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -8087,7 +8369,8 @@ def test_carried_lines_keep_the_host_size(tmp_path):
 
 
 def test_narrow_fragment_is_written_at_the_continuation_width(tmp_path):
-    """行尾半句不按自己的窄框排。译文写到续页，字号保持正文。"""
+    """A half sentence at the line end is not laid out in its own narrow box. The translation continues on the
+    continuation page at the body font size."""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -8138,7 +8421,8 @@ def test_narrow_fragment_is_written_at_the_continuation_width(tmp_path):
 
 
 def test_shared_baseline_continuation_stays_in_its_lines(tmp_path):
-    """共基线的续行只写在自己的两行里，不盖住右边的下一段，字号保持正文。"""
+    """A continuation line sharing a baseline is written only in its own two lines, without covering the next paragraph
+    on the right, at the body font size."""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -8244,7 +8528,7 @@ def test_boundary_echo_keeps_repeated_cells_and_short_phrases():
     prev = "前文结束序列），而目标输出"
     cur = "序列），而目标输出才是下一段"
     assert _strip_boundary_echo("alpha beta", "gamma delta", prev, cur) == "才是下一段"
-    # 标题后另起一段，开头就是标题里的词
+    # A new paragraph after a heading that starts with words from the heading
     head_src, para_src = (
         "4.7.2 Applying softmax in logistic regression",
         "When we apply softmax for logistic regression",
@@ -8274,7 +8558,8 @@ def test_preview_override_replaces_shared_translation():
 
 
 def test_split_translation_balances_style_marks():
-    """跨页切分时样式标记要配对：左半补闭、右半补开，且重开的是仍开着的字号。"""
+    """Style marks stay paired when text is split across pages: the left half gets the closing marks, the right half
+    the opening ones, and the font size reopened is the one still open."""
     from app.formats.pdf_flow import strip_style_marks
     from app.formats.pdf_restore import _split_translation
 
@@ -8301,7 +8586,8 @@ def test_split_translation_balances_style_marks():
 
 
 def test_save_after_redact_keeps_resources_indirect(tmp_path):
-    """redact 把 /Resources 改成内联字典。写回前必须改成间接引用，否则大字典在 garbage 保存时会被写坏。"""
+    """redact turns /Resources into an inline dictionary. Before writing it must become an indirect reference again,
+    otherwise a large dictionary gets corrupted when saving with garbage collection."""
     import pymupdf as pm
 
     from app.formats.pdf_blocks import TextBlock
@@ -8343,7 +8629,8 @@ def test_save_after_redact_keeps_resources_indirect(tmp_path):
 
 
 def test_wrapped_formula_tail_stays_one_placeholder_without_a_wide_box():
-    """跨可视行折行的公式收成一个占位符的两片。不并 bbox，否则裁进两行之间的整栏空白。"""
+    """A formula wrapped across visual lines becomes two pieces of one placeholder. The bboxes are not merged,
+    otherwise the crop would include the full-width blank space between the two lines."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, y0, x1=None, y1=None):
@@ -8381,7 +8668,8 @@ def test_wrapped_formula_tail_stays_one_placeholder_without_a_wide_box():
 
 
 def test_justify_extras_skip_punctuation_and_short_lines():
-    """两端对齐摊在字与字之间，标点前面不拉开。余量太小或缝太少时不拉。"""
+    """Justification spreads the slack between characters and does not open space before punctuation. With too little
+    slack or too few gaps the line is not stretched."""
     from app.formats.pdf_align import justify_extras
 
     text = "我们在此提出一种，采样机制已经写完"
@@ -8399,7 +8687,8 @@ def test_justify_extras_skip_punctuation_and_short_lines():
 
 
 def test_a_loose_mixed_line_stretches_word_spaces_before_the_chinese():
-    """中英混排的行余量大时，先拉开词间空格，汉字之间只稍微拉开，不拉成「常 识 推 理」。"""
+    """On a line mixing Chinese and English with a lot of slack, word spaces stretch first and Chinese characters only
+    a little, so the result is not "常 识 推 理"."""
     from app.formats.pdf_align import justify_extras
 
     text = "常识推理(0-shot): Hellaswag [28], Winogrande [21], PIQA [4],"
@@ -8407,25 +8696,27 @@ def test_a_loose_mixed_line_stretches_word_spaces_before_the_chinese():
     inside = extras[text.index("识")]
     space = extras[text.index(" ")]
     assert 0 < inside <= 1.0 + 1e-9
-    # 一处空格前后两个缝合起来算，最多再拉开四分之一个字。余下的留在行尾
+    # The two gaps before and after a space count together and stretch by at most another quarter em. The rest
+    # stays at the line end
     space += extras[text.index(" ") - 1]
     assert space > inside * 2 and space <= 2.5 + 1e-9
     assert sum(extras) < 60.0
-    # 没有空格的中文行照旧平均摊
+    # A Chinese line without spaces is still spread evenly
     plain = "我们在此提出一种采样机制已经写完了"
     extras = justify_extras(plain, 16.0, 10.0)
     assert len({round(extra, 6) for extra in extras}) == 1
 
 
 def test_snake_case_identifiers_are_one_word():
-    """l_partkey 这样的标识符是一个词：不从下划线处折行，两端对齐也不在下划线两边拉开。"""
+    """An identifier such as l_partkey is one word: it does not wrap at the underscore, and justification does not open
+    space around the underscore."""
     from app.formats.pdf_align import can_stretch
     from app.formats.pdf_flow import tokenize
 
     assert tokenize("{l_partkey, o_custkey}") == ["{", "l_partkey", ",", " ", "o_custkey", "}"]
     assert not can_stretch("l", "_") and not can_stretch("_", "p")
     assert can_stretch(",", "中") and can_stretch(",", " ")
-    # 网址、邮箱连着写，@ . / 两边也不拉开，也不从中间折行
+    # URLs and emails are written as one piece, with no space opened around @ . / and no wrapping inside them
     email = "jimmy@psi.utoronto.ca"
     assert not any(can_stretch(a, b) for a, b in zip(email, email[1:]))
     assert tokenize("多伦多大学 jimmy@psi.utoronto.ca 获取")[6] == email
@@ -8437,7 +8728,8 @@ def test_snake_case_identifiers_are_one_word():
 
 
 def test_a_centered_title_breaks_after_a_clause_mark():
-    """居中的副标题放不下一行时在逗号后面断开，不留“识别”两个字单独一行；一行放得下就不断。"""
+    """A centered subtitle that does not fit on one line breaks after a comma, so "识别" is not left alone on a line;
+    when it fits on one line it is not broken."""
     from app.formats.pdf_place import _clause_lines
     from app.formats.pdf_typeset import typeset_lines
 
@@ -8449,7 +8741,7 @@ def test_a_centered_title_breaks_after_a_clause_mark():
 
     assert broken(230.0) == ["借助语言模型介绍自然语言处理,", "计算语言学和语音识别"]
     assert broken(260.0) == [text]
-    # 整段粗体的作者名单在逗号后面断开，后一行仍是粗体
+    # An author list that is bold throughout breaks after a comma, and the second line is still bold
     names = "{b}Pierre Stock, Teven Le Scao, Thibaut Lavril, Thomas Wang, Timothée Lacroix, William El Sayed{/b}"
     lines = _clause_lines(names, [], 10.0, 10.0, 300.0, typeset_lines(names, 10.0, 300.0, {}))
     texts = ["".join(piece.text for piece in line.pieces) for line in lines]
@@ -8457,14 +8749,15 @@ def test_a_centered_title_breaks_after_a_clause_mark():
 
 
 def test_an_opening_bracket_does_not_end_a_line():
-    """左括号不留在行尾，跟下一个词一起折到下一行（“{” 单独挂在行尾、“o_custkey}” 在下一行）。"""
+    """An opening bracket does not stay at the line end and wraps to the next line with the following word (instead of
+    "{" hanging alone at the line end and "o_custkey}" on the next line)."""
     from app.formats.pdf_flow import break_lines
 
     lines = break_lines("视图范围: {l_partkey}, {o_custkey}", 10.0, 64.0, {})
     assert len(lines) > 1
     assert all(not line.rstrip().endswith(("{", "(", "[", "（")) for line in lines), lines
     assert "".join(lines).replace(" ", "") == "视图范围:{l_partkey},{o_custkey}"
-    # 左引号同样跟着下一个词走，右引号不起行
+    # An opening quote also goes with the following word, and a closing quote does not start a line
     quoted = break_lines(
         "这里, Victoria 有多种不同的指称方式: “Victoria Chen”“Megabucks Banking 的首席财务官”", 9.5, 300.0, {}
     )
@@ -8487,7 +8780,8 @@ def test_garbled_figure_label_is_recognized():
 
 
 def test_right_fragment_stays_on_its_own_line():
-    """侧标让出的第一行仍从这一行起写，左缘用这一行自己的，不整段下移。"""
+    """The first line that makes room for a side label is still written from that line, using its own left edge, and
+    the paragraph does not move down."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _flow_y0, _inset_write_boxes
 
@@ -8520,7 +8814,8 @@ def test_right_fragment_stays_on_its_own_line():
     )
     assert _flow_y0(indented, False) == 40
     assert _inset_write_boxes(indented, False) is None
-    # 同一基线上的碎片不是下一行。续行从真正的下一行起，不压回第一行。
+    # Fragments on the same baseline are not the next line. Continuation lines start at the real next line and are
+    # not pushed back onto the first line.
     fragments = [
         pymupdf.Rect(127.9, 595.2, 134.1, 604.2),
         pymupdf.Rect(141.4, 595.2, 198.1, 604.2),
@@ -8580,7 +8875,8 @@ def test_affiliation_tails_split_and_stack():
 
 
 def test_write_helpers_only_need_the_blocks_on_their_page():
-    """写入只传同页的块。各个版面判断拿整本书的块和只拿本页的块，结果一样。"""
+    """Writing passes only the blocks of the same page. Each layout check gives the same result with the blocks of the
+    whole book as with the blocks of this page only."""
     import random
 
     from app.formats.pdf_blocks import TextBlock
@@ -8632,7 +8928,8 @@ def test_write_helpers_only_need_the_blocks_on_their_page():
             union |= rect
         return TextBlock(page=pno, rect=union, line_rects=rects, text=text, size=10, color="#000", bold=bold)
 
-    # 每页同一位置放并排单位、侧标和它旁边的正文。判断漏了同页条件时，别页的块会混进来。
+    # Each page has side-by-side affiliations, a side label and the body text beside it at the same position. A
+    # check missing the same-page condition would mix in blocks from other pages.
     for pno in range(3):
         blocks += [
             fixed(pno, "∗University of Somewhere", [(60, 40, 180, 50)]),
@@ -8667,7 +8964,8 @@ def test_write_helpers_only_need_the_blocks_on_their_page():
 
 
 def test_side_label_stays_beside_the_first_line(tmp_path):
-    """短标题留在正文第一行左边。正文从标题右侧起写，下一行再回到栏左缘。"""
+    """A short heading stays left of the first body line. The body text starts right of the heading, and the next line
+    returns to the left edge of the column."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -8711,7 +9009,8 @@ def test_side_label_stays_beside_the_first_line(tmp_path):
     heading_right = max(item[2] for item in heading_chars)
     body_left = min(item[1] for item in first_body)
     assert heading_right <= 188
-    # 英文正文从 190 起。中文标签更短，第一行要补上让出来的空白，并且不压到标签。
+    # The English body text starts at 190. The Chinese label is shorter, so the first line fills the space freed and
+    # does not overlap the label.
     assert body_left >= heading_right - 0.6
     assert body_left < 170
     assert abs(first_body[0][3] - heading_chars[0][3]) < 4
@@ -8721,8 +9020,9 @@ def test_side_label_stays_beside_the_first_line(tmp_path):
 
 
 def test_inset_rest_reflows_at_the_column_width():
-    """侧标让出的第一行按窄宽断完后，剩下的不带换行，写入时按续行的框重排。
-    预先断好的换行会在续行让开图时留下半截短行。"""
+    """After the first line making room for a side label is broken at the narrow width, the rest carries no line
+    breaks and is laid out again in the boxes of the continuation lines when writing. Line breaks fixed in advance
+    would leave short half lines where the continuation lines make room for a figure."""
     from app.formats.pdf_write import _split_own_lines
 
     text = "Orca 包含一个可扩展框架, 用于基于形式化的属性规范描述查询需求和计划特征。属性有不同类型, 包括逻辑属性。"
@@ -8731,7 +9031,8 @@ def test_inset_rest_reflows_at_the_column_width():
     assert "框架用于" not in head + rest
     glued = (head + rest.replace("\n", "")).replace(" ", "")
     assert glued == text.replace(" ", "")
-    # 斜体跨过第一行：第一行末尾补了收尾标记，剩下的只接着写后半，斜体在开头重开
+    # Italic spans the end of the first line: the first line gets a closing mark at its end, the rest continues
+    # with the second half, and the italic reopens at its start
     styled = "前面普通{i}斜体跨过第一行的末尾一直延续到下一行{/i}后面普通"
     head, rest = _split_own_lines(styled, [], 10.0, 10.0, 80.0)
     assert head == "前面普通{i}斜体跨过{/i}"
@@ -8739,7 +9040,8 @@ def test_inset_rest_reflows_at_the_column_width():
 
 
 def test_a_word_too_wide_for_the_shared_line_moves_whole_to_the_next_line():
-    """同一行剩下的半截只有一个短词宽，放不下 BERT 时整个词留给续行，不切成 BER / T。"""
+    """When the rest of a line is only one short word wide and BERT does not fit, the whole word goes to the
+    continuation line and is not cut into BER / T."""
     from app.formats.pdf_write import _split_own_lines
 
     assert _split_own_lines("BERT 和 GPT 在所有任务上的表现", [], 8.8, 10.0, 20.0) == (
@@ -8752,7 +9054,8 @@ def test_a_word_too_wide_for_the_shared_line_moves_whole_to_the_next_line():
 
 
 def test_inset_continuation_fills_the_column(tmp_path):
-    """侧标旁边的正文，续行回到栏左缘并写到栏右缘，字号不再因为窄行太多而被压小。"""
+    """For body text beside a side label, the continuation lines return to the left edge of the column and run to its
+    right edge, so the font size is no longer reduced by too many narrow lines."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -8809,7 +9112,8 @@ def test_inset_continuation_fills_the_column(tmp_path):
 
 
 def test_same_baseline_fragments_do_not_cover_the_lead(tmp_path):
-    """同一基线的碎片不是续行。续文从下一行起写，不压到左侧未译的 Cascades 上。"""
+    """Fragments on the same baseline are not continuation lines. The continuation starts on the next line and does not
+    overlap the untranslated Cascades on the left."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -8857,7 +9161,8 @@ def test_same_baseline_fragments_do_not_cover_the_lead(tmp_path):
 
 
 def test_cross_page_stops_above_the_page_number(tmp_path):
-    """跨页译文停在页码带上面。页码是纯数字，不在块列表里，也不能写穿它。"""
+    """A translation carried over to the next page stops above the page number band. The page number is digits only and
+    not in the block list, and the text must not run over it."""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_layout import content_floor
     from app.formats.pdf_write import _render_translated, _room_below
@@ -8875,7 +9180,10 @@ def test_cross_page_stops_above_the_page_number(tmp_path):
             pymupdf.Rect(325.8, 699.8, 556, 708.8),
             pymupdf.Rect(316.8, 710.3, 556, 719.3),
         ],
-        text="Several efforts have addressed interactive processing on Hadoop by creating specialized query engines that allow",
+        text=(
+            "Several efforts have addressed interactive processing on Hadoop by creating specialized query engines "
+            "that allow"
+        ),
         size=9,
         color="#000000",
         bold=False,
@@ -8929,9 +9237,11 @@ def test_cross_page_stops_above_the_page_number(tmp_path):
 
 
 def test_cross_column_host_stops_above_kept_formula(tmp_path):
-    """栏底段落接到另一栏时，译文停在下面留着原字的行间公式上方，余下的写到续块。
+    """When a paragraph at the column bottom continues in another column, the translation stops above the display
+    formula below it that keeps its original glyphs, and the rest goes to the tail block.
 
-    行间公式在提取时丢掉，不在块列表里；只按块算余量，会一直写到本页正文下沿，压在公式上。
+    Display formulas are dropped during extraction and are not in the block list; computing the room from blocks
+    alone would write down to the bottom of the body text on this page, over the formula.
     """
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_write import _render_translated
@@ -8976,7 +9286,8 @@ def test_cross_column_host_stops_above_kept_formula(tmp_path):
 
 
 def test_page_margins_stay_with_the_source(tmp_path):
-    """页首对齐原文上沿，正文不写进原文下沿以下。页脚带里的脚注仍不额外下刀。"""
+    """The page top aligns with the top edge of the original, and body text is not written below the bottom edge of
+    the original. Footnotes in the footer band still get no extra cut."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated, _room_below
 
@@ -9034,7 +9345,8 @@ def test_page_margins_stay_with_the_source(tmp_path):
 
 
 def test_last_short_line_keeps_body_size(tmp_path):
-    """页末一两行的行框余量留着。裁掉之后中文装不下一行，字号不能因此比上面的正文小。"""
+    """The line box slack of the last one or two lines on a page is kept. Without it a Chinese line would not fit, and
+    the font size must not become smaller than the body text above because of that."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -9131,7 +9443,8 @@ def test_last_short_line_keeps_body_size(tmp_path):
 
 
 def test_cjk_lines_share_the_right_edge(tmp_path):
-    """非末行的右缘对齐到写入框。标点贴着前一个字。末行保持左齐。"""
+    """Lines other than the last are right-aligned to the writing box. Punctuation sits against the preceding
+    character. The last line stays left-aligned."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -9166,7 +9479,7 @@ def test_cjk_lines_share_the_right_edge(tmp_path):
 
 
 def test_em_dash_line_stays_inside_the_box(tmp_path):
-    """破折号和 HMM 按实际字宽断行，不能再多出一个字到右缘外面。"""
+    """Dashes and HMM are broken by their real character width, so no extra character ends up past the right edge."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -9199,7 +9512,7 @@ def test_em_dash_line_stays_inside_the_box(tmp_path):
 
 
 def test_italic_marks_still_justify_the_line(tmp_path):
-    """斜体标记不再改走 HTML。汉字没有斜体字形，行仍两端对齐。"""
+    """Italic marks no longer switch to HTML. Chinese characters have no italic glyphs, and the line stays justified."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -9230,8 +9543,9 @@ def test_italic_marks_still_justify_the_line(tmp_path):
 
 
 def test_formula_does_not_jump_to_the_line_above(tmp_path):
-    """上一行伸到栏边时，下一行的公式仍贴着本行文字。
-    上一行的字框会探进本行的写入盒子，不能拿它的右缘当光标。"""
+    """When the previous line reaches the column edge, the formula on the next line still sits against the text of
+    its own line. The glyph boxes of the previous line reach into the writing box of this line, so their right edge
+    must not be used as the cursor."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -9269,7 +9583,7 @@ def test_formula_does_not_jump_to_the_line_above(tmp_path):
         bold=False,
     )
     sentinel = "\x01i\x021\x01/i\x02"
-    # 零宽空格让字形写入失败，改走会测量右缘的 HTML 盒子。
+    # A zero-width space makes glyph writing fail, so the HTML box that measures its right edge is used instead.
     text = (
         "我们在此提出一种采样机制，在训练过程中随机决定使用真实的前一个词元还是估计值。"
         f"在时间{sentinel}, 模型需要上一个标记。\u200b"
@@ -9284,7 +9598,8 @@ def test_formula_does_not_jump_to_the_line_above(tmp_path):
 
 
 def test_italic_run_does_not_open_a_wide_gap_before_the_formula(tmp_path):
-    """i-th 两侧各有一个空格。斜体按 0.5em 估宽会把后面的公式推开，应贴着写出的字。"""
+    """i-th has one space on each side. Estimating italic width at 0.5em would push the following formula away; it
+    belongs right after the written text."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -9360,7 +9675,7 @@ def test_italic_run_does_not_open_a_wide_gap_before_the_formula(tmp_path):
 
 
 def test_formula_keeps_a_space_before_following_text(tmp_path):
-    """公式后面接文字时，中间有一个空格宽的分界，不贴在一起。"""
+    """When text follows a formula, a gap one space wide separates them and they do not touch."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -9411,7 +9726,7 @@ def test_formula_keeps_a_space_before_following_text(tmp_path):
     assert y_hit and after
     gap = after[0].x0 - y_hit[0].x1
     assert gap >= 2.5
-    # 标点仍然贴着公式，不在 ) 前加空格
+    # Punctuation still touches the formula, with no space added before )
     close = _render_translated(
         src,
         [block],
@@ -9451,7 +9766,8 @@ def _group_chars(
 
 
 def test_block_of_typewriter_lines_is_code_and_inline_names_are_not():
-    """整块几乎都是等宽字（SQL）留原样。句子里夹着几个等宽属性名的照翻。"""
+    """A block that is almost all monospace (SQL) is kept as it is. A sentence with a few monospace attribute names in
+    it is translated."""
     from app.formats.pdf_units import _code_block
 
     def span(text, font):
@@ -9478,7 +9794,7 @@ def test_block_of_typewriter_lines_is_code_and_inline_names_are_not():
         ]
     )
     assert not _code_block(prose)
-    # 表格一行：斜体的行名后面是几格等宽记号
+    # A table row: an italic row name followed by several cells of monospace notation
     row = _block_with_spans(
         [
             [
@@ -9491,7 +9807,8 @@ def test_block_of_typewriter_lines_is_code_and_inline_names_are_not():
 
 
 def test_lone_relation_symbol_from_a_symbol_font_stays_a_formula():
-    """CMSY 里的 ≺ 被 OCR 认成 <。单独一个也是公式，不能当成正文里的小于号。"""
+    """The ≺ in CMSY is recognized by OCR as <. Even on its own it is a formula and must not be taken for a less-than
+    sign in body text."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, x0):
@@ -9512,7 +9829,8 @@ def test_lone_relation_symbol_from_a_symbol_font_stays_a_formula():
 
 
 def test_pdf_biblio_bare_label_line_does_not_exit():
-    """悬挂缩进的标签和条目隔得远，[ESS] 单独成一块。它是条目的标签，后面的引文仍跳过。"""
+    """With a hanging indent the label is far from its entry, so [ESS] forms a block of its own. It is the label of the
+    entry, and the citation after it is still skipped."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -9533,7 +9851,8 @@ def test_pdf_biblio_bare_label_line_does_not_exit():
 
 
 def test_inline_typewriter_words_keep_their_glyphs():
-    """句子里的等宽属性名换成占位符，贴回原字。整块都是等宽字的不在这里，那是代码块。"""
+    """Monospace attribute names in a sentence are replaced by placeholders and put back as the original glyphs. Blocks
+    entirely in monospace are not handled here; those are code blocks."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, x0):
@@ -9564,7 +9883,8 @@ def test_list_number_keeps_its_point():
 
 
 def test_sentence_around_formulas_is_translated_and_bare_formula_line_is_not():
-    """公式外有 If、then、Otherwise 三个词，是一句话，照翻。For all 加一长串公式仍是公式行。"""
+    """The three words If, then and Otherwise outside the formula make it a sentence, so it is translated. For all with
+    a long formula is still a formula line."""
     from app.formats.pdf_extract import extract_blocks
 
     doc = pymupdf.open()
@@ -9595,7 +9915,7 @@ def test_sentence_around_formulas_is_translated_and_bare_formula_line_is_not():
 
 
 def _page_data(*lines):
-    """get_text("dict") 的最小结构：每个参数是一行的 span 列表 (字体, 文字)。"""
+    """Minimal get_text("dict") structure: each argument is the span list of one line as (font, text)."""
     return {
         "blocks": [
             {
@@ -9609,7 +9929,8 @@ def _page_data(*lines):
 
 
 def test_computer_modern_upright_is_math_when_the_body_is_times():
-    """Times 排的论文里，CMR 只写 log、min、括号和等号，是公式。CM 排的论文里它是正文。"""
+    """In a paper set in Times, CMR only writes log, min, parentheses and equals signs, so it is a formula. In a paper
+    set in CM it is body text."""
     from app.formats.pdf_math import _mark_math_roman
     from app.formats.pdf_units import _is_formula_span
 
@@ -9625,8 +9946,9 @@ def test_computer_modern_upright_is_math_when_the_body_is_times():
 
 
 def test_a_font_that_writes_math_alphabet_letters_is_math():
-    """字体名单里没有的数学斜体（newtxmath 配 Cochineal 叫 cochMI），字母映到 𝑁、𝑡 这些数学字母，
-    同一字体写的括号、逗号也算公式。正文里偶尔夹一个数学字母的字体不算。"""
+    """A math italic missing from the font list (newtxmath with Cochineal is called cochMI) maps letters to math
+    letters such as 𝑁 and 𝑡, and parentheses and commas in the same font count as formula too. A font that only
+    occasionally puts a math letter into body text does not count."""
     from app.formats.pdf_blocks import _font_is_math, _span_is_math
     from app.formats.pdf_math import _mark_math_alphabet
 
@@ -9647,7 +9969,8 @@ def test_a_font_that_writes_math_alphabet_letters_is_math():
 
 
 def test_a_line_split_into_two_blocks_is_put_back_together():
-    """PyMuPDF 把一行从上标处切开、后半截分进别的块时，挪回前半截后面。"""
+    """When PyMuPDF cuts a line at a superscript and puts the second half into another block, it is moved back after
+    the first half."""
     from app.formats.pdf_extract import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, text):
@@ -9686,7 +10009,8 @@ def test_a_two_column_gutter_is_not_a_split_line():
 
 
 def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
-    """栏沟不到一个字宽，右栏一行以公式起头、或是节号时，也不接到左栏的段落后面。"""
+    """With a column gap narrower than one em, a right-column line starting with a formula or a section number is not
+    joined after the left-column paragraph either."""
     from app.formats.pdf_extract import _rejoin_split_lines
 
     def line(x0, x1, y0, text, font="Times-Roman", size=10.0, y1=None):
@@ -9710,7 +10034,8 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
     _rejoin_split_lines(data)
     assert [block["lines"] for block in data["blocks"]] == [para, [formula, rest], [number, title]]
 
-    # 右栏一行很高，同时压着左栏段落的两行，左栏只剩一行可比：仍是两栏
+    # A tall right-column line overlaps two lines of the left-column paragraph, leaving only one left line to
+    # compare: still two columns
     first = line(72, 301.0, 325.6, "where the BN transform is applied independently to each")
     second = line(72, 301.1, 337.5, "dimension of x = Wu, with a separate pair of learned")
     last = line(72, 219.2, 345.9, "parameters per dimension.", y1=362.8)
@@ -9724,7 +10049,7 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
     _rejoin_split_lines(data)
     assert data["blocks"][1]["lines"] == [tall]
 
-    # 分子分母上下对齐、都止于求和号前，不是一栏
+    # Numerator and denominator are vertically aligned and both end before the summation sign: not a column
     numerator = line(414.3, 418.2, 82.5, "1", "CMR7", 7.0, 89.4)
     denominator = line(413.5, 419.0, 89.8, "L", "CMMI7", 7.0, 96.8)
     total = line(421.8, 437.8, 81.4, "PL", "CMEX10")
@@ -9737,7 +10062,8 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
     _rejoin_split_lines(data)
     assert total in data["blocks"][0]["lines"]
 
-    # 栏顶的大号标题和左栏段落同一基线，左栏只剩一整行可比：字号大一截，不是那一行的后半截
+    # A large heading at the column top shares a baseline with the left-column paragraph, leaving one full line to
+    # compare: the font size is much larger, so it is not the second half of that line
     top = line(72, 301.1, 35.5, "not have to readjust to compensate for the change in the")
     tail = line(72, 138.8, 47.5, "distribution of x.")
     heading = [
@@ -9755,8 +10081,9 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
 
 
 def test_the_hole_for_a_neighbour_stays_inside_its_font_box():
-    """上一行网址的精确框往下多出半行，按它挖孔会削掉下一行网址的字头。孔夹在字体框里；
-    单画量出的墨迹（字体框量错了）照旧。"""
+    """The exact box of a URL on the previous line extends half a line down, and cutting a hole by it would clip the
+    tops of the glyphs of the URL on the next line. The hole is clamped to the font box; ink measured by drawing
+    single glyphs (when the font box is wrong) is used as before."""
     from app.formats.pdf_place import _hole_ink
 
     def box(span):
@@ -9775,7 +10102,8 @@ def test_the_hole_for_a_neighbour_stays_inside_its_font_box():
 
 
 def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line():
-    """ϵ 的字体框伸到下一行，按字体框算和下一行同一行高，分母就被接到下一行后面，分子跟过去。"""
+    """The font box of ϵ reaches into the next line. Measured by the font box, the denominator is on the same row
+    as the next line, so it would be attached after that line and the numerator would follow it."""
     from app.formats.pdf_extract import _rejoin_split_lines
 
     def span(text, font, size, box, ink=None):
@@ -9819,14 +10147,16 @@ def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line():
 
 
 def test_a_split_line_goes_to_its_nearest_left_neighbour():
-    """两个块里都有能接上的左半截：接到挨得最近的那个，不在两个块之间来回挪。"""
+    """Two blocks both have a left half that could be joined: the piece joins the nearest one and does not move back
+    and forth between the two blocks."""
     from app.formats.pdf_extract import _rejoin_split_lines
 
     def line(x0, x1, y0, text, font="CMMI10"):
         box = (x0, y0, x1, y0 + 10)
         return {"bbox": box, "dir": (1, 0), "spans": [{"text": text, "font": font, "size": 10.0, "bbox": box}]}
 
-    # 两个左半截上下错开，各自和右半截同一行高，彼此不是同一行
+    # The two left halves are vertically offset, each shares the line height of the right half, and they are not on
+    # the same line as each other
     far = line(72, 262, 96, "the rule is", "Times-Roman")
     near = line(250, 264, 104, "c =")
     piece = line(265, 300, 100, "d − e")
@@ -9842,7 +10172,8 @@ def test_a_split_line_goes_to_its_nearest_left_neighbour():
 
 
 def test_a_justified_heading_split_word_by_word_stays_one_paragraph():
-    """窄栏标题两端对齐，词距拉到两个字宽，PyMuPDF 一词一行。按整行认回一段。"""
+    """A justified heading in a narrow column has word spacing stretched to two em, so PyMuPDF makes one line per word.
+    It is recognized as one paragraph by whole line."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, x1, y0):
@@ -9871,7 +10202,8 @@ def test_table_cells_on_one_baseline_stay_apart():
 
 
 def test_formula_box_height_follows_the_glyph_ink():
-    """CMSY 的字体伸量将近两行高。框按字体算会把公式压小，还会裁进上下两行的字。"""
+    """The CMSY font extent is almost two lines high. A box computed from the font would shrink the formula and crop
+    glyphs of the lines above and below."""
     from app.formats.pdf_crop import _tighten_formula_height
 
     arrow = {"text": "←", "ink": (130.2, 221.3, 139.9, 226.4)}
@@ -9880,20 +10212,22 @@ def test_formula_box_height_follows_the_glyph_ink():
     _tighten_formula_height(part)
     assert [round(v, 1) for v in part["bbox"]] == [114.7, 219.2, 147.4, 227.1]
     assert part["h"] == 7.9 and part["d"] == 0.8
-    # 减号整个在基线上面（数学轴），收紧后下沿仍在基线上方，不能贴到基线上
+    # The minus sign lies entirely above the baseline (math axis); after tightening its bottom edge is still above
+    # the baseline and must not snap to it
     minus = {"text": "−", "ink": (197.2, 713.4, 205.0, 715.0)}
     part = {"bbox": pymupdf.Rect(197.2, 708.9, 205.0, 726.2), "h": 17.3, "d": 9.6, "spans": [minus]}
     _tighten_formula_height(part)
     baseline = 726.2 - 9.6
     assert part["d"] < 0 and abs(part["bbox"].y1 - part["d"] - baseline) < 0.1
-    # 点阵字没有墨迹框，照旧用原来的框
+    # Bitmap glyphs have no ink box, so the original box is used as before
     unknown = {"bbox": pymupdf.Rect(0, 0, 10, 20), "h": 20, "d": 5, "spans": [{"text": "x"}]}
     _tighten_formula_height(unknown)
     assert unknown["h"] == 20
 
 
 def test_a_block_is_sized_by_its_base_line_text_not_a_subscript():
-    """d_model 的 model 用正文字体排成小字下标，是这一行最长的一截，块字号仍按基线上的 and 算。"""
+    """The model of d_model is a small subscript in the body font and the longest piece of the line; the block size
+    still follows the and on the baseline."""
     from app.formats.pdf_extract import _main_span
 
     def span(text, font, size, y):
@@ -9909,8 +10243,9 @@ def test_a_block_is_sized_by_its_base_line_text_not_a_subscript():
 
 
 def test_a_formula_line_wrapped_from_a_full_line_is_kept():
-    """上一行写到版心右缘、没写完一句，下一行 and W^O ∈ … 从左缘接着写，是这句的后半，不是单独的式子。
-    叠着排的式子写不到右缘。"""
+    """The previous line reaches the right edge of the text area without finishing the sentence, and the next line
+    and W^O ∈ … continues from the left edge: it is the second half of the sentence, not a displayed formula.
+    Stacked formulas do not reach the right edge."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _wraps_from_above
     from app.formats.pdf_frame import TextFrame
@@ -9932,7 +10267,7 @@ def test_a_formula_line_wrapped_from_a_full_line_is_kept():
     short = pymupdf.Rect(107.5, 203.1, 200, 217.6)
     stacked = TextBlock(page=4, rect=short, line_rects=[short], text="et = Ext", size=10, color="#000000", bold=False)
     assert not _wraps_from_above([stacked], 4, tail, "ht = g(Uht−1 + Wet)", rows, frame)
-    # 两栏排时上一行写到的是左栏的右缘，不是版心右缘
+    # In a two-column layout the previous line reaches the right edge of the left column, not of the text area
     column = pymupdf.Rect(108, 203.1, 297.5, 217.6)
     left = TextBlock(
         page=4,
@@ -9945,7 +10280,7 @@ def test_a_formula_line_wrapped_from_a_full_line_is_kept():
     )
     rows = [pymupdf.Rect(108, y, 298, y + 12) for y in (100, 112, 124, 136)]
     assert _wraps_from_above([left], 4, tail, "and x̂ = (x − µ)/σ.", rows, frame)
-    # 居中排的图注，末行和上面的整行中线对齐
+    # A centered caption: the last line shares the center line of the full lines above
     first, second = pymupdf.Rect(83.2, 135.0, 511.7, 147.1), pymupdf.Rect(87.9, 149.7, 507.8, 160.6)
     caption = [
         TextBlock(page=4, rect=line, line_rects=[line], text=text, size=10.9, color="#000000", bold=False)
@@ -9965,19 +10300,20 @@ def test_tex_spacing_accents_are_composed_before_translation():
     assert _compose_accents("Fr´ed´eric, na¨ıve, ˆetre") == "Frédéric, naïve, être"
     assert _compose_accents("Fran¸cois, gar c¸on") == "François, gar çon"
     assert _compose_accents("f(x)´ and x¸") == "f(x)´ and x¸"
-    # 字母是斜体、粗体时，标记夹在重音和字母之间
+    # When the letter is italic or bold, the mark sits between the accent and the letter
     assert _compose_accents("the estimate ˆ{i}y{/i} and ˜{i}x,r{/i}") == "the estimate {i}ŷ{/i} and {i}x̃,r{/i}"
     assert _compose_accents("output ˆ{b}Y{/b}") == "output {b}Ŷ{/b}"
 
 
 def test_a_stacked_accent_is_split_from_the_glyphs_before_it():
-    """「(ˆ」里的帽子叠在后面的 y 上，切成单独的一截。网址里的 ˜、正则里的 ˆ 占自己的宽度，
-    是 ~ ^，不切。"""
+    """The hat in "(ˆ" overlaps the following y and is cut into a separate piece. The ˜ in a URL and the ˆ in a regex
+    take their own width; they are ~ and ^ and are not cut."""
     from app.formats.pdf_math import _PageChars, _split_accents
 
     doc = pymupdf.open()
     page = doc.new_page()
-    # 嵌入字体文件才能写 ˆ ˜；按内置 Times 的单字节编码写会换成别的字
+    # Writing ˆ and ˜ needs an embedded font file; the single-byte encoding of the built-in Times would turn them
+    # into other characters
     font = pymupdf.Font("tiro")
     page.insert_font(fontname="T", fontbuffer=font.buffer)
     page.insert_text((100, 100), "(\u02c6", fontname="T", fontsize=10)
@@ -9998,7 +10334,8 @@ def test_caption_number_is_restored_inside_style_marks():
 
 
 def test_small_caps_heading_is_sent_without_size_marks():
-    """小型大写的标题首字母大一号、其余小一号，是一种字，不在词中间插字号标记。"""
+    """A small-caps heading with the initial one size larger and the rest one size smaller is one font, so no size mark
+    is inserted inside the word."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_units import _placeholderize
 
@@ -10029,7 +10366,8 @@ def test_small_caps_heading_is_sent_without_size_marks():
 
 
 def test_small_caps_words_in_body_text_take_the_body_size():
-    """正文里整词小型大写（AGENT）比正文小一号，译成中文后照搬小字号会缩成一团。"""
+    """A whole word in small caps in body text (AGENT) is one size smaller than the body; copying the small size into
+    the Chinese translation would cram it together."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_units import _placeholderize
 
@@ -10054,7 +10392,7 @@ def test_small_caps_words_in_body_text_take_the_body_size():
     rect = pymupdf.Rect(100, 100, 245, 112)
     block = TextBlock(0, rect, [rect], "roles like AGENT, or theTM x", 9.96, "#000", False, span_lines=[spans])
     sent, _ = _placeholderize(block, 0)
-    # 抬高的上标不是小型大写，字号照旧
+    # A raised superscript is not small caps and keeps its font size
     assert sent.startswith("roles like AGENT, or the{z")
 
 
@@ -10068,7 +10406,8 @@ def test_bare_chinese_section_number_is_restored():
 
 
 def test_fraction_pieces_rejoin_their_line_with_less_overlap():
-    """分母、大括号把框往下拉，同一行的两截上下只交叠三四成。"""
+    """Denominators and large braces pull the box down, so two pieces of the same line overlap vertically by only 30 to
+    40 percent."""
     from app.formats.pdf_extract import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, text):
@@ -10087,7 +10426,8 @@ def test_fraction_pieces_rejoin_their_line_with_less_overlap():
 
 
 def test_math_line_box_follows_glyph_ink():
-    """CMSY 的框按字体伸量能有两行高。行框、格子都按墨迹算；根号的起笔点在顶上，也按墨迹。"""
+    """A CMSY box from the font extent can be two lines high. Line boxes and cells are computed from ink; the radical
+    has its origin at the top, so it is measured by ink as well."""
     from app.formats.pdf_extract import _text_box
     from app.formats.pdf_math import _line_box
 
@@ -10114,7 +10454,8 @@ def test_math_line_box_follows_glyph_ink():
 
 
 def test_formula_pieces_touching_on_one_line_stay_one_paragraph():
-    """分式、大括号把一行式子拆成几截。纯符号的那一截不能把句子切开。"""
+    """Fractions and large braces split a formula line into several pieces. A piece of symbols only must not cut the
+    sentence apart."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, x1, y0, y1, *spans):
@@ -10141,7 +10482,8 @@ def test_formula_pieces_touching_on_one_line_stay_one_paragraph():
 
 
 def test_a_line_with_three_words_among_formulas_is_translated():
-    """Therefore, ∫… = ∫… It follows：公式多、字母占比低，但有三个正文词，是句子。"""
+    """Therefore, ∫… = ∫… It follows: many formulas and a low share of letters, but three body words make it a
+    sentence."""
     from app.formats.pdf_extract import _untranslatable
 
     def span(text, font):
@@ -10162,12 +10504,13 @@ def test_a_line_with_three_words_among_formulas_is_translated():
 
 
 def test_an_inline_fraction_rejoins_its_line_in_reading_order():
-    """g(x) = 1/(1+exp(−x))：分母在另一块里，离等号比词距宽；分子排在分母前面。
-    挪回来以后按从左到右排，分母才接得上等号。"""
+    """g(x) = 1/(1+exp(−x)): the denominator is in another block, farther from the equals sign than a word space, and
+    the numerator comes before the denominator. After moving them back, they are ordered left to right so the
+    denominator can join the equals sign."""
     from app.formats.pdf_extract import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, *spans):
-        # Times 正文里的 CMR 提取时已经标成公式
+        # CMR inside Times body text is already marked as formula during extraction
         return {
             "bbox": (x0, y0, x1, y1),
             "dir": (1, 0),
@@ -10190,7 +10533,8 @@ def test_an_inline_fraction_rejoins_its_line_in_reading_order():
 
 
 def test_pieces_of_one_row_are_read_left_to_right():
-    """分子排在分母前面时，按从左到右重排；上下两行不当成一行。"""
+    """When the numerator comes before the denominator, they are reordered left to right; two lines one above the other
+    are not treated as one line."""
     from app.formats.pdf_extract import _left_to_right
 
     def item(text, x0, y0, x1, y1):
@@ -10227,8 +10571,9 @@ def test_plain_words_a_wide_gap_apart_are_not_rejoined():
 
 
 def test_a_centred_definition_line_keeps_its_glyphs():
-    """居中单独成行的式子里只有几个连接词（if and only if、for all），不当成句子翻。
-    从栏左缘起笔、接着上一行写的式子行仍按句子翻。"""
+    """A centered displayed formula with only a few connecting words (if and only if, for all) is not translated as a
+    sentence. A formula line starting at the left edge of the column and continuing the previous line is still
+    translated as a sentence."""
     from app.formats.pdf_extract import _displayed, _left_margins, _untranslatable
 
     body = {"bbox": (72, 0, 540, 12), "spans": [{"text": "A body line long enough to count as the column margin."}]}
@@ -10250,7 +10595,8 @@ def test_a_centred_definition_line_keeps_its_glyphs():
 
 
 def test_a_lone_numerator_goes_back_to_its_fraction():
-    """分子单独剩在一个块里时，挪到正下方那段式子的行旁边。上一行的正文横向也盖得住它，不算。"""
+    """A numerator left alone in a block is moved next to the formula line right below it. Body text on the previous
+    line also covers it horizontally, but that does not count."""
     from app.formats.pdf_extract import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, *spans):
@@ -10279,8 +10625,9 @@ def test_a_lone_numerator_goes_back_to_its_fraction():
 
 
 def test_fraction_bars_drawn_as_one_pixel_images_are_formula_curves():
-    """老 TeX 把分式线、根号上的横线画成拉长的一像素图片。和矢量线一样算公式的曲线，
-    公式挪走时原处的线才会擦掉；插图不算。"""
+    """Old TeX draws fraction bars and radical bars as stretched one-pixel images. They count as formula curves like
+    vector lines, so the line at the original position is erased when the formula moves; illustrations do not
+    count."""
     from app.formats.pdf_crop import _page_curve_rects
 
     doc = pymupdf.open()
@@ -10292,7 +10639,7 @@ def test_fraction_bars_drawn_as_one_pixel_images_are_formula_curves():
     photo = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 20, 20), False)
     photo.clear_with(128)
     page.insert_image(pymupdf.Rect(100, 100, 300, 300), pixmap=photo)
-    # 描边的横线：路径框高为零，画出来有线宽那么粗
+    # A stroked horizontal line: the path box has zero height, but the drawn line is as thick as the line width
     page.draw_line((234.7, 263.1), (259.9, 263.1), width=0.4)
     rects = _page_curve_rects(page)
     assert any(abs(r.x0 - bar.x0) < 0.1 and abs(r.y1 - bar.y1) < 0.1 for r in rects)
@@ -10306,7 +10653,8 @@ def test_fraction_bars_drawn_as_one_pixel_images_are_formula_curves():
 
 
 def test_a_formula_only_takes_the_rules_its_glyphs_touch():
-    """|m/√v| < 1 的字体框伸到下一行，盖住了下一行 √E[g²] 的根号横线。按墨迹认，横线归下一行的式子。"""
+    """The font box of |m/√v| < 1 reaches into the next line and covers the radical bar of √E[g²] there. Judged by ink,
+    the bar belongs to the formula on the next line."""
     from app.formats.pdf_crop import _absorb_one_box
 
     def formula(bbox, inks):
@@ -10331,7 +10679,8 @@ def test_a_formula_only_takes_the_rules_its_glyphs_touch():
 
 
 def test_a_fraction_bar_stays_when_its_numerator_stays():
-    """分子在另一块里留在原处时，分数线也留着：跟分母挪走，分子就悬在半空。"""
+    """When the numerator is in another block that stays in place, the fraction bar stays too: moved with the
+    denominator, it would leave the numerator hanging in the air."""
     from app.formats.pdf_crop import _absorb_one_box
 
     denominator = {"text": "1−α", "origin": (164.2, 500.0), "ink": (164.2, 496.4, 187.5, 502.0)}
@@ -10346,7 +10695,8 @@ def test_a_fraction_bar_stays_when_its_numerator_stays():
 
 
 def test_a_formula_leaves_the_edge_of_a_proof_box():
-    """证毕方框紧贴在行尾公式下面。方框的上边和两条竖边相接，是方框的一边，不跟公式挪走。"""
+    """An end-of-proof box sits right below the formula at the line end. The top edge of the box meets its two vertical
+    sides, so it is a side of the box and does not move with the formula."""
     from app.formats.pdf_crop import _absorb_one_box
 
     g = {"text": "g", "origin": (493.0, 571.0), "ink": (493.0, 566.5, 496.9, 574.6)}
@@ -10367,7 +10717,8 @@ def test_a_formula_leaves_the_edge_of_a_proof_box():
 
 
 def test_formula_holes_follow_the_neighbours_ink_not_their_font_box():
-    """上一行的大括号字体框伸到下一行的 N 上，墨迹没有。按墨迹挖洞，N 不被削掉一角。"""
+    """The font box of a large brace on the previous line reaches the N on the next line, but its ink does not. Cutting
+    holes by ink leaves the corner of N intact."""
     from app.formats.pdf_place import _formula_form
     from app.formats.pdf_write import _page_form
 
@@ -10379,21 +10730,24 @@ def test_formula_holes_follow_the_neighbours_ink_not_their_font_box():
     brace = {"text": "{", "bbox": (328.0, 445.3, 332.9, 462.3)}
 
     def hole_bottom(neighbour):
-        """孔的下沿（页面坐标）。第一个 re 是公式自己的裁剪框，后面的是孔。"""
+        """Bottom edge of the hole (page coordinates). The first re is the clip box of the formula itself, the following
+        ones are holes."""
         xref = _formula_form(doc, page, fms, formula, "/Fx", [dict(base), neighbour])
         rects = re.findall(r"([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) re", doc.xref_stream(xref).decode())
         [(_, y, _, _)] = rects[1:]
         return page.rect.height - float(y)
 
-    # N 的墨迹从 460.3 起
+    # The ink of N starts at 460.3
     assert hole_bottom(brace) > 460.3
     assert hole_bottom({**brace, "ink": (328.0, 445.6, 332.9, 457.4)}) <= 457.5
 
 
 def test_a_formula_cut_from_a_text_span_is_not_holed_by_that_span():
-    """公式检测模型把「 σ」里的 σ 切出来做公式。页面上还是原来那个「 σ」span，框和公式的 σ 对不上；
-    公式带上标、比一行高时，按它挖洞会把 σ 挖掉（译文里只剩上标）。原 span 只留切剩的字，空格没有墨迹，不挖。
-    上一行伸下来的字照样挖"""
+    """The formula detection model cuts the σ out of " σ" as a formula. The page still has the original " σ" span,
+    whose box does not match the σ of the formula; when the formula has a superscript and is taller than a line,
+    cutting a hole by that box would remove the σ (leaving only the superscript in the translation). The original
+    span keeps only the glyphs left after the cut, and the space has no ink, so no hole is cut. Glyphs reaching
+    down from the line above still get holes"""
     from app.formats.pdf_place import _formula_form
     from app.formats.pdf_write import _page_form
 
@@ -10420,7 +10774,8 @@ def test_a_formula_cut_from_a_text_span_is_not_holed_by_that_span():
 
 
 def test_list_item_near_the_page_middle_stays_left_aligned():
-    """列表项的中线碰巧对上最宽一块的中线，仍是左对齐，不按居中写回。子图下面的 (a) 小标题照旧居中。"""
+    """A list item whose center line happens to match the center line of the widest block is still left-aligned and
+    not written back centered. The (a) subcaption below a subfigure stays centered."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _write_rect
 
@@ -10441,7 +10796,9 @@ def test_list_item_near_the_page_middle_stays_left_aligned():
 
 
 def test_heading_at_the_frame_edge_stays_left_aligned():
-    """2.6.1 小标题从版心左缘起笔。最宽一块是并进旁注、更靠左的段落，中线碰巧对上，仍按左对齐写回。"""
+    """The 2.6.1 subheading starts at the left edge of the text area. The widest block is a paragraph merged with a
+    side note and reaching further left; their center lines happen to match, but it is still written back
+    left-aligned."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
@@ -10464,8 +10821,10 @@ def test_heading_at_the_frame_edge_stays_left_aligned():
 
 
 def test_epigraph_and_attribution_at_the_frame_right_edge_are_written_flush_right():
-    """章首引语和署名每行都收在版心右缘、离左缘很远：按右对齐写回，写入框不往右伸。
-    同一行左边还有别的块时，右边那一块只是一行的后半截，照常左对齐。"""
+    """Every line of an epigraph and its attribution at a chapter start ends at the right edge of the text area, far
+    from the left edge: they are written back right-aligned, and the writing box does not extend to the right.
+    When another block lies to the left on the same line, the right block is only the second half of a line and is
+    left-aligned as usual."""
     from app.formats.pdf_align import _place_line
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
@@ -10496,17 +10855,18 @@ def test_epigraph_and_attribution_at_the_frame_right_edge_are_written_flush_righ
         rect, align = _write_rect(block, items, True, False, geo)
         assert align == "right" and rect.x1 == block.rect.x1
     assert _write_rect(body, items, True, False, geo)[1] == "left"
-    # 同一行左边是另一块：这一块是一行的后半截
+    # Another block lies to the left on the same line: this block is the second half of a line
     left = blk("The first half of the row", [(160.2, 700, 280, 712)])
     tail = blk("and the second half", [(300, 700, 493.2, 712)])
     assert _write_rect(tail, [*items, (left, ""), (tail, "")], True, False, geo)[1] == "left"
-    # 图在前一页，绕图的正文左边空着，几行起笔对齐
+    # The figure is on the previous page; the body text around it leaves the left side empty, and its lines start at
+    # the same x
     wrap = blk(
         "Probably the most common visualization method, however, is to project the 100 dimensions",
         [(270, 218, 493.2, 230), (255, 230, 493.2, 242), (255, 242, 493.2, 254)],
     )
     assert _write_rect(wrap, [*items, (wrap, "")], True, False, geo)[1] == "left"
-    # 栏的右缘只有这一块排到，是它自己撑出来的
+    # Only this block reaches the right edge of the column, so the block itself defines that edge
     lone = blk("1 request", [(300, 300, 493.2, 312)])
     short = blk("Count(w | denied the)", [(160.2, 280, 400, 292)])
     lone_geo = PageGeometry.from_rects(612, [lone.rect, short.rect], height=792, frame=frame)
@@ -10519,13 +10879,15 @@ def test_epigraph_and_attribution_at_the_frame_right_edge_are_written_flush_righ
 
     x, width = start("奥卡姆的威廉")
     assert abs(x + width - 300.0) < 0.5
-    # 折行留在行尾的空格看不见，不占靠右的位置
+    # A space left at the line end by wrapping is invisible and does not count toward the right-aligned position
     assert start("William of Occam ")[0] == start("William of Occam")[0]
 
 
 def test_attribution_short_of_the_frame_edge_by_a_trailing_space_is_written_flush_right():
-    """署名末尾带着词间空格，右缘比版心右缘短两三点，仍按右对齐写。引语末行用 \\hfill 推到行尾的署名也是。
-    两端对齐的窄栏里一行拆出来的末一个词、和下面格子起笔对齐的表头照常左对齐。"""
+    """An attribution with a trailing word space ends two or three points short of the right edge of the text area and
+    is still written right-aligned. So is an attribution pushed to the end of the last epigraph line with \\hfill.
+    The last word split off a line in a justified narrow column, and a table header aligned with the start of the
+    cells below, are left-aligned as usual."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
@@ -10555,25 +10917,26 @@ def test_attribution_short_of_the_frame_edge_by_a_trailing_space_is_written_flus
         [(142.2, 280, 475.2, 292), (142.2, 292, 475.2, 304)],
     )
     assert align(author, [quote, body]) == "right"
-    # 署名和引语末行同在一行
+    # The attribution shares a line with the last epigraph line
     babbage = blk(
         "On two occasions I have been asked, Pray, Mr. Babbage, if you put into the machine wrong figures",
         [(167.1, 210, 475.2, 222), (167.1, 222, 203.4, 234)],
     )
     signed = blk("Babbage (1864)", [(411.3, 222, 475.2, 234)])
     assert align(signed, [babbage, body]) == "right"
-    # 两端对齐时一行里拆出来的末一个词，左边隔着一个拉开的词距
+    # The last word split off a justified line, with a stretched word space to its left
     para = blk("states yields a finite-transition increment", [(142.2, 300, 475.2, 312), (142.2, 312, 300.0, 324)])
     word = blk("comprising", [(316.5, 312, 472.6, 324)])
     assert align(word, [para, body]) == "left"
-    # 表头的左缘和下面格子的起笔对齐
+    # The left edge of the table header aligns with the start of the cells below
     header = blk("Emotion Label Emotion Explanation", [(300.0, 330, 472.6, 340)])
     cells = blk("A V AV Semantic", [(300.8, 344, 320.0, 354), (340.0, 344, 400.0, 354)])
     assert align(header, [cells, body]) == "left"
 
 
 def test_two_line_attribution_is_split_like_the_source_and_written_flush_right(tmp_path):
-    """引语加署名两行，首行短、起笔靠右：译文照首行的宽度断开，两行都收在原来的右缘。"""
+    """An epigraph and attribution on two lines, with a short first line starting toward the right: the translation
+    breaks at the width of the first line, and both lines end at the original right edge."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
@@ -10582,7 +10945,7 @@ def test_two_line_attribution_is_split_like_the_source_and_written_flush_right(t
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
     right = 475.0
-    # 每行从右缘往回量出起笔
+    # The start of each line is measured back from the right edge
     for text, y in (("Time will explain.", 230), ("Jane Austen, Persuasion", 240)):
         page.insert_text((right - pymupdf.get_text_length(text, "tiro", 9), y), text, fontsize=9, fontname="tiro")
     body_line = "x" * 55
@@ -10629,8 +10992,10 @@ def test_two_line_attribution_is_split_like_the_source_and_written_flush_right(t
 
 
 def test_header_cells_near_the_column_middle_are_not_all_centred_on_it():
-    """表头一行的几格中线碰巧都在栏中线附近，整行不在栏中间：照各自的位置写，不都按栏中线居中叠在一起。
-    节号和节名分成两块的标题整行对着栏中线，节名仍居中。"""
+    """The cells of a header row all have center lines that happen to lie near the column center line, but the row
+    is not centered in the column: each is written at its own position and they are not all centered on the
+    column center line on top of each other. In a heading split into a number block and a name block, the whole
+    line is on the column center line, so the name is still centered."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
@@ -10654,15 +11019,16 @@ def test_header_cells_near_the_column_middle_are_not_all_centred_on_it():
     items = [(body, ""), *((cell, "") for cell in cells)]
     geo = PageGeometry.from_rects(612, [block.rect for block, _ in items], height=792, frame=frame)
     assert [_write_rect(cell, items, True, False, geo)[1] for cell in cells] == ["left", "left", "left"]
-    # 节号另成一块，节名和节号整行都对着栏中线
+    # The section number is a separate block, and the whole line of number and name is on the column center line
     number, title = blk("V.", 290.0, 302.0, y0=400), blk("Conclusions", 306.0, 362.0, y0=400)
     items = [(body, ""), (number, ""), (title, "")]
     assert _write_rect(title, items, True, False, geo)[1] == "center"
 
 
 def test_a_paragraph_with_an_overfull_line_is_written_to_the_frame_edge():
-    """一行断不开伸进页边的段落，译文照版心右缘写，不按伸出去的那一行。
-    大半行都在版心外的块照旧按自己的宽度写。"""
+    """For a paragraph with an unbreakable line reaching into the page margin, the translation is written to the right
+    edge of the text area, not to that protruding line. A block mostly outside the text area is still written at
+    its own width."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import Column, PageGeometry
@@ -10699,18 +11065,21 @@ def test_a_paragraph_with_an_overfull_line_is_written_to_the_frame_edge():
     rect, align = _write_rect(para, items, True, False, geo)
     assert align == "left" and rect.x1 == 477.0
     assert _write_rect(wide, items, True, False, geo)[0].x1 == 522.0
-    # 译文放不下往右扩时，也只扩到版心右缘，栏的右缘是被伸出去的那一行撑开的
+    # When the translation does not fit and widens to the right, it also widens only to the right edge of the text
+    # area; the right edge of the column was pushed out by the protruding line
     assert geo.columns[-1].x1 > 500
     assert _write_limit(para, rect, geo, []) == 477.0
     assert _write_limit(wide, rect, geo, []) > 500
-    # 两行的段落伸出去一行。旁注另成一栏时正文栏的右缘被这一行撑开，仍照版心右缘写
+    # A two-line paragraph with one protruding line. When side notes form a column of their own, this line pushes
+    # out the right edge of the body column, and the text is still written to the right edge of the text area
     pair = blk([(157.1, 300, 489.5, 312), (142.2, 312, 475.2, 324)])
     geo = PageGeometry(612, (Column(79.4, 127.8), Column(142.2, 489.5)), (), 792, frame=frame)
     assert _write_rect(pair, [(pair, ""), (para, "")], True, False, geo)[0].x1 == 477.0
 
 
 def test_slide_title_and_a_box_label_below_stay_apart():
-    """幻灯片大标题下面图里的小字框不是图注续行，标题旁边的星形里的字也不是标题的下一行。"""
+    """Small text boxes in a figure below a large slide title are not caption continuation lines, and the text in a
+    star shape beside the title is not the next line of the title."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_caption_fragments, _merge_continuations
 
@@ -10727,7 +11096,8 @@ def test_slide_title_and_a_box_label_below_stay_apart():
 
 
 def test_two_line_title_centered_on_the_page_is_written_centered():
-    """幻灯片标题在页面正中。最宽一块是靠左的列表项，中线偏右，标题仍按页面居中写回。"""
+    """A slide title is in the middle of the page. The widest block is a list item toward the left whose center line is
+    off to the right; the title is still written back centered on the page."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_layout import PageGeometry
     from app.formats.pdf_write import _write_rect
@@ -10757,8 +11127,9 @@ def test_two_line_title_centered_on_the_page_is_written_centered():
 
 
 def test_title_page_centered_off_the_page_middle_is_written_centered():
-    """题名页各行共用一条中线，但这条线不在页面正中（左右边距不对称），也不在全书版心的中线上。
-    每一块都按这条中线居中写回，最宽的书名也一样。"""
+    """The lines of a title page share one center line, which is neither the middle of the page (asymmetric left and
+    right margins) nor the center line of the text area of the book. Every block is written back centered on this
+    line, the widest title too."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
@@ -10785,8 +11156,9 @@ def test_title_page_centered_off_the_page_middle_is_written_centered():
 
 
 def test_body_lines_beside_margin_notes_do_not_make_a_centered_page():
-    """页边旁注把本页文字的左右范围撑宽，正文整行也不能算成短行。正文行都在版心中线上，
-    缩进的例句中线碰巧挨着它，不算整页居中排。"""
+    """Side notes in the margin widen the horizontal extent of the text on the page, but full body lines must still not
+    count as short lines. The body lines are all on the center line of the text area, and an indented example whose
+    center line happens to lie near it does not make the page centered."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _centered_axis
 
@@ -10805,7 +11177,8 @@ def test_body_lines_beside_margin_notes_do_not_make_a_centered_page():
 
 
 def test_white_label_on_a_black_box_is_pasted_back_as_is(tmp_path):
-    """黑底白字的 Figure 标签不重写成正文颜色，原样贴回，后面的图注照译。"""
+    """A white-on-black Figure label is not rewritten in the body text color but put back as it is; the caption after
+    it is translated."""
     src = tmp_path / "label.pdf"
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=300)
@@ -10831,8 +11204,9 @@ def test_white_label_on_a_black_box_is_pasted_back_as_is(tmp_path):
 
 
 def test_bibliography_without_a_heading_stays_original():
-    """章末参考文献紧接着习题排，没有 References 标题。一连串「姓, 名缩写.」起头的条目保留原文；
-    正文里一句这样开头的话不算。"""
+    """References at a chapter end follow the exercises directly, without a References heading. A run of entries
+    starting with "Surname, Initials." keeps the original text; a single body sentence starting this way does not
+    count."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import biblio_skips
 
@@ -10858,7 +11232,8 @@ def test_bibliography_without_a_heading_stays_original():
 
 
 def test_left_aligned_dialogue_lines_are_not_centered():
-    """对话各行左缘对齐。中线碰巧落在版心中线附近的那几行也按左对齐写回。"""
+    """The lines of a dialogue share a left edge. Lines whose center line happens to fall near the center line of the
+    text area are also written back left-aligned."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
@@ -10876,8 +11251,9 @@ def test_left_aligned_dialogue_lines_are_not_centered():
 
 
 def test_large_chapter_number_stays_apart_from_the_title():
-    """章首 60pt 的数字和 25pt 的标题之间隔着一个大字宽：数字原样留着，标题单独写回原位。
-    同字号的 2.2 Training 仍是一行。"""
+    """A 60pt number and a 25pt heading at a chapter start are one large em apart: the number stays as it is, and the
+    heading is written back alone at its original position. 2.2 Training at a single font size is still one
+    line."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, rect, size):
@@ -10891,8 +11267,9 @@ def test_large_chapter_number_stays_apart_from_the_title():
 
 
 def test_pdf_page_lines_and_tables_are_read_once_per_page(tmp_path, monkeypatch):
-    """找表要把整页的字解析一遍，矢量图、图片框每读一次也要几毫秒。
-    提取、阅读顺序、角色判断共用一次结果。写回译文时另读，不在这里数。"""
+    """Finding tables parses all text on the page, and each read of vector drawings or image boxes takes a few
+    milliseconds too. Extraction, reading order and role detection share one result. Writing the translation reads
+    them separately, which is not counted here."""
     from app.formats import pdf_layout
     from app.formats.pdf_extract import _extract
 
@@ -10928,7 +11305,7 @@ def test_union_box_matches_rect_union():
     rects = [
         pymupdf.Rect(378.9772014701512, 294.40010658, 391.92303898, 300.53540323),
         pymupdf.Rect(391.8992945173863, 212.31890825, 415.72914222, 219.31949272),
-        pymupdf.Rect(5, 5, 5, 9),  # 零宽的空框不算
+        pymupdf.Rect(5, 5, 5, 9),  # A zero-width empty box does not count
         pymupdf.Rect(9, 9, 3, 3),
         pymupdf.Rect(pymupdf.INFINITE_RECT()),
     ]
@@ -10938,7 +11315,8 @@ def test_union_box_matches_rect_union():
 
 
 def test_pdf_reports_its_preparation_and_writing_stages(tmp_path):
-    """整本书的版面分析、写回各要几分钟。逐页报做到哪一页，任务页才不像卡住。"""
+    """Layout analysis and writing each take several minutes for a whole book. Progress is reported page by page so the
+    job page does not look stuck."""
     from app.formats.pdf import translate_pdf
 
     doc = pymupdf.open()
@@ -10959,14 +11337,15 @@ def test_pdf_reports_its_preparation_and_writing_stages(tmp_path):
     run(translate_pdf(src, tmp_path, r, False, "zh-CN"))
     assert stages[:4] == [("分析版面", n, 3, "页") for n in (1, 2, 3)] + [("整理段落", 0, 0, "")]
     assert stages[4][0] == "准备译文" and stages[4][1] == 0 and stages[4][3] == "段"
-    # 开始翻译时清掉准备阶段；译文到齐后逐页写回
+    # Translation start clears the preparation stage; once all translations are in, writing proceeds page by page
     after = stages[stages.index(("", 0, 0, "")) :]
     assert [stage for stage in after if stage[0] == "写回译文"] == [("写回译文", n, 3, "页") for n in (0, 1, 2)]
     assert after[-1] == ("生成文件", 0, 0, "")
 
 
 def test_the_layout_model_reports_each_page_it_reads(tmp_path, monkeypatch):
-    """版面模型一页推两秒左右，在定角色前逐页推好、按页报进度，推完回到「整理段落」"""
+    """The layout model takes about two seconds per page; it runs page by page before roles are assigned, reporting
+    progress per page, and then returns to the "整理段落" stage"""
     import numpy as np
 
     from app.formats import pdf, pdf_units, pdf_vision
@@ -10995,7 +11374,7 @@ def test_the_layout_model_reports_each_page_it_reads(tmp_path, monkeypatch):
     for _ in range(3):
         page = doc.new_page(width=420, height=240)
         page.insert_text((40, 60), "A body paragraph long enough to be translated here.", fontsize=10)
-    doc.new_page(width=420, height=240)  # 没有字的页不推
+    doc.new_page(width=420, height=240)  # Pages without text are not run
     src = tmp_path / "pages.pdf"
     doc.save(src)
     session = NoBoxes()
@@ -11018,7 +11397,8 @@ def test_the_layout_model_reports_each_page_it_reads(tmp_path, monkeypatch):
 
 
 def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path, monkeypatch):
-    """改了代码、存下的分析结果作废时重新分析：两个模型的框从 boxes.json 读回，不再推，结果和第一次一样"""
+    """When a code change invalidates the saved analysis result, the analysis runs again: the boxes of both models are
+    read back from boxes.json without running the models, and the result matches the first run"""
     import numpy as np
 
     from app.formats import pdf, pdf_vision
@@ -11034,7 +11414,7 @@ def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path, monkeyp
     runs = {"mfd": 0, "layout": 0}
 
     class Formula:
-        """在 Q7 上框一个行内公式（中心、宽高、两类的分，没做 NMS）"""
+        """Box one inline formula on Q7 (center, width and height, scores for both classes, before NMS)"""
 
         def __init__(self, page):
             self.page = page
@@ -11105,8 +11485,8 @@ def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path, monkeyp
 
 
 def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monkeypatch):
-    """同时跑的两个任务不能一起用 MuPDF（find_tables 会改进程全局的字框开关）；
-    用 MuPDF 的部分在线程里做，事件循环一直能响应别的请求。"""
+    """Two jobs running at the same time must not use MuPDF together (find_tables changes a process-wide glyph box
+    setting); the MuPDF work runs in a thread, so the event loop keeps answering other requests."""
     import threading
     import time
 
@@ -11119,7 +11499,7 @@ def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monk
 
     inside = most = 0
     stages: list[tuple] = []
-    # 在事件循环所在的主线程里调用的次数
+    # Calls made on the main thread that runs the event loop
     on_loop: list[str] = []
 
     def counted(real):
@@ -11139,7 +11519,7 @@ def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monk
 
     real_geometry = pdf_units.PageGeometry
 
-    # 以前在事件循环里逐页算
+    # Previously computed page by page on the event loop
     class SlowGeometry(real_geometry):
         @classmethod
         def from_page(cls, *args, **kwargs):
@@ -11163,16 +11543,19 @@ def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monk
         )
 
     outs = run(scenario())
-    # 后到的任务等的时候任务页上显示在等
+    # While the later job waits, its job page shows that it is waiting
     assert ("等待其他任务", 0, 0, "") in stages
-    # 只看在哪个线程里调用，不量循环停了多久：机器忙的时候线程里的调用也会让循环停上零点几秒
+    # Only the calling thread is checked, not how long the loop stalls: on a busy machine calls in a thread also
+    # stall the loop for a fraction of a second
     assert on_loop == []
     assert most == 1
     assert [pymupdf.open(out)[0].get_text() for [out] in outs] == [pymupdf.open(outs[0][0])[0].get_text()] * 2
 
 
 def test_pdf_keeps_lines_the_model_returns_unchanged(tmp_path):
-    """送翻时 TeX 的 `u 合成了 ù。模型原样返回时这行不算译过，留原字，不按合成后的文字重排。"""
+    """TeX's `u was composed into ù in the text sent for translation. When the model returns the line unchanged, it
+    does not count as translated: the original glyphs stay and the line is not laid out again with the composed
+    text."""
     from app.formats.pdf import translate_pdf
 
     class Echo(MockTranslator):
@@ -11192,7 +11575,8 @@ def test_pdf_keeps_lines_the_model_returns_unchanged(tmp_path):
 
 
 def test_light_cell_shading_is_not_a_formula_stroke():
-    """浅色格子底色压在字下面，不并进公式框；图注标签的黑底和分式线照收。"""
+    """A light cell background under the text is not merged into the formula box; the black background of a caption
+    label and fraction bars are still taken in."""
     from app.formats.pdf_crop import _page_curve_rects
 
     doc = pymupdf.open()
@@ -11205,8 +11589,9 @@ def test_light_cell_shading_is_not_a_formula_stroke():
 
 
 def test_shaded_panel_of_monospace_text_is_kept_whole():
-    """底色上全是等宽字的一片（码位表、代码）留原字。txtt 名字里没有 Mono，靠等宽标志认。
-    没有底色、或者底色上夹着正文字体的，照翻；汉字也带等宽标志，不算。"""
+    """An area of monospace text on a background (code point tables, code) keeps the original glyphs. txtt has no
+    Mono in its name and is recognized by the monospace flag. Text without a background, or with body font mixed
+    in on the background, is translated; Chinese characters carry the monospace flag too and do not count."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_layout import PageScan
     from app.formats.pdf_skip import _code_panel_ids
@@ -11234,7 +11619,8 @@ def test_shaded_panel_of_monospace_text_is_kept_whole():
 
 
 def test_shaded_areas_join_cells_and_leave_out_page_background():
-    """一格一块底色、格间留缝的表并成一片；铺满整页的纸张底色不算。"""
+    """A table with one background per cell and gaps between cells is merged into one area; a paper background
+    covering the whole page does not count."""
     from app.formats.pdf_layout import scan_page
 
     doc = pymupdf.open()
@@ -11247,8 +11633,9 @@ def test_shaded_areas_join_cells_and_leave_out_page_background():
 
 
 def test_resumed_pdf_job_reads_back_its_layout_analysis(tmp_path, monkeypatch):
-    """继续翻译时原文件和代码都没变，读回上次的版面分析，不再逐页分析；写出来的和第一次一样。
-    原文件变了就重新分析。"""
+    """When a job is resumed and neither the source file nor the code has changed, the previous layout analysis is
+    read back instead of analyzing page by page again; the output matches the first run. When the source file has
+    changed, it is analyzed again."""
     from app.formats import pdf_units
     from app.formats.pdf import translate_pdf
 
@@ -11289,7 +11676,8 @@ def test_resumed_pdf_job_reads_back_its_layout_analysis(tmp_path, monkeypatch):
 
 
 def test_styles_carry_over_line_breaks():
-    """断开的每一行自带标记：跨行的粗体、字号在下一行开头重开，本行末尾收起。"""
+    """Each broken line carries its own marks: bold and font size spanning lines are closed at the end of a line and
+    reopened at the start of the next."""
     from app.formats.pdf_flow import break_lines
 
     lines = break_lines("前面的字{z80}{b}这一段很长的小字号粗体文字要跨过换行{/b}{/z}后面", 10, 100, {})
@@ -11299,7 +11687,8 @@ def test_styles_carry_over_line_breaks():
 
 
 def test_cjk_line_keeps_bold_across_a_formula():
-    """公式把一行切成几片，公式后面那片接着用前面开着的粗体，收尾以后回到常规。"""
+    """A formula cuts a line into pieces; the piece after the formula continues the bold opened before it and returns
+    to regular after the closing mark."""
     import pymupdf
 
     from app.formats.pdf_align import _place_lines
@@ -11330,8 +11719,9 @@ def test_cjk_line_keeps_bold_across_a_formula():
 
 
 def test_cjk_lines_rise_to_stay_inside_a_tight_first_line_box():
-    """原文第一行的行框比汉字字形矮时整段往上提，字形下沿不压到紧贴在下面的线；
-    最多提到字形上沿和盒子顶齐平。行框够高时不动。"""
+    """When the line box of the first original line is shorter than the Chinese glyphs, the whole paragraph moves up
+    so the bottom of the glyphs does not overlap the line right below; at most until the glyph tops are level with
+    the top of the box. When the line box is tall enough, nothing moves."""
     import pymupdf
 
     from app.formats.pdf_align import FIRST_BASELINE, _place_lines
@@ -11363,8 +11753,9 @@ def test_cjk_lines_rise_to_stay_inside_a_tight_first_line_box():
 
 
 def test_inline_colors_are_marked_relative_to_the_block():
-    """和块同色的不写标记；别的颜色写 {cRRGGBB}，同色的几个词中间的空格不断开；白字（图注标签）不写。
-    颜色在字号里面、强调外面，标记成对嵌套。"""
+    """Text in the block color gets no mark; other colors get {cRRGGBB}, and spaces between words of the same color do
+    not break the mark; white text (caption labels) gets none. Color goes inside font size and outside emphasis,
+    and marks nest in pairs."""
     from app.formats.pdf_flow import Emphasis, writer_for
 
     plain = Emphasis(False, False)
@@ -11390,7 +11781,8 @@ def test_inline_colors_are_marked_relative_to_the_block():
 
 
 def test_colors_carry_over_line_breaks():
-    """断开的每一行自带标记：跨行的颜色和里面的粗体在下一行开头重开，本行末尾收起。"""
+    """Each broken line carries its own marks: a color spanning lines and the bold inside it are closed at the end of a
+    line and reopened at the start of the next."""
     from app.formats.pdf_flow import break_lines
 
     lines = break_lines("前面的字{c0000ff}{b}这一段很长的蓝色粗体链接文字要跨过换行{/b}{/c}后面", 10, 100, {})
@@ -11400,8 +11792,9 @@ def test_colors_carry_over_line_breaks():
 
 
 def test_pdf_keeps_inline_colors_in_the_translation(tmp_path):
-    """正文里的蓝色引文、红色字串译过去还是原来的颜色，跨行的部分也是；其余的字是块的颜色。
-    模型弄乱了颜色标记（少了收尾）时整段按块的颜色写，不把后半段染色。"""
+    """Blue citations and red strings in body text keep their colors in the translation, including the parts spanning
+    lines; the rest of the text is in the block color. When the model garbles the color marks (a missing closing
+    mark), the whole paragraph is written in the block color and the second half is not colored."""
     from app.formats.pdf import translate_pdf
 
     long_blue = "这是一段很长很长的蓝色链接文字需要跨过换行才能写完" * 3
@@ -11448,7 +11841,8 @@ def test_pdf_keeps_inline_colors_in_the_translation(tmp_path):
 
 
 def test_cjk_line_keeps_colors_across_a_formula():
-    """公式把一行切成几片，公式后面那片接着用前面开着的颜色，收尾以后回到块的颜色。"""
+    """A formula cuts a line into pieces; the piece after the formula continues the color opened before it and returns
+    to the block color after the closing mark."""
     import pymupdf
 
     from app.formats.pdf_align import _place_lines
@@ -11478,8 +11872,10 @@ def test_cjk_line_keeps_colors_across_a_formula():
 
 
 def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path):
-    """目录条目只送标题：节号、点线和页码不送翻，页码留在原处靠右对齐，点线补到译文末尾。
-    点和标题排在同一个 span 里的、没有点线只有页码的（卷名一行）也一样；每条单独成段。"""
+    """Only the title of a contents entry is sent for translation: section number, leader and page number are not;
+    the page number stays in place right-aligned, and the leader is extended to the end of the translation. The
+    same holds when the dots share a span with the title, and for entries with a page number but no leader (a
+    volume name line); each entry is a paragraph of its own."""
     from app.formats.pdf import translate_pdf
 
     sent: list[str] = []
@@ -11503,7 +11899,7 @@ def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path):
             page.insert_text((x, y), ".", fontsize=10)
             x += 5
         page.insert_text((360, y), number, fontsize=10)
-    # 点和标题在同一个 span 里
+    # Dots and title in the same span
     page.insert_text((50, 112), "Exercises" + " ." * 45, fontsize=10)
     page.insert_text((360, 112), "13", fontsize=10)
     doc.save(src)
@@ -11524,7 +11920,7 @@ def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path):
     after = {w[4]: (round(w[0], 1), round(w[1], 1)) for w in words if w[4].isdigit()}
     assert after == before
     assert not any(w[4] in ("Exercises", "Notes", "Tokens") for w in words)
-    # 每条的点线从译文末尾接到页码前，中间不空出一截
+    # Each leader runs from the end of the translation to the page number without a gap
     for line in [line for b in result.get_text("dict")["blocks"] for line in b.get("lines", [])]:
         text = "".join(s["text"] for s in line["spans"])
         if text.startswith("标题") and "." in text:
@@ -11534,8 +11930,9 @@ def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path):
 
 
 def test_a_long_toc_title_with_two_leader_dots_keeps_its_page_number():
-    """标题长、排到页码跟前时点线只剩两个点。目录页上照样把点线和页码切下来，页码留在原处。
-    别的页上这样的行不动。"""
+    """When a long title reaches close to the page number, only two dots of leader remain. On a contents page the
+    leader and page number are still cut off and the page number stays in place. Such lines on other pages are
+    left alone."""
     from app.formats.pdf_extract import _cut_leaders
 
     def span(text, x0, x1, y=278.7):
@@ -11582,8 +11979,9 @@ def _glyph(text, font, size, flags, bbox, ink, math=False):
 
 
 def test_a_formula_at_a_line_start_keeps_its_opening_glue():
-    """下一行行首的 P( 是这一行式子的开头。上一行式子里 CMSY 减号的字体框伸到这一行，
-    按字体框比会把 P( 挂到上一行的 w_{n-2}w_{n-1}w_n 上，两个式子各缺一截。"""
+    """P( at the start of the next line begins the formula of that line. The font box of a CMSY minus sign in the
+    formula on the line above reaches into this line, so comparing font boxes would attach P( to w_{n-2}w_{n-1}w_n
+    on the line above and each formula would lose a piece."""
     from app.formats.pdf_units import _placeholderize
 
     reg, ital, cmsy, cmr = "NimbusRomNo9L-Regu", "NimbusRomNo9L-ReguItal", "CMSY10", "CMR10"
@@ -11641,9 +12039,10 @@ def test_a_formula_at_a_line_start_keeps_its_opening_glue():
 
 
 def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
-    """count(w)/N 的分母 N 被分进下一行那个块。整块都是 Times 斜体，按字体认不出是式子，
-    要按小一号的斜体居中叠在正文行的小斜体上认出来，挪回分子那一行。上面是正文字号的斜体、
-    或者只是左缘对齐的上下标时不挪。"""
+    """The denominator N of count(w)/N was put into the block of the next line. The whole block is Times italic, so
+    the font does not reveal a formula; it is recognized as a smaller italic centered below small italics in the
+    body line and moved back to the line of the numerator. It is not moved when the italics above are at body size,
+    or when they are only a superscript and subscript aligned at the left edge."""
     from app.formats.pdf_extract import _rejoin_split_lines
 
     reg, ital, cmr = "NimbusRomNo9L-Regu", "NimbusRomNo9L-ReguItal", "CMR10"
@@ -11696,13 +12095,13 @@ def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
     assert split["blocks"][0]["lines"] == [score, denominator, tail]
     assert split["blocks"][1]["lines"] == [rest]
 
-    # 上面是正文字号的斜体单词，不是分子：小字不挪
+    # The italic word above is at body size and is no numerator: the small text does not move
     words = data(10.0)
     small = words["blocks"][1]["lines"][0]
     _rejoin_split_lines(words)
     assert small in words["blocks"][1]["lines"]
 
-    # w^i_{i-k+1} 的上标和下标左缘对齐，不是分式：不挪
+    # The superscript and subscript of w^i_{i-k+1} share a left edge and are no fraction: nothing moves
     script = data(7.4)
     sup = script["blocks"][1]["lines"][0]
     sup["spans"][0]["bbox"], sup["spans"][0]["ink"] = (412.2, 312.9, 417.1, 321.7), (412.2, 314.9, 417.1, 319.8)
@@ -11712,8 +12111,9 @@ def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
 
 
 def test_a_citation_year_after_et_al_continues_the_sentence():
-    """Brants et al. | (2007) find that… 是同一句：et al. 的点不是句末，左括号起头的是引文年份。
-    (a) 这样的编号是下一项，(2.11) 是例句的编号，缩进排的是单独的式子，句号收住的上一行也不接。"""
+    """Brants et al. | (2007) find that… is one sentence: the period of et al. is no sentence end, and the line starting
+    with a parenthesis is the citation year. A number such as (a) is the next item, (2.11) is an example number, an
+    indented line is a displayed formula, and a previous line ending with a period is not joined either."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -11757,7 +12157,8 @@ def test_a_citation_year_after_et_al_continues_the_sentence():
 
 
 def test_block_color_follows_most_characters_not_the_longest_span():
-    """逐词一个 span 的书里，最长的一截是黑底白字的图注标签。按它取颜色，整条图注的译文写成白字。"""
+    """In a book with one span per word, the longest piece is a white-on-black caption label. Taking the color from it
+    would write the translation of the whole caption in white."""
     from app.formats.pdf_blocks import _by_chars
 
     spans = [{"text": "Figure 10.3", "color": 0xFFFFFF}] + [
@@ -11767,8 +12168,10 @@ def test_block_color_follows_most_characters_not_the_longest_span():
 
 
 def test_a_contents_page_without_leader_dots_is_found_by_its_page_numbers():
-    """没有点线的目录：标题 Table of Contents，行尾隔得很远、右缘对齐、往下递增的页码。
-    表目录页码从头再来、接在目录页后面没有标题的续页也算。不在目录旁边、没有标题的整数列表格不算。"""
+    """A table of contents without leaders: the heading Table of Contents, and page numbers far from the line ends,
+    right-aligned and increasing downward. A list of tables whose page numbers start over, and a continuation page
+    without a heading after a contents page, count too. A table with a column of integers and no heading that is
+    not next to a contents page does not."""
     from app.formats.pdf_extract import _toc_pages
 
     def line(text, x0, x1, y):
@@ -11808,7 +12211,8 @@ def test_a_contents_page_without_leader_dots_is_found_by_its_page_numbers():
 
 
 def test_the_short_centered_last_line_of_a_caption_continues_it():
-    """居中排的表格说明末行短，两边都缩进。中线对齐、小写起头，接在上一行后面。"""
+    """The last line of a centered table note is short and indented on both sides. With a matching center line and a
+    lowercase start, it is joined to the previous line."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -11823,10 +12227,10 @@ def test_the_short_centered_last_line_of_a_caption_continues_it():
         blk("performance is statistically significant (t-test with p < 0.01).", 153.5, 441.5, 98.2),
     ]
     assert len(_merge_continuations(caption)) == 1
-    # 中线不对齐的缩进行是别的东西
+    # An indented line with a different center line is something else
     offset = [caption[0], blk("performance is statistically significant (t-test with p < 0.01).", 200.0, 488.0, 98.2)]
     assert len(_merge_continuations(offset)) == 2
-    # 只剩一个词的末行全是正文词、以句号收尾，也接上
+    # A last line with a single word, all body words and ending with a period, is joined too
     short = [
         blk(
             "Figure 7 | The experiment results of Language Consistency (LC) Reward during reinforcement",
@@ -11840,8 +12244,10 @@ def test_the_short_centered_last_line_of_a_caption_continues_it():
 
 
 def test_a_line_ending_on_a_function_word_continues_into_a_capital():
-    """上一行停在 and、of 上，下一行大写起头（专名）也是接着写的；下一行是另一个列表项、
-    小一号的脚注时不接。居中段落大写起头的末行接上，题词下面小一号的出处不接。句点起头的接上。"""
+    """When the previous line stops on and or of, a next line starting with a capital (a proper name) continues it;
+    a next line that is another list item or a smaller footnote is not joined. The last line of a centered
+    paragraph starting with a capital is joined, a smaller source below an epigraph is not. A line starting with a
+    period is joined."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -11891,7 +12297,8 @@ def test_a_line_ending_on_a_function_word_continues_into_a_capital():
 
 
 def test_a_centered_formula_or_a_hanging_item_line_keeps_its_place():
-    """段落下面居中的公式行不是居中段落的末行；悬挂缩进条目的续行以左括号起头也接上。"""
+    """A centered formula line below a paragraph is not the last line of a centered paragraph; a continuation line of a
+    hanging-indent entry is joined even when it starts with an opening parenthesis."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -11912,7 +12319,7 @@ def test_a_centered_formula_or_a_hanging_item_line_keeps_its_place():
         blk("lim -1/n log p(w1:n)", 270, 383, 318),
     ]
     assert len(_merge_continuations(formula)) == 2
-    # 成句的公式行也上下空着：rel(A,B) = log(max(|in(A)|,|in(B)|)) ...
+    # A formula line forming a sentence also has space above and below: rel(A,B) = log(max(|in(A)|,|in(B)|)) ...
     spaced = [formula[0], blk("rel(A,B) = log(max(in(A), in(B))) - log(in(A) and in(B))", 215, 438, 318)]
     assert len(_merge_continuations(spaced)) == 2
     indent = [
@@ -11931,7 +12338,8 @@ def test_a_centered_formula_or_a_hanging_item_line_keeps_its_place():
         blk("(like Hong Kong, Marie Curie, or the New York Times.", 157, 380, 324),
     ]
     assert len(_merge_continuations(item)) == 1
-    # 条目只有一行，没有续行可比：粗体标签起头的条目，悬挂缩进的左括号行也是它的续行
+    # The entry has one line and no continuation line to compare with: for an entry starting with a bold label,
+    # the hanging-indent line starting with an opening parenthesis is its continuation line too
     label = blk("unused NPs: these introduce entities that are discourse-new but hearer-old", 185, 493, 656)
     label.span_lines = [
         [
@@ -11949,7 +12357,8 @@ def test_a_centered_formula_or_a_hanging_item_line_keeps_its_place():
 
 
 def test_a_block_inside_an_open_code_fence_continues_with_a_capital():
-    """上一块停在没收口的代码围栏里（“‘sql 开了还没关），下一块的 JOIN 是代码的接续；围栏关上以后大写起头照常分开。"""
+    """The previous block stops inside an unclosed code fence ("‘sql opened and not yet closed), so JOIN in the next
+    block continues the code; once the fence is closed, a capitalized start splits as usual."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -11979,7 +12388,8 @@ def test_a_block_inside_an_open_code_fence_continues_with_a_capital():
 
 
 def test_a_line_opening_with_an_inline_formula_continues_the_sentence():
-    """以行内式子起头、从栏边起笔、后面接着正文的一行是上一句的折行；缩进单独排的式子不是。"""
+    """A line starting with an inline formula at the column edge and continuing with body text is a wrapped line of
+    the previous sentence; an indented displayed formula is not."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -11999,7 +12409,7 @@ def test_a_line_opening_with_an_inline_formula_continues_the_sentence():
             ],
         )
 
-    # 正文是 Times，CMR 的 1/ 是公式（提取时标上 math）
+    # The body text is Times, so the CMR 1/ is a formula (marked math during extraction)
     def head():
         return blk([("whereas SGD is low at learning rare features. Adam with", "Times-Roman")], 105, 490, 682)
 
@@ -12007,14 +12417,15 @@ def test_a_line_opening_with_an_inline_formula_continues_the_sentence():
     assert len(_merge_continuations([head(), wrap])) == 1
     display = blk([("x", "CMMI10"), (" = y + z for all inputs", "Times-Roman")], 160, 300, 694)
     assert len(_merge_continuations([head(), display])) == 2
-    # 行首的分式碎片另成了块，剩下的从分母起头、排到右缘，下一行回到栏边
+    # The fraction fragment at the line start became a separate block; the rest starts with the denominator and
+    # reaches the right edge, and the next line returns to the column edge
     rest = blk(
         [("1−α", "CMR7"), (" had similar results. The first choice is optimal for", "Times-Roman")], 164, 490, 694
     )
     rest.line_rects = [pymupdf.Rect(164, 694, 490, 706), pymupdf.Rect(105, 706, 490, 718)]
     rest.rect = pymupdf.Rect(105, 694, 490, 718)
     assert len(_merge_continuations([head(), rest])) == 1
-    # 上标编号起头的脚注字号小一号，不是折行
+    # A footnote starting with a superscript number is one size smaller and is no wrapped line
     note = blk(
         [("2", "CMR6"), ("The analysis assumes that every possible cell of the data cube exists.", "Times-Roman")],
         164,
@@ -12026,7 +12437,8 @@ def test_a_line_opening_with_an_inline_formula_continues_the_sentence():
 
 
 def test_the_line_gap_is_measured_from_the_documents_body_lines():
-    """行框高的字体紧排的两行叠上一点，量出来是负的。正文太少量不出来时用常见值。"""
+    """Two tightly set lines in a font with tall line boxes overlap a little, so the measured gap is negative. When
+    there is too little body text to measure, a common value is used."""
     from app.formats.pdf_blocks import _LINE_GAP
     from app.formats.pdf_extract import _line_gap
 
@@ -12042,14 +12454,15 @@ def test_the_line_gap_is_measured_from_the_documents_body_lines():
         return {"blocks": [{"type": 0, "lines": lines}]}
 
     assert _line_gap([page(30)]) == -0.25
-    # 量的是正文字号的行，标题不算
+    # Only lines at body size are measured; headings do not count
     assert _line_gap([page(30), page(5, top=40, height=20, pitch=30, size=20)]) == -0.25
     assert _line_gap([page(5)]) == _LINE_GAP
 
 
 def test_a_line_far_below_by_the_documents_own_spacing_is_not_a_continuation():
-    """幻灯片字体行框高，紧排的两行量出来叠着。副标题下面隔开 1.3 个字的表头
-    按固定的 1.5 个字算还在行距里，扣掉这份文档的行距就是另起的一块。"""
+    """Slide fonts have tall line boxes, so two tightly set lines measure as overlapping. A table header 1.3 em below
+    a subtitle is still within line spacing by a fixed 1.5 em, but with the line gap of this document subtracted
+    it is a separate block."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -12070,8 +12483,9 @@ def test_a_line_far_below_by_the_documents_own_spacing_is_not_a_continuation():
 
 
 def test_a_line_tail_pair_measures_its_gap_against_the_documents_line_gap():
-    """行尾半句和下一行回到栏边的续写，行距也扣掉这份文档紧排两行之间的空。
-    提取时配对、写回时再认，两边都看块上带的同一个值。"""
+    """For a half sentence at the line end and its continuation back at the column edge, the line spacing also
+    subtracts the gap between two tightly set lines of this document. Pairing at extraction and recognizing again
+    at writing both use the same value stored on the block."""
     from app.formats.pdf_blocks import TextBlock, _same_page_line_pair
 
     def pair(line_gap):
@@ -12090,8 +12504,9 @@ def test_a_line_tail_pair_measures_its_gap_against_the_documents_line_gap():
 
 
 def test_a_running_head_does_not_take_the_first_line_below_it():
-    """书的页眉靠右排、不带句号，几截排开像一行的后半句，下一行回到栏边、小写起头。
-    认出是页眉就不接，行距卡在哪里都一样。"""
+    """A book running header is right-aligned without a period; its pieces look like the second half of a line, and
+    the next line returns to the column edge starting lowercase. Once recognized as a running header it is not
+    joined, wherever the line spacing threshold lies."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_same_line_sentences
 
@@ -12129,8 +12544,9 @@ def test_a_running_head_does_not_take_the_first_line_below_it():
 
 
 def test_a_slide_sub_point_is_not_a_wrapped_title():
-    """幻灯片正文就有三十来磅，缩进排的子项不是大标题换行的第二行。
-    大字号比这份文档的正文字号算；没量出正文字号时照旧按 12 磅。"""
+    """Slide body text is around 30pt, so an indented sub-item is not the second line of a wrapped large heading.
+    Large sizes are compared with the body size of this document; when no body size was measured, 12pt is used
+    as before."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -12158,8 +12574,9 @@ def test_a_slide_sub_point_is_not_a_wrapped_title():
 
 
 def test_a_block_cut_by_a_margin_note_does_not_take_an_indented_new_paragraph():
-    """旁注把一段正文切成上下两块，拿掉旁注后接回。下一块自己首行缩进的是另起的一段：
-    例句的译文下面接着新段落。不缩进的下一块才是被切开的同一句。"""
+    """A side note cuts a body paragraph into an upper and a lower block, which are joined back once the side note is
+    removed. A next block with its own first-line indent starts a new paragraph: a new paragraph follows the
+    translation of an example. Only an unindented next block is the same sentence cut apart."""
     from app.formats.pdf_extract import _note_cut
 
     def block(*lines):
@@ -12181,7 +12598,8 @@ def test_a_block_cut_by_a_margin_note_does_not_take_an_indented_new_paragraph():
         ("word may have very many morphemes", (142.2, 335.1, 400.0, 347.1)),
     )
     assert _note_cut(upper, lower)
-    # 列表项悬挂缩进的续行下面，比续行靠左起笔的一行是列表完了以后的正文
+    # Below the hanging-indent continuation lines of a list item, a line starting left of them is body text after
+    # the list
     item = block(
         ("2. embeddings, vectors that represent the meanings of tokens and concepts in-", (173.0, 234.0, 493.0, 247.0)),
         ("side the network", (185.0, 247.0, 251.0, 259.0)),
@@ -12193,8 +12611,10 @@ def test_a_block_cut_by_a_margin_note_does_not_take_an_indented_new_paragraph():
 
 
 def test_a_bracket_or_quote_closes_a_sentence_only_after_its_end_mark():
-    """右括号、引号收尾的行，前面有句末标点才算一句完了。引文年份 (Vilain et al., 1995)、
-    代码 r"cat|dog" 后面接着的是同一句。括号紧跟着函数名、变量的是式子收尾，下面的式子、where 不接。"""
+    """A line ending with a closing parenthesis or quote ends a sentence only when sentence-final punctuation comes
+    before it. What follows a citation year (Vilain et al., 1995) or code r"cat|dog" is the same sentence. A
+    parenthesis right after a function name or variable ends a formula, and a formula or where below it is not
+    joined."""
     from app.formats.pdf_blocks import TextBlock, _ends_sentence
     from app.formats.pdf_extract import _merge_continuations
 
@@ -12217,7 +12637,8 @@ def test_a_bracket_or_quote_closes_a_sentence_only_after_its_end_mark():
 
 
 def test_a_list_ends_where_the_next_block_starts_left_of_the_item():
-    """列表项后面第一行比它还靠左起笔的是列表完了以后的正文；悬挂缩进的续行照样接上。"""
+    """The first line after a list item that starts further left than the item is body text after the list;
+    hanging-indent continuation lines are joined as usual."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -12244,7 +12665,8 @@ def test_a_list_ends_where_the_next_block_starts_left_of_the_item():
 
 
 def test_an_example_number_stays_apart_from_its_sentence():
-    """例句编号 (25.4) 是标签，不连进右边的句子：连上以后块的左缘退到编号上，悬挂缩进的第三行就接不上了。"""
+    """The example number (25.4) is a label and is not joined to the sentence on its right: once joined, the left edge
+    of the block moves back to the number and the third, hanging-indent line can no longer be joined."""
     from app.formats.pdf_extract import _same_line_word
 
     assert not _same_line_word(
@@ -12257,7 +12679,8 @@ def test_an_example_number_stays_apart_from_its_sentence():
 
 
 def test_numbered_examples_in_one_block_are_split_apart():
-    """一块里两行例句 (1.2)、(1.3)，第一行最长，按右缘看不出是硬换行。上一句说完、下一行以例句编号起头，拆开。"""
+    """One block holds two example lines (1.2) and (1.3), the first being the longest, so the right edge does not show
+    a hard break. The previous sentence is finished and the next line starts with an example number, so they split."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, bbox):
@@ -12276,7 +12699,9 @@ def test_numbered_examples_in_one_block_are_split_apart():
 
 
 def test_a_paragraph_after_a_hanging_list_line_is_split_off():
-    """列表项折行悬挂缩进，下一段首行缩进比续行靠左，是列表完了。首行缩进的段落第二行回到栏边照常接着。"""
+    """A list item wraps with a hanging indent, and the next paragraph has a first-line indent left of the continuation
+    lines: the list has ended. The second line of a paragraph with a first-line indent returns to the column edge
+    and is joined as usual."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, bbox):
@@ -12296,7 +12721,9 @@ def test_a_paragraph_after_a_hanging_list_line_is_split_off():
 
 
 def test_a_colored_example_sentence_stays_original_but_an_epigraph_does_not():
-    """正文中间缩进排开的一句彩色例句留原文，下文要拿原句里的词来讲。章首题词也这样排，后面跟着出处，照常翻。"""
+    """A colored example sentence set off with an indent in the middle of body text keeps the original text, because the
+    following text discusses words of the original sentence. A chapter epigraph is set the same way with its source
+    after it and is translated as usual."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_units import _attribution, _colored_example
@@ -12330,8 +12757,10 @@ def test_a_colored_example_sentence_stays_original_but_an_epigraph_does_not():
 
 
 def test_numbered_and_bracket_labeled_examples_stay_original():
-    """编号起头、续行悬挂在编号右边的例句和带 [角标 …] 标注的例句留原文。
-    以式子编号起头、续行回到栏边的段落，层号上标 W[1]、整个括号只有一个词的 [EOS] 照翻。"""
+    """Examples starting with a number whose continuation lines hang right of the number, and examples with [subscript
+    …] bracket annotation, keep the original text. A paragraph starting with an equation number whose continuation
+    lines return to the column edge, the layer superscript W[1], and [EOS] with a single word in the brackets are
+    translated."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import _example_ids
 
@@ -12399,7 +12828,8 @@ def test_numbered_and_bracket_labeled_examples_stay_original():
 
 
 def test_a_verbatim_line_does_not_run_into_the_prose_below():
-    """等宽字照录的问答 Q: ... A: Charles 没有句末标点，下一行回到栏边、小写开头的正文不是它的续行。"""
+    """A question and answer reproduced in monospace, Q: ... A: Charles, has no sentence-final punctuation; the body
+    text on the next line, back at the column edge and starting lowercase, is not its continuation line."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _line_tail_match
 
@@ -12425,7 +12855,7 @@ def test_a_verbatim_line_does_not_run_into_the_prose_below():
     assert not _line_tail_match(answer, prose)
     tail = blk("A: Charles", (376, 111, 429, 121), "NimbusRomNo9L-Regu")
     assert _line_tail_match(tail, prose)
-    # 正文里夹的等宽字折到下一行，两边都是等宽，照常接上
+    # Monospace text inside body text wraps to the next line; both sides are monospace, so they are joined as usual
     mixed = blk("1. The prompt is assembled, including", (376, 111, 429, 121), "NimbusRomNo9L-Regu")
     mixed.span_lines.append([{"text": "<user> Who wrote ‘‘The Origin", "size": 10.0, "font": "txtt", "flags": 8}])
     rest = blk('of Species"?', (142, 126, 220, 138), "txtt")
@@ -12433,8 +12863,9 @@ def test_a_verbatim_line_does_not_run_into_the_prose_below():
 
 
 def test_a_line_in_a_column_of_its_own_font_stays_in_its_block():
-    """幻灯片右边一栏等宽字排的示例和左边正文同高，横向还叠上一点。它在自己的块里和上一行
-    左缘对齐、字体相同，是这一栏的一行，不当左边正文切下来的后半截挪过去。"""
+    """A monospace example in the right column of a slide is level with the body text on the left and overlaps it a
+    little horizontally. In its own block it shares the left edge and font of the line above, so it is a line of
+    that column and is not moved over as the cut-off second half of the body text on the left."""
     from app.formats.pdf_extract import _rejoin_split_lines
 
     def line(text, bbox, font):
@@ -12474,8 +12905,9 @@ def test_a_line_in_a_column_of_its_own_font_stays_in_its_block():
 
 
 def test_a_small_fraction_after_a_relation_joins_the_line():
-    """≃ 后面的 1/L 比正文小一号，和 ≃ 隔着正文的一个字宽。按小字的字宽算接不上，
-    分子分母连同后面的求和留在另一块里，被当成公式行跳过，译文里少了右半个式子。"""
+    """The 1/L after ≃ is one size smaller than the body and one body em away from ≃. Measured by the small em it
+    would not be joined, so numerator and denominator together with the following sum would stay in another
+    block and be skipped as a formula line, leaving the right half of the formula missing from the translation."""
     from app.formats.pdf_extract import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, text, font, size):
@@ -12484,7 +12916,7 @@ def test_a_small_fraction_after_a_relation_joins_the_line():
     head = line(108, 315, 84, 94, "that a differentiable estimator can be constructed:", "NimbusRomNo9L-Regu", 10.0)
     rel = line(330, 406, 84, 95, "q(z|x)f(z) dz ≃", "CMSY10", 10.0)
     numerator = line(414, 418, 82, 89, "1", "CMR7", 7.0)
-    numerator["spans"][0]["math"] = True  # _mark_math_roman 给式子里的正体数字打的标
+    numerator["spans"][0]["math"] = True  # The mark _mark_math_roman puts on upright digits in a formula
     denominator = line(414, 419, 90, 97, "L", "CMMI7", 7.0)
     data = {
         "blocks": [
@@ -12497,8 +12929,9 @@ def test_a_small_fraction_after_a_relation_joins_the_line():
 
 
 def test_a_full_line_ending_in_a_call_runs_on_into_the_next_line():
-    """行尾的 f(g(x)) 算句末，单独排的式子下面的 where 不接。排满一整行、下一行是正文词起头的照样接；
-    下一行是另一个式子的不接。"""
+    """f(g(x)) at the line end counts as a sentence end, so where below a displayed formula is not joined. A full line
+    followed by a line starting with a body word is joined as usual; a following line that is another formula is
+    not."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -12524,7 +12957,8 @@ def test_a_full_line_ending_in_a_call_runs_on_into_the_next_line():
 
 
 def test_table_split_keeps_space_spans():
-    """两端对齐的行，词间空格是单独的 span。按格子重拼文字时要带上，词才不会粘在一起。"""
+    """In justified lines the word spaces are separate spans. They must be included when text is reassembled by cells,
+    otherwise the words run together."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _split_table_blocks
     from app.formats.pdf_layout import RuledTable
@@ -12564,7 +12998,8 @@ def test_table_split_keeps_space_spans():
 
 
 def test_a_split_off_period_keeps_its_own_baseline():
-    """「 .」的空格落在根号里下标的基线上，切开后句点要用自己的起笔点，擦除时才认得到。"""
+    """The space of " ." lies on the baseline of a subscript inside a radical; after the split the period must use its
+    own origin so erasing can find it."""
     from app.formats.pdf_math import _split_covered
 
     span = {
@@ -12582,8 +13017,9 @@ def test_a_split_off_period_keeps_its_own_baseline():
 
 
 def test_a_numerator_left_in_its_own_block_rejoins_the_paragraph():
-    """分子 g⁴ 和它的下标 T,i 被分进一个单独的块，逐行挪都有同块的行贴着。整块叠在段落里
-    分母的式子上、和段落的正文行同高，一起挪回段落。"""
+    """The numerator g⁴ and its subscript T,i were put into a separate block, so moving line by line always finds a
+    line of the same block next to it. The whole block sits on the denominator formula in the paragraph, level
+    with the body lines of the paragraph, and moves back into the paragraph as one."""
     from app.formats.pdf_extract import _rejoin_split_lines
 
     reg, cmmi = "NimbusRomNo9L-Regu", "CMMI7"
@@ -12628,7 +13064,8 @@ def test_a_numerator_left_in_its_own_block_rejoins_the_paragraph():
 
 
 def test_a_radical_bar_moves_with_its_formula_under_the_line_above():
-    """根号横线上面贴着上一行的降部，横线左端接在本公式根号的右上角，照样跟公式走。"""
+    """A descender of the line above touches the top of a radical bar; the left end of the bar meets the upper right
+    corner of the radical of this formula, so the bar still goes with the formula."""
     from app.formats.pdf_crop import _absorb_one_box
 
     radical = {"text": "√", "origin": (339.8, 625.9), "ink": (339.8, 618.0, 348.1, 628.0)}
@@ -12641,8 +13078,9 @@ def test_a_radical_bar_moves_with_its_formula_under_the_line_above():
 
 
 def test_a_formula_clip_reaches_into_its_own_gaps_beside_a_comma():
-    """𝒩 的笔画伸进它和 ( 之间的空档。公式后面紧挨着逗号时，只有最右边的矩形要让着逗号，
-    中间的矩形照常扩，空档不能被切掉。"""
+    """The strokes of 𝒩 reach into the gap between it and (. When a comma follows the formula directly, only the
+    rightmost rectangle must make room for the comma; the middle rectangles widen as usual, so the gap is not
+    cut off."""
     from app.formats.pdf_place import _formula_form
     from app.formats.pdf_write import _page_form
 
@@ -12656,7 +13094,7 @@ def test_a_formula_clip_reaches_into_its_own_gaps_beside_a_comma():
         {"text": ")", "bbox": (464.2, 490.1, 468.0, 500.1)},
     ]
     formula = {"bbox": pymupdf.Rect(407.1, 489.9, 468.0, 500.1), "spans": spans}
-    # 前面的 for 和后面的逗号都紧挨着公式
+    # The for before and the comma after both sit right against the formula
     word = {"text": "for", "bbox": (395.2, 489.9, 407.0, 500.0)}
     comma = {"text": ",", "bbox": (468.0, 489.9, 470.6, 500.0)}
     xref = _formula_form(doc, page, fms, formula, "/Fx", [dict(span) for span in spans] + [word, comma])
@@ -12674,8 +13112,9 @@ def test_a_formula_clip_reaches_into_its_own_gaps_beside_a_comma():
 
 
 def test_a_displayed_formula_set_in_the_text_italic_is_kept():
-    """用正文斜体写变量的书，单独排的式子按字体认不出公式字符。带算符、正文词不超过两个的留原字；
-    单独排的整句（L(ŷ,y) = How much ŷ differs from the true y）照翻。"""
+    """In a book writing variables in body italics, the font does not reveal formula characters in displayed
+    formulas. Those with an operator and at most two body words keep the original glyphs; a whole sentence set on
+    its own line (L(ŷ,y) = How much ŷ differs from the true y) is translated."""
     from app.formats.pdf_extract import _untranslatable
 
     def spans(*parts):
@@ -12730,7 +13169,8 @@ def test_a_displayed_formula_set_in_the_text_italic_is_kept():
 
 
 def test_a_fragment_inside_a_kept_formula_is_part_of_it():
-    """分数的分母 dx 单成一行，落在留原字的式子行（dv · dv）的框里，是式子的一截。"""
+    """The denominator dx of a fraction forms its own line inside the box of a formula line that keeps its original
+    glyphs (dv · dv), so it is a piece of that formula."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _inside_kept_formula
 
@@ -12744,7 +13184,8 @@ def test_a_fragment_inside_a_kept_formula_is_part_of_it():
 
 
 def test_text_under_a_big_cmex_radical_is_part_of_the_formula():
-    """CMEX 的大号根号提出来是字母 p，字体框比字形高。横线从它墨迹的右上角起头，线下的 Var 是被开方数。"""
+    """The large CMEX radical is extracted as the letter p, with a font box taller than the glyph. The bar starts at
+    the upper right corner of its ink, and the Var below the bar is the radicand."""
     from app.formats.pdf_math import _mark_radicands, _PageChars
 
     doc = pymupdf.open()
@@ -12772,7 +13213,8 @@ def test_text_under_a_big_cmex_radical_is_part_of_the_formula():
 
 
 def test_a_smaller_line_in_another_colour_does_not_continue_a_title():
-    """幻灯片标题（51 磅灰色）下面小一号的紫色例句不是标题的折行，不并成一段。"""
+    """A smaller purple example below a slide title (51pt, gray) is not a wrapped line of the title and is not merged
+    with it."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -12804,7 +13246,8 @@ def test_a_smaller_line_in_another_colour_does_not_continue_a_title():
 
 
 def test_an_index_entry_ends_at_its_page_numbers():
-    """索引页上一条到页码就完整了：下一行小写起头也是另一条，不并成一段。正文的行很少停在「, 数字」上。"""
+    """On an index page an entry is complete at its page number: a next line starting lowercase is another entry and is
+    not merged. Body lines rarely stop on ", number"."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _index_page, _merge_continuations
 
@@ -12840,7 +13283,8 @@ def test_an_index_entry_ends_at_its_page_numbers():
 
 
 def test_no_borderless_table_is_found_on_an_index_page(monkeypatch):
-    """索引页上几栏短条目行首对齐，几行凑在一起像无线的格子表。和目录页一样不找表，条目照翻。"""
+    """On an index page, columns of short entries with aligned line starts look like a table without rules. As on a
+    contents page, no table search runs, and the entries are translated."""
     from dataclasses import replace
 
     from app.formats import pdf_extract
@@ -12865,8 +13309,9 @@ def test_no_borderless_table_is_found_on_an_index_page(monkeypatch):
 
 
 def test_an_index_entry_with_many_page_numbers_is_translated():
-    """词目后面一串页码，字母占不到四成，也是一条词目，不当成一行数留原文。只有页码的一行照旧留原文。
-    只有一两个字母的词目（F0）也是一条。"""
+    """A headword followed by a run of page numbers, with letters making up less than 40 percent, is still an entry
+    and does not keep the original text as a line of numbers. A line with only page numbers still keeps the
+    original text. A headword of one or two letters (F0) is an entry too."""
     from app.formats import pdf_extract
 
     doc = pymupdf.open()
@@ -12879,12 +13324,14 @@ def test_an_index_entry_with_many_page_numbers_is_translated():
     blocks, _frames, _scans = pdf_extract._extract(doc)
     texts = {block.text for block in blocks}
     assert "perplexity, 27, 76, 88, 203" in texts and "CRF, 414" in texts
-    # 只有一个字母的词目也成块，索引重排时跟着挪，不留在原处被压住
+    # A one-letter headword forms a block too and moves during index reflow instead of staying in place and being
+    # covered
     assert "F0, 340" in texts
 
 
 def test_the_index_at_the_back_stays_original(tmp_path):
-    """书后的索引按原文字母排序，页码指向原书页，整页留原文。前面的正文照翻。"""
+    """The index at the back of a book is sorted by the original alphabet and its page numbers point to the original
+    pages, so the whole page keeps the original text. The body text before it is translated."""
     from app.formats.pdf import _plan_pdf
 
     class Runner:
@@ -12910,8 +13357,9 @@ def test_the_index_at_the_back_stays_original(tmp_path):
 
 
 def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
-    """索引条目折行时续行悬挂缩进。下一行起笔不比这一行靠右就是另一条（see 引用没有页码）；
-    页码折到下一行时那一行只有页码，可能分在另一块里；两端对齐拆开的一行按整行看。"""
+    """A wrapped index entry has hanging-indent continuation lines. A next line starting no further right than this
+    one is another entry (see references have no page numbers); page numbers wrapped to the next line form a line
+    of only page numbers, possibly in another block; a line split by justification is judged as a whole line."""
     from app.formats.pdf_extract import _index_entry_ends
 
     def item(text, x0, y0, x1):
@@ -12925,7 +13373,8 @@ def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
     assert _index_entry_ends(see, []) == {1, 2}
     head = [item("Chinese", 179.3, 206.6, 205.0), item("as verb-framed language,", 187.3, 216.1, 271.3)]
     assert 0 not in _index_entry_ends(head, [])
-    # 续行几行缩进一样，到下一条从首行的左缘起笔才收住
+    # Continuation lines share the same indent; the entry ends only when the next entry starts at the left edge of
+    # the first line
     long = [
         item("Transformations and Dis-", 77.4, 518.7, 169.4),
         item("course Analysis", 101.3, 528.2, 169.4),
@@ -12938,10 +13387,11 @@ def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
     numbers = [pymupdf.Rect(203.3, 661.6, 215.2, 671.9)]
     assert _index_entry_ends(split, numbers) == {1}
     assert _index_entry_ends(split, []) == set()
-    # 续行带着逗号收住，页码和续行缩进一样
+    # The continuation line ends with a comma, and the page number has the same indent as the continuation line
     wrapped = [item("as weighted average", 187.3, 225.6, 271.3), item("branching factor,", 203.3, 235.0, 271.3)]
     assert _index_entry_ends(wrapped, [pymupdf.Rect(203.3, 244.5, 211.2, 254.1)]) == {1}
-    # 块从一条的续行起头，停在断开的半个词上，下一行和它对齐也是同一条
+    # The block starts with a continuation line of an entry and stops on half a broken word; the next line aligned
+    # with it belongs to the same entry
     broken = [
         item("for pronoun resolu-", 203.3, 456.0, 271.3),
         item("tion, 566", 203.3, 465.5, 231.6),
@@ -12951,8 +13401,9 @@ def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
 
 
 def test_a_paragraph_indented_under_an_inset_line_starts_on_its_own():
-    """例句的译文缩进排成一行，下一段的首行缩进比它靠左、比后面几行靠右，是新的一段。
-    两端对齐的参考文献一行拆成几截，按整行的左缘比，不拆。居中排的几行不算缩进。"""
+    """The translation of an example is set as one indented line; the next paragraph has a first-line indent left of
+    it and right of the lines that follow, so it is a new paragraph. A justified reference line split into pieces
+    is compared by the left edge of the whole line and is not split. Centered lines do not count as indented."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1):
@@ -12978,7 +13429,8 @@ def test_a_paragraph_indented_under_an_inset_line_starts_on_its_own():
         item("Henderson, P., X. Li, D. Jurafsky,", 213.3, 266.7, 339.3),
     ]
     assert any({2, 3} <= set(group) for group in _split_lines(entry))
-    # 居中排的作者单位越往下越宽，三行对着同一条中线，不是缩进
+    # A centered author affiliation gets wider line by line; the three lines share one center line and are not
+    # indented
     author = [
         item("Machine Learning Group", 339.9, 182.1, 441.1),
         item("Universiteit van Amsterdam", 334.4, 193.0, 446.6),
@@ -12988,8 +13440,9 @@ def test_a_paragraph_indented_under_an_inset_line_starts_on_its_own():
 
 
 def test_an_indented_line_after_a_full_line_that_ends_a_sentence_starts_a_paragraph():
-    """上一行排满、恰好在句末收住，下一行缩进一个半字宽、排到右缘，再下一行回到左缘：是新一段。
-    上下是编号条目的是参考文献悬挂缩进的续行，不拆。"""
+    """The previous line is full and ends exactly at a sentence end, the next line is indented by one and a half em
+    and reaches the right edge, and the line after it returns to the left edge: a new paragraph. With numbered
+    entries above and below, it is a hanging-indent continuation line of a reference and is not split."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1):
@@ -13017,8 +13470,9 @@ def test_an_indented_line_after_a_full_line_that_ends_a_sentence_starts_a_paragr
 
 
 def test_numbers_wrapped_under_an_indented_first_line_stay_in_the_paragraph():
-    """段落首行缩进，没说完的一串数折到下一行的左缘（13 tokens: 11865, … | 885, 220, … 0)）：
-    这一行和上一行对齐，是句尾，不另成一段。"""
+    """A paragraph with a first-line indent has an unfinished list of numbers wrapped to the left edge of the next line
+    (13 tokens: 11865, … | 885, 220, … 0)): this line aligns with the previous one and ends the sentence, so it
+    does not become a new paragraph."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1):
@@ -13038,7 +13492,8 @@ def test_numbers_wrapped_under_an_indented_first_line_stay_in_the_paragraph():
         item("Clitics like 's are segmented off when they appear on proper nouns like Jane, but", 142.0, 229.0, 475.0),
     ]
     assert _split_lines(items) == [[0, 1, 2, 3], [4, 5]]
-    # 上一行停在句中的 et al. 上，下一行的年份是引文的后半截
+    # The previous line stops on et al. inside a sentence, and the year on the next line is the second half of the
+    # citation
     cited = [
         item("least another star and/or BH in close proximity to carry away", 303.3, 728.3, 558.4),
         item("the excess energy and momentum (Heggie 1975; Tanikawa et al.", 303.3, 739.7, 558.4),
@@ -13048,8 +13503,10 @@ def test_numbers_wrapped_under_an_indented_first_line_stay_in_the_paragraph():
 
 
 def test_caption_lines_wrapped_back_under_the_label_stay_in_the_caption():
-    """图注的标签（Figure 4.12）和后面的正文隔着一段空，是同一行的两截。折下来的行回到标签的左缘，
-    按整行比不是左跳，不另成一段：只剩 (2012). 的一行另成一段时整行留原文，译文写完它还在下一行。"""
+    """A caption label (Figure 4.12) and the text after it are separated by a gap but are two pieces of one line. The
+    wrapped line returns to the left edge of the label, which is no jump to the left when compared by whole line,
+    so it does not start a new paragraph: if the line with only (2012). became a paragraph of its own, it would
+    keep the original text and still sit on the next line after the translation."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1, font="NimbusRomNo9L-Regu"):
@@ -13069,8 +13526,9 @@ def test_caption_lines_wrapped_back_under_the_label_stay_in_the_caption():
 
 
 def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
-    """索引条目停在逗号上，页码折到下一行、缩到条目文字下面。页码那一行跟着条目一起送翻，
-    条目到页码收住，下一条照常另起。"""
+    """An index entry stops on a comma, and its page numbers wrap to the next line, indented below the entry text.
+    The page number line is sent for translation together with the entry, the entry ends at the page numbers, and
+    the next entry starts anew as usual."""
     from app.formats.pdf_extract import _index_entry_ends, _split_lines
 
     def item(text, x0, y0, x1):
@@ -13095,8 +13553,8 @@ def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
 
 
 def test_page_numbers_in_the_next_block_join_the_index_entry():
-    """页码折到下一行、分在下一块里。只有页码的一行紧贴在停在逗号上的条目下面，接到条目上；
-    下面另起的条目不接。"""
+    """The page numbers wrap to the next line and land in the next block. A line with only page numbers right below an
+    entry ending on a comma is joined to the entry; the entry starting below is not."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations, _wraps_from_above
 
@@ -13115,8 +13573,10 @@ def test_page_numbers_in_the_next_block_join_the_index_entry():
 
 
 def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down():
-    """索引一栏排满到下沿。译文要两行的条目多占一行，下面的条目（含留原文的）跟着往下挪，
-    整栏行距收紧一点，末条不出下沿；别栏不动。多出的行太多就照旧不挪。"""
+    """An index column is full to the bottom edge. An entry whose translation needs two lines takes one extra line,
+    the entries below it (including those keeping the original text) move down, the line spacing of the column
+    tightens a little, and the last entry stays within the bottom edge; other columns do not move. With too many
+    extra lines nothing moves, as before."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_layout import Column, PageGeometry
     from app.formats.pdf_write import _index_reflow
@@ -13150,7 +13610,8 @@ def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down():
     assert not any(id(b) in moved for b in right)
     crowded = [(b, "在命名实体识别(NER)中, 241, 419") for b in left]
     assert _index_reflow(crowded, left, geo, True, {}, set(), bottom) == {}
-    # 第 5 条提取时丢了，原字留在原处。上面四条挤不下多出来的一行，不挪，也不压到原字上
+    # Entry 5 was lost during extraction and its original glyphs stay in place. The four entries above cannot fit
+    # the extra line, so they do not move and do not cover the original glyphs
     dropped = left[4].rect
     rest = [b for n, b in enumerate(left) if n != 4]
     moved = _index_reflow(
@@ -13160,7 +13621,7 @@ def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down():
 
 
 def test_an_index_entry_is_never_centered():
-    """缩进的子条目正好落在栏中间，也是靠左排的。"""
+    """An indented subentry that falls exactly in the middle of the column is still left-aligned."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_layout import Column, PageGeometry
     from app.formats.pdf_write import _write_rect
@@ -13184,8 +13645,9 @@ def test_an_index_entry_is_never_centered():
 
 
 def test_the_rest_of_a_broken_word_continues_the_line_above():
-    """上一行停在连字符断开的半个词上，下一行缩进多少都是接着写的（expres- | sions, 50, 65），
-    字母少也不当成一行页码留原文。索引页上比上一行缩进得深的也是续行（as, 51）。"""
+    """When the previous line stops on half a hyphenated word, the next line continues it at any indent
+    (expres- | sions, 50, 65), and despite few letters it is not kept in the original as a line of page numbers.
+    On an index page a line indented deeper than the previous one is a continuation line too (as, 51)."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _wraps_from_above
 
@@ -13202,8 +13664,9 @@ def test_the_rest_of_a_broken_word_continues_the_line_above():
 
 
 def test_one_sentence_per_line_is_not_joined_into_a_paragraph():
-    """幻灯片上逐行排的例句：各占一行、左缘对齐，好几处上一行后面还放得下下一行的第一个词，
-    小写起头也不并成一段。段落里折行的上一行放不下下一个词，照常接上。"""
+    """Examples set line by line on a slide each take one line with aligned left edges; in several places the first
+    word of the next line would still fit after the previous line, and even with a lowercase start they are not
+    merged. In a paragraph, a wrapped line with no room for the next word is joined as usual."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _line_lists, _merge_continuations
     from app.formats.pdf_frame import TextFrame
@@ -13231,8 +13694,9 @@ def test_one_sentence_per_line_is_not_joined_into_a_paragraph():
 
 
 def test_a_glyph_arrow_over_a_word_marks_both_as_formula():
-    """esvect 的 \\vv{woman} 提出来是「#    »」：没有字母、墨迹是一条细带、基线比词高不到一个字，
-    紧贴在 woman 上面。箭头和 woman 是式子，后面的 is close to 照翻。上一行的标点不算。"""
+    """esvect's \\vv{woman} is extracted as "#    »": no letters, ink that is a thin band, and a baseline less than an
+    em above the word, right on top of woman. The arrow and woman are a formula, and the is close to after them is
+    translated. Punctuation on the previous line does not count."""
     from app.formats.pdf_math import _mark_overlays, _PageChars
 
     doc = pymupdf.open()
@@ -13263,7 +13727,8 @@ def test_a_glyph_arrow_over_a_word_marks_both_as_formula():
 
 
 def test_a_word_grid_is_translated_cell_by_cell():
-    """一格一个词的词表：各格自成一条，同一排的几格不连成一句。表下面同一块里的图注标签不算格子。"""
+    """A word table with one word per cell: each cell is its own entry, and cells in the same row are not joined into a
+    sentence. A caption label in the same block below the table is not a cell."""
     from app.formats.pdf_extract import _grid_cells
 
     words = [
@@ -13288,7 +13753,8 @@ def test_a_word_grid_is_translated_cell_by_cell():
 
 
 def test_a_relation_word_after_an_equals_sign_in_the_formula_is_dropped():
-    """y_c = 收进了式子图，后面的 1 是正文字。模型又写一遍「为 1」，读出来是「y_c = 为 1」。"""
+    """y_c = went into the formula image, and the 1 after it is body text. The model writes "为 1" once more, so the
+    result reads "y_c = 为 1"."""
     from app.formats.pdf_restore import _restore_placeholders
 
     formulas = [{"text": "y\x01b\x02c\x01/b\x02 ="}, {"text": "n\x01b\x020\x01/b\x02"}]
@@ -13298,7 +13764,8 @@ def test_a_relation_word_after_an_equals_sign_in_the_formula_is_dropped():
 
 
 def test_a_word_broken_at_the_block_end_continues_in_the_next_block():
-    """上一块停在连字符断开的半个词上，只有两个词也接上下一块（retrieval-augmented genera- | tion, 267）。"""
+    """When the previous block stops on half a hyphenated word, it is joined to the next block even with only two words
+    (retrieval-augmented genera- | tion, 267)."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -13320,14 +13787,14 @@ def test_a_word_broken_at_the_block_end_continues_in_the_next_block():
         [blk("retrieval-augmented genera-", 95.4, 217.0, 187.4), blk("tion, 267", 119.3, 226.2, 147.7, entry=True)]
     )
     assert [block.text for block in merged] == ["retrieval-augmented generation, 267"]
-    # 两个词的标签后面不是断开的词，不接
+    # A two-word label not followed by a broken word is not joined
     kept = _merge_continuations([blk("Figure label", 95.4, 217.0, 150.0), blk("tion, 267", 119.3, 226.2, 147.7)])
     assert len(kept) == 2
 
 
 def test_a_model_name_broken_at_its_hyphen_continues_with_the_number():
-    """行尾停在型号的连字符上（VE- | 8. Both datasets …），下一行的数字是型号的后半截，不是编号。
-    接回去连字符留着、中间不加空格"""
+    """The line ends on the hyphen of a model name (VE- | 8. Both datasets …), so the number on the next line is the
+    second half of the model name, not a list number. When joined, the hyphen stays and no space is inserted"""
     from app.formats.pdf_blocks import TextBlock, _join_lines
     from app.formats.pdf_extract import _merge_continuations
 
@@ -13357,7 +13824,9 @@ def test_a_model_name_broken_at_its_hyphen_continues_with_the_number():
 
 
 def test_the_left_column_of_an_index_page_is_not_a_side_note():
-    """索引页分几栏，最左一栏比正文版心靠外，像页边旁注。旁注里的短词留原文，索引条目就没有翻。"""
+    """An index page has several columns, and the leftmost lies outside the text area of the body, like side notes in
+    the margin. Short words in side notes keep the original text, so taking the column for side notes would leave
+    the index entries untranslated."""
     from app.formats import pdf_extract
 
     doc = pymupdf.open()
@@ -13378,8 +13847,9 @@ def test_the_left_column_of_an_index_page_is_not_a_side_note():
 
 
 def test_the_rest_of_a_numbered_example_stays_original():
-    """编号例句的第二句、换行的 wine.、IT 对照另成了块：紧贴在下面、和编号后的句子对齐的块也是例句。
-    回到编号左缘的正文、段首缩进被旁注切出来的首行照翻。"""
+    """The second sentence of a numbered example, the wrapped wine. and the IT gloss became separate blocks: a block
+    right below and aligned with the sentence after the number is part of the example too. Body text back at the
+    left edge of the number, and a first line with an indent cut out by a side note, are translated."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import _example_ids
 
@@ -13406,8 +13876,10 @@ def test_the_rest_of_a_numbered_example_stays_original():
 
 
 def test_sentences_after_a_separate_example_number_stay_original():
-    """编号 (22.9) 字母少，提取时没进块，后面的 a. Shelly cut … 另成一块：编号右边同一行起笔的块是例句，
-    下面对齐的 b.、逐词对译下面的意译也是。下一段正文、正文里引到编号的句子照翻。"""
+    """The number (22.9) has few letters and did not get into a block during extraction, so the following a. Shelly
+    cut … became a block of its own: a block starting on the same line right of the number is an example, and so
+    are the aligned b. below and the free translation below a word-by-word gloss. The next body paragraph and body
+    sentences referring to the number are translated."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_layout import ExampleNumber
     from app.formats.pdf_skip import _example_ids
@@ -13433,8 +13905,9 @@ def test_sentences_after_a_separate_example_number_stay_original():
 
 
 def test_lines_under_a_number_row_without_a_block_stay_original():
-    """(22.12) fall.01 整行字母少没成块：编号下面缩进排的 Arg1: …、空一行对齐排的 Ex1: 是例句。
-    段首缩进起笔的下一段不算"""
+    """The line (22.12) fall.01 has few letters and formed no block: Arg1: … indented below the number and Ex1:
+    aligned after a blank line are examples. The next paragraph starting with a first-line indent does not
+    count"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_layout import ExampleNumber
     from app.formats.pdf_skip import _example_ids, _example_tails, _ExampleHead
@@ -13461,7 +13934,8 @@ def test_lines_under_a_number_row_without_a_block_stay_original():
     found = _example_ids([*roles, label, note, body], numbers)
     assert found == {id(block) for block in (*roles, label)}
 
-    # (5.6) 编号短，句子从 185 起笔；正文段首缩进 15，一行的段落从 175 起笔
+    # The number (5.6) is short and the sentence starts at 185; body paragraphs are indented by 15, so a one-line
+    # paragraph starts at 175
     short = ExampleNumber(pymupdf.Rect(160.2, 377.0, 179.0, 389.0), pymupdf.Rect(160.2, 377.0, 361.0, 389.0), 185.0)
     head = _ExampleHead(0, short.row, short.rect.x0, short.text_x0, 0.0, None)
     paragraph = blk(
@@ -13471,8 +13945,9 @@ def test_lines_under_a_number_row_without_a_block_stay_original():
 
 
 def test_a_displayed_line_inside_a_block_is_its_own_paragraph():
-    """缩进排开、没排满的一行例句和下一行的正文在同一块里：例句自成一段，下一行小写起头也不并进来。
-    绕图排的段落首行和下一行收在同一处，照旧是一段。"""
+    """An indented example line that is not full shares a block with the body text on the next line: the example is a
+    paragraph of its own, and the next line is not merged into it even when it starts lowercase. In a paragraph
+    set around a figure, the first and next lines end at the same x and are still one paragraph."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1):
@@ -13492,7 +13967,7 @@ def test_a_displayed_line_inside_a_block_is_its_own_paragraph():
 
 
 def test_a_colored_example_on_its_own_line_needs_no_period():
-    """单独排开的一行彩色例句常常不带句号（The green witch arrived）。"""
+    """A colored example set on its own line often has no period (The green witch arrived)."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_units import _colored_example
@@ -13514,8 +13989,10 @@ def test_a_colored_example_on_its_own_line_needs_no_period():
 
 
 def test_text_annotated_with_arcs_stays_original():
-    """依存弧从词连到词，弧上的圆角框里是标签（nsubj）。句子译成中文以后弧对不上词，句子和标签都留原文。
-    曲线图里一头高一头低的线不是弧，旁边的正文照翻。"""
+    """Dependency arcs connect words, with labels (nsubj) in rounded boxes on the arcs. Once the sentence is
+    translated into Chinese the arcs no longer match the words, so the sentence and labels keep the original text.
+    A line in a chart that is high at one end and low at the other is no arc, and the body text beside it is
+    translated."""
     from app.formats import pdf_extract, pdf_skip
 
     doc = pymupdf.open()
@@ -13538,8 +14015,9 @@ def test_text_annotated_with_arcs_stays_original():
 
 
 def test_a_wrapped_formula_with_tall_glyph_boxes_is_split_by_baseline():
-    """折行的公式上下两片（(o_i ≻ | o_j|x)）字体框交叠一点，按基线看是两行，收成两片，
-    不并成一个横跨整栏的框。数值取自 ed3book p226。"""
+    """The upper and lower pieces of a wrapped formula ((o_i ≻ | o_j|x)) have slightly overlapping font boxes; by
+    baseline they are two lines, so they become two pieces and are not merged into one box spanning the column.
+    Values from ed3book p226."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, box, base, ink=None):
@@ -13576,8 +14054,9 @@ def test_a_wrapped_formula_with_tall_glyph_boxes_is_split_by_baseline():
 
 
 def test_formula_pieces_keep_their_source_order():
-    """一个公式被正文字号的变量切成几截（{v2} {b}W{/b}{v3}），模型把次序调了，按原文换回去。
-    中间夹着中文的不动；两个字母以上的是词，不算公式串里的东西。"""
+    """A formula cut into pieces by a body-size variable ({v2} {b}W{/b}{v3}) whose order the model changed is put
+    back in the original order. Pieces with Chinese between them are left alone; two or more letters form a word,
+    which is not part of the formula sequence."""
     from app.formats.pdf_restore import _keep_formula_chains
 
     source = "compute the value of each{v1} as{v2} {b}W{/b}{v3}."
@@ -13590,7 +14069,8 @@ def test_formula_pieces_keep_their_source_order():
 
 
 def test_a_period_after_a_small_denominator_does_not_make_it_a_heading():
-    """分母 Σ_j e^{S·T_j} 后面跟着正文字号的句号。句号不算正文字号的字，分母照样接回分式所在的行。"""
+    """The denominator Σ_j e^{S·T_j} is followed by a body-size period. The period does not count as a body-size
+    character, so the denominator is still joined back to the line of the fraction."""
     from app.formats.pdf_extract import _larger_text
 
     denominator = {
@@ -13607,15 +14087,16 @@ def test_a_period_after_a_small_denominator_does_not_make_it_a_heading():
 
 
 def _draw_visible_space(page, x, baseline):
-    """按 LaTeX 的画法用三条短线画一个 ␣：底线 3 点长，两头各立一条 1.4 点的竖线。"""
+    """Draw a ␣ from three short lines the way LaTeX does: a 3pt base line with a 1.4pt vertical line at each end."""
     page.draw_line((x, baseline - 1.4), (x, baseline), width=0.4)
     page.draw_line((x, baseline), (x + 3, baseline), width=0.4)
     page.draw_line((x + 3, baseline - 1.4), (x + 3, baseline), width=0.4)
 
 
 def test_drawn_visible_space_is_read_into_the_text():
-    """画出来的 ␣ 提取不到字。盖在空格上的换掉空格，空隙里没有字的补一个 ␣，和前面的字隔开一个空格。
-    不在字行基线上的同样形状（图里的刻度）不算。"""
+    """A drawn ␣ yields no text on extraction. One covering a space replaces the space, and one in a gap without text
+    adds a ␣, separated from the preceding text by a space. The same shape off the text baseline (a tick mark in a
+    figure) does not count."""
     from app.formats.pdf_layout import scan_page
     from app.formats.pdf_math import _mark_visible_spaces, _PageChars
 
@@ -13639,8 +14120,9 @@ def test_drawn_visible_space_is_read_into_the_text():
 
 
 def test_index_entries_get_notes_with_their_parent_entry():
-    """索引条目的说明：子条目按缩进挂在前面最近一条缩进更浅的条目下面，有子条目的举出前几个。
-    跨栏时按各栏自己的左缘量缩进。不在索引页上的单元没有说明。"""
+    """Notes for index entries: a subentry is attached by indent to the nearest preceding entry with a shallower
+    indent, and an entry with subentries lists the first few. Across columns the indent is measured from the left
+    edge of each column. Units not on an index page have no note."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_units import _index_notes
 
@@ -13670,8 +14152,9 @@ def test_index_entries_get_notes_with_their_parent_entry():
 
 
 def test_wrapped_monospace_phrase_keeps_its_word_space():
-    """等宽例句 my dog is | hairy 在词间断行，两片并排时留出原文空格那么宽的词距；
-    网址在词中间断行、式子在运算符后面断行的，两片照旧挨着。"""
+    """The monospace example my dog is | hairy breaks between words, so the two pieces side by side keep a word space
+    as wide as the original space; for a URL broken inside a word or a formula broken after an operator, the two
+    pieces still touch."""
     from app.formats.pdf_blocks import _PART_GAP
     from app.formats.pdf_units import _wrap_gap
 
@@ -13694,8 +14177,9 @@ def test_wrapped_monospace_phrase_keeps_its_word_space():
 
 
 def test_inline_formulas_keep_their_size_next_to_chinese():
-    """中文字号比原文小一成，看着一样大。公式按中文的字号比，没缩字号时是原大，不跟着小一成；
-    整段缩小时公式跟着缩。"""
+    """The Chinese font size is 10 percent smaller than the original and looks the same size. Formulas are scaled
+    relative to the Chinese size, so without shrinking they keep their original size instead of becoming 10 percent
+    smaller; when the whole paragraph shrinks, formulas shrink with it."""
     from app.formats.pdf_place import _formula_slot
 
     formula = {"has_img": True, "w": 40.0, "h": 8.0, "d": 2.0, "text": "f(x)"}
@@ -13703,14 +14187,15 @@ def test_inline_formulas_keep_their_size_next_to_chinese():
     assert abs(scale - 1.0) < 1e-6
     scale, _, _ = _formula_slot(formula, 10.0, 8.8 * 0.9, 8.8)
     assert abs(scale - 0.9) < 1e-6
-    # 不传 reference 时照旧按原文字号比
+    # Without reference, the ratio uses the original font size as before
     scale, _, _ = _formula_slot(formula, 10.0, 8.8)
     assert abs(scale - 0.88) < 1e-6
 
 
 def test_a_clipped_plot_path_does_not_cover_the_text_below_it():
-    """剪进图框的曲线路径框伸到页外几万点。按剪裁区裁过，只剩图框里那一截，盖不住下面的正文。
-    整个落在剪裁区外面的路径去掉。"""
+    """The path box of a curve clipped into a figure frame reaches tens of thousands of points off the page. Clipped
+    to the clip area, only the part inside the frame remains, so it cannot cover the body text below. Paths entirely
+    outside the clip area are removed."""
     from app.formats.pdf_layout import visible_drawings
 
     doc = pymupdf.open()
@@ -13728,8 +14213,9 @@ def test_a_clipped_plot_path_does_not_cover_the_text_below_it():
 
 
 def test_a_bold_run_in_label_starts_a_paragraph():
-    """上一行在句末收住，下一行以粗体标签起头：几个词的段落小标题（八个词也算）、
-    粗体的定理名加编号、Q2 这样的编号条目，都另起一段。按词拆开的 span 之间补上空格再认。"""
+    """The previous line ends a sentence and the next line starts with a bold label: a paragraph heading of a few
+    words (eight words count too), a bold theorem name with a number, and a numbered item such as Q2 all start a
+    new paragraph. Spaces are added between spans split by word before recognizing them."""
     from app.formats.pdf_extract import _label_lead, _split_lines
 
     def span(text, x0, x1, bold=False):
@@ -13768,8 +14254,9 @@ def test_a_bold_run_in_label_starts_a_paragraph():
 
 
 def test_an_indented_paragraph_start_is_not_a_continuation():
-    """段落首行缩进的文档里，首行缩进、大写的词起头的块是新的一段：上一块停在 and 上
-    （下面是单独排的式子）也不接。小写起头、行首是式子的照旧接上。"""
+    """In a document with first-line indents, a block with a first-line indent starting with a capitalized word is a
+    new paragraph and is not joined even when the previous block stops on and (with a displayed formula below).
+    A block starting lowercase or with a formula at the line start is joined as before."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -13794,8 +14281,9 @@ def test_an_indented_paragraph_start_is_not_a_continuation():
 
 
 def test_a_paragraph_continues_after_a_page_of_figures():
-    """下一页整页是图，只有图注和紧贴着的分图说明 (C) …：上一页没写完的段落接在再下一页。
-    图注下面紧接着正文字号的段落时，那一页有正文，不跳过。"""
+    """The next page is a full-page figure with only a caption and the subfigure note (C) … right next to it: the
+    unfinished paragraph of the previous page continues on the page after that. When a body-size paragraph follows
+    right below the caption, that page has body text and is not skipped."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_merge import _cross_page_units
 
@@ -13816,8 +14304,9 @@ def test_a_paragraph_continues_after_a_page_of_figures():
 
 
 def test_a_font_that_only_writes_single_marks_beside_formulas_is_math():
-    """点阵的空心 1（𝟙）是名字只有编号的 Type3 字体，提出来是 1。全文只写一两个字、多半贴着公式，
-    就是公式字体。正文里单独出现的脚注号字体不贴公式，不算。"""
+    """The bitmap double-struck 1 (𝟙) is a Type3 font whose name is only a number, and it is extracted as 1. A font
+    that writes only one or two characters in the whole text, mostly next to formulas, is a formula font. A
+    footnote mark font appearing alone in body text is not next to formulas and does not count."""
     from app.formats.pdf_blocks import _span_is_math
     from app.formats.pdf_math import _mark_formula_only_fonts
 
@@ -13855,8 +14344,9 @@ def test_a_font_that_only_writes_single_marks_beside_formulas_is_math():
 
 
 def test_a_roman_numbered_item_does_not_continue_the_paragraph_above():
-    """证明里的 (iii) 是另一项。上一段收在行间公式上、没有句号，(iii) 后面大写起头的也不接上来；
-    句中列举的 (iii) 后面小写，括号里的小写词，照样接。"""
+    """(iii) in a proof is another item. When the previous paragraph ends on a display formula without a period, an
+    (iii) followed by a capital is not joined to it either; an (iii) in an enumeration inside a sentence is
+    followed by lowercase, as is a lowercase word in parentheses, and is joined as usual."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_merge import _can_continue
 
@@ -13872,7 +14362,8 @@ def test_a_roman_numbered_item_does_not_continue_the_paragraph_above():
 
     from app.formats.pdf_extract import _split_lines
 
-    # 上一行停在式子上、没排满，(iii) 另起一项；上一行排满的是段中列举折到了行首
+    # The previous line stops on a formula and is not full, so (iii) starts a new item; after a full line it is an
+    # enumeration inside the paragraph wrapped to the line start
     assert _split_lines(
         [
             _line("is the expansion = 1", 102, 152, 127),
@@ -13889,8 +14380,9 @@ def test_a_roman_numbered_item_does_not_continue_the_paragraph_above():
 
 
 def test_the_margin_piece_of_a_wide_caption_line_is_not_a_side_note():
-    """伸进页边的图注里，行内式子把一行切成几块，留在页边的 that w[1] 自成一块。上下紧挨的行从同一处
-    起笔、写进版心，它是图注的一行，不是旁注。正文旁边的旁注照样是旁注。"""
+    """In a caption reaching into the page margin, inline formulas cut a line into blocks, and that w[1] left in the
+    margin forms a block of its own. The lines right above and below start at the same x and run into the text
+    area, so it is a line of the caption, not a side note. A side note beside body text is still a side note."""
     from app.formats.pdf_extract import _wide_block_lines
     from app.formats.pdf_frame import FrameLine, TextFrame
 
@@ -13918,8 +14410,9 @@ def test_the_margin_piece_of_a_wide_caption_line_is_not_a_side_note():
 
 
 def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator():
-    """正文字体排的数字分式 24000/75，PyMuPDF 把分母 75 分进下一块。分母挪回分子那一行，
-    不然单独成块留原字，压在译文上。"""
+    """For the numeric fraction 24000/75 in the body font, PyMuPDF puts the denominator 75 into the next block. The
+    denominator is moved back to the line of the numerator; otherwise it would be a block of its own keeping the
+    original glyphs, on top of the translation."""
     from app.formats.pdf_extract import _rejoin_split_lines
 
     def span(text, x0, y0, x1, y1, size, base):
@@ -13956,7 +14449,8 @@ def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator():
 
 
 def test_a_script_left_of_a_letter_is_not_its_script():
-    """行内分式的分子（小一号）和同一行后面的斜体 x 上下交叠，中间隔着 . Each token in，x 不是它的底。"""
+    """The numerator of an inline fraction (one size smaller) overlaps vertically with an italic x later on the same
+    line, with . Each token in between them; x is not its base."""
     from app.formats.pdf_units import _script_base
 
     x = {
@@ -13973,8 +14467,10 @@ def test_a_script_left_of_a_letter_is_not_its_script():
 
 
 def test_a_fraction_wrapped_to_the_line_start_ends_the_sentence_above():
-    """句子最后的行内分式折到下一行行首（the log of the odds ratio | p/(1−p):），分子分母叠着比一行高，
-    后面没有正文词，也是这句的结尾，接回上一段。隔着空、缩进排的是单独的式子。"""
+    """An inline fraction at the end of a sentence wraps to the start of the next line (the log of the odds ratio |
+    p/(1−p):); the stacked numerator and denominator are taller than a line and no body words follow, but it still
+    ends the sentence and is joined back to the previous paragraph. One set apart by space and indented is a
+    displayed formula."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations, _wraps_from_above
     from app.formats.pdf_frame import TextFrame
@@ -14006,7 +14502,7 @@ def test_a_fraction_wrapped_to_the_line_start_ends_the_sentence_above():
     assert _wraps_from_above([host], 0, tail, "p 1−p:", rows, frame)
     displayed = pymupdf.Rect(243.8, 548.0, 338.1, 570.0)
     assert not _wraps_from_above([host], 0, displayed, "logit(p) = ln p 1−p", rows, frame)
-    # 一行高的数字是下面表格的一格
+    # A number one line high is a cell of the table below
     assert not _wraps_from_above([host], 0, pymupdf.Rect(143.4, 537.0, 170.0, 548.0), "0.00025", rows, frame)
 
     def span(text, font):
@@ -14035,8 +14531,10 @@ def test_a_fraction_wrapped_to_the_line_start_ends_the_sentence_above():
 
 
 def test_a_formula_form_box_keeps_the_overhang_of_an_italic_letter():
-    """斜体 f 的弯钩和尾巴伸出字宽。Form 的 BBox 也会裁剪，左右放到字形量出来的墨迹，上下照公式的框。
-    只放到自己的墨迹为止：a 不伸出字宽，前面 If 的 f 伸进空档的弯钩不带进来。"""
+    """The hook and tail of an italic f reach past its character width. The Form BBox clips too, so horizontally it
+    widens to the ink measured from the glyphs and vertically it follows the formula box. It widens only to its
+    own ink: a does not reach past its width, and the hook of the f of the preceding If reaching into the gap is
+    not included."""
     from app.formats.pdf_blocks import _GlyphInk
     from app.formats.pdf_place import _formula_form
     from app.formats.pdf_write import _page_form
@@ -14068,8 +14566,10 @@ def test_a_formula_form_box_keeps_the_overhang_of_an_italic_letter():
 
 
 def test_a_formula_bitmap_keeps_the_overhang_of_an_italic_letter_on_a_clear_background():
-    """跨页的公式贴位图。位图按公式框裁会切掉斜体 f 伸出字宽的弯钩和尾巴，左右放到字形量出来的墨迹，
-    贴的位置跟着按缩放往两侧放。底色透明，贴在图框线上不会盖掉线。"""
+    """Formulas carried over to the next page are placed as bitmaps. Cropping the bitmap to the formula box would cut
+    off the hook and tail of an italic f reaching past its character width, so horizontally it widens to the ink
+    measured from the glyphs, and the placement widens on both sides by the scale. The background is transparent,
+    so placing it on a frame line does not hide the line."""
     from app.formats.pdf_blocks import _FormulaImage
     from app.formats.pdf_place import _formula_png_rect
 
@@ -14099,7 +14599,8 @@ def test_a_formula_bitmap_keeps_the_overhang_of_an_italic_letter_on_a_clear_back
 
 
 def test_a_one_line_paragraph_is_written_from_the_column_edge():
-    """首行缩进的书里，只有一行的段落和多行段落一样从栏左缘写。缩进宽度对不上的整块缩排、列表项照旧"""
+    """In a book with first-line indents, a one-line paragraph is written from the left edge of the column like a
+    multi-line paragraph. Indented blocks whose indent width does not match, and list items, stay as before"""
     from app.formats.pdf_blocks import TextBlock, _paragraph_indent
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import Column, PageGeometry
@@ -14141,7 +14642,8 @@ def test_a_one_line_paragraph_is_written_from_the_column_edge():
 
 
 def test_role_pattern_lines_keep_the_original():
-    """逐行列出的角色记法（AGENT/Subject, THEME/Object）留原文，正文里提到 AGENT 的句子照翻"""
+    """Role notation listed line by line (AGENT/Subject, THEME/Object) keeps the original text; a body sentence
+    mentioning AGENT is translated"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import _role_pattern_ids
 
@@ -14160,9 +14662,10 @@ def test_role_pattern_lines_keep_the_original():
 
 
 def test_a_displayed_example_line_keeps_the_original():
-    """首行缩进的书里，正文中间缩得比段首更深、单独排开的一行是例句，留原文。
-    以冒号收尾的引导句、字号小一号的出处、居中的图注、列表项折下来的行、「标签: 释义」的行、
-    带等号的式子说明、逐词对译例句下面的意译不算"""
+    """In a book with first-line indents, a line set off in the middle of body text and indented deeper than a
+    paragraph start is an example and keeps the original text. Lead-in sentences ending with a colon, sources one
+    size smaller, centered captions, wrapped lines of list items, "label: explanation" lines, formula descriptions
+    with an equals sign, and free translations below word-by-word glosses do not count"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import Column, PageGeometry
@@ -14234,8 +14737,10 @@ def test_a_displayed_example_line_keeps_the_original():
 
 
 def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_path):
-    """页末图上面只留着段首缩进的一行，段落接到下一页。译文和别的段落一样从栏左缘写，
-    写不下的接到下一页，不往下压到图框的线上。续块缩着排的是列表项，照旧从第一行的左缘写。"""
+    """Only the indented first line of a paragraph is left above a figure at the page end, and the paragraph continues
+    on the next page. The translation is written from the left edge of the column like other paragraphs, and what
+    does not fit continues on the next page without running down onto the frame line of the figure. An indented
+    tail block is a list item and is still written from the left edge of its first line."""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import Column, PageGeometry
@@ -14296,14 +14801,16 @@ def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_
     ]
     assert chars
     assert min(box[0] for box in chars) < 150
-    # 和图框的线空开，不贴着
+    # Kept clear of the frame line instead of touching it
     assert max(box[3] for box in chars) < 541.5 - 5
     assert "偏导数" in out[1].get_text()
 
 
 def test_patterns_keyed_to_examples_by_color_stay_original():
-    """模式下面一行是例句，同几种颜色按同样的先后标出对应的部分（PER 和 George Marshall 同是蓝色）。
-    译了语序一变颜色就对不上，两行都留原文。颜色先后不同的、只用一两种颜色的照翻"""
+    """The line below a pattern is an example that marks the matching parts with the same colors in the same order
+    (PER and George Marshall are both blue). A translation would change the word order and break the color
+    match, so both lines keep the original text. Lines with a different color order, or with only one or two
+    colors, are translated"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import _color_keyed_ids
 
@@ -14334,9 +14841,10 @@ def test_patterns_keyed_to_examples_by_color_stay_original():
 
 
 def test_examples_listed_under_a_bullet_get_their_own_line():
-    """弹点条目没写到栏的右缘就换行，下一行的第一个词明明放得下：下一行是条目下面列的例子，拆开。
-    条目写满了一行时，下一行字母大半是彩色、上面一个彩色字也没有的，也拆开。
-    写满一行折下来的续行不拆，姓名缩写起头的参考文献不拆"""
+    """A bullet item breaks before reaching the right edge of the column although the first word of the next line
+    would fit: the next line is an example listed under the item, so they split. When the item fills its line, a
+    next line whose letters are mostly colored, below a line with no colored text, also splits. A continuation
+    line wrapped from a full line does not split, and neither does a reference starting with name initials"""
     from app.formats.pdf_extract import _cut_item_breaks
 
     def item(text, rect, color=0):
@@ -14366,8 +14874,9 @@ def test_examples_listed_under_a_bullet_get_their_own_line():
 
 
 def test_colored_lines_under_a_bullet_stay_original():
-    """弹点条目下面另起一行列的例子，字母大半是彩色（M2: -1 spokesman），是从例句里摘的词，留原文；
-    同一项下面接连几行都算。黑字的说明、不在条目下面的彩色行照翻"""
+    """An example listed on its own line below a bullet item, with mostly colored letters (M2: -1 spokesman), is made
+    of words taken from an example sentence and keeps the original text; several consecutive lines under the same
+    item all count. Black explanatory text and colored lines not below an item are translated"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import _item_example_ids
 
@@ -14398,7 +14907,9 @@ def test_colored_lines_under_a_bullet_stay_original():
 
 
 def test_a_numbered_item_with_hanging_lines_keeps_the_hang():
-    """题号顶格、下面各行和题号后的正文对齐的条目，续行按原文缩进；首行缩进的段落和不带编号的块不算。"""
+    """For an item with its number flush left and the following lines aligned with the text after the number, the
+    continuation lines keep the original indent; paragraphs with a first-line indent and blocks without a number do
+    not count."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_place import _hang_lanes
     from app.formats.pdf_write import _hang_indent
@@ -14419,7 +14930,8 @@ def test_a_numbered_item_with_hanging_lines_keeps_the_hang():
     assert _hang_indent(blk("The asphalt that Los Angeles is famous for occurs mainly", [175, 160, 160])) == 0
     assert _hang_indent(blk("tf-idf weighting of the value for word t in document d", [178, 209])) == 0
 
-    # 正文对齐在题号右边 31 点处；译文题号宽 20 点时首行往右挪 11 点，比 31 点宽时这一列跟着往右
+    # The text aligns 31pt right of the number; with a 20pt wide translated number the first line moves 11pt right,
+    # and with one wider than 31pt the whole column moves right with it
     box = pymupdf.Rect(178, 170, 475, 220)
     assert _hang_lanes(box, [], 31, 0, 8.8, 1.45, 3) == [(0.0, 297), (31, 266), (31, 266)]
     assert _hang_lanes(box, [], 31, 20, 8.8, 1.45, 3) == [(11, 286), (31, 266), (31, 266)]
@@ -14427,8 +14939,9 @@ def test_a_numbered_item_with_hanging_lines_keeps_the_hang():
 
 
 def test_a_chinese_line_beside_its_english_rendering_is_kept_apart():
-    """英文书里左栏中文原句、右栏英译排在同一行的题词：两截分开，中文原句留原文。
-    中文后面按正常字距接着的西文不拆。"""
+    """An epigraph in an English book with the Chinese original in the left column and the English translation in the
+    right on the same line: the two pieces split, and the Chinese original keeps the original text. Western text
+    following Chinese at normal character spacing is not split off."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_math import _script_seam
     from app.formats.pdf_skip import _foreign_ids
@@ -14468,7 +14981,8 @@ def test_a_chinese_line_beside_its_english_rendering_is_kept_apart():
 
 
 def test_the_label_width_is_measured_on_the_translation():
-    """译文开头的题号、圆点连同后面的空白有多宽（悬挂缩进时首行按它往右挪）。"""
+    """Width of the number or bullet at the start of the translation, including the space after it (with a hanging
+    indent the first line moves right by this amount)."""
     from app.formats.pdf_flow import measure_width
     from app.formats.pdf_place import _label_width
 
@@ -14478,7 +14992,8 @@ def test_the_label_width_is_measured_on_the_translation():
 
 
 def test_a_line_ending_on_an_equals_sign_runs_on():
-    """上一行停在等号上，下一行数字起头的是式子的另一半，接成一段。"""
+    """When the previous line stops on an equals sign, a next line starting with a digit is the other half of the
+    formula and is joined into one paragraph."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -14500,7 +15015,8 @@ def test_a_line_ending_on_an_equals_sign_runs_on():
 
 
 def test_the_english_rendering_below_a_chinese_example_stays_original():
-    """例句框里汉字、拼音下面紧贴着的英译是作者给的，留原文；下面隔开一截、另起左缘的正文照译。"""
+    """In an example box, the English translation right below the Chinese characters and pinyin is the author's own and
+    keeps the original text; body text below it, after a gap and at a new left edge, is translated."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import _foreign_ids
 
@@ -14540,8 +15056,10 @@ def test_the_english_rendering_below_a_chinese_example_stays_original():
 
 
 def test_a_wrapped_fraction_piece_sits_on_its_line_baseline():
-    """折到下一行行首的分式（… and λ2 = | 1/2, what is …）按那一行正文的基线量下沉，
-    不按分母的基线量：分子分母一样大，量到分母上，贴的时候整个分式往上抬，分子压到上一行。"""
+    """A fraction wrapped to the start of the next line (… and λ2 = | 1/2, what is …) measures its descent from the
+    baseline of the body text on that line, not from the baseline of the denominator: numerator and denominator are
+    the same size, so measuring to the denominator would raise the whole fraction on placement and push the
+    numerator onto the previous line."""
     from app.formats.pdf_units import _placeholderize
 
     def span(text, font, size, x0, x1, base, top=None):
