@@ -4,6 +4,7 @@
 - 老的 MOBI7 只有一个 book.html，把它整理成合法 XHTML 后拼成 EPUB。
 写 MOBI 需要 Calibre：如果本机装了 ebook-convert，会额外输出一份 .mobi / .azw3，否则只输出 EPUB。
 """
+
 import asyncio
 import re
 import shutil
@@ -29,9 +30,7 @@ def _xhtml_from_mobi7(src_html: str) -> bytes:
     body = lxml_html.document_fromstring(s).find("body")
     inner = ""
     if body is not None:
-        inner = escape(body.text or "") + "".join(
-            etree.tostring(c, encoding="unicode", method="xml") for c in body
-        )
+        inner = escape(body.text or "") + "".join(etree.tostring(c, encoding="unicode", method="xml") for c in body)
     return (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         '<html xmlns="http://www.w3.org/1999/xhtml"><head>'

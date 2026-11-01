@@ -28,9 +28,16 @@ def document_digest(src: Path) -> str:
     return hashlib.sha1(src.read_bytes()).hexdigest()
 
 
-async def translate_file(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str,
-                         layout_model: str = "", plan_path: Path | None = None,
-                         formula_model: FormulaModel | None = None) -> list[Path]:
+async def translate_file(
+    src: Path,
+    out_dir: Path,
+    runner,
+    bilingual: bool,
+    target_lang: str,
+    layout_model: str = "",
+    plan_path: Path | None = None,
+    formula_model: FormulaModel | None = None,
+) -> list[Path]:
     """layout_model、formula_model 和 plan_path 只对 PDF 有用：版面模型文件的路径（空串表示不用），
     公式检测模型的设置（None 表示不用），存版面分析结果的文件（继续翻译时读回）。"""
     runner.set_document(document_digest(src))

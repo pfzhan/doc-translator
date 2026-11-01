@@ -4,6 +4,7 @@
 把它的文本作为一个段落翻译；双语模式下在原段落后面插入一个同类型的译文段落，
 仅译文模式下直接替换段落文本。
 """
+
 import copy
 import re
 from html.entities import html5
@@ -14,10 +15,44 @@ from lxml import etree
 from ..languages import RTL_LANGUAGES
 
 BLOCK_TAGS = {
-    "p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "blockquote", "div", "td", "th",
-    "dt", "dd", "figcaption", "caption", "section", "article", "aside", "header",
-    "footer", "pre", "table", "tr", "ul", "ol", "dl", "figure", "nav", "body",
-    "center", "address", "summary", "details", "main", "hr", "tbody", "thead",
+    "p",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "li",
+    "blockquote",
+    "div",
+    "td",
+    "th",
+    "dt",
+    "dd",
+    "figcaption",
+    "caption",
+    "section",
+    "article",
+    "aside",
+    "header",
+    "footer",
+    "pre",
+    "table",
+    "tr",
+    "ul",
+    "ol",
+    "dl",
+    "figure",
+    "nav",
+    "body",
+    "center",
+    "address",
+    "summary",
+    "details",
+    "main",
+    "hr",
+    "tbody",
+    "thead",
 }
 # 这些元素内部的内容不翻译
 SKIP_TAGS = {"pre", "code", "script", "style", "svg", "math", "head", "title", "kbd", "samp", "var"}
@@ -33,8 +68,28 @@ WS_RE = re.compile(r"\s+")
 
 # 需要在翻译中保留的行内格式元素；只有 <span>、<br> 的段落不算富文本
 RICH_TAGS = {
-    "a", "b", "strong", "em", "i", "u", "s", "strike", "del", "ins",
-    "sup", "sub", "code", "kbd", "samp", "var", "mark", "small", "abbr", "q", "cite", "font",
+    "a",
+    "b",
+    "strong",
+    "em",
+    "i",
+    "u",
+    "s",
+    "strike",
+    "del",
+    "ins",
+    "sup",
+    "sub",
+    "code",
+    "kbd",
+    "samp",
+    "var",
+    "mark",
+    "small",
+    "abbr",
+    "q",
+    "cite",
+    "font",
 }
 # 译文片段里出现直接删除（不保留文字）的标签
 DANGER_TAGS = {"script", "style", "iframe", "object", "embed", "form", "input", "button", "select", "textarea"}
@@ -162,7 +217,9 @@ def find_blocks(soup: BeautifulSoup) -> list[tuple[Tag, str, str | None]]:
     for container in [body, *body.find_all(lambda t: _is_block(t))]:
         if _in_skip(container):
             continue
-        if not any(_is_block(c) for c in container.children) and not (container is body and _local(body.name) == "body"):
+        if not any(_is_block(c) for c in container.children) and not (
+            container is body and _local(body.name) == "body"
+        ):
             continue
         for run in _inline_runs(container, soup):
             if run.find(_is_block):
@@ -182,8 +239,7 @@ _BIBLIO_TITLE = (
     r"(?:selected bibliography|further reading|works cited|bibliography|references|endnotes"
     r"|参考文献|参考书目|引用文献)"
 )
-BIBLIO_HEADING_RE = re.compile(
-    rf"^(?:\d{{1,3}}[.)]\s+)?{_BIBLIO_TITLE}\s*[:：.。]?\s*$", re.I)
+BIBLIO_HEADING_RE = re.compile(rf"^(?:\d{{1,3}}[.)]\s+)?{_BIBLIO_TITLE}\s*[:：.。]?\s*$", re.I)
 # 明确是参考文献内部的小标题。Books / 论文 也是常见章名，不放这里。
 BIBLIO_SUBHEADING_RE = re.compile(
     r"^(?:\d{1,3}[.)]\s+)?"
@@ -408,7 +464,7 @@ def _place_media(target: Tag, media: list[Tag]) -> None:
         pieces: list = []
         pos = 0
         for m in SLOT_RE.finditer(node):
-            pieces.append(NavigableString(node[pos:m.start()]))
+            pieces.append(NavigableString(node[pos : m.start()]))
             index = int(m.group(1)) - 1
             if 0 <= index < len(media) and index not in used:
                 used.add(index)
@@ -512,7 +568,13 @@ def _clean_attrs(src: Tag, frag: Tag) -> None:
         for attr in list(t.attrs):
             key = str(attr)
             val = t.attrs[attr]
-            if key.lower().startswith("on") or key not in keep or _unsafe_url(val, _local(t.name)) or key == "style" and str(val) not in styles:
+            if (
+                key.lower().startswith("on")
+                or key not in keep
+                or _unsafe_url(val, _local(t.name))
+                or key == "style"
+                and str(val) not in styles
+            ):
                 del t[attr]
 
 
@@ -613,8 +675,11 @@ def apply_translation_html(soup, el: Tag, src_html: str, translated_html: str, b
     # 原文自带 {vN} 时媒体元素跟着 HTML 发给了模型，译文里全丢了就把原文的补在末尾
     src_frag = _parse_fragment(src_html)
     src_media = src_frag.find_all(lambda t: _local(t.name) in MEDIA_TAGS) if src_frag else []
-    has_media = any(_local(getattr(n, "name", None)) in MEDIA_TAGS
-                    or (isinstance(n, Tag) and n.find(lambda t: _local(t.name) in MEDIA_TAGS)) for n in nodes)
+    has_media = any(
+        _local(getattr(n, "name", None)) in MEDIA_TAGS
+        or (isinstance(n, Tag) and n.find(lambda t: _local(t.name) in MEDIA_TAGS))
+        for n in nodes
+    )
 
     def fill(target: Tag, media: list[Tag] | None):
         target.clear()
@@ -661,6 +726,7 @@ _NAMED_ENTITY_BYTES_RE = re.compile(rb"&([A-Za-z][A-Za-z0-9]*);")
 
 def _numeric_entities(content: bytes | str) -> bytes | str:
     """&rsquo;、&nbsp; 这类 HTML 命名实体改成数字引用。不认识的实体原样保留。"""
+
     def repl(m: re.Match) -> bytes | str:
         name = m.group(1)
         if isinstance(name, bytes):

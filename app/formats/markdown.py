@@ -1,4 +1,5 @@
 """Markdown 翻译：按块切分，跳过代码块 / front matter / HTML 块，保留列表、引用、表格结构。"""
+
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,12 +23,14 @@ HTML_TAG_RE = re.compile(r"^\s{0,3}</?([a-zA-Z][a-zA-Z0-9-]*)(?=[\s/>]|$)")
 # 整行只有一个完整的开始或结束标签，后面没有文字
 LONE_TAG_RE = re.compile(r"^\s{0,3}</?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^<>]*)?/?>\s*$")
 # CommonMark 里能开启 HTML 块的块级标签。<kbd>、<a> 这类行内标签开头的是普通段落
-HTML_BLOCK_TAGS = frozenset("""
+HTML_BLOCK_TAGS = frozenset(
+    """
 address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl
 dt fieldset figcaption figure footer form frame frameset h1 h2 h3 h4 h5 h6 head header hr html iframe legend
 li link main menu menuitem nav noframes ol optgroup option p param search section summary table tbody td
 tfoot th thead title tr track ul pre script style textarea
-""".split())
+""".split()
+)
 # 链接引用定义：[id]: https://...。脚注 [^1]: 有正文，不算
 LINK_DEF_RE = re.compile(r"^\s{0,3}\[(?!\^)[^\]]+\]:\s*\S")
 # GitHub 提示框标记：> [!NOTE]
@@ -191,9 +194,15 @@ def split_blocks(text: str) -> list[Block]:
             j = i
             while j < len(lines) and lines[j].strip() and not FENCE_RE.match(lines[j]):
                 # 列表后紧跟的标题 / 引用 / HTML 块 / 分隔线是新的块级结构，不能并进最后一个列表项
-                if j > i and not LIST_RE.match(lines[j]) and (
-                    HEADING_RE.match(lines[j]) or QUOTE_RE.match(lines[j])
-                    or _starts_html_block(lines[j]) or HR_RE.match(lines[j])
+                if (
+                    j > i
+                    and not LIST_RE.match(lines[j])
+                    and (
+                        HEADING_RE.match(lines[j])
+                        or QUOTE_RE.match(lines[j])
+                        or _starts_html_block(lines[j])
+                        or HR_RE.match(lines[j])
+                    )
                 ):
                     break
                 j += 1
@@ -236,7 +245,8 @@ def _quote_end(lines: list[str], start: int) -> int:
                 in_text = False
             else:
                 in_text = bool(body.strip()) and not (
-                    ALERT_RE.match(body.strip()) or HEADING_RE.match(body) or HR_RE.match(body))
+                    ALERT_RE.match(body.strip()) or HEADING_RE.match(body) or HR_RE.match(body)
+                )
         elif not (in_text and _continues_paragraph(lines[j])):
             break
         j += 1
@@ -246,8 +256,13 @@ def _quote_end(lines: list[str], start: int) -> int:
 def _continues_paragraph(line: str) -> bool:
     """非空、又不是标题、代码栏、分隔线、列表项、HTML 块、公式块的开头。"""
     return bool(line.strip()) and not (
-        HEADING_RE.match(line) or FENCE_RE.match(line) or HR_RE.match(line) or LIST_RE.match(line)
-        or _starts_html_block(line) or MATH_OPEN_RE.match(line))
+        HEADING_RE.match(line)
+        or FENCE_RE.match(line)
+        or HR_RE.match(line)
+        or LIST_RE.match(line)
+        or _starts_html_block(line)
+        or MATH_OPEN_RE.match(line)
+    )
 
 
 def _split_cells(line: str) -> tuple[str, list[str], str]:
@@ -274,8 +289,9 @@ def collect_segments(blocks: list[Block]) -> list[str]:
         elif b.kind == "list":
             b.segments = [(idx, pre, text) for idx, pre, text, _ in _list_items(b.lines)]
         elif b.kind == "quote":
-            b.segments = [(idx, qpre + mpre, text) for kind, idx, qpre, mpre, text, _ in _quote_units(b.lines)
-                          if kind != "raw"]
+            b.segments = [
+                (idx, qpre + mpre, text) for kind, idx, qpre, mpre, text, _ in _quote_units(b.lines) if kind != "raw"
+            ]
         elif b.kind == "table":
             for idx, line in enumerate(b.lines):
                 if idx == 1:
@@ -477,12 +493,22 @@ async def translate_markdown(src: Path, out_dir: Path, runner, bilingual: bool) 
     texts = collect_segments(blocks)
     # 标题：第一个一级标题，没有就用文件名
     # 「# 2024」这类没有可翻译文字的标题没有 segments
-    h1 = next((b.segments[0][2] for b in blocks
-               if b.segments and (b.kind == "heading" and b.lines[0].lstrip().startswith("# ")
-                                  or b.kind == "setext" and b.lines[-1].strip().startswith("="))), "")
+    h1 = next(
+        (
+            b.segments[0][2]
+            for b in blocks
+            if b.segments
+            and (
+                b.kind == "heading"
+                and b.lines[0].lstrip().startswith("# ")
+                or b.kind == "setext"
+                and b.lines[-1].strip().startswith("=")
+            )
+        ),
+        "",
+    )
     runner.set_title(h1 or src.stem)
-    results = await runner.translate_all(texts, kinds=segment_kinds(blocks), preview=True,
-                                         skip=segment_skips(blocks))
+    results = await runner.translate_all(texts, kinds=segment_kinds(blocks), preview=True, skip=segment_skips(blocks))
     suffix = "bilingual" if bilingual else "translated"
     dst = out_dir / f"{src.stem}.{suffix}{src.suffix}"
     dst.write_text(render(blocks, results, bilingual), encoding="utf-8")

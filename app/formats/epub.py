@@ -2,6 +2,7 @@
 
 不依赖 ebooklib，直接按 zip 处理，原书里的 CSS、图片、字体、元数据全部原样保留。
 """
+
 import posixpath
 import re
 import zipfile
@@ -14,11 +15,22 @@ from . import html_blocks as hb
 
 HTML_TYPES = {"application/xhtml+xml", "text/html"}
 # 只认文件名主体。子串会把 chapter-references 整篇锁死，而且锁死后标题也无法退出。
-_BIBLIO_DOC_STEMS = frozenset({
-    "bibliography", "references", "works-cited", "works cited", "endnotes",
-    "further-reading", "further reading", "selected-bibliography", "selected bibliography",
-    "参考文献", "参考书目", "引用文献",
-})
+_BIBLIO_DOC_STEMS = frozenset(
+    {
+        "bibliography",
+        "references",
+        "works-cited",
+        "works cited",
+        "endnotes",
+        "further-reading",
+        "further reading",
+        "selected-bibliography",
+        "selected bibliography",
+        "参考文献",
+        "参考书目",
+        "引用文献",
+    }
+)
 
 
 def _opf_path(zf: zipfile.ZipFile) -> str:
@@ -135,8 +147,9 @@ def _set_language(opf: BeautifulSoup, lang: str, bilingual: bool):
         el.string = lang
 
 
-async def translate_epub(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "",
-                         dst: Path | None = None) -> list[Path]:
+async def translate_epub(
+    src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "", dst: Path | None = None
+) -> list[Path]:
     try:
         zin = zipfile.ZipFile(src)
     except zipfile.BadZipFile:
@@ -182,7 +195,9 @@ async def translate_epub(src: Path, out_dir: Path, runner, bilingual: bool, targ
         kinds = ["toc" if kind == "label" else hb.preview_kind(el) for _, el, _, kind, _, _ in tasks]
         # 富文本段落送 inner HTML 翻译，保留行内格式（加粗、链接）
         results = await runner.translate_all(
-            [t[4] or t[2] for t in tasks], kinds=kinds, preview=True,
+            [t[4] or t[2] for t in tasks],
+            kinds=kinds,
+            preview=True,
             html=[t[4] is not None for t in tasks],
             skip=[t[5] for t in tasks],
         )
