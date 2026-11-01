@@ -7,7 +7,7 @@ from app.formats.pdf_extract import extract_blocks
 from app.formats.pdf_frame import FrameLine, margin_notes, note_groups, note_pitch, text_frames
 
 _LINE = "a body line of running text that is long enough to vote"
-# 正文每行的字都不同；各页同一高度、同一句话的是页眉
+# Every body line has different text; the same sentence at the same height on every page is a running header
 _TAGS = ("".join(pair) for pair in itertools.product(string.ascii_lowercase, repeat=3))
 
 
@@ -27,7 +27,8 @@ def test_frame_follows_body_lines_not_the_leftmost_block():
 
 
 def test_a_wide_caption_does_not_move_the_frame_of_its_page():
-    """通栏图注从页边起笔，本页的正文仍从同侧页的左缘起笔。"""
+    """A full-width caption starts at the page margin, while the body on this page still starts at the left edge of
+    pages on the same side."""
     caption = _lines(77, 475, count=6, top=300)
     frames = text_frames(
         [_lines(160, 493), [*_lines(142, 475, count=12), *caption], _lines(160, 493), _lines(142, 475)]
@@ -36,7 +37,8 @@ def test_a_wide_caption_does_not_move_the_frame_of_its_page():
 
 
 def test_a_running_header_set_like_body_text_is_outside_the_frame():
-    """页眉和正文一样大、一样长，每页同一高度同一句话，不算版心的第一行。"""
+    """A running header as large and as long as body text, the same sentence at the same height on every page, is not
+    the first line of the text frame."""
     header = "Published as a conference paper at ICLR 2015"
     pages = [[FrameLine(pymupdf.Rect(105, 61, 285, 73), header, 10), *_lines(108, 504, top=116)] for _ in range(4)]
     assert all(frame.y0 == 116 for frame in text_frames(pages))
@@ -54,7 +56,7 @@ def test_small_terms_on_a_lane_beside_the_frame_are_notes():
         FrameLine(pymupdf.Rect(84, 161, 128, 169), "Herdan's Law", 7.2),
         FrameLine(pymupdf.Rect(91, 173, 128, 180), "Heaps' Law", 7.2),
         FrameLine(pymupdf.Rect(82, 281, 128, 288), "function words", 7.2),
-        # 页码、外凸的节号和正文一样大，不是旁注
+        # Page numbers and protruding section numbers are as large as body text and are not margin notes
         FrameLine(pymupdf.Rect(77, 84, 82, 94), "4", 10),
         FrameLine(pymupdf.Rect(77, 300, 99, 315), "2.1", 17),
     ]
@@ -65,7 +67,8 @@ def test_small_terms_on_a_lane_beside_the_frame_are_notes():
 
 
 def test_a_body_size_symbol_on_the_note_lane_is_a_note():
-    """旁注里的 ŷ 和正文一样大，贴着旁注那条边对齐，也是旁注。外凸的节号不在那条边上。"""
+    """ŷ in a margin note is as large as body text but aligned with the margin note edge, so it is a margin note too.
+    Protruding section numbers are not on that edge."""
     body = _lines(142, 475)
     notes = [
         FrameLine(pymupdf.Rect(84, 161, 128, 169), "Herdan's Law", 7.2),
@@ -90,8 +93,9 @@ def test_two_line_note_is_one_note_and_neighbours_stay_apart():
 
 
 def test_stacked_notes_split_where_the_pitch_is_off():
-    """正文同一行引出两个术语，两条旁注上下挨着排：AED 下面多出一截才是 listen attend / and spell，
-    vector / semantics 和 representation / learning 叠得比行距还紧。同一条里的行距和全文的一样"""
+    """One body line introduces two terms, and their margin notes sit right above each other: listen attend / and
+    spell starts after a larger gap below AED, and vector / semantics and representation / learning are stacked
+    tighter than the line pitch. The pitch within one note matches that of the whole document"""
 
     def note(y0, text):
         return FrameLine(pymupdf.Rect(110, y0, 146, y0 + 9.4), text, 7.2)
@@ -130,8 +134,9 @@ def test_margin_note_on_a_body_line_is_split_off():
 
 
 def test_label_of_a_caption_wider_than_the_body_is_not_a_margin_note():
-    """宽表的图注从页边起笔，标签落在旁注的位置。下一行图注从同一处起笔、写进版心，
-    标签留在图注里。真正的旁注照旧拆出来。"""
+    """The caption of a wide table starts at the page margin, with its label where margin notes are. The next caption
+    line starts at the same place and runs into the text frame, so the label stays in the caption. Real margin notes
+    are still split off."""
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
     words = (
@@ -152,8 +157,9 @@ def test_label_of_a_caption_wider_than_the_body_is_not_a_margin_note():
 
 
 def test_a_caption_spanning_the_margin_keeps_its_short_lines():
-    """图注整个伸进页边：标签后面接着的一行从页边深处起笔、写进版心，下一行只剩几个字，
-    也落在旁注的位置（Figure 6.17 … computa- | tion of）。标签和这几个字都留在图注里。"""
+    """The whole caption reaches into the margin: the line after the label starts deep in the margin and runs into the
+    text frame, and the next line has only a few words, also where margin notes are (Figure 6.17 ... computa- |
+    tion of). Both the label and those words stay in the caption."""
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
     words = (
@@ -164,7 +170,7 @@ def test_a_caption_spanning_the_margin_keeps_its_short_lines():
         page.insert_text((160, 120 + 12 * i), " ".join(words[(i * 3) % 20 : (i * 3) % 20 + 9]), fontsize=10)
     for row, note in ((2, "tokenization"), (6, "regular"), (10, "edit distance")):
         page.insert_text((78, 120 + 12 * row), note, fontsize=7)
-    # 标签是黑底白字，排在图注后面画，PyMuPDF 分成单独一行
+    # The label is white on black and drawn after the caption, so PyMuPDF makes it a separate line
     page.insert_text((132, 330), "Computation graph for the function, showing the backward pass computa-", fontsize=9)
     page.insert_text((78, 341), "tion of it.", fontsize=9)
     page.insert_text((78, 330), "Figure 6.17", fontsize=9, fontname="hebo")
@@ -198,7 +204,8 @@ def test_displayed_formula_with_a_big_brace_keeps_its_rows():
     body = block("Under this version of Levenshtein, the computation for D[i, j] becomes:", (142, 380, 475, 390))
     inline = block("a sum written inline uses the extension font too", (142, 440, 475, 450), "CMEX10")
     geo = PageGeometry.from_rects(612, [], [], 792, frame=TextFrame(142, 475, 111, 719, 10))
-    # 列表续行、右栏的段落也离开左缘，句中的积分号用同一种字体，按词数认成句子
+    # List continuation lines and right-column paragraphs also start away from the left edge, and integral signs
+    # inside sentences use the same font, so the word count marks them as sentences
     item = TextBlock(
         page=0,
         rect=pymupdf.Rect(170, 460, 475, 500),
@@ -220,7 +227,7 @@ def test_displayed_formula_with_a_big_brace_keeps_its_rows():
             ]
         ],
     )
-    # 行内的宽帽子、小根号也是这种字体，不说明是单独排的式子
+    # Inline wide hats and small radicals use this font too and do not indicate a display formula
     accent = TextBlock(
         page=0,
         rect=pymupdf.Rect(300, 520, 475, 540),
@@ -246,7 +253,7 @@ def test_displayed_formula_with_a_big_brace_keeps_its_rows():
 
 
 def test_a_centered_wide_formula_close_to_the_left_edge_is_displayed():
-    """居中排的宽式子左边只空出不到两个字宽，和右边空的一样多。"""
+    """A wide centered formula leaves less than two characters of space on the left, as much as on the right."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
@@ -295,12 +302,13 @@ def test_body_cut_at_a_margin_note_is_joined_back():
     data = {"blocks": [upper, lower, after]}
     _rejoin_note_cuts(data, {id(upper)})
     assert len(upper["lines"]) == 3 and lower["lines"] == []
-    assert after["lines"]  # 上一行以句末收尾、下一块缩进：新的一段
+    assert after["lines"]  # the previous line ends a sentence and the next block is indented: a new paragraph
 
 
 def test_a_bold_caption_label_starts_its_own_paragraph():
-    """宽图的图注比图里的字靠左不到三个字宽，像缩进。标签单独排成粗体，是图注的第一行。
-    正文里以 Figure 3.8 开头的句子字体不变，不拆。"""
+    """The caption of a wide figure is less than three characters left of the figure text, like an indent. The label
+    is set alone in bold and is the first line of the caption. A body sentence starting with Figure 3.8 keeps its
+    font and is not split."""
     from app.formats.pdf_extract import _split_lines
 
     def item(*spans, x0, y0):
@@ -349,7 +357,8 @@ def test_typewriter_dialogue_keeps_one_line_per_turn():
 
 
 def test_prose_after_typewriter_lines_starts_a_new_paragraph():
-    """等宽字排的小号列表项后面紧跟正文首行。首行缩进和列表项的左缘只差一点，也要拆开。"""
+    """A small list item in monospace is directly followed by the first body line. The first-line indent differs only
+    slightly from the item's left edge, and they must still be split."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1, size, font, flags):
@@ -376,8 +385,9 @@ def test_prose_after_typewriter_lines_starts_a_new_paragraph():
 
 
 def test_a_larger_line_below_a_slide_formula_starts_a_new_paragraph():
-    """幻灯片里缩进的式子下面接着大一号的小标题，左缘只差一个多字宽，像首行缩进，要拆开。
-    小型大写的词后面回到正文字号、接着写的半句不拆。"""
+    """On a slide, an indented formula is followed by a subheading one size larger whose left edge is just over one
+    character away, like a first-line indent; they must be split. The rest of a sentence returning to body size
+    after small capitals is not split."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1, size, font="TimesNewRomanPSMT"):
@@ -398,8 +408,9 @@ def test_a_larger_line_below_a_slide_formula_starts_a_new_paragraph():
 
 
 def test_the_short_last_line_of_an_example_does_not_open_the_next_paragraph():
-    """例句的悬挂续行没排满、以句号收尾，下一段从栏边起笔，只左跳一个多字宽，不是首行缩进。
-    首行缩进的段落第一行排满，照样接着。"""
+    """The hanging continuation line of an example is not full and ends with a period, and the next paragraph starts
+    at the column edge, just over one character to the left; this is not a first-line indent. The full first line of
+    an indented paragraph still continues as before."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1):
@@ -417,7 +428,8 @@ def test_the_short_last_line_of_an_example_does_not_open_the_next_paragraph():
         item("can be verbal as well as nominal.", 160, 543, 300),
     ]
     assert _split_lines(indented) == [[0, 1]]
-    # 块从上一条的续行起头，第一行也缩着。两行缩进之后回到栏边的是下一条
+    # The block starts with a continuation line of the previous item, so its first line is indented too. After two
+    # indented lines, the line back at the column edge is the next item
     mid_item = [
         item("was there a task? Was the language originally spoken conversation, edited", 167, 335, 475),
         item("text, social media communication, monologue vs. dialogue?", 167, 347, 407),
@@ -427,8 +439,9 @@ def test_the_short_last_line_of_an_example_does_not_open_the_next_paragraph():
 
 
 def test_a_bold_label_after_a_finished_sentence_opens_the_next_item():
-    """定义列表里一行一条，排得差不多满，按硬换行看不出来。上一句说完、下一行以粗体标签起头的是下一条。
-    句中折行落到行首的粗体词不拆。"""
+    """A definition list with one nearly full line per item, so hard line breaks do not show the items. After a
+    finished sentence, a line starting with a bold label is the next item. A bold word that wraps to a line start
+    mid-sentence is not split."""
     from app.formats.pdf_extract import _split_lines
 
     def item(label, rest, y0, x1):
@@ -450,8 +463,9 @@ def test_a_bold_label_after_a_finished_sentence_opens_the_next_item():
 
 
 def test_a_bold_label_after_a_short_unfinished_item_opens_the_next_item():
-    """定义列表的条目是半句例句，没有句末标点（mouse² : … a quiet animal like a mouse）。
-    上一条也是粗体标签起头、没写到右缘，下一行的粗体标签是下一条"""
+    """Definition list items are partial example sentences without sentence-ending punctuation (mouse² : ... a quiet
+    animal like a mouse). The previous item also starts with a bold label and does not reach the right edge, so the
+    bold label on the next line is the next item"""
     from app.formats.pdf_extract import _split_lines
 
     def item(label, rest, y0, x1):
@@ -468,7 +482,7 @@ def test_a_bold_label_after_a_short_unfinished_item_opens_the_next_item():
         item("bank2", " ...as agriculture burgeons on the east bank, the river ...", 605, 393),
     ]
     assert _split_lines(rows) == [[0], [1], [2], [3]]
-    # 分成两块以后，也不按图注的续行并回去
+    # Once split into two blocks, they are not joined back as caption continuation lines either
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_caption_fragments
 
@@ -491,7 +505,8 @@ def test_a_bold_label_after_a_short_unfinished_item_opens_the_next_item():
 
 
 def test_a_heading_across_a_narrow_gutter_is_not_joined_to_the_left_line():
-    """左栏一行和右栏的节号标题同高，中间只隔一个字宽的栏沟。节号从右栏栏边起笔，不是左边那行的后半截。"""
+    """A left-column line is level with a numbered heading in the right column, separated by a gutter one character
+    wide. The section number starts at the right column's edge and is not the second half of the left line."""
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
     left = ["BN-Baseline: Same as Inception with Batch Normal-", "ization before each nonlinearity."]
@@ -510,7 +525,8 @@ def test_a_heading_across_a_narrow_gutter_is_not_joined_to_the_left_line():
 
 
 def test_an_inline_enumeration_wrapping_onto_a_new_line_is_not_a_list():
-    """图注里 (a) 写在行中间，(b) 碰巧落到行首、上一行排满：是同一段的折行。各项都在行首的是列表。"""
+    """In a caption, (a) is mid-line and (b) happens to start a line after a full one: a wrapped line of the same
+    paragraph. When every item starts a line, it is a list."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, y, x1=504):
@@ -533,7 +549,8 @@ def test_an_inline_enumeration_wrapping_onto_a_new_line_is_not_a_list():
 
 
 def test_blocks_in_a_flagged_monospace_font_are_code():
-    """txtt 这类字体名字里没有 Mono，只有 PDF 的等宽标志。整块是这种字就留原文。"""
+    """Fonts such as txtt have no Mono in their names, only the PDF monospace flag. A block entirely in such a font
+    keeps the original."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_units import _code_block
 
@@ -557,11 +574,13 @@ def test_blocks_in_a_flagged_monospace_font_are_code():
             (" comes first in the context window.", "NimbusRomNo9L-Regu", 4),
         )
     )
-    # 汉字字体也常带等宽标志，不算代码
+    # Chinese fonts often carry the monospace flag too and are not code
     assert not _code_block(block(("系统提示词放在上下文的最前面。", "SimSun", 8)))
-    # LaTeX times 宏包的等宽字是 URW 的 NimbusMonL，名字里没有 Mono，也不一定带等宽标志
+    # The monospace font of the LaTeX times package is URW's NimbusMonL, without Mono in its name and not always
+    # flagged as monospace
     assert _code_block(block(("dpkingma@gmail.com", "NimbusMonL-Regu", 4)))
-    # 语料表一行：行首的计数用正文字体，后面是等宽字的词。数字不算正文
+    # A row of a corpus table: the count at the start is in the body font, the words after it in monospace. Digits
+    # do not count as body text
     assert _code_block(block(("2", "NimbusRomNo9L-Regu", 4), ("n", "txtt", 12), (" e w", "txtt", 12)))
 
 
@@ -592,8 +611,9 @@ def test_gloss_line_is_split_from_its_free_translation():
 
 
 def test_centered_author_rows_stay_one_item_per_row():
-    """作者栏居中排：粗体名字、常规字体的单位、等宽字的邮箱各占一行。换了字体的下一行是另一项，
-    不和上一行并成一段。同一字体折成两行的单位仍是一项。"""
+    """A centered author block: a bold name, an affiliation in the regular font and an email in monospace, one line
+    each. A next line in another font is another item and is not joined with the line above. An affiliation wrapped
+    onto two lines in the same font is still one item."""
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
 
@@ -616,8 +636,8 @@ def test_centered_author_rows_stay_one_item_per_row():
 
 
 def test_a_centered_name_list_wrapping_at_commas_stays_one_unit():
-    """作者名单居中排、在逗号处折行，PyMuPDF 分成了几块。下一行大写起头也是接着写的，
-    拆开后单独一行的名字会被音译。"""
+    """A centered author list wraps at commas and PyMuPDF splits it into several blocks. A next line starting with a
+    capital still continues it; a name left alone on a line would be transliterated."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_continuations
 
@@ -635,7 +655,7 @@ def test_a_centered_name_list_wrapping_at_commas_stays_one_unit():
     ]
     [merged] = _merge_continuations(rows)
     assert merged.text.endswith("Lacroix, William El Sayed")
-    # 左对齐的两行不算居中排
+    # Two left-aligned lines are not centered
     left = [
         row("Results are listed in the table below, for each model,", 108, 300, 380),
         row("Accuracy improves with scale.", 108, 311, 250),
@@ -644,8 +664,9 @@ def test_a_centered_name_list_wrapping_at_commas_stays_one_unit():
 
 
 def test_a_formula_wrapping_after_an_operator_keeps_its_tail():
-    """行尾停在 > 上，下一行行首的 100) 是式子的后半截，不是编号也不是符号行。
-    单独排的式子里分子从等号右边起笔，仍拆开；===Instructions=== 后面的编号照常是列表。"""
+    """A line ending at > is continued by 100) at the start of the next line, the second half of an expression, not
+    a number or a symbol line. A display formula whose numerator starts right of the equals sign is still split;
+    numbers after ===Instructions=== are still a list."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y, x1=504):
@@ -666,7 +687,8 @@ def test_a_formula_wrapping_after_an_operator_keeps_its_tail():
 
 
 def test_a_justified_row_with_an_italic_variable_stays_one_row():
-    """两端对齐的一行被 PyMuPDF 按词拆开，其中一截夹着斜体的变量 AVG(E)。仍是同一行，不从中间拆段。"""
+    """PyMuPDF splits a justified line by words, one piece holding the italic variable AVG(E). It is still one line and
+    the paragraph is not split in the middle."""
     from app.formats.pdf_extract import _split_lines
 
     def piece(x0, x1, y, *spans):
@@ -692,7 +714,8 @@ def test_a_justified_row_with_an_italic_variable_stays_one_row():
 
 
 def test_a_line_opening_with_a_closing_bracket_continues_the_row():
-    """行尾单拆出来一个等宽的 [，下一行以 ]) 起头接着写。不是符号行后面另起一段。"""
+    """A monospace [ split off at the line end, with the next line continuing with ]). This is not a symbol line
+    followed by a new paragraph."""
     from app.formats.pdf_extract import _split_lines
 
     def piece(x0, x1, y, *spans):
@@ -730,8 +753,9 @@ def test_a_line_opening_with_a_closing_bracket_continues_the_row():
 
 
 def test_a_figure_row_pressed_onto_the_caption_is_its_own_row():
-    """图里的操作行压在图注第一行上，墨迹框交叠过半，同字号、基线差四磅，是上下两行，不和图注并成一行。
-    行内分式的小号分子分母在别的基线上，那一行照样是一行。"""
+    """An operation line in a figure overlaps the first caption line, with ink boxes overlapping by more than half,
+    the same size and baselines 4pt apart: two separate lines, not merged with the caption. The small numerator and
+    denominator of an inline fraction are on other baselines, and that line is still one line."""
     from app.formats.pdf_extract import _left_to_right, _split_lines
 
     def item(text, x0, y0, x1, y1, base, font="NimbusRomNo9L-Regu", size=9.0):
@@ -775,7 +799,7 @@ def test_a_figure_row_pressed_onto_the_caption_is_its_own_row():
         ),
     ]
     assert _split_lines(_left_to_right(row)) == [[0, 1]]
-    # 两行分进了两块，块之间也不按同一行并
+    # The two lines went into two blocks, which are not merged as one line either
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_visual_lines
 
@@ -800,8 +824,8 @@ def test_a_figure_row_pressed_onto_the_caption_is_its_own_row():
 
 
 def test_underlined_letters_are_marked_and_a_fraction_bar_is_not():
-    """字下面画的线（例 6 里标出的列）认成下划线，只标线下面那几个字；行内小分数的分数线下面紧挨着分母，
-    不算下划线。"""
+    """A line drawn under text (the columns marked in example 6) is an underline, marking only the characters above
+    it; the bar of a small inline fraction has the denominator right below and is not an underline."""
     from app.formats.pdf_blocks import _attach_ink
     from app.formats.pdf_layout import scan_page
     from app.formats.pdf_math import _mark_underlines, _PageChars
@@ -825,7 +849,7 @@ def test_underlined_letters_are_marked_and_a_fraction_bar_is_not():
 
 
 def test_digits_under_a_radical_bar_join_the_formula():
-    """√81 的 81 和正文同一种字体。根号横线下面的字标成公式，句号不算。"""
+    """The 81 of √81 is in the body font. Text under the radical bar is marked as formula, the period is not."""
     from app.formats.pdf_blocks import _attach_ink, _span_is_math
     from app.formats.pdf_layout import scan_page
     from app.formats.pdf_math import _mark_radicands, _PageChars
@@ -856,8 +880,9 @@ def test_digits_under_a_radical_bar_join_the_formula():
 
 
 def test_a_glyph_is_measured_by_drawing_it_alone():
-    """字体框量错的字形（txsys 的根号）单画一遍量墨迹：上下沿相对基线，左右沿相对起笔点，单位是字号。
-    斜体 f 的弯钩和尾巴伸出字宽。"""
+    """A glyph with a wrong font box (the radical of txsys) is drawn alone to measure its ink: top and bottom relative
+    to the baseline, left and right relative to the origin, in font sizes. The hook and tail of italic f extend
+    beyond its advance width."""
     from app.formats.pdf_blocks import _measure_glyph
 
     font = pymupdf.Font("tiro")
@@ -873,7 +898,8 @@ def test_a_glyph_is_measured_by_drawing_it_alone():
 
 
 def test_glyphs_are_matched_by_the_glyph_id_used_on_the_page():
-    """逐字按页上用的字形编号记下，空白不收。自定义编码的字体（CMEX）按 Unicode 找不到字形。"""
+    """Each character is recorded by the glyph id used on the page, whitespace excluded. Fonts with a custom encoding
+    (CMEX) have no glyphs to find by Unicode."""
     from app.formats.pdf_blocks import _char_origins
 
     doc = pymupdf.open()
@@ -886,7 +912,8 @@ def test_glyphs_are_matched_by_the_glyph_id_used_on_the_page():
 
 
 def test_an_underline_is_written_as_a_mark_and_drawn_under_the_words():
-    """下划线送翻时写成 {u}，整块都画了线也照写；写回中文时字下面画一条线。"""
+    """Underlines are sent for translation as {u}, even when the whole block is underlined; the Chinese is written
+    with a line below the text."""
     from app.formats.pdf_align import _place_line
     from app.formats.pdf_flow import span_emphasis, writer_for
     from app.formats.pdf_typeset import typeset_lines
@@ -907,7 +934,8 @@ def test_an_underline_is_written_as_a_mark_and_drawn_under_the_words():
 
 
 def test_a_value_column_beside_a_word_label_is_its_own_paragraph():
-    """标签和值分两栏排：值的下一行从值的左缘起笔。值另成一段，标签单独翻；条目号后面的悬挂缩进仍是一条。"""
+    """Labels and values in two columns: the next line of a value starts at the value's left edge. The value becomes
+    its own paragraph and the label is translated alone; a hanging indent after an item number is still one item."""
     from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1):
@@ -933,7 +961,8 @@ def test_a_value_column_beside_a_word_label_is_its_own_paragraph():
 
 
 def test_a_word_label_does_not_absorb_the_value_column_block_beside_it():
-    """标签和值分在两块时，值是几行一栏，不并进标签；图注标签后面的半句照旧并。"""
+    """When label and value are in two blocks, the value is a column of several lines and is not merged into the
+    label; the rest of a sentence after a caption label is still merged."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_extract import _merge_caption_fragments
 
