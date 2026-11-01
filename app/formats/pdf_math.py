@@ -12,13 +12,16 @@ from .pdf_blocks import _INK_PAD, CJK_RE, _by_chars, _font_is_math, _span_is_mat
 
 
 def _line_box(line: dict) -> pymupdf.Rect:
-    """一行字的框。数学字体的 span 只算基线上下一个字高。
+    """Box of a line of text. Spans in math fonts only count one character height around the baseline.
 
-    PyMuPDF 按字体的上下伸量给框，CMSY、CMEX 的伸量是给大号括号、根号留的，
-    一个箭头就能把行框撑到两行高。行框偏高，译文就从上一行的位置写起。
+    PyMuPDF sizes boxes by the font ascent and descent. CMSY and CMEX reserve that room for large brackets
+    and radicals, so one arrow can stretch the line box to two lines high, and the translation would then
+    start at the position of the line above.
 
-    分析时每行要算好几遍，按坐标取最值，不逐个建 Rect 求并集。两个 Rect 求并集在 MuPDF 里按单精度算，
-    有两截以上时结果也按单精度存，和用 Rect 求并集得到的框一样，挨着阈值的比较才不变。"""
+    The analysis computes this several times per line, so it takes minima and maxima of coordinates instead
+    of building a Rect per span and taking unions. MuPDF computes the union of two Rects in single
+    precision; with two or more spans the result is stored in single precision as well, so the box equals
+    the Rect union and comparisons close to a threshold do not change."""
     x0 = y0 = math.inf
     x1 = y1 = -math.inf
     count = 0
@@ -38,23 +41,24 @@ def _line_box(line: dict) -> pymupdf.Rect:
 
 
 def _text_bounds(span: dict) -> tuple[float, float, float, float]:
-    """_text_box 的四个坐标。"""
+    """The four coordinates of _text_box."""
     x0, y0, x1, y1 = span["bbox"]
     ink = span.get("ink")
     if not _span_is_math(span) or not ink:
         return x0, y0, x1, y1
     top, bottom = ink[1] - _INK_PAD, ink[3] + _INK_PAD
     if span.get("ink_drawn"):
-        # 单画量出的墨迹不夹在字体框里：字体框量错了（txsys 的根号往基线下伸了大半个字）。
-        # 连上起笔点：宽波浪号这类重音整个在起笔点上方，只看墨迹就离开了它排的那一行
+        # Ink measured by drawing the glyph alone is not clipped to the font box, because the font box is wrong
+        # (the txsys radical reaches most of a character below the baseline). Include the origin: accents such
+        # as a wide tilde lie wholly above it, and by ink alone they would leave the line they belong to
         base = float(span["origin"][1])
         return x0, min(top, base), x1, max(bottom, base)
     return x0, max(y0, top), x1, min(y1, bottom)
 
 
 class _PageChars:
-    """一页逐字的框（见 _read_char_boxes），第一次用到时才读。下划线、根号、重音等几步标记共用，
-    同一页只读一次。"""
+    """Per-character boxes of a page (see _read_char_boxes), read on first use. The underline, radical and
+    accent marking steps share them, so each page is read once."""
 
     def __init__(self, page: pymupdf.Page):
         self.page = page
@@ -66,21 +70,24 @@ class _PageChars:
         return self._boxes
 
 
-# 下划线在基线下多深（字号的比例）。语料里的下划线在 0.11–0.3 之间；贴着基线的是删除线、
-# 表格线，再往下是下一行的分数线、表格线
+# How far below the baseline an underline lies (fraction of the font size). Underlines in the corpus are
+# between 0.11 and 0.3; lines touching the baseline are strikethroughs or table rules, lines further down
+# are fraction bars or table rules of the next line
 _UNDERLINE_TOP = 0.05
 _UNDERLINE_DEPTH = 0.35
 
 
 def _mark_underlines(page_chars: _PageChars, data: dict, strokes: Sequence[pymupdf.Rect]) -> None:
-    """字下面画的线（opt_views 例 6 里标出的列 {A, D, G}）。线不在字体里，按细横线认：
-    在字的基线下、降部以内，横向不出这一行。线下面的字切成单独的 span，标上 underline，
-    送翻时写成 {u}。公式字下面的横线是分数线、根号线，不算。"""
+    """Lines drawn under text (the marked columns {A, D, G} in example 6 of opt_views). The line is not part
+    of the font, so it is recognized as a thin horizontal rule below the baseline, within the descender, and
+    not wider than the line of text. The characters above it become separate spans marked underline and are
+    sent as {u}. Rules under formula characters are fraction or radical bars and do not count."""
     if not strokes:
         return
     lines = [line for block in data.get("blocks", []) for line in block.get("lines", []) if line.get("spans")]
-    # 分数线下面紧挨着分母，下划线下面空着一段行距。量字形的墨迹框，不量字体框。
-    # 下面那行自己也画着下划线的（一列链接）不是分母
+    # A fraction bar has the denominator right below it, an underline has line spacing below it. Measure the
+    # glyph ink boxes, not the font boxes. A line below that is itself underlined (a column of links) is not
+    # a denominator
     inks = [
         (id(span), pymupdf.Rect(span.get("ink") or span["bbox"]))
         for line in lines
@@ -102,7 +109,7 @@ def _mark_underlines(page_chars: _PageChars, data: dict, strokes: Sequence[pymup
         left = min(span["bbox"][0] for span in spans)
         right = max(span["bbox"][2] for span in spans)
         main = max(float(span.get("size") or 0) for span in spans)
-        # 这一行正文的基线。分子抬在基线上面，下划线的字落在基线上
+        # Baseline of the body text in this line. A numerator is raised above it; underlined text sits on it
         body = [
             span
             for span in spans
@@ -137,16 +144,18 @@ def _mark_underlines(page_chars: _PageChars, data: dict, strokes: Sequence[pymup
         line["spans"] = out
 
 
-# 根号。横线从根号右上角起笔
+# Radical signs. The bar starts at the top right corner of the sign
 _RADICALS = "√∛∜"
 
 
 def _mark_radicands(page_chars: _PageChars, data: dict, strokes: Sequence[pymupdf.Rect]) -> None:
-    """根号横线下面的字是被开方数，标成公式（√81 的 81）。正文和公式用同一套字体时，
-    按字体分不出来，81 留在正文里，根号单独成了一个公式，两边各排各的。
-    CMEX 的大号根号提出来是字母 p，大号定界符字体里的字都按位置认：横线从它的右上角起头才是根号。"""
+    """Mark the text under a radical bar, the radicand, as formula (the 81 of √81). When body text and
+    formulas use the same fonts, the font cannot tell them apart: 81 would stay in the body text and the
+    radical become a formula of its own, each typeset separately. Large CMEX radicals extract as the letter
+    p, so every glyph in a large delimiter font is recognized by position: it is a radical only if a bar
+    starts at its top right corner."""
     lines = [line for block in data.get("blocks", []) for line in block.get("lines", []) if line.get("spans")]
-    # 大号根号的字体框比字形高出一截，横线接在墨迹的右上角
+    # The font box of a large radical is taller than the glyph; the bar meets the top right of the ink
     radicals = [
         pymupdf.Rect(span["ink"]) if span.get("ink") else _glyph_box(span)
         for line in lines
@@ -188,14 +197,15 @@ def _mark_radicands(page_chars: _PageChars, data: dict, strokes: Sequence[pymupd
         line["spans"] = out
 
 
-# 叠在词上面的长箭头、横线最多盖住这么多个字：再长的是表格里的分隔线
+# A long arrow or bar over a word covers at most this many characters; longer ones are table separators
 _OVERLAY_CHARS = 12
 
 
 def _mark_overlays(page_chars: _PageChars, data: dict) -> None:
-    """用字形画在词上面的向量箭头（esvect 的 \vv{king} 提出来是「#    »」）和上横线：没有字母数字、
-    墨迹是一条比一个字宽的细带，紧贴在别的词的墨迹上面。它和盖住的字是一个式子，标成公式，
-    不然箭头当成字排进译文，「# » man」叠在一起。"""
+    """Vector arrows drawn with glyphs over a word (esvect's \vv{king} extracts as "#    »") and overlines:
+    spans with no letters or digits whose ink is a thin band wider than a character, resting on the ink of
+    another word. Together with the covered characters they form one formula and are marked as such;
+    otherwise the arrow would be typeset as text and come out as "# » man" piled together."""
     for block in data.get("blocks", []):
         spans = [span for line in block.get("lines", []) for span in line.get("spans", [])]
         overlays = []
@@ -220,8 +230,9 @@ def _mark_overlays(page_chars: _PageChars, data: dict) -> None:
                 word = pymupdf.Rect(ink)
                 if min(word.x1, box.x1) - max(word.x0, box.x0) <= 0:
                     continue
-                # 按基线比：整个 span 的墨迹顶会被后面带升部的字（close 的 l）抬高。
-                # 箭头自己的基线离词的基线不到一个字高；上一行的标点、省略号、填空横线隔着一整行
+                # Compare baselines: the ink top of a whole span is raised by later letters with ascenders (the l
+                # of close). The arrow's own baseline is less than a character height above the word's; dots,
+                # ellipses and fill-in blanks of the line above are a whole line away
                 base = float(span["origin"][1])
                 lift = base - float(overlay["origin"][1])
                 if 0 <= lift <= size * 0.8 and base - size * 1.3 <= box.y0 and box.y1 <= base - size * 0.45:
@@ -252,15 +263,18 @@ def _mark_overlays(page_chars: _PageChars, data: dict) -> None:
                 line["spans"] = out
 
 
-# 公式检测模型的框常把公式后面的句读也框进去（$x$, 框成「x,」）。句读留在正文里，译文才排得成中文标点
+# Boxes from the formula detection model often include the punctuation after a formula ($x$, boxed as "x,").
+# The punctuation stays in the body text so the translation can use Chinese punctuation
 _FORMULA_TRAIL = ",.;:?!"
-# 框里只有数字（0、.5、(0, 1)）的排出来和正文一样，不当公式，免得同一句里 0 是占位符、1 不是
+# A box holding only numbers (0, .5, (0, 1)) looks like body text and is not a formula, so that one sentence
+# does not have 0 as a placeholder and 1 as text
 _NUMERIC_RE = re.compile(r"[\d\s.,()%+\-−]*")
 
 
 def _mark_detected_formulas(page_chars: _PageChars, data: dict, rects: Sequence[pymupdf.Rect]) -> None:
-    """公式检测模型框出的行内公式，框里的字按字切出来标上 detected_formula。
-    只在认行内公式的 span 时算数（见 _is_formula_span），角色、跳过、拼段仍按字体定下的 math。"""
+    """Cut out the characters inside inline formula boxes from the formula detection model and mark them
+    detected_formula. The mark only counts when recognizing inline formula spans (see _is_formula_span);
+    roles, skipping and paragraph joining still use the font-based math mark."""
     if not rects:
         return
     chars = page_chars.boxes()
@@ -284,7 +298,8 @@ def _mark_detected_formulas(page_chars: _PageChars, data: dict, rects: Sequence[
                     if _span_is_math(span) or not span["text"].strip()
                     else [rect for rect in here if _box_holds_span(rect, span)]
                 )
-                # 字边按框边对：框是从图像上来的，和字边差一点，不能按下划线那样要求对齐
+                # Character edges are matched to the box edges. The box comes from an image and is slightly off,
+                # so exact alignment as for underlines cannot be required
                 out.extend(
                     _split_covered(span, hit, chars, ([r.x0 for r in hit], [r.x1 for r in hit]), "detected_formula")
                     if hit
@@ -294,7 +309,8 @@ def _mark_detected_formulas(page_chars: _PageChars, data: dict, rects: Sequence[
 
 
 def _box_holds_span(rect: pymupdf.Rect, span: dict) -> bool:
-    """框和 span 左右相交，上下有一半以上重合：上下两行的框碰到这一行的边不算。"""
+    """The box and the span overlap horizontally and by at least half vertically, so boxes of the lines above
+    and below that touch this line do not count."""
     box = pymupdf.Rect(span["bbox"])
     return min(rect.y1, box.y1) - max(rect.y0, box.y0) >= 0.5 * min(box.height, rect.height) and min(
         rect.x1, box.x1
@@ -306,7 +322,8 @@ def _trim_formula_box(
     spans: list[dict],
     chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]],
 ) -> pymupdf.Rect | None:
-    """框落到这一行的字上：右端的句读让出去，只框着数字的不要。"""
+    """Fit the box to the characters of this line: give up trailing punctuation, and drop boxes that only
+    cover numbers."""
     covered: list[tuple[float, str]] = []
     for span in spans:
         if not _box_holds_span(rect, span):
@@ -326,16 +343,19 @@ def _trim_formula_box(
     return trimmed
 
 
-# 单独画出来的重音字形（\hat、\bar、Montr\'eal 的 ´）。ASCII 的 ^ ~ ` 在正文、代码里另有用处，不算
+# Accent glyphs drawn on their own (\hat, \bar, the ´ of Montr\'eal). ASCII ^ ~ ` have other uses in text and
+# code and are not included
 _STACKED_ACCENTS = "ˆ˜¯´˙¨ˇ˘˚"
-# 占自己宽度的 ˆ ˜ 是代码、正则、网址里的 ^ ~（r"^The"、nyu.edu/~roweis），等宽字体也画成这两个字形
+# A ˆ or ˜ that takes up its own width is the ^ or ~ of code, a regex or a URL (r"^The", nyu.edu/~roweis);
+# monospaced fonts draw them with these glyphs too
 _ASCII_ACCENTS = {"ˆ": "^", "˜": "~"}
 
 
 def _split_accents(page_chars: _PageChars, data: dict) -> None:
-    """重音和前面的字常在同一个 span 里（「(ˆ」「log ˆ」），按 span 认不出它盖在后面的字或公式上。
-    切成单独的一截：盖在公式上的并进公式，盖在字母上的送翻前合成 ŷ、é。
-    占自己宽度的 ˆ ˜ 不是重音，改回 ^ ~，送翻前不和后面的字母合成。"""
+    """An accent often shares a span with the character before it ("(ˆ", "log ˆ"), and per span it cannot be
+    seen that it sits over the next character or formula. Cut it into a piece of its own: over a formula it
+    joins the formula, over a letter it is composed into ŷ or é before translation. A ˆ or ˜ that takes up
+    its own width is not an accent; it becomes ^ or ~ again and is not composed with the next letter."""
     lines = [line for block in data.get("blocks", []) for line in block.get("lines", []) if line.get("spans")]
     if not any(
         any(char in _STACKED_ACCENTS for char in text)
@@ -353,18 +373,19 @@ def _split_accents(page_chars: _PageChars, data: dict) -> None:
             if not any(char in _STACKED_ACCENTS for char in text) or boxes is None or len(boxes) != len(text):
                 out.append(span)
                 continue
-            # 后一个字的左边：同一截里的下一个字，或者下一截的起头
+            # Left edge of the next character: the next one in this span, or the start of the next span
             follow = [x0 for x0, _x1, _origin in boxes[1:]]
             follow.append(spans[index + 1]["bbox"][0] if index + 1 < len(spans) else float("inf"))
-            # 叠在后一个字上的重音不占位，后一个字从它中间起笔
+            # An accent stacked over the next character takes no width; the next character starts inside it
             stacked = [
                 char in _STACKED_ACCENTS and after < x1 - (x1 - x0) * 0.3
                 for char, (x0, x1, _origin), after in zip(text, boxes, follow)
             ]
-            # 前一个字的右边：叠在前一个字上的（公式里的 sˆ）也是重音
+            # Right edge of the previous character: an accent stacked over it (sˆ in a formula) is an accent too
             before = [spans[index - 1]["bbox"][2] if index else float("-inf")]
             before += [x1 for _x0, x1, _origin in boxes[:-1]]
-            # 后面同一行有字、从它右边起笔，才能断定它占自己的宽度。单成一行的 ˆ 叠在别的行上
+            # It takes up its own width only if more text follows on the line, starting at its right edge.
+            # A ˆ alone on a line sits over another line
             spaced = "".join(
                 _ASCII_ACCENTS.get(char, char)
                 if not on and after != float("inf") and prior <= x0 + (x1 - x0) * 0.3
@@ -403,9 +424,10 @@ VISIBLE_SPACE = "\u2423"
 
 
 def _mark_visible_spaces(page_chars: _PageChars, data: dict, cups: Sequence[pymupdf.Rect]) -> None:
-    """画出来的可见空格 ␣ 不在字体里，提取出来只剩一个普通空格或者一段空白，
-    merged to ␣re 读成 merged to re。落在一行字的基线上、字的空隙里的，在原处写上 ␣：
-    盖着空格的换掉这个空格，空隙里没有字的补一截。和前后的字隔着一段的，中间留一个空格。"""
+    """A drawn visible space ␣ is not in the font and extracts as a plain space or as nothing, so
+    "merged to ␣re" reads as "merged to re". Where one sits on the baseline of a line in a gap between
+    characters, write ␣ in its place: it replaces the space it covers, or is added as a new span when the gap
+    holds no character. When it is apart from the characters before or after it, a space is kept between."""
     if not cups:
         return
     lines = [
@@ -442,7 +464,8 @@ def _mark_visible_spaces(page_chars: _PageChars, data: dict, cups: Sequence[pymu
             tail = " " if x1 - cup.x1 > 1.0 and hit + 1 < len(text) and not text[hit + 1].isspace() else ""
             span["text"] = text[:hit] + lead + VISIBLE_SPACE + tail + text[hit + 1 :]
             continue
-        # 空隙里没有字：接在离得近的那截上，左边的接在后面，右边的接在前面。两边一个字宽内都没有字的不算
+        # No character in the gap: attach it to the nearer span, after a span on the left or before one on the
+        # right. It does not count if neither side has a character within one em
         inked = [(line, span) for line, span in row if str(span.get("text") or "").strip()]
         before = [item for item in inked if item[1]["bbox"][2] <= middle]
         after = [item for item in inked if item[1]["bbox"][0] >= middle]
@@ -476,7 +499,8 @@ def _mark_visible_spaces(page_chars: _PageChars, data: dict, cups: Sequence[pymu
 
 
 def _glyph_box(span: dict) -> pymupdf.Rect:
-    """字形占的框。字体框量错、墨迹是单画量出来的，上下按墨迹算。"""
+    """Box taken by the glyph. When the font box is wrong and the ink was measured by drawing the glyph
+    alone, the top and bottom come from the ink."""
     box = pymupdf.Rect(span["bbox"])
     ink = span.get("ink")
     if ink and span.get("ink_drawn"):
@@ -485,12 +509,13 @@ def _glyph_box(span: dict) -> pymupdf.Rect:
 
 
 def _painted_stroke(page: pymupdf.Page, rect: pymupdf.Rect) -> bool:
-    """线真的画出来了：剪裁路径外面、被盖住的线也在 get_drawings 里。按线所在的一条细带渲染，
-    几乎每一列都有深色才算。字的降部只穿过其中几列。"""
+    """The line is actually visible: get_drawings also lists lines outside the clip path or covered by other
+    content. Render the thin band the line occupies and require dark pixels in almost every column.
+    Descenders only cross a few columns."""
     band = pymupdf.Rect(rect.x0, rect.y0 - 0.4, rect.x1, rect.y1 + 0.4)
     try:
         pix = page.get_pixmap(clip=band, dpi=144, colorspace=pymupdf.csGRAY, alpha=False)
-    except Exception:  # noqa: BLE001 - 渲染不了就不认
+    except Exception:  # noqa: BLE001 - not recognized if it cannot be rendered
         return False
     if pix.width <= 0 or pix.height <= 0:
         return False
@@ -541,7 +566,7 @@ def _line_edges(
     spans: list[dict],
     chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]],
 ) -> tuple[list[float], list[float]]:
-    """一行里所有字的左边和右边。"""
+    """Left and right edges of every character in a line."""
     lefts: list[float] = []
     rights: list[float] = []
     for span in spans:
@@ -558,8 +583,9 @@ def _split_covered(
     edges: tuple[list[float], list[float]] = ([], []),
     flag: str = "underline",
 ) -> list[dict]:
-    """span 按字切成线盖着的和线外的几截，盖着的标上 flag（下划线、根号里的数）。
-    逐字的框对不上时，整个 span 都在线的范围里才标。"""
+    """Cut a span by character into pieces covered by the lines and pieces outside them, and mark the covered
+    pieces with flag (underline, or the number under a radical). Without matching per-character boxes, the
+    span is marked only if all of it lies within a line."""
     text = str(span["text"])
     boxes = chars.get((text, round(span["origin"][0], 1), round(span["origin"][1], 1)))
 
@@ -576,8 +602,9 @@ def _split_covered(
         ):
             return [{**span, flag: True}]
         return [span]
-    # 下划线从某个字的左边画到某个字的右边。图里的虚线、图例线、分数线和字边对不上。
-    # 一条线下面的字可能分成几个 span，按整行的字边对
+    # An underline runs from the left edge of one character to the right edge of another. Dashed lines in
+    # figures, legend lines and fraction bars do not match character edges. The text under one line may be
+    # split into several spans, so the edges of the whole line are used
     reach = max(1.0, float(span.get("size") or 10.0) * 0.15)
     lefts = edges[0] or [x0 for x0, _x1, _ox in boxes]
     rights = edges[1] or [x1 for _x0, x1, _ox in boxes]
@@ -586,7 +613,7 @@ def _split_covered(
         for rect in under
         if any(abs(rect.x0 - x0) <= reach for x0 in lefts) and any(abs(rect.x1 - x1) <= reach for x1 in rights)
     ]
-    # 下划线字符本身不算画了下划线（有的 PDF 把 _ 画成一条线）
+    # The underscore character itself is not underlined text (some PDFs draw _ as a line)
     marks = [covered(x0, x1) and char != "_" for char, (x0, x1, _ox) in zip(text, boxes)]
     if not any(marks):
         return [span]
@@ -597,10 +624,12 @@ def _split_covered(
         if index < len(text) and marks[index] == marks[start]:
             continue
         x0, x1 = boxes[start][0], boxes[index - 1][1]
-        # 起笔点取这一截第一个字的。span 的起笔点是第一个字的：「 .」的空格落在前面下标的基线上，
-        # 切下来的句点照抄它，擦除时按基线认不到，句点留在原处
+        # The origin is that of the piece's first character. The span's origin belongs to its first character:
+        # in " ." the space sits on the baseline of the subscript before it, and a period copying that origin
+        # would not be found by baseline when erasing and would stay on the page
         piece = {**span, "text": text[start:index], "bbox": (x0, y0, x1, y1), "origin": boxes[start][2]}
-        # 页面上的 span 还是切开前的那一个，裁公式时按它认出哪些字是公式自己的（见 _outside_formula）
+        # The page still holds the span from before the cut; cropping formulas uses it to tell which characters
+        # belong to the formula (see _outside_formula)
         piece["source"] = span.get("source") or tuple(span["bbox"])
         if "ink" in span:
             piece["ink"] = (x0, span["ink"][1], x1, span["ink"][3])
@@ -614,8 +643,10 @@ def _split_covered(
 
 
 def _script_parts(line: dict, spans: list[dict]) -> list[tuple]:
-    """西文页上一行里一截中文、空开半个字以上、接着一截西文的，是并排的两栏（左栏中文原句、右栏英译的题词），
-    拆成两截：中文那截按外文留原文，西文接着译。不是这样的行返回空列表"""
+    """On a page in a Western language, a line with Chinese text, a gap of half an em or more and then Western
+    text is two columns side by side (an epigraph with the Chinese original on the left and the English
+    translation on the right). Split it into two pieces: the Chinese piece is kept as foreign text and the
+    Western piece is translated. Returns an empty list for other lines"""
     for k in range(1, len(spans)):
         if _script_seam(spans[:k], spans[k:]):
             parts = []
@@ -627,7 +658,8 @@ def _script_parts(line: dict, spans: list[dict]) -> list[tuple]:
 
 
 def _script_seam(left: list[dict], right: list[dict]) -> bool:
-    """左边一截只有中文、右边一截西文起头，中间空开半个字以上（见 _script_parts）"""
+    """The left piece is Chinese only, the right piece starts with Western text, and the gap between them is
+    half an em or more (see _script_parts)"""
     left = [span for span in left if str(span.get("text") or "").strip()]
     right = [span for span in right if str(span.get("text") or "").strip()]
     if not left or not right:
@@ -642,18 +674,20 @@ def _script_seam(left: list[dict], right: list[dict]) -> bool:
     )
 
 
-# Computer Modern 的正体。正文是 CM 时它们是正文；正文用 Times 之类时只出现在公式里
-# （\mathrm、\log、括号、等号、\mathbf，无衬线粗体的向量 w、x）。
+# Upright Computer Modern fonts. When the body text is set in CM they are body text; when it is set in Times
+# or similar, they only appear in formulas (\mathrm, \log, brackets, equals signs, \mathbf, bold sans-serif
+# vectors w, x).
 _CM_UPRIGHT_RE = re.compile(r"^(?:[A-Z]{6}\+)?(?:CMR|CMBX|CMSS(?:BX|I)?|CMSL)\d", re.I)
 
 
-# 数学字母区（𝑥、𝜁、𝐀）。字体的 ToUnicode 把字母映到这里，这个字体就是写公式的
+# Mathematical alphanumeric symbols (𝑥, 𝜁, 𝐀). A font whose ToUnicode maps letters here is a formula font
 _MATH_ALPHABET_RE = re.compile(r"[\U0001D400-\U0001D7FF\u210E]")
 
 
 def _mark_math_alphabet(pages: list[dict]) -> None:
-    """字母大半映到数学字母区的字体，所有 span 都标上 math。字体名单认不全的数学斜体
-    （newtxmath 配各种正文字体时的名字）照样认得出，同一字体里的逗号、括号也跟着算公式。"""
+    """Mark every span math in fonts that map most of their letters to the mathematical alphanumeric block.
+    This catches math italics that the font name lists miss (the names newtxmath gets with various text
+    fonts), and commas and brackets in the same font count as formula as well."""
     letters: dict[str, int] = {}
     mathy: dict[str, int] = {}
     for data in pages:
@@ -676,8 +710,9 @@ def _mark_math_alphabet(pages: list[dict]) -> None:
 
 
 def _mark_formula_only_fonts(pages: list[dict]) -> None:
-    """全文只写一两个字、多半贴着公式的字体，所有 span 都标上 math。
-    点阵的空心 1（𝟙）是 Type3 字体，名字只是 F74 这样的编号，提出来是普通的 1。"""
+    """Mark every span math in fonts used only for one or two characters at a time, mostly next to formulas.
+    A bitmap double-struck 1 (𝟙) is a Type 3 font named only by a number such as F74, and extracts as a
+    plain 1."""
     spans_of: dict[str, int] = {}
     touching: dict[str, int] = {}
     longer: set[str] = set()
@@ -713,10 +748,12 @@ def _mark_formula_only_fonts(pages: list[dict]) -> None:
 
 
 def _mark_math_roman(pages: list[dict]) -> None:
-    """正文不是 Computer Modern 的文档里，CM 正体的 span 都是公式，标上 math。
+    """In documents whose body text is not Computer Modern, spans in upright CM fonts are formulas; mark them
+    math.
 
-    字体名单只能管到“这种字体通常是什么”。CMR 在一篇 CM 排的论文里是正文，在 Times 排的
-    论文里只用来写 log、min、括号和等号，要看这份文档的正文用的是什么。
+    Font name lists can only say what a font usually is. CMR is the body text in a paper set in CM, but in a
+    paper set in Times it is only used for log, min, brackets and equals signs, so the body font of this
+    document decides.
     """
     counts: dict[str, int] = {}
     for data in pages:
@@ -739,29 +776,35 @@ def _mark_math_roman(pages: list[dict]) -> None:
 
 
 def _prose_units(text: str) -> int:
-    """正文词数：拉丁单词（≥2 字母）+ CJK 字符数 / 2。用来区分"公式行"和"含公式的句子"。"""
+    """Number of prose words: Latin words (2 or more letters) plus CJK characters / 2. Tells a line of
+    formulas from a sentence containing formulas."""
     latin = len(re.findall(r"[A-Za-z]{2,}", text))
     cjk = len(CJK_RE.findall(text))
     return latin + cjk // 2
 
 
-# 分子的基线在分数线上方、分母的基线在下方多远（字号的比例）。分数线在数学轴上，
-# 旁边的等号、标签的基线比它低一点
+# How far the numerator baseline is above the fraction bar and the denominator baseline below it (fraction of
+# the font size). The bar is on the math axis; the baselines of an equals sign or label beside it are a
+# little lower
 _NUMERATOR_RISE = (0.1, 0.75)
 _DENOMINATOR_DROP = (0.4, 1.3)
 _FRACTION_AXIS = 0.5
-# 分子、分母居中的容差（线长的比例），旁边的字离线端多远以内算挨着（字号的比例）
+# Tolerance for centering numerator and denominator (fraction of the bar length), and the distance from the
+# bar ends within which neighboring text counts as next to it (fraction of the font size)
 _FRACTION_CENTER = 0.1
 _FRACTION_NEIGHBOR = 1.5
 
 
 def _fraction_parts(data: dict, rules: Sequence[pymupdf.Rect]) -> set[int]:
-    """分子或分母里有正文词的分式（labeled recall = # of correct … / # of total …）上下的字。
+    """The text above and below fraction bars whose numerator or denominator contains prose words
+    (labeled recall = # of correct ... / # of total ...).
 
-    分数线是一条细横线，分子、分母各成一行，都落在线的长度以内、在线上居中，同一行里
-    再没有挨着线端的字；线端外面在数学轴上有等号、标签之类。链接下划线下一行是接着写的
-    正文，表格线两端外面没有字，都不是。纯数学的分式不在这里认：段落里的行内分式把一行
-    拆成几截，按截数词认不准。
+    The bar is a thin horizontal rule. Numerator and denominator are each one line, lie within the length
+    of the bar and are centered on it, with no other text next to the bar ends on the same line; outside the
+    bar ends, on the math axis, there is an equals sign, a label or similar. A link underline is followed by
+    more body text and a table rule has no text beyond its ends, so neither matches. Purely mathematical
+    fractions are not handled here: inline fractions in a paragraph split a line into pieces, and counting
+    words per piece is unreliable.
     """
     spans = [
         span
@@ -812,12 +855,14 @@ def _centered_alone(row: list[dict], spans: list[dict], inner: set[int], bar: py
 
 
 def _beside_bar(span: dict, bar: pymupdf.Rect, axis: float) -> bool:
-    """线端外面、数学轴附近的字：分式前的等号、标签，后面的运算符。"""
+    """Text beyond a bar end near the math axis: an equals sign or label before the fraction, an operator
+    after it."""
     if not 0 <= span["origin"][1] - axis <= span["size"] * _FRACTION_AXIS:
         return False
     reach = span["size"] * _FRACTION_NEIGHBOR
     return bar.x0 - reach <= span["bbox"][2] <= bar.x0 + 1 or bar.x1 - 1 <= span["bbox"][0] <= bar.x1 + reach
 
 
-# 可伸长的大括号、大求和号这类定界符的字体。行内公式也会用到，所以只认离开左缘的块
+# Fonts of extensible delimiters such as large braces and summation signs. Inline formulas use them too, so
+# only blocks away from the left margin are recognized
 _BIG_DELIMITER_FONT_RE = re.compile(r"CMEX|cmex|LMMathExtension", re.I)
