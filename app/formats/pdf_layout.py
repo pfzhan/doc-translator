@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import bisect
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Generic, Protocol, Sequence, TypeVar
+from typing import Generic, Protocol, TypeVar
 
 import pymupdf
 

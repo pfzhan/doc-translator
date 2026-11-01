@@ -5,8 +5,11 @@ empty（两锚点之间没有能比的字）、lost（锚点没找到）。漏�
 另记为 minor，排成正文也不碍翻译；漏了单个变量、希腊字母、数学符号的才算错（bad_partial、bad_missed）。
 锚点词被做成占位符的记为误判。
 按正文字体分两组：Computer Modern 排的和别的字体排的（Times、Nimbus 等），后者斜体变量和正文斜体同字体。"""
+import json
 import os
-import json, re, sys, unicodedata
+import re
+import sys
+import unicodedata
 from collections import Counter, defaultdict
 from pathlib import Path
 

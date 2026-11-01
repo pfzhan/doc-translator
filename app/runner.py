@@ -8,8 +8,8 @@ import hashlib
 import re
 import sqlite3
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from . import background, glossary, langdetect
 from .prompts import drop_added_braces, drop_invented_marks, strip_control_marks, tidy_marks

@@ -1,7 +1,10 @@
 """从 LaTeX 源码取行内公式，作标准答案。用法: mathgold.py <论文目录> <输出 json>
 只把源码当文本读。每个 $…$、\\(…\\) 记下公式源码和两边各几个正文词（锚点），
 评分时按锚点在计划里找到公式落在哪，看它有没有做成占位符。预处理和 gold.py 一致。"""
-import json, re, sys, unicodedata
+import json
+import re
+import sys
+import unicodedata
 from pathlib import Path
 
 home, out = Path(sys.argv[1]), Path(sys.argv[2])

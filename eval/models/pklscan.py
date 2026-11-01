@@ -1,5 +1,9 @@
 """只读扫描 .pt（zip）里 pickle 引用的全局名，不执行。用法: pklscan.py <pt>"""
-import sys, zipfile, pickletools, collections
+import collections
+import pickletools
+import sys
+import zipfile
+
 z = zipfile.ZipFile(sys.argv[1])
 names = [n for n in z.namelist() if n.endswith(".pkl")]
 print("pkl files:", names, "entries:", len(z.namelist()))

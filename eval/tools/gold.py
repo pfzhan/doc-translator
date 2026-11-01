@@ -1,7 +1,10 @@
 """从 LaTeX 源码取段落边界，作标准答案。用法: gold.py <论文目录> <输出 json>
 只把源码当文本读。段落在空行、\\par、章节命令、块级环境、\\item 处断开；
 段内的行间公式算「不计」的边界（公式两边拆不拆都行）。"""
-import json, re, sys, unicodedata
+import json
+import re
+import sys
+import unicodedata
 from pathlib import Path
 
 home, out = Path(sys.argv[1]), Path(sys.argv[2])

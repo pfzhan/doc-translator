@@ -1,9 +1,13 @@
 """每页轮流跑各个模型/边长，抵消机器负载的漂移。用法: bench2.py <代码目录> <onnx@边长,...> <pdf>..."""
-import sys, time
+import sys
+import time
+
 code, variants = sys.argv[1:3]
 sys.path.insert(0, code)
 import pymupdf
-from app.formats.pdf_vision import load_session, _page_batch
+
+from app.formats.pdf_vision import _page_batch, load_session
+
 runs = []
 for v in variants.split(","):
     path, size = v.rsplit("@", 1)

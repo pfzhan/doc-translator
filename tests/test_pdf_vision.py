@@ -1,9 +1,9 @@
 import numpy as np
 import pymupdf
 
+from app.formats import pdf_vision
 from app.formats.pdf_layout import PageGeometry
 from app.formats.pdf_roles import HeuristicLayout, LayoutItem, Role
-from app.formats import pdf_vision
 from app.formats.pdf_vision import FormulaDetector, FormulaModel, ModelLayout, formula_detector, layout_detector
 
 NAMES = "{0: 'title', 1: 'plain text', 3: 'figure', 4: 'figure_caption', 8: 'isolate_formula'}"

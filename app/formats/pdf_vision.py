@@ -17,9 +17,9 @@ import ast
 import hashlib
 import json
 import os
+import re
 import tempfile
 import threading
-import re
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor

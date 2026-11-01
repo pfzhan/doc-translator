@@ -515,9 +515,7 @@ def _clean_attrs(src: Tag, frag: Tag) -> None:
         for attr in list(t.attrs):
             key = str(attr)
             val = t.attrs[attr]
-            if key.lower().startswith("on") or key not in keep or _unsafe_url(val, _local(t.name)):
-                del t[attr]
-            elif key == "style" and str(val) not in styles:
+            if key.lower().startswith("on") or key not in keep or _unsafe_url(val, _local(t.name)) or key == "style" and str(val) not in styles:
                 del t[attr]
 
 

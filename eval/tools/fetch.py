@@ -2,7 +2,13 @@
 每篇放进自己的空目录 <输出目录>/<不带版本号的编号>/：paper.pdf、meta.txt（分类和带版本号的编号），
 LaTeX 源码只解出 .tex、.bbl、.sty、.cls 到 src/。源码只当文本读，不编译。
 下载的 PDF 和列表里的 SHA-256 对不上时报出来（arXiv 偶尔会重新生成 PDF）。已有的目录跳过。"""
-import gzip, hashlib, io, sys, tarfile, time, urllib.request
+import gzip
+import hashlib
+import io
+import sys
+import tarfile
+import time
+import urllib.request
 from pathlib import Path
 
 tsv, out = Path(sys.argv[1]), Path(sys.argv[2])

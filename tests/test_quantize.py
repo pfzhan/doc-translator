@@ -6,8 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import layout_model, quantize
-from app.history import Job
 from app.formats.pdf_vision import FormulaModel
+from app.history import Job
 from app.settings import Settings, SettingsError
 
 

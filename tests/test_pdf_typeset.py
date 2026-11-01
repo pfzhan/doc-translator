@@ -146,5 +146,5 @@ def test_typeset_formula_tracks_the_line_baseline(tmp_path):
     assert len(hit) == 1
     baseline = text_spans[0]["origin"][1]
     # 记录的下沿是 2pt，再乘渲染缩放，公式底应靠近文字基线而不是盒子顶
-    assert abs((hit[0].y1 - baseline)) < 8
+    assert abs(hit[0].y1 - baseline) < 8
     assert hit[0].x0 > text_spans[0]["bbox"][0]

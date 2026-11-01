@@ -1,7 +1,11 @@
 """两版 plan 逐单元比，只打印不同的片段。用法: segdiff.py a_tag b_tag [name]"""
+import difflib
+import glob
+import json
 import os
+import sys
 from pathlib import Path
-import json, glob, sys, difflib
+
 E = Path(os.environ.get("EVALSET", Path.home() / "doc-translator-evalset"))
 a_tag, b_tag = sys.argv[1], sys.argv[2]
 only = sys.argv[3] if len(sys.argv) > 3 else None

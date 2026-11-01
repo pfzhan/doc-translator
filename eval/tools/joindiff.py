@@ -1,8 +1,10 @@
 """两个标签的计划逐篇比，列出新并上的单元（后一版少了的边界）。用法: joindiff.py a b"""
+import json
 import os
-import json, sys, re
-from pathlib import Path
+import sys
 from difflib import SequenceMatcher
+from pathlib import Path
+
 E = Path(os.environ.get("EVALSET", Path.home() / "doc-translator-evalset")); a, b = sys.argv[1:3]
 for pa in sorted((E / "plans").glob(f"*.{a}.json")):
     id = pa.name.split(f".{a}.")[0]; pb = E / "plans" / f"{id}.{b}.json"

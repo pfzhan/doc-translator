@@ -13,7 +13,8 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 from bs4 import BeautifulSoup
-from lxml import etree, html as lxml_html
+from lxml import etree
+from lxml import html as lxml_html
 from mobi.kindleunpack import unpackBook
 
 from .epub import translate_epub
@@ -36,7 +37,7 @@ def _xhtml_from_mobi7(src_html: str) -> bytes:
         '<html xmlns="http://www.w3.org/1999/xhtml"><head>'
         '<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/><title>book</title>'
         f"</head><body>{inner}</body></html>"
-    ).encode("utf-8")
+    ).encode()
 
 
 def _read_mobi7_html(html_path: Path) -> str:

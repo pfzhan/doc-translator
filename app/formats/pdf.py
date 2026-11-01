@@ -35,6 +35,8 @@ from .. import background, langdetect, prompts
 from ..languages import RTL_LANGUAGES
 from ..runner import clean_translation
 from .pdf_align import FIRST_BASELINE, SQUEEZE, draw_cjk_lines, page_origin
+from .pdf_dedupe import merge_duplicates
+from .pdf_erase import Erasure, erase, restore_glyphs, single_precision, type3_glyphs
 from .pdf_flow import (
     COLOR_MARK_RE,
     STYLE_MARK_RE,
@@ -52,21 +54,47 @@ from .pdf_flow import (
     strip_style_marks,
     writer_for,
 )
-from .pdf_dedupe import merge_duplicates
-from .pdf_erase import Erasure, erase, restore_glyphs, single_precision, type3_glyphs
-from .pdf_order import ReadingOrder
 from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, note_pitch, text_frames
 from .pdf_layout import (
-    ExampleNumber, PageGeometry, PageScan, RuledTable, cell_containing, content_floor, example_numbers,
-    interlinear_glosses, is_page_number, light_fill, margin_skips,
-    scan_page, reading_order, text_page_rect, visible_drawings,
+    ExampleNumber,
+    PageGeometry,
+    PageScan,
+    RuledTable,
+    cell_containing,
+    content_floor,
+    example_numbers,
+    interlinear_glosses,
+    is_page_number,
+    light_fill,
+    margin_skips,
+    reading_order,
+    scan_page,
+    text_page_rect,
+    visible_drawings,
 )
+from .pdf_order import ReadingOrder
 from .pdf_parts import plan_parts, render_in_parts, worker_count
 from .pdf_roles import LayoutItem, Role, is_size_heading
-from .pdf_runs import BOUNDARY, FormulaRun, Run, TextRun, expand_box, intersecting_curves, split_page_boundary, strip_boundary
+from .pdf_runs import (
+    BOUNDARY,
+    FormulaRun,
+    Run,
+    TextRun,
+    expand_box,
+    intersecting_curves,
+    split_page_boundary,
+    strip_boundary,
+)
 from .pdf_type3 import Type3Reader, broken_type3_names, recover_type3_page
 from .pdf_typeset import (
-    FORMULA_PAD, FormulaMetric, FormulaPiece, TextPiece, TypesetLine, line_lead, line_offsets, typeset_lines,
+    FORMULA_PAD,
+    FormulaMetric,
+    FormulaPiece,
+    TextPiece,
+    TypesetLine,
+    line_lead,
+    line_offsets,
+    typeset_lines,
 )
 from .pdf_vision import FormulaDetector, FormulaModel, ModelBoxes, formula_detector, layout_detector
 
@@ -8940,7 +8968,7 @@ def _wrap_holes(
     if len(lines) < 3:
         return []
     area = area or block.rect
-    found: list["pymupdf.Rect"] = []
+    found: list[pymupdf.Rect] = []
     beside: set[int] = set()
     for obstacle in obstacles:
         cut = pymupdf.Rect(obstacle) & area
@@ -9757,7 +9785,7 @@ def _index_reflow(
     moved: dict[int, TextBlock] = {}
     for column, right in _index_columns(blocks, geo):
         tops = sorted(row[0].y0 for b in column for row in _visual_lines(b))
-        steps = [b - a for a, b in zip(tops, tops[1:]) if 0 < b - a]
+        steps = [b - a for a, b in zip(tops, tops[1:]) if b - a > 0]
         if not steps:
             continue
         pitch = sorted(steps)[len(steps) // 2]

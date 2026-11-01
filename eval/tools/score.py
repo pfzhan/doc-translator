@@ -2,7 +2,10 @@
 每段源文在计划里找开头和结尾：段首、段尾 12 个词以内、全文只出现一次的 4 词片段。
 并错：相邻两段（段落边界）的前段尾和后段首落在同一个单元。
 拆错：一段的段首和段尾落在不同单元（行间公式两边拆开不算，见 gold.py）。"""
-import json, re, sys, unicodedata
+import json
+import re
+import sys
+import unicodedata
 from collections import defaultdict
 
 plan = json.load(open(sys.argv[1]))

@@ -11,7 +11,7 @@ from app.formats import translate_file
 from app.formats.epub import _content_docs, translate_epub
 from app.formats.markdown import collect_segments, render, split_blocks
 from app.formats.mobi import _read_mobi7_html, _xhtml_from_mobi7
-from app.formats.pdf import _join_lines
+from app.formats.pdf import TextBlock, _join_lines
 from app.runner import Runner
 from app.translators import MockTranslator, OpenAITranslator
 
@@ -1475,9 +1475,7 @@ def _zh_rows(page: pymupdf.Page, size: float = 8.8) -> list[float]:
     )
 
 
-def _x_block(page: pymupdf.Page, y0: float, count: int, size: float = 10, row: float = 12) -> "TextBlock":
-    from app.formats.pdf import TextBlock
-
+def _x_block(page: pymupdf.Page, y0: float, count: int, size: float = 10, row: float = 12) -> TextBlock:
     rows = [pymupdf.Rect(40, y0 + row * index, 360, y0 + row * index + row) for index in range(count)]
     for rect in rows:
         page.insert_text((40, rect.y0 + 9), "x " * 40, fontsize=size)
@@ -2762,7 +2760,7 @@ def test_pdf_biblio_skips_on_attention_paper():
     src = SAMPLES / "attention.pdf"
     if not src.exists():
         pytest.skip("sample missing")
-    from app.formats.pdf import extract_blocks, biblio_skips
+    from app.formats.pdf import biblio_skips, extract_blocks
 
     blocks = extract_blocks(pymupdf.open(src))
     skips = biblio_skips(blocks)
@@ -4090,7 +4088,7 @@ def test_glyph_places_match_when_a_column_jitters_in_the_last_digits():
 
 def test_a_formula_bitmap_is_rendered_only_when_used(monkeypatch):
     """裁公式图时只记下从哪里裁；矢量贴回失败、要贴位图时才渲染，只渲染一次。"""
-    from app.formats.pdf import _FormulaImage, _formula_png
+    from app.formats.pdf import _formula_png, _FormulaImage
 
     doc = pymupdf.open()
     page = doc.new_page(width=200, height=100)
@@ -5430,7 +5428,7 @@ def test_right_fragment_joins_the_following_line():
                       line_rects=[pymupdf.Rect(40, 126, 110, 138)],
                       text="expression-specific.", size=9, color="#000", bold=False)
     blocked = _merge_line_tails([left, fragment, shared, short])
-    assert all("expression-specific." != block.text or "distinguished" not in block.text
+    assert all(block.text != "expression-specific." or "distinguished" not in block.text
                for block in blocked)
     assert any(block.text == "expression-specific." for block in blocked)
 
@@ -6636,7 +6634,7 @@ def test_shared_baseline_continuation_stays_in_its_lines(tmp_path):
 
 
 def test_cross_page_formulas_keep_own_page_and_name():
-    from app.formats.pdf import TextBlock, _assign_restored_parts, _prepare_unit
+    from app.formats.pdf import _assign_restored_parts, _prepare_unit
 
     def span(text, font, size, x0, y0):
         return {"text": text, "font": font, "size": size, "bbox": (x0, y0, x0 + 12, y0 + 10),
@@ -6730,6 +6728,7 @@ def test_split_translation_balances_style_marks():
 def test_save_after_redact_keeps_resources_indirect(tmp_path):
     """redact 把 /Resources 改成内联字典。写回前必须改成间接引用，否则大字典在 garbage 保存时会被写坏。"""
     import pymupdf as pm
+
     from app.formats.pdf import TextBlock, _render_translated
 
     src = tmp_path / "t.pdf"
@@ -6962,7 +6961,12 @@ def test_write_helpers_only_need_the_blocks_on_their_page():
     import random
 
     from app.formats.pdf import (
-        TextBlock, _affiliation_write_rects, _beside_body, _body_first_starts, _fit_page_margins, _room_below,
+        TextBlock,
+        _affiliation_write_rects,
+        _beside_body,
+        _body_first_starts,
+        _fit_page_margins,
+        _room_below,
     )
 
     rng = random.Random(5)
@@ -7591,7 +7595,6 @@ def test_formula_keeps_a_space_before_following_text(tmp_path):
     assert y_hit and after
     gap = after[0].x0 - y_hit[0].x1
     assert gap >= 2.5
-    stuck = page.search_for(")。")
     # 标点仍然贴着公式，不在 ) 前加空格
     close = _render_translated(
         src, [block], [f"取{sentinel})。"], "zh-CN", {id(block): [formula]},
@@ -10146,7 +10149,7 @@ def test_a_fragment_inside_a_kept_formula_is_part_of_it():
 
 def test_text_under_a_big_cmex_radical_is_part_of_the_formula():
     """CMEX 的大号根号提出来是字母 p，字体框比字形高。横线从它墨迹的右上角起头，线下的 Var 是被开方数。"""
-    from app.formats.pdf import _PageChars, _mark_radicands
+    from app.formats.pdf import _mark_radicands, _PageChars
 
     doc = pymupdf.open()
     page = doc.new_page()
@@ -10514,7 +10517,7 @@ def test_one_sentence_per_line_is_not_joined_into_a_paragraph():
 def test_a_glyph_arrow_over_a_word_marks_both_as_formula():
     """esvect 的 \\vv{woman} 提出来是「#    »」：没有字母、墨迹是一条细带、基线比词高不到一个字，
     紧贴在 woman 上面。箭头和 woman 是式子，后面的 is close to 照翻。上一行的标点不算。"""
-    from app.formats.pdf import _PageChars, _mark_overlays
+    from app.formats.pdf import _mark_overlays, _PageChars
 
     doc = pymupdf.open()
     page = doc.new_page()
@@ -10688,7 +10691,6 @@ def test_lines_under_a_number_row_without_a_block_stay_original():
     label = blk("Ex1:", (188.1, 500.0, 207.0, 512.0))
     note = blk("Note that there is no Arg0 role for fall.", (175.1, 514.0, 400.0, 526.0))
     body = blk("Here the body text goes on across the whole column with no indent at all.", (160.2, 540.0, 493.0, 564.0))
-    after = blk("Arg0: causer of increase", (188.1, 608.0, 300.0, 620.0))
     numbers = {0: (
         ExampleNumber(pymupdf.Rect(160.2, 455.4, 189.3, 467.4), pymupdf.Rect(160.2, 455.4, 221.0, 467.4), 194.2),
         ExampleNumber(pymupdf.Rect(160.2, 596.4, 189.3, 608.4), pymupdf.Rect(160.2, 596.4, 330.0, 608.4), 194.2),
@@ -10821,7 +10823,7 @@ def _draw_visible_space(page, x, baseline):
 def test_drawn_visible_space_is_read_into_the_text():
     """画出来的 ␣ 提取不到字。盖在空格上的换掉空格，空隙里没有字的补一个 ␣，和前面的字隔开一个空格。
     不在字行基线上的同样形状（图里的刻度）不算。"""
-    from app.formats.pdf import _PageChars, _mark_visible_spaces
+    from app.formats.pdf import _mark_visible_spaces, _PageChars
     from app.formats.pdf_layout import scan_page
 
     doc = pymupdf.open()
@@ -11172,7 +11174,7 @@ def test_a_formula_form_box_keeps_the_overhang_of_an_italic_letter():
 def test_a_formula_bitmap_keeps_the_overhang_of_an_italic_letter_on_a_clear_background():
     """跨页的公式贴位图。位图按公式框裁会切掉斜体 f 伸出字宽的弯钩和尾巴，左右放到字形量出来的墨迹，
     贴的位置跟着按缩放往两侧放。底色透明，贴在图框线上不会盖掉线。"""
-    from app.formats.pdf import _FormulaImage, _formula_png_rect
+    from app.formats.pdf import _formula_png_rect, _FormulaImage
 
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)

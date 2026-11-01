@@ -1,10 +1,14 @@
 """开版面模型（读缓存的框）出老语料的计划。用法: plandump_model.py <代码目录> <pdf> <框 json> <输出> [nojoin]"""
-import sys, json
+import json
+import sys
 from pathlib import Path
+
 code, src, cached, out = sys.argv[1:5]
 sys.path.insert(0, code)
 import pymupdf
+
 from app.formats import pdf, pdf_vision
+
 pages = json.load(open(cached))
 class Cached(pdf_vision.ModelLayout):
     def __init__(self, doc):

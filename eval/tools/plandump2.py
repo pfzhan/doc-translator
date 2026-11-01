@@ -1,9 +1,13 @@
 """分段计划，带每个单元首块、末块的页码和框。用法: plandump2.py <代码目录> <pdf> <输出 json>"""
-import sys, json
+import json
+import sys
 from pathlib import Path
+
 code, src, out = sys.argv[1:4]
 sys.path.insert(0, code)
 from app.formats import pdf
+
+
 class R:
     def report_stage(self, *a, **k): pass
     def set_title(self, t): pass

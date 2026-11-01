@@ -1,15 +1,22 @@
 """版面模型（DocLayout-YOLO，YOLOv10 的 one2one 检测头）的 int8 量化，设置同产品里的公式模型。
 用法: lqcal.py <代码目录> <fp32 onnx> <输出> [页数] [seed]；环境变量 EXCLUDE 列不参与校准的 PDF 文件名"""
-import os, re, sys, time, tempfile
+import os
+import re
+import sys
+import tempfile
+import time
 from pathlib import Path
+
 code, src, out = sys.argv[1:4]
 count = int(sys.argv[4]) if len(sys.argv) > 4 else 64
 seed = int(sys.argv[5]) if len(sys.argv) > 5 else 0
 sys.path.insert(0, code)
-import numpy as np, onnx
-from app import quantize, layout_model
+import numpy as np
+import onnx
 from onnxruntime.quantization import CalibrationDataReader, CalibrationMethod, QuantFormat, QuantType, quantize_static
 from onnxruntime.quantization.shape_inference import quant_pre_process
+
+from app import layout_model, quantize
 
 skip = set(filter(None, os.environ.get("EXCLUDE", "").split(",")))
 # 校准页从 CALIB_PDFS 目录下的 PDF 抽（默认是翻译过的任务），和产品里生成 int8 模型时一样

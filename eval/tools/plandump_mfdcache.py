@@ -1,12 +1,16 @@
 """用缓存的公式检测框（mfd/<id>.<标签>.json，tools/mfd_project.py 生成）出计划，不跑模型。
 用法: plandump_mfdcache.py <代码目录> <pdf> <输出 json> <公式框 json> <seg|math> [版面框 json]
 seg 出 plandump2.py 的格式（给 score.py），math 出带公式文字的格式（给 mathscore.py）。"""
-import sys, json
+import json
+import sys
 from pathlib import Path
+
 code, src, out, boxes_path, kind = sys.argv[1:6]
 sys.path.insert(0, code)
 import pymupdf
+
 from app.formats import pdf
+
 boxes = json.load(open(boxes_path))
 
 

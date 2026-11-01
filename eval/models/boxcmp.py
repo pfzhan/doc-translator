@@ -1,8 +1,10 @@
 """逐页比两个版面框目录（a 当参照）：每类 a 有几个、b 里对上几个（同类 IoU>=0.5）、b 多出几个。
 用法: boxcmp.py <a 目录> <b 目录>"""
-import json, sys
+import json
+import sys
 from collections import Counter
 from pathlib import Path
+
 a_dir, b_dir = map(Path, sys.argv[1:3])
 
 def iou(r, s):

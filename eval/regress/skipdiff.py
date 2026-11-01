@@ -1,7 +1,11 @@
 """两份计划里文本相同、skip 不同的单元。用法: skipdiff.py tagA tagB"""
+import collections
+import glob
+import json
 import os
+import sys
 from pathlib import Path
-import json, glob, sys, collections
+
 E = Path(os.environ.get("EVALSET", Path.home() / "doc-translator-evalset"))
 a, b = sys.argv[1:3]
 for fa in sorted(glob.glob(f"{E}/regress/plans/*.{a}.json")):

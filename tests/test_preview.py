@@ -1,6 +1,6 @@
-import re
 import asyncio
 import io
+import re
 import time
 from pathlib import Path
 
@@ -504,7 +504,8 @@ def test_dotted_section_numbers_stay_in_digits():
     """原文以 7.4、1.2.3 开头，模型照着「章节号写中文数字」写成了「七点四」「四.11」，或给没写
     Chapter 的裸章号加上「第十二章」：改回原样，缓存里的旧译文命中时也改写。原文写了单位的、
     读法对不上的不动。"""
-    from app.runner import Runner, keep_section_number as keep
+    from app.runner import Runner
+    from app.runner import keep_section_number as keep
 
     assert keep("7.4 The input", "七点四 输入", "zh-CN") == "7.4 输入"
     assert keep("{b}7.4{/b} Prove that", "{b}七点四{/b} 证明", "zh-CN") == "{b}7.4{/b} 证明"

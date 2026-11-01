@@ -1,8 +1,12 @@
-import sys, json
+import json
+import sys
 from pathlib import Path
+
 code, src, out = sys.argv[1:4]
 sys.path.insert(0, code)
 from app.formats import pdf
+
+
 class R:
     def report_stage(self, *a, **k): pass
     def set_title(self, t): pass

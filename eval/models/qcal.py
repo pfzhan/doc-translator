@@ -1,15 +1,22 @@
 """产品代码的抽页 + 可换的校准方法。用法: qcal.py <代码目录> <fp32 onnx> <输出> <minmax|percentile|entropy|avg> [页数] [seed]"""
-import sys, time
+import sys
+import time
 from pathlib import Path
+
 code, src, out, method = sys.argv[1:5]
 count = int(sys.argv[5]) if len(sys.argv) > 5 else 64
 seed = int(sys.argv[6]) if len(sys.argv) > 6 else 0
 sys.path.insert(0, code)
-import numpy as np, onnx, tempfile
-from app import quantize, layout_model
+import os
+import tempfile
+
+import numpy as np
+import onnx
 from onnxruntime.quantization import CalibrationDataReader, CalibrationMethod, QuantFormat, QuantType, quantize_static
 from onnxruntime.quantization.shape_inference import quant_pre_process
-import os
+
+from app import layout_model, quantize
+
 skip = set(filter(None, os.environ.get("EXCLUDE", "").split(",")))
 # 校准页从 CALIB_PDFS 目录下的 PDF 抽（默认是翻译过的任务），和产品里生成 int8 模型时一样
 calib = Path(os.environ.get("CALIB_PDFS", Path(code, "data", "jobs")))
@@ -28,6 +35,7 @@ class Pages(CalibrationDataReader):
         return None if image is None else {"images": image.astype(np.float32) / 255.0}
 
 from onnxruntime.quantization.calibrate import HistogramCalibrater
+
 _collect = HistogramCalibrater.collect_data
 
 

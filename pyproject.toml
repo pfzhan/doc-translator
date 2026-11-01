@@ -23,6 +23,7 @@ ignore = [
     "B008",    # FastAPI and dataclass defaults call functions on purpose
     "B905",    # zip() without strict= is intended where lengths may differ
     "SIM108",  # a ternary is not always clearer than if/else
+    "SIM905",  # word lists read better as one string split on whitespace
 ]
 
 [tool.ruff.lint.per-file-ignores]

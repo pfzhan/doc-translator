@@ -3,7 +3,12 @@ from dataclasses import replace
 import pymupdf
 
 from app.formats.pdf import (
-    TextBlock, _cross_page_units, _expand_right, _merge_continuations, _render_translated, extract_blocks,
+    TextBlock,
+    _cross_page_units,
+    _expand_right,
+    _merge_continuations,
+    _render_translated,
+    extract_blocks,
 )
 from app.formats.pdf_layout import PageGeometry, RuledTable, margin_skips, reading_order
 
@@ -1055,7 +1060,7 @@ def test_word_by_word_gloss_is_found_but_a_table_is_not():
         for col, word in enumerate(("alpha", "beta", "gamma", "delta")):
             page.insert_text((174 + col * 60, 420 + row * 12), f"{word}{row}", fontsize=10)
     [gloss_rect] = interlinear_glosses(page)
-    assert 275 < gloss_rect.y0 and gloss_rect.y1 < 306
+    assert gloss_rect.y0 > 275 and gloss_rect.y1 < 306
 
 
 def test_indented_examples_are_not_a_column_that_ends_the_page():

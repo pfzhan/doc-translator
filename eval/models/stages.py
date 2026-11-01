@@ -1,11 +1,16 @@
 """翻译前各阶段耗时，外加主线程的 cProfile。用法: stages.py <代码目录> <onnx|-> <pdf> <prof 输出>"""
-import sys, time, cProfile, pstats, tempfile
+import cProfile
+import sys
+import tempfile
+import time
 from pathlib import Path
+
 code, onnx, src, prof = sys.argv[1:5]
 sys.path.insert(0, code)
 from app.formats import pdf
 from app.formats.pdf_vision import FormulaModel
 from app.runner import Cache, Runner
+
 
 class T:
     source_lang = "auto"
