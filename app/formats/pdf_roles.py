@@ -1,7 +1,8 @@
-"""可替换的版面角色：正文、标题、图注、图。
+"""Replaceable layout roles: body text, heading, caption, figure.
 
-默认实现只看几何和字号，不下载模型。换检测器时实现 LayoutDetector.classify。
-整页大图不当图，避免把带文本层的扫描页全部跳过。
+The default implementation looks only at geometry and font size and downloads no model. Another detector
+implements LayoutDetector.classify. A full-page image is not treated as a figure, so scanned pages with a text
+layer are not skipped entirely.
 """
 
 from __future__ import annotations
@@ -22,16 +23,17 @@ _HEADING_BOLD = 1.15
 _CAPTION_LEN = 400
 _PAGE_FILL = 0.7
 _INSIDE = 0.7
-# 编号可以带节号（Figure 2.13）。标签后面跟冒号、句点或竖线，才一定是图注
+# The number may include a section number (Figure 2.13). Only a label followed by a colon, period or vertical bar
+# is certainly a caption
 _CAPTION_RE = re.compile(
     r"^(?:Figure|Fig\.?|Table|Tab\.?|Scheme|Plate|图|表)\s*\d+(?:[.\-]\d+)*(\s*[:.。：|])?",
     re.I,
 )
-# 图注写在图下面。表注常在表上面，不在这里
+# Figure captions are below the figure. Table captions are often above the table and are not covered here
 _FIGURE_CAPTION_RE = re.compile(r"^(?:Figure|Fig\.?|图)\s*\d+(?:[.\-]\d+)*(\s*[:.。：|])?", re.I)
-# 没有冒号的图注比正文小一号，或者标签另用粗体
+# A caption without a colon is one size smaller than the body text, or has its label in bold
 _CAPTION_SMALL = 0.95
-# 正文段落：从左缘起笔、有一句话长
+# A body paragraph: starts at the left edge and is a sentence long
 _BODY_LEN = 20
 _NUMBERED_TITLE_RE = re.compile(r"^\d+(?:\.\d+)*\.?\s+\S")
 _ROMAN_TITLE_RE = re.compile(r"^[IVX]{1,6}\.\s+(?=\S)")
@@ -54,9 +56,9 @@ class LayoutItem:
     text: str
     size: float
     bold: bool
-    # 开头的 Figure、Table 标签用了和后文不同的字体（粗体）
+    # The leading Figure or Table label uses a font different from the rest (bold)
     label_styled: bool = False
-    # 整块每一截都是粗体或斜体
+    # Every span of the block is bold or italic
     styled: bool = False
 
 
@@ -67,17 +69,19 @@ class LayoutDetector(Protocol):
         geometries: Sequence[PageGeometry],
         median: float,
     ) -> list[Role]:
-        """和 items 等长。换模型时只替换这一方法。"""
+        """Same length as items. Another model replaces only this method."""
 
     def text_regions(self, pno: int) -> list[pymupdf.Rect]:
-        """一页上框出的一段段正文。没有模型时为空。"""
+        """Body-text regions boxed on a page. Empty without a model."""
 
     def prepare(self, pages: Sequence[int], on_page: Callable[[int, int], None]) -> None:
-        """定角色之前先把这些页看好，on_page(已看页数, 总页数) 报进度。没有模型时什么也不做。"""
+        """Examine these pages before roles are decided, reporting progress through on_page(pages done, total
+        pages). Does nothing without a model."""
 
 
 class HeuristicLayout:
-    """图内文字、贴着图的图注、以及大于正文的短标题。其余是正文。"""
+    """Text in figures, captions attached to figures, and short headings larger than the body text. The rest is
+    body text."""
 
     def classify(
         self,
@@ -95,7 +99,8 @@ class HeuristicLayout:
         roles: list[Role] = []
         for item in items:
             figures = (*_figures_of(item.page, geometries), *floats.get(item.page, ()))
-            # 画图程序铺的白底常连图注一起包住，图注标签起头的仍是图注
+            # The white background laid down by drawing programs often encloses the caption too; a block starting
+            # with a caption label is still a caption
             labeled = len(item.text.strip()) < _CAPTION_LEN and _caption_start(item, _CAPTION_RE, median)
             if _inside_figure(item.rect, figures) and not labeled and id(item) not in boxed:
                 roles.append(Role.FIGURE)
@@ -118,10 +123,11 @@ class HeuristicLayout:
         pass
 
 
-# 框里成段的正文至少这么多词、这么多句
+# Minimum words and sentences of paragraph text in a box
 _PROSE_WORDS = 40
 _PROSE_SENTENCES = 2
-# 成段正文占了框里一半以上的词，这个框是文本框。框里别的成句的行（列表项、示例）至少这么多词
+# When paragraph text holds more than half of a box's words, the box is a text box. Other sentence lines in it
+# (list items, examples) need at least this many words
 _BOX_PROSE_SHARE = 0.5
 _BOX_LINE_WORDS = 4
 
@@ -132,8 +138,10 @@ def _boxed_items(
     floats: dict[int, tuple[pymupdf.Rect, ...]],
     captions: Sequence[LayoutItem],
 ) -> set[int]:
-    """框里按正文算的块（id）。一个框整框一个算法：成段正文占了框里大半的词，是带底色的提示段、
-    提示词框，框里成句的列表项、示例和正文一起算正文，不留半框原文。图里的短标签照旧算图。"""
+    """Blocks (ids) in a box that count as body text. A box is decided as a whole: when paragraph text holds most
+    of its words, it is a shaded note or a prompt box, and sentence-like list items and examples in it count as
+    body text along with the paragraphs, so half of the box is not left in the original. Short labels in figures
+    still count as figure."""
     prose = {
         id(item)
         for item in items
@@ -155,8 +163,9 @@ def _boxed_items(
 
 
 def _boxed_text(item: LayoutItem, figures: Sequence[pymupdf.Rect], captions: Sequence[LayoutItem]) -> bool:
-    """框起来的一段正文（带底色、圆角框的提示段），不是图。矢量框按图算，框里的字不能都当图里的标签。
-    带图注的框是图：教材图里排的英文例句、提示词是讲解的对象，留原文。"""
+    """A boxed passage of body text (a shaded or rounded-box note) rather than a figure. Vector boxes count as
+    figures, but their text must not all be taken for figure labels. A box with a caption is a figure: English
+    examples and prompts set in textbook figures are the subject of discussion and keep the original."""
     if not _framed_prose(item):
         return False
     holders = [figure for figure in figures if _inside_figure(item.rect, [figure])]
@@ -168,7 +177,7 @@ def _boxed_text(item: LayoutItem, figures: Sequence[pymupdf.Rect], captions: Seq
 
 
 def _captions(caption: pymupdf.Rect, figure: pymupdf.Rect, size: float) -> bool:
-    """图注挨着这个框：在下面、旁边（_attached），或者在上面（表注）。"""
+    """A caption is next to this box: below or beside it (_attached), or above it (a table caption)."""
     if _attached(caption, figure, size):
         return True
     overlap_x = min(caption.x1, figure.x1) - max(caption.x0, figure.x0)
@@ -176,23 +185,23 @@ def _captions(caption: pymupdf.Rect, figure: pymupdf.Rect, size: float) -> bool:
 
 
 def _framed_prose(item: LayoutItem) -> bool:
-    """成段的几句话。图里的标签是几个词，不会是几句话的整段。"""
+    """A paragraph of several sentences. A label in a figure is a few words, never a paragraph of sentences."""
     text = item.text.strip()
-    # 引出下文的一段以冒号收尾（……as your final verdict with a label:）
+    # A paragraph introducing what follows ends with a colon (...as your final verdict with a label:)
     if len(text.split()) < _PROSE_WORDS or not text.endswith(_BODY_END):
         return False
     return len(re.findall(r"[.!?。！？](?:\s|$)", text)) >= _PROSE_SENTENCES
 
 
 def is_size_heading(text: str, size: float, bold: bool, median: float) -> bool:
-    """短块里，明显大于正文的、以及略大于正文的粗体。"""
+    """Short blocks clearly larger than the body text, and bold ones slightly larger."""
     if len(text) >= _HEADING_LEN or median <= 0:
         return False
     return size >= median * _HEADING_SIZE or (bold and size >= median * _HEADING_BOLD)
 
 
 def _is_numbered_title(text: str) -> bool:
-    """'3.1 Encoder'、'1 引言'。'2 samples' 和带句号的句子不是标题。"""
+    """'3.1 Encoder', '1 引言'. '2 samples' and sentences with a period are not headings."""
     stripped = text.strip()
     if not stripped or len(stripped) >= 80 or stripped.endswith(_SENT_END):
         return False
@@ -206,8 +215,9 @@ def _is_numbered_title(text: str) -> bool:
 
 
 def _is_lettered_title(text: str, styled: bool) -> bool:
-    """IEEE 的节标题和正文一样大：II. METHODS（小型大写）、A. Materials（整行斜体）。
-    罗马数字后面全是大写的算，字母编号要整行加粗或斜体：正文里的 B. Smith、V. Vuletić 是人名。"""
+    """IEEE section headings are the same size as the body text: II. METHODS (small capitals), A. Materials
+    (all italic). A Roman numeral followed by all capitals counts; a letter number needs the whole line in bold
+    or italic, since B. Smith or V. Vuletić in body text are names."""
     stripped = text.strip()
     if not stripped or len(stripped) >= 80 or stripped.endswith(_SENT_END) or "," in stripped:
         return False
@@ -226,11 +236,13 @@ def _float_zones(
     geometries: Sequence[PageGeometry],
     median: float,
 ) -> dict[int, list[pymupdf.Rect]]:
-    """图注上方、到上一段正文为止是图。
+    """The area above a caption, up to the previous body paragraph, is the figure.
 
-    节点标签、表格、伪代码不一定画成矢量（老 TeX 的 picture 环境用字形画线），
-    矢量框圈不住。图注写在图下面，正文从栏左缘或段首缩进起笔，图里的东西缩进或居中。
-    上一张图的图注也是边界：两张图叠在一起时，中间没有正文。
+    Node labels, tables and pseudocode are not always drawn as vectors (the picture environment of old TeX
+    draws lines with glyphs), so vector boxes do not enclose them. The caption is below the figure, body text
+    starts at the column's left edge or at the paragraph indent, and the figure's contents are indented or
+    centered. The caption of the previous figure is also a boundary: two stacked figures have no body text in
+    between.
     """
     zones: dict[int, list[pymupdf.Rect]] = {}
     for caption in items:
@@ -242,7 +254,8 @@ def _float_zones(
         column = geo.column_of(caption.rect) if geo.columns else None
         left = column.x0 if column is not None else 0.0
         right = column.x1 if column is not None else geo.width
-        # 单栏时正文从版心左缘起笔。栏左缘取的是本页最左的块，可能是页眉或外凸的节号
+        # In a single column body text starts at the left edge of the text frame. The column's left edge is taken
+        # from the leftmost block on the page, which may be a running header or a protruding section number
         framed = geo.frame is not None and len(geo.columns) < 2
         start = geo.frame.x0 if framed else left
         end = geo.frame.x1 if framed else right
@@ -262,11 +275,12 @@ def _float_zones(
 
 
 def _float_bound(item: LayoutItem, start: float, end: float, indent: float, median: float) -> bool:
-    """图区的上界：正文段落、小节标题，或上一张图的图注。
+    """The upper bound of a figure area: a body paragraph, a subheading, or the caption of the previous figure.
 
-    正文从左缘起笔、有一句话长，字号不比正文小：框里的伪代码、图里的小字缩进不多，但小一号。
-    还要像一段话：两端对齐写到右缘，或者以句末标点收尾。表格首列的格子写不到右缘，
-    也不收句；格子里折成两行的也一样。
+    Body text starts at the left edge, is a sentence long and is no smaller than the body size: pseudocode in a
+    box or small text in a figure is only slightly indented but one size smaller. It must also read as a
+    paragraph: justified to the right edge, or ending with sentence punctuation. Cells in a table's first column
+    neither reach the right edge nor end a sentence, also when they wrap onto two lines.
     """
     if _caption_start(item, _FIGURE_CAPTION_RE, median):
         return True
@@ -281,7 +295,8 @@ def _float_bound(item: LayoutItem, start: float, end: float, indent: float, medi
 
 
 def _caption_start(item: LayoutItem, pattern: re.Pattern[str], median: float) -> bool:
-    """以图表标签起头的图注。正文里的 Figure 2.13 shows ... 和正文一样大，标签也不另用字体。"""
+    """A caption starting with a figure or table label. Figure 2.13 shows ... in body text is at body size and its
+    label uses no different font."""
     matched = pattern.match(item.text.strip())
     if matched is None:
         return False
