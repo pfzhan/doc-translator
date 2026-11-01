@@ -49,15 +49,16 @@ from .pdf_roles import is_size_heading
 
 
 def _preview_kind(block: TextBlock, median: float) -> str:
-    """短块里，明显大于正文的、以及略大于正文的粗体，当作小标题。
+    """Among short blocks, those clearly larger than the body text, and bold ones slightly larger, count as
+    subheadings.
 
-    只看粗体不够：作者名和图注标签也常是粗体，但字号不超过正文。
-    有版面角色时，标题以角色为准，这里只留字号兜底。
+    Bold alone is not enough: author names and caption labels are often bold but no larger than the body.
+    When layout roles are available they decide headings; this is only the font-size fallback.
     """
     return "h2" if is_size_heading(block.text, block.size, block.bold, median) else "p"
 
 
-# 句末标点：判断页面末尾的块是不是被页边界切断的段落
+# Sentence-ending punctuation: tells whether the last block on a page is a paragraph cut by the page break
 _SENT_END_PUNCT = tuple(".!?:;…。！？；：\"'”’)]}》")
 
 
@@ -66,9 +67,11 @@ def _different_columns(
     left: TextBlock,
     right: TextBlock,
 ) -> bool:
-    """两页里只要有一页是多栏、且两块不在同一栏序号，就不是同一栏的跨页续段。
+    """If either page has several columns and the two blocks have different column indexes, the second block
+    is not the continuation of the first in the same column.
 
-    右栏页尾接到下一页左栏是另一条规则，不走这里。单栏页面序号都是 0。
+    The right column's end continuing in the left column of the next page is a separate rule handled
+    elsewhere. On single-column pages the index is always 0.
     """
     if not geometries or left.page >= len(geometries) or right.page >= len(geometries):
         return False
@@ -79,7 +82,8 @@ def _different_columns(
 
 
 def _cjk_page_continue(prev: TextBlock, nxt: TextBlock) -> bool:
-    """跨页中文续段没有大小写。短标签、缩进的新段、图注标签不接。"""
+    """Chinese has no letter case to show a continuation across pages. Short labels, indented new paragraphs
+    and caption labels are not joined."""
     head = nxt.text.lstrip()[:1]
     if not head or CJK_RE.search(head) is None or _caption_label(nxt.text):
         return False
@@ -103,22 +107,28 @@ def _can_continue(
     flush: bool = False,
     at_edge: bool = True,
 ) -> bool:
-    """页末块没有句末标点，页首块以小写、数字或中文开头，且不是标题。
+    """The block at the end of a page has no sentence-ending punctuation, and the block at the top of the next
+    starts with a lowercase letter, a digit or Chinese, and is not a heading.
 
-    换栏时允许大写开头：没写完的句子常常断在 SQL 这种专有名词上。
-    同一栏里的普通换行仍不放开，那和下一句分不开。
-    表格的格子各是各的：格子的列看起来也像栏，上一列的末格不能接到下一列的表头。
-    flush 是段落首行缩进的文档里，页首、栏首（或者栏顶的图表下面）齐平起笔的一段（见 _flush_start）：
-    新段都缩进，齐平的是上一段的续段，上一块恰好在句末断开、下一块大写起头也接上。
-    at_edge 是下一块的首行从本栏正文的左缘起笔（见 _at_text_edge）。
+    A capital letter is allowed when moving to another column: an unfinished sentence often breaks at a
+    proper noun such as SQL. Within one column a capital still ends the paragraph, since it cannot be told
+    from the next sentence. Table cells stand alone: columns of cells look like text columns, and the last
+    cell of one column must not join the header of the next. flush marks, in a document that indents the
+    first line of paragraphs, a block at the top of a page or column (or below a figure at the column top)
+    that starts flush (see _flush_start): new paragraphs are indented, so a flush one continues the previous
+    paragraph, and it is joined even when the previous block happens to end a sentence and this one starts
+    with a capital. at_edge means the first line of the next block starts at the left edge of the column's
+    body text (see _at_text_edge).
     """
     if prev.clip is not None or nxt.clip is not None:
         return False
-    # 栏底整行斜体、粗体的短行是小标题（E. Energy-Detection Characterization），不往下一栏接
+    # A short all-italic or all-bold line at the bottom of a column is a subheading
+    # (E. Energy-Detection Characterization) and does not continue in the next column
     if len(_visual_lines(prev)) == 1 and len(prev.text.split()) <= 8 and _all_styled(prev):
         return False
-    # 圆括号起头的看里面的字：(RMS) loudness、(0, 1), which。(3)、(a) 这样的编号不算。
-    # 方括号、引号里的不看：[v], [z] 是音标，“[M]achines 是另起的引文
+    # For an opening parenthesis look at the text inside: (RMS) loudness, (0, 1), which. Numbers such as (3) and
+    # (a) do not count. Square brackets and quotes are not looked into: [v], [z] are phonetic symbols, and
+    # “[M]achines starts a new quotation
     opening = nxt.text.lstrip()
     if not _EQUATION_TAG_RE.match(opening) and not _list_item(opening):
         opening = opening.lstrip("(")
@@ -128,15 +138,18 @@ def _can_continue(
         is_heading = _preview_kind(nxt, median) != "p"
     else:
         is_heading = id(nxt) in halt_ids
-    # 以行内式子起头的（… minimise a divergence, | 𝐷(⋅||⋅) between …）也是接着写：式子的大写字母不是句首。
-    # 数学字体的项目符号（• We introduce …）不算
+    # A block starting with an inline formula (... minimise a divergence, | 𝐷(⋅||⋅) between ...) also continues:
+    # a capital letter in a formula does not start a sentence. Bullets in a math font (• We introduce ...) do not
+    # count
     math_start = _opens_with_math(nxt) and not _list_item(nxt.text)
     continues = head.islower() or head.isdigit() or _cjk_page_continue(prev, nxt) or math_start
-    # 行尾断开的词（fine-）后半截是小写，换栏也不放开大写：右栏顶上大写起头的是表头、标题
+    # The second half of a word hyphenated at the line end (fine-) is lowercase, so capitals are not allowed
+    # even across columns: a capitalized block at the top of the right column is a table header or a heading
     broken_word = bool(re.search(r"[a-z]-$", prev.text.rstrip()))
     if allow_capital and not broken_word and head.isalpha() and head.isupper() and len(prev.text.split()) >= 3:
         continues = True
-    # 下一块以括注起头，括注后面是标点或小写：(Tables S32–S35), the port …、(§5.3). Urban …
+    # The next block starts with a parenthetical followed by punctuation or lowercase:
+    # (Tables S32–S35), the port ..., (§5.3). Urban ...
     lead = nxt.text.lstrip()
     if (
         re.match(r"\([^()]{1,60}\)\s*(?:[.,;:]|[a-z])", lead)
@@ -144,11 +157,13 @@ def _can_continue(
         and not _list_item(lead)
     ):
         continues = True
-    # 句中的缩写（Mao et al. | 2026）不是句末。分号、冒号、里面没有句号的右括号后面小写接着写的是同一句
-    # （… on BC trials; | an explanation …、… GOP (4.750 vs. 4.733) | and lower …）。
-    # 冒号后面的行间公式跳过了不译时，下一页的 where 接在冒号后面（… scoring function: | where U, W …）。
-    # 冒号下面缩进、居中排的是引出的例句、式子（… from that instance: | is traditionally followed by cherry pie），
-    # 不接：接着写的半句从正文的左缘起笔
+    # An abbreviation inside a sentence (Mao et al. | 2026) does not end it. Lowercase text after a semicolon,
+    # a colon, or a closing parenthesis without a period inside continues the same sentence
+    # (... on BC trials; | an explanation ..., ... GOP (4.750 vs. 4.733) | and lower ...). When a display
+    # formula after a colon is skipped, the where on the next page follows the colon
+    # (... scoring function: | where U, W ...). An indented or centered line below a colon is an example or
+    # formula being introduced (... from that instance: | is traditionally followed by cherry pie) and is not
+    # joined: a continuation starts at the left edge of the body text
     tail = _END_MARK_RE.sub("", prev.text)
     closers = "\"'”’)]}》"
     weak = (
@@ -161,12 +176,15 @@ def _can_continue(
         and not _MID_ABBREV_RE.search(prev.text.rstrip())
         and not (weak and head.islower())
     )
-    # 括号还没合上，下一块在第一句里合上它：(Fu et al., 2024b; | Mao et al., 2024) share …
+    # A bracket is still open and the next block closes it in its first sentence:
+    # (Fu et al., 2024b; | Mao et al., 2024) share ...
     if _unclosed_bracket(prev.text) and _closes_first(nxt.text):
         continues, ended = True, False
-    # 只看正文：小一号的图注、表注下面齐平起笔的正文不是它们的续段。
-    # 只放开大写起头的：句末下面小写起头的（restric- | tion from …）是别的块断开的后半截。
-    # 页末是编号起头的例句（(24.31) IBM announced …）时，下一页齐平起笔的是例句前面那段的续段，不接在例句后面
+    # Body text only: flush text below a smaller figure or table caption does not continue the caption.
+    # Only capitalized starts are allowed here: lowercase text below a sentence end (restric- | tion from ...)
+    # is the second half of another broken block. When the page ends with a numbered example
+    # ((24.31) IBM announced ...), flush text on the next page continues the paragraph before the example, not
+    # the example
     if (
         flush
         and head.isupper()
@@ -187,8 +205,9 @@ def _can_continue(
 
 
 def _flush_start(block: TextBlock) -> bool:
-    """块是排满栏宽的一段，首行和下面的行一样从栏边起笔。行首换了粗体、斜体的小标题，
-    带编号的标签、小节号和列表项本来就齐平起笔，不算"""
+    """The block is a paragraph filling the column width whose first line starts at the column edge like the
+    lines below it. Run-in bold or italic headings, numbered labels, section numbers and list items start
+    flush anyway and do not count"""
     rows = sorted(_visual_lines(block), key=lambda row: row[0].y0)
     if len(rows) < 2 or _styled_edge(block, 0) or _list_item(block.text):
         return False
@@ -200,9 +219,10 @@ def _flush_start(block: TextBlock) -> bool:
 
 
 def _at_text_edge(head: TextBlock, page_blocks: list[TextBlock]) -> bool:
-    """块的首行从本栏正文的左缘起笔。左缘取同一页上和它左右交叠的多行块（连同它自己）里，
-    除首行以外各行最常见的左边，首行缩进、悬挂缩进的段落也量得准。图注的续行居中排，不算。
-    没有能量的行时按在左缘算"""
+    """The first line of the block starts at the left edge of the column's body text. The edge is the most
+    common left of all lines except the first in multi-line blocks on the page that overlap it horizontally
+    (itself included), which works for first-line and hanging indents alike. Continuation lines of captions
+    are centered and do not count. With no lines to measure, the block counts as at the edge"""
     lefts = Counter(
         round(min(rect.x0 for rect in row))
         for block in page_blocks
@@ -217,9 +237,11 @@ def _at_text_edge(head: TextBlock, page_blocks: list[TextBlock]) -> bool:
 
 
 def _resumes(head: TextBlock, page_blocks: list[TextBlock], skip_ids: set[int], passed: set[int]) -> bool:
-    """块是接着上一栏、上一页往下写的位置：正上方没有块（栏顶、页首），或者正上方是跳过的图、式子、
-    小一号的表格格子，或者图注（passed 里是页眉页脚、图和图注）。正上方是一行正文字号的短行
-    （漏认的小标题 B.3.1. RL Data、提示词框里的 PROMPT）时，下面是新起的一段"""
+    """The block is where text from the previous column or page would resume: nothing is directly above it
+    (top of a column or page), or what is above is a skipped figure or formula, a smaller table cell, or a
+    caption (passed holds running headers and footers, figures and captions). When a short line at body size
+    is directly above (a missed heading such as B.3.1. RL Data, PROMPT in a prompt box), the block starts a
+    new paragraph"""
     above = [
         block
         for block in page_blocks
@@ -234,9 +256,9 @@ def _resumes(head: TextBlock, page_blocks: list[TextBlock], skip_ids: set[int], 
     return id(near) in skip_ids or id(near) in passed or _is_float_text(near.text) or near.size < head.size * 0.9
 
 
-# 小节号悬在栏边左面最多这么多字宽
+# A section number may hang at most this many em to the left of the column edge
 _HANGING_HEAD_EM = 3
-# 齐平起笔的续段接上去，上一块至少要有这么多词（成段的正文）
+# For a flush continuation to be joined, the previous block needs at least this many words (a paragraph)
 _FLUSH_HOST_WORDS = 8
 
 
@@ -245,7 +267,8 @@ def _page_edge_blocks(
     median: float,
     ignored: set[int],
 ) -> list[TextBlock]:
-    """页首页尾只看正文。小一号的编号脚注留在原处翻译，不占跨页位置。"""
+    """Only body text counts at the top and bottom of a page. Smaller numbered footnotes are translated where
+    they are and do not take the page-end position."""
     return [
         block
         for block in blocks
@@ -265,7 +288,8 @@ def _column_page_end(
     body: list[TextBlock],
     geometries: list[PageGeometry] | None,
 ) -> TextBlock | None:
-    """同栏跨页看的页末。多栏页上的跨栏块不占这个位置，否则会抢走右栏末行。"""
+    """The page end used for continuation in the same column. A block spanning columns on a multi-column
+    page does not take this position, or it would take it from the last line of the right column."""
     return _column_edge(body, geometries, last=True)
 
 
@@ -332,16 +356,18 @@ def _left_column_head(page_blocks: list[TextBlock], geo: PageGeometry) -> TextBl
 
 
 _CODE_LINE_RE = re.compile(r"^(?:<|\d+\s+0x[0-9a-fA-F])")
-# 这么多词的块是正文，不看字母占比
+# A block with this many words is body text regardless of its share of letters
 _PROSE_WORDS = 8
 _CLUSTER_GAP = 28.0
 
 
 def _is_code_line(text: str) -> bool:
-    """XML、堆栈和图内标签。它们贴在栏顶时不能占续句的位置。
+    """XML, stack traces and labels inside figures. At the top of a column they must not take the place of a
+    continuation.
 
-    短续句（well.、tomer）仍是正文。没有空格、又夹着数字或符号的才是标签。
-    数字多的结果段（and lower mean WER (0.009 vs. 0.013); paired …）字母占比低，词数够的仍是正文。
+    Short continuations (well., tomer) are still body text; a label has no spaces and contains digits or
+    symbols. Result paragraphs full of numbers (and lower mean WER (0.009 vs. 0.013); paired ...) have a low
+    share of letters but enough words to be body text.
     """
     stripped = text.strip()
     if not stripped or _CODE_LINE_RE.match(stripped):
@@ -363,8 +389,9 @@ def _continuation_prose(
 ) -> bool:
     if id(block) in skip_ids or id(block) in ignored:
         return False
-    # 目录、索引条目不接上下文，但照样占着栏顶栏底：跳过它们，栏底一个没页码的词头
-    # 会接到下一栏中间的条目上。词表的格子和图一样跳过
+    # Contents and index entries do not join their neighbors but still occupy the top and bottom of a column:
+    # if they were skipped, a headword without a page number at the bottom would join an entry in the middle
+    # of the next column. Cells of word lists are skipped like figures
     listed = (block.leader is not None or block.entry) and not block.grid
     if halt_ids is not None and id(block) in halt_ids and not listed:
         return False
@@ -376,11 +403,13 @@ def _continuation_prose(
 
 
 def _column_anchors(blocks: list[TextBlock]) -> list[float]:
-    """正文左缘。至少两块落在同一左缘才算一栏，单行右半句不另起栏。
-    页上已经有这样的一栏时，另一栏只有一整段（左栏上面是缩进排的摘要），三行以上的一块也算。
+    """Left edges of the body text. A column needs at least two blocks at the same left edge, so the right half
+    of a single line does not start a column. When the page already has such a column, a single block of
+    three or more lines also counts (another column holding one paragraph, below an indented abstract).
 
-    下一栏从上一栏的右缘以外起笔。缩进排的例句、引文落在上一栏中间，不另起栏：
-    不然它的最后一块会被当成页末，把下一页的段首接过来。
+    The next column starts beyond the right edge of the previous one. Indented examples and quotations lie
+    inside the previous column and do not start a column; otherwise their last block would be taken as the
+    page end and the start of the next page's paragraph joined to it.
     """
     if not blocks:
         return []
@@ -430,9 +459,11 @@ def _assigned_columns(
 
 
 def _column_body(column: list[TextBlock]) -> list[TextBlock]:
-    """栏末的小一号脚注不占续句的位置。整栏都是这个字号时全部留下。
+    """Smaller footnotes at the end of a column do not take the place of a continuation. If the whole column
+    is in that size, everything stays.
 
-    正文字号不算表格的格子：栏顶一张表一格一块，按块数会压过正文。
+    Table cells are left out when finding the body size: a table at the top of a column has one block per
+    cell and would outnumber the body text.
     """
     if not column:
         return []
@@ -451,9 +482,11 @@ def _column_bottom(blocks: list[TextBlock]) -> TextBlock:
 
 
 def _fragment_host(tail: TextBlock, orphans: list[TextBlock]) -> TextBlock:
-    """栏末正文已经句号结束时，同一行右侧没写完的半句才是续句的起点。
+    """When the body text at the end of a column already ends a sentence, an unfinished half sentence to its
+    right on the same line is where the continuation starts.
 
-    用行框而不是块的并集。并集会盖住右侧那半句，半句就不算贴在行尾了。
+    Line boxes are used rather than the block's union box, which would cover the half sentence on the right
+    so that it no longer counts as attached to the line end.
     """
     if not _ends_sentence(tail.text):
         return tail
@@ -475,7 +508,8 @@ def _fragment_host(tail: TextBlock, orphans: list[TextBlock]) -> TextBlock:
 
 
 def _column_wrap(host: TextBlock, tail: TextBlock) -> bool:
-    """左缘差出一栏，才是换栏。同一栏页首的大写仍是下一段。"""
+    """A move to another column needs left edges a column apart. A capital at the top of the page in the same
+    column still starts the next paragraph."""
     return abs(host.rect.x0 - tail.rect.x0) > max(host.size * 4, 36.0)
 
 
@@ -508,11 +542,13 @@ def _try_column_pair(
 
 
 def _float_contents(column: list[TextBlock], page_blocks: list[TextBlock]) -> set[int]:
-    """栏顶一张表（图）的字：从栏顶到下面的图注（Table 7: …）之间，每一行都没排到栏的右缘。
-    表头、行名都是短行；段落的行排满栏宽，栏顶是段落时不算。
-    表的图注排在表上面、整栏都紧接在图注下面的，从栏顶往下数到第一块排满栏宽的段落为止。
-    图的图注排在图下面，下面的短行是正文（式子后面的 subject to），不算。
-    栏的右缘按两端对齐的正文行最常收在的地方算，栏里比正文宽的图不算。"""
+    """Text of a table (or figure) at the top of a column: from the column top down to the caption below it
+    (Table 7: ...), no line reaches the right edge of the column. Table headers and row names are short lines;
+    paragraph lines fill the column width, so a paragraph at the top does not count. When a table caption is
+    above the table and the column starts right below it, the table runs from the top down to the first block
+    that fills the column width. A figure caption is below the figure, and short lines below it are body text
+    (subject to after a formula) and do not count. The column's right edge is where justified body lines most
+    often end; figures wider than the body text do not count."""
     if not column:
         return set()
     x0 = min(block.rect.x0 for block in column)
@@ -556,11 +592,15 @@ def _column_continuations(
     aside_ids: set[int] = frozenset(),
     indents: bool = False,
 ) -> dict[int, TextBlock]:
-    """左栏页尾接到右栏页首，右栏页尾接到下一页左栏。
+    """Join the end of the left column to the top of the right column, and the end of the right column to the
+    left column of the next page.
 
-    栏顶的图、清单和图注跳过，续句在它们下面，栏顶的表也是（见 _float_contents）。几何栏不准时也按左缘分，
-    不依赖 reads_in_columns。同一栏跨页不放开大写：另一栏没形成左缘时，
-    页末左栏不能把下一页新起的一段吞进去。段落首行缩进的文档里齐平起笔的除外（indents，见 _can_continue）。
+    Figures, lists and captions at the top of a column are passed over and the continuation is looked for
+    below them, and so are tables there (see _float_contents). Columns are found from left edges, so this
+    works when the geometric columns are wrong and does not depend on reads_in_columns. Continuation in the
+    same column across pages does not allow capitals: when the other column has no left edge, the left
+    column at the page end must not swallow a new paragraph on the next page. Flush starts in documents that
+    indent first lines are the exception (indents, see _can_continue).
     """
     pairs: dict[int, TextBlock] = {}
     tails: set[int] = set()
@@ -579,8 +619,9 @@ def _column_continuations(
     def head_of(pno: int, column: list[TextBlock]) -> TextBlock | None:
         contents = _float_contents(column, by_page.get(pno) or [])
         body = _column_body([block for block in column if id(block) not in contents])
-        # 一行居中排在不归哪一栏的一行底下的，是分栏排的作者、单位（Shixiang Zhu | Carnegie Mellon University），
-        # 不是栏顶。表格的格子、横跨两栏的标题下面就是栏顶
+        # A single line centered below a line that belongs to no column is an author or affiliation set in
+        # columns (Shixiang Zhu | Carnegie Mellon University), not a column top. Below table cells or a heading
+        # across both columns is the column top
         orphans = orphans_of.get(pno) or []
         body = [
             block
@@ -600,9 +641,10 @@ def _column_continuations(
         return None if heading_above(pno, column, head) else head
 
     def heading_above(pno: int, column: list[TextBlock], head: TextBlock) -> bool:
-        """栏顶正上方紧挨着本栏的小标题（A. Materials），这一栏是新的一节，没有续句。
-        小节号悬在栏边左面的（1.4 Related work）也算。
-        横跨几栏的大标题不算，图里认成标题的大字（中间还隔着图里别的字）也不算"""
+        """A subheading right above the column top within this column (A. Materials): the column starts a new
+        section and holds no continuation. A section number hanging left of the column edge (1.4 Related work)
+        counts too. A heading across several columns does not, nor does large text in a figure taken for a
+        heading (with other figure text in between)"""
         if halt_ids is None:
             return False
         above = [
@@ -640,11 +682,13 @@ def _column_continuations(
         columns = columns_of.get(pno) or []
         for index in range(len(columns) - 1):
             host = host_of(pno, columns[index])
-            # 续句不比上半句的字大。右栏顶上比正文大的是两栏上面的标题、署名，续句在它们下面
+            # A continuation is not larger than the first half. Larger text at the top of the right column is a
+            # title or byline above both columns, and the continuation is below it
             head = head_of(
                 pno, [block for block in columns[index + 1] if host is None or block.size <= host.size * 1.1]
             )
-            # 左栏写到底、再跳到右栏顶，才是换栏续句。并排开头不接。
+            # Only text that runs to the bottom of the left column and resumes at the top of the right one moves
+            # across columns. Columns that start side by side are not joined.
             if host is None or head is None or host.rect.y0 <= head.rect.y0 + host.size:
                 continue
             if host.rect.x1 > head.rect.x0 + 4:
@@ -665,9 +709,11 @@ def _column_continuations(
         if not columns or not nxt:
             continue
         host = host_of(pno, columns[-1])
-        # 右栏没分出来（右栏的块都没归栏）时最后一栏不是最右一栏：右边还排着正文的不是页末。
-        # 下面还有从左到右盖过这一块、字不比它小的正文也不是页末：图里的表格有一列格子左缘对齐，认成了一栏，
-        # 底下接着通栏的段落。页脚注的字小，行间公式旁的标注窄，都不挡
+        # When the right column was not found (none of its blocks got a column), the last column is not the
+        # rightmost: a block with body text to its right is not the page end. Nor is one with body text below it
+        # that spans it from left to right in a size no smaller: a table in a figure whose cells share a left edge
+        # was taken for a column, with a full-width paragraph below. Footnotes are smaller and labels beside
+        # display formulas narrower, so neither blocks it
         if host is not None and any(
             block.rect.x0 >= host.rect.x1 - host.size
             and block.rect.y1 > host.rect.y0
@@ -701,11 +747,14 @@ def _region_joins(
     halt_ids: set[int],
     regions_of: Callable[[int], list[pymupdf.Rect]],
 ) -> list[list[TextBlock]]:
-    """开了版面模型时：同一页上前后两个单元（中间可以隔着跳过的块）落在模型框出的同一段正文里，
-    切口上又有式子，就是被式子切开的同一段（… with{式子} For a Borel set … | 1{式子} is the indicator …）。
-    上一块要是成段的正文：模型也会把一串作者名、算法的一行行框成一块（见 _region_prose）。
-    模型常把一串列表框成一块，上一块句末收住、下一块大写起头的不并（… under fixed conditions. | We show that …）。
-    标题、图注、页眉页脚、列表项、行首的粗斜体标签也不并。没有模型时原样返回。"""
+    """With the layout model enabled: two consecutive units on the same page (possibly with skipped blocks
+    between them) that fall in the same body-text box of the model, with a formula at the cut, are one
+    paragraph cut by the formula (... with{formula} For a Borel set ... | 1{formula} is the indicator ...).
+    The first block must be paragraph text: the model also puts a list of author names or the lines of an
+    algorithm into one box (see _region_prose). The model often boxes a list as one region, so a first block
+    ending a sentence followed by a capitalized one is not joined (... under fixed conditions. | We show
+    that ...). Headings, captions, running headers and footers, list items and run-in bold or italic labels
+    are not joined either. Without the model the units are returned unchanged."""
     pages: dict[int, list[pymupdf.Rect]] = {}
 
     def region(block: TextBlock) -> pymupdf.Rect | None:
@@ -731,8 +780,9 @@ def _region_joins(
 
 
 def _region_prose(block: TextBlock, box: pymupdf.Rect) -> bool:
-    """框里成段的正文：有几个小写的词（一串作者名没有），不止一行，或者单独一行撑满框宽。
-    幻灯片的要点、算法的一步步、提示词模板都是一行一行的短句，模型也框成一块。"""
+    """Paragraph text within the box: a few lowercase words (a list of author names has none), and more than
+    one line, or a single line filling the box width. Slide bullet points, algorithm steps and prompt
+    templates are short lines that the model also puts into one box."""
     if len(re.findall(r"\b[a-z]{3,}\b", block.text)) < _REGION_WORDS:
         return False
     return len(_visual_lines(block)) >= 2 or (
@@ -745,17 +795,19 @@ def _region_continues(prev: TextBlock, nxt: TextBlock, halt_ids: set[int]) -> bo
         return False
     if _list_item(nxt.text) or _LABEL_START_RE.match(nxt.text) or _styled_edge(nxt, 0) or _ALGO_LINE_RE.match(nxt.text):
         return False
-    # 切口上有式子：上一块的末行、下一块的首行里有式子，或者中间空出一行行间公式
+    # A formula at the cut: in the last line of the first block or the first line of the next, or a gap where a
+    # display formula sits
     if not (_math_on_line(prev, -1) or _math_on_line(nxt, 0) or nxt.rect.y0 - prev.rect.y1 >= _REGION_GAP * prev.size):
         return False
     letter = re.search(r"[A-Za-z]", nxt.text)
-    # 引号收住的也算句末：题词下面大写起头的一行是出处（… Location, Location” | Randall Munroe）
+    # A closing quote also ends a sentence: a capitalized line below an epigraph is its source
+    # (... Location, Location” | Randall Munroe)
     ended = _END_MARK_RE.sub("", prev.text).rstrip().endswith(tuple('.!?;:。！？；：”"'))
     return not (ended and letter is not None and letter.group().isupper())
 
 
 def _region_index(rect: pymupdf.Rect, regions: list[pymupdf.Rect]) -> int | None:
-    """块的面积大半落在哪个框里。"""
+    """The box that holds most of the block's area."""
     area = rect.width * rect.height
     if area < 1:
         return None
@@ -770,17 +822,17 @@ def _region_index(rect: pymupdf.Rect, regions: list[pymupdf.Rect]) -> int | None
     return best
 
 
-# 块的面积有这么多落在模型的正文框里，才算框里的块
+# Share of a block's area that must fall in a body-text box of the model for the block to belong to it
 _REGION_COVER = 0.5
-# 模型并段时上一块至少有这么多小写的词
+# Minimum number of lowercase words in the first block when joining by model regions
 _REGION_WORDS = 3
-# 上下两块之间空出这么多（字号的倍数）就是中间排了一行行间公式
+# A vertical gap of this many font sizes between two blocks holds a display formula
 _REGION_GAP = 1.5
-# 算法的行号：6: until converged
+# Algorithm line numbers: 6: until converged
 _ALGO_LINE_RE = re.compile(r"\d{1,3}:\s")
-# 往后最多跳过这么多页整页的图表，去找续段
+# Maximum number of following full-page figures or tables passed over when looking for a continuation
 _FLOAT_PAGES = 2
-# 分图号：(C)、(b)、C.
+# Subfigure labels: (C), (b), C.
 _PANEL_LABEL_RE = re.compile(r"\(?[A-Za-z]\)\s|[A-Z]\.\s")
 
 
@@ -791,9 +843,11 @@ def _next_text_page(
     skip_ids: set[int],
     ignored: set[int],
 ) -> int:
-    """pno 之后第一个有正文的页。整页只有图、图注（连同紧贴在图注下面的分图说明）和页眉页脚的页跳过：
-    上一页没写完的段落接在它后面那一页。分图说明以 (C) 这样的分图号起头，或者比正文小一号；
-    图注下面紧接着的正文字号的段落是正文（上一页断开的那段接在这里）"""
+    """The first page after pno with body text. Pages holding only figures, captions (with the subfigure
+    descriptions right below them) and running headers and footers are passed over: an unfinished paragraph
+    continues on the page after them. A subfigure description starts with a label such as (C) or is smaller
+    than the body text; a paragraph at body size right below a caption is body text (where the paragraph
+    broken on the previous page continues)"""
     later = pno + 1
     while later <= pno + _FLOAT_PAGES and _float_page(by_page.get(later) or [], median, skip_ids, ignored):
         later += 1
@@ -831,21 +885,27 @@ def _cross_page_units(
     ignore_ids: set[int] | None = None,
     aside_ids: set[int] = frozenset(),
 ) -> list[list[TextBlock]]:
-    """把跨页续段两两合并成翻译单元（返回块列表的列表，每单元 1~2 块）。
+    """Pair paragraphs carried over to the next page into translation units (a list of block lists, one or two
+    blocks per unit).
 
-    上一页最后一个正文块不以句末标点结尾、下一页第一个块以小写/数字开头且不像标题时，
-    视为被页边界切断的同一段。页脚脚注（字号明显小于正文，或小一号且以编号、链接开头）和指定跳过的块不参与。
-    同一栏的续段照旧合并。多栏时，只再放开「本页最右栏的末块接到下页最左栏的首块」。
-    ignore_ids 是页眉页脚，不占页末、也不挡页首。跨栏标题和整表同样不占栏首栏尾。
-    aside_ids 是图和图注：下一页先排了一张图，被切断的那段接在图注下面。
+    When the last body block of a page does not end with sentence punctuation and the first block of the next
+    page starts with a lowercase letter or digit and does not look like a heading, both are one paragraph cut
+    by the page break. Footnotes (clearly smaller than the body text, or one size smaller and starting with a
+    number or link) and blocks to skip take no part. Continuations in the same column are joined as before.
+    With several columns, the only addition is that the last block of the rightmost column may continue in the
+    first block of the leftmost column on the next page. ignore_ids are running headers and footers: they
+    neither take the page end nor block the page top. Headings across columns and whole tables do not take a
+    column top or bottom either. aside_ids are figures and captions: when the next page starts with a figure,
+    the cut paragraph continues below its caption.
     """
     by_page: dict[int, list[TextBlock]] = {}
     for b in blocks:
         by_page.setdefault(b.page, []).append(b)
     ignored = ignore_ids or set()
     indents = _indents_paragraphs(blocks)
-    # 不传几何时保持旧的页末/页首规则。传了几何才按左缘把换栏续句接上。
-    # 共基线的半句不依赖栏几何：下一行仍和它成对送翻，只是不并成一个外框。
+    # Without geometry the plain page-end and page-top rules apply. With geometry, continuations across columns
+    # are joined by left edges. Half sentences on a shared baseline do not depend on column geometry: the next
+    # line is still sent paired with it, only without merging their boxes.
     extra: dict[int, TextBlock] = {}
     taken: set[int] = set()
     for host_id, tail in _shared_line_pairs(blocks).items():
@@ -898,7 +958,8 @@ def _cross_page_units(
                 units.append([b])
                 used.add(id(b))
                 continue
-            # 已经和同页另一块成对的块，不能再接到上一页页末，否则它那一半不在任何单元里
+            # A block already paired with another on the same page cannot also join the end of the previous page,
+            # or its partner would be left out of every unit
             same = bool(
                 end is not None
                 and b is end
@@ -955,10 +1016,13 @@ def _seam_apart(
     median: float,
     words_of: Callable[[int], list[tuple]],
 ) -> bool:
-    """跨页、跨栏、被式子切开的两块单元，中间隔着行间公式、例句：上一块紧下面、下一块紧上面是正文的块，
-    或者是不在任何块里的字（抽字时丢掉的行间公式）。这样的单元写回时按分界切回两块（见 _assign_restored_parts），
-    排满再接会把后半段写到公式、例句前面。紧挨着的是图表、图注、页眉页脚、脚注（covered 里是图、图注、表格的格子
-    和页眉页脚）或者什么都没有时，两块之间只是换页、换栏"""
+    """A two-block unit across pages, across columns or cut by a formula, with a display formula or example
+    between the blocks: right below the first block or right above the second there is a body-text block, or
+    text that is in no block (a display formula dropped during extraction). Such a unit is split back into
+    two blocks at the boundary when written (see _assign_restored_parts); filling and continuing would write
+    the second half before the formula or example. When what lies next to them is a figure, table, caption,
+    running header or footer, footnote (covered holds figures, captions, table cells and running headers and
+    footers) or nothing, the blocks are only separated by a page or column break"""
     host, tail = unit
     if host.page == tail.page and _same_page_line_pair(host, tail):
         return False
@@ -980,10 +1044,12 @@ def _content_next(
     words_of: Callable[[int], list[tuple]],
     below: bool,
 ) -> bool:
-    """块的正下方（below 为假时是正上方）离它最近的东西是正文：认出来的行间公式、例句（shown），
-    不在 covered 里、不在图表框里、不是脚注的块，或者版心里不属于任何块的字。版面模型会把行间公式认成图，
-    所以 shown 先看。小一号的块是图注接着的半句、旁注，小得多的是抽成块的公式，算正文。
-    同一页上的 partner 和它后面的不看"""
+    """The nearest thing directly below the block (above when below is false) is body content: a recognized
+    display formula or example (shown), a block not in covered, not inside a figure or table box and not a
+    footnote, or text inside the text frame that belongs to no block. The layout model takes display formulas
+    for figures, so shown is checked first. A block one size smaller is the rest of a caption or a margin
+    note; a much smaller one is a formula extracted as a block and counts as content. The partner on the same
+    page and anything past it are not considered"""
     geo = geometries[block.page] if block.page < len(geometries) else None
     floats = [*geo.figures, *(table.rect for table in geo.tables)] if geo is not None else []
     frame = geo.frame if geo is not None else None
@@ -1015,7 +1081,8 @@ def _content_next(
             or block.size * 0.8 <= other.size < block.size - 0.6
         )
         found.append((distance(other.rect.y0, other.rect.y1), not cover))
-    # 丢掉的行间公式：和块隔开一点、在版心以内、不落在任何块和图表框里的字
+    # Dropped display formulas: text a little apart from the block, inside the text frame, and in no block or
+    # figure or table box
     for x0, y0, x1, y1, *_rest in words_of(block.page):
         word = pymupdf.Rect(x0, y0, x1, y1)
         if not _x_overlap(word, block.rect) or not beyond(y0, y1) or distance(y0, y1) < 0.3 * block.size:
@@ -1036,14 +1103,14 @@ def _x_overlap(a: pymupdf.Rect, b: pymupdf.Rect) -> bool:
 
 
 def _all_styled(block: TextBlock) -> bool:
-    """每一截都是粗体或斜体。"""
+    """Every span is bold or italic."""
     spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
     marks = [emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0)) for span in spans]
     return bool(marks) and all(mark.bold or mark.italic for mark in marks)
 
 
 def _math_on_line(block: TextBlock, index: int) -> bool:
-    """块的第几行（-1 是末行）里有公式字体。"""
+    """Line index of the block (-1 for the last) contains a math font."""
     lines = block.span_lines or []
     if not lines:
         return False
@@ -1051,10 +1118,12 @@ def _math_on_line(block: TextBlock, index: int) -> bool:
 
 
 def _shared_line_pairs(blocks: list[TextBlock]) -> dict[int, TextBlock]:
-    """续行和另一段共基线时不并进外框，但仍成对送翻。并进去写回会盖住那一段。
+    """A continuation line on the same baseline as another paragraph is not merged into the box but is still
+    sent paired. Merging it would make the writing cover that paragraph.
 
-    阅读顺序会把另一栏插在半句和续行中间。续行的纵坐标仍贴着半句，
-    不能因为中间那栏已经往下走了就停。
+    The reading order may put another column between the half sentence and its continuation. The
+    continuation's vertical position still matches the half sentence, so the search must not stop because
+    the column in between has moved further down.
     """
     pairs: dict[int, TextBlock] = {}
     claimed: set[int] = set()
