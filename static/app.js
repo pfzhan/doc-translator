@@ -4,10 +4,10 @@ const SETTINGS_KEY = "doc-translator-settings";
 const state = {
   providers: {}, services: [], defaultId: "google", selectedId: null,
   jobs: [], diskUsage: 0, retentionDays: 30, readerView: "both", view: "translate",
-  selected: new Set(),  // 记录页勾选的记录 id，批量删除用
-  historyPage: 1,  // 记录页的第几页（从 1 起）
-  pageSize: 20,  // 记录页每页的条数，页面上可以改（PAGE_SIZES 之一）
-  pageJobs: [],  // 记录页当前这一页的记录
+  selected: new Set(),  // ids of records ticked on the records page, for batch deletion
+  historyPage: 1,  // current page of the records page (from 1)
+  pageSize: 20,  // records per page, adjustable on the page (one of PAGE_SIZES)
+  pageJobs: [],  // records on the current page of the records page
 };
 
 async function api(url, options = {}) {
@@ -28,9 +28,9 @@ async function api(url, options = {}) {
   return data;
 }
 
-// ---------- 视图切换 ----------
-// 页面：translate（翻译）/ history（翻译记录）/ services（翻译服务）/ layout（版面模型）；
-// 阅读器是覆盖在上面的全屏层
+// ---------- Views ----------
+// Pages: translate / history (translation records) / services (translation services) / layout (layout models);
+// the reader is a full-screen layer on top
 
 const VIEWS = ["translate", "history", "services", "layout"];
 
@@ -46,7 +46,7 @@ function showView(name) {
   try {
     localStorage.setItem("doc-translator-view", name);
   } catch {
-    /* 忽略 */
+    /* ignore */
   }
 }
 for (const tab of document.querySelectorAll(".tab")) {
@@ -69,7 +69,7 @@ function toast(text) {
   toastTimer = setTimeout(() => (el.hidden = true), 2600);
 }
 
-// 异步按钮的即时反馈：点击后立即禁用并显示忙碌文案，结束（无论成败）后恢复
+// Immediate feedback for async buttons: disabled with a busy label on click, restored when done (success or failure)
 async function busy(btn, text, fn) {
   const label = btn.textContent;
   btn.disabled = true;
@@ -83,7 +83,7 @@ async function busy(btn, text, fn) {
 }
 
 
-// ---------- 服务数据 ----------
+// ---------- Service data ----------
 
 async function loadServices() {
   const data = await api("/api/services");
@@ -96,7 +96,7 @@ async function loadServices() {
   renderDetail();
 }
 
-// 24x24 的矢量图标，颜色跟随 currentColor
+// 24x24 vector icons, colored by currentColor
 const ICONS = {
   google: '<path fill="currentColor" d="M21.6 12.23c0-.68-.06-1.33-.17-1.96H12v3.7h5.38a4.6 4.6 0 0 1-2 3.02v2.5h3.23c1.89-1.74 2.99-4.3 2.99-7.26z"/><path fill="currentColor" opacity=".75" d="M12 22c2.7 0 4.96-.9 6.61-2.43l-3.23-2.5c-.9.6-2.04.96-3.38.96-2.6 0-4.8-1.76-5.59-4.12H3.07v2.58A10 10 0 0 0 12 22z"/><path fill="currentColor" opacity=".55" d="M6.41 13.91a6 6 0 0 1 0-3.82V7.51H3.07a10 10 0 0 0 0 8.98z"/><path fill="currentColor" opacity=".9" d="M12 5.96c1.47 0 2.79.5 3.83 1.5l2.87-2.87A9.6 9.6 0 0 0 12 2 10 10 0 0 0 3.07 7.51l3.34 2.58C7.2 7.72 9.4 5.96 12 5.96z"/>',
   openai: '<path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" d="M12 3.2l6.4 3.7v7.4L12 18l-6.4-3.7V6.9zM12 3.2v7.4m0 0l6.4-3.7M12 10.6L5.6 6.9m6.4 3.7v7.4m0-7.4l6.4 3.7M12 10.6l-6.4 3.7"/>',
@@ -116,7 +116,8 @@ function iconFor(provider) {
 
 function renderServiceSelect() {
   const select = $("service_id");
-  // 打开页面时选中默认服务；之后用户手动改过的保持不变（刷新服务列表时不会被重置）
+  // Select the default service when the page opens; a later manual choice is kept (not reset when the service list
+  // refreshes)
   const previous = state.serviceTouched ? select.value : state.defaultId;
   select.replaceChildren();
   for (const s of state.services.filter((s) => s.enabled)) {
@@ -234,9 +235,9 @@ function serviceItem(s) {
   return li;
 }
 
-// ---------- 服务详情 ----------
+// ---------- Service details ----------
 
-// CC Switch 服务复制到本地：连接信息固化，之后不再跟随 CC Switch
+// Copy a CC Switch service to a local one: connection details are fixed and no longer follow CC Switch
 async function cloneService(s, btn) {
   const run = async () => {
     try {
@@ -288,10 +289,11 @@ function renderDetail() {
   $("save-btn").hidden = !editable;
   $("delete-btn").hidden = s.builtin;
   $("test-btn").hidden = fromCC && !s.available;
-  // CC Switch 服务可以复制成本地配置（连接信息固化，不再跟随 CC Switch）；不可用的没有 Key 可复制
+  // A CC Switch service can be copied to a local configuration (connection details fixed, no longer following
+  // CC Switch); an unavailable one has no key to copy
   $("clone-btn").hidden = !fromCC;
   $("clone-btn").disabled = fromCC && !s.available;
-  // CC Switch 的地址、Key、名称以 CC Switch 为准，这里只读
+  // URL, key and name of a CC Switch service come from CC Switch and are read-only here
   for (const id of ["api_key", "base_url", "svc-name-input"]) $(id).readOnly = fromCC;
   $("show-key").closest("label").hidden = fromCC;
   $("cc-notice").hidden = !fromCC;
@@ -340,7 +342,7 @@ function renderDetail() {
   f.auto_glossary.checked = s.auto_glossary !== false;
   showDefaultPromptPlaceholders();
 
-  // 获取过模型列表就用获取到的，否则用预置模型
+  // Use the fetched model list if there is one, otherwise the preset models
   const fetched = fetchedModels[s.id];
   const models = fetched || meta.models || [];
   setModelOptions(models, s.model);
@@ -348,14 +350,15 @@ function renderDetail() {
   $("fetch-models").textContent = fetched ? "重新获取" : "获取模型列表";
   $("fetch-models").disabled = false;
   setFetchStatus(fetched ? `已获取 ${fetched.length} 个模型` : "");
-  // 没有可选模型（如 OpenAI 兼容接口）、或者当前模型不在列表里（中转站自定义的模型名）时，默认用输入框
+  // Default to the text input when there are no models to choose from (such as the OpenAI-compatible API) or the
+  // current model is not in the list (a custom model name of a relay service)
   useCustomModel(!models.length || (fromCC && !models.includes(s.model)));
   if (fromCC) {
     $("model-input").placeholder = `留空时使用 CC Switch 中配置的模型（${s.ccswitch_model}）`;
   }
 }
 
-// 默认提示词随目标语言变化，留空的输入框里用 placeholder 展示
+// The default prompt depends on the target language and is shown as the placeholder of an empty input
 const defaultPromptCache = {};
 
 async function getDefaultPrompts() {
@@ -375,7 +378,7 @@ async function showDefaultPromptPlaceholders() {
     svcForm.elements.prompt.placeholder = d.system;
     svcForm.elements.user_prompt.placeholder = d.user;
   } catch {
-    /* 拿不到默认值不影响使用 */
+    /* failing to get the default does not matter */
   }
 }
 
@@ -480,7 +483,7 @@ $("test-btn").addEventListener("click", async (e) => {
   });
 });
 
-// 已获取的模型列表按服务缓存，切换服务再切回来时不用重新获取
+// Fetched model lists are cached per service, so switching away and back needs no new fetch
 const fetchedModels = {};
 
 function setFetchStatus(text, isError = false) {
@@ -496,13 +499,14 @@ $("fetch-models").addEventListener("click", async () => {
   setFetchStatus("获取中…");
   try {
     const payload = formPayload();
-    payload.model = payload.model || "placeholder"; // 获取列表时还没选模型
+    payload.model = payload.model || "placeholder"; // no model is selected yet while fetching the list
     const { models } = await api("/api/services/models", { json: payload });
     if (!models.length) throw new Error("接口未返回任何模型");
     fetchedModels[sid] = models;
-    if (state.selectedId !== sid) return; // 获取期间切到了别的服务
+    if (state.selectedId !== sid) return; // switched to another service while fetching
     const current = $("custom-model").checked ? $("model-input").value : $("model-select").value;
-    // 只用接口返回的列表，不再混入预置模型；当前模型不在列表里（服务商根本不支持）时改选第一个，不再保留失效选择
+    // Use only the list returned by the API, without the preset models; when the current model is not in it (the
+    // provider does not support it), select the first one instead of keeping an invalid choice
     const fallback = models.includes(current) ? current : models[0];
     setModelOptions(models, fallback);
     useCustomModel(false);
@@ -529,12 +533,12 @@ $("add-btn").addEventListener("click", async (e) => {
   });
 });
 
-// ---------- 翻译页 ----------
+// ---------- Translate page ----------
 
 const form = $("form");
 const fileInput = $("file");
 const drop = $("drop");
-// 翻译服务不记住：每次打开页面都从默认服务开始
+// The translation service is not remembered: every page load starts with the default service
 const SAVED_FIELDS = ["source_lang", "target_lang", "mode"];
 
 function loadSettings() {
@@ -551,12 +555,12 @@ function saveSettings() {
   try {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(data));
   } catch {
-    /* 隐私模式下可能不可用，忽略 */
+    /* may be unavailable in private mode; ignore */
   }
 }
 
 
-// ---------- 语言 ----------
+// ---------- Languages ----------
 
 function langInfo(code) {
   return (state.languages || []).find((l) => l.code === code);
@@ -566,11 +570,11 @@ function langLabel(code) {
   const l = langInfo(code);
   if (!l) return code;
   if (code === "auto") return "自动检测";
-  // 本地名 + 英文名，如 “日本語 Japanese”；两者相同时只显示一个
+  // Native name + English name, such as "日本語 Japanese"; only one when both are the same
   return l.native && l.native !== l.name ? `${l.native} ${l.name}` : l.name;
 }
 
-// 和插件一样，默认目标语言跟随浏览器语言（navigator.language）
+// As in the extension, the default target language follows the browser language (navigator.language)
 function defaultTargetLang() {
   const codes = (state.languages || []).map((l) => l.code);
   for (const raw of navigator.languages || [navigator.language || "zh-CN"]) {
@@ -614,8 +618,8 @@ $("service_id").addEventListener("change", () => (state.serviceTouched = true));
 $("swap-lang").addEventListener("click", () => {
   const src = $("source_lang");
   const dst = $("target_lang");
-  // 源语言是“自动检测”时没法交换到目标语言，用上一次检测到的语言代替
-  // 用最近一条记录里检测到的语言
+  // A source language of "自动检测" cannot be swapped into the target, so the last detected language is used:
+  // the language detected in the most recent record
   const lastDetected = (state.jobs || []).find((j) => j.detected_lang)?.detected_lang;
   const from = src.value === "auto" ? lastDetected : src.value;
   if (!from) {
@@ -675,7 +679,7 @@ form.addEventListener("submit", async (e) => {
     fileInput.value = "";
     showFile();
     upsertJob(job);
-    // 留在当前页：新任务出现在下方「最近翻译」里，想看的时候点「查看进度」进入阅读器
+    // Stay on this page: the new job appears under "最近翻译" below, and "查看进度" opens it in the reader
     toast("已开始翻译");
   } catch (err) {
     showSubmitError(err.message);
@@ -686,18 +690,20 @@ form.addEventListener("submit", async (e) => {
   }
 });
 
-// ---------- 翻译记录 ----------
-// 记录存在服务端磁盘上：刷新页面、换书、重启服务都不会丢，只有手动删除或超过保留时间才会删
+// ---------- Translation records ----------
+// Records are stored on the server's disk: they survive page reloads, switching books and server restarts, and are
+// deleted only manually or after the retention period
 
 const STATUS_TEXT = {
   queued: "排队中", running: "翻译中", done: "已完成", error: "失败", interrupted: "已中断", paused: "已暂停", idle: "未翻译",
 };
-// 可以“继续翻译”的状态：已翻好的段落在缓存里，继续时直接复用
+// States that allow continuing ("继续翻译"): translated paragraphs are in the cache and reused when continuing
 const RESUMABLE = new Set(["paused", "interrupted"]);
 const ACTIVE = new Set(["queued", "running"]);
 
-// 电子书富文本段落的原文/译文带行内标签（<b>、<a> 等），预览显示时剥掉：
-// 纯字符串处理（不走 DOM，译文来自模型，避免 onerror 之类的属性被触发）
+// Source and translated text of ebook rich-text paragraphs carry inline tags (<b>, <a> and so on), stripped for the
+// preview with plain string processing (not through the DOM: translations come from a model, and attributes such
+// as onerror must not fire)
 function htmlToText(s) {
   if (!/<[a-zA-Z/]/.test(s) && !/&(?:#\d+|#x[0-9a-f]+|[a-z]+);/i.test(s)) return s;
   const named = { nbsp: "\u00a0", apos: "'", amp: "&", lt: "<", gt: ">", quot: '"' };
@@ -713,11 +719,12 @@ function isEbookJob(job) {
   return /\.(epub|mobi|azw3?|azw)$/i.test(job?.filename || "");
 }
 
-// 阅读器显示用：电子书剥行内标签，PDF 剥公式占位符（{vN}）、上下标哨兵和公式图片哨兵
+// For display in the reader: strip inline tags from ebooks, and formula placeholders ({vN}), script sentinels and
+// formula image sentinels from PDFs
 function previewText(job, s) {
   if (isEbookJob(job)) return htmlToText(s);
   if (/\.pdf$/i.test(job?.filename || "")) {
-    // 还有送翻时的粗体、斜体、字号标记和跨页分界 {|}
+    // and the bold, italic and size markers of the text sent for translation, and the page break marker {|}
     return s.replace(/\s*\{\|\}\s*/g, " ").replace(/\{\/?[bi]\}|\{z\d+\}|\{\/z\}/g, "").replace(/\{\s*v\s*\d+\s*\}/g, "").replace(/\x01i\x02\d+\x01\/i\x02/g, "").replace(/\x01\/?[sb]\x02/g, "");
   }
   return s;
@@ -727,17 +734,18 @@ function fmtOf(name) {
   return (name.split(".").pop() || "").toLowerCase().replace("markdown", "md");
 }
 
-// 和 app/formats/__init__.py 的 output_variant 同一条规则：标记紧挨扩展名
+// Same rule as output_variant in app/formats/__init__.py: the marker comes right before the extension
 function outputVariant(name) {
   const stem = name.slice(0, Math.max(0, name.lastIndexOf(".")));
   const token = stem.slice(stem.lastIndexOf(".") + 1);
   return token === "bilingual" || token === "translated" ? token : "";
 }
 
-// ---------- 下拉菜单 ----------
-// 按钮下方弹出（贴近窗口底部时朝上），方向键在项之间移动，Esc、Tab、点外面或滚动时关闭。
-// 窗口尺寸变化时只重新定位：手机上地址栏收起、展开也会触发 resize
-// 有记录在跑时列表和阅读器会定时重画，菜单开着时推迟重画，关了再补（见 deferWhileMenuOpen）
+// ---------- Drop-down menus ----------
+// Opens below the button (above it near the bottom of the window); arrow keys move between items, and Esc, Tab, a
+// click outside or scrolling close it. A window resize only repositions it: on phones, the address bar collapsing
+// or expanding also triggers resize. While records are running, the list and the reader redraw periodically; with
+// a menu open the redraw is deferred until it closes (see deferWhileMenuOpen)
 const menu = { panel: null, anchor: null, pending: new Map() };
 
 function deferWhileMenuOpen(key, render) {
@@ -769,8 +777,8 @@ function onMenuScroll(e) {
   if (!menu.panel.contains(e.target)) closeMenu();
 }
 
-// 菜单项：{ label, hint, href, download, newTab, danger, disabled, onSelect }，
-// 分组标题 { heading }，分隔线 "sep"
+// Menu items: { label, hint, href, download, newTab, danger, disabled, onSelect }, group headings { heading },
+// separator "sep"
 function menuItem(item) {
   if (item === "sep") return el("div", "menu-sep");
   if (item.heading) return el("div", "menu-heading", item.heading);
@@ -797,7 +805,7 @@ function menuItem(item) {
   return node;
 }
 
-// 和按钮右边对齐，下方放不下时放到上方
+// Aligned with the button's right edge, and placed above when there is no room below
 function placeMenu() {
   const { panel, anchor } = menu;
   if (!panel) return;
@@ -839,7 +847,7 @@ function openMenu(anchor, items, { keyboard = false } = {}) {
   (keyboard ? entries()[0] : panel)?.focus?.();
 }
 
-// 带下拉菜单的按钮。items 在打开时才算，拿到的是记录的最新状态
+// A button with a drop-down menu. items is computed on opening, so it sees the latest state of the record
 function menuButton(label, cls, items, ariaLabel) {
   const btn = el("button", cls, label);
   btn.type = "button";
@@ -859,24 +867,24 @@ function menuButton(label, cls, items, ariaLabel) {
   return btn;
 }
 
-// ---------- 下载 ----------
+// ---------- Downloads ----------
 
 const VARIANT_NAMES = { bilingual: "双语", translated: "译文" };
 
-// 当前模式对应的译文文件：下载按钮直接下的就是它
+// The translation file of the current mode, which the download button downloads directly
 function currentOutput(job) {
   const current = job.mode === "bilingual" ? "bilingual" : "translated";
   return job.outputs.find((o) => outputVariant(o.name) === current) || job.outputs[0] || null;
 }
 
-// 同一版本有多个格式（MOBI 任务的 EPUB+MOBI）时文字带上格式名
+// When one version has several formats (EPUB + MOBI for a MOBI job), the label includes the format name
 function outputLabel(job, o) {
   const variant = outputVariant(o.name);
   const formats = job.outputs.filter((x) => outputVariant(x.name) === variant).length;
   return `${VARIANT_NAMES[variant] || ""}${formats > 1 ? ` ${fmtOf(o.name).toUpperCase()}` : ""}`;
 }
 
-// PDF 用浏览器自带的阅读器，EPUB 用 epub.html 逐章显示；别的格式不能预览
+// PDFs use the browser's built-in viewer and EPUBs epub.html, chapter by chapter; other formats have no preview
 function previewHref(job, o) {
   const fmt = fmtOf(o.name);
   if (fmt === "pdf") return `${o.url}?inline=1`;
@@ -884,7 +892,7 @@ function previewHref(job, o) {
   return null;
 }
 
-// 在新标签页打开当前版本的译文文件
+// Open the translation file of the current version in a new tab
 function previewButton(job, cls) {
   const o = currentOutput(job);
   const href = o && previewHref(job, o);
@@ -897,8 +905,9 @@ function previewButton(job, cls) {
   return a;
 }
 
-// 下载是拆分按钮：左边一点就下当前版本，右边的箭头展开其余文件和另一种版本。
-// 没有其余选项时只有左边一个按钮。没有可下载的返回 null
+// Download is a split button: the left part downloads the current version, the arrow on the right lists the other
+// files and the other version. Without other options there is only the left button. Returns null when there is
+// nothing to download
 function downloadButton(job, cls) {
   const main = currentOutput(job);
   if (!main) return null;
@@ -933,7 +942,7 @@ function otherDownloads(job, main) {
   return items;
 }
 
-// 另一种版本在后台现生成，生成完直接开始下载
+// The other version is generated in the background, and the download starts when it is ready
 const variantInflight = new Set();
 
 async function generateVariant(job, marker) {
@@ -963,7 +972,8 @@ async function generateVariant(job, marker) {
   }
 }
 
-// 不常用、会丢东西的操作收进“更多”：清理缓存、删除。删除放最后，和上面隔开
+// Rarely used actions that lose data go into "更多": clearing the cache and deleting. Delete comes last,
+// separated from the rest
 function moreMenu(job) {
   return menuButton("⋯", "btn sm ghost more", () => {
     const items = [];
@@ -982,7 +992,7 @@ function timeAgo(ts) {
   return new Date(ts * 1000).toLocaleDateString();
 }
 
-// token 用量：大模型接口才有，谷歌等返回 0 不显示
+// Token usage: only LLM APIs report it; Google and similar return 0, which is not shown
 function tokensText(job) {
   const total = (job.prompt_tokens || 0) + (job.completion_tokens || 0);
   if (!total) return "";
@@ -1021,7 +1031,7 @@ function el(tag, cls, text) {
   return e;
 }
 
-// selectable：记录页的行，左边有勾选框；翻译页的最近记录不带
+// selectable: a row on the records page, with a checkbox on the left; recent records on the translate page have none
 function jobRow(job, selectable = false) {
   const li = el("li", selectable ? "job selectable" : "job");
   li.dataset.id = job.id;
@@ -1043,15 +1053,16 @@ function jobRow(job, selectable = false) {
   const main = el("div", "job-main");
   const name = el("button", "job-name", job.filename);
   name.type = "button";
-  // 文件名常被截断，悬停要能看到全名
+  // File names are often truncated; hovering shows the full name
   name.title = job.filename;
   name.disabled = !job.preview;
   name.addEventListener("click", () => openReader(job.id));
   main.append(name);
 
   const meta = el("div", "job-meta");
-  // 两行固定布局：第一行语言/模式/服务，第二行大小/时间。
-  // 单行 flex-wrap 的换行点会随按钮宽度漂移，不同卡片换行位置不一致，还会把“·”甩到行首
+  // A fixed two-row layout: languages/mode/service on the first row, size/time on the second. With a single
+  // flex-wrap row the wrap point drifts with the button width, cards wrap at different places, and a "·" can end
+  // up at the start of a line
   for (const part of [
     langPair(job),
     job.mode === "translated" ? "仅译文" : "双语对照",
@@ -1063,7 +1074,7 @@ function jobRow(job, selectable = false) {
   for (const part of [formatSize(job.size), timeAgo(job.created)].filter(Boolean)) {
     meta2.append(el("span", "", part));
   }
-  // 记录 id：排查问题时对应 data/jobs/<id>/。点一下整串选中，方便复制
+  // Record id, matching data/jobs/<id>/ when investigating problems. One click selects the whole string for copying
   const jobId = el("span", "job-id", job.id);
   jobId.title = "记录 ID";
   meta2.append(jobId);
@@ -1072,7 +1083,7 @@ function jobRow(job, selectable = false) {
   const status = el("div", "job-status");
   status.append(el("span", `badge ${job.status}`, STATUS_TEXT[job.status] || job.status));
   if (ACTIVE.has(job.status) || (job.status === "paused" && job.total)) {
-    // 向下取整：没翻完不显示 100%（1184/1188 四舍五入会显示 100%，看起来像卡住了）
+    // Round down: an unfinished job never shows 100% (1184/1188 would round to 100% and look stuck)
     const staged = inStage(job);
     const pct = staged ? stagePct(job) : Math.floor((job.done / job.total) * 100);
     const bar = el("div", `job-progress${job.status === "paused" ? " paused" : ""}`);
@@ -1082,7 +1093,7 @@ function jobRow(job, selectable = false) {
     status.append(bar, el("span", "hint", staged ? stageText(job) : `${job.done} / ${job.total} 段 · ${pct}%`));
   } else if (job.status === "error" || job.status === "interrupted") {
     const err = el("span", `job-error ${job.status}`, explainError(job.error));
-    err.title = job.error; // 鼠标悬停看原始错误
+    err.title = job.error; // hover to see the raw error
     status.append(err);
   } else if (job.status === "idle") {
     status.append(el("span", "hint", ["缓存已清理", expiryText(job)].filter(Boolean).join(" · ")));
@@ -1095,14 +1106,14 @@ function jobRow(job, selectable = false) {
     const exp = expiryText(job);
     if (exp) parts.push(exp);
     const hint = el("span", "hint", parts.filter(Boolean).join(" · "));
-    if (tokens) hint.title = tokensTitle(job);  // 悬停看输入/输出拆分
+    if (tokens) hint.title = tokensTitle(job);  // hover to see input/output separately
     status.append(hint);
   }
-  // 状态单独一列，宽屏时放在信息和按钮中间，窄了再落到信息下面
+  // Status has its own column between the details and the buttons on wide screens, below the details when narrow
   li.append(main, status);
 
-  // 常用操作一次点击：阅读、预览、下载（拆分按钮）、继续或重试、重译；
-  // 清理缓存和删除收进“更多”。主操作用浅色强调
+  // Common actions take one click: read, preview, download (split button), continue or retry, retranslate;
+  // clearing the cache and deleting go into "更多". The main action has a light highlight
   const actions = el("div", "job-actions");
   const button = (label, cls, onClick) => {
     const b = el("button", cls, label);
@@ -1130,13 +1141,14 @@ function jobRow(job, selectable = false) {
   return li;
 }
 
-// 记录里显示“服务 · 模型”；模型名已经包含在服务名里时（CC Switch 的服务名不带模型）不重复
+// Records show "service · model"; the model is not repeated when the service name already contains it (CC Switch
+// service names do not include the model)
 function serviceLabel(job) {
   if (!job.service_name) return "";
   return job.model && !job.service_name.includes(job.model) ? `${job.service_name} · ${job.model}` : job.service_name;
 }
 
-// 记录页每页可选的条数。有任务在跑时列表每 2 秒重画一次，只画一页
+// Page sizes available on the records page. While jobs are running the list redraws every 2 seconds, one page only
 const PAGE_SIZES = [10, 20, 50, 100];
 
 function renderJobs() {
@@ -1147,11 +1159,11 @@ function renderJobs() {
   state.historyPage = Math.min(Math.max(1, state.historyPage), pages);
   const start = (state.historyPage - 1) * state.pageSize;
   state.pageJobs = all.slice(start, start + state.pageSize);
-  // 不在这一页的（删掉了、过期了、挤到别的页）不再算选中
+  // Records no longer on this page (deleted, expired, pushed to another page) are no longer selected
   const ids = new Set(state.pageJobs.map((j) => j.id));
   for (const id of state.selected) if (!ids.has(id)) state.selected.delete(id);
   list.replaceChildren(...state.pageJobs.map((job) => jobRow(job, true)));
-  // 只有一页时不显示翻页按钮，每页条数仍可以改
+  // With a single page there are no paging buttons, but the page size can still be changed
   $("history-pager").hidden = all.length === 0;
   $("pager-pages").hidden = pages <= 1;
   $("page-info").textContent = `第 ${state.historyPage} / ${pages} 页`;
@@ -1168,7 +1180,8 @@ function renderJobs() {
   renderSelection();
 }
 
-// 列表上方的勾选栏：没勾选时显示全部暂停/继续，勾选后换成取消选择、删除选中。全选只选当前这一页
+// Selection bar above the list: pause all/continue all when nothing is ticked, deselect and delete selected once
+// something is. Select all selects only the current page
 function renderSelection() {
   const n = state.selected.size;
   const total = state.pageJobs.length;
@@ -1184,14 +1197,14 @@ function renderSelection() {
 }
 
 $("select-all").addEventListener("change", () => {
-  // 已经全选时点一下是全部取消，否则（含部分选中）全选这一页
+  // When everything is selected a click deselects all; otherwise (including partial selection) it selects this page
   const allSelected = state.selected.size === state.pageJobs.length;
   state.selected.clear();
   if (!allSelected) for (const job of state.pageJobs) state.selected.add(job.id);
   renderJobs();
 });
 
-// 换页时清掉勾选：看不见的记录不会被一起删掉
+// Changing pages clears the selection, so records out of sight are never deleted along with the others
 function showHistoryPage(page) {
   state.historyPage = page;
   state.selected.clear();
@@ -1201,12 +1214,12 @@ function showHistoryPage(page) {
 $("page-prev").addEventListener("click", () => showHistoryPage(state.historyPage - 1));
 $("page-next").addEventListener("click", () => showHistoryPage(state.historyPage + 1));
 
-// 每页条数记在浏览器里，改了以后回到第一页
+// The page size is stored in the browser; changing it returns to the first page
 try {
   const saved = Number(localStorage.getItem("doc-translator-page-size"));
   if (PAGE_SIZES.includes(saved)) state.pageSize = saved;
 } catch {
-  /* 忽略 */
+  /* ignore */
 }
 $("page-size").value = String(state.pageSize);
 $("page-size").addEventListener("change", (e) => {
@@ -1216,7 +1229,7 @@ $("page-size").addEventListener("change", (e) => {
   try {
     localStorage.setItem("doc-translator-page-size", String(size));
   } catch {
-    /* 忽略 */
+    /* ignore */
   }
   showHistoryPage(1);
 });
@@ -1250,7 +1263,7 @@ $("delete-selected").addEventListener("click", async (e) => {
   });
 });
 
-// 全部暂停 / 全部继续：只在有需要的时候出现
+// Pause all / continue all: shown only when needed
 function renderBulk(all) {
   const active = all.filter((j) => ACTIVE.has(j.status)).length;
   const resumable = all.filter((j) => RESUMABLE.has(j.status)).length;
@@ -1331,12 +1344,12 @@ async function refreshJobs() {
     state.retentionDays = data.retention_days;
     renderJobs();
   } catch {
-    /* 网络问题时保留旧列表 */
+    /* keep the old list on network problems */
   }
   scheduleJobsPoll();
 }
 
-// 有任务在跑时每 2 秒刷新列表（阅读器自己轮询，不重复）
+// Refresh the list every 2 seconds while jobs are running (the reader polls on its own, not duplicated here)
 let jobsTimer;
 function scheduleJobsPoll() {
   clearTimeout(jobsTimer);
@@ -1371,10 +1384,11 @@ async function retryJob(id, options = {}) {
   }
 }
 
-// 已完成的记录按服务现在的设置重新生成。默认复用已有译文，只请求没有译文的段落
+// Regenerate a finished record with the service's current settings. By default existing translations are reused and
+// only paragraphs without one are requested
 function redoJob(job) {
   const dialog = $("redo-dialog");
-  // 重译用的是服务现在选中的模型，不写当初的模型名
+  // Retranslation uses the service's currently selected model, so the original model name is not shown
   const service = job.service_name;
   $("redo-text").textContent =
     `使用${service ? `「${service}」` : "原翻译服务"}的当前设置重新生成「${job.filename}」。` +
@@ -1387,7 +1401,8 @@ function redoJob(job) {
   dialog.showModal();
 }
 
-// 清理缓存：先向服务端要一份清单（缓存条数、文件大小、共用同一文件的记录），确认后再清
+// Clear cache: first ask the server for a list (cache entries, file sizes, records sharing the same file), and
+// clear after confirmation
 async function purgeJob(job) {
   const dialog = $("purge-dialog");
   const list = $("purge-list");
@@ -1448,7 +1463,7 @@ async function clearJobCache(job, boxes) {
   }
 }
 
-// 保留时间
+// Retention period
 function renderRetention() {
   const sel = $("retention-days");
   const days = String(state.retentionDays ?? 30);
@@ -1459,7 +1474,7 @@ function renderRetention() {
   $("retention-save").hidden = preset;
 }
 
-// 参照 toast：先取消上一次定时器，避免误清新的提示
+// As with toast: cancel the previous timer first, so a newer message is not cleared by mistake
 let retentionStatusTimer;
 async function saveRetention(days) {
   const status = $("retention-status");
@@ -1490,7 +1505,7 @@ $("retention-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const raw = $("retention-custom").value.trim();
   const days = Number(raw);
-  // 0 表示永久保留，是合法值；只拒绝空、非整数和负数
+  // 0 means keep forever and is valid; only empty, non-integer and negative values are rejected
   if (raw === "" || !Number.isInteger(days) || days < 0) {
     toast("保留天数需为不小于 0 的整数（0 表示永久保留）");
     return;
@@ -1498,8 +1513,9 @@ $("retention-form").addEventListener("submit", (e) => {
   saveRetention(days);
 });
 
-// ---------- 阅读器（边翻边预览） ----------
-// 后端按完成顺序记录译文，前端每秒用 version 增量拉取，只更新变化的段落，不重建文件
+// ---------- Reader (preview while translating) ----------
+// The backend records translations in order of completion; the frontend fetches increments by version every second
+// and updates only changed paragraphs, without rebuilding the file
 
 const reader = {
   jobId: null, job: null, version: -1, nodes: [], headings: [], done: 0, total: 0,
@@ -1544,7 +1560,8 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
-// 暂停、继续之后立刻刷新阅读器（不等下一次轮询），避免出现两条轮询
+// Refresh the reader right after pausing or continuing (without waiting for the next poll), avoiding two polling
+// loops
 function refreshReader() {
   clearTimeout(reader.timer);
   readerTick();
@@ -1571,21 +1588,22 @@ async function readerTick() {
       $("reader-content").replaceChildren(el("div", "hint", "此记录没有可预览的内容。"));
     }
     renderNotice(job);
-    // 已经不在翻译、预览也没就绪时不再轮询。加密或扫描版 PDF 会一直 ready=false，
-    // 继续翻译后由 refreshReader / openReader 重新拉。
+    // Stop polling when the job is no longer translating and the preview is not ready. Encrypted or scanned PDFs
+    // stay ready=false; after continuing, refreshReader / openReader fetch again.
     if (ACTIVE.has(job.status)) reader.timer = setTimeout(readerTick, 1000);
   } catch (err) {
     if (reader.jobId !== id) return;
     $("reader-notice").hidden = false;
     $("reader-notice").textContent = `无法读取：${err.message}`;
-    // 记录已经被删掉（比如在另一个标签页里），再拉也是 404，停下来
+    // The record has been deleted (for example in another tab); further fetches would also be 404, so stop
     if (err.status === 404) return;
-    // 出错后也要继续轮询，退避 4 秒，避免一次网络抖动就永久停更
+    // Keep polling after an error with a 4-second backoff, so one network hiccup does not stop updates for good
     reader.timer = setTimeout(readerTick, 4000);
   }
 }
 
-// 翻译前的准备和翻译后的写回：整本书的版面分析、写回各要几分钟，显示做到哪一页
+// Preparation before translation and writing after it: layout analysis and writing of a whole book take minutes
+// each, so the current page is shown
 function inStage(job) {
   return !job.total || (job.done >= job.total && Boolean(job.stage && job.stage.name));
 }
@@ -1639,7 +1657,8 @@ function renderReaderBar(job) {
   downloads.append(...[previewButton(job, "btn sm"), downloadButton(job, "btn primary sm")].filter(Boolean));
 }
 
-// 把接口返回的原始错误整理成一句人话；原文放在“详细信息”里，排查时还能看到
+// Turn the raw error returned by the API into a readable sentence; the original goes into "详细信息", still
+// available when investigating
 function explainError(raw) {
   const text = raw || "";
   if (/INVALID_MODEL|Invalid model|model.*(not found|does not exist|不存在)/i.test(text)) {
@@ -1680,7 +1699,8 @@ function renderNotice(job) {
     pick.setAttribute("aria-label", "重新翻译使用的服务");
     for (const s of services) pick.add(new Option(s.name, s.id));
     pick.value = services.some((s) => s.id === job.service_id) ? job.service_id : state.defaultId;
-    // 和记录页同一个操作用同一个词；“重新翻译”容易和“重译”里的全部重新翻译混淆
+    // The same action uses the same word as on the records page; "重新翻译" is easily confused with translating
+    // everything again under "重译"
     const retry = el("button", "btn primary sm", job.status === "error" ? "重试" : "继续翻译");
     retry.type = "button";
     retry.addEventListener("click", async () => {
@@ -1700,7 +1720,8 @@ function renderNotice(job) {
     notice.append(el("div", "notice-text", `文档语言与目标语言相同（${langLabel(job.target_lang)}），可能没有需要翻译的内容。`));
   }
   notice.hidden = !notice.childNodes.length;
-  // 任务停了，还没翻到的段落不再显示“加载中”的闪烁，改成静态的未翻译状态
+  // Once the job stops, paragraphs not yet translated no longer show the blinking loading state and switch to a
+  // static untranslated state
   $("reader-content").classList.toggle("stopped", !ACTIVE.has(job.status));
 }
 
@@ -1722,7 +1743,7 @@ function buildReader(segments) {
     const dst = el("div", "dst");
     if (lang) dst.lang = lang;
     div.append(src, dst);
-    // 书里自带的目录（nav / ncx）收进一个可折叠块，不打断正文
+    // The book's own table of contents (nav / ncx) goes into a collapsible block, so it does not interrupt the text
     if (seg.k === "toc") {
       if (!toc) {
         toc = el("details", "toc-block");
@@ -1742,12 +1763,12 @@ function buildReader(segments) {
   buildOutline();
 }
 
-// 左侧大纲：用文档里的标题，最多三级；标题太少时不显示
+// Outline on the left: headings from the document, up to three levels; hidden when there are too few headings
 function buildOutline() {
   const list = $("outline-list");
   const levels = [...new Set(reader.headings.map((h) => h.level))].sort().slice(0, 3);
   const items = reader.headings.filter((h) => levels.includes(h.level));
-  // 章节标题太少时不显示大纲，正文占满宽度
+  // With too few chapter headings the outline is hidden and the text takes the full width
   $("reader").classList.toggle("no-outline", items.length < 2);
   list.replaceChildren(
     ...items.map((h) => {
@@ -1785,7 +1806,8 @@ function applyUpdates(updates, initial) {
     last = div;
   }
   refreshOutlineState();
-  // 跟随翻译进度：把最新翻好的段落带进视野；用户自己滚动后暂停，点“跟随”恢复
+  // Follow translation progress: bring the latest translated paragraph into view; paused when the user scrolls,
+  // resumed with "跟随"
   if (last && !initial && reader.following) {
     reader.autoScrolling = true;
     last.scrollIntoView({ block: "center" });
@@ -1795,7 +1817,8 @@ function applyUpdates(updates, initial) {
   $("follow-btn").hidden = reader.following || !active;
 }
 
-// 大纲上的点：灰色未开始、蓝色翻译中、绿色已完成；章节标题翻好后大纲显示译文
+// Dots in the outline: gray not started, blue translating, green done; once a chapter heading is translated the
+// outline shows the translation
 function refreshOutlineState() {
   const items = reader.outline || [];
   items.forEach((h, n) => {
@@ -1841,7 +1864,7 @@ function visibleIndex() {
   return div ? Number(div.dataset.i) : 0;
 }
 
-// 用户在阅读器里滚动时，告诉后端优先翻译当前看到的位置
+// When the user scrolls in the reader, ask the backend to translate the visible part first
 function sendFocus(index) {
   if (!reader.jobId || index === reader.lastFocus || !reader.job || !ACTIVE.has(reader.job.status)) return;
   reader.lastFocus = index;
@@ -1873,7 +1896,7 @@ $("reader-body").addEventListener("scroll", () => {
   }, 200);
 });
 
-// 显示方式：对照 / 只看译文 / 只看原文
+// Display mode: side by side / translation only / original only
 for (const r of document.querySelectorAll('input[name="reader-view"]')) {
   r.addEventListener("change", () => setReaderView(r.value));
 }
@@ -1886,12 +1909,12 @@ function setReaderView(view) {
   try {
     localStorage.setItem("doc-translator-reader-view", view);
   } catch {
-    /* 忽略 */
+    /* ignore */
   }
 }
 
 
-// ---------- 初始化 ----------
+// ---------- Initialization ----------
 
 async function init() {
   const [langs, providers] = await Promise.all([api("/api/languages"), api("/api/providers")]);
@@ -1920,7 +1943,7 @@ async function init() {
     view = localStorage.getItem("doc-translator-view") || view;
     readerView = localStorage.getItem("doc-translator-reader-view") || readerView;
   } catch {
-    /* 忽略 */
+    /* ignore */
   }
   setReaderView(["both", "dst", "src"].includes(readerView) ? readerView : "both");
   await Promise.all([loadServices(), refreshJobs(), api("/api/settings").then((s) => (state.retentionDays = s.retention_days))]);
@@ -1928,13 +1951,15 @@ async function init() {
   renderJobs();
   checkLangPair();
   showView(view);
-  // 刷新页面时回到正在看的那本书（preview=false 的任务没有预览内容，不恢复）
+  // On reload, return to the book being viewed (jobs with preview=false have no preview content and are not
+  // restored)
   const m = location.hash.match(/^#read\/(\w+)$/);
   if (m && state.jobs.some((j) => j.id === m[1] && j.preview !== false)) openReader(m[1]);
 }
 
-// ---------- 版面模型、公式检测模型 ----------
-// 两张卡片结构一样，元素 id 以 layout- / formula- 开头，接口是 /api/layout-model、/api/formula-model
+// ---------- Layout model, formula detection model ----------
+// Both cards have the same structure, with element ids starting with layout- / formula- and the endpoints
+// /api/layout-model and /api/formula-model
 
 const MODEL_KINDS = ["layout", "formula"];
 const MODEL_NAMES = { layout: "版面模型", formula: "公式检测模型" };
@@ -1962,7 +1987,8 @@ function renderModel(kind, m, { keepForm = false } = {}) {
   const file = el("file");
   file.replaceChildren();
   file.classList.toggle("is-ok", m.file.exists);
-  // 只显示文件名，完整路径放在悬停提示里；默认位置在高级设置的路径框里也能看到
+  // Show only the file name, with the full path in the hover tooltip; the default location is also visible in the
+  // path field of the advanced settings
   const where = document.createElement("code");
   where.textContent = m.resolved.split(/[\\/]/).pop();
   where.title = m.resolved;
@@ -1990,7 +2016,7 @@ function renderModel(kind, m, { keepForm = false } = {}) {
         el(name).dataset.auto = String(m.auto[name]);
       }
     }
-    // 高级设置里有改过的值时展开，免得收起来看不到
+    // Expand the advanced settings when they hold changed values, so they are not hidden
     if (m.path || m.workers || m.threads) el("advanced").open = true;
     const select = el("source");
     if (!select.options.length) {
@@ -2011,7 +2037,7 @@ function renderModel(kind, m, { keepForm = false } = {}) {
   }
   el("download").disabled = d.running;
   el("download").textContent = m.file.exists ? "重新下载" : "下载模型";
-  // 还没有模型文件时，下载是这页要做的第一步
+  // Without a model file, downloading is the first thing to do on this page
   el("download").classList.toggle("primary", !m.file.exists);
   if (m.int8) renderInt8(kind, m);
   clearTimeout(modelPolls[kind]);
@@ -2019,14 +2045,15 @@ function renderModel(kind, m, { keepForm = false } = {}) {
   if (busyNow) modelPolls[kind] = setTimeout(() => loadModel(kind, { keepForm: true }), 1000);
 }
 
-// 模型的 int8 版：生成了没有、正在生成到哪一页、没装 onnx 时怎么装。这一行标着「int8 模型」，文字里不再重复
+// The model's int8 version: whether it is generated, which page generation has reached, and how to install onnx
+// when it is missing. The row is labeled "int8 模型", so the text does not repeat it
 function renderInt8(kind, m) {
   const q = m.int8;
   const status = $(`${kind}-int8-status`);
   const btn = $(`${kind}-quantize`);
   const ready = q.file.exists && !q.state.running && !q.state.error;
   status.closest("dd").classList.toggle("is-ok", ready);
-  // int8 是可选的：只有生成失败标红，没装 onnx 照常显示
+  // int8 is optional: only a failed generation is shown in red; a missing onnx is shown normally
   status.classList.toggle("warn", Boolean(q.state.error));
   btn.textContent = q.file.exists ? "重新生成" : "生成 int8 模型";
   btn.disabled = q.state.running || !q.available || !m.file.exists;
@@ -2049,7 +2076,8 @@ function renderInt8(kind, m) {
   }
 }
 
-// 下拉框只列取值，选中项的说明显示在下拉框下面（写在 option 的 data-hint 里）
+// The select lists only values; the description of the selected one is shown below it (from the option's
+// data-hint)
 function showOptionHint(select) {
   $(`${select.id}-hint`).textContent = select.selectedOptions[0]?.dataset.hint || "";
 }
@@ -2065,8 +2093,9 @@ async function loadModel(kind, options = {}) {
   }
 }
 
-// 表单里要存的字段。公式检测模型多输入尺寸、同时推理的页数和每页推理线程数。
-// 后两项填着按核数算出的值；没改或清空时存 0，换了机器仍按核数定
+// Form fields to save. The formula detection model adds the input size, the pages inferred at once and the threads
+// per page. The last two show values computed from the core count; unchanged or cleared they are saved as 0, so
+// another machine still decides by its core count
 function modelForm(kind) {
   const form = { enabled: $(`${kind}-enabled`).checked, path: $(`${kind}-path`).value };
   const size = $(`${kind}-size`);
@@ -2094,7 +2123,7 @@ for (const kind of MODEL_KINDS) {
   });
 }
 
-// 两个模型各占一个标签，记住上次看的是哪个
+// Each model has its own tab, and the last one viewed is remembered
 function showModelTab(kind) {
   if (!MODEL_KINDS.includes(kind)) kind = MODEL_KINDS[0];
   for (const k of MODEL_KINDS) {
@@ -2104,7 +2133,7 @@ function showModelTab(kind) {
   try {
     localStorage.setItem("doc-translator-model-tab", kind);
   } catch {
-    /* 忽略 */
+    /* ignore */
   }
 }
 for (const tab of document.querySelectorAll(".model-tab")) {
