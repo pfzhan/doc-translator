@@ -37,8 +37,9 @@ def _snap_cut(text: str, cut: int) -> int:
 
 
 def _split_translation(t: str, ratio: float) -> tuple[str, str]:
-    """把跨页合并段的译文按比例切回两页：优先在比例附近的句读点断开，
-    没有合适标点时按空格，再不行硬切。切点避开公式哨兵，且两侧样式标记配对。"""
+    """Split the translation of a paragraph joined across pages back into two parts by ratio: at the
+    punctuation mark closest to the ratio if there is one, otherwise at a space, otherwise at the exact
+    position. The cut avoids formula sentinels, and style marks on both sides are balanced."""
     target = len(t) * ratio
     best = None
     for m in re.finditer(r"[。！？；，、：.!?;,:]", t):
@@ -47,7 +48,7 @@ def _split_translation(t: str, ratio: float) -> tuple[str, str]:
     if best is not None and abs(best - target) <= len(t) * 0.3:
         cut = _snap_cut(t, best)
         return balance_marks(t[:cut], t[cut:])
-    # 拉丁文本按空格切
+    # Latin-script text is cut at a space
     spaces = [m.start() for m in re.finditer(r"\s", t)]
     if spaces:
         cut = _snap_cut(t, min(spaces, key=lambda s: abs(s - target)))
@@ -56,17 +57,19 @@ def _split_translation(t: str, ratio: float) -> tuple[str, str]:
     return balance_marks(t[:cut], t[cut:])
 
 
-# 译文里游离的 {vN} 占位符（模型把占位符写进了别的段）
+# A stray {vN} placeholder in a translation (the model wrote a placeholder from another segment)
 _STRAY_PLACEHOLDER_RE = re.compile(r"\{\s*v\s*\d+\s*\}")
 
 
 def _restore_placeholders(translation: str, formulas: list[dict], lenient: bool = False) -> str | None:
-    """译后恢复 {vN}（容忍模型在占位符里塞的空格）；有占位符丢失时返回 None（回退原文）。
-    恢复出来的是图片哨兵（\\x01i\\x02N\\x01/i\\x02），渲染层换成对应公式的 <img>。
-    译文里多出来的幻觉占位符直接删掉。
+    """Restore {vN} after translation (tolerating spaces the model put inside a placeholder). Returns None,
+    falling back to the original, when a placeholder is missing. Each placeholder becomes an image sentinel
+    (\\x01i\\x02N\\x01/i\\x02), which the renderer replaces with the <img> of the formula. Extra placeholders
+    the model invented are deleted.
 
-    lenient=True 时，丢的只是一两个字形的小公式（等号、单个变量、点阵字的公式洞）也收下译文：
-    模型多半按上下文把它写成了文字，比整段退回原文好。
+    With lenient=True, the translation is accepted even if it lost a small formula of one or two glyphs
+    (an equals sign, a single variable, a formula hole in bitmap text): the model most likely wrote it out
+    as text from the context, which is better than falling back to the original for the whole paragraph.
     """
     for n, f in enumerate(formulas, 1):
         pattern = re.compile(rf"\{{\s*v\s*{n}\s*\}}")
@@ -75,24 +78,29 @@ def _restore_placeholders(translation: str, formulas: list[dict], lenient: bool 
                 continue
             return None
         if _ends_in_relation(f):
-            # 式子图里带着等号（y_c =），后面的数字是正文字（1 if …）。模型不知道占位符里已有等号，
-            # 又写一遍「为 1」，读出来是「y_c = 为 1」
+            # The formula image ends with an equals sign (y_c =) and the number after it is body text (1 if ...).
+            # The model does not know the placeholder already holds the sign and writes "为 1" again, which
+            # reads as "y_c = 为 1"
             translation = re.sub(rf"(\{{\s*v\s*{n}\s*\}}\s*){_RELATION_WORD_RE}", r"\1", translation, count=1)
         translation = pattern.sub(lambda _: f"\x01i\x02{n}\x01/i\x02", translation, count=1)
     return re.sub(r"\{\s*v\s*\d+\s*\}", "", translation)
 
 
-# 公式串里夹在占位符之间的东西：空白、样式标记、单个字母的变量和运算符（σ(Σ…) {b}W{/b} x_i + b）。
-# 两个字母以上的是词（as、the），不算
-_CHAIN_GLUE = r"(?:\s+|\{/?[biu]\}|\{/[cz]\}|\{c[0-9a-f]{6}\}|\{z\d+\}|(?<![A-Za-z0-9])[A-Za-z0-9](?![A-Za-z0-9])|[+\-−=·×*/,.()\[\]|]{1,3})"
+# What may sit between placeholders in a chain of formulas: whitespace, style marks, single-letter variables
+# and operators (σ(Σ...) {b}W{/b} x_i + b). Two or more letters make a word (as, the) and do not count
+_CHAIN_GLUE = (
+    r"(?:\s+|\{/?[biu]\}|\{/[cz]\}|\{c[0-9a-f]{6}\}|\{z\d+\}"
+    r"|(?<![A-Za-z0-9])[A-Za-z0-9](?![A-Za-z0-9])|[+\-−=·×*/,.()\[\]|]{1,3})"
+)
 _CHAIN_RE = re.compile(rf"\{{v\d+\}}(?:{_CHAIN_GLUE})*?\{{v\d+\}}(?:(?:{_CHAIN_GLUE})*?\{{v\d+\}})*")
 _PLACEHOLDER_NUM_RE = re.compile(r"\{\s*v\s*(\d+)\s*\}")
 
 
 def _keep_formula_chains(translation: str, source: str) -> str:
-    """原文里一串挨着的式子（{v2} {b}W{/b}{v3}，一个公式被正文字号的变量切成几截），
-    模型有时把几截的次序调了（{b}W{/b}{v3}{v2}），画出来前后颠倒。
-    译文里这几截仍挨在一起、只是次序不同时，按原文的次序换回去。中间夹着中文的不动。"""
+    """A chain of adjacent formulas in the source ({v2} {b}W{/b}{v3}, one formula cut into pieces by a variable
+    set at body size) sometimes comes back with the pieces reordered ({b}W{/b}{v3}{v2}), which draws them in
+    the wrong order. When the pieces are still adjacent in the translation and only their order differs, the
+    source order is restored. Chains with Chinese text between the pieces are left alone."""
     glue = re.compile(rf"(?:{_CHAIN_GLUE})")
     for chain in _CHAIN_RE.finditer(source):
         order = [int(n) for n in _PLACEHOLDER_NUM_RE.findall(chain.group(0))]
@@ -104,11 +112,11 @@ def _keep_formula_chains(translation: str, source: str) -> str:
         middle = translation[start:end]
         rest = _PLACEHOLDER_NUM_RE.sub("", middle)
         if glue.sub("", rest):
-            continue  # 中间夹着别的字
+            continue  # other text in between
         found = [int(n) for n in _PLACEHOLDER_NUM_RE.findall(middle)]
         if found == order:
             continue
-        # 向两边扩到挨着的变量和标记，免得原文的 W 换回去以后又多出一个
+        # Extend over adjacent variables and marks on both sides, so the source's W is not doubled after the swap
         while True:
             before = re.search(rf"(?:{_CHAIN_GLUE})$", translation[:start])
             if before is None or not before.group(0).strip():
@@ -123,7 +131,7 @@ def _keep_formula_chains(translation: str, source: str) -> str:
     return translation
 
 
-# 跟在以关系符收尾的式子后面、数字前面的「为」「等于」「大于」
+# "为", "等于", "大于" and similar words after a formula ending in a relation sign and before a number
 _RELATION_WORD_RE = r"(?:(?:大于|小于|不)?等于|约为|大于|小于|为|是)\s*(?=[-−+]?\d)"
 
 
@@ -142,9 +150,10 @@ async def _retry_lost_placeholders(
     sent_formulas: list[list[dict]],
     raw: list[str],
 ) -> None:
-    """译文丢了 {vN} 的单元单独再翻一次，补上占位符的结果替换 raw 并写进缓存。
+    """Translate units whose translation lost a {vN} once more, one at a time. Results with all placeholders
+    replace the entries in raw and go into the cache.
 
-    只排版（cache_only）时不请求翻译服务。
+    No request is sent when only rendering from the cache (cache_only).
     """
     translator = getattr(runner, "translator", None)
     if translator is None or getattr(runner, "cache_only", False):
@@ -166,7 +175,7 @@ async def _retry_lost_placeholders(
             continue
         text = clean_translation(sent_texts[i], result[0], translator.target_lang)
         if _restore_placeholders(text, sent_formulas[i]) is not None:
-            # 预览按 _done 显示，换成新译文，后面恢复占位符时才对得上
+            # The preview shows _done; store the new translation there so placeholder restoration matches later
             done = getattr(runner, "_done", None)
             if isinstance(done, dict) and done.get(sent_texts[i]) == raw[i]:
                 done[sent_texts[i]] = text
@@ -178,8 +187,8 @@ async def _retry_lost_placeholders(
 
 
 _CN_NUM = r"[0-9零〇一二三四五六七八九十百]+"
-# 模型会把 2.1 写成 第二点一节、四点二、一.三.，把 3.1.3 写成 第三章第一节第三小节，把 8 写成 八,。
-# 都从标题开头剥掉，改回原文编号。
+# The model writes 2.1 as 第二点一节, 四点二 or 一.三., 3.1.3 as 第三章第一节第三小节, and 8 as 八,.
+# All of these are stripped from the start of a heading and replaced with the source number.
 _CN_DOT = r"[零〇一二三四五六七八九十]+"
 _TRANS_HEAD_NUM_RE = re.compile(
     r"^(?:"
@@ -197,7 +206,7 @@ _TRANS_HEAD_NUM_RE = re.compile(
 
 
 def _take_owner(text: str, formulas: list[dict], owner: int) -> tuple[str, list[str]]:
-    """留下属于 owner 的公式哨兵，其余原样抽出（保持相对顺序）。"""
+    """Keep the formula sentinels that belong to owner and take the others out unchanged, in their order."""
     kept: list[str] = []
     foreign: list[str] = []
     pos = 0
@@ -214,7 +223,7 @@ def _take_owner(text: str, formulas: list[dict], owner: int) -> tuple[str, list[
 
 
 def _localize_sentinels(text: str, formulas: list[dict], owner: int) -> tuple[str, list[dict]]:
-    """哨兵改成本块公式列表的序号，渲染时按下标取图。"""
+    """Renumber sentinels by their index in this block's formula list; rendering looks images up by index."""
     local = [f for f in formulas if f.get("owner", 0) == owner]
     index_map: dict[int, int] = {}
     local_n = 1
@@ -233,7 +242,8 @@ def _localize_sentinels(text: str, formulas: list[dict], owner: int) -> tuple[st
 
 
 def _join_boundary(text: str) -> str:
-    """跨页分界收成一段。汉字两侧不加空格，否则「相当」和「不错」会分开。"""
+    """Join the text across a page boundary into one paragraph. No space is added next to Chinese characters,
+    which would separate "相当" from "不错"."""
     split = split_page_boundary(text)
     if split is None:
         return strip_boundary(text)
@@ -246,10 +256,13 @@ def _assign_restored_parts(
     formulas: list[dict],
     apart: bool = False,
 ) -> tuple[list[str], list[list[dict]]]:
-    """跨页单元的译文整段留在起始块。续页只擦原文，不再按分界切回两页。
+    """The whole translation of a unit across two pages stays in the first block. The original text on the
+    next page is only erased; the translation is no longer split back at the boundary.
 
-    模型丢掉 {| } 时同样整段留下。哨兵仍按单元内的序号，公式图跟这段走。
-    apart 时两块中间隔着行间公式、例句（见 _seam_apart），按分界切回两块，公式哨兵跟着自己的块走。
+    The same applies when the model dropped the {|} mark. Sentinels keep their numbers within the unit and
+    the formula images go with the paragraph. With apart, the two blocks are separated by a display formula
+    or an example (see _seam_apart); the text is split at the boundary and each formula sentinel goes with
+    its own block.
     """
     if len(unit) != 2:
         return [strip_boundary(restored)], [formulas]
@@ -264,21 +277,23 @@ def _assign_restored_parts(
 
 
 def _with_label(label: str, translation: str) -> str:
-    """把摘下的编号接回译文开头。"""
+    """Put the peeled number back at the start of the translation."""
     return f"{label} {translation.lstrip()}" if label else translation
 
 
 def _normalize_heading_number(src_text: str, translation: str) -> str:
-    """标题译文开头已有章节号时改回原文编号（'第二章' → '2'）。
+    """Replace a chapter or section number at the start of a heading translation with the source number
+    ('第二章' -> '2').
 
-    没有章节号就不加前缀。译文与原文相同则原样返回，避免跳过块被重新排版。
+    No number is added when the translation has none. A translation identical to the source is returned
+    unchanged, so that skipped blocks are not typeset again.
     """
     if translation.strip() == src_text.strip():
         return translation
     m = _SRC_HEAD_NUM_RE.match(src_text.strip())
     if not m or len(src_text) > 60 or _ends_sentence(src_text):
         return translation
-    # 编号可能包在字号、粗体标记里：{z125}二{/z} 算法
+    # The number may be wrapped in size or bold marks: {z125}二{/z} 算法
     lead = re.match(r"^\s*((?:\{[bizu]\d*\})*)", translation)
     body = translation[lead.end() :]
     if not _TRANS_HEAD_NUM_RE.match(body):
@@ -291,16 +306,16 @@ def _normalize_heading_number(src_text: str, translation: str) -> str:
 
 def _heading_number_for(kind: str, src_text: str, translation: str) -> str:
     if kind == "p":
-        # 正文尺寸的节标题（'2.1 Model' 与正文同字号，kind 是 p）：带点节号
-        # （2.1、3.2.1）几乎不会出现在正文句首；bare 整数开头可能是正文数量
-        # （'2 samples'），不动。且译文以章节号开头才改写。
+        # Section headings at body size ('2.1 Model' has the body font size, so kind is p): dotted numbers
+        # (2.1, 3.2.1) almost never start a body sentence, while a bare integer may be a quantity
+        # ('2 samples') and is left alone. The translation is changed only if it starts with a section number.
         if not (re.match(r"^\d+(?:\.\d+)+\s", src_text.strip()) and _TRANS_HEAD_NUM_RE.match(translation.strip())):
             return translation
     return _normalize_heading_number(src_text, translation)
 
 
 def _list_number(src_text: str, translation: str) -> str:
-    """列表编号 1. 被译成 1。或 1、，图号 Figure 1 被译成 图一，都改回原文的数字。"""
+    """Restore the source number when a list number 1. became 1。 or 1、, or Figure 1 became 图一."""
     caption = _CAPTION_NUM_RE.match(src_text)
     if caption:
         return _CN_CAPTION_RE.sub(rf"\g<1>\g<2> {caption.group(1)}", translation, count=1)
@@ -310,17 +325,19 @@ def _list_number(src_text: str, translation: str) -> str:
     return re.sub(rf"^(\s*){m.group(1)}\s*[。．、]\s*", rf"\g<1>{m.group(1)}{m.group(2)} ", translation, count=1)
 
 
-# 图注标签常带字号或粗体标记：{z110}图一:{/z}
+# Caption labels often carry size or bold marks: {z110}图一:{/z}
 _CN_CAPTION_RE = re.compile(r"^(\s*(?:\{/?[bizu]\d*\}\s*)*)([图表])\s*[一二三四五六七八九十百零〇两]+")
 
 
 def _strip_boundary_echo(prev_src: str, cur_src: str, prev_t: str, cur_t: str) -> str:
-    """去掉模型在段界复读的连接语。
+    """Remove connecting words the model repeated across a block boundary.
 
-    复读只发生在一句话被切成两块时，这一块原文接着上一块的句子，以小写字母开头。
-    标题后面另起的一段，开头常常就是标题里的词，不是复读。
-    相同原文会命中同一条缓存，译文必然相同，不能删。无标点的短重叠
-    （「如下所示」）是常见短语，也不是断点复读。整段重叠不删。
+    Repetition only happens when one sentence was cut into two blocks: the source of this block continues
+    the sentence of the previous one and starts with a lowercase letter. A paragraph after a heading often
+    starts with words from the heading, which is not repetition. Identical source text hits the same cache
+    entry and must give the same translation, so it is not removed. A short overlap without punctuation
+    ("如下所示") is a common phrase rather than repetition at the break. An overlap covering the whole
+    block is not removed.
     """
     if not prev_t or not cur_t or prev_src.strip() == cur_src.strip() or "\x01" in cur_t[:40]:
         return cur_t
@@ -343,7 +360,8 @@ def _sync_unit_preview(
     sent_texts: list[str],
     per_block: dict[int, str],
 ) -> None:
-    """标题改写和段界去重发生在预览写入之后，按段落序号把最终译文补回去。"""
+    """Heading number fixes and boundary deduplication happen after the preview was filled, so write the final
+    translation back into the preview by segment index."""
     overrides = getattr(runner, "_index_overrides", None)
     done = getattr(runner, "_done", None)
     if not isinstance(overrides, dict) or not isinstance(done, dict):
@@ -357,8 +375,9 @@ def _sync_unit_preview(
 
 
 def _sound_colors(translation: str, sent: str) -> str:
-    """模型弄乱的颜色标记整段去掉，字按块的颜色写：开收对不上，或者用了原文里没有的颜色。
-    少一个 {/c}，后半段都会染上色。"""
+    """Remove all color marks from a translation where the model broke them, so the text takes the block's
+    color: when opening and closing marks do not pair up, or a color is not in the source. One missing {/c}
+    would color the rest of the paragraph."""
     marks = COLOR_MARK_RE.findall(translation)
     if not marks:
         return translation
@@ -372,8 +391,9 @@ def _sound_colors(translation: str, sent: str) -> str:
 
 
 def _drop_stray_braces(translation: str, sent: str) -> str:
-    """模型偶尔在标记外面多套一层括号（{{b}填充词{/b}、{{c0000ff}Fox Tree{/c}}），
-    写出来就剩下孤零零的 { 和 }。原文标记以外没有花括号时，译文标记以外的花括号都去掉。"""
+    """The model sometimes wraps a mark in an extra pair of braces ({{b}填充词{/b}, {{c0000ff}Fox Tree{/c}}),
+    which leaves stray { and } in the output. When the source has no braces outside its marks, all braces
+    outside the marks are removed from the translation."""
     if "{" not in translation and "}" not in translation:
         return translation
     if re.search(r"[{}]", _MARKUP_RE.sub("", sent)):
