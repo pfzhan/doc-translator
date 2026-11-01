@@ -1,4 +1,5 @@
 """几个公式模型逐页轮流推理（每份 3 线程、不空转，和翻译时一份的设置一样）。用法: qbench.py <代码目录> <onnx,...> <pdf>..."""
+
 import sys
 import time
 
@@ -23,6 +24,8 @@ for r in runs:
 for pg in pages:
     b, _ = _page_batch(pg, 1024)
     for r in runs:
-        t0 = time.perf_counter(); r[1].run(None, {r[2]: b}); r[3] += time.perf_counter() - t0
+        t0 = time.perf_counter()
+        r[1].run(None, {r[2]: b})
+        r[3] += time.perf_counter() - t0
 for r in runs:
     print(r[0], round(r[3] / len(pages), 3), "s/page", flush=True)

@@ -1,6 +1,7 @@
 """从 LaTeX 源码取段落边界，作标准答案。用法: gold.py <论文目录> <输出 json>
 只把源码当文本读。段落在空行、\\par、章节命令、块级环境、\\item 处断开；
 段内的行间公式算「不计」的边界（公式两边拆不拆都行）。"""
+
 import json
 import re
 import sys
@@ -10,14 +11,17 @@ from pathlib import Path
 home, out = Path(sys.argv[1]), Path(sys.argv[2])
 src = home / "src"
 
+
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
+
 
 def strip_comments(text: str) -> str:
     # % 连行尾一起吃掉，下一行的行首空白也忽略：只有注释的一行不会变成空行（段落分隔）。
     # 下一行本来就是空行时照旧分段
     text = re.sub(r"(?<!\\)%.*\n(?![ \t]*\n)[ \t]*", "", text)
     return re.sub(r"(?<!\\)%.*", "", text)
+
 
 def expand(path: Path, depth: int = 0) -> str:
     text = strip_comments(read(path))
@@ -33,7 +37,9 @@ def expand(path: Path, depth: int = 0) -> str:
             if target.is_file() and src.resolve() in target.parents:
                 return "\n\n" + expand(target, depth + 1) + "\n\n"
         return ""
+
     return re.sub(r"\\(input|include|subfile)\s*\{([^}]*)\}", sub, text)
+
 
 mains = [p for p in src.rglob("*.tex") if re.search(r"\\begin\{document\}", read(p))]
 if not mains:
@@ -44,11 +50,13 @@ body = text.split("\\begin{document}", 1)[1].split("\\end{document}", 1)[0]
 # 源码里的空行是段落分隔，记成 \x02。后面去掉命令、公式剩下的空白行不算分段，插进去的断点也用 \x02
 body = re.sub(r"\n[ \t]*(?:\n[ \t]*)+", "\n\x02\n", body)
 # 自定义的行间公式宏（\be ... \ee、\beq ... \eeq）换回环境
-for name, env in re.findall(r"\\(?:re)?newcommand\*?\s*\{?\\(\w+)\}?\s*(?:\[\d\])?\s*\{\s*\\begin\{(\w+\*?)\}\s*\}", text) + \
-        re.findall(r"\\def\\(\w+)\s*\{\s*\\begin\{(\w+\*?)\}\s*\}", text):
+for name, env in re.findall(
+    r"\\(?:re)?newcommand\*?\s*\{?\\(\w+)\}?\s*(?:\[\d\])?\s*\{\s*\\begin\{(\w+\*?)\}\s*\}", text
+) + re.findall(r"\\def\\(\w+)\s*\{\s*\\begin\{(\w+\*?)\}\s*\}", text):
     body = re.sub(r"\\" + name + r"(?![a-zA-Z])", lambda m: "\\begin{" + env + "}", body)
-for name, env in re.findall(r"\\(?:re)?newcommand\*?\s*\{?\\(\w+)\}?\s*(?:\[\d\])?\s*\{\s*\\end\{(\w+\*?)\}\s*\}", text) + \
-        re.findall(r"\\def\\(\w+)\s*\{\s*\\end\{(\w+\*?)\}\s*\}", text):
+for name, env in re.findall(
+    r"\\(?:re)?newcommand\*?\s*\{?\\(\w+)\}?\s*(?:\[\d\])?\s*\{\s*\\end\{(\w+\*?)\}\s*\}", text
+) + re.findall(r"\\def\\(\w+)\s*\{\s*\\end\{(\w+\*?)\}\s*\}", text):
     body = re.sub(r"\\" + name + r"(?![a-zA-Z])", lambda m: "\\end{" + env + "}", body)
 # 参考文献、附录之后的部分常是表格和长列表，到参考文献为止
 body = re.split(r"\\bibliography\{|\\begin\{thebibliography\}|\\printbibliography", body)[0]
@@ -64,11 +72,20 @@ body = re.sub(r"\$\$.*?\$\$", " \x00MATH\x00 ", body, flags=re.S)
 body = re.sub(r"(?<!\\)\$.*?(?<!\\)\$", " \x01 ", body, flags=re.S)
 body = re.sub(r"\\\(.*?\\\)", " \x01 ", body, flags=re.S)
 # 块级断点
-body = re.sub(r"\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph|caption|title|author|maketitle|item|par|noindent\s*\\textbf)\b\*?", "\n\x02\n\\g<0>", body)
+body = re.sub(
+    r"\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph|caption|title|author|maketitle|item|par|noindent\s*\\textbf)\b\*?",
+    "\n\x02\n\\g<0>",
+    body,
+)
 body = re.sub(r"\\(begin|end)\{[^}]*\}", "\n\x02\n", body)
 # 脚注、致谢号在句子中间，去掉后句子照旧接着
 body = re.sub(r"\\(footnote|thanks|footnotetext)\*?\s*(\[[^\]]*\])?\s*\{", r"\\INLINEDROP{", body)
-body = re.sub(r"\\(caption|title|author|affiliation|address|email|institute|part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\s*(\[[^\]]*\])?\s*\{", r"\\DROP{", body)
+body = re.sub(
+    r"\\(caption|title|author|affiliation|address|email|institute|part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\s*(\[[^\]]*\])?\s*\{",
+    r"\\DROP{",
+    body,
+)
+
 
 def drop_braced(text: str, command: str, repl: str = "\n\x02\n") -> str:
     out, i = [], 0
@@ -90,11 +107,20 @@ def drop_braced(text: str, command: str, repl: str = "\n\x02\n") -> str:
         out.append(repl)
         i = k + 1
 
+
 # 段首的粗体、斜体小标题（\textbf{Ablation.} 正文）是标题，不算段里的字
-body = re.sub(r"(\x02\s*(?:\\noindent\s*)?)\\(textbf|textit|emph|textsc|underline)\s*\{([^{}]{1,80})\}(\s*[.:])?", r"\1\\DROP{\3}", body)
+body = re.sub(
+    r"(\x02\s*(?:\\noindent\s*)?)\\(textbf|textit|emph|textsc|underline)\s*\{([^{}]{1,80})\}(\s*[.:])?",
+    r"\1\\DROP{\3}",
+    body,
+)
 body = drop_braced(body, "\\INLINEDROP", " ")
 body = drop_braced(body, "\\DROP")
-body = re.sub(r"\\(cite[a-z]*|ref|eqref|autoref|cref|Cref|label|url|href|includegraphics|vspace|hspace|footnotemark|bibliographystyle)\*?(\[[^\]]*\])*\{[^}]*\}", " ", body)
+body = re.sub(
+    r"\\(cite[a-z]*|ref|eqref|autoref|cref|Cref|label|url|href|includegraphics|vspace|hspace|footnotemark|bibliographystyle)\*?(\[[^\]]*\])*\{[^}]*\}",
+    " ",
+    body,
+)
 body = re.sub(r"\\[a-zA-Z]+\*?", " ", body)
 body = re.sub(r"[{}~\\]", " ", body)
 

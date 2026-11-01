@@ -5,6 +5,7 @@ empty（两锚点之间没有能比的字）、lost（锚点没找到）。漏�
 另记为 minor，排成正文也不碍翻译；漏了单个变量、希腊字母、数学符号的才算错（bad_partial、bad_missed）。
 锚点词被做成占位符的记为误判。
 按正文字体分两组：Computer Modern 排的和别的字体排的（Times、Nimbus 等），后者斜体变量和正文斜体同字体。"""
+
 import json
 import os
 import re
@@ -28,6 +29,7 @@ def body_fonts() -> dict[str, str]:
     if cache.is_file():
         return json.load(cache.open())
     import pymupdf
+
     out = {}
     for g in sorted((E / "mathgold").glob("2*.json")):
         doc = pymupdf.open(E / "raw" / g.stem / "paper.pdf")
@@ -93,11 +95,11 @@ for g in sorted((E / "mathgold").glob("2*.json")):
         left, right = item["left"], item["right"]
         best = None
         for k in starts.get(left[0], ()):
-            if words[k:k + len(left)] != left:
+            if words[k : k + len(left)] != left:
                 continue
             end = eligible[k + len(left) - 1]
             for r in starts.get(right[0], ()):
-                if r < k + len(left) or words[r:r + len(right)] != right:
+                if r < k + len(left) or words[r : r + len(right)] != right:
                     continue
                 gap = eligible[r] - end
                 if gap <= WINDOW and (best is None or gap < best[2]):
@@ -112,7 +114,7 @@ for g in sorted((E / "mathgold").glob("2*.json")):
         anchors = [eligible[i] for i in (*range(k, k + len(left)), *range(r, r + len(right)))]
         stat["anchor_words"] += len(anchors)
         stat["anchor_fp"] += sum(1 for i in anchors if stream[i][0] == "f")
-        region = stream[eligible[k + len(left) - 1] + 1:eligible[r]]
+        region = stream[eligible[k + len(left) - 1] + 1 : eligible[r]]
         has_f = any(tok[0] == "f" for tok in region)
         leak = [tok for tok in region if tok[0] == "t"]
         serious = any(tok[2] == "s" or not re.fullmatch(r"\d+|[a-z]{2,}", tok[1]) for tok in leak)
@@ -132,13 +134,17 @@ for g in sorted((E / "mathgold").glob("2*.json")):
     totals["all"].update(stat)
     if not show and not lostlist:
         scored = sum(stat[k] for k in KINDS)
-        print(f"{pid} {group:5} {fonts.get(pid, '')[:22]:22} n={scored:4} full={stat['full']:4} minor={stat['minor']:3} "
-              f"bad_partial={stat['bad_partial']:3} bad_missed={stat['bad_missed']:3} lost={stat['lost']:3} "
-              f"fp={stat['anchor_fp']}/{stat['anchor_words']}")
+        print(
+            f"{pid} {group:5} {fonts.get(pid, '')[:22]:22} n={scored:4} full={stat['full']:4} minor={stat['minor']:3} "
+            f"bad_partial={stat['bad_partial']:3} bad_missed={stat['bad_missed']:3} lost={stat['lost']:3} "
+            f"fp={stat['anchor_fp']}/{stat['anchor_words']}"
+        )
 for group in ("cm", "other", "all"):
     s = totals[group]
     scored = sum(s[k] for k in KINDS)
     if scored:
         ok = s["full"] + s["minor"] + s["empty"]
-        print(f"{tag} {group:5} n={scored} ok={ok} ({100 * ok / scored:.1f}%) full={s['full']} minor={s['minor']} "
-              f"bad_partial={s['bad_partial']} bad_missed={s['bad_missed']} lost={s['lost']} fp={s['anchor_fp']}/{s['anchor_words']}")
+        print(
+            f"{tag} {group:5} n={scored} ok={ok} ({100 * ok / scored:.1f}%) full={s['full']} minor={s['minor']} "
+            f"bad_partial={s['bad_partial']} bad_missed={s['bad_missed']} lost={s['lost']} fp={s['anchor_fp']}/{s['anchor_words']}"
+        )

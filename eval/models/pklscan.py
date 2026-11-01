@@ -1,4 +1,5 @@
 """只读扫描 .pt（zip）里 pickle 引用的全局名，不执行。用法: pklscan.py <pt>"""
+
 import collections
 import pickletools
 import sys

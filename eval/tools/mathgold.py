@@ -1,6 +1,7 @@
 """从 LaTeX 源码取行内公式，作标准答案。用法: mathgold.py <论文目录> <输出 json>
 只把源码当文本读。每个 $…$、\\(…\\) 记下公式源码和两边各几个正文词（锚点），
 评分时按锚点在计划里找到公式落在哪，看它有没有做成占位符。预处理和 gold.py 一致。"""
+
 import json
 import re
 import sys
@@ -36,6 +37,7 @@ def expand(path: Path, depth: int = 0) -> str:
             if target.is_file() and src.resolve() in target.parents:
                 return "\n\n" + expand(target, depth + 1) + "\n\n"
         return ""
+
     return re.sub(r"\\(input|include|subfile)\s*\{([^}]*)\}", sub, text)
 
 
@@ -97,11 +99,19 @@ body = re.sub(r"(?<!\\)\$(.+?)(?<!\\)\$", keep, body, flags=re.S)
 body = re.sub(r"\\\((.+?)\\\)", keep, body, flags=re.S)
 # 段落、标题、脚注处断开：锚点不跨过这些地方
 body = re.sub(r"\n[ \t]*(?:\n[ \t]*)+", " \x02 ", body)
-body = re.sub(r"\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph|caption|title|author|maketitle|item|par)\b\*?", " \x02 ", body)
+body = re.sub(
+    r"\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph|caption|title|author|maketitle|item|par)\b\*?",
+    " \x02 ",
+    body,
+)
 body = re.sub(r"\\(begin|end)\{[^}]*\}", " \x02 ", body)
 body = re.sub(r"\\(footnote|thanks|footnotetext)\*?\s*(\[[^\]]*\])?\s*\{", r"\\FOOTDROP{", body)
 body = drop_braced(body, "\\FOOTDROP", " \x02 ")
-body = re.sub(r"\\(cite[a-z]*|ref|eqref|autoref|cref|Cref|label|url|href|includegraphics|vspace|hspace|footnotemark)\*?(\[[^\]]*\])*\{[^}]*\}", " \x03 ", body)
+body = re.sub(
+    r"\\(cite[a-z]*|ref|eqref|autoref|cref|Cref|label|url|href|includegraphics|vspace|hspace|footnotemark)\*?(\[[^\]]*\])*\{[^}]*\}",
+    " \x03 ",
+    body,
+)
 body = re.sub(r"\\[a-zA-Z]+\*?", " ", body)
 body = re.sub(r"[{}~\\]", " ", body)
 

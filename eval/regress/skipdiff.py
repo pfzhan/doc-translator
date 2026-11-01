@@ -1,4 +1,5 @@
 """两份计划里文本相同、skip 不同的单元。用法: skipdiff.py tagA tagB"""
+
 import collections
 import glob
 import json

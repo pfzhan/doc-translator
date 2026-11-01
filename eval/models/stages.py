@@ -1,4 +1,5 @@
 """翻译前各阶段耗时，外加主线程的 cProfile。用法: stages.py <代码目录> <onnx|-> <pdf> <prof 输出>"""
+
 import cProfile
 import sys
 import tempfile
@@ -20,10 +21,14 @@ class T:
 runner = Runner(T(), cache=Cache(Path(tempfile.mkdtemp()) / "c.sqlite3"))
 marks = []
 orig = runner.report_stage
+
+
 def report(name, done=0, total=0, unit=""):
     if not marks or marks[-1][0] != name:
         marks.append((name, time.perf_counter()))
     orig(name, done, total, unit)
+
+
 runner.report_stage = report
 
 t0 = time.perf_counter()
