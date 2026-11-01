@@ -1,11 +1,19 @@
-"""PDF 翻译，保留原版式。
+"""PDF translation that keeps the original layout.
 
-1. 用 PyMuPDF 提取每页的文本块（坐标、字号、颜色、粗体）。
-2. 跳过整块公式、纯数字、旋转文字。行内公式是段落里的一个 run，译后按原样贴回。
-3. 译文版：擦掉原文字（图片和矢量图形保留），在原位置写入译文。
-   放不下时先在本栏内右扩（不盖住图和其他文字），再压行距，最后缩字号。
-   有线表格按格翻译，写回时不越出格子。重复的页眉页脚和页码保留原文。
-4. 双语版：原页面和译文页面左右并排放在同一页上，方便对照阅读。
+1. PyMuPDF extracts the text blocks of each page (position, font size, color, bold).
+2. Whole-block formulas, bare numbers and rotated text are skipped. An inline formula is one run inside
+   a paragraph and is pasted back unchanged after translation.
+3. Translated-only version: the original text is erased (images and vector graphics stay) and the
+   translation is written in its place. When it does not fit, the box first grows to the right within its
+   column (without covering figures or other text), then the line height shrinks, then the font size.
+   Ruled tables are translated cell by cell and the text stays inside each cell. Repeated running headers,
+   footers and page numbers keep the original text.
+4. Bilingual version: the original page and the translated page sit side by side on one page.
+
+The stages live in separate modules: pdf_extract reads pages into blocks, pdf_merge joins paragraphs
+across pages and columns, pdf_skip picks the blocks to keep, pdf_units builds the translation units,
+pdf_restore puts the translations back together, pdf_crop cuts out formula images, pdf_write and pdf_place
+write the translations, and pdf_output assembles the output files. This module runs them in order.
 """
 
 import asyncio
@@ -52,14 +60,15 @@ from .pdf_write import _render_translated
 _CAMEL_RE = re.compile(r"[A-Za-z]*[a-z][A-Z][A-Za-z]*")
 
 
-# PyMuPDF 不支持在几个线程里同时调 MuPDF。它的 find_tables 临时打开进程全局的
-# small_glyph_heights，另一个任务这时提取出的字框就变矮；两边的开、关交错时开关还会一直
-# 开着，之后进程里的每个任务都按矮字框分段，重启服务才恢复
+# PyMuPDF cannot call MuPDF from several threads at once. Its find_tables temporarily turns on the
+# process-wide small_glyph_heights option, and character boxes extracted by another job at that moment come
+# out shorter. When the jobs' on and off calls interleave, the option can stay on, and every later job in
+# the process segments text with short boxes until the service restarts.
 _MUPDF_TURNS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock] = weakref.WeakKeyDictionary()
 
 
 def mupdf_turn() -> asyncio.Lock:
-    """用 MuPDF 前先 async with 拿到它，同一时刻只有一个任务在用。"""
+    """Acquire this with async with before using MuPDF, so that only one job uses it at a time."""
     loop = asyncio.get_running_loop()
     turn = _MUPDF_TURNS.get(loop)
     if turn is None:
@@ -69,7 +78,8 @@ def mupdf_turn() -> asyncio.Lock:
 
 @contextlib.asynccontextmanager
 async def _job_turn(runner):
-    """轮到这个任务用 MuPDF。别的任务在读写一本大书时要等几分钟，任务页上显示在等。"""
+    """Wait for this job's turn with MuPDF. While another job reads or writes a large book the wait can take
+    minutes, and the job page shows that it is waiting."""
     turn = mupdf_turn()
     if turn.locked():
         runner.report_stage("等待其他任务")
@@ -84,9 +94,11 @@ def _plan_pdf(
     formula_model: FormulaModel | None = None,
     boxes: ModelBoxes | None = None,
 ) -> _PdfPlan:
-    """送翻前的部分：读版面、定角色、并跨页段落，给每个单元打好占位符。
-    断行处的连字符要不要留，看全文里有没有接起来的词（见 _join_lines），整个分析期间都按这一篇的词。
-    boxes 是存模型框的地方，给了时两个模型的框读回或存下（见 ModelBoxes）。"""
+    """Everything before translation: read the layout, assign roles, join paragraphs across pages and put
+    placeholders into each unit. Whether a hyphen at a line break is kept depends on whether the joined word
+    appears elsewhere in the document (see _join_lines); the words of this document are used throughout the
+    analysis. boxes is where the boxes of the two models are stored; when given, they are read back or
+    saved (see ModelBoxes)."""
     src_doc = pymupdf.open(src)
     if src_doc.needs_pass:
         raise ValueError("不支持有密码保护的 PDF")
@@ -105,9 +117,11 @@ def _saved_plan(
     path: Path | None,
     formula_model: FormulaModel | None = None,
 ) -> _PdfPlan:
-    """暂停、中断后继续，或生成另一种版本时，原文件、两个模型和代码都没变，就读回上次的分析结果。
-    一本几百页的书逐页读版面要一分多钟，读回只要一两秒。path 为 None 时不存。
-    改了代码要重新分析时，模型框出的框存在旁边的 boxes.json 里（见 ModelBoxes），读回来只重跑规则。"""
+    """Read back the previous analysis result when a job resumes after a pause or an interruption, or when
+    the other version is generated, as long as the source file, both models and the code are unchanged.
+    Reading the layout of a book of a few hundred pages takes over a minute; reading the result back takes a
+    second or two. Nothing is stored when path is None. When the code changed and the analysis has to run
+    again, the model boxes come from boxes.json next to it (see ModelBoxes) and only the rules run again."""
     if path is None:
         return _plan_pdf(src, runner, layout_model, formula_model)
     key = _plan_key(src, layout_model, formula_model)
@@ -123,7 +137,8 @@ def _saved_plan(
 def _plan_key(src: Path, layout_model: str, formula_model: FormulaModel | None = None) -> str:
     digest = hashlib.sha1(src.read_bytes())
     digest.update(_code_version().encode())
-    # 两个模型分开记：只开了公式模型和只开了版面模型的分析结果不一样。公式模型换了输入尺寸也要重新分析
+    # The two models are recorded separately: the result differs between only the formula model and only the
+    # layout model being enabled. A different input size for the formula model also requires a new analysis.
     models = [("layout", layout_model)]
     if formula_model is not None:
         models.append((f"formula@{formula_model.size}", formula_model.path))
@@ -137,7 +152,7 @@ def _plan_key(src: Path, layout_model: str, formula_model: FormulaModel | None =
 
 @functools.cache
 def _code_version() -> str:
-    """程序代码和 PyMuPDF 的版本。改了代码，旧的分析结果就作废。"""
+    """Version of the program code and of PyMuPDF. Changing the code invalidates earlier analysis results."""
     digest = hashlib.sha1(str(pymupdf.VersionBind).encode())
     for path in sorted(Path(__file__).resolve().parents[1].rglob("*.py")):
         digest.update(path.read_bytes())
@@ -145,8 +160,10 @@ def _code_version() -> str:
 
 
 def _save_plan(path: Path, key: str, plan: _PdfPlan) -> None:
-    """块按 id 记的两张表存成序号，读回后块是新对象。先写临时文件再改名，写到一半退出不留坏文件。
-    键不压缩，读的时候先比键；分析结果用最快的一档压缩，几百页的书从 70 多 MB 压到十几 MB，多花不到一秒。"""
+    """The two tables keyed by block id are stored as indexes, since blocks read back are new objects. The
+    file is written to a temporary name and renamed, so an exit halfway leaves no broken file. The key is
+    stored uncompressed and compared first on reading. The result uses the fastest compression level, which
+    takes a book of a few hundred pages from over 70 MB to a little over 10 MB in less than a second."""
     blocks = plan.blocks
     skipped = [index for index, block in enumerate(blocks) if id(block) in plan.skip_ids]
     kinds = [plan.block_kind[id(block)] for block in blocks]
@@ -161,7 +178,7 @@ def _save_plan(path: Path, key: str, plan: _PdfPlan) -> None:
             )
             out.write(zlib.compress(body, 1))
         tmp.replace(path)
-    except Exception:  # noqa: BLE001 - 存不下只是下次要重新分析
+    except Exception:  # noqa: BLE001 - if it cannot be saved, the next run analyses again
         tmp.unlink(missing_ok=True)
 
 
@@ -172,7 +189,7 @@ def _load_plan(path: Path, key: str, src: Path, runner) -> _PdfPlan | None:
                 return None
             runner.report_stage("读取上次的版面分析结果")
             plan, skipped, kinds = pickle.loads(zlib.decompress(saved.read()))
-    except Exception:  # noqa: BLE001 - 没有、读不出或格式旧了都重新分析
+    except Exception:  # noqa: BLE001 - missing, unreadable or an old format: analyse again
         return None
     plan.src_doc = pymupdf.open(src)
     plan.skip_ids = {id(plan.blocks[index]) for index in skipped}
@@ -181,12 +198,14 @@ def _load_plan(path: Path, key: str, src: Path, runner) -> _PdfPlan | None:
 
 
 def saved_texts(path: Path) -> list[tuple[str, str]]:
-    """上次分析结果里送翻的 (原文, 说明)，不管代码和模型变没变。清理任务时据此找出登记归属之前存下的译文。"""
+    """The (source text, note) pairs sent for translation in the previous analysis result, whether or not the
+    code and models changed. Cleaning up a job uses them to find translations cached before cache entries
+    recorded their owner."""
     try:
         with path.open("rb") as saved:
             pickle.load(saved)
             plan, _skipped, _kinds = pickle.loads(zlib.decompress(saved.read()))
-    except Exception:  # noqa: BLE001 - 没有、读不出或格式旧了就当没有
+    except Exception:  # noqa: BLE001 - missing, unreadable or an old format counts as none
         return []
     return list(zip(plan.texts, plan.notes or [""] * len(plan.texts)))
 
@@ -201,12 +220,15 @@ async def translate_pdf(
     plan_path: Path | None = None,
     formula_model: FormulaModel | None = None,
 ) -> list[Path]:
-    """layout_model 是版面模型文件的路径，空串表示不用；formula_model 是公式检测模型的设置，None 表示不用。
-    都不用时只用规则。plan_path 是存分析结果的文件，见 _saved_plan。
+    """layout_model is the path of the layout model file, or an empty string for none; formula_model holds
+    the formula detection model settings, or None for none. Without either, only the rules are used.
+    plan_path is the file that stores the analysis result, see _saved_plan.
 
-    读版面、裁公式图、写回都用 MuPDF，一本书要算几分钟，放在线程里做，事件循环还能响应
-    任务页的轮询。这几步轮到才做（见 mupdf_turn），等翻译接口时放开，别的任务可以接着
-    做它的准备。任务被暂停时线程在下一页停下，停了才放开 MuPDF（见 background.run）。"""
+    Reading the layout, cropping formula images and writing all use MuPDF and take minutes on a book. They
+    run in a thread so that the event loop keeps answering the job page's polling. Each of these steps waits
+    for its turn (see mupdf_turn) and releases it while waiting for the translation service, so another job
+    can do its own preparation. When the job is paused, the thread stops at the next page and releases MuPDF
+    only after it has stopped (see background.run)."""
     async with _job_turn(runner):
         plan = await background.run(_saved_plan, src, runner, layout_model, plan_path, formula_model)
     src_doc, blocks, geometries, toc = plan.src_doc, plan.blocks, plan.geometries, plan.toc
@@ -224,12 +246,13 @@ async def translate_pdf(
     kept_ids = set(skip_ids)
     labels = plan.labels or [""] * len(flat_units)
     aparts = plan.aparts or [False] * len(flat_units)
-    # 按分界切回两块写的单元，写回时不再排满接续
+    # Units split back into two blocks at their boundary; the tail is not filled to the full width when written
     apart_hosts: set[int] = set()
     for unit, t, sent_text, formulas, label, apart in zip(flat_units, raw, sent_texts, sent_formulas, labels, aparts):
         if t == sent_text:
-            # 模型原样返回（编号、代码、专名）。送翻的文字规整过（TeX 的 `u 合成 ù），
-            # 和块里的原字不同，按译文写回会擦掉原字重排。留原字，和跳过的块一样
+            # The model returned the text unchanged (numbers, code, proper names). The text sent was normalized
+            # (TeX's `u composed into ù) and differs from the characters in the block, so writing it back would
+            # erase and reset the original characters. Keep the original, as for a skipped block
             kept_ids.update(id(b) for b in unit)
             for b in unit:
                 per_block[id(b)] = b.text
@@ -241,7 +264,7 @@ async def translate_pdf(
             restored = separate_after_formula(restored)
         if restored is None:
             fallbacks += 1
-            parts = [b.text for b in unit]  # 模型弄丢占位符：整单元回退原文，不产出坏文档
+            parts = [b.text for b in unit]  # the model lost a placeholder: the whole unit falls back to the original
             formula_lists: list[list[dict]] = [[] for _ in unit]
             shown = _join_lines(parts)
         else:
@@ -257,10 +280,11 @@ async def translate_pdf(
                 continue
             per_block[id(b)] = _list_number(b.text, _heading_number_for(block_kind[id(b)], b.text, part))
             block_formulas[id(b)] = flist
-        # 预览里显示恢复后的译文（缓存仍按占位符版本存，重跑照样命中）
+        # The preview shows the restored translation (the cache keeps the placeholder version, so reruns still hit)
         if formulas and getattr(runner, "_done", None) and runner._done.get(sent_text) == t:
             runner._done[sent_text] = shown
-    # 退回原文的单元算进失败段数，任务页才会提示，不会显示成全部翻完
+    # Units that fell back to the original count as failed segments, so the job page reports them instead of
+    # showing everything as translated
     info = getattr(runner, "info", None)
     if fallbacks and isinstance(info, dict):
         info["failed"] = int(info.get("failed") or 0) + fallbacks
@@ -275,7 +299,8 @@ async def translate_pdf(
             translations[i],
         )
         per_block[id(blocks[i])] = translations[i]
-    # 段界去重也可能改到跳过的块。写回只认和原文逐字相同的字符串，才会把原字留下。
+    # Removing text repeated across a unit boundary may also change skipped blocks. Writing keeps the original
+    # characters only for strings identical to the source text.
     for b in blocks:
         if id(b) in kept_ids:
             per_block[id(b)] = b.text
@@ -303,7 +328,8 @@ async def translate_pdf(
                 pages=pages,
             )
 
-        # 一本书要写好几分钟，这时译文已经全部到齐，进度条停在满格，按页报写到哪里
+        # Writing a book takes several minutes after all translations have arrived and the progress bar is full,
+        # so progress is reported by page
         _drop_mupdf_cache()
         translated = _render_by_parts(
             src_doc,
@@ -317,13 +343,13 @@ async def translate_pdf(
         _drop_mupdf_cache()
         if bilingual:
             dst = out_dir / f"{src.stem}.bilingual.pdf"
-            # 先落盘再读回，并排页从读回的文档里取页面
+            # Serialize and reopen first; the side-by-side pages are taken from the reopened document
             output = _render_side_by_side(src_doc, pymupdf.open("pdf", translated.tobytes()))
         else:
             dst = out_dir / f"{src.stem}.translated.pdf"
             output = translated
         if toc:
-            output.set_toc(toc)  # 并排页和原页一一对应，书签页码不用映射
+            output.set_toc(toc)  # side-by-side pages map one to one to source pages, so bookmark pages need no mapping
             if not bilingual and hasattr(runner, "preview"):
                 translate_bookmarks(output, runner.preview(-1))
         _drop_mupdf_cache()
