@@ -271,6 +271,7 @@ def test_normalize_numbered_units():
     assert "body" not in fixed and "cite" not in fixed and "long" not in fixed
     assert norm(texts, results, "en") == {}
     from app.runner import fix_numbered_unit as fix
+
     assert fix("第110章", "zh-CN") == "第一百一十章"
     assert fix("第111章", "zh-CN") == "第一百一十一章"
     assert fix("第210卷", "zh-CN") == "第二百一十卷"
@@ -290,8 +291,7 @@ def test_normalize_numbered_units_updates_cache():
             return ["第2卷" if t == "BOOK 2" else f"[zh-CN] {t}" for t in texts]
 
     runner = Runner(DictTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
-    out = asyncio.run(runner.translate_all(
-        ["BOOK 2", "para one"], kinds=["h1", "p"], preview=True))
+    out = asyncio.run(runner.translate_all(["BOOK 2", "para one"], kinds=["h1", "p"], preview=True))
     assert out[0] == "第二卷"
     # 缓存里也写成归一化后的版本，预览和历史快照都一致
     assert runner.cache.get_many("x", []) == {}
@@ -311,8 +311,7 @@ def test_normalize_applies_to_cache_hits():
 
     cache = MemCache({"BOOK 2": "第2卷", "BOOK 26": "第卷26", "cite": "第25卷第1期"})
     runner = Runner(NeverCalled("zh-CN"), cache=cache, skip_same_lang=False)
-    out = asyncio.run(runner.translate_all(
-        ["BOOK 2", "BOOK 26", "cite"], kinds=["h1", "toc", "h2"], preview=True))
+    out = asyncio.run(runner.translate_all(["BOOK 2", "BOOK 26", "cite"], kinds=["h1", "toc", "h2"], preview=True))
     assert out == ["第二卷", "第二十六卷", "第25卷第1期"]
     assert cache.d["BOOK 2"] == "第二卷" and cache.d["BOOK 26"] == "第二十六卷"
     assert cache.d["cite"] == "第25卷第1期"
@@ -338,7 +337,10 @@ def test_normalize_punctuation():
     assert clean_translation("introduced in Section 2.1", "我们将在第二点一节介绍", "zh-CN") == "我们将在第2.1节介绍"
     assert clean_translation("Section 2.2 Hadoop", "第二点二节 Hadoop", "zh-CN") == "第2.2节 Hadoop"
     # 夹在列表分隔符、运算符中间的是数学省略号，只写一个；句尾、话尾的「……」不动
-    assert normalize_punctuation("引用表{v1}{i}, {/i}{v2}{i}, ……, {/i}{v3}", "zh-CN") == "引用表{v1}{i}, {/i}{v2}{i}, …, {/i}{v3}"
+    assert (
+        normalize_punctuation("引用表{v1}{i}, {/i}{v2}{i}, ……, {/i}{v3}", "zh-CN")
+        == "引用表{v1}{i}, {/i}{v2}{i}, …, {/i}{v3}"
+    )
     assert normalize_punctuation("x{v1} + …… + x{v2}", "zh-CN") == "x{v1} + … + x{v2}"
     assert normalize_punctuation("我不知道……", "zh-CN") == "我不知道……"
     assert normalize_punctuation("苹果、香蕉……等水果", "zh-CN") == "苹果, 香蕉……等水果"
@@ -367,7 +369,7 @@ def test_fix_numbered_unit_inside_html():
 
     html = '<a class="c1" href="part0015.html">第<small class="c2">1</small>卷</a>  论一般的法律'
     out = fix_numbered_unit(html, "zh-CN", html=True)
-    assert 'href="part0015.html"' in out and "<small class=\"c2\">一</small>" in out
+    assert 'href="part0015.html"' in out and '<small class="c2">一</small>' in out
     assert re.sub(r"<[^>]+>", "", out).startswith("第一卷")
     inv = '<a href="x">第<small>卷26</small></a>　论法律'
     assert re.sub(r"<[^>]+>", "", fix_numbered_unit(inv, "zh-CN", html=True)).startswith("第二十六卷")
@@ -407,6 +409,7 @@ def test_fix_numbered_unit_with_selfclosed_anchor():
 
 def test_empty_translations_backfilled_below_threshold():
     """个别空译文回填原文，任务照常完成并计数；超过阈值才判失败。"""
+
     class FlakyEmpty(MockTranslator):
         def __init__(self, target_lang, empty_at):
             super().__init__(target_lang)
@@ -433,14 +436,26 @@ def test_echo_translations_retried_individually():
 
     def handler(request):
         import json as _json
+
         n = len(_json.loads(request.content)["messages"][1]["content"].split("[[p"))
         calls.append(n)
         if n > 2:  # 批量：回显原文
-            return httpx.Response(200, json={"choices": [{"message": {"content":
-                "[[p0]]\nThis is a fairly long sentence that should really be translated.\n"
-                "[[p1]]\nLSTM\n[[source_end]]"}}]})
-        return httpx.Response(200, json={"choices": [{"message": {"content":
-            "这是一个相当长的句子，确实应该被翻译出来。"}}]})
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "[[p0]]\nThis is a fairly long sentence that should really be translated.\n"
+                                "[[p1]]\nLSTM\n[[source_end]]"
+                            }
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "这是一个相当长的句子，确实应该被翻译出来。"}}]}
+        )
 
     tr = __import__("tests.test_translators", fromlist=["make_openai"]).make_openai(handler)
     long_text = "This is a fairly long sentence that should really be translated."
@@ -461,8 +476,18 @@ def test_cached_prose_echo_is_dropped_and_retried():
 
     def handler(request):
         calls.append(1)
-        return httpx.Response(200, json={"choices": [{"message": {"content":
-            "为了在不同系统之间获得更好的覆盖, 我们使用了更大的基准, 让每个引擎的比较都公平。"}}]})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "为了在不同系统之间获得更好的覆盖, 我们使用了更大的基准, 让每个引擎的比较都公平。"
+                        }
+                    }
+                ]
+            },
+        )
 
     tr = __import__("tests.test_translators", fromlist=["make_openai"]).make_openai(handler)
     runner = Runner(tr, cache=cache, skip_same_lang=False)
@@ -518,8 +543,10 @@ def test_dotted_section_numbers_stay_in_digits():
     assert keep("1.1 What", "一点十一 什么", "zh-CN") == "一点十一 什么"
     assert keep("7.4 The input", "七点四 输入", "en") == "七点四 输入"
     # 句中引用的节号、图号、小数也一样
-    assert keep("introduced in Section {c0000ff}7.6{/c}", "在第 {c0000ff}七点六节{/c}中介绍", "zh-CN") == \
-        "在第 {c0000ff}7.6节{/c}中介绍"
+    assert (
+        keep("introduced in Section {c0000ff}7.6{/c}", "在第 {c0000ff}七点六节{/c}中介绍", "zh-CN")
+        == "在第 {c0000ff}7.6节{/c}中介绍"
+    )
     assert keep("see Section 16.4.3 and Fig. 17.3", "见十六点四点三节和图十七点三", "zh-CN") == "见16.4.3节和图17.3"
     assert keep("16.2 and 6.2, with p = 0.5", "十六点二和六点二, 取 p = 零点五", "zh-CN") == "16.2和6.2, 取 p = 0.5"
 
@@ -557,9 +584,12 @@ def test_notes_reach_the_prompt_and_key_the_cache():
 
     def handler(request):
         import json as _json
+
         messages = _json.loads(request.content)["messages"]
         systems.append(messages[0]["content"])
-        return httpx.Response(200, json={"choices": [{"message": {"content": "[[p0]]\n对数\n[[p1]]\n对数似然比, 531"}}]})
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": "[[p0]]\n对数\n[[p1]]\n对数似然比, 531"}}]}
+        )
 
     tr = __import__("tests.test_translators", fromlist=["make_openai"]).make_openai(handler)
     cache = MemCache({"log": "日志"})

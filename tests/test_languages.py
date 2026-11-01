@@ -30,15 +30,18 @@ def test_language_table_from_plugin():
     assert dict((c, n) for c, n, _ in LANGUAGES)["wyw"] == "Classical Chinese"
 
 
-@pytest.mark.parametrize("src,dst,expected", [
-    ("auto", "zh-CN", "你是专业的简体中文母语译者"),
-    ("en", "zh-CN", "你是专业的简体中文母语译者"),       # auto2zh-CN 对任何源语言生效
-    ("wyw", "zh-CN", "你是精通古文的学者"),             # wyw2zh-CN 覆盖 auto2zh-CN
-    ("auto", "wyw", "你是专业的文言文译者"),
-    ("auto", "zh-CN-NE", "你是专业的东北话翻译"),        # extends auto2zh-CN 再覆盖
-    ("auto", "ja", "あなたはプロの日本語ネイティブ翻訳者です"),
-    ("auto", "de", "You are a professional {{to}} native translator"),  # 无专门版本，用通用模板
-])
+@pytest.mark.parametrize(
+    "src,dst,expected",
+    [
+        ("auto", "zh-CN", "你是专业的简体中文母语译者"),
+        ("en", "zh-CN", "你是专业的简体中文母语译者"),  # auto2zh-CN 对任何源语言生效
+        ("wyw", "zh-CN", "你是精通古文的学者"),  # wyw2zh-CN 覆盖 auto2zh-CN
+        ("auto", "wyw", "你是专业的文言文译者"),
+        ("auto", "zh-CN-NE", "你是专业的东北话翻译"),  # extends auto2zh-CN 再覆盖
+        ("auto", "ja", "あなたはプロの日本語ネイティブ翻訳者です"),
+        ("auto", "de", "You are a professional {{to}} native translator"),  # 无专门版本，用通用模板
+    ],
+)
 def test_lang_overrides_match_plugin_rules(src, dst, expected):
     assert default_prompts(dst, src)["system"].startswith(expected)
 
@@ -71,6 +74,7 @@ def test_formula_placeholders_get_their_own_rule():
     system, _ = build_messages(["plain text"], "zh-CN")
     assert "## Formula placeholders" not in system
 
+
 def test_detect():
     assert langdetect.detect("Alice was beginning to get very tired of sitting by her sister on the bank") == "en"
     assert langdetect.detect("Die Katze sitzt auf der Matte und schläft den ganzen Tag lang ruhig") == "de"
@@ -85,7 +89,7 @@ def test_detect():
 def test_same_language_rules():
     assert langdetect.same_language("en", "en")
     assert langdetect.same_language("pt", "pt-br")
-    assert not langdetect.same_language("zh-CN", "zh-TW")   # 简繁互译不算相同
+    assert not langdetect.same_language("zh-CN", "zh-TW")  # 简繁互译不算相同
     assert not langdetect.same_language("zh-CN", "wyw")
     assert langdetect.same_language("zh-TW", "zh-HK")
     assert not langdetect.same_language(None, "en")
@@ -117,8 +121,11 @@ def test_llm_uses_detected_source_in_prompt():
         seen.append(json.loads(request.content))
         return httpx.Response(200, json={"choices": [{"message": {"content": "x"}}]})
 
-    tr = create_translator({"provider": "openai", "api_key": "k", "model": "m", "user_prompt": "{{from}}->{{to}}: {{text}}"},
-                           "fr", transport=httpx.MockTransport(handler))
+    tr = create_translator(
+        {"provider": "openai", "api_key": "k", "model": "m", "user_prompt": "{{from}}->{{to}}: {{text}}"},
+        "fr",
+        transport=httpx.MockTransport(handler),
+    )
     runner = Runner(tr, cache=MemCache())
     run(runner.translate_all(["Alice was beginning to get very tired of sitting by her sister on the bank."]))
     assert seen[0]["messages"][1]["content"].startswith("English->French: Alice")
@@ -155,12 +162,10 @@ def test_glossary_injected_into_messages_and_cache_key():
     assert "Glossary" not in system2
     # 术语表进缓存键：换了术语表就重翻，换回来仍命中
     from app.translators import OpenAITranslator
-    a = OpenAITranslator("zh-CN", api_key="x", base_url="http://localhost", model="m",
-                         glossary="Book = 卷")
-    b = OpenAITranslator("zh-CN", api_key="x", base_url="http://localhost", model="m",
-                         glossary="Book = 册")
-    c = OpenAITranslator("zh-CN", api_key="x", base_url="http://localhost", model="m",
-                         glossary="Book = 卷")
+
+    a = OpenAITranslator("zh-CN", api_key="x", base_url="http://localhost", model="m", glossary="Book = 卷")
+    b = OpenAITranslator("zh-CN", api_key="x", base_url="http://localhost", model="m", glossary="Book = 册")
+    c = OpenAITranslator("zh-CN", api_key="x", base_url="http://localhost", model="m", glossary="Book = 卷")
     assert a.cache_key != b.cache_key and a.cache_key == c.cache_key
 
 
@@ -173,8 +178,9 @@ def test_instant_translator_still_lets_other_requests_run():
         nonlocal ticks
         translator = MockTranslator("zh-CN")
         translator.concurrency = 1
-        runner = Runner(translator, progress=lambda done, total: seen.append(ticks),
-                        cache=MemCache(), skip_same_lang=False)
+        runner = Runner(
+            translator, progress=lambda done, total: seen.append(ticks), cache=MemCache(), skip_same_lang=False
+        )
 
         async def poll():
             nonlocal ticks

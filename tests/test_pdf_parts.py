@@ -51,7 +51,10 @@ def test_parts_written_in_other_processes_are_put_back_in_place(tmp_path):
     # 服务里写回在工作线程中运行，子进程从那里 fork
     with concurrent.futures.ThreadPoolExecutor(1) as pool:
         out = pool.submit(
-            render_in_parts, render, [[0, 1], [2, 3]], lambda done, total: progress.append((done, total)),
+            render_in_parts,
+            render,
+            [[0, 1], [2, 3]],
+            lambda done, total: progress.append((done, total)),
         ).result()
     assert out is not None and out.page_count == 4
     assert [page.get_text().strip().splitlines()[-1] for page in out] == [f"Written page {pno}" for pno in range(4)]

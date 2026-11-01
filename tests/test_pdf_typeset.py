@@ -21,10 +21,7 @@ def test_wide_formula_is_its_own_line():
     metrics = {1: FormulaMetric(slot_width=40, body_width=36, height=12, below=1)}
     lines = typeset_lines(f"甲{_SENTINEL}乙", em=10, max_width=20, metrics=metrics)
     assert any(isinstance(piece, FormulaPiece) and piece.x == 0 for line in lines for piece in line.pieces)
-    assert all(
-        _SENTINEL not in piece.text
-        for line in lines for piece in line.pieces if isinstance(piece, TextPiece)
-    )
+    assert all(_SENTINEL not in piece.text for line in lines for piece in line.pieces if isinstance(piece, TextPiece))
 
 
 def test_a_tall_inline_formula_opens_up_its_line():
@@ -41,7 +38,10 @@ def test_a_tall_inline_formula_opens_up_its_line():
     first, _ = line_offsets([*lines, *plain], em=10, gap=1.45)
     assert first[0] == 0 and first[1] > 0
     short = {1: FormulaMetric(slot_width=20, body_width=16, height=12, below=2)}
-    assert line_offsets(typeset_lines(f"甲{_SENTINEL}乙", em=10, max_width=200, metrics=short), em=10, gap=1.45) == ([0.0], 0.0)
+    assert line_offsets(typeset_lines(f"甲{_SENTINEL}乙", em=10, max_width=200, metrics=short), em=10, gap=1.45) == (
+        [0.0],
+        0.0,
+    )
 
 
 def test_style_marks_are_written_back(tmp_path):
@@ -57,16 +57,26 @@ def test_style_marks_are_written_back(tmp_path):
     doc.close()
     rect = pymupdf.Rect(30, 28, 280, 50)
     block = TextBlock(
-        page=0, rect=rect, line_rects=[rect],
-        text="See this term word", size=12, color="#000000", bold=False,
+        page=0,
+        rect=rect,
+        line_rects=[rect],
+        text="See this term word",
+        size=12,
+        color="#000000",
+        bold=False,
     )
     out = _render_translated(
-        src, [block], ["See {b}this{/b} {i}term{/i} {z80}word{/z}"], "en",
+        src,
+        [block],
+        ["See {b}this{/b} {i}term{/i} {z80}word{/z}"],
+        "en",
     )
     spans = [
         span
-        for blk in out[0].get_text("dict")["blocks"] if blk.get("type") == 0
-        for ln in blk["lines"] for span in ln["spans"]
+        for blk in out[0].get_text("dict")["blocks"]
+        if blk.get("type") == 0
+        for ln in blk["lines"]
+        for span in ln["spans"]
     ]
     bold = next(span for span in spans if "this" in span["text"])
     italic = next(span for span in spans if "term" in span["text"])
@@ -91,12 +101,19 @@ def test_plain_paragraph_keeps_parentheses_and_separates_lines(tmp_path):
     # 宽过页宽的 60%，不再右扩，长译文必须换行。盒子够高，不必压行距。
     rect = pymupdf.Rect(30, 28, 150, 90)
     block = TextBlock(
-        page=0, rect=rect, line_rects=[rect],
-        text="Source", size=12, color="#000000", bold=False,
+        page=0,
+        rect=rect,
+        line_rects=[rect],
+        text="Source",
+        size=12,
+        color="#000000",
+        bold=False,
     )
     out = _render_translated(src, [block], ["甲" * 8 + "（如序列）" + "乙" * 8], "zh-CN")
     lines = [
-        ln for blk in out[0].get_text("dict")["blocks"] if blk.get("type") == 0
+        ln
+        for blk in out[0].get_text("dict")["blocks"]
+        if blk.get("type") == 0
         for ln in blk["lines"]
         if any("\u4e00" <= ch <= "\u9fff" for ch in "".join(span["text"] for span in ln["spans"]))
     ]
@@ -123,25 +140,41 @@ def test_typeset_formula_tracks_the_line_baseline(tmp_path):
     opened = pymupdf.open(src)
     rect = opened[0].search_for("BETA")[0]
     formula = {
-        "bbox": rect, "name": "a_1.png", "mid": 0,
-        "w": round(rect.width, 1), "h": round(rect.height, 1), "d": 2.0,
-        "text": "x", "has_img": True,
+        "bbox": rect,
+        "name": "a_1.png",
+        "mid": 0,
+        "w": round(rect.width, 1),
+        "h": round(rect.height, 1),
+        "d": 2.0,
+        "text": "x",
+        "has_img": True,
         "png": opened[0].get_pixmap(dpi=150, clip=rect).tobytes("png"),
         "spans": [{"bbox": tuple(rect), "text": "x", "size": 10, "origin": (rect.x0, rect.y1 - 2)}],
     }
     opened.close()
     block = TextBlock(
-        page=0, rect=pymupdf.Rect(40, 40, 200, 55), line_rects=[pymupdf.Rect(40, 40, 200, 55)],
-        text="alpha BETA gamma", size=10, color="#000000", bold=False,
+        page=0,
+        rect=pymupdf.Rect(40, 40, 200, 55),
+        line_rects=[pymupdf.Rect(40, 40, 200, 55)],
+        text="alpha BETA gamma",
+        size=10,
+        color="#000000",
+        bold=False,
     )
     out = _render_translated(
-        src, [block], [f"译文 {_SENTINEL} 甲"], "zh-CN", {id(block): [formula]},
+        src,
+        [block],
+        [f"译文 {_SENTINEL} 甲"],
+        "zh-CN",
+        {id(block): [formula]},
     )
     page = out[0]
     text_spans = [
         span
-        for blk in page.get_text("dict")["blocks"] if blk.get("type") == 0
-        for ln in blk["lines"] for span in ln["spans"]
+        for blk in page.get_text("dict")["blocks"]
+        if blk.get("type") == 0
+        for ln in blk["lines"]
+        for span in ln["spans"]
         if span.get("origin") and any("\u4e00" <= ch <= "\u9fff" for ch in span["text"])
     ]
     assert text_spans

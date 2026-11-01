@@ -47,24 +47,39 @@ def test_calibration_images_fall_back_to_the_sample_page(tmp_path):
 def test_the_detection_head_decode_stays_in_float():
     """最后一个块里，cv2/cv3 分支前两层照常量化；最后一层卷积和分支外的解码（拼框、Sigmoid、DFL）不量化"""
     names = [
-        "/model.0/conv/Conv", "/model.22/cv2/conv/Conv",
-        "/model.23/cv2.0/cv2.0.0/conv/Conv", "/model.23/cv3.0/cv3.0.1/cv3.0.1.1/act/Mul",
-        "/model.23/cv2.0/cv2.0.2/Conv", "/model.23/cv3.1/cv3.1.2/Conv",
-        "/model.23/Concat", "/model.23/dfl/Softmax", "/model.23/Sigmoid", "/model.23/Concat_25",
+        "/model.0/conv/Conv",
+        "/model.22/cv2/conv/Conv",
+        "/model.23/cv2.0/cv2.0.0/conv/Conv",
+        "/model.23/cv3.0/cv3.0.1/cv3.0.1.1/act/Mul",
+        "/model.23/cv2.0/cv2.0.2/Conv",
+        "/model.23/cv3.1/cv3.1.2/Conv",
+        "/model.23/Concat",
+        "/model.23/dfl/Softmax",
+        "/model.23/Sigmoid",
+        "/model.23/Concat_25",
     ]
     assert quantize.decode_nodes(names) == [
-        "/model.23/cv2.0/cv2.0.2/Conv", "/model.23/cv3.1/cv3.1.2/Conv",
-        "/model.23/Concat", "/model.23/dfl/Softmax", "/model.23/Sigmoid", "/model.23/Concat_25",
+        "/model.23/cv2.0/cv2.0.2/Conv",
+        "/model.23/cv3.1/cv3.1.2/Conv",
+        "/model.23/Concat",
+        "/model.23/dfl/Softmax",
+        "/model.23/Sigmoid",
+        "/model.23/Concat_25",
     ]
     # 版面模型（YOLOv10）的分支名前面多 one2one_
     v10 = [
-        "/model.23/one2one_cv2.0/one2one_cv2.0.1/conv/Conv", "/model.23/one2one_cv2.0/one2one_cv2.0.2/Conv",
+        "/model.23/one2one_cv2.0/one2one_cv2.0.1/conv/Conv",
+        "/model.23/one2one_cv2.0/one2one_cv2.0.2/Conv",
         "/model.23/one2one_cv3.1/one2one_cv3.1.1/one2one_cv3.1.1.0/conv/Conv",
-        "/model.23/one2one_cv3.1/one2one_cv3.1.2/Conv", "/model.23/dfl/conv/Conv", "/model.23/TopK",
+        "/model.23/one2one_cv3.1/one2one_cv3.1.2/Conv",
+        "/model.23/dfl/conv/Conv",
+        "/model.23/TopK",
     ]
     assert quantize.decode_nodes(v10) == [
-        "/model.23/one2one_cv2.0/one2one_cv2.0.2/Conv", "/model.23/one2one_cv3.1/one2one_cv3.1.2/Conv",
-        "/model.23/dfl/conv/Conv", "/model.23/TopK",
+        "/model.23/one2one_cv2.0/one2one_cv2.0.2/Conv",
+        "/model.23/one2one_cv3.1/one2one_cv3.1.2/Conv",
+        "/model.23/dfl/conv/Conv",
+        "/model.23/TopK",
     ]
     assert quantize.decode_nodes(["Conv_0", "Add_1"]) == []
     assert quantize.int8_path(layout_model.MODELS_DIR / "m.onnx").name == "m.int8.onnx"
@@ -82,6 +97,7 @@ def test_boxes_are_counted_by_each_model_output_layout():
 
 def test_quantizer_reports_failures_and_runs_one_at_a_time(monkeypatch, tmp_path):
     """同一时间只生成一份；量化出错时记下原因，页面上显示"""
+
     def broken(self, src, dest, images, spec):
         raise quantize.QuantizeError("量化后的模型识别出的区域过少")
 
@@ -158,8 +174,9 @@ def test_generating_int8_needs_onnx_and_the_model(app_env, monkeypatch):
     main = app_env
     started = []
     for quantizer in main.quantizers.values():
-        monkeypatch.setattr(quantizer, "start",
-                            lambda src, dest, images, spec: started.append((src, dest, images, spec)))
+        monkeypatch.setattr(
+            quantizer, "start", lambda src, dest, images, spec: started.append((src, dest, images, spec))
+        )
     with TestClient(main.app) as client:
         monkeypatch.setattr(quantize, "available", lambda: False)
         r = client.post("/api/formula-model/quantize")
@@ -190,8 +207,9 @@ def test_only_one_model_is_quantized_at_a_time(app_env, monkeypatch):
     main = app_env
     started = []
     monkeypatch.setattr(quantize, "available", lambda: True)
-    monkeypatch.setattr(main.quantizers["layout"], "start",
-                        lambda src, dest, images, spec: started.append((src, dest, spec)))
+    monkeypatch.setattr(
+        main.quantizers["layout"], "start", lambda src, dest, images, spec: started.append((src, dest, spec))
+    )
 
     class Busy:
         def done(self):

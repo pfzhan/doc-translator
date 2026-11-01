@@ -118,9 +118,9 @@ def test_restore_emphasis_after_escape():
 
 def test_writer_marks_only_a_mixed_block():
     writer = EmphasisWriter(Emphasis(False, False), mixed=True)
-    assert writer.text("see ", Emphasis(False, False)) + writer.text("this", Emphasis(True, False)) + writer.close() == (
-        "see {b}this{/b}"
-    )
+    assert writer.text("see ", Emphasis(False, False)) + writer.text(
+        "this", Emphasis(True, False)
+    ) + writer.close() == ("see {b}this{/b}")
     plain = EmphasisWriter(Emphasis(False, False), mixed=False)
     assert plain.text("see this", Emphasis(True, False)) + plain.atom("{v1}") + plain.close() == "see this{v1}"
 
@@ -166,27 +166,49 @@ def _write(spans: list[dict]) -> str:
 def test_a_bold_label_before_body_split_into_short_spans_keeps_its_mark():
     """正文按引用切成许多小段时，最长的一段是粗体标签。粗体只靠 {b} 写回，底色不能取粗体。"""
     spans = [
-        _span("•"), _span(" ", bold=True), _span("Commonsense Reasoning (0-shot):", bold=True),
-        _span(" Hellaswag ["), _span("28"), _span("], Winogrande ["), _span("21"), _span("]"),
+        _span("•"),
+        _span(" ", bold=True),
+        _span("Commonsense Reasoning (0-shot):", bold=True),
+        _span(" Hellaswag ["),
+        _span("28"),
+        _span("], Winogrande ["),
+        _span("21"),
+        _span("]"),
     ]
     assert _write(spans) == "• {b}Commonsense Reasoning (0-shot):{/b} Hellaswag [28], Winogrande [21]"
     # 粗体比正文多一个字也照样标出来
-    spans = [_span("• N-gram"), _span(" language models", bold=True), _span(" can be evaluated on a"),
-             _span(" test set", bold=True), _span(" using"), _span(" perplexity.", bold=True)]
-    assert _write(spans) == "• N-gram {b}language models{/b} can be evaluated on a {b}test set{/b} using {b}perplexity.{/b}"
+    spans = [
+        _span("• N-gram"),
+        _span(" language models", bold=True),
+        _span(" can be evaluated on a"),
+        _span(" test set", bold=True),
+        _span(" using"),
+        _span(" perplexity.", bold=True),
+    ]
+    assert (
+        _write(spans)
+        == "• N-gram {b}language models{/b} can be evaluated on a {b}test set{/b} using {b}perplexity.{/b}"
+    )
     # 整块粗体以粗体为底，不写标记
     assert _write([_span("Bold title", bold=True), _span(" 3")]) == "Bold title 3"
 
 
 def test_spaces_do_not_open_a_mark_and_close_the_one_that_ends():
-    spans = [_span("Theorem 1.", bold=True), _span(" ", bold=False), _span("The minimum is"), _span(" ", italic=True),
-             _span("unique", italic=True)]
+    spans = [
+        _span("Theorem 1.", bold=True),
+        _span(" ", bold=False),
+        _span("The minimum is"),
+        _span(" ", italic=True),
+        _span("unique", italic=True),
+    ]
     assert _write(spans) == "{b}Theorem 1.{/b} The minimum is {i}unique{/i}"
 
 
 def test_a_mostly_italic_statement_keeps_italic_as_base():
     """斜体的定理正文以斜体为底，不逐段标 {i}。"""
-    writer = writer_for([_span("Theorem 1.", bold=True), _span(" Assume that the function has bounded gradients", italic=True)])
+    writer = writer_for(
+        [_span("Theorem 1.", bold=True), _span(" Assume that the function has bounded gradients", italic=True)]
+    )
     assert writer.base == Emphasis(False, True)
 
 
@@ -261,8 +283,9 @@ def test_a_word_split_by_style_marks_is_not_broken_at_the_mark():
         lines = break_lines(text, 9.0, width, {})
         for line in lines:
             assert not line.rstrip().endswith(("{b}R{/b}", "{b}B{/b}", "{b}T{/b}", "("))
-        assert "".join(lines).replace("{b}", "").replace("{/b}", "").replace(" ", "") == \
-            text.replace("{b}", "").replace("{/b}", "").replace(" ", "")
+        assert "".join(lines).replace("{b}", "").replace("{/b}", "").replace(" ", "") == text.replace(
+            "{b}", ""
+        ).replace("{/b}", "").replace(" ", "")
 
 
 def test_slack_before_a_long_word_is_shared_with_the_line_above():
@@ -270,9 +293,11 @@ def test_slack_before_a_long_word_is_shared_with_the_line_above():
     两端对齐时字距都只拉开一点。末行不管空多少。"""
     from app.formats.pdf_flow import _break_lines, measure_width
 
-    text = ("目前为止所展示的所有结果都采用了微调方法即在预训练模型上添加一个简单的分类层并在下游任务上"
-            "对所有参数进行联合微调然而基于特征的方法也具有一定优势首先并非所有任务都能轻易地用 "
-            "Transformer 编码器架构表示因此需要额外添加特定于任务的模型架构")
+    text = (
+        "目前为止所展示的所有结果都采用了微调方法即在预训练模型上添加一个简单的分类层并在下游任务上"
+        "对所有参数进行联合微调然而基于特征的方法也具有一定优势首先并非所有任务都能轻易地用 "
+        "Transformer 编码器架构表示因此需要额外添加特定于任务的模型架构"
+    )
     lines = _break_lines(text, 10, 230, {})
     assert "".join(lines).replace(" ", "") == text.replace(" ", "")
     # 不匀开时 Transformer 上面那一行空出将近六个字宽
@@ -289,8 +314,10 @@ def test_narrow_latin_letters_measure_as_drawn():
     for text in ("illicit little", "{i}decisions, steep hills{/i}", "{b}difficult{/b}", "可能会让你了解到, "):
         drawn = sum(segment.width for segment in _segments(text, 10.0))
         assert drawn <= measure_width(text, 10.0) <= drawn * 1.1
-    text = ("分布假说的核心思想是: 看到 {i}difficult{/i} 与 {i}hard{/i} 一样, 出现在相似的语境词"
-            "({i}decisions, steep hills{/i})附近, 可能会让你了解到, {i}difficult{/i} 的含义与 {i}hard{/i} 相近。")
+    text = (
+        "分布假说的核心思想是: 看到 {i}difficult{/i} 与 {i}hard{/i} 一样, 出现在相似的语境词"
+        "({i}decisions, steep hills{/i})附近, 可能会让你了解到, {i}difficult{/i} 的含义与 {i}hard{/i} 相近。"
+    )
     assert len(break_lines(text, em=8.8, max_width=335, formula_widths={})) == 2
 
 
@@ -306,8 +333,12 @@ def test_a_formula_at_the_line_start_lines_up_with_the_text_below():
     page = doc.new_page()
     box = pymupdf.Rect(100, 100, 300, 200)
     metrics = {1: FormulaMetric(6 + 2 * FORMULA_PAD, 6, 8.8, 0)}
-    lines = typeset_lines(_SENTINEL + " 个词类型。用各种 n 元语法计数和其他记号来表示估计的公式，后面还有很多字要换到下一行去写",
-                          8.8, box.width, metrics)
+    lines = typeset_lines(
+        _SENTINEL + " 个词类型。用各种 n 元语法计数和其他记号来表示估计的公式，后面还有很多字要换到下一行去写",
+        8.8,
+        box.width,
+        metrics,
+    )
     assert len(lines) >= 2
     slots = draw_cjk_lines(page, doc, lines, box, 8.8, 1.45, "#000000", "left", frozenset({1}), {})
     assert slots is not None

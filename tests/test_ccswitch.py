@@ -41,8 +41,10 @@ def make_db(path, rows, common=None):
                    meta TEXT DEFAULT '{}', is_current BOOLEAN DEFAULT 0)""")
     con.execute("CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)")
     for app, name, cfg, meta, current in rows:
-        con.execute("INSERT INTO providers VALUES (?, ?, ?, ?, ?, ?)",
-                    (f"{app}-{name}", app, name, json.dumps(cfg), json.dumps(meta), current))
+        con.execute(
+            "INSERT INTO providers VALUES (?, ?, ?, ?, ?, ?)",
+            (f"{app}-{name}", app, name, json.dumps(cfg), json.dumps(meta), current),
+        )
     for k, v in (common or {}).items():
         con.execute("INSERT INTO settings VALUES (?, ?)", (f"common_config_{k}", v))
     con.commit()
@@ -52,17 +54,40 @@ def make_db(path, rows, common=None):
 
 @pytest.fixture
 def cc_db(tmp_path):
-    return make_db(tmp_path / "cc.db", [
-        ("claude", "relay-claude", {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-claude-token-123456",
-                                            "ANTHROPIC_BASE_URL": "https://claude.example.com",
-                                            "ANTHROPIC_MODEL": "claude-test[1M]"}}, {}, 1),
-        ("claude", "other", {"env": {"ANTHROPIC_AUTH_TOKEN": "nope"}}, {}, 0),
-        ("codex", "relay-gpt", {"auth": {"OPENAI_API_KEY": "sk-openai-key-123456"}, "config": CODEX_TOML}, {}, 1),
-        ("gemini", "relay-gemini", {"env": {"GOOGLE_GEMINI_BASE_URL": "https://gemini.example.com",
-                                            "GEMINI_API_KEY": "sk-gemini-key-123456"}},
-         {"commonConfigEnabled": True}, 1),
-        ("grokbuild", "relay-grok", {"config": GROK_TOML}, {}, 1),
-    ], common={"gemini": json.dumps({"GEMINI_MODEL": "gemini-test"})})
+    return make_db(
+        tmp_path / "cc.db",
+        [
+            (
+                "claude",
+                "relay-claude",
+                {
+                    "env": {
+                        "ANTHROPIC_AUTH_TOKEN": "sk-claude-token-123456",
+                        "ANTHROPIC_BASE_URL": "https://claude.example.com",
+                        "ANTHROPIC_MODEL": "claude-test[1M]",
+                    }
+                },
+                {},
+                1,
+            ),
+            ("claude", "other", {"env": {"ANTHROPIC_AUTH_TOKEN": "nope"}}, {}, 0),
+            ("codex", "relay-gpt", {"auth": {"OPENAI_API_KEY": "sk-openai-key-123456"}, "config": CODEX_TOML}, {}, 1),
+            (
+                "gemini",
+                "relay-gemini",
+                {
+                    "env": {
+                        "GOOGLE_GEMINI_BASE_URL": "https://gemini.example.com",
+                        "GEMINI_API_KEY": "sk-gemini-key-123456",
+                    }
+                },
+                {"commonConfigEnabled": True},
+                1,
+            ),
+            ("grokbuild", "relay-grok", {"config": GROK_TOML}, {}, 1),
+        ],
+        common={"gemini": json.dumps({"GEMINI_MODEL": "gemini-test"})},
+    )
 
 
 def test_read_current(cc_db):
@@ -71,25 +96,41 @@ def test_read_current(cc_db):
 
     c = items["claude"]
     assert (c["base_url"], c["model"], c["auth_style"], c["api_key"]) == (
-        "https://claude.example.com/v1", "claude-test", "bearer", "sk-claude-token-123456")
+        "https://claude.example.com/v1",
+        "claude-test",
+        "bearer",
+        "sk-claude-token-123456",
+    )
 
     o = items["codex"]
     assert (o["provider"], o["base_url"], o["model"], o["api_format"]) == (
-        "openai", "https://relay.example.com/v1", "gpt-test", "responses")
+        "openai",
+        "https://relay.example.com/v1",
+        "gpt-test",
+        "responses",
+    )
 
     g = items["gemini"]
     assert (g["base_url"], g["model"]) == ("https://gemini.example.com/v1beta", "gemini-test")  # 模型来自通用配置
 
     x = items["grokbuild"]
     assert (x["provider"], x["base_url"], x["model"], x["api_key"], x["api_format"]) == (
-        "grok", "https://grok.example.com/v1", "grok-x", "xai-test-key-123456", "responses")
+        "grok",
+        "https://grok.example.com/v1",
+        "grok-x",
+        "xai-test-key-123456",
+        "responses",
+    )
 
 
 def test_official_login_is_unavailable(tmp_path):
-    db = make_db(tmp_path / "cc.db", [
-        ("grokbuild", "Grok Official", {"config": "[cli]\ninstaller = \"internal\"\n"}, {}, 1),
-        ("claude", "Claude Official", {"env": {}}, {}, 1),
-    ])
+    db = make_db(
+        tmp_path / "cc.db",
+        [
+            ("grokbuild", "Grok Official", {"config": '[cli]\ninstaller = "internal"\n'}, {}, 1),
+            ("claude", "Claude Official", {"env": {}}, {}, 1),
+        ],
+    )
     items = {i["app"]: i for i in ccswitch.read_current(db)}
     assert not items["grokbuild"]["available"] and "OAuth" in items["grokbuild"]["reason"]
     assert not items["claude"]["available"]
@@ -111,11 +152,17 @@ def test_store_merges_ccswitch_services(tmp_path, cc_db):
     assert claude["name"] == "Claude · relay-claude" and claude["api_key_hint"] == "sk-…3456"
 
     # 只能改本地设置，地址和 Key 改不了
-    store.update("ccswitch-claude", {"model": "claude-other", "concurrency": 2,
-                                     "base_url": "https://evil.example.com", "api_key": "x"})
+    store.update(
+        "ccswitch-claude",
+        {"model": "claude-other", "concurrency": 2, "base_url": "https://evil.example.com", "api_key": "x"},
+    )
     svc = store.get("ccswitch-claude")
     assert (svc["model"], svc["concurrency"], svc["base_url"], svc["api_key"]) == (
-        "claude-other", 2, "https://claude.example.com/v1", "sk-claude-token-123456")
+        "claude-other",
+        2,
+        "https://claude.example.com/v1",
+        "sk-claude-token-123456",
+    )
     # 模型改回和 CC Switch 一致时不单独保存
     store.update("ccswitch-claude", {"model": "claude-test"})
     assert store.ccswitch_settings["ccswitch-claude"]["model"] == ""
@@ -148,7 +195,11 @@ def test_clone_ccswitch_service_to_local(tmp_path, cc_db):
     # 连接信息（地址、Key、模型、api_format）从 CC Switch 固化成本地配置
     saved = store.get(clone["id"])
     assert (saved["provider"], saved["base_url"], saved["model"], saved["api_key"]) == (
-        "openai", "https://relay.example.com/v1", "gpt-test", "sk-openai-key-123456")
+        "openai",
+        "https://relay.example.com/v1",
+        "gpt-test",
+        "sk-openai-key-123456",
+    )
     assert saved["api_format"] == "responses" and not saved["builtin"]
 
     # 落盘且不再跟随 CC Switch：数据库读不到时本地副本照常可用

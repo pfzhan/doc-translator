@@ -29,7 +29,9 @@ def test_frame_follows_body_lines_not_the_leftmost_block():
 def test_a_wide_caption_does_not_move_the_frame_of_its_page():
     """通栏图注从页边起笔，本页的正文仍从同侧页的左缘起笔。"""
     caption = _lines(77, 475, count=6, top=300)
-    frames = text_frames([_lines(160, 493), [*_lines(142, 475, count=12), *caption], _lines(160, 493), _lines(142, 475)])
+    frames = text_frames(
+        [_lines(160, 493), [*_lines(142, 475, count=12), *caption], _lines(160, 493), _lines(142, 475)]
+    )
     assert (frames[1].x0, frames[1].x1) == (142, 475)
 
 
@@ -90,6 +92,7 @@ def test_two_line_note_is_one_note_and_neighbours_stay_apart():
 def test_stacked_notes_split_where_the_pitch_is_off():
     """正文同一行引出两个术语，两条旁注上下挨着排：AED 下面多出一截才是 listen attend / and spell，
     vector / semantics 和 representation / learning 叠得比行距还紧。同一条里的行距和全文的一样"""
+
     def note(y0, text):
         return FrameLine(pymupdf.Rect(110, y0, 146, y0 + 9.4), text, 7.2)
 
@@ -106,12 +109,14 @@ def test_stacked_notes_split_where_the_pitch_is_off():
 def test_margin_note_on_a_body_line_is_split_off():
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
-    words = ("The body of this paragraph keeps going across many lines so that the "
-             "frame has enough long lines to vote on where the text starts ").split()
+    words = (
+        "The body of this paragraph keeps going across many lines so that the "
+        "frame has enough long lines to vote on where the text starts "
+    ).split()
     y = 120
     lines = []
     for i in range(16):
-        lines.append(" ".join(words[(i * 3) % 20:(i * 3) % 20 + 9]))
+        lines.append(" ".join(words[(i * 3) % 20 : (i * 3) % 20 + 9]))
     for i, line in enumerate(lines):
         page.insert_text((160, y + 12 * i), line, fontsize=10)
     for row, note in ((2, "tokenization"), (6, "regular"), (10, "edit distance")):
@@ -129,10 +134,12 @@ def test_label_of_a_caption_wider_than_the_body_is_not_a_margin_note():
     标签留在图注里。真正的旁注照旧拆出来。"""
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
-    words = ("The body of this paragraph keeps going across many lines so that the "
-             "frame has enough long lines to vote on where the text starts ").split()
+    words = (
+        "The body of this paragraph keeps going across many lines so that the "
+        "frame has enough long lines to vote on where the text starts "
+    ).split()
     for i in range(16):
-        page.insert_text((160, 120 + 12 * i), " ".join(words[(i * 3) % 20:(i * 3) % 20 + 9]), fontsize=10)
+        page.insert_text((160, 120 + 12 * i), " ".join(words[(i * 3) % 20 : (i * 3) % 20 + 9]), fontsize=10)
     for row, note in ((2, "tokenization"), (6, "regular"), (10, "edit distance")):
         page.insert_text((96, 120 + 12 * row), note, fontsize=7)
     page.insert_text((96, 330), "Figure 3.7", fontsize=9, fontname="hebo")
@@ -149,10 +156,12 @@ def test_a_caption_spanning_the_margin_keeps_its_short_lines():
     也落在旁注的位置（Figure 6.17 … computa- | tion of）。标签和这几个字都留在图注里。"""
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
-    words = ("The body of this paragraph keeps going across many lines so that the "
-             "frame has enough long lines to vote on where the text starts ").split()
+    words = (
+        "The body of this paragraph keeps going across many lines so that the "
+        "frame has enough long lines to vote on where the text starts "
+    ).split()
     for i in range(16):
-        page.insert_text((160, 120 + 12 * i), " ".join(words[(i * 3) % 20:(i * 3) % 20 + 9]), fontsize=10)
+        page.insert_text((160, 120 + 12 * i), " ".join(words[(i * 3) % 20 : (i * 3) % 20 + 9]), fontsize=10)
     for row, note in ((2, "tokenization"), (6, "regular"), (10, "edit distance")):
         page.insert_text((78, 120 + 12 * row), note, fontsize=7)
     # 标签是黑底白字，排在图注后面画，PyMuPDF 分成单独一行
@@ -173,8 +182,16 @@ def test_displayed_formula_with_a_big_brace_keeps_its_rows():
 
     def block(text, rect, font="NimbusRomNo9L-Regu"):
         span = {"text": text, "font": font, "size": 10.0}
-        return TextBlock(page=0, rect=pymupdf.Rect(rect), line_rects=[pymupdf.Rect(rect)], text=text,
-                         size=10, color="#000000", bold=False, span_lines=[[span]])
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(rect),
+            line_rects=[pymupdf.Rect(rect)],
+            text=text,
+            size=10,
+            color="#000000",
+            bold=False,
+            span_lines=[[span]],
+        )
 
     brace = block("D[i−1, j −1]+ 2; if source[i] ≠ target[j]", (237, 408, 432, 432), "CMEX10")
     condition = block("0; if source[i] = target[j]", (325, 420, 432, 430))
@@ -183,22 +200,46 @@ def test_displayed_formula_with_a_big_brace_keeps_its_rows():
     geo = PageGeometry.from_rects(612, [], [], 792, frame=TextFrame(142, 475, 111, 719, 10))
     # 列表续行、右栏的段落也离开左缘，句中的积分号用同一种字体，按词数认成句子
     item = TextBlock(
-        page=0, rect=pymupdf.Rect(170, 460, 475, 500), line_rects=[pymupdf.Rect(170, 460, 475, 500)],
-        text="", size=10, color="#000000", bold=False,
-        span_lines=[[{"text": "R", "font": "CMEX10", "size": 10.0},
-                     {"text": "pθ(z)pθ(x|z) dz is intractable (so we cannot evaluate or differentiate the marginal "
-                              "likelihood), where the true posterior density is intractable (so the EM algorithm "
-                              "cannot be used), and where the required integrals",
-                      "font": "NimbusRomNo9L-Regu", "size": 10.0}]],
+        page=0,
+        rect=pymupdf.Rect(170, 460, 475, 500),
+        line_rects=[pymupdf.Rect(170, 460, 475, 500)],
+        text="",
+        size=10,
+        color="#000000",
+        bold=False,
+        span_lines=[
+            [
+                {"text": "R", "font": "CMEX10", "size": 10.0},
+                {
+                    "text": "pθ(z)pθ(x|z) dz is intractable (so we cannot evaluate or differentiate the marginal "
+                    "likelihood), where the true posterior density is intractable (so the EM algorithm "
+                    "cannot be used), and where the required integrals",
+                    "font": "NimbusRomNo9L-Regu",
+                    "size": 10.0,
+                },
+            ]
+        ],
     )
     # 行内的宽帽子、小根号也是这种字体，不说明是单独排的式子
     accent = TextBlock(
-        page=0, rect=pymupdf.Rect(300, 520, 475, 540), line_rects=[pymupdf.Rect(300, 520, 475, 540)],
-        text="", size=10, color="#000000", bold=False,
-        span_lines=[[{"text": "Let the normalized values be x", "font": "NimbusRomNo9L-Regu", "size": 10.0},
-                     {"text": "b", "font": "CMEX10", "size": 10.0},
-                     {"text": ", and their transformations be y. We refer to the transform", "font": "NimbusRomNo9L-Regu",
-                      "size": 10.0}]],
+        page=0,
+        rect=pymupdf.Rect(300, 520, 475, 540),
+        line_rects=[pymupdf.Rect(300, 520, 475, 540)],
+        text="",
+        size=10,
+        color="#000000",
+        bold=False,
+        span_lines=[
+            [
+                {"text": "Let the normalized values be x", "font": "NimbusRomNo9L-Regu", "size": 10.0},
+                {"text": "b", "font": "CMEX10", "size": 10.0},
+                {
+                    "text": ", and their transformations be y. We refer to the transform",
+                    "font": "NimbusRomNo9L-Regu",
+                    "size": 10.0,
+                },
+            ]
+        ],
     )
     ids = _display_formula_ids([brace, condition, body, inline, item, accent], [geo])
     assert ids == {id(brace), id(condition)}
@@ -213,10 +254,20 @@ def test_a_centered_wide_formula_close_to_the_left_edge_is_displayed():
 
     rect = pymupdf.Rect(160.5, 640, 457.7, 655)
     formula = TextBlock(
-        page=0, rect=rect, line_rects=[rect], text="", size=10, color="#000000", bold=False,
-        span_lines=[[{"text": "p(x1,...,xn) =", "font": "CMMI10", "size": 10.0},
-                     {"text": "Y", "font": "CMEX10", "size": 10.0},
-                     {"text": "p(xi|R(q) ; Answer the following question... ; q ;x<i)", "font": "CMMI10", "size": 10.0}]],
+        page=0,
+        rect=rect,
+        line_rects=[rect],
+        text="",
+        size=10,
+        color="#000000",
+        bold=False,
+        span_lines=[
+            [
+                {"text": "p(x1,...,xn) =", "font": "CMMI10", "size": 10.0},
+                {"text": "Y", "font": "CMEX10", "size": 10.0},
+                {"text": "p(xi|R(q) ; Answer the following question... ; q ;x<i)", "font": "CMMI10", "size": 10.0},
+            ]
+        ],
     )
     geo = PageGeometry.from_rects(612, [], [], 792, frame=TextFrame(142, 475, 111, 719, 10))
     assert _display_formula_ids([formula], [geo]) == {id(formula)}
@@ -226,11 +277,19 @@ def test_body_cut_at_a_margin_note_is_joined_back():
     from app.formats.pdf_extract import _rejoin_note_cuts
 
     def line(text, x0, y0, x1, size=10.0):
-        return {"dir": (1, 0), "bbox": (x0, y0, x1, y0 + size),
-                "spans": [{"text": text, "size": size, "font": "Times", "flags": 0, "color": 0}]}
+        return {
+            "dir": (1, 0),
+            "bbox": (x0, y0, x1, y0 + size),
+            "spans": [{"text": text, "size": size, "font": "Times", "flags": 0, "color": 0}],
+        }
 
-    upper = {"type": 0, "lines": [line("Starting in the 1960s, the characters (like the ones used", 160, 341, 493),
-                                  line("in this sentence), were represented with ASCII (American Standard", 160, 353, 493)]}
+    upper = {
+        "type": 0,
+        "lines": [
+            line("Starting in the 1960s, the characters (like the ones used", 160, 341, 493),
+            line("in this sentence), were represented with ASCII (American Standard", 160, 353, 493),
+        ],
+    }
     lower = {"type": 0, "lines": [line("Code for Information Interchange). ASCII used one byte.", 160, 365, 493)]}
     after = {"type": 0, "lines": [line("Chinese has about 100,000 characters in Unicode.", 175, 377, 493)]}
     data = {"blocks": [upper, lower, after]}
@@ -245,16 +304,22 @@ def test_a_bold_caption_label_starts_its_own_paragraph():
     from app.formats.pdf_extract import _split_lines
 
     def item(*spans, x0, y0):
-        parts = [{"text": text, "size": 9.0 if font.endswith("Medi") else 8.0, "font": font, "flags": 0}
-                 for text, font in spans]
+        parts = [
+            {"text": text, "size": 9.0 if font.endswith("Medi") else 8.0, "font": font, "flags": 0}
+            for text, font in spans
+        ]
         width = sum(len(text) for text, _font in spans) * 4.5
         return ("".join(text for text, _font in spans), pymupdf.Rect(x0, y0, x0 + width, y0 + 9), parts)
 
     figure = [
         item(("anchorTimeID=” t1 ”> the weekend </TIMEX3>, marking", "Courier"), x0=98, y0=147),
         item(("weeks </TIMEX3>.", "Courier"), x0=98, y0=166),
-        item(("Figure 21.17", "Times-Medi"), (" TimeML markup including normalized values.", "Times-Roman"),
-             x0=78, y0=176),
+        item(
+            ("Figure 21.17", "Times-Medi"),
+            (" TimeML markup including normalized values.", "Times-Roman"),
+            x0=78,
+            y0=176,
+        ),
     ]
     assert _split_lines(figure) == [[0, 1], [2]]
     body = [
@@ -294,10 +359,18 @@ def test_prose_after_typewriter_lines_starts_a_new_paragraph():
     items = [
         item("illustrate its explanations with examples, thought experiments", 167, 577, 489, 8.0, "txtt", 12),
         item("self-destructive behavior", 167, 600, 272, 8.0, "txtt", 12),
-        item("Prompts can also be used in more sophisticated ways in a method", 157, 611, 475, 10.0,
-             "NimbusRomNo9L-Regu", 4),
-        item("time compute. One representative example is chain-of-thought", 142, 623, 475, 10.0,
-             "NimbusRomNo9L-Regu", 4),
+        item(
+            "Prompts can also be used in more sophisticated ways in a method",
+            157,
+            611,
+            475,
+            10.0,
+            "NimbusRomNo9L-Regu",
+            4,
+        ),
+        item(
+            "time compute. One representative example is chain-of-thought", 142, 623, 475, 10.0, "NimbusRomNo9L-Regu", 4
+        ),
     ]
     assert _split_lines(items) == [[0, 1], [2, 3]]
 
@@ -382,8 +455,10 @@ def test_a_bold_label_after_a_short_unfinished_item_opens_the_next_item():
     from app.formats.pdf_extract import _split_lines
 
     def item(label, rest, y0, x1):
-        spans = [{"text": label, "size": 10.0, "font": "CMSSBX10", "flags": 20},
-                 {"text": " :" + rest, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 4}]
+        spans = [
+            {"text": label, "size": 10.0, "font": "CMSSBX10", "flags": 20},
+            {"text": " :" + rest, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 4},
+        ]
         return (label + " :" + rest, pymupdf.Rect(142, y0, x1, y0 + 15), spans)
 
     rows = [
@@ -398,9 +473,20 @@ def test_a_bold_label_after_a_short_unfinished_item_opens_the_next_item():
     from app.formats.pdf_extract import _merge_caption_fragments
 
     boxes = [pymupdf.Rect(142, 584, 307, 596), pymupdf.Rect(142, 596, 412, 608)]
-    blocks = [TextBlock(page=0, rect=box, line_rects=[box], text=text, size=10.0, color="#000", bold=False,
-                        span_lines=[spans], line_gap=0.0)
-              for (text, _rect, spans), box in zip(rows[1:3], boxes)]
+    blocks = [
+        TextBlock(
+            page=0,
+            rect=box,
+            line_rects=[box],
+            text=text,
+            size=10.0,
+            color="#000",
+            bold=False,
+            span_lines=[spans],
+            line_gap=0.0,
+        )
+        for (text, _rect, spans), box in zip(rows[1:3], boxes)
+    ]
     assert len(_merge_caption_fragments(blocks)) == 2
 
 
@@ -433,12 +519,16 @@ def test_an_inline_enumeration_wrapping_onto_a_new_line_is_not_a_list():
 
     caption = [
         item("transformed samples. G contracts in regions of high density and expands in regions of low. (a)", 524),
-        item("Consider an adversarial pair near convergence: pg is similar to pdata and D is a partially accurate.", 534),
+        item(
+            "Consider an adversarial pair near convergence: pg is similar to pdata and D is a partially accurate.", 534
+        ),
         item("(b) In the inner loop of the algorithm D is trained to discriminate samples from data, converging", 544),
     ]
     assert _split_lines(caption) == [[0, 1, 2]]
-    listed = [item("(a) Consider an adversarial pair near convergence.", 524, 330),
-              item("(b) In the inner loop of the algorithm D is trained.", 534, 330)]
+    listed = [
+        item("(a) Consider an adversarial pair near convergence.", 524, 330),
+        item("(b) In the inner loop of the algorithm D is trained.", 534, 330),
+    ]
     assert _split_lines(listed) == [[0], [1]]
 
 
@@ -449,14 +539,24 @@ def test_blocks_in_a_flagged_monospace_font_are_code():
 
     def block(*spans):
         return TextBlock(
-            page=0, rect=pymupdf.Rect(0, 0, 100, 10), line_rects=[], text="".join(t for t, _, _ in spans),
-            size=10, color="#000", bold=False,
+            page=0,
+            rect=pymupdf.Rect(0, 0, 100, 10),
+            line_rects=[],
+            text="".join(t for t, _, _ in spans),
+            size=10,
+            color="#000",
+            bold=False,
             span_lines=[[{"text": t, "font": f, "flags": flags, "size": 10} for t, f, flags in spans]],
         )
 
     assert _code_block(block(("<system> You are a helpful assistant.", "txtt", 12)))
-    assert not _code_block(block(("The prompt ", "NimbusRomNo9L-Regu", 4), ("<system>", "txtt", 12),
-                                 (" comes first in the context window.", "NimbusRomNo9L-Regu", 4)))
+    assert not _code_block(
+        block(
+            ("The prompt ", "NimbusRomNo9L-Regu", 4),
+            ("<system>", "txtt", 12),
+            (" comes first in the context window.", "NimbusRomNo9L-Regu", 4),
+        )
+    )
     # 汉字字体也常带等宽标志，不算代码
     assert not _code_block(block(("系统提示词放在上下文的最前面。", "SimSun", 8)))
     # LaTeX times 宏包的等宽字是 URW 的 NimbusMonL，名字里没有 Mono，也不一定带等宽标志
@@ -471,10 +571,20 @@ def test_gloss_line_is_split_from_its_free_translation():
     from app.formats.pdf_units import _split_gloss_lines
 
     lines = [pymupdf.Rect(174, 400, 399, 410), pymupdf.Rect(174, 414, 389, 424)]
-    spans = [[{"text": "1SG.S-E-midnight-big-E-sew-1SG.S[PFV]", "size": 10.0}],
-             [{"text": "“I sewed a lot of yurt covers.”", "size": 10.0}]]
-    block = TextBlock(page=0, rect=lines[0] | lines[1], line_rects=lines, text="", size=10,
-                      color="#000000", bold=False, span_lines=spans)
+    spans = [
+        [{"text": "1SG.S-E-midnight-big-E-sew-1SG.S[PFV]", "size": 10.0}],
+        [{"text": "“I sewed a lot of yurt covers.”", "size": 10.0}],
+    ]
+    block = TextBlock(
+        page=0,
+        rect=lines[0] | lines[1],
+        line_rects=lines,
+        text="",
+        size=10,
+        color="#000000",
+        bold=False,
+        span_lines=spans,
+    )
     glosses = {0: (pymupdf.Rect(174, 388, 399, 410),)}
     gloss, free = _split_gloss_lines([block], glosses)
     assert gloss.text.startswith("1SG.S") and free.text.startswith("“I sewed")
@@ -491,8 +601,10 @@ def test_centered_author_rows_stay_one_item_per_row():
         width = pymupdf.get_text_length(text, fontname=font, fontsize=10)
         page.insert_text((axis - width / 2, y), text, fontsize=10, fontname=font)
 
-    for axis, name, mail in ((215, "Diederik P. Kingma", "dpkingma@gmail.com"),
-                             (390, "Max Welling", "welling.max@gmail.com")):
+    for axis, name, mail in (
+        (215, "Diederik P. Kingma", "dpkingma@gmail.com"),
+        (390, "Max Welling", "welling.max@gmail.com"),
+    ):
         centered(name, axis, 180, "hebo")
         centered("Machine Learning Group", axis, 191, "helv")
         centered("Universiteit van Amsterdam", axis, 202, "helv")
@@ -512,17 +624,22 @@ def test_a_centered_name_list_wrapping_at_commas_stays_one_unit():
     def row(text, x0, y0, x1):
         rect = pymupdf.Rect(x0, y0, x1, y0 + 10)
         span = {"text": text, "font": "NimbusRomNo9L-Medi", "flags": 20, "size": 10.0}
-        return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000",
-                         bold=True, span_lines=[[span]])
+        return TextBlock(
+            page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000", bold=True, span_lines=[[span]]
+        )
 
-    rows = [row("Guillaume Lample, Lucile Saulnier, Lélio Renard Lavaud, Marie-Anne Lachaux,", 133.9, 179.7, 478.1),
-            row("Pierre Stock, Teven Le Scao, Thibaut Lavril, Thomas Wang, Timothée Lacroix,", 137.8, 190.6, 474.2),
-            row("William El Sayed", 269.0, 201.5, 343.0)]
+    rows = [
+        row("Guillaume Lample, Lucile Saulnier, Lélio Renard Lavaud, Marie-Anne Lachaux,", 133.9, 179.7, 478.1),
+        row("Pierre Stock, Teven Le Scao, Thibaut Lavril, Thomas Wang, Timothée Lacroix,", 137.8, 190.6, 474.2),
+        row("William El Sayed", 269.0, 201.5, 343.0),
+    ]
     [merged] = _merge_continuations(rows)
     assert merged.text.endswith("Lacroix, William El Sayed")
     # 左对齐的两行不算居中排
-    left = [row("Results are listed in the table below, for each model,", 108, 300, 380),
-            row("Accuracy improves with scale.", 108, 311, 250)]
+    left = [
+        row("Results are listed in the table below, for each model,", 108, 300, 380),
+        row("Accuracy improves with scale.", 108, 311, 250),
+    ]
     assert len(_merge_continuations(left)) == 2
 
 
@@ -535,14 +652,14 @@ def test_a_formula_wrapping_after_an_operator_keeps_its_tail():
         span = {"text": text, "size": 10.0, "font": "Times-Roman", "flags": 0}
         return (text, pymupdf.Rect(x0, y, x1, y + 10), [span])
 
-    wrapped = [item("we can still evaluate the predicate (l_quantity*l_extendedprice >", 72, 100),
-               item("100) without the columns l_quantity and l_extendedprice.", 72, 111, 330)]
+    wrapped = [
+        item("we can still evaluate the predicate (l_quantity*l_extendedprice >", 72, 100),
+        item("100) without the columns l_quantity and l_extendedprice.", 72, 111, 330),
+    ]
     assert _split_lines(wrapped) == [[0, 1]]
-    item_end = [item("one predicate of this type: (l_quantity*l_extendedprice >", 90, 100),
-                item("100).", 90, 111, 112)]
+    item_end = [item("one predicate of this type: (l_quantity*l_extendedprice >", 90, 100), item("100).", 90, 111, 112)]
     assert _split_lines(item_end) == [[0, 1]]
-    display = [item("cos(cherry, information) =", 147, 140, 280),
-               item("442 * 5 + 8 * 3982 + 2 * 3325", 300, 130, 400)]
+    display = [item("cos(cherry, information) =", 147, 140, 280), item("442 * 5 + 8 * 3982 + 2 * 3325", 300, 130, 400)]
     assert _split_lines(display) == [[0], [1]]
     marker = [item("===Instructions===", 72, 100, 160), item("1. Carefully compare the answers.", 72, 111, 300)]
     assert _split_lines(marker) == [[0], [1]]
@@ -554,8 +671,11 @@ def test_a_justified_row_with_an_italic_variable_stays_one_row():
 
     def piece(x0, x1, y, *spans):
         text = "".join(t for t, _ in spans)
-        return (text, pymupdf.Rect(x0, y, x1, y + 12),
-                [{"text": t, "font": f, "size": 10.0, "flags": 0} for t, f in spans])
+        return (
+            text,
+            pymupdf.Rect(x0, y, x1, y + 12),
+            [{"text": t, "font": f, "size": 10.0, "flags": 0} for t, f in spans],
+        )
 
     roman = "Times-Roman"
     items = [
@@ -577,15 +697,31 @@ def test_a_line_opening_with_a_closing_bracket_continues_the_row():
 
     def piece(x0, x1, y, *spans):
         text = "".join(t for t, _ in spans)
-        return (text, pymupdf.Rect(x0, y, x1, y + 10),
-                [{"text": t, "font": f, "size": 10.0, "flags": 0} for t, f in spans])
+        return (
+            text,
+            pymupdf.Rect(x0, y, x1, y + 10),
+            [{"text": t, "font": f, "size": 10.0, "flags": 0} for t, f in spans],
+        )
 
     roman, mono = "NimbusRomNo9L-Regu", "txtt"
     items = [
-        piece(160.2, 493.2, 280, ("the . to mean period and not the wildcard. By contrast, the regular expression", roman)),
-        piece(160.2, 493.2, 292, ("r\"The dog.$\"", mono), (" would match The dog. but also The dog! and The dogo. As", roman)),
-        piece(160.2, 461.8, 304, ("we’ll discuss below, all the special characters we’ve defined so far (", roman),
-              ("* + ?", mono)),
+        piece(
+            160.2, 493.2, 280, ("the . to mean period and not the wildcard. By contrast, the regular expression", roman)
+        ),
+        piece(
+            160.2,
+            493.2,
+            292,
+            ('r"The dog.$"', mono),
+            (" would match The dog. but also The dog! and The dogo. As", roman),
+        ),
+        piece(
+            160.2,
+            461.8,
+            304,
+            ("we’ll discuss below, all the special characters we’ve defined so far (", roman),
+            ("* + ?", mono),
+        ),
         piece(472.3, 477.5, 304, (".", mono)),
         piece(488.0, 493.2, 304, ("[", mono)),
         piece(160.2, 408.8, 316, ("]", mono), (") need to be backslashed when we mean to use them literally.", roman)),
@@ -602,26 +738,41 @@ def test_a_figure_row_pressed_onto_the_caption_is_its_own_row():
         span = {"text": text, "size": size, "font": font, "flags": 0, "origin": (x0, base)}
         return (text, pymupdf.Rect(x0, y0, x1, y1), [span])
 
-    items = _left_to_right([
-        item("d s s", 264, 600, 288, 609, 607.3, font="txtt"),
-        item("i s", 301, 600, 315, 609, 607.3, font="txtt"),
-        item("Figure 2.17", 143, 604, 186, 613, 611.3, font="NimbusRomNo9L-Medi"),
-        item("Representing the minimum edit distance between two strings as an alignment.", 196, 604, 475, 613, 611.3),
-        item("The final row gives the operation list for converting the top string into the bottom string: d for",
-             142, 615, 475, 624, 622.2),
-    ])
+    items = _left_to_right(
+        [
+            item("d s s", 264, 600, 288, 609, 607.3, font="txtt"),
+            item("i s", 301, 600, 315, 609, 607.3, font="txtt"),
+            item("Figure 2.17", 143, 604, 186, 613, 611.3, font="NimbusRomNo9L-Medi"),
+            item(
+                "Representing the minimum edit distance between two strings as an alignment.", 196, 604, 475, 613, 611.3
+            ),
+            item(
+                "The final row gives the operation list for converting the top string into the bottom string: d for",
+                142,
+                615,
+                475,
+                624,
+                622.2,
+            ),
+        ]
+    )
     assert [text for text, *_ in items][:2] == ["d s s", "i s"]
     assert _split_lines(items) == [[0, 1], [2, 3, 4]]
 
     def fraction_line(x0, y0, x1, y1, pieces):
-        spans = [{"text": text, "size": size, "font": "NimbusRomNo9L-Regu", "flags": 0, "origin": (x0, base)}
-                 for text, size, base in pieces]
+        spans = [
+            {"text": text, "size": size, "font": "NimbusRomNo9L-Regu", "flags": 0, "origin": (x0, base)}
+            for text, size, base in pieces
+        ]
         return ("".join(text for text, _, _ in pieces), pymupdf.Rect(x0, y0, x1, y1), spans)
 
     row = [
-        fraction_line(142, 175, 332, 189, [("word follows each other with equal probability", 10.0, 185.9),
-                                           ("1", 7.4, 182.0)]),
-        fraction_line(329, 177, 475, 192, [("3", 7.4, 189.4), (" (it was trained on a training set with", 10.0, 185.9)]),
+        fraction_line(
+            142, 175, 332, 189, [("word follows each other with equal probability", 10.0, 185.9), ("1", 7.4, 182.0)]
+        ),
+        fraction_line(
+            329, 177, 475, 192, [("3", 7.4, 189.4), (" (it was trained on a training set with", 10.0, 185.9)]
+        ),
     ]
     assert _split_lines(_left_to_right(row)) == [[0, 1]]
     # 两行分进了两块，块之间也不按同一行并
@@ -630,11 +781,21 @@ def test_a_figure_row_pressed_onto_the_caption_is_its_own_row():
 
     def blk(entry):
         text, rect, spans = entry
-        return TextBlock(page=0, rect=pymupdf.Rect(rect), line_rects=[pymupdf.Rect(rect)], text=text, size=9.0,
-                         color="#000", bold=False, span_lines=[spans])
+        return TextBlock(
+            page=0,
+            rect=pymupdf.Rect(rect),
+            line_rects=[pymupdf.Rect(rect)],
+            text=text,
+            size=9.0,
+            color="#000",
+            bold=False,
+            span_lines=[spans],
+        )
 
     ops = item("d s s i s", 264, 600, 315, 609, 607.3, font="txtt")
-    caption = item("Representing the minimum edit distance between two strings as an alignment.", 196, 604, 475, 613, 611.3)
+    caption = item(
+        "Representing the minimum edit distance between two strings as an alignment.", 196, 604, 475, 613, 611.3
+    )
     assert len(_merge_visual_lines([blk(ops), blk(caption)])) == 2
 
 
@@ -675,7 +836,13 @@ def test_digits_under_a_radical_bar_join_the_formula():
     root = 72 + pymupdf.get_text_length("6 + 3 = ", fontname="tiro", fontsize=10)
     page.insert_text((root, 100), "\u221a", fontsize=10, fontname="china-s")
     data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
-    radical = next(span for block in data["blocks"] for line in block["lines"] for span in line["spans"] if "\u221a" in span["text"])
+    radical = next(
+        span
+        for block in data["blocks"]
+        for line in block["lines"]
+        for span in line["spans"]
+        if "\u221a" in span["text"]
+    )
     left = radical["bbox"][2]
     page.insert_text((left, 100), "81. Find the least", fontsize=10, fontname="tiro")
     digits = pymupdf.get_text_length("81", fontname="tiro", fontsize=10)
@@ -774,12 +941,20 @@ def test_a_word_label_does_not_absorb_the_value_column_block_beside_it():
         rect = pymupdf.Rect(rects[0])
         for other in rects[1:]:
             rect |= other
-        return TextBlock(page=0, rect=rect, line_rects=[pymupdf.Rect(r) for r in rects], text=text,
-                         size=9.0, color="#000", bold=False)
+        return TextBlock(
+            page=0,
+            rect=rect,
+            line_rects=[pymupdf.Rect(r) for r in rects],
+            text=text,
+            size=9.0,
+            color="#000",
+            bold=False,
+        )
 
     label = blk("View ranges:", [(318, 604, 366, 616)])
-    values = blk("{l_partkey, p_partkey} in (150, +inf), {o_custkey} in (50, 500)",
-                 [(390, 604, 522, 616), (390, 614, 482, 626)])
+    values = blk(
+        "{l_partkey, p_partkey} in (150, +inf), {o_custkey} in (50, 500)", [(390, 604, 522, 616), (390, 614, 482, 626)]
+    )
     assert len(_merge_caption_fragments([label, values])) == 2
     caption = blk("Figure 2:", [(318, 604, 350, 616)])
     tail = blk("Examples of decay schedules for the learning rate", [(356, 604, 540, 616)])

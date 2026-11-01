@@ -5,8 +5,11 @@ from app.formats.pdf_erase import Erasure, erase
 
 def _spans(page):
     return [
-        span for block in page.get_text("dict")["blocks"] if block.get("type") == 0
-        for line in block["lines"] for span in line["spans"]
+        span
+        for block in page.get_text("dict")["blocks"]
+        if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
     ]
 
 
@@ -173,11 +176,14 @@ def test_shared_type3_glyphs_are_left_alone():
     doc.update_object(glyph, "<<>>")
     doc.update_stream(glyph, b"100 0 0 0 100 100 d1 0 0 100 100 re f")
     font = doc.get_new_xref()
-    doc.update_object(font, (
-        f"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 100 100] /FontMatrix [0.01 0 0 0.01 0 0] "
-        f"/CharProcs << /a {glyph} 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> "
-        f"/FirstChar 97 /LastChar 97 /Widths [100] /Resources << >> >>"
-    ))
+    doc.update_object(
+        font,
+        (
+            f"<< /Type /Font /Subtype /Type3 /FontBBox [0 0 100 100] /FontMatrix [0.01 0 0 0.01 0 0] "
+            f"/CharProcs << /a {glyph} 0 R >> /Encoding << /Type /Encoding /Differences [97 /a] >> "
+            f"/FirstChar 97 /LastChar 97 /Widths [100] /Resources << >> >>"
+        ),
+    )
     doc.xref_set_key(page.xref, "Resources", f"<< /Font << /T3 {font} 0 R >> >>")
     content = doc.get_new_xref()
     doc.update_object(content, "<<>>")

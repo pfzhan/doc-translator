@@ -1,4 +1,5 @@
 """翻译器修复的回归测试：并发上限、错误消息容错、限流重试、标记碰撞。"""
+
 import asyncio
 import json
 import re
@@ -24,8 +25,14 @@ async def _no_sleep(_seconds):
 
 
 def make_openai(handler, **kw):
-    return OpenAITranslator("zh-CN", api_key="k", base_url="https://api.example.com/v1", model="m",
-                            transport=httpx.MockTransport(handler), **kw)
+    return OpenAITranslator(
+        "zh-CN",
+        api_key="k",
+        base_url="https://api.example.com/v1",
+        model="m",
+        transport=httpx.MockTransport(handler),
+        **kw,
+    )
 
 
 def test_concurrency_cap_covers_missing_segment_recovery():
@@ -63,23 +70,30 @@ def test_shifted_batch_items_are_retranslated_one_by_one():
     async def handler(request):
         user = json.loads(request.content)["messages"][-1]["content"]
         if "[[source_end]]" in user:
-            content = ("[[p0]]\n特伦布莱，1975 年，麦格劳-希尔。\n[[p1]]\n泽纳基斯，1994 年 4 月。\n"
-                       "[[p2]]\n严和拉森，第 345-357 页，1995 年。")
+            content = (
+                "[[p0]]\n特伦布莱，1975 年，麦格劳-希尔。\n[[p1]]\n泽纳基斯，1994 年 4 月。\n"
+                "[[p2]]\n严和拉森，第 345-357 页，1995 年。"
+            )
         else:
             singles.append(user)
             content = "单独重翻，" + ("1994 年" if "1994" in user else "1975 年")
         return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
     tr = make_openai(handler)
-    out = run(tr.translate_batch([
-        "Tremblay and Manohar. Discrete Mathematical Structures with Applications to",
-        "Computer Science. McGraw Hill Book Company, New York, 1975.",
-        "John Xenakis, editor. Multidimensional Databases. April 1994.",
-    ]))
+    out = run(
+        tr.translate_batch(
+            [
+                "Tremblay and Manohar. Discrete Mathematical Structures with Applications to",
+                "Computer Science. McGraw Hill Book Company, New York, 1975.",
+                "John Xenakis, editor. Multidimensional Databases. April 1994.",
+            ]
+        )
+    )
     # 第 2、3 段数字对不上。第 1 段的译文是第 1、2 段并成的，看不出来，跟着一起重翻
     assert out == ["单独重翻，1975 年", "单独重翻，1975 年", "单独重翻，1994 年"]
     assert len(singles) == 3
     run(tr.aclose())
+
 
 def test_items_holding_a_neighbors_translation_are_retranslated():
     """模型漏了一段、后面几段串了位：译文带着原文没有的公式占位符，或者长度比远离同批的常见值。
@@ -102,18 +116,22 @@ def test_items_holding_a_neighbors_translation_are_retranslated():
         return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
     tr = make_openai(handler)
-    out = run(tr.translate_batch([
-        "Adding this temporal dimension makes RNNs appear to be more complex than non-recurrent "
-        "architectures. But in reality, they are not all that different.",
-        "{v1} Simple recurrent neural network illustrated as a feedforward network. The hidden "
-        "layer{v2} from the prior time step is multiplied by weight matrix U.",
-        "Inference in RNNs",
-        "Forward inference (mapping a sequence of inputs to a sequence of outputs) in an RNN is nearly "
-        "identical to what we have already seen with feedforward networks, to compute an output {v1} "
-        "for an input {v2}.",
-        "Let us refer to the input, hidden and output layer dimensions as {v1}, {v2}, and {v3} "
-        "respectively, which gives three parameter matrices.",
-    ]))
+    out = run(
+        tr.translate_batch(
+            [
+                "Adding this temporal dimension makes RNNs appear to be more complex than non-recurrent "
+                "architectures. But in reality, they are not all that different.",
+                "{v1} Simple recurrent neural network illustrated as a feedforward network. The hidden "
+                "layer{v2} from the prior time step is multiplied by weight matrix U.",
+                "Inference in RNNs",
+                "Forward inference (mapping a sequence of inputs to a sequence of outputs) in an RNN is nearly "
+                "identical to what we have already seen with feedforward networks, to compute an output {v1} "
+                "for an input {v2}.",
+                "Let us refer to the input, hidden and output layer dimensions as {v1}, {v2}, and {v3} "
+                "respectively, which gives three parameter matrices.",
+            ]
+        )
+    )
     # 第 0、2 段带着别段的占位符，第 3 段只译出一个词
     assert all(text == "单独重翻" for text in out)
     assert len(singles) == 5
@@ -132,24 +150,30 @@ def test_a_short_heading_holding_the_next_paragraph_shifts_the_batch():
     async def handler(request):
         user = json.loads(request.content)["messages"][-1]["content"]
         if "[[source_end]]" in user:
-            content = (f"[[p0]]\n{following}\n[[p1]]\n{after}\n[[p2]]\n{after}\n"
-                       "[[p3]]\n这里不介绍 DFT 的数学细节，只需指出傅里叶分析依赖于欧拉公式，其中 j 是虚数单位。")
+            content = (
+                f"[[p0]]\n{following}\n[[p1]]\n{after}\n[[p2]]\n{after}\n"
+                "[[p3]]\n这里不介绍 DFT 的数学细节，只需指出傅里叶分析依赖于欧拉公式，其中 j 是虚数单位。"
+            )
         else:
             singles.append(user)
             content = "单独重翻"
         return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
     tr = make_openai(handler)
-    out = run(tr.translate_batch([
-        "Discrete Fourier Transform",
-        "The next step is to extract spectral information for our windowed signal; we need to know how much "
-        "energy the signal contains at different frequency bands. The tool for extracting spectral information "
-        "for discrete frequency bands for a discrete-time (sampled) signal is the discrete Fourier transform or DFT.",
-        "The input to the DFT is a windowed signal, and the output, for each of N discrete frequency bands, "
-        "is a complex number representing the magnitude and phase of that frequency component in the original signal.",
-        "We do not introduce the mathematical details of the DFT here, except to note that Fourier analysis "
-        "relies on Euler's formula, with j as the imaginary unit.",
-    ]))
+    out = run(
+        tr.translate_batch(
+            [
+                "Discrete Fourier Transform",
+                "The next step is to extract spectral information for our windowed signal; we need to know how much "
+                "energy the signal contains at different frequency bands. The tool for extracting spectral information "
+                "for discrete frequency bands for a discrete-time (sampled) signal is the discrete Fourier transform or DFT.",
+                "The input to the DFT is a windowed signal, and the output, for each of N discrete frequency bands, "
+                "is a complex number representing the magnitude and phase of that frequency component in the original signal.",
+                "We do not introduce the mathematical details of the DFT here, except to note that Fourier analysis "
+                "relies on Euler's formula, with j as the imaginary unit.",
+            ]
+        )
+    )
     assert all(text == "单独重翻" for text in out)
     assert len(singles) == 4
     run(tr.aclose())
@@ -181,8 +205,7 @@ def test_google_200_html_treated_as_rate_limit(monkeypatch):
 
     def handler(request):
         calls.append(request)
-        return httpx.Response(200, text="<html><body>captcha</body></html>",
-                              headers={"content-type": "text/html"})
+        return httpx.Response(200, text="<html><body>captcha</body></html>", headers={"content-type": "text/html"})
 
     tr = GoogleTranslator("zh-CN", transport=httpx.MockTransport(handler))
     with pytest.raises(TranslatorError, match="不是 JSON"):
@@ -205,8 +228,9 @@ def test_retry_after_header_drives_backoff(monkeypatch, retry_after, expected):
     def handler(request):
         calls.append(request)
         if len(calls) == 1:
-            return httpx.Response(429, json={"error": {"message": "rate limited"}},
-                                  headers={"Retry-After": retry_after})
+            return httpx.Response(
+                429, json={"error": {"message": "rate limited"}}, headers={"Retry-After": retry_after}
+            )
         return httpx.Response(200, json={"choices": [{"message": {"content": "好"}}]})
 
     tr = make_openai(handler)
@@ -294,11 +318,15 @@ def test_google_splits_html_and_plain_batches():
 
 def test_llm_token_usage_accumulated():
     """接口返回的 usage 累计到 translator.usage：批量、补翻的请求都算。"""
+
     def handler(request):
-        return httpx.Response(200, json={
-            "choices": [{"message": {"content": "译"}}],
-            "usage": {"prompt_tokens": 100, "completion_tokens": 20},
-        })
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "译"}}],
+                "usage": {"prompt_tokens": 100, "completion_tokens": 20},
+            },
+        )
 
     tr = make_openai(handler)
     run(tr.translate_batch(["one"]))
@@ -309,15 +337,21 @@ def test_llm_token_usage_accumulated():
 
 def test_gemini_token_usage_mapping():
     """Gemini 的 usageMetadata 字段名映射到 prompt/completion。"""
+
     def handler(request):
-        return httpx.Response(200, json={
-            "candidates": [{"content": {"parts": [{"text": "译"}]}}],
-            "usageMetadata": {"promptTokenCount": 50, "candidatesTokenCount": 10, "thoughtsTokenCount": 30},
-        })
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [{"content": {"parts": [{"text": "译"}]}}],
+                "usageMetadata": {"promptTokenCount": 50, "candidatesTokenCount": 10, "thoughtsTokenCount": 30},
+            },
+        )
 
     from app.translators import GeminiTranslator
-    tr = GeminiTranslator("zh-CN", api_key="x", base_url="http://localhost", model="m",
-                          transport=httpx.MockTransport(handler))
+
+    tr = GeminiTranslator(
+        "zh-CN", api_key="x", base_url="http://localhost", model="m", transport=httpx.MockTransport(handler)
+    )
     assert run(tr.translate_batch(["one"])) == ["译"]
     assert tr.usage == {"prompt": 50, "completion": 40}
     run(tr.aclose())
@@ -331,8 +365,9 @@ def test_reply_without_content_is_asked_again():
         nonlocal calls
         calls += 1
         if calls == 1:
-            return httpx.Response(200, json={"choices": [{"index": 0, "message": {"role": "assistant"},
-                                                          "finish_reason": "stop"}]})
+            return httpx.Response(
+                200, json={"choices": [{"index": 0, "message": {"role": "assistant"}, "finish_reason": "stop"}]}
+            )
         return httpx.Response(200, json={"choices": [{"message": {"content": "译文"}}]})
 
     tr = make_openai(handler)
@@ -343,6 +378,7 @@ def test_reply_without_content_is_asked_again():
 
 def test_reply_that_stays_empty_is_an_empty_translation():
     """一直回空时返回空译文：Runner 回填原文，空的段落多了才判整本失败。"""
+
     async def handler(request):
         return httpx.Response(200, json={"choices": [{"message": {"role": "assistant"}}]})
 
@@ -451,8 +487,10 @@ def test_a_reply_asking_for_the_full_text_is_not_kept():
             content = "[[p0]]\n{v1} 串位的译文。\n[[p1]]\n第二段。\n[[p2]]\n第三段。\n[[p3]]\n第四段。"
         elif fragment in user:
             asks.append(body["messages"][0]["content"])
-            content = ("我需要您提供完整的源文本才能进行翻译。您提到\"IBM, a company with a long...\", "
-                       "但这句话似乎未完成。请提供完整的 source item(源文本内容), 我将按照您的要求将其翻译为简体中文。")
+            content = (
+                '我需要您提供完整的源文本才能进行翻译。您提到"IBM, a company with a long...", '
+                "但这句话似乎未完成。请提供完整的 source item(源文本内容), 我将按照您的要求将其翻译为简体中文。"
+            )
         else:
             content = "单独重翻的译文，长度和原文相称。"
         return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})

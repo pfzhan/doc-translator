@@ -29,10 +29,15 @@ def fake_llm(provider: str, log: list):
         log.append(request)
         if request.method == "GET":
             if provider == "gemini":
-                return httpx.Response(200, json={"models": [
-                    {"name": "models/gemini-x", "supportedGenerationMethods": ["generateContent"]},
-                    {"name": "models/embed", "supportedGenerationMethods": ["embedContent"]},
-                ]})
+                return httpx.Response(
+                    200,
+                    json={
+                        "models": [
+                            {"name": "models/gemini-x", "supportedGenerationMethods": ["generateContent"]},
+                            {"name": "models/embed", "supportedGenerationMethods": ["embedContent"]},
+                        ]
+                    },
+                )
             return httpx.Response(200, json={"data": [{"id": "m-b"}, {"id": "m-a"}]})
         body = json.loads(request.content)
         if provider == "gemini":
@@ -43,8 +48,12 @@ def fake_llm(provider: str, log: list):
         if provider == "claude":
             return httpx.Response(200, json={"content": [{"type": "text", "text": reply}]})
         if provider == "gemini":
-            return httpx.Response(200, json={"candidates": [{"content": {"parts": [
-                {"text": "thinking...", "thought": True}, {"text": reply}]}}]})
+            return httpx.Response(
+                200,
+                json={
+                    "candidates": [{"content": {"parts": [{"text": "thinking...", "thought": True}, {"text": reply}]}}]
+                },
+            )
         return httpx.Response(200, json={"choices": [{"message": {"content": f"<think>hmm</think>\n{reply}"}}]})
 
     return httpx.MockTransport(handler)
@@ -59,12 +68,19 @@ def fake_marker_reply(user: str) -> str:
     return "\n".join(f"[[{pid}]]\nT:{text}" for pid, text in reversed(items))
 
 
-@pytest.mark.parametrize("provider,cls,url", [
-    ("openai", OpenAITranslator, "https://api.openai.com/v1/chat/completions"),
-    ("grok", GrokTranslator, "https://api.x.ai/v1/chat/completions"),
-    ("claude", ClaudeTranslator, "https://api.anthropic.com/v1/messages"),
-    ("gemini", GeminiTranslator, "https://generativelanguage.googleapis.com/v1beta/models/gemini-x:generateContent"),
-])
+@pytest.mark.parametrize(
+    "provider,cls,url",
+    [
+        ("openai", OpenAITranslator, "https://api.openai.com/v1/chat/completions"),
+        ("grok", GrokTranslator, "https://api.x.ai/v1/chat/completions"),
+        ("claude", ClaudeTranslator, "https://api.anthropic.com/v1/messages"),
+        (
+            "gemini",
+            GeminiTranslator,
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-x:generateContent",
+        ),
+    ],
+)
 def test_providers_request_format(provider, cls, url):
     log = []
     svc = {"provider": provider, "api_key": "sk-test", "model": "gemini-x" if provider == "gemini" else "m"}
@@ -94,18 +110,23 @@ def test_providers_request_format(provider, cls, url):
 
 def test_list_models():
     log = []
-    tr = create_translator({"provider": "gemini", "api_key": "k", "model": "x"}, "zh-CN",
-                           transport=fake_llm("gemini", log))
+    tr = create_translator(
+        {"provider": "gemini", "api_key": "k", "model": "x"}, "zh-CN", transport=fake_llm("gemini", log)
+    )
     assert run(tr.list_models()) == ["gemini-x"]
-    tr = create_translator({"provider": "openai", "api_key": "k", "model": "x"}, "zh-CN",
-                           transport=fake_llm("openai", log))
+    tr = create_translator(
+        {"provider": "openai", "api_key": "k", "model": "x"}, "zh-CN", transport=fake_llm("openai", log)
+    )
     assert run(tr.list_models()) == ["m-a", "m-b"]
 
 
 def test_custom_base_url_and_missing_key():
     log = []
-    tr = create_translator({"provider": "custom", "base_url": "http://localhost:11434/v1/", "model": "qwen"},
-                           "en", transport=fake_llm("custom", log))
+    tr = create_translator(
+        {"provider": "custom", "base_url": "http://localhost:11434/v1/", "model": "qwen"},
+        "en",
+        transport=fake_llm("custom", log),
+    )
     run(tr.translate_batch(["你好"]))
     assert str(log[0].url) == "http://localhost:11434/v1/chat/completions"
     assert "authorization" not in log[0].headers
@@ -124,8 +145,9 @@ def test_build_messages_and_custom_prompt():
     assert "{{" not in system
     assert user == "Translate to German:\n\n[[p0]]\na\n[[p1]]\nb\n[[source_end]]"
 
-    system, user = build_messages(["only {{to}} literal"], "zh-CN", system_template="Be a {{to}} poet.",
-                                  user_template="Render:")
+    system, user = build_messages(
+        ["only {{to}} literal"], "zh-CN", system_template="Be a {{to}} poet.", user_template="Render:"
+    )
     assert system.startswith("Be a Simplified Chinese poet.")
     assert "[[source_end]]" not in system and "Return only the processed text" in system
     assert user == "Render:\n\nonly {{to}} literal"  # 原文里的 {{to}} 不能被替换
@@ -148,19 +170,23 @@ def test_marker_parse_missing_item_is_retranslated():
         content = "[[p0]]\nA\n[[p2]]\nC" if "[[source_end]]" in user else "B-single"
         return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
-    tr = create_translator({"provider": "openai", "api_key": "k", "model": "m"}, "zh-CN",
-                           transport=httpx.MockTransport(handler))
+    tr = create_translator(
+        {"provider": "openai", "api_key": "k", "model": "m"}, "zh-CN", transport=httpx.MockTransport(handler)
+    )
     assert run(tr.translate_batch(["a", "b", "c"])) == ["A", "B-single", "C"]
     assert len(calls) == 2
 
 
-@pytest.mark.parametrize("provider,base,expected", [
-    ("openai", "https://relay.example.com/", "https://relay.example.com/v1/chat/completions"),
-    ("custom", "https://relay.example.com:1100", "https://relay.example.com:1100/v1/chat/completions"),
-    ("openai", "https://relay.example.com/api/v3", "https://relay.example.com/api/v3/chat/completions"),
-    ("claude", "https://relay.example.com", "https://relay.example.com/v1/messages"),
-    ("gemini", "https://relay.example.com", "https://relay.example.com/v1beta/models/m:generateContent"),
-])
+@pytest.mark.parametrize(
+    "provider,base,expected",
+    [
+        ("openai", "https://relay.example.com/", "https://relay.example.com/v1/chat/completions"),
+        ("custom", "https://relay.example.com:1100", "https://relay.example.com:1100/v1/chat/completions"),
+        ("openai", "https://relay.example.com/api/v3", "https://relay.example.com/api/v3/chat/completions"),
+        ("claude", "https://relay.example.com", "https://relay.example.com/v1/messages"),
+        ("gemini", "https://relay.example.com", "https://relay.example.com/v1beta/models/m:generateContent"),
+    ],
+)
 def test_domain_only_base_url_gets_version_path(provider, base, expected):
     log = []
 
@@ -172,18 +198,24 @@ def test_domain_only_base_url_gets_version_path(provider, base, expected):
             return httpx.Response(200, json={"candidates": [{"content": {"parts": [{"text": "好"}]}}]})
         return httpx.Response(200, json={"choices": [{"message": {"content": "好"}}]})
 
-    tr = create_translator({"provider": provider, "api_key": "k", "model": "m", "base_url": base}, "zh-CN",
-                           transport=httpx.MockTransport(handler))
+    tr = create_translator(
+        {"provider": provider, "api_key": "k", "model": "m", "base_url": base},
+        "zh-CN",
+        transport=httpx.MockTransport(handler),
+    )
     run(tr.translate_batch(["good"]))
     assert str(log[0].url) == expected
 
 
 def test_html_response_gives_readable_error():
     # 中转站把未知路径返回成首页（200 + HTML），以前会抛 JSONDecodeError 变成 500
-    tr = create_translator({"provider": "openai", "api_key": "k", "model": "m", "base_url": "https://relay.example.com/x"},
-                           "zh-CN", transport=httpx.MockTransport(
-                               lambda r: httpx.Response(200, text="<!doctype html><html></html>",
-                                                        headers={"content-type": "text/html"})))
+    tr = create_translator(
+        {"provider": "openai", "api_key": "k", "model": "m", "base_url": "https://relay.example.com/x"},
+        "zh-CN",
+        transport=httpx.MockTransport(
+            lambda r: httpx.Response(200, text="<!doctype html><html></html>", headers={"content-type": "text/html"})
+        ),
+    )
     with pytest.raises(TranslatorError, match="不是 JSON.*/v1"):
         run(tr.translate_batch(["good"]))
 
@@ -196,11 +228,14 @@ def test_transient_400_from_relay_is_retried(monkeypatch):
     def handler(request):
         calls.append(request)
         if len(calls) == 1:
-            return httpx.Response(400, json={"error": {"message": 'Upstream rejected... {"reason":"INVALID_MODEL_ID"}'}})
+            return httpx.Response(
+                400, json={"error": {"message": 'Upstream rejected... {"reason":"INVALID_MODEL_ID"}'}}
+            )
         return httpx.Response(200, json={"choices": [{"message": {"content": "好"}}]})
 
-    tr = create_translator({"provider": "openai", "api_key": "k", "model": "m"}, "zh-CN",
-                           transport=httpx.MockTransport(handler))
+    tr = create_translator(
+        {"provider": "openai", "api_key": "k", "model": "m"}, "zh-CN", transport=httpx.MockTransport(handler)
+    )
     assert run(tr.translate_batch(["good"])) == ["好"]
     assert len(calls) == 2
 
@@ -214,8 +249,9 @@ def test_config_errors_fail_fast(monkeypatch, status):
         calls.append(request)
         return httpx.Response(status, json={"error": {"message": "bad key"}})
 
-    tr = create_translator({"provider": "openai", "api_key": "k", "model": "m"}, "zh-CN",
-                           transport=httpx.MockTransport(handler))
+    tr = create_translator(
+        {"provider": "openai", "api_key": "k", "model": "m"}, "zh-CN", transport=httpx.MockTransport(handler)
+    )
     with pytest.raises(TranslatorError, match=str(status)):
         run(tr.translate_batch(["good"]))
     assert len(calls) == 1  # Key 错、没权限、地址错，重试没用，立即报错
@@ -234,8 +270,9 @@ def test_batch_rejected_by_relay_is_split(monkeypatch):
             return httpx.Response(400, json={"error": {"message": "INVALID_MODEL_ID"}})
         return httpx.Response(200, json={"choices": [{"message": {"content": fake_marker_reply(user)}}]})
 
-    tr = create_translator({"provider": "openai", "api_key": "k", "model": "m"}, "zh-CN",
-                           transport=httpx.MockTransport(handler))
+    tr = create_translator(
+        {"provider": "openai", "api_key": "k", "model": "m"}, "zh-CN", transport=httpx.MockTransport(handler)
+    )
     texts = [f"para {i}" for i in range(8)]
     assert run(tr.translate_batch(texts)) == [f"T:para {i}" for i in range(8)]
     assert sizes == [8, 8, 4, 4]  # 原样重试一次，然后拆成两半
@@ -243,8 +280,11 @@ def test_batch_rejected_by_relay_is_split(monkeypatch):
 
 def test_single_segment_400_still_fails(monkeypatch):
     monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
-    tr = create_translator({"provider": "openai", "api_key": "k", "model": "m"}, "zh-CN",
-                           transport=httpx.MockTransport(lambda r: httpx.Response(400, json={"error": {"message": "x"}})))
+    tr = create_translator(
+        {"provider": "openai", "api_key": "k", "model": "m"},
+        "zh-CN",
+        transport=httpx.MockTransport(lambda r: httpx.Response(400, json={"error": {"message": "x"}})),
+    )
     with pytest.raises(TranslatorError) as e:
         run(tr.translate_batch(["only one"]))
     assert e.value.status == 400
@@ -264,8 +304,11 @@ def test_temperature_retry_without_it():
             return httpx.Response(400, json={"error": {"message": "Unsupported value: 'temperature'"}})
         return httpx.Response(200, json={"choices": [{"message": {"content": "好"}}]})
 
-    tr = create_translator({"provider": "openai", "api_key": "k", "model": "o3", "temperature": 0}, "zh-CN",
-                           transport=httpx.MockTransport(handler))
+    tr = create_translator(
+        {"provider": "openai", "api_key": "k", "model": "o3", "temperature": 0},
+        "zh-CN",
+        transport=httpx.MockTransport(handler),
+    )
     assert run(tr.translate_batch(["good"])) == ["好"]
     assert len(calls) == 2 and "temperature" not in calls[1]
 
@@ -424,8 +467,7 @@ def test_corrupted_services_json_falls_back(tmp_path):
 def test_ccswitch_default_unreadable_db_falls_back(tmp_path):
     """默认服务是 CC Switch 的但数据库暂时读不到：配置保留，实际生效的默认退回谷歌翻译。"""
     path = tmp_path / "s.json"
-    path.write_text(json.dumps({"default": "ccswitch-claude", "services": [], "ccswitch": {}}),
-                    encoding="utf-8")
+    path.write_text(json.dumps({"default": "ccswitch-claude", "services": [], "ccswitch": {}}), encoding="utf-8")
     store = ServiceStore(path, ccswitch_db=tmp_path / "missing.db")
     assert store.default_id == "ccswitch-claude"  # 原值保留，数据库恢复后仍是默认
     assert store.effective_default() == "google"
@@ -537,12 +579,9 @@ def test_a_cached_translation_of_a_neighbor_is_retranslated():
     tr.max_batch_chars = 100
     cache = Cache()
     good = {
-        "The hidden layer from the previous time step provides a form of memory, or context.":
-            "前一个时间步的隐藏层提供了一种记忆或上下文。",
-        "Critically, this approach does not impose a fixed-length limit on this prior context.":
-            "关键在于, 这种方法不会对先前的上下文施加固定长度的限制。",
-        "Given an input vector and the values for the hidden layer from the previous time step.":
-            "给定一个输入向量和前一个时间步隐藏层的值。",
+        "The hidden layer from the previous time step provides a form of memory, or context.": "前一个时间步的隐藏层提供了一种记忆或上下文。",
+        "Critically, this approach does not impose a fixed-length limit on this prior context.": "关键在于, 这种方法不会对先前的上下文施加固定长度的限制。",
+        "Given an input vector and the values for the hidden layer from the previous time step.": "给定一个输入向量和前一个时间步隐藏层的值。",
     }
     shifted = "Adding this temporal dimension makes RNNs appear to be more complex than before."
     cut = "After putting in place the structures, systems, processes, and teams described above."

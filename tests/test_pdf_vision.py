@@ -66,11 +66,14 @@ def test_model_marks_chart_labels_and_display_formulas_as_figures():
     legend = pymupdf.Rect(60, 100, 160, 112)
     formula = pymupdf.Rect(120, 200, 280, 216)
     body = pymupdf.Rect(40, 300, 360, 340)
-    session = FakeSession(doc[0].rect, [
-        (pymupdf.Rect(50, 80, 350, 180), 0.9, 3),
-        (pymupdf.Rect(110, 195, 290, 220), 0.8, 8),
-        (pymupdf.Rect(38, 298, 362, 342), 0.95, 1),
-    ])
+    session = FakeSession(
+        doc[0].rect,
+        [
+            (pymupdf.Rect(50, 80, 350, 180), 0.9, 3),
+            (pymupdf.Rect(110, 195, 290, 220), 0.8, 8),
+            (pymupdf.Rect(38, 298, 362, 342), 0.95, 1),
+        ],
+    )
     items = [
         _item("ResNet-20 ResNet-56", legend),
         _item("MultiHead(Q, K, V) = Concat(head1, ..., headh)", formula),
@@ -88,10 +91,13 @@ def test_model_titles_and_captions_do_not_pull_text_out_of_a_figure():
     figure = pymupdf.Rect(60, 60, 340, 260)
     label = pymupdf.Rect(100, 100, 150, 112)
     heading = pymupdf.Rect(40, 300, 150, 314)
-    session = FakeSession(doc[0].rect, [
-        (pymupdf.Rect(95, 95, 155, 115), 0.7, 4),
-        (pymupdf.Rect(38, 298, 160, 316), 0.9, 0),
-    ])
+    session = FakeSession(
+        doc[0].rect,
+        [
+            (pymupdf.Rect(95, 95, 155, 115), 0.7, 4),
+            (pymupdf.Rect(38, 298, 160, 316), 0.9, 0),
+        ],
+    )
     items = [_item("none 1", label), _item("Acknowledgements", heading)]
     rule = HeuristicLayout().classify(items, [_geo([figure])], median=10)
     assert rule == [Role.FIGURE, Role.BODY]
@@ -104,12 +110,17 @@ def test_a_body_sentence_under_a_caption_is_not_a_caption():
     doc = _doc()
     caption = pymupdf.Rect(60, 270, 340, 292)
     body = pymupdf.Rect(40, 300, 360, 312)
-    session = FakeSession(doc[0].rect, [
-        (pymupdf.Rect(58, 268, 342, 294), 0.5, 4),
-        (pymupdf.Rect(38, 298, 362, 314), 0.8, 4),
-    ])
-    items = [_item("Figure 19.15 A simplified outline of computing the span scores", caption),
-             _item("Fig. 19.15 sketches the architecture. The input word tokens are embedded by", body)]
+    session = FakeSession(
+        doc[0].rect,
+        [
+            (pymupdf.Rect(58, 268, 342, 294), 0.5, 4),
+            (pymupdf.Rect(38, 298, 362, 314), 0.8, 4),
+        ],
+    )
+    items = [
+        _item("Figure 19.15 A simplified outline of computing the span scores", caption),
+        _item("Fig. 19.15 sketches the architecture. The input word tokens are embedded by", body),
+    ]
     roles = ModelLayout(doc, session).classify(items, [_geo()], median=10)
     assert roles[1] is Role.BODY
     assert roles[0] is Role.CAPTION
@@ -145,8 +156,9 @@ def test_text_regions_are_the_plain_text_boxes_and_the_page_is_read_once():
     body = pymupdf.Rect(38, 298, 362, 342)
     session = FakeSession(doc[0].rect, [(body, 0.95, 1), (pymupdf.Rect(110, 195, 290, 220), 0.8, 8)])
     layout = ModelLayout(doc, session)
-    layout.classify([_item("A body paragraph that explains the figure.", pymupdf.Rect(40, 300, 360, 340))],
-                    [_geo()], median=10)
+    layout.classify(
+        [_item("A body paragraph that explains the figure.", pymupdf.Rect(40, 300, 360, 340))], [_geo()], median=10
+    )
     [region] = layout.text_regions(0)
     assert all(abs(a - b) < 1 for a, b in zip(region, body))
     assert len(session.inputs) == 1
@@ -181,12 +193,15 @@ def test_formula_boxes_keep_the_best_of_overlapping_ones():
     """同一个公式常有几个重叠的框，只留分最高的。分太低的不要，行间公式不算行内公式"""
     doc = _doc()
     inline = pymupdf.Rect(100, 100, 140, 112)
-    session = FormulaSession(doc[0].rect, [
-        (inline, 0.9, 0),
-        (pymupdf.Rect(101, 100, 141, 112), 0.6, 0),
-        (pymupdf.Rect(200, 100, 230, 112), 0.1, 0),
-        (pymupdf.Rect(80, 200, 320, 240), 0.8, 1),
-    ])
+    session = FormulaSession(
+        doc[0].rect,
+        [
+            (inline, 0.9, 0),
+            (pymupdf.Rect(101, 100, 141, 112), 0.6, 0),
+            (pymupdf.Rect(200, 100, 230, 112), 0.1, 0),
+            (pymupdf.Rect(80, 200, 320, 240), 0.8, 1),
+        ],
+    )
     detector = FormulaDetector(doc, [session])
     assert sorted(region.label for region in detector.regions(0)) == ["embedding", "isolated"]
     [found] = detector.inline(0)

@@ -33,7 +33,8 @@ from app.formats.pdf_units import _code_block
 PAPER = next(iter(sorted(Path("data/jobs").glob("*/implementing_data_cube.pdf"))), None)
 needs_paper = pytest.mark.skipif(PAPER is None, reason="样例论文不在本机")
 needs_tesseract = pytest.mark.skipif(
-    __import__("shutil").which("tesseract") is None, reason="本机没有 tesseract",
+    __import__("shutil").which("tesseract") is None,
+    reason="本机没有 tesseract",
 )
 
 ROMAN, MATH, TYPE = 1, 2, 3
@@ -63,8 +64,12 @@ def _box(ch: str, x: float, baseline: float, size: float) -> tuple[pymupdf.Rect,
 
 
 def _set(
-    words: list[tuple[str, int]], labels: dict, x: float = 72.0, baseline: float = 100.0,
-    size: float = SIZE, shift: float = 0.0,
+    words: list[tuple[str, int]],
+    labels: dict,
+    x: float = 72.0,
+    baseline: float = 100.0,
+    size: float = SIZE,
+    shift: float = 0.0,
 ) -> list[Glyph]:
     """一行字。family 是位图那一套：正文、数学斜体、等宽。字距 0.05 个字号，词距 0.4 个字号。"""
     glyphs: list[Glyph] = []
@@ -100,11 +105,14 @@ def _styled(line: _Line, reader: Type3Reader) -> str:
     styles = _glyph_styles(line, reader)
     out = []
     for token in line.tokens:
-        out.append("".join(
-            reader.labels[glyph.key].text if styles[id(glyph)] in ("text", "mono")
-            else f"[{reader.labels[glyph.key].text}]"
-            for glyph in token
-        ))
+        out.append(
+            "".join(
+                reader.labels[glyph.key].text
+                if styles[id(glyph)] in ("text", "mono")
+                else f"[{reader.labels[glyph.key].text}]"
+                for glyph in token
+            )
+        )
     return " ".join(out)
 
 
@@ -125,6 +133,7 @@ def test_hocr_gives_words_with_letter_boxes():
 
 def test_votes_pair_letters_and_give_a_ligature_its_letters():
     """字数和字形数对上的词逐个配对。office 少两个字形：o、c、e 已认定，剩下的 ffi 归连字。"""
+
     def glyph(key: int, x0: float) -> Glyph:
         return Glyph((1, key), pymupdf.Rect(x0, 90, x0 + 5, 100))
 
@@ -143,16 +152,18 @@ def test_votes_pair_letters_and_give_a_ligature_its_letters():
     office = [glyph(o, 70), glyph(ffi, 76), glyph(c, 82), glyph(e, 88)]
     labels = _vote_labels(
         {0: [*cat, *toe, *office]},
-        {0: [word("cat", cat, list("cat")), word("toe", toe, list("toe")),
-             word("office", office, list("office"))]},
+        {0: [word("cat", cat, list("cat")), word("toe", toe, list("toe")), word("office", office, list("office"))]},
     )
     assert labels[(1, o)].text == "o"
     assert labels[(1, ffi)].text == "ffi"
 
 
 def _roles(lines: list[list[tuple[str, int]]], labels: dict, shapes=None) -> dict:
-    page = [_line for glyphs in (_set(words, labels, baseline=100 + 14 * row) for row, words in enumerate(lines))
-            for _line in _build_lines(glyphs, labels, {})]
+    page = [
+        _line
+        for glyphs in (_set(words, labels, baseline=100 + 14 * row) for row, words in enumerate(lines))
+        for _line in _build_lines(glyphs, labels, {})
+    ]
     roles, _doubtful = _learn_roles({0: page}, labels, shapes or (lambda keys: {}))
     return roles
 
@@ -160,8 +171,19 @@ def _roles(lines: list[list[tuple[str, int]]], labels: dict, shapes=None) -> dic
 def test_letters_that_never_join_a_word_are_variables():
     """数学斜体的 p、s 只单独出现；正文的 p、s 在 price、sales 里。冠词 a 和词里的 a 是同一张位图。"""
     labels: dict = {}
-    sentence = [("each", ROMAN), ("price", ROMAN), ("of", ROMAN), ("part", ROMAN), ("p", MATH),
-                ("and", ROMAN), ("sales", ROMAN), ("s", MATH), ("is", ROMAN), ("a", ROMAN), ("cost", ROMAN)]
+    sentence = [
+        ("each", ROMAN),
+        ("price", ROMAN),
+        ("of", ROMAN),
+        ("part", ROMAN),
+        ("p", MATH),
+        ("and", ROMAN),
+        ("sales", ROMAN),
+        ("s", MATH),
+        ("is", ROMAN),
+        ("a", ROMAN),
+        ("cost", ROMAN),
+    ]
     roles = _roles([sentence] * 4, labels)
     assert roles[(MATH, ord("p"))] == "math"
     assert roles[(MATH, ord("s"))] == "math"
@@ -254,11 +276,15 @@ def test_line_follows_baselines_not_the_fraction_order():
 def test_lowered_full_size_letters_are_a_subscript():
     """N 下面的 supplier 和正文一样大，只是整体往下沉。"""
     labels: dict = {}
-    line = _build_lines([
-        *_set([("where", ROMAN), ("N", MATH)], labels),
-        *_set([("supplier", 4)], labels, x=110, shift=2.6),
-        *_set([("is", ROMAN), ("the", ROMAN)], labels, x=150),
-    ], labels, {})[0]
+    line = _build_lines(
+        [
+            *_set([("where", ROMAN), ("N", MATH)], labels),
+            *_set([("supplier", 4)], labels, x=110, shift=2.6),
+            *_set([("is", ROMAN), ("the", ROMAN)], labels, x=150),
+        ],
+        labels,
+        {},
+    )[0]
     reader = _reader(labels, {key: "text" for key in labels})
     sub = [glyph for glyph in line.glyphs if glyph.key[0] == 4]
     plain = [glyph for glyph in line.glyphs if glyph.key[0] == ROMAN]
@@ -284,10 +310,30 @@ def test_variable_with_a_typewriter_subscript_stays_a_formula():
 
 def test_formula_keeps_inner_commas_and_brackets_and_leaves_the_period():
     labels: dict = {}
-    glyphs = _set([("cell", ROMAN), ("(p,", MATH), ("s,", MATH), ("c).", MATH), ("The", ROMAN),
-                   ("(i", MATH), ("+", MATH), ("1)st", ROMAN), ("side", ROMAN),
-                   ("(using", ROMAN), ("d)", MATH), ("and", ROMAN), ("k", MATH), ("=", MATH), ("2.", ROMAN),
-                   ("size", ROMAN), ("S.", MATH), ("c", MATH), ("gives", ROMAN)], labels)
+    glyphs = _set(
+        [
+            ("cell", ROMAN),
+            ("(p,", MATH),
+            ("s,", MATH),
+            ("c).", MATH),
+            ("The", ROMAN),
+            ("(i", MATH),
+            ("+", MATH),
+            ("1)st", ROMAN),
+            ("side", ROMAN),
+            ("(using", ROMAN),
+            ("d)", MATH),
+            ("and", ROMAN),
+            ("k", MATH),
+            ("=", MATH),
+            ("2.", ROMAN),
+            ("size", ROMAN),
+            ("S.", MATH),
+            ("c", MATH),
+            ("gives", ROMAN),
+        ],
+        labels,
+    )
     roles = {key: "text" for key in labels}
     roles.update({key: "neutral" for key in labels if not labels[key].text.isalpha()})
     roles.update({(MATH, ord(ch)): "math" for ch in "pscidkS"})
@@ -299,16 +345,21 @@ def test_formula_keeps_inner_commas_and_brackets_and_leaves_the_period():
     assert "(using [d])" in styled
     assert "[k] [=] [2]." in styled
     assert "size [S]. [c] gives" in styled
-    item = _build_lines(_set([("1.", ROMAN), ("<", MATH), ("is", ROMAN), ("a", ROMAN), ("partial", ROMAN)], labels,
-                             baseline=130), labels, {})[0]
+    item = _build_lines(
+        _set([("1.", ROMAN), ("<", MATH), ("is", ROMAN), ("a", ROMAN), ("partial", ROMAN)], labels, baseline=130),
+        labels,
+        {},
+    )[0]
     assert _styled(item, _reader(labels, roles)).startswith("1. [<] is")
 
 
 def test_comma_outside_brackets_separates_two_formulas():
     """⟨L, ⪯⟩, a ≺ b：括号外的逗号是句子的，两边是两个公式。"""
     labels: dict = {}
-    glyphs = _set([("lattice", ROMAN), ("(L,", MATH), ("<),", MATH), ("a", MATH), ("<", MATH), ("b", MATH),
-                   ("means", ROMAN)], labels)
+    glyphs = _set(
+        [("lattice", ROMAN), ("(L,", MATH), ("<),", MATH), ("a", MATH), ("<", MATH), ("b", MATH), ("means", ROMAN)],
+        labels,
+    )
     labels[(MATH, ord("<"))] = Label("<", 1.0)
     roles = {key: "text" for key in labels}
     roles.update({key: "neutral" for key in labels if not labels[key].text.isalpha()})
@@ -317,17 +368,36 @@ def test_comma_outside_brackets_separates_two_formulas():
     line = _build_lines(glyphs, labels, {})[0]
     styled = _styled(line, _reader(labels, roles))
     assert "[(][L][,] [<][)], [a] [<] [b] means" in styled
-    enumeration = _build_lines(_set([("for", ROMAN), ("a", MATH), ("=", MATH), ("1,", ROMAN), ("2,", ROMAN), ("b.", MATH),
-                                     ("The", ROMAN), ("an", ROMAN), ("b-dimensional", ROMAN)], labels,
-                                    baseline=130), labels, {})[0]
+    enumeration = _build_lines(
+        _set(
+            [
+                ("for", ROMAN),
+                ("a", MATH),
+                ("=", MATH),
+                ("1,", ROMAN),
+                ("2,", ROMAN),
+                ("b.", MATH),
+                ("The", ROMAN),
+                ("an", ROMAN),
+                ("b-dimensional", ROMAN),
+            ],
+            labels,
+            baseline=130,
+        ),
+        labels,
+        {},
+    )[0]
     roles.update({key: "text" for key in labels if key[0] == ROMAN and labels[key].text.isalpha()})
     roles.update({key: "neutral" for key in labels if key[0] == ROMAN and not labels[key].text.isalpha()})
     roles[(MATH, ord("="))] = "symbol"
     roles[(MATH, ord("b"))] = "math"
     styled = _styled(enumeration, _reader(labels, roles))
     assert "for [a] [=] [1][,] [2][,] [b]. The" in styled
-    views = _build_lines(_set([("views", ROMAN), ("d,", MATH), ("e,", MATH), ("and", ROMAN), ("b", MATH)], labels,
-                              baseline=145), labels, {})[0]
+    views = _build_lines(
+        _set([("views", ROMAN), ("d,", MATH), ("e,", MATH), ("and", ROMAN), ("b", MATH)], labels, baseline=145),
+        labels,
+        {},
+    )[0]
     roles.update({key: "text" for key in labels if key[0] == ROMAN and labels[key].text.isalpha()})
     roles.update({(MATH, ord(ch)): "math" for ch in "de"})
     assert _styled(views, _reader(labels, roles)) == "views [d], [e], and [b]"
@@ -345,7 +415,9 @@ def test_typewriter_letters_are_learned_from_even_words_with_narrow_letters():
     """等宽词里 l、逗号也占满一格。latter、each 字距也匀，但只有 0.4 个字号，不算。"""
     labels: dict = {}
     words = [("TotalSales", TYPE), ("supplier", TYPE), ("Customer,", TYPE), ("latter", ROMAN), ("each,", ROMAN)]
-    page = [_line for row in range(2) for _line in _build_lines(_set(words, labels, baseline=100 + 14 * row), labels, {})]
+    page = [
+        _line for row in range(2) for _line in _build_lines(_set(words, labels, baseline=100 + 14 * row), labels, {})
+    ]
     mono = _mono_kinds({0: page}, labels)
     assert (TYPE, ord("l")) in mono and (TYPE, ord(",")) in mono
     assert (ROMAN, ord("l")) not in mono and (ROMAN, ord("e")) not in mono
@@ -353,9 +425,15 @@ def test_typewriter_letters_are_learned_from_even_words_with_narrow_letters():
 
 def test_lines_join_by_baseline_even_when_their_boxes_overlap():
     """行内的高括号把行框撑到上一行里，按基线距仍是同一段。"""
+
     def line(y: float, top: float) -> dict:
-        span = {"text": "word word", "font": "Times-Roman", "size": 10.0, "origin": (72, y),
-                "bbox": (72, top, 400, y + 2.5)}
+        span = {
+            "text": "word word",
+            "font": "Times-Roman",
+            "size": 10.0,
+            "origin": (72, y),
+            "bbox": (72, top, 400, y + 2.5),
+        }
         return {"spans": [span], "bbox": (72, top, 400, y + 2.5)}
 
     groups = _group_lines([line(100, 92), line(113.5, 99), line(160, 152)])
@@ -370,7 +448,10 @@ def test_drop_broken_lines_keeps_images_and_normal_spans():
                 "type": 0,
                 "lines": [
                     {"spans": [{"font": "A", "text": "junk", "bbox": (0, 0, 10, 10)}], "bbox": (0, 0, 10, 10)},
-                    {"spans": [{"font": "Times-Roman", "text": "keep", "bbox": (0, 20, 30, 30)}], "bbox": (0, 20, 30, 30)},
+                    {
+                        "spans": [{"font": "Times-Roman", "text": "keep", "bbox": (0, 20, 30, 30)}],
+                        "bbox": (0, 20, 30, 30),
+                    },
                 ],
             },
         ]
@@ -397,15 +478,19 @@ def test_centered_author_is_not_a_title_fragment():
         rect = pymupdf.Rect(x0, y, x1, y + size)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
 
-    split = _merge_continuations([
-        blk("Implementing Data Cubes Efficiently*", 106.7, 144.4, 473.3, 16.8),
-        blk("Anand Rajaraman", 140.4, 255.7, 364.6, 11.9),
-    ])
+    split = _merge_continuations(
+        [
+            blk("Implementing Data Cubes Efficiently*", 106.7, 144.4, 473.3, 16.8),
+            blk("Anand Rajaraman", 140.4, 255.7, 364.6, 11.9),
+        ]
+    )
     assert len(split) == 2
-    joined = _merge_continuations([
-        blk("Learning to Execute with", 80, 120, 400, 16),
-        blk("Recurrent Neural Networks", 98, 150, 430, 16),
-    ])
+    joined = _merge_continuations(
+        [
+            blk("Learning to Execute with", 80, 120, 400, 16),
+            blk("Recurrent Neural Networks", 98, 150, 430, 16),
+        ]
+    )
     assert len(joined) == 1
     assert "Recurrent" in joined[0].text
 
@@ -433,22 +518,27 @@ def _bitmap_font_pdf(path: Path) -> None:
     glyphs = " ".join(f"/a{i}" for i in range(10))
     charprocs = " ".join(f"/a{i} {xref} 0 R" for i, xref in enumerate(procs))
     font = doc.get_new_xref()
-    doc.update_object(font, (
-        "<< /Type /Font /Subtype /Type3 /Name /BitmapF /FontBBox [0 0 500 700] "
-        f"/FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << {charprocs} >> "
-        f"/Encoding << /Type /Encoding /Differences [65 {glyphs}] >> "
-        f"/FirstChar 65 /LastChar 74 /Widths [{' '.join(['500'] * 10)}] /Resources << >> >>"
-    ))
+    doc.update_object(
+        font,
+        (
+            "<< /Type /Font /Subtype /Type3 /Name /BitmapF /FontBBox [0 0 500 700] "
+            f"/FontMatrix [0.001 0 0 0.001 0 0] /CharProcs << {charprocs} >> "
+            f"/Encoding << /Type /Encoding /Differences [65 {glyphs}] >> "
+            f"/FirstChar 65 /LastChar 74 /Widths [{' '.join(['500'] * 10)}] /Resources << >> >>"
+        ),
+    )
     doc.xref_set_key(page.xref, "Resources", f"<< /Font << /T3 {font} 0 R >> >>")
     codes = "".join(f"{65 + i % 10:02X}" for i in range(30))
     content = doc.get_new_xref()
     doc.update_object(content, "<<>>")
-    doc.update_stream(content, "\n".join(
-        f"BT /T3 12 Tf 40 {250 - row * 16} Td <{codes}> Tj ET" for row in range(6)
-    ).encode())
+    doc.update_stream(
+        content, "\n".join(f"BT /T3 12 Tf 40 {250 - row * 16} Td <{codes}> Tj ET" for row in range(6)).encode()
+    )
     doc.xref_set_key(page.xref, "Contents", f"{content} 0 R")
     doc.new_page(width=400, height=300).insert_text(
-        (40, 60), "A normal paragraph on the next page is still translated.", fontsize=11,
+        (40, 60),
+        "A normal paragraph on the next page is still translated.",
+        fontsize=11,
     )
     doc.save(path)
 
@@ -482,6 +572,7 @@ def test_bitmap_page_reads_back_its_letters(tmp_path, monkeypatch):
 @pytest.mark.parametrize("failure", ["no_words", "timeout"])
 def test_unreadable_bitmap_page_keeps_its_glyphs(tmp_path, monkeypatch, failure):
     """一页点阵字识别超时或认不出字时，这一页留原样，其他页照常翻译，不让整本书失败。"""
+
     def broken(path, scale=3.0):
         if failure == "timeout":
             raise subprocess.TimeoutExpired("tesseract", 90)

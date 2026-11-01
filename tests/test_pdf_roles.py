@@ -69,12 +69,22 @@ def test_page_filling_image_does_not_swallow_the_text_layer():
 
 def test_cross_page_does_not_merge_a_caption():
     left = TextBlock(
-        page=0, rect=pymupdf.Rect(40, 700, 200, 714), line_rects=[],
-        text="the model performs quite", size=10, color="#000", bold=False,
+        page=0,
+        rect=pymupdf.Rect(40, 700, 200, 714),
+        line_rects=[],
+        text="the model performs quite",
+        size=10,
+        color="#000",
+        bold=False,
     )
     caption = TextBlock(
-        page=1, rect=pymupdf.Rect(40, 40, 180, 54), line_rects=[],
-        text="examples of the plot", size=10, color="#000", bold=False,
+        page=1,
+        rect=pymupdf.Rect(40, 40, 180, 54),
+        line_rects=[],
+        text="examples of the plot",
+        size=10,
+        color="#000",
+        bold=False,
     )
     units = _cross_page_units([left, caption], 10.0, halt_ids={id(caption)})
     assert all(len(unit) == 1 for unit in units)
@@ -128,13 +138,18 @@ def test_body_starting_right_of_outdented_headings_bounds_the_figure():
     items = [
         _item("2.3 • UNICODE", pymupdf.Rect(398, 84, 476, 94), size=8),
         _item("2.3 Unicode", pymupdf.Rect(95, 218, 192, 235), size=17),
-        _item("Another option we could consider is the level of the individual character.",
-              pymupdf.Rect(160, 257, 493, 315)),
+        _item(
+            "Another option we could consider is the level of the individual character.",
+            pymupdf.Rect(160, 257, 493, 315),
+        ),
         _item("Ch Hex Dec", pymupdf.Rect(163, 438, 221, 448)),
-        _item("Figure 2.4 Some selected ASCII codes for some English letters.",
-              pymupdf.Rect(160, 499, 493, 519), size=9),
-        _item("But ASCII is of course insufficient since there are lots of other characters.",
-              pymupdf.Rect(160, 533, 493, 579)),
+        _item(
+            "Figure 2.4 Some selected ASCII codes for some English letters.", pymupdf.Rect(160, 499, 493, 519), size=9
+        ),
+        _item(
+            "But ASCII is of course insufficient since there are lots of other characters.",
+            pymupdf.Rect(160, 533, 493, 579),
+        ),
     ]
     frame = TextFrame(160, 493, 111, 719, 10)
     geo = PageGeometry.from_rects(612, [item.rect for item in items], [], 792, frame=frame)
@@ -158,8 +173,11 @@ def test_a_sentence_that_names_a_figure_is_not_its_caption():
 def test_smaller_pseudocode_above_a_caption_is_the_figure():
     items = [
         _item("A body paragraph that ends right before the algorithm box starts.", pymupdf.Rect(160, 60, 493, 100)),
-        _item("V ← all unique characters in C # initial set of tokens is characters",
-              pymupdf.Rect(170, 144, 427, 164), size=9),
+        _item(
+            "V ← all unique characters in C # initial set of tokens is characters",
+            pymupdf.Rect(170, 144, 427, 164),
+            size=9,
+        ),
         _item("Figure 2.6 The training part of the BPE algorithm.", pymupdf.Rect(160, 234, 493, 265), size=9),
     ]
     geo = PageGeometry.from_rects(612, [item.rect for item in items], [], 792)

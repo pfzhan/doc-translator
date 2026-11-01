@@ -63,8 +63,9 @@ def test_records_persist_across_restart(app_env, tmp_path):
 def test_interrupted_job_after_restart_can_resume(tmp_path):
     root = tmp_path / "jobs"
     (root / "abc").mkdir(parents=True)
-    (root / "abc" / "job.json").write_text(json.dumps({"id": "abc", "filename": "x.md", "status": "running",
-                                                       "done": 3, "total": 9}))
+    (root / "abc" / "job.json").write_text(
+        json.dumps({"id": "abc", "filename": "x.md", "status": "running", "done": 3, "total": 9})
+    )
     store = JobStore(root)
     job = store.get("abc")
     assert job.status == "interrupted" and "中断" in job.error
@@ -118,8 +119,9 @@ def test_retry_reuses_cache_and_can_switch_service(app_env):
             again = wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={}).json()["id"])
             assert again["status"] == "done" and sum(calls) == first  # 同一服务命中缓存
 
-            main.store.services.append({"id": "mock2", "provider": "mock", "builtin": True, "name": "Mock 2",
-                                        "enabled": True})
+            main.store.services.append(
+                {"id": "mock2", "provider": "mock", "builtin": True, "name": "Mock 2", "enabled": True}
+            )
             switched = client.post(f"/api/jobs/{job['id']}/retry", json={"service_id": "mock2"}).json()
             assert switched["service_name"] == "Mock 2"
             wait_done(client, job["id"])
@@ -167,7 +169,9 @@ def test_redo_from_scratch_analyses_the_pdf_again(app_env, monkeypatch):
     monkeypatch.setattr(pdf_units, "_extract", lambda *a, **k: calls.append(1) or real_extract(*a, **k))
     doc = pymupdf.open()
     doc.new_page(width=420, height=240).insert_text(
-        (40, 60), "A body paragraph long enough to be translated here.", fontsize=10,
+        (40, 60),
+        "A body paragraph long enough to be translated here.",
+        fontsize=10,
     )
     doc[0].insert_text((40, 120), "Closing Remarks", fontsize=14)
     doc.set_toc([[1, "Closing Remarks", 1]])
@@ -251,7 +255,9 @@ def test_pdf_translated_variant_is_cut_from_the_bilingual_output(app_env, monkey
     main = app_env
     doc = pymupdf.open()
     doc.new_page(width=420, height=240).insert_text(
-        (40, 60), "A body paragraph long enough to be translated here.", fontsize=10,
+        (40, 60),
+        "A body paragraph long enough to be translated here.",
+        fontsize=10,
     )
     doc[0].insert_text((40, 120), "Closing Remarks", fontsize=14)
     doc.set_toc([[1, "Closing Remarks", 1]])
@@ -363,8 +369,14 @@ def test_variant_rejects_second_request_and_discards_partial(app_env, monkeypatc
         main.variant_tasks.pop(job["id"])
 
         async def boom(
-            src: object, out_dir: object, runner: object, bilingual: bool, target_lang: str, layout_model: str = "",
-            plan_path: object = None, formula_model: str = "",
+            src: object,
+            out_dir: object,
+            runner: object,
+            bilingual: bool,
+            target_lang: str,
+            layout_model: str = "",
+            plan_path: object = None,
+            formula_model: str = "",
         ) -> list[object]:
             from pathlib import Path
 
@@ -399,8 +411,13 @@ def test_cleanup_respects_retention(tmp_path):
     now = time.time()
     for jid, age_days, status in [("old", 40, "done"), ("new", 5, "done"), ("busy", 40, "running")]:
         store.dir(jid).mkdir(parents=True)
-        job = Job(id=jid, filename="a.md", status=status, created=now - age_days * DAY,
-                  finished=0 if status == "running" else now - age_days * DAY)
+        job = Job(
+            id=jid,
+            filename="a.md",
+            status=status,
+            created=now - age_days * DAY,
+            finished=0 if status == "running" else now - age_days * DAY,
+        )
         store.add(job)
     assert store.cleanup(0, now) == []  # 0 = 永久保留
     assert store.cleanup(30, now, busy=frozenset({"old"})) == []  # 正在补生成的不删
@@ -575,8 +592,17 @@ def test_resume_with_invalid_service_keeps_result(app_env):
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        main.store.services.append({"id": "broken", "provider": "claude", "builtin": False, "name": "Broken",
-                                    "enabled": True, "api_key": "", "model": "m"})
+        main.store.services.append(
+            {
+                "id": "broken",
+                "provider": "claude",
+                "builtin": False,
+                "name": "Broken",
+                "enabled": True,
+                "api_key": "",
+                "model": "m",
+            }
+        )
         r = client.post(f"/api/jobs/{job['id']}/retry", json={"service_id": "broken"})
         assert r.status_code == 400 and "API Key" in r.json()["detail"]
         after = client.get(f"/api/jobs/{job['id']}").json()
@@ -597,8 +623,11 @@ def test_failed_upload_leaves_no_orphan_dir(app_env):
             raise OSError("read failed")
 
     with pytest.raises(OSError):
-        asyncio.run(main.create_job(BrokenUpload(), target_lang="zh-CN", source_lang="auto",
-                                    service_id="mock", mode="bilingual"))
+        asyncio.run(
+            main.create_job(
+                BrokenUpload(), target_lang="zh-CN", source_lang="auto", service_id="mock", mode="bilingual"
+            )
+        )
     root = main.jobs.root
     assert not root.exists() or not list(root.iterdir())
 
@@ -660,9 +689,11 @@ def _small_epub() -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
         z.writestr("mimetype", "application/epub+zip")
-        z.writestr("META-INF/container.xml",
-                   '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
-                   '<rootfile full-path="OEBPS/content.opf"/></rootfiles></container>')
+        z.writestr(
+            "META-INF/container.xml",
+            '<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles>'
+            '<rootfile full-path="OEBPS/content.opf"/></rootfiles></container>',
+        )
         z.writestr("OEBPS/content.opf", opf)
         z.writestr("OEBPS/nav.xhtml", nav)
         z.writestr("OEBPS/text/ch1.xhtml", page.format("The first chapter of the book."))
@@ -706,8 +737,11 @@ def test_oversized_upload_rejected_before_reading_body(app_env, monkeypatch):
 
     monkeypatch.setattr(main.store, "get", get)
     with TestClient(main.app) as client:
-        r = client.post("/api/jobs", files={"file": ("big.md", b"x" * (2 * 1024 * 1024))},
-                        data={"service_id": "mock", "target_lang": "zh-CN"})
+        r = client.post(
+            "/api/jobs",
+            files={"file": ("big.md", b"x" * (2 * 1024 * 1024))},
+            data={"service_id": "mock", "target_lang": "zh-CN"},
+        )
         assert r.status_code == 413 and "上限" in r.json()["detail"]
         assert not entered
         assert client.get("/api/jobs").json()["jobs"] == []

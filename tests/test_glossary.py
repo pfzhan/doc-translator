@@ -31,7 +31,9 @@ def test_candidates_keep_repeated_phrases_and_acronyms():
 
 def test_possessives_do_not_leave_word_fragments():
     """撇号不是断句标点：view's set 不能切出 “s set”，don't 也不能切出 “t …”。"""
-    text = ["The view's set of output columns must cover the query's set of output columns, and we don't drop columns."] * 4
+    text = [
+        "The view's set of output columns must cover the query's set of output columns, and we don't drop columns."
+    ] * 4
     found = candidates(text)
     assert "output column" in found or "output columns" in found
     assert not any(term.split()[0] in ("s", "t") for term in found), found
@@ -65,7 +67,9 @@ def test_user_entries_win_over_found_ones():
     assert merge(user, [("data cube", "数据立方体"), ("view", "视图")]) == [("Data Cube", "数据立方"), ("view", "视图")]
 
 
-def _translator(requests, terms_reply="data cube = 数据立方体\ngreedy algorithm = 贪心算法\nOLAP = OLAP\nnot asked = 无"):
+def _translator(
+    requests, terms_reply="data cube = 数据立方体\ngreedy algorithm = 贪心算法\nOLAP = OLAP\nnot asked = 无"
+):
     async def handler(request):
         body = json.loads(request.content)
         system = body["messages"][0]["content"]
@@ -80,8 +84,14 @@ def _translator(requests, terms_reply="data cube = 数据立方体\ngreedy algor
             content = "译文"
         return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
 
-    tr = OpenAITranslator("zh-CN", api_key="k", base_url="https://api.example.com/v1", model="m",
-                          transport=httpx.MockTransport(handler), max_items=2)
+    tr = OpenAITranslator(
+        "zh-CN",
+        api_key="k",
+        base_url="https://api.example.com/v1",
+        model="m",
+        transport=httpx.MockTransport(handler),
+        max_items=2,
+    )
     tr.service_id = "svc"
     return tr
 

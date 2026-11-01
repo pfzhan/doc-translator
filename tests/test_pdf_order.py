@@ -57,7 +57,9 @@ def test_moved_translations_keep_their_place_on_the_page(tmp_path, monkeypatch):
         return {w[4]: tuple(round(v, 1) for v in w[:4]) for w in out[0].get_text("words")}, _words(out)
 
     moved, order = boxes()
-    monkeypatch.setattr(pdf_write, "ReadingOrder", lambda page, blocks: pdf_order.ReadingOrder(page, blocks, enabled=False))
+    monkeypatch.setattr(
+        pdf_write, "ReadingOrder", lambda page, blocks: pdf_order.ReadingOrder(page, blocks, enabled=False)
+    )
     at_end, _ = boxes()
     assert moved == at_end
     assert order == ["Header", "line", "甲乙丙", "cell", "one", "two", "丁戊己"]
@@ -104,15 +106,17 @@ def test_a_label_inside_a_figure_goes_right_after_the_figure(tmp_path):
     font = doc.get_new_xref()
     doc.update_object(font, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
     form = doc.get_new_xref()
-    doc.update_object(form, f"<< /Type /XObject /Subtype /Form /BBox [30 230 300 300] "
-                            f"/Resources << /Font << /F1 {font} 0 R >> >> >>")
+    doc.update_object(
+        form, f"<< /Type /XObject /Subtype /Form /BBox [30 230 300 300] /Resources << /Font << /F1 {font} 0 R >> >> >>"
+    )
     doc.update_stream(form, b"BT /F1 10 Tf 40 280 Td (Figure) Tj 0 -40 Td (delta epsilon zeta) Tj ET\n")
     doc.xref_set_key(page.xref, "Resources", f"<< /Font << /F1 {font} 0 R >> /XObject << /Fm0 {form} 0 R >> >>")
     stream = doc.get_new_xref()
     doc.update_object(stream, "<<>>")
-    doc.update_stream(stream, b"BT /F1 10 Tf 40 320 Td (alpha beta gamma) Tj ET\n"
-                              b"q /Fm0 Do Q\n"
-                              b"BT /F1 10 Tf 40 200 Td (cell one two) Tj ET\n")
+    doc.update_stream(
+        stream,
+        b"BT /F1 10 Tf 40 320 Td (alpha beta gamma) Tj ET\nq /Fm0 Do Q\nBT /F1 10 Tf 40 200 Td (cell one two) Tj ET\n",
+    )
     doc.xref_set_key(page.xref, "Contents", f"{stream} 0 R")
     path = tmp_path / "src.pdf"
     doc.save(path)
@@ -156,8 +160,10 @@ def test_a_form_is_measured_by_its_own_box_not_a_nested_one_of_the_same_name(tmp
     doc.update_object(inner, "<< /Type /XObject /Subtype /Form /BBox [-400 -400 800 800] >>")
     doc.update_stream(inner, b"0 0 1 1 re f\n")
     outer = doc.get_new_xref()
-    doc.update_object(outer, f"<< /Type /XObject /Subtype /Form /BBox [300 20 380 60] "
-                             f"/Resources << /XObject << /Fm0 {inner} 0 R >> >> >>")
+    doc.update_object(
+        outer,
+        f"<< /Type /XObject /Subtype /Form /BBox [300 20 380 60] /Resources << /XObject << /Fm0 {inner} 0 R >> >> >>",
+    )
     doc.update_stream(outer, b"q 1 0 0 1 320 30 cm /Fm0 Do Q\n")
     doc.xref_set_key(page.xref, "Resources", f"<< /Font << /F1 {font} 0 R >> /XObject << /Fm0 {outer} 0 R >> >>")
     stream = doc.get_new_xref()
