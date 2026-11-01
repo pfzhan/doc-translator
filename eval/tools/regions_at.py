@@ -2,6 +2,7 @@
 
 import json
 import sys
+from pathlib import Path
 
 code, model, size, threads, src, out = sys.argv[1:7]
 sys.path.insert(0, code)
@@ -16,4 +17,4 @@ layout = ModelLayout(doc, load_session(model, int(threads)))
 pages = []
 for pno in range(doc.page_count):
     pages.append([[r.label, [round(v, 1) for v in r.rect], round(r.score, 3)] for r in layout.regions(pno)])
-json.dump(pages, open(out, "w"))
+Path(out).write_text(json.dumps(pages))

@@ -12,7 +12,7 @@ refs = collections.Counter()
 for n in names:
     data = z.read(n)
     strings = []
-    for op, arg, pos in pickletools.genops(data):
+    for op, arg, _pos in pickletools.genops(data):
         if op.name in ("SHORT_BINUNICODE", "BINUNICODE", "UNICODE", "BINUNICODE8"):
             strings.append(arg)
         elif op.name == "STACK_GLOBAL":

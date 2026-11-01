@@ -4,6 +4,7 @@
 
 import json
 import sys
+from pathlib import Path
 
 code, model, src, out = sys.argv[1:5]
 size = int(sys.argv[5]) if len(sys.argv) > 5 else 1024
@@ -19,4 +20,4 @@ for pno, inline in enumerate(detector.pages()):
     found = [["embedding", [round(v, 1) for v in r], None] for r in inline]
     found += [["isolated", [round(v, 1) for v in r], None] for r in detector.isolated[pno]]
     pages.append(found)
-json.dump(pages, open(out, "w"))
+Path(out).write_text(json.dumps(pages))

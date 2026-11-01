@@ -12,8 +12,8 @@ a, b = sys.argv[1:3]
 for fa in sorted(glob.glob(f"{E}/regress/plans/*.{a}.json")):
     name = fa.split("/")[-1][: -len(f".{a}.json")]
     fb = fa.replace(f".{a}.json", f".{b}.json")
-    A = collections.Counter((u[0], u[2], u[1]) for u in json.load(open(fa)))
-    B = collections.Counter((u[0], u[2], u[1]) for u in json.load(open(fb)))
+    A = collections.Counter((u[0], u[2], u[1]) for u in json.loads(Path(fa).read_text()))
+    B = collections.Counter((u[0], u[2], u[1]) for u in json.loads(Path(fb).read_text()))
     for key in sorted(set(A) | set(B)):
         page, text, skip = key
         if A[key] != B[key] and (page, text, not skip) in (B if A[key] > B[key] else A):

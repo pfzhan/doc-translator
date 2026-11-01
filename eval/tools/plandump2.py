@@ -35,4 +35,4 @@ for u, t, s in zip(plan.units, plan.texts, plan.skips):
             ],
         ]
     )
-json.dump(rows, open(out, "w"), ensure_ascii=False)
+Path(out).write_text(json.dumps(rows, ensure_ascii=False))

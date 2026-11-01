@@ -26,7 +26,7 @@ def get(url: str) -> bytes:
 def safe_extract(blob: bytes, dest: Path) -> None:
     dest.mkdir(parents=True)
     try:
-        tar = tarfile.open(fileobj=io.BytesIO(blob), mode="r:*")
+        tar = tarfile.open(fileobj=io.BytesIO(blob), mode="r:*")  # noqa: SIM115 - closed by the with below
     except tarfile.TarError:
         # 只有一个 tex 文件的投稿，e-print 是 gzip 压缩的单个文件或者纯文本
         try:
@@ -34,15 +34,16 @@ def safe_extract(blob: bytes, dest: Path) -> None:
         except OSError:
             (dest / "main.tex").write_bytes(blob)
         return
-    for m in tar.getmembers():
-        name = Path(m.name)
-        if not m.isfile() or name.is_absolute() or ".." in name.parts:
-            continue
-        if name.suffix.lower() not in (".tex", ".bbl", ".sty", ".cls"):
-            continue
-        target = dest / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(tar.extractfile(m).read())
+    with tar:
+        for m in tar.getmembers():
+            name = Path(m.name)
+            if not m.isfile() or name.is_absolute() or ".." in name.parts:
+                continue
+            if name.suffix.lower() not in (".tex", ".bbl", ".sty", ".cls"):
+                continue
+            target = dest / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(tar.extractfile(m).read())
 
 
 rows = [line.split("\t") for line in tsv.read_text().splitlines()[1:] if line.strip()]

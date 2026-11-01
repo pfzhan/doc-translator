@@ -8,9 +8,10 @@ import re
 import sys
 import unicodedata
 from collections import defaultdict
+from pathlib import Path
 
-plan = json.load(open(sys.argv[1]))
-gold = json.load(open(sys.argv[2]))["segments"]
+plan = json.loads(Path(sys.argv[1]).read_text())
+gold = json.loads(Path(sys.argv[2]).read_text())["segments"]
 show = len(sys.argv) > 3
 
 stream, unit_of, unit_text = [], [], []

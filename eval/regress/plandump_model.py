@@ -10,7 +10,7 @@ import pymupdf
 
 from app.formats import pdf, pdf_units, pdf_vision
 
-pages = json.load(open(cached))
+pages = json.loads(Path(cached).read_text())
 
 
 class Cached(pdf_vision.ModelLayout):
@@ -21,7 +21,7 @@ class Cached(pdf_vision.ModelLayout):
         self._fresh = False
 
     def regions(self, pno):
-        return [pdf_vision.Region(l, pymupdf.Rect(r), s) for l, r, s in pages[pno]]
+        return [pdf_vision.Region(label, pymupdf.Rect(r), score) for label, r, score in pages[pno]]
 
 
 pdf_units.layout_detector = lambda doc, *args: Cached(doc)
@@ -48,4 +48,4 @@ for u, t, fs, s in zip(plan.units, plan.texts, plan.formulas, plan.skips):
             [[f.get("text", ""), [round(v, 1) for v in f["bbox"]] if f.get("bbox") is not None else None] for f in fs],
         ]
     )
-json.dump(rows, open(out, "w"), ensure_ascii=False)
+Path(out).write_text(json.dumps(rows, ensure_ascii=False))

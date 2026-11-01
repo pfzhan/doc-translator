@@ -22,8 +22,8 @@ for old in sorted(glob.glob(f"{E}/regress/plans/*.{a_tag}.json")):
     name = old.split("/")[-1][: -len(f".{a_tag}.json")]
     if only and name != only:
         continue
-    a = json.load(open(old))
-    b = json.load(open(old.replace(f".{a_tag}.json", f".{b_tag}.json")))
+    a = json.loads(Path(old).read_text())
+    b = json.loads(Path(old.replace(f".{a_tag}.json", f".{b_tag}.json")).read_text())
     if a == b:
         continue
     fa = [fmt(r) for r in a]

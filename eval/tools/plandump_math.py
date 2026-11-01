@@ -14,7 +14,7 @@ if len(sys.argv) > 4:
 
     from app.formats import pdf_vision
 
-    boxes = json.load(open(sys.argv[4]))
+    boxes = json.loads(Path(sys.argv[4]).read_text())
 
     class Cached(pdf_vision.ModelLayout):
         def __init__(self, doc):
@@ -24,7 +24,7 @@ if len(sys.argv) > 4:
             self._fresh = False
 
         def regions(self, pno):
-            return [pdf_vision.Region(l, pymupdf.Rect(r), s) for l, r, s in boxes[pno]]
+            return [pdf_vision.Region(label, pymupdf.Rect(r), score) for label, r, score in boxes[pno]]
 
     pdf_units.layout_detector = lambda doc, *args: Cached(doc)
 
@@ -42,4 +42,4 @@ rows = [
     [u[0].page, s, t, [f.get("text", "") for f in fs]]
     for u, t, fs, s in zip(plan.units, plan.texts, plan.formulas, plan.skips)
 ]
-json.dump(rows, open(out, "w"), ensure_ascii=False)
+Path(out).write_text(json.dumps(rows, ensure_ascii=False))

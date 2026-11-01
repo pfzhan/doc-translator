@@ -26,4 +26,4 @@ for u, t, fs, s in zip(plan.units, plan.texts, plan.formulas, plan.skips):
             [[f.get("text", ""), [round(v, 1) for v in f["bbox"]] if f.get("bbox") is not None else None] for f in fs],
         ]
     )
-json.dump(rows, open(out, "w"), ensure_ascii=False)
+Path(out).write_text(json.dumps(rows, ensure_ascii=False))

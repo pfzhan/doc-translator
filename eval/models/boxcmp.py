@@ -25,7 +25,7 @@ for fa in sorted(a_dir.glob("*.json")):
     if not fb.exists():
         continue
     files += 1
-    for pa, pb in zip(json.load(open(fa)), json.load(open(fb))):
+    for pa, pb in zip(json.loads(Path(fa).read_text()), json.loads(Path(fb).read_text())):
         used = set()
         for la, ra, *_ in pa:
             ref[la] += 1
@@ -39,7 +39,7 @@ for fa in sorted(a_dir.glob("*.json")):
             if k not in used:
                 extra[lb] += 1
 print(files, "files")
-for label in sorted(ref | extra, key=lambda l: -ref[l]):
+for label in sorted(ref | extra, key=lambda name: -ref[name]):
     print(
         f"{label:16s} ref {ref[label]:6d}  matched {hit[label]:6d} ({100 * hit[label] / max(ref[label], 1):5.1f}%)  extra {extra[label]:5d}"
     )
