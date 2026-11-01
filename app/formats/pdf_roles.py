@@ -3,6 +3,7 @@
 默认实现只看几何和字号，不下载模型。换检测器时实现 LayoutDetector.classify。
 整页大图不当图，避免把带文本层的扫描页全部跳过。
 """
+
 from __future__ import annotations
 
 import re
@@ -86,7 +87,8 @@ class HeuristicLayout:
     ) -> list[Role]:
         floats = _float_zones(items, geometries, median)
         captions = [
-            item for item in items
+            item
+            for item in items
             if len(item.text.strip()) < _CAPTION_LEN and _caption_start(item, _CAPTION_RE, median)
         ]
         boxed = _boxed_items(items, geometries, floats, captions)
@@ -99,8 +101,11 @@ class HeuristicLayout:
                 roles.append(Role.FIGURE)
             elif labeled and _inside_figure(item.rect, figures) or _is_caption(item, figures, median):
                 roles.append(Role.CAPTION)
-            elif (is_size_heading(item.text, item.size, item.bold, median) or _is_numbered_title(item.text)
-                  or _is_lettered_title(item.text, item.styled)):
+            elif (
+                is_size_heading(item.text, item.size, item.bold, median)
+                or _is_numbered_title(item.text)
+                or _is_lettered_title(item.text, item.styled)
+            ):
                 roles.append(Role.HEADING)
             else:
                 roles.append(Role.BODY)
@@ -122,13 +127,16 @@ _BOX_LINE_WORDS = 4
 
 
 def _boxed_items(
-    items: Sequence[LayoutItem], geometries: Sequence[PageGeometry],
-    floats: dict[int, tuple[pymupdf.Rect, ...]], captions: Sequence[LayoutItem],
+    items: Sequence[LayoutItem],
+    geometries: Sequence[PageGeometry],
+    floats: dict[int, tuple[pymupdf.Rect, ...]],
+    captions: Sequence[LayoutItem],
 ) -> set[int]:
     """框里按正文算的块（id）。一个框整框一个算法：成段正文占了框里大半的词，是带底色的提示段、
     提示词框，框里成句的列表项、示例和正文一起算正文，不留半框原文。图里的短标签照旧算图。"""
     prose = {
-        id(item) for item in items
+        id(item)
+        for item in items
         if _boxed_text(item, (*_figures_of(item.page, geometries), *floats.get(item.page, ())), captions)
     }
     boxed = set(prose)
@@ -154,7 +162,8 @@ def _boxed_text(item: LayoutItem, figures: Sequence[pymupdf.Rect], captions: Seq
     holders = [figure for figure in figures if _inside_figure(item.rect, [figure])]
     return not any(
         caption.page == item.page and _captions(caption.rect, figure, caption.size)
-        for figure in holders for caption in captions
+        for figure in holders
+        for caption in captions
     )
 
 
@@ -206,14 +215,16 @@ def _is_lettered_title(text: str, styled: bool) -> bool:
         return False
     roman = _ROMAN_TITLE_RE.match(stripped)
     if roman is not None:
-        rest = stripped[roman.end():]
+        rest = stripped[roman.end() :]
         if styled or (rest.upper() == rest and sum(ch.isalpha() for ch in rest) >= 2):
             return True
     return styled and _LETTER_TITLE_RE.match(stripped) is not None
 
 
 def _float_zones(
-    items: Sequence[LayoutItem], geometries: Sequence[PageGeometry], median: float,
+    items: Sequence[LayoutItem],
+    geometries: Sequence[PageGeometry],
+    median: float,
 ) -> dict[int, list[pymupdf.Rect]]:
     """图注上方、到上一段正文为止是图。
 

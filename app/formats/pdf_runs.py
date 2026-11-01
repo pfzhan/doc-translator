@@ -3,6 +3,7 @@
 公式 span 在 pdf_math.py 标出，切 run、做占位符在 pdf_units.py。这里只放模型和两件纯操作：按 run 分界切开译文，以及挑出
 落在公式框里的曲线。含公式的段落由排版器按行落位。
 """
+
 from __future__ import annotations
 
 import re
@@ -92,12 +93,13 @@ def _near_formula_stroke(box: pymupdf.Rect, rect: pymupdf.Rect) -> bool:
         cap = max(box.height * 2.5, box.height + 12)
         return overlap >= 0.55 * min(rect.height, box.height) and rect.height <= cap
     beside = rect.x1 <= box.x0 + 1 and _axis_overlap(
-        rect.y0, rect.y1, box.y0, box.y1,
+        rect.y0,
+        rect.y1,
+        box.y0,
+        box.y1,
     ) >= 0.6 * min(rect.height, box.height)
     return bool(
-        beside
-        and rect.width <= max(8.0, box.width * 0.45)
-        and rect.height <= max(box.height * 2.2, box.height + 10)
+        beside and rect.width <= max(8.0, box.width * 0.45) and rect.height <= max(box.height * 2.2, box.height + 10)
     )
 
 
@@ -109,7 +111,12 @@ def intersecting_curves(box: pymupdf.Rect, drawings: list[pymupdf.Rect]) -> tupl
         if rect.width < 0.4 or rect.height < 0.3:
             continue
         # 一页上几千条线，逐条按坐标比，不另建交集的 Rect
-        if rect.x0 > x1 + _STROKE_GAP or rect.x1 < x0 - _STROKE_GAP or rect.y0 > y1 + _STROKE_GAP or rect.y1 < y0 - _STROKE_GAP:
+        if (
+            rect.x0 > x1 + _STROKE_GAP
+            or rect.x1 < x0 - _STROKE_GAP
+            or rect.y0 > y1 + _STROKE_GAP
+            or rect.y1 < y0 - _STROKE_GAP
+        ):
             continue
         intersects = min(rect.x1, x1) - max(rect.x0, x0) >= 0.4 and min(rect.y1, y1) - max(rect.y0, y0) >= 0.3
         if intersects:

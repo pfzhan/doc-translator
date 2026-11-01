@@ -5,6 +5,7 @@ MuPDF 的 letter-spacing、word-spacing、text-align:justify 都拉不动纯汉�
 复制出来的仍是原来的字，不含为对齐插入的空格。
 斜体标记不改走 HTML：汉字没有斜体字形，仍用正文字体；拉丁字母换斜体字体。
 """
+
 from __future__ import annotations
 
 import re
@@ -48,8 +49,17 @@ _LATIN_FONTS = {
 
 # 没有合成字的组合重音（P̂、x̃）。字体里没有组合字形，画成对应的独立重音叠在前一个字上
 _MARK_GLYPHS = {
-    "\u0300": "`", "\u0301": "´", "\u0302": "ˆ", "\u0303": "˜", "\u0304": "¯", "\u0305": "¯",
-    "\u0306": "˘", "\u0307": "˙", "\u0308": "¨", "\u030a": "˚", "\u030c": "ˇ",
+    "\u0300": "`",
+    "\u0301": "´",
+    "\u0302": "ˆ",
+    "\u0303": "˜",
+    "\u0304": "¯",
+    "\u0305": "¯",
+    "\u0306": "˘",
+    "\u0307": "˙",
+    "\u0308": "¨",
+    "\u030a": "˚",
+    "\u030c": "ˇ",
 }
 _MARK_FONT = ("DocRG", "helv")
 # 独立重音按小写字母的高度画，叠在大写字母、带上伸部的字母上要抬高（em）
@@ -246,7 +256,9 @@ def _segments(text: str, em: float) -> list[_Segment] | None:
         for char in run.text:
             if char in _MARK_GLYPHS and (buf or segments):
                 if face is not None:
-                    _append_segment(segments, buf, face, size, stroke and face[0] == _FONT_NAME, run.color, run.underline)
+                    _append_segment(
+                        segments, buf, face, size, stroke and face[0] == _FONT_NAME, run.color, run.underline
+                    )
                 face = None
                 name, font = _latin_font(run.italic, run.bold) if run.italic or run.bold else _mark_font()
                 segments.append(_Segment(char, name, font, size, False, run.color, False, True, run.italic))
@@ -366,8 +378,19 @@ def draw_cjk_lines(
     """
     left, top = page_origin(page)
     placed = _place_lines(
-        lines, box, em, gap, color, align, image_indexes, fallback_text, top,
-        justify_last, left, lanes, first_room,
+        lines,
+        box,
+        em,
+        gap,
+        color,
+        align,
+        image_indexes,
+        fallback_text,
+        top,
+        justify_last,
+        left,
+        lanes,
+        first_room,
     )
     if placed is None:
         return None
@@ -424,7 +447,10 @@ def _place_lines(
         indent, width = lanes[index] if index < len(lanes) else (0.0, box.width)
         lead = line_lead(line) if align == "left" else 0.0
         row = _place_line(
-            line, box.x0 + indent - lead, width + lead, em,
+            line,
+            box.x0 + indent - lead,
+            width + lead,
+            em,
             justify=align == "left" and (justify_last or index != last),
             align=align,
             image_indexes=image_indexes,
@@ -436,8 +462,10 @@ def _place_lines(
             return None
         ops, line_slots, line_fonts, line_rules = row
         # 行里的槽标记按行内序号写，换成全段的序号
-        ops = [_slot_mark(len(slots) + int(op[len("{line-slot"):-1])) if op.startswith("{line-slot") else op
-               for op in ops]
+        ops = [
+            _slot_mark(len(slots) + int(op[len("{line-slot") : -1])) if op.startswith("{line-slot") else op
+            for op in ops
+        ]
         fonts.update(line_fonts)
         if ops:
             wrote = True
@@ -467,7 +495,7 @@ def _trailing_space(pieces: list[tuple[list[_Segment], int | None, float, str]])
         for seg in reversed(segments):
             body = seg.text.rstrip()
             if not seg.mark:
-                width += _text_length(seg.font, seg.text[len(body):], seg.size)
+                width += _text_length(seg.font, seg.text[len(body) :], seg.size)
             if body:
                 return width
     return width
@@ -489,9 +517,15 @@ def _place_line(
     fallback_text: dict[int, str],
     opened: list[str] | None = None,
     color: str = "#000000",
-) -> tuple[
-    list[str], list[tuple[int, float]], dict[str, pymupdf.Font], list[tuple[float, float, float, str]],
-] | None:
+) -> (
+    tuple[
+        list[str],
+        list[tuple[int, float]],
+        dict[str, pymupdf.Font],
+        list[tuple[float, float, float, str]],
+    ]
+    | None
+):
     """一行的文本操作（基线 y 先写成 {Y}）、公式槽的横坐标，和要画下划线的几段（起止横坐标、字号、颜色）。
     opened 是前面还开着的样式标记，读完这一行就地更新。color 是块的颜色，片段没有颜色时用它。"""
     pieces: list[tuple[list[_Segment], int | None, float, str]] = []
@@ -541,7 +575,7 @@ def _place_line(
             cursor += piece_width
             continue
         count = max(len(visible) - 1, 0)
-        piece_extras = extras[extra_at:extra_at + count]
+        piece_extras = extras[extra_at : extra_at + count]
         extra_at += count
         pos = 0
         # 上一个字的起点、宽度和字，组合重音叠在它上面
@@ -557,7 +591,7 @@ def _place_line(
                 if pos < len(visible) and pos - 1 < len(piece_extras):
                     cursor += piece_extras[pos - 1]
                 continue
-            internal = piece_extras[pos:pos + max(n - 1, 0)]
+            internal = piece_extras[pos : pos + max(n - 1, 0)]
             glyphs = _glyphs(seg.font, seg.text)
             if glyphs is None:
                 return None
@@ -599,8 +633,11 @@ def _place_line(
 
 
 def _mark_ops(
-    seg: _Segment, base: tuple[float, float, str], color: str,
-    face_now: tuple[str, float] | None, paint_now: str,
+    seg: _Segment,
+    base: tuple[float, float, str],
+    color: str,
+    face_now: tuple[str, float] | None,
+    paint_now: str,
 ) -> list[str]:
     """组合重音画成独立重音，中线对着前一个字的中线。大写字母和带上伸部的字母上抬高一截，
     斜体顺着字的斜度往右挪。"""

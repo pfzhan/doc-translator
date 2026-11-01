@@ -8,6 +8,7 @@
 字典就一样了），所以反复找，直到没有新的重复。被合并的对象不再有引用，保存时用
 garbage=1 去掉。
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -49,7 +50,10 @@ def merge_duplicates(doc: pymupdf.Document) -> int:
 
 
 def _content_key(
-    doc: pymupdf.Document, xref: int, text: str, digests: dict[int, bytes],
+    doc: pymupdf.Document,
+    xref: int,
+    text: str,
+    digests: dict[int, bytes],
 ) -> tuple[str, bytes | None] | None:
     if doc.xref_is_stream(xref):
         if xref not in digests:
@@ -102,7 +106,7 @@ def _split_strings(text: str) -> list[tuple[str, bool]]:
                     continue
                 depth += {"(": 1, ")": -1}.get(text[end], 0)
                 end += 1
-        elif char == "<" and text[index + 1:index + 2] != "<" and text[index - 1:index] != "<":
+        elif char == "<" and text[index + 1 : index + 2] != "<" and text[index - 1 : index] != "<":
             end = text.find(">", index)
             end = size if end < 0 else end + 1
         else:

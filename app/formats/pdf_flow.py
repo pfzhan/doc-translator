@@ -5,6 +5,7 @@
 整块同一风格仍交给块级字号和字重，送翻文本和原来逐字一致。
 字号标记是相对底色的百分比，写回时按这个比例缩放，跟着收缩阶梯一起变。
 """
+
 from __future__ import annotations
 
 import functools
@@ -77,7 +78,9 @@ class EmphasisWriter:
         if stripped != text:
             # 开头的空格按空白写，标记在空格后面打开：• {b}Math:，不是 •{b} Math:。
             # 后面的字换颜色时空格前就收起
-            lead = self._space(text[:len(text) - len(stripped)], emphasis, percent, shade if shade == self._color else None)
+            lead = self._space(
+                text[: len(text) - len(stripped)], emphasis, percent, shade if shade == self._color else None
+            )
         return lead + self._marks(emphasis, percent, shade) + stripped
 
     def _space(self, text: str, emphasis: Emphasis, percent: int, shade: int | None) -> str:
@@ -182,7 +185,9 @@ def span_emphasis(span: dict[str, object]) -> Emphasis:
 
 
 def writer_for(
-    spans: list[dict[str, object]], base_size: float = 0, base_color: int | None = None,
+    spans: list[dict[str, object]],
+    base_size: float = 0,
+    base_color: int | None = None,
 ) -> EmphasisWriter:
     """定底色的强调，只有别的 span 在强调、字号或颜色上和底色不同时才写标记。
     粗体：整块都是粗体才以粗体为底。中文写回时粗体只认 {b}，整块粗体另由写回补上；
@@ -313,7 +318,7 @@ def _break_lines(
     if "\n" in text:
         lines: list[str] = []
         for part in text.split("\n"):
-            lines.extend(_break_lines(part, em, max_width, formula_widths, first_widths[len(lines):]))
+            lines.extend(_break_lines(part, em, max_width, formula_widths, first_widths[len(lines) :]))
         return lines
     if not text or max_width <= 0:
         return [text]
@@ -424,8 +429,11 @@ def _break_lines(
 
 
 def _even_out(
-    rows: list[list[tuple[int, str]] | None], widths: Sequence[float], em: float,
-    formula_widths: dict[int, float], group_of: dict[int, int],
+    rows: list[list[tuple[int, str]] | None],
+    widths: Sequence[float],
+    em: float,
+    formula_widths: dict[int, float],
+    group_of: dict[int, int],
 ) -> set[int]:
     """下一行行首的长词、公式放不下，这一行空出好几个字宽，两端对齐时字距拉得很开。
     把上一行行尾的汉字挪几个下来，空白分给两行，挪到两行里拉得最开的缝不再变小为止；上一行再从更上一行挪，
@@ -466,7 +474,9 @@ def _even_out(
                 break
             # 字前面刚开的样式标记跟着字走，上一行不留空的 {b}
             start = end - 1
-            while start > 0 and STYLE_MARK_RE.fullmatch(upper[start - 1][1]) and not upper[start - 1][1].startswith("{/"):
+            while (
+                start > 0 and STYLE_MARK_RE.fullmatch(upper[start - 1][1]) and not upper[start - 1][1].startswith("{/")
+            ):
                 start -= 1
             if start == 0:
                 break
@@ -495,7 +505,7 @@ def _trim_line_end(line: str) -> str:
         if matched is None:
             break
         marks = matched.group(0) + marks
-        body = body[:matched.start()]
+        body = body[: matched.start()]
     stripped = body.rstrip(" \t")
     if stripped != body and stripped and stripped[-1] in _HALF_PUNCT:
         return stripped + marks
@@ -700,7 +710,7 @@ def separate_after_formula(text: str) -> str:
                 break
             out.append(mark.group(0))
             index = mark.end()
-        nxt = text[index:index + 1]
+        nxt = text[index : index + 1]
         if nxt and not nxt.isspace() and nxt not in _NO_FORMULA_SPACE and _wants_formula_space(nxt):
             out.append(" ")
     return "".join(out)
@@ -715,7 +725,7 @@ def peel_leading_space(text: str) -> tuple[str, bool]:
             break
         index = mark.end()
     if index < len(text) and text[index] == " ":
-        return text[:index] + text[index + 1:], True
+        return text[:index] + text[index + 1 :], True
     return text, False
 
 
@@ -728,12 +738,7 @@ def _wants_formula_space(char: str) -> bool:
 
 
 def _inside_number(text: str, index: int) -> bool:
-    return (
-        text[index] in ".,"
-        and 0 < index < len(text) - 1
-        and text[index - 1].isdigit()
-        and text[index + 1].isdigit()
-    )
+    return text[index] in ".," and 0 < index < len(text) - 1 and text[index - 1].isdigit() and text[index + 1].isdigit()
 
 
 def _tokenize(text: str) -> list[str]:
@@ -812,7 +817,7 @@ def measure_width(text: str, em: float, formula_widths: dict[int, float] | None 
     total = 0.0
     pos = 0
     for match in _SENTINEL_RE.finditer(cleaned):
-        total += sum(_char_width(ch, em) for ch in cleaned[pos:match.start()])
+        total += sum(_char_width(ch, em) for ch in cleaned[pos : match.start()])
         total += widths.get(int(match.group(1)), em)
         pos = match.end()
     total += sum(_char_width(ch, em) for ch in cleaned[pos:])

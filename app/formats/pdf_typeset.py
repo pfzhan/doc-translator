@@ -3,6 +3,7 @@
 纵向偏移不在这里算：调用方拿这一行文字的真实基线，加上公式记录的下沿。
 没有公式图的段落用同一套断行，再写进一个锁住换行的盒子。
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -44,6 +45,8 @@ FORMULA_PAD = 2.0
 def line_lead(line: TypesetLine) -> float:
     """行首是公式槽时，槽左边空出的那一截。左对齐的行往左挪这么多，公式和上下行的字对齐"""
     return FORMULA_PAD if line.pieces and isinstance(line.pieces[0], FormulaPiece) else 0.0
+
+
 # 公式可以伸进上下行距的部分（em）。原来压到 1.35em 的公式都在这个范围里
 _FORMULA_SPILL = 0.2
 
@@ -97,14 +100,16 @@ def _line_of(
         metric = metrics.get(index)
         slot = metric.slot_width if metric is not None else measure_token(token, em, widths)
         if metric is not None:
-            pieces.append(FormulaPiece(
-                index=index,
-                x=cursor,
-                slot_width=slot,
-                body_width=metric.body_width,
-                height=metric.height,
-                below=metric.below,
-            ))
+            pieces.append(
+                FormulaPiece(
+                    index=index,
+                    x=cursor,
+                    slot_width=slot,
+                    body_width=metric.body_width,
+                    height=metric.height,
+                    below=metric.below,
+                )
+            )
         cursor += slot
     flush()
     width = pieces[-1].x + _piece_width(pieces[-1]) if pieces else 0.0

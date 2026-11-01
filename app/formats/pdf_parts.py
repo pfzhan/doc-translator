@@ -8,6 +8,7 @@
 打开一份，只写自己那段页，存成临时文件。拼的时候以第一段的结果为底稿，书签、链接都在
 它上面；别的段写好的页整页贴进来，盖掉底稿里没写的那页。
 """
+
 from __future__ import annotations
 
 import multiprocessing
@@ -36,7 +37,9 @@ def worker_count() -> int:
 
 
 def plan_parts(
-    weights: dict[int, int], links: Sequence[tuple[int, int]], parts: int,
+    weights: dict[int, int],
+    links: Sequence[tuple[int, int]],
+    parts: int,
 ) -> list[list[int]]:
     """把要写的页（按顺序，值是这页要写的块数）切成至多 parts 段，各段的块数相近。
 
@@ -51,10 +54,7 @@ def plan_parts(
     out: list[list[int]] = [[]]
     filled = 0
     for pno in order:
-        if (
-            filled >= target and len(out) < parts and pno not in blocked
-            and len(out[-1]) >= _MIN_PART_PAGES
-        ):
+        if filled >= target and len(out) < parts and pno not in blocked and len(out[-1]) >= _MIN_PART_PAGES:
             out.append([])
             filled = 0
         out[-1].append(pno)
@@ -63,7 +63,9 @@ def plan_parts(
 
 
 def render_in_parts(
-    render: Render, parts: list[list[int]], on_page: Callable[[int, int], None] | None = None,
+    render: Render,
+    parts: list[list[int]],
+    on_page: Callable[[int, int], None] | None = None,
 ) -> pymupdf.Document | None:
     """各段在子进程里写，拼回一份。不能 fork、有子进程失败或卡住时返回 None，调用方自己整本写。
     旋转页整页贴回去会再转一次，有旋转页的文件调用方不要分段。"""
@@ -78,8 +80,7 @@ def render_in_parts(
     with tempfile.TemporaryDirectory(prefix="pdf-parts-") as tmp:
         paths = [Path(tmp) / f"{index}.pdf" for index in range(len(parts))]
         procs = [
-            ctx.Process(target=_render_part, args=(render, part, path, started))
-            for part, path in zip(parts, paths)
+            ctx.Process(target=_render_part, args=(render, part, path, started)) for part, path in zip(parts, paths)
         ]
         for proc in procs:
             proc.start()
@@ -107,6 +108,7 @@ def render_in_parts(
 
 def _render_part(render: Render, part: list[int], path: Path, started) -> None:
     """写完直接退出。fork 自服务的工作线程，multiprocessing 收尾时清理线程会出错，退出码成了 1。"""
+
     def count(_done: int, _total: int) -> None:
         with started.get_lock():
             started.value += 1

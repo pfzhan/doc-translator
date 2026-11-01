@@ -9,6 +9,7 @@
 那一行正文分进同一块，不拆开就并进句子里。旁注沿一条边对齐（左侧的靠右对齐），
 同一条边上的旁注要有好几条，零散的小字不算。
 """
+
 from __future__ import annotations
 
 import re
@@ -18,19 +19,19 @@ from dataclasses import dataclass
 
 import pymupdf
 
-_PROSE_CHARS = 40     # 够这么长的行才投票
-_MIN_LINES = 12       # 一组里至少这么多长行
-_EDGE_TOL = 2.0       # 同一条缘的容差
-_EDGE_SHARE = 0.5     # 票数不低于最多那条缘的这个比例才算缘：两栏时两栏的左缘都够
-_PAGE_SHIFT = 12.0    # 本页的缘和同侧页差这么多，改用本页的
+_PROSE_CHARS = 40  # 够这么长的行才投票
+_MIN_LINES = 12  # 一组里至少这么多长行
+_EDGE_TOL = 2.0  # 同一条缘的容差
+_EDGE_SHARE = 0.5  # 票数不低于最多那条缘的这个比例才算缘：两栏时两栏的左缘都够
+_PAGE_SHIFT = 12.0  # 本页的缘和同侧页差这么多，改用本页的
 _TOP_TOL = 3.0
-_NOTE_GAP = 2.0       # 旁注离版心至少这么远
-_NOTE_SMALL = 0.9     # 旁注字号不超过正文的这个比例
+_NOTE_GAP = 2.0  # 旁注离版心至少这么远
+_NOTE_SMALL = 0.9  # 旁注字号不超过正文的这个比例
 _LANE_ALIGN = 1.5
-_LANE_MIN = 3         # 同一条边上至少这么多条旁注
+_LANE_MIN = 3  # 同一条边上至少这么多条旁注
 _NOTE_SYMBOL_CHARS = 3  # 和正文一样大的旁注最多这么几个字（ŷ 提出来是 ˆ 和 y 两个字）
-_PITCH_TOL = 0.1      # 旁注里行距和全文的偏开这个比例，是两条旁注的分界
-_PITCH_MIN = 10       # 全文同一字号的旁注至少有这么多处行距，才拿来比
+_PITCH_TOL = 0.1  # 旁注里行距和全文的偏开这个比例，是两条旁注的分界
+_PITCH_MIN = 10  # 全文同一字号的旁注至少有这么多处行距，才拿来比
 
 
 @dataclass(frozen=True)
@@ -74,11 +75,11 @@ def text_frames(pages: Sequence[Sequence[FrameLine]]) -> list[TextFrame | None]:
             x1 = frame.x1 if _holds([line.rect.x1 for line in lines], frame.x1) else own.x1
             own = TextFrame(x0, x1, own.y0, own.y1, own.size)
         if own is not None and (
-            frame is None
-            or abs(own.x0 - frame.x0) > _PAGE_SHIFT or abs(own.x1 - frame.x1) > _PAGE_SHIFT
+            frame is None or abs(own.x0 - frame.x0) > _PAGE_SHIFT or abs(own.x1 - frame.x1) > _PAGE_SHIFT
         ):
             frame = TextFrame(
-                own.x0, own.x1,
+                own.x0,
+                own.x1,
                 frame.y0 if frame is not None else None,
                 frame.y1 if frame is not None else None,
                 own.size,
@@ -120,7 +121,13 @@ def margin_notes(pages: Sequence[Sequence[FrameLine]], frames: Sequence[TextFram
             # 不要求有字母：旁注也可以是 *? 这样的记号。页码和外凸的节号不比正文小，不在其内
             if not line.text.strip():
                 continue
-            side = "left" if line.rect.x1 <= frame.x0 - _NOTE_GAP else "right" if line.rect.x0 >= frame.x1 + _NOTE_GAP else ""
+            side = (
+                "left"
+                if line.rect.x1 <= frame.x0 - _NOTE_GAP
+                else "right"
+                if line.rect.x0 >= frame.x1 + _NOTE_GAP
+                else ""
+            )
             if not side:
                 continue
             if line.size <= frame.size * _NOTE_SMALL:
@@ -188,8 +195,12 @@ def note_groups(lines: Sequence[FrameLine], pitches: dict[float, float] | None =
             above, below = lines[upper], lines[lower]
             pitch = below.rect.y0 - above.rect.y0
             regular = pitches.get(round(above.size, 1))
-            if (regular is not None and abs(above.size - below.size) < 0.1 and pitch > above.size * 0.5
-                    and abs(pitch - regular) > regular * _PITCH_TOL):
+            if (
+                regular is not None
+                and abs(above.size - below.size) < 0.1
+                and pitch > above.size * 0.5
+                and abs(pitch - regular) > regular * _PITCH_TOL
+            ):
                 parts.append([lower])
             else:
                 parts[-1].append(lower)
@@ -229,9 +240,13 @@ def _frame_of(pages: Sequence[Sequence[FrameLine]], with_rows: bool = True) -> T
     if with_rows:
         # 只看版心里正文字号的行：长页眉也够投票的长度，但字号小一号或在版心外
         body = [
-            [line for line in page
-             if line.rect.x0 >= x0 - _EDGE_TOL and line.rect.x1 <= x1 + _EDGE_TOL
-             and abs(line.size - size) <= size * 0.1]
+            [
+                line
+                for line in page
+                if line.rect.x0 >= x0 - _EDGE_TOL
+                and line.rect.x1 <= x1 + _EDGE_TOL
+                and abs(line.size - size) <= size * 0.1
+            ]
             for page in pages
         ]
         y0 = _mode([min(line.rect.y0 for line in page) for page in body if page], _TOP_TOL)
@@ -247,10 +262,12 @@ def _edge(values: Sequence[float], low: bool) -> float:
     eligible = [value for value, votes in support.items() if votes >= best * _EDGE_SHARE]
     pick = min(eligible) if low else max(eligible)
     # 取这条缘附近出现最多的那个值，不取簇的边上
-    return float(max(
-        (value for value in counter if abs(value - pick) <= _EDGE_TOL),
-        key=lambda value: (counter[value], -abs(value - pick)),
-    ))
+    return float(
+        max(
+            (value for value in counter if abs(value - pick) <= _EDGE_TOL),
+            key=lambda value: (counter[value], -abs(value - pick)),
+        )
+    )
 
 
 def _near(counter: Counter[int], value: int) -> int:
@@ -262,8 +279,7 @@ def _mode(values: Sequence[float], tol: float) -> float | None:
     if not values:
         return None
     counter = Counter(round(value) for value in values)
-    support = {value: sum(count for other, count in counter.items() if abs(other - value) <= tol)
-               for value in counter}
+    support = {value: sum(count for other, count in counter.items() if abs(other - value) <= tol) for value in counter}
     value, votes = max(support.items(), key=lambda item: (item[1], -item[0]))
     if votes < 2:
         return None

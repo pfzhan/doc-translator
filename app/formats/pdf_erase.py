@@ -8,6 +8,7 @@ span 的基线上、宽度范围内，就是这个 span 的字。点阵字这类
 线和图不归哪个 span。整个落在要重排的行里的线（\\_ 的下划线、行内分数线）、
 紧贴在行基线下的下划线和一像素高的细图跟着删，背景、表格线、插图都不动。
 """
+
 from __future__ import annotations
 
 import math
@@ -80,7 +81,7 @@ class Erasure:
                 self.spanless.append(rects[index])
         # 并进来的标点碎片只带了行框，没有 span
         if len(rects) > len(span_lines):
-            self.spanless.extend(rects[len(span_lines):])
+            self.spanless.extend(rects[len(span_lines) :])
 
 
 class _Owners:
@@ -118,9 +119,7 @@ class _Owners:
         self.boxes.extend(erasure.spanless)
         # 每个字形都要和这些框比一遍。按 MuPDF 存矩形的单精度先换好，比的结果和 Rect.contains 一样
         self._box_bounds = [single_precision(box) for box in self.boxes]
-        self.runs = _prose_runs(
-            [line for line, span in zip(self.lines, lined) if not erasure.math(span)]
-        )
+        self.runs = _prose_runs([line for line, span in zip(self.lines, lined) if not erasure.math(span)])
 
     def underlines(self, rect: pymupdf.Rect) -> bool:
         """细横线在一串正文词的基线下、降部以内，横向不出这串词：是这些字的下划线（链接常这样画），
@@ -129,8 +128,10 @@ class _Owners:
         if rect.height > _RULE_IMAGE_HEIGHT:
             return False
         return any(
-            run.x0 - _UNDERLINE_REACH <= rect.x0 and rect.x1 <= run.x1 + _UNDERLINE_REACH
-            and run.baseline <= rect.y0 and rect.y1 <= run.baseline + run.size * _UNDERLINE_DEPTH
+            run.x0 - _UNDERLINE_REACH <= rect.x0
+            and rect.x1 <= run.x1 + _UNDERLINE_REACH
+            and run.baseline <= rect.y0
+            and rect.y1 <= run.baseline + run.size * _UNDERLINE_DEPTH
             for run in self.runs
         )
 
@@ -139,10 +140,7 @@ class _Owners:
         if _key(x, y) in self.points:
             return True
         for line in self.lines:
-            if (
-                abs(y - line.baseline) <= line.size * _BASELINE_TOLERANCE
-                and line.x0 - _X_TOLERANCE <= x < line.x1
-            ):
+            if abs(y - line.baseline) <= line.size * _BASELINE_TOLERANCE and line.x0 - _X_TOLERANCE <= x < line.x1:
                 return True
         # 和 MuPDF 判断点在矩形里一样：左、上边算在里面，右、下边不算
         return any(x0 <= x < x1 and y0 <= y < y1 for x0, y0, x1, y1 in self._box_bounds)
@@ -161,7 +159,8 @@ def _prose_runs(lines: list[_Line]) -> list[_Line]:
     for line in sorted(lines, key=lambda item: (round(item.baseline, 1), item.x0)):
         last = runs[-1] if runs else None
         if (
-            last is not None and round(last.baseline, 1) == round(line.baseline, 1)
+            last is not None
+            and round(last.baseline, 1) == round(line.baseline, 1)
             and line.x0 - last.x1 <= max(last.size, line.size) * _WORD_GAP
         ):
             runs[-1] = _Line(last.baseline, max(last.size, line.size), last.x0, max(last.x1, line.x1))
@@ -191,7 +190,11 @@ def _char_origins(page: pymupdf.Page) -> dict[tuple[float, ...], list[tuple[floa
         for line in block["lines"]:
             for span in line["spans"]:
                 # 只跳过真的空格。\r 这类控制字符是没有 Unicode 的字形（CMEX 的大号范数线），照样要擦
-                points = [tuple(char["origin"]) for char in span.get("chars") or [] if str(char.get("c") or " ") not in _BLANKS]
+                points = [
+                    tuple(char["origin"])
+                    for char in span.get("chars") or []
+                    if str(char.get("c") or " ") not in _BLANKS
+                ]
                 if points:
                     out.setdefault(_box_key(pymupdf.Rect(span["bbox"])), []).extend(points)
     return out
@@ -255,8 +258,10 @@ class _Sanitizer(mupdf.PdfSanitizeFilterOptions2):
 
 def _covers(line: pymupdf.Rect, rect: pymupdf.Rect) -> bool:
     return (
-        line.x0 <= rect.x0 and rect.x1 <= line.x1
-        and line.y0 <= rect.y0 and rect.y1 <= line.y1
+        line.x0 <= rect.x0
+        and rect.x1 <= line.x1
+        and line.y0 <= rect.y0
+        and rect.y1 <= line.y1
         and not math.isinf(rect.width)
     )
 
@@ -269,7 +274,9 @@ class _Factory(mupdf.PdfFilterFactory2):
         self.sanitizer = sanitizer
 
     def filter(self, ctx, doc, chain, struct_parents, transform, options):
-        return mupdf.ll_pdf_new_sanitize_filter(doc, chain, struct_parents, transform, options, self.sanitizer.internal())
+        return mupdf.ll_pdf_new_sanitize_filter(
+            doc, chain, struct_parents, transform, options, self.sanitizer.internal()
+        )
 
 
 def erase(page: pymupdf.Page, erasure: Erasure) -> int:
@@ -380,7 +387,7 @@ def _restore_dropped_colors(data: bytes) -> bytes:
         elif op == b"Q" and saved:
             current = saved.pop()
         elif op in _FILL_COLOR or op in _STROKE_COLOR:
-            current[op in _FILL_COLOR] = data[start:op_end - len(op)].strip()
+            current[op in _FILL_COLOR] = data[start : op_end - len(op)].strip()
         elif op == b"cs" or op == b"CS":
             fill = op == b"cs"
             follow = ops[index + 1][0] if index + 1 < len(ops) else b""

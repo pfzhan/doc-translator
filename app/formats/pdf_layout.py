@@ -7,6 +7,7 @@
 页眉、页脚和页码另作跳过，不参与分栏。
 文字栏沟明确时，阅读顺序按栏从上到下；只靠图缘切开的页面不重排。
 """
+
 from __future__ import annotations
 
 import bisect
@@ -176,7 +177,8 @@ class PageGeometry:
         # 表格外框也是一块大矢量，不能再当成图，否则格子里的字会被整段跳过。
         # 比表大出一圈的是图：带网格的坐标图，网格认成了表，标题、坐标轴名在网格外面
         figure_tuple = tuple(
-            figure for figure in (figures or ())
+            figure
+            for figure in (figures or ())
             if not any(
                 _mostly_inside(figure, [zone]) and figure.width * figure.height <= zone.width * zone.height * 1.2
                 for zone in table_zones
@@ -187,13 +189,20 @@ class PageGeometry:
         body = [rect for rect in usable if rect.width <= page_width * _SPAN_MAX]
         columns = _columns_of(page_width, usable, _cutting_figures(figure_tuple, page_width, height))
         return PageGeometry(
-            page_width, columns, figure_tuple, height, table_tuple,
-            reads_in_columns=bool(_find_gutters(body)), frame=frame,
+            page_width,
+            columns,
+            figure_tuple,
+            height,
+            table_tuple,
+            reads_in_columns=bool(_find_gutters(body)),
+            frame=frame,
         )
 
     @staticmethod
     def from_page(
-        page: pymupdf.Page, text_rects: list[pymupdf.Rect], frame: TextFrame | None = None,
+        page: pymupdf.Page,
+        text_rects: list[pymupdf.Rect],
+        frame: TextFrame | None = None,
         scan: PageScan | None = None,
     ) -> PageGeometry:
         """scan 是这一页已经读出的表格和图。没给时现读。"""
@@ -213,6 +222,7 @@ class PageGeometry:
 class PageScan:
     """一页的表格、图和词。提取、阅读顺序、角色判断、逐词对译都要用；
     找表要逐页解析线和字，线、图片框、词每读一次都要几毫秒到几十毫秒，所以每页只读一次。"""
+
     tables: tuple[RuledTable, ...]
     figures: tuple[pymupdf.Rect, ...]
     words: tuple[_TextWord, ...]
@@ -240,9 +250,14 @@ def scan_page(page: pymupdf.Page) -> PageScan:
     horizontal, vertical = _rule_segments(page, drawings)
     # 找图仍按原样的路径框：裁过以后，原先铺满整页、被当成底色略过的图会冒出来，改变图里文字的取舍
     return PageScan(
-        page_tables(page, drawings, words), tuple(_figure_rects(page, [*raw, *rules], images)), words,
-        _shaded_areas(drawings, text_page_rect(page)), tuple(horizontal),
-        tuple(_thin_strokes(drawings)), tuple(vertical), *_curved_paths(drawings),
+        page_tables(page, drawings, words),
+        tuple(_figure_rects(page, [*raw, *rules], images)),
+        words,
+        _shaded_areas(drawings, text_page_rect(page)),
+        tuple(horizontal),
+        tuple(_thin_strokes(drawings)),
+        tuple(vertical),
+        *_curved_paths(drawings),
         visible_spaces=tuple(_visible_spaces(drawings)),
     )
 
@@ -267,9 +282,11 @@ def _curved_paths(drawings: list[dict]) -> tuple[tuple[pymupdf.Rect, ...], tuple
         rect = pymupdf.Rect(drawing["rect"])
         start, end = items[0][1], items[-1][-1]
         arched = (
-            isinstance(start, pymupdf.Point) and isinstance(end, pymupdf.Point)
+            isinstance(start, pymupdf.Point)
+            and isinstance(end, pymupdf.Point)
             and abs(start.x - end.x) >= _ARC_MIN_WIDTH * 0.5
-            and abs(start.y - rect.y1) <= _ARC_FOOT and abs(end.y - rect.y1) <= _ARC_FOOT
+            and abs(start.y - rect.y1) <= _ARC_FOOT
+            and abs(end.y - rect.y1) <= _ARC_FOOT
             and rect.height >= _ARC_FOOT * 2
         )
         if drawing.get("type") == "s" and rect.width >= _ARC_MIN_WIDTH and arched:
@@ -301,7 +318,11 @@ def _visible_spaces(drawings: list[dict]) -> list[pymupdf.Rect]:
     found: list[pymupdf.Rect] = []
     for flat in flats:
         ends = [
-            [stem for stem in stems if abs(stem.x0 - x) <= 0.5 and abs(stem.y1 - flat.y1) <= 0.5 and stem.height < flat.width]
+            [
+                stem
+                for stem in stems
+                if abs(stem.x0 - x) <= 0.5 and abs(stem.y1 - flat.y1) <= 0.5 and stem.height < flat.width
+            ]
             for x in (flat.x0, flat.x1)
         ]
         if all(ends):
@@ -371,10 +392,14 @@ def _clip_images(page: pymupdf.Page, infos: list[dict]) -> list[dict]:
     out: list[dict] = []
     for info in infos:
         whole = pymupdf.Rect(info["bbox"])
-        found = next((
-            n for n, (rect, size) in enumerate(shown)
-            if size == (info.get("width"), info.get("height")) and rect in whole + (-1, -1, 1, 1)
-        ), None)
+        found = next(
+            (
+                n
+                for n, (rect, size) in enumerate(shown)
+                if size == (info.get("width"), info.get("height")) and rect in whole + (-1, -1, 1, 1)
+            ),
+            None,
+        )
         if found is None:
             out.append(info)
             continue
@@ -432,9 +457,13 @@ def light_fill(drawing: dict) -> bool:
     items = drawing.get("items") or []
     fill = drawing.get("fill")
     return (
-        drawing.get("type") == "f" and bool(items) and all(item[0] in ("re", "qu") for item in items)
+        drawing.get("type") == "f"
+        and bool(items)
+        and all(item[0] in ("re", "qu") for item in items)
         and min(rect.width, rect.height) > _RULE_THICK
-        and fill is not None and len(fill) == 3 and 0.299 * fill[0] + 0.587 * fill[1] + 0.114 * fill[2] > 0.6
+        and fill is not None
+        and len(fill) == 3
+        and 0.299 * fill[0] + 0.587 * fill[1] + 0.114 * fill[2] > 0.6
     )
 
 
@@ -462,7 +491,8 @@ def _shaded_areas(drawings: list[dict], bounds: pymupdf.Rect) -> tuple[pymupdf.R
 def page_words(page: pymupdf.Page) -> tuple[_TextWord, ...]:
     return tuple(
         _TextWord(float(item[0]), float(item[1]), float(item[2]), float(item[3]), str(item[4]))
-        for item in page.get_text("words") if str(item[4]).strip()
+        for item in page.get_text("words")
+        if str(item[4]).strip()
     )
 
 
@@ -557,18 +587,27 @@ def _read_units(blocks: Sequence[_BlockT], geo: PageGeometry) -> list[_ReadUnit[
     for index, pairs in grouped.items():
         table = spanning_tables[index]
         cells = tuple(block for _order, block in pairs)
-        units.append(_ReadUnit(
-            table.rect.y0, table.rect.x0, geo.index_of(table.rect), pairs[0][0], True, cells,
-        ))
+        units.append(
+            _ReadUnit(
+                table.rect.y0,
+                table.rect.x0,
+                geo.index_of(table.rect),
+                pairs[0][0],
+                True,
+                cells,
+            )
+        )
     for order, block in loose:
-        units.append(_ReadUnit(
-            block.rect.y0,
-            block.rect.x0,
-            geo.index_of(block.rect),
-            order,
-            _spans_columns(block.rect, geo),
-            (block,),
-        ))
+        units.append(
+            _ReadUnit(
+                block.rect.y0,
+                block.rect.x0,
+                geo.index_of(block.rect),
+                order,
+                _spans_columns(block.rect, geo),
+                (block,),
+            )
+        )
     return units
 
 
@@ -614,7 +653,9 @@ def ruled_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> tupl
     try:
         found = page.find_tables(
             clip=_table_clip(page, drawings),
-            vertical_strategy="lines_strict", horizontal_strategy="lines_strict", paths=drawings,
+            vertical_strategy="lines_strict",
+            horizontal_strategy="lines_strict",
+            paths=drawings,
         )
     except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有表
         return ()
@@ -641,12 +682,19 @@ def _table_clip(page: pymupdf.Page, drawings: Sequence[dict]) -> pymupdf.Rect | 
         return None
     rects = [pymupdf.Rect(drawing["rect"]) for drawing in drawings]
     area = pymupdf.Rect(
-        min(r.x0 for r in rects), min(r.y0 for r in rects), max(r.x1 for r in rects), max(r.y1 for r in rects),
+        min(r.x0 for r in rects),
+        min(r.y0 for r in rects),
+        max(r.x1 for r in rects),
+        max(r.y1 for r in rects),
     )
     flipped = area * ~page.transformation_matrix
     top, bottom = min(area.y0, flipped.y0), max(area.y1, flipped.y1)
-    return pymupdf.Rect(area.x0 - _TABLE_CLIP_PAD, top - _TABLE_CLIP_PAD, area.x1 + _TABLE_CLIP_PAD,
-                        bottom + _TABLE_CLIP_PAD) & page.rect
+    return (
+        pymupdf.Rect(
+            area.x0 - _TABLE_CLIP_PAD, top - _TABLE_CLIP_PAD, area.x1 + _TABLE_CLIP_PAD, bottom + _TABLE_CLIP_PAD
+        )
+        & page.rect
+    )
 
 
 # 取字的范围比线多出的一圈：MuPDF 按它自己量的字框决定收不收，和报出来的框差一点
@@ -661,10 +709,17 @@ def _image_rules(images: Sequence[dict]) -> list[dict]:
     for info in images:
         rect = pymupdf.Rect(info["bbox"])
         if min(rect.width, rect.height) <= _RULE_THICK and max(rect.width, rect.height) >= _RULE_MIN:
-            out.append({
-                "type": "f", "rect": rect, "items": [("re", rect, 1)], "closePath": False,
-                "fill": (0.0, 0.0, 0.0), "color": None, "width": 0.0,
-            })
+            out.append(
+                {
+                    "type": "f",
+                    "rect": rect,
+                    "items": [("re", rect, 1)],
+                    "closePath": False,
+                    "fill": (0.0, 0.0, 0.0),
+                    "color": None,
+                    "width": 0.0,
+                }
+            )
     return out
 
 
@@ -699,7 +754,8 @@ def _grid_possible(drawings: Sequence[dict]) -> bool:
 
 
 def _rule_segments(
-    page: pymupdf.Page, drawings: list[dict] | None = None,
+    page: pymupdf.Page,
+    drawings: list[dict] | None = None,
 ) -> tuple[list[pymupdf.Rect], list[pymupdf.Rect]]:
     """页面上的细横线和细竖线。drawings 是本页的矢量图（含图片画的线），没给时现读。
 
@@ -724,13 +780,17 @@ def _rule_segments(
 
 def _edges_of(rect: pymupdf.Rect) -> list[pymupdf.Rect]:
     return [
-        pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y0), pymupdf.Rect(rect.x0, rect.y1, rect.x1, rect.y1),
-        pymupdf.Rect(rect.x0, rect.y0, rect.x0, rect.y1), pymupdf.Rect(rect.x1, rect.y0, rect.x1, rect.y1),
+        pymupdf.Rect(rect.x0, rect.y0, rect.x1, rect.y0),
+        pymupdf.Rect(rect.x0, rect.y1, rect.x1, rect.y1),
+        pymupdf.Rect(rect.x0, rect.y0, rect.x0, rect.y1),
+        pymupdf.Rect(rect.x1, rect.y0, rect.x1, rect.y1),
     ]
 
 
 def _with_open_edges(
-    table: RuledTable, horizontal: list[pymupdf.Rect], vertical: list[pymupdf.Rect],
+    table: RuledTable,
+    horizontal: list[pymupdf.Rect],
+    vertical: list[pymupdf.Rect],
 ) -> RuledTable:
     """补上没有外框的边行、边列。
 
@@ -740,13 +800,21 @@ def _with_open_edges(
     """
     box = pymupdf.Rect(table.rect)
     for _ in range(3):
-        ys = [v for v in vertical if box.x0 - _NEAR <= v.x0 <= box.x1 + _NEAR
-              and v.y1 >= box.y0 - _NEAR and v.y0 <= box.y1 + _NEAR]
-        xs = [h for h in horizontal if box.y0 - _NEAR <= h.y0 <= box.y1 + _NEAR
-              and h.x1 >= box.x0 - _NEAR and h.x0 <= box.x1 + _NEAR]
+        ys = [
+            v
+            for v in vertical
+            if box.x0 - _NEAR <= v.x0 <= box.x1 + _NEAR and v.y1 >= box.y0 - _NEAR and v.y0 <= box.y1 + _NEAR
+        ]
+        xs = [
+            h
+            for h in horizontal
+            if box.y0 - _NEAR <= h.y0 <= box.y1 + _NEAR and h.x1 >= box.x0 - _NEAR and h.x0 <= box.x1 + _NEAR
+        ]
         grown = pymupdf.Rect(
-            min([box.x0, *(h.x0 for h in xs)]), min([box.y0, *(v.y0 for v in ys)]),
-            max([box.x1, *(h.x1 for h in xs)]), max([box.y1, *(v.y1 for v in ys)]),
+            min([box.x0, *(h.x0 for h in xs)]),
+            min([box.y0, *(v.y0 for v in ys)]),
+            max([box.x1, *(h.x1 for h in xs)]),
+            max([box.y1, *(v.y1 for v in ys)]),
         )
         if all(abs(a - b) < 0.5 for a, b in zip(grown, box)):
             break
@@ -800,8 +868,11 @@ def _merge_rows(cells: list[pymupdf.Rect], horizontal: list[pymupdf.Rect]) -> li
     for cell in sorted(cells, key=lambda c: (c.x0, c.y0)):
         prev = out[-1] if out else None
         if (
-            prev is not None and abs(prev.x0 - cell.x0) < _NEAR and abs(prev.x1 - cell.x1) < _NEAR
-            and abs(prev.y1 - cell.y0) < _NEAR and not _ruled(horizontal, cell.y0, cell.x0, cell.x1, upright=False)
+            prev is not None
+            and abs(prev.x0 - cell.x0) < _NEAR
+            and abs(prev.x1 - cell.x1) < _NEAR
+            and abs(prev.y1 - cell.y0) < _NEAR
+            and not _ruled(horizontal, cell.y0, cell.x0, cell.x1, upright=False)
         ):
             out[-1] = prev | cell
             continue
@@ -810,7 +881,9 @@ def _merge_rows(cells: list[pymupdf.Rect], horizontal: list[pymupdf.Rect]) -> li
 
 
 def page_tables(
-    page: pymupdf.Page, drawings: list[dict] | None = None, words: Sequence[_TextWord] | None = None,
+    page: pymupdf.Page,
+    drawings: list[dict] | None = None,
+    words: Sequence[_TextWord] | None = None,
 ) -> tuple[RuledTable, ...]:
     """有线表、底色格子拼成的表，再加上列缘对齐的短格子表和算法框。两栏正文和整段文字不在这里。
     drawings、words 是本页已读出的矢量图和词，没给时现读。"""
@@ -842,15 +915,19 @@ def _with_header_rows(tables: Sequence[RuledTable], words: Sequence[_TextWord]) 
         rect = table.rect
         lines = sorted({x for cell in table.cells for x in (cell.x0, cell.x1) if rect.x0 + 2 < x < rect.x1 - 2})
         above = [
-            word for word in words
-            if word.x0 >= rect.x0 - 2 and word.x1 <= rect.x1 + 2 and word.y1 <= rect.y0 + 1
+            word
+            for word in words
+            if word.x0 >= rect.x0 - 2
+            and word.x1 <= rect.x1 + 2
+            and word.y1 <= rect.y0 + 1
             and not _mostly_inside(pymupdf.Rect(word.x0, word.y0, word.x1, word.y1), zones)
         ]
         top = rect.y0
         headers: list[pymupdf.Rect] = []
         for row in reversed(_word_rows(above)):
-            box = pymupdf.Rect(min(w.x0 for w in row), min(w.y0 for w in row),
-                               max(w.x1 for w in row), max(w.y1 for w in row))
+            box = pymupdf.Rect(
+                min(w.x0 for w in row), min(w.y0 for w in row), max(w.x1 for w in row), max(w.y1 for w in row)
+            )
             if top - box.y1 > box.height or not _header_row(row, lines):
                 break
             headers.append(pymupdf.Rect(rect.x0, box.y0 - 1, rect.x1, min(box.y1 + 1, top)))
@@ -864,7 +941,9 @@ def _with_header_rows(tables: Sequence[RuledTable], words: Sequence[_TextWord]) 
 
 
 def column_ruled_tables(
-    vertical: Sequence[pymupdf.Rect], words: Sequence[_TextWord], known: Sequence[RuledTable] = (),
+    vertical: Sequence[pymupdf.Rect],
+    words: Sequence[_TextWord],
+    known: Sequence[RuledTable] = (),
 ) -> tuple[RuledTable, ...]:
     """只画了列线的表：没有外框，横线也只有表头下面一条，find_tables 围不出格子；
     数字居中排，按左右缘对齐也认不出。几条竖线上下一样长，竖线范围里每行字在每条竖线
@@ -875,8 +954,12 @@ def column_ruled_tables(
     for index, line in enumerate(lines):
         if index in used:
             continue
-        group = [other for other in lines if other.height > 0
-                 and min(line.y1, other.y1) - max(line.y0, other.y0) >= 0.8 * min(line.height, other.height)]
+        group = [
+            other
+            for other in lines
+            if other.height > 0
+            and min(line.y1, other.y1) - max(line.y0, other.y0) >= 0.8 * min(line.height, other.height)
+        ]
         used.update(lines.index(other) for other in group)
         xs = sorted(other.x0 for other in group)
         top, bottom = min(other.y0 for other in group), max(other.y1 for other in group)
@@ -884,12 +967,14 @@ def column_ruled_tables(
         rows = _word_rows(inside)
         if len(rows) < _MIN_TEXT_ROWS:
             continue
-        sided = [row for row in rows
-                 if all(any(w.x1 <= x for w in row) and any(w.x0 >= x for w in row) for x in xs)]
+        sided = [row for row in rows if all(any(w.x1 <= x for w in row) and any(w.x0 >= x for w in row) for x in xs)]
         if len(sided) < len(rows) * 0.8:
             continue
         pieces = [cell for row in rows for cell in _row_cells(row)]
-        if sum(1 for cell in pieces if cell.words <= _SHORT_WORDS and cell.width <= _SHORT_WIDTH) < len(pieces) * _SHORT_SHARE:
+        if (
+            sum(1 for cell in pieces if cell.words <= _SHORT_WORDS and cell.width <= _SHORT_WIDTH)
+            < len(pieces) * _SHORT_SHARE
+        ):
             continue
         left = min(w.x0 for w in inside) - 2
         right = max(w.x1 for w in inside) + 2
@@ -899,13 +984,17 @@ def column_ruled_tables(
         tops = [min(w.y0 for w in row) for row in rows]
         edges = [top, *((max(w.y1 for w in upper) + lower_top) / 2 for upper, lower_top in zip(rows, tops[1:])), bottom]
         cols = [left, *xs, right]
-        cells = tuple(pymupdf.Rect(x0, y0, x1, y1) for y0, y1 in zip(edges, edges[1:]) for x0, x1 in zip(cols, cols[1:]))
+        cells = tuple(
+            pymupdf.Rect(x0, y0, x1, y1) for y0, y1 in zip(edges, edges[1:]) for x0, x1 in zip(cols, cols[1:])
+        )
         tables.append(RuledTable(area, cells))
     return tuple(tables)
 
 
 def banded_tables(
-    horizontal: Sequence[pymupdf.Rect], words: Sequence[_TextWord], known: Sequence[RuledTable] = (),
+    horizontal: Sequence[pymupdf.Rect],
+    words: Sequence[_TextWord],
+    known: Sequence[RuledTable] = (),
 ) -> tuple[RuledTable, ...]:
     """三线表：顶线、表头下的中线、底线一样长，中间没有竖线。表头常折行、居中，
     几组数据之间还隔着横线，行距不齐，按对齐找只找得到其中一段。
@@ -929,9 +1018,11 @@ def banded_tables(
         bands: list[list[list[_TextWord]]] = []
         for upper, lower in zip(group, group[1:]):
             inside = [
-                word for word in words
+                word
+                for word in words
                 if upper.y1 < (word.y0 + word.y1) / 2 < lower.y0
-                and word.x0 >= left - _NEAR and word.x1 <= right + _NEAR
+                and word.x0 >= left - _NEAR
+                and word.x1 <= right + _NEAR
             ]
             bands.append(_word_rows(inside))
         rows = [row for band in bands for row in band]
@@ -946,13 +1037,18 @@ def banded_tables(
         short = sum(1 for cell in pieces if cell.words <= _SHORT_WORDS and cell.width <= _SHORT_WIDTH)
         # 横线下第一行只有一个短格的是分组名（Conditional、μ prediction），不算没分格的行
         split = sum(
-            1 for band in bands for index, row in enumerate(band)
+            1
+            for band in bands
+            for index, row in enumerate(band)
             if len(cells := _row_cells(row)) >= 2
             or (index == 0 and cells[0].words <= _SHORT_WORDS and cells[0].width <= _SHORT_WIDTH)
         )
         # 跨过半张表的格子只在一行一格时才说明是正文；两列表的行名本来就占大半
-        if (short < len(pieces) * _BAND_SHORT_SHARE or split < len(rows) * 0.8
-                or any(len(cells := _row_cells(row)) == 1 and cells[0].width > (right - left) / 2 for row in rows)):
+        if (
+            short < len(pieces) * _BAND_SHORT_SHARE
+            or split < len(rows) * 0.8
+            or any(len(cells := _row_cells(row)) == 1 and cells[0].width > (right - left) / 2 for row in rows)
+        ):
             continue
         area = pymupdf.Rect(left, group[0].y0, right, group[-1].y1)
         if any(_mostly_inside(area, [table.rect]) for table in known):
@@ -1020,8 +1116,7 @@ def _split_band(band: Sequence[pymupdf.Rect], words: Sequence[_TextWord]) -> lis
     if short < len(pieces) * _SHORT_SHARE:
         return list(band)
     cuts = [
-        (max(word.y1 for word in upper) + min(word.y0 for word in lower)) / 2
-        for upper, lower in zip(rows, rows[1:])
+        (max(word.y1 for word in upper) + min(word.y0 for word in lower)) / 2 for upper, lower in zip(rows, rows[1:])
     ]
     out: list[pymupdf.Rect] = []
     for cell in band:
@@ -1031,7 +1126,9 @@ def _split_band(band: Sequence[pymupdf.Rect], words: Sequence[_TextWord]) -> lis
 
 
 def _with_ruled_heads(
-    tables: Sequence[RuledTable], words: Sequence[_TextWord], horizontal: Sequence[pymupdf.Rect],
+    tables: Sequence[RuledTable],
+    words: Sequence[_TextWord],
+    horizontal: Sequence[pymupdf.Rect],
 ) -> tuple[RuledTable, ...]:
     """三线表的表头夹在顶线和中线之间。表头的字常比数据列宽、居中排，左右缘和表身对不上，
     按对齐找出来的表只有表身。表身上方紧贴一条横贯全表的中线，再往上有一条一样长的顶线，
@@ -1047,7 +1144,10 @@ def _with_ruled_heads(
             continue
         mid = max(mids, key=lambda h: h.y0)
         tops = [
-            h for h in spans if abs(h.x0 - mid.x0) <= _NEAR and abs(h.x1 - mid.x1) <= _NEAR
+            h
+            for h in spans
+            if abs(h.x0 - mid.x0) <= _NEAR
+            and abs(h.x1 - mid.x1) <= _NEAR
             and row_height * 0.5 < mid.y0 - h.y0 <= row_height * _HEAD_ROWS
         ]
         if not tops:
@@ -1055,9 +1155,9 @@ def _with_ruled_heads(
             continue
         top = max(tops, key=lambda h: h.y0)
         band = [
-            word for word in words
-            if top.y1 < (word.y0 + word.y1) / 2 < mid.y0
-            and word.x0 >= mid.x0 - _NEAR and word.x1 <= mid.x1 + _NEAR
+            word
+            for word in words
+            if top.y1 < (word.y0 + word.y1) / 2 < mid.y0 and word.x0 >= mid.x0 - _NEAR and word.x1 <= mid.x1 + _NEAR
         ]
         heads = _head_cells([_row_cells(row) for row in _word_rows(band)], mid.x0, mid.x1, top.y1, mid.y0)
         if len(heads) < 2:
@@ -1069,7 +1169,11 @@ def _with_ruled_heads(
 
 
 def _head_cells(
-    rows: Sequence[Sequence[_TextCell]], left: float, right: float, top: float, bottom: float,
+    rows: Sequence[Sequence[_TextCell]],
+    left: float,
+    right: float,
+    top: float,
+    bottom: float,
 ) -> list[pymupdf.Rect]:
     """表头的字按列分格。一行字接在正上方最近的那格下面，那格又只和这一个字相交的，
     是同一格折了行；跨在两列上面的组名单独一格。格子左右伸到和邻格的空档中线，
@@ -1110,7 +1214,10 @@ def _header_row(row: Sequence[_TextWord], lines: Sequence[float]) -> bool:
 
 
 def filled_tables(
-    page: pymupdf.Page, drawings: list[dict], words: Sequence[_TextWord], ruled: Sequence[RuledTable] = (),
+    page: pymupdf.Page,
+    drawings: list[dict],
+    words: Sequence[_TextWord],
+    ruled: Sequence[RuledTable] = (),
 ) -> tuple[RuledTable, ...]:
     """每格一块底色、格子挨着格子铺满一片的表（LaTeX 的 \\rowcolor、\\cellcolor）。
     这种表常常只有上下几条横线，没有竖线，按线找不出格子，各格的字会被并成一段去翻译。
@@ -1121,8 +1228,11 @@ def filled_tables(
     """
     bounds = text_page_rect(page)
     fills = [
-        pymupdf.Rect(drawing["rect"]) for drawing in drawings
-        if light_fill(drawing) and min(drawing["fill"]) < 0.97 and not (
+        pymupdf.Rect(drawing["rect"])
+        for drawing in drawings
+        if light_fill(drawing)
+        and min(drawing["fill"]) < 0.97
+        and not (
             drawing["rect"].width > bounds.width * _PAGE_FILL and drawing["rect"].height > bounds.height * _PAGE_FILL
         )
     ]
@@ -1167,7 +1277,7 @@ def _tiled_area(cells: Sequence[pymupdf.Rect]) -> float | None:
     叠的这一条扣掉。一块的大半压在另一块上是框里再套一块，返回 None。"""
     total = sum(cell.get_area() for cell in cells)
     for index, cell in enumerate(cells):
-        for other in cells[index + 1:]:
+        for other in cells[index + 1 :]:
             hit = cell & other
             if hit.is_empty:
                 continue
@@ -1202,7 +1312,9 @@ _ALGORITHM_WORD_RE = re.compile(r"Algorithm|Procedure|算法", re.I)
 
 
 def algorithm_tables(
-    page: pymupdf.Page, drawings: list[dict] | None = None, words: Sequence[_TextWord] | None = None,
+    page: pymupdf.Page,
+    drawings: list[dict] | None = None,
+    words: Sequence[_TextWord] | None = None,
 ) -> tuple[RuledTable, ...]:
     """算法框里的伪代码当成一列的表，每一行是一格。
 
@@ -1218,8 +1330,11 @@ def algorithm_tables(
     except Exception:  # noqa: BLE001
         return ()
     lines = [
-        line for block in data.get("blocks", []) if block.get("type") == 0
-        for line in block["lines"] if abs(line["dir"][1]) <= 0.01
+        line
+        for block in data.get("blocks", [])
+        if block.get("type") == 0
+        for line in block["lines"]
+        if abs(line["dir"][1]) <= 0.01
     ]
     captions = [caption for line in lines for caption in _algorithm_captions(line)]
     if not captions:
@@ -1277,7 +1392,9 @@ def _box_above(caption: pymupdf.Rect, size: float, horizontal: list[pymupdf.Rect
     if len(rules) < 2 or caption.y0 - rules[0].y1 > size * 2:
         return None
     bottom = rules[0]
-    top = next((rule for rule in rules[1:] if abs(rule.x0 - bottom.x0) < _NEAR and abs(rule.x1 - bottom.x1) < _NEAR), None)
+    top = next(
+        (rule for rule in rules[1:] if abs(rule.x0 - bottom.x0) < _NEAR and abs(rule.x1 - bottom.x1) < _NEAR), None
+    )
     if top is None:
         return None
     return pymupdf.Rect(bottom.x0, top.y1, bottom.x1, bottom.y0)
@@ -1289,7 +1406,10 @@ _OPEN_END_RE = re.compile(r"[a-z,]$|[a-z]-$")
 
 
 def _join_wrapped_rows(
-    rows: list[pymupdf.Rect], baselines: list[float], spans: list[dict], main: float,
+    rows: list[pymupdf.Rect],
+    baselines: list[float],
+    spans: list[dict],
+    main: float,
 ) -> list[pymupdf.Rect]:
     """行首有行号（1: 2: …）的算法里，行号之后没有行号的行是上一句折下来的，并进上一格。
     没有行号的算法里，上一行排到框的右缘、句子没完，下一行是它折下来的。
@@ -1310,7 +1430,9 @@ def _join_wrapped_rows(
         right = max((box[2] for box in boxes), default=0.0)
         gaps = [b[0] - a[2] for a, b in zip(boxes, boxes[1:])]
         full.append(
-            bool(rows) and right >= rows[0].x1 - main * 0.5 and max(gaps, default=0.0) < main * 1.5
+            bool(rows)
+            and right >= rows[0].x1 - main * 0.5
+            and max(gaps, default=0.0) < main * 1.5
             and bool(_OPEN_END_RE.search(text))
         )
     if sum(labeled) < 2:
@@ -1347,12 +1469,16 @@ def _distinct_rules(rules: list[pymupdf.Rect]) -> list[pymupdf.Rect]:
 
 
 def _code_rows(
-    lines: list[dict], body: pymupdf.Rect, rules: Sequence[pymupdf.Rect] = (),
+    lines: list[dict],
+    body: pymupdf.Rect,
+    rules: Sequence[pymupdf.Rect] = (),
 ) -> tuple[pymupdf.Rect, ...]:
     """框里每一行一格。行按正文字号的基线分，上下标落在它们所属的行里。
     rules 是框里的横线：分数线、根号上的横线短，框线和分隔线横贯整个框。"""
     spans = [
-        span for line in lines for span in line["spans"]
+        span
+        for line in lines
+        for span in line["spans"]
         if span["text"].strip() and body.contains(pymupdf.Point(span["origin"]))
     ]
     if not spans:
@@ -1363,9 +1489,9 @@ def _code_rows(
     # 根号、大括号这类符号字体的起笔点不在基线上，不拿它们分行；
     # 行间公式的分子分母和正文一样大，贴着分数线，也不拿它们分行
     steady = [
-        span for span in spans
-        if span["size"] >= main * 0.85 and not _SYMBOL_FONT_RE.search(span["font"])
-        and not _on_bar(span, bars, main)
+        span
+        for span in spans
+        if span["size"] >= main * 0.85 and not _SYMBOL_FONT_RE.search(span["font"]) and not _on_bar(span, bars, main)
     ]
     for y in sorted(span["origin"][1] for span in steady):
         if not baselines or y - baselines[-1] > main * 0.4:
@@ -1420,7 +1546,9 @@ class _TextCell:
 
 
 def unruled_tables(
-    page: pymupdf.Page, ruled: Sequence[RuledTable] = (), words: Sequence[_TextWord] | None = None,
+    page: pymupdf.Page,
+    ruled: Sequence[RuledTable] = (),
+    words: Sequence[_TextWord] | None = None,
 ) -> tuple[RuledTable, ...]:
     """没有线时，只认短格子组成的网格：列的左缘或右缘对齐，行高重复。words 是本页的词，没给时现读。
 
@@ -1430,7 +1558,8 @@ def unruled_tables(
     """
     zones = [table.rect for table in ruled]
     words = [
-        word for word in (page_words(page) if words is None else words)
+        word
+        for word in (page_words(page) if words is None else words)
         if not _mostly_inside(pymupdf.Rect(word.x0, word.y0, word.x1, word.y1), zones)
     ]
     rows = [_row_cells(row) for row in _word_rows(words)]
@@ -1450,21 +1579,27 @@ def unruled_tables(
             index += 1
     taken = [table.rect for table in tables]
     free = [
-        not any(_mostly_inside(pymupdf.Rect(cell.x0, cell.y0, cell.x1, cell.y1), taken) for cell in row)
-        for row in rows
+        not any(_mostly_inside(pymupdf.Rect(cell.x0, cell.y0, cell.x1, cell.y1), taken) for cell in row) for row in rows
     ]
     # 双栏页上左栏的表和右栏正文挨着排，按列对齐会连成一张表，所以栏间空档两边分开认
     width = text_page_rect(page).width
-    gutters = _find_gutters([
-        pymupdf.Rect(cell.x0, cell.y0, cell.x1, cell.y1) for row in rows for cell in row
-        if cell.x1 - cell.x0 <= width * _SPAN_MAX
-    ])
+    gutters = _find_gutters(
+        [
+            pymupdf.Rect(cell.x0, cell.y0, cell.x1, cell.y1)
+            for row in rows
+            for cell in row
+            if cell.x1 - cell.x0 <= width * _SPAN_MAX
+        ]
+    )
     index = 0
     while index < len(rows):
         cursor = index
-        while cursor < len(rows) and free[cursor] and (
-            cursor == index or _continues_rows(rows[index:cursor], rows[cursor])
-        ) and len(rows[cursor]) >= 2:
+        while (
+            cursor < len(rows)
+            and free[cursor]
+            and (cursor == index or _continues_rows(rows[index:cursor], rows[cursor]))
+            and len(rows[cursor]) >= 2
+        ):
             cursor += 1
         table = _sparse_grid(rows[index:cursor], gutters) if cursor - index >= _MIN_TEXT_ROWS else None
         if table is not None:
@@ -1487,7 +1622,8 @@ _PAGE_REFS_RE = re.compile(r",\s*\d+$")
 
 
 def _sparse_grid(
-    rows: Sequence[Sequence[_TextCell]], gutters: Sequence[tuple[float, float]] = (),
+    rows: Sequence[Sequence[_TextCell]],
+    gutters: Sequence[tuple[float, float]] = (),
 ) -> RuledTable | None:
     """格数每行不一样的表（TMP when? yesterday evening 这样的三列，有的行空着一格）：
     每格的左缘都落在某一列上，这一列至少两行用到；三列以上各有一半的行用到，相邻两列隔得开。
@@ -1503,7 +1639,8 @@ def _sparse_grid(
         return None
     columns: list[list[tuple[int, _TextCell]]] = []
     for row_index, cell in sorted(
-        ((index, cell) for index, row in enumerate(rows) for cell in row), key=lambda item: item[1].x0,
+        ((index, cell) for index, row in enumerate(rows) for cell in row),
+        key=lambda item: item[1].x0,
     ):
         if columns and cell.x0 - columns[-1][-1][1].x0 <= _COL_ALIGN:
             columns[-1].append((row_index, cell))
@@ -1517,14 +1654,17 @@ def _sparse_grid(
         return None
     if any(
         left < start and end <= right + _COL_ALIGN
-        for left, right in zip(anchors, anchors[1:]) for start, end in gutters
+        for left, right in zip(anchors, anchors[1:])
+        for start, end in gutters
     ):
         return None
+
     # 表下面的图注（Figure 18.12 The A transition …）行距相同，也落在列上，但长句不在最后一列
     def long_head(row: Sequence[_TextCell]) -> bool:
         return any(cell.x0 < anchors[-1] - _COL_ALIGN and cell.words > _SHORT_WORDS for cell in row)
+
     if long_head(rows[0]) or long_head(rows[-1]):
-        inner = rows[1 if long_head(rows[0]) else 0:-1 if long_head(rows[-1]) else None]
+        inner = rows[1 if long_head(rows[0]) else 0 : -1 if long_head(rows[-1]) else None]
         return _sparse_grid(inner, gutters) if len(inner) >= _MIN_TEXT_ROWS else None
     rights = [anchor - 3.0 for anchor in anchors[1:]]
     rights.append(max(max(cell.x1 for _, cell in columns[-1]) + 8.0, anchors[-1] + 28.0))
@@ -1532,7 +1672,8 @@ def _sparse_grid(
     bottoms = [top - 1.0 for top in tops[1:]] + [max(cell.y1 for cell in rows[-1]) + 2.0]
     cells = tuple(
         pymupdf.Rect(anchor - 1.0, top - 1.0, max(right, anchor + 18.0), bottom)
-        for top, bottom in zip(tops, bottoms) for anchor, right in zip(anchors, rights)
+        for top, bottom in zip(tops, bottoms)
+        for anchor, right in zip(anchors, rights)
     )
     if not _usable_table(cells):
         return None
@@ -1543,7 +1684,8 @@ def _sparse_grid(
 
 
 def interlinear_glosses(
-    page: pymupdf.Page, words: Sequence[_TextWord] | None = None,
+    page: pymupdf.Page,
+    words: Sequence[_TextWord] | None = None,
 ) -> tuple[pymupdf.Rect, ...]:
     """语言学例句的逐词对译：原文一行、对译一行。逐词翻译对译行没有意义，
     词序一变也对不上，两行都留原文。认两种排法：
@@ -1581,9 +1723,13 @@ def _with_centered_numbers(rows: list[list[_TextWord]]) -> list[list[_TextWord]]
     for index, row in enumerate(rows):
         below = rows[index + 1] if index + 1 < len(rows) else None
         if (
-            out and below is not None and len(row) == 1 and _NUMBER_LABEL_RE.fullmatch(row[0].text)
+            out
+            and below is not None
+            and len(row) == 1
+            and _NUMBER_LABEL_RE.fullmatch(row[0].text)
             and row[0].x1 < min(word.x0 for word in (*out[-1], *below))
-            and row[0].y0 < max(word.y1 for word in out[-1]) and row[0].y1 > min(word.y0 for word in below)
+            and row[0].y0 < max(word.y1 for word in out[-1])
+            and row[0].y1 > min(word.y0 for word in below)
         ):
             out[-1] = [*out[-1], *row]
             continue
@@ -1594,6 +1740,7 @@ def _with_centered_numbers(rows: list[list[_TextWord]]) -> list[list[_TextWord]]
 @dataclass(frozen=True)
 class ExampleNumber:
     """行首的例句编号。rect 是编号，row 是编号这一行，text_x0 是编号后面的字从哪里起笔"""
+
     rect: pymupdf.Rect
     row: pymupdf.Rect
     text_x0: float
@@ -1611,7 +1758,7 @@ def example_numbers(words: Sequence[_TextWord]) -> tuple[ExampleNumber, ...]:
             if index and word.x0 - row[index - 1].x1 < height * 2:
                 continue
             rect = pymupdf.Rect(word.x0, word.y0, word.x1, word.y1)
-            for other in row[index + 1:]:
+            for other in row[index + 1 :]:
                 if other.x0 - rect.x1 > height * 3:
                     break  # 另一栏
                 rect |= pymupdf.Rect(other.x0, other.y0, other.x1, other.y1)
@@ -1627,14 +1774,16 @@ def _glossed(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
     starts = [word.x0 for word in upper]
     # 对译行是词，不是数字表的一行
     aligned = [
-        word for word in lower
+        word
+        for word in lower
         if any(abs(word.x0 - x) <= _GLOSS_ALIGN for x in starts) and any(ch.isalpha() for ch in word.text)
     ]
     hit = [x for x in starts if any(abs(word.x0 - x) <= _GLOSS_ALIGN for word in lower)]
     # 对得上的词大半和上一行同一处的词一样：是两条开头相同的列表项（Else search from right to
     # left for ...），对译行写的是另一种语言，同一处的词不会一样
     same = [
-        word for word in aligned
+        word
+        for word in aligned
         if any(abs(word.x0 - other.x0) <= _GLOSS_ALIGN and word.text == other.text for other in upper)
     ]
     if aligned and len(same) >= len(aligned) * 0.5:
@@ -1653,15 +1802,16 @@ def _role_labels(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool
     图里的大写字上面是数字，都不算。字号按这一排最矮的标签比，ARG0 的下标会把框撑高。"""
     height = min(word.y1 - word.y0 for word in lower)
     return all(
-        _ROLE_LABEL_RE.fullmatch(word.text) and any(_labels(word, other, height) for other in upper)
-        for word in lower
+        _ROLE_LABEL_RE.fullmatch(word.text) and any(_labels(word, other, height) for other in upper) for word in lower
     )
 
 
 def _labels(label: _TextWord, word: _TextWord, height: float) -> bool:
     return (
-        word.x0 - _GLOSS_ALIGN * 2 <= label.x0 <= word.x1 and height < (word.y1 - word.y0) * 0.9
-        and word.y1 - 1 <= label.y0 <= word.y1 + height * 0.35 and any(ch.isalpha() for ch in word.text)
+        word.x0 - _GLOSS_ALIGN * 2 <= label.x0 <= word.x1
+        and height < (word.y1 - word.y0) * 0.9
+        and word.y1 - 1 <= label.y0 <= word.y1 + height * 0.35
+        and any(ch.isalpha() for ch in word.text)
     )
 
 
@@ -1683,7 +1833,8 @@ def _script_share(row: Sequence[_TextWord], latin: bool) -> float:
     if not lettered:
         return 0.0
     matched = [
-        word for word in lettered
+        word
+        for word in lettered
         if all(ord(ch) <= 0x24F or 0x2B0 <= ord(ch) <= 0x2FF for ch in word.text if ch.isalpha()) == latin
     ]
     return len(matched) / len(lettered)
@@ -1723,14 +1874,16 @@ def _row_cells(row: Sequence[_TextWord]) -> list[_TextCell]:
             groups.append([word])
     cells: list[_TextCell] = []
     for group in groups:
-        cells.append(_TextCell(
-            min(word.x0 for word in group),
-            min(word.y0 for word in group),
-            max(word.x1 for word in group),
-            max(word.y1 for word in group),
-            len(group),
-            " ".join(word.text for word in group),
-        ))
+        cells.append(
+            _TextCell(
+                min(word.x0 for word in group),
+                min(word.y0 for word in group),
+                max(word.x1 for word in group),
+                max(word.y1 for word in group),
+                len(group),
+                " ".join(word.text for word in group),
+            )
+        )
     return cells
 
 
@@ -1869,24 +2022,28 @@ def _voting_rects(
 ) -> list[pymupdf.Rect]:
     """表内文字和图内标签不参与分栏，避免把格子或图中的缝当成栏沟。"""
     zones = [table.rect for table in tables]
-    zones.extend(
-        figure for figure in figures if not _page_filling(figure, page_width, page_height)
-    )
+    zones.extend(figure for figure in figures if not _page_filling(figure, page_width, page_height))
     return [rect for rect in rects if not _mostly_inside(rect, zones)]
 
 
 def _cutting_figures(
-    figures: Sequence[pymupdf.Rect], page_width: float, page_height: float,
+    figures: Sequence[pymupdf.Rect],
+    page_width: float,
+    page_height: float,
 ) -> list[pymupdf.Rect]:
     return [
-        figure for figure in figures
-        if figure.width >= _WALL_MIN_W and figure.height >= _WALL_MIN_H
+        figure
+        for figure in figures
+        if figure.width >= _WALL_MIN_W
+        and figure.height >= _WALL_MIN_H
         and not _page_filling(figure, page_width, page_height)
     ]
 
 
 def _columns_of(
-    page_width: float, usable: list[pymupdf.Rect], figures: Sequence[pymupdf.Rect],
+    page_width: float,
+    usable: list[pymupdf.Rect],
+    figures: Sequence[pymupdf.Rect],
 ) -> tuple[Column, ...]:
     if not usable:
         return (Column(0.0, page_width),)
@@ -1916,15 +2073,13 @@ def _find_gutters(body: list[pymupdf.Rect]) -> list[tuple[float, float]]:
 
 
 def _figure_walls(
-    body: list[pymupdf.Rect], figures: Sequence[pymupdf.Rect],
+    body: list[pymupdf.Rect],
+    figures: Sequence[pymupdf.Rect],
 ) -> list[tuple[float, float]]:
     """图旁文字不够三块时，图缘仍把这一侧收成一栏。"""
     walls: list[tuple[float, float]] = []
     for figure in figures:
-        beside = [
-            rect for rect in body
-            if _overlaps_y(rect, figure) and _x_gap(rect, figure) >= _GUTTER_MIN
-        ]
+        beside = [rect for rect in body if _overlaps_y(rect, figure) and _x_gap(rect, figure) >= _GUTTER_MIN]
         left = [rect for rect in beside if rect.x1 <= figure.x0 + 1]
         right = [rect for rect in beside if rect.x0 >= figure.x1 - 1]
         if len(left) >= 2 and _group_y_overlap(left, [figure]) >= _MIN_Y_OVERLAP:
@@ -1963,10 +2118,12 @@ def _columns_from_gutters(
         group = [rect for rect in voters if lo < (rect.x0 + rect.x1) / 2 <= hi]
         if not group:
             continue
-        columns.append(Column(
-            min(rect.x0 for rect in group) if x_start is None else x_start,
-            max(rect.x1 for rect in group) if x_end is None else x_end,
-        ))
+        columns.append(
+            Column(
+                min(rect.x0 for rect in group) if x_start is None else x_start,
+                max(rect.x1 for rect in group) if x_end is None else x_end,
+            )
+        )
     if columns:
         return tuple(columns)
     return (Column(min(rect.x0 for rect in usable), max(rect.x1 for rect in usable)),)
@@ -1995,11 +2152,7 @@ def _merged_x(rects: list[pymupdf.Rect]) -> list[tuple[float, float]]:
 
 
 def _gaps(intervals: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    return [
-        (prev[1], nxt[0])
-        for prev, nxt in zip(intervals, intervals[1:])
-        if nxt[0] > prev[1]
-    ]
+    return [(prev[1], nxt[0]) for prev, nxt in zip(intervals, intervals[1:]) if nxt[0] > prev[1]]
 
 
 def _group_y_overlap(left: Sequence[pymupdf.Rect], right: Sequence[pymupdf.Rect]) -> float:
@@ -2015,7 +2168,7 @@ def _usable_table(cells: tuple[pymupdf.Rect, ...]) -> bool:
         return False
     # 表的格子互不重叠。框套框的是流程图，当表的话框里的字全并成一格
     for index, cell in enumerate(cells):
-        for other in cells[index + 1:]:
+        for other in cells[index + 1 :]:
             hit = cell & other
             smaller = min(cell.width * cell.height, other.width * other.height)
             if not hit.is_empty and hit.width * hit.height > smaller * 0.25:
@@ -2078,13 +2231,13 @@ def _is_blank_fill(drawing: dict) -> bool:
     if any(float(channel) < 0.96 for channel in fill[:3]):
         return False
     items = drawing.get("items") or []
-    return bool(items) and all(
-        isinstance(item, (tuple, list)) and bool(item) and item[0] == "re" for item in items
-    )
+    return bool(items) and all(isinstance(item, (tuple, list)) and bool(item) and item[0] == "re" for item in items)
 
 
 def _figure_rects(
-    page: pymupdf.Page, drawings: list[dict] | None = None, images: list[dict] | None = None,
+    page: pymupdf.Page,
+    drawings: list[dict] | None = None,
+    images: list[dict] | None = None,
 ) -> list[pymupdf.Rect]:
     bounds = text_page_rect(page)
     width, height = bounds.width, bounds.height
@@ -2143,16 +2296,19 @@ def _flat_strokes(drawing: dict) -> list[pymupdf.Rect]:
 
 def _framed(ground: pymupdf.Rect, ruled: Sequence[pymupdf.Rect]) -> bool:
     """白底上下各有一条横线，横跨整块白底、离它的上下沿不远：白底是框起来的一幅图。"""
+
     def edge(y: float) -> bool:
         return any(
-            abs(line.y0 - y) <= _FRAME_REACH and line.x0 <= ground.x0 + 2 and line.x1 >= ground.x1 - 2
-            for line in ruled
+            abs(line.y0 - y) <= _FRAME_REACH and line.x0 <= ground.x0 + 2 and line.x1 >= ground.x1 - 2 for line in ruled
         )
+
     return edge(ground.y0) and edge(ground.y1)
 
 
 def _figure_grounds(
-    grounds: Sequence[pymupdf.Rect], figures: Sequence[pymupdf.Rect], marks: Sequence[pymupdf.Rect] = (),
+    grounds: Sequence[pymupdf.Rect],
+    figures: Sequence[pymupdf.Rect],
+    marks: Sequence[pymupdf.Rect] = (),
     framed: Sequence[pymupdf.Rect] = (),
 ) -> list[pymupdf.Rect]:
     """画图程序（matplotlib）先铺一块白底，标题、坐标轴名、图例都写在白底上，曲线只占中间一块。

@@ -11,6 +11,7 @@
 图内文字、编号标题不会被模型改掉。框出的正文段落（text_regions）用来把被式子切开的
 同一段并回去（见 pdf._region_joins）。
 """
+
 from __future__ import annotations
 
 import ast
@@ -61,7 +62,8 @@ _ROLES = {
 # 正文里以图表编号起头的一句（Fig. 19.15 sketches the architecture.）：编号后面接着小写的词。
 # 这句紧挨在图注下面时模型常把它也框成图注
 _BODY_REFERENCE_RE = re.compile(
-    r"(?:Figure|Fig\.|Table|Tab\.)\s*(?:[A-Z]\.?)?\d+(?:\.\d+)*\s+(?-i:[a-z])", re.I,
+    r"(?:Figure|Fig\.|Table|Tab\.)\s*(?:[A-Z]\.?)?\d+(?:\.\d+)*\s+(?-i:[a-z])",
+    re.I,
 )
 
 
@@ -251,9 +253,12 @@ class ModelLayout:
             on_page(done, len(pages))
         if self._boxes is not None and self._fresh:
             boxes, model_path = self._boxes
-            boxes.keep("layout", model_path, _INPUT, {
-                str(pno): [[r.label, list(r.rect), r.score] for r in found] for pno, found in self._pages.items()
-            })
+            boxes.keep(
+                "layout",
+                model_path,
+                _INPUT,
+                {str(pno): [[r.label, list(r.rect), r.score] for r in found] for pno, found in self._pages.items()},
+            )
 
     def page_regions(self, pno: int) -> list[Region]:
         """每页只推一次：定角色和并段都要用。一页要推两三秒，整本书要几十分钟，任务被暂停时在这里停下。"""
@@ -270,7 +275,8 @@ class ModelLayout:
         rows = self.session.run(None, {self.input: batch})[0][0]
         return [
             Region(self.names.get(int(cls), str(int(cls))), to_page(x0, y0, x1, y1), float(score))
-            for x0, y0, x1, y1, score, cls in rows if score >= _MIN_SCORE
+            for x0, y0, x1, y1, score, cls in rows
+            if score >= _MIN_SCORE
         ]
 
 
@@ -286,7 +292,7 @@ def _page_batch(page: pymupdf.Page, size: int) -> tuple[np.ndarray, Callable[...
     canvas = np.full((height, width, 3), _PAD_GRAY, np.uint8)
     top = (height - pix.height) // 2
     left = (width - pix.width) // 2
-    canvas[top:top + pix.height, left:left + pix.width] = image
+    canvas[top : top + pix.height, left : left + pix.width] = image
     batch = canvas.transpose(2, 0, 1)[None].astype(np.float32) / 255.0
 
     def to_page(x0: float, y0: float, x1: float, y1: float) -> pymupdf.Rect:
@@ -300,6 +306,7 @@ def _page_batch(page: pymupdf.Page, size: int) -> tuple[np.ndarray, Callable[...
 class FormulaModel:
     """公式检测模型的设置：ONNX 文件、输入边长（FORMULA_SIZES 之一），同时推理几页、每页用几个线程
     （0 表示按核数定，见 formula_parallel）。后两个只影响快慢，分析结果不变。"""
+
     path: str
     size: int = FORMULA_SIZES[0]
     workers: int = 0
@@ -363,7 +370,9 @@ class FormulaDetector:
                 yield inline
 
     def _detect(
-        self, batch: np.ndarray, worker: int = 0,
+        self,
+        batch: np.ndarray,
+        worker: int = 0,
     ) -> list[tuple[str, tuple[float, float, float, float], float]]:
         """用第 worker 份模型推理，给出模型输入里的框：(类别, 输入像素坐标, 分)。不碰 MuPDF，可以放在后台线程里跑。"""
         rows = self.sessions[worker].run(None, {self.input: batch})[0][0].T
@@ -372,19 +381,33 @@ class FormulaDetector:
         best = scores.max(1)
         keep = best >= _FORMULA_SCORE
         rows, classes, best = rows[keep], classes[keep], best[keep]
-        boxes = np.stack([rows[:, 0] - rows[:, 2] / 2, rows[:, 1] - rows[:, 3] / 2,
-                          rows[:, 0] + rows[:, 2] / 2, rows[:, 1] + rows[:, 3] / 2], 1)
+        boxes = np.stack(
+            [
+                rows[:, 0] - rows[:, 2] / 2,
+                rows[:, 1] - rows[:, 3] / 2,
+                rows[:, 0] + rows[:, 2] / 2,
+                rows[:, 1] + rows[:, 3] / 2,
+            ],
+            1,
+        )
         found = []
         for cls in np.unique(classes):
             index = np.flatnonzero(classes == cls)
             for k in _nms(boxes[index], best[index]):
-                found.append((self.names.get(int(cls), str(int(cls))), tuple(float(v) for v in boxes[index[k]]),
-                              float(best[index[k]])))
+                found.append(
+                    (
+                        self.names.get(int(cls), str(int(cls))),
+                        tuple(float(v) for v in boxes[index[k]]),
+                        float(best[index[k]]),
+                    )
+                )
         return found
 
 
 def formula_detector(
-    doc: pymupdf.Document, model: FormulaModel | None = None, boxes: ModelBoxes | None = None,
+    doc: pymupdf.Document,
+    model: FormulaModel | None = None,
+    boxes: ModelBoxes | None = None,
 ) -> FormulaDetector | None:
     """model 为 None 表示没开。模型用不了，或者类别里没有行内公式（填成了版面模型）时返回 None，只用规则。
     多份模型里后面的加载不了时，用已经加载好的几份。boxes 里存着这本的框时直接读回，不加载模型；

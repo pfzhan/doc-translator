@@ -8,6 +8,7 @@
 数学斜体的 a、v、S 只单独出现，从不进单词；数学符号各次认得不一样。这两类写成数学字体，
 上下标按实际大小和位置写出。后面的公式占位、分段和普通 TeX PDF 走同一套逻辑。
 """
+
 from __future__ import annotations
 
 import bisect
@@ -250,9 +251,9 @@ def _font_shapes(doc: pymupdf.Document, xref: int) -> dict[int, tuple[float, flo
             continue
         stream = doc.xref_stream(int(proc)) or b""
         found = re.search(rb"\bd([01])\b", stream)
-        if found is None or not stream[found.end():].strip():
+        if found is None or not stream[found.end() :].strip():
             continue
-        head = _numbers(stream[:found.start()].decode("latin-1"))
+        head = _numbers(stream[: found.start()].decode("latin-1"))
         box = head[2:6] if found.group(1) == b"1" and len(head) >= 6 else font_box[:4]
         scale_x, scale_y = matrix[0], matrix[3]
         x0, x1 = sorted((box[0] * scale_x, box[2] * scale_x))
@@ -285,7 +286,9 @@ def _numbers(raw: str) -> list[float]:
 
 
 def _placed_codes(
-    page: pymupdf.Page, fonts: dict[str, int], shapes: dict[int, dict[int, tuple[float, float, float, float]]],
+    page: pymupdf.Page,
+    fonts: dict[str, int],
+    shapes: dict[int, dict[int, tuple[float, float, float, float]]],
 ) -> list[tuple[Key, float, float, float, int]]:
     """按内容流顺序列出画了东西的字形：(key, 起笔 x, 起笔 y, 字号, 颜色)。
 
@@ -305,8 +308,13 @@ def _placed_codes(
 
 
 def _glyph(
-    key: Key, x: float, y: float, size: float, color: int,
-    shapes: dict[int, dict[int, tuple[float, float, float, float]]], flip: bool,
+    key: Key,
+    x: float,
+    y: float,
+    size: float,
+    color: int,
+    shapes: dict[int, dict[int, tuple[float, float, float, float]]],
+    flip: bool,
 ) -> Glyph:
     x0, y0, x1, y1 = shapes[key[0]][key[1]]
     if flip:
@@ -317,7 +325,8 @@ def _glyph(
 
 
 def _y_flip(
-    doc: pymupdf.Document, pages: dict[int, list[tuple[Key, float, float, float, int]]],
+    doc: pymupdf.Document,
+    pages: dict[int, list[tuple[Key, float, float, float, int]]],
     shapes: dict[int, dict[int, tuple[float, float, float, float]]],
 ) -> bool:
     """字形空间朝上还是朝下。Ghostscript 的点阵字用倒置的 Tm，字形往起笔点下方画。
@@ -334,7 +343,7 @@ def _y_flip(
             rect = _glyph(key, x, y, size, color, shapes, flip).rect
             left, right = max(int(rect.x0 * scale), 0), min(int(rect.x1 * scale) + 1, pix.width)
             for row in range(max(int(rect.y0 * scale), 0), min(int(rect.y1 * scale) + 1, pix.height)):
-                mask[row * pix.width + left: row * pix.width + right] = b"\x01" * max(right - left, 0)
+                mask[row * pix.width + left : row * pix.width + right] = b"\x01" * max(right - left, 0)
         return sum(1 for hit, value in zip(mask, pix.samples) if hit and value < 128)
 
     return covered(True) > covered(False)
@@ -388,7 +397,11 @@ def ocr_image(path: Path, scale: float = _OCR_SCALE) -> list[OcrWord]:
     env = {**os.environ, "OMP_THREAD_LIMIT": "1"}
     proc = subprocess.run(
         [exe, str(path), "stdout", "--psm", "3", "-l", "eng", "-c", "hocr_char_boxes=1", "hocr"],
-        capture_output=True, text=True, timeout=_OCR_TIMEOUT, check=False, env=env,
+        capture_output=True,
+        text=True,
+        timeout=_OCR_TIMEOUT,
+        check=False,
+        env=env,
     )
     if proc.returncode != 0 and "traineddata" in proc.stderr:
         raise ValueError("点阵字体页面未识别出文字，请确认已安装 tesseract 英文语言包")
@@ -496,7 +509,9 @@ def _sure(label: Label | None) -> bool:
 
 
 def _align(
-    glyphs: list[Glyph], chars: tuple[OcrChar, ...], labels: dict[Key, Label],
+    glyphs: list[Glyph],
+    chars: tuple[OcrChar, ...],
+    labels: dict[Key, Label],
 ) -> list[tuple[OcrChar, ...]]:
     """把认出的字按顺序分给字形。每个字形分 0 到 3 个字，代价最小的分法。
 
@@ -515,7 +530,7 @@ def _align(
                 prev = cost[index - 1][used - take]
                 if prev == inf:
                     continue
-                taken = chars[used - take:used]
+                taken = chars[used - take : used]
                 text = "".join(char.text for char in taken)
                 if _sure(label):
                     step = 0.0 if text == label.text else 2.0
@@ -532,7 +547,7 @@ def _align(
     used = total
     for index in range(count, 0, -1):
         take = back[index][used]
-        taken.append(tuple(chars[used - take:used]))
+        taken.append(tuple(chars[used - take : used]))
         used -= take
     return taken[::-1]
 
@@ -622,8 +637,10 @@ def _attach(rows: list[_Line], pending: list[list[Glyph]], labels: dict[Key, Lab
                 continue
             host.glyphs.extend(piece)
             left, right = extents[id(host)]
-            extents[id(host)] = (min(left, *(glyph.rect.x0 for glyph in piece)),
-                                 max(right, *(glyph.rect.x1 for glyph in piece)))
+            extents[id(host)] = (
+                min(left, *(glyph.rect.x0 for glyph in piece)),
+                max(right, *(glyph.rect.x1 for glyph in piece)),
+            )
         if len(still) == len(pending):
             return still
         pending = still
@@ -649,7 +666,9 @@ def _same_band(band: list[tuple[Glyph, float, float]], item: tuple[Glyph, float,
 
 
 def _host_line(
-    lines: list[_Line], piece: list[Glyph], labels: dict[Key, Label],
+    lines: list[_Line],
+    piece: list[Glyph],
+    labels: dict[Key, Label],
     extents: dict[int, tuple[float, float]] | None = None,
 ) -> _Line | None:
     """上下标、分数、标点这样的小段并进哪一行：字心落在那一行 x 高的上下 0.75 个字号以内，
@@ -702,8 +721,10 @@ def _measure(line: _Line, labels: dict[Key, Label]) -> None:
     sizes = [size for glyph in line.glyphs if (size := _glyph_size(glyph, labels))]
     line.size = statistics.median(sizes) if sizes else statistics.median(g.rect.height for g in line.glyphs) / 0.7
     sitting = [
-        glyph for glyph in line.glyphs
-        if (size := _glyph_size(glyph, labels)) and size >= line.size * _SCRIPT
+        glyph
+        for glyph in line.glyphs
+        if (size := _glyph_size(glyph, labels))
+        and size >= line.size * _SCRIPT
         and _letter_class(labels[glyph.key].text) in ("x", "tall", "i", "t")
     ]
     line.baseline = statistics.median(glyph.rect.y1 for glyph in (sitting or line.glyphs))
@@ -711,7 +732,10 @@ def _measure(line: _Line, labels: dict[Key, Label]) -> None:
 
 
 def _tokens(
-    line: _Line, labels: dict[Key, Label], owners: dict[int, int], mono: dict[Key, float] | None = None,
+    line: _Line,
+    labels: dict[Key, Label],
+    owners: dict[int, int],
+    mono: dict[Key, float] | None = None,
     bearings: dict[Key, tuple[float, float]] | None = None,
 ) -> list[list[Glyph]]:
     tokens: list[list[Glyph]] = []
@@ -722,7 +746,9 @@ def _tokens(
     for index, glyph in enumerate(line.glyphs):
         prev = tokens[-1][-1] if tokens else None
         pitch = (mono.get(prev.key) or mono.get(glyph.key)) if prev is not None else None
-        same_word = prev is not None and owners.get(id(prev)) is not None and owners.get(id(prev)) == owners.get(id(glyph))
+        same_word = (
+            prev is not None and owners.get(id(prev)) is not None and owners.get(id(prev)) == owners.get(id(glyph))
+        )
         if prev is not None and pitch and (prev.key in mono and glyph.key in mono or same_word):
             # 一边是等宽字、OCR 也认成同一个词（@db.stanford 里只出现一次的 s），按格宽判断
             joined = _middle(glyph) - _middle(prev) <= pitch * 1.5
@@ -828,7 +854,8 @@ class _GlyphCenters:
 
 
 def _learn_roles(
-    pages: dict[int, list[_Line]], labels: dict[Key, Label],
+    pages: dict[int, list[_Line]],
+    labels: dict[Key, Label],
     shapes: Callable[[set[Key]], dict[Key, np.ndarray]],
 ) -> tuple[dict[Key, str], set[Key]]:
     """整份文档统计每个字形出现在单词里的比例，定它是正文、数学还是数字标点。
@@ -843,12 +870,13 @@ def _learn_roles(
     """
     tokens = [
         _without_plural(_main_glyphs(line, token, labels), labels)
-        for lines in pages.values() for line in lines for token in line.tokens
+        for lines in pages.values()
+        for line in lines
+        for token in line.tokens
     ]
     seen = Counter(glyph.key for token in tokens for glyph in token)
     seeds = {
-        glyph.key for token in tokens if _sure_word(token, labels)
-        for glyph in token if _letter(labels.get(glyph.key))
+        glyph.key for token in tokens if _sure_word(token, labels) for glyph in token if _letter(labels.get(glyph.key))
     }
     alone = Counter(token[0].key for token in tokens if len(token) == 1 and _letter(labels.get(token[0].key)))
     loner = {key for key, count in alone.items() if count * 3 >= seen[key]}
@@ -869,10 +897,7 @@ def _learn_roles(
         if sum(ch.isdigit() for ch in text) >= 2 and _NUMBER.fullmatch(text):
             for glyph in token:
                 numeral[glyph.key] += 1
-    roles = {
-        key: _role(labels.get(key), in_word[key], count, numeral[key] * 2 >= count)
-        for key, count in seen.items()
-    }
+    roles = {key: _role(labels.get(key), in_word[key], count, numeral[key] * 2 >= count) for key, count in seen.items()}
     # 横线按宽窄分：减号 0.6 个字号，连字符、短横、长破折号各有各的宽度；比横线高的是箭头
     dashes: dict[Key, list[tuple[float, float]]] = defaultdict(list)
     for line in (line for lines in pages.values() for line in lines):
@@ -896,17 +921,20 @@ def _learn_roles(
                         opening[token[0].key] += 1
                 previous = "".join(_text_of(glyph, labels) for glyph in token) or previous
     words = {
-        key for key, role in roles.items()
+        key
+        for key, role in roles.items()
         if role == "letter" and labels[key].text in _LETTER_WORDS and opening[key] * 2 >= seen[key]
     }
     odd = {
-        key for key, role in roles.items()
-        if role == "neutral" and seen[key] <= 2 and not labels[key].text.isalnum()
+        key for key, role in roles.items() if role == "neutral" and seen[key] <= 2 and not labels[key].text.isalnum()
     }
     names = {labels[key].text for key in words | odd}
     refs = {
-        key for key, role in roles.items()
-        if key not in odd and labels.get(key) is not None and labels[key].text in names
+        key
+        for key, role in roles.items()
+        if key not in odd
+        and labels.get(key) is not None
+        and labels[key].text in names
         and (role == "text" or (role == "neutral" and seen[key] >= 4))
     }
     doubtful: set[Key] = set()
@@ -926,7 +954,7 @@ def _without_plural(token: list[Glyph], labels: dict[Key, Label]) -> list[Glyph]
     while texts and not texts[-1].isalnum():
         texts.pop()
     if len(texts) >= 3 and texts[-1] == "s" and texts[-2] in ("’", "'"):
-        return token[:len(texts) - 2]
+        return token[: len(texts) - 2]
     return token
 
 
@@ -977,7 +1005,11 @@ def _text_of(glyph: Glyph, labels: dict[Key, Label]) -> str:
 
 
 def _looks_like(
-    key: Key, refs: set[Key], labels: dict[Key, Label], images: dict[Key, np.ndarray], threshold: float,
+    key: Key,
+    refs: set[Key],
+    labels: dict[Key, Label],
+    images: dict[Key, np.ndarray],
+    threshold: float,
 ) -> bool:
     image = images.get(key)
     label = labels.get(key)
@@ -988,7 +1020,9 @@ def _looks_like(
 
 
 def _bullets(
-    pages: dict[int, list[_Line]], labels: dict[Key, Label], density: Callable[[set[Key]], dict[Key, float]],
+    pages: dict[int, list[_Line]],
+    labels: dict[Key, Label],
+    density: Callable[[set[Key]], dict[Key, float]],
 ) -> set[Key]:
     """项目符号：总是单独站在行首，方方正正，墨迹填满。OCR 常把实心圆点认成 e。"""
     lines = [line for page_lines in pages.values() for line in page_lines]
@@ -999,8 +1033,11 @@ def _bullets(
         for glyph in line.glyphs:
             shapes.setdefault(glyph.key, glyph.rect)
     keys = {
-        key for key, count in starts.items()
-        if count >= 2 and count * 2 >= seen[key] and key != _RULE
+        key
+        for key, count in starts.items()
+        if count >= 2
+        and count * 2 >= seen[key]
+        and key != _RULE
         and 0.8 <= shapes[key].width / max(shapes[key].height, 0.1) <= 1.25
     }
     filled = density(keys) if keys else {}
@@ -1015,13 +1052,15 @@ def _ink_share(doc: pymupdf.Document, glyphs: dict[int, list[Glyph]], keys: set[
             if glyph.key not in keys or glyph.key in found:
                 continue
             pix = doc[pno].get_pixmap(dpi=_SHAPE_DPI, clip=glyph.rect, colorspace=pymupdf.csGRAY, alpha=False)
-            ink = 1.0 - np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.stride)[:, :pix.width] / 255
+            ink = 1.0 - np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.stride)[:, : pix.width] / 255
             found[glyph.key] = float(ink.mean()) if ink.size else 0.0
     return found
 
 
 def _glyph_shapes(
-    doc: pymupdf.Document, glyphs: dict[int, list[Glyph]], keys: set[Key],
+    doc: pymupdf.Document,
+    glyphs: dict[int, list[Glyph]],
+    keys: set[Key],
 ) -> dict[Key, np.ndarray]:
     """每种字形取第一次出现的位图，按原比例放进方格，块平均到 16×16，减均值、归一，点积就是相似度。"""
     first: dict[Key, tuple[int, Glyph]] = {}
@@ -1034,11 +1073,11 @@ def _glyph_shapes(
         pix = doc[pno].get_pixmap(dpi=_SHAPE_DPI, clip=glyph.rect, colorspace=pymupdf.csGRAY, alpha=False)
         if pix.width < 2 or pix.height < 2:
             continue
-        ink = 1.0 - np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.stride)[:, :pix.width] / 255
+        ink = 1.0 - np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.stride)[:, : pix.width] / 255
         side = max(ink.shape)
         canvas = np.zeros((side, side))
         top, left = (side - ink.shape[0]) // 2, (side - ink.shape[1]) // 2
-        canvas[top:top + ink.shape[0], left:left + ink.shape[1]] = ink
+        canvas[top : top + ink.shape[0], left : left + ink.shape[1]] = ink
         edges = np.linspace(0, side, _SHAPE_GRID + 1).astype(int)[:-1]
         grid = np.add.reduceat(np.add.reduceat(canvas, edges, axis=0), edges, axis=1).flatten()
         grid -= grid.mean()
@@ -1112,11 +1151,14 @@ def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
         if kind != "neutral":
             continue
         before = next((item for item in reversed(kinds[:index]) if item != "neutral"), "")
-        after = next((item for item in kinds[index + 1:] if item != "neutral"), "")
+        after = next((item for item in kinds[index + 1 :] if item != "neutral"), "")
         # k = 2、1 − (…)：紧挨着运算符的数也是公式
         # 列表编号 1. 后面跟着 ≺ 也不是被减数：带句号的不算
-        operand = (index > 0 and kinds[index - 1] == "math" and _ends_with_operator(line.tokens[index - 1], reader)) or (
-            index + 1 < len(kinds) and kinds[index + 1] == "math"
+        operand = (
+            index > 0 and kinds[index - 1] == "math" and _ends_with_operator(line.tokens[index - 1], reader)
+        ) or (
+            index + 1 < len(kinds)
+            and kinds[index + 1] == "math"
             and _starts_with_operator(line.tokens[index + 1], reader)
             and not _sentence_mark(line.tokens[index][-1], reader)
         )
@@ -1128,8 +1170,7 @@ def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
     for index, (token, kind) in enumerate(zip(line.tokens, kinds)):
         tail = len(token)
         phrase_end = (
-            index + 1 == len(kinds) or kinds[index + 1] != "math" or _ends_sentence(token, reader)
-            or index in splits
+            index + 1 == len(kinds) or kinds[index + 1] != "math" or _ends_sentence(token, reader) or index in splits
         )
         if index in mono and index + 1 not in mono:
             # 一串等宽词末尾的句号逗号是句子的。C1, C2 中间的逗号仍是代码
@@ -1168,7 +1209,7 @@ def _hyphen_tails(line: _Line, kinds: list[str], reader: Type3Reader) -> set[int
         for position, glyph in enumerate(token):
             if _label_text(glyph, reader) not in "-‐" or position == 0:
                 continue
-            rest = [item for item in token[position + 1:] if _label_text(item, reader).isalpha()]
+            rest = [item for item in token[position + 1 :] if _label_text(item, reader).isalpha()]
             if len(rest) >= 3 and all(reader.roles.get(item.key) == "text" for item in rest):
                 tails.update(id(item) for item in token[position:])
             break
@@ -1200,7 +1241,7 @@ def _phrase_depth(tokens: list[list[Glyph]], kinds: list[str], end: int, reader:
     start = end
     while start > 0 and kinds[start - 1] == "math":
         start -= 1
-    return sum(_bracket(glyph, reader) for token in tokens[start:end + 1] for glyph in token)
+    return sum(_bracket(glyph, reader) for token in tokens[start : end + 1] for glyph in token)
 
 
 def _clause_splits(tokens: list[list[Glyph]], kinds: list[str], reader: Type3Reader) -> set[int]:
@@ -1229,9 +1270,7 @@ def _clause_splits(tokens: list[list[Glyph]], kinds: list[str], reader: Type3Rea
 
 
 def _has_relation(token: list[Glyph], reader: Type3Reader) -> bool:
-    return any(
-        reader.roles.get(glyph.key) == "symbol" and _label_text(glyph, reader) in _RELATIONS for glyph in token
-    )
+    return any(reader.roles.get(glyph.key) == "symbol" and _label_text(glyph, reader) in _RELATIONS for glyph in token)
 
 
 def _relation_follows(tokens: list[list[Glyph]], kinds: list[str], index: int, reader: Type3Reader) -> bool:
@@ -1326,8 +1365,7 @@ def _mono_tokens(line: _Line, reader: Type3Reader) -> set[int]:
     for index, token in enumerate(line.tokens):
         # 只看字母：(year) 的括号是正体。下标也不算：N 下面等宽字的 supplier 不让 N 变成等宽字
         letters = [
-            glyph for glyph in token
-            if _label_text(glyph, reader).isalpha() and not _is_script(glyph, line, reader)
+            glyph for glyph in token if _label_text(glyph, reader).isalpha() and not _is_script(glyph, line, reader)
         ]
         known = [reader.mono[glyph.key] for glyph in letters if glyph.key in reader.mono]
         # 等宽字和正文是两套位图，词里一半字母是等宽字形就是等宽词（(day) 的 y 只出现过一次）
@@ -1339,8 +1377,9 @@ def _mono_tokens(line: _Line, reader: Type3Reader) -> set[int]:
         gaps = _steps(token)
         if index in found or not gaps or min(gaps) <= 0:
             continue
-        if any(reader.roles.get(glyph.key) in ("math", "symbol") or glyph.key in reader.proportional
-               for glyph in token):
+        if any(
+            reader.roles.get(glyph.key) in ("math", "symbol") or glyph.key in reader.proportional for glyph in token
+        ):
             continue
         pitch = next((value for value in pitches if all(abs(gap - value) <= value * 0.12 for gap in gaps)), None)
         if pitch is not None:
@@ -1353,8 +1392,9 @@ def _mono_tokens(line: _Line, reader: Type3Reader) -> set[int]:
             if index in found or not near:
                 continue
             # part p：等宽词旁边的单个变量仍是公式。So、the 这种在正文里出现过的字形也不跟着走
-            if any(reader.roles.get(glyph.key) in ("math", "symbol") or glyph.key in reader.proportional
-                   for glyph in token):
+            if any(
+                reader.roles.get(glyph.key) in ("math", "symbol") or glyph.key in reader.proportional for glyph in token
+            ):
                 continue
             if all(abs(gap - near[0]) <= near[0] * 0.12 for gap in _steps(token)):
                 found[index] = near[0]
@@ -1442,7 +1482,11 @@ def _span(run: list[Glyph], style: str, line: _Line, reader: Type3Reader) -> dic
     # 公式按这个框从原页裁剪，四周留一点余量，位图边上的像素不被切掉
     box = pymupdf.Rect(box.x0 - _PAD, box.y0 - _PAD, box.x1 + _PAD, box.y1 + _PAD)
     font = {
-        "text": _TEXT_FONT, "mono": _MONO_FONT, "math": _MATH_FONT, "symbol": _SYMBOL_FONT, "script": _MATH_FONT,
+        "text": _TEXT_FONT,
+        "mono": _MONO_FONT,
+        "math": _MATH_FONT,
+        "symbol": _SYMBOL_FONT,
+        "script": _MATH_FONT,
     }[style]
     return {
         "text": text,

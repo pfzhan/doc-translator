@@ -16,6 +16,7 @@
 - 当时的裁剪不是矩形，或者没有盖住写出的位置。
 自己解析出的字形数和 MuPDF 的对不上、字体编码认不出、页面旋转过时整页不挪。
 """
+
 from __future__ import annotations
 
 import bisect
@@ -132,11 +133,11 @@ def _string_bytes(operands: bytes) -> int:
             count, pos = _literal_length(operands, pos)
             total += count
             continue
-        if char == 0x3C and operands[pos:pos + 2] != b"<<":
+        if char == 0x3C and operands[pos : pos + 2] != b"<<":
             end = operands.find(b">", pos)
             if end < 0:
                 break
-            digits = len(re.sub(rb"\s", b"", operands[pos + 1:end]))
+            digits = len(re.sub(rb"\s", b"", operands[pos + 1 : end]))
             total += (digits + 1) // 2
             pos = end + 1
             continue
@@ -174,6 +175,7 @@ def _numbers(operands: bytes) -> list[float]:
 @dataclass
 class _Op:
     """顶层流里的一个操作符：位置、在哪个文本对象里、执行前的状态。"""
+
     name: bytes
     start: int
     group: int | None = None
@@ -197,6 +199,7 @@ class _Mark:
 class _Cut:
     """擦除后的流里一个标记处的状态。MuPDF 重写时会把 cm 这类状态推迟到要画时才写，
     标记处的 CTM 要在重写后的流上算。"""
+
     end: int  # 标记之后的字节位置
     ctm: pymupdf.Matrix
     clips: list[pymupdf.Rect] | None
@@ -286,9 +289,16 @@ class ReadingOrder:
                 self.paints.append((len(ops) - 1, area))
 
         for name, start, end in _operators(raw):
-            operands = raw[start:end - len(name)]
-            op = _Op(name, start, group, line=line if group is not None else None, ctm=ctm,
-                     clips=None if clips is None else list(clips), bounds=bounds)
+            operands = raw[start : end - len(name)]
+            op = _Op(
+                name,
+                start,
+                group,
+                line=line if group is not None else None,
+                ctm=ctm,
+                clips=None if clips is None else list(clips),
+                bounds=bounds,
+            )
             ops.append(op)
             if name == b"q":
                 stack.append((ctm, clips, bounds, leading, render))
@@ -430,7 +440,7 @@ class ReadingOrder:
         for index, op in enumerate(ops):
             if op.name == b"BT":
                 points, taken = next(cursor), 0
-            for x, y in points[taken:taken + op.glyphs]:
+            for x, y in points[taken : taken + op.glyphs]:
                 glyphs.append((index, owner(x, y, op.bounds)))
             taken += op.glyphs
 
@@ -461,10 +471,13 @@ class ReadingOrder:
                 i += 1
                 continue
             j = i
-            while (j + 1 < len(glyphs) and glyphs[j + 1][1] is not None
-                   and not paints_between(glyphs[j][0], glyphs[j + 1][0])):
+            while (
+                j + 1 < len(glyphs)
+                and glyphs[j + 1][1] is not None
+                and not paints_between(glyphs[j][0], glyphs[j + 1][0])
+            ):
                 j += 1
-            run = list(dict.fromkeys(key for _, key in glyphs[i:j + 1] if key not in assigned))
+            run = list(dict.fromkeys(key for _, key in glyphs[i : j + 1] if key not in assigned))
             at = None
             if run:
                 if i == 0:
@@ -503,7 +516,7 @@ class ReadingOrder:
     def _write(self, raw: bytes) -> None:
         pieces, last = [], 0
         for mark in sorted(self.marks, key=lambda m: m.at):
-            pieces.append(raw[last:mark.at])
+            pieces.append(raw[last : mark.at])
             if mark.inside:
                 line = " ".join(_num(v) for v in mark.line)
                 pieces.append(f"\nET\n/DTr{mark.number} MP\nBT\n{line} Tm\n".encode())
@@ -549,8 +562,14 @@ class ReadingOrder:
             text = self.page.get_text("dict", flags=pymupdf.TEXTFLAGS_DICT | pymupdf.TEXT_ACCURATE_BBOXES)
         finally:
             self.doc.xref_set_key(self.page.xref, "Contents", contents)
-        found = [pymupdf.Rect(span["bbox"]) for block in text["blocks"] if block.get("type") == 0
-                 for line in block["lines"] for span in line["spans"] if span["text"].strip()]
+        found = [
+            pymupdf.Rect(span["bbox"])
+            for block in text["blocks"]
+            if block.get("type") == 0
+            for line in block["lines"]
+            for span in line["spans"]
+            if span["text"].strip()
+        ]
         return found or list(self.rects.get(key, []))
 
     def _movable(self, key: int, cut: _Cut) -> bool:
@@ -606,10 +625,12 @@ class ReadingOrder:
                 blocks, cut = moving[end]
                 streams = [xref for key in blocks for xref in self.streams.get(key, [])]
                 inverse = ~cut.ctm
-                refs.append(self._stream(
-                    f"q {inverse.a:.6f} {inverse.b:.6f} {inverse.c:.6f} {inverse.d:.6f} "
-                    f"{inverse.e:.4f} {inverse.f:.4f} cm {_RESET} /{_GS_NAME} gs".encode()
-                ))
+                refs.append(
+                    self._stream(
+                        f"q {inverse.a:.6f} {inverse.b:.6f} {inverse.c:.6f} {inverse.d:.6f} "
+                        f"{inverse.e:.4f} {inverse.f:.4f} cm {_RESET} /{_GS_NAME} gs".encode()
+                    )
+                )
                 refs.extend(streams)
                 refs.append(self._stream(b"Q"))
                 moved_streams.update(streams)
