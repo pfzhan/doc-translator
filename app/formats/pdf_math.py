@@ -1,5 +1,6 @@
 """Mark the spans on a page that belong to formulas: math fonts and alphabets, radicands,
 fractions, accents, scripts and underlines."""
+
 import math
 import re
 import struct
@@ -82,7 +83,8 @@ def _mark_underlines(page_chars: _PageChars, data: dict, strokes: Sequence[pymup
     # 下面那行自己也画着下划线的（一列链接）不是分母
     inks = [
         (id(span), pymupdf.Rect(span.get("ink") or span["bbox"]))
-        for line in lines for span in line["spans"]
+        for line in lines
+        for span in line["spans"]
         if str(span.get("text") or "").strip()
         and not _underline_strokes(span, strokes, line["bbox"][0], line["bbox"][2])
     ]
@@ -101,20 +103,31 @@ def _mark_underlines(page_chars: _PageChars, data: dict, strokes: Sequence[pymup
         right = max(span["bbox"][2] for span in spans)
         main = max(float(span.get("size") or 0) for span in spans)
         # 这一行正文的基线。分子抬在基线上面，下划线的字落在基线上
-        body = [span for span in spans if float(span.get("size") or 0) >= main * 0.85 and str(span.get("text") or "").strip()]
+        body = [
+            span
+            for span in spans
+            if float(span.get("size") or 0) >= main * 0.85 and str(span.get("text") or "").strip()
+        ]
         baseline = float(_by_chars(body, lambda span: round(span["origin"][1], 1))) if body else 0.0
         out: list[dict] = []
         for span in spans:
             size = float(span.get("size") or 10.0)
             raised = abs(span["origin"][1] - baseline) > size * 0.15
-            under = [] if size < main * 0.85 or raised else [
-                rect for rect in _underline_strokes(span, strokes, left, right)
-                if not any(
-                    other != id(span) and rect.y1 - 0.5 <= ink.y0 <= rect.y1 + size * 0.25
-                    and min(ink.x1, rect.x1) - max(ink.x0, rect.x0) > 0.5
-                    for other, ink in inks
-                ) and visible(rect)
-            ]
+            under = (
+                []
+                if size < main * 0.85 or raised
+                else [
+                    rect
+                    for rect in _underline_strokes(span, strokes, left, right)
+                    if not any(
+                        other != id(span)
+                        and rect.y1 - 0.5 <= ink.y0 <= rect.y1 + size * 0.25
+                        and min(ink.x1, rect.x1) - max(ink.x0, rect.x0) > 0.5
+                        for other, ink in inks
+                    )
+                    and visible(rect)
+                ]
+            )
             if not under:
                 out.append(span)
                 continue
@@ -136,15 +149,21 @@ def _mark_radicands(page_chars: _PageChars, data: dict, strokes: Sequence[pymupd
     # 大号根号的字体框比字形高出一截，横线接在墨迹的右上角
     radicals = [
         pymupdf.Rect(span["ink"]) if span.get("ink") else _glyph_box(span)
-        for line in lines for span in line["spans"]
-        if str(span.get("text") or "").strip() and (
+        for line in lines
+        for span in line["spans"]
+        if str(span.get("text") or "").strip()
+        and (
             str(span.get("text") or "").strip()[-1:] in _RADICALS
             or _BIG_DELIMITER_FONT_RE.search(str(span.get("font") or ""))
         )
     ]
     bars = [
-        stroke for stroke in strokes
-        if any(abs(stroke.x0 - radical.x1) <= 1.5 and radical.y0 - 1.5 <= stroke.y0 <= radical.y0 + 2.0 for radical in radicals)
+        stroke
+        for stroke in strokes
+        if any(
+            abs(stroke.x0 - radical.x1) <= 1.5 and radical.y0 - 1.5 <= stroke.y0 <= radical.y0 + 2.0
+            for radical in radicals
+        )
     ]
     if not bars:
         return
@@ -155,10 +174,16 @@ def _mark_radicands(page_chars: _PageChars, data: dict, strokes: Sequence[pymupd
             size = float(span.get("size") or 10.0)
             base = float(span["origin"][1])
             box = pymupdf.Rect(span["bbox"])
-            over = [] if _span_is_math(span) or not str(span.get("text") or "").strip() else [
-                bar for bar in bars
-                if base - size * 1.1 <= bar.y0 <= base - size * 0.5 and min(bar.x1, box.x1) - max(bar.x0, box.x0) > 0.5
-            ]
+            over = (
+                []
+                if _span_is_math(span) or not str(span.get("text") or "").strip()
+                else [
+                    bar
+                    for bar in bars
+                    if base - size * 1.1 <= bar.y0 <= base - size * 0.5
+                    and min(bar.x1, box.x1) - max(bar.x0, box.x0) > 0.5
+                ]
+            )
             out.extend(_split_covered(span, over, chars, _line_edges(line["spans"], chars), "math") if over else [span])
         line["spans"] = out
 
@@ -204,8 +229,12 @@ def _mark_overlays(page_chars: _PageChars, data: dict) -> None:
             if not covered:
                 continue
             boxes = [
-                (x0, x1) for span, _word in covered
-                for x0, x1, _origin in chars.get((str(span["text"]), round(span["origin"][0], 1), round(span["origin"][1], 1))) or []
+                (x0, x1)
+                for span, _word in covered
+                for x0, x1, _origin in chars.get(
+                    (str(span["text"]), round(span["origin"][0], 1), round(span["origin"][1], 1))
+                )
+                or []
                 if box.x0 <= (x0 + x1) / 2 <= box.x1
             ]
             if not boxes or len(boxes) > _OVERLAY_CHARS:
@@ -240,21 +269,26 @@ def _mark_detected_formulas(page_chars: _PageChars, data: dict, rects: Sequence[
             spans = line.get("spans", [])
             box = pymupdf.Rect(line["bbox"])
             here = [
-                kept for rect in rects
+                kept
+                for rect in rects
                 if min(rect.y1, box.y1) > max(rect.y0, box.y0) and min(rect.x1, box.x1) > max(rect.x0, box.x0)
-                for kept in [_trim_formula_box(rect, spans, chars)] if kept is not None
+                for kept in [_trim_formula_box(rect, spans, chars)]
+                if kept is not None
             ]
             if not here:
                 continue
             out: list[dict] = []
             for span in spans:
-                hit = [] if _span_is_math(span) or not span["text"].strip() else [
-                    rect for rect in here if _box_holds_span(rect, span)
-                ]
+                hit = (
+                    []
+                    if _span_is_math(span) or not span["text"].strip()
+                    else [rect for rect in here if _box_holds_span(rect, span)]
+                )
                 # 字边按框边对：框是从图像上来的，和字边差一点，不能按下划线那样要求对齐
                 out.extend(
                     _split_covered(span, hit, chars, ([r.x0 for r in hit], [r.x1 for r in hit]), "detected_formula")
-                    if hit else [span]
+                    if hit
+                    else [span]
                 )
             line["spans"] = out
 
@@ -262,14 +296,14 @@ def _mark_detected_formulas(page_chars: _PageChars, data: dict, rects: Sequence[
 def _box_holds_span(rect: pymupdf.Rect, span: dict) -> bool:
     """框和 span 左右相交，上下有一半以上重合：上下两行的框碰到这一行的边不算。"""
     box = pymupdf.Rect(span["bbox"])
-    return (
-        min(rect.y1, box.y1) - max(rect.y0, box.y0) >= 0.5 * min(box.height, rect.height)
-        and min(rect.x1, box.x1) > max(rect.x0, box.x0)
-    )
+    return min(rect.y1, box.y1) - max(rect.y0, box.y0) >= 0.5 * min(box.height, rect.height) and min(
+        rect.x1, box.x1
+    ) > max(rect.x0, box.x0)
 
 
 def _trim_formula_box(
-    rect: pymupdf.Rect, spans: list[dict],
+    rect: pymupdf.Rect,
+    spans: list[dict],
     chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]],
 ) -> pymupdf.Rect | None:
     """框落到这一行的字上：右端的句读让出去，只框着数字的不要。"""
@@ -279,7 +313,8 @@ def _trim_formula_box(
             continue
         boxes = chars.get((str(span["text"]), round(span["origin"][0], 1), round(span["origin"][1], 1))) or []
         covered += [
-            (x0, char) for char, (x0, x1, _origin) in zip(str(span["text"]), boxes)
+            (x0, char)
+            for char, (x0, x1, _origin) in zip(str(span["text"]), boxes)
             if rect.x0 - 0.5 <= (x0 + x1) / 2 <= rect.x1 + 0.5
         ]
     covered.sort()
@@ -304,7 +339,8 @@ def _split_accents(page_chars: _PageChars, data: dict) -> None:
     lines = [line for block in data.get("blocks", []) for line in block.get("lines", []) if line.get("spans")]
     if not any(
         any(char in _STACKED_ACCENTS for char in text)
-        for line in lines for text in (str(span.get("text") or "") for span in line["spans"])
+        for line in lines
+        for text in (str(span.get("text") or "") for span in line["spans"])
     ):
         return
     chars = page_chars.boxes()
@@ -331,7 +367,8 @@ def _split_accents(page_chars: _PageChars, data: dict) -> None:
             # 后面同一行有字、从它右边起笔，才能断定它占自己的宽度。单成一行的 ˆ 叠在别的行上
             spaced = "".join(
                 _ASCII_ACCENTS.get(char, char)
-                if not on and after != float("inf") and prior <= x0 + (x1 - x0) * 0.3 else char
+                if not on and after != float("inf") and prior <= x0 + (x1 - x0) * 0.3
+                else char
                 for char, on, (x0, x1, _origin), prior, after in zip(text, stacked, boxes, before, follow)
             )
             if spaced != text:
@@ -340,15 +377,25 @@ def _split_accents(page_chars: _PageChars, data: dict) -> None:
             if len(text.strip()) <= 1:
                 out.append(span)
                 continue
-            cuts = sorted({
-                cut for index, on in enumerate(stacked) if on for cut in (index, index + 1)
-            } - {0, len(text)})
+            cuts = sorted(
+                {cut for index, on in enumerate(stacked) if on for cut in (index, index + 1)} - {0, len(text)}
+            )
             for start, end in zip([0, *cuts], [*cuts, len(text)]):
-                out.append(span if not cuts else {
-                    **span, "text": text[start:end], "origin": boxes[start][2],
-                    "bbox": (boxes[start][0], span["bbox"][1], boxes[end - 1][1], span["bbox"][3]),
-                    **({"ink": (boxes[start][0], span["ink"][1], boxes[end - 1][1], span["ink"][3])} if "ink" in span else {}),
-                })
+                out.append(
+                    span
+                    if not cuts
+                    else {
+                        **span,
+                        "text": text[start:end],
+                        "origin": boxes[start][2],
+                        "bbox": (boxes[start][0], span["bbox"][1], boxes[end - 1][1], span["bbox"][3]),
+                        **(
+                            {"ink": (boxes[start][0], span["ink"][1], boxes[end - 1][1], span["ink"][3])}
+                            if "ink" in span
+                            else {}
+                        ),
+                    }
+                )
         line["spans"] = out
 
 
@@ -362,14 +409,19 @@ def _mark_visible_spaces(page_chars: _PageChars, data: dict, cups: Sequence[pymu
     if not cups:
         return
     lines = [
-        line for block in data.get("blocks", []) if block.get("type") == 0 for line in block.get("lines", [])
+        line
+        for block in data.get("blocks", [])
+        if block.get("type") == 0
+        for line in block.get("lines", [])
         if line.get("spans") and abs(line["dir"][1]) <= 0.01
     ]
     chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]] | None = None
     for cup in cups:
         middle = (cup.x0 + cup.x1) / 2
         row = [
-            (line, span) for line in lines for span in line["spans"]
+            (line, span)
+            for line in lines
+            for span in line["spans"]
             if abs(float(span["origin"][1]) - cup.y1) <= float(span.get("size") or 10.0) * 0.12
             and span["bbox"][1] < cup.y0
         ]
@@ -388,7 +440,7 @@ def _mark_visible_spaces(page_chars: _PageChars, data: dict, cups: Sequence[pymu
             x0, x1, _origin = boxes[hit]
             lead = " " if cup.x0 - x0 > 1.0 and (hit == 0 or not text[hit - 1].isspace()) else ""
             tail = " " if x1 - cup.x1 > 1.0 and hit + 1 < len(text) and not text[hit + 1].isspace() else ""
-            span["text"] = text[:hit] + lead + VISIBLE_SPACE + tail + text[hit + 1:]
+            span["text"] = text[:hit] + lead + VISIBLE_SPACE + tail + text[hit + 1 :]
             continue
         # 空隙里没有字：接在离得近的那截上，左边的接在后面，右边的接在前面。两边一个字宽内都没有字的不算
         inked = [(line, span) for line, span in row if str(span.get("text") or "").strip()]
@@ -410,11 +462,16 @@ def _mark_visible_spaces(page_chars: _PageChars, data: dict, cups: Sequence[pymu
         lead = " " if gap_left > 1.0 and (to_left or place > 0) else ""
         tail = " " if gap_right > 1.0 and (not to_left or place < len(spans)) else ""
         box = (cup.x0, neighbor["bbox"][1], cup.x1, neighbor["bbox"][3])
-        spans.insert(place, {
-            **neighbor, "text": lead + VISIBLE_SPACE + tail, "bbox": box,
-            "origin": (cup.x0, neighbor["origin"][1]),
-            **({"ink": (cup.x0, cup.y0, cup.x1, cup.y1)} if "ink" in neighbor else {}),
-        })
+        spans.insert(
+            place,
+            {
+                **neighbor,
+                "text": lead + VISIBLE_SPACE + tail,
+                "bbox": box,
+                "origin": (cup.x0, neighbor["origin"][1]),
+                **({"ink": (cup.x0, cup.y0, cup.x1, cup.y1)} if "ink" in neighbor else {}),
+            },
+        )
         line["bbox"] = tuple(pymupdf.Rect(line["bbox"]) | pymupdf.Rect(box))
 
 
@@ -438,15 +495,15 @@ def _painted_stroke(page: pymupdf.Page, rect: pymupdf.Rect) -> bool:
     if pix.width <= 0 or pix.height <= 0:
         return False
     samples = pix.samples
-    dark = sum(
-        1 for x in range(pix.width)
-        if any(samples[y * pix.stride + x] < 200 for y in range(pix.height))
-    )
+    dark = sum(1 for x in range(pix.width) if any(samples[y * pix.stride + x] < 200 for y in range(pix.height)))
     return dark >= pix.width * 0.8
 
 
 def _underline_strokes(
-    span: dict, strokes: Sequence[pymupdf.Rect], left: float, right: float,
+    span: dict,
+    strokes: Sequence[pymupdf.Rect],
+    left: float,
+    right: float,
 ) -> list[pymupdf.Rect]:
     text = str(span.get("text") or "")
     if not text.strip() or _span_is_math(span):
@@ -455,9 +512,12 @@ def _underline_strokes(
     base = float(span["origin"][1])
     box = pymupdf.Rect(span["bbox"])
     return [
-        rect for rect in strokes
-        if base + size * _UNDERLINE_TOP <= rect.y0 and rect.y1 <= base + size * _UNDERLINE_DEPTH
-        and rect.x0 >= left - 1 and rect.x1 <= right + 1
+        rect
+        for rect in strokes
+        if base + size * _UNDERLINE_TOP <= rect.y0
+        and rect.y1 <= base + size * _UNDERLINE_DEPTH
+        and rect.x0 >= left - 1
+        and rect.x1 <= right + 1
         and min(rect.x1, box.x1) - max(rect.x0, box.x0) > 0.5
     ]
 
@@ -478,7 +538,8 @@ def _read_char_boxes(
 
 
 def _line_edges(
-    spans: list[dict], chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]],
+    spans: list[dict],
+    chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]],
 ) -> tuple[list[float], list[float]]:
     """一行里所有字的左边和右边。"""
     lefts: list[float] = []
@@ -491,7 +552,8 @@ def _line_edges(
 
 
 def _split_covered(
-    span: dict, under: list[pymupdf.Rect],
+    span: dict,
+    under: list[pymupdf.Rect],
     chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]],
     edges: tuple[list[float], list[float]] = ([], []),
     flag: str = "underline",
@@ -507,7 +569,11 @@ def _split_covered(
 
     if boxes is None or len(boxes) != len(text):
         box = pymupdf.Rect(span["bbox"])
-        if all(rect.x0 - 1 <= box.x0 for rect in under) and covered(box.x0, box.x0 + 0.1) and covered(box.x1 - 0.1, box.x1):
+        if (
+            all(rect.x0 - 1 <= box.x0 for rect in under)
+            and covered(box.x0, box.x0 + 0.1)
+            and covered(box.x1 - 0.1, box.x1)
+        ):
             return [{**span, flag: True}]
         return [span]
     # 下划线从某个字的左边画到某个字的右边。图里的虚线、图例线、分数线和字边对不上。
@@ -516,7 +582,8 @@ def _split_covered(
     lefts = edges[0] or [x0 for x0, _x1, _ox in boxes]
     rights = edges[1] or [x1 for _x0, x1, _ox in boxes]
     under = [
-        rect for rect in under
+        rect
+        for rect in under
         if any(abs(rect.x0 - x0) <= reach for x0 in lefts) and any(abs(rect.x1 - x1) <= reach for x1 in rights)
     ]
     # 下划线字符本身不算画了下划线（有的 PDF 把 _ 画成一条线）
@@ -567,9 +634,12 @@ def _script_seam(left: list[dict], right: list[dict]) -> bool:
         return False
     text = "".join(str(span.get("text") or "") for span in left)
     size = float(right[0].get("size") or 10)
-    return (bool(CJK_RE.search(text)) and not re.search(r"[A-Za-z]", text)
-            and re.match(r"\s*[A-Za-z]", str(right[0].get("text") or "")) is not None
-            and float(right[0]["bbox"][0]) - float(left[-1]["bbox"][2]) >= size * 0.5)
+    return (
+        bool(CJK_RE.search(text))
+        and not re.search(r"[A-Za-z]", text)
+        and re.match(r"\s*[A-Za-z]", str(right[0].get("text") or "")) is not None
+        and float(right[0]["bbox"][0]) - float(left[-1]["bbox"][2]) >= size * 0.5
+    )
 
 
 # Computer Modern 的正体。正文是 CM 时它们是正文；正文用 Times 之类时只出现在公式里
@@ -624,9 +694,12 @@ def _mark_formula_only_fonts(pages: list[dict]) -> None:
                         continue
                     spans_of[font] = spans_of.get(font, 0) + 1
                     box = span["bbox"]
-                    neighbours = shown[max(index - 1, 0):index] + shown[index + 1:index + 2]
-                    if any(_span_is_math(other) and min(abs(other["bbox"][0] - box[2]), abs(box[0] - other["bbox"][2])) < 1.5
-                           for other in neighbours):
+                    neighbours = shown[max(index - 1, 0) : index] + shown[index + 1 : index + 2]
+                    if any(
+                        _span_is_math(other)
+                        and min(abs(other["bbox"][0] - box[2]), abs(box[0] - other["bbox"][2])) < 1.5
+                        for other in neighbours
+                    ):
                         touching[font] = touching.get(font, 0) + 1
     fonts = {font for font, count in spans_of.items() if font not in longer and touching.get(font, 0) * 2 >= count}
     if not fonts:
@@ -691,9 +764,13 @@ def _fraction_parts(data: dict, rules: Sequence[pymupdf.Rect]) -> set[int]:
     拆成几截，按截数词认不准。
     """
     spans = [
-        span for block in data.get("blocks", []) if block.get("type") == 0
-        for line in block["lines"] if abs(line["dir"][1]) <= 0.01
-        for span in line["spans"] if span["text"].strip()
+        span
+        for block in data.get("blocks", [])
+        if block.get("type") == 0
+        for line in block["lines"]
+        if abs(line["dir"][1]) <= 0.01
+        for span in line["spans"]
+        if span["text"].strip()
     ]
     found: set[int] = set()
     for bar in rules:

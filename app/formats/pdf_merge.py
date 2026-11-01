@@ -1,5 +1,6 @@
 """Find where a paragraph continues: on the next page, in the next column or in the next
 layout-model region, and pair the blocks into one translation unit."""
+
 import re
 from collections import Counter
 from collections.abc import Callable, Sequence
@@ -61,7 +62,9 @@ _SENT_END_PUNCT = tuple(".!?:;…。！？；：\"'”’)]}》")
 
 
 def _different_columns(
-    geometries: list[PageGeometry] | None, left: TextBlock, right: TextBlock,
+    geometries: list[PageGeometry] | None,
+    left: TextBlock,
+    right: TextBlock,
 ) -> bool:
     """两页里只要有一页是多栏、且两块不在同一栏序号，就不是同一栏的跨页续段。
 
@@ -92,8 +95,13 @@ def _is_page_footnote(block: TextBlock, median: float) -> bool:
 
 
 def _can_continue(
-    prev: TextBlock, nxt: TextBlock, median: float, halt_ids: set[int] | None,
-    allow_capital: bool = False, flush: bool = False, at_edge: bool = True,
+    prev: TextBlock,
+    nxt: TextBlock,
+    median: float,
+    halt_ids: set[int] | None,
+    allow_capital: bool = False,
+    flush: bool = False,
+    at_edge: bool = True,
 ) -> bool:
     """页末块没有句末标点，页首块以小写、数字或中文开头，且不是标题。
 
@@ -130,8 +138,11 @@ def _can_continue(
         continues = True
     # 下一块以括注起头，括注后面是标点或小写：(Tables S32–S35), the port …、(§5.3). Urban …
     lead = nxt.text.lstrip()
-    if (re.match(r"\([^()]{1,60}\)\s*(?:[.,;:]|[a-z])", lead) and not _EQUATION_TAG_RE.match(lead)
-            and not _list_item(lead)):
+    if (
+        re.match(r"\([^()]{1,60}\)\s*(?:[.,;:]|[a-z])", lead)
+        and not _EQUATION_TAG_RE.match(lead)
+        and not _list_item(lead)
+    ):
         continues = True
     # 句中的缩写（Mao et al. | 2026）不是句末。分号、冒号、里面没有句号的右括号后面小写接着写的是同一句
     # （… on BC trials; | an explanation …、… GOP (4.750 vs. 4.733) | and lower …）。
@@ -140,23 +151,39 @@ def _can_continue(
     # 不接：接着写的半句从正文的左缘起笔
     tail = _END_MARK_RE.sub("", prev.text)
     closers = "\"'”’)]}》"
-    weak = tail.endswith((";", "；")) or (at_edge and tail.endswith((":", "："))) or (tail.endswith(tuple(closers))
-                                         and not tail.rstrip(closers).endswith(_SENT_END_PUNCT))
-    ended = (tail.endswith(_SENT_END_PUNCT) and not _MID_ABBREV_RE.search(prev.text.rstrip())
-             and not (weak and head.islower()))
+    weak = (
+        tail.endswith((";", "；"))
+        or (at_edge and tail.endswith((":", "：")))
+        or (tail.endswith(tuple(closers)) and not tail.rstrip(closers).endswith(_SENT_END_PUNCT))
+    )
+    ended = (
+        tail.endswith(_SENT_END_PUNCT)
+        and not _MID_ABBREV_RE.search(prev.text.rstrip())
+        and not (weak and head.islower())
+    )
     # 括号还没合上，下一块在第一句里合上它：(Fu et al., 2024b; | Mao et al., 2024) share …
     if _unclosed_bracket(prev.text) and _closes_first(nxt.text):
         continues, ended = True, False
     # 只看正文：小一号的图注、表注下面齐平起笔的正文不是它们的续段。
     # 只放开大写起头的：句末下面小写起头的（restric- | tion from …）是别的块断开的后半截。
     # 页末是编号起头的例句（(24.31) IBM announced …）时，下一页齐平起笔的是例句前面那段的续段，不接在例句后面
-    if (flush and head.isupper() and len(prev.text.split()) >= _FLUSH_HOST_WORDS
-            and abs(prev.size - nxt.size) <= prev.size * 0.05 and _flush_start(nxt)
-            and not _numbered_line(prev.text)):
+    if (
+        flush
+        and head.isupper()
+        and len(prev.text.split()) >= _FLUSH_HOST_WORDS
+        and abs(prev.size - nxt.size) <= prev.size * 0.05
+        and _flush_start(nxt)
+        and not _numbered_line(prev.text)
+    ):
         continues, ended = True, False
-    return bool(not numbered_heading and not is_heading and continues and not ended
-                and not _is_float_text(nxt.text)
-                and nxt.size <= prev.size * 1.4)
+    return bool(
+        not numbered_heading
+        and not is_heading
+        and continues
+        and not ended
+        and not _is_float_text(nxt.text)
+        and nxt.size <= prev.size * 1.4
+    )
 
 
 def _flush_start(block: TextBlock) -> bool:
@@ -169,8 +196,7 @@ def _flush_start(block: TextBlock) -> bool:
         return False
     lefts = [min(rect.x0 for rect in row) for row in rows]
     rights = [max(rect.x1 for rect in row) for row in rows]
-    return (max(lefts) - min(lefts) <= 0.3 * block.size
-            and rights[0] >= max(rights[1:]) - 0.5 * block.size)
+    return max(lefts) - min(lefts) <= 0.3 * block.size and rights[0] >= max(rights[1:]) - 0.5 * block.size
 
 
 def _at_text_edge(head: TextBlock, page_blocks: list[TextBlock]) -> bool:
@@ -195,15 +221,17 @@ def _resumes(head: TextBlock, page_blocks: list[TextBlock], skip_ids: set[int], 
     小一号的表格格子，或者图注（passed 里是页眉页脚、图和图注）。正上方是一行正文字号的短行
     （漏认的小标题 B.3.1. RL Data、提示词框里的 PROMPT）时，下面是新起的一段"""
     above = [
-        block for block in page_blocks
-        if block is not head and block.rect.y1 <= head.rect.y0 + 1
-        and block.rect.x0 < head.rect.x1 and block.rect.x1 > head.rect.x0
+        block
+        for block in page_blocks
+        if block is not head
+        and block.rect.y1 <= head.rect.y0 + 1
+        and block.rect.x0 < head.rect.x1
+        and block.rect.x1 > head.rect.x0
     ]
     if not above:
         return True
     near = max(above, key=lambda block: block.rect.y1)
-    return (id(near) in skip_ids or id(near) in passed or _is_float_text(near.text)
-            or near.size < head.size * 0.9)
+    return id(near) in skip_ids or id(near) in passed or _is_float_text(near.text) or near.size < head.size * 0.9
 
 
 # 小节号悬在栏边左面最多这么多字宽
@@ -213,13 +241,15 @@ _FLUSH_HOST_WORDS = 8
 
 
 def _page_edge_blocks(
-    blocks: list[TextBlock], median: float, ignored: set[int],
+    blocks: list[TextBlock],
+    median: float,
+    ignored: set[int],
 ) -> list[TextBlock]:
     """页首页尾只看正文。小一号的编号脚注留在原处翻译，不占跨页位置。"""
     return [
-        block for block in blocks
-        if block.size >= median * 0.8 and id(block) not in ignored
-        and not _is_page_footnote(block, median)
+        block
+        for block in blocks
+        if block.size >= median * 0.8 and id(block) not in ignored and not _is_page_footnote(block, median)
     ]
 
 
@@ -232,20 +262,24 @@ def _in_column(geo: PageGeometry, block: TextBlock) -> bool:
 
 
 def _column_page_end(
-    body: list[TextBlock], geometries: list[PageGeometry] | None,
+    body: list[TextBlock],
+    geometries: list[PageGeometry] | None,
 ) -> TextBlock | None:
     """同栏跨页看的页末。多栏页上的跨栏块不占这个位置，否则会抢走右栏末行。"""
     return _column_edge(body, geometries, last=True)
 
 
 def _column_page_start(
-    body: list[TextBlock], geometries: list[PageGeometry] | None,
+    body: list[TextBlock],
+    geometries: list[PageGeometry] | None,
 ) -> TextBlock | None:
     return _column_edge(body, geometries, last=False)
 
 
 def _column_edge(
-    body: list[TextBlock], geometries: list[PageGeometry] | None, last: bool,
+    body: list[TextBlock],
+    geometries: list[PageGeometry] | None,
+    last: bool,
 ) -> TextBlock | None:
     if not body:
         return None
@@ -259,14 +293,17 @@ def _column_edge(
 
 
 def _is_last_in_right_column(
-    block: TextBlock, page_blocks: list[TextBlock], geo: PageGeometry,
+    block: TextBlock,
+    page_blocks: list[TextBlock],
+    geo: PageGeometry,
 ) -> bool:
     if len(geo.columns) < 2 or not _in_column(geo, block):
         return False
     if _column_index(geo, block) != len(geo.columns) - 1:
         return False
     return not any(
-        other is not block and _in_column(geo, other)
+        other is not block
+        and _in_column(geo, other)
         and _column_index(geo, other) == len(geo.columns) - 1
         and other.rect.y0 > block.rect.y0 + 1
         for other in page_blocks
@@ -277,10 +314,14 @@ def _left_column_head(page_blocks: list[TextBlock], geo: PageGeometry) -> TextBl
     if len(geo.columns) < 2:
         return None
     heads = [
-        block for block in page_blocks
-        if _in_column(geo, block) and _column_index(geo, block) == 0
+        block
+        for block in page_blocks
+        if _in_column(geo, block)
+        and _column_index(geo, block) == 0
         and not any(
-            other is not block and _in_column(geo, other) and _column_index(geo, other) == 0
+            other is not block
+            and _in_column(geo, other)
+            and _column_index(geo, other) == 0
             and other.rect.y0 < block.rect.y0 - 1
             for other in page_blocks
         )
@@ -288,6 +329,8 @@ def _left_column_head(page_blocks: list[TextBlock], geo: PageGeometry) -> TextBl
     if not heads:
         return None
     return min(heads, key=lambda block: (block.rect.y0, block.rect.x0))
+
+
 _CODE_LINE_RE = re.compile(r"^(?:<|\d+\s+0x[0-9a-fA-F])")
 # 这么多词的块是正文，不看字母占比
 _PROSE_WORDS = 8
@@ -312,7 +355,11 @@ def _is_code_line(text: str) -> bool:
 
 
 def _continuation_prose(
-    block: TextBlock, median: float, skip_ids: set[int], halt_ids: set[int] | None, ignored: set[int],
+    block: TextBlock,
+    median: float,
+    skip_ids: set[int],
+    halt_ids: set[int] | None,
+    ignored: set[int],
 ) -> bool:
     if id(block) in skip_ids or id(block) in ignored:
         return False
@@ -368,7 +415,8 @@ def _anchor_index(block: TextBlock, anchors: list[float]) -> int | None:
 
 
 def _assigned_columns(
-    blocks: list[TextBlock], anchors: list[float],
+    blocks: list[TextBlock],
+    anchors: list[float],
 ) -> tuple[list[list[TextBlock]], list[TextBlock]]:
     columns: list[list[TextBlock]] = [[] for _ in anchors]
     orphans: list[TextBlock] = []
@@ -432,9 +480,16 @@ def _column_wrap(host: TextBlock, tail: TextBlock) -> bool:
 
 
 def _try_column_pair(
-    pairs: dict[int, TextBlock], tails: set[int], host: TextBlock | None, tail: TextBlock | None,
-    median: float, halt_ids: set[int] | None, skip_ids: set[int],
-    allow_capital: bool = True, flush: bool = False, at_edge: bool = True,
+    pairs: dict[int, TextBlock],
+    tails: set[int],
+    host: TextBlock | None,
+    tail: TextBlock | None,
+    median: float,
+    halt_ids: set[int] | None,
+    skip_ids: set[int],
+    allow_capital: bool = True,
+    flush: bool = False,
+    at_edge: bool = True,
 ) -> None:
     if host is None or tail is None or host is tail:
         return
@@ -467,8 +522,7 @@ def _float_contents(column: list[TextBlock], page_blocks: list[TextBlock]) -> se
     if count < 3:
         return set()
     captions = [
-        block for block in page_blocks
-        if _is_float_text(block.text) and block.rect.x0 < x1 and block.rect.x1 > x0
+        block for block in page_blocks if _is_float_text(block.text) and block.rect.x0 < x1 and block.rect.x1 > x0
     ]
     if not captions:
         return set()
@@ -528,11 +582,18 @@ def _column_continuations(
         # 一行居中排在不归哪一栏的一行底下的，是分栏排的作者、单位（Shixiang Zhu | Carnegie Mellon University），
         # 不是栏顶。表格的格子、横跨两栏的标题下面就是栏顶
         orphans = orphans_of.get(pno) or []
-        body = [block for block in body if not (len(_visual_lines(block)) == 1 and any(
-            0 <= block.rect.y0 - other.rect.y1 <= 1.5 * block.size
-            and abs((block.rect.x0 + block.rect.x1) - (other.rect.x0 + other.rect.x1)) / 2 <= block.size
-            for other in orphans
-        ))]
+        body = [
+            block
+            for block in body
+            if not (
+                len(_visual_lines(block)) == 1
+                and any(
+                    0 <= block.rect.y0 - other.rect.y1 <= 1.5 * block.size
+                    and abs((block.rect.x0 + block.rect.x1) - (other.rect.x0 + other.rect.x1)) / 2 <= block.size
+                    for other in orphans
+                )
+            )
+        ]
         if not body:
             return None
         head = _column_top(body)
@@ -545,9 +606,13 @@ def _column_continuations(
         if halt_ids is None:
             return False
         above = [
-            block for block in by_page.get(pno) or []
-            if id(block) not in ignored and block is not head and block.rect.y1 <= head.rect.y0 + 1
-            and block.rect.x0 < head.rect.x1 and block.rect.x1 > head.rect.x0
+            block
+            for block in by_page.get(pno) or []
+            if id(block) not in ignored
+            and block is not head
+            and block.rect.y1 <= head.rect.y0 + 1
+            and block.rect.x0 < head.rect.x1
+            and block.rect.x1 > head.rect.x0
         ]
         if not above:
             return False
@@ -555,9 +620,14 @@ def _column_continuations(
         x0 = min(block.rect.x0 for block in column)
         x1 = max(block.rect.x1 for block in column)
         return (
-            id(near) in halt_ids and id(near) not in aside_ids and id(near) not in skip_ids
-            and not near.side_note and near.leader is None and not near.entry
-            and near.rect.x0 >= x0 - _HANGING_HEAD_EM * near.size and near.rect.x1 <= x1 + near.size
+            id(near) in halt_ids
+            and id(near) not in aside_ids
+            and id(near) not in skip_ids
+            and not near.side_note
+            and near.leader is None
+            and not near.entry
+            and near.rect.x0 >= x0 - _HANGING_HEAD_EM * near.size
+            and near.rect.x1 <= x1 + near.size
         )
 
     def host_of(pno: int, column: list[TextBlock]) -> TextBlock | None:
@@ -571,17 +641,25 @@ def _column_continuations(
         for index in range(len(columns) - 1):
             host = host_of(pno, columns[index])
             # 续句不比上半句的字大。右栏顶上比正文大的是两栏上面的标题、署名，续句在它们下面
-            head = head_of(pno, [
-                block for block in columns[index + 1] if host is None or block.size <= host.size * 1.1
-            ])
+            head = head_of(
+                pno, [block for block in columns[index + 1] if host is None or block.size <= host.size * 1.1]
+            )
             # 左栏写到底、再跳到右栏顶，才是换栏续句。并排开头不接。
             if host is None or head is None or host.rect.y0 <= head.rect.y0 + host.size:
                 continue
             if host.rect.x1 > head.rect.x0 + 4:
                 continue
-            _try_column_pair(pairs, tails, host, head, median, halt_ids, skip_ids,
-                             flush=indents and _resumes(head, by_page.get(pno) or [], skip_ids, ignored | aside_ids),
-                             at_edge=_at_text_edge(head, by_page.get(pno) or []))
+            _try_column_pair(
+                pairs,
+                tails,
+                host,
+                head,
+                median,
+                halt_ids,
+                skip_ids,
+                flush=indents and _resumes(head, by_page.get(pno) or [], skip_ids, ignored | aside_ids),
+                at_edge=_at_text_edge(head, by_page.get(pno) or []),
+            )
         later = _next_text_page(by_page, pno, median, skip_ids, ignored)
         nxt = columns_of.get(later) or []
         if not columns or not nxt:
@@ -591,15 +669,25 @@ def _column_continuations(
         # 下面还有从左到右盖过这一块、字不比它小的正文也不是页末：图里的表格有一列格子左缘对齐，认成了一栏，
         # 底下接着通栏的段落。页脚注的字小，行间公式旁的标注窄，都不挡
         if host is not None and any(
-            block.rect.x0 >= host.rect.x1 - host.size and block.rect.y1 > host.rect.y0
-            or block is not host and block.rect.y0 >= host.rect.y1 - 1 and block.size >= host.size - 0.5
-            and block.rect.x0 <= host.rect.x0 + host.size and block.rect.x1 >= host.rect.x1 - host.size
+            block.rect.x0 >= host.rect.x1 - host.size
+            and block.rect.y1 > host.rect.y0
+            or block is not host
+            and block.rect.y0 >= host.rect.y1 - 1
+            and block.size >= host.size - 0.5
+            and block.rect.x0 <= host.rect.x0 + host.size
+            and block.rect.x1 >= host.rect.x1 - host.size
             for block in prose[pno]
         ):
             continue
         head = head_of(later, nxt[0])
         _try_column_pair(
-            pairs, tails, host, head, median, halt_ids, skip_ids,
+            pairs,
+            tails,
+            host,
+            head,
+            median,
+            halt_ids,
+            skip_ids,
             allow_capital=bool(host and head and _column_wrap(host, head)),
             flush=bool(indents and head and _resumes(head, by_page.get(later) or [], skip_ids, ignored | aside_ids)),
             at_edge=head is None or _at_text_edge(head, by_page.get(later) or []),
@@ -608,7 +696,9 @@ def _column_continuations(
 
 
 def _region_joins(
-    units: list[list[TextBlock]], skip_ids: set[int], halt_ids: set[int],
+    units: list[list[TextBlock]],
+    skip_ids: set[int],
+    halt_ids: set[int],
     regions_of: Callable[[int], list[pymupdf.Rect]],
 ) -> list[list[TextBlock]]:
     """开了版面模型时：同一页上前后两个单元（中间可以隔着跳过的块）落在模型框出的同一段正文里，
@@ -653,16 +743,14 @@ def _region_prose(block: TextBlock, box: pymupdf.Rect) -> bool:
 def _region_continues(prev: TextBlock, nxt: TextBlock, halt_ids: set[int]) -> bool:
     if prev.page != nxt.page or id(prev) in halt_ids or id(nxt) in halt_ids:
         return False
-    if (_list_item(nxt.text) or _LABEL_START_RE.match(nxt.text) or _styled_edge(nxt, 0)
-            or _ALGO_LINE_RE.match(nxt.text)):
+    if _list_item(nxt.text) or _LABEL_START_RE.match(nxt.text) or _styled_edge(nxt, 0) or _ALGO_LINE_RE.match(nxt.text):
         return False
     # 切口上有式子：上一块的末行、下一块的首行里有式子，或者中间空出一行行间公式
-    if not (_math_on_line(prev, -1) or _math_on_line(nxt, 0)
-            or nxt.rect.y0 - prev.rect.y1 >= _REGION_GAP * prev.size):
+    if not (_math_on_line(prev, -1) or _math_on_line(nxt, 0) or nxt.rect.y0 - prev.rect.y1 >= _REGION_GAP * prev.size):
         return False
     letter = re.search(r"[A-Za-z]", nxt.text)
     # 引号收住的也算句末：题词下面大写起头的一行是出处（… Location, Location” | Randall Munroe）
-    ended = _END_MARK_RE.sub("", prev.text).rstrip().endswith(tuple(".!?;:。！？；：”\""))
+    ended = _END_MARK_RE.sub("", prev.text).rstrip().endswith(tuple('.!?;:。！？；：”"'))
     return not (ended and letter is not None and letter.group().isupper())
 
 
@@ -697,7 +785,11 @@ _PANEL_LABEL_RE = re.compile(r"\(?[A-Za-z]\)\s|[A-Z]\.\s")
 
 
 def _next_text_page(
-    by_page: dict[int, list[TextBlock]], pno: int, median: float, skip_ids: set[int], ignored: set[int],
+    by_page: dict[int, list[TextBlock]],
+    pno: int,
+    median: float,
+    skip_ids: set[int],
+    ignored: set[int],
 ) -> int:
     """pno 之后第一个有正文的页。整页只有图、图注（连同紧贴在图注下面的分图说明）和页眉页脚的页跳过：
     上一页没写完的段落接在它后面那一页。分图说明以 (C) 这样的分图号起头，或者比正文小一号；
@@ -710,7 +802,8 @@ def _next_text_page(
 
 def _float_page(blocks: list[TextBlock], median: float, skip_ids: set[int], ignored: set[int]) -> bool:
     prose = [
-        block for block in blocks
+        block
+        for block in blocks
         if id(block) not in ignored and id(block) not in skip_ids and block.size >= median * 0.8
     ]
     captions = [block for block in prose if _is_float_text(block.text)]
@@ -718,8 +811,11 @@ def _float_page(blocks: list[TextBlock], median: float, skip_ids: set[int], igno
         if block in captions:
             continue
         panel = _PANEL_LABEL_RE.match(block.text.lstrip()) is not None or block.size < median * 0.95
-        if panel and any(0 <= block.rect.y0 - caption.rect.y1 <= 1.5 * block.size
-                         and abs(block.rect.x0 - caption.rect.x0) <= block.size for caption in captions):
+        if panel and any(
+            0 <= block.rect.y0 - caption.rect.y1 <= 1.5 * block.size
+            and abs(block.rect.x0 - caption.rect.x0) <= block.size
+            for caption in captions
+        ):
             captions.append(block)
             continue
         return False
@@ -764,7 +860,13 @@ def _cross_page_units(
         taken.add(id(tail))
     if geometries is not None:
         for host_id, tail in _column_continuations(
-            by_page, median, skip_ids, halt_ids, ignored, aside_ids, indents,
+            by_page,
+            median,
+            skip_ids,
+            halt_ids,
+            ignored,
+            aside_ids,
+            indents,
         ).items():
             if host_id in taken or id(tail) in taken:
                 continue
@@ -782,10 +884,7 @@ def _cross_page_units(
         nxt_body = _page_edge_blocks(nxt, median, ignored | aside_ids)
         first = _column_page_start(nxt_body, geometries)
         end = _column_page_end(body, geometries)
-        head = (
-            _left_column_head(nxt_body, geometries[later])
-            if geometries and later < len(geometries) else None
-        )
+        head = _left_column_head(nxt_body, geometries[later]) if geometries and later < len(geometries) else None
         for b in by_page[pno]:
             if id(b) in used:
                 continue
@@ -801,23 +900,40 @@ def _cross_page_units(
                 continue
             # 已经和同页另一块成对的块，不能再接到上一页页末，否则它那一半不在任何单元里
             same = bool(
-                end is not None and b is end and first is not None and id(first) not in used
+                end is not None
+                and b is end
+                and first is not None
+                and id(first) not in used
                 and id(first) not in extra
-                and id(b) not in skip_ids and id(first) not in skip_ids
-                and _can_continue(b, first, median, halt_ids,
-                                  flush=indents and _resumes(first, nxt, skip_ids, ignored | aside_ids),
-                                  at_edge=_at_text_edge(first, nxt))
+                and id(b) not in skip_ids
+                and id(first) not in skip_ids
+                and _can_continue(
+                    b,
+                    first,
+                    median,
+                    halt_ids,
+                    flush=indents and _resumes(first, nxt, skip_ids, ignored | aside_ids),
+                    at_edge=_at_text_edge(first, nxt),
+                )
                 and not _different_columns(geometries, b, first)
             )
             cross_target = head if head is not None and id(head) not in used and id(head) not in extra else None
             cross = bool(
-                not same and cross_target is not None and geometries is not None
+                not same
+                and cross_target is not None
+                and geometries is not None
                 and pno < len(geometries)
                 and _is_last_in_right_column(b, body, geometries[pno])
-                and id(b) not in skip_ids and id(cross_target) not in skip_ids
-                and _can_continue(b, cross_target, median, halt_ids,
-                                  flush=indents and _resumes(cross_target, nxt, skip_ids, ignored | aside_ids),
-                                  at_edge=_at_text_edge(cross_target, nxt))
+                and id(b) not in skip_ids
+                and id(cross_target) not in skip_ids
+                and _can_continue(
+                    b,
+                    cross_target,
+                    median,
+                    halt_ids,
+                    flush=indents and _resumes(cross_target, nxt, skip_ids, ignored | aside_ids),
+                    at_edge=_at_text_edge(cross_target, nxt),
+                )
             )
             other = first if same else cross_target
             if (same or cross) and other is not None:
@@ -831,8 +947,13 @@ def _cross_page_units(
 
 
 def _seam_apart(
-    unit: list[TextBlock], by_page: dict[int, list[TextBlock]], geometries: Sequence[PageGeometry],
-    covered: set[int], shown: set[int], median: float, words_of: Callable[[int], list[tuple]],
+    unit: list[TextBlock],
+    by_page: dict[int, list[TextBlock]],
+    geometries: Sequence[PageGeometry],
+    covered: set[int],
+    shown: set[int],
+    median: float,
+    words_of: Callable[[int], list[tuple]],
 ) -> bool:
     """跨页、跨栏、被式子切开的两块单元，中间隔着行间公式、例句：上一块紧下面、下一块紧上面是正文的块，
     或者是不在任何块里的字（抽字时丢掉的行间公式）。这样的单元写回时按分界切回两块（见 _assign_restored_parts），
@@ -849,8 +970,15 @@ def _seam_apart(
 
 
 def _content_next(
-    block: TextBlock, partner: TextBlock, by_page: dict[int, list[TextBlock]], geometries: Sequence[PageGeometry],
-    covered: set[int], shown: set[int], median: float, words_of: Callable[[int], list[tuple]], below: bool,
+    block: TextBlock,
+    partner: TextBlock,
+    by_page: dict[int, list[TextBlock]],
+    geometries: Sequence[PageGeometry],
+    covered: set[int],
+    shown: set[int],
+    median: float,
+    words_of: Callable[[int], list[tuple]],
+    below: bool,
 ) -> bool:
     """块的正下方（below 为假时是正上方）离它最近的东西是正文：认出来的行间公式、例句（shown），
     不在 covered 里、不在图表框里、不是脚注的块，或者版心里不属于任何块的字。版面模型会把行间公式认成图，
@@ -880,8 +1008,11 @@ def _content_next(
         if not beyond(other.rect.y0, other.rect.y1):
             continue
         cover = id(other) not in shown and (
-            id(other) in covered or _is_page_footnote(other, median) or _is_float_text(other.text)
-            or any(rect.contains(other.rect) for rect in floats) or block.size * 0.8 <= other.size < block.size - 0.6
+            id(other) in covered
+            or _is_page_footnote(other, median)
+            or _is_float_text(other.text)
+            or any(rect.contains(other.rect) for rect in floats)
+            or block.size * 0.8 <= other.size < block.size - 0.6
         )
         found.append((distance(other.rect.y0, other.rect.y1), not cover))
     # 丢掉的行间公式：和块隔开一点、在版心以内、不落在任何块和图表框里的字
@@ -931,7 +1062,7 @@ def _shared_line_pairs(blocks: list[TextBlock]) -> dict[int, TextBlock]:
     for index, block in enumerate(blocks):
         if id(block) in claimed or not _is_line_tail(block, earlier[index]):
             continue
-        for nxt in blocks[index + 1:]:
+        for nxt in blocks[index + 1 :]:
             if nxt.page != block.page:
                 break
             if nxt.rect.y0 > block.rect.y1 + block.size * 2:

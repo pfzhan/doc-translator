@@ -1,5 +1,6 @@
 """Read PDF pages into text blocks: split and rejoin lines, cut table cells, contents leaders
 and list items, and merge lines that continue a paragraph."""
+
 import re
 import unicodedata
 from collections import Counter
@@ -72,7 +73,9 @@ from .pdf_type3 import Type3Reader, recover_type3_page
 from .pdf_vision import FormulaDetector
 
 MONO_FONT_RE = re.compile(
-    r"Courier|NimbusMon|Mono|Consolas|Menlo|Monaco|CMTT|Typewriter|Inconsolata|Fira ?Code|Lucida ?Console|Source ?Code", re.I)
+    r"Courier|NimbusMon|Mono|Consolas|Menlo|Monaco|CMTT|Typewriter|Inconsolata|Fira ?Code|Lucida ?Console|Source ?Code",
+    re.I,
+)
 NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
 # 式子折行时留在行尾的运算符、关系符。表里当空值的连字符、数字不算
 _OPERATOR_RE = re.compile(r"[=+−±×·<>≤≥≈≃≅∼≡≠→←⇒⇔∈∉⊂⊆∝]+")
@@ -91,7 +94,11 @@ CJK_START_RE = re.compile(r"^[぀-ヿ㐀-鿿가-힯]")
 
 
 def _same_line_word(
-    prev: str, nxt: str, prev_rect: pymupdf.Rect, rect: pymupdf.Rect, size: float,
+    prev: str,
+    nxt: str,
+    prev_rect: pymupdf.Rect,
+    rect: pymupdf.Rect,
+    size: float,
 ) -> bool:
     """同一基线上、词距内的下一个词。按词拆行时，行内大写词仍是这一句。"""
     height = min(prev_rect.height, rect.height)
@@ -142,15 +149,19 @@ def _label_lead(spans: list[dict]) -> bool:
         # 研究问题、假设这样的编号条目（Q2 Which…、RQ1 How…、H3 …）也是
         numbered = re.fullmatch(r"[A-Z]{1,3}\d+", phrase) is not None or (
             re.fullmatch(r"[A-Z][a-z]+(?:\s+\d+(?:\.\d+)*)?", phrase) is not None
-            and (any(ch.isdigit() for ch in phrase) or re.match(r"\d+(?:\.\d+)*\b", rest) is not None))
+            and (any(ch.isdigit() for ch in phrase) or re.match(r"\d+(?:\.\d+)*\b", rest) is not None)
+        )
         if numbered:
             return _prose_units(rest) >= 2
         if rest[:1] in ":.":
             label, rest = label + rest[0], rest[1:].strip()
         phrase = label.strip()
         # 标签后面这一行可能只剩一个词就折行了（… Batch Instances. A | batch consists of …）
-        return (phrase.endswith((":", ".")) and len(phrase.split()) <= _LABEL_WORDS
-                and re.search(r"[^\W\d_]", rest) is not None)
+        return (
+            phrase.endswith((":", "."))
+            and len(phrase.split()) <= _LABEL_WORDS
+            and re.search(r"[^\W\d_]", rest) is not None
+        )
     return False
 
 
@@ -174,8 +185,14 @@ def _justified_joins(items: list[tuple], max_x1: float, whole_rows: bool = False
         while end < len(items) and _same_row(items[end - 1], items[end]):
             end += 1
         row = items[start:end]
-        if (whole_rows and len(row) >= 2 or len(row) >= 3 and _spread_evenly(row, max_x1)
-                or len(row) == 2 and _full_row(row, items, max_x1)):
+        if (
+            whole_rows
+            and len(row) >= 2
+            or len(row) >= 3
+            and _spread_evenly(row, max_x1)
+            or len(row) == 2
+            and _full_row(row, items, max_x1)
+        ):
             joins.update(range(start + 1, end))
         start = end
     return joins
@@ -191,7 +208,8 @@ def _full_row(row: list[tuple], items: list[tuple], max_x1: float) -> bool:
         return False
     return any(
         abs(item[1].x0 - left.x0) <= 1 and item[1].x1 >= max_x1 - 1
-        for item in items if item is not row[0] and item is not row[1]
+        for item in items
+        if item is not row[0] and item is not row[1]
     )
 
 
@@ -200,11 +218,11 @@ def _same_row(left: tuple, right: tuple) -> bool:
     overlap = min(a.y1, b.y1) - max(a.y0, b.y0)
     if overlap < min(a.height, b.height) * 0.7 or b.x0 <= a.x1:
         return False
+
     # 同一字号、用着同一种字体。一截里夹着斜体的变量（AVG(E)）也算，并排格子的字体字号常整个不同
     def styles(item: tuple) -> set[tuple]:
         return {
-            (s.get("font"), round(float(s.get("size") or 0), 1))
-            for s in item[2] if str(s.get("text") or "").strip()
+            (s.get("font"), round(float(s.get("size") or 0), 1)) for s in item[2] if str(s.get("text") or "").strip()
         }
 
     ours, theirs = styles(left), styles(right)
@@ -305,7 +323,8 @@ def _embed_math_blocks(blocks: list[dict], line_box) -> None:
     留原字，同一行的其余部分译完挪走以后，它孤零零留在原处，公式也缺了一截。"""
     for block in blocks:
         shown = [
-            line for line in block["lines"]
+            line
+            for line in block["lines"]
             if abs(line["dir"][1]) <= 0.01 and "".join(span["text"] for span in line["spans"]).strip()
         ]
         maths = [line for line in shown if all(_span_is_math(span) for span in line["spans"] if span["text"].strip())]
@@ -330,7 +349,11 @@ def _embed_math_blocks(blocks: list[dict], line_box) -> None:
 
 
 def _math_host(
-    blocks: list[dict], own: dict, spans: list[dict], box: pymupdf.Rect, line_box,
+    blocks: list[dict],
+    own: dict,
+    spans: list[dict],
+    box: pymupdf.Rect,
+    line_box,
 ) -> tuple[dict, dict] | None:
     """box 叠在哪一块的式子行上，那一块在同一行高上有一行正文（三个以上正文词）。
     只和公式行同高的不挪：行间公式里拆开的大括号挪到另一截公式里没有用处。"""
@@ -368,8 +391,11 @@ def _stacked_rows(upper: list[dict], lower: list[dict]) -> bool:
 def _latin_page(data: dict) -> bool:
     """页上的字九成以上不是中日韩文字"""
     text = "".join(
-        span["text"] for block in data.get("blocks", []) if block.get("type") == 0
-        for line in block["lines"] for span in line["spans"]
+        span["text"]
+        for block in data.get("blocks", [])
+        if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
     )
     letters = sum(1 for c in text if c.isalpha())
     return letters > 0 and len(CJK_RE.findall(text)) < letters * 0.1
@@ -404,7 +430,8 @@ _LEADER_DOTS_RE = re.compile(r"[\s.·…]*[.·…][\s.·…]*")
 def _has_leader_line(data: dict) -> bool:
     return any(
         _LEADER_RE.search("".join(span["text"] for span in line["spans"]))
-        for block in data.get("blocks", []) for line in block.get("lines", [])
+        for block in data.get("blocks", [])
+        for line in block.get("lines", [])
     )
 
 
@@ -457,7 +484,9 @@ def _index_page(data: dict) -> bool:
     """书后的索引页：四成以上的行以「, 页码」收尾。正文的行很少停在逗号加数字上。"""
     texts = [
         "".join(span["text"] for span in line["spans"]).strip()
-        for block in data.get("blocks", []) if block.get("type") == 0 for line in block["lines"]
+        for block in data.get("blocks", [])
+        if block.get("type") == 0
+        for line in block["lines"]
     ]
     texts = [text for text in texts if text]
     if len(texts) < _INDEX_MIN_LINES:
@@ -468,7 +497,10 @@ def _index_page(data: dict) -> bool:
 def _index_ref_rows(data: dict) -> list[pymupdf.Rect]:
     """索引页上只有页码的行。PyMuPDF 常把它和上一行的条目分在两块里，按整页收。"""
     return [
-        _line_box(line) for block in data.get("blocks", []) if block.get("type") == 0 for line in block["lines"]
+        _line_box(line)
+        for block in data.get("blocks", [])
+        if block.get("type") == 0
+        for line in block["lines"]
         if _INDEX_REFS_ONLY_RE.match("".join(span["text"] for span in line["spans"]).strip())
     ]
 
@@ -507,22 +539,31 @@ def _index_entry_ends(items: list[tuple], ref_rows: Sequence[pymupdf.Rect]) -> s
         # 页码折到了下一行，那一行在同一块里：条目连着页码一起送翻，到页码那一行才收住。
         # 只剩页码的一行单独留着，译文里这一条就没有页码
         refs_next = (
-            text.endswith(",") and below is not None and below.y0 - rect.y1 <= size * 0.5
+            text.endswith(",")
+            and below is not None
+            and below.y0 - rect.y1 <= size * 0.5
             and _INDEX_REFS_ONLY_RE.match(" ".join(items[index][0].strip() for index in nxt)) is not None
         )
         # 停在连字符断开的半个词上，下一行小写起头，是同一个词的后半（resolu- | tion, 566）。
         # 块从一条的续行起头时，这一行不是条目的首行，下一行和它对齐也收不住
         broken = (
-            re.search(r"[A-Za-z]-$", text) is not None and below is not None
+            re.search(r"[A-Za-z]-$", text) is not None
+            and below is not None
             and below.y0 - rect.y1 <= size * 0.5
             and items[nxt[0]][0].lstrip()[:1].islower()
         )
         if refs_next or broken:
             continue
-        if (_INDEX_REF_RE.search(text) or _INDEX_REFS_ONLY_RE.match(text)
-                or (text.endswith(",") and _refs_below(rect, ref_rows, size))
-                or (below is not None and below.y0 - rect.y1 <= size * 0.5
-                    and (below.x0 <= first_x0 + 1 or (continued and below.x0 < rect.x0 - 1)))):
+        if (
+            _INDEX_REF_RE.search(text)
+            or _INDEX_REFS_ONLY_RE.match(text)
+            or (text.endswith(",") and _refs_below(rect, ref_rows, size))
+            or (
+                below is not None
+                and below.y0 - rect.y1 <= size * 0.5
+                and (below.x0 <= first_x0 + 1 or (continued and below.x0 < rect.x0 - 1))
+            )
+        ):
             ends.add(row[-1])
             first_x0 = None
     return ends
@@ -532,8 +573,7 @@ def _refs_below(rect: pymupdf.Rect, ref_rows: Sequence[pymupdf.Rect], size: floa
     """条目的页码折到了下一行：只有页码的一行紧贴在下面，起笔落在这一行的左右缘之间。
     这一行本身是续行时，页码和它缩进一样（branching factor, | 77）。"""
     return any(
-        -size * 0.3 <= box.y0 - rect.y1 <= size * 0.5 and rect.x0 - size * 0.5 <= box.x0 < rect.x1
-        for box in ref_rows
+        -size * 0.3 <= box.y0 - rect.y1 <= size * 0.5 and rect.x0 - size * 0.5 <= box.x0 < rect.x1 for box in ref_rows
     )
 
 
@@ -545,12 +585,13 @@ def _toc_pages(pages: list[dict]) -> set[int]:
     previous = False
     for pno, data in enumerate(pages):
         lines = [
-            line for block in data.get("blocks", []) if block.get("type") == 0
-            for line in block.get("lines", []) if abs(line["dir"][1]) <= 0.01
+            line
+            for block in data.get("blocks", [])
+            if block.get("type") == 0
+            for line in block.get("lines", [])
+            if abs(line["dir"][1]) <= 0.01
         ]
-        titled = any(
-            _TOC_TITLE_RE.fullmatch("".join(span["text"] for span in line["spans"]).strip()) for line in lines
-        )
+        titled = any(_TOC_TITLE_RE.fullmatch("".join(span["text"] for span in line["spans"]).strip()) for line in lines)
         if _page_number_column(lines) and (titled or previous):
             found.add(pno)
             previous = True
@@ -579,7 +620,8 @@ def _page_number_column(lines: list[dict]) -> bool:
                 break
     best = max(
         ([(y0, number) for x1, y0, number in found if abs(x1 - edge) <= 1.5] for edge in {x for x, _, _ in found}),
-        key=len, default=[],
+        key=len,
+        default=[],
     )
     numbers = [number for _, number in sorted(best)]
     drops = sum(1 for a, b in zip(numbers, numbers[1:]) if b < a)
@@ -598,16 +640,17 @@ def _number_cells(items: list[tuple]) -> set[int]:
     """表格里只有数的几截：左缘或右缘和另外两行的数对齐（同一列），或者和这样的数并排在一行。
     句号收尾的数（参考文献的年份 2015.）不算。"""
     numbers = [
-        index for index, item in enumerate(items)
-        if _number_cell(item[0]) and not item[0].rstrip().endswith(".")
+        index for index, item in enumerate(items) if _number_cell(item[0]) and not item[0].rstrip().endswith(".")
     ]
     found: set[int] = set()
     for index in numbers:
         rect = items[index][1]
         for edge in ("x0", "x1"):
             mates = [
-                other for other in numbers
-                if other != index and min(rect.y1, items[other][1].y1) - max(rect.y0, items[other][1].y0) <= 0
+                other
+                for other in numbers
+                if other != index
+                and min(rect.y1, items[other][1].y1) - max(rect.y0, items[other][1].y0) <= 0
                 and abs(getattr(items[other][1], edge) - getattr(rect, edge)) <= 1
             ]
             if len(mates) >= 2:
@@ -634,8 +677,10 @@ def _row_labels(items: list[tuple], cells: Collection[int]) -> set[int]:
         size = max((float(span["size"]) for span in spans), default=10.0)
         for cell in cells:
             mate = items[cell][1]
-            if (mate.x0 - rect.x1 >= size
-                    and min(rect.y1, mate.y1) - max(rect.y0, mate.y0) > min(rect.height, mate.height) * 0.5):
+            if (
+                mate.x0 - rect.x1 >= size
+                and min(rect.y1, mate.y1) - max(rect.y0, mate.y0) > min(rect.height, mate.height) * 0.5
+            ):
                 found.add(index)
                 break
     return found
@@ -645,9 +690,12 @@ def _number_columns(data: dict) -> list[float]:
     """本页表格里一列列数的中线：三格以上的数中线落在同一处（差一磅以内）。"""
     centers = sorted(
         (float(span["bbox"][0]) + float(span["bbox"][2])) / 2
-        for block in data.get("blocks", []) if block.get("type") == 0
-        for line in block["lines"] for span in line["spans"]
-        if str(span["text"]).strip() and _number_cell(str(span["text"]))
+        for block in data.get("blocks", [])
+        if block.get("type") == 0
+        for line in block["lines"]
+        for span in line["spans"]
+        if str(span["text"]).strip()
+        and _number_cell(str(span["text"]))
         and not str(span["text"]).rstrip().endswith(".")
     )
     columns: list[float] = []
@@ -695,13 +743,21 @@ def _cut_header_cells(items: list[tuple], columns: Sequence[float]) -> tuple[lis
         hits = []
         for piece in pieces:
             center = (float(piece[0]["bbox"][0]) + float(piece[-1]["bbox"][2])) / 2
-            near = [k for k, column in enumerate(columns) if abs(column - center) <= max(2.0, float(piece[0]["size"]) * 0.25)]
+            near = [
+                k
+                for k, column in enumerate(columns)
+                if abs(column - center) <= max(2.0, float(piece[0]["size"]) * 0.25)
+            ]
             hits.append(near[0] if near else None)
         # 行首一截是行名那一列的表头（System），下面没有数
         aligned = hits[1:] if hits and hits[0] is None else hits
         texts = [" ".join(str(span["text"]).strip() for span in piece) for piece in pieces]
-        if (len(aligned) < 2 or None in aligned or len(set(aligned)) < len(aligned)
-                or not all(re.search(r"[^\W\d_]", text) and len(text.split()) <= _HEADER_CELL_WORDS for text in texts)):
+        if (
+            len(aligned) < 2
+            or None in aligned
+            or len(set(aligned)) < len(aligned)
+            or not all(re.search(r"[^\W\d_]", text) and len(text.split()) <= _HEADER_CELL_WORDS for text in texts)
+        ):
             out.extend(items[index] for index in row)
             continue
         raw = sorted((span for index in row for span in items[index][3]), key=lambda span: span["bbox"][0])
@@ -714,8 +770,9 @@ def _cut_header_cells(items: list[tuple], columns: Sequence[float]) -> tuple[lis
             for span in piece:
                 box |= _text_box(span)
             found.add(len(out))
-            out.append(("".join(str(span["text"]) for span in kept), pymupdf.Rect(box.x0, top, box.x1, bottom),
-                        piece, kept))
+            out.append(
+                ("".join(str(span["text"]) for span in kept), pymupdf.Rect(box.x0, top, box.x1, bottom), piece, kept)
+            )
     return out, found
 
 
@@ -733,10 +790,12 @@ def _drop_number_tails(items: list[tuple]) -> list[tuple]:
         for k in range(1, len(spans)):
             x = float(spans[k]["bbox"][0])
             size = float(spans[k]["size"])
-            if (any(abs(x - start) <= 1 for start in starts)
-                    and x - float(spans[k - 1]["bbox"][2]) >= size * 0.5
-                    and _number_cell("".join(str(span["text"]) for span in spans[k:]))
-                    and re.search(r"[^\W\d_]", "".join(str(span["text"]) for span in spans[:k]))):
+            if (
+                any(abs(x - start) <= 1 for start in starts)
+                and x - float(spans[k - 1]["bbox"][2]) >= size * 0.5
+                and _number_cell("".join(str(span["text"]) for span in spans[k:]))
+                and re.search(r"[^\W\d_]", "".join(str(span["text"]) for span in spans[:k]))
+            ):
                 cut = x
                 break
         if cut is None:
@@ -750,8 +809,15 @@ def _drop_number_tails(items: list[tuple]) -> list[tuple]:
             if str(span["text"]).strip():
                 box |= _text_box(span)
         head = "".join(str(span["text"]) for span in kept)
-        out.append((head, pymupdf.Rect(box.x0, rect.y0, box.x1, rect.y1),
-                    [span for span in spans if float(span["bbox"][0]) < cut - 0.5], kept, *item[4:]))
+        out.append(
+            (
+                head,
+                pymupdf.Rect(box.x0, rect.y0, box.x1, rect.y1),
+                [span for span in spans if float(span["bbox"][0]) < cut - 0.5],
+                kept,
+                *item[4:],
+            )
+        )
     return out
 
 
@@ -808,8 +874,10 @@ def _cut_leaders(items: list[tuple], toc_page: bool = False) -> tuple[list[tuple
                 continue
             line = {"spans": spans, "bbox": items[index][1]}
             replaced[index] = (
-                "".join(str(span["text"]) for span in spans), _line_box(line),
-                [span for span in spans if str(span["text"]).strip()], spans,
+                "".join(str(span["text"]) for span in spans),
+                _line_box(line),
+                [span for span in spans if str(span["text"]).strip()],
+                spans,
             )
             last = index
         if last is not None:
@@ -898,7 +966,12 @@ def _leader_of(spans: list[dict], shared: list[dict]) -> Leader | None:
     # 页码常是蓝色链接，点按点线自己的颜色
     color = int((dotted[0] if dotted else first).get("color") or 0)
     return Leader(
-        number, dot_x, pitch, float(origin[1]), size, color,
+        number,
+        dot_x,
+        pitch,
+        float(origin[1]),
+        size,
+        color,
         tuple(span for span in [*dotted, *shared] if "origin" in span),
     )
 
@@ -913,7 +986,11 @@ def _cut_after(group: list[int], ends: Collection[int]) -> list[list[int]]:
 
 
 def _line_host(
-    line: dict, own: dict, blocks: list[dict], line_box=None, starts: Sequence[float] = (),
+    line: dict,
+    own: dict,
+    blocks: list[dict],
+    line_box=None,
+    starts: Sequence[float] = (),
 ) -> tuple[dict, dict] | None:
     """紧挨在 line 左边的那一截。它本来就在 line 的块里时不挪：
     取第一个找到的，两个块里各有一截能接时，line 每一轮都会挪到另一个块去。
@@ -949,8 +1026,10 @@ def _line_host(
             if column_font and _main_font(other) != column_font:
                 continue
             left = [span for span in other["spans"] if span["text"].strip()]
-            if gap <= size * 0.6 or (gap <= size and _math_seam(other["spans"], line["spans"])) or (
-                gap <= reach and bool(left) and _span_is_math(left[-1])
+            if (
+                gap <= size * 0.6
+                or (gap <= size and _math_seam(other["spans"], line["spans"]))
+                or (gap <= reach and bool(left) and _span_is_math(left[-1]))
             ):
                 if best is None or abs(gap) < abs(best[0]):
                     best = (gap, block, other)
@@ -969,8 +1048,11 @@ def _column_font(line: dict, own: dict, size: float) -> str:
         if other is line or abs(other["dir"][1]) > 0.01:
             continue
         ox0, oy0, _, oy1 = other["bbox"]
-        if (abs(ox0 - x0) <= 1 and (0 <= y0 - oy1 < size * 0.6 or 0 <= oy0 - y1 < size * 0.6)
-                and _main_font(other) == font):
+        if (
+            abs(ox0 - x0) <= 1
+            and (0 <= y0 - oy1 < size * 0.6 or 0 <= oy0 - y1 < size * 0.6)
+            and _main_font(other) == font
+        ):
             return font
     return ""
 
@@ -991,22 +1073,24 @@ def _past_column(block: dict, line: dict, x: float, size: float, line_box=None) 
     对不上右缘，单靠它不算。"""
     box = pymupdf.Rect(line["bbox"])
     rows = [
-        pymupdf.Rect(other["bbox"]) for other in block["lines"]
-        if other is not line and not _same_band(other, line, line_box)
+        pymupdf.Rect(other["bbox"])
+        for other in block["lines"]
+        if other is not line
+        and not _same_band(other, line, line_box)
         and abs(pymupdf.Rect(other["bbox"]).x0 - box.x0) <= size
         and pymupdf.Rect(other["bbox"]).width >= size * 8
     ]
-    return (
-        bool(rows) and all(row.x1 < x for row in rows)
-        and any(abs(row.x1 - box.x1) <= size * 0.5 for row in rows)
-    )
+    return bool(rows) and all(row.x1 < x for row in rows) and any(abs(row.x1 - box.x1) <= size * 0.5 for row in rows)
 
 
 def _larger_text(line: dict, host: dict) -> bool:
     """line 里的正文字号比 host 大一截：是隔壁栏和它同一基线的标题，切开的后半截字号不变。
     只有标点的一截不算：式子后面跟的句号用正文字号，接在小一号的分母后面（Σ_j e^{S·T_j} .）。"""
-    sizes = [float(span["size"]) for span in line["spans"]
-             if any(ch.isalnum() for ch in span["text"]) and not _span_is_math(span)]
+    sizes = [
+        float(span["size"])
+        for span in line["spans"]
+        if any(ch.isalnum() for ch in span["text"]) and not _span_is_math(span)
+    ]
     host_size = max((float(span["size"]) for span in host["spans"] if span["text"].strip()), default=0.0)
     return bool(sizes) and host_size > 0 and max(sizes) > host_size * 1.2
 
@@ -1062,8 +1146,9 @@ def _stacked_on(block: dict, line: dict, box: pymupdf.Rect, size: float, italic:
             if not span["text"].strip() or "bbox" not in span:
                 continue
             # 斜体的一行只认小一号的分子分母，求和号这样的大算子上下的 K、n 不挪
-            if italic and not (float(span["size"]) < small
-                               and (_span_is_math(span) or _italic_span(span) or _numeral_span(span))):
+            if italic and not (
+                float(span["size"]) < small and (_span_is_math(span) or _italic_span(span) or _numeral_span(span))
+            ):
                 continue
             if not italic and not _span_is_math(span):
                 continue
@@ -1126,8 +1211,10 @@ def _verbatim_seam(host: TextBlock, guest: TextBlock) -> bool:
     if not host.span_lines or not guest.span_lines:
         return False
     return (
-        _verbatim_block(host) and not _typewriter_line(guest.span_lines[0])
-        or _verbatim_block(guest) and not _typewriter_line(host.span_lines[-1])
+        _verbatim_block(host)
+        and not _typewriter_line(guest.span_lines[0])
+        or _verbatim_block(guest)
+        and not _typewriter_line(host.span_lines[-1])
     )
 
 
@@ -1135,14 +1222,15 @@ def _row_style(spans: list[dict]) -> tuple[bool, bool]:
     """一行字的样式：是否整行粗体、是否整行等宽。只看带字母的正文 span，名字后面的角标星号、
     邮箱外面公式字体的花括号不算。"""
     words = [
-        span for span in spans
-        if any(ch.isalpha() for ch in str(span.get("text") or "")) and not _span_is_math(span)
+        span for span in spans if any(ch.isalpha() for ch in str(span.get("text") or "")) and not _span_is_math(span)
     ]
     bold = bool(words) and all(
         emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0)).bold for span in words
     )
-    mono = bool(words) and all(_mono_span(span) for span in words) and not any(
-        CJK_RE.search(str(span.get("text") or "")) for span in words
+    mono = (
+        bool(words)
+        and all(_mono_span(span) for span in words)
+        and not any(CJK_RE.search(str(span.get("text") or "")) for span in words)
     )
     return bold, mono
 
@@ -1171,8 +1259,9 @@ def _centered_rows(rows: Sequence[pymupdf.Rect], size: float) -> bool:
     if max(mids) - min(mids) > size * 0.5:
         return False
     widths = [row.width for row in rows]
-    return (max(row.x0 for row in rows) - min(row.x0 for row in rows) >= 1
-            and max(widths) - min(widths) >= max(1.0, size * 0.2))
+    return max(row.x0 for row in rows) - min(row.x0 for row in rows) >= 1 and max(widths) - min(widths) >= max(
+        1.0, size * 0.2
+    )
 
 
 def _new_voice(host: TextBlock, guest: TextBlock) -> bool:
@@ -1194,8 +1283,10 @@ def _restyled_seam(host: TextBlock, guest: TextBlock) -> bool:
 
     def row_spans(block: TextBlock, at: pymupdf.Rect) -> list[dict]:
         return [
-            span for rect, spans in zip(block.line_rects, block.span_lines)
-            if abs(rect.y0 - at.y0) <= gap for span in spans
+            span
+            for rect, spans in zip(block.line_rects, block.span_lines)
+            if abs(rect.y0 - at.y0) <= gap
+            for span in spans
         ]
 
     upper = row_spans(host, host.line_rects[-1])
@@ -1242,7 +1333,8 @@ def _row_left(items: list[tuple], index: int) -> float:
     """第 index 截所在那一行的左缘：和它上下交叠过半的几截里最靠左的。"""
     box = items[index][1]
     return min(
-        other[1].x0 for other in items
+        other[1].x0
+        for other in items
         if min(other[1].y1, box.y1) - max(other[1].y0, box.y0) > min(other[1].height, box.height) * 0.5
     )
 
@@ -1304,17 +1396,23 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         stripped = text.lstrip()
         # 纯符号行独立成段，后面的内容不和它拼
         prev_symbol = bool(NO_TEXT_RE.match(ptext.strip())) and ref not in number_tails
-        if (NO_TEXT_RE.match(stripped) and re.search(r"\d", stripped) and not prev_symbol
-                and max_x1 - prect.x1 <= 0.5 * psize
-                and (not _ends_sentence(ptext) or _MID_ABBREV_RE.search(ptext.rstrip()) is not None)
-                and min(abs(rect.x0 - group_x0), abs(rect.x0 - prect.x0)) <= 0.5 * psize
-                and rect.y0 >= prect.y1 - 0.5 * psize
-                and (i + 1 == len(items) or items[i + 1][1].y0 >= rect.y1 - 0.5 * psize)):
+        if (
+            NO_TEXT_RE.match(stripped)
+            and re.search(r"\d", stripped)
+            and not prev_symbol
+            and max_x1 - prect.x1 <= 0.5 * psize
+            and (not _ends_sentence(ptext) or _MID_ABBREV_RE.search(ptext.rstrip()) is not None)
+            and min(abs(rect.x0 - group_x0), abs(rect.x0 - prect.x0)) <= 0.5 * psize
+            and rect.y0 >= prect.y1 - 0.5 * psize
+            and (i + 1 == len(items) or items[i + 1][1].y0 >= rect.y1 - 0.5 * psize)
+        ):
             # 这个数独占一行。同一行后面还有字的是行首的节号（9.6 Summary）
             number_tails.add(i)
         # 索引条目停在逗号上，页码折到下一行：页码跟着条目（见 _index_entry_ends），缩进多深都不拆
         index_tail = (
-            whole_rows and ptext.rstrip().endswith(",") and bool(_INDEX_REFS_ONLY_RE.match(stripped))
+            whole_rows
+            and ptext.rstrip().endswith(",")
+            and bool(_INDEX_REFS_ONLY_RE.match(stripped))
             and -0.3 * psize <= rect.y0 - prect.y1 <= 0.5 * psize
         )
         if index_tail:
@@ -1324,32 +1422,34 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         # 再往左起笔是列表项、例句的悬挂续行完了。块从续行起头时第一行也是缩着的（datasheet 的条目）。
         # 只看成句的文字行，公式拆出来的几截不算行
         hanging_end = (
-            group_rows >= 2 and rect.x0 < row_rect.x0 - 0.5 * psize
-            and _prose_units(stripped) >= 3 and _prose_units(items[i - 1][0]) >= 2
+            group_rows >= 2
+            and rect.x0 < row_rect.x0 - 0.5 * psize
+            and _prose_units(stripped) >= 3
+            and _prose_units(items[i - 1][0]) >= 2
         )
         # 首行缩进的第一行排到右缘。块里第一行没排满、以句号收尾，下一行又是新句子起头的，
         # 是上一段（例句的悬挂续行）的末行
         closed = (
-            group_rows == 1 and max_x1 - prect.x1 > 3 * psize and ptext.rstrip().endswith((".", "?", "!"))
-            and _ends_sentence(ptext) and bool(SEG_START_RE.match(stripped))
+            group_rows == 1
+            and max_x1 - prect.x1 > 3 * psize
+            and ptext.rstrip().endswith((".", "?", "!"))
+            and _ends_sentence(ptext)
+            and bool(SEG_START_RE.match(stripped))
         )
         # 缩进起笔、没排到右缘的第一行，下一行回到左边：单独排开的一行（例句 The green witch arrived），
         # 下一行接着写正文。段落的首行缩进排到右缘；绕图排的段落各行收在同一处，首行不比下一行短
         displayed = (
-            group_rows == 1 and row_rect.x0 - rect.x0 > 0.5 * psize and max_x1 - row_rect.x1 > 3 * psize
-            and row_rect.x1 < rect.x1 - psize and _prose_units(items[i - 1][0]) >= 2
+            group_rows == 1
+            and row_rect.x0 - rect.x0 > 0.5 * psize
+            and max_x1 - row_rect.x1 > 3 * psize
+            and row_rect.x1 < rect.x1 - psize
+            and _prose_units(items[i - 1][0]) >= 2
         )
         indent = 0 < jump <= 3 * psize and not hanging_end and not closed and not displayed
         # 列表项的续行：缩进在弹点之后的悬挂对齐。同 x0 或左跳的不是续行，可能是下一段
-        continuing_list = (
-            _list_item(ptext)
-            and not _list_item(text)
-            and rect.x0 > prect.x0
-        )
+        continuing_list = _list_item(ptext) and not _list_item(text) and rect.x0 > prect.x0
         # CJK 行首分不出新句子和续行，要求上行以句末标点结尾才算新段落
-        seg_start = bool(SEG_START_RE.match(stripped)) or (
-            bool(CJK_START_RE.match(stripped)) and _ends_sentence(ptext)
-        )
+        seg_start = bool(SEG_START_RE.match(stripped)) or (bool(CJK_START_RE.match(stripped)) and _ends_sentence(ptext))
         # 打字机字体排的是逐行照录的文字（对话、示例），右缘参差，没到右边距不说明是硬换行。
         # 下一行像新句子开头就是新的一行
         verbatim = _typewriter_line(pspans) and _typewriter_line(items[i][2])
@@ -1362,9 +1462,15 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         above = row_box.get(head - 1, items[head - 1][1]) if head > 0 else None
         below = row_box.get(i, rect)
         lane_full = (
-            above is not None and above.y0 < prect.y0 - 0.5 * psize and rect.x0 <= prect.x0 + 0.5 * psize
-            and (abs(above.x1 - prect.x1) <= 0.5 and below.x1 >= prect.x1 - 0.5
-                 or abs(below.x1 - prect.x1) <= 0.5 and above.x1 >= prect.x1 - 0.5)
+            above is not None
+            and above.y0 < prect.y0 - 0.5 * psize
+            and rect.x0 <= prect.x0 + 0.5 * psize
+            and (
+                abs(above.x1 - prect.x1) <= 0.5
+                and below.x1 >= prect.x1 - 0.5
+                or abs(below.x1 - prect.x1) <= 0.5
+                and above.x1 >= prect.x1 - 0.5
+            )
         )
         hard_break = (
             (max_x1 - prect.x1 > 3 * psize and not lane_full or verbatim)
@@ -1381,8 +1487,10 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         # 是图注的折行，不是左跳。按正文那一截量，左跳有好几个字宽。只看块里的行，排满的一列短行
         # （右缘就是块的右缘）和它分不开，所以要第一截是图注标签
         wrap_back = (
-            group_rows == 1 and bool(_CAPTION_SPAN_RE.match(items[cur[0]][0].strip()))
-            and abs(rect.x0 - group_x0) <= 0.5 * psize and max_x1 - prect.x1 <= 0.5 * psize
+            group_rows == 1
+            and bool(_CAPTION_SPAN_RE.match(items[cur[0]][0].strip()))
+            and abs(rect.x0 - group_x0) <= 0.5 * psize
+            and max_x1 - prect.x1 <= 0.5 * psize
             and rect.y0 >= prect.y1 - 0.5 * psize
         )
         left_jump = jump > 3 * psize and not both_full and not hanging_wrap and not wrap_back
@@ -1412,9 +1520,13 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             and -seam_gap <= rect.x0 - row_rect.x1 <= seam_reach
         )
         same_visual_line = (
-            (h_overlap > 0 and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5
-             and not _stacked_rows(items[i - 1][2], items[i][2]))
-            or same_word or touching
+            (
+                h_overlap > 0
+                and overlap > min(qrect.y1 - qrect.y0, rect.y1 - rect.y0) * 0.5
+                and not _stacked_rows(items[i - 1][2], items[i][2])
+            )
+            or same_word
+            or touching
         )
         # 同一行上隔开三个字宽以上、又不是两端对齐拉开的词距：并排的标签（图注和图里的节点）。
         # 接口是式子的不算，分式的几截可能分在别的块里，留下一段空。
@@ -1429,9 +1541,11 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         # 也不按硬换行拆开，否则数字被过滤不遮罩、标题单独翻，基线对不齐
         # 章首比标题大一倍多的数字是单独的装饰，标题按原位写，不跟着数字挪
         line_size = max((s["size"] for s in items[i][2]), default=10)
-        sec_label = (bool(re.fullmatch(r"\d+(?:\.\d+)*\.?", ptext.strip()))
-                     and overlap > min(prect.y1 - prect.y0, rect.y1 - rect.y0) * 0.5
-                     and psize <= line_size * 1.6)
+        sec_label = (
+            bool(re.fullmatch(r"\d+(?:\.\d+)*\.?", ptext.strip()))
+            and overlap > min(prect.y1 - prect.y0, rect.y1 - rect.y0) * 0.5
+            and psize <= line_size * 1.6
+        )
         # 12pt 标题下的 9pt 导语左缘只差一截节号，看起来像缩进。字号落下才是新段。
         # 上下标拆出的短行和上一行上下交叠；自成一行的两个词也算（作者名下面的单位），
         # 比的是上一行多数字的字号，行首的大号星号不算
@@ -1444,7 +1558,10 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         # 式子靠左一点，按首行缩进算会并进去。小型大写的词（KNOWREF、GOVERN 1:）后面回到正文字号不算；
         # 上下标拆出的小行、几个字的碎片（块从角标 u 起头）不计入这一段的字号。小写起头的是接着写的半句
         size_rise = (
-            not same_visual_line and own_row and seg_start and 0 < group_size * _SIZE_RISE < line_size
+            not same_visual_line
+            and own_row
+            and seg_start
+            and 0 < group_size * _SIZE_RISE < line_size
             and _prose_units(stripped) >= 2
         )
         body_line = line_size >= ref_size * 0.79 and len("".join(stripped.split())) >= _SIZE_ROW_CHARS
@@ -1452,8 +1569,10 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         # 正文首行缩进和等宽行的左缘只差一点，按缩进算会并进去。
         # 行首还是等宽字的，是上一行的网址、代码折下来的尾巴（...BaBao | 1). This ...），没换回正文
         leaves_verbatim = (
-            own_row and seg_start
-            and _typewriter_line(pspans) and not _typewriter_line(items[i][2])
+            own_row
+            and seg_start
+            and _typewriter_line(pspans)
+            and not _typewriter_line(items[i][2])
             and not _typewriter_line(items[i][2][:1])
             and _prose_units(stripped) >= 4
         )
@@ -1485,18 +1604,21 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         # 上一行停在运算符、左括号上，式子没写完，折到下一行行首：下一行的 100) 是式子的后半截，
         # 不是编号，也不是符号行。单独排的式子里，分子从等号右边起笔，不是折行
         open_end = (
-            not prev_symbol and _open_operator_end(ptext)
-            and not same_visual_line and rect.x0 <= row_rect.x0 + psize
+            not prev_symbol and _open_operator_end(ptext) and not same_visual_line and rect.x0 <= row_rect.x0 + psize
         )
         # 标签和值分两栏排（View ranges:   {l_partkey, …} ∈ (150, +∞), | {o_custkey} …）：值和标签隔着
         # 一个字宽以上，值的下一行从值的左缘起笔，不回到标签下面。值是另一栏，另成一段
         next_row = items[i + 1][1] if i + 1 < len(items) else None
         # 条目号（2.1、a.）后面的悬挂缩进是列表项，不在这里拆，标签要是词
         value_column = (
-            overlap > min(qrect.height, rect.height) * 0.5 and not touching
-            and bool(re.search(r"[^\W\d_]{2,}", items[i - 1][0])) and not _list_item(items[i - 1][0])
-            and rect.x0 - qrect.x1 >= psize and rect.x0 > group_x0 + psize
-            and next_row is not None and next_row.y0 >= rect.y0 + rect.height * 0.5
+            overlap > min(qrect.height, rect.height) * 0.5
+            and not touching
+            and bool(re.search(r"[^\W\d_]{2,}", items[i - 1][0]))
+            and not _list_item(items[i - 1][0])
+            and rect.x0 - qrect.x1 >= psize
+            and rect.x0 > group_x0 + psize
+            and next_row is not None
+            and next_row.y0 >= rect.y0 + rect.height * 0.5
             and abs(next_row.x0 - rect.x0) <= 1.0
         )
         # 上一句说完，下一行以例句编号开头：一行一个例句
@@ -1506,7 +1628,9 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         # 单独一行、两边都缩进三个字宽以上、只有数学字体、带关系符号的一行是单独排的式子，
         # 上一行停在逗号上也不接。分式拆出来的求和号、分母那几截没有关系符号，不算
         display_math = (
-            own_row and rect.x0 - group_x0 > 3 * psize and max_x1 - rect.x1 > 3 * psize
+            own_row
+            and rect.x0 - group_x0 > 3 * psize
+            and max_x1 - rect.x1 > 3 * psize
             and all(_span_is_math(span) for span in items[i][2] if str(span["text"]).strip())
             and bool(_RELATION_RE.search(stripped))
         )
@@ -1519,36 +1643,67 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
             abs((other.x0 + other.x1) - (rect.x0 + rect.x1)) / 2 <= 0.15 * psize for other in (prect, items[i + 1][1])
         )
         opens_indent = (
-            own_row and seg_start and below is not None and not centered_rows
-            and above - rect.x0 > 0.5 * psize and 0.5 * psize < rect.x0 - below <= 3 * psize
+            own_row
+            and seg_start
+            and below is not None
+            and not centered_rows
+            and above - rect.x0 > 0.5 * psize
+            and 0.5 * psize < rect.x0 - below <= 3 * psize
             and not ptext.rstrip().endswith((",", "，", "、", ";", "；", ":", "："))
         )
         # 上一行在句末收住（哪怕排满了），这一行缩进一两个字宽、排到右缘，下一行又回到上一行的左缘：
         # 是新一段的首行缩进。上下是编号条目的是悬挂缩进的续行（46. Fuller … | Monthly Notices … | 47. …）
         indent_after_end = (
-            own_row and seg_start and below is not None and not centered_rows and _ends_sentence(ptext)
-            and not _list_item(items[i - 1][0]) and not _list_item(items[i + 1][0])
-            and 0.5 * psize < rect.x0 - above <= 3 * psize and abs(below - above) <= 0.5 * psize
+            own_row
+            and seg_start
+            and below is not None
+            and not centered_rows
+            and _ends_sentence(ptext)
+            and not _list_item(items[i - 1][0])
+            and not _list_item(items[i + 1][0])
+            and 0.5 * psize < rect.x0 - above <= 3 * psize
+            and abs(below - above) <= 0.5 * psize
             and rect.x1 >= max_x1 - 2 * psize
         )
         # 带编号的定理、引理标签（Lemma 10.3.）总是另起一段，上一行停在式子上也一样。
         # 这一段也是粗体标签起头、上一行没写到右缘的，是定义列表的下一条，条目是没有句末标点的半句例句
         # （mouse² : … a quiet animal like a mouse | bank¹ : …）
         labeled = (
-            not same_visual_line and _label_lead(items[i][2])
-            and (_ends_sentence(ptext) or ptext.rstrip().endswith(")") or bool(_NUMBERED_LABEL_RE.match(stripped))
-                 or (max_x1 - prect.x1 > 3 * psize and _label_lead(items[cur[0]][2])))
-        )
-        if not index_tail and (value_column or i in cells or i in row_labels or (
-            not same_visual_line and not sec_label and (
-                (not open_end and (bullet or example or (NO_TEXT_RE.match(stripped) and i not in number_tails)))
-                or (prev_symbol and not closing)
-                or hard_break or left_jump or size_drop or size_rise or side_by_side or leaves_verbatim or restyled
-                or labeled or display_math or opens_indent or indent_after_end
-                or displayed
-                or _caption_opens(items[i][2], pspans)
+            not same_visual_line
+            and _label_lead(items[i][2])
+            and (
+                _ends_sentence(ptext)
+                or ptext.rstrip().endswith(")")
+                or bool(_NUMBERED_LABEL_RE.match(stripped))
+                or (max_x1 - prect.x1 > 3 * psize and _label_lead(items[cur[0]][2]))
             )
-        )):
+        )
+        if not index_tail and (
+            value_column
+            or i in cells
+            or i in row_labels
+            or (
+                not same_visual_line
+                and not sec_label
+                and (
+                    (not open_end and (bullet or example or (NO_TEXT_RE.match(stripped) and i not in number_tails)))
+                    or (prev_symbol and not closing)
+                    or hard_break
+                    or left_jump
+                    or size_drop
+                    or size_rise
+                    or side_by_side
+                    or leaves_verbatim
+                    or restyled
+                    or labeled
+                    or display_math
+                    or opens_indent
+                    or indent_after_end
+                    or displayed
+                    or _caption_opens(items[i][2], pspans)
+                )
+            )
+        ):
             groups.append(cur)
             cur = [i]
             group_x0, group_rows, group_size = rect.x0, 1, line_size if body_line else 0
@@ -1598,8 +1753,7 @@ def _caption_opens(spans: list[dict], above: list[dict]) -> bool:
     if not shown or not prior or not _CAPTION_SPAN_RE.match(shown[0]["text"].strip()):
         return False
     first, main = shown[0], max(prior, key=lambda span: len(span["text"]))
-    return (first.get("font") != main.get("font")
-            or bool(first.get("flags", 0) & 16) != bool(main.get("flags", 0) & 16))
+    return first.get("font") != main.get("font") or bool(first.get("flags", 0) & 16) != bool(main.get("flags", 0) & 16)
 
 
 def _caption_label(text: str) -> bool:
@@ -1632,7 +1786,7 @@ def _closes_first(text: str) -> bool:
             if depth == 0:
                 return True
             depth -= 1
-        elif depth == 0 and not _MID_ABBREV_RE.search(text[:match.end()]):
+        elif depth == 0 and not _MID_ABBREV_RE.search(text[: match.end()]):
             return False
     return False
 
@@ -1663,7 +1817,9 @@ def _overlaps_line(block: TextBlock, other: TextBlock) -> bool:
 
 
 def _blocks_share_column(
-    left: TextBlock, right: TextBlock, geometries: dict[int, PageGeometry] | None,
+    left: TextBlock,
+    right: TextBlock,
+    geometries: dict[int, PageGeometry] | None,
 ) -> bool:
     """间隙小于栏沟时，仍要确认两块落在同一栏。没有栏信息时只靠间隙本身。"""
     if not geometries or left.page not in geometries:
@@ -1683,7 +1839,9 @@ def _line_spans(block: TextBlock) -> list[list[dict]]:
 
 
 def _shares_visual_row(
-    left: TextBlock, right: TextBlock, geometries: dict[int, PageGeometry] | None,
+    left: TextBlock,
+    right: TextBlock,
+    geometries: dict[int, PageGeometry] | None,
 ) -> bool:
     """两块有没有落在同一基线上、并且横向挨着。
 
@@ -1699,14 +1857,18 @@ def _shares_visual_row(
                 continue
             horizontal = min(a.x1, b.x1) - max(a.x0, b.x0)
             gap = b.x0 - a.x1 if b.x0 >= a.x0 else a.x0 - b.x1
-            if horizontal > 0 or (0 <= gap < 6 and _blocks_share_column(left, right, geometries)
-                                  and not (b.x0 >= a.x0 and _script_seam(a_spans, b_spans))):
+            if horizontal > 0 or (
+                0 <= gap < 6
+                and _blocks_share_column(left, right, geometries)
+                and not (b.x0 >= a.x0 and _script_seam(a_spans, b_spans))
+            ):
                 return True
     return False
 
 
 def _merge_visual_lines(
-    blocks: list[TextBlock], geometries: dict[int, PageGeometry] | None = None,
+    blocks: list[TextBlock],
+    geometries: dict[int, PageGeometry] | None = None,
 ) -> list[TextBlock]:
     """合并其实是同一可视行的相邻块（字体在公式处切换时，PyMuPDF 会把一行拆成两块）。
 
@@ -1716,8 +1878,12 @@ def _merge_visual_lines(
     for b in blocks:
         if out:
             p = out[-1]
-            if (p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note)
-                    and _shares_visual_row(p, b, geometries)):
+            if (
+                p.page == b.page
+                and p.clip == b.clip
+                and not (p.side_note or b.side_note)
+                and _shares_visual_row(p, b, geometries)
+            ):
                 p.line_rects.extend(b.line_rects)
                 if p.span_lines and b.span_lines:
                     p.span_lines.extend(b.span_lines)
@@ -1728,6 +1894,8 @@ def _merge_visual_lines(
                 continue
         out.append(b)
     return out
+
+
 # 自成一个 span 的图注标签，带小节式的编号
 _CAPTION_SPAN_RE = re.compile(r"^(?:Figure|Fig\.?|Table|Tab\.?)\s*\d+(?:[.\-]\d+)*\s*[:.]?$", re.I)
 # 图注标签可以没有冒号：图 2、Fig. 1.
@@ -1736,8 +1904,7 @@ _CAPTION_LABEL_RE = re.compile(
     re.I,
 )
 _OPERATOR_NAMES = (
-    "arg|max|min|log|ln|sin|cos|tan|cot|sec|csc|exp|lim|sup|inf|det|dim|"
-    "ker|gcd|mod|sgn|deg|hom|Pr|arcsin|sinh|cosh"
+    "arg|max|min|log|ln|sin|cos|tan|cot|sec|csc|exp|lim|sup|inf|det|dim|ker|gcd|mod|sgn|deg|hom|Pr|arcsin|sinh|cosh"
 )
 
 
@@ -1758,9 +1925,13 @@ def _block_size(main: dict, span_lines: list[list[dict]]) -> float:
     base = float(main["origin"][1])
     for line in span_lines:
         for span in line:
-            if (span is not main and str(span.get("text") or "").strip() and span.get("origin") is not None
-                    and abs(float(span.get("size") or 0) - big) <= 0.1
-                    and abs(float(span["origin"][1]) - base) <= big * 0.1):
+            if (
+                span is not main
+                and str(span.get("text") or "").strip()
+                and span.get("origin") is not None
+                and abs(float(span.get("size") or 0) - big) <= 0.1
+                and abs(float(span["origin"][1]) - base) <= big * 0.1
+            ):
                 return big
     return size
 
@@ -1768,8 +1939,11 @@ def _block_size(main: dict, span_lines: list[list[dict]]) -> float:
 def _small_band(run: dict, over: pymupdf.Rect, small: float) -> pymupdf.Rect | None:
     """run 里横向落在 over 下面或上面的那一截小字号（分母、分子），整截取出来。"""
     spans = [span for span in run["spans"] if str(span.get("text") or "").strip() and float(span["size"]) < small]
-    seeds = [pymupdf.Rect(span["bbox"]) for span in spans
-             if min(over.x1, span["bbox"][2]) - max(over.x0, span["bbox"][0]) > 0]
+    seeds = [
+        pymupdf.Rect(span["bbox"])
+        for span in spans
+        if min(over.x1, span["bbox"][2]) - max(over.x0, span["bbox"][0]) > 0
+    ]
     if not seeds:
         return None
     top, bottom = min(seed.y0 for seed in seeds), max(seed.y1 for seed in seeds)
@@ -1871,15 +2045,17 @@ def _split_one_table_block(block: TextBlock, tables: tuple[RuledTable, ...]) -> 
         text = _join_lines(["".join(str(span.get("text", "")) for span in spans) for _rect, spans in pieces])
         if not text.strip():
             continue
-        parts.append(replace(
-            block,
-            rect=rect,
-            line_rects=[line_rect for line_rect, _spans in pieces],
-            text=text,
-            span_lines=[spans for _rect, spans in pieces],
-            clip=key,
-            runs=[],
-        ))
+        parts.append(
+            replace(
+                block,
+                rect=rect,
+                line_rects=[line_rect for line_rect, _spans in pieces],
+                text=text,
+                span_lines=[spans for _rect, spans in pieces],
+                clip=key,
+                runs=[],
+            )
+        )
     return parts or [block]
 
 
@@ -1929,7 +2105,10 @@ def _frame_lines(data: dict) -> tuple[list[FrameLine], list[tuple[dict, dict]]]:
 
 
 def _detach_margin_notes(
-    data: dict, lines: list[FrameLine], refs: list[tuple[dict, dict]], notes: set[int],
+    data: dict,
+    lines: list[FrameLine],
+    refs: list[tuple[dict, dict]],
+    notes: set[int],
     pitches: dict[float, float] | None = None,
 ) -> None:
     """旁注行移出原来的块，每条旁注自成一块，排在本页最后。
@@ -1947,9 +2126,14 @@ def _detach_margin_notes(
             block["lines"].remove(line)
             touched.add(id(block))
             rect |= pymupdf.Rect(line["bbox"])
-        data["blocks"].append({
-            "type": 0, "bbox": tuple(rect), "lines": [line for _, line in members], "side_note": True,
-        })
+        data["blocks"].append(
+            {
+                "type": 0,
+                "bbox": tuple(rect),
+                "lines": [line for _, line in members],
+                "side_note": True,
+            }
+        )
     _rejoin_note_cuts(data, touched)
     kept = []
     for block in data["blocks"]:
@@ -1971,7 +2155,10 @@ _EDGE_NEAR = 2
 
 
 def _wide_block_lines(
-    lines: list[FrameLine], refs: list[tuple[dict, dict]], notes: set[int], frame: TextFrame | None,
+    lines: list[FrameLine],
+    refs: list[tuple[dict, dict]],
+    notes: set[int],
+    frame: TextFrame | None,
 ) -> set[int]:
     """伸进页边的宽表、宽图注里落在旁注位置的行。块里另有一行从同一条边起笔、一直写进版心，
     这一行就是块的一部分（Figure 3.7 的标签，下面一行图注从同一处起笔），不是旁注。
@@ -2072,7 +2259,8 @@ def extract_blocks(doc: pymupdf.Document) -> list[TextBlock]:
 
 
 def _extract(
-    doc: pymupdf.Document, on_page: Callable[[int, int], None] | None = None,
+    doc: pymupdf.Document,
+    on_page: Callable[[int, int], None] | None = None,
     formulas: FormulaDetector | None = None,
 ) -> tuple[list[TextBlock], list[TextFrame | None], list[PageScan]]:
     """文本块，以及每页的版心和表格、图、词。on_page(已读页数, 总页数) 在逐页读完一页后调用。
@@ -2138,7 +2326,10 @@ def _extract(
         kept_rows: list[pymupdf.Rect] = []
         page_start = len(blocks)
         row_ends = [
-            _line_box(line) for block in data["blocks"] if block.get("type") == 0 for line in block["lines"]
+            _line_box(line)
+            for block in data["blocks"]
+            if block.get("type") == 0
+            for line in block["lines"]
             if "".join(span["text"] for span in line["spans"]).strip()
         ]
         fractions = _fraction_parts(data, scans[pno].rules)
@@ -2206,9 +2397,12 @@ def _extract(
                 judged = _INDEX_REF_RE.sub("", text) if index_page else text
                 # 以页码收尾的索引条目字母再少（F0, 340）也是一条，成块留原文，索引重排时跟着挪
                 entry = index_page and judged != text and bool(judged.strip()) and not fraction
-                if not in_cell and not entry \
-                        and (fraction or _untranslatable(spans, judged, _DISPLAY_PROSE if displayed else 3, displayed)) \
-                        and not _wraps_from_above(blocks, pno, rect, text, row_ends, frames[pno], index_page):
+                if (
+                    not in_cell
+                    and not entry
+                    and (fraction or _untranslatable(spans, judged, _DISPLAY_PROSE if displayed else 3, displayed))
+                    and not _wraps_from_above(blocks, pno, rect, text, row_ends, frames[pno], index_page)
+                ):
                     # 只捐标点碎片。公式行和低字母行不送翻，矩形也不能捐出去：
                     # 捐了会被擦掉，而这些行没有占位符、不会重画。
                     if NO_TEXT_RE.match(text) and blocks and blocks[-1].page == pno:
@@ -2224,23 +2418,25 @@ def _extract(
                 bold = _by_chars(spans, lambda s: bool(s["flags"] & 16) or "Bold" in s["font"])
                 if in_cell:
                     pending_cells.add(len(blocks))
-                blocks.append(TextBlock(
-                    page=pno,
-                    rect=rect,
-                    line_rects=line_rects,
-                    text=text,
-                    size=round(main_size, 1),
-                    color=f"#{color:06x}",
-                    bold=bold,
-                    span_lines=span_lines,
-                    side_note=side_note,
-                    leader=leaders.get(group[-1]),
-                    line_gap=line_gap,
-                    body_size=body_size,
-                    entry=group[-1] in entry_ends,
-                    grid=group[-1] in cells,
-                    index=index_page,
-                ))
+                blocks.append(
+                    TextBlock(
+                        page=pno,
+                        rect=rect,
+                        line_rects=line_rects,
+                        text=text,
+                        size=round(main_size, 1),
+                        color=f"#{color:06x}",
+                        bold=bold,
+                        span_lines=span_lines,
+                        side_note=side_note,
+                        leader=leaders.get(group[-1]),
+                        line_gap=line_gap,
+                        body_size=body_size,
+                        entry=group[-1] in entry_ends,
+                        grid=group[-1] in cells,
+                        index=index_page,
+                    )
+                )
         absorbed.update(id(block) for block in blocks[page_start:] if _inside_kept_formula(block, kept_rows))
     split: list[TextBlock] = []
     unchecked: set[int] = set()
@@ -2326,7 +2522,7 @@ def _line_gap(pages: list[dict]) -> float:
         lines = [box for box, size, _count in row if abs(size - body) <= 0.3]
         for index, box in enumerate(lines):
             # 同一栏紧挨着的下一行：横向交叠过半，不和这一行同排
-            for below in lines[index + 1:]:
+            for below in lines[index + 1 :]:
                 if below.y0 > box.y1 + body * 3:
                     break
                 if below.y0 < box.y1 - body * 0.3:
@@ -2376,7 +2572,8 @@ def _cut_at_posts(group: list[int], items: list[tuple], posts: Sequence[pymupdf.
         left, right = items[prev][1], items[cur][1]
         rows = min(left.height, right.height) * 0.5
         between = any(
-            left.x1 - 1 <= post.x0 and post.x1 <= right.x0 + 1
+            left.x1 - 1 <= post.x0
+            and post.x1 <= right.x0 + 1
             and min(left.y1, right.y1, post.y1) - max(left.y0, right.y0, post.y0) > rows
             for post in posts
         )
@@ -2408,8 +2605,7 @@ def _main_span(lines: list[list[dict]]) -> dict:
             weights[round(float(span["origin"][1]))] += len(span["text"].strip())
         base = weights.most_common(1)[0][0] if weights else None
         kept += [
-            span for span in spans
-            if base is None or abs(float(span["origin"][1]) - base) <= float(span["size"]) * 0.2
+            span for span in spans if base is None or abs(float(span["origin"][1]) - base) <= float(span["size"]) * 0.2
         ]
     words = [span for span in kept if not _span_is_math(span) and span["text"].strip()]
     pool = words or kept or [span for spans in lines for span in spans]
@@ -2428,13 +2624,19 @@ def _inside_kept_formula(block: TextBlock, kept: Sequence[pymupdf.Rect]) -> bool
 def _index_refs_tail(block: TextBlock, rect: pymupdf.Rect) -> bool:
     """rect 是 block 末行折下来的一行页码：紧贴在末行下面，起笔落在末行的左右缘之间。"""
     last = block.line_rects[-1]
-    return (-block.size * 0.3 <= rect.y0 - last.y1 <= block.size * 0.5
-            and last.x0 - block.size * 0.5 <= rect.x0 < last.x1)
+    return (
+        -block.size * 0.3 <= rect.y0 - last.y1 <= block.size * 0.5 and last.x0 - block.size * 0.5 <= rect.x0 < last.x1
+    )
 
 
 def _wraps_from_above(
-    blocks: list[TextBlock], pno: int, rect: pymupdf.Rect, text: str,
-    rows: Sequence[pymupdf.Rect], frame: TextFrame | None, index_page: bool = False,
+    blocks: list[TextBlock],
+    pno: int,
+    rect: pymupdf.Rect,
+    text: str,
+    rows: Sequence[pymupdf.Rect],
+    frame: TextFrame | None,
+    index_page: bool = False,
 ) -> bool:
     """以小写正文词起头、从上一行正文的左缘接着写的式子行（and W^O ∈ ℝ^{hd_v×d_model}.）是上一句
     折下来的，不是单独排的式子：上一行写到本栏右缘、没写完一句，这一行紧贴在它下面。
@@ -2445,10 +2647,7 @@ def _wraps_from_above(
     索引条目停在逗号上，页码折到下一行、分在下一块里：只有页码的一行紧贴在下面，也接上去。"""
     page_blocks = [block for block in blocks if block.page == pno and block.line_rects]
     if index_page and _INDEX_REFS_ONLY_RE.match(text.strip()):
-        return any(
-            block.text.rstrip().endswith(",") and _index_refs_tail(block, rect)
-            for block in page_blocks[-1:]
-        )
+        return any(block.text.rstrip().endswith(",") and _index_refs_tail(block, rect) for block in page_blocks[-1:])
     worded = re.match(r"[a-z]{2,}\b", text.lstrip()) is not None
     for block in reversed(page_blocks):
         last = block.line_rects[-1]
@@ -2456,12 +2655,17 @@ def _wraps_from_above(
             # 块按阅读顺序排，再往前的都在更上面或者在别的栏
             continue
         # 折下来的是一行：底下再叠几行的是另排的式子。行内分式的分子分母叠着，比一行高
-        if (rect.height > block.size * (1.6 if worded else 2.5) or rect.y0 - last.y1 < -0.5 * block.size
-                or _ends_sentence(block.text)):
+        if (
+            rect.height > block.size * (1.6 if worded else 2.5)
+            or rect.y0 - last.y1 < -0.5 * block.size
+            or _ends_sentence(block.text)
+        ):
             continue
         # 靠左排的上一行写到本栏右缘。居中排的段落逐行成块，上一行和它上面那行一样宽，是排满的行
-        left = (abs(block.rect.x0 - rect.x0) <= block.size * 0.5
-                and last.x1 >= _column_right(block.rect.x0, block.size, rows, frame) - block.size)
+        left = (
+            abs(block.rect.x0 - rect.x0) <= block.size * 0.5
+            and last.x1 >= _column_right(block.rect.x0, block.size, rows, frame) - block.size
+        )
         if not worded:
             # 不以词起头的只认分子分母叠着的行内分式，靠左、紧贴着上一行（the odds ratio | p/(1−p):）。
             # 单独排的式子上面留着空。一行高的数字、记号是表格、图里的
@@ -2470,13 +2674,18 @@ def _wraps_from_above(
             continue
         centered = abs((last.x0 + last.x1) / 2 - (rect.x0 + rect.x1) / 2) <= block.size and any(
             0 <= last.y0 - line.y1 <= block.size
-            and abs(line.x0 - last.x0) <= block.size and abs(line.x1 - last.x1) <= block.size
-            for other in page_blocks for line in other.line_rects if line is not last
+            and abs(line.x0 - last.x0) <= block.size
+            and abs(line.x1 - last.x1) <= block.size
+            for other in page_blocks
+            for line in other.line_rects
+            if line is not last
         )
         # 上一行停在连字符断开的半个词上（expres- | sions, 50, 65）：不管缩进多少都是接着写的。
         # 索引条目的续行悬挂缩进，剩下的半个词带着页码，字母少，像一行页码
-        broken = (re.search(r"[A-Za-z]-$", block.text.rstrip()) is not None
-                  and block.rect.x0 - block.size * 0.5 <= rect.x0 < last.x1)
+        broken = (
+            re.search(r"[A-Za-z]-$", block.text.rstrip()) is not None
+            and block.rect.x0 - block.size * 0.5 <= rect.x0 < last.x1
+        )
         hanging = index_page and last.x0 + block.size * 0.5 < rect.x0 < last.x1
         if left or centered or broken or hanging:
             return True
@@ -2549,8 +2758,14 @@ def _prose_words(spans: list[dict], text: str) -> list[str]:
     words = []
     for token in text.split():
         word = token.strip(",.;:!?\"'“”‘’()[]{}")
-        if (len(word) >= 2 and word.isascii() and word.isalpha() and word in upright
-                and any(c.islower() for c in word) and word not in _MATH_NAMES):
+        if (
+            len(word) >= 2
+            and word.isascii()
+            and word.isalpha()
+            and word in upright
+            and any(c.islower() for c in word)
+            and word not in _MATH_NAMES
+        ):
             words.append(word)
     return words
 
@@ -2579,7 +2794,8 @@ def _merge_cells(blocks: list[TextBlock], unchecked: set[int]) -> list[TextBlock
             continue
         done.add(key)
         parts = [
-            part for part in _reading_sorted(cells[key])
+            part
+            for part in _reading_sorted(cells[key])
             if not (id(part) in unchecked and _displayed_in_cell(part, cells[key]))
         ]
         for group in _cell_groups(parts):
@@ -2621,7 +2837,8 @@ def _displayed_in_cell(part: TextBlock, parts: list[TextBlock]) -> bool:
     if not others or not _untranslatable(_block_spans(part), part.text):
         return False
     beside = [
-        other for other in others
+        other
+        for other in others
         if min(other.rect.y1, part.rect.y1) - max(other.rect.y0, part.rect.y0)
         > min(other.rect.height, part.rect.height) * 0.35
     ]
@@ -2631,8 +2848,7 @@ def _displayed_in_cell(part: TextBlock, parts: list[TextBlock]) -> bool:
             return False
         texts = [other for other in beside if not _untranslatable(_block_spans(other), other.text)]
         return bool(texts) and all(
-            max(other.rect.x0 - part.rect.x1, part.rect.x0 - other.rect.x1) > part.size * 2
-            for other in texts
+            max(other.rect.x0 - part.rect.x1, part.rect.x0 - other.rect.x1) > part.size * 2 for other in texts
         )
     left = min(other.rect.x0 for other in others)
     return part.rect.x0 - left > part.size * 2.5
@@ -2681,8 +2897,9 @@ def _vivid(color: int) -> bool:
 def _vivid_share(spans: Sequence[dict]) -> float:
     """字母里鲜明颜色的占比，没有字母时为 0"""
     letters = sum(char.isalpha() for span in spans for char in str(span.get("text") or ""))
-    vivid = sum(char.isalpha() for span in spans if _vivid(int(span.get("color") or 0))
-                for char in str(span.get("text") or ""))
+    vivid = sum(
+        char.isalpha() for span in spans if _vivid(int(span.get("color") or 0)) for char in str(span.get("text") or "")
+    )
     return vivid / letters if letters else 0.0
 
 
@@ -2693,9 +2910,11 @@ def _mono_span(span: dict) -> bool:
 
 def _plain_words(block: TextBlock) -> int:
     """公式外的正文词数。"""
-    return _prose_units(" ".join(
-        str(span.get("text") or "") for line in block.span_lines or [] for span in line if not _span_is_math(span)
-    ))
+    return _prose_units(
+        " ".join(
+            str(span.get("text") or "") for line in block.span_lines or [] for span in line if not _span_is_math(span)
+        )
+    )
 
 
 def _line_text(span_lines: list[list[dict]], index: int) -> str:
@@ -2819,8 +3038,9 @@ def _line_lists(blocks: list[TextBlock], frames: Sequence[TextFrame | None]) -> 
             return
         rows = rows_of[run[0].page]
         if _same_opening([block.text for block in run]) or _breaks_early(
-                [(block.rect, block.text, block.size) for block in run],
-                lambda rect, size: _column_right(rect.x0, size, rows, frame)):
+            [(block.rect, block.text, block.size) for block in run],
+            lambda rect, size: _column_right(rect.x0, size, rows, frame),
+        ):
             listed.update(id(block) for block in run)
 
     for block in blocks:
@@ -2829,9 +3049,13 @@ def _line_lists(blocks: list[TextBlock], frames: Sequence[TextFrame | None]) -> 
             last = run[-1]
             pitch = block.rect.y0 - last.rect.y0
             first_pitch = run[1].rect.y0 - run[0].rect.y0 if len(run) >= 2 else pitch
-            if (block.page == last.page and abs(block.rect.x0 - last.rect.x0) <= last.size * 0.5
-                    and abs(block.size - last.size) <= last.size * 0.05
-                    and 0 < pitch <= last.size * 2.0 and abs(pitch - first_pitch) <= last.size * 0.2):
+            if (
+                block.page == last.page
+                and abs(block.rect.x0 - last.rect.x0) <= last.size * 0.5
+                and abs(block.size - last.size) <= last.size * 0.05
+                and 0 < pitch <= last.size * 2.0
+                and abs(pitch - first_pitch) <= last.size * 0.2
+            ):
                 run.append(block)
                 continue
         close()
@@ -2841,7 +3065,8 @@ def _line_lists(blocks: list[TextBlock], frames: Sequence[TextFrame | None]) -> 
 
 
 def _breaks_early(
-    rows: Sequence[tuple[pymupdf.Rect, str, float]], right_of: Callable[[pymupdf.Rect, float], float],
+    rows: Sequence[tuple[pymupdf.Rect, str, float]],
+    right_of: Callable[[pymupdf.Rect, float], float],
     at_least: int = 1,
 ) -> bool:
     """一行一行（框、文字、字号）里，一半以上、至少 at_least 处换行，上一行后面还放得下下一行的第一个词。
@@ -2999,7 +3224,9 @@ def _same_opening(texts: Sequence[str]) -> bool:
 
 
 def _merge_continuations(
-    blocks: list[TextBlock], listed: Collection[int] = frozenset(), margins: Collection[int] = frozenset(),
+    blocks: list[TextBlock],
+    listed: Collection[int] = frozenset(),
+    margins: Collection[int] = frozenset(),
 ) -> list[TextBlock]:
     """合并同页内被公式/碎片拆断的段落续行：上行无句末标点、下行小写（或闭括号）
     开头、同左 margin、行距正常，就是同一段被拆开的两行。各翻各的会产出半截译文，
@@ -3026,13 +3253,16 @@ def _merge_continuations(
             # 标题换行的两行左右总有交叠，横向错开的是旁边的标签。
             # 大字号比这份文档的正文字号算：幻灯片的正文就有三十来磅，子项缩进排，不是标题换行。
             # 换行的标题两行一样大。紧接着大一号的是下一级标题（8.4.4 小节名下面的 8.5 Summary）
-            title_frag = (p.size >= max(12, p.body_size * 1.1) and p.size * 0.7 <= b.size <= p.size * 1.1
-                          and 0 <= b.rect.y0 - p.rect.y1 < 0.75 * p.size
-                          and abs(b.rect.x0 - p.rect.x0) > p.size * 0.5
-                          and min(p.rect.x1, b.rect.x1) > max(p.rect.x0, b.rect.x0)
-                          and not _list_item(b.text)
-                          and not _ends_sentence(p.text)
-                          and not _ends_sentence(b.text))
+            title_frag = (
+                p.size >= max(12, p.body_size * 1.1)
+                and p.size * 0.7 <= b.size <= p.size * 1.1
+                and 0 <= b.rect.y0 - p.rect.y1 < 0.75 * p.size
+                and abs(b.rect.x0 - p.rect.x0) > p.size * 0.5
+                and min(p.rect.x1, b.rect.x1) > max(p.rect.x0, b.rect.x0)
+                and not _list_item(b.text)
+                and not _ends_sentence(p.text)
+                and not _ends_sentence(b.text)
+            )
             y_close = -0.9 * p.size <= b.rect.y0 - p.rect.y1 - p.line_gap * p.size < 1.4 * p.size
             # 悬挂缩进大约 2–3em。2em 卡太紧时，特征列表的续行拆成两段，
             # 短行再被单独缩小。向左跳仍用 2em，避免把另一栏接进来。
@@ -3046,7 +3276,8 @@ def _merge_continuations(
             centered_tail = (
                 len(_visual_lines(b)) == 1
                 and b.rect.y0 - last_y1 - p.line_gap * p.size <= 0.3 * p.size
-                and b.rect.x0 > p.rect.x0 + p.size and b.rect.x1 < p.rect.x1 - p.size
+                and b.rect.x0 > p.rect.x0 + p.size
+                and b.rect.x1 < p.rect.x1 - p.size
                 and abs((b.rect.x0 + b.rect.x1) - (p.rect.x0 + p.rect.x1)) / 2 <= p.size
                 and not _list_item(b.text)
                 and (_prose_units(b.text) >= 3 or (_ends_sentence(b.text) and _prose_units(b.text) == len(words)))
@@ -3055,8 +3286,11 @@ def _merge_continuations(
             # 下一行没撑满的是冒号引出的例句、列表
             last_x1 = p.line_rects[-1].x1 if p.line_rects else p.rect.x1
             next_x1 = b.line_rects[0].x1 if b.line_rects else b.rect.x1
-            colon_wrap = (p.text.rstrip().endswith(":") and abs(last_x1 - next_x1) <= p.size
-                          and last_x1 >= max(p.rect.x1, b.rect.x1) - p.size)
+            colon_wrap = (
+                p.text.rstrip().endswith(":")
+                and abs(last_x1 - next_x1) <= p.size
+                and last_x1 >= max(p.rect.x1, b.rect.x1) - p.size
+            )
             # 以 f(x) 收尾算句末，是为了单独排的式子下面的 where 不接上来。
             # 末行从下一行的左缘一直排到右缘、下一行又是正文词起头的，是句中折行，式子只是落在行尾
             call_wrap = _ends_in_call(p.text.rstrip()) and _opens_with_word(b) and _wraps_into(p, b)
@@ -3066,18 +3300,27 @@ def _merge_continuations(
             first_x0 = b.line_rects[0].x0 if b.line_rects else b.rect.x0
             rows = sorted(_visual_lines(b), key=lambda row: row[0].y0) if b.line_rects else []
             math_wrap = (
-                _opens_with_math(b) and _plain_words(b) >= _MATH_WRAP_WORDS and abs(b.size - p.size) <= p.size * 0.1
-                and (abs(first_x0 - p.rect.x0) <= p.size * 0.5 or (
-                    len(rows) >= 2 and abs(max(rect.x1 for rect in rows[0]) - p.rect.x1) <= p.size * 0.5
-                    and abs(min(rect.x0 for rect in rows[1]) - p.rect.x0) <= p.size * 0.5
-                ))
+                _opens_with_math(b)
+                and _plain_words(b) >= _MATH_WRAP_WORDS
+                and abs(b.size - p.size) <= p.size * 0.1
+                and (
+                    abs(first_x0 - p.rect.x0) <= p.size * 0.5
+                    or (
+                        len(rows) >= 2
+                        and abs(max(rect.x1 for rect in rows[0]) - p.rect.x1) <= p.size * 0.5
+                        and abs(min(rect.x0 for rect in rows[1]) - p.rect.x0) <= p.size * 0.5
+                    )
+                )
             )
             # 句子最后的行内分式折到下一行行首，后面没有正文词（the odds ratio | p/(1−p):）：
             # 分子分母叠着比一行高，从栏边起笔，紧贴着排到右缘的上一行。单独排的式子缩进，上面也留着空
             formula_tail = (
-                bool(b.line_rects) and _plain_words(b) == 0 and b.rect.height > p.size * 1.6
+                bool(b.line_rects)
+                and _plain_words(b) == 0
+                and b.rect.height > p.size * 1.6
                 and abs(first_x0 - p.rect.x0) <= p.size * 0.5
-                and last_x1 >= p.rect.x1 - p.size and b.rect.y0 - last_y1 <= 0.3 * p.size
+                and last_x1 >= p.rect.x1 - p.size
+                and b.rect.y0 - last_y1 <= 0.3 * p.size
             )
             # 句中的缩写（Brants et al. | (2007)）不是句末。左括号起头的续行是引文年份、插入语，
             # 不比上一段最左的一行靠右（首行缩进的段落），或者和其中一行同一左缘（悬挂缩进的条目续行），
@@ -3086,15 +3329,22 @@ def _merge_continuations(
             # 缩进的是单独排的式子（LUNAR 的逻辑式），往右错开的是表头一列列的 (Acc)。
             # 粗体标签起头的条目只有一行时，没有续行可比，悬挂缩进一两个字宽的也是它的续行
             label_hang = (
-                bool(p.span_lines) and 0 < b.rect.x0 - p.rect.x0 <= 3 * p.size
+                bool(p.span_lines)
+                and 0 < b.rect.x0 - p.rect.x0 <= 3 * p.size
                 and _label_lead([span for span in p.span_lines[0] if str(span.get("text") or "").strip()])
             )
             # 括号还没合上，下一行在第一句里合上它（(see e.g. | Ghosal et al., 2000)、(Chérief- | Abdellatif …)）
             bracketed = _unclosed_bracket(p.text) and _closes_first(b.text)
             open_paren = (
-                first == "(" and not _list_item(b.text) and not _EQUATION_TAG_RE.match(b.text)
-                and (centered_tail or label_hang or b.rect.x0 <= p.rect.x0 + p.size * 0.5
-                     or any(abs(b.rect.x0 - rect.x0) <= p.size * 0.5 for rect in p.line_rects))
+                first == "("
+                and not _list_item(b.text)
+                and not _EQUATION_TAG_RE.match(b.text)
+                and (
+                    centered_tail
+                    or label_hang
+                    or b.rect.x0 <= p.rect.x0 + p.size * 0.5
+                    or any(abs(b.rect.x0 - rect.x0) <= p.size * 0.5 for rect in p.line_rects)
+                )
             )
             # 上一行停在 and、of 上，下一行哪怕大写起头也是接着写的。下一行是另一个列表项（…; and | • …）
             # 或者小一号的脚注时不算
@@ -3104,14 +3354,18 @@ def _merge_continuations(
             centered_end = centered_tail and same_size
             # 居中排的一段（作者名单）在逗号处折行，下一行大写起头也是接着写的。整摞共用一条中线、字体不变
             centered_comma = (
-                same_size and p.text.rstrip().endswith((",", "，")) and not _list_item(b.text)
-                and bool(p.line_rects) and bool(b.line_rects)
+                same_size
+                and p.text.rstrip().endswith((",", "，"))
+                and not _list_item(b.text)
+                and bool(p.line_rects)
+                and bool(b.line_rects)
                 and _centered_rows(_row_boxes(p.line_rects + b.line_rects), p.size)
             )
             # 段落缩进的首行和页边旁注挤在一块里，被单拆出来：这一行排到右缘、没有句末标点，
             # 下一行比它靠左一个缩进，是句中折行，大写起头（专名）也接上
-            full_wrap = (same_size and not _list_item(b.text) and len(_visual_lines(p)) == 1
-                         and _wraps_into(p, b, indented=True))
+            full_wrap = (
+                same_size and not _list_item(b.text) and len(_visual_lines(p)) == 1 and _wraps_into(p, b, indented=True)
+            )
             # 列表项后面第一行比它还靠左起笔的是列表完了以后的正文。续行和条目文字对齐或者悬挂缩进，不会往左
             list_end = _list_item(p.text) and first_x0 < p.rect.x0 - p.size * 0.5
             # 上一块停在断开的半个词上（retrieval-augmented genera- | tion, 267），下一行小写接着写完这个词。
@@ -3121,8 +3375,11 @@ def _merge_continuations(
             # agrees with the MLE under）从它们右边起笔，下一行回到栏边。这一行和下一块右缘对齐就是同一栏
             row_tail = len(_visual_lines(p)) == 1 and abs(p.rect.x1 - b.rect.x1) <= p.size and first_x0 < p.rect.x0
             word_cut = (
-                same_size and y_close and re.search(r"[A-Za-z]{2}-$", p.text.rstrip()) is not None
-                and (first.islower() or first.isdigit()) and first_x0 < p.rect.x1
+                same_size
+                and y_close
+                and re.search(r"[A-Za-z]{2}-$", p.text.rstrip()) is not None
+                and (first.islower() or first.isdigit())
+                and first_x0 < p.rect.x1
                 and (p.rect.x0 - p.size <= first_x0 or row_tail)
             )
             row_wrap = same_size and row_tail and first.islower() and not _ends_sentence(p.text)
@@ -3147,18 +3404,30 @@ def _merge_continuations(
             # 上一行排到右缘、停在等号加号上（… and λ2 = | 1/2, what is …），下一行从同一左缘按正常行距紧贴着起笔，
             # 是式子的另一半，数字起头也接上。单独排的式子行不到右缘，下面空得多；大写单词、脚注编号起头的是下一句、下一条
             open_end = (
-                same_size and _open_operator_end(p.text) and row_gap <= 0.3 * p.size
-                and abs(first_x0 - p.rect.x0) <= 0.5 * p.size and last_x1 >= max(p.rect.x1, b.rect.x1) - p.size
-                and bool(p.line_rects) and _row_width(_visual_lines(p)[-1]) >= b.rect.width * 0.8
-                and not _FOOTNOTE_LEAD_RE.match(b.text.lstrip()) and not re.match(r"[A-Z][a-z]", b.text.lstrip())
+                same_size
+                and _open_operator_end(p.text)
+                and row_gap <= 0.3 * p.size
+                and abs(first_x0 - p.rect.x0) <= 0.5 * p.size
+                and last_x1 >= max(p.rect.x1, b.rect.x1) - p.size
+                and bool(p.line_rects)
+                and _row_width(_visual_lines(p)[-1]) >= b.rect.width * 0.8
+                and not _FOOTNOTE_LEAD_RE.match(b.text.lstrip())
+                and not re.match(r"[A-Z][a-z]", b.text.lstrip())
             )
             flush_wrap = (
-                same_size and ((indents and row_gap <= 0.5 * p.size) or (space and row_gap <= space / 2))
-                and not _list_item(b.text) and not _LABEL_START_RE.match(b.text)
-                and not _numbered_line(b.text) and not _numbered_line(p.text)
+                same_size
+                and ((indents and row_gap <= 0.5 * p.size) or (space and row_gap <= space / 2))
+                and not _list_item(b.text)
+                and not _LABEL_START_RE.match(b.text)
+                and not _numbered_line(b.text)
+                and not _numbered_line(p.text)
                 and not (_EQUATION_TAG_RE.match(b.text.lstrip()) and row_gap > 0.15 * p.size)
-                and not _is_float_text(b.text) and not _styled_edge(b, 0) and not _styled_edge(p, -1)
-                and (_wraps_into(p, b) or full_wrap) and bool(p.line_rects) and _row_width(_visual_lines(p)[-1]) >= measure * 0.9
+                and not _is_float_text(b.text)
+                and not _styled_edge(b, 0)
+                and not _styled_edge(p, -1)
+                and (_wraps_into(p, b) or full_wrap)
+                and bool(p.line_rects)
+                and _row_width(_visual_lines(p)[-1]) >= measure * 0.9
                 and not _hangs(b, blocks[index + 1] if index + 1 < len(blocks) else None)
                 and _row_gap(_visual_lines(p)[-1]) <= 1.5 * p.size
             )
@@ -3167,32 +3436,70 @@ def _merge_continuations(
             latin = (
                 y_close
                 and (x_close or centered_tail or math_wrap or centered_comma or word_cut or row_wrap)
-                and not list_end and not displayed_line
+                and not list_end
+                and not displayed_line
                 and (len(p.text.split()) >= 3 or word_cut)  # 一两个词的无标点短块是标题/标签，不是段落
                 and p.size * 0.7 <= b.size <= p.size / 0.7  # 续行和上一行同字号，大标题下的小字是图里的
-                and (colon_wrap or call_wrap or flush_wrap or _MID_ABBREV_RE.search(p.text.rstrip())
-                     or not _ends_sentence(p.text))
-                and (first.islower() or first in ".),;%,；，" or open_paren or math_wrap or formula_tail or centered_end
-                     or dangling or open_end or centered_comma or in_fence or full_wrap or flush_wrap or bracketed
-                     or word_cut)
+                and (
+                    colon_wrap
+                    or call_wrap
+                    or flush_wrap
+                    or _MID_ABBREV_RE.search(p.text.rstrip())
+                    or not _ends_sentence(p.text)
+                )
+                and (
+                    first.islower()
+                    or first in ".),;%,；，"
+                    or open_paren
+                    or math_wrap
+                    or formula_tail
+                    or centered_end
+                    or dangling
+                    or open_end
+                    or centered_comma
+                    or in_fence
+                    or full_wrap
+                    or flush_wrap
+                    or bracketed
+                    or word_cut
+                )
                 and not _verbatim_seam(p, b)
                 # 段落首行缩进的文档里，首行比下面几行缩进一两个字宽、大写的词起头的块是新的一段，
                 # 上一块停在 and 上（式子前的半句）也不接。行首是式子（W 1,∞ …）的不算
-                and not (indents and re.match(r"[A-Z][a-z]", b.text.lstrip()) is not None
-                         and not _opens_with_math(b) and not word_cut and _first_line_indented(b))
+                and not (
+                    indents
+                    and re.match(r"[A-Z][a-z]", b.text.lstrip()) is not None
+                    and not _opens_with_math(b)
+                    and not word_cut
+                    and _first_line_indented(b)
+                )
             )
             # 索引条目停在逗号上，页码折到下一块里（见 _wraps_from_above）：条目收在页码上
-            if (p.index and p.page == b.page and p.text.rstrip().endswith(",") and p.line_rects
-                    and _INDEX_REFS_ONLY_RE.match(b.text.strip()) and _index_refs_tail(p, b.rect)):
+            if (
+                p.index
+                and p.page == b.page
+                and p.text.rstrip().endswith(",")
+                and p.line_rects
+                and _INDEX_REFS_ONLY_RE.match(b.text.strip())
+                and _index_refs_tail(p, b.rect)
+            ):
                 _absorb_block(p, b)
                 break
             # 目录条目到点线和页码就完整了，不和上下的条目、卷名并段
-            if (p.page == b.page and p.clip == b.clip and not (p.side_note or b.side_note)
-                    and id(p) not in margins and id(b) not in margins
-                    and p.leader is None and b.leader is None and not p.entry
-                    and not (id(p) in listed and id(b) in listed)
-                    and (title_frag or latin or (y_close and _cjk_wrap(p, b)))
-                    and not _restyled_seam(p, b) and not _new_voice(p, b)):
+            if (
+                p.page == b.page
+                and p.clip == b.clip
+                and not (p.side_note or b.side_note)
+                and id(p) not in margins
+                and id(b) not in margins
+                and p.leader is None
+                and b.leader is None
+                and not p.entry
+                and not (id(p) in listed and id(b) in listed)
+                and (title_frag or latin or (y_close and _cjk_wrap(p, b)))
+                and not _restyled_seam(p, b)
+                and not _new_voice(p, b)
+            ):
                 _absorb_block(p, b)
                 break
         else:
@@ -3233,8 +3540,11 @@ def _hangs(block: TextBlock, nxt: TextBlock | None = None) -> bool:
             return False
         head = nxt.line_rects[0]
         bottom = max(rect.y1 for rect in rows[0])
-        return (0 <= head.y0 - bottom <= block.size and abs(nxt.size - block.size) <= block.size * 0.05
-                and block.size * 0.5 < head.x0 - left <= block.size * _MAX_INDENT_EM)
+        return (
+            0 <= head.y0 - bottom <= block.size
+            and abs(nxt.size - block.size) <= block.size * 0.05
+            and block.size * 0.5 < head.x0 - left <= block.size * _MAX_INDENT_EM
+        )
     return all(min(rect.x0 for rect in row) - left > block.size * 0.5 for row in rows[1:])
 
 
@@ -3248,8 +3558,11 @@ def _paragraph_space(blocks: list[TextBlock]) -> float:
         if _styled_edge(b, 0) or _LABEL_START_RE.match(b.text) or _NUMBERED_HEAD_RE.match(b.text) or _list_item(b.text):
             continue
         tail, head = p.line_rects[-1], b.line_rects[0]
-        if (not _ends_sentence(p.text) or tail.x1 > max(p.rect.x1, b.rect.x1) - 2 * p.size
-                or abs(head.x0 - tail.x0) > p.size * 0.3):
+        if (
+            not _ends_sentence(p.text)
+            or tail.x1 > max(p.rect.x1, b.rect.x1) - 2 * p.size
+            or abs(head.x0 - tail.x0) > p.size * 0.3
+        ):
             continue
         gap = head.y0 - tail.y1 - p.line_gap * p.size
         if 0 <= gap <= 1.5 * p.size:
@@ -3283,11 +3596,12 @@ def _opens_with_math(block: TextBlock) -> bool:
     return bool(spans) and _span_is_math(spans[0])
 
 
-
 def _opens_with_word(block: TextBlock) -> bool:
     """第一截不是公式字体，以小写单词起头。下一行的式子（t3 = t2 + x、hi = t5 + t3）不算。"""
     spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
-    return bool(spans) and not _span_is_math(spans[0]) and bool(re.match(r"[a-z]{2,}\b(?!\s*[\[(←=∈<>≤≥+])", block.text))
+    return (
+        bool(spans) and not _span_is_math(spans[0]) and bool(re.match(r"[a-z]{2,}\b(?!\s*[\[(←=∈<>≤≥+])", block.text))
+    )
 
 
 def _wraps_into(block: TextBlock, nxt: TextBlock, indented: bool = False) -> bool:
@@ -3296,8 +3610,7 @@ def _wraps_into(block: TextBlock, nxt: TextBlock, indented: bool = False) -> boo
     lines = block.line_rects or [block.rect]
     tail = lines[-1]
     row = [
-        rect for rect in lines
-        if min(rect.y1, tail.y1) - max(rect.y0, tail.y0) >= min(rect.height, tail.height) * 0.5
+        rect for rect in lines if min(rect.y1, tail.y1) - max(rect.y0, tail.y0) >= min(rect.height, tail.height) * 0.5
     ]
     first = nxt.line_rects[0] if nxt.line_rects else nxt.rect
     shift = min(rect.x0 for rect in row) - first.x0
@@ -3381,7 +3694,9 @@ def _line_tail_match(block: TextBlock, nxt: TextBlock) -> bool:
 
 
 def _line_tail_continuation(
-    block: TextBlock, later: list[TextBlock], blocks: list[TextBlock],
+    block: TextBlock,
+    later: list[TextBlock],
+    blocks: list[TextBlock],
 ) -> TextBlock | None:
     for nxt in later:
         if nxt.page != block.page or nxt.rect.y0 > block.rect.y1 + block.size * 2:
@@ -3402,7 +3717,7 @@ def _merge_line_tails(blocks: list[TextBlock], edges: Collection[int] = ()) -> l
         if id(block) in used:
             continue
         if id(block) not in edges and not block.entry and _is_line_tail(block, earlier[index]):
-            later = [other for other in blocks[index + 1:] if id(other) not in edges]
+            later = [other for other in blocks[index + 1 :] if id(other) not in edges]
             nxt = _line_tail_continuation(block, later, blocks)
             if nxt is not None and id(nxt) not in used and not nxt.entry:
                 _absorb_block(block, nxt)
@@ -3553,26 +3868,37 @@ def _merge_caption_fragments(blocks: list[TextBlock]) -> list[TextBlock]:
                 same_line = y_ov > 0.5 * min(p.rect.y1 - p.rect.y0, b.rect.y1 - b.rect.y0)
                 gap = b.rect.x0 - p.rect.x1
                 # 注记和续行与图注同字号。大标题下面的小字是图里的框
-                below = (-0.1 * p.size <= b.rect.y0 - p.rect.y1 - p.line_gap * p.size < 1.1 * p.size
-                         and abs(b.rect.x0 - p.rect.x0) < p.size
-                         and abs(b.size - p.size) <= p.size * 0.2)
+                below = (
+                    -0.1 * p.size <= b.rect.y0 - p.rect.y1 - p.line_gap * p.size < 1.1 * p.size
+                    and abs(b.rect.x0 - p.rect.x0) < p.size
+                    and abs(b.size - p.size) <= p.size * 0.2
+                )
                 label = (p.text.rstrip().endswith((":", "：")) and len(p.text) < 30) or _caption_label(p.text)
                 head = b.text.lstrip()[:1]
                 note = bool(head and (head.islower() or CJK_RE.search(head)) and not _caption_label(b.text))
                 # 自己也以粗体标签起头的是定义列表的下一条（mouse² : … like a mouse | bank¹ : …），不是续行
-                continuation = (len(p.text) < 60 and b.text[:1].islower()
-                                and (":" in p.text or "：" in p.text)
-                                and not _ends_sentence(p.text)
-                                and not (b.span_lines and _label_lead(
-                                    [span for span in b.span_lines[0] if str(span.get("text") or "").strip()])))
+                continuation = (
+                    len(p.text) < 60
+                    and b.text[:1].islower()
+                    and (":" in p.text or "：" in p.text)
+                    and not _ends_sentence(p.text)
+                    and not (
+                        b.span_lines
+                        and _label_lead([span for span in b.span_lines[0] if str(span.get("text") or "").strip()])
+                    )
+                )
                 # 定义式的标签后面是一栏值：值有几行、每行都从值的左缘起笔（View ranges:  {…}, | {…}）。
                 # 并进标签的话，译文折回标签下面，栏就没了。图注标签照旧并
                 rows = _visual_lines(b) if b.line_rects else []
                 column = (
-                    not _caption_label(p.text) and len(rows) >= 2 and b.rect.x0 > p.rect.x1
+                    not _caption_label(p.text)
+                    and len(rows) >= 2
+                    and b.rect.x0 > p.rect.x1
                     and all(abs(min(rect.x0 for rect in row) - b.rect.x0) <= 1.0 for row in rows)
                 )
-                if (same_line and -1 <= gap < 3 * p.size and label and not column) or (below and (continuation or (label and note))):
+                if (same_line and -1 <= gap < 3 * p.size and label and not column) or (
+                    below and (continuation or (label and note))
+                ):
                     _absorb_block(p, b)
                     continue
         out.append(b)

@@ -1,5 +1,6 @@
 """Decide which blocks keep their original text: examples, glosses, code, display formulas,
 foreign-language passages and the bibliography."""
+
 import math
 import re
 from collections.abc import Sequence
@@ -81,17 +82,28 @@ def _display_example_ids(blocks: list[TextBlock], geometries: list[PageGeometry]
         geo = geometries[page] if page < len(geometries) else None
         runs: list[list[TextBlock]] = []
         for block in page_blocks:
-            if (id(block) in skipped or len(block.line_rects) != 1 or block.index or block.entry
-                    or block.leader is not None or _list_item(block.text) or block.text.rstrip().endswith((":", "："))
-                    or _GLOSS_ROW_RE.match(block.text)
-                    or not block.body_size or abs(block.size - block.body_size) > 0.5):
+            if (
+                id(block) in skipped
+                or len(block.line_rects) != 1
+                or block.index
+                or block.entry
+                or block.leader is not None
+                or _list_item(block.text)
+                or block.text.rstrip().endswith((":", "："))
+                or _GLOSS_ROW_RE.match(block.text)
+                or not block.body_size
+                or abs(block.size - block.body_size) > 0.5
+            ):
                 continue
             edge = _column_left(block.rect, geo)
             if edge is None or not indent + block.size * 0.5 < block.rect.x0 - edge <= block.size * 8:
                 continue
             last = runs[-1][-1] if runs else None
-            if (last is not None and abs(block.rect.x0 - last.rect.x0) <= 1
-                    and -2 <= block.rect.y0 - last.rect.y1 <= block.size * 1.5):
+            if (
+                last is not None
+                and abs(block.rect.x0 - last.rect.x0) <= 1
+                and -2 <= block.rect.y0 - last.rect.y1 <= block.size * 1.5
+            ):
                 runs[-1].append(block)
             else:
                 runs.append([block])
@@ -100,27 +112,49 @@ def _display_example_ids(blocks: list[TextBlock], geometries: list[PageGeometry]
             size = first.size
             edge = _column_left(first.rect, geo)
             right = geo.column_of(first.rect).x1 if len(geo.columns) >= 2 else geo.frame.x1 if geo.frame else None
-            if (len(run) == 1 and right is not None
-                    and abs((first.rect.x0 + first.rect.x1) / 2 - (edge + right) / 2) < size * 0.5):
+            if (
+                len(run) == 1
+                and right is not None
+                and abs((first.rect.x0 + first.rect.x1) / 2 - (edge + right) / 2) < size * 0.5
+            ):
                 continue
             if any(_RELATION_RE.search(block.text) for block in run):
                 continue
             members = {id(block) for block in run}
             # 上下紧挨着的行：上面取各块的末行，下面取首行
-            above = [(other, other.line_rects[-1]) for other in page_blocks if id(other) not in members
-                     and other.rect.y1 <= first.rect.y0 + 2 and first.rect.y0 - other.rect.y1 <= size * 1.5
-                     and _x_overlap(other.rect, first.rect)]
-            below = [(other, other.line_rects[0]) for other in page_blocks if id(other) not in members
-                     and other.rect.y0 >= last.rect.y1 - 2 and other.rect.y0 - last.rect.y1 <= size * 1.5
-                     and _x_overlap(other.rect, last.rect)]
-            if (not above or not below or any(_list_item(other.text) for other, _ in above)
-                    or any(abs(x0 - first.rect.x0) <= 1 for other, row in above + below for x0 in (other.rect.x0, row.x0))):
+            above = [
+                (other, other.line_rects[-1])
+                for other in page_blocks
+                if id(other) not in members
+                and other.rect.y1 <= first.rect.y0 + 2
+                and first.rect.y0 - other.rect.y1 <= size * 1.5
+                and _x_overlap(other.rect, first.rect)
+            ]
+            below = [
+                (other, other.line_rects[0])
+                for other in page_blocks
+                if id(other) not in members
+                and other.rect.y0 >= last.rect.y1 - 2
+                and other.rect.y0 - last.rect.y1 <= size * 1.5
+                and _x_overlap(other.rect, last.rect)
+            ]
+            if (
+                not above
+                or not below
+                or any(_list_item(other.text) for other, _ in above)
+                or any(abs(x0 - first.rect.x0) <= 1 for other, row in above + below for x0 in (other.rect.x0, row.x0))
+            ):
                 continue
             # 它或紧挨着的块同一行旁边还有块（拼音、对译、表格的另一列），是逐词对译的例句或表格里的一行
-            if any(other is not block and not other.side_note and not _x_overlap(other.rect, block.rect)
-                   and min(other.rect.y1, block.rect.y1) - max(other.rect.y0, block.rect.y0) > block.rect.height * 0.5
-                   and (right is None or edge <= other.rect.x0 < right)
-                   for block in run + [other for other, _ in above + below] for other in page_blocks):
+            if any(
+                other is not block
+                and not other.side_note
+                and not _x_overlap(other.rect, block.rect)
+                and min(other.rect.y1, block.rect.y1) - max(other.rect.y0, block.rect.y0) > block.rect.height * 0.5
+                and (right is None or edge <= other.rect.x0 < right)
+                for block in run + [other for other, _ in above + below]
+                for other in page_blocks
+            ):
                 continue
             found |= members
     return found
@@ -156,8 +190,12 @@ def _color_keyed_ids(blocks: list[TextBlock]) -> set[int]:
     for page_rows in rows.values():
         page_rows.sort(key=lambda row: row[0].y0)
         for (upper, key, block), (lower, other, below) in zip(page_rows, page_rows[1:]):
-            if (len(key) >= _KEY_COLORS and key == other and _x_overlap(upper, lower)
-                    and -2 <= lower.y0 - upper.y1 <= block.size * 1.5):
+            if (
+                len(key) >= _KEY_COLORS
+                and key == other
+                and _x_overlap(upper, lower)
+                and -2 <= lower.y0 - upper.y1 <= block.size * 1.5
+            ):
                 found |= {id(block), id(below)}
     return found
 
@@ -179,7 +217,8 @@ def _item_example_ids(blocks: list[TextBlock]) -> set[int]:
             if len(_visual_lines(block)) != 1 or _MARK_ITEM_RE.match(block.text) or not _vivid_letters(block):
                 continue
             above = [
-                other for other in page_blocks[:index]
+                other
+                for other in page_blocks[:index]
                 if _x_overlap(other.rect, block.rect) and -2 <= block.rect.y0 - other.rect.y1 <= block.size * 1.5
             ]
             if not above:
@@ -211,7 +250,8 @@ def _arc_figure_ids(blocks: list[TextBlock], scans: Sequence[PageScan]) -> set[i
         rows = block.line_rects or [block.rect]
         if any(
             abs(arc.y1 - row.y0) <= block.size * 0.4 and row.x0 - 2 <= arc.x0 and arc.x1 <= row.x1 + 2
-            for arc in scan.arcs for row in rows
+            for arc in scan.arcs
+            for row in rows
         ):
             found.add(id(block))
             continue
@@ -239,7 +279,9 @@ def _example_ids(blocks: list[TextBlock], numbers: dict[int, tuple[ExampleNumber
             continue
         if _EXAMPLE_NUMBER_RE.match(block.text) and _hanging(block):
             found.add(id(block))
-            heads.append(_ExampleHead(block.page, block.rect, block.rect.x0, _after_number_x0(block), block.size, id(block)))
+            heads.append(
+                _ExampleHead(block.page, block.rect, block.rect.x0, _after_number_x0(block), block.size, id(block))
+            )
         elif (number := _example_number_before(block, numbers.get(block.page, ()))) is not None:
             found.add(id(block))
             heads.append(_ExampleHead(block.page, block.rect, number.rect.x0, block.rect.x0, block.size, id(block)))
@@ -250,7 +292,8 @@ def _example_ids(blocks: list[TextBlock], numbers: dict[int, tuple[ExampleNumber
         for number in page_numbers:
             if not any(
                 min(block.rect.y1, number.row.y1) - max(block.rect.y0, number.row.y0) > number.row.height * 0.5
-                and block.rect.x0 < number.row.x1 and block.rect.x1 > number.row.x0
+                and block.rect.x0 < number.row.x1
+                and block.rect.x1 > number.row.x0
                 for block in on_page
             ):
                 heads.append(_ExampleHead(page, number.row, number.rect.x0, number.text_x0, 0.0, None))
@@ -261,6 +304,7 @@ def _example_ids(blocks: list[TextBlock], numbers: dict[int, tuple[ExampleNumber
 class _ExampleHead:
     """编号例句的第一行。block_id 是它所在的块，整行没成块时为 None，size 这时取下面第一块的字号。
     number_x0 是编号的左缘，text_x0 是编号后面的句子从哪里起笔"""
+
     page: int
     rect: pymupdf.Rect
     number_x0: float
@@ -272,16 +316,23 @@ class _ExampleHead:
 def _example_number_before(block: TextBlock, numbers: tuple[ExampleNumber, ...]) -> ExampleNumber | None:
     """块的第一行紧接在一个单独的例句编号右边，同一行"""
     first = block.line_rects[0] if block.line_rects else block.rect
-    return next((
-        number for number in numbers
-        if number.rect.x1 <= first.x0 and first.x0 - number.rect.x1 <= block.size * 5
-        and min(number.rect.y1, first.y1) - max(number.rect.y0, first.y0)
-        > min(number.rect.height, first.height) * 0.5
-    ), None)
+    return next(
+        (
+            number
+            for number in numbers
+            if number.rect.x1 <= first.x0
+            and first.x0 - number.rect.x1 <= block.size * 5
+            and min(number.rect.y1, first.y1) - max(number.rect.y0, first.y0)
+            > min(number.rect.height, first.height) * 0.5
+        ),
+        None,
+    )
 
 
 def _example_tails(
-    blocks: list[TextBlock], heads: list[_ExampleHead], numbers: dict[int, tuple[ExampleNumber, ...]],
+    blocks: list[TextBlock],
+    heads: list[_ExampleHead],
+    numbers: dict[int, tuple[ExampleNumber, ...]],
     indent: float | None = None,
 ) -> set[int]:
     """编号例句的后几行另成了块（(24.14) 的第二句、例句里换行的 wine.、IT、JA 几种语言的对照、
@@ -297,11 +348,16 @@ def _example_tails(
     tails: set[int] = set()
     for head in heads:
         left = (head.number_x0 + head.text_x0) / 2
-        stop = min((
-            number.rect.y0 for number in numbers.get(head.page, ())
-            if number.rect.y0 > head.rect.y0 + number.rect.height * 0.5
-            and number.rect.x0 < head.rect.x1 and number.rect.x1 > head.rect.x0
-        ), default=math.inf)
+        stop = min(
+            (
+                number.rect.y0
+                for number in numbers.get(head.page, ())
+                if number.rect.y0 > head.rect.y0 + number.rect.height * 0.5
+                and number.rect.x0 < head.rect.x1
+                and number.rect.x1 > head.rect.x0
+            ),
+            default=math.inf,
+        )
         last, size = head.rect, head.size
         for block in by_page.get(head.page, ()):
             if id(block) == head.block_id or block.rect.y0 < head.rect.y0 + head.rect.height * 0.5:
@@ -313,9 +369,14 @@ def _example_tails(
                 left = max(left, head.number_x0 + indent + size * 0.5)
             # 例句里空一行接着排的（Arg 几行下面的 Ex1:）和上一行对齐起笔
             gap = size * (1.6 if last is not head.rect and abs(block.rect.x0 - last.x0) <= 1 else 0.6)
-            if (block.rect.y0 - last.y1 > gap or block.rect.y0 >= stop - 1
-                    or block.rect.x0 < left or abs(block.size - size) > size * 0.1
-                    or _EXAMPLE_NUMBER_RE.match(block.text) or id(block) in head_ids):
+            if (
+                block.rect.y0 - last.y1 > gap
+                or block.rect.y0 >= stop - 1
+                or block.rect.x0 < left
+                or abs(block.size - size) > size * 0.1
+                or _EXAMPLE_NUMBER_RE.match(block.text)
+                or id(block) in head_ids
+            ):
                 break
             tails.add(id(block))
             last = block.rect
@@ -330,9 +391,15 @@ def _after_number_x0(block: TextBlock) -> float:
     first = [span for span in lines[0] if str(span.get("text") or "").strip() and span.get("bbox") is not None]
     top = pymupdf.Rect(first[0]["bbox"]) if first else None
     spans = sorted(
-        (span for line in lines for span in line if str(span.get("text") or "").strip()
-         and span.get("bbox") is not None
-         and top is not None and abs(pymupdf.Rect(span["bbox"]).y1 - top.y1) <= block.size * 0.3),
+        (
+            span
+            for line in lines
+            for span in line
+            if str(span.get("text") or "").strip()
+            and span.get("bbox") is not None
+            and top is not None
+            and abs(pymupdf.Rect(span["bbox"]).y1 - top.y1) <= block.size * 0.3
+        ),
         key=lambda span: span["bbox"][0],
     )
     if matched is None or not spans:
@@ -367,8 +434,11 @@ def _labeled_brackets(block: TextBlock) -> int:
     for left, label, after in zip(spans, spans[1:], spans[2:]):
         text = str(label.get("text") or "").strip()
         if (
-            str(left.get("text") or "").rstrip().endswith("[") and float(label.get("size") or 0) < block.size * 0.95
-            and len(text) <= _BRACKET_LABEL_CHARS and " " not in text and sum(c.isalpha() for c in text) >= 2
+            str(left.get("text") or "").rstrip().endswith("[")
+            and float(label.get("size") or 0) < block.size * 0.95
+            and len(text) <= _BRACKET_LABEL_CHARS
+            and " " not in text
+            and sum(c.isalpha() for c in text) >= 2
             and not str(after.get("text") or "").lstrip().startswith("]")
         ):
             count += 1
@@ -383,8 +453,11 @@ def _role_pattern_ids(blocks: list[TextBlock]) -> set[int]:
     """逐行列出的角色记法（AGENT/Subject, THEME/Object）。下文拿记法里的角色名来讲，留原文。
     词下面标着角色的例句按对译认，见 interlinear_glosses。"""
     return {
-        id(block) for block in blocks
-        if block.clip is None and not block.side_note and len(block.line_rects) <= 3
+        id(block)
+        for block in blocks
+        if block.clip is None
+        and not block.side_note
+        and len(block.line_rects) <= 3
         and _ROLE_PATTERN_RE.fullmatch(block.text.strip())
     }
 
@@ -398,8 +471,12 @@ def _concordance_ids(blocks: list[TextBlock]) -> set[int]:
         if block.clip is not None or block.side_note:
             continue
         spans = sorted(
-            (span for line in block.span_lines or [] for span in line
-             if str(span.get("text") or "").strip() and span.get("origin") is not None),
+            (
+                span
+                for line in block.span_lines or []
+                for span in line
+                if str(span.get("text") or "").strip() and span.get("origin") is not None
+            ),
             key=lambda span: float(span["origin"][1]),
         )
         rows: list[list[dict]] = []
@@ -413,8 +490,11 @@ def _concordance_ids(blocks: list[TextBlock]) -> set[int]:
         lefts = []
         for row in rows:
             row.sort(key=lambda span: float(span["bbox"][0]))
-            bold = [i for i, span in enumerate(row)
-                    if emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0)).bold]
+            bold = [
+                i
+                for i, span in enumerate(row)
+                if emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0)).bold
+            ]
             # 粗体的词连成一截，左右都有前后文
             if not bold or bold != list(range(bold[0], bold[-1] + 1)) or bold[0] == 0 or bold[-1] == len(row) - 1:
                 break
@@ -456,9 +536,12 @@ def _foreign_ids(blocks: list[TextBlock]) -> set[int]:
         for block in page_blocks:
             reach = block.rect + (-block.size, -block.size * 0.6, block.size, block.size * 0.6)
             near = [
-                group for group in groups
-                if any(abs(other.size - block.size) < 0.3 and other.color == block.color
-                       and reach.intersects(other.rect) for other in group)
+                group
+                for group in groups
+                if any(
+                    abs(other.size - block.size) < 0.3 and other.color == block.color and reach.intersects(other.rect)
+                    for other in group
+                )
             ]
             merged = [block]
             for group in near:
@@ -476,8 +559,11 @@ def _foreign_ids(blocks: list[TextBlock]) -> set[int]:
 def _han_line(block: TextBlock) -> bool:
     """块的第一行是一句中文：八个以上汉字，不夹西文字母、假名、谚文。下面可以跟着拼音"""
     first = "".join(str(span.get("text") or "") for span in block.span_lines[0]) if block.span_lines else block.text
-    return (len(_HAN_RE.findall(first)) >= _FOREIGN_CJK and not re.search(r"[A-Za-z]", first)
-            and not _KANA_HANGUL_RE.search(first))
+    return (
+        len(_HAN_RE.findall(first)) >= _FOREIGN_CJK
+        and not re.search(r"[A-Za-z]", first)
+        and not _KANA_HANGUL_RE.search(first)
+    )
 
 
 def _rendering_ids(blocks: list[TextBlock], found: set[int]) -> set[int]:
@@ -491,8 +577,10 @@ def _rendering_ids(blocks: list[TextBlock], found: set[int]) -> set[int]:
             if block.page != source.page or id(block) in found or id(block) in out:
                 continue
             r, s = block.rect, source.rect
-            beside = (min(r.y1, s.y1) - max(r.y0, s.y0) > min(r.height, s.height) * 0.5
-                      and 0 <= r.x0 - s.x1 <= 3 * source.size)
+            beside = (
+                min(r.y1, s.y1) - max(r.y0, s.y0) > min(r.height, s.height) * 0.5
+                and 0 <= r.x0 - s.x1 <= 3 * source.size
+            )
             below = 0 <= r.y0 - s.y1 + 1 <= source.size * 0.5 and abs(r.x0 - s.x0) <= source.size
             if beside or below:
                 out.add(id(block))
@@ -504,9 +592,13 @@ def _rendering_ids(blocks: list[TextBlock], found: set[int]) -> set[int]:
             if id(block) in found or id(block) in out:
                 continue
             for other in blocks:
-                if (id(other) in out and other.page == block.page and abs(block.rect.x0 - other.rect.x0) <= 1
-                        and 0 <= block.rect.y0 - other.rect.y1 + 1 <= block.size * 0.5
-                        and abs(block.size - other.size) <= 0.3):
+                if (
+                    id(other) in out
+                    and other.page == block.page
+                    and abs(block.rect.x0 - other.rect.x0) <= 1
+                    and 0 <= block.rect.y0 - other.rect.y1 + 1 <= block.size * 0.5
+                    and abs(block.size - other.size) <= 0.3
+                ):
                     out.add(id(block))
                     grown = True
                     break
@@ -530,10 +622,7 @@ def _code_panel_ids(blocks: list[TextBlock], scans: list[PageScan]) -> set[int]:
     found: set[int] = set()
     for pno, page_blocks in by_page.items():
         for area in scans[pno].shades:
-            inside = [
-                block for block in page_blocks
-                if (block.rect & area).get_area() > block.rect.get_area() * 0.6
-            ]
+            inside = [block for block in page_blocks if (block.rect & area).get_area() > block.rect.get_area() * 0.6]
             spans = [span for block in inside for span in _block_spans(block) if not _span_is_math(span)]
             total = mono = 0
             for span in spans:
@@ -544,6 +633,8 @@ def _code_panel_ids(blocks: list[TextBlock], scans: list[PageScan]) -> set[int]:
             if total and mono >= total * 0.8:
                 found.update(id(block) for block in inside)
     return found
+
+
 # 大号字体里正文行内也用的字形：宽帽子、宽波浪（b–g），最小的两号根号（p、q）。
 # 伸长括号、求和积分号才说明是单独排的式子。文中号的求和号也算：单独排的分式里分母用的就是它
 _BIG_GLYPH_RE = re.compile(r"[^\sb-gpq]")
@@ -552,12 +643,14 @@ _DISPLAY_FORMULA_MAX_WORDS = 24
 # 块的面积有这么多落在公式检测模型的行间公式框里，才算行间公式（同版面模型的 _COVER）
 _ISOLATED_COVER = 0.6
 # 冠词、系动词、介词、连词、代词这类虚词。行间公式框里有这么多个虚词的是说明句
-_FUNCTION_WORDS = frozenset("""
+_FUNCTION_WORDS = frozenset(
+    """
 a an the is are was were be been being am do does did has have had can could will would shall should may might must
 of to in for with by from on at as into onto over under about between than that which who whom whose what where
 when why how this these those it its they their them we our us you your he his she her him i my not no nor
 and or but if then so each every any all some such much many
-""".split())
+""".split()
+)
 _SENTENCE_FUNCTION_WORDS = 3
 
 
@@ -580,10 +673,15 @@ def _display_formula_ids(blocks: list[TextBlock], geometries: list[PageGeometry]
         centered = left > block.size and abs(left - right) <= block.size
         if left <= block.size * 2 and not centered:
             continue
-        if any(
-            _BIG_DELIMITER_FONT_RE.search(str(span.get("font") or "")) and _BIG_GLYPH_RE.search(str(span.get("text") or ""))
-            for line in block.span_lines or [] for span in line
-        ) and _plain_words(block) < _DISPLAY_FORMULA_MAX_WORDS:
+        if (
+            any(
+                _BIG_DELIMITER_FONT_RE.search(str(span.get("font") or ""))
+                and _BIG_GLYPH_RE.search(str(span.get("text") or ""))
+                for line in block.span_lines or []
+                for span in line
+            )
+            and _plain_words(block) < _DISPLAY_FORMULA_MAX_WORDS
+        ):
             found.append(block)
     ids = {id(block) for block in found}
     for block in blocks:
@@ -601,7 +699,9 @@ def _display_formula_ids(blocks: list[TextBlock], geometries: list[PageGeometry]
 
 
 def _isolated_formula_ids(
-    blocks: list[TextBlock], formulas: FormulaDetector | None, roles: Sequence[Role] | None = None,
+    blocks: list[TextBlock],
+    formulas: FormulaDetector | None,
+    roles: Sequence[Role] | None = None,
 ) -> set[int]:
     """公式检测模型框成行间公式的块留原文：块的面积大半落在框里。Word 排的行间公式用正文字体，
     按字体认不出来，没有伸长的定界符时 _display_formula_ids 也认不到。
@@ -796,7 +896,7 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
         pending_type = False
         # 作者-年份体的条目不带编号和括号年份（Abadi, M., A. Agarwal, … 2001.），连着几条才算
         author_leads = 0
-        for block, text in prepared[idx + 1:idx + 16]:
+        for block, text in prepared[idx + 1 : idx + 16]:
             # Endnotes / 参考文献是另一节的标题，必须停住，不能把进入字号抬高
             if len(text) < 40 and BIBLIO_HEADING_RE.match(text):
                 return False
@@ -823,7 +923,12 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
         return False
 
     def exits(
-        block: TextBlock, text: str, start_size: float, prev_numbered: bool, entry_size: float, prev_text: str,
+        block: TextBlock,
+        text: str,
+        start_size: float,
+        prev_numbered: bool,
+        entry_size: float,
+        prev_text: str,
     ) -> bool:
         # 像不像标题按条目的字号比：有的参考文献整体比正文大一号，按全文的中位字号，条目也像标题
         median = max(median_all, entry_size)
@@ -875,10 +980,15 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
                 skips.append(True)
             continue
         # 标题比正文小的排法（ICASSP 整节参考文献都小一号）：加粗、不比下面几条引文小，也是这一节的标题
-        following = sorted(b.size for b, _t in prepared[i + 1:i + 6]) or [block.size]
-        if title and citations_follow(i) and (
-            _biblio_heading_like(block, text, median) or block.size + 0.4 >= median
-            or (block.bold and block.size + 0.4 >= following[len(following) // 2])
+        following = sorted(b.size for b, _t in prepared[i + 1 : i + 6]) or [block.size]
+        if (
+            title
+            and citations_follow(i)
+            and (
+                _biblio_heading_like(block, text, median)
+                or block.size + 0.4 >= median
+                or (block.bold and block.size + 0.4 >= following[len(following) // 2])
+            )
         ):
             in_biblio = True
             start_size = block.size
@@ -903,11 +1013,7 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
             prev_numbered = True
         elif _BIBLIO_WRAP_RE.match(text):
             pass
-        elif (
-            len(text) < 40
-            and BIBLIO_SHORT_LABEL_RE.match(text)
-            and not _biblio_heading_like(block, text, median)
-        ):
+        elif len(text) < 40 and BIBLIO_SHORT_LABEL_RE.match(text) and not _biblio_heading_like(block, text, median):
             pass  # 引文单词不是标题，编号条目的续行还没结束
         else:
             prev_numbered = False
@@ -923,9 +1029,9 @@ _AUTHOR_LEAD_RE = re.compile(
     r"(?:,|\s(?:and|&)\s|\s\(?(?:19|20)\d{2})"
 )
 _AUTHOR_LEADS_TO_ENTER = 2  # 参考文献标题后面至少几块以作者-年份条目起头
-_ENTRY_WINDOW = 8   # 往后看几块
-_ENTRY_LEADS = 4    # 其中至少几块是条目开头
-_ENTRY_GAP = 4      # 连续这么多块没有新条目，参考文献就结束了
+_ENTRY_WINDOW = 8  # 往后看几块
+_ENTRY_LEADS = 4  # 其中至少几块是条目开头
+_ENTRY_GAP = 4  # 连续这么多块没有新条目，参考文献就结束了
 
 
 def _headless_bibliography(prepared: list[tuple[TextBlock, str]]) -> set[int]:

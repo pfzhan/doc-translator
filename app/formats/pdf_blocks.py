@@ -1,5 +1,6 @@
 """Text blocks and the helpers that both reading and writing pages use: line joining,
 sentence ends, glyph ink and math-font checks."""
+
 import contextvars
 import functools
 import hashlib
@@ -31,7 +32,9 @@ MATH_FONT_RE = re.compile(r"CMMI|CMB?SY|CMEX|MSBM|MSAM|Math|Symbol|StandardSym|S
 MATH_FONT_PRECISE_RE = re.compile(
     r"Asana|FiraMath|STIX|TeXGyre.*Math|XITSMath|LibertinusMath|MathJax|Cambria Math|LatinModern.*Math"
     r"|(?-i:Math(?![a-z]))|(?:^|\+)n?[tp]x(?:mi|sy|ex)|(?:^|\+)(?:New[TP]X|coch)B?(?:MI|MRM)\d*$"
-    r"|(?:^|\+)(?:EU[SF]M|EURM|EUEX|BBOLD|bbm|dsrom|dsss|DSSerif)", re.I)
+    r"|(?:^|\+)(?:EU[SF]M|EURM|EUEX|BBOLD|bbm|dsrom|dsss|DSSerif)",
+    re.I,
+)
 # 常见正文字体黑名单（优先于启发式，里面的希腊字母/符号靠字符级规则识别）
 TEXT_FONT_RE = re.compile(
     r"Times|Arial|Calibri|Minion|Palatino|\bCMR|Charter|Georgia|Helvetica|Verdana|Roboto|Lato|"
@@ -42,7 +45,9 @@ TEXT_FONT_RE = re.compile(
     r"Spectral|Inter|Work Sans|IBM Plex|Charis|Gentium|Doulos|Andika|"
     r"PingFang|SimSun|SimHei|Songti|Heiti|Kaiti|FangSong|SourceHan|WenQuanYi|YaHei|YouYuan|LiSu|"
     r"STFangsong|STHeiti|STKaiti|STSong|STXihei|Yuanti|Hiragino|Ryumin|GothicBBB|Kozuka|IPA|"
-    r"Takao|Sazanami|Motoya|Yomogi|BIZ |M PLUS|GenShin|GenRyu|NotoSansCJK|NotoSerifCJK", re.I)
+    r"Takao|Sazanami|Motoya|Yomogi|BIZ |M PLUS|GenShin|GenRyu|NotoSansCJK|NotoSerifCJK",
+    re.I,
+)
 CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 _PAREN_ITEM_RE = re.compile(r"^\([a-zA-Z]\)\s+")
 # 证明分项的 (ii)、(iii) 后面大写起头的是另一项。小写接着写的是句中的列举（(iii) the arm must …）
@@ -89,6 +94,7 @@ class Leader:
     """目录条目的点线和页码。点线和标题一起擦掉，页码留在原处；写回时从 dot_x（页码前最右一个点）
     按点距 pitch 往左补点，接到译文末尾。dots 是要擦的点（连同和标题排在一起的那个 span）。
     没有点线、只有页码时 pitch 为 0，不补点。"""
+
     number: pymupdf.Rect
     dot_x: float
     pitch: float
@@ -147,8 +153,9 @@ def _join_lines(lines: list[str]) -> str:
         if out.endswith("-") and re.match(r"[a-zA-ZÀ-ÿ]", line):
             # 行尾连字符断词接回去。数字后面的是名字里本来的连字符（Claude-3.7-|Sonnet），留着。
             # 小写字母接大写的（Distill-|Qwen、Mc-|Callum）看全文：接起来的词在别处出现过才是断词
-            kept = out[-2:-1].isdigit() or (out[-2:-1].islower() and line[0].isupper()
-                                            and _camel_join(out, line) not in _CAMEL_WORDS.get())
+            kept = out[-2:-1].isdigit() or (
+                out[-2:-1].islower() and line[0].isupper() and _camel_join(out, line) not in _CAMEL_WORDS.get()
+            )
             out = out + line if kept else out[:-1] + line
         elif out.endswith("-") and out[-2:-1].isalpha() and line[:1].isdigit():
             out += line  # 型号在连字符处折行（VE-|8、GPT-|4），连字符留着，中间没有空格
@@ -181,7 +188,7 @@ def _carry_marks(out: str, line: str) -> tuple[str, str]:
     if not closers or not openers or closers.start() == 0 or openers.end() == len(line):
         return out, line
     stack: list[str] = []
-    for tag in STYLE_MARK_RE.findall(out[:closers.start()]):
+    for tag in STYLE_MARK_RE.findall(out[: closers.start()]):
         if tag.startswith("{/"):
             if stack and stack[-1][1] == tag[2]:
                 stack.pop()
@@ -190,10 +197,10 @@ def _carry_marks(out: str, line: str) -> tuple[str, str]:
     closed = re.findall(r"\{/([a-z])\}", closers.group())
     if len(closed) > len(stack):
         return out, line
-    reopened = stack[len(stack) - len(closed):]
+    reopened = stack[len(stack) - len(closed) :]
     if [tag[1] for tag in reversed(reopened)] != closed or "".join(reopened) != openers.group():
         return out, line
-    return out[:closers.start()], line[openers.end():]
+    return out[: closers.start()], line[openers.end() :]
 
 
 # 行尾停在网址的分隔符上；下一行开头的一截里面还有网址的分隔符，是网址的后半
@@ -263,7 +270,9 @@ def _char_origins(page: pymupdf.Page) -> dict[tuple[str, float, float], list[tup
     span 的起笔点是第一个字的：「 √」的空格和根号不在一条基线上。"""
     gids = {
         (round(char[2][0], 1), round(char[2][1], 1)): char[1]
-        for trace in page.get_texttrace() for char in trace["chars"] if char[1] >= 0
+        for trace in page.get_texttrace()
+        for char in trace["chars"]
+        if char[1] >= 0
     }
     found: dict[tuple[str, float, float], list[tuple[int, float, float]]] = {}
     for block in page.get_text("rawdict", flags=_TEXT_FLAGS).get("blocks", []):
@@ -273,7 +282,8 @@ def _char_origins(page: pymupdf.Page) -> dict[tuple[str, float, float], list[tup
                 text = "".join(char["c"] for char in chars)
                 key = (text, round(span["origin"][0], 1), round(span["origin"][1], 1))
                 found[key] = [
-                    (gid, char["origin"][1], char["bbox"][2] - char["bbox"][0]) for char in chars
+                    (gid, char["origin"][1], char["bbox"][2] - char["bbox"][0])
+                    for char in chars
                     if not char["c"].isspace()
                     and (gid := gids.get((round(char["origin"][0], 1), round(char["origin"][1], 1)))) is not None
                 ]
@@ -281,7 +291,9 @@ def _char_origins(page: pymupdf.Page) -> dict[tuple[str, float, float], list[tup
 
 
 def _drawn_ink(
-    span: dict, fonts: list[tuple[bytes, bytes]], glyphs: list[tuple[int, float, float]],
+    span: dict,
+    fonts: list[tuple[bytes, bytes]],
+    glyphs: list[tuple[int, float, float]],
 ) -> tuple[float, float, float, float] | None:
     """按字形单画出来的墨迹算 span 的上下沿，左右照原框。每个字按自己的基线放。
     按页上用的字形编号画：大号定界符有好几档，CMEX 的宽波浪号按 Unicode 在字体里找不到。
@@ -326,7 +338,15 @@ def _measure_glyph(buffer: bytes, gid: int) -> tuple[float, float, float, float,
         advance = mupdf.fz_advance_glyph(font, gid, 0)
         text = mupdf.fz_new_text()
         mupdf.fz_show_glyph(
-            text, font, mupdf.FzMatrix(100, 0, 0, -100, 100, 150), gid, 0, 0, 0, mupdf.FZ_BIDI_LTR, mupdf.FZ_LANG_UNSET,
+            text,
+            font,
+            mupdf.FzMatrix(100, 0, 0, -100, 100, 150),
+            gid,
+            0,
+            0,
+            0,
+            mupdf.FZ_BIDI_LTR,
+            mupdf.FZ_LANG_UNSET,
         )
         canvas = mupdf.fz_new_pixmap(mupdf.fz_device_gray(), 300, 300, mupdf.FzSeparations(), 0)
         mupdf.fz_clear_pixmap_with_value(canvas, 255)
@@ -340,11 +360,17 @@ def _measure_glyph(buffer: bytes, gid: int) -> tuple[float, float, float, float,
         return None
     width = pix.width
     samples = pix.samples
-    rows = [y for y in range(pix.height) if min(samples[y * width:(y + 1) * width]) < 128]
+    rows = [y for y in range(pix.height) if min(samples[y * width : (y + 1) * width]) < 128]
     if not rows:
         return None
     columns = [x for x in range(width) if min(samples[x::width]) < 128]
-    return (rows[0] - 150) / 100, (rows[-1] + 1 - 150) / 100, advance, (columns[0] - 100) / 100, (columns[-1] + 1 - 100) / 100
+    return (
+        (rows[0] - 150) / 100,
+        (rows[-1] + 1 - 150) / 100,
+        advance,
+        (columns[0] - 100) / 100,
+        (columns[-1] + 1 - 100) / 100,
+    )
 
 
 def _bare_font_name(name: str) -> str:
@@ -362,8 +388,10 @@ class _GlyphInk:
             self._fonts.setdefault(_bare_font_name(name), []).extend(found)
         self._chars = [
             (_bare_font_name(str(trace["font"])), float(trace["size"]), char)
-            for trace in page.get_texttrace() if tuple(trace["dir"]) == (1.0, 0.0)
-            for char in trace["chars"] if char[1] >= 0 and char[0] != 32
+            for trace in page.get_texttrace()
+            if tuple(trace["dir"]) == (1.0, 0.0)
+            for char in trace["chars"]
+            if char[1] >= 0 and char[0] != 32
         ]
 
     def x_bounds(self, span: dict) -> tuple[float, float] | None:
@@ -379,7 +407,9 @@ class _GlyphInk:
                 continue
             for digest, buffer in self._fonts.get(font, []):
                 extent = _glyph_extent(digest, buffer, gid)
-                if extent is not None and abs(extent[2] * size - (box[2] - box[0])) <= max(0.3, (box[2] - box[0]) * 0.08):
+                if extent is not None and abs(extent[2] * size - (box[2] - box[0])) <= max(
+                    0.3, (box[2] - box[0]) * 0.08
+                ):
                     lefts.append(ox + extent[3] * size)
                     rights.append(ox + extent[4] * size)
                     break
@@ -404,6 +434,8 @@ def _font_is_math(font: str) -> bool:
 def _span_is_math(span: dict) -> bool:
     """按字体判公式。math 是提取时按全文字体定下的（见 _mark_math_roman）。"""
     return bool(span.get("math")) or _font_is_math(str(span.get("font") or ""))
+
+
 # '1 Introduction'、'3.1 Encoder' 是章节标题，不能当成跨页续段
 _SRC_HEAD_NUM_RE = re.compile(r"^(\d+(?:\.\d+)*\.?)\s+\S")
 
@@ -455,7 +487,9 @@ def _small_caps_sizes(span_lines: list[list[dict]]) -> dict[int, float]:
         lowered = [False] * len(line)
         start = 0
         for i in range(1, len(line) + 1):
-            if i == len(line) or round(float(line[i].get("size") or 0), 1) != round(float(line[start].get("size") or 0), 1):
+            if i == len(line) or round(float(line[i].get("size") or 0), 1) != round(
+                float(line[start].get("size") or 0), 1
+            ):
                 low = any(c.islower() for s in line[start:i] for c in str(s.get("text") or ""))
                 lowered[start:i] = [low] * (i - start)
                 start = i
@@ -463,9 +497,19 @@ def _small_caps_sizes(span_lines: list[list[dict]]) -> dict[int, float]:
         for i, span in enumerate(line):
             text = str(span.get("text") or "")
             size = float(span.get("size") or 0)
-            on_base = not bases or span.get("origin") is None or min(abs(float(span["origin"][1]) - b) for b in bases) <= body * 0.15
-            caps_at.append(id(span) not in out and body > 0 and 0.6 <= size / body < 0.92 and on_base and not lowered[i]
-                           and (_all_caps(text) or not text.strip()))
+            on_base = (
+                not bases
+                or span.get("origin") is None
+                or min(abs(float(span["origin"][1]) - b) for b in bases) <= body * 0.15
+            )
+            caps_at.append(
+                id(span) not in out
+                and body > 0
+                and 0.6 <= size / body < 0.92
+                and on_base
+                and not lowered[i]
+                and (_all_caps(text) or not text.strip())
+            )
         # 空格跟着两边走：夹在小型大写词中间的空格算进去，正文和小型大写之间的空格不动
         for i, span in enumerate(line):
             if not caps_at[i]:
@@ -482,6 +526,8 @@ def _small_caps_sizes(span_lines: list[list[dict]]) -> dict[int, float]:
 def _all_caps(text: str) -> bool:
     letters = [c for c in text if c.isalpha()]
     return bool(letters) and all(c.isupper() for c in letters)
+
+
 _TEXT_FLAGS = pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES
 
 
@@ -499,7 +545,9 @@ class _CharIndex(list):
         上沿相差不到半点，所在的桶最多差一格。"""
         row = math.floor(box.y0)
         found = [
-            order for key in (row - 1, row, row + 1) for order in self._rows.get(key, ())
+            order
+            for key in (row - 1, row, row + 1)
+            for order in self._rows.get(key, ())
             if _boxes_match(box, self[order][0])
         ]
         return self[min(found)][1] if found else None
@@ -532,7 +580,9 @@ def _boxes_match(left: pymupdf.Rect, right: pymupdf.Rect) -> bool:
 
 
 def _outside_formula(
-    page_spans: list[dict], run_spans: Sequence[dict], char_index: _CharIndex | None = None,
+    page_spans: list[dict],
+    run_spans: Sequence[dict],
+    char_index: _CharIndex | None = None,
 ) -> list[dict]:
     """页面上的 span，公式自己的字除外。
 
@@ -632,9 +682,11 @@ def _first_line_indented(block: TextBlock) -> bool:
     lefts = [min(rect.x0 for rect in row) for row in rows]
     rights = [max(rect.x1 for rect in row) for row in rows]
     rest = lefts[1:]
-    return (max(rest) - min(rest) <= 0.5 * block.size
-            and 0.5 * block.size < lefts[0] - min(rest) <= _MAX_INDENT_EM * block.size
-            and rights[0] >= max(rights[1:]) - 0.5 * block.size)
+    return (
+        max(rest) - min(rest) <= 0.5 * block.size
+        and 0.5 * block.size < lefts[0] - min(rest) <= _MAX_INDENT_EM * block.size
+        and rights[0] >= max(rights[1:]) - 0.5 * block.size
+    )
 
 
 def _indents_paragraphs(blocks: list[TextBlock]) -> bool:
@@ -649,8 +701,12 @@ def _indents_paragraphs(blocks: list[TextBlock]) -> bool:
         if _styled_edge(b, 0) or _LABEL_START_RE.match(b.text) or _NUMBERED_HEAD_RE.match(b.text):
             continue
         tail, head = p.line_rects[-1], b.line_rects[0]
-        if (not _ends_sentence(p.text) or _list_item(b.text) or tail.x1 > max(p.rect.x1, b.rect.x1) - 2 * p.size
-                or not -0.3 * p.size <= head.y0 - tail.y1 - p.line_gap * p.size <= 1.5 * p.size):
+        if (
+            not _ends_sentence(p.text)
+            or _list_item(b.text)
+            or tail.x1 > max(p.rect.x1, b.rect.x1) - 2 * p.size
+            or not -0.3 * p.size <= head.y0 - tail.y1 - p.line_gap * p.size <= 1.5 * p.size
+        ):
             continue
         shift = head.x0 - tail.x0
         if p.size * 0.5 < shift <= p.size * _MAX_INDENT_EM:
@@ -671,8 +727,10 @@ def _numbered_line(text: str) -> bool:
     tag = _EQUATION_TAG_RE.match(lead)
     if tag is None:
         return False
-    rest = lead[tag.end():].lstrip()
+    rest = lead[tag.end() :].lstrip()
     return not rest or not (rest[0].islower() or rest[0] in ",.;:()[]")
+
+
 # 行首的编号 (2.11)、(3)。四位数的 (2007) 是年份
 _EQUATION_TAG_RE = re.compile(r"\((?:\d+\.)+\d+\)|\(\d{1,3}\)")
 
@@ -803,21 +861,20 @@ def _source_bold_lead(block: TextBlock) -> str:
 def _uniform_bold(block: TextBlock) -> bool:
     """正文字都是粗体。公式字体的角标（名字后面的星号）原样贴回，不算。"""
     spans = [
-        span for line in (block.span_lines or [])
-        for span in line if str(span.get("text") or "").strip() and not _span_is_math(span)
+        span
+        for line in (block.span_lines or [])
+        for span in line
+        if str(span.get("text") or "").strip() and not _span_is_math(span)
     ]
     if not spans:
         return False
-    return all(
-        emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0)).bold
-        for span in spans
-    )
+    return all(emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0)).bold for span in spans)
 
 
 def _wrap_lead_bold(text: str) -> str:
     """译文丢掉了段首粗体时，补到第一个句号。导语都很短，不把整段包进去。"""
     stripped = text.lstrip()
-    pad = text[:len(text) - len(stripped)]
+    pad = text[: len(text) - len(stripped)]
     cut = 0
     for index, char in enumerate(stripped):
         if index > 16:

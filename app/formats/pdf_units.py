@@ -1,5 +1,6 @@
 """Turn text blocks into translation units: inline formulas become placeholders, section
 numbers are peeled off, and each unit gets a note on where it sits in the book."""
+
 import functools
 import re
 import struct
@@ -198,8 +199,12 @@ def _letter_formula_runs(span_lines: list[list[dict]], runs: list[dict]) -> list
     def assigned(window: list[dict]) -> bool:
         """串尾是数字，前面紧挨着的是标成公式的运算符（= 1、< 0）"""
         words = [span for span in window if span["text"].strip()]
-        return (len(words) >= 2 and words[-1]["text"].strip().isdigit() and math_mark(words[-2])
-                and words[-2]["text"].strip() in _ASSIGN_OPS)
+        return (
+            len(words) >= 2
+            and words[-1]["text"].strip().isdigit()
+            and math_mark(words[-2])
+            and words[-2]["text"].strip() in _ASSIGN_OPS
+        )
 
     found: list[dict] = []
     for line_no, spans in enumerate(span_lines):
@@ -218,19 +223,24 @@ def _letter_formula_runs(span_lines: list[list[dict]], runs: list[dict]) -> list
                     break
                 nxt = spans[j + 1]
                 word = nxt["text"].strip()
-                if not (not word or edge(nxt) or word.isdigit()
-                        or (depth > 0 and italic(nxt) and word.isalpha())):
+                if not (not word or edge(nxt) or word.isdigit() or (depth > 0 and italic(nxt) and word.isalpha())):
                     break
                 j += 1
-            while j > i and not edge(spans[j]) and not assigned(spans[i:j + 1]):
+            while j > i and not edge(spans[j]) and not assigned(spans[i : j + 1]):
                 j -= 1
-            window = spans[i:j + 1]
+            window = spans[i : j + 1]
             if any(math_mark(span) for span in window) and any(letter(span) for span in window):
                 bbox = _glyph_box(window[0])
                 for span in window[1:]:
                     bbox |= _glyph_box(span)
-                found.append({"spans": window, "bbox": bbox, "max_size": max(span["size"] for span in window),
-                              "pos": (line_no, i, j)})
+                found.append(
+                    {
+                        "spans": window,
+                        "bbox": bbox,
+                        "max_size": max(span["size"] for span in window),
+                        "pos": (line_no, i, j),
+                    }
+                )
             i = j + 1
     covered = {id(span) for run in found for span in run["spans"]}
     runs[:] = [run for run in runs if not all(id(span) in covered for span in run["spans"] if span["text"].strip())]
@@ -238,7 +248,11 @@ def _letter_formula_runs(span_lines: list[list[dict]], runs: list[dict]) -> list
 
 
 def _script_base(
-    span: dict, bbox: pymupdf.Rect, block_size: float, math: bool = False, script_y: float | None = None,
+    span: dict,
+    bbox: pymupdf.Rect,
+    block_size: float,
+    math: bool = False,
+    script_y: float | None = None,
 ) -> bool:
     """单字母贴在较小角标上，才并进公式。引用上标在字母右侧，中心出了字框，不收；
     数学字体的角标（inf、tr 这样宽的）不是引用，只要紧贴字母右缘。
@@ -273,8 +287,11 @@ def _has_text_base(run: dict, span_lines: list[list[dict]], members: set[int], b
     box = run["bbox"]
     for line in span_lines:
         for span in line:
-            if (id(span) in members or not str(span.get("text") or "").strip()
-                    or float(span.get("size") or 0) < block_size * 0.79):
+            if (
+                id(span) in members
+                or not str(span.get("text") or "").strip()
+                or float(span.get("size") or 0) < block_size * 0.79
+            ):
                 continue
             base = _glyph_box(span)
             overlap = min(base.y1, box.y1) - max(base.y0, box.y0)
@@ -341,10 +358,12 @@ def _absorb_inner_blanks(runs: list[dict], span_lines: list[list[dict]]) -> None
             run = owner.get(id(line[left]))
             if run is None or owner.get(id(line[right])) != run:
                 continue
-            for span in line[left + 1:right]:
+            for span in line[left + 1 : right]:
                 if id(span) not in owner:
                     runs[run]["spans"].append(span)
                     owner[id(span)] = run
+
+
 _ITALIC_GLUE_RE = re.compile(r"^[\s()\[\]{}.,=<>+\-*/'A-Za-z0-9]+$")
 _ITALIC_OPERATOR_RE = re.compile(r"[()\[\]{}=<>+\-*/]")
 
@@ -383,7 +402,10 @@ def _attach_span(run: dict, span: dict, line_no: int, index: int) -> None:
 
 
 def _gap_is_clear(
-    span: dict, run: dict, span_lines: list[list[dict]], taken: set[int],
+    span: dict,
+    run: dict,
+    span_lines: list[list[dict]],
+    taken: set[int],
 ) -> bool:
     """两框之间不能隔着还没收进公式的字。空白可以。"""
     box = pymupdf.Rect(span["bbox"])
@@ -408,8 +430,11 @@ def _gap_is_clear(
 
 
 def _glue_host(
-    span: dict, runs: list[dict], span_lines: list[list[dict]],
-    block_size: float, taken: set[int],
+    span: dict,
+    runs: list[dict],
+    span_lines: list[list[dict]],
+    block_size: float,
+    taken: set[int],
 ) -> dict | None:
     box = pymupdf.Rect(span["bbox"])
     # 纵向按字高比：CMSY 的减号、竖线的字体框伸到下一行，下一行行首的 P( 会挂到上一行的式子上
@@ -432,7 +457,10 @@ def _glue_host(
 
 
 def _blanks_between(
-    span: dict, run: dict, span_lines: list[list[dict]], taken: set[int],
+    span: dict,
+    run: dict,
+    span_lines: list[list[dict]],
+    taken: set[int],
 ) -> list[tuple[int, int, dict]]:
     """公式和这段胶水之间的空白。收进公式后，送翻文本里不再留一个空档。"""
     box = pymupdf.Rect(span["bbox"])
@@ -458,7 +486,9 @@ def _blanks_between(
 
 
 def _absorb_math_glue(
-    runs: list[dict], span_lines: list[list[dict]], block_size: float,
+    runs: list[dict],
+    span_lines: list[list[dict]],
+    block_size: float,
 ) -> None:
     """把贴着公式的 CMR 数字、括号、算子名并进公式。远处的数字仍是正文。"""
     taken = {id(span) for run in runs for span in run["spans"]}
@@ -466,10 +496,13 @@ def _absorb_math_glue(
         (line_no, index, span)
         for line_no, line in enumerate(span_lines)
         for index, span in enumerate(line)
-        if id(span) not in taken and _is_math_glue(span)
+        if id(span) not in taken
+        and _is_math_glue(span)
         # 斜体变量后面贴着下标、正文是常事（∂L 接 CE），只有正体的数字、算子、标点怕拆开一个数
-        and not ((_CM_ROMAN_RE.search(str(span.get("font") or "")) or _span_is_math(span))
-                 and _runs_into_word(line, index, taken))
+        and not (
+            (_CM_ROMAN_RE.search(str(span.get("font") or "")) or _span_is_math(span))
+            and _runs_into_word(line, index, taken)
+        )
     ]
     while pending:
         attached = False
@@ -493,7 +526,7 @@ def _absorb_math_glue(
 def _runs_into_word(line: list[dict], index: int, taken: set[int]) -> bool:
     """span 后面没隔空格就接着正文的字母、数字：B/T = 0.31 的「= 0」后面是「.」和「31 likely」。
     收进公式会把一个数拆成两半，这一串都留在正文。中间也能收的 span 跳过去接着看。"""
-    for item in line[index + 1:]:
+    for item in line[index + 1 :]:
         text = str(item.get("text") or "")
         if id(item) in taken or not text or text[0].isspace():
             return False
@@ -539,8 +572,11 @@ def _release_ordinals(runs: list[dict], block_size: float) -> tuple[dict[int, st
             kept.append(run)
             continue
         anchor = next(
-            (span for span in run["spans"] if str(span.get("text") or "").strip()
-             and float(span.get("size") or 0) >= block_size * 0.79),
+            (
+                span
+                for span in run["spans"]
+                if str(span.get("text") or "").strip() and float(span.get("size") or 0) >= block_size * 0.79
+            ),
             None,
         )
         if anchor is None:
@@ -595,9 +631,14 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                         bbox = _glyph_box(run_spans[0])
                         for s in run_spans[1:]:
                             bbox |= _glyph_box(s)
-                        runs.append({"spans": run_spans, "bbox": bbox,
-                                     "max_size": max(s["size"] for s in run_spans),
-                                     "pos": (line_no, i, j - 1)})
+                        runs.append(
+                            {
+                                "spans": run_spans,
+                                "bbox": bbox,
+                                "max_size": max(s["size"] for s in run_spans),
+                                "pos": (line_no, i, j - 1),
+                            }
+                        )
                 i = j
             else:
                 i += 1
@@ -651,14 +692,17 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         # 前一段收住一行，后一段整个在它左下方：折到了下一行行首。
         # 分子右边还有式子，分母的根号也在左下方，不算折行
         # 数学字体的字框很高，上下两行的框会交叠，再按基线比：低了半行以上就是下一行
-        wrapped = (r["bbox"].x1 <= m["bbox"].x0
-                   and (_run_text_box(r).y0 >= _run_text_box(m).y1
-                        or _run_baseline(r) - _run_baseline(m) > block.size * 0.6)
-                   and _ends_row(m, block.span_lines))
-        return (flow_adjacent(m, r)
-                and r["bbox"].x0 - m["bbox"].x1 < block.size
-                and not wrapped
-                and y_overlap > 0.3 * min(m["bbox"].height, r["bbox"].height))
+        wrapped = (
+            r["bbox"].x1 <= m["bbox"].x0
+            and (_run_text_box(r).y0 >= _run_text_box(m).y1 or _run_baseline(r) - _run_baseline(m) > block.size * 0.6)
+            and _ends_row(m, block.span_lines)
+        )
+        return (
+            flow_adjacent(m, r)
+            and r["bbox"].x0 - m["bbox"].x1 < block.size
+            and not wrapped
+            and y_overlap > 0.3 * min(m["bbox"].height, r["bbox"].height)
+        )
 
     merged: list[dict] = []
     # 刚收过一段的 run。分子并进前面的分母以后，分子的下标要接着找到它
@@ -705,7 +749,9 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
             # 原来那个就不再单列，不然送翻文本里多出一个只有 ˆ 的占位符
             owner = next((m for m in merged if any(s is x for x in m["spans"])), None)
             if owner is not None and any(
-                str(x.get("text") or "").strip() not in _ACCENT_CHARS for x in owner["spans"] if str(x.get("text") or "").strip()
+                str(x.get("text") or "").strip() not in _ACCENT_CHARS
+                for x in owner["spans"]
+                if str(x.get("text") or "").strip()
             ):
                 continue
             for m in merged:
@@ -727,8 +773,13 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
     def text_baseline(spans: list[dict]) -> float | None:
         """几截字所在行正文的基线：这几行里正文字号的字 origin 的中位数，不能按全块算"""
         lines = {span_line.get(id(span)) for span in spans}
-        origins = sorted(span["origin"][1] for li in lines if li is not None for span in block.span_lines[li]
-                         if span["text"].strip() and span.get("origin") and span["size"] >= block.size * 0.9)
+        origins = sorted(
+            span["origin"][1]
+            for li in lines
+            if li is not None
+            for span in block.span_lines[li]
+            if span["text"].strip() and span.get("origin") and span["size"] >= block.size * 0.9
+        )
         return origins[len(origins) // 2] if origins else None
 
     line_x0 = [_line_x0(spans) for spans in block.span_lines]
@@ -761,13 +812,20 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         extras = m.get("extras") or []
         if extras:
             record["text"] = " ".join(
-                piece for piece in [record["text"], *(_formula_markup(extra["spans"], block.size).strip() for extra in extras)]
+                piece
+                for piece in [
+                    record["text"],
+                    *(_formula_markup(extra["spans"], block.size).strip() for extra in extras),
+                ]
                 if piece
             )
-            record["parts"] = [record, *(
-                _part_record(extra, block.page, f"{formula_run.name[:-4]}_p{i}.png", text_baseline(extra["spans"]))
-                for i, extra in enumerate(extras, 1)
-            )]
+            record["parts"] = [
+                record,
+                *(
+                    _part_record(extra, block.page, f"{formula_run.name[:-4]}_p{i}.png", text_baseline(extra["spans"]))
+                    for i, extra in enumerate(extras, 1)
+                ),
+            ]
             for part, before, after in zip(record["parts"][1:], [m, *extras], extras):
                 part["lead"] = _wrap_gap(before["spans"], after["spans"])
         formulas.append(record)
@@ -894,12 +952,15 @@ def _line_edge(span_lines: list[list[dict]], line_no: int, side: str) -> float:
 
 def _only_this_run(run: dict, span_lines: list[list[dict]], head: bool) -> bool:
     line_no, start, end = run["pos"]
-    spans = span_lines[line_no][:start] if head else span_lines[line_no][end + 1:]
+    spans = span_lines[line_no][:start] if head else span_lines[line_no][end + 1 :]
     return not any(str(span.get("text") or "").strip() for span in spans)
 
 
 def _continues_wrapped_formula(
-    prev: dict, nxt: dict, span_lines: list[list[dict]], block_size: float,
+    prev: dict,
+    nxt: dict,
+    span_lines: list[list[dict]],
+    block_size: float,
 ) -> bool:
     """行末公式接到下一行行首，是同一式子被换行切开。中间不能还有正文。"""
     last = (prev.get("extras") or [prev])[-1]
@@ -965,13 +1026,18 @@ def _run_baseline(run: dict) -> float:
     """公式 run 里正文字号的那几截的基线，取中位数。角标抬高、压低，不算。"""
     sizes = [float(span.get("size") or 0) for span in run["spans"] if span.get("origin") is not None]
     top = max(sizes, default=0.0)
-    lows = sorted(float(span["origin"][1]) for span in run["spans"]
-                  if span.get("origin") is not None and float(span.get("size") or 0) >= top * 0.9)
+    lows = sorted(
+        float(span["origin"][1])
+        for span in run["spans"]
+        if span.get("origin") is not None and float(span.get("size") or 0) >= top * 0.9
+    )
     return lows[len(lows) // 2] if lows else float(run["bbox"].y1)
 
 
 def _join_line_wrapped_formulas(
-    runs: list[dict], span_lines: list[list[dict]], block_size: float,
+    runs: list[dict],
+    span_lines: list[list[dict]],
+    block_size: float,
 ) -> list[dict]:
     """换行切开的公式收成一个占位符的多片。不并 bbox，否则裁进两行之间的整栏空白。
     几片并排起来比一行还宽的不收（跨两行的长网址）：占位符整个排在一行里，放不下就把整段缩小，
@@ -979,8 +1045,11 @@ def _join_line_wrapped_formulas(
     if len(runs) < 2:
         return runs
     line_width = max(
-        (max(float(span["bbox"][2]) for span in line) - min(float(span["bbox"][0]) for span in line)
-         for line in span_lines if line),
+        (
+            max(float(span["bbox"][2]) for span in line) - min(float(span["bbox"][0]) for span in line)
+            for line in span_lines
+            if line
+        ),
         default=0.0,
     )
     joined: list[dict] = []
@@ -1024,6 +1093,7 @@ def _wrap_gap(before: list[dict], after: list[dict]) -> float:
     """换行切开的公式两片之间的空。等宽字体的例句在词间断行（my dog is | hairy），留一个词距，
     取片里空格的宽度。片里的词本来就用空格隔开、断处两边都是字母或数字才算；
     网址、标识符在词中间断行，式子在运算符后面断行，都挨着排。"""
+
     def text(spans: list[dict]) -> str:
         return "".join(str(span.get("text") or "") for span in sorted(spans, key=lambda span: span["bbox"][0]))
 
@@ -1032,7 +1102,8 @@ def _wrap_gap(before: list[dict], after: list[dict]) -> float:
     if not (last.isalnum() and first.isalnum()) or not (_SPACED_WORDS_RE.search(head) or _SPACED_WORDS_RE.search(tail)):
         return _PART_GAP
     spaces = sorted(
-        span["bbox"][2] - span["bbox"][0] for span in [*before, *after]
+        span["bbox"][2] - span["bbox"][0]
+        for span in [*before, *after]
         if str(span.get("text") or "") and not str(span.get("text") or "").strip()
     )
     return max(_PART_GAP, spaces[len(spaces) // 2]) if spaces else _PART_GAP
@@ -1054,6 +1125,8 @@ def _formula_record(run: FormulaRun, spans: list[dict]) -> dict:
         "curves": [],
         "owner": run.owner,
     }
+
+
 _OPERATOR_CHARS = "+−×±"
 # 式子里的正文词不到这个数：argmax、Precision 这种名字
 _EQUATION_PROSE = 3
@@ -1115,8 +1188,11 @@ def _attribution(quote: TextBlock, below: TextBlock) -> bool:
 def _colored_example(block: TextBlock, frame: TextFrame) -> bool:
     spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
     # 单独排开的一行例句常常不带句号（The green witch arrived）
-    if not spans or block.bold or len(block.text.split()) < 4 or not (
-        _ends_sentence(block.text) or len(_visual_lines(block)) == 1
+    if (
+        not spans
+        or block.bold
+        or len(block.text.split()) < 4
+        or not (_ends_sentence(block.text) or len(_visual_lines(block)) == 1)
     ):
         return False
     if block.body_size and abs(block.size - block.body_size) > 0.5:
@@ -1126,7 +1202,9 @@ def _colored_example(block: TextBlock, frame: TextFrame) -> bool:
         return False
     if not _vivid(colors.pop()):
         return False
-    if sum(len(span["text"]) for span in spans if int(span.get("flags") or 0) & 2) * 2 > sum(len(span["text"]) for span in spans):
+    if sum(len(span["text"]) for span in spans if int(span.get("flags") or 0) & 2) * 2 > sum(
+        len(span["text"]) for span in spans
+    ):
         return False
     indent = block.rect.x0 - frame.x0
     return block.size * 1.5 <= indent <= block.size * 4 and block.rect.x1 <= frame.x1 + 2
@@ -1165,7 +1243,8 @@ def _code_block(block: TextBlock) -> bool:
 
 
 def _split_gloss_lines(
-    blocks: list[TextBlock], glosses: dict[int, tuple[pymupdf.Rect, ...]],
+    blocks: list[TextBlock],
+    glosses: dict[int, tuple[pymupdf.Rect, ...]],
 ) -> list[TextBlock]:
     """对译行和下面的意译常分在同一块里。按行拆开，对译留原文，意译另成一块：不在编号例句里的照翻。"""
     out: list[TextBlock] = []
@@ -1241,8 +1320,15 @@ def _bridge_hyphen(left: str, right: str) -> tuple[str, str]:
 # TeX 的 \' \` \^ \" \~ 把重音画成单独的字形，提出来是“Montr´eal”“Fr´ed´eric”。
 # 送翻前合成 é：模型认得出人名地名，写回的译文里也不再出现散开的重音。
 _SPACING_ACCENTS = {
-    "´": "\u0301", "`": "\u0300", "ˆ": "\u0302", "¨": "\u0308", "˜": "\u0303",
-    "ˇ": "\u030c", "˘": "\u0306", "˙": "\u0307", "˚": "\u030a",
+    "´": "\u0301",
+    "`": "\u0300",
+    "ˆ": "\u0302",
+    "¨": "\u0308",
+    "˜": "\u0303",
+    "ˇ": "\u030c",
+    "˘": "\u0306",
+    "˙": "\u0307",
+    "˚": "\u030a",
 }
 # 重音和字母之间可能隔着样式标记：ŷ 的 y 是斜体，提出来是 ˆ{i}y{/i}
 _ACCENT_BEFORE_RE = re.compile(
@@ -1312,10 +1398,12 @@ def _peel_number(sent: str, kind: str) -> tuple[str, str]:
     if not m:
         return "", sent
     number = m.group(2)
-    rest = sent[m.end():]
+    rest = sent[m.end() :]
     if not re.search(r"[^\W\d_]", strip_style_marks(rest)):
         return "", sent
-    sure = bool(re.fullmatch(r"\d{1,3}\.|\d{1,3}(?:\.\d{1,3})+\.|[A-Z](?:\.\d{1,3})+\.?|\(?[a-z]\)|\(\d{1,2}\)", number))
+    sure = bool(
+        re.fullmatch(r"\d{1,3}\.|\d{1,3}(?:\.\d{1,3})+\.|[A-Z](?:\.\d{1,3})+\.?|\(?[a-z]\)|\(\d{1,2}\)", number)
+    )
     if not sure and kind == "p" and (len(sent) > 80 or _ends_sentence(sent)):
         return "", sent
     # 粗体从编号一直延续到标题文字（{b}17.2.1 The Encoder{/b}）：编号这边关上，文字这边重开
@@ -1348,6 +1436,7 @@ _REPORT_UNITS = 200
 @dataclass
 class _PdfPlan:
     """送翻前准备好的东西：原书、块、每页的几何，和按单元整理好的送翻文本。"""
+
     src_doc: pymupdf.Document
     blocks: list[TextBlock]
     geometries: list[PageGeometry]
@@ -1366,13 +1455,19 @@ class _PdfPlan:
 
 
 def _plan_document(
-    src: Path, src_doc: pymupdf.Document, runner, layout_model: str, formula_model: FormulaModel | None = None,
+    src: Path,
+    src_doc: pymupdf.Document,
+    runner,
+    layout_model: str,
+    formula_model: FormulaModel | None = None,
     boxes: ModelBoxes | None = None,
 ) -> _PdfPlan:
     # 逐页读线、表、字占准备时间的大半，按页报进度
     formulas = formula_detector(src_doc, formula_model, boxes)
     blocks, frames, scans = _extract(
-        src_doc, lambda done, total: runner.report_stage("分析版面", done, total, "页"), formulas,
+        src_doc,
+        lambda done, total: runner.report_stage("分析版面", done, total, "页"),
+        formulas,
     )
     runner.report_stage("整理段落")
     glosses = {
@@ -1381,8 +1476,9 @@ def _plan_document(
     blocks = _split_gloss_lines(blocks, glosses)
     # 纯扫描件提不出块。有块的文件不必再逐页查文本层
     if not blocks and _scan_status(src_doc) == "scanned":
-        raise ValueError("此 PDF 为没有文本层的扫描件，请先使用 Acrobat、ABBYY 或 WPS 的 OCR 功能识别文字，"
-                         "再上传识别后的文件")
+        raise ValueError(
+            "此 PDF 为没有文本层的扫描件，请先使用 Acrobat、ABBYY 或 WPS 的 OCR 功能识别文字，再上传识别后的文件"
+        )
     if not blocks:
         raise ValueError("未提取到可用的文字：页面可能为图片，或 OCR 文本层质量过低")
     toc = src_doc.get_toc()  # 输出文件带上原书签
@@ -1413,17 +1509,24 @@ def _plan_document(
     if modeled:
         runner.report_stage("整理段落")
     roles = detector.classify(
-        [LayoutItem(b.page, pymupdf.Rect(b.rect), b.text, b.size, b.bold, _label_styled(b), _all_styled(b))
-         for b in blocks],
+        [
+            LayoutItem(b.page, pymupdf.Rect(b.rect), b.text, b.size, b.bold, _label_styled(b), _all_styled(b))
+            for b in blocks
+        ],
         geometries,
         median,
     )
     edges = margin_skips(blocks, geometries)
     displayed = (
-        _display_formula_ids(blocks, geometries) | _isolated_formula_ids(blocks, formulas, roles)
-        | _gloss_ids(blocks, glosses) | _code_panel_ids(blocks, scans)
-        | _foreign_ids(blocks) | _colored_examples(blocks, geometries) | _color_keyed_ids(blocks)
-        | _item_example_ids(blocks) | _arc_figure_ids(blocks, scans)
+        _display_formula_ids(blocks, geometries)
+        | _isolated_formula_ids(blocks, formulas, roles)
+        | _gloss_ids(blocks, glosses)
+        | _code_panel_ids(blocks, scans)
+        | _foreign_ids(blocks)
+        | _colored_examples(blocks, geometries)
+        | _color_keyed_ids(blocks)
+        | _item_example_ids(blocks)
+        | _arc_figure_ids(blocks, scans)
     )
     numbers = {pno: example_numbers(scans[pno].words) for pno in sorted({block.page for block in blocks})}
     examples = _example_ids(blocks, numbers) | _role_pattern_ids(blocks) | _concordance_ids(blocks)
@@ -1436,16 +1539,25 @@ def _plan_document(
     cell_ids = {id(block) for block in blocks if _table_cell(block, geometries[block.page])}
     # 书后的索引留原文：条目按原文字母排序，页码指向原书页，译过来既查不到，也和页码对不上
     skips = [
-        bib or role is Role.FIGURE or edge or _garbled_label(block.text) or _code_block(block)
-        or _margin_term(block) or id(block) in displayed or id(block) in cell_ids or _equation_block(block)
-        or id(block) in examples or block.index
+        bib
+        or role is Role.FIGURE
+        or edge
+        or _garbled_label(block.text)
+        or _code_block(block)
+        or _margin_term(block)
+        or id(block) in displayed
+        or id(block) in cell_ids
+        or _equation_block(block)
+        or id(block) in examples
+        or block.index
         for bib, role, edge, block in zip(biblio_skips(blocks), roles, edges, blocks)
     ]
     skip_ids = {id(b) for b, s in zip(blocks, skips) if s}
     margin_ids = {id(b) for b, edge in zip(blocks, edges) if edge}
     # 目录条目到点线就完了，索引条目到页码就完了，不和下一栏、下一页的条目并段
     halt_ids = {
-        id(b) for b, role in zip(blocks, roles)
+        id(b)
+        for b, role in zip(blocks, roles)
         if role is not Role.BODY or b.side_note or b.leader is not None or b.entry
     } | margin_ids
     aside_ids = {id(b) for b, role in zip(blocks, roles) if role in (Role.CAPTION, Role.FIGURE)}
@@ -1455,9 +1567,16 @@ def _plan_document(
         skip_ids |= {
             id(block)
             for unit in _cross_page_units(
-                blocks, median, skip_ids - cell_ids - examples, geometries, halt_ids, margin_ids, aside_ids,
+                blocks,
+                median,
+                skip_ids - cell_ids - examples,
+                geometries,
+                halt_ids,
+                margin_ids,
+                aside_ids,
             )
-            for index, block in enumerate(unit) if any(id(head) in examples for head in unit[:index])
+            for index, block in enumerate(unit)
+            if any(id(head) in examples for head in unit[:index])
         }
     units = _cross_page_units(blocks, median, skip_ids - cell_ids, geometries, halt_ids, margin_ids, aside_ids)
     units = _region_joins(units, skip_ids, halt_ids, detector.text_regions)
@@ -1469,8 +1588,7 @@ def _plan_document(
     shown = displayed | examples | {id(block) for block in blocks if _equation_block(block)}
     words_of = functools.cache(lambda pno: src_doc[pno].get_text("words"))
     aparts = [
-        len(unit) == 2 and _seam_apart(unit, by_page, geometries, covered, shown, median, words_of)
-        for unit in units
+        len(unit) == 2 and _seam_apart(unit, by_page, geometries, covered, shown, median, words_of) for unit in units
     ]
 
     sent_texts: list[str] = []
@@ -1512,8 +1630,21 @@ def _plan_document(
         sent_skips.append(False)
 
     return _PdfPlan(
-        src_doc, blocks, geometries, toc, flat_units, sent_texts, sent_formulas, sent_kinds, sent_skips,
-        skip_ids, block_kind, title, sent_labels, _index_notes(flat_units, sent_texts, sent_skips), aparts,
+        src_doc,
+        blocks,
+        geometries,
+        toc,
+        flat_units,
+        sent_texts,
+        sent_formulas,
+        sent_kinds,
+        sent_skips,
+        skip_ids,
+        block_kind,
+        title,
+        sent_labels,
+        _index_notes(flat_units, sent_texts, sent_skips),
+        aparts,
     )
 
 
