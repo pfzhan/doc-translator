@@ -1,7 +1,8 @@
 import pymupdf
 
-from app.formats import pdf, pdf_order
-from app.formats.pdf import TextBlock, _render_translated
+from app.formats import pdf_order, pdf_write
+from app.formats.pdf_blocks import TextBlock
+from app.formats.pdf_write import _render_translated
 
 
 def _source(tmp_path, body: bytes, extra: bytes = b""):
@@ -56,7 +57,7 @@ def test_moved_translations_keep_their_place_on_the_page(tmp_path, monkeypatch):
         return {w[4]: tuple(round(v, 1) for v in w[:4]) for w in out[0].get_text("words")}, _words(out)
 
     moved, order = boxes()
-    monkeypatch.setattr(pdf, "ReadingOrder", lambda page, blocks: pdf_order.ReadingOrder(page, blocks, enabled=False))
+    monkeypatch.setattr(pdf_write, "ReadingOrder", lambda page, blocks: pdf_order.ReadingOrder(page, blocks, enabled=False))
     at_end, _ = boxes()
     assert moved == at_end
     assert order == ["Header", "line", "甲乙丙", "cell", "one", "two", "丁戊己"]
@@ -176,6 +177,6 @@ def test_a_shifted_index_entry_still_goes_back_where_it_was(tmp_path, monkeypatc
     path = _source(tmp_path, _BODY)
     blocks = _blocks(path)
     first = blocks[0]
-    monkeypatch.setattr(pdf, "_index_reflow", lambda *_args, **_kwargs: {id(first): replace(first)})
+    monkeypatch.setattr(pdf_write, "_index_reflow", lambda *_args, **_kwargs: {id(first): replace(first)})
     out = _render_translated(path, blocks, ["甲乙丙", "丁戊己"], "zh-CN")
     assert _words(out) == ["Header", "line", "甲乙丙", "cell", "one", "two", "丁戊己"]

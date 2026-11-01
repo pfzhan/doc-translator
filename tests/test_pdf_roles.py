@@ -2,8 +2,9 @@ from pathlib import Path
 
 import pymupdf
 
-from app.formats.pdf import TextBlock, _cross_page_units
+from app.formats.pdf_blocks import TextBlock
 from app.formats.pdf_layout import PageGeometry
+from app.formats.pdf_merge import _cross_page_units
 from app.formats.pdf_roles import HeuristicLayout, LayoutItem, Role
 
 

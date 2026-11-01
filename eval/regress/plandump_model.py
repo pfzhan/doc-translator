@@ -7,7 +7,7 @@ code, src, cached, out = sys.argv[1:5]
 sys.path.insert(0, code)
 import pymupdf
 
-from app.formats import pdf, pdf_vision
+from app.formats import pdf, pdf_units, pdf_vision
 
 pages = json.load(open(cached))
 class Cached(pdf_vision.ModelLayout):
@@ -15,9 +15,9 @@ class Cached(pdf_vision.ModelLayout):
         self.doc = doc; self._pages = {}; self._boxes = None; self._fresh = False
     def regions(self, pno):
         return [pdf_vision.Region(l, pymupdf.Rect(r), s) for l, r, s in pages[pno]]
-pdf.layout_detector = lambda doc, *args: Cached(doc)
+pdf_units.layout_detector = lambda doc, *args: Cached(doc)
 if len(sys.argv) > 5 and sys.argv[5] == "nojoin":
-    pdf._region_joins = lambda units, *a: units
+    pdf_units._region_joins = lambda units, *a: units
 class R:
     def report_stage(self, *a, **k): pass
     def set_title(self, t): pass

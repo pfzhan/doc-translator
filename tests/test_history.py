@@ -159,12 +159,12 @@ def test_redo_from_scratch_analyses_the_pdf_again(app_env, monkeypatch):
     """PDF 的版面分析存在任务目录里，继续、重译时读回；选了“全部重新翻译”就重新分析。"""
     import pymupdf
 
-    from app.formats import pdf
+    from app.formats import pdf_units
 
     main = app_env
     calls = []
-    real_extract = pdf._extract
-    monkeypatch.setattr(pdf, "_extract", lambda *a, **k: calls.append(1) or real_extract(*a, **k))
+    real_extract = pdf_units._extract
+    monkeypatch.setattr(pdf_units, "_extract", lambda *a, **k: calls.append(1) or real_extract(*a, **k))
     doc = pymupdf.open()
     doc.new_page(width=420, height=240).insert_text(
         (40, 60), "A body paragraph long enough to be translated here.", fontsize=10,

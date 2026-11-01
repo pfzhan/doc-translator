@@ -3,7 +3,7 @@ import string
 
 import pymupdf
 
-from app.formats.pdf import extract_blocks
+from app.formats.pdf_extract import extract_blocks
 from app.formats.pdf_frame import FrameLine, margin_notes, note_groups, note_pitch, text_frames
 
 _LINE = "a body line of running text that is long enough to vote"
@@ -166,9 +166,10 @@ def test_a_caption_spanning_the_margin_keeps_its_short_lines():
 
 
 def test_displayed_formula_with_a_big_brace_keeps_its_rows():
-    from app.formats.pdf import TextBlock, _display_formula_ids
+    from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
+    from app.formats.pdf_skip import _display_formula_ids
 
     def block(text, rect, font="NimbusRomNo9L-Regu"):
         span = {"text": text, "font": font, "size": 10.0}
@@ -205,9 +206,10 @@ def test_displayed_formula_with_a_big_brace_keeps_its_rows():
 
 def test_a_centered_wide_formula_close_to_the_left_edge_is_displayed():
     """居中排的宽式子左边只空出不到两个字宽，和右边空的一样多。"""
-    from app.formats.pdf import TextBlock, _display_formula_ids
+    from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
+    from app.formats.pdf_skip import _display_formula_ids
 
     rect = pymupdf.Rect(160.5, 640, 457.7, 655)
     formula = TextBlock(
@@ -221,7 +223,7 @@ def test_a_centered_wide_formula_close_to_the_left_edge_is_displayed():
 
 
 def test_body_cut_at_a_margin_note_is_joined_back():
-    from app.formats.pdf import _rejoin_note_cuts
+    from app.formats.pdf_extract import _rejoin_note_cuts
 
     def line(text, x0, y0, x1, size=10.0):
         return {"dir": (1, 0), "bbox": (x0, y0, x1, y0 + size),
@@ -240,7 +242,7 @@ def test_body_cut_at_a_margin_note_is_joined_back():
 def test_a_bold_caption_label_starts_its_own_paragraph():
     """宽图的图注比图里的字靠左不到三个字宽，像缩进。标签单独排成粗体，是图注的第一行。
     正文里以 Figure 3.8 开头的句子字体不变，不拆。"""
-    from app.formats.pdf import _split_lines
+    from app.formats.pdf_extract import _split_lines
 
     def item(*spans, x0, y0):
         parts = [{"text": text, "size": 9.0 if font.endswith("Medi") else 8.0, "font": font, "flags": 0}
@@ -263,7 +265,7 @@ def test_a_bold_caption_label_starts_its_own_paragraph():
 
 
 def test_typewriter_dialogue_keeps_one_line_per_turn():
-    from app.formats.pdf import _split_lines
+    from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1, font="txtt", flags=8):
         span = {"text": text, "size": 9.0, "font": font, "flags": flags}
@@ -283,7 +285,7 @@ def test_typewriter_dialogue_keeps_one_line_per_turn():
 
 def test_prose_after_typewriter_lines_starts_a_new_paragraph():
     """等宽字排的小号列表项后面紧跟正文首行。首行缩进和列表项的左缘只差一点，也要拆开。"""
-    from app.formats.pdf import _split_lines
+    from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1, size, font, flags):
         span = {"text": text, "size": size, "font": font, "flags": flags}
@@ -303,7 +305,7 @@ def test_prose_after_typewriter_lines_starts_a_new_paragraph():
 def test_a_larger_line_below_a_slide_formula_starts_a_new_paragraph():
     """幻灯片里缩进的式子下面接着大一号的小标题，左缘只差一个多字宽，像首行缩进，要拆开。
     小型大写的词后面回到正文字号、接着写的半句不拆。"""
-    from app.formats.pdf import _split_lines
+    from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1, size, font="TimesNewRomanPSMT"):
         span = {"text": text, "size": size, "font": font, "flags": 0}
@@ -325,7 +327,7 @@ def test_a_larger_line_below_a_slide_formula_starts_a_new_paragraph():
 def test_the_short_last_line_of_an_example_does_not_open_the_next_paragraph():
     """例句的悬挂续行没排满、以句号收尾，下一段从栏边起笔，只左跳一个多字宽，不是首行缩进。
     首行缩进的段落第一行排满，照样接着。"""
-    from app.formats.pdf import _split_lines
+    from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1):
         span = {"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}
@@ -354,7 +356,7 @@ def test_the_short_last_line_of_an_example_does_not_open_the_next_paragraph():
 def test_a_bold_label_after_a_finished_sentence_opens_the_next_item():
     """定义列表里一行一条，排得差不多满，按硬换行看不出来。上一句说完、下一行以粗体标签起头的是下一条。
     句中折行落到行首的粗体词不拆。"""
-    from app.formats.pdf import _split_lines
+    from app.formats.pdf_extract import _split_lines
 
     def item(label, rest, y0, x1):
         spans = [{"text": label, "size": 10.0, "font": "NimbusRomNo9L-Medi", "flags": 16}] if label else []
@@ -377,7 +379,7 @@ def test_a_bold_label_after_a_finished_sentence_opens_the_next_item():
 def test_a_bold_label_after_a_short_unfinished_item_opens_the_next_item():
     """定义列表的条目是半句例句，没有句末标点（mouse² : … a quiet animal like a mouse）。
     上一条也是粗体标签起头、没写到右缘，下一行的粗体标签是下一条"""
-    from app.formats.pdf import _split_lines
+    from app.formats.pdf_extract import _split_lines
 
     def item(label, rest, y0, x1):
         spans = [{"text": label, "size": 10.0, "font": "CMSSBX10", "flags": 20},
@@ -392,7 +394,8 @@ def test_a_bold_label_after_a_short_unfinished_item_opens_the_next_item():
     ]
     assert _split_lines(rows) == [[0], [1], [2], [3]]
     # 分成两块以后，也不按图注的续行并回去
-    from app.formats.pdf import TextBlock, _merge_caption_fragments
+    from app.formats.pdf_blocks import TextBlock
+    from app.formats.pdf_extract import _merge_caption_fragments
 
     boxes = [pymupdf.Rect(142, 584, 307, 596), pymupdf.Rect(142, 596, 412, 608)]
     blocks = [TextBlock(page=0, rect=box, line_rects=[box], text=text, size=10.0, color="#000", bold=False,
@@ -412,7 +415,7 @@ def test_a_heading_across_a_narrow_gutter_is_not_joined_to_the_left_line():
     page.insert_text((352, 318), "Ensemble Classification", fontsize=10, fontname="hebo")
     for i in range(6):
         page.insert_text((311, 340 + 12 * i), f"The current reported best results on ImageNet line {i}", fontsize=10)
-    from app.formats.pdf import _rejoin_split_lines
+    from app.formats.pdf_extract import _rejoin_split_lines
 
     data = page.get_text("dict")
     _rejoin_split_lines(data)
@@ -422,7 +425,7 @@ def test_a_heading_across_a_narrow_gutter_is_not_joined_to_the_left_line():
 
 def test_an_inline_enumeration_wrapping_onto_a_new_line_is_not_a_list():
     """图注里 (a) 写在行中间，(b) 碰巧落到行首、上一行排满：是同一段的折行。各项都在行首的是列表。"""
-    from app.formats.pdf import _split_lines
+    from app.formats.pdf_extract import _split_lines
 
     def item(text, y, x1=504):
         span = {"text": text, "size": 9.0, "font": "Times-Roman", "flags": 0}
@@ -441,7 +444,8 @@ def test_an_inline_enumeration_wrapping_onto_a_new_line_is_not_a_list():
 
 def test_blocks_in_a_flagged_monospace_font_are_code():
     """txtt 这类字体名字里没有 Mono，只有 PDF 的等宽标志。整块是这种字就留原文。"""
-    from app.formats.pdf import TextBlock, _code_block
+    from app.formats.pdf_blocks import TextBlock
+    from app.formats.pdf_units import _code_block
 
     def block(*spans):
         return TextBlock(
@@ -462,7 +466,9 @@ def test_blocks_in_a_flagged_monospace_font_are_code():
 
 
 def test_gloss_line_is_split_from_its_free_translation():
-    from app.formats.pdf import TextBlock, _gloss_ids, _split_gloss_lines
+    from app.formats.pdf_blocks import TextBlock
+    from app.formats.pdf_skip import _gloss_ids
+    from app.formats.pdf_units import _split_gloss_lines
 
     lines = [pymupdf.Rect(174, 400, 399, 410), pymupdf.Rect(174, 414, 389, 424)]
     spans = [[{"text": "1SG.S-E-midnight-big-E-sew-1SG.S[PFV]", "size": 10.0}],
@@ -500,7 +506,8 @@ def test_centered_author_rows_stay_one_item_per_row():
 def test_a_centered_name_list_wrapping_at_commas_stays_one_unit():
     """作者名单居中排、在逗号处折行，PyMuPDF 分成了几块。下一行大写起头也是接着写的，
     拆开后单独一行的名字会被音译。"""
-    from app.formats.pdf import TextBlock, _merge_continuations
+    from app.formats.pdf_blocks import TextBlock
+    from app.formats.pdf_extract import _merge_continuations
 
     def row(text, x0, y0, x1):
         rect = pymupdf.Rect(x0, y0, x1, y0 + 10)
@@ -522,7 +529,7 @@ def test_a_centered_name_list_wrapping_at_commas_stays_one_unit():
 def test_a_formula_wrapping_after_an_operator_keeps_its_tail():
     """行尾停在 > 上，下一行行首的 100) 是式子的后半截，不是编号也不是符号行。
     单独排的式子里分子从等号右边起笔，仍拆开；===Instructions=== 后面的编号照常是列表。"""
-    from app.formats.pdf import _split_lines
+    from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y, x1=504):
         span = {"text": text, "size": 10.0, "font": "Times-Roman", "flags": 0}
@@ -543,7 +550,7 @@ def test_a_formula_wrapping_after_an_operator_keeps_its_tail():
 
 def test_a_justified_row_with_an_italic_variable_stays_one_row():
     """两端对齐的一行被 PyMuPDF 按词拆开，其中一截夹着斜体的变量 AVG(E)。仍是同一行，不从中间拆段。"""
-    from app.formats.pdf import _split_lines
+    from app.formats.pdf_extract import _split_lines
 
     def piece(x0, x1, y, *spans):
         text = "".join(t for t, _ in spans)
@@ -566,7 +573,7 @@ def test_a_justified_row_with_an_italic_variable_stays_one_row():
 
 def test_a_line_opening_with_a_closing_bracket_continues_the_row():
     """行尾单拆出来一个等宽的 [，下一行以 ]) 起头接着写。不是符号行后面另起一段。"""
-    from app.formats.pdf import _split_lines
+    from app.formats.pdf_extract import _split_lines
 
     def piece(x0, x1, y, *spans):
         text = "".join(t for t, _ in spans)
@@ -589,7 +596,7 @@ def test_a_line_opening_with_a_closing_bracket_continues_the_row():
 def test_a_figure_row_pressed_onto_the_caption_is_its_own_row():
     """图里的操作行压在图注第一行上，墨迹框交叠过半，同字号、基线差四磅，是上下两行，不和图注并成一行。
     行内分式的小号分子分母在别的基线上，那一行照样是一行。"""
-    from app.formats.pdf import _left_to_right, _split_lines
+    from app.formats.pdf_extract import _left_to_right, _split_lines
 
     def item(text, x0, y0, x1, y1, base, font="NimbusRomNo9L-Regu", size=9.0):
         span = {"text": text, "size": size, "font": font, "flags": 0, "origin": (x0, base)}
@@ -618,7 +625,8 @@ def test_a_figure_row_pressed_onto_the_caption_is_its_own_row():
     ]
     assert _split_lines(_left_to_right(row)) == [[0, 1]]
     # 两行分进了两块，块之间也不按同一行并
-    from app.formats.pdf import TextBlock, _merge_visual_lines
+    from app.formats.pdf_blocks import TextBlock
+    from app.formats.pdf_extract import _merge_visual_lines
 
     def blk(entry):
         text, rect, spans = entry
@@ -633,8 +641,9 @@ def test_a_figure_row_pressed_onto_the_caption_is_its_own_row():
 def test_underlined_letters_are_marked_and_a_fraction_bar_is_not():
     """字下面画的线（例 6 里标出的列）认成下划线，只标线下面那几个字；行内小分数的分数线下面紧挨着分母，
     不算下划线。"""
-    from app.formats.pdf import _attach_ink, _mark_underlines, _PageChars
+    from app.formats.pdf_blocks import _attach_ink
     from app.formats.pdf_layout import scan_page
+    from app.formats.pdf_math import _mark_underlines, _PageChars
 
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=300)
@@ -656,8 +665,9 @@ def test_underlined_letters_are_marked_and_a_fraction_bar_is_not():
 
 def test_digits_under_a_radical_bar_join_the_formula():
     """√81 的 81 和正文同一种字体。根号横线下面的字标成公式，句号不算。"""
-    from app.formats.pdf import _attach_ink, _mark_radicands, _PageChars, _span_is_math
+    from app.formats.pdf_blocks import _attach_ink, _span_is_math
     from app.formats.pdf_layout import scan_page
+    from app.formats.pdf_math import _mark_radicands, _PageChars
 
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=300)
@@ -681,7 +691,7 @@ def test_digits_under_a_radical_bar_join_the_formula():
 def test_a_glyph_is_measured_by_drawing_it_alone():
     """字体框量错的字形（txsys 的根号）单画一遍量墨迹：上下沿相对基线，左右沿相对起笔点，单位是字号。
     斜体 f 的弯钩和尾巴伸出字宽。"""
-    from app.formats.pdf import _measure_glyph
+    from app.formats.pdf_blocks import _measure_glyph
 
     font = pymupdf.Font("tiro")
     top, bottom, width, left, right = _measure_glyph(font.buffer, font.has_glyph(ord("g")))
@@ -697,7 +707,7 @@ def test_a_glyph_is_measured_by_drawing_it_alone():
 
 def test_glyphs_are_matched_by_the_glyph_id_used_on_the_page():
     """逐字按页上用的字形编号记下，空白不收。自定义编码的字体（CMEX）按 Unicode 找不到字形。"""
-    from app.formats.pdf import _char_origins
+    from app.formats.pdf_blocks import _char_origins
 
     doc = pymupdf.open()
     page = doc.new_page()
@@ -731,7 +741,7 @@ def test_an_underline_is_written_as_a_mark_and_drawn_under_the_words():
 
 def test_a_value_column_beside_a_word_label_is_its_own_paragraph():
     """标签和值分两栏排：值的下一行从值的左缘起笔。值另成一段，标签单独翻；条目号后面的悬挂缩进仍是一条。"""
-    from app.formats.pdf import _split_lines
+    from app.formats.pdf_extract import _split_lines
 
     def item(text, x0, y0, x1):
         span = {"text": text, "size": 9.0, "font": "Times-Roman", "flags": 0}
@@ -757,7 +767,8 @@ def test_a_value_column_beside_a_word_label_is_its_own_paragraph():
 
 def test_a_word_label_does_not_absorb_the_value_column_block_beside_it():
     """标签和值分在两块时，值是几行一栏，不并进标签；图注标签后面的半句照旧并。"""
-    from app.formats.pdf import TextBlock, _merge_caption_fragments
+    from app.formats.pdf_blocks import TextBlock
+    from app.formats.pdf_extract import _merge_caption_fragments
 
     def blk(text, rects):
         rect = pymupdf.Rect(rects[0])

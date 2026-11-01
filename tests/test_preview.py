@@ -474,7 +474,7 @@ def test_cached_prose_echo_is_dropped_and_retried():
 
 def test_stray_placeholders_cleaned_from_formula_free_blocks():
     """没有公式的块：模型错配/幻觉产生的 {vN} 占位符一律剥掉，不漏进输出。"""
-    from app.formats.pdf import _STRAY_PLACEHOLDER_RE
+    from app.formats.pdf_restore import _STRAY_PLACEHOLDER_RE
 
     t = "其中{v1}从{v2}到{v3}进行线性递减"
     assert _STRAY_PLACEHOLDER_RE.sub("", t) == "其中从到进行线性递减"

@@ -1,7 +1,10 @@
 import pymupdf
 
-from app.formats.pdf import TextBlock, _absorb_curves, _assign_restored_parts, _placeholderize, _prepare_unit
+from app.formats.pdf_blocks import TextBlock
+from app.formats.pdf_crop import _absorb_curves
+from app.formats.pdf_restore import _assign_restored_parts
 from app.formats.pdf_runs import FormulaRun, TextRun, intersecting_curves, split_page_boundary, strip_boundary
+from app.formats.pdf_units import _placeholderize, _prepare_unit
 from app.prompts import build_messages
 
 
@@ -78,7 +81,7 @@ def test_prepare_unit_marks_the_run_boundary():
 
 def test_assign_keeps_the_cross_page_paragraph_together():
     """跨页译文整段留在起始页。汉字分界不加空格，否则「相当」和「不错」会分开。"""
-    from app.formats.pdf import SPILL_TAIL
+    from app.formats.pdf_blocks import SPILL_TAIL
 
     left = TextBlock(
         page=0, rect=pymupdf.Rect(0, 0, 40, 12), line_rects=[],
@@ -96,7 +99,7 @@ def test_assign_keeps_the_cross_page_paragraph_together():
 
 def test_assign_splits_a_paragraph_cut_by_a_display_at_the_boundary():
     """两块中间隔着行间公式、例句时按分界切回两块，公式哨兵跟着自己的块走。模型丢了分界时仍整段留在起始块。"""
-    from app.formats.pdf import SPILL_TAIL
+    from app.formats.pdf_blocks import SPILL_TAIL
 
     left = TextBlock(
         page=0, rect=pymupdf.Rect(0, 0, 40, 12), line_rects=[],

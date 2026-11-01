@@ -36,5 +36,5 @@ ignore = [
 "tests/*" = ["E402"]  # conftest sets environment variables before importing the app
 "eval/*" = ["E402"]   # scripts put the project directory on sys.path before importing it
 # Closures defined in a loop are called within the same iteration
-"app/formats/pdf.py" = ["B023"]
+"app/formats/pdf_{restore,skip,units,write}.py" = ["B023"]
 "eval/tools/gold.py" = ["B023"]

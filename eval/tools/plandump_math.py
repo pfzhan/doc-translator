@@ -6,7 +6,7 @@ from pathlib import Path
 
 code, src, out = sys.argv[1:4]
 sys.path.insert(0, code)
-from app.formats import pdf
+from app.formats import pdf, pdf_units
 
 if len(sys.argv) > 4:
     import pymupdf
@@ -20,7 +20,7 @@ if len(sys.argv) > 4:
 
         def regions(self, pno):
             return [pdf_vision.Region(l, pymupdf.Rect(r), s) for l, r, s in boxes[pno]]
-    pdf.layout_detector = lambda doc, *args: Cached(doc)
+    pdf_units.layout_detector = lambda doc, *args: Cached(doc)
 class R:
     def report_stage(self, *a, **k): pass
     def set_title(self, t): pass

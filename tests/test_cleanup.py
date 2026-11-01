@@ -169,12 +169,12 @@ def _pdf() -> bytes:
 
 
 def test_jobs_of_the_same_book_share_the_layout_analysis(app_env, monkeypatch):
-    from app.formats import pdf
+    from app.formats import pdf_units
 
     main = app_env
     calls = []
-    real_extract = pdf._extract
-    monkeypatch.setattr(pdf, "_extract", lambda *a, **k: calls.append(1) or real_extract(*a, **k))
+    real_extract = pdf_units._extract
+    monkeypatch.setattr(pdf_units, "_extract", lambda *a, **k: calls.append(1) or real_extract(*a, **k))
     data = _pdf()
     with TestClient(main.app) as client:
         a = wait_done(client, submit(client, name="paper.pdf", data=data)["id"])

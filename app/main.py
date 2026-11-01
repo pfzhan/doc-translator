@@ -19,7 +19,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from . import cleanup, history, layout_model, quantize
 from .formats import PREVIEW_FORMATS, SUPPORTED, output_variant, translate_file
 from .formats.epub import book_outline
-from .formats.pdf import mupdf_turn, translated_from_bilingual
+from .formats.pdf import mupdf_turn
+from .formats.pdf_output import translated_from_bilingual
 from .formats.pdf_vision import FormulaModel, formula_parallel
 from .history import Job, JobStore
 from .languages import GOOGLE_CODES, LANGUAGES

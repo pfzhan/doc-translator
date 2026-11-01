@@ -46,7 +46,8 @@ def test_a_tall_inline_formula_opens_up_its_line():
 
 def test_style_marks_are_written_back(tmp_path):
     """粗体、斜体、较小字号按标记写回，不留在页面文字里。"""
-    from app.formats.pdf import TextBlock, _render_translated
+    from app.formats.pdf_blocks import TextBlock
+    from app.formats.pdf_write import _render_translated
 
     src = tmp_path / "src.pdf"
     doc = pymupdf.open()
@@ -78,7 +79,8 @@ def test_style_marks_are_written_back(tmp_path):
 
 def test_plain_paragraph_keeps_parentheses_and_separates_lines(tmp_path):
     """没有公式的段落也由排版器断行：短括号组留在同一行，行与行不重叠。"""
-    from app.formats.pdf import TextBlock, _render_translated
+    from app.formats.pdf_blocks import TextBlock
+    from app.formats.pdf_write import _render_translated
 
     src = tmp_path / "src.pdf"
     doc = pymupdf.open()
@@ -108,7 +110,8 @@ def test_plain_paragraph_keeps_parentheses_and_separates_lines(tmp_path):
 
 def test_typeset_formula_tracks_the_line_baseline(tmp_path):
     """公式下沿贴在同一行文字的基线上，不跟盒子顶走。"""
-    from app.formats.pdf import TextBlock, _render_translated
+    from app.formats.pdf_blocks import TextBlock
+    from app.formats.pdf_write import _render_translated
 
     src = tmp_path / "src.pdf"
     doc = pymupdf.open()

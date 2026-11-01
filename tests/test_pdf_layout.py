@@ -2,15 +2,12 @@ from dataclasses import replace
 
 import pymupdf
 
-from app.formats.pdf import (
-    TextBlock,
-    _cross_page_units,
-    _expand_right,
-    _merge_continuations,
-    _render_translated,
-    extract_blocks,
-)
+from app.formats.pdf_blocks import TextBlock
+from app.formats.pdf_extract import _merge_continuations, extract_blocks
 from app.formats.pdf_layout import PageGeometry, RuledTable, margin_skips, reading_order
+from app.formats.pdf_merge import _cross_page_units
+from app.formats.pdf_place import _expand_right
+from app.formats.pdf_write import _render_translated
 
 
 def _stack(x0: float, x1: float, y0: float, n: int = 4, step: float = 24) -> list[pymupdf.Rect]:
@@ -154,7 +151,7 @@ def test_expand_right_honors_column_limit():
 def test_the_indented_next_line_does_not_stop_widening():
     """索引条目下一行是缩进的子条目，写入框比原文行多出的留白探进下一行，不是并排的障碍。
     算法框和段落首行并排十几点，就算比段落高很多也要让开。"""
-    from app.formats.pdf import _beside_rows
+    from app.formats.pdf_write import _beside_rows
 
     entry_row = pymupdf.Rect(197, 130.4, 234, 140.8)
     entry_box = pymupdf.Rect(197, 131.2, 236, 144.8)
@@ -173,7 +170,7 @@ def test_the_indented_next_line_does_not_stop_widening():
 def test_an_equation_number_between_two_rows_is_beside_them():
     """分情况的行间公式，右边的式号夹在「if …」「otherwise」两行中间，和每一行都只交叠一小半，
     也在这两行旁边，右扩要让开。在最后一行下面的不算。"""
-    from app.formats.pdf import _beside_rows, _on_rows
+    from app.formats.pdf_write import _beside_rows, _on_rows
 
     rows = [pymupdf.Rect(351.4, 215.1, 422.0, 227.1), pymupdf.Rect(351.4, 229.4, 390.1, 241.4)]
     number = pymupdf.Rect(471.5, 222.8, 493.2, 233.6)
@@ -780,7 +777,7 @@ def test_open_edged_table_gets_its_header_row_and_outer_columns():
 
 def test_table_cells_never_continue_into_each_other():
     """格子的列看起来像栏，上一列的末格不能接到下一列的表头上。"""
-    from app.formats.pdf import _can_continue
+    from app.formats.pdf_merge import _can_continue
 
     def cell(text, x0, y0, clip):
         rect = pymupdf.Rect(x0, y0, x0 + 80, y0 + 12)
@@ -989,7 +986,7 @@ def test_a_displayed_formula_inside_an_algorithm_step_keeps_its_glyphs():
 def test_an_algorithm_formula_beside_a_distant_comment_keeps_its_glyphs():
     """算法一步的行间公式和右边远处的注释在同一格：注释照翻，公式留原字，不压成一行高塞进注释里。
     紧挨着正文的式子仍是句子的一部分。"""
-    from app.formats.pdf import _merge_cells
+    from app.formats.pdf_extract import _merge_cells
 
     clip = (307.7, 576.4, 543.5, 608.1)
 
@@ -1010,7 +1007,7 @@ def test_an_algorithm_formula_beside_a_distant_comment_keeps_its_glyphs():
 
 def test_far_apart_labels_in_one_box_stay_separate():
     """框里隔开的几个节点标签不是一句话，各翻各的、各写回各的位置。挨着的换行仍并成一句。"""
-    from app.formats.pdf import _merge_cells
+    from app.formats.pdf_extract import _merge_cells
 
     clip = (388.0, 163.0, 687.0, 373.0)
 
@@ -1536,7 +1533,7 @@ def test_filled_cells_overlapping_along_their_edges_are_a_table():
 
 def test_short_margin_terms_stay_original():
     """页边的术语留原文；成句的旁注照常翻译。"""
-    from app.formats.pdf import _margin_term
+    from app.formats.pdf_units import _margin_term
 
     def note(text):
         return replace(_block(text, 0, pymupdf.Rect(80, 100, 128, 110), 7.2), side_note=True)
@@ -1549,7 +1546,7 @@ def test_short_margin_terms_stay_original():
 
 def test_an_epigraph_in_another_language_stays_original():
     """英文书里的西班牙文题记分两列排，一项只有一两个词。合起来认出是外文，整组留原文。"""
-    from app.formats.pdf import _foreign_ids
+    from app.formats.pdf_skip import _foreign_ids
 
     body = [
         _block("Classification lies at the heart of language processing and intelligence. Recognizing a "

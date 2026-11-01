@@ -9,7 +9,7 @@ code, src, out, boxes_path, kind = sys.argv[1:6]
 sys.path.insert(0, code)
 import pymupdf
 
-from app.formats import pdf
+from app.formats import pdf, pdf_units
 
 boxes = json.load(open(boxes_path))
 
@@ -24,7 +24,7 @@ class Cached:
             yield [pymupdf.Rect(r) for label, r, _s in found if label == "embedding"]
 
 
-pdf.formula_detector = lambda doc, *args: Cached()
+pdf_units.formula_detector = lambda doc, *args: Cached()
 if len(sys.argv) > 6:
     from app.formats import pdf_vision
     regions = json.load(open(sys.argv[6]))
@@ -35,7 +35,7 @@ if len(sys.argv) > 6:
 
         def regions(self, pno):
             return [pdf_vision.Region(l, pymupdf.Rect(r), s) for l, r, s in regions[pno]]
-    pdf.layout_detector = lambda doc, *args: Layout(doc)
+    pdf_units.layout_detector = lambda doc, *args: Layout(doc)
 class R:
     def report_stage(self, *a, **k): pass
     def set_title(self, t): pass

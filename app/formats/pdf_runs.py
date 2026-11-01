@@ -1,6 +1,6 @@
 """段落的有序 run：文字带样式和基线，公式带框、基线和相对所在行的偏移。
 
-检测仍在 pdf.py。这里只放模型和两件纯操作：按 run 分界切开译文，以及挑出
+公式 span 在 pdf_math.py 标出，切 run、做占位符在 pdf_units.py。这里只放模型和两件纯操作：按 run 分界切开译文，以及挑出
 落在公式框里的曲线。含公式的段落由排版器按行落位。
 """
 from __future__ import annotations
