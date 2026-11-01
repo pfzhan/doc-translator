@@ -1,4 +1,5 @@
-"""Markdown 翻译：按块切分，跳过代码块 / front matter / HTML 块，保留列表、引用、表格结构。"""
+"""Markdown translation: split into blocks, skip code blocks / front matter / HTML blocks, and keep the
+structure of lists, quotes and tables."""
 
 import re
 from dataclasses import dataclass, field
@@ -7,22 +8,23 @@ from pathlib import Path
 from .html_blocks import BIBLIO_HEADING_RE
 
 FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
-# $$ 开头的行起一个公式块，到以 $$ 结尾的行为止
+# A line starting with $$ opens a formula block, which runs to the line ending with $$
 MATH_OPEN_RE = re.compile(r"^\s{0,3}\$\$")
 HEADING_RE = re.compile(r"^(\s{0,3}#{1,6}\s+)(.*?)(\s+#+\s*)?$")
 LIST_RE = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s+)?)(.*)$")
-# 列表项正文的起始列：标记加后面的空格，任务框算正文
+# Start column of list item content: the marker plus the following spaces; a task box counts as content
 LIST_CONTENT_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 QUOTE_RE = re.compile(r"^(\s*(?:>\s?)+)(.*)$")
-# GFM 表格分隔行：每格至少一个 -，可以带冒号对齐
+# GFM table separator row: at least one - per cell, optionally with colons for alignment
 TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
 HR_RE = re.compile(r"^\s{0,3}([-*_])(\s*\1){2,}\s*$")
-# Setext 标题的下划线：段落下面一行 === 是一级标题，--- 是二级标题
+# Setext heading underline: a line of === under a paragraph makes a level 1 heading, --- a level 2 heading
 SETEXT_RE = re.compile(r"^\s{0,3}(=+|-+)\s*$")
 HTML_TAG_RE = re.compile(r"^\s{0,3}</?([a-zA-Z][a-zA-Z0-9-]*)(?=[\s/>]|$)")
-# 整行只有一个完整的开始或结束标签，后面没有文字
+# The whole line is one complete start or end tag, with no text after it
 LONE_TAG_RE = re.compile(r"^\s{0,3}</?[a-zA-Z][a-zA-Z0-9-]*(?:\s[^<>]*)?/?>\s*$")
-# CommonMark 里能开启 HTML 块的块级标签。<kbd>、<a> 这类行内标签开头的是普通段落
+# Block-level tags that open an HTML block in CommonMark. A line starting with an inline tag such as <kbd> or
+# <a> is an ordinary paragraph
 HTML_BLOCK_TAGS = frozenset(
     """
 address article aside base basefont blockquote body caption center col colgroup dd details dialog dir div dl
@@ -31,23 +33,24 @@ li link main menu menuitem nav noframes ol optgroup option p param search sectio
 tfoot th thead title tr track ul pre script style textarea
 """.split()
 )
-# 链接引用定义：[id]: https://...。脚注 [^1]: 有正文，不算
+# Link reference definition: [id]: https://... A footnote [^1]: has body text and does not count
 LINK_DEF_RE = re.compile(r"^\s{0,3}\[(?!\^)[^\]]+\]:\s*\S")
-# GitHub 提示框标记：> [!NOTE]
+# GitHub alert marker: > [!NOTE]
 ALERT_RE = re.compile(r"^\[![A-Za-z]+\]$")
-# 只有链接 / 图片 / 符号，没有可翻译文字
+# Only links / images / symbols, no translatable text
 NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
 
 
 def _translatable(text: str) -> bool:
-    stripped = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)  # 去掉图片
-    stripped = re.sub(r"`[^`]*`", "", stripped)  # 去掉行内代码
+    stripped = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)  # Remove images
+    stripped = re.sub(r"`[^`]*`", "", stripped)  # Remove inline code
     stripped = re.sub(r"https?://\S+", "", stripped)
     return bool(stripped.strip()) and not NO_TEXT_RE.match(stripped.strip())
 
 
 def _starts_html_block(line: str) -> bool:
-    """注释、<!DOCTYPE>、块级标签，或整行只有一个标签时是 HTML 块；自动链接 <https://...> 不是。"""
+    """A comment, <!DOCTYPE>, a block-level tag, or a line holding a single tag starts an HTML block; an
+    autolink <https://...> does not."""
     stripped = line.lstrip()
     if stripped.startswith(("<!--", "<?", "<!")):
         return True
@@ -58,14 +61,16 @@ def _starts_html_block(line: str) -> bool:
 
 
 def _closes_fence(line: str, fence: str) -> bool:
-    """结束栏用同一种字符、不比开栏短，后面不能带别的字。四个反引号的栏里可以写 ```。"""
+    """A closing fence uses the same character, is no shorter than the opening fence, and has nothing after it.
+    A fence of four backticks can contain ```."""
     stripped = line.strip()
     return len(stripped) >= len(fence) and stripped == fence[0] * len(stripped)
 
 
 def _math_end(lines: list[str], start: int) -> int | None:
-    """lines[start] 起的 $$ 公式块的最后一行。$$x$$ 后面还有字的是行内公式；
-    空行前还没闭合的不算公式块，免得一个漏写的 $$ 吞掉后面整篇。"""
+    """Last line of the $$ formula block starting at lines[start]. $$x$$ followed by more text is an inline
+    formula. A block not closed before a blank line is not a formula block, so that one missing $$ does not
+    swallow the rest of the document."""
     rest = lines[start].strip()[2:]
     if "$$" in rest:
         return start if rest.rstrip().endswith("$$") and rest.count("$$") == 1 else None
@@ -78,7 +83,8 @@ def _math_end(lines: list[str], start: int) -> int | None:
 
 
 def _interrupts_paragraph(line: str) -> bool:
-    """CommonMark：引用、非空的无序列表项、从 1 开始的有序列表项可以紧跟在段落后面，不用空行隔开。"""
+    """CommonMark: a quote, a non-empty bullet list item, or an ordered list item starting at 1 can directly
+    follow a paragraph without a blank line in between."""
     if QUOTE_RE.match(line):
         return True
     m = LIST_RE.match(line)
@@ -92,7 +98,7 @@ def _interrupts_paragraph(line: str) -> bool:
 class Block:
     kind: str  # raw / heading / setext / para / list / quote / table
     lines: list[str]
-    # 每个可翻译片段：(行号, 前缀, 文本)
+    # Each translatable segment: (line index, prefix, text)
     segments: list[tuple[int, str, str]] = field(default_factory=list)
 
 
@@ -100,7 +106,7 @@ def split_blocks(text: str) -> list[Block]:
     lines = text.split("\n")
     blocks: list[Block] = []
     i = 0
-    # YAML front matter（---）和 Hugo 的 TOML front matter（+++）
+    # YAML front matter (---) and Hugo TOML front matter (+++)
     if lines and lines[0].strip() in ("---", "+++"):
         ends = ("---", "...") if lines[0].strip() == "---" else ("+++",)
         for j in range(1, len(lines)):
@@ -110,7 +116,8 @@ def split_blocks(text: str) -> list[Block]:
                 break
 
     para: list[str] = []
-    # 最近一个列表项正文的起始列。空行后缩进到这一列的段落还属于这个列表项
+    # Content start column of the most recent list item. A paragraph after a blank line indented to this column
+    # still belongs to that list item
     list_offset: int | None = None
 
     def flush():
@@ -137,17 +144,17 @@ def split_blocks(text: str) -> list[Block]:
             continue
         end = _math_end(lines, i) if MATH_OPEN_RE.match(line) else None
         if end is not None:
-            # 公式原样保留：块里 + b、- c 这样的行不能当成列表项
+            # Formulas are kept as is: lines such as + b or - c inside the block must not be taken as list items
             flush()
             blocks.append(Block("raw", lines[i : end + 1]))
             i = end + 1
             continue
-        # Tab 按 CommonMark 算到下一个 4 的倍数列
+        # Per CommonMark, a tab advances to the next column that is a multiple of 4
         expanded = line.expandtabs(4)
         indent = len(expanded) - len(expanded.lstrip(" "))
         if list_offset is not None and indent < list_offset and not para:
             list_offset = None
-        # 列表项里的缩进代码块要比正文再多缩进 4 格
+        # An indented code block in a list item needs 4 more columns of indentation than the item content
         in_item = list_offset is not None and indent < list_offset + 4
         if para and SETEXT_RE.match(line):
             blocks.append(Block("setext", para + [line]))
@@ -155,7 +162,7 @@ def split_blocks(text: str) -> list[Block]:
             i += 1
             continue
         if HR_RE.match(line) or indent >= 4 and not para and not in_item:
-            # 分隔线 / 缩进代码块
+            # Thematic break / indented code block
             flush()
             blocks.append(Block("raw", [line]))
             i += 1
@@ -173,7 +180,7 @@ def split_blocks(text: str) -> list[Block]:
             i = j
             continue
         if LINK_DEF_RE.match(line) and not para:
-            # 连续几行定义并成一段会让后面的定义失效，原样保留
+            # Joining consecutive definitions into one paragraph would invalidate the later ones; keep them as is
             j = i
             while j < len(lines) and LINK_DEF_RE.match(lines[j]):
                 j += 1
@@ -193,7 +200,8 @@ def split_blocks(text: str) -> list[Block]:
         if LIST_RE.match(line) and not para:
             j = i
             while j < len(lines) and lines[j].strip() and not FENCE_RE.match(lines[j]):
-                # 列表后紧跟的标题 / 引用 / HTML 块 / 分隔线是新的块级结构，不能并进最后一个列表项
+                # A heading / quote / HTML block / thematic break right after a list is a new block structure and
+                # must not be merged into the last list item
                 if (
                     j > i
                     and not LIST_RE.match(lines[j])
@@ -223,15 +231,17 @@ def split_blocks(text: str) -> list[Block]:
 
 
 def _starts_table(header: str, separator: str) -> bool:
-    """GFM：表头有 |，下一行是分隔行，两行列数一样。列数不同时 --- 是 Setext 标题的下划线。"""
+    """GFM: the header row has |, the next line is a separator row, and both have the same number of columns.
+    With different column counts, --- is a Setext heading underline."""
     if "|" not in header or not TABLE_SEP_RE.match(separator):
         return False
     return len(_split_cells(header)[1]) == len(_split_cells(separator)[1])
 
 
 def _quote_end(lines: list[str], start: int) -> int:
-    """引用块到哪一行为止（不含）。不带 > 的行紧跟在引用里的段落文字后面、又不开新块时，
-    是这一段的懒续行（CommonMark），还算引用。标题、提示框标记、代码块后面不能懒续。"""
+    """End line (exclusive) of a quote block. A line without > that directly follows paragraph text in the
+    quote and does not open a new block is a lazy continuation line of that paragraph (CommonMark) and still
+    belongs to the quote. Headings, alert markers and code blocks cannot be continued lazily."""
     j = start
     fence = ""
     in_text = False
@@ -254,7 +264,8 @@ def _quote_end(lines: list[str], start: int) -> int:
 
 
 def _continues_paragraph(line: str) -> bool:
-    """非空、又不是标题、代码栏、分隔线、列表项、HTML 块、公式块的开头。"""
+    """Non-empty and not the start of a heading, code fence, thematic break, list item, HTML block or formula
+    block."""
     return bool(line.strip()) and not (
         HEADING_RE.match(line)
         or FENCE_RE.match(line)
@@ -274,14 +285,15 @@ def _split_cells(line: str) -> tuple[str, list[str], str]:
 
 
 def collect_segments(blocks: list[Block]) -> list[str]:
-    """填充每个块的 segments，返回全部待翻译文本。"""
+    """Fill the segments of each block and return all texts to translate."""
     texts = []
     for b in blocks:
         if b.kind == "heading":
             m = HEADING_RE.match(b.lines[0])
             b.segments = [(0, m.group(1), m.group(2))]
         elif b.kind == "para":
-            # 前缀是首行缩进：列表项里的续段要留在原来的列
+            # The prefix is the first-line indentation: a continuation paragraph in a list item must stay in its
+            # column
             lead = b.lines[0][: len(b.lines[0]) - len(b.lines[0].lstrip())]
             b.segments = [(0, lead, " ".join(line.strip() for line in b.lines))]
         elif b.kind == "setext":
@@ -300,14 +312,14 @@ def collect_segments(blocks: list[Block]) -> list[str]:
                 for c in cells:
                     b.segments.append((idx, "", c))
         if b.kind in ("heading", "setext", "para", "quote"):
-            # 没有可翻译文字的块（纯图片、纯链接等）当作 raw 原样输出
+            # Blocks without translatable text (only images, only links, etc.) are output as is, like raw
             b.segments = [s for s in b.segments if _translatable(s[2])]
         texts.extend(s[2] for s in b.segments if _translatable(s[2]))
     return texts
 
 
 def segment_kinds(blocks: list[Block]) -> list[str]:
-    """和 collect_segments 返回的文本一一对应的段落类型，给预览用。"""
+    """Paragraph types for the preview, one per text returned by collect_segments."""
     kinds = []
     for b in blocks:
         for _, pre, text in b.segments:
@@ -323,9 +335,10 @@ def segment_kinds(blocks: list[Block]) -> list[str]:
 
 
 def segment_skips(blocks: list[Block]) -> list[bool]:
-    """和 collect_segments 返回的文本一一对应：参考文献章节里的段落保留原文，和 EPUB、PDF 一样。
+    """One flag per text returned by collect_segments: paragraphs in a bibliography section keep the original
+    text, as in EPUB and PDF.
 
-    标题本身照常翻译。遇到同级或更高级的标题，章节结束。
+    Headings themselves are translated as usual. A heading of the same or a higher level ends the section.
     """
     skips: list[bool] = []
     level = 0
@@ -348,7 +361,8 @@ def segment_skips(blocks: list[Block]) -> list[bool]:
 
 
 def _list_items(lines: list[str]) -> list[tuple[int, str, str, list[str]]]:
-    """把列表块拆成列表项：(起始行号, 标记前缀, 合并后的文本, 原始行)。懒续行并入上一项。"""
+    """Split a list block into items: (start line index, marker prefix, joined text, raw lines). Lazy
+    continuation lines join the previous item."""
     items = []
     for idx, line in enumerate(lines):
         m = LIST_RE.match(line)
@@ -362,17 +376,18 @@ def _list_items(lines: list[str]) -> list[tuple[int, str, str, list[str]]]:
 
 
 def _quote_units(lines: list[str]) -> list[tuple[str, int, str, str, str, list[str]]]:
-    """把引用块拆成 (类型, 起始行号, 引用前缀, 列表标记, 合并后的文本, 原始行)。
+    """Split a quote block into (kind, start line index, quote prefix, list marker, joined text, raw lines).
 
-    类型 raw 原样输出：空的引用行、提示框标记、引用里的代码块。para、item、heading 要翻译：
-    空引用行之间的每一段、引用里的每个列表项、每个标题各自成段，引用层级变了也另起一段。
+    Kind raw is output as is: empty quote lines, alert markers and code blocks inside the quote. para, item and
+    heading are translated: each paragraph between empty quote lines, each list item and each heading in the
+    quote is a separate segment, and a change of quote level also starts a new one.
     """
     units: list[tuple[str, int, str, str, str, list[str]]] = []
     fence = ""
     for idx, line in enumerate(lines):
         m = QUOTE_RE.match(line)
         if m is None:
-            # 懒续行：_quote_end 只在段落文字后面放它进来
+            # Lazy continuation line: _quote_end only lets it in after paragraph text
             if units and units[-1][0] in ("para", "item"):
                 kind, start, lpre, mpre, text, raw = units[-1]
                 units[-1] = (kind, start, lpre, mpre, text + " " + line.strip(), raw + [line])
@@ -409,8 +424,9 @@ def _quote_units(lines: list[str]) -> list[tuple[str, int, str, str, str, list[s
 
 
 def render(blocks: list[Block], translations: list[str], bilingual: bool) -> str:
-    """translations 和 collect_segments 返回的文本按位置一一对应。不按原文查：
-    同一句在正文和参考文献里各出现一次时，一处翻译、一处保留原文。"""
+    """translations match the texts returned by collect_segments by position. They are not looked up by source
+    text: when the same sentence appears once in the body and once in the bibliography, one is translated and
+    the other keeps the original."""
     out: list[str] = []
     pending = iter(translations)
 
@@ -463,7 +479,7 @@ def render(blocks: list[Block], translations: list[str], bilingual: bool) -> str
                 if not _translatable(text):
                     out.extend(raw)
                 elif bilingual:
-                    # 原文 + 硬换行 + 译文，保持在同一个列表项里
+                    # Source + hard line break + translation, kept in the same list item
                     out.append(pre + text + "  ")
                     out.append(" " * len(pre) + t(text))
                 else:
@@ -491,8 +507,8 @@ async def translate_markdown(src: Path, out_dir: Path, runner, bilingual: bool) 
     text = src.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
     blocks = split_blocks(text)
     texts = collect_segments(blocks)
-    # 标题：第一个一级标题，没有就用文件名
-    # 「# 2024」这类没有可翻译文字的标题没有 segments
+    # Title: the first level 1 heading, or the file name if there is none
+    # A heading without translatable text, such as "# 2024", has no segments
     h1 = next(
         (
             b.segments[0][2]

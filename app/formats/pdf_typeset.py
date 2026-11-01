@@ -1,7 +1,10 @@
-"""排版器自己断行。公式是不可拆的槽位，横坐标由前面的文字宽度决定。
+"""The typesetter breaks lines itself. A formula is an unbreakable slot whose x position is set by the width of
+the text before it.
 
-纵向偏移不在这里算：调用方拿这一行文字的真实基线，加上公式记录的下沿。
-没有公式图的段落用同一套断行，再写进一个锁住换行的盒子。
+Vertical offsets are not computed here: the caller takes the actual baseline of the line's text and adds the
+lower extent recorded for the formula (below).
+Paragraphs without formula images use the same line breaking and are then written into a box with the line
+breaks locked.
 """
 
 from __future__ import annotations
@@ -38,16 +41,18 @@ class FormulaPiece:
 
 
 Piece = TextPiece | FormulaPiece
-# 公式槽左右各空出的宽度（点），公式和两边的字隔开
+# Width (points) left free on each side of a formula slot, separating the formula from the text around it
 FORMULA_PAD = 2.0
 
 
 def line_lead(line: TypesetLine) -> float:
-    """行首是公式槽时，槽左边空出的那一截。左对齐的行往左挪这么多，公式和上下行的字对齐"""
+    """The padding left of the slot when a line starts with a formula slot. Left-aligned lines move left by this
+    much so that the formula lines up with the text on the lines above and below"""
     return FORMULA_PAD if line.pieces and isinstance(line.pieces[0], FormulaPiece) else 0.0
 
 
-# 公式可以伸进上下行距的部分（em）。原来压到 1.35em 的公式都在这个范围里
+# How far a formula may extend into the line spacing above and below (em). Formulas that used to be squeezed
+# to 1.35em all fit in this range
 _FORMULA_SPILL = 0.2
 
 
@@ -64,7 +69,8 @@ def typeset_lines(
     metrics: dict[int, FormulaMetric],
     first_widths: Sequence[float] = (),
 ) -> list[TypesetLine]:
-    """按槽位宽度断行，再把每一行拆成文字块和公式槽。first_widths 见 break_lines。"""
+    """Break lines using the slot widths, then split each line into text pieces and formula slots. For
+    first_widths see break_lines."""
     widths = {index: metric.slot_width for index, metric in metrics.items()}
     raw_lines = break_lines(text, em, max_width, widths, first_widths)
     return [_line_of(raw, em, widths, metrics) for raw in raw_lines]
@@ -117,11 +123,15 @@ def _line_of(
 
 
 def line_offsets(lines: Sequence[TypesetLine], em: float, gap: float) -> tuple[list[float], float]:
-    """每行顶部比按行距排的位置多往下挪多少，以及整段多出的高度。
+    """How far the top of each line moves down from its position under normal line spacing, and the extra
+    height of the whole paragraph.
 
-    根号、求和带上下限的行内公式比一行字高。按行距排会压到上下行，缩到一行高又看不清，
-    和原文一样把这一行的行距撑开。正常行距里本来容得下的公式不撑。
-    第一行不往下挪：原文这一行上面本来留着公式的地方，往下挪反倒压到下面另写的一块。"""
+    Inline formulas with radicals or sums with limits are taller than a line of text. At normal line spacing
+    they would overlap the lines above and below, and shrunk to one line height they become unreadable, so the
+    spacing of that line is widened, as in the original. Formulas that fit in the normal line spacing do not
+    widen it.
+    The first line does not move down: the original already leaves room for the formula above this line, and
+    moving down would overlap the block written separately below."""
     half = (gap - 1) / 2
     room_above = em * (0.88 + half + _FORMULA_SPILL)
     room_below = em * (0.12 + half + _FORMULA_SPILL)

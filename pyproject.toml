@@ -38,5 +38,5 @@ ignore = [
 # Closures defined in a loop are called within the same iteration
 "app/formats/pdf_{restore,skip,units,write}.py" = ["B023"]
 "eval/tools/gold.py" = ["B023"]
-# Generated from the Immersive Translate extension; the prompts are long single-line strings
-"app/languages.py" = ["E501"]
+# Prompt texts are sent to the model as written; wrapping them would change the prompts
+"app/{languages,prompts}.py" = ["E501"]

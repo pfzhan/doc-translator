@@ -1,12 +1,15 @@
-"""分几个子进程写回译文，再拼成一份。
+"""Write the translation in several subprocesses, then combine the results into one document.
 
-写回逐页排版，一本几百页的书要好几分钟，页和页之间几乎互不相干。唯一的牵连是跨页
-段落：上一页写不下的半段留给下一页的续块（见 _render_translated 的 carried），
-所以宿主和续块要分在同一段里。
+Writing typesets page by page and takes several minutes for a book of a few hundred pages, and pages are almost
+independent of each other. The only dependency is a paragraph carried over to the next page: the part a page
+cannot fit is left to the tail block on the next page (see carried in pdf_write._render_translated), so a host
+and its tail must be in the same part.
 
-子进程用 fork 起：写回要用的块、译文、公式图都在内存里，不用序列化。每个子进程从原书
-打开一份，只写自己那段页，存成临时文件。拼的时候以第一段的结果为底稿，书签、链接都在
-它上面；别的段写好的页整页贴进来，盖掉底稿里没写的那页。
+Subprocesses are started with fork: the blocks, translations and formula images that writing needs are in
+memory and need no serialization. Each subprocess opens its own copy of the original book, writes only its own
+pages and saves them to a temporary file. When combining, the result of the first part is the base document,
+which carries the bookmarks and links; pages written by the other parts are pasted in as whole pages, replacing
+the unwritten pages of the base.
 """
 
 from __future__ import annotations
@@ -21,18 +24,20 @@ from pathlib import Path
 
 import pymupdf
 
-# 每段至少这么多页。页少时起子进程、拼页的开销比省下的多
+# Minimum pages per part. With fewer pages, starting subprocesses and combining pages costs more than it saves
 _MIN_PART_PAGES = 12
-# 子进程最多几个。646 页的书每个写回子进程多占 0.6–0.9 GB；6 核上 5 个比 4 个写回快 10–20 秒
+# Maximum number of subprocesses. For a 646-page book each writing subprocess uses an extra 0.6-0.9 GB; on 6
+# cores, 5 subprocesses write 10-20 seconds faster than 4
 _MAX_WORKERS = 6
-# 这么久没开始写新的一页就当子进程卡住了（fork 时别的线程拿着的锁在子进程里永远不放）
+# A subprocess that has not started a new page for this long is considered stuck (a lock held by another thread
+# at fork time is never released in the child)
 _STALL_SECONDS = 300
 
 Render = Callable[[Collection[int] | None, Callable[[int, int], None] | None], pymupdf.Document]
 
 
 def worker_count() -> int:
-    """留一个核给服务本身。"""
+    """Leave one core for the service itself."""
     return max(1, min(_MAX_WORKERS, (os.cpu_count() or 2) - 1))
 
 
@@ -41,9 +46,11 @@ def plan_parts(
     links: Sequence[tuple[int, int]],
     parts: int,
 ) -> list[list[int]]:
-    """把要写的页（按顺序，值是这页要写的块数）切成至多 parts 段，各段的块数相近。
+    """Split the pages to write (in order; each value is the number of blocks to write on that page) into at
+    most parts parts with similar block counts.
 
-    links 是 (宿主页, 续块页)。切点 q 前后不能有一对跨过去：宿主在 q 之前、续块在 q 或之后。
+    links are (host page, tail page) pairs. No pair may straddle a cut point q, i.e. have its host before q and
+    its tail at or after q.
     """
     order = list(weights)
     if parts <= 1 or len(order) < _MIN_PART_PAGES * 2:
@@ -67,8 +74,10 @@ def render_in_parts(
     parts: list[list[int]],
     on_page: Callable[[int, int], None] | None = None,
 ) -> pymupdf.Document | None:
-    """各段在子进程里写，拼回一份。不能 fork、有子进程失败或卡住时返回 None，调用方自己整本写。
-    旋转页整页贴回去会再转一次，有旋转页的文件调用方不要分段。"""
+    """Write each part in a subprocess and combine them into one document. Return None when fork is
+    unavailable or a subprocess fails or gets stuck; the caller then writes the whole book itself.
+    A rotated page pasted back as a whole page is rotated a second time, so callers must not split files that
+    have rotated pages."""
     if len(parts) < 2:
         return None
     try:
@@ -107,7 +116,8 @@ def render_in_parts(
 
 
 def _render_part(render: Render, part: list[int], path: Path, started) -> None:
-    """写完直接退出。fork 自服务的工作线程，multiprocessing 收尾时清理线程会出错，退出码成了 1。"""
+    """Exit right after writing. The process is forked from a worker thread of the service, and the thread
+    cleanup in multiprocessing shutdown would fail and make the exit code 1."""
 
     def count(_done: int, _total: int) -> None:
         with started.get_lock():
@@ -116,14 +126,15 @@ def _render_part(render: Render, part: list[int], path: Path, started) -> None:
     try:
         doc = render(set(part), count)
         path.write_bytes(doc.tobytes())
-    except BaseException:  # noqa: BLE001 - 子进程里的异常只能打印，父进程按退出码整本重写
+    except BaseException:  # noqa: BLE001 - the child can only print it; the parent rewrites the book by exit code
         traceback.print_exc()
         os._exit(1)
     os._exit(0)
 
 
 def _replace_page(base: pymupdf.Document, pno: int, written: pymupdf.Document) -> None:
-    """底稿的第 pno 页换成别的子进程写好的那页。注释（链接）留在底稿上，和原书一样。"""
+    """Replace page pno of the base document with the page written by another subprocess. Annotations (links)
+    stay on the base, as in the original book."""
     page = base[pno]
     blank = base.get_new_xref()
     base.update_object(blank, "<<>>")

@@ -1,8 +1,9 @@
-"""(X)HTML 段落翻译，EPUB / MOBI 共用。
+"""(X)HTML paragraph translation, shared by EPUB and MOBI.
 
-思路和沉浸式翻译的网页翻译一致：找出“叶子块级元素”（自身是块级、内部没有其他块级元素），
-把它的文本作为一个段落翻译；双语模式下在原段落后面插入一个同类型的译文段落，
-仅译文模式下直接替换段落文本。
+The approach matches the web page translation of Immersive Translate: find the leaf block elements (block-level
+elements with no other block-level element inside) and translate the text of each as one paragraph. In bilingual
+mode a translated paragraph of the same type is inserted after the original; in translated-only mode the
+paragraph text is replaced.
 """
 
 import copy
@@ -54,11 +55,13 @@ BLOCK_TAGS = {
     "tbody",
     "thead",
 }
-# 这些元素内部的内容不翻译
+# Content inside these elements is not translated
 SKIP_TAGS = {"pre", "code", "script", "style", "svg", "math", "head", "title", "kbd", "samp", "var"}
-# 行内的代码、按键、变量：文字原样留在段落里，跟着一起发给翻译服务
+# Inline code, keys and variables: the text stays in the paragraph as is and is sent to the translation service
+# with it
 VERBATIM_TAGS = {"code", "kbd", "samp", "var"}
-# 在元素内部追加译文：插入兄弟元素会破坏列表序号 / 表格结构，标题复制一份会让目录出现重复项
+# The translation is appended inside these elements: inserting a sibling would break list numbering / table
+# structure, and a copied heading would show up twice in the table of contents
 INNER_TAGS = {"li", "td", "th", "dt", "dd", "caption", "span", "h1", "h2", "h3", "h4", "h5", "h6"}
 
 TRANSLATION_CLASS = "dt-translation"
@@ -66,7 +69,8 @@ BILINGUAL_CSS = f".{TRANSLATION_CLASS} {{ opacity: 0.85; }}"
 NO_TEXT_RE = re.compile(r"^[\W\d_]*$")
 WS_RE = re.compile(r"\s+")
 
-# 需要在翻译中保留的行内格式元素；只有 <span>、<br> 的段落不算富文本
+# Inline formatting elements to keep through translation; a paragraph with only <span> and <br> is not rich
+# text
 RICH_TAGS = {
     "a",
     "b",
@@ -91,7 +95,7 @@ RICH_TAGS = {
     "cite",
     "font",
 }
-# 译文片段里出现直接删除（不保留文字）的标签
+# Tags removed together with their text when they appear in a translated fragment
 DANGER_TAGS = {"script", "style", "iframe", "object", "embed", "form", "input", "button", "select", "textarea"}
 
 
@@ -108,11 +112,13 @@ def _in_skip(el: Tag) -> bool:
 
 
 def _text_of(el: Tag, slots: bool = True) -> str:
-    """取段落纯文本；<br> 变成换行，文字里的换行和空格一样，script/style 等忽略，行内 code 保留原样参与翻译。
+    """Get the plain text of a paragraph: <br> becomes a newline, newlines in the text count as spaces,
+    script/style and the like are ignored, and inline code is kept as is and translated with the rest.
 
-    段落里的公式、图片换成 {v1}、{v2}，译完按编号放回原处（见 _uses_slots）。
+    Formulas and images in the paragraph become {v1}, {v2}, and are put back by number after translation (see
+    _uses_slots).
     """
-    # 按 id 认：bs4 的 Tag 相等比的是内容，两张同样的图会被当成一个
+    # Matched by id: bs4 Tag equality compares content, so two identical images would count as one
     slot_of = {id(m): i for i, m in enumerate(_media_of(el), 1)} if slots and _uses_slots(el) else {}
     parts = []
     for node in el.descendants:
@@ -120,28 +126,32 @@ def _text_of(el: Tag, slots: bool = True) -> str:
             parts.append(f"{{v{slot_of[id(node)]}}}")
         elif isinstance(node, Tag) and _local(node.name) == "br":
             parts.append("\n")
-        elif type(node) is NavigableString:  # 排除注释、CDATA 等子类
+        elif type(node) is NavigableString:  # Excludes subclasses such as comments and CDATA
             parents = [p for p in node.parents if isinstance(p, Tag)]
             if any(id(p) in slot_of for p in parents):
                 continue
             if not any(_local(p.name) in SKIP_TAGS - VERBATIM_TAGS for p in parents):
-                # 源文件里折行写的段落，换行和空格一样是空白；只有 <br> 才是换行
+                # In paragraphs wrapped across lines in the source, a newline is whitespace like a space; only
+                # <br> is a line break
                 parts.append(WS_RE.sub(" ", str(node)))
     return _join_lines("".join(parts))
 
 
 def _join_lines(text: str) -> str:
-    """每行收紧空白。连着两个 <br> 留下的空行是诗的分节，中间的保留，头尾的去掉。"""
+    """Collapse whitespace on each line. An empty line left by two consecutive <br> separates the stanzas of a
+    poem; such lines are kept in the middle and removed at the start and end."""
     return "\n".join(WS_RE.sub(" ", line).strip() for line in text.split("\n")).strip("\n")
 
 
 MEDIA_TAGS = {"img", "image", "svg", "math", "video", "audio", "object"}
-# 行内公式、图片在译文里的占位符，和 PDF 的公式占位符同一个写法，提示词里有对应的说明
+# Placeholder for inline formulas and images in the translation, written the same way as the PDF formula
+# placeholder; the prompt explains it
 SLOT_RE = re.compile(r"\{v(\d+)\}")
 
 
 def _media_of(el: Tag) -> list[Tag]:
-    """el 里的媒体元素，按文档顺序；嵌在别的媒体里的（svg 里的 image）不单算。"""
+    """Media elements in el, in document order; those nested in other media (an image inside svg) are not
+    counted separately."""
     media: list[Tag] = []
     seen: set[int] = set()
     for m in el.find_all(lambda t: _local(t.name) in MEDIA_TAGS):
@@ -152,7 +162,8 @@ def _media_of(el: Tag) -> list[Tag]:
 
 
 def _uses_slots(el: Tag) -> bool:
-    """有媒体元素、原文里又没有现成的 {vN} 时才用占位符，不然分不清哪个是原文。"""
+    """Use placeholders only when there are media elements and the source has no {vN} of its own; otherwise the
+    placeholders could not be told apart from the source text."""
     return bool(_media_of(el)) and not SLOT_RE.search(el.get_text())
 
 
@@ -177,7 +188,8 @@ def _attr_local(el: Tag, local: str) -> list[str]:
 
 
 def _is_page_anchor(el: Tag) -> bool:
-    """分页锚点：epub:type=pagebreak，或没有可见文字的 id 锚点。纯文本回写会把它们清掉。"""
+    """Page anchor: epub:type=pagebreak, or an id anchor with no visible text. Writing back plain text would
+    remove them."""
     if any("pagebreak" in v.lower() for v in _attr_local(el, "type")):
         return True
     return bool(el.has_attr("id") and not el.get_text(strip=True) and _local(el.name) in ("a", "span"))
@@ -188,8 +200,9 @@ def _has_kept_structure(el: Tag) -> bool:
 
 
 def _inner_html(el: Tag) -> str | None:
-    """块内有需要保留的行内格式或分页锚点时返回 inner HTML；否则 None（纯文本路径）。
-    媒体元素和纯文本路径一样换成 {vN}，MathML 不发给模型。"""
+    """Return the inner HTML when the block has inline formatting or page anchors to keep; otherwise None
+    (plain text path).
+    Media elements become {vN} as in the plain text path, so MathML is not sent to the model."""
     if not _has_kept_structure(el):
         return None
     if not _uses_slots(el):
@@ -201,7 +214,7 @@ def _inner_html(el: Tag) -> str | None:
 
 
 def find_blocks(soup: BeautifulSoup) -> list[tuple[Tag, str, str | None]]:
-    """返回 [(元素, 纯文本, 富文本 HTML 或 None)]，元素之间互不嵌套。"""
+    """Return [(element, plain text, rich text HTML or None)]; no element is nested in another."""
     body = soup.find(lambda t: _local(t.name) == "body") or soup
     result = []
     for el in body.find_all(True):
@@ -212,8 +225,9 @@ def find_blocks(soup: BeautifulSoup) -> list[tuple[Tag, str, str | None]]:
         text = _text_of(el)
         if translatable(_without_slots(text)):
             result.append((el, text, _inner_html(el)))
-    # 块级容器里直接挂着的“裸文本”（常见于 MOBI 转出来的 HTML），包成 span 再翻译。
-    # 别的容器没有块级子元素时整个就是上面找到的叶子块；<body> 不在上面的范围里，一个块都没有时也要包
+    # Bare text directly inside a block container (common in HTML converted from MOBI) is wrapped in a span and
+    # translated. Other containers without block children are already leaf blocks found above; <body> is not
+    # covered above, so its text is wrapped even when it has no block at all
     for container in [body, *body.find_all(lambda t: _is_block(t))]:
         if _in_skip(container):
             continue
@@ -223,24 +237,27 @@ def find_blocks(soup: BeautifulSoup) -> list[tuple[Tag, str, str | None]]:
             continue
         for run in _inline_runs(container, soup):
             if run.find(_is_block):
-                continue  # 行内元素里包着块级元素，块级部分已在上面处理
+                continue  # An inline element containing block elements; the block part was handled above
             text = _text_of(run)
             if translatable(_without_slots(text)):
                 result.append((run, text, _inner_html(run)))
-    # 按文档顺序排列（裸文本是第二遍才找到的），这样预览和翻译顺序都和阅读顺序一致
+    # Sort in document order (bare text is found in the second pass), so that preview and translation follow
+    # the reading order
     order = {id(el): i for i, el in enumerate(body.find_all(True))}
     result.sort(key=lambda item: order.get(id(item[0]), len(order)))
     return result
 
 
 HEADING_KINDS = {"h1", "h2", "h3", "h4", "h5", "h6"}
-# 引文翻成目标语言后对不上原书。必须整段命中，正文里出现 references 不算。
+# Citations translated into the target language no longer match the original book. The whole heading must
+# match; references appearing inside body text does not count.
 _BIBLIO_TITLE = (
     r"(?:selected bibliography|further reading|works cited|bibliography|references|endnotes"
     r"|参考文献|参考书目|引用文献)"
 )
 BIBLIO_HEADING_RE = re.compile(rf"^(?:\d{{1,3}}[.)]\s+)?{_BIBLIO_TITLE}\s*[:：.。]?\s*$", re.I)
-# 明确是参考文献内部的小标题。Books / 论文 也是常见章名，不放这里。
+# Subheadings that clearly belong inside a bibliography. Books / "论文" are also common chapter titles and
+# are not listed here.
 BIBLIO_SUBHEADING_RE = re.compile(
     r"^(?:\d{1,3}[.)]\s+)?"
     r"(?:primary sources?|secondary sources?|archival sources?|online sources?"
@@ -250,7 +267,8 @@ BIBLIO_SUBHEADING_RE = re.compile(
     r"\s*[:：.。]?\s*$",
     re.I,
 )
-# 单词小标题。只有比参考文献标题更小、又像标题时才算，避免引文里单独一行 Journal。
+# One-word subheadings. They count only when lower than the bibliography heading and heading-like, so that
+# a line with only Journal in a citation is not matched.
 BIBLIO_SHORT_LABEL_RE = re.compile(
     r"^(?:\d{1,3}[.)]\s+)?"
     r"(?:books?|articles?|journals?|essays?|papers?|magazines?|newspapers?"
@@ -264,13 +282,14 @@ _HEADING_CLASS_RE = re.compile(r"\b(?:heading|title|chapter|h[1-6])\b", re.I)
 
 
 def heading_level(el: Tag) -> int:
-    """标题元素返回级别（1-6），否则 0。"""
+    """Return the level (1-6) for a heading element, otherwise 0."""
     name = _local(el.name)
     return int(name[1]) if name in HEADING_KINDS else 0
 
 
 def structural_heading_level(el: Tag) -> int:
-    """h1–h6 的级别。class 或 role 标成标题的短块也算，否则 <p class="heading"> 认不出。"""
+    """Level of h1-h6. Short blocks marked as headings by class or role also count, otherwise
+    <p class="heading"> would not be recognized."""
     level = heading_level(el)
     if level:
         return level
@@ -292,7 +311,7 @@ def _heading_text(el: Tag) -> str:
 
 
 def biblio_heading_level(el: Tag) -> int:
-    """是参考文献章节标题时返回级别（1-6），否则 0。"""
+    """Return the level (1-6) for a bibliography section heading, otherwise 0."""
     level = structural_heading_level(el)
     if not level:
         return 0
@@ -303,7 +322,7 @@ def biblio_heading_level(el: Tag) -> int:
 
 
 def is_biblio_subheading(text: str) -> bool:
-    """参考文献内部的小标题，或又一个参考文献标题。"""
+    """A subheading inside a bibliography, or another bibliography heading."""
     text = WS_RE.sub(" ", text).strip()
     if len(text) > 40:
         return False
@@ -318,7 +337,7 @@ def _type_values(el: Tag) -> set[str]:
 
 
 def _biblio_container(el: Tag) -> Tag | None:
-    """祖先里带 bibliography / rearnotes / endnotes 的 section。标题自己不算容器。"""
+    """The ancestor section marked bibliography / rearnotes / endnotes. A heading is not a container itself."""
     for parent in el.parents:
         if not isinstance(parent, Tag):
             continue
@@ -331,7 +350,8 @@ def _biblio_container(el: Tag) -> Tag | None:
 
 
 def _owning_section(heading: Tag) -> Tag | None:
-    """这个标题是其第一个标题的 section/article；平铺在 body 下则没有。"""
+    """The section/article whose first heading is this heading; None when the heading sits directly under
+    body."""
     for parent in heading.parents:
         if not isinstance(parent, Tag):
             continue
@@ -345,7 +365,8 @@ def _owning_section(heading: Tag) -> Tag | None:
 
 
 def _biblio_should_exit(el: Tag, heading_lv: int, level: int, section: Tag | None) -> bool:
-    # 平铺文档里 h1 参考文献后的 h2 附录不是小标题；同一 section 里更深的标题才留下。
+    # In a flat document, an h2 appendix after an h1 bibliography is not a subheading; only deeper headings in
+    # the same section stay inside.
     if section is not None and section not in el.parents:
         return True
     if heading_lv <= level:
@@ -356,9 +377,11 @@ def _biblio_should_exit(el: Tag, heading_lv: int, level: int, section: Tag | Non
 
 
 def bibliography_skips(blocks: list[Tag], *, start_level: int = 0) -> tuple[list[bool], int]:
-    """标记应保留原文的块，并返回带到下一个 spine 文件的级别（0 表示已退出）。
+    """Mark the blocks that keep the original text, and return the level carried to the next spine file (0
+    means the bibliography has ended).
 
-    标题本身不跳过。epub:type 容器内的正文整段跳过，离开容器后按标题级别继续。
+    Headings themselves are not skipped. Body text inside an epub:type container is skipped entirely; after
+    leaving the container, heading levels decide as before.
     """
     level = start_level if 0 <= start_level <= 6 else 0
     section: Tag | None = None
@@ -391,7 +414,8 @@ def bibliography_skips(blocks: list[Tag], *, start_level: int = 0) -> tuple[list
 
 
 def preview_kind(el: Tag) -> str:
-    """预览里的段落类型：标题保留级别，列表、引用、表格单元格各自一类，其他都算段落。"""
+    """Paragraph type for the preview: headings keep their level, list items, quotes and table cells each
+    have their own type, everything else is a paragraph."""
     name = _local(el.name)
     if name in HEADING_KINDS:
         return name
@@ -405,7 +429,7 @@ def preview_kind(el: Tag) -> str:
 
 
 def _inline_runs(container: Tag, soup) -> list[Tag]:
-    """把容器里相邻的行内节点合并成 <span>，便于当作段落处理。"""
+    """Merge adjacent inline nodes in a container into a <span> so they can be handled as a paragraph."""
     runs, cur = [], []
 
     def flush():
@@ -427,8 +451,9 @@ def _inline_runs(container: Tag, soup) -> list[Tag]:
 
 
 def _set_text(soup, el: Tag, text: str, media: list[Tag] | None = None):
-    """清空 el 写入 text。media 是原段落的媒体元素：text 里的 {vN} 换成对应的那个，
-    译文漏掉的补在末尾。media 为 None 时（原文本来就有 {vN}）不认占位符。"""
+    """Clear el and write text into it. media holds the media elements of the original paragraph: each {vN}
+    in text is replaced by the matching one, and those the translation left out are appended at the end. When
+    media is None (the source already contains {vN}), placeholders are not interpreted."""
     el.clear()
     for i, line in enumerate(text.split("\n")):
         if i:
@@ -439,7 +464,8 @@ def _set_text(soup, el: Tag, text: str, media: list[Tag] | None = None):
 
 
 def _slot_media(el: Tag, copies: bool) -> list[Tag] | None:
-    """el 的媒体元素，准备放进译文。双语时原段落还要用，放副本，去掉 id 免得重复。"""
+    """Media elements of el, to be placed in the translation. In bilingual mode the original paragraph still
+    needs them, so copies are used, with ids removed to avoid duplicates."""
     if not _uses_slots(el):
         return None
     if not copies:
@@ -455,8 +481,9 @@ def _slot_media(el: Tag, copies: bool) -> list[Tag] | None:
 
 
 def _place_media(target: Tag, media: list[Tag]) -> None:
-    """把 target 文字里的 {vN} 换成 media 里第 N 个元素。重复的、编号越界的占位符删掉，
-    没用上的元素按原顺序补在末尾：模型漏掉占位符时公式不能跟着丢。"""
+    """Replace {vN} in the text of target with the Nth element of media. Duplicate and out-of-range
+    placeholders are removed, and unused elements are appended at the end in their original order: a formula
+    must not be lost when the model drops its placeholder."""
     used: set[int] = set()
     for node in list(target.descendants):
         if type(node) is not NavigableString or not SLOT_RE.search(node):
@@ -480,7 +507,8 @@ def _place_media(target: Tag, media: list[Tag]) -> None:
 
 
 def lang_attrs(lang: str) -> dict:
-    """译文元素的语言属性：阅读器据此选字体、断行；阿拉伯语等需要从右到左排版。"""
+    """Language attributes of a translated element: readers use them to choose fonts and line breaking;
+    Arabic and similar languages need right-to-left layout."""
     if not lang:
         return {}
     attrs = {"lang": lang, "xml:lang": lang}
@@ -490,7 +518,8 @@ def lang_attrs(lang: str) -> dict:
 
 
 def apply_translation(soup, el: Tag, text: str, translated: str, bilingual: bool, lang: str = "") -> Tag | None:
-    """回写纯文本译文，返回译文落在的元素（el 本身 / 内部 span / 克隆块）；跳过返回 None。"""
+    """Write back a plain text translation and return the element that holds it (el itself / an inner span /
+    a cloned block); return None when skipped."""
     if not translated or translated.strip() == text.strip():
         return None
     name = _local(el.name)
@@ -498,7 +527,7 @@ def apply_translation(soup, el: Tag, text: str, translated: str, bilingual: bool
     if not bilingual:
         media = _slot_media(el, copies=False)
         if media is None:
-            # 原文自带 {vN}：媒体元素按原来的办法放在段首
+            # The source contains {vN} itself: media elements are placed at the start of the paragraph as before
             media_kept = [m.extract() for m in _media_of(el)]
             _set_text(soup, el, translated)
             for m in reversed(media_kept):
@@ -532,19 +561,19 @@ def apply_translation(soup, el: Tag, text: str, translated: str, bilingual: bool
 def _parse_fragment(html: str) -> Tag | None:
     try:
         return BeautifulSoup(f"<div>{html}</div>", "lxml").find("div")
-    except Exception:  # noqa: BLE001 - 译文是模型生成的，任何解析异常都按回退处理
+    except Exception:  # noqa: BLE001 - the translation is model output; any parse error falls back
         return None
 
 
 _URL_ATTRS = frozenset({"href", "src", "xlink:href"})
 
 
-# svg+xml 能内嵌脚本；只放行浏览器当图片画的栅格 data URI
+# svg+xml can embed scripts; only raster data URIs, which browsers draw as images, are allowed
 _RASTER_DATA_RE = re.compile(r"^data:image/(?:png|jpe?g|gif|webp)[;,]")
 
 
 def _unsafe_url(value: object, tag: str) -> bool:
-    """javascript:/vbscript: 一律危险；data: 只放行 img/image 上的栅格图。"""
+    """javascript:/vbscript: are always unsafe; data: is allowed only for raster images on img/image."""
     if not isinstance(value, str):
         return False
     v = value.strip().lower()
@@ -556,7 +585,8 @@ def _unsafe_url(value: object, tag: str) -> bool:
 
 
 def _clean_attrs(src: Tag, frag: Tag) -> None:
-    """只留原文同名标签上出现过的属性，并丢掉事件处理和脚本 URL。"""
+    """Keep only attributes that appear on tags of the same name in the source, and drop event handlers and
+    script URLs."""
     allowed: dict[str, set[str]] = {}
     styles: set[str] = set()
     for t in src.find_all(True):
@@ -579,7 +609,7 @@ def _clean_attrs(src: Tag, frag: Tag) -> None:
 
 
 def _restore_page_anchors(src: Tag, dest: Tag) -> None:
-    """译文丢掉的分页锚点补回去，否则书内页码链接失效。"""
+    """Restore page anchors the translation dropped, otherwise page number links in the book break."""
     have = {t.get("id") for t in dest.find_all(True) if t.has_attr("id")}
     missing = []
     for anchor in src.find_all(True):
@@ -594,7 +624,8 @@ def _restore_page_anchors(src: Tag, dest: Tag) -> None:
 
 
 def _prose_of(el: Tag) -> str:
-    """段落纯文本。分页锚点里的页码不是正文，不能拿来判断译文还在不在。"""
+    """Plain text of a paragraph. Page numbers in page anchors are not body text and must not be used to judge
+    whether the translation is still there."""
     parts: list[str] = []
     for node in el.descendants:
         if isinstance(node, Tag) and _local(node.name) == "br":
@@ -611,12 +642,14 @@ def _prose_of(el: Tag) -> str:
 
 
 def _sanitize_translation(src_html: str, translated_html: str) -> list | None:
-    """校验并清洗译文 HTML 片段，返回可插入的节点列表；不合格返回 None（调用方回退纯文本）。
+    """Validate and clean a translated HTML fragment and return the list of nodes to insert; return None when
+    it is rejected (the caller falls back to plain text).
 
-    - 剔除 script/style 等危险标签；
-    - 原文没有的标签 unwrap（只保留文字），防模型自造结构；
-    - 丢掉事件处理、脚本 URL，以及原文没有的属性；
-    - 译文为空、解析失败、原文的行内格式一个都没保住，或原文有正文而译文去掉分页锚点后没有文字时，判为不合格。
+    - Remove dangerous tags such as script/style.
+    - Unwrap tags the source does not have (keeping only their text), so the model cannot invent structure.
+    - Drop event handlers, script URLs and attributes the source does not have.
+    - Reject the fragment when the translation is empty, fails to parse, keeps none of the source's inline
+      formatting, or has no text after removing page anchors while the source has body text.
     """
     if not translated_html or not translated_html.strip():
         return None
@@ -632,7 +665,8 @@ def _sanitize_translation(src_html: str, translated_html: str) -> list | None:
             t.unwrap()
     _clean_attrs(src, frag)
     _restore_page_anchors(src, frag)
-    # 页码在分页锚点里，补回来之后仍不算译文。原文去掉锚点后还有文字、译文没有，就是模型把段落清空了。
+    # Page numbers are inside page anchors and do not count as translation after being restored. If the source
+    # has text without its anchors and the translation has none, the model emptied the paragraph.
     if _prose_of(src) and not _prose_of(frag):
         return None
     if not frag.get_text(strip=True) and not any(_is_page_anchor(t) for t in frag.find_all(True)):
@@ -644,7 +678,8 @@ def _sanitize_translation(src_html: str, translated_html: str) -> list | None:
 
 
 def _strip_ids(target: Tag) -> None:
-    """双语译文里去掉 id 和分页锚点：原文段落还留着它们，再出现一次 id 就重复了，页码也会显示两遍。"""
+    """Remove ids and page anchors from a bilingual translation: the original paragraph still has them, so a
+    second copy would duplicate the ids and show the page numbers twice."""
     anchors = [t for t in target.find_all(True) if _is_page_anchor(t)]
     for t in anchors:
         if not any(p in anchors for p in t.parents):
@@ -656,23 +691,26 @@ def _strip_ids(target: Tag) -> None:
 
 
 def apply_translation_html(soup, el: Tag, src_html: str, translated_html: str, bilingual: bool, lang: str = ""):
-    """富文本段落回写：译文保留行内标签（加粗、链接等）。不合格时回退纯文本路径。"""
+    """Write back a rich text paragraph: the translation keeps inline tags (bold, links, etc.). Falls back to
+    the plain text path when the translation is rejected."""
     if translated_html.strip() == src_html.strip():
         return
     nodes = _sanitize_translation(src_html, translated_html)
     if nodes is None:
         frag = _parse_fragment(translated_html)
-        # <br> 换成换行；分页锚点里的页码不是译文，不能拿来覆盖原文
+        # <br> becomes a newline; page numbers in page anchors are not translation and must not overwrite the
+        # original
         plain = _prose_of(frag) if frag is not None else translated_html
         target = apply_translation(soup, el, _text_of(el), plain, bilingual, lang)
         src = _parse_fragment(src_html)
-        # 双语时分页锚点还在原文段落里，不用补
+        # In bilingual mode the page anchors are still in the original paragraph and need no restoring
         if target is not None and src is not None and not bilingual:
             _restore_page_anchors(src, target)
         return
     name = _local(el.name)
     attrs = lang_attrs(lang)
-    # 原文自带 {vN} 时媒体元素跟着 HTML 发给了模型，译文里全丢了就把原文的补在末尾
+    # When the source contains {vN} itself, media elements were sent to the model with the HTML; if the
+    # translation lost all of them, the source's media are appended at the end
     src_frag = _parse_fragment(src_html)
     src_media = src_frag.find_all(lambda t: _local(t.name) in MEDIA_TAGS) if src_frag else []
     has_media = any(
@@ -718,14 +756,15 @@ def apply_translation_html(soup, el: Tag, src_html: str, translated_html: str, b
     el.insert_after(clone)
 
 
-# XML 自带的五个实体，其余命名实体要靠 DTD，lxml-xml 不加载外部 DTD
+# The five entities built into XML; other named entities need a DTD, and lxml-xml does not load external DTDs
 _XML_ENTITIES = {"amp", "lt", "gt", "quot", "apos"}
 _NAMED_ENTITY_RE = re.compile(r"&([A-Za-z][A-Za-z0-9]*);")
 _NAMED_ENTITY_BYTES_RE = re.compile(rb"&([A-Za-z][A-Za-z0-9]*);")
 
 
 def _numeric_entities(content: bytes | str) -> bytes | str:
-    """&rsquo;、&nbsp; 这类 HTML 命名实体改成数字引用。不认识的实体原样保留。"""
+    """Convert HTML named entities such as &rsquo; and &nbsp; to numeric references. Unknown entities are kept
+    as is."""
 
     def repl(m: re.Match) -> bytes | str:
         name = m.group(1)
@@ -742,11 +781,11 @@ def _numeric_entities(content: bytes | str) -> bytes | str:
     return _NAMED_ENTITY_RE.sub(repl, content)
 
 
-# HTML 写法的空元素：<br>、<img ...> 不闭合，在 XML 里不合法
+# Void elements written HTML-style: unclosed <br> and <img ...> are invalid in XML
 _VOID_TAGS = "area|base|br|col|embed|hr|img|input|link|meta|param|source|track|wbr"
 _OPEN_VOID = rf"""<({_VOID_TAGS})\b((?:[^<>"']|"[^"]*"|'[^']*')*?)\s*(?<!/)>"""
 _VOID_END = rf"</(?:{_VOID_TAGS})\s*>"
-# 后面不是实体引用的 &（AT&T）
+# An & not followed by an entity reference (AT&T)
 _BARE_AMP = r"&(?!#\d+;|#[xX][0-9a-fA-F]+;|[A-Za-z][A-Za-z0-9]*;)"
 
 
@@ -767,7 +806,8 @@ def _well_formed(content: bytes | str) -> bool:
 
 
 def _close_html_tags(content: bytes | str) -> bytes | str:
-    """把 HTML 写法补成 XML：空元素自闭合、去掉它们的结束标签，裸 & 转义。"""
+    """Turn HTML-style markup into XML: void elements become self-closing, their end tags are removed, and bare
+    & is escaped."""
     content = _sub(_OPEN_VOID, r"<\1\2/>", content)
     content = _sub(_VOID_END, "", content)
     return _sub(_BARE_AMP, "&amp;", content)
@@ -775,18 +815,22 @@ def _close_html_tags(content: bytes | str) -> bytes | str:
 
 def parse(content: bytes | str, xml: bool) -> BeautifulSoup:
     if xml:
-        # 不换的话这些实体会被静默删掉，原文和译文都缺字
+        # Without the conversion these entities are silently dropped, and characters go missing from both the
+        # source and the translation
         content = _numeric_entities(content)
-        # 不良构时 lxml-xml 的容错解析从出错处起丢掉 &amp;、&lt; 的字，块还会互相嵌套，
-        # 而整篇是按解析结果写回的。先补 HTML 写法；还不行就按 HTML 解析，SVG 属性的大小写会丢
+        # On malformed input, the lenient parsing of lxml-xml drops the characters &amp; and &lt; from the error
+        # onward, and blocks end up nested in each other, while the whole document is written back from the parse
+        # result. First fix the HTML-style markup; if that is not enough, parse as HTML, which loses the case of
+        # SVG attributes
         if not _well_formed(content):
             repaired = _close_html_tags(content)
             if not _well_formed(repaired):
                 return BeautifulSoup(content, "lxml")
             content = repaired
     soup = BeautifulSoup(content, "lxml-xml" if xml else "lxml")
-    # lxml-xml 遇到带内部 DTD 子集（<!DOCTYPE html [<!ENTITY nbsp "&#160;">]>）的 XHTML 会静默产出空文档，
-    # 原文非空但解析不出任何元素时回退到 HTML 模式重新解析
+    # lxml-xml silently produces an empty document for XHTML with an internal DTD subset
+    # (<!DOCTYPE html [<!ENTITY nbsp "&#160;">]>). When the source is not empty but no element was parsed,
+    # parse again in HTML mode
     if xml and soup.find(True) is None and content.strip():
         soup = BeautifulSoup(content, "lxml")
     return soup
@@ -802,7 +846,7 @@ def add_style(soup, css: str = BILINGUAL_CSS):
 
 
 def translate_nav_links(soup) -> list[tuple[Tag, str]]:
-    """EPUB3 导航文档：只翻译 <a>/<span> 的文字，不改变结构。"""
+    """EPUB3 navigation document: translate only the text of <a>/<span>, without changing the structure."""
     out = []
     for el in soup.find_all(lambda t: _local(t.name) in ("a", "span")):
         if el.find(lambda t: _local(t.name) in ("a", "span")):

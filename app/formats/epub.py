@@ -1,6 +1,7 @@
-"""EPUB 翻译：解压 → 按 OPF spine 找出正文 XHTML → 段落翻译 → 重新打包。
+"""EPUB translation: unzip -> find the content XHTML from the OPF spine -> translate paragraphs -> repack.
 
-不依赖 ebooklib，直接按 zip 处理，原书里的 CSS、图片、字体、元数据全部原样保留。
+Does not depend on ebooklib and works on the zip directly; CSS, images, fonts and metadata of the original
+book are all kept unchanged.
 """
 
 import posixpath
@@ -14,7 +15,8 @@ from bs4 import BeautifulSoup
 from . import html_blocks as hb
 
 HTML_TYPES = {"application/xhtml+xml", "text/html"}
-# 只认文件名主体。子串会把 chapter-references 整篇锁死，而且锁死后标题也无法退出。
+# Only the file name stem is matched. A substring match would lock the whole of chapter-references as
+# bibliography, and once locked, no heading can exit it.
 _BIBLIO_DOC_STEMS = frozenset(
     {
         "bibliography",
@@ -46,7 +48,7 @@ def _opf_path(zf: zipfile.ZipFile) -> str:
 
 
 def _content_docs(zf: zipfile.ZipFile, opf_path: str):
-    """返回 (正文 XHTML 列表, nav 文档, ncx 文档, opf soup)。"""
+    """Return (list of content XHTML, nav document, ncx document, opf soup)."""
     opf = BeautifulSoup(zf.read(opf_path), "lxml-xml")
     base = posixpath.dirname(opf_path)
     items = {}
@@ -61,10 +63,11 @@ def _content_docs(zf: zipfile.ZipFile, opf_path: str):
     docs = []
     for ref in opf.find_all("itemref"):
         href, mt = items.get(ref.get("idref"), (None, None))
-        # nav 常同时出现在 spine 里：跳过，由专门的 label 翻译路径处理，避免同一文档解析两次、第一次的译文被丢弃
+        # nav often also appears in the spine: skip it here and leave it to the dedicated label translation path,
+        # so that the same document is not parsed twice with the first translation discarded
         if href and mt in HTML_TYPES and href not in docs and href != nav:
             docs.append(href)
-    # spine 之外的 HTML（少见）也一起翻译
+    # HTML outside the spine (rare) is translated as well
     for href, mt in items.values():
         if mt in HTML_TYPES and href not in docs and href != nav:
             docs.append(href)
@@ -72,7 +75,8 @@ def _content_docs(zf: zipfile.ZipFile, opf_path: str):
 
 
 def book_outline(zf: zipfile.ZipFile) -> dict:
-    """在线预览用：书名、阅读顺序和目录。路径都是 zip 里的成员名，目录项带上 # 后面的锚点。"""
+    """For the online preview: title, reading order and table of contents. Paths are member names in the zip;
+    table of contents entries keep the anchor after #."""
     docs, nav, ncx, opf = _content_docs(zf, _opf_path(zf))
     names = set(zf.namelist())
     title = opf.find("title")
@@ -159,16 +163,17 @@ async def translate_epub(
         docs, nav, ncx, opf = _content_docs(zin, opf_path)
         names = set(zin.namelist())
 
-        # 1. 解析所有文档，收集段落
+        # 1. Parse all documents and collect paragraphs
         soups: dict[str, BeautifulSoup] = {}
-        tasks: list[tuple[str, object, str, str, str | None, bool]] = []  # (文档, 元素, 原文, 类型, 富文本 HTML, 跳过)
+        tasks: list[tuple[str, object, str, str, str | None, bool]] = []  # (doc, element, text, kind, rich HTML, skip)
         carry = 0
         for name in docs:
             if name not in names:
                 continue
             soup = hb.parse(zin.read(name), xml=True)
             if soup.find(True) is None:
-                continue  # 解析结果为空（如内部 DTD 问题回退也失败）：保留原文件，不用空文档覆盖
+                continue  # Empty parse result (e.g. the internal DTD fallback also failed): keep the file
+                # instead of overwriting it with an empty document
             soups[name] = soup
             blocks = hb.find_blocks(soup)
             start = carry or (1 if _is_biblio_doc(name) else 0)
@@ -188,12 +193,13 @@ async def translate_epub(
                     if hb.translatable(el.get_text(strip=True)):
                         tasks.append((ncx, el, el.get_text(strip=True), "label", None, False))
 
-        # 2. 翻译（书名作为上下文）
+        # 2. Translate (with the book title as context)
         title_el = opf.find("dc:title") or opf.find("title")
         runner.set_title(title_el.get_text(strip=True) if title_el else src.stem)
-        # 预览里目录（nav / ncx）用 toc 类型，正文用元素名（h1、p、li…）
+        # In the preview, the table of contents (nav / ncx) uses the toc type and body text uses the element name
+        # (h1, p, li...)
         kinds = ["toc" if kind == "label" else hb.preview_kind(el) for _, el, _, kind, _, _ in tasks]
-        # 富文本段落送 inner HTML 翻译，保留行内格式（加粗、链接）
+        # Rich text paragraphs are sent as inner HTML to keep inline formatting (bold, links)
         results = await runner.translate_all(
             [t[4] or t[2] for t in tasks],
             kinds=kinds,
@@ -202,7 +208,7 @@ async def translate_epub(
             skip=[t[5] for t in tasks],
         )
 
-        # 3. 回写
+        # 3. Write back
         for (name, el, text, kind, html, _skip), translated in zip(tasks, results):
             if kind == "block":
                 if html is not None:
@@ -218,7 +224,7 @@ async def translate_epub(
         if target_lang:
             _set_language(opf, target_lang, bilingual)
 
-        # 4. 打包：mimetype 必须是第一个文件且不压缩
+        # 4. Pack: mimetype must be the first file and uncompressed
         suffix = "bilingual" if bilingual else "translated"
         dst = dst or out_dir / f"{src.stem}.{suffix}.epub"
         with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as zout:

@@ -8,15 +8,16 @@ from .pdf import translate_pdf
 from .pdf_vision import FormulaModel
 
 SUPPORTED = {".md", ".markdown", ".epub", ".mobi", ".azw3", ".azw", ".pdf"}
-# 支持边翻边预览的格式
+# Formats that support preview while translation is running
 PREVIEW_FORMATS = {".md", ".markdown", ".epub", ".mobi", ".azw3", ".azw", ".pdf"}
-# 译文文件名是 {原名}.{bilingual|translated}.{扩展名}。标记必须贴着扩展名，
-# 不能用子串：再上传 book.bilingual.md 得到的是 book.bilingual.translated.md。
+# Output file names are {name}.{bilingual|translated}.{extension}. The marker must sit right before the
+# extension, and a substring match is not enough: uploading book.bilingual.md again gives
+# book.bilingual.translated.md.
 _VARIANT_MARKERS = frozenset({"bilingual", "translated"})
 
 
 def output_variant(name: str) -> str | None:
-    """返回紧挨扩展名的版本标记；文件名里没有这个标记时返回 None。"""
+    """Return the version marker right before the extension, or None when the file name has no such marker."""
     token = Path(name).stem.rsplit(".", 1)[-1]
     if token in _VARIANT_MARKERS:
         return token
@@ -24,7 +25,8 @@ def output_variant(name: str) -> str | None:
 
 
 def document_digest(src: Path) -> str:
-    """文件内容的摘要。术语表和缓存条目的归属都按它记，同一份文件传几次都认作一份。"""
+    """Digest of the file content. Glossaries and cache entries are keyed by it, so the same file uploaded
+    several times counts as one document."""
     return hashlib.sha1(src.read_bytes()).hexdigest()
 
 
@@ -38,8 +40,9 @@ async def translate_file(
     plan_path: Path | None = None,
     formula_model: FormulaModel | None = None,
 ) -> list[Path]:
-    """layout_model、formula_model 和 plan_path 只对 PDF 有用：版面模型文件的路径（空串表示不用），
-    公式检测模型的设置（None 表示不用），存版面分析结果的文件（继续翻译时读回）。"""
+    """layout_model, formula_model and plan_path apply only to PDF: the path of the layout model file (empty
+    string means not used), the formula detection model settings (None means not used), and the file that
+    stores the layout analysis result (read back when a job is resumed)."""
     runner.set_document(document_digest(src))
     ext = src.suffix.lower()
     if ext in (".md", ".markdown"):

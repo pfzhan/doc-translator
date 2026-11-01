@@ -1,8 +1,9 @@
-"""MOBI / AZW3 翻译：先解包成 EPUB，再走 EPUB 流程。
+"""MOBI / AZW3 translation: unpack to EPUB first, then run the EPUB pipeline.
 
-- KF8（AZW3、新版 MOBI）里自带一份 EPUB 结构，直接用。
-- 老的 MOBI7 只有一个 book.html，把它整理成合法 XHTML 后拼成 EPUB。
-写 MOBI 需要 Calibre：如果本机装了 ebook-convert，会额外输出一份 .mobi / .azw3，否则只输出 EPUB。
+- KF8 (AZW3, newer MOBI) contains an EPUB structure, which is used directly.
+- Old MOBI7 has only a book.html, which is cleaned up into valid XHTML and packed into an EPUB.
+Writing MOBI requires Calibre: if ebook-convert is installed locally, an extra .mobi / .azw3 is written,
+otherwise only the EPUB.
 """
 
 import asyncio
@@ -25,8 +26,8 @@ def _xhtml_from_mobi7(src_html: str) -> bytes:
     s = re.sub(r"<mbp:pagebreak\s*/?>(\s*</mbp:pagebreak>)?", '<div style="page-break-before: always"></div>', src_html)
     s = re.sub(r"</?mbp:[^>]*>", "", s)
     s = re.sub(r"<guide>.*?</guide>", "", s, flags=re.S)
-    # 用 HTML 解析器容错解析，再按 XML 序列化，得到合法的 XHTML。
-    # MOBI7 的 height/width 等非标准属性不影响阅读，保留即可
+    # Parse leniently with the HTML parser, then serialize as XML to get valid XHTML.
+    # Non-standard MOBI7 attributes such as height/width do not affect reading and are kept
     body = lxml_html.document_fromstring(s).find("body")
     inner = ""
     if body is not None:
@@ -40,7 +41,8 @@ def _xhtml_from_mobi7(src_html: str) -> bytes:
 
 
 def _read_mobi7_html(html_path: Path) -> str:
-    """kindleunpack 按 MOBI 头 codec 把原始字节写进 book.html：先试 UTF-8，失败按 cp1252（老书常见）解码。"""
+    """kindleunpack writes the raw bytes into book.html according to the codec in the MOBI header: try UTF-8
+    first, and on failure decode as cp1252 (common in old books)."""
     raw = html_path.read_bytes()
     try:
         return raw.decode("utf-8")
@@ -87,14 +89,16 @@ async def _calibre_convert(src: Path, dst: Path) -> bool:
     try:
         return await proc.wait() == 0 and dst.exists()
     except asyncio.CancelledError:
-        # 暂停或删除任务时子进程不会自己停，留着会在后台接着写输出文件
+        # The subprocess does not stop when the job is paused or deleted; left running, it would keep writing the
+        # output file in the background
         proc.kill()
         raise
 
 
 def _extract(src: Path, tmpdir: Path) -> Path:
-    """解包到 tmpdir，返回其中的 EPUB、book.html 或 PDF。和 mobi.extract 一样，只是临时目录由调用方建、调用方删：
-    mobi.extract 自己建目录，解包失败时目录没人删。"""
+    """Unpack into tmpdir and return the EPUB, book.html or PDF in it. Same as mobi.extract, except that the
+    caller creates and deletes the temporary directory: mobi.extract creates its own directory, which nobody
+    deletes when unpacking fails."""
     unpackBook(str(src), str(tmpdir), epubver="A")
     for path in (tmpdir / "mobi8" / f"{src.stem}.epub", tmpdir / "mobi7" / "book.html", tmpdir / f"{src.stem}.001.pdf"):
         if path.exists():
@@ -104,7 +108,8 @@ def _extract(src: Path, tmpdir: Path) -> Path:
 
 async def translate_mobi(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "") -> list[Path]:
     tmpdir = Path(tempfile.mkdtemp(prefix="mobiex"))
-    # 暂停或删除时协程被取消，解包线程还在往目录里写。shield 让它跑完，目录等它结束再删
+    # On pause or delete the coroutine is cancelled while the unpacking thread is still writing to the directory.
+    # shield lets it finish, and the directory is deleted after it ends
     extract = asyncio.ensure_future(asyncio.to_thread(_extract, src, tmpdir))
     try:
         extracted = await asyncio.shield(extract)
@@ -133,5 +138,5 @@ async def translate_mobi(src: Path, out_dir: Path, runner, bilingual: bool, targ
 
 def _remove_after(task: asyncio.Future, tmpdir: Path):
     if not task.cancelled():
-        task.exception()  # 取走异常，不然事件循环会报 exception was never retrieved
+        task.exception()  # Retrieve the exception, otherwise the event loop reports exception was never retrieved
     shutil.rmtree(tmpdir, ignore_errors=True)

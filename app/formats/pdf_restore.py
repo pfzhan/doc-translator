@@ -187,7 +187,7 @@ async def _retry_lost_placeholders(
 
 
 _CN_NUM = r"[0-9零〇一二三四五六七八九十百]+"
-# The model writes 2.1 as 第二点一节, 四点二 or 一.三., 3.1.3 as 第三章第一节第三小节, and 8 as 八,.
+# The model writes 2.1 as "第二点一节", "四点二" or "一.三.", 3.1.3 as "第三章第一节第三小节", and 8 as "八,".
 # All of these are stripped from the start of a heading and replaced with the source number.
 _CN_DOT = r"[零〇一二三四五六七八九十]+"
 _TRANS_HEAD_NUM_RE = re.compile(
@@ -283,7 +283,7 @@ def _with_label(label: str, translation: str) -> str:
 
 def _normalize_heading_number(src_text: str, translation: str) -> str:
     """Replace a chapter or section number at the start of a heading translation with the source number
-    ('第二章' -> '2').
+    ("第二章" -> "2").
 
     No number is added when the translation has none. A translation identical to the source is returned
     unchanged, so that skipped blocks are not typeset again.
@@ -315,7 +315,7 @@ def _heading_number_for(kind: str, src_text: str, translation: str) -> str:
 
 
 def _list_number(src_text: str, translation: str) -> str:
-    """Restore the source number when a list number 1. became 1。 or 1、, or Figure 1 became 图一."""
+    """Restore the source number when a list number 1. became "1。" or "1、", or Figure 1 became "图一"."""
     caption = _CAPTION_NUM_RE.match(src_text)
     if caption:
         return _CN_CAPTION_RE.sub(rf"\g<1>\g<2> {caption.group(1)}", translation, count=1)

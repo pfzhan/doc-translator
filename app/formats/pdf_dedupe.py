@@ -1,12 +1,14 @@
-"""合并 PDF 里内容相同的对象。
+"""Merge objects with identical content in a PDF.
 
-双语版左边引用原书的页面，右边引用译文文档的页面。译文文档是原书的副本，图片、字体、
-表单各有一份，原样存下来文件大一倍。MuPDF 的 garbage=4 能合并它们，但它两两比较所有
-对象，一本几百页的书要十几分钟。这里按内容的哈希分组，一遍就找出重复。
+The left side of the bilingual version references pages of the original book, the right side pages of the
+translated document. The translated document is a copy of the original, so images, fonts and forms each exist
+twice, and saved as is the file doubles in size. MuPDF's garbage=4 can merge them, but it compares all objects
+pairwise and takes over ten minutes for a book of a few hundred pages. Here objects are grouped by a hash of
+their content, which finds duplicates in one pass.
 
-一个对象合并到另一个以后，引用它的对象也可能变得相同（图片的蒙版合并后，两张图片的
-字典就一样了），所以反复找，直到没有新的重复。被合并的对象不再有引用，保存时用
-garbage=1 去掉。
+After one object is merged into another, objects referencing it may become identical too (after the masks of
+two images are merged, the image dictionaries are the same), so the search repeats until no new duplicates
+appear. Merged objects are no longer referenced and are removed with garbage=1 on save.
 """
 
 from __future__ import annotations
@@ -16,15 +18,18 @@ import re
 
 import pymupdf
 
-# 有身份的对象：同样内容的两页仍是两页。树里的节点带 /Parent，合并会弄乱树
+# Objects with identity: two pages with the same content are still two pages. Tree nodes carry /Parent, and
+# merging them would corrupt the tree
 _IDENTITY_RE = re.compile(r"/Type\s*/(?:Page|Pages|Catalog|Annot|Outlines|StructTreeRoot|StructElem)\b|/Parent\b")
 _REF_RE = re.compile(r"(?<![\w.])(\d+) 0 R(?!\w)")
 
 
 def merge_duplicates(doc: pymupdf.Document) -> int:
-    """把引用指向内容相同的第一份对象，返回合并掉的对象数。"""
+    """Point references to the first of the objects with identical content and return the number of objects
+    merged away."""
     gone: set[int] = set()
-    # 合并只改字典里的引用，流的内容不变，哈希算一次
+    # Merging changes only references in dictionaries and leaves stream content unchanged, so each hash is
+    # computed once
     digests: dict[int, bytes] = {}
     while True:
         first_of: dict[tuple[str, bytes | None], int] = {}
@@ -43,7 +48,8 @@ def merge_duplicates(doc: pymupdf.Document) -> int:
         if not remap:
             return len(gone)
         gone.update(remap)
-        # 只改引用了被合并对象的。字符串里写着的 "12 0 R" 也会挑出来，_redirect 不改它
+        # Change only objects that reference a merged object. A "12 0 R" written inside a string is also picked
+        # here, and _redirect leaves it unchanged
         for xref, text in texts.items():
             if xref not in gone and any(int(m.group(1)) in remap for m in _REF_RE.finditer(text)):
                 _redirect(doc, xref, remap, text)
@@ -65,13 +71,13 @@ def _content_key(
 
 
 def _redirect(doc: pymupdf.Document, xref: int, remap: dict[int, int], text: str) -> None:
-    """text 是这个对象现在的文本（流对象是它的字典）。"""
+    """text is the current text of the object (for a stream object, its dictionary)."""
     if not doc.xref_is_stream(xref):
         new = replace_refs(text, remap)
         if new != text:
             doc.update_object(xref, new)
         return
-    # update_object 会丢掉从文件读进来的流，流对象逐项改字典
+    # update_object drops a stream read from the file, so for stream objects the dictionary is changed key by key
     for key in doc.xref_get_keys(xref):
         kind, value = doc.xref_get_key(xref, key)
         if kind in ("xref", "dict", "array"):
@@ -81,7 +87,8 @@ def _redirect(doc: pymupdf.Document, xref: int, remap: dict[int, int], text: str
 
 
 def replace_refs(text: str, remap: dict[int, int]) -> str:
-    """改对象文本里的间接引用。字符串里写着的 "12 0 R" 不是引用，不改。"""
+    """Change indirect references in the object text. A "12 0 R" written inside a string is not a reference
+    and is left unchanged."""
     parts: list[str] = []
     for piece, is_code in _split_strings(text):
         if is_code:
@@ -91,8 +98,8 @@ def replace_refs(text: str, remap: dict[int, int]) -> str:
 
 
 def _split_strings(text: str) -> list[tuple[str, bool]]:
-    """切成 (片段, 是否在字符串外)。字面串 (...) 可以嵌套括号、用反斜杠转义；
-    十六进制串 <...> 和字典的 << 区分开。"""
+    """Split into (piece, whether outside a string). A literal string (...) can nest parentheses and escape
+    with backslashes; a hex string <...> is told apart from the << of a dictionary."""
     out: list[tuple[str, bool]] = []
     start = index = 0
     size = len(text)

@@ -1,7 +1,9 @@
-"""段落的有序 run：文字带样式和基线，公式带框、基线和相对所在行的偏移。
+"""Ordered runs of a paragraph: text runs carry style and baseline, formula runs carry box, baseline and offset
+relative to their line.
 
-公式 span 在 pdf_math.py 标出，切 run、做占位符在 pdf_units.py。这里只放模型和两件纯操作：按 run 分界切开译文，以及挑出
-落在公式框里的曲线。含公式的段落由排版器按行落位。
+Formula spans are marked in pdf_math.py; runs are cut and placeholders made in pdf_units.py. This module holds
+only the model and two pure operations: splitting a translation at run boundaries, and picking the curves that
+fall in a formula box. Paragraphs with formulas are placed line by line by the typesetter.
 """
 
 from __future__ import annotations
@@ -13,7 +15,8 @@ import pymupdf
 
 from .pdf_flow import Emphasis
 
-# 跨页单元的 run 分界。送翻文本里保留它，写回时收成一段，不再按它切回两页。
+# Run boundary of a unit that spans a page break. It is kept in the text sent for translation; when writing,
+# the unit is gathered into one paragraph and is not split back into the two pages at the boundary.
 BOUNDARY = "{|}"
 _BOUNDARY_RE = re.compile(r"\s*\{\s*\|\s*\}\s*")
 
@@ -32,7 +35,8 @@ class TextRun:
 
 @dataclass(frozen=True)
 class FormulaRun:
-    """公式是段落里的一个单元。dx、dy 相对它所在行的左缘和正文基线。"""
+    """A formula is one unit of the paragraph. dx and dy are relative to the left edge of its line and the body
+    text baseline."""
 
     index: int
     bbox: pymupdf.Rect
@@ -52,7 +56,7 @@ Run = TextRun | FormulaRun
 
 
 def split_page_boundary(text: str) -> tuple[str, str] | None:
-    """按 {| } 切开。没有分界时返回 None。"""
+    """Split at {|}. Return None when there is no boundary."""
     if _BOUNDARY_RE.search(text) is None:
         return None
     left, right = _BOUNDARY_RE.split(text, maxsplit=1)
@@ -60,12 +64,13 @@ def split_page_boundary(text: str) -> tuple[str, str] | None:
 
 
 def strip_boundary(text: str) -> str:
-    """预览里去掉分界。分界两侧的空白收成一个空格。"""
+    """Remove boundaries for the preview. Whitespace around a boundary collapses into one space."""
     cleaned = _BOUNDARY_RE.sub(" ", text)
     return re.sub(r" {2,}", " ", cleaned).strip()
 
 
-# 分式线、根号经常贴在字形框外一两磅，相交判定收不到。再远就是下划线或通栏线。
+# Fraction bars and radical signs often sit one or two points outside the glyph box, where the intersection
+# test misses them. Anything farther away is an underline or a full-width rule.
 _STROKE_GAP = 2.5
 _STROKE_THIN = 2.4
 
@@ -81,7 +86,8 @@ def _axis_overlap(a0: float, a1: float, b0: float, b1: float) -> float:
 
 
 def _near_formula_stroke(box: pymupdf.Rect, rect: pymupdf.Rect) -> bool:
-    """贴着框、但没有相交的细线或根号竖笔。长出一截的通栏线不收。"""
+    """A thin line or vertical radical stroke right next to the box without intersecting it. A full-width rule
+    that extends well beyond the box is not taken."""
     if _edge_gap(box, rect) > _STROKE_GAP:
         return False
     if min(rect.width, rect.height) <= _STROKE_THIN and rect.height <= rect.width:
@@ -104,13 +110,14 @@ def _near_formula_stroke(box: pymupdf.Rect, rect: pymupdf.Rect) -> bool:
 
 
 def intersecting_curves(box: pymupdf.Rect, drawings: list[pymupdf.Rect]) -> tuple[pymupdf.Rect, ...]:
-    """和公式框相交、或紧贴框外的分式线与根号。整页通栏线不并进来。"""
+    """Fraction bars and radical signs that intersect the formula box or sit right outside it. Rules across the
+    full page width are not included."""
     found: list[pymupdf.Rect] = []
     x0, y0, x1, y1 = box
     for rect in drawings:
         if rect.width < 0.4 or rect.height < 0.3:
             continue
-        # 一页上几千条线，逐条按坐标比，不另建交集的 Rect
+        # A page has thousands of lines; compare coordinates one by one instead of building an intersection Rect
         if (
             rect.x0 > x1 + _STROKE_GAP
             or rect.x1 < x0 - _STROKE_GAP
