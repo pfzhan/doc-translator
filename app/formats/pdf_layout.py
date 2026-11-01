@@ -1,11 +1,15 @@
-"""页面几何：从文本块的横向间隔认出栏，把图、矢量图形和有线表格收成边界。
+"""Page geometry: find columns from the horizontal gaps between text blocks, and collect figures, vector graphics
+and ruled tables as boundaries.
 
-不依赖版面模型。跨栏标题（宽过页宽六成）不参与分栏。
-栏间空档至少 12pt，左右各有三块以上、纵向交叠够深。空档不必落在页宽正中，
-所以三栏也能分开。图把一侧的文字吃掉时，图缘仍是栏墙，写入不会跨过去。
-有横竖线的表格，以及列缘对齐的短格子表，用格子限制写入。整段正文不算表。
-页眉、页脚和页码另作跳过，不参与分栏。
-文字栏沟明确时，阅读顺序按栏从上到下；只靠图缘切开的页面不重排。
+Does not depend on the layout model. Headings spanning columns (wider than 60% of the page width) take no part in
+column detection. A column gap is at least 12pt wide, with three or more blocks on each side that overlap deeply
+enough vertically. The gap need not sit in the middle of the page, so three columns can be separated too. When a
+figure takes up the text on one side, the figure edge still acts as a column wall and writing does not cross it.
+Tables with horizontal and vertical rules, and short-cell tables whose column edges align, limit writing to their
+cells. Whole paragraphs of body text are not tables.
+Running headers, footers and page numbers are skipped separately and take no part in column detection.
+When the text column gaps are clear, the reading order runs column by column from top to bottom; pages split only by
+figure edges are not reordered.
 """
 
 from __future__ import annotations
@@ -30,40 +34,42 @@ _FIGURE_MIN = 8.0
 _DRAW_MIN = 24.0
 _DRAW_AREA = 800.0
 _PAGE_FILL = 0.85
-_GROUND_SHARE = 2.0  # 图的白底最多是里面曲线、图片所占范围的几倍
-_GROUND_REACH = 24.0  # 标题、坐标轴名离曲线最远多少
-_GROUND_MARKS = 3  # 白底里没有成形的图时，至少要有这么多个小记号
-_FRAME_REACH = 12.0  # 框线离白底的上下沿最多多远
+_GROUND_SHARE = 2.0  # Maximum ratio of a figure's white ground to the area of the curves and images inside it
+_GROUND_REACH = 24.0  # Maximum distance of titles and axis labels from the curves
+_GROUND_MARKS = 3  # Minimum number of small marks on a white ground that holds no complete figure
+_FRAME_REACH = 12.0  # Maximum distance of a frame line from the top or bottom edge of the white ground
 _WALL_MIN_H = 48.0
 _WALL_MIN_W = 36.0
 _CELL_MIN_W = 18.0
 _CELL_MIN_H = 8.0
 _CELL_NARROW = 16.0
 _MAX_TABLE_COLS = 12
-# 表格线：不超过这么粗、至少这么长
+# Table rules: at most this thick and at least this long
 _RULE_THICK = 1.5
 _RULE_MIN = 5.0
-# find_tables 的吸附距离：比它细的填充块也当线
+# Snap distance of find_tables: filled shapes thinner than this also count as rules
 _SNAP = 3.0
-# 线和格子边算对齐的距离
+# Distance within which a rule and a cell edge count as aligned
 _NEAR = 2.0
-# 算法框相邻两行的分界，从上一行基线往下占行距的比例
+# Boundary between two adjacent rows of an algorithm box, as a share of the line spacing below the upper baseline
 _ROW_CUT = 0.35
 _TEXT_JOIN = 8.0
 _COL_ALIGN = 5.0
 _MIN_TEXT_ROWS = 3
 _MIN_PITCH = 8.0
-# 逐词对译：左缘对齐的容差、至少几个词、两行各有多少比例的词对得上
+# Interlinear gloss: tolerance for aligned left edges, minimum number of words, and share of the words in each of the
+# two lines that must align
 _GLOSS_ALIGN = 1.0
 _GLOSS_MIN = 4
 _GLOSS_SHARE = 0.75
-# 例句词下面的角色标签，小型大写字母抽出来是全大写：AGENT、ARG0、ARGM-TMP
-# 例句编号：(22.27)、(3)、(4a)
+# Role labels below the words of an example sentence; small capitals extract as all capitals: AGENT, ARG0, ARGM-TMP
+# Example numbers: (22.27), (3), (4a)
 _NUMBER_LABEL_RE = re.compile(r"\(\d+(?:\.\d+)*[a-z]?\)")
-# 按章编号的例句：(22.9)、(3.4a)
+# Example sentences numbered by chapter: (22.9), (3.4a)
 _CHAPTER_NUMBER_RE = re.compile(r"\(\d+\.\d+[a-z]?\)")
 _ROLE_LABEL_RE = re.compile(r"[A-Z][A-Z0-9-]{2,}")
-# 莱比锡标注规则里常用的语法缩写。单个字母（S、A、P）在别处太常见，不算
+# Grammatical abbreviations common in the Leipzig Glossing Rules. Single letters (S, A, P) are too common elsewhere
+# and do not count
 _LEIPZIG = frozenset(
     "SG PL DU NOM ACC GEN DAT ERG ABS LOC ABL ALL INS INSTR COM VOC PST PRS FUT PFV IPFV PRF IMPF "
     "PROG NEG DEF INDF CLF COP AUX POSS REFL RECP CAUS PASS APPL TOP FOC DECL IMP SBJ OBJ OBL DEM "
@@ -71,16 +77,18 @@ _LEIPZIG = frozenset(
 )
 _PERSON_RE = re.compile(r"[123](?:SG|PL|DU)")
 _HANZI_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
-# 注音行里的音节按空格和标点分开。抽出来的声调符号是单独的字符（z`ai、zh¯u），不算分隔
+# Syllables in a transcription line are separated by spaces and punctuation. Extracted tone marks are separate
+# characters (z`ai, zh¯u) and do not separate syllables
 _SYLLABLE_SPLIT_RE = re.compile(r"[\s,.;:!?，。；：！？、()（）\[\]“”\"'‘’]+")
 _MORPHEME_SPLIT_RE = re.compile(r"[-.=\[\]<>:~()\s]+")
 _MAX_PITCH = 36.0
 _SHORT_WORDS = 3
 _SHORT_WIDTH = 80.0
 _SHORT_SHARE = 0.8
-# 三线表顶线到中线之间最多几行字高
+# Maximum number of text line heights between the top rule and the middle rule of a three-line table
 _HEAD_ROWS = 4.0
-# 三线表的横线至少这么长。正文里给词加的下划线、分式线都短得多
+# Minimum length of the rules of a three-line table. Underlines of words and fraction bars in body text are much
+# shorter
 _BAND_MIN_W = 120.0
 _BAND_SHORT_SHARE = 0.6
 _LABEL_RE = re.compile(r"(?:Figure|Fig\.|Table|Tab\.)\s*\d+(?:\.\d+)*\b")
@@ -89,7 +97,7 @@ _MARGIN_BAND = 0.07
 _MARGIN_MIN = 42.0
 _MARGIN_HEIGHT = 22.0
 _MARGIN_LEN = 80
-# 和这么多条重复页眉落在同一高度（容差内）的短行也是页眉
+# A short line at the same height (within tolerance) as this many repeated running headers is also a running header
 _MARGIN_ROW = 1.5
 _MARGIN_ROWS = 3
 _PAGE_NO_RE = re.compile(
@@ -113,7 +121,8 @@ class Column:
 class RuledTable:
     rect: pymupdf.Rect
     cells: tuple[pymupdf.Rect, ...]
-    # 算法框里的伪代码也按一列的表切格子，但要逐行翻译。别的表格留原文
+    # Pseudocode in an algorithm box is also cut into cells as a one-column table, but is translated line by line.
+    # Other tables keep the original text
     algorithm: bool = False
 
 
@@ -124,13 +133,14 @@ class PageGeometry:
     figures: tuple[pymupdf.Rect, ...]
     height: float = 0.0
     tables: tuple[RuledTable, ...] = ()
-    # 图缘可以挡住写入，但一侧文字不够三块时不能据此重排。
+    # Figure edges can block writing, but with fewer than three text blocks on one side they cannot drive reordering.
     reads_in_columns: bool = False
-    # 整份文档投出来的版心。栏左缘是本页最左的块，版心左缘是正文起笔的地方
+    # Text frame voted across the whole document. The column's left edge is the leftmost block on this page, the
+    # frame's left edge is where body text starts
     frame: TextFrame | None = None
 
     def index_of(self, rect: pymupdf.Rect) -> int:
-        """块中心落在哪一栏。落在栏间空白时取最近的一栏。"""
+        """The column the block's center falls in. A center in the gap between columns takes the nearest column."""
         center = (rect.x0 + rect.x1) / 2
         for index, column in enumerate(self.columns):
             if column.x0 - 1 <= center <= column.x1 + 1:
@@ -144,14 +154,16 @@ class PageGeometry:
         return self.columns[self.index_of(rect)]
 
     def spans_columns(self, rect: pymupdf.Rect) -> bool:
-        """跨栏标题和整表。中心会落进某一栏，不能拿来当栏首或栏尾。"""
+        """Headings and whole tables that span columns. Their center falls into some column, but they cannot serve as
+        the start or end of a column."""
         return _spans_columns(rect, self)
 
     def cell_of(self, rect: pymupdf.Rect) -> pymupdf.Rect | None:
         return cell_containing(rect, self.tables)
 
     def right_limit(self, rect: pymupdf.Rect, obstacles: list[pymupdf.Rect]) -> float:
-        """本栏右缘，并在纵向交叠的右侧障碍前停下。可以小于 rect.x1，调用方不得因此把框缩小。"""
+        """Right edge of the column, stopping before obstacles on the right that overlap vertically. It can be less
+        than rect.x1; callers must not shrink the box because of that."""
         limit = self.column_of(rect).x1
         cell = self.cell_of(rect)
         if cell is not None:
@@ -174,8 +186,10 @@ class PageGeometry:
     ) -> PageGeometry:
         table_tuple = tuple(tables or ())
         table_zones = [table.rect for table in table_tuple]
-        # 表格外框也是一块大矢量，不能再当成图，否则格子里的字会被整段跳过。
-        # 比表大出一圈的是图：带网格的坐标图，网格认成了表，标题、坐标轴名在网格外面
+        # A table's outer frame is also a large vector shape and must not count as a figure, or the text in its cells
+        # would be skipped as a whole.
+        # A shape clearly larger than the table is a figure: a chart with a grid, where the grid was detected as a
+        # table and the title and axis labels lie outside the grid
         figure_tuple = tuple(
             figure
             for figure in (figures or ())
@@ -205,7 +219,7 @@ class PageGeometry:
         frame: TextFrame | None = None,
         scan: PageScan | None = None,
     ) -> PageGeometry:
-        """scan 是这一页已经读出的表格和图。没给时现读。"""
+        """scan holds the tables and figures already read for this page. Read now when not given."""
         scan = scan or scan_page(page)
         bounds = text_page_rect(page)
         return PageGeometry.from_rects(
@@ -220,24 +234,27 @@ class PageGeometry:
 
 @dataclass(frozen=True)
 class PageScan:
-    """一页的表格、图和词。提取、阅读顺序、角色判断、逐词对译都要用；
-    找表要逐页解析线和字，线、图片框、词每读一次都要几毫秒到几十毫秒，所以每页只读一次。"""
+    """Tables, figures and words of one page. Extraction, reading order, role detection and interlinear glosses all
+    use them; finding tables parses the rules and text of each page, and every read of rules, image boxes or words
+    takes from a few to tens of milliseconds, so each page is read only once."""
 
     tables: tuple[RuledTable, ...]
     figures: tuple[pymupdf.Rect, ...]
     words: tuple[_TextWord, ...]
-    # 相连的浅色底并成的一片：一张表、一个文本框的底色
+    # Areas of connected light shading merged into one: the background of a table or a text box
     shades: tuple[pymupdf.Rect, ...] = ()
-    # 细横线：表格线、分数线、下划线
+    # Thin horizontal rules: table rules, fraction bars, underlines
     rules: tuple[pymupdf.Rect, ...] = ()
-    # 所有细横线，连一个字母宽的短线也在（单个字母的下划线比 rules 的下限还短）
+    # All thin horizontal strokes, down to short ones one letter wide (the underline of a single letter is shorter
+    # than the lower bound of rules)
     strokes: tuple[pymupdf.Rect, ...] = ()
-    # 细竖线：表格竖线、章首章号和标题之间的分隔线
+    # Thin vertical rules: vertical table rules, separators between the chapter number and title at a chapter start
     posts: tuple[pymupdf.Rect, ...] = ()
-    # 只描边的弧线（依存弧、注意力弧）和填了底色的圆角框（弧上的标签）
+    # Stroked-only arcs (dependency arcs, attention arcs) and filled rounded boxes (labels on the arcs)
     arcs: tuple[pymupdf.Rect, ...] = ()
     round_boxes: tuple[pymupdf.Rect, ...] = ()
-    # 用三条短线画成的可见空格 ␣（LaTeX 的 \verb* 和 \textvisiblespace），字体里没有这个字
+    # Visible spaces ␣ drawn with three short lines (LaTeX \verb* and \textvisiblespace); the font has no such
+    # character
     visible_spaces: tuple[pymupdf.Rect, ...] = ()
 
 
@@ -248,7 +265,8 @@ def scan_page(page: pymupdf.Page) -> PageScan:
     drawings = [*visible, *rules]
     words = page_words(page)
     horizontal, vertical = _rule_segments(page, drawings)
-    # 找图仍按原样的路径框：裁过以后，原先铺满整页、被当成底色略过的图会冒出来，改变图里文字的取舍
+    # Figures are still found with the unclipped path boxes: after clipping, shapes that covered the whole page and
+    # were ignored as background would turn up and change which text inside figures is kept
     return PageScan(
         page_tables(page, drawings, words),
         tuple(_figure_rects(page, [*raw, *rules], images)),
@@ -262,16 +280,17 @@ def scan_page(page: pymupdf.Page) -> PageScan:
     )
 
 
-# 圆角框一圈四个角都是曲线；弧线至少这么宽
+# All four corners of a rounded box are curves; an arc is at least this wide
 _ROUND_CORNERS = 4
 _ARC_MIN_WIDTH = 6.0
-# 弧的两只脚离框的下沿最多这么远
+# Maximum distance of the two feet of an arc from the bottom edge of its box
 _ARC_FOOT = 3.0
 
 
 def _curved_paths(drawings: list[dict]) -> tuple[tuple[pymupdf.Rect, ...], tuple[pymupdf.Rect, ...]]:
-    """只描边、带曲线的拱形是弧线：起点和终点分开，都落在框的下沿，中间拱起来。
-    曲线图里的线一头高一头低，圆圈、圆角框首尾相接，都不算。填色、四个角都是曲线的小框是圆角框。"""
+    """A stroked-only arch with curves is an arc: start and end points apart, both on the bottom edge of the box, with
+    the middle raised. Lines in a plot, with one end high and one low, and circles and rounded boxes, whose ends
+    meet, do not count. A filled small box with curves at all four corners is a rounded box."""
     arcs: list[pymupdf.Rect] = []
     boxes: list[pymupdf.Rect] = []
     for drawing in drawings:
@@ -296,13 +315,14 @@ def _curved_paths(drawings: list[dict]) -> tuple[tuple[pymupdf.Rect, ...], tuple
     return tuple(arcs), tuple(boxes)
 
 
-# 可见空格的底线长度（点）。按 0.3 个字宽画，正文字号下约 3 点
+# Length of the bottom line of a visible space (points). Drawn 0.3 em wide, about 3 points at body-text size
 _VISIBLE_SPACE_WIDTH = (1.0, 6.0)
 
 
 def _visible_spaces(drawings: list[dict]) -> list[pymupdf.Rect]:
-    """一条短横线，两端各立着一条更短的竖线，竖线的下端落在横线上：画出来是 ␣ 的形状。
-    只认形状，是不是落在一行字的空隙里由提取时判断。"""
+    """A short horizontal line with a shorter vertical line standing at each end, whose lower ends sit on the
+    horizontal line: the shape of ␣. Only the shape is detected; extraction decides whether it falls in a gap within a
+    line of text."""
     flats: list[pymupdf.Rect] = []
     stems: list[pymupdf.Rect] = []
     low, high = _VISIBLE_SPACE_WIDTH
@@ -330,17 +350,18 @@ def _visible_spaces(drawings: list[dict]) -> list[pymupdf.Rect]:
     return found
 
 
-# 下划线至少这么宽（点）。再短的是字里的笔画、标记
+# Minimum width of an underline (points). Shorter ones are strokes of characters or marks
 _STROKE_MIN = 1.0
 
 
-# 画成一个扁多边形的下划线（幻灯片里的链接），整个轮廓不超过这么高
+# An underline drawn as one flat polygon (links in slides) has an outline at most this tall
 _STROKE_SHAPE_THICK = 3.0
 
 
 def _thin_strokes(drawings: list[dict]) -> list[pymupdf.Rect]:
-    """细横线，不限长短：直线段和扁的填充矩形，各算一条。别的路径整个轮廓是一条扁带的
-    （填充的细长多边形）算一条；轮廓高的是图形的边（梯形、圆角框、虚线框），不算。"""
+    """Thin horizontal strokes of any length: each line segment and each flat filled rectangle counts as one. Another
+    path whose whole outline is a flat band (a filled long thin polygon) counts as one; taller outlines are edges of
+    shapes (trapezoids, rounded boxes, dashed boxes) and do not count."""
     found: list[pymupdf.Rect] = []
     for drawing in drawings:
         pieces: list[pymupdf.Rect] | None = []
@@ -364,25 +385,27 @@ def _thin_strokes(drawings: list[dict]) -> list[pymupdf.Rect]:
 
 
 def _image_infos(page: pymupdf.Page) -> list[dict]:
-    """本页的图片，框按剪裁路径收过。"""
+    """Images on this page, with their boxes reduced to the clipping paths."""
     try:
         infos = page.get_image_info()
-    except Exception:  # noqa: BLE001 - 读不出来就当没有图片
+    except Exception:  # noqa: BLE001 - if they cannot be read, treat the page as having no images
         return []
     return _clip_images(page, infos) if infos else infos
 
 
-# 文本层里图片块的说明：<image: DeviceRGB, width: 678, height: 678, bpc: 8>
+# Description of an image block in the text layer: <image: DeviceRGB, width: 678, height: 678, bpc: 8>
 _IMAGE_SIZE_RE = re.compile(r"width: (\d+), height: (\d+)")
 
 
 def _clip_images(page: pymupdf.Page, infos: list[dict]) -> list[dict]:
-    """图片框换成剪裁以后看得见的部分。get_image_info 不管剪裁路径：一张 20 行的样例图只露出
-    上面三行，框却一直伸到页底，盖住的两段正文被当成图里的字。按剪裁读文本层，
-    图片块的框就是看得见的部分，按像素尺寸和位置对回各张图。对不上的照原框。"""
+    """Replace image boxes with the part visible after clipping. get_image_info ignores clipping paths: a sample image
+    of 20 lines shows only its top three lines, yet its box reaches the bottom of the page, and the two paragraphs it
+    covers are taken as text inside the image. Reading the text layer with clipping gives image blocks whose boxes are
+    the visible parts; they are matched back to the images by pixel size and position. Images without a match keep
+    their original box."""
     try:
         blocks = page.get_text("blocks", flags=pymupdf.TEXT_PRESERVE_IMAGES | pymupdf.TEXT_CLIP)
-    except Exception:  # noqa: BLE001 - 读不出来就照原框
+    except Exception:  # noqa: BLE001 - if it cannot be read, keep the original boxes
         return infos
     shown: list[tuple[pymupdf.Rect, tuple[int, int]]] = []
     for block in blocks:
@@ -409,23 +432,24 @@ def _clip_images(page: pymupdf.Page, infos: list[dict]) -> list[dict]:
 
 
 def visible_drawings(page: pymupdf.Page) -> list[dict]:
-    """get_drawings 的路径，框裁到它所在的剪裁区里。剪进图框的曲线路径框可能伸到页外几万点，
-    按原框算会盖住下面整栏正文。整个落在剪裁区外面的路径看不见，去掉"""
+    """Paths from get_drawings, with boxes clipped to their clipping region. The box of a curve path clipped into a
+    figure can reach tens of thousands of points off the page, and the original box would cover the whole column of
+    body text below. Paths entirely outside their clipping region are invisible and are dropped"""
     return _drawing_paths(page)[0]
 
 
 def _drawing_paths(page: pymupdf.Page) -> tuple[list[dict], list[dict]]:
-    """读一次本页的路径，给出裁过的（见 visible_drawings）和原样的两份。"""
+    """Read the paths of this page once and return two lists: clipped (see visible_drawings) and unclipped."""
     try:
         paths = page.get_drawings(extended=True)
-    except Exception:  # noqa: BLE001 - 个别页面的矢量表读不出来，当没有线
+    except Exception:  # noqa: BLE001 - the vector graphics of some pages cannot be read; treat as no rules
         return [], []
     out: list[dict] = []
     raw: list[dict] = []
     clips: list[tuple[int, pymupdf.Rect]] = []
     for path in paths:
         level = int(path.get("level") or 0)
-        # 剪裁区管到同一层级以下的路径，回到它的层级就失效
+        # A clipping region applies to paths nested below its level and lapses once a path is back at its level
         clips = [clip for clip in clips if clip[0] < level]
         kind = path.get("type")
         if kind == "clip":
@@ -446,13 +470,14 @@ def _drawing_paths(page: pymupdf.Page) -> tuple[list[dict], list[dict]]:
 
 
 def _page_drawings(page: pymupdf.Page, images: list[dict] | None = None) -> list[dict]:
-    """本页的矢量图，加上图片画的细线。images 是本页的图片框，没给时现读。"""
+    """Vector graphics of this page plus thin rules drawn as images. images holds the image boxes of this page; read
+    now when not given."""
     return [*visible_drawings(page), *_image_rules(_image_infos(page) if images is None else images)]
 
 
 def light_fill(drawing: dict) -> bool:
-    """只填色、由矩形拼成、两边都比线粗的浅色块：表格格子、文本框的底色。
-    深色块不算：图注标签是黑底白字。"""
+    """Light filled-only shapes made of rectangles and thicker than a rule in both directions: the shading of table
+    cells and text boxes. Dark shapes do not count: caption labels are white text on black."""
     rect = pymupdf.Rect(drawing["rect"])
     items = drawing.get("items") or []
     fill = drawing.get("fill")
@@ -468,8 +493,8 @@ def light_fill(drawing: dict) -> bool:
 
 
 def _shaded_areas(drawings: list[dict], bounds: pymupdf.Rect) -> tuple[pymupdf.Rect, ...]:
-    """挨着的浅色块并成一片。一张表常是每格一块底色，格子之间留一道细缝。
-    铺满整页的是纸张底色，不算。"""
+    """Merge adjacent light shapes into areas. A table often has one shaded shape per cell, with a narrow gap between
+    cells. A shape covering the whole page is the paper color and does not count."""
     areas: list[pymupdf.Rect] = []
     for drawing in drawings:
         area = pymupdf.Rect(drawing["rect"])
@@ -503,12 +528,13 @@ class _MarginBlock(Protocol):
 
 
 def text_page_rect(page: pymupdf.Page) -> pymupdf.Rect:
-    """文字坐标所在的页面框。旋转页的 page.rect 是转过的，提取出来的坐标没转。"""
+    """The page box that text coordinates refer to. On a rotated page page.rect is rotated, while extracted
+    coordinates are not."""
     return pymupdf.Rect(0, 0, page.cropbox.width, page.cropbox.height)
 
 
 def cell_containing(rect: pymupdf.Rect, tables: Sequence[RuledTable]) -> pymupdf.Rect | None:
-    """块的大部分落在哪个格子里。落在线外的正文返回 None。"""
+    """The cell that holds most of the block. Body text outside the rules returns None."""
     area = rect.width * rect.height
     if area < 1:
         return None
@@ -548,9 +574,11 @@ class _ReadUnit(Generic[_BlockT]):
 
 
 def reading_order(blocks: Sequence[_BlockT], geo: PageGeometry) -> list[_BlockT]:
-    """栏沟明确时按栏从上到下。跨栏标题和整表留在纵向位置，不塞进某一栏。
+    """With clear column gaps, order column by column from top to bottom. Headings and whole tables spanning columns
+    stay at their vertical position and are not put into any column.
 
-    单栏、以及只靠图缘切开的页面保持传入顺序。表内格子已有行序，跨栏表不拆开。
+    Single-column pages and pages split only by figure edges keep the given order. Cells inside a table already have
+    a row order, and tables spanning columns are not split up.
     """
     if not geo.reads_in_columns or len(geo.columns) < 2 or len(blocks) < 2:
         return list(blocks)
@@ -640,11 +668,13 @@ def _spanning_table_index(block: _OrderedBlock, tables: Sequence[RuledTable]) ->
 
 
 def ruled_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> tuple[RuledTable, ...]:
-    """只认横竖线围出的格子。文字对齐出来的假表、公式笔画网格不要。drawings 是本页的矢量图
-    （含图片画的线，见 _page_drawings），没给时现读。
+    """Only cells enclosed by horizontal and vertical rules count. False tables formed by aligned text and grids of
+    formula strokes are left out. drawings holds the vector graphics of this page (including rules drawn as images,
+    see _page_drawings); read now when not given.
 
-    find_tables 每次先把整页的字逐个转成字典，一页要几十毫秒。页面上凑不出两横两竖的线，
-    就围不出格子，不必调用；凑得出时只取线所在一带的字（见 _table_clip）。"""
+    find_tables first converts every character of the page into a dict, which takes tens of milliseconds per page.
+    When the page does not have two horizontal and two vertical rules, no cell can be enclosed and the call is
+    skipped; otherwise only the text in the band around the rules is taken (see _table_clip)."""
     if drawings is None:
         drawings = _page_drawings(page)
     if not _grid_possible(drawings):
@@ -657,7 +687,7 @@ def ruled_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> tupl
             horizontal_strategy="lines_strict",
             paths=drawings,
         )
-    except Exception:  # noqa: BLE001 - 个别页面的线读不出来，当没有表
+    except Exception:  # noqa: BLE001 - the rules of some pages cannot be read; treat as no tables
         return ()
     tables: list[RuledTable] = []
     rules: tuple[list[pymupdf.Rect], list[pymupdf.Rect]] | None = None
@@ -672,12 +702,15 @@ def ruled_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> tupl
 
 
 def _table_clip(page: pymupdf.Page, drawings: Sequence[dict]) -> pymupdf.Rect | None:
-    """find_tables 取字的范围。线都在范围里，找出的表和不限范围时一样，只是少转换范围外的字。
+    """The area from which find_tables takes text. All rules lie inside it, so the tables found are the same as
+    without a limit; only the text outside the area is not converted.
 
-    find_tables 用字做两处判断：表格区域里要有字才算表；几条线连成的一片里要有字，才给这一片
-    补上外框线。后一处比的是字框经页面变换矩阵换算后的上下沿，等于拿上下翻转后的位置去比，
-    所以范围除了线所在的一带，还要加上它上下翻转后的一带。线的外框宽或高可能为零，
-    Rect 求并集时会当成空框跳过，所以按坐标取最值。旋转过的页面不限范围。"""
+    find_tables uses the text for two decisions: a table area must contain text to count as a table, and a patch of
+    connected rules must contain text before an outer frame is added to it. The second compares the top and bottom
+    edges of character boxes after conversion by the page transformation matrix, which amounts to comparing
+    vertically flipped positions, so besides the band around the rules the area also includes that band flipped
+    vertically. The bounding box of a rule may have zero width or height, and Rect union would skip it as empty, so
+    the extremes are taken by coordinate. Rotated pages get no limit."""
     if page.rotation or not drawings:
         return None
     rects = [pymupdf.Rect(drawing["rect"]) for drawing in drawings]
@@ -697,14 +730,16 @@ def _table_clip(page: pymupdf.Page, drawings: Sequence[dict]) -> pymupdf.Rect | 
     )
 
 
-# 取字的范围比线多出的一圈：MuPDF 按它自己量的字框决定收不收，和报出来的框差一点
+# Margin of the text area around the rules: MuPDF decides whether to take a character by its own measured box,
+# which differs slightly from the reported box
 _TABLE_CLIP_PAD = 5.0
 
 
 def _image_rules(images: Sequence[dict]) -> list[dict]:
-    """一像素宽的图片拉成的细条，按 get_drawings 的格式写成填充矩形。
+    """Thin strips made by stretching one-pixel images, written as filled rectangles in the get_drawings format.
 
-    老 TeX 和一些转换器用图片画框线，get_drawings 读不到，find_tables 也就看不见。"""
+    Old TeX and some converters draw frame lines with images, which get_drawings does not read, so find_tables does not
+    see them either."""
     out: list[dict] = []
     for info in images:
         rect = pymupdf.Rect(info["bbox"])
@@ -724,10 +759,11 @@ def _image_rules(images: Sequence[dict]) -> list[dict]:
 
 
 def _grid_possible(drawings: Sequence[dict]) -> bool:
-    """横线、竖线各至少两条。
+    """At least two horizontal and two vertical rules.
 
-    按 lines_strict 取边的口径数：线段、矩形和四边形的边都算，不分长短（短线会接成长线）；
-    只填充不描边、两个方向都比吸附距离宽的块不当线。"""
+    Counted the way lines_strict takes edges: line segments and the edges of rectangles and quads all count,
+    regardless of length (short lines are joined into long ones); filled shapes without a stroke that are wider than
+    the snap distance in both directions are not rules."""
     horizontal = vertical = 0
     for drawing in drawings:
         rect = pymupdf.Rect(drawing.get("rect"))
@@ -757,9 +793,10 @@ def _rule_segments(
     page: pymupdf.Page,
     drawings: list[dict] | None = None,
 ) -> tuple[list[pymupdf.Rect], list[pymupdf.Rect]]:
-    """页面上的细横线和细竖线。drawings 是本页的矢量图（含图片画的线），没给时现读。
+    """Thin horizontal and vertical rules on the page. drawings holds the vector graphics of this page (including
+    rules drawn as images); read now when not given.
 
-    线段、细长的矩形、描边矩形的四条边都算。"""
+    Line segments, long thin rectangles and the four edges of stroked rectangles all count."""
     rects: list[pymupdf.Rect] = []
     if drawings is None:
         drawings = _page_drawings(page)
@@ -792,11 +829,12 @@ def _with_open_edges(
     horizontal: list[pymupdf.Rect],
     vertical: list[pymupdf.Rect],
 ) -> RuledTable:
-    """补上没有外框的边行、边列。
+    """Add the outer rows and columns that have no outer frame.
 
-    很多论文的表只画格子之间的线：横线伸出最外一条竖线，竖线伸过最上、最下一条横线。
-    find_tables 只认四面都有线的格子，表头、首列、末列、末行就漏了。按线伸出去的范围
-    把网格补全；相邻两格之间没有线隔开的（跨列的表头）并成一格。
+    Many papers draw only the rules between cells: horizontal rules reach past the outermost vertical rule, and
+    vertical rules reach past the top and bottom horizontal rules. find_tables only detects cells with rules on all
+    four sides, so the header, the first and last columns and the last row are missed. The grid is completed up to
+    where the rules reach; adjacent cells without a rule between them (headers spanning columns) are merged into one.
     """
     box = pymupdf.Rect(table.rect)
     for _ in range(3):
@@ -851,7 +889,8 @@ def _edges(values: list[float]) -> list[float]:
 
 
 def _ruled(segments: list[pymupdf.Rect], at: float, start: float, end: float, *, upright: bool) -> bool:
-    """at 处有线盖住 start 到 end 的大半。upright 为真时找竖线，否则找横线。"""
+    """Rules at at cover most of the range from start to end. With upright true, look for vertical rules, otherwise
+    horizontal ones."""
     covered = 0.0
     for seg in segments:
         pos = seg.x0 if upright else seg.y0
@@ -863,7 +902,8 @@ def _ruled(segments: list[pymupdf.Rect], at: float, start: float, end: float, *,
 
 
 def _merge_rows(cells: list[pymupdf.Rect], horizontal: list[pymupdf.Rect]) -> list[pymupdf.Rect]:
-    """上下相邻、左右对齐、中间没有横线的边格并成一格（跨行的行名）。"""
+    """Merge outer cells that are vertically adjacent, aligned left and right, and not separated by a horizontal rule
+    (row names spanning rows)."""
     out: list[pymupdf.Rect] = []
     for cell in sorted(cells, key=lambda c: (c.x0, c.y0)):
         prev = out[-1] if out else None
@@ -885,8 +925,9 @@ def page_tables(
     drawings: list[dict] | None = None,
     words: Sequence[_TextWord] | None = None,
 ) -> tuple[RuledTable, ...]:
-    """有线表、底色格子拼成的表，再加上列缘对齐的短格子表和算法框。两栏正文和整段文字不在这里。
-    drawings、words 是本页已读出的矢量图和词，没给时现读。"""
+    """Ruled tables and tables made of shaded cells, plus short-cell tables with aligned column edges and algorithm
+    boxes. Two-column body text and whole paragraphs are not included. drawings and words hold the vector graphics
+    and words already read for this page; read now when not given."""
     if drawings is None:
         drawings = _page_drawings(page)
     if words is None:
@@ -897,7 +938,8 @@ def page_tables(
     algorithms = algorithm_tables(page, drawings, words)
     banded = banded_tables(_rule_segments(page, drawings)[0], words, (*ruled, *algorithms))
     ruled = (*(table for table in ruled if not _mostly_inside(table.rect, [band.rect for band in banded])), *banded)
-    # 无线的格子表本来就是按对齐的行找的，表头对齐的话已经在里面，不再往上找
+    # Unruled cell tables are found by aligned rows in the first place, so an aligned header is already included and
+    # there is no search upward
     ruled = _with_header_rows(ruled, words)
     unruled = unruled_tables(page, (*ruled, *algorithms), words)
     if unruled:
@@ -906,9 +948,11 @@ def page_tables(
 
 
 def _with_header_rows(tables: Sequence[RuledTable], words: Sequence[_TextWord]) -> tuple[RuledTable, ...]:
-    """三线表的表头和表身隔着横线，按线只找得到表身。紧贴在表上面、横向落在表的范围里、
-    每个词都落在表的某一列里（不跨列线）、占三列以上、每列不过三个词的行是表头，
-    一行一格并进这张表。表上面的说明、正文是连着排的句子，会跨过列线，到那里为止。"""
+    """In a three-line table a rule separates the header from the body, and the rules only yield the body. Rows right
+    above the table, horizontally within its extent, with every word inside one column of the table (not crossing a
+    column line), covering three or more columns and with at most three words per column are header rows, and each
+    row joins the table as one cell. Descriptions and body text above the table are continuous sentences that cross
+    the column lines, and the search stops there."""
     zones = [table.rect for table in tables]
     out: list[RuledTable] = []
     for table in tables:
@@ -945,9 +989,11 @@ def column_ruled_tables(
     words: Sequence[_TextWord],
     known: Sequence[RuledTable] = (),
 ) -> tuple[RuledTable, ...]:
-    """只画了列线的表：没有外框，横线也只有表头下面一条，find_tables 围不出格子；
-    数字居中排，按左右缘对齐也认不出。几条竖线上下一样长，竖线范围里每行字在每条竖线
-    两边都有，多是短格，就按竖线分列、按字分行。两栏正文中间的分隔线两边是长句，不算。"""
+    """Tables with only column lines: no outer frame and only one horizontal rule below the header, so find_tables
+    cannot enclose cells; numbers are centered, so alignment of left and right edges does not detect them either.
+    When several vertical lines have the same vertical extent, each text row within that extent has text on both sides
+    of every line, and most cells are short, columns are split by the lines and rows by the text. A separator between
+    two columns of body text has long sentences on both sides and does not count."""
     lines = _joined_verticals(vertical)
     tables: list[RuledTable] = []
     used: set[int] = set()
@@ -996,10 +1042,12 @@ def banded_tables(
     words: Sequence[_TextWord],
     known: Sequence[RuledTable] = (),
 ) -> tuple[RuledTable, ...]:
-    """三线表：顶线、表头下的中线、底线一样长，中间没有竖线。表头常折行、居中，
-    几组数据之间还隔着横线，行距不齐，按对齐找只找得到其中一段。
-    三条以上首尾对齐的横线，线间的字多是短格，就按线分段、段里按字分行分格。
-    已经找到的表落在里面的，换成这一张；这一片落在已有的表里的，不另算。"""
+    """Three-line tables: the top rule, the middle rule below the header and the bottom rule have the same length, with
+    no vertical rules. The header often wraps and is centered, groups of data are separated by further rules, and the
+    row spacing is uneven, so a search by alignment finds only one section. With three or more horizontal rules whose
+    ends align and mostly short cells between them, the table is split into sections by the rules, and each section
+    into rows and cells by the text. A table already found inside this area is replaced by this one; an area inside an
+    existing table is not counted again."""
     rules = sorted((rule for rule in horizontal if rule.width >= _BAND_MIN_W), key=lambda rule: rule.y0)
     tables: list[RuledTable] = []
     used: set[int] = set()
@@ -1028,14 +1076,17 @@ def banded_tables(
         rows = [row for band in bands for row in band]
         if len(rows) < _MIN_TEXT_ROWS or any(not band for band in bands):
             continue
-        # 线间排着图注的是图（文法规则、例句框），图注要照常翻
+        # Rules with a caption between them enclose a figure (grammar rules, example boxes), and the caption is
+        # translated as usual
         if any(_LABEL_RE.match(" ".join(word.text for word in row)) for row in rows):
             continue
-        # 有三条线撑着，短格占得少一些也算：表头的列名、O(k·n·d) 这样的式子比数据格长。
-        # 正文、伪代码一行连成一格，跨过半张表
+        # Backed by three rules, a lower share of short cells is enough: column names in the header and expressions
+        # such as O(k·n·d) are longer than data cells.
+        # A line of body text or pseudocode forms one cell spanning more than half the table
         pieces = [cell for row in rows for cell in _row_cells(row)]
         short = sum(1 for cell in pieces if cell.words <= _SHORT_WORDS and cell.width <= _SHORT_WIDTH)
-        # 横线下第一行只有一个短格的是分组名（Conditional、μ prediction），不算没分格的行
+        # A first row below a rule with a single short cell is a group name (Conditional, μ prediction) and is not
+        # counted as a row without cells
         split = sum(
             1
             for band in bands
@@ -1043,7 +1094,8 @@ def banded_tables(
             if len(cells := _row_cells(row)) >= 2
             or (index == 0 and cells[0].words <= _SHORT_WORDS and cells[0].width <= _SHORT_WIDTH)
         )
-        # 跨过半张表的格子只在一行一格时才说明是正文；两列表的行名本来就占大半
+        # A cell spanning more than half the table indicates body text only when it is the only cell in its row; row
+        # names of a two-column table take up most of the width anyway
         if (
             short < len(pieces) * _BAND_SHORT_SHARE
             or split < len(rows) * 0.8
@@ -1066,7 +1118,8 @@ def banded_tables(
 
 
 def _joined_verticals(vertical: Sequence[pymupdf.Rect]) -> list[pymupdf.Rect]:
-    """同一横坐标上首尾相接的竖线段接成一条。逐行画的表格线是一格一段。"""
+    """Join vertical segments that meet end to end at the same x coordinate. Table rules drawn row by row have one
+    segment per cell."""
     out: list[pymupdf.Rect] = []
     for seg in sorted(vertical, key=lambda r: (round(r.x0), r.y0)):
         last = out[-1] if out else None
@@ -1078,9 +1131,11 @@ def _joined_verticals(vertical: Sequence[pymupdf.Rect]) -> list[pymupdf.Rect]:
 
 
 def _with_text_rows(table: RuledTable, words: Sequence[_TextWord]) -> RuledTable:
-    """只画了列线、行与行之间没有横线的表，一格里叠着好几行。同一排的几格里，字一行行
-    左右对齐、每行跨两格以上、行名每行都有、多是短格的，是没画线的行，按行间空档切开。
-    折了行的表头常有只占一行的格，句子折行只在一格里，长句也不算短格。"""
+    """In a table with only column lines and no rules between rows, one cell holds several stacked lines. When the
+    cells of one band have text in lines aligned across them, each line spanning two or more cells, a row name on every
+    line and mostly short cells, the lines are unruled rows and are cut at the gaps between them. A wrapped header
+    often has cells with only one line, a wrapped sentence stays within one cell, and long sentences do not count as
+    short cells."""
     bands: dict[tuple[int, int], list[pymupdf.Rect]] = {}
     for cell in table.cells:
         bands.setdefault((round(cell.y0), round(cell.y1)), []).append(cell)
@@ -1101,7 +1156,7 @@ def _split_band(band: Sequence[pymupdf.Rect], words: Sequence[_TextWord]) -> lis
     rows = _word_rows(inside)
     if len(rows) < 2:
         return list(band)
-    # 最左边有字的一列是行名
+    # The leftmost column with text holds the row names
     names = min({i for i in map(holder, inside) if i is not None}, key=lambda i: band[i].x0)
     pieces: list[_TextCell] = []
     for row in rows:
@@ -1130,9 +1185,11 @@ def _with_ruled_heads(
     words: Sequence[_TextWord],
     horizontal: Sequence[pymupdf.Rect],
 ) -> tuple[RuledTable, ...]:
-    """三线表的表头夹在顶线和中线之间。表头的字常比数据列宽、居中排，左右缘和表身对不上，
-    按对齐找出来的表只有表身。表身上方紧贴一条横贯全表的中线，再往上有一条一样长的顶线，
-    两线之间的字就是表头，按列间空档分格并进表里。"""
+    """The header of a three-line table sits between the top rule and the middle rule. Header text is often wider than
+    the data columns and centered, so its left and right edges do not match the body, and a table found by alignment
+    holds only the body. When a middle rule across the whole table lies right above the body and a top rule of the
+    same length lies further up, the text between the two rules is the header; it is split into cells at the gaps
+    between columns and added to the table."""
     out: list[RuledTable] = []
     for table in tables:
         rect = table.rect
@@ -1175,9 +1232,10 @@ def _head_cells(
     top: float,
     bottom: float,
 ) -> list[pymupdf.Rect]:
-    """表头的字按列分格。一行字接在正上方最近的那格下面，那格又只和这一个字相交的，
-    是同一格折了行；跨在两列上面的组名单独一格。格子左右伸到和邻格的空档中线，
-    上下伸到所在的那段表头。"""
+    """Split header text into cells by column. Text right below the nearest cell above it, when that cell overlaps
+    only this one piece of text, is a wrapped line of the same cell; a group name spanning two columns is a cell of its
+    own. Cells extend left and right to the middle of the gap to the neighboring cell, and up and down to the bounds
+    of their header section."""
     groups: list[pymupdf.Rect] = []
     for row in rows:
         boxes = [pymupdf.Rect(cell.x0, cell.y0, cell.x1, cell.y1) for cell in row]
@@ -1201,7 +1259,8 @@ def _head_cells(
 
 
 def _header_row(row: Sequence[_TextWord], lines: Sequence[float]) -> bool:
-    """按词距连成一片的是一句话（段落末行 Levenshtein in Eq. 2.20.），表头各列之间隔着空档。"""
+    """Text joined by normal word spacing is a sentence (the last line of a paragraph, Levenshtein in Eq. 2.20.);
+    header columns are separated by gaps."""
     if len(_row_cells(row)) < 2:
         return False
     if any(word.x0 < x - 1 and word.x1 > x + 1 for word in row for x in lines):
@@ -1219,12 +1278,14 @@ def filled_tables(
     words: Sequence[_TextWord],
     ruled: Sequence[RuledTable] = (),
 ) -> tuple[RuledTable, ...]:
-    """每格一块底色、格子挨着格子铺满一片的表（LaTeX 的 \\rowcolor、\\cellcolor）。
-    这种表常常只有上下几条横线，没有竖线，按线找不出格子，各格的字会被并成一段去翻译。
+    """Tables with one shaded shape per cell, the cells tiling an area (LaTeX \\rowcolor, \\cellcolor). Such tables
+    often have only a few horizontal rules and no vertical ones, so the rules yield no cells and the text of all cells
+    would be merged into one paragraph for translation.
 
-    底色块要拼成至少两行两列、铺满这一片，有两格以上有字，片里的字都落在某一格里。
-    一整块底色是文本框，一行一块的是代码框的底纹，都不算；图里铺的白底格子
-    压着跨好几格的图注，也不算。已经按线找到的表不再算一遍。
+    The shaded shapes must form at least two rows and two columns and tile the area, at least two cells must contain
+    text, and all text in the area must fall into some cell. One shaded shape for the whole area is a text box, and
+    one shape per line is the shading of a code box; neither counts. White cells laid out in a figure with labels
+    spanning several cells do not count either. Tables already found by rules are not counted again.
     """
     bounds = text_page_rect(page)
     fills = [
@@ -1258,7 +1319,8 @@ def filled_tables(
             continue
         if len(rows) < 2 or len(cols) < 2:
             continue
-        # 格子互不交叠、合起来铺满整片：嵌套的底色（框里再套一块）面积会多出来
+        # Cells must not overlap and together must tile the area: nested shading (a shape inside a box) adds extra
+        # area
         covered = _tiled_area(cells)
         if covered is None or abs(covered - area.get_area()) > area.get_area() * 0.05:
             continue
@@ -1273,8 +1335,9 @@ def filled_tables(
 
 
 def _tiled_area(cells: Sequence[pymupdf.Rect]) -> float | None:
-    """底色块合起来的面积。相邻两格沿边叠着一条（LaTeX 给每格上色时多铺一点，免得格间露白缝），
-    叠的这一条扣掉。一块的大半压在另一块上是框里再套一块，返回 None。"""
+    """Total area of the shaded shapes. Adjacent cells overlap in a strip along their shared edge (LaTeX paints a
+    little beyond each cell so that no white seam shows between cells), and that strip is subtracted. When most of
+    one shape lies on another, it is a shape inside a box, and None is returned."""
     total = sum(cell.get_area() for cell in cells)
     for index, cell in enumerate(cells):
         for other in cells[index + 1 :]:
@@ -1288,8 +1351,9 @@ def _tiled_area(cells: Sequence[pymupdf.Rect]) -> float | None:
 
 
 def _spaced_rows(cells: Sequence[pymupdf.Rect], words: Sequence[_TextWord]) -> bool:
-    """一列逐行底色的表（\\rowcolor）：三行以上，每行一行字，都隔着大空档分成几段
-    （例句、填空的横线、答案）。代码框的底纹也是一行一块，但一行是连着的一句。"""
+    """A one-column table shaded row by row (\\rowcolor): three or more rows, one line of text per row, each split into
+    parts by large gaps (example sentence, blank line to fill in, answer). The shading of a code box also has one
+    shape per line, but each line is one continuous sentence."""
     if len(cells) < _MIN_TEXT_ROWS:
         return False
     for cell in cells:
@@ -1301,7 +1365,8 @@ def _spaced_rows(cells: Sequence[pymupdf.Rect], words: Sequence[_TextWord]) -> b
 
 
 def _holds(cell: pymupdf.Rect, box: pymupdf.Rect) -> bool:
-    """词整个落在格子里，左右只许出头一点。跨两格的词说明这片底色不是按格子铺的。"""
+    """The word lies entirely in the cell, sticking out only slightly left or right. A word spanning two cells shows
+    that the shading is not laid out by cells."""
     middle = (box.y0 + box.y1) / 2
     return cell.x0 - _NEAR <= box.x0 and box.x1 <= cell.x1 + _NEAR and cell.y0 <= middle <= cell.y1
 
@@ -1316,12 +1381,14 @@ def algorithm_tables(
     drawings: list[dict] | None = None,
     words: Sequence[_TextWord] | None = None,
 ) -> tuple[RuledTable, ...]:
-    """算法框里的伪代码当成一列的表，每一行是一格。
+    """Treat pseudocode in an algorithm box as a one-column table with one cell per line.
 
-    伪代码一行一句，缩进是结构，行和行不是一段话。PyMuPDF 常把几行收进同一块，
-    后面的合并又会把它们接成段落重排。做成格子以后，每行单独翻译、写回原行，
-    不和别的行合并。算法框的范围按框线定：图注下面那条横线到再下面一条横线。
-    words 是本页的词。没有一个词含 Algorithm、Procedure 或「算法」的页面不会有算法图注，不必再读一遍整页的字。
+    Pseudocode has one statement per line and indentation is structure; the lines do not form a paragraph. PyMuPDF
+    often puts several lines into one block, and later merging would join them into a reflowed paragraph. As cells,
+    each line is translated on its own, written back to its original line and not merged with other lines. The extent
+    of an algorithm box is set by its frame rules: from the rule below the caption to the next rule below it.
+    words holds the words of this page. A page where no word contains Algorithm, Procedure or "算法" has no algorithm
+    caption, so the text of the whole page need not be read again.
     """
     if words is not None and not any(_ALGORITHM_WORD_RE.search(word.text) for word in words):
         return ()
@@ -1352,7 +1419,8 @@ def algorithm_tables(
 
 
 def _algorithm_captions(line: dict) -> list[tuple[pymupdf.Rect, float]]:
-    """一行里的算法图注（框、字号）。并排的两个算法框，图注常在同一行里，中间隔着栏沟。"""
+    """Algorithm captions in one line (box, font size). Two algorithm boxes side by side often have their captions in
+    the same line, separated by a column gap."""
     spans = [span for span in line["spans"] if span["text"].strip()]
     starts: list[int] = []
     for index, span in enumerate(spans):
@@ -1370,7 +1438,8 @@ def _algorithm_captions(line: dict) -> list[tuple[pymupdf.Rect, float]]:
 
 
 def _box_below(caption: pymupdf.Rect, size: float, horizontal: list[pymupdf.Rect]) -> pymupdf.Rect | None:
-    """图注在上：图注下面的第一条线是框顶，再下面一条是框底。图注可能有好几行。"""
+    """Caption on top: the first rule below the caption is the top of the box, the next one below is the bottom. The
+    caption may have several lines."""
     rules = sorted(
         (rule for rule in horizontal if rule.y0 >= caption.y1 - _NEAR and _under(rule, caption, size)),
         key=lambda rule: rule.y0,
@@ -1383,7 +1452,8 @@ def _box_below(caption: pymupdf.Rect, size: float, horizontal: list[pymupdf.Rect
 
 
 def _box_above(caption: pymupdf.Rect, size: float, horizontal: list[pymupdf.Rect]) -> pymupdf.Rect | None:
-    """图注在下：紧挨图注上方的线是框底，再往上一条同宽的线是框顶。"""
+    """Caption at the bottom: the rule right above the caption is the bottom of the box, the next rule of the same
+    width further up is the top."""
     rules = sorted(
         (rule for rule in horizontal if rule.y1 <= caption.y0 + _NEAR and _under(rule, caption, size)),
         key=lambda rule: -rule.y0,
@@ -1401,7 +1471,7 @@ def _box_above(caption: pymupdf.Rect, size: float, horizontal: list[pymupdf.Rect
 
 
 _LINE_LABEL_RE = re.compile(r"^\s*\d+\s*[:.]")
-# 句子没完的行尾：小写字母、逗号、断词的连字符
+# Line ends of an unfinished sentence: a lowercase letter, a comma, a hyphen of a broken word
 _OPEN_END_RE = re.compile(r"[a-z,]$|[a-z]-$")
 
 
@@ -1411,11 +1481,13 @@ def _join_wrapped_rows(
     spans: list[dict],
     main: float,
 ) -> list[pymupdf.Rect]:
-    """行首有行号（1: 2: …）的算法里，行号之后没有行号的行是上一句折下来的，并进上一格。
-    没有行号的算法里，上一行排到框的右缘、句子没完，下一行是它折下来的。
+    """In an algorithm with line numbers at the line starts (1: 2: ...), a line without a number after the numbered
+    lines is a wrapped part of the previous statement and joins the previous cell. In an algorithm without line
+    numbers, when the previous line reaches the right edge of the box and its sentence is unfinished, the next line is
+    its wrapped part.
 
-    折开的两半各自送翻，半句里正文词太少，会被当成公式留下英文。
-    第一个行号之前的 Input:、Output: 各是一格。"""
+    If the two halves were sent for translation separately, a half sentence would have too few body-text words and
+    would be kept in English as a formula. Input: and Output: before the first line number are one cell each."""
     labeled: list[bool] = []
     full: list[bool] = []
     for baseline in baselines:
@@ -1425,7 +1497,8 @@ def _join_wrapped_rows(
         )
         text = "".join(span["text"] for span in row).rstrip()
         labeled.append(bool(_LINE_LABEL_RE.match(text)))
-        # 排满的一行字距均匀；右对齐的注释（// mean）也到右缘，但和语句隔着一大段空
+        # A full line has even spacing; a right-aligned comment (// mean) also reaches the right edge, but with a wide
+        # gap after the statement
         boxes = [span["bbox"] for span in row if "bbox" in span and span["text"].strip()]
         right = max((box[2] for box in boxes), default=0.0)
         gaps = [b[0] - a[2] for a, b in zip(boxes, boxes[1:])]
@@ -1454,12 +1527,14 @@ def _join_wrapped_rows(
 
 
 def _under(rule: pymupdf.Rect, caption: pymupdf.Rect, size: float) -> bool:
-    """线从图注左缘起、盖过图注开头。并排的另一个算法框的线在旁边，不算。"""
+    """The rule starts at the left edge of the caption and covers the start of the caption. Rules of another
+    algorithm box beside it do not count."""
     return rule.x0 <= caption.x0 + _NEAR and rule.x1 >= min(caption.x1, caption.x0 + size * 4)
 
 
 def _distinct_rules(rules: list[pymupdf.Rect]) -> list[pymupdf.Rect]:
-    """同一条线可能既是线段又是框的一边，叠在一起的只留一条。"""
+    """One rule may be both a line segment and an edge of a box; of rules lying on top of each other only one is
+    kept."""
     out: list[pymupdf.Rect] = []
     for rule in rules:
         if out and abs(rule.y0 - out[-1].y0) < _NEAR and abs(rule.x0 - out[-1].x0) < _NEAR:
@@ -1473,8 +1548,9 @@ def _code_rows(
     body: pymupdf.Rect,
     rules: Sequence[pymupdf.Rect] = (),
 ) -> tuple[pymupdf.Rect, ...]:
-    """框里每一行一格。行按正文字号的基线分，上下标落在它们所属的行里。
-    rules 是框里的横线：分数线、根号上的横线短，框线和分隔线横贯整个框。"""
+    """One cell per line in the box. Lines are split by baselines at body-text size, and superscripts and subscripts
+    fall into the line they belong to. rules holds the horizontal rules in the box: fraction bars and radical bars are
+    short, frame lines and separators run across the whole box."""
     spans = [
         span
         for line in lines
@@ -1486,8 +1562,9 @@ def _code_rows(
     main = max(span["size"] for span in spans)
     bars = [rule for rule in rules if rule.width < body.width * 0.5 and body.intersects(rule)]
     baselines: list[float] = []
-    # 根号、大括号这类符号字体的起笔点不在基线上，不拿它们分行；
-    # 行间公式的分子分母和正文一样大，贴着分数线，也不拿它们分行
+    # Symbol-font glyphs such as radicals and large braces do not have their origin on the baseline, so they are not
+    # used to split lines; numerators and denominators of display formulas are as large as body text but sit against
+    # a fraction bar, so they are not used either
     steady = [
         span
         for span in spans
@@ -1498,15 +1575,16 @@ def _code_rows(
             baselines.append(y)
     if len(baselines) < 2:
         return ()
-    # 分界放在偏上一行基线的地方：下标和降部只比基线低一点，上标（1st 的 st）却抬得很高，
-    # 放在正中会被划进上一行
+    # The boundary sits close to the upper baseline: subscripts and descenders are only slightly below the baseline,
+    # while superscripts (the st of 1st) are raised high and would fall into the upper line with a boundary midway
     cuts = [body.y0, *(a + (b - a) * _ROW_CUT for a, b in zip(baselines, baselines[1:])), body.y1]
     rows = [pymupdf.Rect(body.x0, top, body.x1, bottom) for top, bottom in zip(cuts, cuts[1:])]
     return tuple(_join_wrapped_rows(rows, baselines, spans, main))
 
 
 def _on_bar(span: dict, bars: Sequence[pymupdf.Rect], size: float) -> bool:
-    """span 紧贴在一条短横线的上面或下面，横向落在线的范围里：分子、分母、根号里的字。"""
+    """The span sits right above or below a short horizontal rule and within its horizontal extent: a numerator, a
+    denominator, or text under a radical."""
     if not bars:
         return False
     box = pymupdf.Rect(span["bbox"])
@@ -1550,11 +1628,13 @@ def unruled_tables(
     ruled: Sequence[RuledTable] = (),
     words: Sequence[_TextWord] | None = None,
 ) -> tuple[RuledTable, ...]:
-    """没有线时，只认短格子组成的网格：列的左缘或右缘对齐，行高重复。words 是本页的词，没给时现读。
+    """Without rules, only grids of short cells count: column left or right edges align and row heights repeat. words
+    holds the words of this page; read now when not given.
 
-    词间距并成一格。栏间大空档上的长行是正文，不是表。
-    有空格子、相邻两列挨得近并成一格的表，每行格数不一样，按行对齐认不出来。
-    剩下的行再按各格的左缘落在哪几列上认一遍（见 _sparse_grid）。
+    Words at word spacing are merged into one cell. Long lines across a wide column gap are body text, not tables.
+    Tables with empty cells, or with two adjacent columns so close that they merge into one cell, have a different
+    number of cells per row and are not detected by row alignment. The remaining rows are checked again by the columns
+    that the left edges of their cells fall on (see _sparse_grid).
     """
     zones = [table.rect for table in ruled]
     words = [
@@ -1581,7 +1661,8 @@ def unruled_tables(
     free = [
         not any(_mostly_inside(pymupdf.Rect(cell.x0, cell.y0, cell.x1, cell.y1), taken) for cell in row) for row in rows
     ]
-    # 双栏页上左栏的表和右栏正文挨着排，按列对齐会连成一张表，所以栏间空档两边分开认
+    # On a two-column page a table in the left column sits next to body text in the right column, and column
+    # alignment would join them into one table, so the two sides of the column gap are detected separately
     width = text_page_rect(page).width
     gutters = _find_gutters(
         [
@@ -1611,13 +1692,13 @@ def unruled_tables(
 
 
 def _continues_rows(run: Sequence[Sequence[_TextCell]], row: Sequence[_TextCell]) -> bool:
-    """行距和前面一样。格数不管"""
+    """The row spacing matches the rows before. The number of cells does not matter"""
     pitch = row[0].y0 - run[-1][0].y0
     first = run[1][0].y0 - run[0][0].y0 if len(run) > 1 else pitch
     return _MIN_PITCH <= pitch <= _MAX_PITCH and abs(pitch - first) <= max(4.0, first * 0.3)
 
 
-# 索引条目末尾的页码：hallucinate, 31, 253
+# Page numbers at the end of an index entry: hallucinate, 31, 253
 _PAGE_REFS_RE = re.compile(r",\s*\d+$")
 
 
@@ -1625,11 +1706,15 @@ def _sparse_grid(
     rows: Sequence[Sequence[_TextCell]],
     gutters: Sequence[tuple[float, float]] = (),
 ) -> RuledTable | None:
-    """格数每行不一样的表（TMP when? yesterday evening 这样的三列，有的行空着一格）：
-    每格的左缘都落在某一列上，这一列至少两行用到；三列以上各有一半的行用到，相邻两列隔得开。
-    最后一列可以是较长的例句、说明，前面几列是一两个词的短格。
-    索引的子条目只比条目缩进一点，列挨得太近，不算；几栏索引条目以页码收尾（hallucinate, 31, 253），也不算。
-    首尾两行在前面几列有长句的（表下面的图注）不算进表。相邻两列隔着页面的栏间空档，是两栏各自的字，不算。"""
+    """Tables with a different number of cells per row (three columns such as TMP when? yesterday evening, with an
+    empty cell in some rows): the left edge of every cell falls on some column, and each column is used by at least
+    two rows; three or more columns are each used by half of the rows, and adjacent columns are well apart.
+    The last column may hold longer example sentences or explanations, the columns before it short cells of one or two
+    words. Index subentries are indented only slightly more than entries, so the columns are too close and do not
+    count; index entries in several columns ending with page numbers (hallucinate, 31, 253) do not count either.
+    A first or last row with long sentences in the earlier columns (a caption below the table) is not part of the
+    table. Two adjacent columns separated by the page's column gap hold the text of two separate columns and do not
+    count."""
     flat = [cell for row in rows for cell in row]
     if sum(1 for cell in flat if _PAGE_REFS_RE.search(cell.text)) >= len(flat) * 0.3:
         return None
@@ -1659,7 +1744,8 @@ def _sparse_grid(
     ):
         return None
 
-    # 表下面的图注（Figure 18.12 The A transition …）行距相同，也落在列上，但长句不在最后一列
+    # A caption below the table (Figure 18.12 The A transition ...) has the same row spacing and also falls on the
+    # columns, but its long sentence is not in the last column
     def long_head(row: Sequence[_TextCell]) -> bool:
         return any(cell.x0 < anchors[-1] - _COL_ALIGN and cell.words > _SHORT_WORDS for cell in row)
 
@@ -1687,20 +1773,25 @@ def interlinear_glosses(
     page: pymupdf.Page,
     words: Sequence[_TextWord] | None = None,
 ) -> tuple[pymupdf.Rect, ...]:
-    """语言学例句的逐词对译：原文一行、对译一行。逐词翻译对译行没有意义，
-    词序一变也对不上，两行都留原文。认两种排法：
+    """Interlinear glosses of linguistic examples: one line of original text, one line of gloss. Translating the gloss
+    line word by word makes no sense, and any change of word order breaks the alignment, so both lines keep the
+    original text. Two arrangements are detected:
 
-    - 逐词对齐：下一行每个词都和上一行的某个词左缘对齐。正文相邻两行碰巧对齐的词
-      只有零星几个，要求两行各有七成五以上的词对得上。只有两三个词时，还要上一行
-      是汉字、假名这类非拉丁文字，下一行是拉丁字母。
-    - 逐语素对译：两行从同一处起笔，都是连字符串起来的语素，对译行里有 1SG、PFV
-      这样的语法标注缩写（莱比锡标注规则）。
-    - 逐字注音：上一行是汉字，下一行从同一处起笔，全是拉丁字母，音节数和汉字数一样。
-      汉字之间不空格，没法一个词一个词地对齐。
-    - 角色标注：下一行是小一号的全大写标签（AGENT、ARG0、ARGM-TMP），每个都从上一行
-      某个词的下面起笔。标签对着一整个短语，只和短语的第一个词对齐。
+    - Word-by-word alignment: every word of the lower line shares its left edge with some word of the upper line.
+      Adjacent lines of body text have only a few words aligned by chance, so at least 75% of the words of each line
+      must align. With only two or three words, the upper line must also be in a non-Latin script such as Chinese
+      characters or kana, and the lower line in Latin letters.
+    - Morpheme-by-morpheme gloss: both lines start at the same x, both consist of morphemes joined by hyphens, and
+      the gloss line contains grammatical abbreviations such as 1SG and PFV (Leipzig Glossing Rules).
+    - Character-by-character transcription: the upper line is Chinese characters and the lower line starts at the
+      same x, consists only of Latin letters and has as many syllables as there are characters. Chinese characters
+      have no spaces between them, so word-by-word alignment is impossible.
+    - Role labels: the lower line consists of all-capital labels one size smaller (AGENT, ARG0, ARGM-TMP), each
+      starting below some word of the upper line. A label refers to a whole phrase and aligns only with its first
+      word.
 
-    表格一连好几行都这样对齐，对译只有孤零零的两行。words 是本页的词，没给时现读。
+    Tables align like this over many consecutive rows, while a gloss is an isolated pair of lines. words holds the
+    words of this page; read now when not given.
     """
     words = list(page_words(page) if words is None else words)
     rows = _with_centered_numbers(_word_rows(words))
@@ -1717,8 +1808,9 @@ def interlinear_glosses(
 
 
 def _with_centered_numbers(rows: list[list[_TextWord]]) -> list[list[_TextWord]]:
-    """例句编号 (22.27) 对着例句和下面一行标签的中间排，单独成了一行，夹在两行中间。
-    并进上面那行，例句和标签才挨着。"""
+    """An example number (22.27) set level with the middle between the example and the label line below it forms a
+    line of its own between the two. Merging it into the upper line puts the example and its labels next to each
+    other."""
     out: list[list[_TextWord]] = []
     for index, row in enumerate(rows):
         below = rows[index + 1] if index + 1 < len(rows) else None
@@ -1739,7 +1831,8 @@ def _with_centered_numbers(rows: list[list[_TextWord]]) -> list[list[_TextWord]]
 
 @dataclass(frozen=True)
 class ExampleNumber:
-    """行首的例句编号。rect 是编号，row 是编号这一行，text_x0 是编号后面的字从哪里起笔"""
+    """An example number at the start of a line. rect is the number, row is the line of the number, text_x0 is
+    where the text after the number starts"""
 
     rect: pymupdf.Rect
     row: pymupdf.Rect
@@ -1747,8 +1840,9 @@ class ExampleNumber:
 
 
 def example_numbers(words: Sequence[_TextWord]) -> tuple[ExampleNumber, ...]:
-    """行首的例句编号 (22.9)、(22.11)。编号字母少，提取时常留在原处不进块，后面的句子另成一块，
-    或者整行（(22.12) fall.01）都没成块。左边紧挨着别的字的不算（正文里引到的编号）。"""
+    """Example numbers at the start of a line: (22.9), (22.11). A number has few letters, so extraction often leaves
+    it outside any block while the sentence after it forms a block of its own, or the whole line ((22.12) fall.01)
+    forms no block. Numbers with other text right to their left do not count (numbers cited in body text)."""
     found: list[ExampleNumber] = []
     for row in _word_rows(words):
         for index, word in enumerate(row):
@@ -1760,7 +1854,7 @@ def example_numbers(words: Sequence[_TextWord]) -> tuple[ExampleNumber, ...]:
             rect = pymupdf.Rect(word.x0, word.y0, word.x1, word.y1)
             for other in row[index + 1 :]:
                 if other.x0 - rect.x1 > height * 3:
-                    break  # 另一栏
+                    break  # another column
                 rect |= pymupdf.Rect(other.x0, other.y0, other.x1, other.y1)
             text_x0 = row[index + 1].x0 if index + 1 < len(row) else word.x1
             found.append(ExampleNumber(pymupdf.Rect(word.x0, word.y0, word.x1, word.y1), rect, text_x0))
@@ -1772,15 +1866,16 @@ def _glossed(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
     if lower[0].y0 - upper[0].y0 > height * 1.6:
         return False
     starts = [word.x0 for word in upper]
-    # 对译行是词，不是数字表的一行
+    # A gloss line consists of words, not a row of a table of numbers
     aligned = [
         word
         for word in lower
         if any(abs(word.x0 - x) <= _GLOSS_ALIGN for x in starts) and any(ch.isalpha() for ch in word.text)
     ]
     hit = [x for x in starts if any(abs(word.x0 - x) <= _GLOSS_ALIGN for word in lower)]
-    # 对得上的词大半和上一行同一处的词一样：是两条开头相同的列表项（Else search from right to
-    # left for ...），对译行写的是另一种语言，同一处的词不会一样
+    # When most aligned words equal the word at the same place in the upper line, these are two list items with the
+    # same start (Else search from right to left for ...); a gloss line is in another language, so the word at the
+    # same place differs
     same = [
         word
         for word in aligned
@@ -1797,9 +1892,10 @@ def _glossed(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
 
 
 def _role_labels(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
-    """标签上面对着的是比它大一号的词，标签整个在这个词下面、紧挨着。
-    旁注里的缩写（DFT、RNN）上面是同样小字号的旁注词，下标（h 下面的 CLS）和上一行叠着，
-    图里的大写字上面是数字，都不算。字号按这一排最矮的标签比，ARG0 的下标会把框撑高。"""
+    """Above a label is a word one size larger, and the label lies entirely right below that word. These do not
+    count: abbreviations in side notes (DFT, RNN), with side-note words of the same small size above them; subscripts
+    (CLS below h), which overlap the line above; capitals in figures, with numbers above them. The size is compared
+    with the shortest label in the row, since the subscript of ARG0 makes its box taller."""
     height = min(word.y1 - word.y0 for word in lower)
     return all(
         _ROLE_LABEL_RE.fullmatch(word.text) and any(_labels(word, other, height) for other in upper) for word in lower
@@ -1827,8 +1923,9 @@ def _romanized(upper: Sequence[_TextWord], lower: Sequence[_TextWord]) -> bool:
 
 
 def _script_share(row: Sequence[_TextWord], latin: bool) -> float:
-    """这一行带字母的词里，拉丁字母词（latin=True）或非拉丁文字词所占的比例。
-    PDF 里拼音的声调常抽成单独的修饰字母（wˇo），这一段字符也算拉丁字母。"""
+    """Share of Latin-letter words (latin=True) or of non-Latin-script words among the words with letters in this row.
+    Pinyin tone marks in PDFs are often extracted as separate modifier letters (wˇo); characters in that range also
+    count as Latin letters."""
     lettered = [word for word in row if any(ch.isalpha() for ch in word.text)]
     if not lettered:
         return 0.0
@@ -1945,12 +2042,14 @@ def _grid_cells(rows: Sequence[Sequence[_TextCell]]) -> tuple[pymupdf.Rect, ...]
 
 
 def margin_skips(blocks: Sequence[_MarginBlock], geometries: Sequence[PageGeometry]) -> list[bool]:
-    """页边重复的短行，以及页码，保留原文。
+    """Short lines repeated in the page margins, and page numbers, keep the original text.
 
-    只看页顶和页底：固定的一条窄带，或者版心以外。同一侧、同一文本出现在两页以上
-    才算页眉页脚，文本里的数字不算（页眉常带着页码和章号）。书的页眉随小节变，
-    只出现一次的那条和别页的页眉落在同一高度，也算。
-    页码每页不同，单独认。格子里的数字不是页码。
+    Only the top and bottom of the page are checked: a fixed narrow band, or the area outside the text frame. Text
+    counts as a running header or footer only when the same text appears on the same side on two or more pages,
+    ignoring digits (running headers often contain page and chapter numbers). Running headers of a book change with
+    the section, so one that appears only once also counts when it sits at the same height as the running headers of
+    other pages. Page numbers differ on every page and are detected separately. Numbers inside cells are not page
+    numbers.
     """
     zones: list[str | None] = []
     for block in blocks:
@@ -2020,7 +2119,8 @@ def _voting_rects(
     page_width: float,
     page_height: float,
 ) -> list[pymupdf.Rect]:
-    """表内文字和图内标签不参与分栏，避免把格子或图中的缝当成栏沟。"""
+    """Text inside tables and labels inside figures take no part in column detection, so that gaps in cells or
+    figures are not taken as column gaps."""
     zones = [table.rect for table in tables]
     zones.extend(figure for figure in figures if not _page_filling(figure, page_width, page_height))
     return [rect for rect in rects if not _mostly_inside(rect, zones)]
@@ -2076,7 +2176,7 @@ def _figure_walls(
     body: list[pymupdf.Rect],
     figures: Sequence[pymupdf.Rect],
 ) -> list[tuple[float, float]]:
-    """图旁文字不够三块时，图缘仍把这一侧收成一栏。"""
+    """With fewer than three text blocks beside a figure, the figure edge still makes that side one column."""
     walls: list[tuple[float, float]] = []
     for figure in figures:
         beside = [rect for rect in body if _overlaps_y(rect, figure) and _x_gap(rect, figure) >= _GUTTER_MIN]
@@ -2166,7 +2266,8 @@ def _group_y_overlap(left: Sequence[pymupdf.Rect], right: Sequence[pymupdf.Rect]
 def _usable_table(cells: tuple[pymupdf.Rect, ...]) -> bool:
     if len(cells) < 2:
         return False
-    # 表的格子互不重叠。框套框的是流程图，当表的话框里的字全并成一格
+    # Table cells do not overlap. Boxes inside boxes form a flowchart; treated as a table, all text in a box would be
+    # merged into one cell
     for index, cell in enumerate(cells):
         for other in cells[index + 1 :]:
             hit = cell & other
@@ -2184,7 +2285,8 @@ def _usable_table(cells: tuple[pymupdf.Rect, ...]) -> bool:
 
 
 def content_floor(height: float) -> float:
-    """正文能写到的最下沿。再往下是页码和页脚，跨页续写停在这里。"""
+    """Lowest edge that body text can be written to. Below it are page numbers and the footer; text continued
+    across pages stops here."""
     if height <= 0:
         return 0.0
     return height - max(_MARGIN_MIN, height * _MARGIN_BAND)
@@ -2222,7 +2324,8 @@ def is_page_number(text: str) -> bool:
 
 
 def _is_blank_fill(drawing: dict) -> bool:
-    """近白、只有矩形填充、没有描边。这是底色，不是图。描边框和图片仍算图。"""
+    """Near-white, filled rectangles only, no stroke. This is background shading, not a figure. Stroked boxes and
+    images still count as figures."""
     if drawing.get("type") != "f":
         return False
     fill = drawing.get("fill")
@@ -2270,7 +2373,8 @@ def _figure_rects(
 
 
 def _is_mark(drawing: dict) -> bool:
-    """图里的小记号：圈出词的彩色椭圆、虚线箭头。实线的细线是框线、下划线，不算"""
+    """Small marks in a figure: colored ellipses circling words, dashed arrows. Solid thin lines are frame lines or
+    underlines and do not count"""
     items = drawing.get("items") or []
     if any(item[0] == "c" for item in items):
         return True
@@ -2281,7 +2385,7 @@ def _is_mark(drawing: dict) -> bool:
 
 
 def _flat_strokes(drawing: dict) -> list[pymupdf.Rect]:
-    """描边路径里的横线：直线段，和矩形的上下两条边。"""
+    """Horizontal lines in a stroked path: line segments, and the top and bottom edges of rectangles."""
     out: list[pymupdf.Rect] = []
     for item in drawing.get("items") or []:
         if item[0] == "l":
@@ -2295,7 +2399,8 @@ def _flat_strokes(drawing: dict) -> list[pymupdf.Rect]:
 
 
 def _framed(ground: pymupdf.Rect, ruled: Sequence[pymupdf.Rect]) -> bool:
-    """白底上下各有一条横线，横跨整块白底、离它的上下沿不远：白底是框起来的一幅图。"""
+    """A horizontal line above and below the white ground, each spanning the whole ground and close to its top or
+    bottom edge: the white ground is a framed figure."""
 
     def edge(y: float) -> bool:
         return any(
@@ -2311,12 +2416,15 @@ def _figure_grounds(
     marks: Sequence[pymupdf.Rect] = (),
     framed: Sequence[pymupdf.Rect] = (),
 ) -> list[pymupdf.Rect]:
-    """画图程序（matplotlib）先铺一块白底，标题、坐标轴名、图例都写在白底上，曲线只占中间一块。
-    白底里装着曲线、图片，又不比它们大出一倍的，是图。铺在正文和图下面的白底比图大得多。
-    标题、坐标轴名紧挨着曲线，白底只算到曲线外面一圈：有的白底往下一直铺到正文里。
-    框起来的白底上一段示例文字、词上圈着彩色椭圆、连着虚线（ed3book 的 Figure 4.2）也是图：
-    这些小记号凑够几个、铺满白底的大半，就和曲线一样算进去。没框的白底铺在正文下面，里面零星的
-    曲线、虚线不算"""
+    """Plotting programs (matplotlib) first lay down a white ground and write the title, axis labels and legend on it,
+    with the curves only in the middle part. A white ground that holds curves or images and is at most twice their
+    size is a figure. White grounds laid under body text and figures are much larger than the figures.
+    Titles and axis labels sit right next to the curves, so the white ground is only taken up to a margin around the
+    curves: some white grounds extend down into the body text.
+    A framed white ground with a passage of sample text, colored ellipses circling words and dashed lines connecting
+    them (ed3book Figure 4.2) is also a figure: when there are enough of these small marks and they cover most of the
+    white ground, they count like curves. An unframed white ground lies under body text, and scattered curves and
+    dashed lines on it do not count"""
     kept: list[pymupdf.Rect] = []
     for ground in grounds:
         inside = [figure for figure in figures if _mostly_inside(figure, [ground])]

@@ -1,12 +1,15 @@
-"""Type3 点阵字没有 Unicode 时，按字形把字母认回来。
+"""Recognize the letters of Type3 bitmap fonts without Unicode from their glyph shapes.
 
-旧版 Ghostscript 把每个字画成一张位图，编码名是 /a0、/a1，没有 ToUnicode，提出来的是字符码。
-同一个字符码在整份文档里画的是同一张位图。整份文档先用 tesseract 认一遍，把认出的字母按位置
-对到位图上投票，就知道每张位图是哪个字母。文字层再按位图重建：位置和大小取 d1 给的位图框，
-词距看墨迹间隔。OCR 词框的漂移、漏词、个别认错都不再进译文。
+Old versions of Ghostscript draw every character as a bitmap with encoding names /a0, /a1 and no ToUnicode, so
+text extraction yields character codes. A character code draws the same bitmap throughout the document. The whole
+document is first recognized with tesseract, and the recognized letters vote by position on the bitmaps, which
+tells which letter each bitmap is. The text layer is then rebuilt from the bitmaps: position and size come from the
+bitmap box given by d1, word spacing from the gaps between the ink. Drift of OCR word boxes, missed words and
+occasional misreadings no longer reach the translation.
 
-数学斜体的 a、v、S 只单独出现，从不进单词；数学符号各次认得不一样。这两类写成数学字体，
-上下标按实际大小和位置写出。后面的公式占位、分段和普通 TeX PDF 走同一套逻辑。
+Math italic a, v, S only occur on their own and never inside words; math symbols are recognized differently each
+time. These two kinds are written in math fonts, and superscripts and subscripts are written with their actual size
+and position. Formula placeholders and paragraph splitting downstream follow the same logic as ordinary TeX PDFs.
 """
 
 from __future__ import annotations
@@ -30,69 +33,75 @@ import numpy as np
 import pymupdf
 
 _CUSTOM_NAME = re.compile(r"^[A-Za-z]\d+$")
-# 坏字体占这一页文字的比例。零星符号字体不整页重建。
+# Share of the page's text in broken fonts. A few characters in a symbol font do not rebuild the whole page.
 _BROKEN_SHARE = 0.4
 _MIN_BROKEN_CHARS = 20
 _OCR_SCALE = 3.0
 _OCR_TIMEOUT = 90
-# 认得一致的比例。低于它的字形各次认得不一样，是数学符号或数学斜体。
+# Agreement ratio of the recognition. Glyphs below it are recognized differently each time: math symbols or
+# math italic.
 _SURE = 0.8
-# 一页的字形里有这么多认出了字母，这一页才重建。否则留下原字形。
+# A page is rebuilt only when this share of its glyphs has a recognized letter. Otherwise the original glyphs stay.
 _READABLE = 0.8
-# 一个字形有四分之一以上出现在单词里，它就是正文字母
+# A glyph with more than a quarter of its occurrences inside words is a body-text letter
 _IN_WORD = 0.25
-# 词距以 x 高计：0.4 以内是字距，0.6 以上是空格。中间这一档两种都有，
-# 按这一行的字距和词距分，这一行没有明显的词距时听 OCR 分词的
+# Gaps in x-heights: up to 0.4 is letter spacing, from 0.6 on is a space. The band in between has both; it is
+# split by the letter and word spacing of the line, and when the line has no clear word spacing OCR words decide
 _TIGHT = 0.4
 _WIDE = 0.6
-# 同一行里最大的横向空隙，以字号计。撑开的词距也不到半个字号，再宽是并排的署名、另一栏或表格的另一列
+# Largest horizontal gap within one line, in font sizes. Even stretched word spaces stay under half a font size;
+# wider gaps separate side-by-side author names, another column, or another table column
 _RUN_GAP = 1.6
-# 比本行字号小这么多的是上下标。字号不小、基线却偏开这么多（以字号计）的也是
+# Glyphs this much smaller than the line's font size are superscripts or subscripts. So are glyphs of full size
+# whose baseline is shifted by this much (in font sizes)
 _SCRIPT = 0.8
 _SHIFT = 0.18
-# 同一个字母的两张位图像到这个程度，就是同一种字体
+# Two bitmaps of the same letter with this similarity are the same font
 _SAME_SHAPE = 0.85
 _SAME_MARK = 0.5
-# 实心圆点的墨迹占满框的七成以上，字母不到一半
+# The ink of a filled dot covers more than 70% of its box, a letter less than half
 _FILLED = 0.65
 _SHAPE_DPI = 600
 _SHAPE_GRID = 16
-# 基线距在这么多个字号以内的下一行并进同一块。TeX 的行距是 1.2 个字号，行内公式撑高时再多一点
+# The next line joins the same block when its baseline is within this many font sizes. TeX leading is 1.2 font
+# sizes, a bit more where an inline formula makes the line taller
 _LEADING = 1.6
 _MATH_SYMBOLS = set("<>=+|{}^~*∑∏√∞≤≥≠≈∈∉⊂⊃±×÷→←")
 _SENTENCE_MARKS = set(".,;:")
 _OPERATORS = set("=<>+-−–—≤≥≠×")
 _RELATIONS = set("=<>≤≥≠≺⪯≈∈")
 _TRAILING_MARKS = set(",.;:)")
-# 节号、编号、年份这样的数
+# Numbers such as section numbers, item numbers and years
 _NUMBER = re.compile(r"\(?\d+(?:\.\d+)*[.:,)]?")
 _LIGATURES = {"ﬁ": "fi", "ﬂ": "fl", "ﬀ": "ff", "ﬃ": "ffi", "ﬄ": "ffl"}
-# 等宽字格宽的下限，以字号计。等宽字是 0.525；正文词里字距最匀的（each、latter）不到 0.48
+# Lower bound of the monospace cell width, in font sizes. Monospace is 0.525; the most evenly spaced body-text
+# words (each, latter) stay below 0.48
 _MONO_PITCH = 0.5
-# 英文里单独成词的大写字母
+# Capital letters that form a word on their own in English
 _LETTER_WORDS = {"A", "I"}
-# 正文字体里很窄的字（0.28 个字号上下）。等宽字体里它们也占满一格
+# Characters that are very narrow in body-text fonts (around 0.28 font sizes). In monospace fonts they also fill a
+# whole cell
 _NARROW = set("iljI.,;:’'!|")
-# 各类字母的墨迹高度占字号的比例（Computer Modern、Times 都差不多）
+# Ink height of each letter class as a share of the font size (about the same in Computer Modern and Times)
 _X_LETTERS = set("acemnorsuvwxz")
 _TALL_LETTERS = set("bdhkl") | set("ABCDEFGHIKLMNOPRSTUVWXYZ") | set("0123456789")
 _DESCENDERS = set("gpqy")
 _UNSTEADY = set("fjJQ")
 _HEIGHT_RATIO = {"x": 0.45, "tall": 0.69, "desc": 0.64, "i": 0.67, "t": 0.62}
-# 各类字母的字心在基线以上多高
+# Height of the center of each letter class above the baseline
 _CENTER_RATIO = {"x": 0.225, "tall": 0.345, "desc": 0.13, "i": 0.335, "t": 0.31}
 _QUOTES = set("‘’“”'\"`")
 _DASHES = set("-–—−~")
-# 减号的墨迹宽度（以字号计）。短横 0.5，长破折号 1.0，连字符 0.3
+# Ink width of the minus sign (in font sizes). En dash 0.5, em dash 1.0, hyphen 0.3
 _MINUS_WIDTH = (0.55, 0.8)
 _TEXT_FONT = "Times-Roman"
 _MONO_FONT = "Courier"
 _MATH_FONT = "CMMI10"
 _SYMBOL_FONT = "CMSY10"
-# PyMuPDF get_text("dict") 的结构。字段随版本变化，只在这层进出。
+# Structure of PyMuPDF get_text("dict"). Its fields change between versions, so it only passes through this layer.
 PageData = dict[str, Any]
 Key = tuple[int, int]
-# 细线：\_ 的下划线、行内分数线。比 30pt 长的是表格线、脚注线
+# Thin rules: the underline of \_ and inline fraction bars. Rules longer than 30pt are table rules and footnote rules
 _RULE: Key = (-2, 0)
 _RULE_HEIGHT = 1.2
 _RULE_LENGTH = 30.0
@@ -116,7 +125,8 @@ class OcrWord:
 
 @dataclass(frozen=True)
 class Glyph:
-    """页面上画出来的一个字形。key 是（字体 xref，字符码），rect 是位图的墨迹框，origin 是起笔点。"""
+    """One glyph drawn on the page. key is (font xref, character code), rect is the ink box of the bitmap, origin is
+    the glyph origin."""
 
     key: Key
     rect: pymupdf.Rect
@@ -140,7 +150,7 @@ class _Line:
 
 
 def broken_type3_names(doc: pymupdf.Document, page: pymupdf.Page) -> set[str]:
-    """没有 ToUnicode、字形名又是 /a0 这种自造名的 Type3 字体。"""
+    """Type3 fonts without ToUnicode whose glyph names are made-up names such as /a0."""
     return set(_broken_fonts(doc, page).values())
 
 
@@ -153,7 +163,8 @@ def _broken_fonts(doc: pymupdf.Document, page: pymupdf.Page) -> dict[int, str]:
 
 
 class Type3Reader:
-    """一份文档里的点阵字。第一次用到时整份认一遍，之后逐页给出重建好的行。"""
+    """The bitmap fonts of one document. The whole document is recognized on first use; after that the rebuilt lines
+    are returned page by page."""
 
     def __init__(self, doc: pymupdf.Document):
         self.doc = doc
@@ -191,7 +202,7 @@ class Type3Reader:
         }
         words = _ocr_pages(self.doc, list(glyphs))
         self.labels = _vote_labels(glyphs, words)
-        # \_ 和行内分数线是细线，老 Ghostscript 画成小图片。它们是这一行的一部分
+        # \_ and inline fraction bars are thin rules that old Ghostscript draws as small images. They belong to the line
         self.labels[_RULE] = Label("_", 1.0)
         for pno, items in glyphs.items():
             items.extend(Glyph(_RULE, rect) for rect in _rules(self.doc[pno]))
@@ -204,8 +215,8 @@ class Type3Reader:
             self.labels[key] = Label("•", 1.0)
             self.roles[key] = "text"
         bearings = _bearings(lines, self.labels)
-        # 等宽字的空格是一整格空白，字距本身也宽；f 的钩子伸进右边的空白。
-        # 认出等宽字形、量出各字形的边距以后重新分词
+        # A monospace space is a whole blank cell and the letter spacing itself is wide; the hook of f reaches into the
+        # blank on its right. Words are split again after monospace glyphs are found and side bearings measured
         for pno, page_lines in lines.items():
             for line in page_lines:
                 line.tokens = _tokens(line, self.labels, owners[pno], self.mono, bearings)
@@ -213,9 +224,11 @@ class Type3Reader:
 
 
 def recover_type3_page(page: pymupdf.Page, data: PageData, reader: Type3Reader | None = None) -> bool:
-    """这一页大部分是自造编码的点阵字时，用认出来的文字层换掉字符码。
+    """When most of this page is bitmap font text with a made-up encoding, replace the character codes with the
+    recognized text layer.
 
-    认不出来的页（识别超时、字形大多没认出字母）只去掉字符码，点阵字留在原页，不让整本书失败。
+    Pages that cannot be recognized (OCR timeout, most glyphs without a recognized letter) only lose the character
+    codes; the bitmap glyphs stay on the original page, so the whole book does not fail.
     """
     doc = page.parent
     if doc is None or "blocks" not in data:
@@ -236,11 +249,12 @@ def recover_type3_page(page: pymupdf.Page, data: PageData, reader: Type3Reader |
     return True
 
 
-# ---- 字体和字形位置 ----
+# ---- Fonts and glyph positions ----
 
 
 def _font_shapes(doc: pymupdf.Document, xref: int) -> dict[int, tuple[float, float, float, float]]:
-    """画了东西的字形在字形空间里的框（已乘 FontMatrix）。只推进笔位的空字形不收。"""
+    """Boxes in glyph space (FontMatrix applied) of the glyphs that draw something. Empty glyphs that only advance
+    the pen are left out."""
     matrix = _numbers(doc.xref_get_key(xref, "FontMatrix")[1]) or [0.001, 0, 0, 0.001, 0, 0]
     font_box = _numbers(doc.xref_get_key(xref, "FontBBox")[1]) or [0, 0, 1000, 1000]
     procs = dict(re.findall(r"/([^\s/<>\[\]()]+)\s+(\d+)\s+0\s+R", doc.xref_get_key(xref, "CharProcs")[1]))
@@ -270,7 +284,7 @@ def _encoding_names(doc: pymupdf.Document, xref: int) -> dict[int, str]:
     if found is None:
         return names
     code = 0
-    # 名字之间可以不留空格：[65/a0/a1]
+    # Names need not be separated by spaces: [65/a0/a1]
     for token in re.findall(r"/[^\s/\[\]<>()]+|\d+", found.group(1)):
         if token.isdigit():
             code = int(token)
@@ -281,7 +295,7 @@ def _encoding_names(doc: pymupdf.Document, xref: int) -> dict[int, str]:
 
 
 def _numbers(raw: str) -> list[float]:
-    """PDF 的数可以省掉整数部分：.001。"""
+    """PDF numbers may omit the integer part: .001."""
     return [float(item) for item in re.findall(r"[-+]?(?:\d+\.?\d*|\.\d+)", raw)]
 
 
@@ -290,9 +304,9 @@ def _placed_codes(
     fonts: dict[str, int],
     shapes: dict[int, dict[int, tuple[float, float, float, float]]],
 ) -> list[tuple[Key, float, float, float, int]]:
-    """按内容流顺序列出画了东西的字形：(key, 起笔 x, 起笔 y, 字号, 颜色)。
+    """List the glyphs that draw something in content stream order: (key, origin x, origin y, font size, color).
 
-    get_text 会丢掉和前一个字同位置的零宽字形，texttrace 不丢。
+    get_text drops zero-width glyphs at the same position as the previous character; texttrace keeps them.
     """
     placed: list[tuple[Key, float, float, float, int]] = []
     for span in page.get_texttrace():
@@ -329,9 +343,11 @@ def _y_flip(
     pages: dict[int, list[tuple[Key, float, float, float, int]]],
     shapes: dict[int, dict[int, tuple[float, float, float, float]]],
 ) -> bool:
-    """字形空间朝上还是朝下。Ghostscript 的点阵字用倒置的 Tm，字形往起笔点下方画。
+    """Whether glyph space points up or down. Ghostscript bitmap fonts use an inverted Tm and draw glyphs below the
+    origin.
 
-    PyMuPDF 不给出文字矩阵，两种都摆一遍，看哪种盖住页面上的墨迹。
+    PyMuPDF does not expose the text matrix, so glyphs are placed both ways to see which one covers the ink on the
+    page.
     """
     pno = max(pages, key=lambda number: len(pages[number]))
     pix = doc[pno].get_pixmap(dpi=36, colorspace=pymupdf.csGRAY, alpha=False)
@@ -350,11 +366,11 @@ def _y_flip(
 
 
 def _rules(page: pymupdf.Page) -> list[pymupdf.Rect]:
-    """行内的短横线，画成图片的和画成矢量的都算。"""
+    """Short horizontal rules within lines, whether drawn as images or as vectors."""
     rects = [pymupdf.Rect(info["bbox"]) for info in page.get_image_info()]
     try:
         rects.extend(pymupdf.Rect(drawing["rect"]) for drawing in page.get_drawings())
-    except Exception:  # noqa: BLE001 - 个别页面的矢量读不出来，当没有
+    except Exception:  # noqa: BLE001 - vector graphics of some pages cannot be read; treat as none
         pass
     return [rect for rect in rects if rect.height <= _RULE_HEIGHT and 1.5 <= rect.width <= _RULE_LENGTH]
 
@@ -366,11 +382,12 @@ def _rgb(color: object) -> int:
     return (red << 16) | (green << 8) | blue
 
 
-# ---- 认字 ----
+# ---- Recognition ----
 
 
 def _ocr_pages(doc: pymupdf.Document, numbers: list[int]) -> dict[int, list[OcrWord]]:
-    """整份文档一起认。渲染在主线程，tesseract 并行跑，渲染好一页就开始认这一页。某一页超时就不给这页投票。"""
+    """Recognize the whole document together. Rendering runs on the main thread and tesseract in parallel; each page
+    is recognized as soon as it is rendered. A page that times out casts no votes."""
     if shutil.which("tesseract") is None:
         raise ValueError("此 PDF 的文字为不含 Unicode 编码的点阵字体，需要安装 tesseract 才能识别原文")
 
@@ -411,7 +428,7 @@ def ocr_image(path: Path, scale: float = _OCR_SCALE) -> list[OcrWord]:
 
 
 class _HocrWords(HTMLParser):
-    """hOCR 里的词和逐字框。字框和置信度在 ocrx_cinfo 上。"""
+    """Words and per-character boxes in hOCR. Character boxes and confidences are on ocrx_cinfo."""
 
     def __init__(self, scale: float):
         super().__init__()
@@ -465,11 +482,12 @@ class _HocrWords(HTMLParser):
 
 
 def _vote_labels(glyphs: dict[int, list[Glyph]], words: dict[int, list[OcrWord]]) -> dict[Key, Label]:
-    """认出的字按位置落到字形上投票。
+    """Recognized characters vote on the glyphs they fall on by position.
 
-    字数和字形数对得上的词逐个配对，先定下大部分字形。对不上的词（连字 ffi 是一个字形、
-    OCR 漏了或多认了一个字）再按已定的字形和位置对齐：认得准的字形吃掉自己那个字，
-    剩下的字归没定的字形。
+    Words whose character count matches the glyph count are paired one by one, which settles most glyphs. Words that
+    do not match (the ligature ffi is one glyph, OCR missed or added a character) are then aligned by the settled
+    glyphs and by position: a reliably recognized glyph takes its own character, and the remaining characters go to
+    the unsettled glyphs.
     """
     votes: dict[Key, Counter[str]] = defaultdict(Counter)
     uneven: list[tuple[list[Glyph], tuple[OcrChar, ...]]] = []
@@ -480,7 +498,8 @@ def _vote_labels(glyphs: dict[int, list[Glyph]], words: dict[int, list[OcrWord]]
             inside = sorted(centers.inside(box), key=lambda glyph: glyph.rect.x0)
             if not inside or not word.chars:
                 continue
-            # 字数对上时按顺序配：OCR 的字序可靠，逐字框常偏出两三个点
+            # When the counts match, pair in order: the OCR character order is reliable, while per-character boxes
+            # are often two or three points off
             if len(inside) == len(word.chars):
                 for glyph, char in zip(inside, word.chars):
                     votes[glyph.key][char.text] += char.conf
@@ -513,10 +532,10 @@ def _align(
     chars: tuple[OcrChar, ...],
     labels: dict[Key, Label],
 ) -> list[tuple[OcrChar, ...]]:
-    """把认出的字按顺序分给字形。每个字形分 0 到 3 个字，代价最小的分法。
+    """Assign the recognized characters to the glyphs in order, 0 to 3 characters per glyph, with the lowest cost.
 
-    已认定的字形要分到它自己的字；分到的字和字形横向不重叠要加代价，
-    OCR 多认出来的一个点不会把后面的字都挤错位。
+    A settled glyph should get its own character; a character that does not overlap its glyph horizontally adds cost,
+    so an extra dot recognized by OCR does not push all following characters out of place.
     """
     count, total = len(glyphs), len(chars)
     inf = float("inf")
@@ -536,7 +555,7 @@ def _align(
                     step = 0.0 if text == label.text else 2.0
                 else:
                     step = 1.5 if take == 0 else 0.3 * (take - 1)
-                # 分给一个字形的字要和它横向重叠
+                # Characters assigned to a glyph must overlap it horizontally
                 step += sum(1.0 for char in taken if _overlap(glyphs[index - 1].rect, char.rect) <= 0)
                 if prev + step < cost[index][used]:
                     cost[index][used] = prev + step
@@ -557,16 +576,19 @@ def _readable(glyphs: list[Glyph], labels: dict[Key, Label]) -> bool:
     return bool(glyphs) and known >= len(glyphs) * _READABLE
 
 
-# ---- 行、词和字形的角色 ----
+# ---- Lines, words and glyph roles ----
 
 
 def _build_lines(glyphs: list[Glyph], labels: dict[Key, Label], owners: dict[int, int]) -> list[_Line]:
-    """按基线把字形排成行，和普通 PDF 的文字一样按位置排，不按内容流的先后。
+    """Arrange glyphs into lines by baseline, ordered by position like the text of ordinary PDFs, and not by content
+    stream order.
 
-    认得出字母类别的字形各有一条基线，基线相同的是一行。上下标、分数的分子分母
-    字小、基线偏开，自成一小行，再并回它们所在的那一行；认不出类别的符号和标点按高度并进去。
-    都并好以后再按大的横向空隙切开：并排的署名、两栏。内容流里分母会让笔头退回分数左边，
-    按先后接行会把分数后面的半句接到分母上。
+    Each glyph with a recognized letter class has its own baseline, and glyphs with the same baseline form a line.
+    Superscripts, subscripts, numerators and denominators are smaller and off the baseline, so they first form small
+    lines of their own and are then merged back into the line they belong to; symbols and punctuation without a
+    recognized class are merged by height. After merging, lines are cut at large horizontal gaps: side-by-side author
+    names, two columns. In the content stream a denominator moves the pen back to the left of the fraction, and joining
+    lines in stream order would attach the rest of the sentence after the fraction to the denominator.
     """
     placed: list[tuple[Glyph, float, float]] = []
     loose: list[Glyph] = []
@@ -586,7 +608,8 @@ def _build_lines(glyphs: list[Glyph], labels: dict[Key, Label], owners: dict[int
     ordered = [[item[0] for item in band] for band in sorted(bands, key=len, reverse=True)]
     rows: list[_Line] = []
     for piece in (piece for piece in ordered if len(piece) >= 3):
-        # 整体下沉的正文字（N 下面的 supplier）字数也不少，仍是上一段的下标
+        # Body-text glyphs lowered as a whole (supplier below N) can be many, and are still a subscript of an earlier
+        # piece
         host = _host_line(rows, piece, labels)
         if host is None:
             rows.append(_row(piece, labels))
@@ -596,7 +619,8 @@ def _build_lines(glyphs: list[Glyph], labels: dict[Key, Label], owners: dict[int
     while pending:
         pending = _attach(rows, pending, labels)
         if pending:
-            # 剩下的小段自己成行：先让最大的一段成行，再看别的能不能并进来
+            # The remaining small pieces form lines of their own: the largest piece becomes a line first, then the
+            # others are checked again for merging into it
             rows.append(_row(pending.pop(0), labels))
     lines: list[_Line] = []
     for row in rows:
@@ -611,7 +635,7 @@ def _build_lines(glyphs: list[Glyph], labels: dict[Key, Label], owners: dict[int
             current.append(glyph)
             right = max(right, glyph.rect.x1)
         lines.append(_Line(current))
-    # 没落进任何一行的细线是图里的线，不是字
+    # Thin rules that fall into no line are lines of a figure, not characters
     lines = [line for line in lines if any(glyph.key != _RULE for glyph in line.glyphs)]
     for line in lines:
         _measure(line, labels)
@@ -626,7 +650,8 @@ def _row(glyphs: list[Glyph], labels: dict[Key, Label]) -> _Line:
 
 
 def _attach(rows: list[_Line], pending: list[list[Glyph]], labels: dict[Key, Label]) -> list[list[Glyph]]:
-    """小段并进行里，一轮轮并到没有可并的为止：1、.、1 一个挨一个才够得着标题。"""
+    """Merge small pieces into lines round by round until none can be merged: "1", "." and "1" reach the heading
+    only one after another."""
     extents = {id(row): _extent(row) for row in rows}
     while pending:
         still: list[list[Glyph]] = []
@@ -657,7 +682,8 @@ def _own_baseline(glyph: Glyph, labels: dict[Key, Label], size: float) -> float:
 
 
 def _same_band(band: list[tuple[Glyph, float, float]], item: tuple[Glyph, float, float]) -> bool:
-    """基线差不到字号的一成二、字号也差不多，是同一条基线上的字。"""
+    """Glyphs whose baselines differ by less than 12% of the font size and whose font sizes are similar sit on the
+    same baseline."""
     _glyph, size, baseline = item
     sizes = [entry[1] for entry in band[-8:]]
     base = statistics.median(entry[2] for entry in band[-8:])
@@ -671,8 +697,9 @@ def _host_line(
     labels: dict[Key, Label],
     extents: dict[int, tuple[float, float]] | None = None,
 ) -> _Line | None:
-    """上下标、分数、标点这样的小段并进哪一行：字心落在那一行 x 高的上下 0.75 个字号以内，
-    横向挨着那一行。字更大的段不并进小字行。"""
+    """The line that a small piece such as a superscript, subscript, fraction or punctuation joins: the piece's center
+    lies within 0.75 font sizes of the middle of the line's x-height, and the piece is horizontally next to the line.
+    Pieces in a larger size do not join lines in a smaller size."""
     left = min(glyph.rect.x0 for glyph in piece)
     right = max(glyph.rect.x1 for glyph in piece)
     center = statistics.median((glyph.rect.y0 + glyph.rect.y1) / 2 for glyph in piece)
@@ -692,7 +719,8 @@ def _host_line(
 
 
 def _letter_class(text: str) -> str | None:
-    """按墨迹高度分的字母类别。f、j、J、Q 在斜体里会伸到基线以下，高度不定，不归类。"""
+    """Letter class by ink height. f, j, J and Q reach below the baseline in italic and have no fixed height, so they
+    get no class."""
     if len(text) != 1 or text in _UNSTEADY:
         return None
     if text in _X_LETTERS:
@@ -707,7 +735,8 @@ def _letter_class(text: str) -> str | None:
 
 
 def _glyph_size(glyph: Glyph, labels: dict[Key, Label], sure: bool = True) -> float | None:
-    """按字母类别把墨迹高度换回字号。认不准的字形没有字号。"""
+    """Convert the ink height back to a font size by letter class. Glyphs not recognized reliably have no font
+    size."""
     label = labels.get(glyph.key)
     if label is None or (sure and label.agreement < _SURE):
         return None
@@ -750,7 +779,8 @@ def _tokens(
             prev is not None and owners.get(id(prev)) is not None and owners.get(id(prev)) == owners.get(id(glyph))
         )
         if prev is not None and pitch and (prev.key in mono and glyph.key in mono or same_word):
-            # 一边是等宽字、OCR 也认成同一个词（@db.stanford 里只出现一次的 s），按格宽判断
+            # One side is monospace and OCR also reads both as one word (the s in @db.stanford, which occurs only
+            # once): decide by the cell width
             joined = _middle(glyph) - _middle(prev) <= pitch * 1.5
         else:
             joined = prev is not None and not _space_before(gaps[index - 1], prev, glyph, owners, split)
@@ -758,7 +788,8 @@ def _tokens(
             tokens[-1].append(glyph)
         else:
             tokens.append([glyph])
-    # 逗号句号前面不会有空格。等宽字体里逗号在格子中间，墨迹离前一个字远
+    # No space precedes a comma or period. In monospace fonts the comma sits in the middle of its cell, with its ink
+    # far from the previous character
     merged: list[list[Glyph]] = []
     for token in tokens:
         marks = all((labels.get(glyph.key) or Label("?", 0)).text in _TRAILING_MARKS for glyph in token)
@@ -770,7 +801,7 @@ def _tokens(
 
 
 def _gap(left: Glyph, right: Glyph, line: _Line, bearings: dict[Key, tuple[float, float]]) -> float:
-    """两个字形墨迹之间的空白，以 x 高计，减掉两边字形自带的边距。"""
+    """Blank space between the ink of two glyphs, in x-heights, minus the side bearings of both glyphs."""
     raw = (right.rect.x0 - left.rect.x1) / line.xheight
     return raw - bearings.get(left.key, (0.0, 0.0))[1] - bearings.get(right.key, (0.0, 0.0))[0]
 
@@ -789,8 +820,9 @@ def _space_before(gap: float, prev: Glyph, glyph: Glyph, owners: dict[int, int],
 
 
 def _space_split(gaps: list[float]) -> float | None:
-    """两端对齐的一行里词距处处一样宽。取这一行字距和词距的中点当分界；
-    这一行没有明显的词距时返回 None，交给 OCR 分词。"""
+    """In a justified line all word spaces have the same width. The midpoint between the line's letter spacing and
+    word spacing is the threshold; when the line has no clear word spacing, return None and leave it to the OCR
+    words."""
     letters = [gap for gap in gaps if gap <= _TIGHT]
     spaces = [gap for gap in gaps if _WIDE <= gap <= 3.0]
     if len(letters) < 3 or len(spaces) < 2:
@@ -799,9 +831,11 @@ def _space_split(gaps: list[float]) -> float | None:
 
 
 def _bearings(pages: dict[int, list[_Line]], labels: dict[Key, Label]) -> dict[Key, tuple[float, float]]:
-    """各字形左右自带的边距：在认得准的词里，它前后的字距比一般的字距宽多少、窄多少。
+    """Left and right side bearings of each glyph: how much wider or narrower than usual the letter spacing before
+    and after it is in reliably recognized words.
 
-    正体 f 的钩子伸到右边，后面的字距总比别的字窄一截，of the 的空格看起来就只剩一半。
+    The hook of upright f reaches to the right, so the spacing after it is always narrower than after other letters,
+    and the space in "of the" looks only half as wide.
     """
     after: dict[Key, list[float]] = defaultdict(list)
     before: dict[Key, list[float]] = defaultdict(list)
@@ -826,7 +860,7 @@ def _bearings(pages: dict[int, list[_Line]], labels: dict[Key, Label]) -> dict[K
 
 
 def _word_owners(glyphs: list[Glyph], words: list[OcrWord]) -> dict[int, int]:
-    """每个字形落在 OCR 的第几个词里。词距拿不准时按它分词。"""
+    """Index of the OCR word each glyph falls in. Words are split by it when the word spacing is ambiguous."""
     owners: dict[int, int] = {}
     centers = _GlyphCenters(glyphs)
     for index, word in enumerate(words):
@@ -837,8 +871,9 @@ def _word_owners(glyphs: list[Glyph], words: list[OcrWord]) -> dict[int, int]:
 
 
 class _GlyphCenters:
-    """一页的字形按中心的纵坐标排好。一页有上千个字形、几百个词，逐个词和每个字形比太慢，
-    查一个框时只看中心落在框上下范围里的那一段。"""
+    """The glyphs of one page sorted by the vertical coordinate of their center. A page has a thousand glyphs and
+    hundreds of words, and comparing every word with every glyph is too slow, so a box lookup only checks the range
+    whose centers lie between the top and bottom of the box."""
 
     def __init__(self, glyphs: list[Glyph]) -> None:
         self._glyphs = glyphs
@@ -846,7 +881,7 @@ class _GlyphCenters:
         self._middles = [(glyphs[index].rect.y0 + glyphs[index].rect.y1) / 2 for index in self._order]
 
     def inside(self, box: pymupdf.Rect) -> list[Glyph]:
-        """中心落在 box 里的字形，按原来的先后。"""
+        """Glyphs whose center lies in box, in their original order."""
         low = bisect.bisect_left(self._middles, box.y0)
         high = bisect.bisect_right(self._middles, box.y1)
         found = sorted(index for index in self._order[low:high] if _center_in(self._glyphs[index].rect, box))
@@ -858,15 +893,18 @@ def _learn_roles(
     labels: dict[Key, Label],
     shapes: Callable[[set[Key]], dict[Key, np.ndarray]],
 ) -> tuple[dict[Key, str], set[Key]]:
-    """整份文档统计每个字形出现在单词里的比例，定它是正文、数学还是数字标点。
+    """Count across the document how often each glyph occurs inside words, and decide whether it is body text, math,
+    or a digit or punctuation mark.
 
-    先用四个字母以上、每个字都认得准的词定下一批正文字形（psc、cp 这种视图名是数学斜体，不算）。
-    这样的词里的字母都算在词里。短词再看：同一个词里有别的字母是正文字形，
-    又没有常单独出现的变量字母（等宽的 S 在伪代码里也单独当变量用），它就算在词里。
-    连字 ff、We 的 W、标题里只出现在 The 里的 T 和 h 这样补上。
-    数学斜体的 a、v 几乎从不在词里（v’s 偶尔算一次）。
-    从不进词的字母是变量。英文里单独成词的只有 A 和 I：拿位图和正文里的 A、I 比，
-    像就是正文（摘要里小一号的 A）。斜体正文和数学斜体长得一样，其他字母比不出来。
+    First, words of four or more letters with every character recognized reliably settle a set of body-text glyphs
+    (view names such as psc and cp are math italic and do not count). All letters of such words count as inside a
+    word. Short words come next: a letter counts as inside a word when another letter of the same word is a body-text
+    glyph and none of them is a variable letter that often stands alone (monospace S is also used alone as a variable
+    in pseudocode). This fills in the ligature ff, the W of We, and T and h that occur in headings only in The.
+    Math italic a and v almost never occur in words (v’s counts once in a while).
+    Letters that never occur in a word are variables. In English only A and I form words on their own: their bitmaps
+    are compared with A and I in body text, and a similar one is body text (the A one size smaller in the abstract).
+    Italic body text and math italic look the same, so other letters cannot be told apart by comparison.
     """
     tokens = [
         _without_plural(_main_glyphs(line, token, labels), labels)
@@ -893,12 +931,13 @@ def _learn_roles(
     numeral: Counter[Key] = Counter()
     for token in tokens:
         text = "".join(_text_of(glyph, labels) for glyph in token)
-        # 至少两位数字：数学斜体的 b 常被认成 6，后面跟着逗号也像个数
+        # At least two digits: math italic b is often read as 6, and followed by a comma it also looks like a number
         if sum(ch.isdigit() for ch in text) >= 2 and _NUMBER.fullmatch(text):
             for glyph in token:
                 numeral[glyph.key] += 1
     roles = {key: _role(labels.get(key), in_word[key], count, numeral[key] * 2 >= count) for key, count in seen.items()}
-    # 横线按宽窄分：减号 0.6 个字号，连字符、短横、长破折号各有各的宽度；比横线高的是箭头
+    # Dashes are told apart by width: the minus sign is 0.6 font sizes, and hyphen, en dash and em dash each have
+    # their own width; marks taller than a dash are arrows
     dashes: dict[Key, list[tuple[float, float]]] = defaultdict(list)
     for line in (line for lines in pages.values() for line in lines):
         for glyph in line.glyphs:
@@ -909,8 +948,9 @@ def _learn_roles(
         height = statistics.median(shape[1] for shape in shapes_seen)
         if height > 0.15 or _MINUS_WIDTH[0] <= width <= _MINUS_WIDTH[1]:
             roles[key] = "symbol"
-    # 冠词 A 在句首，变量 A 在句中。句首居多、位图又像正文的 A，才是冠词。
-    # 只出现一两次的标点也拿位图和常见的同名字形比
+    # The article A starts a sentence, the variable A sits inside one. It is the article only when it mostly starts
+    # sentences and its bitmap looks like the body-text A.
+    # Punctuation that occurs only once or twice is also compared by bitmap with common glyphs of the same name
     opening = Counter()
     for lines in pages.values():
         previous = "."
@@ -943,13 +983,14 @@ def _learn_roles(
         for key in words:
             if _looks_like(key, refs, labels, images, _SAME_SHAPE):
                 roles[key] = "text"
-        # 脚注星号被认成引号：和真正的引号长得不像，这个字认得不可信
+        # A footnote asterisk read as a quote mark does not look like real quote marks, so its recognition is not
+        # trusted
         doubtful = {key for key in odd if not _looks_like(key, refs, labels, images, _SAME_MARK)}
     return {key: "math" if role == "letter" else role for key, role in roles.items()}, doubtful
 
 
 def _without_plural(token: list[Glyph], labels: dict[Key, Label]) -> list[Glyph]:
-    """数学里给变量加复数：the a’s、v’s。去掉 ’s，剩下的单个字母不算单词。"""
+    """Plurals of variables in math: the a’s, v’s. After removing ’s, the single letter left is not a word."""
     texts = [_text_of(glyph, labels) for glyph in token]
     while texts and not texts[-1].isalnum():
         texts.pop()
@@ -963,7 +1004,8 @@ def _letter(label: Label | None) -> bool:
 
 
 def _core(token: list[Glyph], labels: dict[Key, Label]) -> str:
-    """去掉两头的标点、引号和脚注记号（Efficiently* 的星号），剩下中间的字。"""
+    """Strip punctuation, quote marks and footnote marks (the asterisk of Efficiently*) from both ends and return the
+    characters in between."""
     texts = [(labels.get(glyph.key) or Label("?", 0)).text for glyph in token]
     start, end = 0, len(texts)
     while start < end and not texts[start].isalpha():
@@ -985,7 +1027,8 @@ def _sure_word(token: list[Glyph], labels: dict[Key, Label]) -> bool:
 
 
 def _role(label: Label | None, in_word: int, count: int, numeral: bool = False) -> str:
-    """数字认得不稳（粗体 1 有时认成 l），但大多出现在 1.1、12 这种数里，仍是数字。"""
+    """Digits are recognized unsteadily (bold 1 is sometimes read as l), but they mostly occur in numbers such as 1.1
+    and 12, so they are still digits."""
     if label is None:
         return "symbol"
     if count and in_word / count >= _IN_WORD:
@@ -1024,7 +1067,7 @@ def _bullets(
     labels: dict[Key, Label],
     density: Callable[[set[Key]], dict[Key, float]],
 ) -> set[Key]:
-    """项目符号：总是单独站在行首，方方正正，墨迹填满。OCR 常把实心圆点认成 e。"""
+    """Bullets: always alone at the start of a line, square, and filled with ink. OCR often reads a filled dot as e."""
     lines = [line for page_lines in pages.values() for line in page_lines]
     seen = Counter(glyph.key for line in lines for glyph in line.glyphs)
     starts = Counter(line.tokens[0][0].key for line in lines if line.tokens and len(line.tokens[0]) == 1)
@@ -1045,7 +1088,7 @@ def _bullets(
 
 
 def _ink_share(doc: pymupdf.Document, glyphs: dict[int, list[Glyph]], keys: set[Key]) -> dict[Key, float]:
-    """字形框里墨迹占多少。"""
+    """Share of the glyph box covered by ink."""
     found: dict[Key, float] = {}
     for pno, items in glyphs.items():
         for glyph in items:
@@ -1062,7 +1105,8 @@ def _glyph_shapes(
     glyphs: dict[int, list[Glyph]],
     keys: set[Key],
 ) -> dict[Key, np.ndarray]:
-    """每种字形取第一次出现的位图，按原比例放进方格，块平均到 16×16，减均值、归一，点积就是相似度。"""
+    """For each glyph kind, take the bitmap of its first occurrence, place it in a square keeping its aspect ratio,
+    block-average it to 16×16, subtract the mean and normalize; the dot product is the similarity."""
     first: dict[Key, tuple[int, Glyph]] = {}
     for pno, items in glyphs.items():
         for glyph in items:
@@ -1087,7 +1131,7 @@ def _glyph_shapes(
     return found
 
 
-# ---- 写成 PyMuPDF 的行 ----
+# ---- Writing PyMuPDF lines ----
 
 
 def _line_dict(line: _Line, reader: Type3Reader) -> dict[str, Any] | None:
@@ -1097,7 +1141,8 @@ def _line_dict(line: _Line, reader: Type3Reader) -> dict[str, Any] | None:
         if index:
             items.append(("", _SPACE))
         items.extend((styles[id(glyph)], glyph) for glyph in token)
-    # 词间空格跟着正文走：公式 span 整个换成占位符，空格放在里面会一起丢掉
+    # Spaces between words go with the body text: a formula span is replaced as a whole by a placeholder, and a space
+    # inside it would be lost with it
     for index, (_style, glyph) in enumerate(items):
         if glyph is _SPACE:
             before, after = items[index - 1][0], items[index + 1][0]
@@ -1122,24 +1167,25 @@ def _line_dict(line: _Line, reader: Type3Reader) -> dict[str, Any] | None:
     return {"spans": spans, "wmode": 0, "dir": (1.0, 0.0), "bbox": (box.x0, box.y0, box.x1, box.y1)}
 
 
-# 词之间的空格
+# Space between words
 _SPACE = Glyph((-1, -1), pymupdf.Rect())
-# 空格只跟着普通正文走：等宽词和公式一样会换成占位符
+# Spaces only go with plain body text: monospace words are replaced by placeholders like formulas
 _PROSE = ("text",)
 
 
 def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
-    """每个字形写成什么：text、mono、math、symbol、script。
+    """What each glyph is written as: text, mono, math, symbol, script.
 
-    含数学字形的词整个是公式；夹在两个公式词中间的数字、括号也并进去，(p, s, c) 是一个公式。
-    一串公式词末尾的句号逗号是句子的标点，留在正文里。
+    A word containing math glyphs is a formula as a whole; digits and brackets between two formula words join it, so
+    (p, s, c) is one formula. A period or comma at the end of a run of formula words is sentence punctuation and stays
+    in the body text.
     """
     mono = _mono_tokens(line, reader)
     kinds: list[str] = []
     for index, token in enumerate(line.tokens):
         roles = [_role_of(glyph, line, reader) for glyph in token if not _is_script(glyph, line, reader)]
         if index in mono:
-            # 等宽字体里没有数学：{venky, anand}@db 的括号、@ 都是原样的字
+            # Monospace fonts have no math: the braces and @ in {venky, anand}@db are literal characters
             kinds.append("text")
         elif any(role in ("math", "symbol") for role in roles):
             kinds.append("math")
@@ -1152,8 +1198,8 @@ def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
             continue
         before = next((item for item in reversed(kinds[:index]) if item != "neutral"), "")
         after = next((item for item in kinds[index + 1 :] if item != "neutral"), "")
-        # k = 2、1 − (…)：紧挨着运算符的数也是公式
-        # 列表编号 1. 后面跟着 ≺ 也不是被减数：带句号的不算
+        # k = 2, 1 − (…): a number right next to an operator is also part of the formula
+        # A list number 1. followed by ≺ is not a minuend either: numbers with a period do not count
         operand = (
             index > 0 and kinds[index - 1] == "math" and _ends_with_operator(line.tokens[index - 1], reader)
         ) or (
@@ -1173,7 +1219,8 @@ def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
             index + 1 == len(kinds) or kinds[index + 1] != "math" or _ends_sentence(token, reader) or index in splits
         )
         if index in mono and index + 1 not in mono:
-            # 一串等宽词末尾的句号逗号是句子的。C1, C2 中间的逗号仍是代码
+            # A period or comma at the end of a run of monospace words belongs to the sentence. The comma in C1, C2
+            # is still code
             while tail > 1 and _sentence_mark(token[tail - 1], reader):
                 tail -= 1
         if kind == "math" and phrase_end:
@@ -1183,7 +1230,7 @@ def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
                 if _sentence_mark(last, reader):
                     tail -= 1
                 elif _bracket(last, reader) < 0 and opened < 0:
-                    # (using d) 的右括号是正文开的，留在正文
+                    # The closing parenthesis of (using d) was opened in the body text and stays there
                     opened += 1
                     tail -= 1
                 else:
@@ -1201,7 +1248,8 @@ def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
 
 
 def _hyphen_tails(line: _Line, kinds: list[str], reader: Type3Reader) -> set[int]:
-    """n-dimensional 里连字符后面的正文词留在正文，公式只是 n。不然模型看不到这个词，又把它译一遍。"""
+    """In n-dimensional, the body-text word after the hyphen stays in the body text and only n is a formula.
+    Otherwise the model does not see the word and translates it again."""
     tails: set[int] = set()
     for token, kind in zip(line.tokens, kinds):
         if kind != "math":
@@ -1217,7 +1265,8 @@ def _hyphen_tails(line: _Line, kinds: list[str], reader: Type3Reader) -> set[int
 
 
 def _close_brackets(tokens: list[list[Glyph]], kinds: list[str], reader: Type3Reader) -> set[int]:
-    """公式里开了括号，括号要在公式里合上：(i + 1)st 的 1) 归公式，st 留在正文。"""
+    """A bracket opened in a formula must close in the formula: in (i + 1)st, 1) goes to the formula and st stays in
+    the body text."""
     absorbed: set[int] = set()
     depth = 0
     for token, kind in zip(tokens, kinds):
@@ -1237,7 +1286,8 @@ def _close_brackets(tokens: list[list[Glyph]], kinds: list[str], reader: Type3Re
 
 
 def _phrase_depth(tokens: list[list[Glyph]], kinds: list[str], end: int, reader: Type3Reader) -> int:
-    """以 end 结尾的这串公式词里，左括号比右括号多几个。负数是多出来的右括号。"""
+    """How many more opening than closing brackets the run of formula words ending at end has. A negative number
+    means extra closing brackets."""
     start = end
     while start > 0 and kinds[start - 1] == "math":
         start -= 1
@@ -1245,11 +1295,12 @@ def _phrase_depth(tokens: list[list[Glyph]], kinds: list[str], end: int, reader:
 
 
 def _clause_splits(tokens: list[list[Glyph]], kinds: list[str], reader: Type3Reader) -> set[int]:
-    """一串公式词里，哪些词末的逗号把公式断开。
+    """The words in a run of formula words whose trailing comma splits the formula.
 
-    括号里的逗号不断：(p, s, c)。逗号左边这段还没有关系符，是单个变量或一组括号，断开：
-    d, e, g 和 h 各是一个公式，⟨L, ⪯⟩, a ≺ b 是两个。左边已经有关系符（i = 1, 2, …, k），
-    后面只是列举，除非后面又是一个关系式（a = b, c = d）。
+    A comma inside brackets does not split: (p, s, c). When the part left of the comma has no relation symbol yet and
+    is a single variable or one bracketed group, it splits: d, e, g and h are one formula each, ⟨L, ⪯⟩, a ≺ b is two.
+    When the left part already has a relation symbol (i = 1, 2, …, k), what follows is only an enumeration, unless
+    another relation follows (a = b, c = d).
     """
     splits: set[int] = set()
     depth = 0
@@ -1285,7 +1336,7 @@ def _relation_follows(tokens: list[list[Glyph]], kinds: list[str], index: int, r
 
 
 def _ends_sentence(token: list[Glyph], reader: Type3Reader) -> bool:
-    """size S. c gives：S 后面的句号断开两个公式。省略号 ... 不算。"""
+    """size S. c gives: the period after S separates two formulas. An ellipsis ... does not count."""
     if len(token) < 2 or not _sentence_mark(token[-1], reader) or _label_text(token[-1], reader) != ".":
         return False
     return _label_text(token[-2], reader) != "."
@@ -1307,13 +1358,15 @@ def _bracket(glyph: Glyph, reader: Type3Reader) -> int:
 
 
 def _sentence_mark(glyph: Glyph, reader: Type3Reader) -> bool:
-    """句子的标点认得准。下标 i 常被认成分号，但认得不稳，不算。"""
+    """Sentence punctuation recognized reliably. Subscript i is often read as a semicolon, but unsteadily, so it does
+    not count."""
     label = reader.labels.get(glyph.key)
     return _sure(label) and label is not None and label.text in _SENTENCE_MARKS
 
 
 def _role_of(glyph: Glyph, line: _Line, reader: Type3Reader) -> str:
-    """细线贴着基线是下划线，是字；在基线以上是分数线，归公式。"""
+    """A thin rule at the baseline is an underline and counts as a character; above the baseline it is a fraction
+    bar and belongs to the formula."""
     if glyph.key == _RULE:
         center = (glyph.rect.y0 + glyph.rect.y1) / 2
         return "neutral" if abs(center - line.baseline) <= line.size * 0.12 else "symbol"
@@ -1321,13 +1374,16 @@ def _role_of(glyph: Glyph, line: _Line, reader: Type3Reader) -> str:
 
 
 def _is_script(glyph: Glyph, line: _Line, reader: Type3Reader) -> bool:
-    """上下标：字号明显小，或者字号一样、整个字却上下偏开（N 下面正体的 supplier）。
+    """Superscript or subscript: a clearly smaller font size, or the same size with the whole glyph shifted up or
+    down (the upright supplier below N).
 
-    偏开看字心，不看下沿：斜体的 f 本来就伸到基线以下。
-    认不出字母的符号没有字号，下沿悬在 x 高四分之三以上的（脚注记号）算上标。
-    引号本来就悬着，连字符在 x 高一半上下，都不算。
+    The shift is measured at the glyph center, not the bottom edge: italic f reaches below the baseline anyway.
+    Symbols without a recognized letter have no font size; those whose bottom edge hangs above three quarters of the
+    x-height (footnote marks) count as superscripts. Quote marks hang anyway and hyphens sit around half the
+    x-height; neither counts.
     """
-    # 认得不稳的字母（下标 N 有时认成 M）类别多半没错，字号照样能估
+    # For letters recognized unsteadily (subscript N is sometimes read as M) the class is usually right, so the font
+    # size can still be estimated
     size = _glyph_size(glyph, reader.labels, sure=False)
     if size is None:
         text = _label_text(glyph, reader)
@@ -1340,7 +1396,8 @@ def _is_script(glyph: Glyph, line: _Line, reader: Type3Reader) -> bool:
 
 
 def _off_size(glyph: Glyph, line: _Line, labels: dict[Key, Label], size: float) -> bool:
-    """字号比这一行小一截，或者字心偏离同类字母该在的高度。"""
+    """The font size is clearly smaller than the line's, or the center is off the height expected for its letter
+    class."""
     if size < line.size * _SCRIPT:
         return True
     kind = _letter_class(labels[glyph.key].text)
@@ -1350,7 +1407,8 @@ def _off_size(glyph: Glyph, line: _Line, labels: dict[Key, Label], size: float) 
 
 
 def _main_glyphs(line: _Line, token: list[Glyph], labels: dict[Key, Label]) -> list[Glyph]:
-    """去掉上下标。N 下面的 supplier 和 N 挨在一个词里，不能让 N 看起来像单词的一部分。"""
+    """Remove superscripts and subscripts. The supplier below N sits in one word with N and must not make N look
+    like part of a word."""
     kept = []
     for glyph in token:
         size = _glyph_size(glyph, labels, sure=False)
@@ -1360,18 +1418,22 @@ def _main_glyphs(line: _Line, token: list[Glyph], labels: dict[Key, Label]) -> l
 
 
 def _mono_tokens(line: _Line, reader: Type3Reader) -> set[int]:
-    """一半以上的字母是等宽字形的词。挨着等宽词、字距也是格宽的词（SELECT、AS、FROM）跟着算。"""
+    """Words in which at least half of the letters are monospace glyphs. Words next to a monospace word whose letter
+    spacing is also the cell width (SELECT, AS, FROM) count as well."""
     found: dict[int, float] = {}
     for index, token in enumerate(line.tokens):
-        # 只看字母：(year) 的括号是正体。下标也不算：N 下面等宽字的 supplier 不让 N 变成等宽字
+        # Only letters count: the parentheses of (year) are upright. Subscripts do not count either: the monospace
+        # supplier below N does not make N monospace
         letters = [
             glyph for glyph in token if _label_text(glyph, reader).isalpha() and not _is_script(glyph, line, reader)
         ]
         known = [reader.mono[glyph.key] for glyph in letters if glyph.key in reader.mono]
-        # 等宽字和正文是两套位图，词里一半字母是等宽字形就是等宽词（(day) 的 y 只出现过一次）
+        # Monospace and body text use two sets of bitmaps; a word with half of its letters in monospace glyphs is a
+        # monospace word (the y of (day) occurs only once)
         if letters and len(known) * 2 >= len(letters):
             found[index] = statistics.median(known)
-    # 字距正好是等宽格宽、字形又从没出现在比例字体的词里（FROM 这一行没有别的等宽词）
+    # Letter spacing exactly at a monospace cell width, with glyphs that never occur in proportional-font words (the
+    # FROM line has no other monospace word)
     pitches = set(reader.mono.values())
     for index, token in enumerate(line.tokens):
         gaps = _steps(token)
@@ -1391,7 +1453,8 @@ def _mono_tokens(line: _Line, reader: Type3Reader) -> set[int]:
             near = [found[other] for other in (index - 1, index + 1) if other in found]
             if index in found or not near:
                 continue
-            # part p：等宽词旁边的单个变量仍是公式。So、the 这种在正文里出现过的字形也不跟着走
+            # part p: a single variable next to a monospace word is still a formula. Glyphs seen in body text, as in
+            # So and the, do not follow either
             if any(
                 reader.roles.get(glyph.key) in ("math", "symbol") or glyph.key in reader.proportional for glyph in token
             ):
@@ -1403,12 +1466,14 @@ def _mono_tokens(line: _Line, reader: Type3Reader) -> set[int]:
 
 
 def _mono_kinds(pages: dict[int, list[_Line]], labels: dict[Key, Label]) -> dict[Key, float]:
-    """等宽字体的字形和它的格宽。
+    """Monospace glyphs and their cell widths.
 
-    从长词里找：五个字以上、字心距处处一样、又带着 i、l、逗号这种窄字的词。
-    正文字体里窄字和邻字的字心距短一截，凑不齐；数字在哪种字体里都等宽，不算。
-    等宽字的格宽是 0.525 个字号，each、latter 这种字距也匀的正文词不到 0.48。
-    这样的词至少三个落在同一档格宽（正文和脚注各一档），它们的字形就是等宽字形。
+    They are found in long words: five or more characters, the same distance between centers throughout, and a narrow
+    character such as i, l or a comma. In body-text fonts the center distance between a narrow character and its
+    neighbors is shorter, so the distances do not come out equal; digits have equal widths in every font and do not
+    count. The monospace cell width is 0.525 font sizes; evenly spaced body-text words such as each and latter stay
+    below 0.48. When at least three such words fall in the same cell-width band (one band for body text, one for
+    footnotes), their glyphs are monospace glyphs.
     """
     candidates: list[tuple[float, list[Glyph]]] = []
     for line in (line for lines in pages.values() for line in lines):
@@ -1437,9 +1502,11 @@ def _mono_kinds(pages: dict[int, list[_Line]], labels: dict[Key, Label]) -> dict
 
 
 def _proportional_kinds(pages: dict[int, list[_Line]], mono: dict[Key, float]) -> set[Key]:
-    """出现在字距不匀的词里的字形：比例字体。等宽字体的词字距处处一样。
+    """Glyphs that occur in words with uneven letter spacing: proportional fonts. Words in a monospace font have the
+    same spacing throughout.
 
-    (year) 这种正体括号包着等宽字的词字距也不匀，词里有等宽字形的不算。
+    Words such as (year), with upright parentheses around monospace characters, also have uneven spacing, so words
+    containing monospace glyphs do not count.
     """
     found: set[Key] = set()
     for line in (line for lines in pages.values() for line in lines):
@@ -1479,7 +1546,8 @@ def _span(run: list[Glyph], style: str, line: _Line, reader: Type3Reader) -> dic
         size = round(line.size, 1)
         baseline = line.baseline
         box = ink | pymupdf.Rect(ink.x0, baseline - size * 0.72, ink.x1, baseline + size * 0.22)
-    # 公式按这个框从原页裁剪，四周留一点余量，位图边上的像素不被切掉
+    # Formulas are cropped from the original page with this box; a small margin on all sides keeps the pixels at the
+    # bitmap edges
     box = pymupdf.Rect(box.x0 - _PAD, box.y0 - _PAD, box.x1 + _PAD, box.y1 + _PAD)
     font = {
         "text": _TEXT_FONT,
@@ -1496,7 +1564,8 @@ def _span(run: list[Glyph], style: str, line: _Line, reader: Type3Reader) -> dic
         "flags": 0,
         "color": glyphs[0].color if glyphs else 0,
         "origin": (ink.x0, baseline),
-        # 擦原文按这些起笔点认字。点阵字的字体框比墨迹高出半行，按框认会认到别人的字
+        # Erasing the original text finds characters by these origins. The font box of a bitmap font is half a line
+        # taller than the ink, so finding them by box would catch other characters
         "origins": [glyph.origin for glyph in glyphs if glyph.origin is not None],
         "ascender": 0.75,
         "descender": -0.25,
@@ -1504,9 +1573,11 @@ def _span(run: list[Glyph], style: str, line: _Line, reader: Type3Reader) -> dic
 
 
 def _group_lines(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
-    """行距内、横向交叠、字号相近的行并成一块，和 PyMuPDF 对普通字体的分块一样。分段交给后面。
+    """Lines within the leading that overlap horizontally and have similar font sizes are grouped into one block, as
+    PyMuPDF does for ordinary fonts. Paragraph splitting is left to later steps.
 
-    行距按基线量。行框会被高括号、下标撑开，两行的框叠在一起不说明什么。
+    Leading is measured between baselines. Line boxes are stretched by tall brackets and subscripts, so overlapping
+    boxes of two lines mean nothing.
     """
     ordered = sorted(lines, key=lambda line: (_baseline(line), float(line["bbox"][0])))
     groups: list[list[dict[str, Any]]] = []
@@ -1542,7 +1613,7 @@ def _line_size(line: dict[str, Any]) -> float:
     return max(sizes) if sizes else max(float(span["size"]) for span in line["spans"])
 
 
-# ---- 共用 ----
+# ---- Shared helpers ----
 
 
 def _custom_encoding(doc: pymupdf.Document, xref: int) -> bool:
@@ -1577,7 +1648,8 @@ def _broken_share(data: PageData, names: set[str]) -> float:
 
 
 def _drop_broken_lines(data: PageData, names: set[str]) -> None:
-    """删掉字符码。图片和正常字体留下。混在同一行里的正常字也留下。"""
+    """Remove the character codes. Images and normal fonts stay, and so do normal characters mixed into the same
+    line."""
     kept: list[dict[str, Any]] = []
     for block in data["blocks"]:
         if block.get("type") != 0:
