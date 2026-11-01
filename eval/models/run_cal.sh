@@ -1,6 +1,7 @@
-# 用法: run_cal.sh <名字:方法:页数:seed> ...
-# 用指定的校准方法、页数、随机种子把公式检测模型量化成 int8（$W/int8/mfd.<名字>.onnx），再像 run_formula_model.sh 一样评测。
-# 方法是 minmax、avg（滑动平均）、percentile、entropy。$W/int8/mfd.<名字>.onnx 已存在时不再量化，直接评测这个文件
+# Usage: run_cal.sh <name:method:pages:seed> ...
+# Quantize the formula detection model to int8 ($W/int8/mfd.<name>.onnx) with the given calibration method, page
+# count and random seed, then evaluate it as run_formula_model.sh does. Methods are minmax, avg (moving average),
+# percentile and entropy. When $W/int8/mfd.<name>.onnx already exists, it is evaluated without quantizing again
 . "$(dirname "$0")/../env.sh"
 M=$C/data/models/pix2text-mfd-1.5.onnx
 mkdir -p $W/int8 $E/mfd

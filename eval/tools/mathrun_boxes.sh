@@ -1,5 +1,6 @@
-# 用法: mathrun_boxes.sh <代码目录> <标签> <公式框标签>
-# 用缓存的公式框 mfd/<id>.<公式框标签>.json 出带公式文字的计划（mplans/），再打行内公式的分，不跑模型
+# Usage: mathrun_boxes.sh <code dir> <tag> <formula box tag>
+# Produce plans with formula text (mplans/) from the cached formula boxes mfd/<id>.<formula box tag>.json, then
+# score inline formulas, without running the model
 code=$1; tag=$2; ftag=$3; . "$(dirname "$0")/../env.sh"
 mkdir -p $E/mplans
 for d in $E/raw/*/; do

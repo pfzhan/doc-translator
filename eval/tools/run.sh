@@ -1,4 +1,5 @@
-# 用法: run.sh <代码目录> <标签>   对 raw/ 下每篇出分段计划并打分，汇总到 results/<标签>.txt
+# Usage: run.sh <code dir> <tag>
+# Produce and score a segmentation plan for each paper under raw/, summarized in results/<tag>.txt
 code=$1; tag=$2; . "$(dirname "$0")/../env.sh"
 mkdir -p $E/plans $E/gold $E/results
 for d in $E/raw/*/; do

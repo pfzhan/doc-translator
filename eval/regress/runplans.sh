@@ -1,4 +1,5 @@
-# 用法: runplans.sh <代码目录> <标签>   不开模型，出老语料的计划到 regress/plans/<文件名>.<标签>.json
+# Usage: runplans.sh <code dir> <tag>
+# Produce plans for the regression corpus without models, into regress/plans/<file name>.<tag>.json
 . "$(dirname "$0")/../env.sh"
 mkdir -p $E/regress/plans
 regress_pdfs | while read -r f; do

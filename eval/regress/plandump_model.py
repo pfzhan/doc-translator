@@ -1,4 +1,4 @@
-"""Produce the plan for the old corpus with the layout model enabled (reading cached boxes).
+"""Produce the plan for the regression corpus with the layout model enabled (reading cached boxes).
 Usage: plandump_model.py <code dir> <pdf> <boxes json> <output> [nojoin]"""
 
 import json

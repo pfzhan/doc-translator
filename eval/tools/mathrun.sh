@@ -1,4 +1,5 @@
-# 用法: mathrun.sh <代码目录> <标签>   不开模型，出带公式文字的计划（mplans/），再按 mathgold/ 打行内公式的分
+# Usage: mathrun.sh <code dir> <tag>
+# Produce plans with formula text (mplans/) without models, then score inline formulas against mathgold/
 code=$1; tag=$2; . "$(dirname "$0")/../env.sh"
 mkdir -p $E/mplans
 for d in $E/raw/*/; do

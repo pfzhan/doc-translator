@@ -1,5 +1,6 @@
-# 用法: run_layout_model.sh <onnx> <框目录名> [公式框标签=rect]
-# 用一个版面模型给评测集出框到 $EVALSET/<框目录名>/（已有的不重出），再配上缓存的公式框打分段的分，计划标签是 r<框目录名>
+# Usage: run_layout_model.sh <onnx> <box dir name> [formula box tag=rect]
+# Produce boxes for the evaluation set with a layout model into $EVALSET/<box dir name>/ (existing ones are kept),
+# then score segmentation together with the cached formula boxes. The plan tag is r<box dir name>
 . "$(dirname "$0")/../env.sh"
 M=$1; D=$E/$2; mkdir -p $D
 t0=$(date +%s)

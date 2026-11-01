@@ -1,7 +1,8 @@
-# 用法: compare_models.sh <formula|layout> <参照标签>=<onnx> <新标签>=<onnx>
-# 在老语料（REGRESS_PDFS 下的 PDF）上比较同一类模型的两个文件（如 fp32 和 int8）：各自出框、出计划，再列出单元数变了的文件、
-# 跳过与否变了的单元。框缓存已有时不再推理：公式框在 regress/mfd/<文件名>.<标签>.json，
-# 版面框在 regress/regions_<标签>/<文件名>.json。
+# Usage: compare_models.sh <formula|layout> <reference tag>=<onnx> <new tag>=<onnx>
+# Compare two files of the same kind of model (such as fp32 and int8) on the regression corpus (the PDFs under
+# REGRESS_PDFS): produce boxes and plans with each, then list files whose unit count changed and units whose skip
+# flag changed. Cached boxes are reused without inference: formula boxes in regress/mfd/<file name>.<tag>.json,
+# layout boxes in regress/regions_<tag>/<file name>.json.
 . "$(dirname "$0")/../env.sh"
 kind=$1; shift
 mkdir -p $E/regress/plans

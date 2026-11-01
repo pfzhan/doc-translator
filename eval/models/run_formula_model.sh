@@ -1,6 +1,6 @@
-# 用法: run_formula_model.sh <onnx> <标签:边长> ...
-# 用一个公式检测模型给评测集出框（mfd/<id>.<标签>.json，已有的不重出），再打行内公式和分段的分。
-# 计划标签是 m<标签>（行内公式）和 s<标签>（分段）
+# Usage: run_formula_model.sh <onnx> <tag:side> ...
+# Produce boxes for the evaluation set with a formula detection model (mfd/<id>.<tag>.json, existing ones are kept),
+# then score inline formulas and segmentation. Plan tags are m<tag> (inline formulas) and s<tag> (segmentation)
 . "$(dirname "$0")/../env.sh"
 M=$1; shift
 mkdir -p $E/mfd

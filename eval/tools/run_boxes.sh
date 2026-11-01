@@ -1,5 +1,6 @@
-# 用法: run_boxes.sh <代码目录> <标签> <公式框标签> [版面框目录]
-# 用缓存的公式框 mfd/<id>.<公式框标签>.json 出分段计划并打分，不跑模型；给了版面框目录时再开版面模型（读 <目录>/<id>.json）
+# Usage: run_boxes.sh <code dir> <tag> <formula box tag> [layout box dir]
+# Produce and score segmentation plans from the cached formula boxes mfd/<id>.<formula box tag>.json without
+# running the model; with a layout box dir the layout model is enabled too (reading <dir>/<id>.json)
 code=$1; tag=$2; ftag=$3; . "$(dirname "$0")/../env.sh"
 mkdir -p $E/plans $E/results
 for d in $E/raw/*/; do
