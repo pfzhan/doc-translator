@@ -33,12 +33,13 @@ from .pdf_merge import _x_overlap
 from .pdf_roles import Role
 from .pdf_vision import FormulaDetector
 
-# 例句里方括号标注的角标（Arg0、ArgM-TMP、PER）最多几个字
+# Maximum length of a bracketed label in an example sentence (Arg0, ArgM-TMP, PER)
 _BRACKET_LABEL_CHARS = 10
 
 
 def _median_size(blocks: list[TextBlock]) -> float:
-    """按字数取中位的字号。按块数取时，索引、图里成百上千个小字的短块会把它拉下来。"""
+    """Median font size weighted by character count. Counted per block, the hundreds of short blocks in small
+    type in an index or a figure would pull it down."""
     total = sum(len(block.text) for block in blocks)
     seen = 0
     for block in sorted(blocks, key=lambda block: block.size):
@@ -48,27 +49,32 @@ def _median_size(blocks: list[TextBlock]) -> float:
     return 0.0
 
 
-# 认外文段落时一段至少要有的字母数。题记里的一个小项只有一两个词，要和旁边的合起来认
+# Minimum number of letters for detecting a foreign-language passage. An item of an epigraph has only one or
+# two words and is detected together with its neighbors
 _FOREIGN_LETTERS = 40
 _FOREIGN_CJK = 8
 _HAN_RE = re.compile(r"[㐀-鿿]")
 _KANA_HANGUL_RE = re.compile(r"[぀-ヿ가-힯]")
 
 
-# 例句底下逐行列的「标签: 释义」（Arg1: Proposition、Cf (U2): {John, piano}）
+# "Label: gloss" rows listed below an example sentence (Arg1: Proposition, Cf (U2): {John, piano})
 _GLOSS_ROW_RE = re.compile(r"[^\s:：]{1,8}(?:\s?\([^)]*\))?\s?[:：]\s")
 
 
 def _display_example_ids(blocks: list[TextBlock], geometries: list[PageGeometry], skipped: set[int]) -> set[int]:
-    """首行缩进的书里，正文中间单独排开、比段首缩进缩得更深的一行或左缘对齐的几行：讲语言现象时举的例句
-    （a clear majority of senators back/VBP the bill、*fair and brutal）、关系的记法
-    （Giraffe is-a ruminant is-a ungulate …）。下文拿原句里的词来讲，留原文。
-    以冒号收尾的是引出下文的一句（Then repeat iteratively until convergence:），
-    字号和正文不一样的是题词的出处，在栏里居中的是图注（Listing 3 | Prompt for …），
-    带等号、不等号的是式子的说明（x_i contains a particular prefix (… length ≤ 2)），
-    「标签: 释义」一行是给人看的释义，紧接在列表项下面的是这一项折下来的行，都不算。
-    上下紧挨着的块和它左缘对齐、或者它和紧挨着的块同一行旁边还有块时，它是表格、逐词对译的例句、悬挂缩进的条目里的一行
-    （表头 corpus、意译 “Yao Ming reaches the finals”），由那一类的规则处理"""
+    """In a book that indents first lines, a single line or a few left-aligned lines set apart in the body text
+    and indented deeper than a paragraph start: example sentences illustrating a linguistic point
+    (a clear majority of senators back/VBP the bill, *fair and brutal) and relation notation
+    (Giraffe is-a ruminant is-a ungulate ...). The text that follows discusses words of the original
+    sentence, so the original is kept. These do not count: a line ending with a colon introduces what
+    follows (Then repeat iteratively until convergence:), a different font size marks the source of an
+    epigraph, a line centered in the column is a caption (Listing 3 | Prompt for ...), a line with an equals
+    or inequality sign explains a formula (x_i contains a particular prefix (... length ≤ 2)), a "label: gloss"
+    line is a gloss for the reader, and a line right below a list item is a wrapped line of that item. When
+    the blocks right above or below share its left edge, or it or an adjacent block has another block beside
+    it on the same line, it is a line of a table, an interlinear gloss or an entry with a hanging indent
+    (the table header corpus, the free translation “Yao Ming reaches the finals”), handled by the rules for
+    those"""
     indent = _paragraph_indent(blocks)
     if indent is None:
         return set()
@@ -121,7 +127,7 @@ def _display_example_ids(blocks: list[TextBlock], geometries: list[PageGeometry]
             if any(_RELATION_RE.search(block.text) for block in run):
                 continue
             members = {id(block) for block in run}
-            # 上下紧挨着的行：上面取各块的末行，下面取首行
+            # Lines right above and below: the last line of each block above, the first line of each block below
             above = [
                 (other, other.line_rects[-1])
                 for other in page_blocks
@@ -145,7 +151,8 @@ def _display_example_ids(blocks: list[TextBlock], geometries: list[PageGeometry]
                 or any(abs(x0 - first.rect.x0) <= 1 for other, row in above + below for x0 in (other.rect.x0, row.x0))
             ):
                 continue
-            # 它或紧挨着的块同一行旁边还有块（拼音、对译、表格的另一列），是逐词对译的例句或表格里的一行
+            # It or an adjacent block has another block beside it on the same line (pinyin, a gloss, another table
+            # column): a line of an interlinear gloss or a table
             if any(
                 other is not block
                 and not other.side_note
@@ -160,12 +167,14 @@ def _display_example_ids(blocks: list[TextBlock], geometries: list[PageGeometry]
     return found
 
 
-# 模式和例句按颜色对应时至少用几种颜色。正文的链接、强调只用一两种
+# Minimum number of colors when a pattern and an example are matched by color. Links and emphasis in body text
+# use only one or two
 _KEY_COLORS = 3
 
 
 def _color_keys(block: TextBlock) -> list[tuple[pymupdf.Rect, tuple[int, ...]]]:
-    """块里每一行（同一基线的几截并起来）的框，和行里鲜明颜色先后出现的顺序"""
+    """The box of each line in the block (spans on the same baseline merged), and the order in which vivid colors
+    appear in the line"""
     rows: list[tuple[pymupdf.Rect, list[int]]] = []
     gap = max(block.size * 0.4, 2.0)
     for rect, spans in zip(block.line_rects, block.span_lines or []):
@@ -179,9 +188,10 @@ def _color_keys(block: TextBlock) -> list[tuple[pymupdf.Rect, tuple[int, ...]]]:
 
 
 def _color_keyed_ids(blocks: list[TextBlock]) -> set[int]:
-    """模式和例句上下两行排，用同几种颜色按同样的先后标出对应的部分
-    （PER, POSITION of ORG: 下面是 George Marshall, Secretary of State of the United States，
-    PER 和 George Marshall 同是蓝色）。译了语序一变，颜色就对不上了，两行都留原文。"""
+    """A pattern and an example on two consecutive lines, with matching parts marked by the same colors in the
+    same order (PER, POSITION of ORG: above George Marshall, Secretary of State of the United States, with
+    PER and George Marshall both blue). Translation changes the word order and the colors no longer match,
+    so both lines keep the original text."""
     rows: dict[int, list[tuple[pymupdf.Rect, tuple[int, ...], TextBlock]]] = {}
     for block in blocks:
         if block.clip is None and not block.side_note:
@@ -201,9 +211,11 @@ def _color_keyed_ids(blocks: list[TextBlock]) -> set[int]:
 
 
 def _item_example_ids(blocks: list[TextBlock]) -> set[int]:
-    """列表项下面另起一行列的例子（Bag-of-words in M1 and M2 下面的 American, Airlines, Tim …，
-    M2: -1 spokesman）：缩在弹点右边，字母大半用鲜明的颜色标着，是从例句里摘出来的词，留原文。
-    同一项下面接连几行都算。和条目折下来的行分开见 _cut_item_breaks，也只看弹点起头的条目。"""
+    """Examples on their own lines below a list item (American, Airlines, Tim ... below Bag-of-words in M1
+    and M2, M2: -1 spokesman): indented right of the bullet, with most letters in vivid colors, they are
+    words taken from an example sentence and keep the original text. Several consecutive lines below the
+    same item count. For telling them from wrapped lines of the item see _cut_item_breaks, which also only
+    looks at items starting with a bullet."""
     by_page: dict[int, list[TextBlock]] = {}
     for block in blocks:
         if block.clip is None and not block.side_note:
@@ -211,7 +223,7 @@ def _item_example_ids(blocks: list[TextBlock]) -> set[int]:
     found: set[int] = set()
     for page_blocks in by_page.values():
         page_blocks.sort(key=lambda block: (block.rect.y0, block.rect.x0))
-        # 已经认出的例子行挂在哪一项下面：项的左缘
+        # The item each recognized example line belongs to: the item's left edge
         roots: dict[int, float] = {}
         for index, block in enumerate(page_blocks):
             if len(_visual_lines(block)) != 1 or _MARK_ITEM_RE.match(block.text) or not _vivid_letters(block):
@@ -232,14 +244,15 @@ def _item_example_ids(blocks: list[TextBlock]) -> set[int]:
 
 
 def _vivid_letters(block: TextBlock) -> bool:
-    """块里一半以上的字母是鲜明的颜色"""
+    """More than half of the letters in the block are in vivid colors"""
     return _vivid_share(_block_spans(block)) > 0.5
 
 
 def _arc_figure_ids(blocks: list[TextBlock], scans: Sequence[PageScan]) -> set[int]:
-    """用弧线标注的例句（依存弧、注意力弧从词连到词）和弧上圆角框里的标签（nsubj、coreference attention）。
-    弧的两端落在句子里某个词的上方，译成中文以后对不上词，留原文。
-    句子的上缘接着弧线的下端；标签在圆角框里，框压着弧线。"""
+    """Example sentences annotated with arcs (dependency or attention arcs linking word to word) and the labels
+    in rounded boxes on the arcs (nsubj, coreference attention). Both ends of an arc sit above words of the
+    sentence and would no longer match them in Chinese, so the original is kept. The top of the sentence meets
+    the lower ends of the arcs; a label is inside a rounded box that overlaps an arc."""
     found: set[int] = set()
     for block in blocks:
         if block.page >= len(scans):
@@ -264,13 +277,16 @@ def _arc_figure_ids(blocks: list[TextBlock], scans: Sequence[PageScan]) -> set[i
 
 
 def _example_ids(blocks: list[TextBlock], numbers: dict[int, tuple[ExampleNumber, ...]] | None = None) -> set[int]:
-    """讲语言现象时举的例句：(24.3) 编号起头、续行悬挂在编号右边的句子，和带两处以上
-    [角标 …] 标注的句子（[Arg0 The group] agreed …、[PER Jane] of [ORG United]）。
-    下文拿原句里的词来讲，标注也夹在词中间，留原文。
-    numbers 是各页行首的例句编号（见 example_numbers）：编号没进块，同一行紧接在它右边的块是例句；
-    整行都没成块的（(22.12) fall.01），下面缩进的几行（Arg1: …、Ex1: …）是例句。
+    """Example sentences illustrating a linguistic point: sentences starting with a number such as (24.3) whose
+    continuation lines hang right of the number, and sentences with two or more [label ...] annotations
+    ([Arg0 The group] agreed ..., [PER Jane] of [ORG United]). The text that follows discusses words of the
+    original, and the annotations sit between the words, so the original is kept. numbers holds the example
+    numbers at line starts on each page (see example_numbers): when a number is not part of a block, the block
+    right of it on the same line is an example; when the whole line formed no block ((22.12) fall.01), the
+    indented lines below (Arg1: ..., Ex1: ...) are the example.
 
-    正文以式子编号起头（(2.4) follows from …）的段落，续行回到栏边，不算。"""
+    A body paragraph starting with an equation number ((2.4) follows from ...) has continuation lines back at
+    the column edge and does not count."""
     found: set[int] = set()
     heads: list[_ExampleHead] = []
     numbers = numbers or {}
@@ -302,8 +318,9 @@ def _example_ids(blocks: list[TextBlock], numbers: dict[int, tuple[ExampleNumber
 
 @dataclass(frozen=True)
 class _ExampleHead:
-    """编号例句的第一行。block_id 是它所在的块，整行没成块时为 None，size 这时取下面第一块的字号。
-    number_x0 是编号的左缘，text_x0 是编号后面的句子从哪里起笔"""
+    """The first line of a numbered example. block_id is the block it is in, or None when the line formed no
+    block, in which case size is taken from the first block below. number_x0 is the left edge of the number,
+    text_x0 where the sentence after the number starts"""
 
     page: int
     rect: pymupdf.Rect
@@ -314,7 +331,7 @@ class _ExampleHead:
 
 
 def _example_number_before(block: TextBlock, numbers: tuple[ExampleNumber, ...]) -> ExampleNumber | None:
-    """块的第一行紧接在一个单独的例句编号右边，同一行"""
+    """The first line of the block is right of a standalone example number on the same line"""
     first = block.line_rects[0] if block.line_rects else block.rect
     return next(
         (
@@ -335,9 +352,12 @@ def _example_tails(
     numbers: dict[int, tuple[ExampleNumber, ...]],
     indent: float | None = None,
 ) -> set[int]:
-    """编号例句的后几行另成了块（(24.14) 的第二句、例句里换行的 wine.、IT、JA 几种语言的对照、
-    框架文件条目下面的 Arg0: …、Ex1: …、对译下面的意译 “Yao Ming reaches the finals”）：紧贴在例句下面、字号一样、起笔在编号和句子之间偏右的块，也是这个例句。
-    正文回到编号的左缘起笔；indent 是正文段首缩进多宽，缩进这么多起笔的是下一段。到下一个编号为止。"""
+    """Later lines of a numbered example that formed separate blocks (the second sentence of (24.14), wine.
+    wrapped within an example, the IT and JA lines comparing languages, Arg0: ... and Ex1: ... below a
+    frame file entry, the free translation “Yao Ming reaches the finals” below a gloss): a block right
+    below the example, in the same size, starting right of the midpoint between the number and the sentence,
+    belongs to the example. Body text returns to the left edge of the number; indent is the first-line indent
+    of body paragraphs, and a block starting that far in is the next paragraph. Stops at the next number."""
     by_page: dict[int, list[TextBlock]] = {}
     for block in blocks:
         if block.clip is None and not block.side_note:
@@ -363,11 +383,12 @@ def _example_tails(
             if id(block) == head.block_id or block.rect.y0 < head.rect.y0 + head.rect.height * 0.5:
                 continue
             if block.rect.x0 >= head.rect.x1 or block.rect.x1 <= head.rect.x0:
-                continue  # 另一栏
+                continue  # another column
             size = size or block.size
             if indent is not None:
                 left = max(left, head.number_x0 + indent + size * 0.5)
-            # 例句里空一行接着排的（Arg 几行下面的 Ex1:）和上一行对齐起笔
+            # A line set after a blank line within the example (Ex1: below the Arg lines) starts aligned with the
+            # previous line
             gap = size * (1.6 if last is not head.rect and abs(block.rect.x0 - last.x0) <= 1 else 0.6)
             if (
                 block.rect.y0 - last.y1 > gap
@@ -384,9 +405,10 @@ def _example_tails(
 
 
 def _after_number_x0(block: TextBlock) -> float:
-    """例句编号后面第一个字的横坐标。编号和句子在同一个 span 里时按字数比例估。"""
+    """x coordinate of the first character after the example number. When the number and the sentence share a
+    span, it is estimated from the character count."""
     matched = _EXAMPLE_NUMBER_RE.match(block.text)
-    # 编号和句子可能分在同一高度的两行里
+    # The number and the sentence may be in two lines at the same height
     lines = block.span_lines or [[]]
     first = [span for span in lines[0] if str(span.get("text") or "").strip() and span.get("bbox") is not None]
     top = pymupdf.Rect(first[0]["bbox"]) if first else None
@@ -421,14 +443,14 @@ def _after_number_x0(block: TextBlock) -> float:
 
 
 def _hanging(block: TextBlock) -> bool:
-    """首行以下各行都比首行靠右起笔。只有一行的也算。"""
+    """Every line after the first starts right of the first line. A single line also counts."""
     starts = [min(rect.x0 for rect in row) for row in sorted(_visual_lines(block), key=lambda row: row[0].y0)]
     return all(x0 > starts[0] + block.size for x0 in starts[1:])
 
 
 def _labeled_brackets(block: TextBlock) -> int:
-    """左方括号后面紧跟一个小一号的字母标签、标签后面还有词的次数。
-    层号 W[1] 的上标是数字，[EOS] 这样整个括号里只有一个词，都不算。"""
+    """Number of times a left bracket is followed by a smaller letter label and the label by more words.
+    The superscript in a layer index W[1] is a digit and [EOS] holds a single word; neither counts."""
     spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
     count = 0
     for left, label, after in zip(spans, spans[1:], spans[2:]):
@@ -445,13 +467,14 @@ def _labeled_brackets(block: TextBlock) -> int:
     return count
 
 
-# 论元的几种实现方式逐行列出：AGENT/Subject, THEME/Object, INSTRUMENT/PPwith
+# Realizations of arguments listed line by line: AGENT/Subject, THEME/Object, INSTRUMENT/PPwith
 _ROLE_PATTERN_RE = re.compile(r"[A-Z]{3,}/\w+(?:,\s*[A-Z]{3,}/\w+)*")
 
 
 def _role_pattern_ids(blocks: list[TextBlock]) -> set[int]:
-    """逐行列出的角色记法（AGENT/Subject, THEME/Object）。下文拿记法里的角色名来讲，留原文。
-    词下面标着角色的例句按对译认，见 interlinear_glosses。"""
+    """Role notation listed line by line (AGENT/Subject, THEME/Object). The text that follows discusses the role
+    names, so the original is kept. Examples with roles marked below the words are found as glosses, see
+    interlinear_glosses."""
     return {
         id(block)
         for block in blocks
@@ -463,9 +486,10 @@ def _role_pattern_ids(blocks: list[TextBlock]) -> set[int]:
 
 
 def _concordance_ids(blocks: list[TextBlock]) -> set[int]:
-    """逐行列出的语料检索结果：每行中间一个粗体的词，各行的这个词左缘对齐，两边是它在语料里的前后文
-    （is traditionally followed by | cherry | pie, a traditional dessert）。
-    前后文是截下来的半句，几行连起来不成句，下文拿中间的词来讲，留原文。"""
+    """Corpus concordance lines: a bold word in the middle of each line, left-aligned across lines, with its
+    context from the corpus on both sides (is traditionally followed by | cherry | pie, a traditional
+    dessert). The contexts are cut-off fragments that do not form sentences when read together, and the
+    text that follows discusses the middle word, so the original is kept."""
     found: set[int] = set()
     for block in blocks:
         if block.clip is not None or block.side_note:
@@ -495,7 +519,7 @@ def _concordance_ids(blocks: list[TextBlock]) -> set[int]:
                 for i, span in enumerate(row)
                 if emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0)).bold
             ]
-            # 粗体的词连成一截，左右都有前后文
+            # The bold words are contiguous, with context on both sides
             if not bold or bold != list(range(bold[0], bold[-1] + 1)) or bold[0] == 0 or bold[-1] == len(row) - 1:
                 break
             lefts.append(float(row[bold[0]]["bbox"][0]))
@@ -506,12 +530,15 @@ def _concordance_ids(blocks: list[TextBlock]) -> set[int]:
 
 
 def _foreign_ids(blocks: list[TextBlock]) -> set[int]:
-    """和全文不是同一种语言的段落：英文书里的西班牙文题记、德文引文、巴斯克语例句。
-    作者有意留着原文，旁边多半已经给了译文，留原文。
+    """Passages in a language other than the document's: a Spanish epigraph, a German quotation or Basque
+    examples in an English book. The author kept them in the original on purpose and usually gives a
+    translation nearby, so the original is kept.
 
-    题记分两列排，一项只有一两个词，单独认不准。同一页上字号、颜色相同、挨在一起的块
-    合起来认，整组是外文就整组留原文；正文里夹着的一段外文按自己认。
-    字母不够、置信度不够的不算，正文语言认不出来时不做判断。
+    Epigraphs are set in two columns with one or two words per item, too little to detect alone. Adjacent
+    blocks on the same page with the same size and color are detected together, and if the group is foreign
+    the whole group keeps the original; a foreign passage within body text is detected on its own. Too few
+    letters or too low a confidence does not count, and nothing is decided when the document language
+    cannot be detected.
     """
     doc_lang = langdetect.detect_document([block.text for block in blocks])
     if not doc_lang:
@@ -520,7 +547,9 @@ def _foreign_ids(blocks: list[TextBlock]) -> set[int]:
     cjk_doc = doc_lang.split("-")[0] in ("zh", "ja", "ko")
 
     def foreign(text: str) -> bool:
-        # 一个汉字顶好几个字母：西文书里十来个字、不夹西文的一句中文（题词的原句）字母数不够也认得出
+        # One Han character carries as much as several letters: a Chinese sentence of ten or so characters
+        # without Latin letters in a Western book (the original of an epigraph) is detected despite the
+        # letter count
         if not cjk_doc and len(CJK_RE.findall(text)) >= _FOREIGN_CJK and not re.search(r"[A-Za-z]", text):
             return True
         lang = langdetect.detect(text, min_letters=_FOREIGN_LETTERS)
@@ -557,7 +586,8 @@ def _foreign_ids(blocks: list[TextBlock]) -> set[int]:
 
 
 def _han_line(block: TextBlock) -> bool:
-    """块的第一行是一句中文：八个以上汉字，不夹西文字母、假名、谚文。下面可以跟着拼音"""
+    """The first line of the block is a Chinese sentence: eight or more Han characters, with no Latin letters,
+    kana or hangul. Pinyin may follow below"""
     first = "".join(str(span.get("text") or "") for span in block.span_lines[0]) if block.span_lines else block.text
     return (
         len(_HAN_RE.findall(first)) >= _FOREIGN_CJK
@@ -567,9 +597,11 @@ def _han_line(block: TextBlock) -> bool:
 
 
 def _rendering_ids(blocks: list[TextBlock], found: set[int]) -> set[int]:
-    """中文原句（见 _han_line）旁边作者给的西文译文：同一行右边起笔的（题词 荃者所以在鱼 | Nets are for fish;），
-    或者紧贴在下面、左缘对齐的（例句框里汉字、拼音下面的 In my backyard, …），连同下面左缘对齐的续行。
-    原句就在旁边，再译回中文没有意义，留原文。"""
+    """The author's Western translation next to an original Chinese sentence (see _han_line): starting right of
+    it on the same line (the epigraph 荃者所以在鱼 | Nets are for fish;), or right below it with the same left
+    edge (In my backyard, ... below the characters and pinyin in an example box), together with left-aligned
+    continuation lines below. The original is right there, so translating back into Chinese is pointless and
+    the original is kept."""
     sources = [block for block in blocks if _han_line(block)]
     out: set[int] = set()
     for source in sources:
@@ -584,7 +616,7 @@ def _rendering_ids(blocks: list[TextBlock], found: set[int]) -> set[int]:
             below = 0 <= r.y0 - s.y1 + 1 <= source.size * 0.5 and abs(r.x0 - s.x0) <= source.size
             if beside or below:
                 out.add(id(block))
-    # 续行：紧贴在下面、左缘对齐、同字号
+    # Continuation lines: right below, same left edge, same size
     grown = True
     while grown:
         grown = False
@@ -606,15 +638,17 @@ def _rendering_ids(blocks: list[TextBlock], found: set[int]) -> set[int]:
 
 
 def _latin_chars(text: str) -> int:
-    """数等宽字时只数拉丁字母和数字。汉字、假名和全角标点也带等宽标志，不计数。"""
+    """Count only Latin letters and digits when counting monospaced characters. Han characters, kana and
+    full-width punctuation also carry the monospace flag and are not counted."""
     return sum(1 for ch in text if ch.isalnum() and not CJK_RE.match(ch))
 
 
 def _code_panel_ids(blocks: list[TextBlock], scans: list[PageScan]) -> set[int]:
-    """一片底色上的字八成以上是等宽字：程序、码位表、命令行输出。整片留原字。
+    """At least 80% of the text on a shaded area is monospaced: program code, code point tables, command output.
+    The whole area keeps the original text.
 
-    按整片算：片里夹着的注释行、行号单独看不够八成，跟着整片留原字。
-    底色上还有不少正文字体的不受影响。
+    Counted over the whole area: comment lines and line numbers inside it fall short of 80% on their own and
+    keep the original along with the area. Shaded areas with much text in the body font are not affected.
     """
     by_page: dict[int, list[TextBlock]] = {}
     for block in blocks:
@@ -635,14 +669,18 @@ def _code_panel_ids(blocks: list[TextBlock], scans: list[PageScan]) -> set[int]:
     return found
 
 
-# 大号字体里正文行内也用的字形：宽帽子、宽波浪（b–g），最小的两号根号（p、q）。
-# 伸长括号、求和积分号才说明是单独排的式子。文中号的求和号也算：单独排的分式里分母用的就是它
+# Glyphs of the big-delimiter font that also appear inline: wide hats and tildes (b-g) and the two smallest
+# radicals (p, q). Only extended brackets and summation or integral signs show a display formula. The
+# text-size summation sign counts too: the denominator of a displayed fraction uses it
 _BIG_GLYPH_RE = re.compile(r"[^\sb-gpq]")
-# 公式外的词数到这个数就是成段的句子。行内积分号也用这种字体，右栏、列表续行又都离开版心左缘
+# With this many words outside formulas the block is a paragraph. Inline integral signs use the same font, and
+# right columns and list continuation lines also start away from the left edge of the text frame
 _DISPLAY_FORMULA_MAX_WORDS = 24
-# 块的面积有这么多落在公式检测模型的行间公式框里，才算行间公式（同版面模型的 _COVER）
+# Share of a block's area that must fall in a display formula box of the formula detection model for the block
+# to count as a display formula (like _COVER for the layout model)
 _ISOLATED_COVER = 0.6
-# 冠词、系动词、介词、连词、代词这类虚词。行间公式框里有这么多个虚词的是说明句
+# Function words: articles, copulas, prepositions, conjunctions, pronouns. A display formula box with this many
+# of them holds an explanatory sentence
 _FUNCTION_WORDS = frozenset(
     """
 a an the is are was were be been being am do does did has have had can could will would shall should may might must
@@ -659,16 +697,18 @@ def _function_words(text: str) -> int:
 
 
 def _display_formula_ids(blocks: list[TextBlock], geometries: list[PageGeometry]) -> set[int]:
-    """用正文字体排的行间公式：分段函数的大括号把几行式子并成一组，式子里的
-    min、ins-cost(target[j]) 看起来像词，按词数认不出来。带伸长定界符、又不从版心左缘
-    起笔的块是公式；落在它框里的块（大括号右边的条件行）也是。"""
+    """Display formulas set in the body font: the brace of a piecewise function groups several lines, and
+    min or ins-cost(target[j]) in them look like words, so word counts miss them. A block with an extended
+    delimiter that does not start at the left edge of the text frame is a formula, and so are blocks inside
+    its box (the condition lines right of the brace)."""
     found: list[TextBlock] = []
     for block in blocks:
         geo = geometries[block.page] if block.page < len(geometries) else None
         frame = geo.frame if geo is not None else None
         if frame is None:
             continue
-        # 居中排的宽式子左边只空出一点，和右边空的一样多；成段的正文写到右缘
+        # A wide centered formula leaves only a little space on the left, as much as on the right; a paragraph
+        # runs to the right edge
         left, right = block.rect.x0 - frame.x0, frame.x1 - block.rect.x1
         centered = left > block.size and abs(left - right) <= block.size
         if left <= block.size * 2 and not centered:
@@ -703,13 +743,16 @@ def _isolated_formula_ids(
     formulas: FormulaDetector | None,
     roles: Sequence[Role] | None = None,
 ) -> set[int]:
-    """公式检测模型框成行间公式的块留原文：块的面积大半落在框里。Word 排的行间公式用正文字体，
-    按字体认不出来，没有伸长的定界符时 _display_formula_ids 也认不到。
+    """Blocks that the formula detection model boxes as display formulas keep the original text: most of the
+    block's area falls in the box. Display formulas typeset in Word use the body font, so fonts do not reveal
+    them, and without extended delimiters _display_formula_ids misses them too.
 
-    框里成句的说明照翻（(where c is the correct class)、L(ŷ, y) = How much ŷ differs from the true y）。
-    成不成句看虚词，不看正文词数：式子里的词是实词和变量名（perplexity_A(T) = P_A(red red red red blue)），
-    数正文词会把它当成句子，译成「困惑度 = P(红红红红蓝)」。
-    标题、图注不算：幻灯片上的大字标题（Phoenix + Calcite）模型也常框成行间公式。"""
+    Sentences explaining something inside the box are translated ((where c is the correct class),
+    L(ŷ, y) = How much ŷ differs from the true y). Whether text is a sentence is decided by function words,
+    not by the word count: the words of a formula are content words and variable names
+    (perplexity_A(T) = P_A(red red red red blue)), and counting words would take it for a sentence and
+    translate it as "困惑度 = P(红红红红蓝)". Headings and captions do not count: the model often boxes large
+    slide titles (Phoenix + Calcite) as display formulas."""
     if formulas is None:
         return set()
     ids: set[int] = set()
@@ -737,30 +780,32 @@ def _in_gloss(rect: pymupdf.Rect, glosses: tuple[pymupdf.Rect, ...]) -> bool:
 
 
 def _gloss_ids(blocks: list[TextBlock], glosses: dict[int, tuple[pymupdf.Rect, ...]]) -> set[int]:
-    """落在逐词对译两行里的块。"""
+    """Blocks inside the two lines of an interlinear gloss."""
     return {id(block) for block in blocks if _in_gloss(block.rect, glosses.get(block.page, ()))}
 
 
 _BIBLIO_CITE_RE = re.compile(r"\((?:19|20)\d{2}\)|et al\.|doi:|https?://", re.I)
-# 行尾 “, 2016.” 在正文里太常见。确认进入时必须同时是编号条目，或带 arXiv/CoRR/doi。
+# A line ending in “, 2016.” is too common in body text. To enter the bibliography the line must also be a
+# numbered entry or contain arXiv/CoRR/doi.
 _BIBLIO_YEAR_END_RE = re.compile(r",\s*(?:19|20)\d{2}\s*[.]?\s*$")
-# 老数据库论文收在页码：ICDE 1995, 190-200. / VLDB 2000: 496-505。同样只认编号条目。
+# Older database papers end with page numbers: ICDE 1995, 190-200. / VLDB 2000: 496-505. Numbered entries only.
 _BIBLIO_PAGES_END_RE = re.compile(r"(?:19|20)\d{2}\s*[,:]\s*(?:pp?\.\s*)?\d+\s*[-–]\s*\d+\s*[.]?\s*$")
 _BIBLIO_TRAIL_YEAR_RE = re.compile(r"(?:19|20)\d{2}\s*[.]?\s*$|年版\s*[.。]?\s*$")
 _BIBLIO_YEAR_RE = re.compile(r"(?:19|20)\d{2}")
-# 卷期续行：2020, 3(2) / Vol. 3 / Volume 3 / pp. 1-10 / 第3期。
-# Volume 后面必须是阿拉伯数字，避免 “volume were”。
+# Volume and issue continuation lines: 2020, 3(2) / Vol. 3 / Volume 3 / pp. 1-10 / 第3期.
+# Volume must be followed by an Arabic numeral, to exclude “volume were”.
 _BIBLIO_VOLUME_RE = re.compile(
     r"^(?:19|20)\d{2}\s*[,，(（]\s*(?:[\d(（]|[Vv]ol\.?\s*\d|[Vv]olume\.?\s*\d|[Nn]o\.?(?:\s|\d)|[Pp]p?\.?(?:\s|\d)|第)"
 )
-# 只认缩写 Vol. 后的罗马数字。不含 M/D，否则 mix / mill 会当成卷号。
+# Roman numerals only after the abbreviation Vol. M and D are excluded, or mix / mill would be taken for volumes.
 _ROMAN_VOL_RE = re.compile(
     r"(?=[IVXLC])C{0,3}(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})(?![A-Za-z])",
     re.I,
 )
 _BIBLIO_VOL_LABEL_RE = re.compile(r"^(?:19|20)\d{2}\s*[,，(（]\s*[Vv]ol\.?\s*")
-# 同字号退出用。数字后要是期号、页码或行尾；No/pp 后要是数字；「第」后要是「期」。
-# 行首只是年份的下一章（2020, 1. Introduction / 第1章）不能靠这条留下。
+# Used when deciding exit at the same size. A number must be followed by an issue, pages or the line end; No/pp
+# by a number; "第" by "期". The next chapter starting with just a year (2020, 1. Introduction / 第1章) must not
+# be kept by this rule.
 _BIBLIO_EXIT_VOLUME_RE = re.compile(
     r"^(?:19|20)\d{2}\s*[,，(（]\s*(?:"
     r"\d+\s*(?:[（(]|[:：]\s*\d|[,，]\s*\d|[.。]?\s*$)"
@@ -769,30 +814,33 @@ _BIBLIO_EXIT_VOLUME_RE = re.compile(
     r"|第\s*\d+\s*期"
     r")"
 )
-# 出版社行可以收在 2019。 / 2019年。 / 年版。出版社后面还有字的是正文。
+# A publisher line may end with 2019。 / 2019年。 / 年版。 Text continuing after the publisher is body text.
 _BIBLIO_IMPRINT_END_RE = re.compile(r"(?:(?:19|20)\d{2}年?|年版)\s*[.。]?\s*$")
 _BIBLIO_MARK_RE = re.compile(r"\barXiv\b|\bCoRR\b|doi:|https?://", re.I)
-# 题名后的著录位置才算，如 研究[J]. 刊名。句末单独的 [M]。 是正文，不是引文。
+# Only the position after a title counts, as in 研究[J]. 刊名. A lone [M]。 at a sentence end is body text.
 _BIBLIO_TYPE_MARK_RE = re.compile(r"(?<=\S)\[[JMDCNRP]\]\s*[.。]\s*\S")
-# [1]张三 中间常没有空格。1. 仍要空格，避免把 1.2 当成编号。
-# 老论文常用作者缩写加年份的标签：[CS94]、[GBLP95]、[TPCD]。点阵字 OCR 常把开头的 [ 认丢，只剩 ESS]。
+# [1]张三 often has no space in between. 1. still needs a space so that 1.2 is not taken for a number.
+# Older papers use labels of author initials and year: [CS94], [GBLP95], [TPCD]. OCR of bitmap fonts often
+# loses the opening [, leaving ESS].
 _BIBLIO_LEAD_RE = re.compile(r"^(?:\[\d+\]\s*|\d{1,3}[.)]\s+|\[?[A-Z][A-Za-z]{0,8}\+?\d{0,4}[a-z]?\](?:\s+|$))")
 _BIBLIO_WRAP_RE = re.compile(r"^[a-zà-öø-ÿ]")
-# 弱信号：只有编号条目才算。“这项研究发表于某出版社。”是正文。
+# Weak signal: counts only for numbered entries. “这项研究发表于某出版社。” is body text.
 _BIBLIO_CN_PUB_RE = re.compile(r"出版社|年版")
-# 一串作者名：Y. Bai, A. Jones, K. Ndousse, …；Alan Akbik, Duncan Blythe, and Roland Vollgraf.
-# 标题和正文不会以连着两三个「名, 名,」起头
+# A list of author names: Y. Bai, A. Jones, K. Ndousse, ...; Alan Akbik, Duncan Blythe, and Roland Vollgraf.
+# Headings and body text do not start with two or three "name, name," in a row
 _AUTHOR_NAME = r"(?:(?:[A-Z]\.[\s-]?){1,3}[A-Z][\w'’-]+|[A-Z][a-z][\w'’-]*(?:\s(?:[A-Z]\.|[A-Z][\w'’-]+)){1,3})"
 _AUTHOR_LIST_RE = re.compile(rf"^{_AUTHOR_NAME}(?:,\s+(?:and\s+)?{_AUTHOR_NAME}){{2,}}(?:,|\.|$)")
-# 一行只有作者名：逗号隔开的两个以上名字，每个至少两个词（名、中间名缩写可以不带点、van der 这类小写前缀），
-# 最后一个折行时只剩名（前面至少两个完整的名字）。老字体把重音拆成单独的符号（S´ebastien）
+# A line of author names only: two or more comma-separated names of at least two words each (middle initials
+# may lack the period, lowercase particles such as van der are allowed); when the line wraps, the last may be
+# only a first name (after at least two full names). Old fonts set accents as separate glyphs (S´ebastien)
 _NAME_WORD = r"[A-Z][\w´`¨˜ˆ'’.-]*"
 _FULL_NAME = rf"{_NAME_WORD}(?:\s+(?:(?:van|von|der|den|de|da|di|du|del|la|le)\s+)*{_NAME_WORD})+"
 _NAMES_LINE_RE = re.compile(
     rf"^{_FULL_NAME}(?:,\s+(?:and\s+)?{_FULL_NAME})*,\s+(?:and\s+)?{_FULL_NAME}[,.]?$"
     rf"|^{_FULL_NAME}(?:,\s+(?:and\s+)?{_FULL_NAME})+,\s+(?:and\s+)?{_NAME_WORD}[,.]?$"
 )
-# ACL 体：作者. 2018. 题名. In Proceedings …, pages 1–10. 年份在作者后面单独一句，后面是出处
+# ACL style: Authors. 2018. Title. In Proceedings ..., pages 1–10. The year is a sentence of its own after the
+# authors and is followed by the venue
 _BIBLIO_ACL_YEAR_RE = re.compile(r"(?:^|\.\s)(?:19|20)\d{2}[a-z]?\.\s+\S")
 _BIBLIO_VENUE_RE = re.compile(r"\bIn\s+(?:Proc|[A-Z]{2,})|\bpages\s+\d+\s*[–-]\s*\d+|\bJournal\b")
 
@@ -806,10 +854,11 @@ def _biblio_heading_like(block: TextBlock, text: str, median: float) -> bool:
 
 
 def _biblio_entry_citation(text: str) -> bool:
-    """标题后面这行像引文，才进入参考文献。正文里的 2017 / arXiv / 出版社 / [J] 不算。"""
+    """The bibliography is entered only when the line after the heading looks like a citation. 2017 / arXiv /
+    出版社 / [J] in body text do not count."""
     if _BIBLIO_CITE_RE.search(text) or _author_entry(text):
         return True
-    # 类型标记 + 年份才是著录条目；“出处见某书[M]。后续还有讨论。”是正文
+    # A type mark plus a year makes an entry; “出处见某书[M]。后续还有讨论。” is body text
     if _BIBLIO_TYPE_MARK_RE.search(text) and _BIBLIO_YEAR_RE.search(text):
         return True
     lead = bool(_BIBLIO_LEAD_RE.match(text))
@@ -820,15 +869,16 @@ def _biblio_entry_citation(text: str) -> bool:
 
 
 def _author_entry(text: str) -> bool:
-    """一串作者名起头，或者 ACL 体的「作者. 年份. 题名. In 出处」。参考文献的字号常比正文大一点，
-    作者那一行按字号像标题，要靠这个认出来。"""
+    """Starts with a list of author names, or follows the ACL style "Authors. Year. Title. In Venue". The
+    bibliography is often set a little larger than the body text, and by size the author line looks like a
+    heading, so this is how it is recognized."""
     if _AUTHOR_LIST_RE.match(text):
         return True
     return bool(_BIBLIO_ACL_YEAR_RE.search(text) and _BIBLIO_VENUE_RE.search(text))
 
 
 def _vol_roman_continuation(text: str) -> bool:
-    """Vol. III / vol. xii 是卷号。单词 mix / mill 不是。"""
+    """Vol. III / vol. xii are volume numbers. The words mix / mill are not."""
     head = _BIBLIO_VOL_LABEL_RE.match(text)
     if head is None:
         return False
@@ -836,32 +886,34 @@ def _vol_roman_continuation(text: str) -> bool:
 
 
 def _biblio_exit_continuation(text: str) -> bool:
-    """同字号时仍算引文续行。行首像年份的下一章不算。"""
+    """Still a citation continuation at the same size. The next chapter with a year-like start is not."""
     if _BIBLIO_EXIT_VOLUME_RE.match(text) or _vol_roman_continuation(text):
         return True
     return bool(_BIBLIO_CN_PUB_RE.search(text) and _BIBLIO_IMPRINT_END_RE.search(text))
 
 
 def _biblio_year_continuation(text: str) -> bool:
-    """类型标记的下一块仍是著录。后来随便出现的年份不算。"""
+    """The block after a type mark is still part of the entry. A year appearing later does not count."""
     if _BIBLIO_VOLUME_RE.match(text) or _vol_roman_continuation(text):
         return True
-    # 出版社行以年份或「年版」收尾。正文提到出版社后还有下文的不算。
+    # A publisher line ends with a year or "年版". Body text mentioning a publisher and continuing does not count.
     return bool(_BIBLIO_CN_PUB_RE.search(text) and _BIBLIO_IMPRINT_END_RE.search(text))
 
 
 def _biblio_citation_line(block: TextBlock, text: str, start_size: float, median: float) -> bool:
-    """已经在参考文献里：这行是引文或换行前的条目，不能当成下一章。"""
+    """Already in the bibliography: the line is a citation or part of a wrapped entry and must not be taken for
+    the next chapter."""
     if _BIBLIO_CITE_RE.search(text) or _BIBLIO_MARK_RE.search(text) or _author_entry(text):
         return True
     heading = _biblio_heading_like(block, text, median)
     short_heading = heading and len(text) < 40
-    # 比起始标题更大，或同字号短标题，仍是下一章。超过 80 字的加粗行先让给出类型标记和行尾年份。
+    # Larger than the starting heading, or a short heading at the same size, is still the next chapter. Bold lines
+    # over 80 characters are first checked for a type mark and a trailing year.
     if block.size > start_size + 0.5 or short_heading or (block.bold and heading):
         return False
     if _BIBLIO_TYPE_MARK_RE.search(text) or _BIBLIO_TRAIL_YEAR_RE.search(text):
         return True
-    # 真正的卷期、出版社续行和标题同字号也不是下一章。
+    # Real volume, issue and publisher continuation lines at the heading's size are not the next chapter either.
     if _biblio_exit_continuation(text):
         return True
     if not _BIBLIO_LEAD_RE.match(text):
@@ -870,20 +922,23 @@ def _biblio_citation_line(block: TextBlock, text: str, start_size: float, median
 
 
 def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
-    """标记参考文献章节的块。标题本身不跳过，章节正文保留原文。
+    """Mark the blocks of bibliography sections. The heading itself is not skipped; the section body keeps the
+    original text.
 
-    页眉和目录里的同名短行不能把进入字号改小；同等字号的引文也不是下一章标题。
+    Short lines with the same name in running headers and the table of contents must not lower the entry size;
+    a citation at the same size is not the next chapter heading either.
     """
     from .html_blocks import BIBLIO_HEADING_RE, BIBLIO_SHORT_LABEL_RE, BIBLIO_SUBHEADING_RE
 
     if not blocks:
         return []
-    # 按字数取中位：按块数取时，正文接上续行少了几块，中位就掉到小字号上，参考文献的标题认不出来
+    # Median weighted by characters: counted per block, joining continuation lines leaves fewer body blocks, the
+    # median drops to a small size and the bibliography heading is missed
     median = median_all = _median_size(blocks)
     prepared = [(b, re.sub(r"\s+", " ", b.text).strip()) for b in blocks]
 
     def smaller_subsection(block: TextBlock, text: str, origin: float) -> bool:
-        # 同字号或更大的 Books / 论文是下一章，不能当成内部小标题。
+        # Books / 论文 at the same size or larger is the next chapter, not a subheading inside.
         if len(text) >= 40 or block.size + 0.4 >= origin:
             return False
         if BIBLIO_SUBHEADING_RE.match(text):
@@ -894,20 +949,22 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
         origin = prepared[idx][0].size
         pending_lead = False
         pending_type = False
-        # 作者-年份体的条目不带编号和括号年份（Abadi, M., A. Agarwal, … 2001.），连着几条才算
+        # Author-year entries have no number and no year in parentheses (Abadi, M., A. Agarwal, ... 2001.); only
+        # several in a row count
         author_leads = 0
         for block, text in prepared[idx + 1 : idx + 16]:
-            # Endnotes / 参考文献是另一节的标题，必须停住，不能把进入字号抬高
+            # Endnotes / 参考文献 is the heading of another section: stop here and do not raise the entry size
             if len(text) < 40 and BIBLIO_HEADING_RE.match(text):
                 return False
             if smaller_subsection(block, text, origin):
                 pending_lead = False
                 pending_type = False
                 continue
-            # 像标题的行即使含 [J] 或年份也不是引文，先停住
+            # A heading-like line is not a citation even with [J] or a year; stop
             if _biblio_heading_like(block, text, median) and len(text) < 80:
                 return False
-            # 编号和出版社、类型标记和年份，都常被拆成相邻两块。只看下一块。
+            # A number and the publisher, or a type mark and the year, are often split into adjacent blocks. Only
+            # the next block is checked.
             if (
                 _biblio_entry_citation(text)
                 or (pending_lead and _BIBLIO_CN_PUB_RE.search(text))
@@ -930,35 +987,39 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
         entry_size: float,
         prev_text: str,
     ) -> bool:
-        # 像不像标题按条目的字号比：有的参考文献整体比正文大一号，按全文的中位字号，条目也像标题
+        # Heading-likeness is judged against the entry size: some bibliographies are one size larger than the
+        # body text, and against the document median the entries would look like headings
         median = max(median_all, entry_size)
         if not text or len(text) > 120 or smaller_subsection(block, text, start_size):
             return False
-        # 悬挂缩进里单独成行的编号 [ESS]、[12] 是条目的标签，不是下一章
+        # A number on its own line in a hanging indent, [ESS] or [12], is an entry label, not the next chapter
         if _BIBLIO_LEAD_RE.fullmatch(text + " "):
             return False
-        # 句中标点起头的、没有空格的一整串网址，是上一条折过来的半截
-        # （https: 后面折行，下一行是 //github.com/…；…-Abstract-Datasets_and_Benchmarks_Track.html.）
+        # A line starting with mid-sentence punctuation, or a URL without spaces, is the wrapped rest of the
+        # previous entry (wrapped after https:, the next line is //github.com/...;
+        # ...-Abstract-Datasets_and_Benchmarks_Track.html.)
         if text[:1] in "/.,;:)]}-–_" or (" " not in text and re.search(r"[/_]|\.[A-Za-z]{2,}\.?$", text)):
             return False
         if block.size + 0.5 < start_size * 0.8:
             return False
         if _biblio_citation_line(block, text, start_size, median):
             return False
-        # 引文里单独一行 Journal 不是下一章
+        # Journal alone on a line in a citation is not the next chapter
         if len(text) < 40 and BIBLIO_SHORT_LABEL_RE.match(text) and not _biblio_heading_like(block, text, median):
             return False
-        # 编号条目的换行续行以小写字母开头，不是下一章。
-        # 句号收尾的短行（Databases. White Paper.）也是条目断开的一截：点阵字 OCR 后字号都统一了，靠字号分不开
+        # A wrapped line of a numbered entry starts lowercase and is not the next chapter.
+        # A short line ending with a period (Databases. White Paper.) is also part of a broken entry: after OCR of
+        # bitmap fonts all sizes are the same, so size cannot tell them apart
         if prev_numbered and (_BIBLIO_WRAP_RE.match(text) or text.endswith(".")):
             return False
         if _biblio_heading_like(block, text, median):
             return True
-        # 加粗长标题（heading_like 的加粗分支有 80 字上限）
+        # Long bold headings (the bold branch of heading_like has an 80-character limit)
         if block.bold and block.size + 0.4 >= median:
             return True
-        # 条目首行折断时只剩一串作者名（Ahmed M. Alaa, Zaid Ahmad, and Mark van der Laan.），
-        # 接在作者名后面的短行是题名（API is enough: Conformal prediction for large lan-），都不是下一章
+        # When the first line of an entry wraps, it may hold only author names (Ahmed M. Alaa, Zaid Ahmad, and Mark
+        # van der Laan.), and a short line after the names is the title (API is enough: Conformal prediction for
+        # large lan-); neither is the next chapter
         names = _NAMES_LINE_RE.match(text) or _NAMES_LINE_RE.match(prev_text)
         return len(text) < 60 and block.size >= start_size - 0.5 and not names
 
@@ -966,7 +1027,7 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
     in_biblio = False
     start_size = 0.0
     prev_numbered = False
-    # 已经认进参考文献的条目字号
+    # Sizes of the entries already taken into the bibliography
     entry_sizes: list[float] = []
     for i, (block, text) in enumerate(prepared):
         title = len(text) < 40 and bool(BIBLIO_HEADING_RE.match(text))
@@ -979,7 +1040,8 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
             else:
                 skips.append(True)
             continue
-        # 标题比正文小的排法（ICASSP 整节参考文献都小一号）：加粗、不比下面几条引文小，也是这一节的标题
+        # Layouts where the heading is smaller than the body text (ICASSP sets the whole bibliography one size
+        # smaller): a bold line no smaller than the citations below is also the section heading
         following = sorted(b.size for b, _t in prepared[i + 1 : i + 6]) or [block.size]
         if (
             title
@@ -1014,7 +1076,7 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
         elif _BIBLIO_WRAP_RE.match(text):
             pass
         elif len(text) < 40 and BIBLIO_SHORT_LABEL_RE.match(text) and not _biblio_heading_like(block, text, median):
-            pass  # 引文单词不是标题，编号条目的续行还没结束
+            pass  # a single word in a citation is not a heading; the numbered entry continues
         else:
             prev_numbered = False
     for index in _headless_bibliography(prepared) | _headless_numbered_bibliography(prepared, median):
@@ -1022,23 +1084,25 @@ def biblio_skips(blocks: list[TextBlock]) -> list[bool]:
     return skips
 
 
-# 作者-年份体的著录条目开头：Ahia, O.,  /  Arkadiev, P. M. 2020.  /  Clark, H. H. and  /  Smith, J. (2020)
+# Start of an author-year entry: Ahia, O.,  /  Arkadiev, P. M. 2020.  /  Clark, H. H. and  /  Smith, J. (2020)
 _AUTHOR_LEAD_RE = re.compile(
     r"^[A-Z][^\s,.;:()]{1,30}(?:[\s-][A-Za-z][^\s,.;:()]{1,30}){0,3},\s"
     r"(?:[A-Z]\.(?:\s?-?[A-Z]\.)*|[A-Z][a-z]+)"
     r"(?:,|\s(?:and|&)\s|\s\(?(?:19|20)\d{2})"
 )
-_AUTHOR_LEADS_TO_ENTER = 2  # 参考文献标题后面至少几块以作者-年份条目起头
-_ENTRY_WINDOW = 8  # 往后看几块
-_ENTRY_LEADS = 4  # 其中至少几块是条目开头
-_ENTRY_GAP = 4  # 连续这么多块没有新条目，参考文献就结束了
+_AUTHOR_LEADS_TO_ENTER = 2  # minimum blocks after a bibliography heading that start like author-year entries
+_ENTRY_WINDOW = 8  # number of blocks looked ahead
+_ENTRY_LEADS = 4  # minimum entry starts among them
+_ENTRY_GAP = 4  # the bibliography ends after this many blocks without a new entry
 
 
 def _headless_bibliography(prepared: list[tuple[TextBlock, str]]) -> set[int]:
-    """没有标题的参考文献：书的章末常紧接着习题排，不写 References。
+    """A bibliography without a heading: books often set it right after the exercises at a chapter end, without
+    References.
 
-    一连串同字号、以「姓, 名缩写.」起头的条目就是。正文里偶尔有一句这样开头，凑不够数。
-    中间夹着的页眉、条目断开的续行一并算进去。字号明显变大的块是下一节，到此为止。
+    It is a run of entries in the same size starting with "Surname, Initials.". A body sentence occasionally
+    starts this way but never adds up to enough. Running headers and wrapped lines of entries in between are
+    included. A block clearly larger is the next section and ends it.
     """
     leads = [bool(_AUTHOR_LEAD_RE.match(text)) for _, text in prepared]
     found: set[int] = set()
@@ -1046,7 +1110,8 @@ def _headless_bibliography(prepared: list[tuple[TextBlock, str]]) -> set[int]:
     while index < len(prepared):
         size = prepared[index][0].size
 
-        # 条目都是同一个字号。正文里这样开头的一句话字号不同，不和后面的条目凑数
+        # All entries share one size. A body sentence starting this way has a different size and is not counted
+        # with the entries after it
         def entry(at: int) -> bool:
             return leads[at] and abs(prepared[at][0].size - size) <= 0.5
 
@@ -1061,7 +1126,7 @@ def _headless_bibliography(prepared: list[tuple[TextBlock, str]]) -> set[int]:
                 last = cursor
             cursor += 1
         end = last + 1
-        # 最后一条的续行：字号不变大
+        # Continuation lines of the last entry: no larger in size
         while end < cursor and prepared[end][0].size <= size + 0.5 and not leads[end]:
             end += 1
         found.update(range(index, end))
@@ -1069,15 +1134,17 @@ def _headless_bibliography(prepared: list[tuple[TextBlock, str]]) -> set[int]:
     return found
 
 
-# 编号条目的开头：[12] A. Buonanno。上一条的续行和下一条挤在一块里时，编号跟在句点后面
+# Start of a numbered entry: [12] A. Buonanno. When the end of the previous entry and the next entry share a
+# block, the number follows a period
 _NUMBERED_LEAD_RE = re.compile(r"(?:^|[.)]\s)\[(\d{1,3})\]\s+\S")
 
 
 def _headless_numbered_bibliography(prepared: list[tuple[TextBlock, str]], median: float) -> set[int]:
-    """没有标题的编号参考文献（revtex 的期刊版式不印 References）：从 [1] 起头的块开始，
-    往后几块里编号挨着排到 [4] 以上就是。编号连不上、隔了几块没有新条目、字号变大，
-    或者碰到标题（SUPPLEMENTAL MATERIAL、另一栏的 Appendix F），到此为止。
-    标题后面以下一个编号起头的块是另一栏接着排的条目，从那里接着认。
+    """A numbered bibliography without a heading (revtex journal layouts do not print References): starting
+    from a block that begins with [1], consecutive numbers reaching [4] or more within the next few blocks.
+    It ends where the numbers break, several blocks pass without a new entry, the size grows, or a heading
+    appears (SUPPLEMENTAL MATERIAL, Appendix F in another column). A block after the heading starting with
+    the next number continues the entries in another column, and detection resumes there.
     """
     numbers = [[int(n) for n in _NUMBERED_LEAD_RE.findall(text)] for _, text in prepared]
 
@@ -1107,7 +1174,7 @@ def _headless_numbered_bibliography(prepared: list[tuple[TextBlock, str]], media
             index += 1
             continue
         end = last + 1
-        # 最后一条的续行：不再有编号
+        # Continuation lines of the last entry: no more numbers
         while end < cursor and not numbers[end]:
             end += 1
         found.update(range(index, end))
