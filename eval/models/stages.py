@@ -1,4 +1,5 @@
-"""翻译前各阶段耗时，外加主线程的 cProfile。用法: stages.py <代码目录> <onnx|-> <pdf> <prof 输出>"""
+"""Time of each stage before translation, plus a cProfile of the main thread.
+Usage: stages.py <code dir> <onnx|-> <pdf> <prof output>"""
 
 import cProfile
 import sys

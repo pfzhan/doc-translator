@@ -1,6 +1,7 @@
-"""从 LaTeX 源码取段落边界，作标准答案。用法: gold.py <论文目录> <输出 json>
-只把源码当文本读。段落在空行、\\par、章节命令、块级环境、\\item 处断开；
-段内的行间公式算「不计」的边界（公式两边拆不拆都行）。"""
+"""Take paragraph boundaries from the LaTeX source as the gold standard. Usage: gold.py <paper dir> <output json>
+The source is read as text only. Paragraphs break at blank lines, \\par, sectioning commands, block environments
+and \\item; a display formula inside a paragraph is an ignored boundary (splitting or not at the formula are both
+accepted)."""
 
 import json
 import re
@@ -17,8 +18,9 @@ def read(path: Path) -> str:
 
 
 def strip_comments(text: str) -> str:
-    # % 连行尾一起吃掉，下一行的行首空白也忽略：只有注释的一行不会变成空行（段落分隔）。
-    # 下一行本来就是空行时照旧分段
+    # % consumes the line end too, and leading whitespace of the next line is ignored, so a line holding only a
+    # comment does not become a blank line (a paragraph break). When the next line is blank, the paragraph still
+    # breaks
     text = re.sub(r"(?<!\\)%.*\n(?![ \t]*\n)[ \t]*", "", text)
     return re.sub(r"(?<!\\)%.*", "", text)
 
@@ -47,9 +49,10 @@ if not mains:
 main = max(mains, key=lambda p: len(read(p)))
 text = expand(main)
 body = text.split("\\begin{document}", 1)[1].split("\\end{document}", 1)[0]
-# 源码里的空行是段落分隔，记成 \x02。后面去掉命令、公式剩下的空白行不算分段，插进去的断点也用 \x02
+# Blank lines in the source separate paragraphs and are recorded as \x02. Blank lines left after removing commands
+# and formulas do not break paragraphs; inserted breaks also use \x02
 body = re.sub(r"\n[ \t]*(?:\n[ \t]*)+", "\n\x02\n", body)
-# 自定义的行间公式宏（\be ... \ee、\beq ... \eeq）换回环境
+# Custom display formula macros (\be ... \ee, \beq ... \eeq) are turned back into environments
 for name, env in re.findall(
     r"\\(?:re)?newcommand\*?\s*\{?\\(\w+)\}?\s*(?:\[\d\])?\s*\{\s*\\begin\{(\w+\*?)\}\s*\}", text
 ) + re.findall(r"\\def\\(\w+)\s*\{\s*\\begin\{(\w+\*?)\}\s*\}", text):
@@ -58,27 +61,29 @@ for name, env in re.findall(
     r"\\(?:re)?newcommand\*?\s*\{?\\(\w+)\}?\s*(?:\[\d\])?\s*\{\s*\\end\{(\w+\*?)\}\s*\}", text
 ) + re.findall(r"\\def\\(\w+)\s*\{\s*\\end\{(\w+\*?)\}\s*\}", text):
     body = re.sub(r"\\" + name + r"(?![a-zA-Z])", lambda m: "\\end{" + env + "}", body)
-# 参考文献、附录之后的部分常是表格和长列表，到参考文献为止
+# What follows the bibliography and appendices is often tables and long lists; stop at the bibliography
 body = re.split(r"\\bibliography\{|\\begin\{thebibliography\}|\\printbibliography", body)[0]
 
-# 浮动体夹在段落中间不断段，段落照旧看两边有没有空行。名字带 figure、table 的自定义环境也算
+# A float inside a paragraph does not break it; the paragraph still breaks only on blank lines around it. Custom
+# environments with figure or table in their names count too
 FLOATS = r"\w*figure\*?|\w*table\*?|algorithm\*?|algorithmic|tabular\*?|tikzpicture|lstlisting|verbatim|minted|wrapfigure|subfigure|thebibliography|keywords|IEEEkeywords|CCSXML|acks|acknowledgements|acknowledgments"
 body = re.sub(r"\\begin\{(" + FLOATS + r")\}.*?\\end\{\1\}", " \x01 ", body, flags=re.S)
 DISPLAY = r"equation\*?|align\*?|gather\*?|multline\*?|eqnarray\*?|displaymath|flalign\*?|alignat\*?|split|cases|array"
 body = re.sub(r"\\begin\{(" + DISPLAY + r")\}.*?\\end\{\1\}", " \x00MATH\x00 ", body, flags=re.S)
 body = re.sub(r"\\\[.*?\\\]", " \x00MATH\x00 ", body, flags=re.S)
 body = re.sub(r"\$\$.*?\$\$", " \x00MATH\x00 ", body, flags=re.S)
-# 行内公式换成不是空白的占位符：单独占几行的 $…$、\(…\) 去掉后不能留下空行（变成分段）
+# Inline formulas are replaced by a non-blank placeholder: removing $…$ or \(…\) spanning lines of their own must
+# not leave a blank line (which would break the paragraph)
 body = re.sub(r"(?<!\\)\$.*?(?<!\\)\$", " \x01 ", body, flags=re.S)
 body = re.sub(r"\\\(.*?\\\)", " \x01 ", body, flags=re.S)
-# 块级断点
+# Block-level breaks
 body = re.sub(
     r"\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph|caption|title|author|maketitle|item|par|noindent\s*\\textbf)\b\*?",
     "\n\x02\n\\g<0>",
     body,
 )
 body = re.sub(r"\\(begin|end)\{[^}]*\}", "\n\x02\n", body)
-# 脚注、致谢号在句子中间，去掉后句子照旧接着
+# Footnotes and acknowledgement marks sit inside sentences, which continue after they are removed
 body = re.sub(r"\\(footnote|thanks|footnotetext)\*?\s*(\[[^\]]*\])?\s*\{", r"\\INLINEDROP{", body)
 body = re.sub(
     r"\\(caption|title|author|affiliation|address|email|institute|part|chapter|section|subsection|subsubsection|paragraph|subparagraph)\*?\s*(\[[^\]]*\])?\s*\{",
@@ -108,7 +113,7 @@ def drop_braced(text: str, command: str, repl: str = "\n\x02\n") -> str:
         i = k + 1
 
 
-# 段首的粗体、斜体小标题（\textbf{Ablation.} 正文）是标题，不算段里的字
+# A bold or italic run-in heading at the paragraph start (\textbf{Ablation.} text) is a heading, not paragraph text
 body = re.sub(
     r"(\x02\s*(?:\\noindent\s*)?)\\(textbf|textit|emph|textsc|underline)\s*\{([^{}]{1,80})\}(\s*[.:])?",
     r"\1\\DROP{\3}",
@@ -131,7 +136,8 @@ for para in body.split("\x02"):
         words = re.findall(r"[a-z0-9]+", unicodedata.normalize("NFKC", piece).lower())
         words = [w for w in words if len(w) >= 2]
         segments.append({"words": words, "next": "math" if index + 1 < len(pieces) else "par"})
-# 太短的段（标题、公式后的半句）对不准，不计分。两个留下的段之间只要有一处是段落边界，就要分开
+# Very short paragraphs (headings, half sentences after a formula) cannot be located reliably and are not scored.
+# Two remaining paragraphs must be separate when there is a paragraph boundary anywhere between them
 kept = []
 pending_par = False
 for seg in segments:

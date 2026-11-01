@@ -1,5 +1,6 @@
-"""分段计划连同每个单元的公式文字。用法: plandump_math.py <代码目录> <pdf> <输出 json> [框 json]
-给了框 json 时开版面模型（读缓存的框）。行: [页, 跳过, 送翻文本, [公式文字...]]"""
+"""Segmentation plan with the formula text of each unit. Usage: plandump_math.py <code dir> <pdf> <output json>
+[boxes json]. With a boxes json the layout model is enabled (reading cached boxes). Rows: [page, skip, text sent
+for translation, [formula text...]]"""
 
 import json
 import sys

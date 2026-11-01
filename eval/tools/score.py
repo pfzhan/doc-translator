@@ -1,7 +1,9 @@
-"""按标准答案给一份分段计划打分。用法: score.py plan.json gold.json [列出错误]
-每段源文在计划里找开头和结尾：段首、段尾 12 个词以内、全文只出现一次的 4 词片段。
-并错：相邻两段（段落边界）的前段尾和后段首落在同一个单元。
-拆错：一段的段首和段尾落在不同单元（行间公式两边拆开不算，见 gold.py）。"""
+"""Score a segmentation plan against the gold standard. Usage: score.py plan.json gold.json [list errors]
+The start and end of each source paragraph are located in the plan by 4-word fragments within 12 words of the
+paragraph start and end that occur only once in the whole text.
+Wrong join: the end of one paragraph and the start of the next (across a paragraph boundary) fall in the same unit.
+Wrong split: the start and end of one paragraph fall in different units (splits at a display formula do not
+count, see gold.py)."""
 
 import json
 import re

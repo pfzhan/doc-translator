@@ -1,4 +1,5 @@
-"""每页轮流跑各个模型/边长，抵消机器负载的漂移。用法: bench2.py <代码目录> <onnx@边长,...> <pdf>..."""
+"""Run each model/input side in turn on every page, cancelling out drift in machine load.
+Usage: bench2.py <code dir> <onnx@side,...> <pdf>..."""
 
 import sys
 import time

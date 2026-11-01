@@ -1,10 +1,13 @@
-"""行内公式的分：按 mathgold/ 的锚点在 mplans/ 的计划里找公式，看它做没做成占位符。
-用法: mathscore.py <标签> [show|lost [论文]]
-每处公式记成 full（全在占位符里）、partial（占位符外还漏了字）、missed（没有占位符）、
-empty（两锚点之间没有能比的字）、lost（锚点没找到）。漏在外面的只有数字、单位这类整词（50 Myr、250 μm）的
-另记为 minor，排成正文也不碍翻译；漏了单个变量、希腊字母、数学符号的才算错（bad_partial、bad_missed）。
-锚点词被做成占位符的记为误判。
-按正文字体分两组：Computer Modern 排的和别的字体排的（Times、Nimbus 等），后者斜体变量和正文斜体同字体。"""
+"""Inline formula score: locate formulas in the plans under mplans/ by the anchors in mathgold/ and check whether
+each became a placeholder.
+Usage: mathscore.py <tag> [show|lost [paper]]
+Each formula is recorded as full (entirely in a placeholder), partial (characters left outside the placeholder),
+missed (no placeholder), empty (nothing comparable between the two anchors) or lost (anchors not found). When only
+whole words such as numbers and units (50 Myr, 250 μm) are left outside, it is recorded as minor instead, since
+set as body text they do not hurt the translation; only a single variable, Greek letter or math symbol left
+outside is an error (bad_partial, bad_missed). Anchor words turned into placeholders are counted as false
+positives. Results are split by body font into two groups: Computer Modern, and other fonts (Times, Nimbus and so
+on), in which italic variables use the same font as italic body text."""
 
 import json
 import os
@@ -20,7 +23,7 @@ show = len(sys.argv) > 2 and sys.argv[2] == "show"
 lostlist = len(sys.argv) > 2 and sys.argv[2] == "lost"
 only = sys.argv[3] if len(sys.argv) > 3 else None
 MARK = re.compile(r"\{/?(?!v\d+\})[a-z]\w*\}|\{\|\}|\x01/?\w\x02")
-WINDOW = 40  # 左右锚点之间最多隔这么多个记号
+WINDOW = 40  # maximum tokens between the left and right anchors
 KINDS = ("full", "minor", "empty", "bad_partial", "bad_missed")
 
 
@@ -45,7 +48,8 @@ def body_fonts() -> dict[str, str]:
 
 
 def tokens(rows) -> list[tuple[str, str, str]]:
-    """(标签 t/f, 记号, 种类 w/s)：w 是字母数字串，s 是一个数学符号。占位符另放一个 ("f", "§", "s")"""
+    """(label t/f, token, kind w/s): w is an alphanumeric string, s a single math symbol. A placeholder adds
+    ("f", "§", "s")"""
     out = []
 
     def add(text: str, label: str) -> None:

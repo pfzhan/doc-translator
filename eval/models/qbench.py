@@ -1,4 +1,5 @@
-"""几个公式模型逐页轮流推理（每份 3 线程、不空转，和翻译时一份的设置一样）。用法: qbench.py <代码目录> <onnx,...> <pdf>..."""
+"""Run several formula models in turn on every page (3 threads each, no spinning, the settings of one session during
+translation). Usage: qbench.py <code dir> <onnx,...> <pdf>..."""
 
 import sys
 import time

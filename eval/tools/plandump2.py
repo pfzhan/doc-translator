@@ -1,4 +1,5 @@
-"""分段计划，带每个单元首块、末块的页码和框。用法: plandump2.py <代码目录> <pdf> <输出 json>"""
+"""Segmentation plan with the page number and box of the first and last block of each unit.
+Usage: plandump2.py <code dir> <pdf> <output json>"""
 
 import json
 import sys

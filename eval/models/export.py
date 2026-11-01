@@ -1,4 +1,5 @@
-"""把 Ultralytics .pt 导成和 Pix2Text MFD 一样的 ONNX（动态尺寸、不带 NMS）。用法: export.py <pt>"""
+"""Export an Ultralytics .pt to ONNX in the same form as Pix2Text MFD (dynamic shape, no NMS).
+Usage: export.py <pt>"""
 
 import sys
 

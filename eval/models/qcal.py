@@ -1,4 +1,5 @@
-"""产品代码的抽页 + 可换的校准方法。用法: qcal.py <代码目录> <fp32 onnx> <输出> <minmax|percentile|entropy|avg> [页数] [seed]"""
+"""Page sampling from the application code with a choice of calibration methods.
+Usage: qcal.py <code dir> <fp32 onnx> <output> <minmax|percentile|entropy|avg> [pages] [seed]"""
 
 import sys
 import time
@@ -19,7 +20,8 @@ from onnxruntime.quantization.shape_inference import quant_pre_process
 from app import layout_model, quantize
 
 skip = set(filter(None, os.environ.get("EXCLUDE", "").split(",")))
-# 校准页从 CALIB_PDFS 目录下的 PDF 抽（默认是翻译过的任务），和产品里生成 int8 模型时一样
+# Calibration pages are sampled from the PDFs under CALIB_PDFS (by default the translated jobs), as when the
+# application generates an int8 model
 calib = Path(os.environ.get("CALIB_PDFS", Path(code, "data", "jobs")))
 pdfs = sorted(
     p
@@ -56,7 +58,8 @@ class One(CalibrationDataReader):
 
 
 def one_page_at_a_time(self, reader):
-    # 原实现把所有页的中间结果都留在内存里再算直方图；直方图能逐页合并
+    # The original implementation keeps the activations of all pages in memory before computing histograms;
+    # histograms can be merged page by page
     while item := reader.get_next():
         _collect(self, One(item))
 

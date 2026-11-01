@@ -1,4 +1,5 @@
-"""开版面模型（读缓存的框）出老语料的计划。用法: plandump_model.py <代码目录> <pdf> <框 json> <输出> [nojoin]"""
+"""Produce the plan for the old corpus with the layout model enabled (reading cached boxes).
+Usage: plandump_model.py <code dir> <pdf> <boxes json> <output> [nojoin]"""
 
 import json
 import sys

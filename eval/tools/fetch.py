@@ -1,7 +1,8 @@
-"""按 papers.tsv 从 arXiv 下载评测集的论文。用法: fetch.py <papers.tsv> <输出目录>
-每篇放进自己的空目录 <输出目录>/<不带版本号的编号>/：paper.pdf、meta.txt（分类和带版本号的编号），
-LaTeX 源码只解出 .tex、.bbl、.sty、.cls 到 src/。源码只当文本读，不编译。
-下载的 PDF 和列表里的 SHA-256 对不上时报出来（arXiv 偶尔会重新生成 PDF）。已有的目录跳过。"""
+"""Download the evaluation papers from arXiv as listed in papers.tsv. Usage: fetch.py <papers.tsv> <output dir>
+Each paper goes into its own empty directory <output dir>/<id without version>/: paper.pdf, meta.txt (category and
+versioned id), and only the .tex, .bbl, .sty and .cls files of the LaTeX source, extracted to src/. The source is
+read as text only, never compiled. A downloaded PDF whose SHA-256 differs from the list is reported (arXiv
+occasionally regenerates PDFs). Existing directories are skipped."""
 
 import gzip
 import hashlib
@@ -17,7 +18,7 @@ UA = {"User-Agent": "doc-translator-eval/0.1 (layout regression set)"}
 
 
 def get(url: str) -> bytes:
-    # arXiv 要求两次请求之间隔 3 秒以上
+    # arXiv asks for at least 3 seconds between requests
     time.sleep(3.1)
     with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=120) as r:
         return r.read()
@@ -28,7 +29,7 @@ def safe_extract(blob: bytes, dest: Path) -> None:
     try:
         tar = tarfile.open(fileobj=io.BytesIO(blob), mode="r:*")  # noqa: SIM115 - closed by the with below
     except tarfile.TarError:
-        # 只有一个 tex 文件的投稿，e-print 是 gzip 压缩的单个文件或者纯文本
+        # For a submission with a single tex file, the e-print is one gzip-compressed file or plain text
         try:
             (dest / "main.tex").write_bytes(gzip.decompress(blob))
         except OSError:
@@ -54,7 +55,7 @@ for aid, cat, _pages, sha256, _title in rows:
     try:
         pdf = get(f"https://arxiv.org/pdf/{aid}")
         src = get(f"https://arxiv.org/e-print/{aid}")
-    except Exception as error:  # noqa: BLE001  网络错误、arXiv 限流
+    except Exception as error:  # noqa: BLE001 - network errors, arXiv rate limiting
         print(aid, "skip", error, flush=True)
         continue
     home.mkdir(parents=True)

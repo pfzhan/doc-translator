@@ -1,6 +1,7 @@
-"""用项目代码（formula_detector + pages()，含几页同时推理）跑公式检测模型，缓存每页的框：
-每页一个列表，每个框是 [类别, [x0, y0, x1, y1], null]，坐标是 PDF 页面坐标。
-用法: mfd_project.py <代码目录> <模型> <pdf> <输出 json> [边长=1024]"""
+"""Run the formula detection model through the project code (formula_detector + pages(), including several pages
+inferred at once) and cache the boxes of each page: one list per page, each box [class, [x0, y0, x1, y1], null] in
+PDF page coordinates.
+Usage: mfd_project.py <code dir> <model> <pdf> <output json> [side=1024]"""
 
 import json
 import sys

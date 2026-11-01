@@ -1,4 +1,5 @@
-"""两版 plan 逐单元比，只打印不同的片段。用法: segdiff.py a_tag b_tag [name]"""
+"""Compare two versions of plans unit by unit and print only the differing parts.
+Usage: segdiff.py a_tag b_tag [name]"""
 
 import difflib
 import glob
@@ -13,7 +14,7 @@ only = sys.argv[3] if len(sys.argv) > 3 else None
 
 
 def fmt(r):
-    # 带单元框的计划（plandump_mfdcache.py 的 seg 格式）多一列框，不参与比较
+    # Plans with unit boxes (the seg format of plandump_mfdcache.py) have an extra column of boxes, not compared
     p, s, t, fs = r[:4]
     return f"{t} || " + " ; ".join(x[0].replace("\x01", "").replace("\x02", "") for x in fs), p, s
 

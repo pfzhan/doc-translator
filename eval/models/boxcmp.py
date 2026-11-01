@@ -1,5 +1,6 @@
-"""逐页比两个版面框目录（a 当参照）：每类 a 有几个、b 里对上几个（同类 IoU>=0.5）、b 多出几个。
-用法: boxcmp.py <a 目录> <b 目录>"""
+"""Compare two directories of layout boxes page by page, with a as the reference: per class, how many a has, how
+many of them b matches (same class, IoU >= 0.5), and how many extra b has.
+Usage: boxcmp.py <dir a> <dir b>"""
 
 import json
 import sys

@@ -1,6 +1,7 @@
-"""从 LaTeX 源码取行内公式，作标准答案。用法: mathgold.py <论文目录> <输出 json>
-只把源码当文本读。每个 $…$、\\(…\\) 记下公式源码和两边各几个正文词（锚点），
-评分时按锚点在计划里找到公式落在哪，看它有没有做成占位符。预处理和 gold.py 一致。"""
+"""Take inline formulas from the LaTeX source as the gold standard. Usage: mathgold.py <paper dir> <output json>
+The source is read as text only. For each $…$ or \\(…\\), the formula source and a few body words on each side
+(anchors) are recorded; scoring uses the anchors to locate the formula in the plan and checks whether it became a
+placeholder. Preprocessing is the same as in gold.py."""
 
 import json
 import re
@@ -10,7 +11,7 @@ from pathlib import Path
 
 home, out = Path(sys.argv[1]), Path(sys.argv[2])
 src = home / "src"
-# 锚点每边取几个词；少于 MIN 个的找不准，不计
+# Words taken as anchors on each side; with fewer than MIN the formula cannot be located and is not scored
 CONTEXT, MIN = 4, 2
 
 
@@ -68,7 +69,8 @@ def words_of(text: str) -> list[str]:
 
 
 def trivial(math: str) -> bool:
-    """只有数字、百分号、正负号的公式（$10\\%$、$-1$）排出来和正文一样，不计"""
+    """Formulas of only digits, percent and plus or minus signs ($10\\%$, $-1$) look the same as body text and are
+    not scored"""
     bare = re.sub(r"\\[,;:! ]|\\%|\\textrm|\\mathrm|[{}\s~]", "", math)
     return re.fullmatch(r"[-+−]?[\d.,]+%?", bare) is not None
 
@@ -86,7 +88,7 @@ DISPLAY = r"equation\*?|align\*?|gather\*?|multline\*?|eqnarray\*?|displaymath|f
 body = re.sub(r"\\begin\{(" + DISPLAY + r")\}.*?\\end\{\1\}", " \x02 ", body, flags=re.S)
 body = re.sub(r"\\\[.*?\\\]", " \x02 ", body, flags=re.S)
 body = re.sub(r"\$\$.*?\$\$", " \x02 ", body, flags=re.S)
-# 行内公式抽出来，正文里留 \x00序号\x00
+# Inline formulas are taken out, leaving \x00index\x00 in the text
 maths: list[str] = []
 
 
@@ -97,7 +99,7 @@ def keep(match: re.Match) -> str:
 
 body = re.sub(r"(?<!\\)\$(.+?)(?<!\\)\$", keep, body, flags=re.S)
 body = re.sub(r"\\\((.+?)\\\)", keep, body, flags=re.S)
-# 段落、标题、脚注处断开：锚点不跨过这些地方
+# Break at paragraphs, headings and footnotes: anchors do not cross them
 body = re.sub(r"\n[ \t]*(?:\n[ \t]*)+", " \x02 ", body)
 body = re.sub(
     r"\\(part|chapter|section|subsection|subsubsection|paragraph|subparagraph|caption|title|author|maketitle|item|par)\b\*?",
@@ -115,7 +117,8 @@ body = re.sub(
 body = re.sub(r"\\[a-zA-Z]+\*?", " ", body)
 body = re.sub(r"[{}~\\]", " ", body)
 
-# 词和公式排成一串：("w", 词) / ("m", 序号) / ("x", 断开)。引用、交叉引用排出来是编号，也断开锚点
+# Words and formulas in sequence: ("w", word) / ("m", index) / ("x", break). Citations and cross-references are
+# typeset as numbers and also break anchors
 stream: list[tuple[str, object]] = []
 for piece in re.split(r"(\x00\d+\x00|\x02|\x03)", body):
     if not piece:

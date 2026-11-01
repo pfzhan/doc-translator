@@ -1,4 +1,4 @@
-"""只读扫描 .pt（zip）里 pickle 引用的全局名，不执行。用法: pklscan.py <pt>"""
+"""List the global names referenced by the pickles in a .pt (zip) without executing them. Usage: pklscan.py <pt>"""
 
 import collections
 import pickletools

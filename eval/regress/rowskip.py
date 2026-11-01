@@ -1,4 +1,5 @@
-"""两版计划按单元顺序比：单元数变了的文件，和同一位置上跳过与否变了的单元。用法: rowskip.py tagA tagB [显示几条]"""
+"""Compare two versions of plans unit by unit: files whose unit count changed, and units at the same position whose
+skip flag changed. Usage: rowskip.py tagA tagB [how many to show]"""
 
 import glob
 import json

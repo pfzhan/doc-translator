@@ -1,4 +1,5 @@
-"""两个标签的计划逐篇比，列出新并上的单元（后一版少了的边界）。用法: joindiff.py a b"""
+"""Compare the plans of two tags paper by paper and list newly joined units (boundaries missing in the second).
+Usage: joindiff.py a b"""
 
 import json
 import os
