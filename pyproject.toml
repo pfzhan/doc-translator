@@ -24,8 +24,17 @@ ignore = [
     "B905",    # zip() without strict= is intended where lengths may differ
     "SIM108",  # a ternary is not always clearer than if/else
     "SIM905",  # word lists read better as one string split on whitespace
+    "SIM102",  # nested ifs often carry a comment on each condition
+    "SIM103",  # an explicit return True/False reads better after a chain of checks
+    "SIM105",  # try/except/pass is as clear as contextlib.suppress
+    "SIM117",  # a nested with reads better when the inner context comes from the outer one
+    "UP046",   # keep Generic[T]/TypeVar until the code moves to PEP 695 syntax as a whole
+    "UP047",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E402"]  # conftest sets environment variables before importing the app
 "eval/*" = ["E402"]   # scripts put the project directory on sys.path before importing it
+# Closures defined in a loop are called within the same iteration
+"app/formats/pdf.py" = ["B023"]
+"eval/tools/gold.py" = ["B023"]

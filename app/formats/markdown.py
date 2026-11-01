@@ -268,9 +268,9 @@ def collect_segments(blocks: list[Block]) -> list[str]:
         elif b.kind == "para":
             # 前缀是首行缩进：列表项里的续段要留在原来的列
             lead = b.lines[0][: len(b.lines[0]) - len(b.lines[0].lstrip())]
-            b.segments = [(0, lead, " ".join(l.strip() for l in b.lines))]
+            b.segments = [(0, lead, " ".join(line.strip() for line in b.lines))]
         elif b.kind == "setext":
-            b.segments = [(0, "", " ".join(l.strip() for l in b.lines[:-1]))]
+            b.segments = [(0, "", " ".join(line.strip() for line in b.lines[:-1]))]
         elif b.kind == "list":
             b.segments = [(idx, pre, text) for idx, pre, text, _ in _list_items(b.lines)]
         elif b.kind == "quote":
@@ -320,7 +320,7 @@ def segment_skips(blocks: list[Block]) -> list[bool]:
                 title = HEADING_RE.match(b.lines[0]).group(2).strip()
             else:
                 lv = 1 if b.lines[-1].strip().startswith("=") else 2
-                title = " ".join(l.strip() for l in b.lines[:-1])
+                title = " ".join(line.strip() for line in b.lines[:-1])
             if len(title) <= 40 and BIBLIO_HEADING_RE.match(title):
                 level = lv
             elif level and lv <= level:

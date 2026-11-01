@@ -88,7 +88,7 @@ class Settings:
             try:
                 days = int(changes["retention_days"])
             except (TypeError, ValueError):
-                raise SettingsError("保留天数必须是整数")
+                raise SettingsError("保留天数必须是整数") from None
             if not 0 <= days <= MAX_RETENTION_DAYS:
                 raise SettingsError(f"保留天数须在 0 到 {MAX_RETENTION_DAYS} 之间（0 表示永久保留）")
             with self.lock:

@@ -1783,7 +1783,7 @@ def _cut_leaders(items: list[tuple], toc_page: bool = False) -> tuple[list[tuple
     out: list[tuple] = []
     leaders: dict[int, Leader] = {}
     for index, item in enumerate(items):
-        item = replaced[index] if index in replaced else item
+        item = replaced.get(index, item)
         if item is None:
             continue
         if index in marked:

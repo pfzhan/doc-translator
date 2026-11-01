@@ -1785,7 +1785,7 @@ def _grid_cells(rows: Sequence[Sequence[_TextCell]]) -> tuple[pymupdf.Rect, ...]
         bottoms.append(tops[index + 1] - 1.0)
     bottoms.append(max(cell.y1 for cell in rows[-1]) + 2.0)
     cells: list[pymupdf.Rect] = []
-    for top, bottom, row in zip(tops, bottoms, rows):
+    for top, bottom, _row in zip(tops, bottoms, rows):
         for anchor, right in zip(anchors, rights):
             cells.append(pymupdf.Rect(anchor - 1.0, top - 1.0, max(right, anchor + 18.0), bottom))
     return tuple(cells)

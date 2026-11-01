@@ -1059,7 +1059,7 @@ def _line_dict(line: _Line, reader: Type3Reader) -> dict[str, Any] | None:
             items.append(("", _SPACE))
         items.extend((styles[id(glyph)], glyph) for glyph in token)
     # 词间空格跟着正文走：公式 span 整个换成占位符，空格放在里面会一起丢掉
-    for index, (style, glyph) in enumerate(items):
+    for index, (_style, glyph) in enumerate(items):
         if glyph is _SPACE:
             before, after = items[index - 1][0], items[index + 1][0]
             items[index] = (before if before in _PROSE or after not in _PROSE else after, glyph)

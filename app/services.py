@@ -122,7 +122,7 @@ def _clean(data: dict) -> dict:
             try:
                 v = int(v)
             except (TypeError, ValueError):
-                raise ServiceError(f"{k} 必须是整数")
+                raise ServiceError(f"{k} 必须是整数") from None
             v = max(1, min(v, {"concurrency": 32, "max_items": 200, "max_chars": 50000}[k]))
         elif k == "temperature":
             if v in (None, ""):
@@ -131,7 +131,7 @@ def _clean(data: dict) -> dict:
                 try:
                     v = max(0.0, min(float(v), 2.0))
                 except (TypeError, ValueError):
-                    raise ServiceError("temperature 必须是数字")
+                    raise ServiceError("temperature 必须是数字") from None
         else:
             v = str(v or "") if k in ("prompt", "user_prompt", "glossary") else str(v or "").strip()
         out[k] = v

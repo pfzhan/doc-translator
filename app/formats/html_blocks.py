@@ -49,10 +49,7 @@ def _is_block(el) -> bool:
 
 
 def _in_skip(el: Tag) -> bool:
-    for p in [el, *el.parents]:
-        if isinstance(p, Tag) and _local(p.name) in SKIP_TAGS:
-            return True
-    return False
+    return any(isinstance(p, Tag) and _local(p.name) in SKIP_TAGS for p in [el, *el.parents])
 
 
 def _text_of(el: Tag, slots: bool = True) -> str:
@@ -316,7 +313,7 @@ def bibliography_skips(blocks: list[Tag], *, start_level: int = 0) -> tuple[list
         heading_lv = structural_heading_level(el)
         if container is not None:
             ended_in_container = True
-            skips.append(False if heading_lv else True)
+            skips.append(not heading_lv)
             continue
         ended_in_container = False
         biblio_lv = biblio_heading_level(el)

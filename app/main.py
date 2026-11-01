@@ -171,7 +171,7 @@ def _make_translator(job: Job, service: dict):
     try:
         return create_translator(service, job.target_lang, job.source_lang)
     except TranslatorError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
 
 def _start(job: Job, translator):
@@ -266,7 +266,7 @@ def create_service(data: dict = Body(...)):
     try:
         return store.create(data)
     except ServiceError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
 
 @app.put("/api/services/{sid}")
@@ -274,7 +274,7 @@ def update_service(sid: str, data: dict = Body(...)):
     try:
         return store.update(sid, data)
     except ServiceError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
 
 @app.delete("/api/services/{sid}")
@@ -282,7 +282,7 @@ def delete_service(sid: str):
     try:
         store.delete(sid)
     except ServiceError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return {"ok": True}
 
 
@@ -291,7 +291,7 @@ def set_default_service(sid: str):
     try:
         store.set_default(sid)
     except ServiceError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return store.list()
 
 
@@ -300,7 +300,7 @@ def clone_service(sid: str):
     try:
         return store.clone_to_local(sid)
     except ServiceError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
 
 async def _with_translator(data: dict, fn):
@@ -309,11 +309,11 @@ async def _with_translator(data: dict, fn):
             store.resolve(data), data.get("target_lang") or "zh-CN", data.get("source_lang") or "auto"
         )
     except (ServiceError, TranslatorError) as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     try:
         return await fn(translator)
     except TranslatorError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     finally:
         await translator.aclose()
 
@@ -373,7 +373,7 @@ async def create_job(
     try:
         await create_translator(service, target_lang, source_lang).aclose()
     except TranslatorError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
     job = Job(id=uuid.uuid4().hex[:12], filename=name, source_lang=source_lang, target_lang=target_lang,
               mode="translated" if mode == "translated" else "bilingual", service_id=service["id"],
@@ -641,7 +641,7 @@ async def build_variant(job_id: str):
                     formula_model=_formula_model(),
                 )
             except (TranslatorError, ValueError) as e:
-                raise HTTPException(400, str(e))
+                raise HTTPException(400, str(e)) from e
         current = jobs.get(job.id)
         if current is None or not jobs.dir(job.id).exists():
             raise HTTPException(404, "翻译记录不存在")
@@ -691,7 +691,7 @@ def job_focus(job_id: str, data: dict = Body(...)):
     try:
         index = int(data.get("index", 0))
     except (TypeError, ValueError):
-        raise HTTPException(400, "index 必须是整数")
+        raise HTTPException(400, "index 必须是整数") from None
     runner = job.runner
     if runner is None:
         # 任务已结束（Runner 已释放）：聚焦没有意义，直接视为成功；还没开始的保持失败
@@ -766,7 +766,7 @@ async def update_settings(data: dict = Body(...)):
     try:
         result = settings.update(data)
     except SettingsError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     await _cleanup()  # 改短了保留时间，立即清理
     return result
 
@@ -841,7 +841,7 @@ def update_model(kind: str, data: dict = Body(...)):
     try:
         settings.update({spec.key: {k: data[k] for k in ("enabled", "path", "size", "precision", "workers", "threads") if k in data}})
     except SettingsError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return _model_status(kind)
 
 
@@ -853,7 +853,7 @@ async def download_model(kind: str, data: dict = Body(...)):
     try:
         model_downloads[kind].start(str(data.get("source") or ""), target)
     except layout_model.LayoutModelError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return _model_status(kind)
 
 
@@ -871,7 +871,7 @@ async def test_model(kind: str, data: dict | None = Body(None)):
         async with mupdf_turn():  # 样例页用 MuPDF 画，和正在跑的任务错开
             return await asyncio.to_thread(layout_model.check, spec, path, size)
     except layout_model.LayoutModelError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
 
 
 @app.post("/api/{kind}-model/quantize")
@@ -894,7 +894,7 @@ async def quantize_model(kind: str):
     try:
         quantizers[kind].start(src, quantize.int8_path(src), images, quant)
     except quantize.QuantizeError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     return _model_status(kind)
 
 

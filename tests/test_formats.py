@@ -3807,7 +3807,7 @@ class _PlaceholderDropper(MockTranslator):
         self.calls.append(list(texts))
         retry = len(self.calls) > 1
         out = []
-        for text in texts:
+        for _text in texts:
             if retry and self.keep_on_retry:
                 out.append("当参数 k{v1} 较小时，贪心算法效果很好。")
             else:
@@ -9285,7 +9285,7 @@ def test_pdf_keeps_inline_colors_in_the_translation(tmp_path):
     doc.save(src)
 
     [out] = run(translate_pdf(src, tmp_path, Runner(Colored("zh-CN"), cache=MemCache()), False, "zh-CN"))
-    spans = [s for b in pymupdf.open(out)[0].get_text("dict")["blocks"] for l in b.get("lines", []) for s in l["spans"]]
+    spans = [s for b in pymupdf.open(out)[0].get_text("dict")["blocks"] for line in b.get("lines", []) for s in line["spans"]]
     blue = "".join(s["text"] for s in spans if s["color"] == 0x0000FF)
     red = "".join(s["text"] for s in spans if s["color"] == 0xFF0000)
     assert blue.replace(" ", "") == long_blue
@@ -9358,7 +9358,7 @@ def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path):
     assert after == before
     assert not any(w[4] in ("Exercises", "Notes", "Tokens") for w in words)
     # 每条的点线从译文末尾接到页码前，中间不空出一截
-    for line in [l for b in result.get_text("dict")["blocks"] for l in b.get("lines", [])]:
+    for line in [line for b in result.get_text("dict")["blocks"] for line in b.get("lines", [])]:
         text = "".join(s["text"] for s in line["spans"])
         if text.startswith("标题") and "." in text:
             title = next(s for s in line["spans"] if s["text"].startswith("标题"))
