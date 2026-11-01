@@ -336,8 +336,6 @@ def _list_item(text: str) -> bool:
     return bool(BULLET_RE.match(text) or _PAREN_ITEM_RE.match(stripped) or _ROMAN_ITEM_RE.match(stripped))
 
 
-# 式子里的关系符号
-_RELATION_RE = re.compile(r"[=<>≤≥≈≡≜∝→←⇒⇔∈∉⊂⊆]")
 # 定理、引理、定义一类的编号标签：Lemma 10.3.、Theorem 4.1.、Definition 2.
 _NUMBERED_LABEL_RE = re.compile(r"[A-Z][a-z]+\s+\d+(?:\.\d+)*\.\s")
 
@@ -12153,9 +12151,6 @@ def _compose_accents(text: str) -> str:
 
     text = _ACCENT_BEFORE_RE.sub(before, text)
     return _CEDILLA_RE.sub(lambda m: unicodedata.normalize("NFC", (m.group(1) or m.group(2)) + "\u0327"), text)
-
-
-_MARKUP_RE = re.compile(r"\{v\d+\}|\{\|\}|\{/?[biu]\}|\{z\d+\}|\{/z\}")
 
 
 def _only_formulas(sent: str) -> bool:
