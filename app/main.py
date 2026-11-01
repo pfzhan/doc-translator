@@ -1,4 +1,5 @@
-"""Web 服务：上传文档 → 后台翻译 → 边翻边预览 → 下载结果；翻译记录持久化在 data/jobs/。"""
+"""Web server: upload a document -> translate in the background -> preview during translation -> download the
+result. Translation records are persisted in data/jobs/."""
 
 import asyncio
 import hashlib
@@ -38,32 +39,36 @@ CLEANUP_INTERVAL = 3600
 store = ServiceStore()
 settings = Settings()
 jobs = JobStore(history.JOBS_DIR)
-# 正在运行的翻译任务，防止被垃圾回收，也用于暂停、删除时取消
+# Running translation jobs; keeps them from being garbage collected and is used to cancel on pause or delete
 running: dict[str, asyncio.Task] = {}
-# 正在补生成另一种版本的请求。删除和过期清理要等它写完，第二次请求直接拒绝。
+# Requests generating the other version. Deletion and expiry cleanup wait until they finish writing; a second
+# request is rejected.
 variant_tasks: dict[str, asyncio.Future[None]] = {}
-# 正在清理的任务：过期清理已经决定要删、还没删完的，或者用户点了清理缓存、还没清完的。
-# 补生成、继续翻译看到它就拒绝，避免清理时还在写。
+# Jobs being cleaned: those expiry cleanup has decided to delete and not finished deleting, or those whose cache
+# the user asked to clear and not finished clearing.
+# Generating the other version and resuming translation are rejected for them, so nothing writes during cleanup.
 cleaning: set[str] = set()
-# 用户点了暂停的任务：取消时据此把状态记成“已暂停”，而不是“已中断”
+# Jobs the user paused: on cancellation their status is recorded as "已暂停" instead of "已中断"
 pause_requested: set[str] = set()
-# 版面模型的下载（同一时间只有一个）
+# Layout model downloads (one at a time)
 model_downloads = {kind: layout_model.Downloader(spec) for kind, spec in layout_model.MODELS.items()}
-# 两个模型的 int8 版在本机生成（见 quantize.py），同一时间只生成一个
+# int8 versions of both models are generated locally (see quantize.py), one at a time
 quantizers = {kind: quantize.Quantizer() for kind in layout_model.MODELS}
 ACTIVE = ("queued", "running")
 PROGRESS_SAVE_INTERVAL = 5
 
 
 async def _cleanup() -> None:
-    """删过期记录；把记录目录里的版面分析结果搬到共用目录，删掉没有记录用到的；把重复的原文件换成硬链接。
-    是否在补生成只在事件循环里判断，不把那个字典交给别的线程。"""
+    """Delete expired records; move layout analysis results from record directories to the shared directory and
+    delete those no record uses; replace duplicate source files with hard links.
+    Whether the other version is being generated is checked only in the event loop; that dict is not handed to
+    other threads."""
     expired = await asyncio.to_thread(jobs.expired_ids, settings.retention_days)
     for jid in expired:
         if jid in variant_tasks or jid in running or jid in cleaning:
             continue
         cleaning.add(jid)
-        # 登记和再检查之间没有 await，补生成插不进来
+        # There is no await between registering and checking again, so generating the other version cannot get in
         if jid in variant_tasks:
             cleaning.discard(jid)
             continue
@@ -79,14 +84,14 @@ async def _cleanup() -> None:
 
 @asynccontextmanager
 async def lifespan(_app):
-    """启动时清理一次过期记录，之后每小时检查一次。"""
+    """Clean up expired records once at startup, then check every hour."""
 
     async def loop():
         while True:
             try:
-                await _cleanup()  # 扫磁盘放在 _cleanup 里的线程，别卡事件循环
+                await _cleanup()  # Disk scans run in threads inside _cleanup, so the event loop is not blocked
             except Exception:  # noqa: BLE001
-                traceback.print_exc()  # 清理失败记录日志，下一轮再试，不能让后台任务结束
+                traceback.print_exc()  # Log a failed cleanup and retry next round; the background task must not end
             await asyncio.sleep(CLEANUP_INTERVAL)
 
     task = asyncio.create_task(loop())
@@ -97,8 +102,9 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="Doc Translator", lifespan=lifespan)
-# 只接受本机地址访问。否则恶意网页把自己的域名解析到 127.0.0.1（DNS 重绑定），就能以同源身份调用这些接口，
-# 比如用已保存的 Key 去测一个它指定的 API 地址。在局域网里用 IP 访问时，把地址加到环境变量 ALLOWED_HOSTS，逗号分隔
+# Accept only local addresses. Otherwise a malicious web page could resolve its own domain to 127.0.0.1 (DNS
+# rebinding) and call these APIs as the same origin, for example to test an API address of its choice with a saved
+# Key. When accessing by IP on a LAN, add the address to the environment variable ALLOWED_HOSTS, comma-separated
 ALLOWED_HOSTS = [
     "127.0.0.1",
     "localhost",
@@ -110,13 +116,14 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 @app.middleware("http")
 async def limit_upload_size(request: Request, call_next):
-    """上传超过上限时，在读请求体之前就拒绝。否则 Starlette 会先把整个文件写进临时文件，create_job 里的检查才轮到。"""
+    """Reject an upload above the limit before the request body is read. Otherwise Starlette first writes the whole
+    file to a temporary file before the check in create_job runs."""
     if request.method == "POST" and request.url.path == "/api/jobs":
         try:
             length = int(request.headers.get("content-length") or 0)
         except ValueError:
             length = 0
-        # 留 1MB 给 multipart 的分隔符和表单字段
+        # Leave 1 MB for multipart boundaries and form fields
         if length > MAX_UPLOAD + 1024 * 1024:
             return JSONResponse({"detail": "文件太大（上限 200MB）"}, status_code=413)
     return await call_next(request)
@@ -128,7 +135,8 @@ async def _run_job(job: Job, translator, bilingual: bool):
     def progress(done, total):
         nonlocal last_save
         job.done, job.total = done, total
-        # 隔几秒存一次进度，服务意外退出后记录里还能看到翻到了哪里
+        # Save progress every few seconds, so the record still shows how far translation got after the server
+        # exits unexpectedly
         if time.time() - last_save > PROGRESS_SAVE_INTERVAL:
             last_save = time.time()
             jobs.save(job)
@@ -153,7 +161,7 @@ async def _run_job(job: Job, translator, bilingual: bool):
         if job.id in pause_requested:
             job.status, job.error = "paused", ""
         else:
-            # 服务关闭等原因被取消
+            # Cancelled for reasons such as server shutdown
             job.status, job.error = "interrupted", "翻译已中断。已翻译的段落已缓存，继续翻译时直接复用。"
         raise
     except (TranslatorError, ValueError) as e:
@@ -163,16 +171,16 @@ async def _run_job(job: Job, translator, bilingual: bool):
         job.status, job.error = "error", f"{type(e).__name__}: {e}"
     finally:
         job.finished = time.time()
-        # 累计本次运行的 token 用量（继续/重试会加在之前的数上）
+        # Accumulate the token usage of this run (resume/retry adds to the earlier count)
         usage = getattr(translator, "usage", None)
         if usage:
             job.prompt_tokens += usage.get("prompt", 0)
             job.completion_tokens += usage.get("completion", 0)
-        # 快照可能很大，写盘放到线程里
+        # The snapshot may be large, so it is written in a thread
         await asyncio.to_thread(jobs.save_preview, job)
         job.sync_info()
         job.document = job.runner.document or job.document
-        # 释放 Runner 占用的内存；之后预览接口从 preview.json 快照读
+        # Release the memory held by the Runner; the preview API then reads from the preview.json snapshot
         job.runner = None
         jobs.save(job)
         running.pop(job.id, None)
@@ -181,7 +189,8 @@ async def _run_job(job: Job, translator, bilingual: bool):
 
 
 def _make_translator(job: Job, service: dict):
-    """按服务当前的配置创建翻译引擎。配置无效时抛 400，此时任务状态和文件都还没动。"""
+    """Create the translation engine from the service's current configuration. Raise 400 for an invalid
+    configuration; job status and files have not been touched at that point."""
     try:
         return create_translator(service, job.target_lang, job.source_lang)
     except TranslatorError as e:
@@ -189,17 +198,19 @@ def _make_translator(job: Job, service: dict):
 
 
 def _start(job: Job, translator):
-    """开始（或继续）翻译。每次都按服务当前的配置创建引擎，所以继续翻译时用的是服务现在选中的模型。"""
+    """Start (or resume) translation. The engine is created from the service's current configuration each time,
+    so resuming uses the model now selected in the service."""
     job.model = getattr(translator, "model", "")
     running[job.id] = asyncio.create_task(_run_job(job, translator, job.mode == "bilingual"))
 
 
 async def _cancel(job_id: str):
-    """取消正在跑的翻译任务，等它真正停下来（写完记录）再返回。"""
+    """Cancel a running translation job and return once it has actually stopped (finished writing its record)."""
     task = running.pop(job_id, None)
     if task and not task.done():
         task.cancel()
-        # 只吞被等待任务的取消和异常；当前协程自己被取消时仍会向上传播
+        # Swallow only the cancellation and exceptions of the awaited task; cancellation of the current coroutine
+        # itself still propagates
         await asyncio.gather(task, return_exceptions=True)
 
 
@@ -208,7 +219,7 @@ async def _pause(job: Job) -> bool:
         return False
     pause_requested.add(job.id)
     await _cancel(job.id)
-    # 还在排队、没开始跑的任务被取消时不会进入 _run_job，状态要在这里改
+    # A job still queued and not started never enters _run_job when cancelled, so its status is changed here
     if job.status in ACTIVE:
         job.status, job.error, job.finished = "paused", "", time.time()
         jobs.save(job)
@@ -217,8 +228,9 @@ async def _pause(job: Job) -> bool:
 
 
 async def _resume(job: Job, service_id: str | None = None, fresh: bool = False) -> Job:
-    """继续（或重新）翻译同一个文件。已翻好的段落在缓存里，不会重复请求；
-    fresh 为真时先清理这条记录的缓存痕迹（见 _clear），从版面分析做起、全部重新请求。"""
+    """Resume (or redo) translation of the same file. Translated paragraphs are in the cache and are not requested
+    again; with fresh true, what this record left in the caches is cleared first (see _clear), and everything starts
+    over from layout analysis with all paragraphs requested again."""
     if job.status in ACTIVE:
         raise HTTPException(400, "该任务正在翻译")
     if job.id in cleaning:
@@ -228,7 +240,8 @@ async def _resume(job: Job, service_id: str | None = None, fresh: bool = False) 
     service = store.get(service_id or job.service_id)
     if not service:
         raise HTTPException(400, "原翻译服务已不存在，请选择其他服务")
-    # 先验证配置，通过后才重置状态、删旧译文，否则配置失效时译文已丢
+    # Validate the configuration first and reset status and delete old translations only after it passes;
+    # otherwise the translations would be lost when the configuration is invalid
     translator = _make_translator(job, service)
     if fresh:
         try:
@@ -239,7 +252,7 @@ async def _resume(job: Job, service_id: str | None = None, fresh: bool = False) 
         job.clear_results()
     job.service_id, job.service_name = service["id"], service.get("name", "")
     job.status, job.error, job.done, job.total, job.outputs, job.finished = "queued", "", 0, 0, [], 0.0
-    # 重新计算预览标记：旧记录可能是加预览功能之前创建的（存的是 False）
+    # Recompute the preview flag: old records may have been created before the preview feature (stored as False)
     job.preview = Path(job.filename).suffix.lower() in PREVIEW_FORMATS
     for old in jobs.out_dir(job.id).glob("*"):
         old.unlink()
@@ -251,14 +264,15 @@ async def _resume(job: Job, service_id: str | None = None, fresh: bool = False) 
 
 @app.get("/api/languages")
 def languages():
-    """语言列表，顺序和插件一致。google 字段表示谷歌翻译是否支持。"""
+    """Language list in the same order as the plugin. The google field tells whether Google Translate supports
+    the language."""
     return [
         {"code": code, "name": en, "native": native, "google": code == "auto" or code in GOOGLE_CODES}
         for code, en, native in LANGUAGES
     ]
 
 
-# ---------- 翻译服务管理 ----------
+# ---------- Translation service management ----------
 
 
 @app.get("/api/providers")
@@ -335,8 +349,10 @@ async def _with_translator(data: dict, fn):
 
 @app.post("/api/services/test")
 async def test_service(data: dict = Body(...)):
-    """用表单里当前（可能尚未保存）的配置翻译一句话，验证 Key / 地址 / 模型是否可用。"""
-    # 目标语言是英语时用中文例句，否则用英文例句，避免“英译英”
+    """Translate one sentence with the configuration currently in the form (possibly unsaved) to check that the
+    Key / address / model work."""
+    # Use a Chinese sample sentence when the target language is English, otherwise an English one, to avoid
+    # translating English into English
     target = data.get("target_lang") or "zh-CN"
     default_sample = "你好，世界！这是一条翻译测试。" if target == "en" else "Hello, world! This is a translation test."
     sample = data.get("text") or default_sample
@@ -359,7 +375,7 @@ async def fetch_models(data: dict = Body(...)):
     return await _with_translator(data, run)
 
 
-# ---------- 翻译任务 / 翻译记录 ----------
+# ---------- Translation jobs / translation records ----------
 
 
 def _job_or_404(job_id: str) -> Job:
@@ -385,7 +401,7 @@ async def create_job(
     service = store.get(service_id or store.effective_default())
     if not service:
         raise HTTPException(400, "翻译服务不存在")
-    # 先检查配置，避免上传完才发现服务不可用
+    # Check the configuration first, so an unusable service is not discovered only after the upload
     try:
         await create_translator(service, target_lang, source_lang).aclose()
     except TranslatorError as e:
@@ -404,7 +420,8 @@ async def create_job(
     jobs.out_dir(job.id).mkdir(parents=True)
     try:
         size = 0
-        # 边写边算摘要：缓存归属、版面分析结果、原文件去重都按它认同一本书
+        # Compute the digest while writing: cache ownership, layout analysis results and source file
+        # deduplication all identify the same book by it
         digest = hashlib.sha1()
         with jobs.source_path(job).open("wb") as f:
             while chunk := await file.read(1024 * 1024):
@@ -412,10 +429,10 @@ async def create_job(
                 if size > MAX_UPLOAD:
                     raise HTTPException(413, "文件太大（上限 200MB）")
                 digest.update(chunk)
-                # 大文件写盘放到线程里，别卡事件循环
+                # Write large files in a thread, so the event loop is not blocked
                 await asyncio.to_thread(f.write, chunk)
     except BaseException:
-        # 上传中途失败（读异常、超大小等）：清掉孤儿目录再抛出
+        # Upload failed midway (read error, size exceeded, etc.): remove the orphan directory, then re-raise
         shutil.rmtree(jobs.dir(job.id), ignore_errors=True)
         raise
     job.size, job.document = size, digest.hexdigest()
@@ -427,7 +444,7 @@ async def create_job(
 
 @app.get("/api/jobs")
 async def list_jobs():
-    # 遍历所有任务目录算大小，放到线程里避免卡事件循环
+    # Walking all job directories to compute sizes runs in a thread, so the event loop is not blocked
     usage = await asyncio.to_thread(jobs.disk_usage)
     return {"jobs": [j.to_dict() for j in jobs.list()], "disk_usage": usage, "retention_days": settings.retention_days}
 
@@ -438,7 +455,8 @@ def get_job(job_id: str):
 
 
 def _service_translator(job: Job):
-    """按记录的服务现在的配置创建引擎，只用来算缓存键，不发请求。服务删了或配置无效时返回 None。"""
+    """Create an engine from the current configuration of the record's service, only to compute cache keys,
+    without sending requests. Return None when the service was deleted or its configuration is invalid."""
     service = store.get(job.service_id)
     if not service:
         return None
@@ -449,7 +467,8 @@ def _service_translator(job: Job):
 
 
 async def _forget_cache(job_id: str) -> None:
-    """删除记录前清掉这份文件的缓存（没有别的记录在用时）。清不掉不影响删除，条目等缓存满了会被挤掉。"""
+    """Clear this file's cache before deleting a record (when no other record uses it). A failure to clear does
+    not affect deletion; the entries are pushed out when the cache fills up."""
     job = jobs.get(job_id)
     if job is None:
         return
@@ -464,7 +483,8 @@ async def _forget_cache(job_id: str) -> None:
 
 
 async def _delete(job_id: str) -> None:
-    """删除记录，连同原文件、译文、预览和这份文件的缓存。正在翻译的会先停止；正在补生成的等它写完再删。"""
+    """Delete a record together with the source file, translations, preview and this file's cache. A job being
+    translated is stopped first; one generating the other version is deleted after it finishes writing."""
     await _cancel(job_id)
     task = variant_tasks.get(job_id)
     if task is not None and task is not asyncio.current_task() and not task.done():
@@ -482,7 +502,8 @@ async def delete_job(job_id: str):
 
 @app.post("/api/jobs/delete")
 async def delete_jobs(data: dict = Body(...)):
-    """批量删除选中的记录。已经不存在的 id 放进 missing 返回，不影响其他的。"""
+    """Delete the selected records in bulk. Ids that no longer exist are returned in missing and do not affect
+    the others."""
     ids = data.get("ids")
     if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
         raise HTTPException(400, "ids 必须是记录 id 列表")
@@ -497,7 +518,8 @@ async def delete_jobs(data: dict = Body(...)):
 
 
 def _check_idle(job: Job) -> None:
-    """清理缓存前确认记录没有在翻译、补生成或清理。"""
+    """Before clearing the cache, make sure the record is not being translated, generating the other version, or
+    being cleaned."""
     if job.status in ACTIVE:
         raise HTTPException(409, "该任务正在翻译，请先暂停")
     if job.id in variant_tasks:
@@ -508,7 +530,8 @@ def _check_idle(job: Job) -> None:
 
 @app.get("/api/jobs/{job_id}/cache")
 async def get_job_cache(job_id: str):
-    """清理前列出会清掉什么：缓存条目数、译文文件数、生成文件和版面识别结果的大小、共用同一文件的记录数。"""
+    """List what clearing would remove: number of cache entries, number of translation files, size of generated
+    files and layout recognition results, and number of records sharing the same file."""
     job = _job_or_404(job_id)
     translator = _service_translator(job)
     try:
@@ -520,8 +543,9 @@ async def get_job_cache(job_id: str):
 
 
 async def _clear(job: Job, boxes: bool = False) -> int:
-    """清理记录留下的缓存痕迹（见 cleanup.purge），返回删掉的缓存条目数。
-    先确认记录空闲；登记和检查之间没有 await，继续翻译、补生成插不进来。"""
+    """Clear what a record left in the caches (see cleanup.purge) and return the number of cache entries deleted.
+    The record is checked to be idle first; there is no await between registering and checking, so resuming
+    translation or generating the other version cannot get in."""
     _check_idle(job)
     cleaning.add(job.id)
     translator = _service_translator(job)
@@ -535,7 +559,8 @@ async def _clear(job: Job, boxes: bool = False) -> int:
 
 @app.delete("/api/jobs/{job_id}/cache")
 async def clear_job_cache(job_id: str, boxes: bool = False):
-    """清理记录留下的缓存痕迹，记录回到未翻译。boxes=true 时连版面模型的识别结果一起清。"""
+    """Clear what a record left in the caches; the record returns to untranslated. With boxes=true the layout
+    model's recognition results are cleared too."""
     job = _job_or_404(job_id)
     removed = await _clear(job, boxes)
     if jobs.get(job.id) is None:
@@ -547,7 +572,7 @@ async def clear_job_cache(job_id: str, boxes: bool = False):
 
 @app.post("/api/jobs/pause-all")
 async def pause_all_jobs():
-    """暂停所有正在翻译和排队的任务。"""
+    """Pause all jobs that are translating or queued."""
     targets = [j for j in jobs.list() if j.status in ACTIVE]
     results = await asyncio.gather(*(_pause(j) for j in targets))
     return {"paused": sum(results)}
@@ -555,7 +580,8 @@ async def pause_all_jobs():
 
 @app.post("/api/jobs/resume-all")
 async def resume_all_jobs():
-    """继续所有已暂停和已中断的任务，各自用原来的翻译服务（服务当前选中的模型）。"""
+    """Resume all paused and interrupted jobs, each with its original translation service (the model currently
+    selected in that service)."""
     resumed, failed = 0, []
     for job in jobs.list():
         if job.status not in ("paused", "interrupted"):
@@ -570,11 +596,11 @@ async def resume_all_jobs():
 
 @app.post("/api/jobs/{job_id}/pause")
 async def pause_job(job_id: str):
-    """暂停：立即停止发送请求。已翻好的段落在缓存里，继续翻译时直接复用。"""
+    """Pause: stop sending requests at once. Translated paragraphs are in the cache and are reused on resume."""
     job = _job_or_404(job_id)
     if not await _pause(job):
         raise HTTPException(400, "该任务未在翻译")
-    # 暂停期间记录可能被并发删除，别返回已过期的结果
+    # The record may be deleted concurrently during the pause; do not return a stale result
     if jobs.get(job_id) is None:
         raise HTTPException(404, "翻译记录不存在")
     return job.to_dict()
@@ -582,12 +608,16 @@ async def pause_job(job_id: str):
 
 @app.post("/api/jobs/{job_id}/retry")
 async def retry_job(job_id: str, data: dict | None = Body(None)):
-    """继续翻译（暂停、中断、失败后），或重译已完成的记录。已翻好的段落在缓存里，不会重复请求。
+    """Resume translation (after pause, interruption or failure), or retranslate a finished record. Translated
+    paragraphs are in the cache and are not requested again.
 
-    用的是服务当前的配置：在服务里换了模型，后面的段落就用新模型。
-    可以传 service_id 换一个服务；换了服务 id 就会按新服务重新翻译。
-    传 fresh=true 时先清理这条记录的缓存痕迹，再从头翻译，每一段都重新请求。
-    必须是 async：_start 会创建后台任务，需要在事件循环里调用。
+    The service's current configuration is used: after the model is changed in the service, the remaining
+    paragraphs use the new model.
+    service_id may be passed to switch services; with a different service id, translation is redone with the new
+    service.
+    With fresh=true, what this record left in the caches is cleared first, then translation starts over with every
+    paragraph requested again.
+    Must be async: _start creates a background task and has to be called in the event loop.
     """
     data = data or {}
     job = await _resume(_job_or_404(job_id), data.get("service_id"), fresh=bool(data.get("fresh")))
@@ -595,7 +625,8 @@ async def retry_job(job_id: str, data: dict | None = Body(None)):
 
 
 def _variant_service(job: Job, service: dict) -> dict:
-    """用当初翻译时的模型去对缓存。不改服务里当前选中的模型。"""
+    """Match the cache with the model used for the original translation. The model currently selected in the
+    service is not changed."""
     if not job.model:
         return service
     pinned = dict(service)
@@ -604,7 +635,8 @@ def _variant_service(job: Job, service: dict) -> dict:
 
 
 async def _cut_from_bilingual(job: Job, stage: Path) -> list[Path] | None:
-    """PDF 已经有双语版时，仅译文版直接从里面取，不重新排版。取不了返回 None。"""
+    """When a PDF already has a bilingual version, take the translated-only version from it without laying out
+    again. Return None when that is not possible."""
     src = jobs.source_path(job)
     made = next((name for name in job.outputs if output_variant(name) == "bilingual"), None)
     if src.suffix.lower() != ".pdf" or made is None or not (jobs.out_dir(job.id) / made).is_file():
@@ -617,7 +649,7 @@ async def _cut_from_bilingual(job: Job, stage: Path) -> list[Path] | None:
                 jobs.out_dir(job.id) / made,
                 jobs.load_preview(job),
             )
-    except (RuntimeError, ValueError):  # 双语版读不出来，重新排版
+    except (RuntimeError, ValueError):  # The bilingual version cannot be read; lay out again
         return None
     if data is None:
         return None
@@ -628,14 +660,16 @@ async def _cut_from_bilingual(job: Job, stage: Path) -> list[Path] | None:
 
 @app.post("/api/jobs/{job_id}/variant")
 async def build_variant(job_id: str):
-    """生成另一种版本（双语 ⇄ 仅译文）。PDF 的仅译文版从双语版里取，其余按当时的缓存重新排版，不请求翻译服务。"""
+    """Generate the other version (bilingual <-> translated-only). The translated-only version of a PDF is taken
+    from the bilingual version; everything else is laid out again from the cache of that run, without requests to
+    the translation service."""
     job = _job_or_404(job_id)
     if job.status != "done":
         raise HTTPException(400, "翻译完成后才能生成另一种版本")
     bilingual = job.mode != "bilingual"
     want = "bilingual" if bilingual else "translated"
     if any(output_variant(name) == want for name in job.outputs):
-        return job.to_dict()  # 已经生成过
+        return job.to_dict()  # Already generated
     if job.id in cleaning:
         raise HTTPException(409, "该记录正在清理，请稍后重试")
     if job.id in variant_tasks:
@@ -643,7 +677,7 @@ async def build_variant(job_id: str):
     task = asyncio.current_task()
     if task is None:
         raise HTTPException(500, "无法生成另一种版本")
-    # 登记必须发生在下一个 await 之前，否则两个请求会同时通过上面的检查
+    # Registration must happen before the next await; otherwise two requests could both pass the checks above
     variant_tasks[job.id] = task
     translator = None
     stage = jobs.dir(job.id) / ".variant"
@@ -677,7 +711,8 @@ async def build_variant(job_id: str):
             raise HTTPException(404, "翻译记录不存在")
         out_dir = jobs.out_dir(job.id)
         out_dir.mkdir(parents=True, exist_ok=True)
-        # 先落到临时目录，替换进 out/ 后再写入记录，避免写到一半被读到
+        # Write to a staging directory first and update the record after moving into out/, so a half-written
+        # result is never read
         for path in outputs:
             path.replace(out_dir / path.name)
             if path.name not in current.outputs:
@@ -696,27 +731,30 @@ async def build_variant(job_id: str):
 
 @app.get("/api/jobs/{job_id}/preview")
 def job_preview(job_id: str, since: int = -1):
-    """边翻边预览。since=-1 返回全部段落和已完成译文；之后用返回的 version 增量拉取。"""
+    """Preview during translation. since=-1 returns all paragraphs and finished translations; later calls fetch
+    increments with the returned version."""
     job = _job_or_404(job_id)
-    # 这个接口在线程池里跑，任务结束时事件循环会把 job.runner 置空，先取到局部变量再用
+    # This endpoint runs in the thread pool, and the event loop sets job.runner to None when the job ends, so take
+    # it into a local variable first
     runner = job.runner
     if runner is not None:
         return {**runner.preview(since), "status": job.status}
-    # 已结束的任务（包括重启前的）从快照读
+    # Finished jobs (including those from before a restart) are read from the snapshot
     snap = jobs.load_preview(job)
     if snap is None:
         return {"ready": False, "version": 0, "status": job.status}
     if since >= snap["version"]:
         return {"ready": True, "version": snap["version"], "updates": [], "status": job.status}
     if since >= 0:
-        # 上次拉取之后到任务结束之间翻好的段落只在快照里。快照不分版本，整份返回，前端会跳过已显示的段落
+        # Paragraphs translated between the last fetch and the end of the job are only in the snapshot. The
+        # snapshot has no versions, so it is returned whole, and the frontend skips paragraphs already shown
         return {"ready": True, "version": snap["version"], "updates": snap["updates"], "status": job.status}
     return {**snap, "status": job.status}
 
 
 @app.post("/api/jobs/{job_id}/focus")
 def job_focus(job_id: str, data: dict = Body(...)):
-    """预览里用户跳到了哪一段，后面优先翻译这附近。"""
+    """The paragraph the user jumped to in the preview; translation then prioritizes the area around it."""
     job = _job_or_404(job_id)
     try:
         index = int(data.get("index", 0))
@@ -724,7 +762,8 @@ def job_focus(job_id: str, data: dict = Body(...)):
         raise HTTPException(400, "index 必须是整数") from None
     runner = job.runner
     if runner is None:
-        # 任务已结束（Runner 已释放）：聚焦没有意义，直接视为成功；还没开始的保持失败
+        # The job has ended (Runner released): focusing is meaningless and counts as success; a job not yet
+        # started still fails
         return {"ok": job.status not in ACTIVE}
     runner.focus(index)
     return {"ok": True}
@@ -732,9 +771,10 @@ def job_focus(job_id: str, data: dict = Body(...)):
 
 @app.get("/api/jobs/{job_id}/files/{name}")
 def download(job_id: str, name: str, inline: bool = False):
-    """inline=1 时让浏览器直接打开（PDF 用自带的阅读器看），不弹下载。"""
+    """With inline=1 the browser opens the file directly (a PDF in its built-in viewer) instead of downloading
+    it."""
     job = _job_or_404(job_id)
-    # job.json 可能被篡改过，挡住带路径分隔符的文件名
+    # job.json may have been tampered with; reject file names containing path separators
     if Path(name).name != name:
         raise HTTPException(404, "文件不存在")
     if name in job.outputs:
@@ -744,8 +784,9 @@ def download(job_id: str, name: str, inline: bool = False):
     raise HTTPException(404, "文件不存在")
 
 
-# 书里的页面直接从 zip 里取出来给浏览器。书里的脚本一律不跑，免得它在本站的源下调接口；
-# 保留同源，书里的字体、样式照常加载，预览页也能跟上读者点进去的章节
+# Pages of the book are served to the browser straight from the zip. Scripts in the book never run, so they cannot
+# call the APIs under this site's origin; same origin is kept, so fonts and styles in the book load as usual and the
+# preview page can follow the chapter the reader clicks into
 _BOOK_PAGE_HEADERS = {
     "Content-Security-Policy": "sandbox allow-same-origin allow-popups; script-src 'none'; object-src 'none'",
     "X-Content-Type-Options": "nosniff",
@@ -763,7 +804,8 @@ def _epub_output(job_id: str, name: str) -> Path:
 
 @app.get("/api/jobs/{job_id}/epub/{name}")
 def epub_outline(job_id: str, name: str):
-    """在线预览 EPUB：书名、按 spine 排好的章节和目录。章节内容从下面的接口按成员名取。"""
+    """Online EPUB preview: title, chapters ordered by spine, and table of contents. Chapter content is fetched
+    by member name from the endpoint below."""
     path = _epub_output(job_id, name)
     try:
         with zipfile.ZipFile(path) as zf:
@@ -784,7 +826,7 @@ def epub_member(job_id: str, name: str, member: str):
     return Response(data, media_type=media, headers=_BOOK_PAGE_HEADERS)
 
 
-# ---------- 设置 ----------
+# ---------- Settings ----------
 
 
 @app.get("/api/settings")
@@ -798,12 +840,12 @@ async def update_settings(data: dict = Body(...)):
         result = settings.update(data)
     except SettingsError as e:
         raise HTTPException(400, str(e)) from e
-    await _cleanup()  # 改短了保留时间，立即清理
+    await _cleanup()  # The retention period may have been shortened; clean up at once
     return result
 
 
-# ---------- 版面模型、公式检测模型 ----------
-# 两个模型的接口一样：/api/layout-model、/api/formula-model
+# ---------- Layout model, formula detection model ----------
+# Both models have the same API: /api/layout-model, /api/formula-model
 MODEL_NAMES = {"layout": "版面模型", "formula": "公式检测模型"}
 
 
@@ -814,7 +856,8 @@ def _spec(kind: str) -> layout_model.ModelSpec:
 
 
 def _model_path(kind: str) -> str:
-    """PDF 翻译用的模型文件（按精度选，见 _model_file）。没开时是空串，只用规则。"""
+    """Model file used for PDF translation (chosen by precision, see _model_file). An empty string when disabled;
+    only the rules are used then."""
     spec = layout_model.MODELS[kind]
     conf = settings.model(spec.key)
     return _model_file(str(spec.resolve(conf["path"])), conf["precision"]) if conf["enabled"] else ""
@@ -827,7 +870,7 @@ def _formula_model() -> FormulaModel | None:
 
 
 def _model_file(path: str, precision: str) -> str:
-    """选了 int8、int8 文件也生成了时用它，否则用 fp32 文件。"""
+    """Use the int8 file when int8 is selected and the int8 file has been generated, otherwise the fp32 file."""
     int8 = quantize.int8_path(Path(path))
     return str(int8) if precision == "int8" and int8.is_file() else path
 
@@ -848,7 +891,7 @@ def _model_status(kind: str) -> dict:
         "in_use": _model_file(str(path), conf["precision"]),
     }
     if spec is layout_model.FORMULA:
-        # 页面上「自动」现在对应的值
+        # The values that "自动" on the page currently stands for
         workers, threads = formula_parallel()
         extra["auto"] = {"workers": workers, "threads": threads}
     return {
@@ -887,7 +930,8 @@ def update_model(kind: str, data: dict = Body(...)):
 
 @app.post("/api/{kind}-model/download")
 async def download_model(kind: str, data: dict = Body(...)):
-    """下到设置里的路径（留空是默认位置）。页面轮询 GET 看进度。"""
+    """Download to the path in the settings (empty means the default location). The page polls GET for
+    progress."""
     spec = _spec(kind)
     target = spec.resolve(str(data.get("path", settings.model(spec.key)["path"]) or ""))
     try:
@@ -899,16 +943,16 @@ async def download_model(kind: str, data: dict = Body(...)):
 
 @app.post("/api/{kind}-model/test")
 async def test_model(kind: str, data: dict | None = Body(None)):
-    """用表单里的路径（可能还没保存）加载模型，在一张样例页上跑一遍。"""
+    """Load the model from the path in the form (possibly unsaved) and run it once on a sample page."""
     spec = _spec(kind)
     conf = settings.model(spec.key)
     raw = (data or {}).get("path", conf["path"])
     size = (data or {}).get("size", conf.get("size"))
     path = spec.resolve(str(raw or ""))
-    # 测翻译时会用的那个文件
+    # Test the file that translation would use
     path = Path(_model_file(str(path), (data or {}).get("precision", conf["precision"])))
     try:
-        async with mupdf_turn():  # 样例页用 MuPDF 画，和正在跑的任务错开
+        async with mupdf_turn():  # The sample page is rendered with MuPDF, taking turns with running jobs
             return await asyncio.to_thread(layout_model.check, spec, path, size)
     except layout_model.LayoutModelError as e:
         raise HTTPException(400, str(e)) from e
@@ -916,7 +960,8 @@ async def test_model(kind: str, data: dict | None = Body(None)):
 
 @app.post("/api/{kind}-model/quantize")
 async def quantize_model(kind: str):
-    """用翻译过的 PDF 抽页校准，生成模型的 int8 版。页面轮询 GET 看进度。"""
+    """Generate the int8 version of the model, calibrated on pages sampled from translated PDFs. The page polls
+    GET for progress."""
     spec = _spec(kind)
     if not quantize.available():
         raise HTTPException(
@@ -925,14 +970,15 @@ async def quantize_model(kind: str):
     src = spec.resolve(settings.model(spec.key)["path"])
     if not src.is_file():
         raise HTTPException(400, f"找不到{MODEL_NAMES[kind]}文件：{src}，请先下载模型")
-    # 一次只生成一个：校准时每页的中间结果都留在内存里，两个一起生成要多占一倍
+    # Generate only one at a time: calibration keeps the intermediate results of every page in memory, and
+    # generating two together would take twice as much
     if any(quantizer.running for quantizer in quantizers.values()):
         raise HTTPException(
             400, "int8 模型正在生成" if quantizers[kind].running else "另一个模型的 int8 版本正在生成，请在完成后重试"
         )
     pdfs = [path for job in jobs.list() if (path := jobs.source_path(job)).suffix.lower() == ".pdf" and path.is_file()]
     quant = quantize.SPECS[kind]
-    async with mupdf_turn():  # 抽页要用 MuPDF 画，和正在跑的任务错开
+    async with mupdf_turn():  # Sampling pages renders with MuPDF, taking turns with running jobs
         picks = await asyncio.to_thread(quantize.pick_pages, pdfs)
         images = await asyncio.to_thread(quantize.calibration_images, picks, layout_model.sample_page, quant.size)
     try:
@@ -943,8 +989,10 @@ async def quantize_model(kind: str):
 
 
 class NoCacheStaticFiles(StaticFiles):
-    """前端文件不让浏览器凭缓存直接用：每次都带 ETag 问一下服务器，没改过返回 304，改过就拿新的。
-    否则改了 app.js 后，浏览器可能继续用旧版本（实际发生过：提交后仍然跳进阅读器）。"""
+    """Keep the browser from using cached frontend files directly: it asks the server with an ETag each time and
+    gets 304 when unchanged, or the new file when changed.
+    Otherwise, after app.js changes, the browser may keep using the old version (this happened: after a commit it
+    still jumped into the reader)."""
 
     def file_response(self, *args, **kwargs):
         response = super().file_response(*args, **kwargs)

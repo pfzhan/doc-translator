@@ -1,7 +1,9 @@
-"""批量翻译调度：去重、缓存、切批、并发、进度回调，以及边翻边预览。
+"""Batch translation scheduling: deduplication, cache, batching, concurrency, progress callbacks, and preview
+during translation.
 
-并发用固定数量的 worker 从待翻批次里取活：默认按文档顺序，预览里用户滚动或跳转后，
-优先取关注位置之后的批次（类似沉浸式翻译“翻译可视区域”的思路，但整本书最终都会翻完）。
+A fixed number of workers take batches from the pending ones: in document order by default; after the user
+scrolls or jumps in the preview, batches after the focus position come first (similar to the "翻译可视区域"
+approach of Immersive Translate, though the whole book is still translated in the end).
 """
 
 import asyncio
@@ -17,19 +19,20 @@ from .prompts import drop_added_braces, drop_invented_marks, strip_control_marks
 from .translators import Translator, TranslatorError, misplaced, stray_chars, typical_ratio
 
 CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "cache.sqlite3"
-# 候选术语少于这么多条的文档（短文、对话）不值得多一次请求
+# Documents with fewer candidate terms than this (short texts, dialogues) are not worth an extra request
 _MIN_TERMS = 3
 
 
 class Cache:
-    # 缓存只增不减会无限膨胀，超过上限时删掉最旧的一批
+    # A cache that only grows would bloat without limit; above this limit the oldest entries are deleted
     MAX_ENTRIES = 50000
 
     def __init__(self, path: Path = CACHE_PATH):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.execute("CREATE TABLE IF NOT EXISTS t (k TEXT PRIMARY KEY, v TEXT)")
-        # 条目属于哪些文件（文件内容的摘要）。键是哈希，看不出出自哪份文件，清理任务时按这张表删
+        # Which files (digests of file content) the entries belong to. Keys are hashes that do not show which file
+        # they came from, so cleaning up a job deletes by this table
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS owner (doc TEXT NOT NULL, k TEXT NOT NULL, PRIMARY KEY (doc, k)) WITHOUT ROWID"
         )
@@ -45,7 +48,8 @@ class Cache:
         return {cls._key(prefix, text) for text in texts}
 
     def claim(self, doc: str, prefix: str, texts: list[str]) -> None:
-        """登记这些条目被文件 doc 用到。写入和命中时都登记，以前存的条目用过一次也就有了归属。"""
+        """Record that file doc uses these entries. Recorded on both write and hit, so an entry stored earlier gets
+        an owner once it is used again."""
         if not doc or not texts:
             return
         with self.lock:
@@ -55,7 +59,8 @@ class Cache:
             self.conn.commit()
 
     def owned(self, doc: str, extra: set[str] = frozenset()) -> set[str]:
-        """文件 doc 名下还在缓存里的条目。extra 是按别的线索算出来的键，只留缓存里有的。"""
+        """Entries owned by file doc that are still in the cache. extra holds keys computed from other clues; only
+        those present in the cache are kept."""
         with self.lock:
             found = {
                 k
@@ -67,7 +72,8 @@ class Cache:
         return found
 
     def purge(self, doc: str, keys: set[str]) -> int:
-        """删掉这些条目和文件 doc 的登记，返回删掉的条目数。别的文件对这些条目的登记一并删掉，不留空引用。"""
+        """Delete these entries and the records of file doc, and return the number of entries deleted. Records of
+        other files for these entries are deleted too, so no dangling references remain."""
         with self.lock:
             rows = [(k,) for k in keys]
             removed = self.conn.executemany("DELETE FROM t WHERE k=?", rows).rowcount
@@ -86,7 +92,8 @@ class Cache:
         return out
 
     def drop_many(self, prefix: str, texts: list[str]) -> None:
-        """丢掉不该留下的缓存。整句英文回显下次还要再翻。"""
+        """Drop cache entries that should not be kept. A whole English sentence echoed back must be translated
+        again next time."""
         if not texts:
             return
         rows = [(self._key(prefix, text),) for text in texts]
@@ -103,7 +110,8 @@ class Cache:
             )
             (n,) = self.conn.execute("SELECT COUNT(*) FROM t").fetchone()
             if n > self.MAX_ENTRIES:
-                # rowid 随写入递增（REPLACE 刷新过的条目也算新），删掉最旧的，留一成余量
+                # rowid increases with each write (entries refreshed by REPLACE count as new); delete the oldest,
+                # leaving 10% headroom
                 self.conn.execute(
                     "DELETE FROM t WHERE rowid IN (SELECT rowid FROM t ORDER BY rowid LIMIT ?)",
                     (n - self.MAX_ENTRIES + self.MAX_ENTRIES // 10,),
@@ -123,7 +131,8 @@ def get_cache() -> Cache:
 
 
 class Runner:
-    # 第一批只发几段，让预览尽快出现；之后恢复正常批量
+    # The first batch sends only a few paragraphs so that the preview appears quickly; later batches are normal
+    # size
     first_batch_items = 4
 
     def __init__(
@@ -137,41 +146,44 @@ class Runner:
         self.translator = translator
         self.progress = progress or (lambda done, total: None)
         self.cache = cache if cache is not None else get_cache()
-        # 存取都经过它，顺带登记条目属于哪份文件
+        # All reads and writes go through it, which also records which file the entries belong to
         self.owned_cache = _OwnedCache(self.cache, lambda: self.document)
-        # 已经是目标语言的段落不翻（插件的段落语言检测）
+        # Paragraphs already in the target language are not translated (the plugin's paragraph language detection)
         self.skip_same_lang = skip_same_lang
-        # 只排版、不请求翻译服务：缺缓存时直接失败，避免用另一套配置悄悄重译
+        # Typeset only, without requests to the translation service: fail at once when the cache is missing
+        # entries, so that nothing is silently retranslated with another configuration
         self.cache_only = cache_only
-        # 给任务页展示：检测到的文档语言、跳过的段落数
+        # Shown on the job page: detected document language, number of skipped paragraphs
         self.info = {"detected_lang": "", "skipped": 0}
-        # 翻译前的准备、翻译后的写回做到哪一步（见 report_stage）
+        # How far preparation before translation and writing after translation have got (see report_stage)
         self.stage = {"name": "", "done": 0, "total": 0, "unit": ""}
-        # 文件内容的摘要（set_document），术语表按它缓存
+        # Digest of the file content (set_document); the glossary is cached by it
         self.document = ""
-        # 按段落序号覆盖预览译文（标题改写、段界去重），同一句在不同位置可以不同
+        # Preview translations overridden by paragraph index (heading rewrites, deduplication at paragraph
+        # boundaries); the same sentence may differ at different positions
         self._index_overrides: dict[int, str] = {}
-        # 上一次 translate_all 用的缓存：键带上各段的说明（见 _NotedCache）
+        # Cache used by the last translate_all: keys include each paragraph's note (see _NotedCache)
         self.keyed_cache = None
 
-        # ---- 边翻边预览 ----
-        # segments：文档顺序的段落 [{"s": 原文, "k": 类型}]，translate_all(preview=True) 时填充
+        # ---- Preview during translation ----
+        # segments: paragraphs in document order [{"s": source text, "k": kind}], filled by
+        # translate_all(preview=True)
         self.segments: list[dict] | None = None
-        self._indices: dict[str, list[int]] = {}  # 原文 → 出现的段落序号（同一句可能出现多次）
+        self._indices: dict[str, list[int]] = {}  # source text -> its paragraph indices (may occur several times)
         self._done: dict[str, str] = {}
         self._skipped: set[str] = set()
         self._skip_idx: set[int] = set()
-        # 完成顺序的日志，下标就是版本号；预览接口按 since 增量返回
+        # Log in order of completion; the index is the version number. The preview API returns increments by since
         self._log: list[str] = []
-        # 用户正在看的位置（段落序号），优先翻译它后面的内容
+        # Position the user is viewing (paragraph index); content after it is translated first
         self._focus: int | None = None
 
     def set_document(self, digest: str):
-        """正在翻译的文件（内容摘要）。同一份文件沿用第一次定下的术语表。"""
+        """The file being translated (content digest). The same file keeps the glossary fixed the first time."""
         self.document = digest
 
     def set_title(self, title: str):
-        """文档标题作为翻译上下文（只有大模型引擎用得上）。"""
+        """Document title as translation context (used only by LLM engines)."""
         if hasattr(self.translator, "title"):
             self.translator.title = (title or "").strip()[:200]
 
@@ -189,24 +201,26 @@ class Runner:
             batches.append(cur)
         return batches
 
-    # ---------- 预览 ----------
+    # ---------- Preview ----------
 
     def focus(self, index: int):
-        """预览里用户滚动或跳转到了第 index 段，之后优先翻译这附近。"""
+        """The user scrolled or jumped to paragraph index in the preview; translate around it first from now on."""
         self._focus = max(0, int(index))
 
     def _record(self, texts: list[str]):
         self._log.extend(texts)
 
     def report_stage(self, name: str, done: int = 0, total: int = 0, unit: str = "") -> None:
-        """翻译前的准备、翻译后的写回做到哪里，unit 是计数的单位（页、段）。整本书的版面分析、
-        写回各要几分钟，任务页据此显示进度。可以在线程里调用：只整体替换一个字典。
-        在 background.run 起的线程里调用时，任务被暂停就在这里停下（抛 background.Stopped）。"""
+        """Report how far preparation before translation or writing after translation has got; unit is the unit
+        counted (pages, paragraphs). Layout analysis and writing of a whole book each take several minutes, and
+        the job page shows progress from this. Safe to call from a thread: it only replaces one dict as a whole.
+        When called in a thread started by background.run, a paused job stops here (raises background.Stopped)."""
         self.stage = {"name": name, "done": done, "total": total, "unit": unit}
         background.check_stop()
 
     def preview(self, since: int = -1) -> dict:
-        """since < 0 时返回全部段落和所有已完成的译文；否则只返回版本 since 之后完成的。"""
+        """With since < 0, return all paragraphs and all finished translations; otherwise only those finished
+        after version since."""
         if self.segments is None:
             return {"ready": False, "version": 0}
         start = 0 if since < 0 else min(since, len(self._log))
@@ -214,7 +228,8 @@ class Runner:
         for text in self._log[start:]:
             translated = self._done.get(text, text)
             for i in self._indices.get(text, ()):
-                # 参考文献按位置跳过：同一句在正文里仍显示译文
+                # References are skipped by position: the same sentence in the body text still shows the
+                # translation
                 if i in self._skip_idx or text in self._skipped:
                     updates.append([i, text, 1])
                 else:
@@ -225,7 +240,8 @@ class Runner:
         return out
 
     def _next_batch(self, pending: list[tuple[int, list[str]]]):
-        """取下一批：有关注位置时取它之后最近的一批，否则按文档顺序。"""
+        """Take the next batch: the nearest one after the focus position if there is one, otherwise in document
+        order."""
         if not pending:
             return None
         pick = 0
@@ -234,7 +250,7 @@ class Runner:
         return pending.pop(pick)[1]
 
     def _detect(self, unique: list[str]) -> set[str]:
-        """检测文档语言，返回需要跳过（已是目标语言）的段落。"""
+        """Detect the document language and return the paragraphs to skip (already in the target language)."""
         tr = self.translator
         doc_lang = langdetect.detect_document(unique)
         self.info["detected_lang"] = doc_lang or ""
@@ -245,12 +261,16 @@ class Runner:
         return {t for t in unique if langdetect.same_language(langdetect.detect(t), tr.target_lang)}
 
     async def _prepare_glossary(self, texts: list[str]) -> None:
-        """在全文里找术语，请模型一次定好译名，之后每一批都按它翻。
+        """Find terms in the full text and ask the model to fix their translations once; every batch is then
+        translated with them.
 
-        结果进缓存：同一份文档续翻、重试、补生成另一种版本时用的是同一张表，段落缓存才对得上。
-        知道是哪个文件时按文件内容找，提取规则改了、候选清单跟着变也沿用原来那张表，
-        不然术语表一变，整篇的段落缓存都对不上。不知道文件、或者是改成这样之前存的，按候选清单找。
-        只排版的时候不请求，缓存里没有就不用术语表。定译名失败不影响翻译，只是这次没有术语表。
+        The result goes into the cache: resuming, retrying or generating the other version of the same document
+        uses the same table, so that the paragraph cache still matches. When the file is known, the table is looked
+        up by file content, so the original table is kept even when the extraction rules change and the candidate
+        list changes with them; otherwise a changed glossary would make the paragraph cache of the whole document
+        miss. When the file is unknown, or the table was stored before this change, it is looked up by the
+        candidate list. When only typesetting, no request is made, and without a cached table no glossary is used.
+        A failure to fix the translations does not affect translation; this run just has no glossary.
         """
         tr = self.translator
         if not getattr(tr, "auto_glossary", False) or not hasattr(tr, "define_terms"):
@@ -271,7 +291,7 @@ class Runner:
             try:
                 found = glossary.render(await tr.define_terms(terms, excerpt))
             except TranslatorError:
-                # 服务本身出了问题的话，接下来的翻译请求会报出来
+                # If the service itself has a problem, the following translation requests will report it
                 return
             self.owned_cache.put_many(prefix, {key: found for key in keys})
         elif keys[0] not in cached:
@@ -288,17 +308,23 @@ class Runner:
         skip: list[bool] | None = None,
         notes: list[str] | None = None,
     ) -> list[str]:
-        """按原顺序返回译文；空白文本和已是目标语言的段落原样返回。
+        """Return translations in the original order; blank texts and paragraphs already in the target language
+        are returned unchanged.
 
-        preview=True 时记录段落供预览接口读取；kinds 是每段的类型（h1~h6 / p / li / quote / td / toc），
-        只影响预览的显示样式。html 与 texts 对齐，标记哪些段是电子书富文本片段。
-        skip 与 texts 对齐，标记调用方要求保留原文的段落（如参考文献章节），预览里标注为跳过。
-        这个标记按位置生效：同一句在正文里出现时仍会翻译。
-        notes 与 texts 对齐，是各段在文档里所处位置的说明（索引的子条目属于哪一条），随批次交给模型选词义。
-        同一句有说明和没有说明译法可能不同，缓存按原文加说明存。同一句出现多次时用第一个说明。
+        With preview=True the paragraphs are recorded for the preview API; kinds is the kind of each paragraph
+        (h1~h6 / p / li / quote / td / toc) and affects only the display style of the preview. html is aligned
+        with texts and marks which paragraphs are e-book rich-text fragments.
+        skip is aligned with texts and marks paragraphs where the caller asks to keep the original text (such as
+        a references section); the preview marks them as skipped.
+        The flag applies by position: the same sentence is still translated where it occurs in the body text.
+        notes is aligned with texts and holds notes on where each paragraph appears in the document (which entry
+        a subentry of an index belongs to); they go to the model with the batch to choose word senses.
+        A sentence may be translated differently with and without a note, so the cache stores by source text plus
+        note. When a sentence occurs several times, the first note is used.
         """
         n = len(texts)
-        # 准备阶段到此结束。之后的进度看已译段数，格式自己再报写回的阶段
+        # The preparation stage ends here. Progress from now on is the number of translated paragraphs; the format
+        # reports its own writing stage later
         self.report_stage("")
         skip_flags = list(skip or [])
         if len(skip_flags) < n:
@@ -308,7 +334,7 @@ class Runner:
         html_flags = list(html or [])
         if len(html_flags) < n:
             html_flags.extend([False] * (n - len(html_flags)))
-        # 只有调用方标了的段才按 HTML 发送；正文里的 <Note> 不是标签
+        # Only paragraphs flagged by the caller are sent as HTML; a <Note> in body text is not a tag
         unique = list(dict.fromkeys(t for t in texts if t.strip()))
         lang_skipped = await asyncio.to_thread(self._detect, unique)
 
@@ -328,17 +354,22 @@ class Runner:
         def key(text: str) -> str:
             return noted_key(text, note_of.get(text, ""))
 
-        # 翻完以后格式自己补翻的译文（见 pdf 的 _retry_lost_placeholders）也按这个键写回
+        # Translations that the format retranslates itself after translation (see
+        # pdf_restore._retry_lost_placeholders) are also written back with this key
         self.keyed_cache = cache = _NotedCache(self.owned_cache, key)
-        # 术语表要在算缓存键之前定下来：它是键的一部分
+        # The glossary must be fixed before the cache keys are computed: it is part of the key
         await self._prepare_glossary(need)
         prefix = self.translator.cache_key
         tl = self.translator.target_lang
         done_map = cache.get_many(prefix, need)
-        # 整句英文回显进过缓存的话，下次重排仍是英文。丢掉，让这次重新翻译。
+        # If a whole English sentence echoed back got into the cache, the next re-layout would still be English.
+        # Drop it so it is translated again this time.
         echoed = [src for src, dst in done_map.items() if _is_prose_echo(src, dst)]
-        # 以前批量翻译时串了位、夹带了外文的译文也进过缓存，同样丢掉重翻。只排版时没法重翻，留着。
-        # 串了位的那一批里别的段多半也跟着挪了一格，前后一批篇幅内的一起丢掉
+        # Translations that were shifted to the wrong paragraph or carried foreign text in earlier batch
+        # translation also got into the cache; drop them and translate again too. When only typesetting they cannot
+        # be retranslated and are kept.
+        # Other paragraphs in a shifted batch were most likely shifted by one as well, so paragraphs within one
+        # batch length before and after are dropped too
         if not self.cache_only:
             typical = typical_ratio(done_map.items())
             shifted = {src for src, dst in done_map.items() if src not in echoed and misplaced(src, dst, typical)}
@@ -361,8 +392,9 @@ class Runner:
                 return dst
             return fix_numbered_unit(dst, tl, html=src in html_sources)
 
-        # 标题和目录的旧缓存可能还是「第2卷」、译文可能还带全角括号/逗号或漏进来的 [[END]]：
-        # 命中时改写，预览不用重翻
+        # Old cache entries for headings and contents may still read "第2卷", and translations may still carry
+        # full-width parentheses/commas or a leaked [[END]]: rewrite them on a hit, so the preview needs no
+        # retranslation
         rewrites = {t: d2 for t, d in done_map.items() if (d2 := fixed(t, d)) != d}
         if rewrites:
             cache.put_many(prefix, rewrites)
@@ -371,7 +403,8 @@ class Runner:
         if self.cache_only and todo:
             raise ValueError("部分段落不在翻译缓存中，无法仅重新排版，请重新翻译。")
 
-        # 每段原文第一次出现的位置，用来按“离关注位置的远近”挑批次
+        # Position of the first occurrence of each source text, used to pick batches by distance from the focus
+        # position
         first_pos: dict[str, int] = {}
         for i, t in enumerate(texts):
             if t.strip() and not kept(i):
@@ -388,8 +421,9 @@ class Runner:
             self._skip_idx = {i for i in range(n) if skip_flags[i]}
             self._log = []
             self.segments = [{"s": t, "k": (kinds[i] if kinds else "p")} for i, t in enumerate(texts)]
-            # 已是目标语言的、调用方整句跳过的、缓存命中的，预览里直接显示。
-            # 同一句只有部分位置跳过时，等译文出来再按位置分别标。
+            # Paragraphs already in the target language, skipped whole by the caller, or found in the cache are shown
+            # in the preview at once. When a sentence is skipped only at some positions, each position is marked
+            # once the translation arrives.
             immediate: list[str] = []
             seen: set[str] = set()
             for t in texts:
@@ -404,7 +438,7 @@ class Runner:
         total = len(need)
         done = len(done_map)
         self.progress(done, total)
-        failed: list[str] = []  # 返回空译文的段落：回填原文，超过阈值才判失败
+        failed: list[str] = []  # Empty results: fall back to the source text; fail only above a threshold
 
         pending = [(first_pos[b[0]], b) for b in self._make_batches(todo)]
 
@@ -414,11 +448,12 @@ class Runner:
                 try:
                     result = await self.translator.translate_batch(batch)
                 except BaseException:
-                    pending.clear()  # 出错时让其他并发任务也尽快停下
+                    pending.clear()  # On error, make the other concurrent workers stop soon too
                     raise
                 pairs = dict(zip(batch, result))
-                # 回显检测（仅大模型引擎）：长段落译文检测出来仍是源语言，等于没翻（批量模式常见）。
-                # 逐段重翻一次；仍是源语言才保留（专有名词、代码段不会更差）
+                # Echo detection (LLM engines only): a long paragraph whose translation is still detected as the source
+                # language was not translated (common in batch mode). Retranslate each such paragraph once; if the
+                # retry is still in the source language, the first result is kept (no worse for proper nouns and code)
                 from .translators import LLMTranslator
 
                 src_lang = getattr(self.translator, "detected_source", "") or getattr(
@@ -440,8 +475,9 @@ class Runner:
                         for s, (rt,) in zip(echoes, retried):
                             if rt and rt.strip() and langdetect.detect(rt) != src_lang:
                                 pairs[s] = rt
-                # 空译文不写缓存、不计入完成（否则会永久缓存空结果），按失败处理。
-                # 标题和目录的「第2卷」在入库前改成中文数字
+                # Empty translations are not cached and not counted as done (otherwise an empty result would be
+                # cached for good); they are treated as failures.
+                # "第2卷" in headings and contents is changed to Chinese numerals before storing
                 good = {s: fixed(s, d) for s, d in pairs.items() if d and d.strip() and not _is_prose_echo(s, d)}
                 empty = [s for s in batch if s not in good]
                 if good:
@@ -451,12 +487,14 @@ class Runner:
                         self._record(list(good))
                     done += len(good)
                 if empty:
-                    # 回填策略（BabelDOC 同款）：个别段落空译文保留原文，不让整本书失败；
-                    # 但全部失败，或失败段超过阈值时，不能当成功返回
+                    # Fallback policy (the same as BabelDOC): a few empty translations keep the original text instead
+                    # of failing the whole book, but when all fail, or failures exceed the threshold, this must not
+                    # return as success
                     failed.extend(empty)
                     done += len(empty)
                 self.progress(done, total)
-                # 接口立即返回时（mock、本地模型）这个循环不会交出事件循环，整段翻译期间服务不响应
+                # When the API returns immediately (mock, local model), this loop would never yield the event loop
+                # and the server would not respond during the whole translation
                 await asyncio.sleep(0)
 
         workers = min(self.translator.concurrency, len(pending))
@@ -468,7 +506,8 @@ class Runner:
 
 
 def _batch_around(order: list[str], flagged: set[str], limit: int) -> set[str]:
-    """order 里 flagged 各段前后各一批篇幅（limit 个字符）以内的段落。"""
+    """Paragraphs in order within one batch length (limit characters) before and after each flagged
+    paragraph."""
     out: set[str] = set()
     for index, text in enumerate(order):
         if text not in flagged:
@@ -483,13 +522,15 @@ def _batch_around(order: list[str], flagged: set[str], limit: int) -> set[str]:
 
 
 def noted_key(text: str, note: str) -> str:
-    """缓存里按什么存这一段：带说明的段落连说明一起算，同一句在不同位置可以译得不同。"""
+    """The cache key for a paragraph: a paragraph with a note includes the note, so the same sentence can be
+    translated differently at different positions."""
     return f"{text}\n\n[note] {note}" if note else text
 
 
 class _OwnedCache:
-    """转给底下的缓存，存进去的和命中的条目登记到当前文件（doc() 是文件内容的摘要）名下。
-    底下的缓存不支持登记（测试里的内存缓存）或者不知道是哪份文件时只转发。"""
+    """Forward to the underlying cache, recording stored and hit entries under the current file (doc() is the
+    digest of the file content). When the underlying cache does not support recording (the in-memory cache in
+    tests) or the file is unknown, it only forwards."""
 
     def __init__(self, cache, doc: Callable[[], str]):
         self.cache = cache
@@ -514,7 +555,8 @@ class _OwnedCache:
 
 
 class _NotedCache:
-    """按原文存取译文，键换成 key(原文)：带说明的段落连说明一起算键。"""
+    """Store and fetch translations by source text, with the key replaced by key(source): a paragraph with a note
+    includes the note in its key."""
 
     def __init__(self, cache, key: Callable[[str], str]):
         self.cache = cache
@@ -535,32 +577,36 @@ class _NotedCache:
 _CN_DIGITS = "零一二三四五六七八九"
 _HEADING_KINDS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6", "toc"})
 _PARENS = str.maketrans("（）", "()")
-# 句号、书名号、引号保持全角；其余全角标点换成半角并补一个空格（已有空格不重复）
+# Full stops, title marks and quotation marks stay full-width; other full-width punctuation becomes half-width
+# followed by a space (an existing space is not doubled)
 _PUNCT_HALF = {"，": ",", "、": ",", "；": ";", "：": ":", "？": "?", "！": "!"}
 _PUNCT_RE = re.compile(r"([，、；：？！])\s*")
-# 原文里带点的编号和小数：7.6、16.4.3、0.5
+# Dotted numbers and decimals in the source text: 7.6, 16.4.3, 0.5
 _DOTTED_RE = re.compile(r"(?<![\d.])\d{1,4}(?:\.\d{1,4})+(?![\d.])")
 _CN_NUMERALS = "一二三四五六七八九十百千零〇"
-# 第2卷、第２卷，以及模型翻串了的“第卷26”。单位不含页/期/号，那些保留阿拉伯数字
+# "第2卷", "第２卷", and "第卷26" garbled by the model. The units exclude page/issue/number ("页/期/号"), which
+# keep Arabic digits
 _UNIT_HEAD_RE = re.compile(r"^第([0-9０-９]{1,4})(?=[卷章部篇集册])")
 _UNIT_INVERTED_RE = re.compile(r"^第([卷章部篇集册])([0-9０-９]{1,4})")
-# 第25卷第1期、第3页、第5号：卷期页号不是章节标题
+# "第25卷第1期", "第3页", "第5号": volume, issue, page and number references are not chapter headings
 _CITE_RE = re.compile(r"第[0-9０-９]{1,4}\s*[期页号]|[卷章部篇集册]\s*第?\s*[0-9０-９]{1,4}\s*期")
 _FULLWIDTH = str.maketrans("０１２３４５６７８９", "0123456789")
 _NUM_CHARS = frozenset("第0123456789０１２３４５６７８９卷章部篇集册")
 
 
-# 两边都是列表分隔符、运算符的省略号是数学里的省略（T1, T2, …, Tn；x1 + … + xn），
-# 只写一个。中文的「……」收在句尾、话尾，不会夹在两个逗号中间。中间可以隔着样式标记、占位符
+# An ellipsis with list separators or operators on both sides is a mathematical ellipsis (T1, T2, …, Tn;
+# x1 + … + xn) and is written once. The Chinese "……" ends a sentence or utterance and never sits between two
+# commas. Style markers and placeholders may come in between
 _MARKS = r"(?:\{[^{}\s]{1,10}\}|\x01[^\x02]{0,8}\x02)*"
 _LIST_SEP = r"[,，、;；+\-=<>≤≥×·]"
 _LIST_ELLIPSIS_RE = re.compile(rf"({_LIST_SEP}[ \t]*{_MARKS}[ \t]*)(?:……|⋯⋯|\.{{6}})({_MARKS}[ \t]*{_LIST_SEP})")
 
 
 def normalize_punctuation(dst: str, target_lang: str) -> str:
-    """中文译文的全角标点统一半角：括号直接换，逗号/顿号/分号/冒号/问号/叹号
-    换成半角并补一个空格。句号、书名号、引号保持全角——它们是中文排版的一部分，
-    而全角的 , ; : ? ! 和汉字同宽，夹在正文里又宽又笨。"""
+    """Make full-width punctuation in Chinese translations half-width: parentheses are replaced directly; commas,
+    enumeration commas, semicolons, colons, question marks and exclamation marks become half-width followed by a
+    space. Full stops, title marks and quotation marks stay full-width, since they are part of Chinese typesetting,
+    while full-width , ; : ? ! are as wide as a Chinese character and look wide and clumsy in body text."""
     if not target_lang.startswith("zh"):
         return dst
     out = _PUNCT_RE.sub(lambda m: _PUNCT_HALF[m.group(1)] + " ", dst.translate(_PARENS))
@@ -569,7 +615,8 @@ def normalize_punctuation(dst: str, target_lang: str) -> str:
 
 
 def _is_prose_echo(src: str, dst: str) -> bool:
-    """一整句英文正文被原样回显。代码和短标签不算，那些留着不会更差。"""
+    """A whole English body-text sentence was echoed back unchanged. Code and short labels do not count; leaving
+    them is no worse."""
     plain = dst.strip()
     if not plain or plain.startswith("<") or "dxl:" in plain.lower():
         return False
@@ -584,7 +631,8 @@ def _is_prose_echo(src: str, dst: str) -> bool:
 
 
 def _cn_number(n: int, *, higher: bool = False) -> str:
-    """1–9999 转中文。单独的 10–19 是「十 / 十一」；作为更高位的余数时补「一」（一百一十）。"""
+    """Convert 1–9999 to Chinese. A standalone 10–19 is "十 / 十一"; as the remainder of a higher place it gets a
+    leading "一" ("一百一十")."""
     if n < 0:
         return str(n)
     if n < 10:
@@ -605,10 +653,11 @@ def _cn_number(n: int, *, higher: bool = False) -> str:
 
 
 def _unit_span(text: str) -> tuple[int, int, str] | None:
-    """可见文字里要替换的区间（相对 text）和替换串。不适用时返回 None。
+    """The span of visible text to replace (relative to text) and its replacement. Return None when not
+    applicable.
 
-    普通形式只替换数字（「第2卷」→ 把 2 换成「二」），单位留在原处。
-    颠倒形式「第卷26」把单位和数字一起换成「二十六卷」。
+    The normal form replaces only the digits ("第2卷": 2 becomes "二") and leaves the unit in place.
+    The inverted form "第卷26" replaces unit and digits together with "二十六卷".
     """
     stripped = text.strip()
     if len(stripped) > 40 or not stripped.startswith("第") or _CITE_RE.search(stripped):
@@ -628,10 +677,12 @@ def _unit_span(text: str) -> tuple[int, int, str] | None:
 
 
 def fix_numbered_unit(dst: str, target_lang: str, *, html: bool = False) -> str:
-    """标题、目录开头的阿拉伯数字章节编号改成中文数字。不适用时原样返回。
+    """Change an Arabic chapter number at the start of a heading or contents entry to Chinese numerals. Return the
+    text unchanged when not applicable.
 
-    html=True 才解析标签（调用方标记的富文本）。纯文本里的尖括号只做字符串替换。
-    后面跟着期、页、号的短引文不改。
+    Tags are parsed only with html=True (rich text flagged by the caller). Angle brackets in plain text get only
+    string replacement.
+    Short citations followed by issue, page or number ("期", "页", "号") are not changed.
     """
     if not target_lang.startswith("zh"):
         return dst
@@ -646,14 +697,16 @@ def fix_numbered_unit(dst: str, target_lang: str, *, html: bool = False) -> str:
     return dst.replace(core, new, 1) if new != core else dst
 
 
-# 自闭合的行内标签（calibre 的 <a id="x"/>、<span id="x"/> 锚点）：
-# html.parser 会把它们当成开放标签吞掉后面的内容，先展开成显式闭合再解析。
-# 斜杠前的空白要丢掉，否则序列化结果和展开串对不上，编号不会改。
+# Self-closing inline tags (calibre's <a id="x"/>, <span id="x"/> anchors):
+# html.parser treats them as open tags that swallow the following content, so they are expanded to explicit
+# closing tags before parsing. Whitespace before the slash is dropped; otherwise the serialized result does not
+# match the expanded string and the number is not changed.
 _SELFCLOSED_INLINE_RE = re.compile(r"<(a|span)\b([^>]*?)\s*/>")
 
 
 def _fix_html_unit(dst: str) -> str:
-    """富文本只改数字所在的文本节点。解析器改动了标签或丢掉文字时原样返回。"""
+    """In rich text, change only the text nodes holding the digits. Return the text unchanged when the parser
+    altered tags or dropped text."""
     from bs4 import BeautifulSoup, NavigableString, Tag
 
     from .formats.html_blocks import _is_page_anchor
@@ -699,21 +752,24 @@ def _fix_html_unit(dst: str) -> str:
     return "".join(str(child) for child in frag.children)
 
 
-# 段首的编号：带点的小节号（7.4、1.2.3），或者后面直接跟着词的章号（12 Agents）。前面可以有样式标记或标签
+# Number at the start of a paragraph: a dotted section number (7.4, 1.2.3) or a chapter number directly followed
+# by a word (12 Agents). Style markers or tags may precede it
 _LEADING_MARKS = r"\s*(?:\{[^{}\s]{1,8}\}|<[^<>]+>)*\s*"
 _SECTION_NUMBER_RE = re.compile(_LEADING_MARKS + r"(\d{1,3}(?:\.\d{1,3})+)(?![\d.])")
 _BARE_NUMBER_RE = re.compile(_LEADING_MARKS + r"(\d{1,3})\s+(?=[^\W\d_])")
 
 
 def clean_translation(src: str, dst: str, target_lang: str) -> str:
-    """模型译文入库前统一整理：去掉漏进来的协议标记和编造的标记，理顺样式标记，标点、编号改回原文写法。"""
+    """Tidy a model translation before storing: remove leaked protocol markers and invented markers, straighten
+    style markers, and restore punctuation and numbers to the form of the source text."""
     dst = drop_invented_marks(src, strip_control_marks(dst))
     dst = drop_added_braces(src, tidy_marks(src, dst))
     return keep_section_number(src, normalize_punctuation(dst, target_lang), target_lang)
 
 
 def _readings(number: str) -> list[str]:
-    """带点编号的中文读法，长的在前：十六点四点三；小数部分也可能逐位读（二点一零）。"""
+    """Chinese readings of a dotted number, longest first: "十六点四点三"; the decimal part may also be read digit
+    by digit ("二点一零")."""
     head, *rest = number.split(".")
     whole = _cn_number(int(head))
     readings = {
@@ -724,7 +780,7 @@ def _readings(number: str) -> list[str]:
 
 
 def keep_dotted_numbers(src: str, dst: str) -> str:
-    """原文的 7.6、16.4.3 被读成「七点六」「十六点四点三」时改回原文的写法。"""
+    """Restore 7.6, 16.4.3 from the source text when they were read out as "七点六", "十六点四点三"."""
     if "点" not in dst:
         return dst
     for number in sorted(set(_DOTTED_RE.findall(src)), key=len, reverse=True):
@@ -734,9 +790,11 @@ def keep_dotted_numbers(src: str, dst: str) -> str:
 
 
 def keep_section_number(src: str, dst: str, target_lang: str) -> str:
-    """原文编号是阿拉伯数字，译文却写成「七点四」「四.11」「第一点七点一」，或给裸章号加上
-    「第十二章」时改回原样。提示词以前让目录、标题里的章节号一律写中文数字，模型连带点的
-    小节号、没写 Chapter 的章号也改了，同一页有的改有的不改。缓存里的旧译文命中时也走这里。"""
+    """Restore the original when the source number is in Arabic digits but the translation writes "七点四",
+    "四.11", "第一点七点一", or adds "第十二章" to a bare chapter number. The prompt used to ask for
+    Chinese numerals for all chapter numbers in contents and headings, and the model also changed dotted section
+    numbers and chapter numbers without "Chapter", some on a page and not others. Old cached translations also
+    pass through here on a hit."""
     if not target_lang.startswith("zh"):
         return dst
     dst = keep_dotted_numbers(src, dst)
@@ -756,7 +814,7 @@ def keep_section_number(src: str, dst: str, target_lang: str) -> str:
 
 
 def normalize_numbered_units(texts: list[str], results: list[str], target_lang: str) -> dict[str, str]:
-    """批量版的 fix_numbered_unit，返回 {原文: 修正后译文}。"""
+    """Batch version of fix_numbered_unit; return {source text: corrected translation}."""
     fixed: dict[str, str] = {}
     for src, dst in zip(texts, results):
         new = fix_numbered_unit(dst, target_lang)

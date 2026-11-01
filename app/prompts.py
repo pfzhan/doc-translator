@@ -1,24 +1,28 @@
-"""AI 翻译提示词，取自沉浸式翻译 1.33.3 的默认配置（default_config.json 的 translationServices.ai）。
+"""AI translation prompts, taken from the default configuration of Immersive Translate 1.33.3
+(translationServices.ai in default_config.json).
 
-用的是它的“AI 批量标记协议”（aiBatch marker protocol）：
-- 输入：每段前面一行 [[p0]]、[[p1]]…，最后一行 [[source_end]]
-- 输出：同样的 [[pN]] 标题行 + 译文，模型可以按任意顺序返回
-- 系统提示词 = 任务提示词（taskSystemPrompt）+ 协议说明（protocolSystemPrompt）
-- 只有一段时不用协议，直接让模型输出译文
+They use its "AI batch marker protocol" (aiBatch marker protocol):
+- Input: each paragraph is preceded by a line [[p0]], [[p1]], ..., and the last line is [[source_end]]
+- Output: the same [[pN]] heading lines followed by the translations; the model may return them in any order
+- System prompt = task prompt (taskSystemPrompt) + protocol description (protocolSystemPrompt)
+- With a single paragraph the protocol is not used and the model outputs the translation directly
 
-按语言覆盖（langOverrides）和插件的匹配规则一致：每项 id 是 "<from>2<to>"，
-from 是 auto 或当前源语言、to 是 auto 或当前目标语言时生效，按顺序叠加，extends 先叠加被继承的项。
-所以 "auto2zh-CN" 对任何源语言生效，"wyw2zh-CN" 只在源语言是文言文时生效并覆盖前者。
+Per-language overrides (langOverrides) follow the plugin's matching rules: each item id is "<from>2<to>", and an
+item applies when from is auto or the current source language and to is auto or the current target language.
+Matching items are applied in order, and extends applies the inherited item first. So "auto2zh-CN" applies to
+any source language, while "wyw2zh-CN" applies only when the source language is Classical Chinese and overrides
+the former.
 
-占位符：{{to}} 目标语言，{{from}} 源语言，{{text}} 原文，{{title_prompt}} 文档标题上下文，
-{{summary_prompt}} / {{terms_prompt}} / {{imt_style_guide}} 暂未使用（留空），方便以后加摘要和术语表。
+Placeholders: {{to}} target language, {{from}} source language, {{text}} source text, {{title_prompt}} document
+title context. {{summary_prompt}} / {{terms_prompt}} / {{imt_style_guide}} are not used yet (left empty), so that
+a summary and a glossary can be added later.
 """
 
 import re
 
 from .languages import LANG_OVERRIDES, LANGUAGES
 
-# {{to}} / {{from}} 用英文语言名，和插件一致
+# {{to}} / {{from}} use English language names, as the plugin does
 LANG_EN = {code: en for code, en, _ in LANGUAGES}
 
 TASK_SYSTEM_PROMPT = """You are a professional {{to}} native translator. Translate each source item accurately and fluently into {{to}}.
@@ -37,7 +41,8 @@ TASK_SYSTEM_PROMPT = """You are a professional {{to}} native translator. Transla
 
 USER_PROMPT = "Translate to {{to}}:\n\n{{text}}"
 
-# 多段时附加在系统提示词后面的协议说明（插件里术语提取关闭时的版本）
+# Protocol description appended to the system prompt for several paragraphs (the plugin's version with term
+# extraction turned off)
 PROTOCOL_SYSTEM_PROMPT = """
 
 ## Multi-item processing protocol
@@ -55,8 +60,8 @@ Do not wrap the entire response or protocol envelope in a Markdown fence.
 Fenced code blocks that belong to an item's processed content may be preserved.
 Do not include explanations outside processed text."""
 
-# 只有一段时附加的说明。书里故意写半截的例句（"IBM, a company with a long..."）单独送去时，
-# 模型会回一句「请提供完整的原文」
+# Instruction appended when there is only one paragraph. When an example sentence that a book leaves unfinished
+# on purpose ("IBM, a company with a long...") is sent alone, the model replies "请提供完整的原文"
 SINGLE_ITEM_SUFFIX = """
 The text may be a single word, a label, or an unfinished sentence; process it as
 given and never ask for more context or the full text.
@@ -64,7 +69,8 @@ Return only the processed text, without source text, markers, titles,
 explanations, or an enclosing Markdown fence. Preserve fenced code blocks that
 belong to the processed content."""
 
-# 块内和正文不同的粗体、斜体、字号、颜色。模型必须带着标记走，译完才写得回原样式。
+# Bold, italic, font size and color in a block that differ from the body text. The model must carry the markers
+# along so that the original styles can be written back after translation.
 STYLE_SUFFIX = """
 
 ## Style placeholders
@@ -76,7 +82,9 @@ drop, or invent markers."""
 
 _STYLE_IN_TEXT = re.compile(r"\{/?[biu]\}|\{z\d+\}|\{c[0-9a-f]{6}\}")
 
-# 跨页段落的 run 分界。模型原样保留，写回时收成一段排满再接；中间隔着行间公式、例句的按它切回两块（见 pdf._seam_apart）。
+# Run boundary of a paragraph carried over to the next page. The model keeps it unchanged. When writing, the two
+# parts are typeset as one paragraph that fills the first part before continuing; a unit with a display formula or
+# an example sentence between its parts is split back into two blocks at the boundary (see pdf_merge._seam_apart).
 BOUNDARY_SUFFIX = """
 
 ## Page-boundary placeholder
@@ -84,7 +92,9 @@ Some items contain a {|} placeholder. It marks where one paragraph crosses a
 page. Keep {|} and every {vN} unchanged, in the same order. Do not translate,
 drop, or move the braces."""
 
-# 行内公式的占位符（PDF 的公式，电子书段落里的 MathML 和图片）。模型常按上下文把 {v1} 猜成「=」写出来，占位符一丢，整段只能回退原文。
+# Placeholders for inline formulas (formulas in PDFs, MathML and images in e-book paragraphs). The model often
+# guesses {v1} from the context and writes it out as "="; once a placeholder is lost, the whole paragraph
+# falls back to the original text.
 FORMULA_SUFFIX = """
 
 ## Formula placeholders
@@ -95,7 +105,8 @@ contains, and do not drop or renumber it."""
 
 _FORMULA_IN_TEXT = re.compile(r"\{v\d+\}")
 
-# 批次里含 HTML 片段（电子书富文本段落）时附加：保留行内格式（加粗、链接）
+# Appended when the batch contains HTML fragments (e-book rich-text paragraphs): keep inline formatting (bold,
+# links)
 HTML_SUFFIX = """
 
 ## HTML fragments
@@ -104,7 +115,8 @@ and class) and translate only the text between tags. Move a tag together with th
 words it wraps so the markup follows the target word order. Do not add, drop, or
 nest tags."""
 
-# 条目在文档里所处位置的说明（索引页上的子条目属于哪一条）。只用来选词义，不译、不输出
+# Notes on where an item appears in the document (which entry a subentry on an index page belongs to). Used only
+# to choose word senses; not translated and not output
 NOTES_SUFFIX = """
 
 ## Item notes
@@ -114,10 +126,11 @@ or add it to the output."""
 
 TITLE_PROMPT = "\n\n## Context Awareness\nDocument Metadata:\nTitle: “{{imt_title}}”"
 
-# 术语表：每行“原文 = 译文”，翻译时保持一致
+# Glossary: one "source = translation" per line, kept consistent during translation
 TERMS_PROMPT = "\n\n## Glossary\nUse these translations consistently:\n{{glossary}}"
 
-# 翻译前定术语译名：候选是本地从全文数出来的，普通词让模型删掉
+# Fixing term translations before translating: the candidates are counted locally from the full text, and the
+# model is asked to drop ordinary words
 TERMS_SYSTEM_PROMPT = """You are preparing the terminology list for translating a document into {{to}}.{{title_prompt}}
 
 The user lists candidate terms that recur in the document. They were counted mechanically, so
@@ -143,19 +156,21 @@ TERMS_USER_PROMPT = "Document excerpt:\n{{excerpt}}\n\nCandidate terms:\n{{terms
 SOURCE_END = "[[source_end]]"
 MARKER_RE = re.compile(r"^\[\[(p\d+)\]\]$", re.I)
 CONTROL_RE = re.compile(r"^\[\[(?:p\d+|source_end|terms|term|end)\]\]$", re.I)
-# 模型有时把收尾标记写成大写，或者接在译文最后一行后面：……8200。[[END]]
+# The model sometimes writes the closing marker in upper case, or appends it to the last line of the
+# translation: "……8200。[[END]]"
 TAIL_CONTROL_RE = re.compile(r"\s*\[\[(?:source_end|terms|term|end)\]\]\s*$", re.I)
 
 
 def pick_marker(texts: list[str]) -> str:
-    """选段落标记前缀。原文本身有独占一行的 [[pN]] 时换用别的前缀，避免被当成协议标记截断。"""
+    """Choose the paragraph marker prefix. When the source text itself has [[pN]] on a line of its own, another
+    prefix is used so that the text is not cut there as a protocol marker."""
     for prefix in ("p", "q", "s"):
         if not any(re.search(rf"^\[\[{prefix}\d+\]\]$", t, re.M) for t in texts):
             return prefix
-    return "p"  # 三种前缀都被占用的极端情况，维持默认
+    return "p"  # Edge case where all three prefixes are taken: keep the default
 
 
-# 插件的 removeResRegexs：去掉推理模型输出的 <think> 段
+# The plugin's removeResRegexs: remove the <think> section output by reasoning models
 THINK_RE = re.compile(r"^\s*<think>[\s\S]*?</think>\s*|^\s*</think>\s*")
 
 _OVERRIDES = {o["id"]: o for o in LANG_OVERRIDES}
@@ -166,7 +181,8 @@ def lang_name(code: str) -> str:
 
 
 def default_prompts(target_lang: str, source_lang: str = "auto") -> dict:
-    """按插件的 langOverrides 规则算出某个语言对的默认提示词（未填充占位符）。"""
+    """Compute the default prompts for a language pair by the plugin's langOverrides rules (placeholders not
+    filled)."""
     result = {"system": TASK_SYSTEM_PROMPT, "user": USER_PROMPT}
 
     def apply(item):
@@ -184,7 +200,7 @@ def default_prompts(target_lang: str, source_lang: str = "auto") -> dict:
 
 
 def fill(template: str, values: dict) -> str:
-    # 先展开 {{title_prompt}} 这类片段，片段里可能还有 {{imt_title}}
+    # Expand fragments such as {{title_prompt}} first; a fragment may contain {{imt_title}} in turn
     for _ in range(2):
         template = re.sub(r"\{\{(\w+)\}\}", lambda m: values.get(m.group(1), m.group(0)), template)
     return template
@@ -202,18 +218,20 @@ def build_messages(
     glossary: str = "",
     notes: list[str] | None = None,
 ) -> tuple[str, str]:
-    """返回 (system, user)。自定义模板为空时用默认模板。source_lang 是用户选的或检测出的源语言。
-    notes 与 texts 对齐，是各段在文档里所处位置的说明，空串表示没有。"""
+    """Return (system, user). The default templates are used when the custom templates are empty. source_lang is
+    the source language chosen by the user or detected.
+    notes is aligned with texts and holds notes on where each paragraph appears in the document; an empty string
+    means no note."""
     defaults = default_prompts(target_lang, source_lang)
     system_t = system_template.strip() or defaults["system"]
     user_t = user_template.strip() or defaults["user"]
     if "{{text}}" not in user_t:
         user_t += "\n\n{{text}}"
-    # 术语表：每行“原文 = 译文”，多余的空行去掉
+    # Glossary: one "source = translation" per line, with extra blank lines removed
     terms = "\n".join(line for line in (glossary or "").splitlines() if line.strip())
     values = {
         "to": lang_name(target_lang),
-        # 不知道源语言时，插件也是把 {{from}} 填成 "Auto Detect"
+        # When the source language is unknown, the plugin also fills {{from}} with "Auto Detect"
         "from": lang_name(source_lang or "auto"),
         "title_prompt": TITLE_PROMPT if title else "",
         "imt_title": title,
@@ -244,7 +262,8 @@ def build_messages(
             system += f"Note: {noted[0][1]}"
         else:
             system += "\n".join(f"[[{marker}{i}]] {note}" for i, note in noted)
-    # {{text}} 最后替换，避免原文里恰好有 {{xxx}} 被当成占位符
+    # {{text}} is replaced last, so that a {{xxx}} that happens to be in the source text is not taken as a
+    # placeholder
     user = fill(user_t.replace("{{text}}", "\0TEXT\0"), values).replace("\0TEXT\0", body)
     return system, user
 
@@ -252,7 +271,7 @@ def build_messages(
 def build_terms_messages(
     terms: list[str], target_lang: str, *, source_lang: str = "auto", title: str = "", excerpt: str = ""
 ) -> tuple[str, str]:
-    """定术语译名的 (system, user)。"""
+    """(system, user) for fixing term translations."""
     values = {
         "to": lang_name(target_lang),
         "from": lang_name(source_lang or "auto"),
@@ -266,36 +285,39 @@ def build_terms_messages(
 
 def clean_output(content: str) -> str:
     content = THINK_RE.sub("", content).strip()
-    # 去掉包住整个回复的 ``` 围栏
+    # Remove a ``` fence around the whole reply
     m = re.fullmatch(r"```[\w-]*\n([\s\S]*?)\n```", content)
     return m.group(1).strip() if m else content
 
 
 def strip_control_marks(text: str) -> str:
-    """去掉漏进译文的协议标记（[[END]]、[[source_end]]）。旧缓存里可能已经带着。"""
+    """Remove protocol markers that leaked into the translation ([[END]], [[source_end]]). Old cache entries may
+    already contain them."""
     lines = [line for line in text.split("\n") if not CONTROL_RE.match(line.strip())]
     return TAIL_CONTROL_RE.sub("", "\n".join(lines)).strip()
 
 
-# 协议标记样子的 [[词]]
+# A [[word]] that looks like a protocol marker
 _BRACKET_WORD_RE = re.compile(r"[ \t]*\[\[/?[A-Za-z_][\w-]*\]\]")
 
 
 def drop_invented_marks(src: str, dst: str) -> str:
-    """去掉原文里没有的 [[词]]。模型偶尔照着协议标记自己编一个（[[toolong]]、[[/INST]]），接在译文后面。"""
+    """Remove a [[word]] that is not in the source text. The model occasionally invents one modelled on the
+    protocol markers ([[toolong]], [[/INST]]) and appends it to the translation."""
     if "[[" not in dst:
         return dst
     kept = {match.group().strip() for match in _BRACKET_WORD_RE.finditer(src)}
     lines: list[str] = []
     for line in dst.split("\n"):
         cleaned = _BRACKET_WORD_RE.sub(lambda match: match.group() if match.group().strip() in kept else "", line)
-        # 标记独占的一行整行去掉
+        # A line holding only such a marker is removed entirely
         if cleaned == line or cleaned.strip():
             lines.append(cleaned)
     return "\n".join(lines)
 
 
-# 送翻文本里的标记：强调、字号、颜色的开关，公式占位符，跨页分界
+# Markers in the text sent for translation: on/off markers for emphasis, font size and color, formula
+# placeholders, and page boundaries
 _MARK_TOKEN_RE = re.compile(r"\{(?:/?[biuzc]|z\d+|c[0-9a-f]{6}|v\d+|\|)\}")
 _PLACEHOLDER_RE = re.compile(r"\{v\d+\}")
 
@@ -305,12 +327,13 @@ def without_marks(text: str) -> str:
 
 
 def placeholders(text: str) -> set[str]:
-    """公式占位符 {v1}、{v2}…"""
+    """Formula placeholders {v1}, {v2}, ..."""
     return set(_PLACEHOLDER_RE.findall(text))
 
 
 def _braces_at_marks(text: str) -> tuple[list[int], list[int]]:
-    """紧贴标记的字面 {、} 的位置。标记本身的花括号不算。"""
+    """Positions of literal { and } directly adjacent to markers. The braces of the markers themselves do not
+    count."""
     marks = [(m.start(), m.end()) for m in _MARK_TOKEN_RE.finditer(text)]
     starts = {start for start, _end in marks}
     ends = {end for _start, end in marks}
@@ -320,16 +343,18 @@ def _braces_at_marks(text: str) -> tuple[list[int], list[int]]:
     return before, after
 
 
-# 写走样的标记：花括号里夹了空白、零宽字符、问号（{ i}、{​i}、{ i? }），写成方括号（[i]），
-# 收尾写成 >（{/b>），颜色的收尾带上色号（{/cb30000}）
+# Malformed markers: whitespace, zero-width characters or question marks inside the braces ({ i}, {​i}, { i? }),
+# square brackets instead of braces ([i]), a closing > ({/b>}), or a color closing marker carrying the color code
+# ({/cb30000})
 _LOOSE_MARK_RE = re.compile(r"[{\[][^{}\[\]<>\n]{1,14}[}\]>]")
 _NOT_MARK_CHAR_RE = re.compile(r"[^A-Za-z0-9/|]")
 _CLOSE_WITH_ARG_RE = re.compile(r"^/(c)[0-9a-f]{6}$|^/(z)\d+$")
 
 
 def tidy_marks(src: str, dst: str) -> str:
-    """模型偶尔把标记写走样，认不出是标记，渲染成字面的 i、/cb30000。改回标准写法；
-    只改成原文里有的标记，原文正文里本来就有的同样写法（{ i}、x[i]）不动。"""
+    """The model occasionally writes a marker in a malformed way; it is then not recognized as a marker and is
+    rendered as a literal i or /cb30000. Restore the standard form, using only markers present in the source text;
+    the same forms that already occur in the source body text ({ i}, x[i]) are left alone."""
     marks = set(_MARK_TOKEN_RE.findall(src))
 
     def tidy(match: re.Match[str]) -> str:
@@ -345,9 +370,10 @@ def tidy_marks(src: str, dst: str) -> str:
 
 
 def drop_added_braces(src: str, dst: str) -> str:
-    """去掉模型套在标记外面的花括号：{{b}填充词{/b}}、{/b}}、{{c0000ff}Chen{/c}}。
-    原文正文里有 {n,m} 这类花括号时，模型会把标记也照着写一层。只去紧贴标记的，
-    而且原文同样位置上一个都没有才去；集合 {{i}o{/i}{v1}, …} 原文就有，留着。"""
+    """Remove braces the model wrapped around markers: "{{b}填充词{/b}}", {/b}}, {{c0000ff}Chen{/c}}.
+    When the source body text has braces such as {n,m}, the model wraps the markers in a layer of braces too.
+    Only braces directly adjacent to markers are removed, and only when the source text has none at the same
+    positions; the set {{i}o{/i}{v1}, …} is in the source text and is kept."""
     if "{" not in dst:
         return dst
     src_before, src_after = _braces_at_marks(src)
@@ -363,7 +389,8 @@ def drop_added_braces(src: str, dst: str) -> str:
 
 
 def parse_markers(content: str, count: int, marker: str = "p") -> dict[int, str]:
-    """解析 [[pN]] 格式的回复，返回 {序号: 译文}；缺失的序号不在结果里。marker 需与 build_messages 用的一致。"""
+    """Parse a reply in [[pN]] format and return {index: translation}; missing indices are not in the result.
+    marker must match the one used by build_messages."""
     marker_re = MARKER_RE if marker == "p" else re.compile(rf"^\[\[({marker}\d+)\]\]$", re.I)
     control_re = (
         CONTROL_RE if marker == "p" else re.compile(rf"^\[\[(?:{marker}\d+|source_end|terms|term|end)\]\]$", re.I)

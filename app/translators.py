@@ -1,8 +1,9 @@
-"""翻译引擎。每个引擎实现 translate_batch(texts) -> list[str]。
+"""Translation engines. Each engine implements translate_batch(texts) -> list[str].
 
-大模型引擎（OpenAI / Grok / Gemini / Claude / OpenAI 兼容）共用同一套批量翻译逻辑，
-提示词和 [[pN]] 标记协议取自沉浸式翻译（见 prompts.py）。模型漏掉的段落会单独补翻。
-各家只在请求格式上不同，由子类实现 _complete。
+LLM engines (OpenAI / Grok / Gemini / Claude / OpenAI-compatible) share the same batch translation logic; the
+prompts and the [[pN]] marker protocol are taken from Immersive Translate (see prompts.py). Paragraphs the model
+leaves out are translated again one by one.
+Providers differ only in request format, which subclasses implement in _complete.
 """
 
 import asyncio
@@ -17,19 +18,19 @@ from . import glossary as glossary_mod
 from . import prompts
 from .languages import GOOGLE_CODES, LANGUAGES
 
-# 前端下拉框用的语言列表：[(代码, 英文名, 本地名)]，顺序与插件一致
+# Language list for the frontend drop-down: [(code, English name, native name)], in the same order as the plugin
 LANG_CODES = {code for code, _, _ in LANGUAGES}
 
 
 class TranslatorError(Exception):
     def __init__(self, message: str = "", status: int | None = None):
         super().__init__(message)
-        # 接口返回的 HTTP 状态码；网络错误、解析错误等没有状态码时为 None
+        # HTTP status code returned by the API; None when there is none, such as for network or parse errors
         self.status = status
 
 
 class Translator:
-    # 单批最多多少段、多少字符，由 Runner 用来切批
+    # Maximum paragraphs and characters per batch, used by Runner to split batches
     max_batch_items = 20
     max_batch_chars = 3000
     concurrency = 4
@@ -41,15 +42,20 @@ class Translator:
             raise TranslatorError(f"不支持的源语言: {source_lang}")
         self.target_lang = target_lang
         self.source_lang = source_lang
-        # 源语言选“自动检测”时，由 Runner 检测文档语言后填进来，用于提示词的 {{from}}
+        # When the source language is "自动检测", Runner fills this in after detecting the document language; used
+        # for {{from}} in the prompt
         self.detected_source = ""
-        # 翻译服务 id，算进缓存 key：换了服务就重新翻译，同一个服务重用缓存
+        # Translation service id, part of the cache key: a different service translates again, the same service
+        # reuses the cache
         self.service_id = ""
-        # 接口返回的 token 用量（大模型引擎在 _complete 里累计）；谷歌等不提供的保持 0
+        # Token usage returned by the API (LLM engines accumulate it in _complete); stays 0 for engines that do not
+        # report it, such as Google
         self.usage = {"prompt": 0, "completion": 0}
-        # 由 Runner 按调用方标记填入：这些原文是电子书富文本片段，不能从尖括号猜
+        # Filled in by Runner from the caller's flags: these source texts are e-book rich-text fragments, which
+        # cannot be guessed from angle brackets
         self.html_texts: set[str] = set()
-        # 由 Runner 按调用方给的说明填入：原文 → 它在文档里所处位置的说明（只有大模型引擎用得上）
+        # Filled in by Runner from the notes the caller gives: source text -> note on where it appears in the
+        # document (used only by LLM engines)
         self.notes: dict[str, str] = {}
 
     def is_html_item(self, text: str) -> bool:
@@ -79,7 +85,7 @@ def _error_text(resp: httpx.Response) -> str:
         data = resp.json()
     except ValueError:
         return resp.text[:300]
-    # 中转站的错误响应不一定是 JSON 对象，可能是数组或字符串
+    # Error responses from relay services are not always JSON objects; they may be arrays or strings
     if not isinstance(data, dict):
         return str(data)[:300]
     err = data.get("error", data)
@@ -87,24 +93,28 @@ def _error_text(resp: httpx.Response) -> str:
     return str(msg or resp.text)[:300]
 
 
-# 年份、页码、编号这类三位以上的数字，翻译前后应该原样都在
+# Numbers of three or more digits, such as years, page numbers and identifiers, should be present unchanged
+# before and after translation
 _NUMBER_RE = re.compile(r"\d{3,}")
 
 
 def _numbers_mismatch(source: str, translation: str) -> bool:
-    """原文的数字译文里一个都没有，却有别的数字：多半是模型把两段并成一段，后面的译文整体错了位。"""
+    """None of the source numbers is in the translation, but other numbers are: most likely the model merged two
+    paragraphs into one and the following translations are all shifted."""
     src = set(_NUMBER_RE.findall(source))
     dst = set(_NUMBER_RE.findall(translation))
     return bool(src) and bool(dst) and not (src & dst)
 
 
-# 译文和原文的长度比偏离常见值这么多倍，多半是模型把相邻几段串了位，或者译到一半断了。
-# 实测英译中常见值约 0.35，正常译文最低约 0.58 倍，原样照抄的最高约 3 倍
+# When the translation/source length ratio deviates from the typical value by this factor, most likely the model
+# shifted adjacent paragraphs or stopped halfway.
+# Measured for English to Chinese: the typical value is about 0.35, normal translations go as low as about 0.58
+# times that, and verbatim copies as high as about 3 times
 _RATIO_LOW = 0.45
 _RATIO_HIGH = 4.0
-# 原文去掉标记后至少这么长才比长度，短句的比例本来就散
+# Minimum source length without markers for comparing lengths; ratios of short sentences vary widely anyway
 _RATIO_MIN_CHARS = 60
-# 算常见值至少要这么多段
+# Minimum number of paragraphs for computing the typical value
 _RATIO_SAMPLES = 3
 
 
@@ -116,7 +126,8 @@ def _length_ratio(source: str, translation: str) -> float | None:
 
 
 def typical_ratio(pairs) -> float | None:
-    """一批 (原文, 译文) 的长度比中位数。段数太少时不算。"""
+    """Median length ratio of a batch of (source, translation). Not computed when there are too few
+    paragraphs."""
     ratios = sorted(r for source, translation in pairs if (r := _length_ratio(source, translation)) is not None)
     if len(ratios) < _RATIO_SAMPLES:
         return None
@@ -124,9 +135,10 @@ def typical_ratio(pairs) -> float | None:
 
 
 def misplaced(source: str, translation: str, typical: float | None) -> bool:
-    """译文多半不是这一段的：带着原文没有的公式占位符，或者长度比远离同批的常见值。
-    短句的比例本来就散，只看上限：原文按 _RATIO_MIN_CHARS 算，译文还长得多，是串进了别段
-    （三个词的标题拿到了下一段的译文）"""
+    """The translation most likely belongs to another paragraph: it carries formula placeholders the source lacks,
+    or its length ratio is far from the typical value of the batch. Ratios of short sentences vary widely anyway,
+    so only the upper bound is checked: counting the source as _RATIO_MIN_CHARS, a translation still much longer
+    has picked up another paragraph (a three-word heading got the translation of the next paragraph)"""
     if prompts.placeholders(translation) - prompts.placeholders(source):
         return True
     if not typical:
@@ -137,8 +149,9 @@ def misplaced(source: str, translation: str, typical: float | None) -> bool:
     return len(prompts.without_marks(translation).strip()) > typical * _RATIO_HIGH * _RATIO_MIN_CHARS
 
 
-# 判断夹带外文用的文字系统，取字符 Unicode 名称的第一个词。拉丁字母、希腊字母不在其中：
-# 代码、人名、公式符号（μ律、λ）在任何语言的译文里都可能出现
+# Scripts used to detect foreign text, taken from the first word of a character's Unicode name. Latin and Greek
+# are not among them: code, personal names and formula symbols ("μ律", λ) may appear in translations into any
+# language
 _SCRIPTS = frozenset(
     {
         "CYRILLIC",
@@ -171,7 +184,7 @@ _SCRIPTS = frozenset(
         "CJK",
     }
 )
-# 本地名里看不出的文字系统：日文的假名
+# Scripts not visible in the native name: Japanese kana
 _EXTRA_SCRIPTS = {"ja": {"HIRAGANA", "KATAKANA"}}
 _NATIVE_NAMES = {code: native for code, _, native in LANGUAGES}
 
@@ -187,13 +200,15 @@ def _scripts(text: str) -> set[str]:
 
 
 def _symbols(text: str) -> set[str]:
-    """杂项符号、装饰符号、表情和私用区字符。译文里的这类字符应当都来自原文。"""
+    """Miscellaneous symbols, dingbats, emoji and private-use characters. Such characters in a translation should
+    all come from the source text."""
     return {ch for ch in text if 0x2600 <= ord(ch) <= 0x27BF or ord(ch) >= 0x1F000 or unicodedata.category(ch) == "Co"}
 
 
 def stray_chars(source: str, translation: str, target_lang: str) -> bool:
-    """译文里夹着原文和目标语言都不用的文字，例如中文译文里冒出半个俄文词「убед自己」，
-    或者原文没有的符号（标题后面多出一串「♀♀♀」）。目标语言用的文字从它的本地名（简体中文、Русский）里看。"""
+    """The translation contains a script used by neither the source text nor the target language, such as half a
+    Russian word in a Chinese translation ("убед自己"), or symbols the source lacks (a run of "♀♀♀" after a
+    heading). The scripts of the target language are read from its native name ("简体中文", "Русский")."""
     if _symbols(translation) - _symbols(source):
         return True
     allowed = _scripts(source) | _scripts(_NATIVE_NAMES.get(target_lang, ""))
@@ -201,7 +216,8 @@ def stray_chars(source: str, translation: str, target_lang: str) -> bool:
     return bool(_scripts(translation) - allowed)
 
 
-# 这些状态码说明是我们这边的配置有问题（Key 错、没权限、地址错），重试也不会好，立即报错
+# These status codes mean our configuration is wrong (bad Key, no permission, wrong address); retrying will not
+# help, so report the error at once
 FATAL_STATUS = {401, 403, 404}
 
 
@@ -210,7 +226,8 @@ def _retryable(status: int) -> bool:
 
 
 def _retry_delay(resp: httpx.Response, default: float) -> float:
-    """重试间隔：响应头带 Retry-After 时优先使用（上限 60s），否则用传入的指数退避值。"""
+    """Retry delay: use the Retry-After response header when present (capped at 60 s), otherwise the given
+    exponential backoff value."""
     try:
         delay = float(resp.headers.get("retry-after") or 0)
     except ValueError:
@@ -219,7 +236,8 @@ def _retry_delay(resp: httpx.Response, default: float) -> float:
 
 
 def _json_or_error(resp: httpx.Response, url: str) -> dict:
-    """解析 JSON 响应。返回的是网页（常见于 API 地址少了 /v1，请求落到了中转站首页）时给出可读的错误。"""
+    """Parse a JSON response. Give a readable error when a web page comes back (common when the API address lacks
+    /v1 and the request lands on the relay service's home page)."""
     try:
         data = resp.json()
     except ValueError:
@@ -236,14 +254,15 @@ def _json_or_error(resp: httpx.Response, url: str) -> dict:
 
 
 def _with_default_path(url: str, path: str) -> str:
-    """API 地址只填了域名（没有路径）时补上版本路径，和 OpenAI SDK、Cherry Studio 等客户端的习惯一致。"""
+    """Append the version path when the API address is only a domain (no path), as clients such as the OpenAI SDK
+    and Cherry Studio do."""
     url = url.strip().rstrip("/")
     if url and not urlparse(url).path:
         url += path
     return url
 
 
-# 只填了域名时补的版本路径：Claude 和 OpenAI 系是 /v1，Gemini 是 /v1beta
+# Version path appended when only a domain is given: /v1 for Claude and the OpenAI family, /v1beta for Gemini
 DEFAULT_API_PATH = {"openai": "/v1", "grok": "/v1", "custom": "/v1", "claude": "/v1", "gemini": "/v1beta"}
 
 
@@ -274,15 +293,17 @@ class LLMTranslator(Translator):
         super().__init__(target_lang, source_lang)
         if not model:
             raise TranslatorError("未设置模型")
-        # api_format：OpenAI 系可选 "responses"（Responses API），默认 Chat Completions
-        # auth_style：Claude 可选 "bearer"（Authorization: Bearer，中转站常用），默认 x-api-key
+        # api_format: the OpenAI family may choose "responses" (Responses API); the default is Chat Completions
+        # auth_style: Claude may choose "bearer" (Authorization: Bearer, common with relay services); the default is
+        # x-api-key
         self.api_format = api_format
         self.auth_style = auth_style
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.concurrency = max(1, int(concurrency))
-        # 并发上限：translate_batch 里拆批 / 补翻的 gather 也要过这个信号量，否则会绕过 Runner 的 worker 限制
+        # Concurrency limit: the gather calls for batch splitting / retranslation in translate_batch also go through
+        # this semaphore; otherwise they would bypass Runner's worker limit
         self._sem = asyncio.Semaphore(self.concurrency)
         self.max_batch_items = max(1, int(max_items))
         self.max_batch_chars = max(200, int(max_chars))
@@ -290,28 +311,34 @@ class LLMTranslator(Translator):
         self.prompt = prompt.strip()
         self.user_prompt = user_prompt.strip()
         self.glossary = glossary
-        # 翻译前从文档里找术语、定译名（Runner 调 define_terms，结果放进 doc_glossary）
+        # Find terms in the document and fix their translations before translating (Runner calls define_terms and
+        # the result goes into doc_glossary)
         self.auto_glossary = auto_glossary
         self.doc_glossary: list[glossary_mod.Entry] = []
-        # 文档标题，作为上下文填进提示词的 {{title_prompt}}
+        # Document title, filled into {{title_prompt}} of the prompt as context
         self.title = ""
         self.client = httpx.AsyncClient(timeout=180, transport=transport)
 
     @property
     def cache_key(self):
-        # 模型、提示词、术语表进缓存键：换了就自动整本重翻，换回来仍命中该配置自己的缓存。
-        # 源语言影响提示词（{{from}}、wyw2zh-CN 这类覆盖），用检测后的实际源语言
+        # Model, prompts and glossary are part of the cache key: changing them retranslates the whole book
+        # automatically, and changing back still hits that configuration's own cache.
+        # The source language affects the prompts ({{from}}, overrides such as wyw2zh-CN), so the actual detected
+        # source language is used
         p = hashlib.sha1(f"{self.prompt}\0{self.user_prompt}\0{self.glossary}".encode()).hexdigest()[:8]
         key = f"{self.service_id}:{self.provider}:{self.model}:{p}:{self.effective_source}:{self.target_lang}"
-        # 文档术语表也影响译文。没有时键不变，以前的缓存照样命中
+        # The document glossary also affects the translation. Without one the key is unchanged, so earlier cache
+        # entries still hit
         if self.doc_glossary:
             key += ":g" + hashlib.sha1(glossary_mod.render(self.doc_glossary).encode()).hexdigest()[:8]
         return key
 
     def glossary_for(self, texts: list[str]) -> str:
-        """这一批用的术语表：用户填的加文档里找到的，只留原文里出现了的条目。
+        """Glossary for this batch: the user's entries plus those found in the document, keeping only entries that
+        occur in the source text.
 
-        用户填的行没写成“原文 = 译文”的，看不出跟哪段有关，每批都带上。
+        Lines from the user not written as "source = translation" cannot be tied to any paragraph and go with every
+        batch.
         """
         lines = [line.strip() for line in self.glossary.splitlines() if line.strip()]
         loose = [line for line in lines if not glossary_mod.parse(line)]
@@ -319,7 +346,8 @@ class LLMTranslator(Translator):
         return "\n".join([*loose, glossary_mod.render(glossary_mod.relevant(entries, texts))]).strip()
 
     async def define_terms(self, terms: list[str], excerpt: str = "") -> list[glossary_mod.Entry]:
-        """一次请求定下候选术语的译名。模型删掉的、改了写法的候选不收。"""
+        """Fix the translations of the candidate terms in one request. Candidates the model dropped or rewrote are
+        not accepted."""
         system, user = prompts.build_terms_messages(
             terms,
             self.target_lang,
@@ -353,10 +381,12 @@ class LLMTranslator(Translator):
         raise NotImplementedError
 
     async def _post(self, url: str, payload: dict, headers: dict) -> dict:
-        """带重试的 POST。部分推理模型不接受 temperature，遇到这种 400 会去掉后重发。
+        """POST with retries. Some reasoning models do not accept temperature; on such a 400 it is removed and the
+        request is sent again.
 
-        中转站经常把上游的偶发故障（号池轮换、渠道临时下线）原样包装成 400 返回，
-        同样的请求过几秒就能成功，所以除了明确是我们这边配置错误的情况，400 也按可重试处理。
+        Relay services often wrap occasional upstream failures (account pool rotation, a channel going offline
+        temporarily) as a 400, and the same request succeeds a few seconds later, so a 400 is treated as retryable
+        too, except when it clearly comes from a configuration error on our side.
         """
         for attempt in range(self.retries):
             last = attempt == self.retries - 1
@@ -370,7 +400,7 @@ class LLMTranslator(Translator):
             if resp.status_code == 200:
                 return _json_or_error(resp, url)
             msg = _error_text(resp)
-            # 最后一次尝试不再剥离 temperature 重发，让真实错误抛出来
+            # The last attempt does not strip temperature and resend, so the real error is raised
             if resp.status_code == 400 and "temperature" in msg.lower() and self.temperature is not None and not last:
                 self.temperature = None
                 payload = {k: v for k, v in payload.items() if k != "temperature"}
@@ -378,7 +408,8 @@ class LLMTranslator(Translator):
                 if isinstance(gen, dict):
                     payload["generationConfig"] = {k: v for k, v in gen.items() if k != "temperature"}
                 continue
-            # 400 只原样重试一次（应付偶发故障）；再失败就交给 translate_batch 拆批，不在这里白等
+            # A 400 is retried unchanged only once (for occasional failures); if it fails again, translate_batch splits
+            # the batch instead of waiting here in vain
             if _retryable(resp.status_code) and not last and not (resp.status_code == 400 and attempt >= 1):
                 await asyncio.sleep(_retry_delay(resp, 2 ** (attempt + 1)))
                 continue
@@ -400,25 +431,32 @@ class LLMTranslator(Translator):
     async def translate_batch(self, texts):
         system, user = self.build_messages(texts)
         try:
-            # 实际发请求的唯一入口，递归拆批 / 补翻最终也回到这里，都受同一个信号量限制
+            # The only place that actually sends requests; recursive batch splitting / retranslation ends up here too,
+            # all limited by the same semaphore
             async with self._sem:
                 content = await self._complete(system, user)
-                # 回空多是上游偶发故障，原样再问一次。仍是空的，批量时下面逐段补翻，单段时 Runner 回填原文
+                # An empty reply is mostly an occasional upstream failure; ask again unchanged. If it is still empty,
+                # a batch is retranslated paragraph by paragraph below, and for a single paragraph Runner falls back
+                # to the source text
                 if not content.strip():
                     content = await self._complete(system, user)
         except TranslatorError as e:
-            # 中转站会稳定拒绝某些段落组合（实测同一批 8 段每次都 400，拆开后每一部分都能翻），
-            # 原样重试没用，拆成两半各自翻。只对 400 这样做：配置错误（401/403/404）拆了也没用，
-            # 429、5xx 已经在 _post 里退避重试过了，再拆只会放大请求量
+            # Relay services consistently reject some combinations of paragraphs (measured: the same batch of 8
+            # paragraphs got a 400 every time, while each part translated after splitting).
+            # Retrying unchanged does not help, so split into two halves translated separately. This is done only
+            # for 400: splitting does not help configuration errors (401/403/404), and 429 and 5xx were already
+            # retried with backoff in _post, so splitting would only multiply requests
             if len(texts) == 1 or e.status != 400:
                 raise
             mid = len(texts) // 2
-            # 两半并行翻：串行的话批次越拆越深，最后几段会排很久的队
+            # Translate both halves in parallel: serially, the deeper the splitting goes, the longer the last
+            # paragraphs wait in the queue
             left, right = await asyncio.gather(self.translate_batch(texts[:mid]), self.translate_batch(texts[mid:]))
             return left + right
         if len(texts) == 1:
             out = prompts.clean_output(content)
-            # 夹带外文的译文再问一次，仍然夹带就照收，由 Runner 下次重排时丢掉重翻
+            # Ask again for a translation carrying foreign text; if it still does, accept it, and Runner drops and
+            # retranslates it at the next re-layout
             if stray_chars(texts[0], out, self.target_lang):
                 async with self._sem:
                     again = prompts.clean_output(await self._complete(system, user))
@@ -426,9 +464,12 @@ class LLMTranslator(Translator):
                     out = again
             return [out]
         found = prompts.parse_markers(content, len(texts), marker=prompts.pick_marker(texts))
-        # 模型漏掉的段落补翻（和插件的 recovery 思路一样，只补缺失的），并行发出。夹带外文的同样重翻。
-        # 数字、公式占位符、长度对不上的是错了位：标记数量对得上，内容却是别段的。模型漏掉或并掉一段，
-        # 后面几段跟着整体挪一格，看得出来的只是其中长短悬殊的一段，这一批逐段重翻
+        # Retranslate paragraphs the model left out (the same idea as the plugin's recovery, filling in only the
+        # missing ones), sent in parallel. Translations carrying foreign text are retranslated too.
+        # Mismatched numbers, formula placeholders or lengths mean shifted translations: the marker count matches,
+        # but the content belongs to other paragraphs. When the model leaves out or merges one paragraph,
+        # the following ones all shift by one, and only one of them with a very different length is detectable,
+        # so the whole batch is retranslated paragraph by paragraph
         typical = typical_ratio((texts[i], found[i]) for i in found)
         shifted = any(_numbers_mismatch(texts[i], found[i]) or misplaced(texts[i], found[i], typical) for i in found)
         missing = [
@@ -440,8 +481,10 @@ class LLMTranslator(Translator):
             redone = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in missing))
             for i, [text] in zip(missing, redone):
                 found[i] = text
-            # 单独重翻的回复也可能不是译文（「请提供完整的原文」），按重翻后这一批的常见长度比再查一遍。
-            # 再问一次仍不对就回空，由 Runner 回填原文，不写进缓存
+            # A reply to a single retranslation may also not be a translation ("请提供完整的原文"), so check again
+            # against the typical length ratio of the batch after retranslation.
+            # If asking once more is still wrong, return empty; Runner falls back to the source text and nothing is
+            # cached
             typical = typical_ratio((texts[i], found[i]) for i in found)
             wrong = [i for i in missing if misplaced(texts[i], found[i], typical)]
             again = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in wrong))
@@ -454,7 +497,7 @@ class LLMTranslator(Translator):
 
 
 class OpenAITranslator(LLMTranslator):
-    """OpenAI Chat Completions 格式。Grok 和各种 OpenAI 兼容服务也走这里。"""
+    """OpenAI Chat Completions format. Grok and the various OpenAI-compatible services use it too."""
 
     provider = "openai"
 
@@ -477,11 +520,12 @@ class OpenAITranslator(LLMTranslator):
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as e:
             raise TranslatorError(f"返回格式异常: {str(data)[:200]}") from e
-        # 中转站偶尔回一条没有 content 的消息，和其他接口回空一样当空回复
+        # Relay services occasionally return a message without content; treat it as an empty reply, like an empty
+        # reply from other APIs
         return (message.get("content") if isinstance(message, dict) else "") or ""
 
     async def _complete_responses(self, system, user):
-        """OpenAI Responses API（Codex / Grok Build 默认用这个）。"""
+        """OpenAI Responses API (the default for Codex / Grok Build)."""
         payload = {"model": self.model, "instructions": system, "input": user, "store": False}
         if self.temperature is not None:
             payload["temperature"] = self.temperature
@@ -517,7 +561,7 @@ class CustomOpenAITranslator(OpenAITranslator):
 
 
 class ClaudeTranslator(LLMTranslator):
-    """Anthropic Messages API。"""
+    """Anthropic Messages API."""
 
     provider = "claude"
     api_version = "2023-06-01"
@@ -547,7 +591,7 @@ class ClaudeTranslator(LLMTranslator):
 
 
 class GeminiTranslator(LLMTranslator):
-    """Google Gemini generateContent API。"""
+    """Google Gemini generateContent API."""
 
     provider = "gemini"
 
@@ -566,7 +610,7 @@ class GeminiTranslator(LLMTranslator):
         model = self.model.removeprefix("models/")
         data = await self._post(f"{self.base_url}/models/{model}:generateContent", payload, self._headers())
         usage = data.get("usageMetadata") or {}
-        # 思考 token 会计费，只记 candidates 会把推理模型的用量算少
+        # Thinking tokens are billed; counting only candidates would undercount the usage of reasoning models
         completion = (usage.get("candidatesTokenCount") or 0) + (usage.get("thoughtsTokenCount") or 0)
         self._record_usage(usage.get("promptTokenCount"), completion)
         candidates = data.get("candidates") or []
@@ -574,7 +618,7 @@ class GeminiTranslator(LLMTranslator):
             reason = (data.get("promptFeedback") or {}).get("blockReason", "无返回内容")
             raise TranslatorError(f"Gemini 未返回结果: {reason}")
         parts = (candidates[0].get("content") or {}).get("parts", [])
-        # 思考模型可能带 thought 片段，只取正文
+        # Thinking models may include thought parts; take only the main text
         return "".join(p.get("text", "") for p in parts if not p.get("thought"))
 
     async def list_models(self):
@@ -587,9 +631,10 @@ class GeminiTranslator(LLMTranslator):
 
 
 class GoogleTranslator(Translator):
-    """Google 网页版免费接口，无需 Key，适合试用；量大时可能被限流。"""
+    """Free API of the Google web version; needs no Key and suits trial use. Heavy use may be rate-limited."""
 
-    # translate_a/t 支持一次传多个 q，大幅减少请求数，降低被限流的概率
+    # translate_a/t accepts several q values at once, which cuts the number of requests and the chance of being
+    # rate-limited
     max_batch_items = 50
     max_batch_chars = 4500
     concurrency = 3
@@ -597,7 +642,8 @@ class GoogleTranslator(Translator):
 
     def __init__(self, target_lang, source_lang="auto", transport=None):
         super().__init__(target_lang, source_lang)
-        # 插件的 Google 语言映射：zh-HK→zh-TW、pt-br→pt、pt→pt-PT、fil→tl，不在表里的语言不支持
+        # The plugin's Google language mapping: zh-HK->zh-TW, pt-br->pt, pt->pt-PT, fil->tl; languages not in the
+        # table are not supported
         if target_lang not in GOOGLE_CODES:
             raise TranslatorError(f"谷歌翻译不支持目标语言「{prompts.lang_name(target_lang)}」，请换用 AI 翻译服务")
         if source_lang != "auto" and source_lang not in GOOGLE_CODES:
@@ -606,7 +652,7 @@ class GoogleTranslator(Translator):
             )
         self.tl = GOOGLE_CODES[target_lang]
         self.sl = "auto" if source_lang == "auto" else GOOGLE_CODES[source_lang]
-        # 和 LLM 引擎一样，实际发请求都过同一个信号量
+        # As with the LLM engines, all actual requests go through the same semaphore
         self._sem = asyncio.Semaphore(self.concurrency)
         self.client = httpx.AsyncClient(timeout=60, transport=transport)
 
@@ -615,8 +661,9 @@ class GoogleTranslator(Translator):
         return f"{self.service_id}:google:{self.source_lang}:{self.target_lang}"
 
     async def translate_batch(self, texts):
-        # 混合批按调用方标记拆成两组：富文本组用 format=html 保留行内格式，
-        # 纯文本组保持 format=text，避免 & 等字符被实体转义。不从尖括号猜测。
+        # A mixed batch is split into two groups by the caller's flags: the rich-text group uses format=html to keep
+        # inline formatting, and the plain-text group keeps format=text so that characters such as & are not
+        # entity-escaped. Nothing is guessed from angle brackets.
         html_idx = [i for i, t in enumerate(texts) if self.is_html_item(t)]
         if not html_idx or len(html_idx) == len(texts):
             return await self._request(texts, html=bool(html_idx))
@@ -647,13 +694,14 @@ class GoogleTranslator(Translator):
                 await asyncio.sleep(2**attempt)
                 continue
             if resp.status_code == 200:
-                # 被限流时偶尔 200 返回 HTML 验证码页，JSON 解析失败按可重试的限流处理
+                # When rate-limited, a 200 with an HTML captcha page occasionally comes back; a JSON parse failure is
+                # treated as retryable rate limiting
                 try:
                     data = resp.json()
                 except ValueError:
                     data = None
                 if isinstance(data, list):
-                    # 每个 q 对应一项：sl=auto 时是 [译文, 检测到的语言]，否则直接是译文
+                    # One item per q: [translation, detected language] with sl=auto, otherwise the translation itself
                     out = [d[0] if isinstance(d, list) else d for d in data]
                     if len(out) != len(texts):
                         raise TranslatorError("Google 返回的译文条数与请求不一致")
@@ -662,7 +710,7 @@ class GoogleTranslator(Translator):
                     raise TranslatorError("Google 返回的不是 JSON（可能已被限流，请稍后重试或改用 AI 翻译服务）")
                 await asyncio.sleep(_retry_delay(resp, min(2 ** (attempt + 1), 30)))
                 continue
-            # 302 跳到验证码页 / 429 都是限流，退避重试
+            # A 302 redirect to the captcha page / 429 both mean rate limiting; retry with backoff
             if resp.status_code not in (302, 429, 500, 503) or last:
                 raise TranslatorError(
                     f"Google 接口错误 {resp.status_code}（可能已被限流，请稍后重试或改用 AI 翻译服务）"
@@ -675,7 +723,7 @@ class GoogleTranslator(Translator):
 
 
 class MockTranslator(Translator):
-    """测试用：在文本前加上标记。"""
+    """For tests: prefix the text with a marker."""
 
     async def translate_batch(self, texts):
         return [f"[{self.target_lang}] {t}" for t in texts]
@@ -691,7 +739,7 @@ LLM_CLASSES = {
 
 
 def create_translator(service: dict, target_lang: str, source_lang: str = "auto", transport=None) -> Translator:
-    """根据翻译服务配置（见 services.py）创建引擎。"""
+    """Create an engine from a translation service configuration (see services.py)."""
     translator = _build_translator(service, target_lang, source_lang, transport)
     translator.service_id = service.get("id") or ""
     return translator
