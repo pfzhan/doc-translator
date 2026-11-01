@@ -77,12 +77,14 @@ from .pdf_typeset import (
     typeset_lines,
 )
 
-# 整页居中排时，各行中线的偏差。行尾的逗号、斜体的外伸会让中线偏一两点
+# Tolerance for the line centers on a page set centered throughout. A comma at the end of a line or an italic overhang
+# shifts the center by a point or two
 _AXIS_TOL = 2.0
 
 
 def _attach_chars(page: pymupdf.Page, spans: list[dict]) -> None:
-    """给 span 记下逐字的框（span["chars"]），按 span 的框对上。页面擦过以后再查就查不到了。"""
+    """Record the per-character boxes of each span (span["chars"]), matched by the span's box. Once the page has
+    been erased they can no longer be looked up."""
     index = {_rect_key(rect): chars for rect, chars in _page_char_index(page)}
     for span in spans:
         chars = index.get(_rect_key(pymupdf.Rect(span["bbox"])))
@@ -101,8 +103,8 @@ def _white_pixmap(doc) -> "pymupdf.Pixmap":
 
 
 def _page_form(doc: "pymupdf.Document", page: "pymupdf.Page") -> int:
-    """把页面内容打包成 Form XObject（在 redact 之前调用），返回 xref。
-    供公式透传引用：资源沿用页面自己的，BBox 为整页。"""
+    """Pack the page content into a Form XObject (called before redaction) and return its xref.
+    Formula pass-through references it: it uses the page's own resources, and the BBox is the whole page."""
     mb = page.mediabox
     fm = doc.get_new_xref()
     doc.update_object(
@@ -124,21 +126,25 @@ def _place_formula_images(
     forms: "_FormulaSources | None" = None,
     page_spans: list[dict] | None = None,
 ):
-    """把占位标记换成公式内容并校准基线。
+    """Replace the placeholder markers with formula content and correct the baseline.
 
-    htmlbox 对 <img> 只做图片底部对齐，公式的 baseline 在图片内部（上下标在 baseline
-    之下还有延伸），直接插会整体浮起来。所以先插一个按公式宽高占位的 1x1 标记像素，
-    从落位矩形读出文本基线位置，再把公式按“bbox 底 − 公式 baseline”下移贴到精确位置。
-    有源页 Form（forms）时用紧致 BBox 的包裹 Form 做矢量透传（原 glyph、可选中、选择
-    不爆框）；失败回退到 PNG 位图。
+    htmlbox aligns an <img> only by its bottom, while the baseline of a formula lies inside the image (sub- and
+    superscripts extend below the baseline), so a formula inserted directly would float up as a whole. A 1x1
+    marker pixel sized to the formula's width and height is inserted first, the text baseline is read from the
+    rectangle where it lands, and the formula is then moved down by "bbox bottom − formula baseline" to its exact
+    position. When a source page Form (forms) is available, a wrapper Form with a tight BBox does vector
+    pass-through (original glyphs, selectable, selection does not blow up the box); on failure it falls back to a
+    PNG bitmap.
 
-    标记像素按全局序号（mid）编码，整页一次处理；所有公式绘制集中在最后一条新内容
-    流里：insert_htmlbox 每块新建内容流，标记涂白后白块仍在块的内容流里，公式若画在
-    之前的流里会被后续块的白块盖住上半截。
+    Marker pixels encode a global index (mid), and the whole page is processed at once. All formula drawing goes
+    into one new content stream at the end: insert_htmlbox creates a new content stream for each block, and after
+    a marker is painted white the white patch stays in that block's stream, so a formula drawn in an earlier
+    stream would have its upper half covered by the white patches of later blocks.
     """
     draws = []
-    # 渲染后的文本 span：htmlbox 对 img 只做底部对齐，且标记底边和文本 baseline 有
-    # ~1pt 系统偏差，公式 baseline 直接锚到同一行文字的 origin 上最稳
+    # Text spans after rendering: htmlbox aligns img only by its bottom, and the marker bottom has a systematic
+    # offset of ~1pt from the text baseline, so anchoring the formula baseline to the origin of text on the same
+    # line is the most reliable
     text_spans = [
         s
         for blk in page.get_text("dict")["blocks"]
@@ -161,7 +167,8 @@ def _place_formula_images(
             continue
         rect = rects[0]
         rs = f.get("rs", 1.0)
-        # raise：孤立角标公式（²）的 origin 比正文 baseline 高，落位时按高差抬回去
+        # raise: the origin of a standalone superscript formula (²) is above the body baseline, and placement
+        # moves it back up by the difference
         w, h = f["w"] * rs, f["h"] * rs
         d = (f["d"] - f.get("raise", 0.0)) * rs
         cy = (rect.y0 + rect.y1) / 2
@@ -169,10 +176,10 @@ def _place_formula_images(
         best_key = (0.0, float("inf"))
         for s in text_spans:
             sb = s["bbox"]
-            if not (sb[1] - 1 <= cy <= sb[3] + 1):  # 不在同一行
+            if not (sb[1] - 1 <= cy <= sb[3] + 1):  # not on the same line
                 continue
-            # CJK line-height 放大后相邻行的 glyph bbox 会交叠：按与标记矩形的
-            # y 交叠量取最大（同一行交叠最多），并列再取 x 最近
+            # With the enlarged CJK line-height, glyph bboxes of adjacent lines overlap: take the largest y overlap
+            # with the marker rectangle (the same line overlaps most), and on a tie the nearest in x
             overlap = min(sb[3], rect.y1) - max(sb[1], rect.y0)
             dx = max(0.0, sb[0] - rect.x1, rect.x0 - sb[2])
             if (overlap, -dx) > (best_key[0], -best_key[1]):
@@ -195,13 +202,15 @@ def _place_formula_images(
 
 
 def _closes_clause(text: str) -> bool:
-    """以句末标点、分号、冒号收尾（列表项常以分号收尾）。末尾的数字是脚注号，不算"""
+    """Ends with sentence-final punctuation, a semicolon or a colon (list items often end with a semicolon).
+    Trailing digits are footnote numbers and do not count"""
     text = text.rstrip().rstrip("0123456789")
     return _ends_sentence(text) or text.endswith((";", "；", ":", "："))
 
 
 def _row_neighbor(block: TextBlock, blocks: list[TextBlock], geo: PageGeometry | None) -> bool:
-    """本栏里同一行旁边还有别的块（表格的另一格）。页边的旁注、另一栏的正文不算"""
+    """Another block sits beside this one on the same row in this column (another table cell). Margin notes and
+    body text in another column do not count"""
     column = geo.index_of(block.rect) if geo is not None and len(geo.columns) >= 2 else None
     return any(
         other is not block
@@ -220,8 +229,9 @@ def _wrap_holes(
     obstacles: list["pymupdf.Rect"],
     area: "pymupdf.Rect | None" = None,
 ) -> list["pymupdf.Rect"]:
-    """原文绕着排开的图和图注。它们落在要写的范围里（默认是块的框）、贴着左缘或右缘，
-    块里没有一行压上去，旁边至少有两行让开了。整块按一个框写，译文会盖到图上。"""
+    """Figures and captions the source text flows around. They lie in the area to write (the block's box by
+    default) against its left or right edge, no line of the block overlaps them, and at least two lines beside them
+    make room. Writing the whole block as one box would put the translation over the figure."""
     lines = block.line_rects
     if len(lines) < 3:
         return []
@@ -232,7 +242,7 @@ def _wrap_holes(
         cut = pymupdf.Rect(obstacle) & area
         if cut.is_empty or cut.height < block.size * 0.8:
             continue
-        # 另一侧要留出三成宽，横贯整块的公式、表格不算
+        # The other side must leave 30% of the width; formulas and tables across the whole block do not count
         right = obstacle.x1 >= area.x1 - block.size and obstacle.x0 > area.x0 + area.width * 0.3
         left = obstacle.x0 <= area.x0 + block.size and obstacle.x1 < area.x1 - area.width * 0.3
         if not (right or left):
@@ -251,7 +261,8 @@ def _wrap_holes(
 
 
 def _first_row_room(block: TextBlock, rect: "pymupdf.Rect") -> float | None:
-    """写的盒子顶到原文第一行行框下沿的高度。盒子不从第一行起（跨页接过来的半段）时不算。"""
+    """Height from the top of the write box to the bottom of the first source line box. None when the box does not
+    start at the first line (the half of a paragraph carried over from the previous page)."""
     if not block.line_rects:
         return None
     rows = sorted(_visual_lines(block), key=lambda row: row[0].y0)
@@ -261,14 +272,16 @@ def _first_row_room(block: TextBlock, rect: "pymupdf.Rect") -> float | None:
     return bottom - rect.y0
 
 
-# 悬挂缩进的条目起头：题号（3.1、2.）、圆点、(a) 这类编号
+# Start of a hanging-indent item: a number (3.1, 2.), a bullet, or a label like (a)
 _HANG_NUMBER_RE = re.compile(r"\d+(?:\.\d+)*\.?\s")
 
 
 def _hang_indent(block: TextBlock) -> float:
-    """题号、圆点顶格，下面各行都和题号后面的正文对齐（练习题 3.1 Write out …）：续行比首行缩进多少点。
-    不是这样排的块返回 0"""
-    # 节标题（1.1 What is a Large Language Model?）的编号也和标题空开一截，编号留在原处
+    """For an item whose number or bullet starts at the margin and whose following lines align with the body after
+    the number (exercise 3.1 Write out …): how many points continuation lines are indented more than the first.
+    Returns 0 for blocks not set this way"""
+    # The number of a section heading (1.1 What is a Large Language Model?) is also spaced off from the title; the
+    # number stays where it is
     if block.body_size and block.size > block.body_size * 1.1:
         return 0.0
     rows = sorted(_visual_lines(block), key=lambda row: row[0].y0)
@@ -286,8 +299,9 @@ def _hang_indent(block: TextBlock) -> float:
 
 
 def _label_gap(block: TextBlock) -> float:
-    """只有一行的条目：和正文同字号的题号单独一截，和后面的正文之间空出半个字以上（3.8 | Write a program …），
-    正文比题号缩进多少点。不是这样排的返回 0"""
+    """For a one-line item whose number, in the body font size, stands apart with at least half a character of space
+    before the body (3.8 | Write a program …): how many points the body is indented more than the number. Returns 0
+    for items not set this way"""
     spans = sorted(
         (
             span
@@ -303,7 +317,7 @@ def _label_gap(block: TextBlock) -> float:
         and not _list_item(str(spans[0]["text"]).strip() + " x")
     ):
         return 0.0
-    # 脚注的上标编号后面也空开一截，脚注的续行顶格
+    # A footnote's superscript number is also followed by a space, and footnote continuation lines start at the margin
     if float(spans[0].get("size") or 0) < block.size * 0.9:
         return 0.0
     gap = float(spans[1]["bbox"][0]) - float(spans[0]["bbox"][2])
@@ -312,7 +326,8 @@ def _label_gap(block: TextBlock) -> float:
 
 
 def _extend_leader(page: "pymupdf.Page", block: TextBlock, leader: Leader) -> None:
-    """点线和标题一起擦掉了。按原来的点距、基线从页码前往左补点，接到译文末尾。"""
+    """The leader was erased together with the heading. Add dots leftward from the page number with the original
+    dot pitch and baseline, up to the end of the translation."""
     if leader.pitch <= 0:
         return
     band = pymupdf.Rect(block.rect.x0 - 1, block.rect.y0 - 1, leader.number.x0 - 0.5, block.rect.y1 + 1)
@@ -320,7 +335,8 @@ def _extend_leader(page: "pymupdf.Page", block: TextBlock, leader: Leader) -> No
     for item in page.get_text("dict", clip=band)["blocks"]:
         for line in item.get("lines", []):
             for span in line["spans"]:
-                # 上下两条挨得近，框会探进这一行。只认基线在这一行的字
+                # Entries above and below are close, and their boxes reach into this line. Only glyphs with their
+                # baseline on this line count
                 if str(span.get("text") or "").strip() and abs(span["origin"][1] - leader.baseline) < leader.size * 0.6:
                     right = max(right, float(span["bbox"][2]))
     if right <= band.x0:
@@ -341,20 +357,21 @@ def _extend_leader(page: "pymupdf.Page", block: TextBlock, leader: Leader) -> No
 
 
 def _flush_png(page: "pymupdf.Page", deferred_png: list[tuple["pymupdf.Rect", bytes]]) -> None:
-    """矢量透传失败、退回位图的公式，整页写完再贴。"""
+    """Formulas whose vector pass-through failed and fell back to bitmaps are pasted after the whole page is written."""
     for target, png in deferred_png:
         page.insert_image(target, stream=png, keep_proportion=False, overlay=True)
     deferred_png.clear()
 
 
 def _nowrap_parens(body: str) -> str:
-    """短括号组包 nowrap span：MuPDF 的 CJK 换行可以在任意处断，会出现
-    '（如\\n序列）' 这种断在括号中间的丑行，以及 '（y_1^{t-1}' 把右括号单独
-    留在下一行。整组不拆（含公式图的组，括号跟着公式一起走），长组不包（防溢出）。"""
+    """Wrap short parenthesized groups in a nowrap span: MuPDF's CJK line breaking can break anywhere, producing
+    bad lines like "（如\\n序列）" broken inside the parentheses, or "（y_1^{t-1}" with the closing parenthesis left
+    alone on the next line. A group is kept whole (in a group with a formula image, the parentheses move with the
+    formula); long groups are not wrapped (to avoid overflow)."""
 
     def repl(m):
         inner = m.group(0)
-        # 估算渲染宽度：<img> 按 3 个字符计，其余标签不计
+        # Estimated rendered width: <img> counts as 3 characters, other tags count as none
         plain = re.sub(r"<[^>]+>", lambda t: "@@@" if t.group(0).startswith("<img") else "", inner)
         if len(plain) <= 10:
             return f'<span style="white-space: nowrap">{inner}</span>'
@@ -370,7 +387,8 @@ def _translation_html(
     render_size: float,
     max_width: float,
 ) -> str:
-    """译文 HTML。含公式哨兵时自己断行，每行 nowrap；否则仍交给 MuPDF 折行。"""
+    """HTML of the translation. With formula sentinels it breaks the lines itself and makes each line nowrap;
+    otherwise MuPDF does the wrapping."""
 
     def img_repl(match: re.Match[str]) -> str:
         number = int(match.group(1))
@@ -380,7 +398,8 @@ def _translation_html(
         if formula.get("has_img"):
             scale, width, height = _formula_slot(formula, block_size, render_size)
             formula["rs"] = scale
-            # 槽位两侧各留 2pt：斜体字形会微微越出 bbox，紧贴排布时像被前后汉字压住
+            # Leave 2pt on each side of the slot: italic glyphs go slightly past their bbox and, set tight, look
+            # pressed by the Chinese characters around them
             return f'<img src="ph_{formula["name"]}" style="width: {width:.1f}px; height: {height:.1f}px;">'
         return _inline_marks(html.escape(str(formula.get("text") or "")))
 
@@ -395,7 +414,8 @@ def _translation_html(
 
 
 def _centered_in_cell(block: TextBlock) -> bool:
-    """原文在格子里居中。栏中线对不上格子中线，不能拿栏来判断。"""
+    """The source text is centered in its cell. The column center does not match the cell center, so the column
+    cannot be used to decide."""
     clip = block.clip
     if clip is None:
         return False
@@ -405,15 +425,18 @@ def _centered_in_cell(block: TextBlock) -> bool:
 
 
 def _flow_y0(block: TextBlock, cjk: bool) -> float:
-    """写入起点。侧标让出的第一行由单独的框从自己的左缘写，这里仍从第一行起。"""
+    """Where writing starts. A first line indented for a side label is written by a separate box from its own left
+    edge; here writing still starts at the first line."""
     origin = block.line_rects[0].y0 if block.line_rects else block.rect.y0
     return origin + block.size * 0.1 if cjk else origin
 
 
 def _inset_write_boxes(block: TextBlock, cjk: bool) -> tuple[pymupdf.Rect, pymupdf.Rect] | None:
-    """第一行比后面几行靠右时，第一行从自己的左缘写，后面的行从栏左缘写。
+    """When the first line starts further right than the following lines, the first line is written from its own
+    left edge and the rest from the column's left edge.
 
-    续行从下一视觉行起。同一基线的碎片如果当成下一行，续文会压到第一行和左侧标签上。
+    Continuation starts at the next visual line. If fragments on the same baseline were taken as the next line, the
+    continued text would cover the first line and the label on its left.
     """
     lines = _visual_lines(block)
     if len(lines) < 2 or block.size <= 0:
@@ -437,7 +460,7 @@ def _inset_write_boxes(block: TextBlock, cjk: bool) -> tuple[pymupdf.Rect, pymup
 
 
 def _short_left_label(block: TextBlock) -> bool:
-    """正文第一行左边的短标签。Memo.、Property Enforcement.、(2) Statistics Derivation."""
+    """A short label to the left of the first body line. Memo., Property Enforcement., (2) Statistics Derivation."""
     text = block.text.strip()
     if not text.endswith(".") or len(text.split()) > 6 or block.rect.width > 150:
         return False
@@ -445,7 +468,7 @@ def _short_left_label(block: TextBlock) -> bool:
 
 
 def _label_beside(body: TextBlock, blocks: list[TextBlock]) -> TextBlock | None:
-    """和正文第一行并排、源文几乎贴到正文左缘的短标签。"""
+    """A short label beside the first body line whose source text nearly touches the body's left edge."""
     if not body.line_rects:
         return None
     first = body.line_rects[0]
@@ -469,7 +492,8 @@ def _body_first_starts(
     cjk: bool,
     formulas_map: dict[int, list[dict]] | None,
 ) -> dict[int, float]:
-    """短译文标签让出的第一行空白补上。译文比英文宽时，正文让到标签右边。"""
+    """Fill the first-line space left free by a short translated label. When the translation is wider than the
+    English, the body moves to the right of the label."""
     out: dict[int, float] = {}
     by_id = {id(block): text for block, text in items}
     known = formulas_map or {}
@@ -500,7 +524,7 @@ def _body_first_starts(
 
 
 def _beside_body(block: TextBlock, blocks: list[TextBlock]) -> TextBlock | None:
-    """短侧标右边、同一基线上的正文。标签不能扩进这一行。"""
+    """Body text to the right of a short side label, on the same baseline. The label may not extend into this line."""
     if not _is_side_label(block):
         return None
     found: TextBlock | None = None
@@ -528,16 +552,19 @@ def _index_reflow(
     bottom: float,
     ink: Sequence[pymupdf.Rect] = (),
 ) -> dict[int, TextBlock]:
-    """索引一栏里译文比原文多占行的条目，连同下面的条目按原文行距往下挪。
+    """In an index column, move entries whose translation takes more lines than the source down by the source line
+    pitch, together with the entries below them.
 
-    一条一行紧挨着排，不挪的话多出来的一行没有地方，只能缩小字号。字母分组之间的空白先拿来抵，
-    不够再收紧行距（见 _restack）。留原文的条目也跟着挪。跨栏跨页的段落、不属于任何块的原字
-    （ink，提取时丢掉的条目）挪不了，挪到它们上面为止。返回挪过的条目的副本，框和行框都已挪好。
+    Entries are set one per line with no gaps, so without moving, the extra line has no room and the font size has
+    to shrink. The blank space between letter groups absorbs it first, and if that is not enough the line spacing
+    is tightened (see _restack). Entries that keep the original text move too. Paragraphs crossing columns or pages
+    and source glyphs that belong to no block (ink, entries dropped during extraction) cannot move, so entries move
+    only down to them. Returns copies of the moved entries with their boxes and line boxes already moved.
     """
     if geo is None or not any(b.index for b in blocks):
         return {}
     texts = {id(b): t for b, t in items if t != SPILL_TAIL}
-    # 留原文的条目（BERT、CKY）也跟着挪，挪了就按原文重写
+    # Entries that keep the original text (BERT, CKY) move too, and once moved they are rewritten from the source
     texts.update(
         (id(b), _source_marked(b))
         for b in blocks
@@ -576,7 +603,8 @@ def _index_reflow(
 
 
 def _source_marked(block: TextBlock) -> str:
-    """原文按 span 写出粗体、斜体标记。重写留原文的块时，粗体的页码照旧是粗体。"""
+    """The source text with bold and italic marks written out span by span. When a block that keeps the original
+    text is rewritten, bold page numbers stay bold."""
     spans = [s for line in block.span_lines for s in line]
     writer = writer_for(spans, block.size, _color_value(block.color))
     return _join_lines(
@@ -591,10 +619,13 @@ def _source_marked(block: TextBlock) -> str:
 
 
 def _index_columns(blocks: list[TextBlock], geo: PageGeometry) -> list[tuple[list[TextBlock], float]]:
-    """索引页按左右不重叠分栏，栏内从上到下排好，另给出每栏能写到的右缘。
+    """Split an index page into columns that do not overlap horizontally, sort each column top to bottom, and give
+    the right edge each column can write to.
 
-    索引的行参差不齐，版面分析常常只认出一栏。条目只在本栏里写，横向和别栏的条目不相交。
-    分栏只看索引条目，页首横跨几栏的标题不算；它和别的块一起放进左右相交的栏里，挡住条目。
+    Index lines are ragged, and layout analysis often finds only one column. Entries are written only within their
+    column and do not overlap entries of other columns horizontally. The split looks only at index entries, not at
+    a heading spanning several columns at the top of the page; that heading goes, like other blocks, into the
+    columns it overlaps horizontally, where it blocks entries.
     """
     groups: list[list[TextBlock]] = []
     for b in sorted((b for b in blocks if b.index), key=lambda b: b.rect.x0):
@@ -615,10 +646,12 @@ def _index_columns(blocks: list[TextBlock], geo: PageGeometry) -> list[tuple[lis
 
 
 def _restack(segment: list[tuple[TextBlock, int, int]], pitch: float, limit: float) -> dict[int, TextBlock]:
-    """一段条目从上往下排：每条从原位或上一条末行之下起，占它要的行数。
+    """Stack a run of entries top to bottom: each starts at its original position or below the last line of the
+    previous entry, and takes the number of lines it needs.
 
-    索引一栏常常排到正文下沿，没有空行可借。超出 limit 时整段行距一起收紧，至多收一成，
-    一行少不到一点，比单独缩小一条的字号好认；再不够就不挪。
+    An index column often runs down to the bottom of the body, with no blank lines to borrow. Beyond limit, the line
+    spacing of the whole run is tightened together, by at most 10%, less than a point per line, which reads better
+    than shrinking the font size of a single entry; if that is still not enough, nothing moves.
     """
     if not segment or not any(need > rows for _b, rows, need in segment):
         return {}
@@ -657,7 +690,8 @@ def _restack(segment: list[tuple[TextBlock, int, int]], pitch: float, limit: flo
 
 
 def _affiliation_write_rects(blocks: list[TextBlock]) -> dict[int, pymupdf.Rect]:
-    """并排的作者单位改成逐行写下。中文比原文宽，并排写会叠在一起。"""
+    """Write author affiliations that sit side by side one per line instead. Chinese is wider than the source, and
+    side by side they would overlap."""
     marked = [
         block
         for block in blocks
@@ -729,9 +763,11 @@ def _affiliation_write_rects(blocks: list[TextBlock]) -> dict[int, pymupdf.Rect]
 
 
 def _row_span(block: TextBlock, others: list[TextBlock], col_x0: float, col_x1: float) -> pymupdf.Rect:
-    """这一块连同栏里同一行挨着它的块（间隔不到一个半字宽）占的横向范围。一行拆成几块时
-    看整行：节号和节名分成两块的标题整行居中；表格一行的几格连起来不在栏中间。
-    多行的块每一行都要有同一行的块才算，表题下面一行连着表头的块仍按自己的范围看。"""
+    """Horizontal extent of this block together with the blocks next to it on the same row in the column (less
+    than 1.5 character widths apart). When a line is split into several blocks, the whole line counts: a heading
+    split into section number and section name is centered as a whole line; the cells of a table row together are
+    not in the middle of the column. For a multi-line block, every line must have a block on the same row; a block
+    whose second line, below the table title, sits on the row of the table header still uses its own extent."""
     rows = block.line_rects or [block.rect]
 
     def same_row(rect: pymupdf.Rect, row: pymupdf.Rect) -> bool:
@@ -761,8 +797,9 @@ def _row_span(block: TextBlock, others: list[TextBlock], col_x0: float, col_x1: 
 
 
 def _left_aligned_stack(block: TextBlock, others: list[TextBlock]) -> bool:
-    """上下紧挨的一块和它左缘对齐、右缘不齐：是左对齐排的一组行（对话、例句），
-    某一行的中线碰巧落在栏中线附近也不是居中。宽度相同的两块居中行左右都齐，不在其内。"""
+    """A block right above or below shares the left edge but not the right edge: this is a left-aligned group of
+    lines (dialogue, example sentences), and a line whose center happens to fall near the column center is not
+    centered. Two centered lines of the same width align on both sides and are not included."""
     for other in others:
         if other is block or other.page != block.page:
             continue
@@ -775,10 +812,11 @@ def _left_aligned_stack(block: TextBlock, others: list[TextBlock]) -> bool:
 
 
 def _centered_axis(block: TextBlock, others: list[TextBlock]) -> float | None:
-    """封面、题名页整页居中排，本页宽窄不一的行大多共用一条中线。块的每一行都在这条中线上
-    就是居中的，返回这条中线。
-    和最宽一行差不多宽的行不计数，版心里的正文行都在同一条中线上；页边旁注会把本页文字的左右范围撑宽，
-    所以拿最宽的行比。左缘也相同的行是一列等宽的数，不是居中。"""
+    """Covers and title pages are centered throughout, and most of their lines of varying width share one center
+    line. A block is centered when each of its lines is on this center line, which is returned.
+    Lines about as wide as the widest line do not count, because the body lines in the text frame all share one
+    center line; margin notes widen the horizontal extent of the page's text, so the comparison is with the widest
+    line. Lines that also share the left edge are a column of numbers of equal width and are not centered."""
     page = [other for other in others if other.page == block.page]
     lines = [line for other in page for line in (other.line_rects or [other.rect])]
     if not lines:
@@ -814,9 +852,10 @@ def _write_rect(
     rtl: bool,
     geo: PageGeometry | None,
 ) -> tuple[pymupdf.Rect, str]:
-    """写入框和对齐方式（left、center、right）。多栏且块落在某一栏内时，居中参照该栏；
-    单栏有版心时参照版心，没有时用本页最宽块。格子里原本居中的文字，改以格子中线居中。
-    从栏左缘起笔的块是左对齐的，中线碰巧对上也不算居中。"""
+    """Write box and alignment (left, center, right). With several columns and the block inside one of them,
+    centering refers to that column; with one column it refers to the text frame if there is one, otherwise to the
+    widest block on the page. Text originally centered in a table cell is centered on the cell center instead.
+    A block starting at the column's left edge is left-aligned, even if its center happens to match."""
     y0 = _flow_y0(block, cjk)
     pad = block.size * 0.5 if cjk else block.size * 0.3
     if _centered_in_cell(block) and block.clip is not None:
@@ -828,7 +867,7 @@ def _write_rect(
         candidate = geo.column_of(block.rect)
         if block.rect.x0 >= candidate.x0 - 2 and _inside_right(block, candidate.x1):
             column = candidate
-    # 靠右排参照栏或版心的左右缘，本页最宽块的右缘不算
+    # Right alignment refers to the edges of the column or text frame, not the right edge of the widest block
     margin: tuple[float, float] | None = None
     if column is not None:
         col_x0, col_x1 = column.x0, column.x1
@@ -850,9 +889,10 @@ def _write_rect(
         widest = max((other.rect for other, _ in items), key=lambda rect: rect.width, default=block.rect)
         col_x0, col_x1 = widest.x0, widest.x1
         col_width = widest.width
-    # 字比本页多数大、每行都正对页面中线的是居中的标题：幻灯片最宽的一块是靠左的列表项，
-    # 中线不在页面正中；标题本身是最宽的一块时，跟页宽比。论文正文左右边距对称，
-    # 整行也正对页面中线，字号不大，不算。
+    # Text larger than most on the page with every line on the page center line is a centered heading: on a
+    # slide the widest block is a left-aligned list item whose center is not the page center; when the heading
+    # itself is the widest block, it is compared with the page width. Body text of a paper has symmetric margins,
+    # so full lines are also on the page center line, but its font size is not large, so it does not count.
     page_mid = geo.width / 2 if geo is not None and column is None and geo.width > 0 else None
     sizes = sorted(other.size for other, _ in items)
     on_page_mid = (
@@ -861,9 +901,11 @@ def _write_rect(
         and block.rect.width < geo.width * 0.85
         and all(abs((line.x0 + line.x1) / 2 - page_mid) < 4 for line in block.line_rects or [block.rect])
     )
-    # 弹点、短横线起头的列表项是靠左排的，中线碰巧对上栏中线也不算居中。索引的条目也一样，
-    # 缩进的子条目常常正好落在栏中间。(a) 子图小标题和 1. 引言这种居中的标题不在其内。
-    # 一行拆成几块时整行也要对着栏中线（见 _row_span）：表格一行的几格都按栏中线写会叠在一起
+    # List items starting with a bullet or dash are left-aligned, even if their center happens to match the column
+    # center. The same holds for index entries, whose indented subentries often fall right in the middle of the
+    # column. Centered headings such as the "(a)" subfigure caption or "1. 引言" are not included.
+    # When a line is split into several blocks, the whole line must be on the column center too (see _row_span):
+    # the cells of a table row written on the column center would overlap
     col_mid = (col_x0 + col_x1) / 2
     span = _row_span(block, [other for other, _ in items], col_x0, col_x1)
     centered = (
@@ -889,8 +931,9 @@ def _write_rect(
         and _flush_right(block, [other for other, _ in items], geo.figures if geo is not None else (), *margin)
     )
     axis = None
-    # 几行都对着本页中线、字号一样的长副标题也是居中排的。正文段的末行短，对不上中线；
-    # 作者名下面接着小一号的单位，各行另有排法
+    # A long subtitle with several lines on the page's center line and a single font size is also centered. The
+    # last line of a body paragraph is short and does not match the center line; author names followed by smaller
+    # affiliations are laid out line by line in other ways
     long_title = (
         len(block.line_rects) >= 2
         and len(
@@ -913,7 +956,8 @@ def _write_rect(
     ):
         axis = _centered_axis(block, [other for other, _ in items])
     if axis is not None:
-        # 页面左右边距不对称时版心和最宽块都不在这条中线上，按中线到本页文字两侧的距离留宽
+        # With asymmetric page margins neither the text frame nor the widest block is on this center line, so the
+        # width comes from the distance between the center line and the sides of the page's text
         left = min(other.rect.x0 for other, _ in items if other.page == block.page)
         right = max(other.rect.x1 for other, _ in items if other.page == block.page)
         half = max(block.rect.width / 2, min(axis - left, right - axis))
@@ -929,7 +973,9 @@ def _write_rect(
             pymupdf.Rect(block.rect.x0, y0, block.rect.x1, block.rect.y1 + pad), block.clip
         ), "right"
     else:
-        # 伸进页边的那几行不算，译文照栏或版心的右缘断行。旁注另成一栏时，正文栏的右缘也会被这几行撑出去
+        # Lines reaching into the margin do not count, and the translation breaks at the right edge of the column
+        # or text frame. When margin notes form a column of their own, these lines also push out the right edge
+        # of the body column
         edges = [
             edge for edge in (margin[1] if margin is not None else None, _frame_x1(block, geo)) if edge is not None
         ]
@@ -939,8 +985,9 @@ def _write_rect(
 
 
 def _inside_right(block: TextBlock, x1: float) -> bool:
-    """块收在 x1 以内。块的右缘只由个别几行撑出去的也算：TeX 断不开的长词、引用会让一行
-    伸进页边，同一段收在 x1 的行不比伸出去的少。"""
+    """The block ends within x1. It also counts when only a few lines push the block's right edge out: a long word
+    or citation that TeX cannot break makes a line reach into the margin, as long as the paragraph has at least as
+    many lines ending at x1 as lines reaching past it."""
     if block.rect.x1 <= x1 + 2:
         return True
     out = [row.x1 for row in block.line_rects if row.x1 > x1 + 2]
@@ -949,7 +996,7 @@ def _inside_right(block: TextBlock, x1: float) -> bool:
 
 
 def _frame_x1(block: TextBlock, geo: PageGeometry | None) -> float | None:
-    """块在版心里时版心的右缘。"""
+    """Right edge of the text frame when the block is inside it."""
     frame = geo.frame if geo is not None else None
     if frame is not None and frame.x0 - 2 <= block.rect.x0 and _inside_right(block, frame.x1):
         return frame.x1
@@ -963,14 +1010,21 @@ def _flush_right(
     col_x0: float,
     col_x1: float,
 ) -> bool:
-    """靠右排的块：章首的引语、署名。每行都收在栏的右缘，左缘离栏的左缘有栏宽的四分之一以上。
-    TeX 排的署名末尾常带着一个词间空格，斜体还有倾斜补偿，字的右缘会比栏的右缘短半个字宽左右。
-    栏的右缘要有本页更宽的块排到，栏只由这一块撑出来时右缘就是它自己的右缘。
-    有两行起笔对齐的是左对齐的正文，左边空着也不算（图在前一页时绕图的正文左边是空的）。
-    同一行栏里左边还有别的块或图的不算：一行拆成几块时的右边那一块，绕着图排的正文。
-    左边几个字宽以内有别的块的行也不算：两端对齐的窄栏里一行拆出来的末一个词。引语末行用
-    \\hfill 推到行尾的署名离左边的字很远。
-    左缘和上下几行的起笔对齐的也不算：表头、列表这类左对齐的字。"""
+    """A right-aligned block: an epigraph or attribution at the start of a chapter. Every line ends at the column's
+    right edge, and the left edge is more than a quarter of the column width from the column's left edge.
+    An attribution set by TeX often ends with an interword space, and italics add slant correction, so the glyphs
+    end about half a character width short of the column's right edge.
+    A wider block on the page must reach the column's right edge; when this block alone defines the column, the
+    right edge is its own.
+    Two lines starting at the same x mean left-aligned body text, even with space on the left (body text wrapping
+    around a figure has empty space on the left when the figure is on the previous page).
+    It does not count when another block or figure lies to the left on the same row of the column: the right part
+    of a line split into several blocks, or body text wrapping around a figure.
+    Lines with another block within a few character widths to the left do not count either: the last word split
+    off a line in a narrow justified column. An attribution pushed to the end of the epigraph's last line with
+    \\hfill is far from the glyphs to its left.
+    A left edge aligned with the start of the lines above or below does not count either: left-aligned text such
+    as table headers and lists."""
     if block.index or block.clip is not None or block.rect.x0 < col_x0 + (col_x1 - col_x0) * 0.25:
         return False
     rows = block.line_rects or [block.rect]
@@ -1000,10 +1054,11 @@ def _clip_write_rect(
     rect: pymupdf.Rect,
     clip: tuple[float, float, float, float] | None,
 ) -> pymupdf.Rect:
-    """格子左右是硬边界。上下保留行框高度。
+    """The left and right sides of a cell are hard limits. Vertically the line box height is kept.
 
-    贴着格子下沿的一行，如果把下沿余量裁掉，行框会矮过一行。排版器误以为
-    高度不够，把这一格的字号单独缩小，同一张表里就会大小不齐。
+    For a line against the bottom of the cell, trimming the margin below would make the line box shorter than a
+    line. The typesetter would then take the height as too small and shrink the font size of this cell alone,
+    leaving mixed sizes in one table.
     """
     if clip is None:
         return rect
@@ -1027,7 +1082,8 @@ def _write_limit(
     limit = geo.right_limit(rect, obstacles) if geo is not None else None
     frame_x1 = _frame_x1(block, geo)
     if limit is not None and frame_x1 is not None:
-        # 版心里的段落右扩到版心右缘为止。栏的右缘会被伸进页边的行撑出去
+        # A paragraph in the text frame extends right only up to the frame's right edge. Lines reaching into the
+        # margin push out the column's right edge
         limit = min(limit, frame_x1 + 2)
     if block.clip is not None:
         cap = block.clip[2] - 0.8
@@ -1037,8 +1093,10 @@ def _write_limit(
 
 @dataclass(frozen=True)
 class _Carry:
-    """续页接着写的后半。普通跨页按栏宽断好；共基线的半句按续行自己的宽度再断。
-    size 是上一块的字号：后半按它断的行，续块的字号稍大一点就放不下，每行末尾挤出一个字"""
+    """The second half written on the continuation page. An ordinary carried-over paragraph is broken by column
+    width; a half sentence sharing a baseline is broken again by the width of its continuation line.
+    size is the font size of the previous block: with lines broken at that size, a tail block with a slightly
+    larger size cannot hold them, and one character is pushed out at the end of each line"""
 
     text: str
     formulas: list[dict]
@@ -1053,8 +1111,9 @@ def _page_content_bottom(
     height: float,
     ink: Sequence[pymupdf.Rect] = (),
 ) -> float:
-    """这一页原文正文的下沿。页码带里的块不算，译文不写进这条线以下。
-    ink 是算在正文里、留在原处的字和图框（见 _body_ink）"""
+    """Bottom of the source body on this page. Blocks in the page number band do not count; the translation is not
+    written below this line. ink is the glyphs and figure boxes that count as body and stay in place (see
+    _body_ink)"""
     floor = content_floor(height)
     bottoms = [block.rect.y1 for block in blocks if block.page == page and block.rect.y0 < floor - 4]
     bottoms += [rect.y1 for rect in ink if rect.y0 < floor - 4]
@@ -1064,7 +1123,8 @@ def _page_content_bottom(
 
 
 def _is_column_top(block: TextBlock, blocks: list[TextBlock]) -> bool:
-    """这一栏最靠上的块。页首不再下移，上边距跟原文对齐。"""
+    """The topmost block of its column. The top of the page is not moved down, so the top margin matches the
+    source."""
     for other in blocks:
         if other is block or other.page != block.page or other.rect.y0 >= block.rect.y0 - 0.5:
             continue
@@ -1075,9 +1135,11 @@ def _is_column_top(block: TextBlock, blocks: list[TextBlock]) -> bool:
 
 
 def _keeps_line_pad(block: TextBlock) -> bool:
-    """页末只有一两行。行框余量裁掉之后，中文装不下一行，字号会被单独缩小。
+    """Only one or two lines at the end of the page. With the line box margin trimmed, Chinese cannot fit one line,
+    and the font size would be shrunk for this block alone.
 
-    更高的段落仍停在原文下沿。长译文不能借这点余量写进下边距。
+    Taller paragraphs still stop at the source bottom. A long translation may not use this margin to write into the
+    bottom margin.
     """
     if block.size <= 0:
         return False
@@ -1092,13 +1154,15 @@ def _fit_page_margins(
     cjk: bool,
     ink: Sequence[pymupdf.Rect] = (),
 ) -> pymupdf.Rect:
-    """页首对齐原文上沿，正文不写进原文下沿以下。格子下沿不裁，避免表内字号被单独缩小。
+    """At the top of the page, align with the source top; body text is not written below the source bottom. Cell
+    bottoms are not trimmed, so the font size inside a table is not shrunk for one cell.
 
-    页末一两行的行框余量留着。那一点高度只够放下这一行，不会把段落拉进下边距。
+    The line box margin of one or two lines at the end of the page is kept. That little height only fits this line
+    and does not pull the paragraph into the bottom margin.
     """
     y0, y1 = rect.y0, rect.y1
     if cjk and _is_column_top(block, blocks):
-        # 整框上移，不把框拉高。拉高之后一行会换到两行。
+        # Move the whole box up instead of making it taller. A taller box would turn one line into two.
         shift = block.size * 0.1
         y0 = max(0.0, y0 - shift)
         y1 -= shift
@@ -1113,9 +1177,11 @@ def _fit_page_margins(
 
 
 def _kept_ink(page: "pymupdf.Page", blocks: list[TextBlock]) -> list[pymupdf.Rect]:
-    """擦除以后原处还留着、不属于任何块的字，如提取时丢掉的行间公式。
-    目录的点线、随公式图搬走的字形已经擦掉，不在其内。"""
-    # 一页几千个词，每个都和所有行框比。点和框都按 MuPDF 的单精度先换好，结果和 Rect 的判断一样
+    """Glyphs still in place after erasing that belong to no block, such as display formulas dropped during
+    extraction. Table of contents leaders and glyphs moved along with formula images are already erased and are not
+    included."""
+    # A page has thousands of words, each compared with every line box. Points and boxes are converted to MuPDF's
+    # single precision first, so the result matches the Rect checks
     boxes = [single_precision(rect + (-1, -1, 1, 1)) for block in blocks for rect in (block.rect, *block.line_rects)]
     kept = []
     for word in page.get_text("words"):
@@ -1127,8 +1193,9 @@ def _kept_ink(page: "pymupdf.Page", blocks: list[TextBlock]) -> list[pymupdf.Rec
 
 
 def _body_ink(page: "pymupdf.Page", kept: list[pymupdf.Rect], marks: list[pymupdf.Rect]) -> list[pymupdf.Rect]:
-    """留在原处、算在正文里的字和图框（见 _page_content_bottom）：页底的行间公式、图。
-    只有页码的那一行不算，页码常常是纯数字，提取时被丢掉，擦完还留在原处（见 _kept_ink）"""
+    """Glyphs and figure boxes that stay in place and count as body (see _page_content_bottom): display formulas and
+    figures at the bottom of the page. A row holding only the page number does not count; page numbers are often
+    plain digits, dropped during extraction and left in place after erasing (see _kept_ink)"""
     words = {tuple(pymupdf.Rect(word[:4])): word[4] for word in page.get_text("words")}
     rows: list[list[pymupdf.Rect]] = []
     for rect in sorted(kept, key=lambda rect: rect.y0):
@@ -1149,9 +1216,10 @@ def _beside_rows(
     rect: pymupdf.Rect,
     rows: Sequence[pymupdf.Rect],
 ) -> list[pymupdf.Rect]:
-    """右扩时挡路的障碍：和原文某一行并排的才算。写入框比原文的行上下多出留白，
-    上一行、下一行的框会探进这几点，不在旁边（索引里缩进的子条目压着上一条的下沿）。
-    框往下多出来的整行也算一行，那里将来要写字。"""
+    """Obstacles in the way when extending right: only those beside some source line count. The write box has
+    extra space above and below the source lines, and the boxes of the lines above and below reach into those few
+    points without being beside the block (an indented subentry in an index overlaps the bottom of the entry
+    above). A whole extra line at the bottom of the box counts as a line, because text will be written there."""
     top, bottom = min(row.y0 for row in rows), max(row.y1 for row in rows)
     pitch = max(row.height for row in rows)
     bands = _row_bands(rows)
@@ -1168,8 +1236,9 @@ def _beside_rows(
 
 
 def _row_bands(rows: Sequence[pymupdf.Rect]) -> list[pymupdf.Rect]:
-    """原文的各行，加上上下相邻、间隔不到半行高的两行合起来的带。夹在两行中间的字
-    （分情况的行间公式右边的式号）和每一行都只交叠一小半，和合起来的带交叠过半。"""
+    """The source lines, plus bands made of two vertically adjacent lines less than half a line height apart.
+    Glyphs between two lines (the equation number to the right of a display formula with cases) overlap each line
+    by less than half, and the combined band by more than half."""
     bands = list(rows)
     ordered = sorted(rows, key=lambda row: row.y0)
     for upper, lower in zip(ordered, ordered[1:]):
@@ -1179,13 +1248,14 @@ def _row_bands(rows: Sequence[pymupdf.Rect]) -> list[pymupdf.Rect]:
 
 
 def _on_rows(ink: pymupdf.Rect, rows: Sequence[pymupdf.Rect]) -> bool:
-    """这处字和某一行（或相邻两行合起来）的上下交叠过它自己高度的一半：在这几行的旁边，
-    不是上一行、下一行。"""
+    """These glyphs overlap a line (or two adjacent lines combined) vertically by more than half their own height:
+    they are beside these lines, not on the line above or below."""
     return any(min(ink.y1, band.y1) - max(ink.y0, band.y0) > ink.height * 0.5 for band in _row_bands(rows))
 
 
 def _drawn_marks(page: "pymupdf.Page") -> list[pymupdf.Rect]:
-    """页上画出来的线、框、色块和图片。只填白色的块看不见，不算。"""
+    """Lines, boxes, color fills and images drawn on the page. Shapes filled only with white are invisible and do not
+    count."""
     marks = [
         pymupdf.Rect(path["rect"])
         for path in visible_drawings(page)
@@ -1200,9 +1270,11 @@ def _indented_start(
     tail: TextBlock,
     geometries: list[PageGeometry] | None,
 ) -> float | None:
-    """只有段首缩进的一行留在本页（栏），段落接到下一页：本栏的左缘。
-    续块从它那一栏的左缘起笔才是正文段落，译文和别的段落一样从栏左缘写，不留缩进。
-    续块缩着排的是列表项的悬挂缩进，照旧从第一行的左缘写。"""
+    """When only the indented first line of a paragraph stays on this page (column) and the paragraph continues on
+    the next page: the left edge of this column. Only when the tail starts at the left edge of its column is it a
+    body paragraph; then the translation is written from the column's left edge like other paragraphs, with no
+    indent. An indented tail is the hanging indent of a list item and is written from the first line's left edge
+    as before."""
     if not geometries or len(block.line_rects) != 1 or block.size <= 0:
         return None
 
@@ -1219,9 +1291,12 @@ def _indented_start(
 
 
 def _indent_edge(block: TextBlock, geo: PageGeometry | None, indent: float | None) -> float | None:
-    """只有一行的段落比栏左缘正好缩进一个段首缩进：栏左缘。多行段落的译文从栏左缘写，首行缩进不留，
-    只有一行的也一样顶格。缩进的宽度对不上的是引语、代码这些整块缩着排的，列表项、带标签的不算。
-    段落只有这一行，句子就在这一行收住；没有句末标点的是表格里的行名（BiDAF+ELMo (Single)）"""
+    """When a one-line paragraph is indented from the column's left edge by exactly one paragraph indent: the
+    column's left edge. The translation of a multi-line paragraph is written from the column's left edge without
+    the first-line indent, and a one-line paragraph also starts at the margin. An indent of a different width means
+    a block indented as a whole, such as a quotation or code; list items and labelled lines do not count. The
+    paragraph has only this line, so its sentence ends on it; a line without sentence-final punctuation is a row
+    name in a table (BiDAF+ELMo (Single))"""
     if indent is None or len(block.line_rects) != 1 or not _ends_sentence(block.text.rstrip().rstrip("]")):
         return None
     edge = _column_left(block.rect, geo)
@@ -1243,15 +1318,19 @@ def _room_below(
     marks: Sequence[pymupdf.Rect] = (),
     body: Sequence[pymupdf.Rect] = (),
 ) -> float:
-    """这一栏往下还能写到哪里。停在页码带上面，也停在后面的脚注或其他块前面。
+    """How far down this column can still be written. Stops above the page number band, and also before the
+    footnotes or other blocks that follow.
 
-    页码常常是纯数字，提取时被丢掉，x 方向也不一定和这一栏相交。
-    块自己已经在页脚带里时不再下刀，贴底的脚注不会因此被缩掉。
-    正文下沿以上的块停在原文正文下沿，不写进下边距。body 是算在正文里的留在原处的字和图框（见 _body_ink），
-    正文下沿算到它们下面。
-    kept 是原处留着的字（见 _kept_ink），marks 是画出来的图框、图片（见 _drawn_marks），
-    块下方正文区里的都要让开。marks 的框就是线条本身，末行下面的行距又可以伸过下沿（见 _filled_bottom），
-    只让 2pt 字就贴在线上，这里空出半个字号。
+    Page numbers are often plain digits, dropped during extraction, and do not necessarily overlap this column in x.
+    When the block itself is already in the footer band, no further cut is made, so footnotes at the bottom are not
+    shrunk by it.
+    Blocks above the body bottom stop at the source body bottom and do not write into the bottom margin. body is the
+    glyphs and figure boxes that stay in place and count as body (see _body_ink); the body bottom extends below
+    them.
+    kept is the glyphs left in place (see _kept_ink), marks is the drawn figure boxes and images (see
+    _drawn_marks); those in the body area below the block must be avoided. A box in marks is the line itself, and
+    the line spacing below the last line may extend past the bottom (see _filled_bottom), so with only 2pt of
+    clearance the glyphs would sit on the line; half the font size is left here instead.
     """
     bounds = text_page_rect(page)
     limit = bounds.y1 - 6
@@ -1289,20 +1368,22 @@ def _split_filled_lines(
     page_bottom: float | None = None,
     next_room: float = 0.0,
 ) -> tuple[str, str]:
-    """按满行切开。这一页放得下几行整行，就留几行；剩下的从下一页继续。
+    """Split at full lines. As many full lines as fit on this page stay here; the rest continues on the next page.
 
-    next_room 是续块从起笔往下能写的高度。余下的行按正常行距在那里写得下时，本页按正常行距数行数。
-    写不下时，页底原文的两行按原行距放不下两行译文，余下的挤到下一页只能缩小字号，
-    这时和 _fit_typeset 一样先压行距再数行数。末行下面的行距是空白，
-    也可以伸过 limit（见 _filled_bottom），但写入框到 page_bottom 为止：limit 就是原文正文下沿时，
-    框在那里被裁掉，多算的这截放不下，这几行会被整体缩小。"""
+    next_room is the height the tail can write from its origin downward. When the remaining lines fit there at
+    normal line spacing, the lines on this page are counted at normal line spacing. Otherwise, two source lines at
+    the bottom of the page cannot hold two translated lines at the source line spacing, and the rest pushed to the
+    next page would have to shrink its font size; then, as in _fit_typeset, the line spacing is tightened first and
+    the lines are counted after that. The line spacing below the last line is blank and may also extend past limit
+    (see _filled_bottom), but the write box ends at page_bottom: when limit is the source body bottom, the box is
+    trimmed there, the extra part counted would not fit, and these lines would be shrunk as a whole."""
     prepared = space_around_latin(separate_after_formula(text))
     metrics = _formula_metrics(formulas, block_size, em, block_size * 0.88 if cjk else None)
     widths = {index: metric.slot_width for index, metric in metrics.items()}
     raw = break_lines(prepared, em, max(width, 1.0), widths)
 
     def fitting(gap: float, room: float) -> int:
-        """高 room 的地方按行距 gap 放得下几行"""
+        """How many lines fit in a height of room at line spacing gap"""
         count = 0
         while count < len(raw) and (count + 1) * em * gap + em * 0.3 <= room + 1:
             count += 1
@@ -1318,8 +1399,8 @@ def _split_filled_lines(
     if 0 < roomy < count and fitting(normal, next_room + (normal - 1) * em) >= len(raw) - roomy:
         count = roomy
     if count >= len(raw):
-        # 返回已经断好的行。返回原文的话，调用方会按一行去量盒子，
-        # 整段就被挤进一行高，字号缩到看不清。
+        # Return the lines already broken. If the unbroken text were returned, the caller would measure the box as
+        # one line, the whole paragraph would be squeezed into one line height, and the font would become unreadable.
         return "\n".join(raw), ""
     if count <= 0:
         return "", prepared
@@ -1327,14 +1408,16 @@ def _split_filled_lines(
 
 
 def _filled_bottom(y0: float, lines: int, em: float, cjk: bool, room: float, page_bottom: float) -> float:
-    """_split_filled_lines 留在本页的几行，写入框的下沿。框要有整行距高，末行字形下面
-    还有一截空白，大致是行距超出字号的那部分。这截空白可以伸过 room，字仍在 room 以内。"""
+    """Bottom of the write box for the lines _split_filled_lines keeps on this page. The box needs the full
+    line-spacing height; below the glyphs of the last line there is a blank part, roughly the amount by which the
+    line spacing exceeds the font size. This blank part may extend past room while the glyphs stay within room."""
     gap = 1.45 if cjk else 1.2
     return min(y0 + lines * em * gap + em * 0.3, room + (gap - 1) * em, page_bottom)
 
 
 def _own_line_box(block: TextBlock, cjk: bool) -> pymupdf.Rect:
-    """半句和续行只占自己这一行。框高至少一行，左右不超出这一行。"""
+    """A half sentence or continuation line occupies only its own line. The box is at least one line high and does
+    not go past this line on the left or right."""
     origin = block.line_rects[0].y0 if block.line_rects else block.rect.y0
     y0 = origin + block.size * 0.1 if cjk else origin
     size = block.size * 0.88 if cjk else block.size
@@ -1345,13 +1428,14 @@ def _own_line_box(block: TextBlock, cjk: bool) -> pymupdf.Rect:
     return _clip_write_rect(rect, block.clip)
 
 
-# break_lines 在行末收起跨行的样式标记
+# Style marks that break_lines closes at the end of a line when the style continues onto the next line
 _TRAILING_CLOSERS_RE = re.compile(r"(?:\{/[bizcu]\})+$")
 
 
 def _after_first_line(source: str, head: str) -> str:
-    """第一行从原文切下去。断行吃掉的那个空格不要留在下一行行首。
-    粗体、斜体跨过第一行时，break_lines 在行末补了收尾标记，原文里没有：去掉再比，剩下的重开这些标记。"""
+    """Cut the first line off the source. The space consumed by the line break must not remain at the start of the
+    next line. When bold or italic continues past the first line, break_lines adds closing marks at the end of the
+    line that the source does not have: they are removed before comparing, and the rest reopens these marks."""
     if not head:
         return source
     if source.startswith(head):
@@ -1369,14 +1453,17 @@ def _split_own_lines(
     block_size: float,
     host_width: float,
 ) -> tuple[str, str]:
-    """第一行按半句的宽度断，剩下的不断行，写入时按续行自己的框再断。
+    """Break the first line at the width of the half sentence and leave the rest unbroken; it is broken again by
+    the continuation line's own box when written.
 
-    按窄宽断好的换行不能留在后半里。break_lines 把换行当成硬断，
-    短行再送进更宽的框也不会并回去，侧标旁边的正文就会一直只有第一行那么窄。
-    按整宽预先断好也不行：续行旁边有图时，写入还要让开图，预断的换行会留下半截短行。
+    Line breaks made at the narrow width must not stay in the second half. break_lines treats a newline as a hard
+    break, and short lines are not joined again in a wider box, so the body text beside the side label would stay
+    as narrow as the first line. Breaking in advance at the full width does not work either: when there is a
+    figure beside the continuation lines, writing must also avoid the figure, and the pre-broken lines would leave
+    short half lines.
     """
     prepared = space_around_latin(separate_after_formula(text))
-    # em 是没缩过的译文字号，公式按它保持原大（见 _formula_slot）
+    # em is the unshrunk translation font size; formulas keep their original size against it (see _formula_slot)
     metrics = _formula_metrics(formulas, block_size, em, em)
     widths = {index: metric.slot_width for index, metric in metrics.items()}
     raw = break_lines(prepared, em, max(host_width, 1.0), widths)
@@ -1385,8 +1472,8 @@ def _split_own_lines(
     if len(raw) == 1:
         return raw[0], ""
     rest = _after_first_line(prepared, raw[0]).strip()
-    # 半句的位置太窄，放不下第一个词时 break_lines 按字符硬切（BER / T）。
-    # 后面的行比这里宽，这个词整个留给续行
+    # When the space for the half sentence is too narrow for the first word, break_lines cuts it by character
+    # (BER / T). The following lines are wider, so the whole word is left for the continuation line
     shown = STYLE_MARK_RE.sub("", raw[0]).rstrip()
     visible = STYLE_MARK_RE.sub("", prepared)
     joint = visible[len(shown) - 1 : len(shown) + 1] if shown and visible.startswith(shown) else ""
@@ -1407,18 +1494,22 @@ def _render_translated(
     on_page: Callable[[int, int], None] | None = None,
     pages: Collection[int] | None = None,
 ) -> pymupdf.Document:
-    """on_page(已写页数, 要写的页数) 在每写一页之前调用。pages 给出时只写这些页。"""
+    """on_page(pages written, pages to write) is called before each page is written. When pages is given, only
+    those pages are written."""
     rtl = target_lang.split("-")[0] in RTL_LANGUAGES
-    # CJK 字体的行框比拉丁高（约 1.31em vs 1.16em），且字形顶部会越出给定区域：
-    # 按原字号写入会和下一行叠在一起，字号缩小并下移补偿
-    # 粤语、文言文走同一套 CJK 字体，行框一样偏高
+    # Line boxes of CJK fonts are taller than Latin ones (about 1.31em vs 1.16em), and glyph tops go past the given
+    # area: written at the original font size they would overlap the next line, so the font size is reduced and
+    # the text moved down to compensate
+    # Cantonese and Classical Chinese use the same CJK fonts, with the same taller line boxes
     cjk = target_lang.split("-")[0] in ("zh", "ja", "ko", "yue", "wyw")
-    # lang 让 MuPDF 为中日韩选对字形；dir=rtl 让阿拉伯语、希伯来语从右往左排
+    # lang lets MuPDF choose the right glyphs for Chinese, Japanese and Korean; dir=rtl sets Arabic and Hebrew
+    # right to left
     div_attrs = f' lang="{html.escape(target_lang)}"' if target_lang else ""
     if rtl:
         div_attrs += ' dir="rtl" style="text-align: right"'
     continuations = continuations or {}
-    # 跨页段落的公式记在上一页那块名下，续写到这一页时原处的分数线要按续块擦
+    # Formulas of a paragraph carried over to the next page are recorded under the block on the previous page; when
+    # the text continues on this page, the fraction bars in place must be erased according to the tail
     spill_hosts = {id(tail): host for host, tail in continuations.items()}
     carried: dict[int, _Carry] = {}
     doc = pymupdf.open(src_path)
@@ -1426,15 +1517,18 @@ def _render_translated(
     if pages is not None:
         by_page = {pno: items for pno, items in by_page.items() if pno in pages}
 
-    # 写入时只和同页的块比较。每块都扫一遍整本书，几百页就很慢。
+    # Writing compares only with blocks on the same page. Scanning the whole book for every block is slow with
+    # hundreds of pages.
     page_blocks: dict[int, list[TextBlock]] = {}
     for b in blocks:
         page_blocks.setdefault(b.page, []).append(b)
-    # 段首缩进的宽度，只有一行的段落按它认出来顶格写（见 _indent_edge）
+    # Width of the paragraph indent; one-line paragraphs recognized by it are written from the margin (see
+    # _indent_edge)
     indent = _paragraph_indent(blocks)
-    # 各页留在原处的字和画出来的图框（见 _room_below）。写到这一页时换成擦完以后的
+    # Glyphs left in place and drawn figure boxes on each page (see _room_below). Replaced with the post-erase ones
+    # when writing reaches the page
     page_inks: dict[int, tuple[list[pymupdf.Rect], list[pymupdf.Rect]]] = {}
-    # 第 pno 页的 _body_ink，和算它用的 page_inks 那一份
+    # _body_ink of page pno, and the page_inks entry it was computed from
     body_inks: dict[int, tuple[list[pymupdf.Rect], list[pymupdf.Rect]]] = {}
 
     def body_ink(pno: int) -> list[pymupdf.Rect]:
@@ -1454,22 +1548,28 @@ def _render_translated(
         shared_head: dict,
         hosts: bool = True,
     ) -> tuple[Callable, Callable, Callable, Callable]:
-        """第 pno 页的 spare_below、next_movable、latest_start、movable_box。写这一页的时候用；写上一页的跨页段落时也用它估续块能借到多少，
-        那时这一页还没擦，items 是要写的块，kept、marks 按没擦的页认，没有写过的块。
-        hosts 为假时下面的跨页段落不跟着挪：它往下挪要看再下一页，估续块的时候不往后看"""
+        """spare_below, next_movable, latest_start and movable_box of page pno. Used when writing this page, and
+        also when writing a paragraph carried over from the previous page, to estimate how much the tail can
+        borrow; then this page is not erased yet, items are the blocks to write, kept and marks come from the
+        unerased page, and no block has been written.
+        When hosts is false, a paragraph below that is carried over to the next page does not move along: moving it
+        down depends on the page after, and estimating a tail does not look further ahead"""
         page = doc[pno]
         same_page = page_blocks.get(pno, [])
         bounds = text_page_rect(page)
         geo = geometries[pno] if geometries and pno < len(geometries) else None
         visible = [(b, t) for b, t in items if t != SPILL_TAIL]
         texts = {id(b): t for b, t in items}
-        # 下面各段按正常行距排出来要多高，压一点字距（见 SQUEEZE）后要多高、排几行。只看译文和框宽，算一次就够
+        # Height of each paragraph below at normal line spacing, and its height and line count with slightly
+        # tightened letter spacing (see SQUEEZE). They depend only on the translation and box width, so computing
+        # them once is enough
         heights: dict[int, tuple[float, float, int]] = {}
         host_starts: dict[int, float] = {}
 
         def plain_rect(block: TextBlock) -> pymupdf.Rect | None:
-            """按普通段落写的块（不跨页、不分两个框、不是格子和索引）写在哪个框里，和下面写的时候一样算。
-            别的写法返回 None"""
+            """The box a block written as an ordinary paragraph (not carried over, not split into two boxes, not a
+            cell or index entry) is written in, computed the same way as when writing below. None for other ways of
+            writing"""
             text = texts.get(id(block))
             if (
                 text is None
@@ -1495,7 +1595,8 @@ def _render_translated(
             return _fit_page_margins(block, rect, same_page, bounds.height, cjk, body_ink(block.page))
 
         def next_movable(block: TextBlock, rect: pymupdf.Rect, room: float) -> tuple[TextBlock, pymupdf.Rect] | None:
-            """room 停在下面紧挨着的一段上，那一段还没写、按普通段落写、能跟着上下挪时，返回它和它的框"""
+            """When room stops at the paragraph right below, and that paragraph is not written yet, is written as
+            an ordinary paragraph and can move up or down, return it and its box"""
             below = [
                 other
                 for other in same_page
@@ -1512,8 +1613,10 @@ def _render_translated(
             return None if box is None else (nearest, box)
 
         def movable_box(block: TextBlock, above: TextBlock | None = None) -> pymupdf.Rect | None:
-            """能上下挪的一段写在哪个框里（见 plain_rect），不能挪时 None。above 是紧挨着它上面的一段"""
-            # 挪的只能是正文段落。图里的标签（树状图上的词）各自对着图上的位置，挪了就对不上
+            """The box a paragraph that can move up or down is written in (see plain_rect), or None when it cannot
+            move. above is the paragraph right above it"""
+            # Only body paragraphs move. Labels in a figure (words on a tree diagram) each match a position in the
+            # figure and would no longer match if moved
             if block.body_size and abs(block.size - block.body_size) > 0.5:
                 return None
             box = plain_rect(block)
@@ -1522,12 +1625,14 @@ def _render_translated(
             return box
 
         def pinned(block: TextBlock, box: pymupdf.Rect, above: TextBlock | None) -> bool:
-            """这一段的框里有不跟着它挪的东西"""
+            """The paragraph's box contains something that does not move with it"""
 
-            # 行内公式按译文里的占位贴，跟着段落走。留在原处的字（丢掉的行间公式、式号）和图框、
-            # 框里并排的别的块（Airlines-Wagner）不跟着段落挪，那一段挪了就压上了。
-            # 从上面伸进顶上一截的（公式框）往上提时按 lift_limit 让开；
-            # 下面一段的框和这一段底下叠着一截，它跟着往下挪，由 room 管
+            # Inline formulas are pasted at their placeholders in the translation and move with the paragraph.
+            # Glyphs left in place (dropped display formulas, equation numbers), figure boxes and other blocks side
+            # by side in the box (Airlines-Wagner) do not move with the paragraph, which would cover them if moved.
+            # Things reaching into the top from above (formula boxes) are avoided by lift_limit when moving up;
+            # the box of the paragraph below overlaps the bottom of this one, moves down with it, and is handled by
+            # room
             def fixed(ink: pymupdf.Rect, other: TextBlock | None = None) -> bool:
                 if not (
                     ink.y0 < block.rect.y1 - 1 and ink.y1 > block.rect.y0 + 1 and ink.x0 < box.x1 and ink.x1 > box.x0
@@ -1547,8 +1652,9 @@ def _render_translated(
             )
 
         def host_box(block: TextBlock, above: TextBlock | None = None) -> pymupdf.Rect | None:
-            """跨到下一页（下一栏）的段落按宿主写（不是分两个框、半句、和续行同一行的写法）时写在哪个框里。
-            它往下挪，留在这一页的行少了，多出的行写到续块那里"""
+            """The box a paragraph carried over to the next page (next column) is written in when written as a host
+            (not split into two boxes, not a half sentence, not on the same line as its continuation). When it
+            moves down, fewer lines stay on this page and the extra lines go to the tail"""
             text = texts.get(id(block))
             tail = continuations.get(id(block))
             if (
@@ -1575,8 +1681,9 @@ def _render_translated(
             return None if pinned(block, rect, above) else rect
 
         def host_latest(block: TextBlock, box: pymupdf.Rect) -> float:
-            """跨页段落最晚从哪里起笔：留在这一页的行照正常行距放得下，余下的行续块那里也照正常行距写得下。
-            原处就放不下时不挪，原处起笔"""
+            """The lowest origin of a paragraph carried over to the next page at which the lines staying on this page
+            fit at normal line spacing and the remaining lines also fit at normal line spacing in the tail. When
+            they do not fit even at the original position, it does not move and starts there"""
             if id(block) in host_starts:
                 return host_starts[id(block)]
             size = block.size * 0.88 if cjk else block.size
@@ -1624,15 +1731,17 @@ def _render_translated(
             return latest
 
         def latest_start(block: TextBlock, box: pymupdf.Rect) -> float:
-            """能挪的一段（见 next_movable）最晚从哪里起笔，它和下面一串能挪的段落才都照正常行距写得下。
-            比原来的起笔低是它能往下挪多少，借给上面一段；比原来高是它得往上提多少。
-            下面一段得往上提时，这一段要在它上面半行处收住，原来的框底就不能再用了"""
+            """The lowest origin of a movable paragraph (see next_movable) at which it and the run of movable
+            paragraphs below it all still fit at normal line spacing. Below the original origin, the difference is
+            how far it can move down, lent to the paragraph above; above it, how far it has to move up.
+            When the paragraph below has to move up, this one must end half a line above it, so the original box
+            bottom can no longer be used"""
             if id(block) in continuations:
                 return host_latest(block, box)
             size = block.size * 0.88 if cjk else block.size
             gap = 1.45 if cjk else 1.2
             if id(block) not in heights:
-                # 和 _fit_typeset 一样按公式槽断行，公式高的行行距跟着加
+                # Break lines by formula slots as _fit_typeset does; lines with tall formulas get more spacing
                 text = space_around_latin(separate_after_formula(texts[id(block)]))
                 formulas = (formulas_map or {}).get(id(block), [])
                 metrics = _formula_metrics(formulas, block.size, size, block.size * 0.88 if cjk else block.size)
@@ -1644,7 +1753,8 @@ def _render_translated(
             normal, squeezed, count = heights[id(block)]
             room = _room_below(page, block, box.y0, box.x0, box.x1, same_page, kept, marks, body_ink(block.page))
             fixed = room
-            # 在框里写到原文末行为止（盒子比末行行框多出首行上方 0.3em 的出头）
+            # Write in the box down to the last source line (the box is taller than the line boxes by the 0.3em
+            # overhang above the first line)
             own = min(box.y1, block.rect.y1 + size * 0.3)
             below = next_movable(block, box, room)
             if below is not None:
@@ -1653,22 +1763,28 @@ def _render_translated(
                     room = max(room, start)
                 elif start < below[1].y0 - 0.5:
                     room, own = min(room, start), -math.inf
-            # 框里放不下时和 _fit_typeset 往下长一样，写到下面一块往上半行处。
-            # 估的宽度和写的时候差一点就少算一行，留 1pt
+            # When the box cannot hold the text, write down to half a line above the block below, as _fit_typeset
+            # does when growing downward. A small difference between the estimated and written width loses a line,
+            # so 1pt is left
             reach = room - size * (gap * 0.5 - 0.3)
             latest = max(own, reach) - normal - 1
-            # 在原处写得下（和 _fit_typeset 一样量，见 _glyph_bottom，也可以压一点字距）就不用往上提，
-            # 原文末行往下的那截框只是挪下去时不用
-            # 末行下面那截空白伸过框底时按下面不动的东西量，下面一段借出来的地方它要挪下去半行，不算
+            # When the text fits at the original position (measured as in _fit_typeset, see _glyph_bottom, with
+            # slightly tightened letter spacing allowed), it need not move up; the part of the box below the last
+            # source line goes unused only when the block moves down
+            # The blank part below the last line extending past the box bottom is measured against what stays fixed
+            # below; space lent by the paragraph below does not count, because that paragraph moves down half a
+            # line into it
             bottom = _glyph_bottom(box.y1, fixed, size, gap) if cjk and count > 1 else box.y1
             if own > -math.inf and box.y0 + squeezed <= bottom + 1:
                 latest = max(latest, box.y0)
             return latest
 
         def spare_below(block: TextBlock, rect: pymupdf.Rect, room: float) -> tuple[TextBlock, float] | None:
-            """room 停在下面紧挨着的一段上，那一段按正常行距写完还空着的高度：这一段可以借来往下伸，
-            那一段跟着往下挪。返回那一段和它最低能从哪里起笔。
-            那一段自己也能向它下面的一段借，一段接一段往下挪，借到的算在它能写到的地方里"""
+            """When room stops at the paragraph right below: the height left free after that paragraph is written at
+            normal line spacing. This paragraph can borrow it to reach down, and that paragraph moves down. Returns
+            that paragraph and its lowest origin.
+            That paragraph can itself borrow from the one below it, paragraph after paragraph moving down, and what
+            it borrows counts toward how far it can write"""
             below = next_movable(block, rect, room)
             if below is None:
                 return None
@@ -1680,12 +1796,14 @@ def _render_translated(
         return spare_below, next_movable, latest_start, movable_box
 
     def tail_room(tail: TextBlock, width: float, em: float) -> float:
-        """续块从起笔往下能写多高，和写续块（SPILL_TAIL）时的 room 一样算。
-        续块那一页还没写，原文的字都在块里，留在原处的字、图框照样认得出来。
-        续块右边 width 以内并排着图、别的块时，按 width 断的行到那里要绕开，折成更多行，不算它有地方。
-        下面紧挨着的段落还空着的话，续块写的时候能借来往下伸（见 spare_below），算在里面；
-        下面一串得往上提时，提上去要用的地方不算。
-        em 是续写的字号"""
+        """How far down the tail can write from its origin, computed the same way as room when writing the tail
+        (SPILL_TAIL). The tail's page is not written yet and the source glyphs are all in blocks, so glyphs left in
+        place and figure boxes can still be recognized.
+        When a figure or another block sits beside the tail within width to its right, lines broken at width
+        would have to go around it there and wrap into more lines, so the tail is counted as having no room.
+        Free space in the paragraph right below, which the tail can borrow to reach down when written (see
+        spare_below), is included; when the run below has to move up, the space needed for that is not.
+        em is the font size of the continued text"""
         key = (id(tail), round(width, 2), round(em, 2))
         if key not in tail_rooms:
             tail_rooms[key] = measure_tail_room(tail, width, em)
@@ -1694,7 +1812,8 @@ def _render_translated(
     tail_rooms: dict[tuple[int, float, float], float] = {}
 
     def later_flow(pno: int) -> tuple[Callable, Callable, Callable, Callable]:
-        """还没写的第 pno 页的 page_flow。下面的跨页段落不跟着挪（见 page_flow 的 hosts）"""
+        """page_flow of page pno, which is not written yet. A paragraph below that is carried over to the next page
+        does not move along (see hosts in page_flow)"""
         if pno not in later_flows:
             later_page = doc[pno]
             same = page_blocks.get(pno, [])
@@ -1734,8 +1853,10 @@ def _render_translated(
             _, next_movable, latest_start, _ = later_flow(tail.page)
             below = next_movable(tail, pymupdf.Rect(x0, y0, x1, room), room)
             if below is not None:
-                # 往下伸到下面那段最低起笔往上半行（同 _fit_typeset），换成和 room 一样的算法：框比 room 多出末行下面的行距。
-                # 下面那一串照正常行距写不下、得往上提时，续块在提上去的起笔上面半行收住（同 latest_start）
+                # Reach down to half a line above the lowest origin of the paragraph below (as in _fit_typeset),
+                # converted to the same measure as room: the box exceeds room by the line spacing below the last
+                # line. When the run below does not fit at normal line spacing and has to move up, the tail ends
+                # half a line above the raised origin (as in latest_start)
                 start = latest_start(*below)
                 gap = 1.45 if cjk else 1.2
                 reach = start - em * (gap * 0.5 - 0.3) - (gap - 1) * em
@@ -1746,9 +1867,11 @@ def _render_translated(
         return room - y0
 
     def spill_target(block: TextBlock, width: float, em: float) -> tuple[TextBlock, pymupdf.Rect, float] | None:
-        """页底最后一段放不下时，末几行接到下一页页首那一段前面写：那一段和它下面能挪的段落往下让。
-        返回那一段、它的框、它前面能接着写多高（和 tail_room 一样，从起笔量到能写到的地方）。
-        下一页页首是标题、图注这类不能挪的块，或者栏比这一段窄时没有"""
+        """When the last paragraph at the bottom of the page does not fit, its last lines are written in front of
+        the first paragraph of the next page, and that paragraph and the movable paragraphs below it move down.
+        Returns that paragraph, its box, and how much height can be written in front of it (as in tail_room,
+        measured from the origin to where writing can reach). None when the next page starts with a block that
+        cannot move, such as a heading or caption, or when its column is narrower than this paragraph"""
         later = by_page.get(block.page + 1)
         if not later:
             return None
@@ -1768,11 +1891,13 @@ def _render_translated(
         if box is None or box.width < width - 2:
             return None
         gap = 1.45 if cjk else 1.2
-        # 接着写的几行末行下面半行是下一段的起笔（同 claims）；换成 _split_filled_lines 的 next_room
+        # Half a line below the last of the added lines is the origin of the next paragraph (as in claims);
+        # converted to the next_room of _split_filled_lines
         lowest = latest_start(head, box) - em * gap * 0.5
         return head, box, lowest - box.y0 + em * 0.3 - (gap - 1) * em - 1
 
-    # 页底一段接到下一页写的末几行，按下一页页首那一段记
+    # Last lines of a paragraph at the bottom of a page written on the next page, keyed by the first paragraph of
+    # that page
     spilled: dict[int, tuple[pymupdf.Rect, _Carry]] = {}
 
     for written, (pno, items) in enumerate(by_page.items()):
@@ -1780,15 +1905,16 @@ def _render_translated(
             on_page(written, len(by_page))
         page = doc[pno]
         same_page = page_blocks.get(pno, [])
-        # 旋转页的 page.rect 是转过的，和文字坐标比较要用没转的页面框
+        # page.rect of a rotated page is rotated; comparing with text coordinates needs the unrotated page box
         bounds = text_page_rect(page)
         items = _hosts_first(items, continuations)
         visible = [(b, t) for b, t in items if t != SPILL_TAIL]
         geo = geometries[pno] if geometries and pno < len(geometries) else None
         mid_map = {f["mid"]: f for b, _ in visible for f in (formulas_map or {}).get(id(b), []) if "mid" in f}
-        # redact 之前把整页打包成 Form：公式透传从它里面裁剪原 glyph；
-        # 同时收集页面全部 span（检测上标区域被上一行降部侵入的污染）。
-        # 没有 Unicode 的点阵字报的是字体框，比墨迹高出半行，拿来挖洞会把公式自己挖掉，不参与
+        # Before redaction, pack the whole page into a Form: formula pass-through clips the original glyphs from it;
+        # also collect all spans of the page (to detect superscript areas intruded on by descenders from the line
+        # above). Bitmap glyphs without Unicode report the font box, half a line taller than the ink; cutting
+        # holes with them would cut away the formula itself, so they are left out
         bitmap_fonts = broken_type3_names(doc, page) if mid_map else set()
         page_spans = None
         if mid_map:
@@ -1802,7 +1928,8 @@ def _render_translated(
                 for s in ln["spans"]
                 if s.get("font") not in bitmap_fonts
             ]
-            # 公式的字从正文 span 里切出来时，裁公式要按字认，擦了就查不到了
+            # When the glyphs of a formula were cut out of a body span, clipping the formula identifies them by
+            # character, which can no longer be looked up after erasing
             if any(
                 span.get("source")
                 for f in mid_map.values()
@@ -1811,8 +1938,9 @@ def _render_translated(
             ):
                 _attach_chars(page, page_spans)
         forms = _FormulaSources(doc, page, _page_form(doc, page), mid_map.values()) if mid_map else None
-        # 公式贴的是擦除前打包的原页，不受影响。点阵字的字形是全文共用的，擦除、裁公式的过滤会改到它，
-        # 这一页写完原样写回
+        # Formulas paste the original page packed before erasing and are not affected. Bitmap glyphs are shared by
+        # the whole document, and the filters for erasing and clipping formulas change them, so they are written
+        # back unchanged after this page is done
         glyphs = type3_glyphs(page) if mid_map else {}
         stacked = _affiliation_write_rects(same_page)
         fixed = {*stacked, *continuations, *(id(tail) for tail in continuations.values())}
@@ -1826,7 +1954,7 @@ def _render_translated(
             _page_content_bottom(same_page, pno, bounds.height),
             _kept_ink(page, same_page) if any(b.index for b in same_page) else (),
         )
-        # 挪过的索引条目，别的块右扩、绕排时按挪过的位置让开
+        # Other blocks extending right or wrapping avoid the moved index entries at their new positions
         layout = [reflowed.get(id(ob), ob) for ob in same_page]
         written = {id(b) for b, _ in items}
         items = [
@@ -1840,11 +1968,12 @@ def _render_translated(
         erasure = Erasure(math=_span_is_math)
         for b, _ in items:
             erasure.add_block(b.span_lines, b.line_rects or [b.rect])
-            # 目录条目的点线一起擦掉，写完译文再从页码前补到译文末尾
+            # The leader of a table of contents entry is erased too, and after the translation is written it is
+            # filled in from the page number back to the end of the translation
             if b.leader is not None:
                 erasure.spans.extend(b.leader.dots)
-            # 公式收进来的分数线、根号横线随公式图贴到新位置，原处的要擦掉。
-            # 行框按墨迹收紧以后，分数线常落在行框外面
+            # Fraction bars and radical bars taken into a formula move with the formula image, so the originals
+            # must be erased. After line boxes are tightened to the ink, fraction bars often lie outside them
             erasure.lines.extend(
                 pymupdf.Rect(curve) + (-0.5, -0.5, 0.5, 0.5)
                 for key in (id(b), spill_hosts.get(id(b)))
@@ -1853,8 +1982,9 @@ def _render_translated(
                 for curve in part.get("curves") or []
                 if curve is not None and int(part.get("page", f.get("page", pno))) == pno
             )
-            # 公式图按框整块裁下来贴到新位置，框里起笔的字形原处都要擦。没有 Unicode 的字形
-            # （CMEX 的大号范数线提出来是 \r）当成空白，不在 span 里，按 span 擦不到
+            # A formula image is cut out by its whole box and pasted at the new position, so every glyph whose
+            # origin is in the box must be erased in place. Glyphs without Unicode (the large norm bars of CMEX
+            # extract as \r) are treated as blank and are not in any span, so erasing by span misses them
             erasure.spanless.extend(
                 pymupdf.Rect(part["bbox"])
                 for key in (id(b), spill_hosts.get(id(b)))
@@ -1862,19 +1992,23 @@ def _render_translated(
                 for part in _formula_parts(f)
                 if part.get("bbox") is not None and int(part.get("page", f.get("page", pno))) == pno
             )
-        # 擦之前在原文的位置放好标记，写完把译文插回去，拖选、复制按阅读顺序走
+        # Before erasing, place markers at the source positions; after writing, the translation is inserted back
+        # there, so drag selection and copying follow the reading order
         order = ReadingOrder(page, [b for b, _ in items])
         erase(page, erasure)
         order.after_erase()
-        # 擦完还在原处的字（丢掉的行间公式、式号），译文右扩、续写都要让开
+        # Glyphs still in place after erasing (dropped display formulas, equation numbers) must be avoided when the
+        # translation extends right or continues
         kept = _kept_ink(page, same_page)
-        # 续写往下伸时还要让开图框、图片，它们不在块里。写译文之前读：写进去的公式也是画出来的
+        # Continued text reaching down must also avoid figure boxes and images, which are not in blocks. Read
+        # before writing the translation: the formulas written are drawn too
         spills = any(t == SPILL_TAIL or id(b) in continuations for b, t in items)
         marks = _drawn_marks(page) if spills else []
         page_inks[pno] = kept, marks
-        # 重写内容流会把 /Resources 改写成内联字典；排版器写入后 /XObject 条目上百个，
-        # 这么大的内联嵌套字典在保存的 GC（garbage≥3）里会被写坏（第一个表单的条目
-        # 指向字体流，内容静默丢失）。规范成间接引用避开这个 MuPDF bug。
+        # Rewriting the content stream turns /Resources into an inline dictionary; after the typesetter writes,
+        # /XObject has hundreds of entries, and such a large nested inline dictionary gets corrupted by the GC on
+        # save (garbage≥3) (the entry of the first form points to a font stream and content is silently lost).
+        # Making it an indirect reference avoids this MuPDF bug.
         res_v = doc.xref_get_key(page.xref, "Resources")[1]
         if res_v.startswith("<<"):
             res_x = doc.get_new_xref()
@@ -1885,7 +2019,8 @@ def _render_translated(
         starts = _body_first_starts(same_page, items, cjk, formulas_map)
 
         def write_floor(block: TextBlock, rect: pymupdf.Rect) -> float:
-            """写入框最低能到哪里：写的时候 _fit_page_margins 会把框裁在原文正文下沿。"""
+            """How low the write box can reach: when writing, _fit_page_margins trims the box at the source body
+            bottom."""
             box = pymupdf.Rect(rect.x0, rect.y0, rect.x1, bounds.y1)
             return _fit_page_margins(block, box, same_page, bounds.height, cjk, body_ink(block.page)).y1
 
@@ -1896,17 +2031,19 @@ def _render_translated(
             align: str,
             formulas: list[dict] | None = None,
             justify_last: bool = False,
-            # source：block 是挪过位置的副本（索引条目）时的原块，阅读顺序的标记放在原块上
+            # source: the original block when block is a moved copy (index entry); the reading order marker is on
+            # the original block
             x_cap: float | None = None,
             source: TextBlock | None = None,
-            # 续写的后半按上一块的字号写（见 _Carry）
+            # The second half of continued text is written at the previous block's font size (see _Carry)
             block_size: float | None = None,
-            # 往下挪的起笔、往下伸到哪里，见 _fit_typeset
+            # Lowered origin and how far down to reach: see _fit_typeset
             lower: tuple[float, float] | None = None,
             room: float | None = None,
-            # 起笔被上一段推下来了，首行不再按原文第一行往上提
+            # The origin was pushed down by the paragraph above, so the first line is no longer raised to match
+            # the first source line
             pushed: bool = False,
-            # room 是下面一段借出来的（见 _fit_typeset）
+            # room is lent by the paragraph below (see _fit_typeset)
             lent: bool = False,
         ) -> None:
             rect = _fit_page_margins(block, rect, same_page, bounds.height, cjk, body_ink(block.page))
@@ -1917,32 +2054,37 @@ def _render_translated(
             block_size = block.size if block_size is None else block_size
             size = block_size * 0.88 if cjk else block_size
             obstacles = [ob.rect for ob in layout if ob is not block]
-            # 目录的页码留在原页上，译文不能写过去
+            # Table of contents page numbers stay on the original page, and the translation must not run over them
             obstacles += [ob.leader.number for ob in same_page if ob.leader is not None]
             obstacles += [ink for ink in kept if _on_rows(ink, block.line_rects or [block.rect])]
             if geo is not None:
-                # 带框线的表和算法框画着外框，右扩也不能压上去
+                # Ruled tables and algorithm boxes have drawn borders, and extending right must not cover them
                 obstacles = [*obstacles, *geo.figures, *(table.rect for table in geo.tables)]
             beside = _beside_rows(obstacles, rect, block.line_rects or [block.rect])
             limit = _write_limit(block, rect, geo, beside)
             if x_cap is not None:
                 limit = x_cap if limit is None else min(limit, x_cap)
-            # 靠右排的收在原来的右缘，不往右扩，放不下时往左扩，最多到页宽 10% 处或格子左缘
+            # Right-aligned text ends at the original right edge without extending right; when it does not fit it
+            # extends left, at most to 10% of the page width or the cell's left edge
             left_limit = None
             if align == "right":
                 limit = rect.x1
                 left_limit = block.clip[0] + 0.8 if block.clip is not None else bounds.width * 0.1
-            # 跨页接过来的半段按上一页的栏宽写，要让开的图可能在块的框外面
+            # The half of a paragraph carried over from the previous page is written at that page's column width, so
+            # figures to avoid may lie outside the block's box
             holes = _wrap_holes(block, obstacles, rect | block.rect)
-            # 题号、圆点顶格的条目，正文照原文对齐在题号右边的一列。续写的后半、挪过位置的副本不按原块的行算
+            # For items whose number or bullet starts at the margin, the body aligns as in the source in a column to
+            # the right of the number. The second half of continued text and moved copies are not measured by the
+            # original block's lines
             hang = (
                 _hang_indent(block)
                 if align == "left" and source is None and formulas is None and abs(rect.x0 - block.rect.x0) <= 1
                 else 0.0
             )
             first_room = None if pushed else _first_row_room(block, rect)
-            # 从右往左仍交给 HTML 盒子。其余段落由排版器断行：有公式图时按行落位，
-            # 没有公式图时写进一个锁住换行的盒子，避免一行嵌一次整套字体。
+            # Right-to-left text still goes to an HTML box. Other paragraphs are broken by the typesetter: with
+            # formula images they are placed line by line, without them they are written into one box with locked
+            # line breaks, so the whole font is not embedded once per line.
             if rtl:
                 body = _translation_html(text, bformulas, block_size, size, rect.width)
                 css = (
@@ -2009,27 +2151,30 @@ def _render_translated(
                     ends[id(source or block)] = (source or block, end, size)
             if block.leader is not None and not page.rotation:
                 _extend_leader(page, block, block.leader)
-            # 右扩、左扩、绕排时字会写出框外，按能写到的最左、最右边算
+            # Extending right or left and wrapping write outside the box, so use the leftmost and rightmost reach
             left = _expand_left(rect, left_limit, beside).x0 if left_limit is not None else rect.x0
             reach = pymupdf.Rect(left, rect.y0, max(rect.x1, limit or rect.x1), rect.y1) | block.rect
             order.record(source or block, before, reach + (-2, -2, 2, 2))
 
-        # 本页写好的块：原块、末行行框的下沿、字号
+        # Blocks written on this page: original block, bottom of the last line box, font size
         ends: dict[int, tuple[TextBlock, float, float]] = {}
-        # 本页已经写过的块，上一段伸下来以后各段最高从哪里起笔（见 spare_below）
+        # Blocks already written on this page; after the paragraph above reaches down, the highest origin of each
+        # paragraph (see spare_below)
         written_ids: set[int] = set()
         claims: dict[int, float] = {}
 
         def paragraph_room(block: TextBlock, rect: pymupdf.Rect) -> float | None:
-            """段落往下能写到哪里（见 _room_below）。表格里上下相邻的格子（旁边还有别的格子）、
-            索引的条目各自对着原来的行，没有"""
+            """How far down the paragraph can write (see _room_below). None for vertically adjacent table cells
+            (with other cells beside them) and index entries, which each match their original lines"""
             if block.index or _row_neighbor(block, same_page, geo):
                 return None
             return _room_below(page, block, rect.y0, rect.x0, rect.x1, same_page, kept, marks, body_ink(block.page))
 
         def lift_limit(block: TextBlock, rect: pymupdf.Rect, size: float) -> float | None:
-            """往上提最多提到哪里：上面最近的东西下面半行。写好的块按末行算，没译的块、留在原处的字、
-            图框按原处算。上面还有没轮到的块（它往下长会压上来）、上面什么都没有（栏顶）时不提"""
+            """How far up the paragraph can move at most: half a line below the nearest thing above. Written blocks
+            count by their last line; untranslated blocks, glyphs left in place and figure boxes count at their
+            original position. None when a block above has not had its turn yet (growing down, it would cover this
+            one) or there is nothing above (top of the column)"""
             pending = {id(other) for other, _ in items} - reached
             bottoms = []
             for other in same_page:
@@ -2053,10 +2198,12 @@ def _render_translated(
             return max(bottoms) + size * (1.45 if cjk else 1.2) * 0.5
 
         def paragraph_top(block: TextBlock, rect: pymupdf.Rect, room: float | None) -> tuple[float, float] | None:
-            """上面紧挨着的一段译文写满了自己的框，末行贴着这一段的起笔，两段读起来像一段。
-            译文不缩进，段落只靠上下的空隙分开：起笔至少比上一段末行低半行。
-            上一块没有在句末、分号、冒号收住的是同一句断开的两半，不隔开。
-            room 是 paragraph_room 算出的下沿，没有时不挪。"""
+            """When the translation of the paragraph right above fills its box, its last line touches this
+            paragraph's origin and the two read as one paragraph. The translation has no indents, so paragraphs are
+            separated only by vertical space: the origin is at least half a line below the last line above.
+            When the block above does not end at a sentence end, semicolon or colon, the two are halves of one
+            broken sentence and are not separated.
+            room is the bottom computed by paragraph_room; without it nothing moves."""
             if room is None:
                 return None
             above = [
@@ -2077,7 +2224,8 @@ def _render_translated(
                 return None
             return wanted, room
 
-        # 续行可能排在半句前面。先把后半放进 carry，写的时候才不会丢掉。
+        # The continuation line may come before the half sentence. The second half goes into carry first so it is
+        # not lost when writing.
         shared_head: dict[int, tuple[str, pymupdf.Rect, list[dict], bool]] = {}
         for b, t in items:
             if t == SPILL_TAIL:
@@ -2108,9 +2256,10 @@ def _render_translated(
             reflowed,
             shared_head,
         )
-        # 能挪的一段紧挨着上面哪一段写（见 next_movable），和它自己的框
+        # For a movable paragraph: the paragraph right above that it follows (see next_movable), and its own box
         follows: dict[int, tuple[TextBlock, pymupdf.Rect]] = {}
-        # 已经轮到过的块。译文全挪去宿主的续块、整段写去续页的宿主轮到了也不写字
+        # Blocks that have had their turn. A tail whose translation moved entirely to its host, or a host written
+        # entirely on the continuation page, writes nothing when its turn comes
         reached: set[int] = set()
 
         def spill_last_lines(
@@ -2121,8 +2270,10 @@ def _render_translated(
             room: float,
             pushed: bool,
         ) -> bool:
-            """这一段是这一页最后一段正文，照正常行距放不下、上下都没有空：留在这一页的行照正常行距写，
-            余下的接到下一页页首（见 spill_target）。余下的行里有行内公式时不接，公式图只贴在本页"""
+            """This paragraph is the last body paragraph on the page, does not fit at normal line spacing, and has no
+            free space above or below: the lines staying on this page are written at normal line spacing, and the
+            rest continues at the top of the next page (see spill_target). Not done when the remaining lines contain
+            inline formulas, because formula images are only pasted on this page"""
             index = next(i for i, (other, _) in enumerate(items) if other is block)
             if any(
                 t != SPILL_TAIL and not (other.body_size and abs(other.size - other.body_size) > 0.5)
@@ -2191,11 +2342,13 @@ def _render_translated(
                 room = _room_below(
                     page, b, rect.y0, rect.x0, rect.x0 + carry.width, same_page, kept, marks, body_ink(b.page)
                 )
-                # 末行下面的行距是空白，框可以伸过 room，字仍在 room 以内（同 _filled_bottom）
+                # The line spacing below the last line is blank, so the box may extend past room while the glyphs
+                # stay within room (as in _filled_bottom)
                 size = carry.size * 0.88 if cjk else carry.size
                 bottom = room + ((1.45 if cjk else 1.2) - 1) * size
                 placed = pymupdf.Rect(rect.x0, rect.y0, rect.x0 + carry.width, max(bottom, rect.y0 + 4))
-                # 上一页按 tail_room 算过能向下面一段借的，这里写不下就伸进去，那一段跟着往下挪
+                # The previous page counted, via tail_room, on borrowing from the paragraph below; when the text does
+                # not fit here it reaches into that space, and that paragraph moves down
                 borrowed = spare_below(b, placed, room)
                 write_one(
                     b,
@@ -2219,13 +2372,15 @@ def _render_translated(
                 if head:
                     write_one(b, head, host_box, "left", bformulas, justify, host_box.x1)
                 continue
-            # 栏宽参考：单栏用本页最宽块；多栏用本块所在栏。居中块用整栏宽，
-            # 短译文不再被小框挤成孤字行。排版器按这个宽度断行。
+            # Reference column width: the widest block on the page for one column, the block's own column for
+            # several. Centered blocks use the full column width, so short translations are not squeezed by a small
+            # box into lines with single characters. The typesetter breaks lines at this width.
             rect, align = _write_rect(b, visible, cjk, rtl, geo)
             inset = _inset_write_boxes(b, cjk)
             if inset is not None and id(b) not in stacked:
                 first_box, rest_box = inset
-                # 靠右排的引语加署名首行短、起笔靠右：照样按两个框断行，每行收在原来的右缘
+                # A right-aligned epigraph with attribution has a short first line starting further right: it is
+                # still broken into two boxes, and every line ends at the original right edge
                 side = "right" if align == "right" else "left"
                 if side == "right":
                     first_box = pymupdf.Rect(first_box.x0, first_box.y0, rect.x1, first_box.y1)
@@ -2293,7 +2448,8 @@ def _render_translated(
                 write_one(shifted, t, rect, align, (formulas_map or {}).get(id(b), []), source=b)
                 continue
             if b.side_note and geo is not None and geo.frame is not None and b.rect.x1 <= geo.frame.x0:
-                # 左侧的旁注靠右对齐，贴着正文。放不下一行时照常从左起笔
+                # A margin note on the left is right-aligned against the body. When it does not fit on one line it
+                # starts from the left as usual
                 width = measure_width(t, b.size * 0.88 if cjk else b.size)
                 if width < rect.width:
                     rect = pymupdf.Rect(b.rect.x1 - width - 1, rect.y0, b.rect.x1 + 1, rect.y1)
@@ -2315,7 +2471,8 @@ def _render_translated(
                     rect = pymupdf.Rect(edge, rect.y0, rect.x1, rect.y1)
                 carry = spilled.pop(id(b), None)
                 if carry is not None:
-                    # 上一页页底那一段的末几行接在这一段前面，这一段从它下面半行起笔
+                    # The last lines of the paragraph at the bottom of the previous page come before this paragraph,
+                    # which starts half a line below them
                     box, carry = carry
                     size = carry.size * 0.88 if cjk else carry.size
                     lines = carry.text.count("\n") + 1
@@ -2330,12 +2487,14 @@ def _render_translated(
                         claims[id(b)] = ends[id(b)][1] + size * (1.45 if cjk else 1.2) * 0.5
                 claim = claims.get(id(b))
                 pushed = claim is not None and claim > rect.y0
-                # 下面有哪些块按这一段原来的位置找。挪下去的起笔可能已经低过下一段的顶，从那里往下找会漏掉它
+                # Blocks below are looked up from this paragraph's original position. The lowered origin may already
+                # be below the top of the next paragraph, and searching down from there would miss it
                 own = rect
                 if pushed:
                     rect = pymupdf.Rect(rect.x0, claim, rect.x1, rect.y1)
-                # 这一段和下面一串段落照正常行距写不下，上面还空着：往上提，最多提到上面最近的东西下面半行。
-                # 上面一段写的时候已经按同样的算法提过，上面的空一段段攒下来
+                # This paragraph and the run below it do not fit at normal line spacing and there is space above:
+                # move up, at most to half a line below the nearest thing above. The paragraph above was already
+                # moved up the same way when written, so the free space above accumulates paragraph by paragraph
                 link = follows.get(id(b))
                 box = link[1] if link is not None else movable_box(b)
                 if box is not None:
@@ -2349,7 +2508,7 @@ def _render_translated(
                     below = next_movable(b, own, room)
                     if below is not None:
                         follows[id(below[0])] = (b, below[1])
-                # 格子里的字写不下也不伸进下一格
+                # Text in a cell does not reach into the next cell even when it does not fit
                 grow = room if b.clip is None else None
                 borrowed = spare_below(b, own, grow) if grow is not None else None
                 if borrowed is not None:
@@ -2369,14 +2528,15 @@ def _render_translated(
                 )
                 if borrowed is not None and id(b) in ends:
                     _, end, size = ends[id(b)]
-                    # 盒子伸过了原来的下沿（盒子比末行行框多出 0.3em），伸进了下面一段的框：
-                    # 那一段的起笔挪到末行下面半行
+                    # The box reached past the original bottom (the box is 0.3em taller than the last line box) into
+                    # the box of the paragraph below: that paragraph's origin moves to half a line below the last line
                     if end + size * 0.3 > rect.y1 + 0.5:
                         claims[id(borrowed[0])] = end + size * (1.45 if cjk else 1.2) * 0.5
                 continue
             bformulas = (formulas_map or {}).get(id(b), [])
-            # 行尾半句只有几个词宽。按它的宽度断行，续页也会被挤小。
-            # 原文擦掉，整段按续页的栏宽写在续页上。
+            # A half sentence at the end of a line is only a few words wide. Breaking at its width would squeeze the
+            # continuation page too. The source is erased and the whole paragraph is written on the continuation
+            # page at that page's column width.
             if len(b.line_rects) <= 1 and rect.width < tail.rect.width * 0.7:
                 carried[id(tail)] = _Carry(t, bformulas, tail.rect.width, b.size)
                 continue
@@ -2387,7 +2547,7 @@ def _render_translated(
             room = _room_below(page, b, rect.y0, rect.x0, rect.x1, same_page, kept, marks, body_ink(b.page))
             floor = write_floor(b, rect)
             next_room = tail_room(tail, rect.width, size)
-            # 上面一段借了这一段往下挪出的空（见 host_latest）
+            # The paragraph above borrowed the space freed by this paragraph moving down (see host_latest)
             claim = claims.get(id(b))
             if claim is not None and claim > rect.y0:
                 rect = pymupdf.Rect(rect.x0, claim, rect.x1, rect.y1)
@@ -2396,13 +2556,15 @@ def _render_translated(
                 return _split_filled_lines(t, bformulas, size, b.size, rect.width, cjk, y0, room, floor, next_room)
 
             def squeezed(head: str, y0: float) -> bool:
-                """留在这一页的几行照正常行距放不下（同 _split_filled_lines 数行数）"""
+                """The lines staying on this page do not fit at normal line spacing (lines counted as in
+                _split_filled_lines)"""
                 gap = 1.45 if cjk else 1.2
                 lines = head.count("\n") + 1
                 return bool(head) and y0 + lines * size * gap + size * 0.3 > min(room + (gap - 1) * size, floor) + 1
 
             head, rest = split(rect.y0)
-            # 照正常行距放不下、上面还空着：往上提。提得越高这一页放的行越多，找放得下的最低起笔
+            # Does not fit at normal line spacing and there is space above: move up. The higher it moves, the more
+            # lines this page holds, so find the lowest origin at which they fit
             up = lift_limit(b, rect, size) if squeezed(head, rect.y0) else None
             if up is not None and up < rect.y0 - 0.5 and not squeezed(split(up)[0], up):
                 low, high = up, rect.y0
@@ -2415,7 +2577,8 @@ def _render_translated(
                 rect = pymupdf.Rect(rect.x0, low, rect.x1, rect.y1)
                 head, rest = split(low)
             elif up is not None and up < rect.y0 - 0.5:
-                # 提上去多放的行照样挤（下一页接不住）：行数不变，提到这几行照正常行距放得下的地方
+                # The extra lines gained by moving up are still squeezed (the next page cannot take them): keep the
+                # line count and move up to where these lines fit at normal line spacing
                 gap = 1.45 if cjk else 1.2
                 lines = head.count("\n") + 1
                 start = min(room + (gap - 1) * size, floor) - lines * size * gap - size * 0.3
@@ -2440,10 +2603,11 @@ def _hosts_first(
     items: list[tuple[TextBlock, str]],
     continuations: dict[int, TextBlock],
 ) -> list[tuple[TextBlock, str]]:
-    """同页的续块挪到宿主后面。
+    """Move tails on the same page after their hosts.
 
-    内容流先画右栏时，右栏顶的续块会排在左栏宿主前面。轮到它时还没有接续的译文，
-    原文已经擦掉，这一段就整段没了。
+    When the content stream draws the right column first, a tail at the top of the right column comes before its
+    host in the left column. When its turn comes there is no continued translation yet, the source is already
+    erased, and the whole paragraph is lost.
     """
     host_of = {id(tail): host_id for host_id, tail in continuations.items()}
     position = {id(b): index for index, (b, _t) in enumerate(items)}

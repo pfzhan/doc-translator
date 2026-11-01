@@ -32,28 +32,30 @@ from .pdf_typeset import (
     typeset_lines,
 )
 
-# 行内公式最高几个字高。根号、求和带上下限的式子在这以内按原大写，行距跟着撑开
+# Maximum height of an inline formula, in em. Up to this height, formulas with radicals or sums with limits are
+# written at their original size and the line spacing grows with them
 _INLINE_FORMULA_EM = 2.6
-# 盒子放不下撑开的行距时，公式压到的高度：正好在一行里
+# Height a formula is reduced to when the box cannot hold the enlarged line spacing: exactly one line
 _LINE_FORMULA_EM = 1.35
-# 分式、根号下求和，基线以上一般不到一个半字高，以下不到一个字高
+# Fractions and sums under a radical usually reach less than 1.5 em above the baseline and less than 1 em below it
 _FORMULA_ASCENT_EM = 1.8
 _FORMULA_DESCENT_EM = 1.3
 
 
 def _part_lead(part: dict, scale: float) -> float:
-    """这一片和前一片之间的空，按公式的缩放算。"""
+    """The gap between this part and the previous one, scaled with the formula."""
     return max(_PART_GAP, float(part.get("lead") or 0) * scale)
 
 
 def _formula_png(formula: dict) -> bytes | None:
-    """公式的位图：测试里直接给 PNG，正式流程里是 _FormulaImage。"""
+    """The bitmap of a formula: tests give a PNG directly, the normal pipeline gives a _FormulaImage."""
     png = formula.get("png")
     return png.png() if isinstance(png, _FormulaImage) else png
 
 
 def _formula_png_rect(formula: dict, target: pymupdf.Rect) -> pymupdf.Rect:
-    """位图贴到哪里。裁图比公式框宽出的部分（见 _FormulaImage.area）按公式框到 target 的缩放放到两侧。"""
+    """Where the bitmap goes. The parts of the cropped image that extend past the formula box (see
+    _FormulaImage.area) are placed on both sides, scaled by the same factor as the formula box to target."""
     png, bbox = formula.get("png"), formula.get("bbox")
     if not isinstance(png, _FormulaImage) or bbox is None or bbox.width <= 0 or bbox.height <= 0:
         return target
@@ -68,35 +70,40 @@ def _formula_png_rect(formula: dict, target: pymupdf.Rect) -> pymupdf.Rect:
 
 
 def _pdf_rect(page: "pymupdf.Page", rect: "pymupdf.Rect") -> "pymupdf.Rect":
-    """页面坐标的矩形换成 PDF 坐标（y 向上）。裁剪框不从原点起时要加上偏移。"""
+    """Convert a rectangle in page coordinates to PDF coordinates (y up). When the crop box does not start at the
+    origin, its offset is added."""
     left, top = page_origin(page)
     return pymupdf.Rect(rect.x0 + left, top - rect.y1, rect.x1 + left, top - rect.y0)
 
 
 class _GlyphKeeper(pymupdf.mupdf.PdfSanitizeFilterOptions2):
-    """只删字形：中心落在 keep 外的删掉，留下的记下位置，过滤后拿来核对。
-    路径和图片不删，裁剪路径挡得住。按位置删路径会把 Type3 字形过程里的笔画也删掉
-    （𝟙 这种点阵字就没了）。每个字形回调一次，写得越简单越快。"""
+    """Delete glyphs only: glyphs whose center lies outside keep are deleted, and the positions of the kept ones
+    are recorded to be checked after filtering. Paths and images are not deleted; the clipping path hides them.
+    Deleting paths by position would also delete the strokes inside Type3 glyph procedures (bitmap glyphs such
+    as 𝟙 would disappear). The callback runs once per glyph, so the simpler it is, the faster."""
 
     def __init__(self, keep: list[tuple[float, float, float, float]]):
         super().__init__()
         self.keep = keep
         self.kept: list[tuple[float, float]] = []
         self.use_virtual_text_filter()
-        # 有图片时过滤器还要调这个回调，不实现会报错
+        # The filter also calls this callback when there are images, and raises an error if it is not implemented
         self.use_virtual_image_filter()
 
     def image_filter(self, ctx, ctm, name, image, scissor):
-        # 返回的图片用完会被释放一次，原样留下要先加一次引用
+        # The returned image is released once after use, so keeping it unchanged needs one extra reference first
         return pymupdf.mupdf.ll_fz_keep_image(image)
 
     def text_filter(self, ctx, ucs, length, trm, ctm, bbox, *rest):
-        # 字形中心按这个字自己的框算，整套字体的框比括号宽，中心会落到括号外面。返回 1 是删掉
+        # The glyph center is computed from the glyph's own box. The box of the whole font is wider than a
+        # parenthesis, and the center would fall outside the parenthesis. Returning 1 deletes the glyph
         gx, gy = (bbox.x0 + bbox.x1) / 2, (bbox.y0 + bbox.y1) / 2
         x, y = gx * trm.a + gy * trm.c + trm.e, gx * trm.b + gy * trm.d + trm.f
         x, y = x * ctm.a + y * ctm.c + ctm.e, x * ctm.b + y * ctm.d + ctm.f
-        # 点阵字常不报自己的框（宽为 0），只有整套字体的上下界，算出的中心离墨迹半行。
-        # 这时横向看起笔点，纵向只要上下界和保留框交叠就留下：笔画有裁剪路径挡着
+        # Bitmap glyphs often do not report their own box (width 0), only the vertical bounds of the whole font,
+        # and the computed center is half a line away from the ink. In that case the origin is used horizontally,
+        # and vertically the glyph is kept as long as those bounds overlap a keep box: the clipping path hides the
+        # strokes
         reach = None
         if bbox.x0 == bbox.x1:
             ends = [gy_ * trm.d + trm.f for gy_ in (bbox.y0, bbox.y1)]
@@ -110,7 +117,8 @@ class _GlyphKeeper(pymupdf.mupdf.PdfSanitizeFilterOptions2):
 
 
 class _SanitizeFactory(pymupdf.mupdf.PdfFilterFactory2):
-    # 属性不能叫 options：那是底层结构体的字段名，赋值会写进 C 结构体
+    # The attribute must not be called options: that is a field name of the underlying struct, and assigning to it
+    # writes into the C struct
     def __init__(self, sanitize: pymupdf.mupdf.PdfSanitizeFilterOptions2):
         super().__init__()
         self.sanitize = sanitize
@@ -130,13 +138,16 @@ class _SanitizeFactory(pymupdf.mupdf.PdfFilterFactory2):
 def _filter_form(
     doc: "pymupdf.Document", form: int, keep: list[tuple[float, float, float, float]], recurse: bool = True
 ) -> tuple[int, list[tuple[float, float]]]:
-    """过滤一遍 Form，返回新 Form 的 xref 和留下的字的位置。recurse 为假时只过滤这一层，套着的 Form 原样引用。"""
+    """Filter a Form once and return the xref of the new Form and the positions of the kept glyphs. When recurse
+    is false, only this level is filtered and nested Forms are referenced unchanged."""
     mupdf = pymupdf.mupdf
     keeper = _GlyphKeeper(keep)
     factory = _SanitizeFactory(keeper)
     options = mupdf.PdfFilterOptions()
-    # 页里套的 Form（图）也要过滤。过滤结果另存新对象，原对象页面自己还在用，直接改会把图删掉。
-    # 不进套着的 Form 时也不复制：复制时 MuPDF 会改写内容流，图就和原来的字节不同了（见 _lines_form）
+    # Forms nested in the page (figures) are filtered too. The result is stored as a new object because the page
+    # itself still uses the original one, and changing it in place would delete the figure.
+    # When nested Forms are not entered, they are not copied either: copying makes MuPDF rewrite the content
+    # stream, and the figure's bytes would differ from the original (see _lines_form)
     options.recurse = int(recurse)
     options.instance_forms = int(recurse)
     options.add_factory(factory.internal())
@@ -151,7 +162,7 @@ _EVERYWHERE = [(-1e9, -1e9, 1e9, 1e9)]
 
 
 def _keeps_places(doc: "pymupdf.Document", xref: int, kept: list[tuple[float, float]], recurse: bool = True) -> bool:
-    """过滤后的 Form 里每个字还在原来的位置上。recurse 和过滤时一样。"""
+    """Every glyph in the filtered Form is still at its original position. recurse is the same as when filtering."""
     if not xref:
         return False
     _same, now = _filter_form(doc, xref, _EVERYWHERE, recurse)
@@ -159,9 +170,10 @@ def _keeps_places(doc: "pymupdf.Document", xref: int, kept: list[tuple[float, fl
 
 
 def _same_places(a: list[tuple[float, float]], b: list[tuple[float, float]]) -> bool:
-    """两组字形位置一一配得上，各差不到 0.1。不能排序后逐个比：同一列上下几行行首的字，
-    横坐标差万分之几，排出来的先后就乱了，拿不同行的字来比。这里按 0.1 的格子分好，
-    每个字在自己和相邻的格子里找。"""
+    """The two sets of glyph positions match one to one, each within 0.1. Sorting and comparing in order does not
+    work: the glyphs at the start of several lines in one column differ in x by a few ten-thousandths, the sort
+    order gets mixed up, and glyphs from different lines are compared. Here the positions are put into cells of
+    0.1, and each glyph is looked up in its own cell and the neighbouring ones."""
     if len(a) != len(b):
         return False
     cells: dict[tuple[int, int], list[tuple[float, float]]] = {}
@@ -181,13 +193,16 @@ def _same_places(a: list[tuple[float, float]], b: list[tuple[float, float]]) -> 
 
 
 def _keep_marks(doc: "pymupdf.Document", form: int, keep: list["pymupdf.Rect"]) -> int:
-    """复制 Form，只留 keep 里的字形，返回新 Form 的 xref。keep 是 PDF 坐标（y 向上）。
+    """Copy the Form keeping only the glyphs inside keep, and return the xref of the new Form. keep is in PDF
+    coordinates (y up).
 
-    公式透传引用的是整页原文，裁剪路径只挡得住笔画，挡不住文字层：浏览器里拖选、
-    复制时，每个公式底下都叠着一整页隐形原文，一拖就选中一大片。
-    MuPDF 删掉同一行前面的字时，中途换过字号的行（小型大写的 THEME）会把后面的字
-    算偏几个点，落到裁剪框外。所以过滤后核对位置：偏了就整行留下（删别的行不影响
-    本行），还偏就退回原 Form。
+    Formula pass-through references the whole source page. The clipping path hides only the strokes, not the
+    text layer: when selecting by dragging or copying in a browser, every formula has a whole page of invisible
+    source text under it, and one drag selects a large area.
+    When MuPDF deletes earlier glyphs on the same line, a line that changes font size midway (THEME in small caps)
+    gets its later glyphs placed a few points off, outside the clip box. So the positions are checked after
+    filtering: if they moved, whole lines are kept (deleting other lines does not affect this line), and if they
+    still move, the original Form is used.
     """
     boxes = [(k.x0, k.y0, k.x1, k.y1) for k in keep]
     rows = [(-1e9, y0, 1e9, y1) for _x0, y0, _x1, y1 in boxes]
@@ -212,16 +227,19 @@ def _merge_bands(bands: list[tuple[float, float]]) -> list[tuple[float, float]]:
 
 
 def _lines_form(doc: "pymupdf.Document", form: int, bands: list[tuple[float, float]]) -> int:
-    """过滤一遍 Form 这一层，只留 bands（PDF 坐标的纵向区间）里的字，返回新 Form 的 xref。位置核对不过时用原 Form。
+    """Filter this level of the Form once, keeping only the glyphs in bands (vertical ranges in PDF coordinates),
+    and return the xref of the new Form. The original Form is used when the position check fails.
 
-    套着的 Form（图）不进去，原样引用，留给每个公式最后那一遍（_keep_marks）。MuPDF 每过滤一遍都会去掉
-    一层空的 q Q，图里的字在哪一遍删掉，删完的字节也不一样。各公式的图要是过滤的遍数不同，
-    内容相同而字节不同，合并重复对象时合不掉，一张大图会在文件里存好几份。"""
+    Nested Forms (figures) are not entered and are referenced unchanged; they are left to the last pass of each
+    formula (_keep_marks). Every MuPDF filter pass removes one level of empty q Q, so the resulting bytes depend
+    on the pass in which the glyphs of a figure are deleted. If the figures of different formulas go through
+    different numbers of passes, they have the same content and different bytes, merging duplicate objects cannot
+    merge them, and a large figure is stored several times in the file."""
     try:
         xref, kept = _filter_form(doc, form, [(-1e9, y0, 1e9, y1) for y0, y1 in bands], recurse=False)
         if _keeps_places(doc, xref, kept, recurse=False):
             return xref
-    except Exception:  # noqa: BLE001 - 和 _keep_marks 一样，过滤出错时用原 Form
+    except Exception:  # noqa: BLE001 - as in _keep_marks, use the original Form when filtering fails
         pass
     return form
 
@@ -234,17 +252,20 @@ class _LinesNode:
 
 
 class _FormulaSources:
-    """本页公式透传时引用的源 Form。
+    """Source Forms referenced by formula pass-through on this page.
 
-    每个公式透传前都要过滤一遍源 Form（见 _keep_marks），每个字形回调一次。都在整页上过滤，
-    一页几十个公式就要把整页的字走几十遍。这里把本页的公式按上下位置对半分，每一半只留自己所在的行，
-    再往下分，到每份不超过四个公式为止：每层合起来只走一遍整页，每个公式最后只在自己那几行的字上过滤。
-    留下的行是公式的框上下各放 2pt，盖住 _formula_form 的裁剪框（上下最多扩 1.5pt），
-    按框、按行过滤时要留的字都在里面。取的时候按位置找最小的、整个盖住这个公式的一份，
-    没有登记的公式也能找到，最差是整页。"""
+    Before pass-through, each formula filters the source Form once (see _keep_marks), with one callback per glyph.
+    If every filter ran on the whole page, a page with dozens of formulas would walk through all its glyphs dozens
+    of times. Here the formulas on the page are split in half by vertical position, each half keeps only the lines
+    it lies on, and the split continues until each part has at most four formulas: each level walks the whole
+    page only once in total, and each formula is finally filtered only on the glyphs of its own lines.
+    The lines kept are the formula boxes extended by 2pt above and below. This covers the clip box of
+    _formula_form (extended by at most 1.5pt above and below), so the glyphs to keep when filtering by box or by
+    line all lie inside. A lookup finds by position the smallest part that covers the whole formula, so formulas
+    that were not registered are found too; at worst it is the whole page."""
 
     def __init__(self, doc: "pymupdf.Document", page: "pymupdf.Page", form: int, formulas):
-        # 只记换算 PDF 坐标要的页面上沿（见 _pdf_rect），不留页面对象
+        # Keep only the page top needed for converting to PDF coordinates (see _pdf_rect), not the page object
         self.top = page_origin(page)[1]
         self.glyphs = _GlyphInk(page)
         group: list[tuple[tuple[float, float], dict]] = []
@@ -289,8 +310,10 @@ class _FormulaSources:
 
 
 def _hole_ink(span: dict) -> pymupdf.Rect:
-    """外来 span 在公式裁剪里挖的孔：墨迹框，夹在字体框里。精确框比字体框还大的
-    （LMMono 的精确框往下多出半行）不是墨迹，按字体框挖，不然会削掉下一行的字头。单画量出的照旧。"""
+    """The hole a foreign span cuts in the formula clip: its ink box, clipped to its font box. An exact box larger
+    than the font box (the exact box of LMMono extends half a line downward) is not ink, so the hole follows the
+    font box; otherwise it would shave off the tops of the glyphs on the next line. Ink measured by drawing the
+    glyph on its own is used unchanged."""
     box = pymupdf.Rect(span["bbox"])
     if span.get("ink") is None:
         return box
@@ -307,22 +330,26 @@ def _formula_form(
     page_spans: list[dict] | None = None,
     glyphs: _GlyphInk | None = None,
 ) -> int:
-    """给单个公式造紧致 BBox 的包裹 Form（按 span 逐个裁剪后引用源页 Form），返回 xref。
+    """Build a wrapper Form with a tight BBox for one formula (clipped span by span, then referencing the source
+    page Form) and return its xref.
 
-    裁剪路径是 run 里每个 span 的矩形并集，不是整个外框矩形：外框矩形会把间隙里
-    的邻字笔画（上一行 p 的降部等）也裁进来，在公式上方留下横杠。
-    BBox 取并集外框，选择/复制时不会框出一大片。
+    The clipping path is the union of the rectangles of the spans in the run, not the whole bounding rectangle:
+    the bounding rectangle would also take in strokes of neighbouring glyphs in the gaps (the descender of a p on
+    the line above, and so on) and leave a bar above the formula.
+    The BBox is the bounding box of the union, so selecting/copying does not frame a large area.
 
-    裁剪用 even-odd：run 的 span 矩形按侧扩展后取并集（斜体笔画会越出 span 的
-    排版 bbox——Y 的右臂能越出 1.2pt，扩展以不碰到邻居为限），再减去外来 span
-    的矩形孔（上一行降部等），既不削自己的字，也不沾别人的。
-    裁剪挡不住文字层，引用的源页 Form 先去掉裁剪区外的字形，只留本公式的。
+    The clip uses even-odd: the span rectangles of the run are extended per side and united (italic strokes go
+    past the typeset bbox of a span; the right arm of Y can go 1.2pt past it, and extension stops before touching
+    a neighbour), then the rectangular holes of foreign spans (descenders from the line above and so on) are
+    subtracted, so the formula's own glyphs are not shaved and nothing from other glyphs is picked up.
+    The clip does not hide the text layer, so the referenced source page Form first has the glyphs outside the
+    clip region removed and keeps only those of this formula.
     """
     bbox = f["bbox"]
     clip_outer = _pdf_rect(page, bbox)
-    # run 的 span 来自 extract_blocks 的另一次 get_text 调用，和 page_spans 是不同
-    # 对象，只能按 bbox 相等判断是不是 run 成员，否则兄弟 span（本公式的上标）会被
-    # 当成外来 span 被挖洞挖掉
+    # The spans of the run come from a separate get_text call in extract_blocks and are different objects from
+    # page_spans, so run membership can only be decided by equal bboxes; otherwise sibling spans (superscripts of
+    # this formula) would be treated as foreign spans and cut out as holes
     curve_rects = [pymupdf.Rect(r) for r in f.get("curves") or []]
     run_rects = [pymupdf.Rect(s["bbox"]) for s in f["spans"]] + curve_rects
     if page_spans:
@@ -348,34 +375,37 @@ def _formula_form(
             for rr in run_rects
         )
 
-    # 先并成不相交集合（ŷ 的符头 bbox 和 y 几乎完全重叠，不并掉 even-odd 会把
-    # y 的躯干整个关掉），再按侧扩展：每侧扩到 1.5pt 为止、以不贴到邻居 bbox 为限
+    # First merge into disjoint sets (the bbox of the hat on ŷ almost fully overlaps y, and without merging,
+    # even-odd would switch off the whole stem of y), then extend per side: up to 1.5pt per side, stopping before
+    # touching a neighbour's bbox
     base = merge_rects([pymupdf.Rect(s["bbox"]) for s in f["spans"]] + curve_rects)
     union = pymupdf.Rect()
     for rr in base:
         union |= rr
-    lim = {"t": 1.5, "b": 1.5}  # 上下扩展上限（pt），左右也是 1.5
-    # 左右邻居的边。每个矩形按自己到邻居的距离扩：按整个公式的外框算，紧挨着一个逗号时
-    # 里面每个矩形都只扩 0.2，𝒩 伸进下一个字前空档里的笔画就被切断
+    lim = {"t": 1.5, "b": 1.5}  # upper limit of extension above and below (pt); left and right also 1.5
+    # Edges of the left and right neighbours. Each rectangle extends by its own distance to the neighbours: with
+    # the bounding box of the whole formula, a comma right next to it would let every rectangle inside extend only
+    # 0.2, and the stroke of 𝒩 reaching into the space before the next glyph would be cut off
     left_edges: list[float] = []
     right_edges: list[float] = []
     if page_spans:
         for fb in page_spans:
-            if not fb["text"].strip():  # 空白 span 没有墨迹，不限扩展也不挖洞
+            if not fb["text"].strip():  # blank spans have no ink; they neither limit extension nor cut holes
                 continue
-            # 先用坐标排除和公式不在同一高度的 span：一页上千个，每个都建 Rect 很慢
+            # First use coordinates to exclude spans not at the formula's height: a page has thousands, and building
+            # a Rect for each is slow
             if not (fb["bbox"][1] < union.y1 and fb["bbox"][3] > union.y0):
                 continue
             fr = pymupdf.Rect(fb["bbox"])
             if is_run_member(fr) or not (fr.y0 < union.y1 and fr.y1 > union.y0):
                 continue
-            if fr.x1 <= union.x0 + 0.01:  # 左侧邻居
+            if fr.x1 <= union.x0 + 0.01:  # left neighbour
                 left_edges.append(fr.x1)
-            elif fr.x0 >= union.x1 - 0.01:  # 右侧邻居
+            elif fr.x0 >= union.x1 - 0.01:  # right neighbour
                 right_edges.append(fr.x0)
-            if fr.y1 <= union.y0 + 0.01:  # 上方邻居（pymupdf y 向下）
+            if fr.y1 <= union.y0 + 0.01:  # neighbour above (pymupdf y points down)
                 lim["t"] = max(0.2, min(lim["t"], union.y0 - fr.y1 - 0.3))
-            elif fr.y0 >= union.y1 - 0.01:  # 下方邻居
+            elif fr.y0 >= union.y1 - 0.01:  # neighbour below
                 lim["b"] = max(0.2, min(lim["b"], fr.y0 - union.y1 - 0.3))
 
     def reach(gaps: list[float]) -> float:
@@ -408,9 +438,9 @@ def _formula_form(
             return box[0] <= reach_x1 and box[2] >= reach_x0 and box[1] <= reach_y1 and box[3] >= reach_y0
 
         for fb in page_spans:
-            if not fb["text"].strip():  # 空白 span 没有墨迹，限扩展和挖洞都不参与
+            if not fb["text"].strip():  # blank spans have no ink; they play no part in limits or holes
                 continue
-            # 孔落在 span 的字体框或墨迹框里，两个都碰不到裁剪框的 span 挖不出孔
+            # Holes lie in the span's font box or ink box; a span where neither touches the clip box cannot cut a hole
             if not touches(fb["bbox"]) and (fb.get("ink") is None or not touches(fb["ink"])):
                 continue
             fr = pymupdf.Rect(fb["bbox"])
@@ -422,13 +452,17 @@ def _formula_form(
                 for rr in run_rects
             ):
                 continue
-            # 挖不挖按字体框判断，孔按墨迹挖：括号、箭头的字体框比字形高出一截，会伸到下一行的字上
+            # Whether to cut is decided by the font box, and the hole follows the ink: the font boxes of parentheses
+            # and arrows are a good deal taller than the glyphs and reach into the glyphs on the next line
             ink = _hole_ink(fb)
-            # 孔 = 外来 span 与我们的每个矩形的交。必须完全落在我们的矩形内：
-            # even-odd 裁剪下越出并集的孔会反开，把正要排除的外来笔画整个画出来。
-            # 只挖纵向不共线的 span（降部、邻公式的角标等）：同行邻字的 bbox 常常
-            # 仅仅贴边且纵向几乎等长，挖掉会把本公式的笔画（y 的左干）削了。
-            # 孔不内收：降部墨迹和 span bbox 底边之间本就有缝隙，内收会留下一道残影
+            # hole = intersection of the foreign span with each of our rectangles. It must lie entirely inside our
+            # rectangles: under even-odd clipping, a hole that goes past the union is inverted and draws the whole
+            # foreign stroke it was meant to exclude.
+            # Only spans that are not vertically aligned are cut (descenders, indices of a neighbouring formula and so
+            # on): the bbox of a neighbouring glyph on the same line often just touches the edge and has almost the
+            # same vertical extent, and cutting it would shave the strokes of this formula (the left stem of y).
+            # Holes are not shrunk: there is already a gap between descender ink and the bottom of the span bbox,
+            # and shrinking would leave a faint trace
             for rr in our_rects:
                 y_ov = min(fr.y1, rr.y1) - max(fr.y0, rr.y0)
                 if y_ov > 0.7 * (rr.y1 - rr.y0):
@@ -436,7 +470,7 @@ def _formula_form(
                 hb = ink & rr
                 if not hb.is_empty and hb.width >= 0.3 and hb.height >= 0.3:
                     hole_rects.append(hb)
-        # 相交的孔合并成一个：两个孔相交处在 even-odd 下会反开
+        # Merge intersecting holes into one: under even-odd, the area where two holes intersect is inverted
         merged: list[pymupdf.Rect] = []
         for hb in hole_rects:
             for i, mb in enumerate(merged):
@@ -448,11 +482,15 @@ def _formula_form(
         for hb in merged:
             hr = _pdf_rect(page, hb)
             holes.append(f"{hr.x0:.2f} {hr.y0:.2f} {hr.width:.2f} {hr.height:.2f} re")
-    # 留哪些字按公式自己的 span 框认，不按往外扩过的裁剪框：MuPDF 只给整套字体的上下界，
-    # 下一行的字算出的中心在基线上 0.25em，正好落进裁剪框下沿扩出的那一条，成了公式图里的隐形字
+    # The glyphs to keep are identified by the formula's own span boxes, not by the extended clip box: MuPDF only
+    # gives the vertical bounds of the whole font, so the computed center of a glyph on the next line is 0.25em
+    # above its baseline, falls right into the strip added below the clip box, and becomes invisible text in the
+    # formula image
     source = _keep_marks(doc, fmS, [_pdf_rect(page, r) for r in base]) if our_rects else fmS
-    # BBox 也会裁剪。斜体 f 的弯钩和尾巴伸出字宽，按公式框会被切掉：左右放到字形量出来的墨迹，
-    # 不超过裁剪路径。只放到自己的墨迹为止，旁边的字（If 的 f）伸进空档的笔画不带进来
+    # The BBox clips too. The hook and tail of an italic f reach past its character width and would be cut off by
+    # the formula box: extend left and right to the ink measured from the glyphs, no further than the clipping
+    # path. Extend only to the formula's own ink, so strokes of neighbouring glyphs reaching into the space (the f
+    # of If) are not brought in
     inks = [glyphs.x_bounds(span) for span in f["spans"]] if glyphs is not None and our_rects else []
     inks = [ink for ink in inks if ink is not None]
     if inks:
@@ -473,8 +511,8 @@ def _formula_form(
     )
     doc.update_stream(fmT, f"q {' '.join(ours + holes)} W* n /FmS Do Q".encode())
     res_v = doc.xref_get_key(page.xref, "Resources")[1]
-    # redact 后 /Resources 会变成直接字典（键要带 Resources/ 前缀）；
-    # 间接引用则在资源对象上直接设键
+    # After redaction /Resources becomes a direct dictionary (keys need the Resources/ prefix);
+    # for an indirect reference the keys are set directly on the resource object
     m = re.match(r"(\d+) \d+ R", res_v)
     res_xref, base = (int(m.group(1)), "") if m else (page.xref, "Resources/")
     xo_v = doc.xref_get_key(res_xref, f"{base}XObject")[1]
@@ -499,9 +537,11 @@ def _paint_formula(
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]] | None = None,
 ) -> None:
-    """把公式画进 target。矢量透传失败时回退位图。绘制命令先攒着，最后一条内容流再写。
+    """Draw the formula into target. Falls back to a bitmap when vector pass-through fails. Drawing commands are
+    collected and written in one content stream at the end.
 
-    公式若来自另一页，本页的 Form 里没有它的笔画，只能贴已经裁好的图。
+    If the formula comes from another page, this page's Form does not contain its strokes, so only the already
+    cropped image can be pasted.
     """
     bbox = formula.get("bbox")
     source_page = formula.get("page")
@@ -515,19 +555,21 @@ def _paint_formula(
         and target.width > 0.5
     ):
         try:
-            # 资源名必须全页唯一：块内序号相同的 FmF0 会互相覆盖
+            # The resource name must be unique on the page: FmF0 entries with the same index within their blocks
+            # would overwrite each other
             f_name = "FmF_" + re.sub(r"[^A-Za-z0-9_]", "_", str(formula["name"]))
             _formula_form(doc, page, forms.source(formula), formula, f_name, page_spans, forms.glyphs)
             sx = target.width / bbox.width
             sy = target.height / bbox.height
-            # 带缩放的仿射：平移量必须吸收缩放，否则公式整体往下漂 (1-sy)*H
+            # Affine transform with scaling: the translation must absorb the scale, otherwise the whole formula
+            # drifts down by (1-sy)*H
             source = _pdf_rect(page, bbox)
             placed = _pdf_rect(page, target)
             tx = placed.x0 - sx * source.x0
             ty = placed.y0 - sy * source.y0
             draws.append(f"q {sx:.4f} 0 0 {sy:.4f} {tx:.2f} {ty:.2f} cm /{f_name} Do Q")
             return
-        except Exception:  # noqa: BLE001 - 矢量透传失败回退位图
+        except Exception:  # noqa: BLE001 - fall back to a bitmap when vector pass-through fails
             pass
     png = _formula_png(formula)
     if not png:
@@ -545,7 +587,8 @@ def _formula_metrics(
     em: float,
     reference: float | None = None,
 ) -> dict[int, FormulaMetric]:
-    """按当前字号给出每个公式槽。rs 写回记录，矢量缩放和槽位用同一个数。reference 见 _formula_slot。"""
+    """Give the slot of each formula at the current font size. rs is written back to the record, so the vector
+    scaling and the slot use the same number. reference: see _formula_slot."""
     metrics: dict[int, FormulaMetric] = {}
     for index, formula in enumerate(formulas, 1):
         scale, slot_width, height = _formula_slot(formula, block_size, em, reference)
@@ -573,26 +616,35 @@ def _fit_typeset(
     lent: bool = False,
     hang: float = 0.0,
 ) -> tuple[list[TypesetLine], float, float, "pymupdf.Rect", list[tuple[float, float]]]:
-    """放得下就按原字号排。放不下先在本栏右扩，再往下伸进空白，再压一点字距，再压行距，最后才缩字号。
-    holes 是原文绕开的图，碰到它的行让到一边，另外返回这几行的缩进和宽度。
-    lower 是（想要的起笔，下面一块的上沿）：盒子写不满时上沿往下挪，最多挪到想要的起笔。
-    框的下沿伸过原文末行，挪下去的字不能碰到下面一块。
-    room 是下面一块的上沿（见 _room_below）。下沿往下伸时，末行和下面一块之间留出半行，和分段的空隙一样。
-    left_limit 是靠右排的块往左扩能到哪里，给了就往左扩，不往右扩。
-    lent 为真时 room 是下面一段借出地方后最低的起笔（见 spare_below），它要挪到末行下面半行，
-    末行下面那截空白就不能伸过框底（见 _glyph_bottom）。
-    hang 是悬挂缩进的条目里原文正文比题号缩进多少点（见 _hang_indent）。"""
+    """Typeset at the original font size if the text fits. If not, first extend right within the column, then
+    reach down into blank space, then tighten the letter spacing slightly, then the line spacing, and only then
+    shrink the font size.
+    holes are figures the source text flows around. Lines that touch them move to one side, and the indents and
+    widths of those lines are returned as well.
+    lower is (desired origin, top of the block below): when the text does not fill the box, the top moves down, at
+    most to the desired origin. The bottom of the box reaches past the last source line, and text moved down must
+    not touch the block below.
+    room is the top of the block below (see _room_below). When the bottom extends downward, half a line is left
+    between the last line and the block below, the same as the gap between paragraphs.
+    left_limit is how far left a right-aligned block can extend. When given, the box extends left, not right.
+    When lent is true, room is the lowest origin of the paragraph below after it lends space (see spare_below). That
+    paragraph moves to half a line below the last line, so the blank part below the last line must not extend past
+    the box bottom (see _glyph_bottom).
+    hang is how many points the source body of a hanging-indent item is indented more than its number (see
+    _hang_indent)."""
     gap = 1.45 if cjk else 1.2
     reference = block_size * 0.88 if cjk else block_size
     box = rect
-    # 伸到这里，末行行框下沿离 room 还有半行。盒子高度比末行行框多出首行上方 0.3em 的出头
+    # Extending to here leaves half a line between the bottom of the last line box and room. The box is taller than
+    # the line boxes by the 0.3em overhang above the first line
     reach = None if room is None else room - em * (gap * 0.5 - 0.3)
     expanded = False
     grown = False
     squeezed = False
     tightened = False
     capped = False
-    # 按多宽断行。压字距时比盒子宽一点，写的时候各行压回盒子宽（见 SQUEEZE）
+    # Width to break lines at. With tightened letter spacing it is a little wider than the box, and each line is
+    # compressed back to the box width when written (see SQUEEZE)
     squeeze = 1.0
     for formula in formulas:
         formula.pop("cap", None)
@@ -611,13 +663,17 @@ def _fit_typeset(
             line.width > (lanes[index][1] if index < len(lanes) else box.width * squeeze) + 1
             for index, line in enumerate(lines)
         )
-        # 末行下面那截空白伸过框底只为保住正常行距。压了行距还放不下，照旧按框底量，该缩字号就缩。
-        # 只有一行时没有行距要保，压了行距字形不动，末行行框下沿还高一些，下面一段能往上提
+        # The blank part below the last line extends past the box bottom only to keep the normal line spacing. If
+        # the text still does not fit with tightened line spacing, measure against the box bottom as before and
+        # shrink the font size if needed.
+        # With a single line there is no line spacing to keep: tightening the line spacing does not move the
+        # glyphs, the bottom of the last line box is a little higher, and the paragraph below can move up
         relax = cjk and len(lines) > 1 and room is not None and not tightened and not lent
         bottom = _glyph_bottom(box.y1, room, em, gap) if relax else box.y1
         too_tall = box.y0 + height > bottom + 1
         if not overflows and not too_tall:
-            # 绕图的行按图的位置算好了，盒子不能再挪；悬挂缩进跟着盒子走
+            # Lines that wrap around figures were computed from the figure positions, so the box cannot move any
+            # more; a hanging indent moves with the box
             if lower is not None and not wrapped:
                 top, floor = lower
                 lowered = min(top, min(box.y1, floor) - height)
@@ -638,7 +694,8 @@ def _fit_typeset(
             grown = True
             box = pymupdf.Rect(box.x0, box.y0, box.x1, min(reach, box.y0 + height))
             continue
-        # 末行只剩几个字时，字距压一点就能收回这一行，比压行距看不出来
+        # When the last line has only a few characters, tightening the letter spacing slightly pulls that line
+        # back, which is less visible than tightening the line spacing
         if too_tall and not overflows and not squeezed and cjk and not lanes:
             squeezed = True
             if len(typeset_lines(text, em, max(box.width, 1.0) * (1 + SQUEEZE), metrics)) < len(lines):
@@ -648,7 +705,8 @@ def _fit_typeset(
             gap = 1.1 if gap <= 1.25 else gap - 0.25
             tightened = True
             continue
-        # 压了行距，高公式撑开的那几行还是放不下，就把公式压回一行高，字号不动
+        # If the lines opened up by tall formulas still do not fit with tightened line spacing, reduce the formulas
+        # back to one line height and keep the font size
         if too_tall and extra > 0 and not capped:
             capped = True
             for formula in formulas:
@@ -661,24 +719,28 @@ def _fit_typeset(
 
 
 def _box_height(lines: list[TypesetLine], em: float, gap: float) -> float:
-    """排好的几行要多高的盒子。首行字形顶部还有 0.3em 的出头（实测 MuPDF 盒子内容高 = 行数×行距 + ~0.25em），
-    只算行距会让临界盒子在写入时被静默缩到 0.93 倍"""
+    """Height of the box the typeset lines need. The glyph tops of the first line add a 0.3em overhang (measured:
+    MuPDF box content height = lines × line spacing + ~0.25em); counting only the line spacing makes a borderline
+    box get silently shrunk to 0.93 when written"""
     return max(len(lines), 1) * em * gap + em * 0.3 + line_offsets(lines, em, gap)[1]
 
 
 def _glyph_bottom(bottom: float, room: float, em: float, gap: float) -> float:
-    """逐字画的中文段，盒子（按 _box_height 量）能写到哪里。末行字形下面那截行距是空白，
-    可以伸过框底；离 room 还要空出半截行距，字不贴到下面一块上。框底本来就伸过 room 的（目录条目一条挨一条），
-    仍写到框底。跨页段落拆行时同样让这截空白伸过 room（见 _filled_bottom）"""
+    """How far a Chinese paragraph drawn glyph by glyph can write in its box (measured by _box_height). The line
+    spacing below the glyphs of the last line is blank and may extend past the box bottom; half of that spacing is
+    still left before room, so the glyphs do not touch the block below. When the box bottom already extends past
+    room (table of contents entries one right after another), it still writes to the box bottom. When a paragraph
+    carried over to the next page is split into lines, this blank part also extends past room (see
+    _filled_bottom)"""
     return max(bottom, min(bottom + (gap - 1) * em, room + (gap - 1) * em * 0.5))
 
 
 def _typeset_end(lines: list[TypesetLine], em: float, gap: float, box: "pymupdf.Rect") -> float:
-    """排好的几行末行行框的下沿"""
+    """Bottom of the last line box of the typeset lines"""
     return box.y0 + max(len(lines), 1) * em * gap + line_offsets(lines, em, gap)[1]
 
 
-# 居中的题名折行时可以断开的小句标点
+# Clause punctuation after which a centered title may break when it wraps
 _CLAUSE_MARKS = "，、；：,;:"
 
 
@@ -691,8 +753,9 @@ def _clause_lines(
     lines: list[TypesetLine],
     reference: float | None = None,
 ) -> list[TypesetLine]:
-    """居中排的题名、副标题折成几行时，在小句标点后面断开，不留一两个字单独一行。
-    行数不能比按宽度断的多；几处标点都行的，取各行最宽的那行最窄的断法。"""
+    """When a centered title or subtitle wraps onto several lines, break after clause punctuation so that one or
+    two characters are not left alone on a line. There may not be more lines than with breaking by width; when
+    several punctuation marks work, take the break whose widest line is the narrowest."""
     metrics = _formula_metrics(formulas, block_size, em, reference)
     best, best_width = lines, None
     for index, char in enumerate(text[:-1]):
@@ -701,7 +764,7 @@ def _clause_lines(
         head, tail = text[: index + 1].rstrip(), text[index + 1 :].strip()
         if not head or not tail:
             continue
-        # 整段粗体的作者名单在逗号处断开，后半截要重开粗体
+        # When an author list that is bold throughout breaks at a comma, the second half must reopen the bold
         head, tail = balance_marks(head, tail)
         parts = typeset_lines(head, em, width, metrics) + typeset_lines(tail, em, width, metrics)
         widest = max(line.width for line in parts)
@@ -718,8 +781,9 @@ def _hole_lanes(
     em: float,
     gap: float,
 ) -> list[tuple[float, float]]:
-    """开头几行相对盒子左缘的缩进和宽度。字形落在图的高度里的行让到图的另一侧，
-    和图隔半个字。图以下的行不列出，按整个盒子宽。"""
+    """Indent from the left edge of the box and width of the first lines. Lines whose glyphs fall within the height
+    of a figure move to the other side of the figure, half a character from it. Lines below the figure are not
+    listed and use the full box width."""
     if not holes:
         return []
     pitch = em * gap
@@ -728,7 +792,7 @@ def _hole_lanes(
     keep = 0
     top = box.y0
     while top < bottom:
-        # 字形大约占基线上 0.88em、下 0.12em
+        # Glyphs occupy about 0.88em above the baseline and 0.12em below
         glyph_top = top + em * (FIRST_BASELINE - 0.88)
         glyph_bottom = top + em * (FIRST_BASELINE + 0.12)
         x0, x1 = box.x0, box.x1
@@ -746,12 +810,13 @@ def _hole_lanes(
     return lanes[:keep]
 
 
-# 译文开头的题号、圆点连同后面的空白
+# Number or bullet at the start of the translation, with the blank after it
 _HANG_LABEL_RE = re.compile(r"\s*(?:[•◦▪‣·○■□►»]|[-–—*]|\(?(?:\d+(?:\.\d+)*|[a-zA-Z]|[ivxlc]+)[.)]?)\s+")
 
 
 def _label_width(text: str, em: float) -> float:
-    """译文开头的题号、圆点连同后面的空白有多宽，续行从这里起笔。没有题号时返回 0"""
+    """Width of the number or bullet at the start of the translation together with the blank after it;
+    continuation lines start here. Returns 0 when there is no number"""
     matched = _HANG_LABEL_RE.match(strip_style_marks(text))
     return measure_width(matched.group(0), em) if matched else 0.0
 
@@ -765,9 +830,12 @@ def _hang_lanes(
     gap: float,
     chars: int,
 ) -> list[tuple[float, float]]:
-    """悬挂缩进的各行，绕图的行再让开图。正文对齐在盒子左缘往右 hang 处，和条目下面另起的说明段落同一列；
-    label 是译文题号连同空白的宽度（见 _label_width），首行往右挪，题号后面的正文也从这一列起笔。
-    题号比 hang 宽时这一列跟着往右。断行前不知道有几行，每行至少一个字，按字数列满"""
+    """Lines of a hanging indent; lines that wrap around figures also move clear of them. The body aligns at hang
+    to the right of the box's left edge, in the same column as the description paragraphs that follow the item;
+    label is the width of the translation's number with its blank (see _label_width), and the first line moves
+    right so that the body after the number also starts at this column. When the number is wider than hang, the
+    column moves right with it. The number of lines is unknown before breaking and each line holds at least one
+    character, so one entry is listed per character"""
     column = max(hang, label)
     out = []
     for index in range(max(chars, 1)):
@@ -787,8 +855,9 @@ def _line_baseline(
     cjk: bool,
     slot_x: float | None = None,
 ) -> float:
-    """这一行已写入文字的 origin。纯公式行没有文字，用 htmlbox 的经验基线。
-    相邻行的字框会交叠，离槽位更近的文字优先，避免公式掉到下一行仍留在原横坐标。"""
+    """Origin of the text already written on this line. A line with only formulas has no text and uses the
+    empirical htmlbox baseline. Glyph boxes of adjacent lines overlap, so text closer to the slot wins; this keeps
+    a formula that moved to the next line from staying at its old x."""
     best: tuple[tuple[float, float], float] | None = None
     for span in spans:
         origin = span.get("origin")
@@ -826,7 +895,8 @@ def _paint_formula_parts(
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
 ) -> None:
-    """一个占位符的几片按阅读顺序并排贴。换行切开的后半段不再留在源文横坐标。"""
+    """Paste the parts of one placeholder side by side in reading order. The second half split off by a line break
+    no longer stays at its x in the source."""
     scale = float(formula.get("rs") or 1)
     x = slot_x + FORMULA_PAD
     for index, part in enumerate(_formula_parts(formula)):
@@ -841,7 +911,7 @@ def _paint_formula_parts(
 
 
 def _typeset_line_html(line: TypesetLine, formulas: list[dict]) -> str:
-    """一行的 HTML。没有图的公式退回记录里的文字。"""
+    """HTML of one line. Formulas without an image fall back to the text in their record."""
     parts: list[str] = []
     for piece in line.pieces:
         if isinstance(piece, TextPiece):
@@ -879,7 +949,8 @@ def _draw_cjk(
     lanes: list[tuple[float, float]] = (),
     first_room: float | None = None,
 ) -> bool:
-    """中文行按字形两端对齐，公式画在内容流里它所在的位置（见 draw_cjk_lines）。缺字时返回 False。"""
+    """Justify Chinese lines by glyph and draw each formula at its position in the content stream (see
+    draw_cjk_lines). Returns False when glyphs are missing."""
     images, fallback = _formula_draw_args(formulas)
 
     def paint(slot) -> str:
@@ -942,8 +1013,9 @@ def _place_plain(
     lent: bool = False,
     hang: float = 0.0,
 ) -> float | None:
-    """排版器断行，再写入。中文按字形两端对齐；缺字时退回一个 HTML 盒子。
-    lower、room、left_limit、lent、hang 见 _fit_typeset。返回末行行框的下沿，没写时返回 None。"""
+    """Break lines with the typesetter, then write them. Chinese is justified by glyph; when glyphs are missing, it
+    falls back to one HTML box. lower, room, left_limit, lent, hang: see _fit_typeset. Returns the bottom of the
+    last line box, or None when nothing was written."""
     text = space_around_latin(separate_after_formula(text))
     lines, em, gap, box, lanes = _fit_typeset(
         text,
@@ -963,7 +1035,7 @@ def _place_plain(
         hang,
     )
     if box.y0 > rect.y0:
-        # 起笔挪下来了，首行不再按原文第一行往上提
+        # The origin moved down, so the first line is no longer raised to match the first source line
         first_room = None
     end = _typeset_end(lines, em, gap, box)
     if align == "center" and len(lines) > 1 and not any(indent for indent, _ in lanes):
@@ -988,7 +1060,8 @@ def _place_plain(
         return end
     rendered = [_typeset_line_html(line, formulas) for line in lines]
     if any(indent for indent, _ in lanes):
-        # 图在左边时，旁边几行各自缩进。行内的 margin、padding MuPDF 不认，每行写成一个块
+        # With a figure on the left, the lines beside it are indented individually. MuPDF ignores inline margin and
+        # padding, so each line is written as a block
         parts = [
             f'<div style="margin-left:{lanes[index][0] if index < len(lanes) else 0:.2f}px">'
             f'<span style="white-space:nowrap">{line_html}</span></div>'
@@ -1006,7 +1079,8 @@ def _place_plain(
     )
     html_text = f"<div{div_attrs}>{body}</div>"
     if cjk:
-        # 放没放下按末行字形量（见 _glyph_bottom），HTML 盒子要有整行距高，否则整段被缩小
+        # Whether the text fits is measured by the glyphs of the last line (see _glyph_bottom). The HTML box needs
+        # the full line-spacing height, otherwise the whole paragraph gets shrunk
         box = pymupdf.Rect(box.x0, box.y0, box.x1, max(box.y1, box.y0 + _box_height(lines, em, gap)))
     if not _try_insert(page, box, html_text, css, 0.9, archive):
         _insert_fitting(page, box, html_text, css, obstacles, archive, right_limit)
@@ -1014,8 +1088,9 @@ def _place_plain(
 
 
 def _written_right(page: "pymupdf.Page", x0: float, y0: float, y1: float) -> float:
-    """这一条刚写进去的文字的右缘。估算宽度不准时，下一槽跟着它走。
-    只认基线落在本盒子里的字。上一行的字框会探进盒子上沿，拿它的右缘会把公式推到栏边。"""
+    """Right edge of the text just written for this entry. When the estimated width is off, the next slot follows
+    this edge. Only glyphs whose baseline lies in this box count. Glyph boxes of the line above reach into the top
+    of the box, and their right edge would push the formula to the column edge."""
     right = x0
     for block in page.get_text("dict")["blocks"]:
         if block.get("type") != 0:
@@ -1060,7 +1135,8 @@ def _place_typeset(
     lent: bool = False,
     hang: float = 0.0,
 ) -> float:
-    """按行写入文字，公式槽用记录的下沿贴到该行基线。lower、room、hang 和返回值见 _place_plain。"""
+    """Write the text line by line, and paste formula slots onto the line's baseline by their recorded bottom.
+    lower, room, hang and the return value: see _place_plain."""
     text = space_around_latin(separate_after_formula(text))
     lines, em, gap, box, lanes = _fit_typeset(
         text,
@@ -1105,7 +1181,8 @@ def _place_typeset(
         f"font-weight: {weight}; line-height: {gap}; margin: 0; padding: 0; text-align: left;}}"
     )
     line_h = em * gap
-    # 公式记下前面一片文字写完时最后一条内容流，量完基线画在它后面，拖选时夹在前后的字中间
+    # Each formula records the last content stream after the text before it is written. Once the baseline is
+    # measured, the formula is drawn after that stream, so drag selection finds it between the text around it
     pending: list[tuple[FormulaPiece, float, float, int | None]] = []
     offsets, _extra = line_offsets(lines, em, gap)
     for index, line in enumerate(lines):
@@ -1114,8 +1191,9 @@ def _place_typeset(
         origin_x = box.x0 + indent - (line_lead(line) if align == "left" else 0.0)
         if align != "left" and line.width < width:
             origin_x += width - line.width if align == "right" else (width - line.width) / 2
-        # 拉丁字母按 0.5em 估算，i-th 这种窄词会偏宽。公式若跟估算走，就会被推开。
-        # 文字按实际写出的右缘接着排，两侧只留公式槽自己的 2pt。
+        # Latin letters are estimated at 0.5em, so narrow words like i-th come out too wide. A formula that followed
+        # the estimate would be pushed away. Text continues from the right edge actually written, and only the
+        # slot's own 2pt is left on each side.
         cursor = origin_x
         after_formula = False
         for piece in line.pieces:
@@ -1127,7 +1205,8 @@ def _place_typeset(
                     cursor += em * 0.33
                 fragment = _inline_marks(restore_emphasis(html.escape(body)))
                 html_text = f'<div{div_attrs}><span style="white-space:nowrap">{fragment}</span></div>'
-                # 盒子按估算加宽，避免窄词被缩字；落位不用这个宽，用写出的右缘。
+                # The box is widened from the estimate so narrow words are not shrunk; placement uses the right edge
+                # written, not this width.
                 slot = pymupdf.Rect(
                     cursor,
                     y,
@@ -1177,15 +1256,16 @@ def _place_typeset(
 
 
 def _last_contents(doc: "pymupdf.Document", page: "pymupdf.Page") -> int | None:
-    """页面 Contents 里最后一条内容流的 xref。"""
+    """xref of the last content stream in the page's Contents."""
     refs = re.findall(r"(\d+) 0 R", doc.xref_get_key(page.xref, "Contents")[1])
     return int(refs[-1]) if refs else None
 
 
 def _insert_contents_after(page: "pymupdf.Page", doc: "pymupdf.Document", after: int | None, commands: str) -> None:
-    """新建一条内容流，排在 Contents 里 after 这条后面；找不到 after 时排在最后。
+    """Create a content stream and put it after the stream after in Contents, or last when after is not found.
 
-    按 xref 找位置：insert_htmlbox 第一次写时会在最前面补一条 q，按下标记会错位。"""
+    The position is found by xref: the first write of insert_htmlbox adds a q stream at the front, so a recorded
+    index would be off."""
     stream = doc.get_new_xref()
     doc.update_object(stream, "<<>>")
     doc.update_stream(stream, ("\n" + commands + "\n").encode())
@@ -1201,18 +1281,23 @@ def _formula_slot(
     render_size: float,
     reference: float | None = None,
 ) -> tuple[float, float, float]:
-    """行内公式槽位 (缩放, 宽, 高)。高超过 _INLINE_FORMULA_EM 时压下来，再高的那一行撑开行距（见 line_offsets）。
-    盒子放不下时 _fit_typeset 在公式上记 cap，压到一行高。
-    换行切开的几片按阅读顺序横排，宽度相加，不把两行空白裁进同一个框。
-    reference 是公式保持原大时的译文字号。中文比原文的字号小一成（看着和原文一样大），
-    公式按 render_size / block_size 缩就跟着小一成，夹在汉字里显得小；中文按 reference 比，没缩字号就是原大。"""
+    """Inline formula slot (scale, width, height). A height above _INLINE_FORMULA_EM is reduced to it, and a line
+    with a taller formula opens up its line spacing (see line_offsets). When the box cannot hold it, _fit_typeset
+    records cap on the formula, which reduces it to one line height.
+    Parts split by line breaks are laid out horizontally in reading order with their widths added, so the space
+    between the two lines is not cropped into one box.
+    reference is the translation font size at which the formula keeps its original size. Chinese is set 10%
+    smaller than the source font size (so it looks as large as the source), and a formula scaled by render_size /
+    block_size would become 10% smaller too and look small among Chinese characters. For Chinese the scale is
+    taken against reference, so without font shrinking the formula keeps its original size."""
     parts = _formula_parts(formula)
     height = max(float(part.get("h") or 0) for part in parts)
     if not formula.get("has_img") or height <= 0 or block_size <= 0:
         text = str(formula.get("text") or "")
         return 1.0, len(text) * render_size * 0.5, render_size
     cap = float(formula.get("cap") or _INLINE_FORMULA_EM)
-    # 基线上下伸出一大截的，多半把相邻一行的字也框了进来，基线也认错了。放大只会盖住别的行，仍压到一行高
+    # A formula reaching far above or below the baseline has most likely taken in glyphs of an adjacent line and has
+    # the wrong baseline. Enlarging it would only cover other lines, so it is still reduced to one line height
     ascent = max(float(part.get("h") or 0) - float(part.get("d") or 0) for part in parts)
     descent = max(float(part.get("d") or 0) for part in parts)
     if ascent > _FORMULA_ASCENT_EM * block_size or descent > _FORMULA_DESCENT_EM * block_size:
@@ -1238,9 +1323,11 @@ def _expand_right(
     obstacles: list["pymupdf.Rect"],
     right_limit: float | None = None,
 ) -> "pymupdf.Rect":
-    """排版收缩第一级：向右扩，不盖住右侧纵向交叠的文字或图。
+    """First shrink stage of typesetting: extend right without covering text or figures on the right that overlap
+    vertically.
 
-    上限是页宽的 90%，有栏缘时再取更小的那个。结果不会小于原来的右缘。
+    The limit is 90% of the page width, or the column edge when given and smaller. The result never ends left of
+    the original right edge.
     """
     x1 = page_width * 0.9
     if right_limit is not None:
@@ -1254,7 +1341,8 @@ def _expand_right(
 
 
 def _expand_left(rect: "pymupdf.Rect", x0: float, obstacles: list["pymupdf.Rect"]) -> "pymupdf.Rect":
-    """靠右排的块向左扩，最多到 x0，不盖住左侧纵向交叠的文字或图。结果不会小于原来的左缘。"""
+    """Extend a right-aligned block to the left, at most to x0, without covering text or figures on the left that
+    overlap vertically. The result never starts right of the original left edge."""
     for obstacle in obstacles:
         if obstacle.x1 >= rect.x1 - 1:
             continue
@@ -1266,8 +1354,9 @@ def _expand_left(rect: "pymupdf.Rect", x0: float, obstacles: list["pymupdf.Rect"
 def _try_insert(
     page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, css: str, scale_low: float, archive=None
 ) -> bool:
-    """insert_htmlbox 放不下返回负值（此时不画内容）。pymupdf 在缩放刚好等于 scale_low 时
-    会因浮点误差触发 assert（0.8999999999999999 < 0.9），按没放下来处理。"""
+    """insert_htmlbox returns a negative value when the text does not fit (and draws nothing). When the scale is
+    exactly scale_low, pymupdf can trip an assert from floating-point error (0.8999999999999999 < 0.9); this is
+    treated as not fitting."""
     try:
         return page.insert_htmlbox(rect, html_text, css=css, scale_low=scale_low, archive=archive)[0] >= 0
     except AssertionError:
@@ -1275,7 +1364,8 @@ def _try_insert(
 
 
 def _tighten_line_height(css: str) -> str:
-    """压一级行距。CJK 样式是 1.45，写死替换 1.2 时这一步不会生效。"""
+    """Tighten the line spacing by one step. The CJK style uses 1.45, so a hard-coded replacement of 1.2 would
+    have no effect."""
     match = re.search(r"line-height:\s*([0-9.]+)", css)
     if match is None:
         return css
@@ -1293,12 +1383,15 @@ def _insert_fitting(
     archive=None,
     right_limit: float | None = None,
 ):
-    """排版三级收缩（BabelDOC 思路）：先右扩 → 压行距 → 最后才缩字号。
+    """Three shrink stages of typesetting (the BabelDOC approach): extend right → tighten the line spacing → only
+    then shrink the font size.
 
-    每一级只在放不下（insert_htmlbox 返回负值，此时不会画出内容）时进入下一级。
-    右扩只对明显窄于页宽的块（标签、图注、短行）生效：满栏段落右扩会越过栏边界，
-    且扩完不缩字号时 CJK 行框（1.31em）比盒子（按拉丁 1.16em 算）高，会向下溢出
-    压到下一行内容。right_limit 是本栏右缘，扩出去也不能越过它。
+    Each stage moves on to the next only when the text does not fit (insert_htmlbox returns a negative value and
+    draws nothing).
+    Extending right applies only to blocks clearly narrower than the page width (labels, captions, short lines):
+    a full-column paragraph extended right would cross the column boundary, and without shrinking the font after
+    extending, CJK line boxes (1.31em) are taller than the box (computed with the Latin 1.16em), overflow downward
+    and cover the next line of content. right_limit is the right edge of this column, and extension may not cross it.
     """
     if _try_insert(page, rect, html_text, css, 0.9, archive):
         return
@@ -1310,5 +1403,5 @@ def _insert_fitting(
     css_tight = _tighten_line_height(css)
     if _try_insert(page, target, html_text, css_tight, 0.9, archive):
         return
-    # 兜底：和原来一样缩到能放下为止
+    # Fallback: as before, shrink until the text fits
     page.insert_htmlbox(target, html_text, css=css_tight, scale_low=0, archive=archive)
