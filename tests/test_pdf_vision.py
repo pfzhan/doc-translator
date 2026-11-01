@@ -18,7 +18,8 @@ class _Input:
 
 
 class FakeSession:
-    """按页面坐标给框，换算成模型输入里的像素坐标（长边缩放到输入的长边、两侧补边）。"""
+    """Take a box in page coordinates and convert it to pixel coordinates of the model input (long side scaled to the
+    input's long side, padded on both sides)."""
 
     def __init__(self, page_rect, boxes):
         self.page_rect = page_rect
@@ -42,7 +43,7 @@ class FakeSession:
             [rect.x0 * zoom + left, rect.y0 * zoom + top, rect.x1 * zoom + left, rect.y1 * zoom + top, score, cls]
             for rect, score, cls in self.boxes
         ]
-        rows.append([0, 0, 10, 10, 0.1, 1])  # 分数太低，不算
+        rows.append([0, 0, 10, 10, 0.1, 1])  # score too low, ignored
         return [np.array([rows], dtype=np.float32)]
 
 
@@ -61,7 +62,8 @@ def _geo(figures=()):
 
 
 def test_model_marks_chart_labels_and_display_formulas_as_figures():
-    """图例里的字、行间公式没有矢量框也没有图注时，规则当成正文；模型框成图和公式的留原样。"""
+    """Legend text and display formulas without vector boxes or captions are body text to the rules; those the model
+    boxes as figures and formulas keep the original."""
     doc = _doc()
     legend = pymupdf.Rect(60, 100, 160, 112)
     formula = pymupdf.Rect(120, 200, 280, 216)
@@ -81,12 +83,13 @@ def test_model_marks_chart_labels_and_display_formulas_as_figures():
     ]
     roles = ModelLayout(doc, session).classify(items, [_geo()], median=10)
     assert roles == [Role.FIGURE, Role.FIGURE, Role.BODY]
-    # 400 × 500 的页：长边 1024，短边 820 补到 32 的倍数 832，不补成正方形
+    # A 400 × 500 page: long side 1024, short side 820 padded to 832, the next multiple of 32, not to a square
     assert session.inputs == [(1, 3, 1024, 832)]
 
 
 def test_model_titles_and_captions_do_not_pull_text_out_of_a_figure():
-    """图里的标签被模型看成图注或标题时，规则已经认成图内文字的仍留在图里。"""
+    """When the model sees a label in a figure as a caption or heading, text the rules already found inside the figure
+    stays in the figure."""
     doc = _doc()
     figure = pymupdf.Rect(60, 60, 340, 260)
     label = pymupdf.Rect(100, 100, 150, 112)
@@ -106,7 +109,8 @@ def test_model_titles_and_captions_do_not_pull_text_out_of_a_figure():
 
 
 def test_a_body_sentence_under_a_caption_is_not_a_caption():
-    """图注下面紧接着的正文以图号起头（Fig. 19.15 sketches …）、被模型框成图注时，仍是正文；真的图注照样认。"""
+    """Body text right below a caption that starts with a figure number (Fig. 19.15 sketches ...) and that the model
+    boxes as a caption is still body text; real captions are still recognized."""
     doc = _doc()
     caption = pymupdf.Rect(60, 270, 340, 292)
     body = pymupdf.Rect(40, 300, 360, 312)
@@ -127,7 +131,7 @@ def test_a_body_sentence_under_a_caption_is_not_a_caption():
 
 
 def test_boxes_map_back_through_page_rotation():
-    """转过的页面按转过的样子渲染，框要转回文字坐标。"""
+    """A rotated page is rendered rotated, and boxes must be rotated back to text coordinates."""
     doc = _doc(400, 500)
     page = doc[0]
     page.set_rotation(90)
@@ -137,12 +141,13 @@ def test_boxes_map_back_through_page_rotation():
     [region] = ModelLayout(doc, session).regions(0)
     assert region.label == "figure"
     assert all(abs(a - b) < 1 for a, b in zip(region.rect, target))
-    # 转过以后是横的，补的是上下
+    # Rotated, the page is landscape, so the padding is at top and bottom
     assert session.inputs == [(1, 3, 832, 1024)]
 
 
 def test_without_a_usable_model_the_rules_are_used(tmp_path):
-    """没开、文件不存在、文件不是模型，都退回规则，翻译不因此失败。"""
+    """Disabled, a missing file or a file that is not a model all fall back to the rules, and translation does not
+    fail."""
     assert isinstance(layout_detector(_doc()), HeuristicLayout)
     assert isinstance(layout_detector(_doc(), str(tmp_path / "missing.onnx")), HeuristicLayout)
     broken = tmp_path / "broken.onnx"
@@ -151,7 +156,8 @@ def test_without_a_usable_model_the_rules_are_used(tmp_path):
 
 
 def test_text_regions_are_the_plain_text_boxes_and_the_page_is_read_once():
-    """并段要的是模型框出的正文段落。定角色时已经推过的页不再推一次。"""
+    """Paragraph joining needs the body-text regions boxed by the model. Pages already inferred when deciding roles
+    are not inferred again."""
     doc = _doc()
     body = pymupdf.Rect(38, 298, 362, 342)
     session = FakeSession(doc[0].rect, [(body, 0.95, 1), (pymupdf.Rect(110, 195, 290, 220), 0.8, 8)])
@@ -169,7 +175,8 @@ class _FormulaMeta:
 
 
 class FormulaSession(FakeSession):
-    """Ultralytics 导出的 YOLO：输出 [1, 4 + 类别数, N]，每列是中心、宽高和各类的分，没做 NMS。"""
+    """YOLO exported by Ultralytics: output [1, 4 + classes, N], each column center, width, height and class scores,
+    without NMS."""
 
     def get_modelmeta(self):
         return _FormulaMeta()
@@ -190,7 +197,8 @@ class FormulaSession(FakeSession):
 
 
 def test_formula_boxes_keep_the_best_of_overlapping_ones():
-    """同一个公式常有几个重叠的框，只留分最高的。分太低的不要，行间公式不算行内公式"""
+    """One formula often has several overlapping boxes, and only the highest-scoring one is kept. Boxes scoring too low
+    are dropped, and display formulas are not inline formulas"""
     doc = _doc()
     inline = pymupdf.Rect(100, 100, 140, 112)
     session = FormulaSession(
@@ -209,7 +217,8 @@ def test_formula_boxes_keep_the_best_of_overlapping_ones():
 
 
 def test_formula_detector_needs_an_inline_formula_class(monkeypatch, tmp_path):
-    """没开、文件不存在都只用规则。路径填成版面模型（类别里没有行内公式）也不用"""
+    """Disabled or a missing file means rules only. A path to the layout model (no inline formula class) is not used
+    either"""
     assert formula_detector(_doc()) is None
     assert formula_detector(_doc(), FormulaModel(str(tmp_path / "missing.onnx"))) is None
     doc = _doc()
@@ -220,14 +229,15 @@ def test_formula_detector_needs_an_inline_formula_class(monkeypatch, tmp_path):
 
 
 def test_formula_pages_come_in_page_order_at_the_chosen_size():
-    """逐页给的框和一页一页单独推的一样（下一页在后台线程里推）。输入尺寸按设置画页面"""
+    """Boxes yielded page by page are the same as inferring each page alone (the next page is inferred in a background
+    thread). Pages are rendered at the input size from the settings"""
     doc = pymupdf.open()
     for _ in range(3):
         doc.new_page(width=400, height=500)
     box = pymupdf.Rect(100, 100, 140, 112)
 
     class PerPage(FormulaSession):
-        """第 n 次推理给出往下挪 n * 100 的框，看得出框对的是哪一页"""
+        """Inference number n returns a box moved down by n * 100, showing which page a box belongs to"""
 
         def run(self, outputs, feeds):
             shift = len(self.inputs) * 100
@@ -241,7 +251,8 @@ def test_formula_pages_come_in_page_order_at_the_chosen_size():
 
 
 def test_formula_inference_splits_the_cores_between_two_pages(monkeypatch):
-    """自动时 4 核以上两页同时推理，核平分；核少时一页用满。设置里给了就按设置。推理线程都不空转"""
+    """Automatic: with 4 or more cores two pages at once with the cores split, with fewer cores one page using all of
+    them. Explicit settings are followed. Inference threads never spin"""
     seen = []
     doc = _doc()
 
@@ -263,7 +274,8 @@ def test_formula_inference_splits_the_cores_between_two_pages(monkeypatch):
 
 
 def test_formula_detector_uses_the_copies_that_load(monkeypatch):
-    """后面几份模型加载不了时用已经加载好的，第一份都加载不了才只用规则"""
+    """When later sessions fail to load, the loaded ones are used; only when the first fails are the rules used
+    alone"""
     doc = _doc()
     monkeypatch.setattr(pdf_vision, "_usable_sessions", lambda path, *args, **kwargs: [FormulaSession(doc[0].rect, [])])
     assert len(formula_detector(doc, FormulaModel("mfd.onnx", workers=3)).sessions) == 1
@@ -272,7 +284,8 @@ def test_formula_detector_uses_the_copies_that_load(monkeypatch):
 
 
 def test_several_pages_infer_at_once_each_with_its_own_copy():
-    """两份模型时页按顺序轮流交给两份，同一份不会同时推两页；给出的框仍按页的顺序"""
+    """With two sessions, pages alternate between them in order, a session never infers two pages at once, and boxes
+    are still yielded in page order"""
     import threading
     import time
 
@@ -300,7 +313,7 @@ def test_several_pages_infer_at_once_each_with_its_own_copy():
             finally:
                 self.lock.release()
 
-    # a 比 b 慢：b 先推完时，下一页要等 a 空出来才能交给 a
+    # a is slower than b: when b finishes first, the next page for a waits until a is free
     copies = [Copy("a", 0.05), Copy("b", 0.01)]
     detector = FormulaDetector(doc, copies)
     pages = list(detector.pages())
@@ -310,7 +323,8 @@ def test_several_pages_infer_at_once_each_with_its_own_copy():
 
 
 def test_formula_sessions_do_not_spin_while_waiting(monkeypatch, tmp_path):
-    """不空转的推理线程等活时让出核；同一个模型的几份各是一个会话"""
+    """Inference threads that do not spin give up their cores while waiting; each copy of a model is its own
+    session"""
     import onnxruntime
 
     made = []
@@ -322,7 +336,7 @@ def test_formula_sessions_do_not_spin_while_waiting(monkeypatch, tmp_path):
                 raise RuntimeError("out of memory")
             try:
                 made.append(options.get_session_config_entry("session.intra_op.allow_spinning"))
-            except RuntimeError:  # 没设过，onnxruntime 默认空转
+            except RuntimeError:  # not set; onnxruntime spins by default
                 made.append(None)
 
     monkeypatch.setattr(onnxruntime, "InferenceSession", Session)
@@ -331,18 +345,18 @@ def test_formula_sessions_do_not_spin_while_waiting(monkeypatch, tmp_path):
         model = str(tmp_path / "mfd.onnx")
         first, second = pdf_vision.load_sessions(model, 3, spin=False, count=2)
         assert first is not second and made == ["0", "0"]
-        # 加载过的留给后面的任务
+        # Loaded sessions are kept for later jobs
         assert pdf_vision.load_sessions(model, 3, spin=False, count=2) == [first, second]
         assert pdf_vision.load_sessions(model, 3, spin=False) == [first]
-        # 第三份加载不了，用已经有的两份
+        # The third session fails to load, so the two existing ones are used
         broken.add(2)
         assert pdf_vision.load_sessions(model, 3, spin=False, count=3) == [first, second]
-        # 线程设置改了，换成新的
+        # Thread settings changed, so the sessions are replaced
         broken.clear()
         assert first not in pdf_vision.load_sessions(model, 2, spin=False)
         pdf_vision.load_session("layout.onnx")
         assert made == ["0", "0", "0", None]
-        # 重新生成模型以后加载新文件
+        # After the model is regenerated the new file is loaded
         pdf_vision.clear_sessions()
         assert pdf_vision.load_session("layout.onnx") is not None and len(made) == 5
     finally:
@@ -350,7 +364,8 @@ def test_formula_sessions_do_not_spin_while_waiting(monkeypatch, tmp_path):
 
 
 def test_formula_pages_also_keep_the_display_formula_boxes():
-    """逐页取行内公式框时，行间公式框（isolated）按页记下，定哪些块留原文时用"""
+    """While inline formula boxes are taken page by page, display formula boxes (isolated) are recorded per page, for
+    deciding which blocks keep the original"""
     doc = _doc()
     display = pymupdf.Rect(80, 200, 320, 240)
     session = FormulaSession(doc[0].rect, [(pymupdf.Rect(100, 100, 140, 112), 0.9, 0), (display, 0.8, 1)])
@@ -362,7 +377,8 @@ def test_formula_pages_also_keep_the_display_formula_boxes():
 
 
 def test_layout_inference_stops_when_the_job_is_paused():
-    """版面模型一页推一秒多，整本书在定角色时逐页推。任务被暂停时在下一页停下"""
+    """The layout model takes over a second per page and runs page by page over the whole book while deciding roles.
+    A paused job stops at the next page"""
     import asyncio
     import time
 
@@ -391,7 +407,8 @@ def test_layout_inference_stops_when_the_job_is_paused():
 
 
 def test_saved_boxes_come_back_only_for_the_same_pdf_model_and_size(tmp_path):
-    """框按 PDF、模型文件、输入尺寸存。换了哪一样都不读回；两个模型分开存"""
+    """Boxes are stored by PDF, model file and input size. A change in any of them prevents reading them back; the two
+    models are stored separately"""
     import os
 
     from app.formats.pdf_vision import ModelBoxes
@@ -415,12 +432,12 @@ def test_saved_boxes_come_back_only_for_the_same_pdf_model_and_size(tmp_path):
     os.utime(model, ns=(stat.st_atime_ns, stat.st_mtime_ns))
     src.write_bytes(b"%PDF-1.4 another")
     assert again.load("formula", str(model), 1024) is None
-    # 存不下（目录不在了）只是下次要重新推
+    # Failing to save (the directory is gone) only means inferring again next time
     ModelBoxes(tmp_path / "gone" / "boxes.json", src).keep("formula", str(model), 1024, pages)
 
 
 def test_formula_boxes_are_kept_only_after_the_whole_book():
-    """整本推完才存；暂停时中途停下，不存半本"""
+    """Saved only after the whole document is inferred; stopping halfway on pause saves nothing"""
     doc = pymupdf.open()
     for _ in range(3):
         doc.new_page(width=400, height=500)
@@ -432,7 +449,7 @@ def test_formula_boxes_are_kept_only_after_the_whole_book():
     next(pages)
     pages.close()
     assert kept == []
-    # 和提取时一样：逐页取，取完最后一页就关掉
+    # As during extraction: take page by page and close after the last page
     detector = FormulaDetector(doc, [session])
     detector.keep = kept.append
     pages = detector.pages()
