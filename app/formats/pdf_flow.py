@@ -1,9 +1,10 @@
-"""译文断行，以及块内粗体、斜体、字号、颜色差的占位符。
+"""Line breaking of translations, and markers for bold, italic, size and color differences within a block.
 
-公式哨兵是不可拆的原子。短括号组放得下时也不从中间切开。
-样式标记不占宽，只在和块的底色不同时写出。
-整块同一风格仍交给块级字号和字重，送翻文本和原来逐字一致。
-字号标记是相对底色的百分比，写回时按这个比例缩放，跟着收缩阶梯一起变。
+Formula sentinels are atoms that cannot be split. Short bracket groups are not split either when they fit.
+Style markers take no width and are written only where they differ from the block's base style.
+A block in a single style is still handled by the block-level size and weight, so the text sent for translation
+matches the original character for character. Size markers are percentages of the base size; writing scales by
+that ratio and follows the shrink steps.
 """
 
 from __future__ import annotations
@@ -19,7 +20,8 @@ import pymupdf
 _SENTINEL_RE = re.compile(r"\x01i\x02(\d+)\x01/i\x02")
 STYLE_MARK_RE = re.compile(r"\{z\d+\}|\{/z\}|\{c[0-9a-f]{6}\}|\{/c\}|\{/?[biu]\}")
 _ATOM_RE = re.compile(rf"\x01i\x02\d+\x01/i\x02|{STYLE_MARK_RE.pattern}")
-# 网址、邮箱整个不折行。结尾的句号、括号、逗号是句子的，不算在里面
+# URLs and email addresses are never broken. A trailing period, bracket or comma belongs to the sentence and is
+# not part of them
 _LINK_RE = re.compile(r"(?:https?://|www\.)[!-~]*[A-Za-z0-9/#=_-]|[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", re.A)
 _SIZE_OPEN_RE = re.compile(r"\{z(\d+)\}")
 COLOR_MARK_RE = re.compile(r"\{c[0-9a-f]{6}\}|\{/c\}")
@@ -30,11 +32,13 @@ _BOLD_FLAG = 16
 _ITALIC_FLAG = 2
 _PAREN_CLOSE = {"（": "）", "(": ")"}
 _PAREN_LIMIT = 10
-# 这些标点不能出现在行首。放不下时把前一个字带到下一行，标点跟在它后面。
+# These punctuation marks must not start a line. When one does not fit, the character before it moves to the next
+# line and the mark follows it.
 _NO_LINE_START = frozenset("。，、；：？！）】」』〉》”’％%.,;:?!)]}>")
-# 左括号、左引号不能留在行尾，跟后面的字一起折到下一行。
+# Opening brackets and quotes must not end a line; they move to the next line with the character after them.
 _NO_LINE_END = frozenset("（【「『《〈“‘([{")
-# 半角标点在行尾时，后面的空格是标点自带的间隔，不留在这一行。
+# For half-width punctuation at the end of a line, the space after it is the mark's own spacing and is not kept on
+# the line.
 _HALF_PUNCT = frozenset(".,;:?!)]}%")
 
 
@@ -42,13 +46,15 @@ _HALF_PUNCT = frozenset(".,;:?!)]}%")
 class Emphasis:
     bold: bool
     italic: bool
-    # 原文字下面画了线。线不在字体里，提取时按字下面的细横线认出来（span["underline"]）
+    # The source text is underlined. The line is not part of the font; extraction finds it as a thin horizontal
+    # line below the text (span["underline"])
     underline: bool = False
 
 
 class EmphasisWriter:
-    """相对块的底色写出 {b} {i} {u} {zN} {cRRGGBB}。公式占位符是原子，不进强调、字号和颜色。
-    写回时块级只有字号和粗细，下划线总按标记写，整块都有下划线也一样。"""
+    """Write {b} {i} {u} {zN} {cRRGGBB} relative to the block's base style. Formula placeholders are atoms and are
+    never wrapped in emphasis, size or color. When writing, the block level carries only size and weight, so
+    underline is always written as a marker, even when the whole block is underlined."""
 
     def __init__(self, base: Emphasis, mixed: bool, base_size: float = 0, base_color: int | None = None) -> None:
         self.base = base
@@ -59,7 +65,7 @@ class EmphasisWriter:
         self._italic = False
         self._underline = False
         self._size = 100
-        # 当前写着的颜色。None 是块的颜色
+        # The color currently written. None is the block's color
         self._color: int | None = None
 
     def text(self, text: str, emphasis: Emphasis, size: float = 0, color: int | None = None) -> str:
@@ -68,24 +74,26 @@ class EmphasisWriter:
         percent = size_percent(size, self.base_size) if size and self.base_size else 100
         stripped = text.lstrip()
         if not stripped:
-            # 单独的空白不换颜色：同色的两个词中间不断开
+            # Whitespace alone does not change the color, so two words in the same color are not split apart
             return self._space(text, emphasis, percent, self._color)
-        # 只有标点的一截不换字号：句号排成角标字号时，{z65}.{/z} 会被模型套到半句话上
+        # A span of punctuation only does not change the size: with a period set at superscript size, the model
+        # would wrap {z65}.{/z} around half a sentence
         if not re.search(r"[^\W_]", stripped):
             percent = self._size
         shade = marked_color(color, self.base_color)
         lead = ""
         if stripped != text:
-            # 开头的空格按空白写，标记在空格后面打开：• {b}Math:，不是 •{b} Math:。
-            # 后面的字换颜色时空格前就收起
+            # A leading space is written as whitespace and the marker opens after it: • {b}Math:, not •{b} Math:.
+            # When the following text changes color, the marker closes before the space
             lead = self._space(
                 text[: len(text) - len(stripped)], emphasis, percent, shade if shade == self._color else None
             )
         return lead + self._marks(emphasis, percent, shade) + stripped
 
     def _space(self, text: str, emphasis: Emphasis, percent: int, shade: int | None) -> str:
-        """空白的字号和强调只留和正写着的共有的：空格不打开标记，
-        后文不用的标记在空格前收起（{z110}Figure 1:{/z} Gen…）。"""
+        """Whitespace keeps only the size and emphasis it shares with what is being written: a space opens no
+        marker, and markers that the following text does not use close before the space
+        ({z110}Figure 1:{/z} Gen...)."""
         kept = Emphasis(
             emphasis.bold and (self._bold or self.base.bold),
             emphasis.italic and (self._italic or self.base.italic),
@@ -104,7 +112,8 @@ class EmphasisWriter:
         return self._marks(self.base, 100)
 
     def _marks(self, emphasis: Emphasis, size_pct: int, color: int | None = None) -> str:
-        """由外到内是字号、颜色、强调。换外层时先收起里面的，换完再打开，标记始终成对嵌套。"""
+        """From outside in: size, color, emphasis. Changing an outer marker first closes the inner ones and reopens
+        them afterwards, so markers always nest in pairs."""
         if size_pct == self._size and color == self._color:
             return self._emphasis_marks(emphasis)
         parts = [self._emphasis_marks(self.base)]
@@ -162,7 +171,8 @@ class EmphasisWriter:
 
 
 def size_percent(size: float, base: float) -> int:
-    """相对块底色的字号，四舍五入到 5%。差不到 8% 视为相同，不写标记。"""
+    """Size relative to the block's base size, rounded to 5%. A difference under 8% counts as equal and gets no
+    marker."""
     if base <= 0 or size <= 0:
         return 100
     ratio = size / base
@@ -179,7 +189,7 @@ def emphasis_of(font: str, flags: int) -> Emphasis:
 
 
 def span_emphasis(span: dict[str, object]) -> Emphasis:
-    """span 的粗细、斜体，加上提取时认出的下划线。"""
+    """Weight and italic of the span, plus the underline found during extraction."""
     mark = emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0))  # type: ignore[arg-type]
     return Emphasis(mark.bold, mark.italic, bool(span.get("underline")))
 
@@ -189,12 +199,15 @@ def writer_for(
     base_size: float = 0,
     base_color: int | None = None,
 ) -> EmphasisWriter:
-    """定底色的强调，只有别的 span 在强调、字号或颜色上和底色不同时才写标记。
-    粗体：整块都是粗体才以粗体为底。中文写回时粗体只认 {b}，整块粗体另由写回补上；
-    底色是粗体时块里的粗体不写标记，混排的块（• 粗体标签后接正文）粗体就丢了。
-    斜体：按字数占多数的取，一样多时取正体。汉字没有斜体，斜体的定理正文逐段标 {i} 只会添乱。
-    没有字母的 span（标点、数字）不参与。
-    base_color 是块的颜色，写回时整块用它；和它不同的字才写颜色标记。"""
+    """Find the base emphasis; markers are written only for spans whose emphasis, size or color differs from it.
+    Bold: the base is bold only when the whole block is bold. Chinese writing recognizes bold only through {b}, and
+    a fully bold block gets its bold from the writing step; with a bold base, bold inside the block gets no marker,
+    and a mixed block (• a bold label followed by body text) would lose its bold.
+    Italic: the style covering most characters wins, upright on a tie. Chinese has no italic, and marking the
+    italic body of a theorem with {i} paragraph by paragraph only adds noise.
+    Spans without letters (punctuation, digits) take no part.
+    base_color is the block's color, used for the whole block when writing; only text in other colors gets color
+    markers."""
     weighted: list[tuple[Emphasis, int]] = []
     other_mixed = False
     for span in spans:
@@ -217,8 +230,9 @@ def writer_for(
 
 
 def marked_color(color: object, base_color: int | None) -> int | None:
-    """要写颜色标记的颜色。和块同色的不写；很浅的不写：黑底白字的图注标签整个贴回，
-    白字写成译文会落在白底上看不见。块本身是浅色字时也不写。"""
+    """The color to write as a marker. None when it matches the block's color, or when it is very light: a white
+    caption label on black is pasted back whole, and white translated text would land invisibly on a white
+    background. None also when the block itself is in light text."""
     if base_color is None or not isinstance(color, int) or color == base_color:
         return None
     if _light(color) or _light(base_color):
@@ -232,8 +246,9 @@ def _light(color: int) -> bool:
 
 
 def restore_emphasis(escaped_html: str) -> str:
-    """html.escape 之后把样式标记换成标签。标记本身没有需要转义的字符。
-    斜体保持 <i>：回退字体没有汉字粗体，改成 <b> 既不能强调汉字，又会丢掉拉丁斜体。"""
+    """After html.escape, replace style markers with tags. The markers contain no characters that need escaping.
+    Italic stays <i>: the fallback font has no bold Chinese, so <b> would neither emphasize the Chinese nor keep
+    the Latin italic."""
     tagged = (
         escaped_html.replace("{b}", "<b>")
         .replace("{/b}", "</b>")
@@ -249,7 +264,7 @@ def restore_emphasis(escaped_html: str) -> str:
 
 
 def strip_style_marks(text: str) -> str:
-    """预览里去掉样式标记。写回 PDF 时仍要这些标记。"""
+    """Remove style markers for the preview. Writing the PDF still needs them."""
     return STYLE_MARK_RE.sub("", text)
 
 
@@ -260,10 +275,12 @@ def break_lines(
     formula_widths: dict[int, float],
     first_widths: Sequence[float] = (),
 ) -> list[str]:
-    """按估算宽度断行。哨兵、超宽公式、放得下的短括号组都不拆开。
-    每行自带样式标记：跨行的粗体、颜色在下一行开头重开，在本行末尾收起。
-    各行是分开写的（HTML 每行一个不折行的盒子，中文逐片画），不补的话下一行就丢了样式。
-    first_widths 是开头几行各自的宽度（让开图的那几行），其余各行按 max_width。"""
+    """Break lines by estimated width. Sentinels, overwide formulas and short bracket groups that fit are never
+    split. Each line carries its own style markers: bold or color spanning lines is reopened at the start of the
+    next line and closed at the end of this one. Lines are written separately (one non-wrapping box per line in
+    HTML, Chinese drawn piece by piece), so without this the next line would lose its style.
+    first_widths are the widths of the first few lines (those making room for a figure); the other lines use
+    max_width."""
     return balance_lines(_break_lines(text, em, max_width, formula_widths, first_widths))
 
 
@@ -282,7 +299,7 @@ def balance_lines(lines: list[str]) -> list[str]:
 
 
 def open_marks(text: str, opened: list[str] | None = None) -> list[str]:
-    """读完 text 后还开着的样式标记，由外到内。opened 是 text 之前已经开着的。"""
+    """Style markers still open after text, from outside in. opened are those already open before text."""
     stack = list(opened or ())
     for matched in STYLE_MARK_RE.finditer(text):
         token = matched.group(0)
@@ -301,7 +318,8 @@ def _closing(opened: list[str]) -> str:
 
 
 def balance_marks(left: str, right: str) -> tuple[str, str]:
-    """切开处补上仍开着的样式标记。字号、颜色不嵌套，必须重开还开着的那一个，不能重开更早已经闭合的。"""
+    """Reopen the style markers still open at the cut. Size and color do not nest, so the one still open must be
+    reopened, not an earlier one that has already closed."""
     opened = open_marks(left)
     if not opened:
         return left, right
@@ -323,12 +341,14 @@ def _break_lines(
     if not text or max_width <= 0:
         return [text]
     tokens = _tokenize(text)
-    # 括号组按最窄的一行锁，否则组在窄行放不下，回滚后又回到同一处
+    # Bracket groups are locked against the narrowest line; otherwise a group would not fit on a narrow line and
+    # rolling back would return to the same place
     group_of = _paren_groups(tokens, em, formula_widths, min((max_width, *first_widths)))
     for index, start in _marked_words(tokens, em, formula_widths, min((max_width, *first_widths))).items():
         group_of.setdefault(index, start)
     lines: list[str] = []
-    # 每行的词，和 lines 一一对应。硬切、独占一行的超宽公式记 None，不参与匀开
+    # Words of each line, one entry per line in lines. Hard cuts and overwide formulas on a line of their own are
+    # None and are not justified
     rows: list[list[tuple[int, str]] | None] = []
     buf: list[tuple[int, str]] = []
     width = 0.0
@@ -355,9 +375,10 @@ def _break_lines(
         if not token.isspace() and token_width > room():
             flush()
             if _SENTINEL_RE.fullmatch(token):
-                put(token)  # 公式超宽：独占一行（调用方会缩它）
+                put(token)  # overwide formula: a line of its own (the caller scales it down)
             else:
-                # 超宽普通词（长 URL 等）按字符硬切，不 nowrap 越出右缘
+                # Overwide ordinary words (long URLs and the like) are cut by character instead of running past
+                # the right edge with nowrap
                 chunk, cw = "", 0.0
                 for ch in token:
                     chw = _token_width(ch, em, formula_widths)
@@ -382,7 +403,7 @@ def _break_lines(
             start = group_of.get(index)
             if start is not None and any(token_index >= start for token_index, _ in buf):
                 buf[:] = [(token_index, item) for token_index, item in buf if token_index < start]
-                # 组前面的左括号也跟着组到下一行
+                # The opening bracket before the group also moves to the next line with it
                 carried = _detach_opener(buf)
                 width = sum(_token_width(item, em, formula_widths) for _, item in buf)
                 flush()
@@ -435,11 +456,14 @@ def _even_out(
     formula_widths: dict[int, float],
     group_of: dict[int, int],
 ) -> set[int]:
-    """下一行行首的长词、公式放不下，这一行空出好几个字宽，两端对齐时字距拉得很开。
-    把上一行行尾的汉字挪几个下来，空白分给两行，挪到两行里拉得最开的缝不再变小为止；上一行再从更上一行挪，
-    一直往上匀。只挪单个汉字和跟着它的样式标记，不挪拉丁词、公式、括号组，行首行尾的标点照禁则。
-    末行不两端对齐，不管它空多少。返回改过的行号。"""
-    # 两端对齐由 pdf_align 来摊，它引用本模块，只能在这里引
+    """When a long word or formula at the start of the next line did not fit, this line is short by several
+    character widths and justification spreads it widely. Move a few Chinese characters from the end of the line
+    above down to share the space between the two lines, until the widest gap in the two lines stops getting
+    smaller; the line above then takes from the one above it, and so on upward. Only single Chinese characters
+    and the style markers attached to them move, never Latin words, formulas or bracket groups, and punctuation
+    at line starts and ends follows the line-breaking rules. The last line is not justified, however short it
+    is. Returns the indexes of changed lines."""
+    # pdf_align distributes justification space; it imports this module, so it can only be imported here
     from .pdf_align import line_extras
 
     changed: set[int] = set()
@@ -448,8 +472,10 @@ def _even_out(
         return sum(_token_width(token, em, formula_widths) for _, token in row)
 
     def stretch(row: list[tuple[int, str]], slack: float) -> float:
-        # 照写出时的摊法看这一行拉不拉：缝太少、余量太小的行不拉，算 0。拉的行按余量摊到每道缝上算，
-        # 不封顶：拉到上限的行余量留在行尾，挪几个字下来照样能把它收回上限以内
+        # Whether a line is stretched follows how writing distributes space: lines with too few gaps or too little
+        # slack are not stretched and count as 0. A stretched line counts its slack spread over every gap,
+        # uncapped: a line stretched to the limit keeps the rest of its slack at the end, and moving a few
+        # characters down still brings it back within the limit
         texts: list[str | None] = [""]
         for _, token in row:
             if _SENTINEL_RE.fullmatch(token):
@@ -472,7 +498,8 @@ def _even_out(
             index, char = upper[end - 1]
             if not _CJK_RE.fullmatch(char) or index in group_of:
                 break
-            # 字前面刚开的样式标记跟着字走，上一行不留空的 {b}
+            # A style marker opened right before the character moves with it, so no empty {b} is left on the line
+            # above
             start = end - 1
             while (
                 start > 0 and STYLE_MARK_RE.fullmatch(upper[start - 1][1]) and not upper[start - 1][1].startswith("{/")
@@ -497,7 +524,7 @@ def _even_out(
 
 
 def _trim_line_end(line: str) -> str:
-    """半角标点在行尾时去掉后面的空格。样式标记不算字。"""
+    """Remove the space after half-width punctuation at the end of a line. Style markers are not characters."""
     body = line
     marks = ""
     while True:
@@ -513,14 +540,15 @@ def _trim_line_end(line: str) -> str:
 
 
 def _detach_char(chunk: str) -> tuple[str, str] | None:
-    """超宽硬切时，把最后一个字留给行首的标点。"""
+    """When hard-cutting an overwide word, leave the last character for the punctuation that starts the line."""
     if len(chunk) < 2 or chunk[-1] in _NO_LINE_START:
         return None
     return chunk[:-1], chunk[-1]
 
 
 def _detach_opener(buf: list[tuple[int, str]]) -> list[tuple[int, str]]:
-    """行尾的左括号（连同贴着它的样式标记）摘下来，放到下一行开头。整行只有括号时不动。"""
+    """Move an opening bracket at the end of a line (with style markers attached to it) to the start of the next
+    line. Nothing moves when the line holds only the bracket."""
     start = len(buf)
     while start > 0 and STYLE_MARK_RE.fullmatch(buf[start - 1][1]):
         start -= 1
@@ -535,7 +563,8 @@ def _detach_opener(buf: list[tuple[int, str]]) -> list[tuple[int, str]]:
 
 
 def _detach_for_punct(buf: list[tuple[int, str]]) -> list[tuple[int, str]] | None:
-    """行尾标点放不下时，带上前一个字。行里没有可带的字就不动。"""
+    """When punctuation at the end of a line does not fit, take the character before it along. Nothing moves when
+    the line has no character to take."""
     end = len(buf)
     while end > 0 and (
         STYLE_MARK_RE.fullmatch(buf[end - 1][1]) or buf[end - 1][1].isspace() or buf[end - 1][1] in _NO_LINE_START
@@ -552,7 +581,8 @@ def _detach_for_punct(buf: list[tuple[int, str]]) -> list[tuple[int, str]] | Non
 
 
 def _visible_len(token: str) -> int:
-    """括号组的长度不计样式标记。公式哨兵算一个字，不按哨兵原文的字符数。"""
+    """Length of a bracket group without style markers. A formula sentinel counts as one character regardless of
+    the length of its text."""
     if STYLE_MARK_RE.fullmatch(token):
         return 0
     if _SENTINEL_RE.fullmatch(token):
@@ -569,8 +599,9 @@ def _marked_words(
     formula_widths: dict[int, float],
     max_width: float,
 ) -> dict[int, int]:
-    """词中间夹着样式标记（{b}R{/b}epresentations）切成了几个 token，整个词锁成一组，
-    不在标记处断行。前面开着的标记跟着词走。和括号组交叠、本身超宽的不锁。"""
+    """A word split into several tokens by a style marker inside it ({b}R{/b}epresentations) is locked as one
+    group and never broken at the marker. Markers opened before it move with the word. Words overlapping a
+    bracket group or wider than the line are not locked."""
     group_of: dict[int, int] = {}
     count = len(tokens)
     index = 0
@@ -607,7 +638,8 @@ def _paren_groups(
     formula_widths: dict[int, float],
     max_width: float,
 ) -> dict[int, int]:
-    """短括号组里每个 token 指向开括号的下标。组本身超宽时不锁，允许切开。"""
+    """Map each token of a short bracket group to the index of its opening bracket. A group wider than the line is
+    not locked and may be split."""
     group_of: dict[int, int] = {}
     index = 0
     count = len(tokens)
@@ -629,8 +661,9 @@ def _paren_groups(
             if tokens[cursor] == close and cursor > index:
                 end = cursor
                 break
-        # 锁组条件和填充的溢出判定必须一致：放宽到 +0.5 会让组在填充时超宽，
-        # 触发回滚后又因组已锁再次回滚，死循环
+        # The locking condition must match the overflow test used when filling: relaxing it to +0.5 lets a group
+        # overflow while filling, and the rollback is followed by another rollback because the group is locked,
+        # an infinite loop
         if end is not None and width <= max_width:
             for cursor in range(index, end + 1):
                 group_of[cursor] = index
@@ -641,7 +674,7 @@ def _paren_groups(
 
 
 def nowrap_lines(lines: list[str]) -> str:
-    """每行一个 nowrap span。和括号组同一写法，MuPDF 不能再把公式从中间折开。"""
+    """One nowrap span per line, written like bracket groups, so MuPDF cannot break a formula in the middle."""
     return "<br>".join(f'<span style="white-space:nowrap">{line}</span>' for line in lines)
 
 
@@ -658,7 +691,8 @@ def formula_index(token: str) -> int | None:
     return int(matched.group(1)) if matched else None
 
 
-# 公式后面直接接文字时要有一个空格。标点和已有空白不补，补第二次也不再加。
+# Text right after a formula needs a space. None is added before punctuation or existing whitespace, and a second
+# pass adds no more.
 _NO_FORMULA_SPACE = frozenset("。，、；：？！）】」』〉》％%.,;:?!)]}>（【「『《〈([{")
 
 
@@ -668,10 +702,11 @@ _LATIN_CHAR = r"[A-Za-z]"
 
 
 def space_around_latin(text: str) -> str:
-    """汉字和夹在中间的拉丁字母两侧各留一个空格。
+    """Put one space on each side of Latin text between Chinese characters.
 
-    序数写成 {i} i-th{/i} 时，空格在斜体里面，后面的汉字又贴着字母。
-    把标记内的空格挪出来，边界上没有的补一个，已经有的收成一个。
+    When an ordinal is written as {i} i-th{/i}, the space is inside the italic and the Chinese after it touches
+    the letters. Spaces inside markers are moved out, a missing space at a boundary is added, and several are
+    collapsed into one.
     """
     if not text or not _CJK_RE.search(text):
         return text
@@ -690,7 +725,7 @@ def space_around_latin(text: str) -> str:
 
 
 def separate_after_formula(text: str) -> str:
-    """公式哨兵后面如果直接接字母、数字或汉字，补一个空格。"""
+    """Add a space when a formula sentinel is directly followed by a letter, digit or Chinese character."""
     if "\x01i\x02" not in text:
         return text
     out: list[str] = []
@@ -717,7 +752,7 @@ def separate_after_formula(text: str) -> str:
 
 
 def peel_leading_space(text: str) -> tuple[str, bool]:
-    """去掉样式标记之后的第一个空格。HTML 盒子会吃掉开头的普通空格。"""
+    """The first space after removing style markers. HTML boxes swallow an ordinary leading space."""
     index = 0
     while True:
         mark = STYLE_MARK_RE.match(text, index)
@@ -761,7 +796,7 @@ def _tokenize(text: str) -> list[str]:
             continue
         if _is_word_char(char):
             end = index + 1
-            # 2.07、10,000 里夹在数字中间的点和逗号属于这个数，不能从这里断行
+            # A period or comma between digits, as in 2.07 or 10,000, belongs to the number and is no break point
             while end < length and (_is_word_char(text[end]) or _inside_number(text, end)):
                 end += 1
                 if _hyphen_break(text, end):
@@ -774,15 +809,15 @@ def _tokenize(text: str) -> list[str]:
     return tokens
 
 
-# 连字符两边至少这么多个字母才能在它后面折行：Super-|NaturalInstructions、pre-|training。
-# GPT-4、x-axis 不折
+# Minimum letters on both sides of a hyphen for a break after it: Super-|NaturalInstructions, pre-|training.
+# GPT-4 and x-axis do not break
 _HYPHEN_SIDE = 3
 _HYPHEN_LEFT_RE = re.compile(rf"[A-Za-z]{{{_HYPHEN_SIDE}}}-$")
 _HYPHEN_RIGHT_RE = re.compile(rf"[A-Za-z]{{{_HYPHEN_SIDE}}}")
 
 
 def _hyphen_break(text: str, end: int) -> bool:
-    """text[:end] 以连字符收尾，连字符可以折行。"""
+    """text[:end] ends with a hyphen at which the line may break."""
     return bool(_HYPHEN_LEFT_RE.search(text, max(0, end - _HYPHEN_SIDE - 1), end)) and bool(
         _HYPHEN_RIGHT_RE.match(text, end)
     )
@@ -791,7 +826,7 @@ def _hyphen_break(text: str, end: int) -> bool:
 def _is_word_char(char: str) -> bool:
     if _CJK_RE.match(char):
         return False
-    # l_partkey 这样的标识符不能从下划线处折行
+    # Identifiers such as l_partkey must not break at the underscore
     return char.isalnum() or char in "-'_"
 
 
@@ -799,7 +834,8 @@ _drawing_fonts: tuple[pymupdf.Font, ...] | None = None
 
 
 def _drawing_fonts_loaded() -> tuple[pymupdf.Font, ...]:
-    """断行要用真正写出的字宽。破折号和 M 按 0.5em 估，一行会多挤出一个字。"""
+    """Line breaking needs the widths actually written. Estimating dashes and M at 0.5em would squeeze an extra
+    character onto a line."""
     global _drawing_fonts
     if _drawing_fonts is None:
         _drawing_fonts = (
@@ -811,7 +847,8 @@ def _drawing_fonts_loaded() -> tuple[pymupdf.Font, ...]:
 
 
 def measure_width(text: str, em: float, formula_widths: dict[int, float] | None = None) -> float:
-    """一段译文占多宽。样式标记为 0，公式哨兵用槽宽，缺槽宽时按一个 em。"""
+    """Width of a piece of translation. Style markers are 0, formula sentinels take their slot width, or one em
+    without one."""
     widths = formula_widths or {}
     cleaned = strip_style_marks(text)
     total = 0.0
@@ -824,7 +861,8 @@ def measure_width(text: str, em: float, formula_widths: dict[int, float] | None 
     return total
 
 
-# 断行时每个字都要量一次，一本书要量上百万次；字宽只看字和字号，量过的记下来
+# Line breaking measures every character, millions of times for a book; the width depends only on the character
+# and the size, so measured widths are cached
 @functools.lru_cache(maxsize=65536)
 def _char_width(char: str, em: float) -> float:
     if _CJK_RE.match(char) or unicodedata.east_asian_width(char) in ("W", "F"):
@@ -833,8 +871,9 @@ def _char_width(char: str, em: float) -> float:
         estimate = em * 0.33
     else:
         estimate = em * 0.5
-    # 字体里有这个字就按写出的宽度量。估计只给哪个字体都没有的字：拿 0.5em 兜底，
-    # i、l、逗号量宽了一倍，中英混排的行没满就折行，两端对齐也拉不满
+    # When the font has the character, measure the written width. The estimate is only for characters no font
+    # has: with 0.5em as the default, i, l and commas come out twice too wide, mixed Chinese and English lines
+    # break before they are full, and justification cannot fill them
     drawn = 0.0
     code = ord(char)
     for font in _drawing_fonts_loaded():
