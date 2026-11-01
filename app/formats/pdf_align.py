@@ -1,9 +1,10 @@
-"""中文行的两端对齐。
+"""Justification of Chinese lines.
 
-MuPDF 的 letter-spacing、word-spacing、text-align:justify 都拉不动纯汉字行。
-这里按字形自己写文本：非末行的余量摊到字与字之间，标点前面不拉开。
-复制出来的仍是原来的字，不含为对齐插入的空格。
-斜体标记不改走 HTML：汉字没有斜体字形，仍用正文字体；拉丁字母换斜体字体。
+MuPDF's letter-spacing, word-spacing and text-align:justify cannot stretch lines of pure Chinese text, so the
+text is written here glyph by glyph: the slack of every line but the last is spread between characters, with no
+extra space before punctuation. Copied text is still the original text, without spaces inserted for alignment.
+Italic markers do not send the text through HTML: Chinese has no italic glyphs and stays in the body font, while
+Latin letters switch to an italic font.
 """
 
 from __future__ import annotations
@@ -18,27 +19,31 @@ import pymupdf
 from .pdf_flow import open_marks
 from .pdf_typeset import FormulaPiece, TextPiece, TypesetLine, line_lead, line_offsets
 
-# htmlbox 首行 origin 相对盒子顶的比例。和它对齐，换写法后行高不变。
+# Position of the first line's origin in htmlbox relative to the box top. Aligning with it keeps the line height
+# unchanged with this way of writing.
 FIRST_BASELINE = 1.108
 _FONT_NAME = "DocCJK"
-# 汉字字形大约占基线上 0.88em、下 0.12em
+# Chinese glyphs occupy about 0.88em above the baseline and 0.12em below
 _GLYPH_ASCENT = 0.88
 _GLYPH_DESCENT = 0.12
 _MIN_SLOTS = 6
 _MIN_SLACK_EM = 0.15
 _MAX_GAP_EM = 0.35
-# 词间空格每处最多再拉开多少（em），前后两个缝各摊一半。空格本身约 0.26em，拉满后约半个字宽
+# Maximum extra width (em) per word space, split between the gaps on either side. A space is about 0.26em, so
+# fully stretched it is about half a character wide
 _MAX_SPACE_EM = 0.25
-# 有词间空格的行里，字与字之间最多拉开多少（em）
+# Maximum extra width (em) between characters in a line with word spaces
 _MAX_MIXED_GAP_EM = 0.1
-# 一行最多压掉行宽的多少。排版器估的字宽和实际差一点，断行按 SQUEEZE 放宽，写的时候按实际宽度压，压到 2 倍为止
+# Maximum share of the line width that can be squeezed out. The typesetter's estimated widths differ slightly from
+# the actual ones; line breaking allows SQUEEZE, and writing squeezes by the actual width, up to twice that
 SQUEEZE = 0.03
-# 句读贴着前一个字，开括号贴着后一个字。空格可以拉开，公式后的分界就靠它。
+# Sentence punctuation stays with the preceding character and opening brackets with the following one. Spaces
+# can stretch, which is what separates text from a preceding formula.
 _NO_GAP_BEFORE = frozenset("。，、；：？！）】」』〉》％%.,;:?!)]}>")
 _NO_GAP_AFTER = frozenset("（【「『《〈([{")
 
 _MARK_RE = re.compile(r"\{i\}|\{/i\}|\{b\}|\{/b\}|\{u\}|\{/u\}|\{/z\}|\{z(\d+)\}|\{/c\}|\{c([0-9a-f]{6})\}")
-# 下划线在基线下多远、多粗（em）
+# Distance below the baseline and thickness of underlines (em)
 _UNDERLINE_DROP = 0.1
 _UNDERLINE_WIDTH = 0.05
 _LATIN_FONTS = {
@@ -47,7 +52,8 @@ _LATIN_FONTS = {
     (True, True): ("DocBI", "hebi"),
 }
 
-# 没有合成字的组合重音（P̂、x̃）。字体里没有组合字形，画成对应的独立重音叠在前一个字上
+# Combining accents without a precomposed character (P̂, x̃). The font has no combining glyphs, so the matching
+# spacing accent is drawn over the preceding character
 _MARK_GLYPHS = {
     "\u0300": "`",
     "\u0301": "´",
@@ -62,13 +68,13 @@ _MARK_GLYPHS = {
     "\u030c": "ˇ",
 }
 _MARK_FONT = ("DocRG", "helv")
-# 独立重音按小写字母的高度画，叠在大写字母、带上伸部的字母上要抬高（em）
+# Spacing accents are drawn for lowercase height and must be raised over capitals and letters with ascenders (em)
 _TALL_LIFT = 0.2
 _ITALIC_SLANT = 0.21
 
 _font: pymupdf.Font | None = None
 _latin: dict[str, pymupdf.Font] = {}
-# 各字体里每个字的宽度（1 号字）
+# Width of each character in each font (at size 1)
 _ADVANCES: dict[pymupdf.Font, dict[str, float]] = {}
 
 
@@ -85,7 +91,7 @@ class _Run:
     italic: bool
     bold: bool
     size_pct: int
-    # #rrggbb。空串是块的颜色
+    # #rrggbb. An empty string is the block's color
     color: str = ""
     underline: bool = False
 
@@ -99,7 +105,7 @@ class _Segment:
     bold: bool = False
     color: str = ""
     underline: bool = False
-    # 组合重音：不占宽，叠在前一个字上
+    # Combining accent: takes no width and sits over the preceding character
     mark: bool = False
     italic: bool = False
 
@@ -111,8 +117,8 @@ class _Segment:
 
 
 def _text_length(font: pymupdf.Font, text: str, size: float) -> float:
-    """同 Font.text_length。它每个字都要问一遍 MuPDF 用哪个字形，这里每个字只问一次，
-    按原来的次序累加，结果相同。"""
+    """Same as Font.text_length. That asks MuPDF for the glyph of every character each time; here each character
+    is asked once and the widths are summed in the original order, with the same result."""
     advances = _ADVANCES.setdefault(font, {})
     total = 0.0
     for char in text:
@@ -140,7 +146,7 @@ def _latin_font(italic: bool, bold: bool) -> tuple[str, pymupdf.Font]:
 
 
 def _styled_runs(text: str) -> list[_Run]:
-    """按 {i} {b} {u} {zN} {cRRGGBB} 切开。标记本身不占字。"""
+    """Split at {i} {b} {u} {zN} {cRRGGBB}. The markers themselves are not characters."""
     italic = False
     bold = False
     underline = False
@@ -189,7 +195,7 @@ def _styled_runs(text: str) -> list[_Run]:
 
 
 def _keeps_body_font(char: str) -> bool:
-    """汉字和全角符号没有斜体字形，强调也不换字体。"""
+    """Chinese characters and full-width symbols have no italic glyphs, and emphasis does not change their font."""
     code = ord(char)
     if 0x3040 <= code <= 0x30FF or 0x3400 <= code <= 0x9FFF or 0xAC00 <= code <= 0xD7AF:
         return True
@@ -224,7 +230,8 @@ def _append_segment(
         return
     name, font = face
     text = "".join(buf)
-    # 汉字没有粗体字形。粗体只记在片段上，写的时候描一笔，不换字体。
+    # Chinese has no bold glyphs. Bold is only recorded on the piece and drawn with an added stroke, keeping the
+    # font.
     if (
         segments
         and not segments[-1].mark
@@ -242,7 +249,7 @@ def _append_segment(
 
 
 def _segments(text: str, em: float) -> list[_Segment] | None:
-    """同一字体、同一字号的相邻片段合成一段。缺字返回 None。"""
+    """Merge adjacent pieces with the same font and size. Returns None when a character is missing."""
     if "\x01" in text:
         return None
     segments: list[_Segment] = []
@@ -251,7 +258,7 @@ def _segments(text: str, em: float) -> list[_Segment] | None:
         size = em * pct / 100.0
         buf: list[str] = []
         face: tuple[str, pymupdf.Font] | None = None
-        # 拉丁粗体已经换了 hebo。描边只加在仍用正文字体的汉字上。
+        # Latin bold has already switched to hebo. The stroke is added only to Chinese still in the body font.
         stroke = run.bold
         for char in run.text:
             if char in _MARK_GLYPHS and (buf or segments):
@@ -285,15 +292,17 @@ def _mark_font() -> tuple[str, pymupdf.Font]:
 
 
 def _latin_unit(ch: str) -> bool:
-    """词内的拉丁字母、数字、连字符和下划线（l_partkey）。两端对齐不能从这里拉开。"""
+    """Latin letters, digits, hyphens and underscores inside a word (l_partkey). Justification must not stretch
+    there."""
     return ch.isascii() and (ch.isalnum() or ch in "-'’_")
 
 
 def can_stretch(left: str, right: str) -> bool:
     if right in _NO_GAP_BEFORE or left in _NO_GAP_AFTER or right in _MARK_GLYPHS:
         return False
-    # 作者名被拉成 Z h o n g，就是把词内的字母也拉开了。只在词与词之间留缝。
-    # 网址、邮箱（jimmy@psi.utoronto.ca）中间的 @ . / 也是连着写的一串，拉开就像断成了几段
+    # An author name stretched to Z h o n g means letters inside a word were spread. Gaps go only between words.
+    # The @ . / inside URLs and email addresses (jimmy@psi.utoronto.ca) are part of one string too, and spreading
+    # them makes it look broken into pieces
     if _latin_unit(left) and _latin_unit(right) or _ascii_mark(left) and _ascii_mark(right):
         return False
     return True
@@ -304,16 +313,17 @@ def _ascii_mark(ch: str) -> bool:
 
 
 def justify_extras(text: str, slack: float, em: float) -> list[float]:
-    """每个字后面摊多少点。长度是 len(text)-1。不该拉的行返回空列表。"""
+    """Points added after each character, len(text)-1 entries. An empty list for a line that should not stretch."""
     if em <= 0 or slack < em * _MIN_SLACK_EM or len(text) < 2:
         return []
     return _spread([(text[i], text[i + 1]) for i in range(len(text) - 1)], slack, em)
 
 
 def _spread(pairs: list[tuple[str, str]], slack: float, em: float) -> list[float]:
-    """余量摊到相邻两字之间。词间空格旁的缝按两份摊，字与字之间按一份：中英混排的行里
-    拉丁词长、拉不开，平均摊会把汉字拉成「常 识 推 理」。一种缝拉到上限，剩下的给另一种，
-    两种都到上限，余下的留在行尾。"""
+    """Spread the slack between adjacent characters. Gaps beside word spaces get two shares and gaps between
+    characters one: in mixed Chinese and English lines the Latin words are long and cannot stretch, and an even
+    spread would turn the Chinese into "常 识 推 理". When one kind of gap reaches its limit the rest goes to the
+    other, and when both are at their limits what remains stays at the end of the line."""
     stretch = [can_stretch(left, right) for left, right in pairs]
     if sum(stretch) < _MIN_SLOTS:
         return []
@@ -323,7 +333,7 @@ def _spread(pairs: list[tuple[str, str]], slack: float, em: float) -> list[float
     unit = slack / (2 * n_space + n_char)
     space_cap = em * _MAX_SPACE_EM / 2
     space_each = min(2 * unit, space_cap) if n_space else 0.0
-    # 有词间空格的行，字与字之间只稍微拉开，再多的余量留在行尾
+    # In a line with word spaces, characters are spread only slightly and further slack stays at the line end
     char_cap = _MAX_MIXED_GAP_EM if n_space else _MAX_GAP_EM
     char_each = min((slack - space_each * n_space) / n_char, em * char_cap) if n_char else 0.0
     if n_space:
@@ -334,17 +344,19 @@ def _spread(pairs: list[tuple[str, str]], slack: float, em: float) -> list[float
 
 
 def page_origin(page: pymupdf.Page) -> tuple[float, float]:
-    """页面坐标原点在 PDF 坐标里的位置，即裁剪框的左上角。
+    """Position of the page coordinate origin in PDF coordinates, the top left corner of the crop box.
 
-    裁剪框或媒体框不从 0 起时，页面坐标要加上这段偏移才是 PDF 坐标。
+    When the crop box or media box does not start at 0, page coordinates need this offset to become PDF
+    coordinates.
     """
     return float(page.cropbox.x0), float(page.mediabox.y1 - page.cropbox.y0)
 
 
 def _lift(em: float, first_room: float | None) -> float:
-    """整段往上提多少。按 htmlbox 的首行基线写，汉字的下沿常比原文第一行的行框低，
-    压到紧贴在下面的线（代码框的上沿）。字形下沿超出原文行框时往上提，最多提到字形
-    上沿和盒子顶齐平，不越过上面的东西。"""
+    """How far to raise the whole paragraph. Written at htmlbox's first-line baseline, the bottom of Chinese
+    glyphs is often lower than the line box of the original first line and touches a line right below (the top
+    edge of a code box). When the glyph bottom goes past the original line box the text is raised, at most until
+    the glyph top is level with the box top, so it never crosses what is above."""
     if first_room is None:
         return 0.0
     over = em * (FIRST_BASELINE + _GLYPH_DESCENT) - first_room
@@ -367,14 +379,15 @@ def draw_cjk_lines(
     first_room: float | None = None,
     paint: Callable[[FormulaSlot], str] | None = None,
 ) -> list[FormulaSlot] | None:
-    """写成两端对齐的行。缺字时返回 None，调用方改走 HTML 盒子。
-    align 是 left、center 或 right，居中、靠右排的行不拉开。
+    """Write justified lines. Returns None when a character is missing, and the caller falls back to an HTML
+    box. align is left, center or right; centered and right-aligned lines are not stretched.
 
-    段落还要接到下一页时，这一页的末行也是满行，同样两端对齐。
-    lanes 是开头几行相对盒子左缘的缩进和宽度（让开图的那几行），其余各行占满盒子。
-    first_room 是原文第一行从盒子顶到下沿的高度，见 _lift。
-    paint 给出画一个公式槽的命令（页面坐标，不含本段的平移），画在内容流里这个槽的位置上：
-    拖选、复制时公式夹在前后的字中间，不排到整页最后。
+    When the paragraph continues on the next page, the last line on this page is also a full line and is
+    justified too. lanes are the indent from the box's left edge and the width of the first few lines (those
+    making room for a figure); the other lines fill the box. first_room is the height from the box top to the
+    bottom of the original first line, see _lift. paint gives the commands drawing a formula slot (page
+    coordinates, without this paragraph's offset), drawn at the slot's position in the content stream, so that
+    when selecting and copying, the formula sits between the text around it rather than at the end of the page.
     """
     left, top = page_origin(page)
     placed = _place_lines(
@@ -399,7 +412,8 @@ def draw_cjk_lines(
         drawn = paint(slot) if paint is not None else ""
         if drawn and left:
             drawn = f"q 1 0 0 1 {-left:.2f} 0 cm\n{drawn}\nQ"
-        # 文本对象里不能画 XObject，先结束再接着写；字体、颜色是图形状态，接着写的字照旧
+        # An XObject cannot be drawn inside a text object, so the object is ended and writing resumes after it;
+        # font and color are graphics state and carry over to the text that follows
         commands = commands.replace(_slot_mark(number), f"ET\n{drawn}\nBT" if drawn else "")
     if commands:
         for name, face in fonts.items():
@@ -437,9 +451,10 @@ def _place_lines(
     last = len(lines) - 1
     offsets, _extra = line_offsets(lines, em, gap)
     wrote = False
-    # 公式把一行切成几片，每片从头读标记。前一片还开着的粗体、颜色带到下一片
+    # Formulas cut a line into pieces, and each piece reads markers from its start. Bold or color still open in one
+    # piece carries over to the next
     opened: list[str] = []
-    # 下划线：文本对象里不能画填充，写完字再画
+    # Underlines: fills cannot be drawn inside a text object, so they are drawn after the text
     rules: list[tuple[float, float, float, float, str]] = []
     lift = _lift(em, first_room)
     for index, line in enumerate(lines):
@@ -461,7 +476,7 @@ def _place_lines(
         if row is None:
             return None
         ops, line_slots, line_fonts, line_rules = row
-        # 行里的槽标记按行内序号写，换成全段的序号
+        # Slot markers in a line use indexes within the line; convert them to indexes within the paragraph
         ops = [
             _slot_mark(len(slots) + int(op[len("{line-slot") : -1])) if op.startswith("{line-slot") else op
             for op in ops
@@ -487,7 +502,7 @@ def _place_lines(
 
 
 def _trailing_space(pieces: list[tuple[list[_Segment], int | None, float, str]]) -> float:
-    """一行末尾空白的宽度。行尾是公式槽时为 0。"""
+    """Width of the whitespace at the end of a line. 0 when the line ends with a formula slot."""
     width = 0.0
     for segments, slot, _width, _visible in reversed(pieces):
         if slot is not None:
@@ -502,7 +517,8 @@ def _trailing_space(pieces: list[tuple[list[_Segment], int | None, float, str]])
 
 
 def _slot_mark(number: int) -> str:
-    """公式槽在文字操作里的位置标记，单占一行，画的时候换成公式（见 draw_cjk_lines）。"""
+    """Position marker of a formula slot among the text operators, on a line of its own, replaced by the formula
+    when drawing (see draw_cjk_lines)."""
     return f"{{slot{number}}}"
 
 
@@ -526,8 +542,9 @@ def _place_line(
     ]
     | None
 ):
-    """一行的文本操作（基线 y 先写成 {Y}）、公式槽的横坐标，和要画下划线的几段（起止横坐标、字号、颜色）。
-    opened 是前面还开着的样式标记，读完这一行就地更新。color 是块的颜色，片段没有颜色时用它。"""
+    """Text operators of one line (with the baseline y written as {Y} for now), the x positions of formula slots,
+    and the underlined stretches (start and end x, size, color). opened are the style markers still open from
+    before, updated in place after reading the line. color is the block's color, used for pieces without one."""
     pieces: list[tuple[list[_Segment], int | None, float, str]] = []
     fonts: dict[str, pymupdf.Font] = {}
     carried = opened if opened is not None else []
@@ -553,12 +570,13 @@ def _place_line(
     if justify and slack > 0:
         extras = line_extras(texts, slack, em)
     elif -width * SQUEEZE * 2 <= slack < 0:
-        # 比盒子宽的行（压字距断的行、估的字宽偏窄的行）把多出的摊到字与字之间收回来
+        # A line wider than the box (broken with squeezed spacing, or with underestimated widths) takes the excess
+        # back from the gaps between characters
         extras = [-extra for extra in line_extras(texts, -slack, em)]
     else:
         extras = []
     cursor = x0
-    # 行尾的空格看不见，靠右、居中按最后一个字对齐
+    # Spaces at the line end are invisible, so right and center alignment use the last character
     inked = total - _trailing_space(pieces)
     if inked < width and align != "left":
         cursor += width - inked if align == "right" else (width - inked) / 2
@@ -578,7 +596,7 @@ def _place_line(
         piece_extras = extras[extra_at : extra_at + count]
         extra_at += count
         pos = 0
-        # 上一个字的起点、宽度和字，组合重音叠在它上面
+        # Origin, width and text of the previous character, over which a combining accent is drawn
         base: tuple[float, float, str] | None = None
         for seg in segments:
             n = len(seg.text)
@@ -603,7 +621,8 @@ def _place_line(
                 ops.append(f"{red:.4f} {green:.4f} {blue:.4f} rg")
                 ops.append(f"{red:.4f} {green:.4f} {blue:.4f} RG")
                 paint_now = seg.color
-            # 正文字体没有汉字粗体。填充再描边，字还是一个，复制出来不会变两个。
+            # The body font has no bold Chinese. Fill and stroke draw the character once, so copying does not
+            # produce it twice.
             if seg.bold:
                 ops.append("2 Tr")
                 ops.append(f"{max(seg.size * 0.045, 0.2):.2f} w")
@@ -613,7 +632,7 @@ def _place_line(
                 ops.append("0 Tr")
             advance = seg.width + sum(internal)
             if seg.underline and seg.text.strip():
-                # 接着上一段下划线画，词间拉开的空也画上
+                # Continue the previous underline, including the stretched space between words
                 if rules and abs(rules[-1][1] - cursor) < 0.5 and rules[-1][3] == seg.color:
                     rules[-1] = (rules[-1][0], cursor + advance, rules[-1][2], seg.color)
                 else:
@@ -625,7 +644,7 @@ def _place_line(
                 advance += piece_extras[pos - 1]
             cursor += advance
     if paint_now:
-        # 下一行从块的颜色开始
+        # The next line starts in the block's color
         red, green, blue = _rgb(color)
         ops.append(f"{red:.4f} {green:.4f} {blue:.4f} rg")
         ops.append(f"{red:.4f} {green:.4f} {blue:.4f} RG")
@@ -639,8 +658,8 @@ def _mark_ops(
     face_now: tuple[str, float] | None,
     paint_now: str,
 ) -> list[str]:
-    """组合重音画成独立重音，中线对着前一个字的中线。大写字母和带上伸部的字母上抬高一截，
-    斜体顺着字的斜度往右挪。"""
+    """Draw a combining accent as a spacing accent centered on the preceding character. It is raised over
+    capitals and letters with ascenders, and shifted right along the slant for italics."""
     x, width, char = base
     glyph = _MARK_GLYPHS[seg.text]
     gid = seg.font.has_glyph(ord(glyph))
@@ -672,7 +691,8 @@ def _draw_piece(
     fallback_text: dict[int, str],
     opened: str = "",
 ) -> tuple[list[_Segment], int | None] | None:
-    """文字片返回片段。公式图返回空片段和占位符序号。缺字返回 None。opened 是前面还开着的标记。"""
+    """A text piece returns its pieces; a formula image returns no pieces and the placeholder index. Returns None
+    when a character is missing. opened are the markers still open from before."""
     if isinstance(piece, FormulaPiece) and piece.index in image_indexes:
         return [], piece.index
     text = opened + piece.text if isinstance(piece, TextPiece) else fallback_text.get(piece.index, "")
@@ -683,7 +703,7 @@ def _draw_piece(
 
 
 def line_extras(texts: list[str | None], slack: float, em: float) -> list[float]:
-    """把整行的余量摊进各段文字。公式槽是原子，不在这里拆。"""
+    """Spread the line's slack over its text pieces. Formula slots are atoms and are not split here."""
     if em <= 0 or slack < em * _MIN_SLACK_EM:
         return []
     pairs = [(text[i], text[i + 1]) for text in texts if text and len(text) >= 2 for i in range(len(text) - 1)]
