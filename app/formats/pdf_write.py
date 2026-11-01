@@ -1,4 +1,5 @@
 """Erase the original text of each page and write the translations in its place."""
+
 import bisect
 import html
 import math
@@ -104,17 +105,25 @@ def _page_form(doc: "pymupdf.Document", page: "pymupdf.Page") -> int:
     供公式透传引用：资源沿用页面自己的，BBox 为整页。"""
     mb = page.mediabox
     fm = doc.get_new_xref()
-    doc.update_object(fm, (
-        f"<< /Type /XObject /Subtype /Form /BBox [{mb.x0} {mb.y0} {mb.x1} {mb.y1}] "
-        f"/Matrix [1 0 0 1 0 0] /Resources {doc.xref_get_key(page.xref, 'Resources')[1]} >>"
-    ))
+    doc.update_object(
+        fm,
+        (
+            f"<< /Type /XObject /Subtype /Form /BBox [{mb.x0} {mb.y0} {mb.x1} {mb.y1}] "
+            f"/Matrix [1 0 0 1 0 0] /Resources {doc.xref_get_key(page.xref, 'Resources')[1]} >>"
+        ),
+    )
     doc.update_stream(fm, page.read_contents())
     return fm
 
 
-def _place_formula_images(page: "pymupdf.Page", doc: "pymupdf.Document", before: set[int],
-                          mid_map: dict[int, dict], forms: "_FormulaSources | None" = None,
-                          page_spans: list[dict] | None = None):
+def _place_formula_images(
+    page: "pymupdf.Page",
+    doc: "pymupdf.Document",
+    before: set[int],
+    mid_map: dict[int, dict],
+    forms: "_FormulaSources | None" = None,
+    page_spans: list[dict] | None = None,
+):
     """把占位标记换成公式内容并校准基线。
 
     htmlbox 对 <img> 只做图片底部对齐，公式的 baseline 在图片内部（上下标在 baseline
@@ -130,9 +139,14 @@ def _place_formula_images(page: "pymupdf.Page", doc: "pymupdf.Document", before:
     draws = []
     # 渲染后的文本 span：htmlbox 对 img 只做底部对齐，且标记底边和文本 baseline 有
     # ~1pt 系统偏差，公式 baseline 直接锚到同一行文字的 origin 上最稳
-    text_spans = [s for blk in page.get_text("dict")["blocks"] if blk.get("type") == 0
-                  for ln in blk["lines"] for s in ln["spans"]
-                  if s["text"].strip() and s.get("origin")]
+    text_spans = [
+        s
+        for blk in page.get_text("dict")["blocks"]
+        if blk.get("type") == 0
+        for ln in blk["lines"]
+        for s in ln["spans"]
+        if s["text"].strip() and s.get("origin")
+    ]
     now = {img[0] for img in page.get_images(full=True)}
     for xref in now - before:
         pix = pymupdf.Pixmap(doc, xref)
@@ -190,7 +204,9 @@ def _row_neighbor(block: TextBlock, blocks: list[TextBlock], geo: PageGeometry |
     """本栏里同一行旁边还有别的块（表格的另一格）。页边的旁注、另一栏的正文不算"""
     column = geo.index_of(block.rect) if geo is not None and len(geo.columns) >= 2 else None
     return any(
-        other is not block and other.page == block.page and not other.side_note
+        other is not block
+        and other.page == block.page
+        and not other.side_note
         and (column is None or geo.index_of(other.rect) == column)
         and not (other.rect.x0 < block.rect.x1 and block.rect.x0 < other.rect.x1)
         and min(other.rect.y1, block.rect.y1) - max(other.rect.y0, block.rect.y0)
@@ -200,7 +216,9 @@ def _row_neighbor(block: TextBlock, blocks: list[TextBlock], geo: PageGeometry |
 
 
 def _wrap_holes(
-    block: TextBlock, obstacles: list["pymupdf.Rect"], area: "pymupdf.Rect | None" = None,
+    block: TextBlock,
+    obstacles: list["pymupdf.Rect"],
+    area: "pymupdf.Rect | None" = None,
 ) -> list["pymupdf.Rect"]:
     """原文绕着排开的图和图注。它们落在要写的范围里（默认是块的框）、贴着左缘或右缘，
     块里没有一行压上去，旁边至少有两行让开了。整块按一个框写，译文会盖到图上。"""
@@ -270,11 +288,20 @@ def _hang_indent(block: TextBlock) -> float:
 def _label_gap(block: TextBlock) -> float:
     """只有一行的条目：和正文同字号的题号单独一截，和后面的正文之间空出半个字以上（3.8 | Write a program …），
     正文比题号缩进多少点。不是这样排的返回 0"""
-    spans = sorted((span for line in block.span_lines or [] for span in line
-                    if str(span.get("text") or "").strip() and span.get("bbox") is not None),
-                   key=lambda span: float(span["bbox"][0]))
-    if len(spans) < 2 or not _HANG_NUMBER_RE.match(str(spans[0]["text"]).strip() + " ") and not _list_item(
-            str(spans[0]["text"]).strip() + " x"):
+    spans = sorted(
+        (
+            span
+            for line in block.span_lines or []
+            for span in line
+            if str(span.get("text") or "").strip() and span.get("bbox") is not None
+        ),
+        key=lambda span: float(span["bbox"][0]),
+    )
+    if (
+        len(spans) < 2
+        or not _HANG_NUMBER_RE.match(str(spans[0]["text"]).strip() + " ")
+        and not _list_item(str(spans[0]["text"]).strip() + " x")
+    ):
         return 0.0
     # 脚注的上标编号后面也空开一截，脚注的续行顶格
     if float(spans[0].get("size") or 0) < block.size * 0.9:
@@ -324,6 +351,7 @@ def _nowrap_parens(body: str) -> str:
     """短括号组包 nowrap span：MuPDF 的 CJK 换行可以在任意处断，会出现
     '（如\\n序列）' 这种断在括号中间的丑行，以及 '（y_1^{t-1}' 把右括号单独
     留在下一行。整组不拆（含公式图的组，括号跟着公式一起走），长组不包（防溢出）。"""
+
     def repl(m):
         inner = m.group(0)
         # 估算渲染宽度：<img> 按 3 个字符计，其余标签不计
@@ -331,6 +359,7 @@ def _nowrap_parens(body: str) -> str:
         if len(plain) <= 10:
             return f'<span style="white-space: nowrap">{inner}</span>'
         return inner
+
     return re.sub(r"（[^（）]+）|\([^()]+\)", repl, body)
 
 
@@ -352,10 +381,7 @@ def _translation_html(
             scale, width, height = _formula_slot(formula, block_size, render_size)
             formula["rs"] = scale
             # 槽位两侧各留 2pt：斜体字形会微微越出 bbox，紧贴排布时像被前后汉字压住
-            return (
-                f'<img src="ph_{formula["name"]}" '
-                f'style="width: {width:.1f}px; height: {height:.1f}px;">'
-            )
+            return f'<img src="ph_{formula["name"]}" style="width: {width:.1f}px; height: {height:.1f}px;">'
         return _inline_marks(html.escape(str(formula.get("text") or "")))
 
     def one(fragment: str) -> str:
@@ -364,10 +390,7 @@ def _translation_html(
 
     if "\x01i\x02" not in text:
         return _nowrap_parens(one(text).replace("\n", "<br>"))
-    widths = {
-        index: _formula_slot(formula, block_size, render_size)[1]
-        for index, formula in enumerate(formulas, 1)
-    }
+    widths = {index: _formula_slot(formula, block_size, render_size)[1] for index, formula in enumerate(formulas, 1)}
     return nowrap_lines([one(line) for line in break_lines(text, render_size, max_width, widths)])
 
 
@@ -496,8 +519,13 @@ def _beside_body(block: TextBlock, blocks: list[TextBlock]) -> TextBlock | None:
 
 
 def _index_reflow(
-    items: list[tuple[TextBlock, str]], blocks: list[TextBlock], geo: PageGeometry | None,
-    cjk: bool, formulas_map: dict[int, list[dict]], fixed: set[int], bottom: float,
+    items: list[tuple[TextBlock, str]],
+    blocks: list[TextBlock],
+    geo: PageGeometry | None,
+    cjk: bool,
+    formulas_map: dict[int, list[dict]],
+    fixed: set[int],
+    bottom: float,
     ink: Sequence[pymupdf.Rect] = (),
 ) -> dict[int, TextBlock]:
     """索引一栏里译文比原文多占行的条目，连同下面的条目按原文行距往下挪。
@@ -511,7 +539,8 @@ def _index_reflow(
     texts = {id(b): t for b, t in items if t != SPILL_TAIL}
     # 留原文的条目（BERT、CKY）也跟着挪，挪了就按原文重写
     texts.update(
-        (id(b), _source_marked(b)) for b in blocks
+        (id(b), _source_marked(b))
+        for b in blocks
         if b.index and id(b) not in texts and not any(_span_is_math(s) for line in b.span_lines for s in line)
     )
     moved: dict[int, TextBlock] = {}
@@ -524,15 +553,14 @@ def _index_reflow(
         segment: list[tuple[TextBlock, int, int]] = []
         x0, x1 = min(b.rect.x0 for b in column), max(b.rect.x1 for b in column)
         stops = [rect for rect in ink if x0 <= (rect.x0 + rect.x1) / 2 <= x1]
-        for b in sorted([*column, *stops], key=lambda item: item.y0 if isinstance(item, pymupdf.Rect) else item.rect.y0):
+        for b in sorted(
+            [*column, *stops], key=lambda item: item.y0 if isinstance(item, pymupdf.Rect) else item.rect.y0
+        ):
             if isinstance(b, pymupdf.Rect):
                 moved.update(_restack(segment, pitch, b.y0))
                 segment = []
                 continue
-            movable = (
-                b.index and id(b) in texts and id(b) not in fixed
-                and pitch < b.size * 2
-            )
+            movable = b.index and id(b) in texts and id(b) not in fixed and pitch < b.size * 2
             if movable:
                 rows = len(_visual_lines(b))
                 em = b.size * 0.88 if cjk else b.size
@@ -551,11 +579,15 @@ def _source_marked(block: TextBlock) -> str:
     """原文按 span 写出粗体、斜体标记。重写留原文的块时，粗体的页码照旧是粗体。"""
     spans = [s for line in block.span_lines for s in line]
     writer = writer_for(spans, block.size, _color_value(block.color))
-    return _join_lines([
-        "".join(writer.text(str(s["text"]), span_emphasis(s), float(s.get("size") or 0), s.get("color"))
-                for s in line) + writer.close()
-        for line in block.span_lines
-    ])
+    return _join_lines(
+        [
+            "".join(
+                writer.text(str(s["text"]), span_emphasis(s), float(s.get("size") or 0), s.get("color")) for s in line
+            )
+            + writer.close()
+            for line in block.span_lines
+        ]
+    )
 
 
 def _index_columns(blocks: list[TextBlock], geo: PageGeometry) -> list[tuple[list[TextBlock], float]]:
@@ -611,11 +643,13 @@ def _restack(segment: list[tuple[TextBlock, int, int]], pitch: float, limit: flo
             continue
         out[id(b)] = replace(
             b,
-            rect=pymupdf.Rect(b.rect.x0, b.rect.y0 + new_top - top, b.rect.x1,
-                              b.rect.y1 + new_top - top + grow * scale),
+            rect=pymupdf.Rect(
+                b.rect.x0, b.rect.y0 + new_top - top, b.rect.x1, b.rect.y1 + new_top - top + grow * scale
+            ),
             line_rects=[
-                pymupdf.Rect(rect.x0, new_top + (rect.y0 - top) * scale, rect.x1,
-                             new_top + (rect.y0 - top) * scale + rect.height)
+                pymupdf.Rect(
+                    rect.x0, new_top + (rect.y0 - top) * scale, rect.x1, new_top + (rect.y0 - top) * scale + rect.height
+                )
                 for rect in b.line_rects
             ],
         )
@@ -625,8 +659,11 @@ def _restack(segment: list[tuple[TextBlock, int, int]], pitch: float, limit: flo
 def _affiliation_write_rects(blocks: list[TextBlock]) -> dict[int, pymupdf.Rect]:
     """并排的作者单位改成逐行写下。中文比原文宽，并排写会叠在一起。"""
     marked = [
-        block for block in blocks
-        if block.clip is None and block.rect.height <= 32 and len(block.line_rects) <= 2
+        block
+        for block in blocks
+        if block.clip is None
+        and block.rect.height <= 32
+        and len(block.line_rects) <= 2
         and _AFFIL_MARK_RE.match(block.text.lstrip())
     ]
     used: set[int] = set()
@@ -663,20 +700,24 @@ def _affiliation_write_rects(blocks: list[TextBlock]) -> dict[int, pymupdf.Rect]
         left = min(item.rect.x0 for item in group)
         right = max(item.rect.x1 for item in group)
         members = {id(item) for item in group}
+
         def overlaps_row(other: TextBlock) -> bool:
             return other.rect.x1 > left - 2 and other.rect.x0 < right - 4
 
         above = [
-            other.rect.y1 for other in blocks
-            if other.page == block.page and id(other) not in members
-            and other.rect.y1 <= top + 1 and overlaps_row(other)
+            other.rect.y1
+            for other in blocks
+            if other.page == block.page
+            and id(other) not in members
+            and other.rect.y1 <= top + 1
+            and overlaps_row(other)
         ]
         if above:
             top = max(max(above) + 1, top - 8)
         below = [
-            other.rect.y0 for other in blocks
-            if other.page == block.page and id(other) not in members
-            and other.rect.y0 > top + 4 and overlaps_row(other)
+            other.rect.y0
+            for other in blocks
+            if other.page == block.page and id(other) not in members and other.rect.y0 > top + 4 and overlaps_row(other)
         ]
         floor = min(below) - 3 if below else top + 12 * len(group)
         slot = max(9.0, (floor - top) / len(group))
@@ -697,9 +738,12 @@ def _row_span(block: TextBlock, others: list[TextBlock], col_x0: float, col_x1: 
         return min(rect.y1, row.y1) - max(rect.y0, row.y0) > min(rect.height, row.height) * 0.5
 
     mates = [
-        other.rect for other in others
-        if other is not block and other.page == block.page
-        and col_x0 - 2 <= other.rect.x0 and other.rect.x1 <= col_x1 + 2
+        other.rect
+        for other in others
+        if other is not block
+        and other.page == block.page
+        and col_x0 - 2 <= other.rect.x0
+        and other.rect.x1 <= col_x1 + 2
         and any(same_row(other.rect, row) for row in rows)
     ]
     span = pymupdf.Rect(block.rect)
@@ -741,7 +785,8 @@ def _centered_axis(block: TextBlock, others: list[TextBlock]) -> float | None:
         return None
     widest = max(line.width for line in lines)
     short = sorted(
-        (line for line in lines if line.width < widest * 0.85), key=lambda line: (line.x0 + line.x1) / 2,
+        (line for line in lines if line.width < widest * 0.85),
+        key=lambda line: (line.x0 + line.x1) / 2,
     )
     if len(short) < 3:
         return None
@@ -789,8 +834,10 @@ def _write_rect(
         col_x0, col_x1 = column.x0, column.x1
         col_width = col_x1 - col_x0
         margin = col_x0, col_x1
-    elif geo is not None and geo.frame is not None and (
-        geo.frame.x0 - 2 <= block.rect.x0 and _inside_right(block, geo.frame.x1)
+    elif (
+        geo is not None
+        and geo.frame is not None
+        and (geo.frame.x0 - 2 <= block.rect.x0 and _inside_right(block, geo.frame.x1))
     ):
         col_x0, col_x1 = geo.frame.x0, geo.frame.x1
         col_width = col_x1 - col_x0
@@ -820,28 +867,50 @@ def _write_rect(
     col_mid = (col_x0 + col_x1) / 2
     span = _row_span(block, [other for other, _ in items], col_x0, col_x1)
     centered = (
-        not rtl and not block.index and len(block.text) < 100
+        not rtl
+        and not block.index
+        and len(block.text) < 100
         and not _left_aligned_stack(block, [other for other, _ in items])
         and (
-            (block.rect.width < col_width * 0.85 and block.rect.x0 > col_x0 + 2
-             and abs((block.rect.x0 + block.rect.x1) / 2 - col_mid) < 15 and abs((span.x0 + span.x1) / 2 - col_mid) < 15)
+            (
+                block.rect.width < col_width * 0.85
+                and block.rect.x0 > col_x0 + 2
+                and abs((block.rect.x0 + block.rect.x1) / 2 - col_mid) < 15
+                and abs((span.x0 + span.x1) / 2 - col_mid) < 15
+            )
             or on_page_mid
         )
         and not _MARK_ITEM_RE.match(block.text)
     )
     right = (
-        margin is not None and not centered and not rtl
+        margin is not None
+        and not centered
+        and not rtl
         and _flush_right(block, [other for other, _ in items], geo.figures if geo is not None else (), *margin)
     )
     axis = None
     # 几行都对着本页中线、字号一样的长副标题也是居中排的。正文段的末行短，对不上中线；
     # 作者名下面接着小一号的单位，各行另有排法
-    long_title = len(block.line_rects) >= 2 and len({
-        round(span.get("size", block.size))
-        for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()
-    }) == 1
-    if (not centered and not right and not rtl and not block.index and (len(block.text) < 100 or long_title)
-            and not _MARK_ITEM_RE.match(block.text)):
+    long_title = (
+        len(block.line_rects) >= 2
+        and len(
+            {
+                round(span.get("size", block.size))
+                for line in block.span_lines or []
+                for span in line
+                if str(span.get("text") or "").strip()
+            }
+        )
+        == 1
+    )
+    if (
+        not centered
+        and not right
+        and not rtl
+        and not block.index
+        and (len(block.text) < 100 or long_title)
+        and not _MARK_ITEM_RE.match(block.text)
+    ):
         axis = _centered_axis(block, [other for other, _ in items])
     if axis is not None:
         # 页面左右边距不对称时版心和最宽块都不在这条中线上，按中线到本页文字两侧的距离留宽
@@ -856,10 +925,14 @@ def _write_rect(
     elif centered:
         rect = pymupdf.Rect(col_x0, y0, col_x1, block.rect.y1 + pad)
     elif right:
-        return _clip_write_rect(pymupdf.Rect(block.rect.x0, y0, block.rect.x1, block.rect.y1 + pad), block.clip), "right"
+        return _clip_write_rect(
+            pymupdf.Rect(block.rect.x0, y0, block.rect.x1, block.rect.y1 + pad), block.clip
+        ), "right"
     else:
         # 伸进页边的那几行不算，译文照栏或版心的右缘断行。旁注另成一栏时，正文栏的右缘也会被这几行撑出去
-        edges = [edge for edge in (margin[1] if margin is not None else None, _frame_x1(block, geo)) if edge is not None]
+        edges = [
+            edge for edge in (margin[1] if margin is not None else None, _frame_x1(block, geo)) if edge is not None
+        ]
         x1 = min(edges) if edges and block.rect.x1 > min(edges) + 2 else block.rect.x1
         rect = pymupdf.Rect(block.rect.x0, y0, x1 + 2, block.rect.y1 + pad)
     return _clip_write_rect(rect, block.clip), "center" if centered else "left"
@@ -884,7 +957,11 @@ def _frame_x1(block: TextBlock, geo: PageGeometry | None) -> float | None:
 
 
 def _flush_right(
-    block: TextBlock, others: list[TextBlock], figures: tuple[pymupdf.Rect, ...], col_x0: float, col_x1: float,
+    block: TextBlock,
+    others: list[TextBlock],
+    figures: tuple[pymupdf.Rect, ...],
+    col_x0: float,
+    col_x1: float,
 ) -> bool:
     """靠右排的块：章首的引语、署名。每行都收在栏的右缘，左缘离栏的左缘有栏宽的四分之一以上。
     TeX 排的署名末尾常带着一个词间空格，斜体还有倾斜补偿，字的右缘会比栏的右缘短半个字宽左右。
@@ -907,8 +984,7 @@ def _flush_right(
         return False
     other_rows = [row for other in near for row in other.line_rects or [other.rect]]
     if any(
-        abs(row.x0 - block.rect.x0) <= 1
-        and max(row.y0 - block.rect.y1, block.rect.y0 - row.y1) < block.size * 2
+        abs(row.x0 - block.rect.x0) <= 1 and max(row.y0 - block.rect.y1, block.rect.y0 - row.y1) < block.size * 2
         for row in other_rows
     ):
         return False
@@ -921,7 +997,8 @@ def _flush_right(
 
 
 def _clip_write_rect(
-    rect: pymupdf.Rect, clip: tuple[float, float, float, float] | None,
+    rect: pymupdf.Rect,
+    clip: tuple[float, float, float, float] | None,
 ) -> pymupdf.Rect:
     """格子左右是硬边界。上下保留行框高度。
 
@@ -942,7 +1019,10 @@ def _clip_write_rect(
 
 
 def _write_limit(
-    block: TextBlock, rect: pymupdf.Rect, geo: PageGeometry | None, obstacles: list[pymupdf.Rect],
+    block: TextBlock,
+    rect: pymupdf.Rect,
+    geo: PageGeometry | None,
+    obstacles: list[pymupdf.Rect],
 ) -> float | None:
     limit = geo.right_limit(rect, obstacles) if geo is not None else None
     frame_x1 = _frame_x1(block, geo)
@@ -968,15 +1048,15 @@ class _Carry:
 
 
 def _page_content_bottom(
-    blocks: list[TextBlock], page: int, height: float, ink: Sequence[pymupdf.Rect] = (),
+    blocks: list[TextBlock],
+    page: int,
+    height: float,
+    ink: Sequence[pymupdf.Rect] = (),
 ) -> float:
     """这一页原文正文的下沿。页码带里的块不算，译文不写进这条线以下。
     ink 是算在正文里、留在原处的字和图框（见 _body_ink）"""
     floor = content_floor(height)
-    bottoms = [
-        block.rect.y1 for block in blocks
-        if block.page == page and block.rect.y0 < floor - 4
-    ]
+    bottoms = [block.rect.y1 for block in blocks if block.page == page and block.rect.y0 < floor - 4]
     bottoms += [rect.y1 for rect in ink if rect.y0 < floor - 4]
     if not bottoms:
         return floor
@@ -1005,7 +1085,11 @@ def _keeps_line_pad(block: TextBlock) -> bool:
 
 
 def _fit_page_margins(
-    block: TextBlock, rect: pymupdf.Rect, blocks: list[TextBlock], height: float, cjk: bool,
+    block: TextBlock,
+    rect: pymupdf.Rect,
+    blocks: list[TextBlock],
+    height: float,
+    cjk: bool,
     ink: Sequence[pymupdf.Rect] = (),
 ) -> pymupdf.Rect:
     """页首对齐原文上沿，正文不写进原文下沿以下。格子下沿不裁，避免表内字号被单独缩小。
@@ -1019,11 +1103,7 @@ def _fit_page_margins(
         y0 = max(0.0, y0 - shift)
         y1 -= shift
     floor = content_floor(height)
-    if (
-        block.clip is None
-        and block.rect.y0 < floor - 4
-        and not (cjk and _keeps_line_pad(block))
-    ):
+    if block.clip is None and block.rect.y0 < floor - 4 and not (cjk and _keeps_line_pad(block)):
         bottom = _page_content_bottom(blocks, block.page, height, ink)
         if block.rect.y0 < bottom - 4:
             y1 = min(y1, bottom)
@@ -1065,7 +1145,9 @@ def _body_ink(page: "pymupdf.Page", kept: list[pymupdf.Rect], marks: list[pymupd
 
 
 def _beside_rows(
-    obstacles: list[pymupdf.Rect], rect: pymupdf.Rect, rows: Sequence[pymupdf.Rect],
+    obstacles: list[pymupdf.Rect],
+    rect: pymupdf.Rect,
+    rows: Sequence[pymupdf.Rect],
 ) -> list[pymupdf.Rect]:
     """右扩时挡路的障碍：和原文某一行并排的才算。写入框比原文的行上下多出留白，
     上一行、下一行的框会探进这几点，不在旁边（索引里缩进的子条目压着上一条的下沿）。
@@ -1078,7 +1160,8 @@ def _beside_rows(
     if top - rect.y0 > pitch * 0.5:
         bands.append(pymupdf.Rect(rect.x0, rect.y0, rect.x1, top))
     return [
-        ob for ob in obstacles
+        ob
+        for ob in obstacles
         if any(min(ob.y1, band.y1) - max(ob.y0, band.y0) > min(ob.height, band.height) * 0.5 for band in bands)
         or not (ob.y0 < rect.y1 and ob.y1 > rect.y0)
     ]
@@ -1104,7 +1187,8 @@ def _on_rows(ink: pymupdf.Rect, rows: Sequence[pymupdf.Rect]) -> bool:
 def _drawn_marks(page: "pymupdf.Page") -> list[pymupdf.Rect]:
     """页上画出来的线、框、色块和图片。只填白色的块看不见，不算。"""
     marks = [
-        pymupdf.Rect(path["rect"]) for path in visible_drawings(page)
+        pymupdf.Rect(path["rect"])
+        for path in visible_drawings(page)
         if path.get("color") is not None or tuple(path.get("fill") or ()) != (1, 1, 1)
     ]
     marks.extend(pymupdf.Rect(info["bbox"]) for info in page.get_image_info())
@@ -1112,7 +1196,9 @@ def _drawn_marks(page: "pymupdf.Page") -> list[pymupdf.Rect]:
 
 
 def _indented_start(
-    block: TextBlock, tail: TextBlock, geometries: list[PageGeometry] | None,
+    block: TextBlock,
+    tail: TextBlock,
+    geometries: list[PageGeometry] | None,
 ) -> float | None:
     """只有段首缩进的一行留在本页（栏），段落接到下一页：本栏的左缘。
     续块从它那一栏的左缘起笔才是正文段落，译文和别的段落一样从栏左缘写，不留缩进。
@@ -1147,8 +1233,15 @@ def _indent_edge(block: TextBlock, geo: PageGeometry | None, indent: float | Non
 
 
 def _room_below(
-    page: "pymupdf.Page", block: TextBlock, y0: float, x0: float, x1: float, blocks: list[TextBlock],
-    kept: Sequence[pymupdf.Rect] = (), marks: Sequence[pymupdf.Rect] = (), body: Sequence[pymupdf.Rect] = (),
+    page: "pymupdf.Page",
+    block: TextBlock,
+    y0: float,
+    x0: float,
+    x1: float,
+    blocks: list[TextBlock],
+    kept: Sequence[pymupdf.Rect] = (),
+    marks: Sequence[pymupdf.Rect] = (),
+    body: Sequence[pymupdf.Rect] = (),
 ) -> float:
     """这一栏往下还能写到哪里。停在页码带上面，也停在后面的脚注或其他块前面。
 
@@ -1185,8 +1278,16 @@ def _room_below(
 
 
 def _split_filled_lines(
-    text: str, formulas: list[dict], em: float, block_size: float, width: float, cjk: bool,
-    y0: float, limit: float, page_bottom: float | None = None, next_room: float = 0.0,
+    text: str,
+    formulas: list[dict],
+    em: float,
+    block_size: float,
+    width: float,
+    cjk: bool,
+    y0: float,
+    limit: float,
+    page_bottom: float | None = None,
+    next_room: float = 0.0,
 ) -> tuple[str, str]:
     """按满行切开。这一页放得下几行整行，就留几行；剩下的从下一页继续。
 
@@ -1254,15 +1355,18 @@ def _after_first_line(source: str, head: str) -> str:
     if not head:
         return source
     if source.startswith(head):
-        return source[len(head):].lstrip(" \t")
+        return source[len(head) :].lstrip(" \t")
     body = _TRAILING_CLOSERS_RE.sub("", head)
     if not body or not source.startswith(body):
         return source
-    return balance_marks(body, source[len(body):].lstrip(" \t"))[1]
+    return balance_marks(body, source[len(body) :].lstrip(" \t"))[1]
 
 
 def _split_own_lines(
-    text: str, formulas: list[dict], em: float, block_size: float,
+    text: str,
+    formulas: list[dict],
+    em: float,
+    block_size: float,
     host_width: float,
 ) -> tuple[str, str]:
     """第一行按半句的宽度断，剩下的不断行，写入时按续行自己的框再断。
@@ -1285,19 +1389,24 @@ def _split_own_lines(
     # 后面的行比这里宽，这个词整个留给续行
     shown = STYLE_MARK_RE.sub("", raw[0]).rstrip()
     visible = STYLE_MARK_RE.sub("", prepared)
-    joint = visible[len(shown) - 1:len(shown) + 1] if shown and visible.startswith(shown) else ""
+    joint = visible[len(shown) - 1 : len(shown) + 1] if shown and visible.startswith(shown) else ""
     if not shown or len(joint) == 2 and all(ch.isascii() and ch.isalnum() for ch in joint):
         return "", prepared
     return raw[0], rest
 
 
-def _render_translated(src_path: Path, blocks: list[TextBlock], translations: list[str],
-                       target_lang: str = "", formulas_map: dict | None = None,
-                       archive=None,
-                       geometries: list[PageGeometry] | None = None,
-                       continuations: dict[int, TextBlock] | None = None,
-                       on_page: Callable[[int, int], None] | None = None,
-                       pages: Collection[int] | None = None) -> pymupdf.Document:
+def _render_translated(
+    src_path: Path,
+    blocks: list[TextBlock],
+    translations: list[str],
+    target_lang: str = "",
+    formulas_map: dict | None = None,
+    archive=None,
+    geometries: list[PageGeometry] | None = None,
+    continuations: dict[int, TextBlock] | None = None,
+    on_page: Callable[[int, int], None] | None = None,
+    pages: Collection[int] | None = None,
+) -> pymupdf.Document:
     """on_page(已写页数, 要写的页数) 在每写一页之前调用。pages 给出时只写这些页。"""
     rtl = target_lang.split("-")[0] in RTL_LANGUAGES
     # CJK 字体的行框比拉丁高（约 1.31em vs 1.16em），且字形顶部会越出给定区域：
@@ -1335,8 +1444,15 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         return body_inks[pno][1]
 
     def page_flow(
-        pno: int, items: list[tuple[TextBlock, str]], kept: list[pymupdf.Rect], marks: list[pymupdf.Rect],
-        written_ids: set[int], stacked: dict, reflowed: dict, shared_head: dict, hosts: bool = True,
+        pno: int,
+        items: list[tuple[TextBlock, str]],
+        kept: list[pymupdf.Rect],
+        marks: list[pymupdf.Rect],
+        written_ids: set[int],
+        stacked: dict,
+        reflowed: dict,
+        shared_head: dict,
+        hosts: bool = True,
     ) -> tuple[Callable, Callable, Callable, Callable]:
         """第 pno 页的 spare_below、next_movable、latest_start、movable_box。写这一页的时候用；写上一页的跨页段落时也用它估续块能借到多少，
         那时这一页还没擦，items 是要写的块，kept、marks 按没擦的页认，没有写过的块。
@@ -1356,10 +1472,18 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             别的写法返回 None"""
             text = texts.get(id(block))
             if (
-                text is None or text == SPILL_TAIL or block.index or block.clip is not None or block.side_note
-                or id(block) in continuations or id(block) in stacked or id(block) in shared_head
-                or id(block) in reflowed or _inset_write_boxes(block, cjk) is not None
-                or _beside_body(block, same_page) is not None or _row_neighbor(block, same_page, geo)
+                text is None
+                or text == SPILL_TAIL
+                or block.index
+                or block.clip is not None
+                or block.side_note
+                or id(block) in continuations
+                or id(block) in stacked
+                or id(block) in shared_head
+                or id(block) in reflowed
+                or _inset_write_boxes(block, cjk) is not None
+                or _beside_body(block, same_page) is not None
+                or _row_neighbor(block, same_page, geo)
             ):
                 return None
             rect, align = _write_rect(block, visible, cjk, rtl, geo)
@@ -1373,8 +1497,10 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         def next_movable(block: TextBlock, rect: pymupdf.Rect, room: float) -> tuple[TextBlock, pymupdf.Rect] | None:
             """room 停在下面紧挨着的一段上，那一段还没写、按普通段落写、能跟着上下挪时，返回它和它的框"""
             below = [
-                other for other in same_page
-                if other is not block and other.rect.y0 > rect.y0 + 1
+                other
+                for other in same_page
+                if other is not block
+                and other.rect.y0 > rect.y0 + 1
                 and not (other.rect.x1 < rect.x0 + 4 or other.rect.x0 > rect.x1 - 4)
             ]
             nearest = min(below, key=lambda other: other.rect.y0, default=None)
@@ -1397,17 +1523,22 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
 
         def pinned(block: TextBlock, box: pymupdf.Rect, above: TextBlock | None) -> bool:
             """这一段的框里有不跟着它挪的东西"""
+
             # 行内公式按译文里的占位贴，跟着段落走。留在原处的字（丢掉的行间公式、式号）和图框、
             # 框里并排的别的块（Airlines-Wagner）不跟着段落挪，那一段挪了就压上了。
             # 从上面伸进顶上一截的（公式框）往上提时按 lift_limit 让开；
             # 下面一段的框和这一段底下叠着一截，它跟着往下挪，由 room 管
             def fixed(ink: pymupdf.Rect, other: TextBlock | None = None) -> bool:
-                if not (ink.y0 < block.rect.y1 - 1 and ink.y1 > block.rect.y0 + 1 and ink.x0 < box.x1 and ink.x1 > box.x0):
+                if not (
+                    ink.y0 < block.rect.y1 - 1 and ink.y1 > block.rect.y0 + 1 and ink.x0 < box.x1 and ink.x1 > box.x0
+                ):
                     return False
                 if ink.y0 < block.rect.y0 - 1 and ink.y1 < block.rect.y1 - 1:
                     return False
                 return not (
-                    other is not None and ink.y0 > block.rect.y0 + 1 and ink.y1 > block.rect.y1 + 1
+                    other is not None
+                    and ink.y0 > block.rect.y0 + 1
+                    and ink.y1 > block.rect.y1 + 1
                     and min(ink.x1, box.x1) - max(ink.x0, box.x0) > box.width * 0.5
                 )
 
@@ -1421,10 +1552,18 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             text = texts.get(id(block))
             tail = continuations.get(id(block))
             if (
-                text is None or text == SPILL_TAIL or tail is None or block.index or block.clip is not None
-                or block.side_note or id(block) in stacked or id(block) in shared_head or id(block) in reflowed
+                text is None
+                or text == SPILL_TAIL
+                or tail is None
+                or block.index
+                or block.clip is not None
+                or block.side_note
+                or id(block) in stacked
+                or id(block) in shared_head
+                or id(block) in reflowed
                 or (block.body_size and abs(block.size - block.body_size) > 0.5)
-                or _inset_write_boxes(block, cjk) is not None or _beside_body(block, same_page) is not None
+                or _inset_write_boxes(block, cjk) is not None
+                or _beside_body(block, same_page) is not None
             ):
                 return None
             rect, align = _write_rect(block, visible, cjk, rtl, geo)
@@ -1445,14 +1584,28 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             formulas = (formulas_map or {}).get(id(block), [])
             room = _room_below(page, block, box.y0, box.x0, box.x1, same_page, kept, marks, body_ink(block.page))
             floor = _fit_page_margins(
-                block, pymupdf.Rect(box.x0, box.y0, box.x1, bounds.y1), same_page, bounds.height, cjk, body_ink(block.page),
+                block,
+                pymupdf.Rect(box.x0, box.y0, box.x1, bounds.y1),
+                same_page,
+                bounds.height,
+                cjk,
+                body_ink(block.page),
             ).y1
             next_room = tail_room(continuations[id(block)], box.width, size)
             bottom = min(room + (gap - 1) * size, floor)
 
             def fits(y0: float) -> bool:
                 head, rest = _split_filled_lines(
-                    texts[id(block)], formulas, size, block.size, box.width, cjk, y0, room, floor, next_room,
+                    texts[id(block)],
+                    formulas,
+                    size,
+                    block.size,
+                    box.width,
+                    cjk,
+                    y0,
+                    room,
+                    floor,
+                    next_room,
                 )
                 if not head or y0 + (head.count("\n") + 1) * size * gap + size * 0.3 > bottom + 1:
                     return False
@@ -1549,7 +1702,15 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 page_inks[pno] = _kept_ink(later_page, same), _drawn_marks(later_page)
             kept, marks = page_inks[pno]
             later_flows[pno] = page_flow(
-                pno, by_page[pno], kept, marks, set(), _affiliation_write_rects(same), {}, {}, False,
+                pno,
+                by_page[pno],
+                kept,
+                marks,
+                set(),
+                _affiliation_write_rects(same),
+                {},
+                {},
+                False,
             )
         return later_flows[pno]
 
@@ -1563,8 +1724,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         kept, marks = page_inks[tail.page]
         x0, x1 = tail.rect.x0, tail.rect.x0 + width
         if any(
-            tail.rect.x1 - 2 <= ob.x0 < x1 - 4
-            and min(ob.y1, tail.rect.y1) - max(ob.y0, tail.rect.y0) > tail.size * 0.5
+            tail.rect.x1 - 2 <= ob.x0 < x1 - 4 and min(ob.y1, tail.rect.y1) - max(ob.y0, tail.rect.y0) > tail.size * 0.5
             for ob in (*marks, *(other.rect for other in same if other is not tail))
         ):
             return 0.0
@@ -1597,7 +1757,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             return None
         head = body[0]
         if any(
-            other is not head and other.rect.y1 <= head.rect.y0 + 1
+            other is not head
+            and other.rect.y1 <= head.rect.y0 + 1
             and min(other.rect.x1, head.rect.x1) - max(other.rect.x0, head.rect.x0) > 8
             for other, _ in later
         ):
@@ -1624,8 +1785,7 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         items = _hosts_first(items, continuations)
         visible = [(b, t) for b, t in items if t != SPILL_TAIL]
         geo = geometries[pno] if geometries and pno < len(geometries) else None
-        mid_map = {f["mid"]: f for b, _ in visible for f in (formulas_map or {}).get(id(b), [])
-                   if "mid" in f}
+        mid_map = {f["mid"]: f for b, _ in visible for f in (formulas_map or {}).get(id(b), []) if "mid" in f}
         # redact 之前把整页打包成 Form：公式透传从它里面裁剪原 glyph；
         # 同时收集页面全部 span（检测上标区域被上一行降部侵入的污染）。
         # 没有 Unicode 的点阵字报的是字体框，比墨迹高出半行，拿来挖洞会把公式自己挖掉，不参与
@@ -1634,11 +1794,21 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         if mid_map:
             page_data = page.get_text("dict")
             _attach_ink(page, page_data)
-            page_spans = [s for blk in page_data["blocks"] if blk.get("type") == 0
-                          for ln in blk["lines"] for s in ln["spans"] if s.get("font") not in bitmap_fonts]
+            page_spans = [
+                s
+                for blk in page_data["blocks"]
+                if blk.get("type") == 0
+                for ln in blk["lines"]
+                for s in ln["spans"]
+                if s.get("font") not in bitmap_fonts
+            ]
             # 公式的字从正文 span 里切出来时，裁公式要按字认，擦了就查不到了
-            if any(span.get("source") for f in mid_map.values() for part in _formula_parts(f)
-                   for span in part.get("spans") or []):
+            if any(
+                span.get("source")
+                for f in mid_map.values()
+                for part in _formula_parts(f)
+                for span in part.get("spans") or []
+            ):
                 _attach_chars(page, page_spans)
         forms = _FormulaSources(doc, page, _page_form(doc, page), mid_map.values()) if mid_map else None
         # 公式贴的是擦除前打包的原页，不受影响。点阵字的字形是全文共用的，擦除、裁公式的过滤会改到它，
@@ -1647,15 +1817,26 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         stacked = _affiliation_write_rects(same_page)
         fixed = {*stacked, *continuations, *(id(tail) for tail in continuations.values())}
         reflowed = _index_reflow(
-            items, same_page, geo, cjk, formulas_map or {}, fixed,
+            items,
+            same_page,
+            geo,
+            cjk,
+            formulas_map or {},
+            fixed,
             _page_content_bottom(same_page, pno, bounds.height),
             _kept_ink(page, same_page) if any(b.index for b in same_page) else (),
         )
         # 挪过的索引条目，别的块右扩、绕排时按挪过的位置让开
         layout = [reflowed.get(id(ob), ob) for ob in same_page]
         written = {id(b) for b, _ in items}
-        items = [*items, *((b, _with_source_bold(b, _source_marked(b))) for b in same_page
-                           if id(b) in reflowed and id(b) not in written)]
+        items = [
+            *items,
+            *(
+                (b, _with_source_bold(b, _source_marked(b)))
+                for b in same_page
+                if id(b) in reflowed and id(b) not in written
+            ),
+        ]
         erasure = Erasure(math=_span_is_math)
         for b, _ in items:
             erasure.add_block(b.span_lines, b.line_rects or [b.rect])
@@ -1709,10 +1890,15 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             return _fit_page_margins(block, box, same_page, bounds.height, cjk, body_ink(block.page)).y1
 
         def write_one(
-            block: TextBlock, text: str, rect: pymupdf.Rect, align: str,
-            formulas: list[dict] | None = None, justify_last: bool = False,
+            block: TextBlock,
+            text: str,
+            rect: pymupdf.Rect,
+            align: str,
+            formulas: list[dict] | None = None,
+            justify_last: bool = False,
             # source：block 是挪过位置的副本（索引条目）时的原块，阅读顺序的标记放在原块上
-            x_cap: float | None = None, source: TextBlock | None = None,
+            x_cap: float | None = None,
+            source: TextBlock | None = None,
             # 续写的后半按上一块的字号写（见 _Carry）
             block_size: float | None = None,
             # 往下挪的起笔、往下伸到哪里，见 _fit_typeset
@@ -1749,8 +1935,11 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             # 跨页接过来的半段按上一页的栏宽写，要让开的图可能在块的框外面
             holes = _wrap_holes(block, obstacles, rect | block.rect)
             # 题号、圆点顶格的条目，正文照原文对齐在题号右边的一列。续写的后半、挪过位置的副本不按原块的行算
-            hang = (_hang_indent(block) if align == "left" and source is None and formulas is None
-                    and abs(rect.x0 - block.rect.x0) <= 1 else 0.0)
+            hang = (
+                _hang_indent(block)
+                if align == "left" and source is None and formulas is None and abs(rect.x0 - block.rect.x0) <= 1
+                else 0.0
+            )
             first_room = None if pushed else _first_row_room(block, rect)
             # 从右往左仍交给 HTML 盒子。其余段落由排版器断行：有公式图时按行落位，
             # 没有公式图时写进一个锁住换行的盒子，避免一行嵌一次整套字体。
@@ -1764,16 +1953,57 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 _insert_fitting(page, rect, f"<div{div_attrs}>{body}</div>", css, beside, archive, limit)
             elif any(f.get("has_img") for f in bformulas):
                 end = _place_typeset(
-                    page, doc, block_size, text, bformulas, rect, size, cjk, align, div_attrs,
-                    block.color, weight, beside, limit, forms, page_spans, deferred_png,
-                    justify_last, holes, first_room, lower, room, left_limit, lent, hang,
+                    page,
+                    doc,
+                    block_size,
+                    text,
+                    bformulas,
+                    rect,
+                    size,
+                    cjk,
+                    align,
+                    div_attrs,
+                    block.color,
+                    weight,
+                    beside,
+                    limit,
+                    forms,
+                    page_spans,
+                    deferred_png,
+                    justify_last,
+                    holes,
+                    first_room,
+                    lower,
+                    room,
+                    left_limit,
+                    lent,
+                    hang,
                 )
                 ends[id(source or block)] = (source or block, end, size)
             else:
                 end = _place_plain(
-                    page, text, bformulas, rect, size, block_size, cjk, align, div_attrs,
-                    block.color, weight, beside, limit, archive, justify_last, holes, first_room, lower, room,
-                    left_limit, lent, hang,
+                    page,
+                    text,
+                    bformulas,
+                    rect,
+                    size,
+                    block_size,
+                    cjk,
+                    align,
+                    div_attrs,
+                    block.color,
+                    weight,
+                    beside,
+                    limit,
+                    archive,
+                    justify_last,
+                    holes,
+                    first_room,
+                    lower,
+                    room,
+                    left_limit,
+                    lent,
+                    hang,
                 )
                 if end is not None:
                     ends[id(source or block)] = (source or block, end, size)
@@ -1803,14 +2033,19 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             pending = {id(other) for other, _ in items} - reached
             bottoms = []
             for other in same_page:
-                if (other is block or other.rect.y0 > block.rect.y0 - 1
-                        or other.rect.x1 < rect.x0 + 4 or other.rect.x0 > rect.x1 - 4):
+                if (
+                    other is block
+                    or other.rect.y0 > block.rect.y0 - 1
+                    or other.rect.x1 < rect.x0 + 4
+                    or other.rect.x0 > rect.x1 - 4
+                ):
                     continue
                 if id(other) in pending:
                     return None
                 bottoms.append(ends[id(other)][1] if id(other) in ends else other.rect.y1)
             bottoms += [
-                ink.y1 for ink in (*kept, *marks)
+                ink.y1
+                for ink in (*kept, *marks)
                 if ink.y0 < block.rect.y0 - 1 and ink.x1 > rect.x0 + 4 and ink.x0 < rect.x1 - 4
             ]
             if not bottoms:
@@ -1825,8 +2060,10 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             if room is None:
                 return None
             above = [
-                (end, size) for other, end, size in ends.values()
-                if not other.index and _closes_clause(other.text)
+                (end, size)
+                for other, end, size in ends.values()
+                if not other.index
+                and _closes_clause(other.text)
                 and other.rect.y1 <= block.rect.y0 + 2
                 and block.rect.y0 - other.rect.y1 < block.size * 1.5
                 and min(other.rect.x1, block.rect.x1) - max(other.rect.x0, block.rect.x0) > block.size * 2
@@ -1853,12 +2090,23 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             host_box = _own_line_box(b, cjk)
             tail_box = _own_line_box(tail, cjk)
             head, rest = _split_own_lines(
-                t, bformulas, size, b.size, host_box.width,
+                t,
+                bformulas,
+                size,
+                b.size,
+                host_box.width,
             )
             shared_head[id(b)] = (head, host_box, bformulas, bool(rest.strip()))
             carried[id(tail)] = _Carry(rest, bformulas, tail_box.width, b.size, True)
         spare_below, next_movable, latest_start, movable_box = page_flow(
-            pno, items, kept, marks, written_ids, stacked, reflowed, shared_head,
+            pno,
+            items,
+            kept,
+            marks,
+            written_ids,
+            stacked,
+            reflowed,
+            shared_head,
         )
         # 能挪的一段紧挨着上面哪一段写（见 next_movable），和它自己的框
         follows: dict[int, tuple[TextBlock, pymupdf.Rect]] = {}
@@ -1866,18 +2114,25 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
         reached: set[int] = set()
 
         def spill_last_lines(
-            block: TextBlock, text: str, rect: pymupdf.Rect, align: str, room: float, pushed: bool,
+            block: TextBlock,
+            text: str,
+            rect: pymupdf.Rect,
+            align: str,
+            room: float,
+            pushed: bool,
         ) -> bool:
             """这一段是这一页最后一段正文，照正常行距放不下、上下都没有空：留在这一页的行照正常行距写，
             余下的接到下一页页首（见 spill_target）。余下的行里有行内公式时不接，公式图只贴在本页"""
             index = next(i for i, (other, _) in enumerate(items) if other is block)
             if any(
                 t != SPILL_TAIL and not (other.body_size and abs(other.size - other.body_size) > 0.5)
-                for other, t in items[index + 1:]
+                for other, t in items[index + 1 :]
             ) or any(
-                other.rect.y0 > block.rect.y0 + 1 and min(other.rect.x1, rect.x1) - max(other.rect.x0, rect.x0) > 8
+                other.rect.y0 > block.rect.y0 + 1
+                and min(other.rect.x1, rect.x1) - max(other.rect.x0, rect.x0) > 8
                 and not (other.body_size and abs(other.size - other.body_size) > 0.5)
-                for other in same_page if other is not block
+                for other in same_page
+                if other is not block
             ):
                 return False
             size = block.size * 0.88 if cjk else block.size
@@ -1888,19 +2143,37 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             bformulas = (formulas_map or {}).get(id(block), [])
             floor = write_floor(block, rect)
             head, rest = _split_filled_lines(
-                text, bformulas, size, block.size, rect.width, cjk, rect.y0, room, floor, next_room,
+                text,
+                bformulas,
+                size,
+                block.size,
+                rect.width,
+                cjk,
+                rect.y0,
+                room,
+                floor,
+                next_room,
             )
             gap = 1.45 if cjk else 1.2
             lines = head.count("\n") + 1
             if (
-                not head or not rest or "\x01" in rest
+                not head
+                or not rest
+                or "\x01" in rest
                 or rect.y0 + lines * size * gap + size * 0.3 > min(room + (gap - 1) * size, floor) + 1
                 or (rest.count("\n") + 1) * size * gap + size * 0.3 > next_room + (gap - 1) * size + 1
             ):
                 return False
             bottom = _filled_bottom(rect.y0, lines, size, cjk, room, floor)
-            write_one(block, head, pymupdf.Rect(rect.x0, rect.y0, rect.x1, max(bottom, rect.y0 + 4)), align,
-                      bformulas, True, pushed=pushed)
+            write_one(
+                block,
+                head,
+                pymupdf.Rect(rect.x0, rect.y0, rect.x1, max(bottom, rect.y0 + 4)),
+                align,
+                bformulas,
+                True,
+                pushed=pushed,
+            )
             spilled[id(head_block)] = (box, _Carry(rest, bformulas, rect.width, block.size))
             return True
 
@@ -1915,15 +2188,26 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     write_one(b, carry.text, box, "left", carry.formulas, False, box.x1, block_size=carry.size)
                     continue
                 rect, align = _write_rect(b, visible or [(b, carry.text)], cjk, rtl, geo)
-                room = _room_below(page, b, rect.y0, rect.x0, rect.x0 + carry.width, same_page, kept, marks, body_ink(b.page))
+                room = _room_below(
+                    page, b, rect.y0, rect.x0, rect.x0 + carry.width, same_page, kept, marks, body_ink(b.page)
+                )
                 # 末行下面的行距是空白，框可以伸过 room，字仍在 room 以内（同 _filled_bottom）
                 size = carry.size * 0.88 if cjk else carry.size
                 bottom = room + ((1.45 if cjk else 1.2) - 1) * size
                 placed = pymupdf.Rect(rect.x0, rect.y0, rect.x0 + carry.width, max(bottom, rect.y0 + 4))
                 # 上一页按 tail_room 算过能向下面一段借的，这里写不下就伸进去，那一段跟着往下挪
                 borrowed = spare_below(b, placed, room)
-                write_one(b, carry.text, placed, align, carry.formulas, False, block_size=carry.size,
-                          room=None if borrowed is None else borrowed[1], lent=True)
+                write_one(
+                    b,
+                    carry.text,
+                    placed,
+                    align,
+                    carry.formulas,
+                    False,
+                    block_size=carry.size,
+                    room=None if borrowed is None else borrowed[1],
+                    lent=True,
+                )
                 if borrowed is not None and id(b) in ends:
                     _, end, size = ends[id(b)]
                     if end + size * 0.3 > placed.y1 + 0.5:
@@ -1949,12 +2233,17 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 moved = starts.get(id(b))
                 if moved is not None:
                     first_box = _clip_write_rect(
-                        pymupdf.Rect(moved, first_box.y0, first_box.x1, first_box.y1), b.clip,
+                        pymupdf.Rect(moved, first_box.y0, first_box.x1, first_box.y1),
+                        b.clip,
                     )
                 bformulas = (formulas_map or {}).get(id(b), [])
                 size = b.size * 0.88 if cjk else b.size
                 head, rest = _split_own_lines(
-                    t, bformulas, size, b.size, first_box.width,
+                    t,
+                    bformulas,
+                    size,
+                    b.size,
+                    first_box.width,
                 )
                 if head:
                     write_one(b, head, first_box, side, bformulas, bool(rest.strip()), first_box.x1)
@@ -1962,17 +2251,30 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 if rest.strip() and tail is None:
                     write_one(b, rest, rest_box, side, bformulas, False, rest_box.x1)
                 elif rest.strip() and tail is not None:
-                    room = _room_below(page, b, rest_box.y0, rest_box.x0, rest_box.x1, same_page, kept, marks, body_ink(b.page))
+                    room = _room_below(
+                        page, b, rest_box.y0, rest_box.x0, rest_box.x1, same_page, kept, marks, body_ink(b.page)
+                    )
                     floor = write_floor(b, rest_box)
                     placed, spill = _split_filled_lines(
-                        rest, bformulas, size, b.size, rest_box.width, cjk, rest_box.y0, room, floor,
+                        rest,
+                        bformulas,
+                        size,
+                        b.size,
+                        rest_box.width,
+                        cjk,
+                        rest_box.y0,
+                        room,
+                        floor,
                         tail_room(tail, rest_box.width, size),
                     )
                     if placed:
                         lines = placed.count("\n") + 1
                         bottom = _filled_bottom(rest_box.y0, lines, size, cjk, room, floor)
                         placed_rect = pymupdf.Rect(
-                            rest_box.x0, rest_box.y0, rest_box.x1, max(bottom, rest_box.y0 + 4),
+                            rest_box.x0,
+                            rest_box.y0,
+                            rest_box.x1,
+                            max(bottom, rest_box.y0 + 4),
                         )
                         write_one(b, placed, placed_rect, side, bformulas, bool(spill), rest_box.x1)
                     if spill:
@@ -1983,7 +2285,10 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
             shifted = reflowed.get(id(b))
             if shifted is not None:
                 rect = pymupdf.Rect(
-                    rect.x0, rect.y0 + shifted.rect.y0 - b.rect.y0, rect.x1, rect.y1 + shifted.rect.y1 - b.rect.y1,
+                    rect.x0,
+                    rect.y0 + shifted.rect.y0 - b.rect.y0,
+                    rect.x1,
+                    rect.y1 + shifted.rect.y1 - b.rect.y1,
                 )
                 write_one(shifted, t, rect, align, (formulas_map or {}).get(id(b), []), source=b)
                 continue
@@ -2015,7 +2320,9 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                     size = carry.size * 0.88 if cjk else carry.size
                     lines = carry.text.count("\n") + 1
                     placed = pymupdf.Rect(
-                        box.x0, box.y0, box.x0 + carry.width,
+                        box.x0,
+                        box.y0,
+                        box.x0 + carry.width,
                         box.y0 + lines * size * (1.45 if cjk else 1.2) + size * 0.3,
                     )
                     write_one(b, carry.text, placed, "left", [], False, block_size=carry.size)
@@ -2050,8 +2357,16 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
                 if box is not None and grow is not None and borrowed is None and latest < rect.y0 - 0.5:
                     if spill_last_lines(b, t, rect, align, grow, pushed):
                         continue
-                write_one(b, t, rect, align, lower=paragraph_top(b, rect, room), room=grow, pushed=pushed,
-                          lent=borrowed is not None)
+                write_one(
+                    b,
+                    t,
+                    rect,
+                    align,
+                    lower=paragraph_top(b, rect, room),
+                    room=grow,
+                    pushed=pushed,
+                    lent=borrowed is not None,
+                )
                 if borrowed is not None and id(b) in ends:
                     _, end, size = ends[id(b)]
                     # 盒子伸过了原来的下沿（盒子比末行行框多出 0.3em），伸进了下面一段的框：
@@ -2122,7 +2437,8 @@ def _render_translated(src_path: Path, blocks: list[TextBlock], translations: li
 
 
 def _hosts_first(
-    items: list[tuple[TextBlock, str]], continuations: dict[int, TextBlock],
+    items: list[tuple[TextBlock, str]],
+    continuations: dict[int, TextBlock],
 ) -> list[tuple[TextBlock, str]]:
     """同页的续块挪到宿主后面。
 

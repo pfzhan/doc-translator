@@ -1,4 +1,5 @@
 """Crop each inline formula from the original page into an image to paste into the translation."""
+
 from dataclasses import replace
 
 import pymupdf
@@ -64,7 +65,8 @@ def _absorb_one_box(formula: dict, drawings: list[pymupdf.Rect], glyphs: list[di
     own = {_origin_key(span) for span in formula.get("spans") or [] if span.get("origin")}
     spans = formula.get("spans") or []
     curves = [
-        curve for curve in intersecting_curves(probe, drawings)
+        curve
+        for curve in intersecting_curves(probe, drawings)
         if _radical_bar(curve, spans) or not _rests_on(curve, glyphs, own)
     ]
     curves = [curve for curve in curves if not _joins_outer_shape(curve, curves, drawings, probe)]
@@ -90,11 +92,7 @@ _FORMULA_INK_DPI = 180
 def _page_text_spans(page: pymupdf.Page) -> list[dict]:
     data = page.get_text("dict", flags=_TEXT_FLAGS)
     return [
-        span
-        for block in data["blocks"]
-        if block.get("type") == 0
-        for line in block["lines"]
-        for span in line["spans"]
+        span for block in data["blocks"] if block.get("type") == 0 for line in block["lines"] for span in line["spans"]
     ]
 
 
@@ -102,7 +100,9 @@ def _page_glyphs(page: pymupdf.Page) -> list[dict]:
     """页面上的 span，带字形墨迹。"""
     data = page.get_text("dict", flags=_TEXT_FLAGS)
     _attach_ink(page, data)
-    return [span for block in data["blocks"] if block.get("type") == 0 for line in block["lines"] for span in line["spans"]]
+    return [
+        span for block in data["blocks"] if block.get("type") == 0 for line in block["lines"] for span in line["spans"]
+    ]
 
 
 def _span_ink_boxes(span: dict, char_index: _CharIndex) -> list[pymupdf.Rect]:
@@ -141,10 +141,7 @@ def _ink_x_bounds(
         return samples[offset] < 245
 
     def near(rects: list[pymupdf.Rect], px: float, py: float, pad: float) -> bool:
-        return any(
-            rect.x0 - pad <= px <= rect.x1 + pad and rect.y0 - pad <= py <= rect.y1 + pad
-            for rect in rects
-        )
+        return any(rect.x0 - pad <= px <= rect.x1 + pad and rect.y0 - pad <= py <= rect.y1 + pad for rect in rects)
 
     def is_ours(x: int, y: int) -> bool:
         px = clip.x0 + (x + 0.5) * step_x
@@ -187,18 +184,12 @@ def _tighten_formula_sides(
         char_index = _page_char_index(page)
     if page_spans is None:
         page_spans = _page_text_spans(page)
-    own_spans = [
-        pymupdf.Rect(span["bbox"])
-        for span in part.get("spans") or []
-        if span.get("bbox") is not None
-    ]
+    own_spans = [pymupdf.Rect(span["bbox"]) for span in part.get("spans") or [] if span.get("bbox") is not None]
     ours = [box for span in part.get("spans") or [] for box in _span_ink_boxes(span, char_index)]
     # 字体框量错的字（txsys、CMSY 的根号）框在墨迹上方，按单画量出的墨迹补上，不然根号的下半截
     # 当成邻字的墨迹，左边收到根号中间
     ours.extend(pymupdf.Rect(span["ink"]) for span in part.get("spans") or [] if span.get("ink_drawn"))
-    ours.extend(
-        pymupdf.Rect(curve) for curve in part.get("curves") or [] if curve is not None
-    )
+    ours.extend(pymupdf.Rect(curve) for curve in part.get("curves") or [] if curve is not None)
     foreign: list[pymupdf.Rect] = []
     for span in _outside_formula(page_spans, part.get("spans") or [], char_index):
         if not str(span.get("text") or "").strip() or span.get("bbox") is None:
@@ -284,7 +275,10 @@ _RESTING_GAP = 2.0
 
 
 def _joins_outer_shape(
-    curve: pymupdf.Rect, curves: list[pymupdf.Rect], drawings: list[pymupdf.Rect], probe: pymupdf.Rect,
+    curve: pymupdf.Rect,
+    curves: list[pymupdf.Rect],
+    drawings: list[pymupdf.Rect],
+    probe: pymupdf.Rect,
 ) -> bool:
     """横线和公式外的另一条线首尾相接：是证毕方框、表格线这类图形的一边，不是分数线。
     挪走一边，原处的方框就缺了口，公式下面多出一道杠。实心的底块（图注标签的黑底）不算。"""
@@ -324,7 +318,12 @@ def _rests_on(curve: pymupdf.Rect, glyphs: list[dict], own: set[tuple[float, flo
         return False
     for span in glyphs:
         found = span.get("ink")
-        if found is None or not span.get("origin") or _origin_key(span) in own or not str(span.get("text") or "").strip():
+        if (
+            found is None
+            or not span.get("origin")
+            or _origin_key(span) in own
+            or not str(span.get("text") or "").strip()
+        ):
             continue
         ink = pymupdf.Rect(found)
         if min(ink.x1, curve.x1) - max(ink.x0, curve.x0) < 1:
@@ -350,7 +349,10 @@ def _spans_ink(spans: list[dict]) -> pymupdf.Rect | None:
 
 
 def _absorb_curves(
-    formula: dict, drawings: list[pymupdf.Rect], block: TextBlock, glyphs: list[dict] = (),
+    formula: dict,
+    drawings: list[pymupdf.Rect],
+    block: TextBlock,
+    glyphs: list[dict] = (),
 ) -> None:
     """把相交曲线并进公式框，并写回对应的 FormulaRun。换行续片各自收自己的框。"""
     _absorb_one_box(formula, drawings, glyphs)
@@ -365,7 +367,8 @@ def _absorb_curves(
             descent=formula["d"],
             dx=formula.get("dx", run.dx),
         )
-        if isinstance(run, FormulaRun) and run.name == formula["name"] else run
+        if isinstance(run, FormulaRun) and run.name == formula["name"]
+        else run
         for run in block.runs
     ]
 
@@ -379,7 +382,9 @@ def _marker_png(idx: int) -> bytes:
 
 
 def _crop_formulas(
-    src_doc: pymupdf.Document, flat_units: list[list[TextBlock]], sent_formulas: list[list[dict]],
+    src_doc: pymupdf.Document,
+    flat_units: list[list[TextBlock]],
+    sent_formulas: list[list[dict]],
 ) -> pymupdf.Archive:
     # 公式从它所在的原页裁图。不能用单元最后一块的页码，跨页时会裁错页。
     # 框内相交的曲线并进裁剪，根号、分式线才不会被切掉。
@@ -412,7 +417,11 @@ def _crop_formulas(
                     display = part_page, src_doc[part_page].get_displaylist()
                 _tighten_formula_height(part)
                 _tighten_formula_sides(
-                    part, src_doc[part_page], span_cache[part_page], char_cache[part_page], display[1],
+                    part,
+                    src_doc[part_page],
+                    span_cache[part_page],
+                    char_cache[part_page],
+                    display[1],
                 )
                 bbox = pymupdf.Rect(part["bbox"])
                 if bbox.width < 1 or bbox.height < 1:

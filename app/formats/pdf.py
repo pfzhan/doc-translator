@@ -7,6 +7,7 @@
    有线表格按格翻译，写回时不越出格子。重复的页眉页脚和页码保留原文。
 4. 双语版：原页面和译文页面左右并排放在同一页上，方便对照阅读。
 """
+
 import asyncio
 import contextlib
 import functools
@@ -77,7 +78,11 @@ async def _job_turn(runner):
 
 
 def _plan_pdf(
-    src: Path, runner, layout_model: str, formula_model: FormulaModel | None = None, boxes: ModelBoxes | None = None,
+    src: Path,
+    runner,
+    layout_model: str,
+    formula_model: FormulaModel | None = None,
+    boxes: ModelBoxes | None = None,
 ) -> _PdfPlan:
     """送翻前的部分：读版面、定角色、并跨页段落，给每个单元打好占位符。
     断行处的连字符要不要留，看全文里有没有接起来的词（见 _join_lines），整个分析期间都按这一篇的词。
@@ -94,7 +99,11 @@ def _plan_pdf(
 
 
 def _saved_plan(
-    src: Path, runner, layout_model: str, path: Path | None, formula_model: FormulaModel | None = None,
+    src: Path,
+    runner,
+    layout_model: str,
+    path: Path | None,
+    formula_model: FormulaModel | None = None,
 ) -> _PdfPlan:
     """暂停、中断后继续，或生成另一种版本时，原文件、两个模型和代码都没变，就读回上次的分析结果。
     一本几百页的书逐页读版面要一分多钟，读回只要一两秒。path 为 None 时不存。
@@ -182,9 +191,16 @@ def saved_texts(path: Path) -> list[tuple[str, str]]:
     return list(zip(plan.texts, plan.notes or [""] * len(plan.texts)))
 
 
-async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "",
-                        layout_model: str = "", plan_path: Path | None = None,
-                        formula_model: FormulaModel | None = None) -> list[Path]:
+async def translate_pdf(
+    src: Path,
+    out_dir: Path,
+    runner,
+    bilingual: bool,
+    target_lang: str = "",
+    layout_model: str = "",
+    plan_path: Path | None = None,
+    formula_model: FormulaModel | None = None,
+) -> list[Path]:
     """layout_model 是版面模型文件的路径，空串表示不用；formula_model 是公式检测模型的设置，None 表示不用。
     都不用时只用规则。plan_path 是存分析结果的文件，见 _saved_plan。
 
@@ -220,8 +236,7 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
                 block_formulas[id(b)] = []
             continue
         t = _keep_formula_chains(_sound_colors(_drop_stray_braces(t, sent_text), sent_text), sent_text)
-        restored = (_restore_placeholders(t, formulas, lenient=True) if formulas
-                    else _STRAY_PLACEHOLDER_RE.sub("", t))
+        restored = _restore_placeholders(t, formulas, lenient=True) if formulas else _STRAY_PLACEHOLDER_RE.sub("", t)
         if restored is not None:
             restored = separate_after_formula(restored)
         if restored is None:
@@ -254,7 +269,10 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
         if translations[i] == SPILL_TAIL or translations[i - 1] == SPILL_TAIL:
             continue
         translations[i] = _strip_boundary_echo(
-            blocks[i - 1].text, blocks[i].text, translations[i - 1], translations[i],
+            blocks[i - 1].text,
+            blocks[i].text,
+            translations[i - 1],
+            translations[i],
         )
         per_block[id(blocks[i])] = translations[i]
     # 段界去重也可能改到跳过的块。写回只认和原文逐字相同的字符串，才会把原字留下。
@@ -265,22 +283,34 @@ async def translate_pdf(src: Path, out_dir: Path, runner, bilingual: bool, targe
     translations = [per_block[id(b)] for b in blocks]
     _sync_unit_preview(runner, flat_units, sent_texts, per_block)
     continuations = {
-        id(unit[0]): unit[1] for unit in flat_units
+        id(unit[0]): unit[1]
+        for unit in flat_units
         if len(unit) == 2 and not all(id(b) in skip_ids for b in unit) and id(unit[0]) not in apart_hosts
     }
 
     def build():
         def render(pages, on_page):
             return _render_translated(
-                src, blocks, translations, target_lang, block_formulas, archive,
-                geometries=geometries, continuations=continuations,
-                on_page=on_page, pages=pages,
+                src,
+                blocks,
+                translations,
+                target_lang,
+                block_formulas,
+                archive,
+                geometries=geometries,
+                continuations=continuations,
+                on_page=on_page,
+                pages=pages,
             )
 
         # 一本书要写好几分钟，这时译文已经全部到齐，进度条停在满格，按页报写到哪里
         _drop_mupdf_cache()
         translated = _render_by_parts(
-            src_doc, blocks, translations, continuations, render,
+            src_doc,
+            blocks,
+            translations,
+            continuations,
+            render,
             lambda done, total: runner.report_stage("写回译文", done, total, "页"),
         )
         runner.report_stage("生成文件")

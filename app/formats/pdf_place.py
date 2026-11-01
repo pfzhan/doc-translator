@@ -1,5 +1,6 @@
 """Lay out translated text in a block's box: line breaking, inline formula images, and
 shrinking the line height or font size when the text does not fit."""
+
 import html
 import re
 from dataclasses import dataclass
@@ -58,8 +59,12 @@ def _formula_png_rect(formula: dict, target: pymupdf.Rect) -> pymupdf.Rect:
         return target
     area = png.area()
     sx, sy = target.width / bbox.width, target.height / bbox.height
-    return pymupdf.Rect(target.x0 + (area.x0 - bbox.x0) * sx, target.y0 + (area.y0 - bbox.y0) * sy,
-                        target.x1 + (area.x1 - bbox.x1) * sx, target.y1 + (area.y1 - bbox.y1) * sy)
+    return pymupdf.Rect(
+        target.x0 + (area.x0 - bbox.x0) * sx,
+        target.y0 + (area.y0 - bbox.y0) * sy,
+        target.x1 + (area.x1 - bbox.x1) * sx,
+        target.y1 + (area.y1 - bbox.y1) * sy,
+    )
 
 
 def _pdf_rect(page: "pymupdf.Page", rect: "pymupdf.Rect") -> "pymupdf.Rect":
@@ -113,12 +118,18 @@ class _SanitizeFactory(pymupdf.mupdf.PdfFilterFactory2):
 
     def filter(self, ctx, doc, chain, struct_parents, transform, options):
         return pymupdf.mupdf.ll_pdf_new_sanitize_filter(
-            doc, chain, struct_parents, transform, options, self.sanitize.internal(),
+            doc,
+            chain,
+            struct_parents,
+            transform,
+            options,
+            self.sanitize.internal(),
         )
 
 
-def _filter_form(doc: "pymupdf.Document", form: int, keep: list[tuple[float, float, float, float]],
-                 recurse: bool = True) -> tuple[int, list[tuple[float, float]]]:
+def _filter_form(
+    doc: "pymupdf.Document", form: int, keep: list[tuple[float, float, float, float]], recurse: bool = True
+) -> tuple[int, list[tuple[float, float]]]:
     """过滤一遍 Form，返回新 Form 的 xref 和留下的字的位置。recurse 为假时只过滤这一层，套着的 Form 原样引用。"""
     mupdf = pymupdf.mupdf
     keeper = _GlyphKeeper(keep)
@@ -139,8 +150,7 @@ def _filter_form(doc: "pymupdf.Document", form: int, keep: list[tuple[float, flo
 _EVERYWHERE = [(-1e9, -1e9, 1e9, 1e9)]
 
 
-def _keeps_places(doc: "pymupdf.Document", xref: int, kept: list[tuple[float, float]],
-                  recurse: bool = True) -> bool:
+def _keeps_places(doc: "pymupdf.Document", xref: int, kept: list[tuple[float, float]], recurse: bool = True) -> bool:
     """过滤后的 Form 里每个字还在原来的位置上。recurse 和过滤时一样。"""
     if not xref:
         return False
@@ -268,8 +278,10 @@ class _FormulaSources:
         band = self._band(formula)
         node = self.root
         while band is not None:
-            inner = next((child for child in node.children
-                          if any(y0 <= band[0] and band[1] <= y1 for y0, y1 in child.bands)), None)
+            inner = next(
+                (child for child in node.children if any(y0 <= band[0] and band[1] <= y1 for y0, y1 in child.bands)),
+                None,
+            )
             if inner is None:
                 break
             node = inner
@@ -286,9 +298,15 @@ def _hole_ink(span: dict) -> pymupdf.Rect:
     return ink if span.get("ink_drawn") else ink & box
 
 
-def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
-                  f: dict, f_name: str, page_spans: list[dict] | None = None,
-                  glyphs: _GlyphInk | None = None) -> int:
+def _formula_form(
+    doc: "pymupdf.Document",
+    page: "pymupdf.Page",
+    fmS: int,
+    f: dict,
+    f_name: str,
+    page_spans: list[dict] | None = None,
+    glyphs: _GlyphInk | None = None,
+) -> int:
     """给单个公式造紧致 BBox 的包裹 Form（按 span 逐个裁剪后引用源页 Form），返回 xref。
 
     裁剪路径是 run 里每个 span 的矩形并集，不是整个外框矩形：外框矩形会把间隙里
@@ -322,9 +340,13 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
         return out
 
     def is_run_member(fr: "pymupdf.Rect") -> bool:
-        return any(abs(fr.x0 - rr.x0) < 0.5 and abs(fr.y0 - rr.y0) < 0.5
-                   and abs(fr.x1 - rr.x1) < 0.5 and abs(fr.y1 - rr.y1) < 0.5
-                   for rr in run_rects)
+        return any(
+            abs(fr.x0 - rr.x0) < 0.5
+            and abs(fr.y0 - rr.y0) < 0.5
+            and abs(fr.x1 - rr.x1) < 0.5
+            and abs(fr.y1 - rr.y1) < 0.5
+            for rr in run_rects
+        )
 
     # 先并成不相交集合（ŷ 的符头 bbox 和 y 几乎完全重叠，不并掉 even-odd 会把
     # y 的躯干整个关掉），再按侧扩展：每侧扩到 1.5pt 为止、以不贴到邻居 bbox 为限
@@ -347,23 +369,29 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
             fr = pymupdf.Rect(fb["bbox"])
             if is_run_member(fr) or not (fr.y0 < union.y1 and fr.y1 > union.y0):
                 continue
-            if fr.x1 <= union.x0 + 0.01:      # 左侧邻居
+            if fr.x1 <= union.x0 + 0.01:  # 左侧邻居
                 left_edges.append(fr.x1)
-            elif fr.x0 >= union.x1 - 0.01:    # 右侧邻居
+            elif fr.x0 >= union.x1 - 0.01:  # 右侧邻居
                 right_edges.append(fr.x0)
-            if fr.y1 <= union.y0 + 0.01:      # 上方邻居（pymupdf y 向下）
+            if fr.y1 <= union.y0 + 0.01:  # 上方邻居（pymupdf y 向下）
                 lim["t"] = max(0.2, min(lim["t"], union.y0 - fr.y1 - 0.3))
-            elif fr.y0 >= union.y1 - 0.01:    # 下方邻居
+            elif fr.y0 >= union.y1 - 0.01:  # 下方邻居
                 lim["b"] = max(0.2, min(lim["b"], fr.y0 - union.y1 - 0.3))
 
     def reach(gaps: list[float]) -> float:
         return max(0.2, min([1.5, *(gap - 0.3 for gap in gaps)]))
 
-    our_rects = merge_rects([
-        pymupdf.Rect(b.x0 - reach([b.x0 - x for x in left_edges]), b.y0 - lim["t"],
-                     b.x1 + reach([x - b.x1 for x in right_edges]), b.y1 + lim["b"])
-        for b in base
-    ])
+    our_rects = merge_rects(
+        [
+            pymupdf.Rect(
+                b.x0 - reach([b.x0 - x for x in left_edges]),
+                b.y0 - lim["t"],
+                b.x1 + reach([x - b.x1 for x in right_edges]),
+                b.y1 + lim["b"],
+            )
+            for b in base
+        ]
+    )
     ours, holes = [], []
     for b in our_rects:
         r = _pdf_rect(page, b)
@@ -386,9 +414,13 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
             if not touches(fb["bbox"]) and (fb.get("ink") is None or not touches(fb["ink"])):
                 continue
             fr = pymupdf.Rect(fb["bbox"])
-            if any(abs(fr.x0 - rr.x0) < 0.5 and abs(fr.y0 - rr.y0) < 0.5
-                   and abs(fr.x1 - rr.x1) < 0.5 and abs(fr.y1 - rr.y1) < 0.5
-                   for rr in run_rects):
+            if any(
+                abs(fr.x0 - rr.x0) < 0.5
+                and abs(fr.y0 - rr.y0) < 0.5
+                and abs(fr.x1 - rr.x1) < 0.5
+                and abs(fr.y1 - rr.y1) < 0.5
+                for rr in run_rects
+            ):
                 continue
             # 挖不挖按字体框判断，孔按墨迹挖：括号、箭头的字体框比字形高出一截，会伸到下一行的字上
             ink = _hole_ink(fb)
@@ -427,13 +459,18 @@ def _formula_form(doc: "pymupdf.Document", page: "pymupdf.Page", fmS: int,
         left = max(min(ink[0] for ink in inks), min(r.x0 for r in our_rects))
         right = min(max(ink[1] for ink in inks), max(r.x1 for r in our_rects))
         reach = _pdf_rect(page, pymupdf.Rect(left, bbox.y0, right, bbox.y1))
-        clip_outer = pymupdf.Rect(min(clip_outer.x0, reach.x0), clip_outer.y0, max(clip_outer.x1, reach.x1), clip_outer.y1)
+        clip_outer = pymupdf.Rect(
+            min(clip_outer.x0, reach.x0), clip_outer.y0, max(clip_outer.x1, reach.x1), clip_outer.y1
+        )
     fmT = doc.get_new_xref()
-    doc.update_object(fmT, (
-        f"<< /Type /XObject /Subtype /Form /BBox [{clip_outer.x0:.2f} {clip_outer.y0:.2f} "
-        f"{clip_outer.x1:.2f} {clip_outer.y1:.2f}] "
-        f"/Matrix [1 0 0 1 0 0] /Resources << /XObject << /FmS {source} 0 R >> >> >>"
-    ))
+    doc.update_object(
+        fmT,
+        (
+            f"<< /Type /XObject /Subtype /Form /BBox [{clip_outer.x0:.2f} {clip_outer.y0:.2f} "
+            f"{clip_outer.x1:.2f} {clip_outer.y1:.2f}] "
+            f"/Matrix [1 0 0 1 0 0] /Resources << /XObject << /FmS {source} 0 R >> >> >>"
+        ),
+    )
     doc.update_stream(fmT, f"q {' '.join(ours + holes)} W* n /FmS Do Q".encode())
     res_v = doc.xref_get_key(page.xref, "Resources")[1]
     # redact 后 /Resources 会变成直接字典（键要带 Resources/ 前缀）；
@@ -470,8 +507,12 @@ def _paint_formula(
     source_page = formula.get("page")
     same_page = source_page is None or int(source_page) == page.number
     if (
-        same_page and forms is not None and bbox is not None
-        and bbox.width > 0.5 and bbox.height > 0.5 and target.width > 0.5
+        same_page
+        and forms is not None
+        and bbox is not None
+        and bbox.width > 0.5
+        and bbox.height > 0.5
+        and target.width > 0.5
     ):
         try:
             # 资源名必须全页唯一：块内序号相同的 FmF0 会互相覆盖
@@ -499,7 +540,10 @@ def _paint_formula(
 
 
 def _formula_metrics(
-    formulas: list[dict], block_size: float, em: float, reference: float | None = None,
+    formulas: list[dict],
+    block_size: float,
+    em: float,
+    reference: float | None = None,
 ) -> dict[int, FormulaMetric]:
     """按当前字号给出每个公式槽。rs 写回记录，矢量缩放和槽位用同一个数。reference 见 _formula_slot。"""
     metrics: dict[int, FormulaMetric] = {}
@@ -639,7 +683,12 @@ _CLAUSE_MARKS = "，、；：,;:"
 
 
 def _clause_lines(
-    text: str, formulas: list[dict], em: float, block_size: float, width: float, lines: list[TypesetLine],
+    text: str,
+    formulas: list[dict],
+    em: float,
+    block_size: float,
+    width: float,
+    lines: list[TypesetLine],
     reference: float | None = None,
 ) -> list[TypesetLine]:
     """居中排的题名、副标题折成几行时，在小句标点后面断开，不留一两个字单独一行。
@@ -649,7 +698,7 @@ def _clause_lines(
     for index, char in enumerate(text[:-1]):
         if char not in _CLAUSE_MARKS:
             continue
-        head, tail = text[:index + 1].rstrip(), text[index + 1:].strip()
+        head, tail = text[: index + 1].rstrip(), text[index + 1 :].strip()
         if not head or not tail:
             continue
         # 整段粗体的作者名单在逗号处断开，后半截要重开粗体
@@ -664,7 +713,10 @@ def _clause_lines(
 
 
 def _hole_lanes(
-    box: "pymupdf.Rect", holes: list["pymupdf.Rect"], em: float, gap: float,
+    box: "pymupdf.Rect",
+    holes: list["pymupdf.Rect"],
+    em: float,
+    gap: float,
 ) -> list[tuple[float, float]]:
     """开头几行相对盒子左缘的缩进和宽度。字形落在图的高度里的行让到图的另一侧，
     和图隔半个字。图以下的行不列出，按整个盒子宽。"""
@@ -705,7 +757,12 @@ def _label_width(text: str, em: float) -> float:
 
 
 def _hang_lanes(
-    box: "pymupdf.Rect", lanes: list[tuple[float, float]], hang: float, label: float, em: float, gap: float,
+    box: "pymupdf.Rect",
+    lanes: list[tuple[float, float]],
+    hang: float,
+    label: float,
+    em: float,
+    gap: float,
     chars: int,
 ) -> list[tuple[float, float]]:
     """悬挂缩进的各行，绕图的行再让开图。正文对齐在盒子左缘往右 hang 处，和条目下面另起的说明段落同一列；
@@ -723,7 +780,12 @@ def _hang_lanes(
 
 
 def _line_baseline(
-    spans: list[dict], line_top: float, line_h: float, em: float, cjk: bool, slot_x: float | None = None,
+    spans: list[dict],
+    line_top: float,
+    line_h: float,
+    em: float,
+    cjk: bool,
+    slot_x: float | None = None,
 ) -> float:
     """这一行已写入文字的 origin。纯公式行没有文字，用 htmlbox 的经验基线。
     相邻行的字框会交叠，离槽位更近的文字优先，避免公式掉到下一行仍留在原横坐标。"""
@@ -795,9 +857,7 @@ def _typeset_line_html(line: TypesetLine, formulas: list[dict]) -> str:
 def _formula_draw_args(formulas: list[dict]) -> tuple[frozenset[int], dict[int, str]]:
     images = frozenset(index for index, formula in enumerate(formulas, 1) if formula.get("has_img"))
     fallback = {
-        index: str(formula.get("text") or "")
-        for index, formula in enumerate(formulas, 1)
-        if index not in images
+        index: str(formula.get("text") or "") for index, formula in enumerate(formulas, 1) if index not in images
     }
     return images, fallback
 
@@ -827,13 +887,32 @@ def _draw_cjk(
             return ""
         drawn: list[str] = []
         _paint_formula_parts(
-            page, doc, formulas[slot.index - 1], slot.x, slot.baseline,
-            forms, page_spans, drawn, deferred_png,
+            page,
+            doc,
+            formulas[slot.index - 1],
+            slot.x,
+            slot.baseline,
+            forms,
+            page_spans,
+            drawn,
+            deferred_png,
         )
         return "\n".join(drawn)
 
     slots = draw_cjk_lines(
-        page, doc, lines, box, em, gap, color, align, images, fallback, justify_last, lanes, first_room,
+        page,
+        doc,
+        lines,
+        box,
+        em,
+        gap,
+        color,
+        align,
+        images,
+        fallback,
+        justify_last,
+        lanes,
+        first_room,
         paint,
     )
     return slots is not None
@@ -867,7 +946,20 @@ def _place_plain(
     lower、room、left_limit、lent、hang 见 _fit_typeset。返回末行行框的下沿，没写时返回 None。"""
     text = space_around_latin(separate_after_formula(text))
     lines, em, gap, box, lanes = _fit_typeset(
-        text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit, holes, lower, room, left_limit, lent,
+        text,
+        formulas,
+        rect,
+        em,
+        block_size,
+        cjk,
+        page,
+        obstacles,
+        right_limit,
+        holes,
+        lower,
+        room,
+        left_limit,
+        lent,
         hang,
     )
     if box.y0 > rect.y0:
@@ -877,8 +969,21 @@ def _place_plain(
     if align == "center" and len(lines) > 1 and not any(indent for indent, _ in lanes):
         lines = _clause_lines(text, formulas, em, block_size, box.width, lines, block_size * 0.88 if cjk else None)
     if cjk and _draw_cjk(
-        page, page.parent, lines, formulas, box, em, gap, color, align,
-        None, None, [], justify_last, lanes, first_room,
+        page,
+        page.parent,
+        lines,
+        formulas,
+        box,
+        em,
+        gap,
+        color,
+        align,
+        None,
+        None,
+        [],
+        justify_last,
+        lanes,
+        first_room,
     ):
         return end
     rendered = [_typeset_line_html(line, formulas) for line in lines]
@@ -891,11 +996,7 @@ def _place_plain(
         ]
         body = "".join(parts) if any(rendered) else ""
     else:
-        parts = [
-            f'<span style="white-space:nowrap">{line_html}</span>'
-            for line_html in rendered
-            if line_html
-        ]
+        parts = [f'<span style="white-space:nowrap">{line_html}</span>' for line_html in rendered if line_html]
         body = "<br>".join(parts)
     if not body:
         return None
@@ -962,15 +1063,41 @@ def _place_typeset(
     """按行写入文字，公式槽用记录的下沿贴到该行基线。lower、room、hang 和返回值见 _place_plain。"""
     text = space_around_latin(separate_after_formula(text))
     lines, em, gap, box, lanes = _fit_typeset(
-        text, formulas, rect, em, block_size, cjk, page, obstacles, right_limit, holes, lower, room, left_limit, lent,
+        text,
+        formulas,
+        rect,
+        em,
+        block_size,
+        cjk,
+        page,
+        obstacles,
+        right_limit,
+        holes,
+        lower,
+        room,
+        left_limit,
+        lent,
         hang,
     )
     if box.y0 > rect.y0:
         first_room = None
     end = _typeset_end(lines, em, gap, box)
     if cjk and _draw_cjk(
-        page, doc, lines, formulas, box, em, gap, color, align,
-        forms, page_spans, deferred_png, justify_last, lanes, first_room,
+        page,
+        doc,
+        lines,
+        formulas,
+        box,
+        em,
+        gap,
+        color,
+        align,
+        forms,
+        page_spans,
+        deferred_png,
+        justify_last,
+        lanes,
+        first_room,
     ):
         return end
     css = (
@@ -1002,7 +1129,10 @@ def _place_typeset(
                 html_text = f'<div{div_attrs}><span style="white-space:nowrap">{fragment}</span></div>'
                 # 盒子按估算加宽，避免窄词被缩字；落位不用这个宽，用写出的右缘。
                 slot = pymupdf.Rect(
-                    cursor, y, cursor + max(piece.width, 4) + 4, y + line_h + em * 0.3,
+                    cursor,
+                    y,
+                    cursor + max(piece.width, 4) + 4,
+                    y + line_h + em * 0.3,
                 )
                 if not _try_insert(page, slot, html_text, css, 0.9):
                     try:
@@ -1020,16 +1150,25 @@ def _place_typeset(
         return end
     spans = [
         span
-        for blk in page.get_text("dict")["blocks"] if blk.get("type") == 0
-        for ln in blk["lines"] for span in ln["spans"]
+        for blk in page.get_text("dict")["blocks"]
+        if blk.get("type") == 0
+        for ln in blk["lines"]
+        for span in ln["spans"]
         if span.get("text", "").strip() and span.get("origin")
     ]
     after_stream: dict[int | None, list[str]] = {}
     for piece, slot_x, line_top, after in pending:
         baseline = _line_baseline(spans, line_top, line_h, em, cjk, slot_x)
         _paint_formula_parts(
-            page, doc, formulas[piece.index - 1], slot_x, baseline, forms, page_spans,
-            after_stream.setdefault(after, []), deferred_png,
+            page,
+            doc,
+            formulas[piece.index - 1],
+            slot_x,
+            baseline,
+            forms,
+            page_spans,
+            after_stream.setdefault(after, []),
+            deferred_png,
         )
     for after, drawn in after_stream.items():
         if drawn:
@@ -1057,7 +1196,10 @@ def _insert_contents_after(page: "pymupdf.Page", doc: "pymupdf.Document", after:
 
 
 def _formula_slot(
-    formula: dict, block_size: float, render_size: float, reference: float | None = None,
+    formula: dict,
+    block_size: float,
+    render_size: float,
+    reference: float | None = None,
 ) -> tuple[float, float, float]:
     """行内公式槽位 (缩放, 宽, 高)。高超过 _INLINE_FORMULA_EM 时压下来，再高的那一行撑开行距（见 line_offsets）。
     盒子放不下时 _fit_typeset 在公式上记 cap，压到一行高。
@@ -1121,8 +1263,9 @@ def _expand_left(rect: "pymupdf.Rect", x0: float, obstacles: list["pymupdf.Rect"
     return pymupdf.Rect(min(x0, rect.x0), rect.y0, rect.x1, rect.y1)
 
 
-def _try_insert(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, css: str, scale_low: float,
-                archive=None) -> bool:
+def _try_insert(
+    page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, css: str, scale_low: float, archive=None
+) -> bool:
     """insert_htmlbox 放不下返回负值（此时不画内容）。pymupdf 在缩放刚好等于 scale_low 时
     会因浮点误差触发 assert（0.8999999999999999 < 0.9），按没放下来处理。"""
     try:
@@ -1138,11 +1281,18 @@ def _tighten_line_height(css: str) -> str:
         return css
     current = float(match.group(1))
     tight = 1.1 if current <= 1.25 else current - 0.25
-    return f"{css[:match.start(1)]}{tight:g}{css[match.end(1):]}"
+    return f"{css[: match.start(1)]}{tight:g}{css[match.end(1) :]}"
 
 
-def _insert_fitting(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, css: str,
-                    obstacles: list["pymupdf.Rect"], archive=None, right_limit: float | None = None):
+def _insert_fitting(
+    page: "pymupdf.Page",
+    rect: "pymupdf.Rect",
+    html_text: str,
+    css: str,
+    obstacles: list["pymupdf.Rect"],
+    archive=None,
+    right_limit: float | None = None,
+):
     """排版三级收缩（BabelDOC 思路）：先右扩 → 压行距 → 最后才缩字号。
 
     每一级只在放不下（insert_htmlbox 返回负值，此时不会画出内容）时进入下一级。
@@ -1153,10 +1303,7 @@ def _insert_fitting(page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, 
     if _try_insert(page, rect, html_text, css, 0.9, archive):
         return
     page_width = text_page_rect(page).width
-    wide = (
-        _expand_right(rect, page_width, obstacles, right_limit)
-        if rect.width < page_width * 0.6 else rect
-    )
+    wide = _expand_right(rect, page_width, obstacles, right_limit) if rect.width < page_width * 0.6 else rect
     if wide.x1 > rect.x1 + 1 and _try_insert(page, wide, html_text, css, 0.9, archive):
         return
     target = wide

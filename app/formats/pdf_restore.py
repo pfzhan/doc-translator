@@ -1,5 +1,6 @@
 """Put the model's translation back together: restore formula placeholders and section numbers,
 split units that span two blocks, and update the preview."""
+
 import asyncio
 import re
 
@@ -136,7 +137,10 @@ def _small_formula(formula: dict) -> bool:
 
 
 async def _retry_lost_placeholders(
-    runner: object, sent_texts: list[str], sent_formulas: list[list[dict]], raw: list[str],
+    runner: object,
+    sent_texts: list[str],
+    sent_formulas: list[list[dict]],
+    raw: list[str],
 ) -> None:
     """译文丢了 {vN} 的单元单独再翻一次，补上占位符的结果替换 raw 并写进缓存。
 
@@ -146,13 +150,15 @@ async def _retry_lost_placeholders(
     if translator is None or getattr(runner, "cache_only", False):
         return
     lost = [
-        i for i, (t, formulas) in enumerate(zip(raw, sent_formulas))
+        i
+        for i, (t, formulas) in enumerate(zip(raw, sent_formulas))
         if formulas and _restore_placeholders(t, formulas) is None
     ]
     if not lost:
         return
     results = await asyncio.gather(
-        *(translator.translate_batch([sent_texts[i]]) for i in lost), return_exceptions=True,
+        *(translator.translate_batch([sent_texts[i]]) for i in lost),
+        return_exceptions=True,
     )
     fixed: dict[str, str] = {}
     for i, result in zip(lost, results):
@@ -196,7 +202,7 @@ def _take_owner(text: str, formulas: list[dict], owner: int) -> tuple[str, list[
     foreign: list[str] = []
     pos = 0
     for m in _SENTINEL_NUM_RE.finditer(text):
-        kept.append(text[pos:m.start()])
+        kept.append(text[pos : m.start()])
         n = int(m.group(1))
         if 1 <= n <= len(formulas) and formulas[n - 1].get("owner", 0) == owner:
             kept.append(m.group(0))
@@ -235,7 +241,10 @@ def _join_boundary(text: str) -> str:
 
 
 def _assign_restored_parts(
-    restored: str, unit: list[TextBlock], formulas: list[dict], apart: bool = False,
+    restored: str,
+    unit: list[TextBlock],
+    formulas: list[dict],
+    apart: bool = False,
 ) -> tuple[list[str], list[list[dict]]]:
     """跨页单元的译文整段留在起始块。续页只擦原文，不再按分界切回两页。
 
@@ -271,12 +280,12 @@ def _normalize_heading_number(src_text: str, translation: str) -> str:
         return translation
     # 编号可能包在字号、粗体标记里：{z125}二{/z} 算法
     lead = re.match(r"^\s*((?:\{[bizu]\d*\})*)", translation)
-    body = translation[lead.end():]
+    body = translation[lead.end() :]
     if not _TRANS_HEAD_NUM_RE.match(body):
         return translation
     rest = _TRANS_HEAD_NUM_RE.sub("", body, count=1)
     close = re.match(r"^((?:\{/[bizu]\})*)\s*", rest)
-    rest = rest[close.end():]
+    rest = rest[close.end() :]
     return f"{lead.group(1)}{m.group(1)}{close.group(1)} {rest}" if rest else translation
 
 
@@ -285,8 +294,7 @@ def _heading_number_for(kind: str, src_text: str, translation: str) -> str:
         # 正文尺寸的节标题（'2.1 Model' 与正文同字号，kind 是 p）：带点节号
         # （2.1、3.2.1）几乎不会出现在正文句首；bare 整数开头可能是正文数量
         # （'2 samples'），不动。且译文以章节号开头才改写。
-        if not (re.match(r"^\d+(?:\.\d+)+\s", src_text.strip())
-                and _TRANS_HEAD_NUM_RE.match(translation.strip())):
+        if not (re.match(r"^\d+(?:\.\d+)+\s", src_text.strip()) and _TRANS_HEAD_NUM_RE.match(translation.strip())):
             return translation
     return _normalize_heading_number(src_text, translation)
 
@@ -300,6 +308,8 @@ def _list_number(src_text: str, translation: str) -> str:
     if not m:
         return translation
     return re.sub(rf"^(\s*){m.group(1)}\s*[。．、]\s*", rf"\g<1>{m.group(1)}{m.group(2)} ", translation, count=1)
+
+
 # 图注标签常带字号或粗体标记：{z110}图一:{/z}
 _CN_CAPTION_RE = re.compile(r"^(\s*(?:\{/?[bizu]\d*\}\s*)*)([图表])\s*[一二三四五六七八九十百零〇两]+")
 
@@ -328,7 +338,10 @@ def _strip_boundary_echo(prev_src: str, cur_src: str, prev_t: str, cur_t: str) -
 
 
 def _sync_unit_preview(
-    runner: object, units: list[list[TextBlock]], sent_texts: list[str], per_block: dict[int, str],
+    runner: object,
+    units: list[list[TextBlock]],
+    sent_texts: list[str],
+    per_block: dict[int, str],
 ) -> None:
     """标题改写和段界去重发生在预览写入之后，按段落序号把最终译文补回去。"""
     overrides = getattr(runner, "_index_overrides", None)
@@ -336,10 +349,7 @@ def _sync_unit_preview(
     if not isinstance(overrides, dict) or not isinstance(done, dict):
         return
     for ui, (unit, sent_text) in enumerate(zip(units, sent_texts)):
-        pieces = [
-            part for b in unit
-            if (part := per_block.get(id(b), b.text)) != SPILL_TAIL
-        ]
+        pieces = [part for b in unit if (part := per_block.get(id(b), b.text)) != SPILL_TAIL]
         shown = strip_style_marks(_join_lines(pieces))
         current = done.get(sent_text)
         if current is not None and shown != current:

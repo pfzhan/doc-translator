@@ -1,5 +1,6 @@
 """Build the output files: side-by-side pages, the translated-only version cut from the
 bilingual one, translated bookmarks, and font subsetting."""
+
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -15,8 +16,12 @@ from .pdf_parts import plan_parts, render_in_parts, worker_count
 
 
 def _render_by_parts(
-    src_doc: pymupdf.Document, blocks: list[TextBlock], translations: list[str],
-    continuations: dict[int, TextBlock], render, on_page: Callable[[int, int], None],
+    src_doc: pymupdf.Document,
+    blocks: list[TextBlock],
+    translations: list[str],
+    continuations: dict[int, TextBlock],
+    render,
+    on_page: Callable[[int, int], None],
 ) -> pymupdf.Document:
     """分几段并行写回。跨页段落的宿主和续块分在同一段；有旋转页、页太少时整本一起写。"""
     weights = {pno: len(items) for pno, items in _pages_to_write(blocks, translations).items()}
@@ -51,8 +56,14 @@ def translated_from_bilingual(src: Path, bilingual: Path, preview: dict | None) 
     forms = []
     for page, side in zip(src_doc, both):
         box = page.mediabox
-        if (page.rotation or box.x0 or box.y0 or page.cropbox != box
-                or abs(side.rect.width - 2 * box.width) > 0.01 or abs(side.rect.height - box.height) > 0.01):
+        if (
+            page.rotation
+            or box.x0
+            or box.y0
+            or page.cropbox != box
+            or abs(side.rect.width - 2 * box.width) > 0.01
+            or abs(side.rect.height - box.height) > 0.01
+        ):
             return None
         form = _translated_form(both, side, box)
         if form is None:
@@ -115,14 +126,14 @@ def translate_bookmarks(doc: pymupdf.Document, preview: dict | None) -> None:
             continue
         text = found[0]
         if not _NUMBER_LABEL_RE.match(title.strip()) and (number := _NUMBER_LABEL_RE.match(text)):
-            text = text[number.end():].strip()
+            text = text[number.end() :].strip()
         doc.xref_set_key(xref, "Title", pymupdf.get_pdf_str(text))
 
 
 def _bookmark_key(text: str) -> str:
     text = strip_style_marks(text).strip().replace("’", "'")
     if number := _NUMBER_LABEL_RE.match(text):
-        text = text[number.end():]
+        text = text[number.end() :]
     return " ".join(text.split()).casefold()
 
 
@@ -135,8 +146,14 @@ def _translated_form(doc: pymupdf.Document, page: pymupdf.Page, box: pymupdf.Rec
     for xref in map(int, re.findall(r"(\d+) 0 R", value)):
         matrix = [float(v) for v in doc.xref_get_key(xref, "Matrix")[1].strip("[]").split()]
         bbox = [float(v) for v in doc.xref_get_key(xref, "BBox")[1].strip("[]").split()]
-        if (len(matrix) == 6 and len(bbox) == 4 and matrix[:4] == [1, 0, 0, 1] and abs(matrix[4] - box.width) < 0.01
-                and matrix[5] == 0 and all(abs(a - b) < 0.01 for a, b in zip(bbox, box))):
+        if (
+            len(matrix) == 6
+            and len(bbox) == 4
+            and matrix[:4] == [1, 0, 0, 1]
+            and abs(matrix[4] - box.width) < 0.01
+            and matrix[5] == 0
+            and all(abs(a - b) < 0.01 for a, b in zip(bbox, box))
+        ):
             found.append(xref)
     return found[0] if len(found) == 1 else None
 
