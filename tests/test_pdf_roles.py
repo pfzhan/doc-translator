@@ -50,7 +50,8 @@ def test_text_inside_a_figure_is_a_figure_and_a_caption_is_not():
 
 
 def test_a_caption_on_the_figure_ground_stays_a_caption():
-    """画图程序的白底连图注一起包住时，以图注标签起头的仍是图注，标签后面可以是竖线。"""
+    """When a drawing program's white background encloses the caption too, a block starting with a caption label is
+    still a caption, and the label may be followed by a vertical bar."""
     ground = pymupdf.Rect(60, 60, 340, 260)
     items = [
         _item("Rollout", pymupdf.Rect(100, 100, 140, 110), size=7),
@@ -107,7 +108,7 @@ def test_figure_label_stays_original_and_caption_is_translated(tmp_path: Path):
     doc.close()
 
     [out] = run(translate_file(src, tmp_path, runner(), False, "zh-CN"))
-    # 正文下面空着，译文长了就折到下一行，不缩字号
+    # The space below the body text is free, so a longer translation wraps to the next line without shrinking
     text = " ".join(pymupdf.open(out)[0].get_text().split())
     assert "axis" in text and "[zh-CN] axis" not in text
     assert "[zh-CN] Figure 1: a plot." in text
@@ -115,8 +116,9 @@ def test_figure_label_stays_original_and_caption_is_translated(tmp_path: Path):
 
 
 def test_labels_and_listing_above_a_figure_caption_are_the_figure():
-    """picture 环境用字形画线，没有矢量框。图注上方、到上一段正文为止都是图。
-    两张图叠在一起时，上一张的图注是下一张图的上界，不被吞进去。"""
+    """The picture environment draws lines with glyphs, without vector boxes. Everything above the caption up to the
+    previous body paragraph is the figure. With two stacked figures, the caption of the first is the upper bound of
+    the second and is not swallowed by it."""
     items = [
         _item("A body paragraph that ends right before the figure starts.", pymupdf.Rect(40, 40, 360, 54)),
         _item("psc 6M", pymupdf.Rect(170, 70, 210, 80)),
@@ -132,7 +134,8 @@ def test_labels_and_listing_above_a_figure_caption_are_the_figure():
 
 
 def test_body_starting_right_of_outdented_headings_bounds_the_figure():
-    """版心左缘在 160：页眉和外凸的节标题更靠左，正文段落仍是图区的上界。"""
+    """The text frame starts at 160: running headers and protruding section headings are further left, and body
+    paragraphs are still the upper bound of the figure area."""
     from app.formats.pdf_frame import TextFrame
 
     items = [
@@ -186,7 +189,8 @@ def test_smaller_pseudocode_above_a_caption_is_the_figure():
 
 
 def test_a_paragraph_in_a_framed_box_is_body_text():
-    """带底色的圆角框按图算，框里成段的几句话仍是正文；图里的短标签照旧算图。"""
+    """A shaded rounded box counts as a figure, but a paragraph of sentences in it is still body text; short labels in
+    figures still count as figure."""
     box = pymupdf.Rect(100, 100, 500, 300)
     paragraph = (
         "The Framework is intended to be flexible and to augment existing risk practices which should align "
@@ -203,8 +207,9 @@ def test_a_paragraph_in_a_framed_box_is_body_text():
 
 
 def test_a_prompt_box_is_translated_as_a_whole():
-    """框里大半是成段的正文（以冒号引出下文的一段也算），框里成句的列表项、示例和正文一起算正文，
-    不留半框原文。两三个词的短标签照旧算图。"""
+    """When most of a box is paragraph text (a paragraph introducing what follows with a colon counts too),
+    sentence-like list items and examples in it count as body text along with the paragraphs, so half of the box is
+    not left in the original. Short labels of two or three words still count as figure."""
     box = pymupdf.Rect(70, 330, 525, 700)
     first = (
         "Please act as an impartial judge and evaluate the quality of the responses provided by two AI "
@@ -224,5 +229,5 @@ def test_a_prompt_box_is_translated_as_a_whole():
         LayoutItem(0, pymupdf.Rect(400, 660, 450, 670), "Encoder output", 8, False),
     ]
     roles = HeuristicLayout().classify(items, [_geo([box], 612, 792)], median=11)
-    # 带编号的短列表项可能认成标题，都会送翻
+    # Short numbered list items may be taken for headings; either way they are translated
     assert [role is Role.FIGURE for role in roles] == [False, False, False, False, True]

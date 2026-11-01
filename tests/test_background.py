@@ -17,12 +17,13 @@ def test_run_returns_the_result_and_passes_errors_through():
 
     with pytest.raises(ValueError):
         asyncio.run(background.run(broken))
-    # 不在 run 起的线程里时 check_stop 什么也不做
+    # Outside a thread started by run, check_stop does nothing
     background.check_stop()
 
 
 def test_a_cancelled_run_stops_the_thread_and_waits_for_it():
-    """任务被取消时线程在下一次 check_stop 停下；取消等线程停了才抛出来"""
+    """When the job is cancelled the thread stops at its next check_stop, and the cancellation is raised only after
+    the thread has stopped"""
     steps = []
     finished = threading.Event()
 
@@ -49,7 +50,8 @@ def test_a_cancelled_run_stops_the_thread_and_waits_for_it():
 
 
 def test_pausing_a_pdf_during_analysis_stops_it_before_freeing_mupdf(monkeypatch, tmp_path):
-    """读版面时暂停：分析在下一页停下（报进度时），MuPDF 等分析停了才让给别的任务"""
+    """Pause while reading layout: analysis stops at the next page (when reporting progress), and MuPDF is handed to
+    another job only after the analysis has stopped"""
     pages = []
     finished = threading.Event()
 

@@ -2,7 +2,8 @@ import os
 
 import pytest
 
-# TestClient 的请求地址是 testserver，main 只接受本机地址。要在导入 main 之前设好
+# TestClient requests come from testserver, and main accepts only local addresses. This must be set before main is
+# imported
 os.environ["ALLOWED_HOSTS"] = "testserver"
 
 from app import ccswitch  # noqa: E402
@@ -10,14 +11,15 @@ from app import ccswitch  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def isolate_ccswitch(tmp_path, monkeypatch):
-    """测试默认不读本机真实的 CC Switch 数据库。"""
+    """By default tests do not read the real CC Switch database of this machine."""
     monkeypatch.setattr(ccswitch, "DB_PATH", tmp_path / "no-cc-switch.db")
 
 
 @pytest.fixture(autouse=True)
 def isolate_cache(tmp_path, monkeypatch):
-    """翻译缓存也用临时库：不读写真实的 data/cache.sqlite3。
-    否则上次跑测试留下的译文会让“是否重新翻译”的断言失效，测试的假译文也会混进真实缓存。"""
+    """The translation cache also uses a temporary database instead of the real data/cache.sqlite3. Otherwise
+    translations left by an earlier test run would break the assertions about retranslation, and fake test
+    translations would end up in the real cache."""
     from app import runner
 
     monkeypatch.setattr(runner, "_cache", runner.Cache(tmp_path / "cache.sqlite3"))
@@ -25,8 +27,9 @@ def isolate_cache(tmp_path, monkeypatch):
 
 @pytest.fixture
 def app_env(tmp_path, monkeypatch):
-    """把 Web 服务的翻译服务、翻译记录、设置都换到临时目录，并加一个 mock 翻译服务。
-    模型目录也换掉：公式检测模型默认开着，本机下好的模型不能让测试跑真模型。"""
+    """Move the web service's translation services, records and settings to a temporary directory and add a mock
+    translation service. The model directory is replaced too: the formula detection model is on by default, and a
+    model downloaded on this machine must not make tests run the real model."""
     from app import layout_model, main, quantize
     from app.history import JobStore
     from app.services import ServiceStore

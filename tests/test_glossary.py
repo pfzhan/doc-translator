@@ -24,13 +24,14 @@ def test_candidates_keep_repeated_phrases_and_acronyms():
     assert "data cube" in found
     assert "greedy algorithm" in found
     assert "OLAP" in found
-    # cube 只出现在 data cube 里，不单独成条；虚词和只出现一次的词不进来
+    # cube occurs only within data cube and gets no entry of its own; function words and words occurring once are left
+    # out
     assert "cube" not in found and "the greedy" not in found
     assert "Summary statistics" not in found and "summary statistics" not in found
 
 
 def test_possessives_do_not_leave_word_fragments():
-    """撇号不是断句标点：view's set 不能切出 “s set”，don't 也不能切出 “t …”。"""
+    """An apostrophe does not split phrases: view's set must not yield “s set”, nor don't yield “t …”."""
     text = [
         "The view's set of output columns must cover the query's set of output columns, and we don't drop columns."
     ] * 4
@@ -40,7 +41,7 @@ def test_possessives_do_not_leave_word_fragments():
 
 
 def test_a_word_repeated_across_table_cells_is_not_a_phrase():
-    """表格里相邻两格都是 semi-supervised，拼成的 “semi-supervised semi-supervised” 不是术语。"""
+    """Two adjacent table cells both reading semi-supervised do not make “semi-supervised semi-supervised” a term."""
     rows = ["Vinyals & Kaiser el al. (2014) semi-supervised semi-supervised 92.1"] * 4
     assert not any(len(set(term.casefold().split())) < len(term.split()) for term in candidates(rows))
 
@@ -52,7 +53,7 @@ def test_candidates_skip_text_without_spaces_between_words():
 def test_relevant_entries_follow_the_batch_text():
     entries = [("query", "查询"), ("data cube", "数据立方体"), ("SQL", "SQL"), ("view", "视图")]
     assert relevant(entries, ["Two queries over data  cubes"]) == [("query", "查询"), ("data cube", "数据立方体")]
-    # 缩写分大小写，词中间的 view 不算
+    # Acronyms are case-sensitive, and view inside a word does not count
     assert relevant(entries, ["no sql in this review"]) == []
 
 
@@ -103,11 +104,12 @@ def test_terms_are_defined_once_and_sent_only_where_they_appear(tmp_path):
     asyncio.run(runner.translate_all(DOC))
     term_requests = [user for system, user in requests if "terminology list" in system]
     assert len(term_requests) == 1 and "data cube" in term_requests[0]
-    # 候选是按词频数出来的：提示词要让模型删掉截出来的片段、公式变量和宽泛的普通词
+    # Candidates come from word counts, so the prompt must ask the model to drop cut-off fragments, formula variables
+    # and broad common words
     term_system = next(system for system, _user in requests if "terminology list" in system)
     assert "cut out of a longer phrase" in term_system and "variable names" in term_system
     assert "everyday words" in term_system
-    # 模型多给的、不在候选里的条目不收
+    # Extra entries from the model that were not candidates are not accepted
     assert tr.doc_glossary == [("data cube", "数据立方体"), ("greedy algorithm", "贪心算法"), ("OLAP", "OLAP")]
     assert runner.info["terms"] == 3
     batches = [(system, user) for system, user in requests if "terminology list" not in system]
@@ -128,8 +130,8 @@ def test_resuming_reuses_the_same_glossary_and_cache(tmp_path):
 
 
 def test_the_same_file_keeps_its_glossary_when_extraction_changes(tmp_path):
-    """同一份文件，提取规则改了以后候选清单跟着变：仍用第一次定下的术语表，
-    没变的段落照样命中缓存，不会整篇重翻。"""
+    """For the same file, the candidate list changes when extraction rules change, but the glossary fixed the first
+    time is still used, so unchanged paragraphs still hit the cache and the document is not retranslated."""
     cache = Cache(tmp_path / "c.sqlite3")
     first = Runner(_translator([]), cache=cache, skip_same_lang=False)
     first.set_document("sha-of-file")
@@ -143,7 +145,7 @@ def test_the_same_file_keeps_its_glossary_when_extraction_changes(tmp_path):
     asyncio.run(again.translate_all(changed))
     assert not any("terminology list" in system for system, _user in requests)
     assert tr.doc_glossary == first.translator.doc_glossary
-    # 只有新加的那一段去请求翻译
+    # Only the newly added paragraph is requested
     sent = [user for system, user in requests]
     assert len(sent) == 1 and "A new paragraph" in sent[0]
 
@@ -159,7 +161,8 @@ def test_translate_file_names_the_document(tmp_path):
 
 
 def test_clearing_a_document_defines_terms_and_translates_again(tmp_path):
-    """清理一份文件的缓存后重新翻译：术语表和段落都登记在这份文件名下，一起清掉，重新请求。"""
+    """Retranslating after clearing a file's cache: the glossary and paragraphs are registered under this file, are
+    cleared together and requested again."""
     cache = Cache(tmp_path / "c.sqlite3")
     first = Runner(_translator([]), cache=cache, skip_same_lang=False)
     first.set_document("doc")
@@ -174,7 +177,8 @@ def test_clearing_a_document_defines_terms_and_translates_again(tmp_path):
 
 
 def test_relayout_only_never_asks_for_terms(tmp_path):
-    """只排版时缺术语表不去请求，按没有术语表的缓存键找，旧记录照样能补生成。"""
+    """When only typesetting, a missing glossary is not requested; lookup uses cache keys without a glossary, so old
+    records can still regenerate outputs."""
     cache = Cache(tmp_path / "c.sqlite3")
     plain = _translator([])
     plain.auto_glossary = False
@@ -200,5 +204,5 @@ def test_covered_terms_are_found_anywhere_inside_longer_ones():
 
     counts = Counter({"large language model": 10, "language model": 11, "language": 30, "model": 12})
     terms = ["language", "model", "language model", "large language model"]
-    # language model、model 多半出现在 large language model 里；language 单独出现得多，留下
+    # language model and model mostly occur within large language model; language occurs often on its own and stays
     assert _drop_covered(terms, counts) == ["language", "large language model"]

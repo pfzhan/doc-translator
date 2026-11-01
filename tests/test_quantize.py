@@ -20,7 +20,8 @@ def _pdf(path, pages):
 
 
 def test_calibration_pages_come_from_every_pdf(tmp_path):
-    """各个 PDF 轮流抽，页数少的取完为止，一共不超过要的页数；打不开的文件跳过；同样的输入抽到同样的页"""
+    """PDFs are sampled in turn until those with few pages run out, never more than the requested count in total;
+    files that cannot be opened are skipped; the same input samples the same pages"""
     small, medium, large = _pdf(tmp_path / "a.pdf", 2), _pdf(tmp_path / "b.pdf", 5), _pdf(tmp_path / "c.pdf", 40)
     broken = tmp_path / "broken.pdf"
     broken.write_bytes(b"not a pdf")
@@ -34,7 +35,8 @@ def test_calibration_pages_come_from_every_pdf(tmp_path):
 
 
 def test_calibration_images_fall_back_to_the_sample_page(tmp_path):
-    """抽到的页按给的边长画成和翻译时一样的模型输入，存成 8 位；一页都没有时用样例页"""
+    """Sampled pages are rendered at the given side as the same model input as during translation, stored as 8 bits;
+    without any page the sample pages are used"""
     picks = [(_pdf(tmp_path / "a.pdf", 2), 1)]
     [image] = quantize.calibration_images(picks, layout_model.sample_page, 1024)
     assert image.dtype == np.uint8 and image.shape == (1, 3, 1024, 768)
@@ -45,7 +47,8 @@ def test_calibration_images_fall_back_to_the_sample_page(tmp_path):
 
 
 def test_the_detection_head_decode_stays_in_float():
-    """最后一个块里，cv2/cv3 分支前两层照常量化；最后一层卷积和分支外的解码（拼框、Sigmoid、DFL）不量化"""
+    """In the last block, the first two layers of the cv2/cv3 branches are quantized as usual; the last convolution and
+    the decoding outside the branches (concatenating boxes, Sigmoid, DFL) are not"""
     names = [
         "/model.0/conv/Conv",
         "/model.22/cv2/conv/Conv",
@@ -66,7 +69,7 @@ def test_the_detection_head_decode_stays_in_float():
         "/model.23/Sigmoid",
         "/model.23/Concat_25",
     ]
-    # 版面模型（YOLOv10）的分支名前面多 one2one_
+    # Branch names of the layout model (YOLOv10) are prefixed with one2one_
     v10 = [
         "/model.23/one2one_cv2.0/one2one_cv2.0.1/conv/Conv",
         "/model.23/one2one_cv2.0/one2one_cv2.0.2/Conv",
@@ -86,7 +89,8 @@ def test_the_detection_head_decode_stays_in_float():
 
 
 def test_boxes_are_counted_by_each_model_output_layout():
-    """生成后核对框数：公式检测模型每列一个候选框（框和各类的分），版面模型每行一个框（两角坐标、分、类别）"""
+    """Box count check after generation: formula detection has one candidate per column (box and class scores), the
+    layout model one box per row (corner coordinates, score, class)"""
     formula = np.zeros((1, 6, 4), np.float32)
     formula[0, 4] = [0.9, 0.1, 0.3, 0.0]
     formula[0, 5] = [0.0, 0.2, 0.1, 0.6]
@@ -96,7 +100,7 @@ def test_boxes_are_counted_by_each_model_output_layout():
 
 
 def test_quantizer_reports_failures_and_runs_one_at_a_time(monkeypatch, tmp_path):
-    """同一时间只生成一份；量化出错时记下原因，页面上显示"""
+    """Only one generation at a time; a quantization error is recorded and shown on the page"""
 
     def broken(self, src, dest, images, spec):
         raise quantize.QuantizeError("量化后的模型识别出的区域过少")
@@ -130,7 +134,8 @@ def test_int8_is_the_default_precision(tmp_path):
 
 
 def test_translation_uses_the_int8_file_once_it_exists(app_env, monkeypatch):
-    """选了 int8：int8 文件生成了就用它，没生成时用 fp32；选了 fp32 一直用 fp32。状态里报出用的是哪个"""
+    """With int8 chosen, the int8 file is used once generated and fp32 before that; with fp32 chosen, always fp32. The
+    status reports which one is used"""
     main = app_env
     monkeypatch.setattr(layout_model, "runtime_version", lambda: "")
     fp32 = layout_model.FORMULA.default_path()
@@ -151,7 +156,7 @@ def test_translation_uses_the_int8_file_once_it_exists(app_env, monkeypatch):
 
 
 def test_layout_model_uses_its_int8_file_too(app_env, monkeypatch):
-    """版面模型同样：开着、选了 int8 且 int8 文件生成了时翻译用它"""
+    """Same for the layout model: translation uses int8 when enabled, int8 is chosen and the int8 file exists"""
     main = app_env
     monkeypatch.setattr(layout_model, "runtime_version", lambda: "")
     fp32 = layout_model.LAYOUT.default_path()
@@ -170,7 +175,8 @@ def test_layout_model_uses_its_int8_file_too(app_env, monkeypatch):
 
 
 def test_generating_int8_needs_onnx_and_the_model(app_env, monkeypatch):
-    """没装 onnx、模型没下时不生成；能生成时用翻译过的 PDF 抽页，写到 fp32 文件旁边"""
+    """No generation without onnx or a downloaded model; when possible, pages are sampled from translated PDFs and
+    the result is written next to the fp32 file"""
     main = app_env
     started = []
     for quantizer in main.quantizers.values():
@@ -187,7 +193,7 @@ def test_generating_int8_needs_onnx_and_the_model(app_env, monkeypatch):
         fp32 = layout_model.FORMULA.default_path()
         fp32.parent.mkdir(parents=True)
         fp32.write_bytes(b"x")
-        # 还没有翻译过 PDF：用样例页
+        # No PDF translated yet: use the sample pages
         assert client.post("/api/formula-model/quantize").status_code == 200
         src, dest, images, spec = started[-1]
         assert src == fp32 and dest == quantize.int8_path(fp32) and len(images) == 1
@@ -203,7 +209,7 @@ def test_generating_int8_needs_onnx_and_the_model(app_env, monkeypatch):
 
 
 def test_only_one_model_is_quantized_at_a_time(app_env, monkeypatch):
-    """版面模型也能生成 int8 版；一个模型在生成时，另一个不开始"""
+    """The layout model can also get an int8 version; while one model is generating, the other does not start"""
     main = app_env
     started = []
     monkeypatch.setattr(quantize, "available", lambda: True)

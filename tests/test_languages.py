@@ -34,12 +34,12 @@ def test_language_table_from_plugin():
     "src,dst,expected",
     [
         ("auto", "zh-CN", "你是专业的简体中文母语译者"),
-        ("en", "zh-CN", "你是专业的简体中文母语译者"),  # auto2zh-CN 对任何源语言生效
-        ("wyw", "zh-CN", "你是精通古文的学者"),  # wyw2zh-CN 覆盖 auto2zh-CN
+        ("en", "zh-CN", "你是专业的简体中文母语译者"),  # auto2zh-CN applies to any source language
+        ("wyw", "zh-CN", "你是精通古文的学者"),  # wyw2zh-CN overrides auto2zh-CN
         ("auto", "wyw", "你是专业的文言文译者"),
-        ("auto", "zh-CN-NE", "你是专业的东北话翻译"),  # extends auto2zh-CN 再覆盖
+        ("auto", "zh-CN-NE", "你是专业的东北话翻译"),  # extends auto2zh-CN, then overrides
         ("auto", "ja", "あなたはプロの日本語ネイティブ翻訳者です"),
-        ("auto", "de", "You are a professional {{to}} native translator"),  # 无专门版本，用通用模板
+        ("auto", "de", "You are a professional {{to}} native translator"),  # no specific version; the generic template
     ],
 )
 def test_lang_overrides_match_plugin_rules(src, dst, expected):
@@ -66,7 +66,8 @@ def test_from_and_to_placeholders():
 
 
 def test_formula_placeholders_get_their_own_rule():
-    """带 {vN} 的段落要单独说明公式占位符，模型才不会把它猜成「=」写出来。"""
+    """Paragraphs with {vN} need a separate explanation of formula placeholders, or the model guesses them to be "="
+    and writes that."""
     system, _ = build_messages(["the case k {v1} 2 is the worst"], "zh-CN")
     assert "## Formula placeholders" in system
     system, _ = build_messages(["the case k {v1} 2", "another item"], "zh-CN")
@@ -83,13 +84,13 @@ def test_detect():
     assert langdetect.detect("这一段本来就是中文，不需要再翻译成中文了。") == "zh-CN"
     assert langdetect.detect("吾輩は猫である。名前はまだ無い。どこで生れたかとんと見当がつかぬ。") == "ja"
     assert langdetect.detect("안녕하세요 오늘은 날씨가 정말 좋네요 산책하러 갈까요") == "ko"
-    assert langdetect.detect("OK") is None  # 太短不判断
+    assert langdetect.detect("OK") is None  # too short to judge
 
 
 def test_same_language_rules():
     assert langdetect.same_language("en", "en")
     assert langdetect.same_language("pt", "pt-br")
-    assert not langdetect.same_language("zh-CN", "zh-TW")  # 简繁互译不算相同
+    assert not langdetect.same_language("zh-CN", "zh-TW")  # Simplified and Traditional are not the same
     assert not langdetect.same_language("zh-CN", "wyw")
     assert langdetect.same_language("zh-TW", "zh-HK")
     assert not langdetect.same_language(None, "en")
@@ -109,7 +110,7 @@ def test_runner_skips_paragraphs_already_in_target_and_detects_source():
     assert runner.info == {"detected_lang": "en", "skipped": 1, "failed": 0}
     assert tr.effective_source == "en"
 
-    # 关闭跳过后全部翻译
+    # With skipping off, everything is translated
     runner = Runner(MockTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
     assert run(runner.translate_all(texts))[2].startswith("[zh-CN] ")
 
@@ -160,7 +161,7 @@ def test_glossary_injected_into_messages_and_cache_key():
     assert "Book = 卷" in system and "Glossary" in system
     system2, _ = build_messages(["x"], "zh-CN")
     assert "Glossary" not in system2
-    # 术语表进缓存键：换了术语表就重翻，换回来仍命中
+    # The glossary is part of the cache key: another glossary retranslates, and switching back hits the cache again
     from app.translators import OpenAITranslator
 
     a = OpenAITranslator("zh-CN", api_key="x", base_url="http://localhost", model="m", glossary="Book = 卷")
@@ -170,9 +171,10 @@ def test_glossary_injected_into_messages_and_cache_key():
 
 
 def test_instant_translator_still_lets_other_requests_run():
-    """接口立即返回时，每批之间也要交出事件循环，任务页的轮询才有响应。"""
+    """Even when the API returns at once, the event loop must be yielded between batches so that polling from the job
+    page gets responses."""
     ticks = 0
-    seen: list[int] = []  # 每次报进度时轮询跑过几次
+    seen: list[int] = []  # how many polls had run at each progress report
 
     async def scenario():
         nonlocal ticks
@@ -194,5 +196,5 @@ def test_instant_translator_still_lets_other_requests_run():
 
     run(scenario())
     assert len(seen) > 3
-    # 第一次是开始前报的，之后每批之间轮询都要跑到
+    # The first report is before the start; after that polling must run between every two batches
     assert len(set(seen[1:])) == len(seen[1:])

@@ -91,7 +91,8 @@ def test_prepare_unit_marks_the_run_boundary():
 
 
 def test_assign_keeps_the_cross_page_paragraph_together():
-    """跨页译文整段留在起始页。汉字分界不加空格，否则「相当」和「不错」会分开。"""
+    """A translation across pages stays whole on the starting page. No space is added at a boundary between Chinese
+    characters, or "相当" and "不错" would be separated."""
     from app.formats.pdf_blocks import SPILL_TAIL
 
     left = TextBlock(
@@ -119,7 +120,8 @@ def test_assign_keeps_the_cross_page_paragraph_together():
 
 
 def test_assign_splits_a_paragraph_cut_by_a_display_at_the_boundary():
-    """两块中间隔着行间公式、例句时按分界切回两块，公式哨兵跟着自己的块走。模型丢了分界时仍整段留在起始块。"""
+    """Two blocks separated by a display formula or example are split back at the boundary, and formula sentinels go
+    with their own block. When the model drops the boundary, the whole paragraph stays in the starting block."""
     from app.formats.pdf_blocks import SPILL_TAIL
 
     left = TextBlock(
@@ -150,12 +152,13 @@ def test_assign_splits_a_paragraph_cut_by_a_display_at_the_boundary():
 
 
 def test_stroke_just_outside_the_glyph_box_joins_the_formula():
-    """分式线贴在框外、根号竖笔贴在左侧时要收进裁剪。通栏线和下划线不收。"""
+    """A fraction bar just outside the box or a radical stroke on the left is taken into the clip. Full-width rules
+    and underlines are not."""
     box = pymupdf.Rect(40, 40, 70, 54)
-    bar = pymupdf.Rect(38, 36.8, 74, 38.2)  # 高出框 1.8pt 的分式线
-    radical = pymupdf.Rect(32, 38, 39, 56)  # 贴在左侧的根号
-    rule = pymupdf.Rect(0, 37, 400, 38.2)  # 贴着框、但是通栏
-    underline = pymupdf.Rect(10, 52, 38, 53.2)  # 左侧单词的下划线
+    bar = pymupdf.Rect(38, 36.8, 74, 38.2)  # fraction bar 1.8pt above the box
+    radical = pymupdf.Rect(32, 38, 39, 56)  # radical on the left
+    rule = pymupdf.Rect(0, 37, 400, 38.2)  # touching the box but full width
+    underline = pymupdf.Rect(10, 52, 38, 53.2)  # underline of the word on the left
     curves = intersecting_curves(box, [bar, radical, rule, underline])
     assert pymupdf.Rect(bar) in curves
     assert pymupdf.Rect(radical) in curves
@@ -165,8 +168,8 @@ def test_stroke_just_outside_the_glyph_box_joins_the_formula():
 
 def test_intersecting_curve_joins_the_formula_box():
     box = pymupdf.Rect(40, 40, 70, 54)
-    bar = pymupdf.Rect(42, 38, 68, 42)  # 压在框顶上的分式线
-    rule = pymupdf.Rect(0, 40, 400, 41)  # 通栏线，不并
+    bar = pymupdf.Rect(42, 38, 68, 42)  # fraction bar over the box top
+    rule = pymupdf.Rect(0, 40, 400, 41)  # full-width rule, not merged
     curves = intersecting_curves(box, [bar, rule])
     assert curves == (pymupdf.Rect(bar),)
     formula = {

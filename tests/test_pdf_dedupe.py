@@ -22,7 +22,7 @@ def _book_with_a_picture() -> bytes:
 
 
 def _side_by_side(data: bytes) -> pymupdf.Document:
-    """双语版的拼法：左边原书，右边原书的副本。"""
+    """Assembled like the bilingual version: the original on the left, a copy of the original on the right."""
     left, right = pymupdf.open("pdf", data), pymupdf.open("pdf", data)
     out = pymupdf.open()
     for index in range(len(left)):
@@ -39,12 +39,13 @@ def _images(doc: pymupdf.Document) -> int:
 def test_copies_of_the_same_picture_and_font_become_one():
     doc = _side_by_side(_book_with_a_picture())
     before = [page.get_pixmap(dpi=72).samples for page in doc]
-    # 每份是一张图加它的透明蒙版。蒙版先合并，两张图的字典才一样
+    # Each copy is an image with its soft mask. The masks are merged first so that the two image dictionaries match
     assert _images(doc) == 4
     assert merge_duplicates(doc) > 0
     merged = pymupdf.open("pdf", doc.tobytes(garbage=1, deflate=True))
     assert _images(merged) == 2
-    # 合并只改引用。流对象的字典改过以后流还在，页面画出来和原来一样
+    # Merging changes only references. After the stream dictionaries change the streams remain, and the page renders
+    # as before
     assert [page.get_pixmap(dpi=72).samples for page in merged] == before
 
 

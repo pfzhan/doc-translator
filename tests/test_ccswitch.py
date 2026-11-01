@@ -111,7 +111,8 @@ def test_read_current(cc_db):
     )
 
     g = items["gemini"]
-    assert (g["base_url"], g["model"]) == ("https://gemini.example.com/v1beta", "gemini-test")  # 模型来自通用配置
+    # The model comes from the common configuration
+    assert (g["base_url"], g["model"]) == ("https://gemini.example.com/v1beta", "gemini-test")
 
     x = items["grokbuild"]
     assert (x["provider"], x["base_url"], x["model"], x["api_key"], x["api_format"]) == (
@@ -151,7 +152,7 @@ def test_store_merges_ccswitch_services(tmp_path, cc_db):
     claude = next(s for s in listed["services"] if s["id"] == "ccswitch-claude")
     assert claude["name"] == "Claude · relay-claude" and claude["api_key_hint"] == "sk-…3456"
 
-    # 只能改本地设置，地址和 Key 改不了
+    # Only local settings can change, not the URL or key
     store.update(
         "ccswitch-claude",
         {"model": "claude-other", "concurrency": 2, "base_url": "https://evil.example.com", "api_key": "x"},
@@ -163,7 +164,7 @@ def test_store_merges_ccswitch_services(tmp_path, cc_db):
         "https://claude.example.com/v1",
         "sk-claude-token-123456",
     )
-    # 模型改回和 CC Switch 一致时不单独保存
+    # A model changed back to CC Switch's is not saved separately
     store.update("ccswitch-claude", {"model": "claude-test"})
     assert store.ccswitch_settings["ccswitch-claude"]["model"] == ""
 
@@ -172,7 +173,7 @@ def test_store_merges_ccswitch_services(tmp_path, cc_db):
 
     store.set_default("ccswitch-codex")
     assert ServiceStore(tmp_path / "s.json", ccswitch_db=cc_db).list()["default"] == "ccswitch-codex"
-    # CC Switch 读不到时默认服务退回谷歌翻译
+    # When CC Switch cannot be read, the default service falls back to Google Translate
     assert ServiceStore(tmp_path / "s.json", ccswitch_db=tmp_path / "gone.db").list()["default"] == "google"
 
 
@@ -189,10 +190,10 @@ def test_unavailable_service_cannot_be_enabled(tmp_path):
 def test_clone_ccswitch_service_to_local(tmp_path, cc_db):
     store = ServiceStore(tmp_path / "s.json", ccswitch_db=cc_db)
     clone = store.clone_to_local("ccswitch-codex")
-    assert "api_key" not in clone  # 返回给前端的版本不带明文 Key
+    assert "api_key" not in clone  # the version returned to the frontend has no plain-text key
     assert clone["name"].endswith("（本地）")
 
-    # 连接信息（地址、Key、模型、api_format）从 CC Switch 固化成本地配置
+    # Connection details (URL, key, model, api_format) are fixed from CC Switch into the local configuration
     saved = store.get(clone["id"])
     assert (saved["provider"], saved["base_url"], saved["model"], saved["api_key"]) == (
         "openai",
@@ -202,7 +203,7 @@ def test_clone_ccswitch_service_to_local(tmp_path, cc_db):
     )
     assert saved["api_format"] == "responses" and not saved["builtin"]
 
-    # 落盘且不再跟随 CC Switch：数据库读不到时本地副本照常可用
+    # Saved and no longer following CC Switch: the local copy works even when the database cannot be read
     again = ServiceStore(tmp_path / "s.json", ccswitch_db=tmp_path / "gone.db")
     assert again.get(clone["id"])["api_key"] == "sk-openai-key-123456"
 

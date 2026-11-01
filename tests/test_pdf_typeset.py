@@ -25,7 +25,8 @@ def test_wide_formula_is_its_own_line():
 
 
 def test_a_tall_inline_formula_opens_up_its_line():
-    """根号下带求和上下限的行内公式比一行字高，这一行的行距撑开，后面各行跟着下移。一行高的公式不撑。"""
+    """An inline formula with a summation and limits under a radical is taller than a line, so that line's spacing
+    opens up and the following lines move down. A formula one line tall does not."""
     from app.formats.pdf_typeset import line_offsets
 
     tall = {1: FormulaMetric(slot_width=40, body_width=36, height=24, below=7)}
@@ -34,7 +35,7 @@ def test_a_tall_inline_formula_opens_up_its_line():
     offsets, extra = line_offsets([*plain, *lines, *plain], em=10, gap=1.45)
     assert offsets[0] == 0 and offsets[1] > 0 and offsets[2] > offsets[1]
     assert extra == offsets[2]
-    # 第一行就是高公式的，上面借原文留的地方，不往下挪
+    # When the tall formula is on the first line, it uses the space left above by the original and nothing moves down
     first, _ = line_offsets([*lines, *plain], em=10, gap=1.45)
     assert first[0] == 0 and first[1] > 0
     short = {1: FormulaMetric(slot_width=20, body_width=16, height=12, below=2)}
@@ -45,7 +46,7 @@ def test_a_tall_inline_formula_opens_up_its_line():
 
 
 def test_style_marks_are_written_back(tmp_path):
-    """粗体、斜体、较小字号按标记写回，不留在页面文字里。"""
+    """Bold, italic and smaller sizes are written from their markers, and the markers do not remain in the page text."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -88,7 +89,8 @@ def test_style_marks_are_written_back(tmp_path):
 
 
 def test_plain_paragraph_keeps_parentheses_and_separates_lines(tmp_path):
-    """没有公式的段落也由排版器断行：短括号组留在同一行，行与行不重叠。"""
+    """Paragraphs without formulas are also broken by the typesetter: short bracket groups stay on one line, and lines
+    do not overlap."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -98,7 +100,8 @@ def test_plain_paragraph_keeps_parentheses_and_separates_lines(tmp_path):
     page.insert_text((30, 40), "Source", fontsize=12)
     doc.save(src)
     doc.close()
-    # 宽过页宽的 60%，不再右扩，长译文必须换行。盒子够高，不必压行距。
+    # Wider than 60% of the page width, the box is not extended to the right, so a long translation must wrap. The box
+    # is tall enough that the line spacing need not be reduced.
     rect = pymupdf.Rect(30, 28, 150, 90)
     block = TextBlock(
         page=0,
@@ -126,7 +129,7 @@ def test_plain_paragraph_keeps_parentheses_and_separates_lines(tmp_path):
 
 
 def test_typeset_formula_tracks_the_line_baseline(tmp_path):
-    """公式下沿贴在同一行文字的基线上，不跟盒子顶走。"""
+    """The bottom of the formula sits on the baseline of the text on the same line, not relative to the box top."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
 
@@ -181,6 +184,7 @@ def test_typeset_formula_tracks_the_line_baseline(tmp_path):
     hit = page.search_for("BETA")
     assert len(hit) == 1
     baseline = text_spans[0]["origin"][1]
-    # 记录的下沿是 2pt，再乘渲染缩放，公式底应靠近文字基线而不是盒子顶
+    # The recorded depth is 2pt, times the render scale; the formula bottom should be near the text baseline, not the
+    # box top
     assert abs(hit[0].y1 - baseline) < 8
     assert hit[0].x0 > text_spans[0]["bbox"][0]

@@ -25,7 +25,8 @@ def test_settings_keep_the_layout_model_choice(tmp_path):
 
 
 def test_the_formula_model_is_on_by_default(tmp_path):
-    """公式检测模型默认开着，关掉以后记住。两个模型的设置互不影响"""
+    """The formula detection model is on by default, and turning it off is remembered. The settings of the two models
+    are independent"""
     path = tmp_path / "settings.json"
     settings = Settings(path)
     assert settings.formula_model == {
@@ -53,7 +54,8 @@ def test_the_formula_model_is_on_by_default(tmp_path):
 
 
 def test_formula_parallel_settings_take_small_whole_numbers(tmp_path):
-    """同时推理的页数、每页推理线程数存成整数，留空是 0（自动）。别的设置不受影响"""
+    """Pages inferred at once and threads per page are stored as integers, empty as 0 (automatic). Other settings are
+    not affected"""
     path = tmp_path / "settings.json"
     settings = Settings(path)
     settings.update({"formula_model": {"workers": 3, "threads": 2}})
@@ -133,7 +135,7 @@ def test_layout_model_page_api(app_env, monkeypatch, tmp_path):
         model.write_bytes(b"x")
         saved = client.put("/api/layout-model", json={"enabled": True, "path": str(model)}).json()
         assert saved["enabled"] is True and saved["file"] == {"exists": True, "size": 1}
-        # 开了模型，翻译时把文件路径交给 PDF 流程
+        # With the model enabled, translation passes the file path to the PDF pipeline
         assert main._model_path("layout") == str(model)
 
         tested = client.post("/api/layout-model/test", json={"path": str(model)})
@@ -143,12 +145,13 @@ def test_layout_model_page_api(app_env, monkeypatch, tmp_path):
 
 
 def test_formula_model_page_api(app_env, monkeypatch, tmp_path):
-    """公式检测模型的接口和版面模型一样，默认开着，设置分开存"""
+    """The formula detection model has the same endpoints as the layout model, is on by default, and its settings are
+    stored separately"""
     main = app_env
     monkeypatch.setattr(layout_model, "runtime_version", lambda: "")
     with TestClient(main.app) as client:
         status = client.get("/api/formula-model").json()
-        # 本机 data/models 里下好的模型不算：测试的模型目录是临时的
+        # Models downloaded into data/models on this machine do not count: the test model directory is temporary
         assert status["enabled"] is True and status["file"]["exists"] is False
         assert status["default_path"] == str(layout_model.FORMULA.default_path())
         assert {source["id"] for source in status["sources"]} == set(layout_model.FORMULA.sources)
@@ -177,7 +180,8 @@ def test_formula_model_page_api(app_env, monkeypatch, tmp_path):
 
 
 def test_saved_analysis_depends_on_the_formula_model_and_its_size(tmp_path):
-    """开关公式模型、换输入尺寸，分析结果都不一样，存下的不能拿来用"""
+    """Toggling the formula model or changing its input size changes the analysis result, so a saved one cannot be
+    reused"""
     src = tmp_path / "a.pdf"
     src.write_bytes(b"%PDF-1.4 fake")
     model = tmp_path / "mfd.onnx"
@@ -188,5 +192,5 @@ def test_saved_analysis_depends_on_the_formula_model_and_its_size(tmp_path):
         _plan_key(src, "", FormulaModel(str(model), 768)),
     }
     assert len(keys) == 3
-    # 同时推理几页、用几个线程只影响快慢
+    # How many pages are inferred at once and with how many threads affects only speed
     assert _plan_key(src, "", FormulaModel(str(model), 768, 2, 3)) == _plan_key(src, "", FormulaModel(str(model), 768))

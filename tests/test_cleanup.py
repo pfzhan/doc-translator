@@ -1,4 +1,5 @@
-"""清理一条记录的缓存痕迹：缓存归属登记、按归属清理、接口和删除记录时的连带清理。"""
+"""Clearing what a record left in caches: registering cache owners, clearing by owner, and clearing through the API
+and when records are deleted."""
 
 import asyncio
 import hashlib
@@ -49,7 +50,7 @@ def test_runner_claims_written_and_hit_entries(tmp_path):
     first.set_document("doc1")
     asyncio.run(first.translate_all(["Hello world, this is a sentence."]))
     assert len(cache.owned("doc1")) == 1
-    # 另一份文件命中同一条缓存，也登记到它名下
+    # Another file hitting the same cache entry is registered as an owner too
     second = Runner(tr, cache=cache, skip_same_lang=False)
     second.set_document("doc2")
     asyncio.run(second.translate_all(["Hello world, this is a sentence."]))
@@ -77,7 +78,7 @@ def test_clearing_a_job_removes_its_cache_and_generated_files(app_env):
         assert sorted(p.name for p in folder.iterdir()) == ["book.md", "job.json", "out"]
         assert not any((folder / "out").iterdir()) and boxes.is_file()
 
-        # 记录还能重新开始翻译
+        # The record can still be translated again
         client.post(f"/api/jobs/{job['id']}/retry")
         again = wait_done(client, job["id"])
         assert again["status"] == "done" and again["outputs"] and _rows(cache) == 3
@@ -109,10 +110,10 @@ def test_jobs_of_the_same_file_share_cache(app_env):
         a = wait_done(client, submit(client)["id"])
         b = wait_done(client, submit(client)["id"])
         assert client.get(f"/api/jobs/{a['id']}/cache").json()["shared"] == 1
-        # 删掉其中一条，另一条还在用，缓存留着
+        # Delete one of them; the other still uses the cache, so it stays
         client.delete(f"/api/jobs/{a['id']}")
         assert _rows(cache) == 3
-        # 最后一条也删掉，缓存跟着清掉
+        # Delete the last one too, and the cache is cleared with it
         client.delete(f"/api/jobs/{b['id']}")
         assert _rows(cache) == 0
 
@@ -122,7 +123,8 @@ def test_entries_saved_before_ownership_are_found_from_the_saved_plan(app_env, m
     cache = runner.get_cache()
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        # 模拟登记归属之前存下的缓存：去掉登记，再多存一条只在上次版面分析里出现过的旧段落
+        # Simulate a cache saved before owners were registered: remove the registration, and add an old paragraph that
+        # appears only in the last layout analysis
         cache.conn.execute("DELETE FROM owner")
         tr = MockTranslator("zh-CN")
         tr.service_id = "mock"
@@ -147,7 +149,7 @@ def test_redo_from_scratch_clears_stale_entries_first(app_env):
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
         doc = main.jobs.get(job["id"]).document
-        # 旧代码切出来、现在已经不用的段落
+        # A paragraph cut by old code and no longer used
         cache.put_many("old-prefix", {"A stale paragraph.": "旧译文"})
         cache.claim(doc, "old-prefix", ["A stale paragraph."])
         r = client.post(f"/api/jobs/{job['id']}/retry", json={"fresh": True})
@@ -183,7 +185,7 @@ def test_jobs_of_the_same_book_share_the_layout_analysis(app_env, monkeypatch):
         assert a["status"] == b["status"] == "done" and len(calls) == 1
         plan = main.jobs.plan_path(main.jobs.get(a["id"]))
         assert plan == main.jobs.plan_path(main.jobs.get(b["id"])) and plan.is_file()
-        # 删掉一条，另一条还在用，分析结果留着；最后一条也删掉，一起删
+        # Delete one; the other still uses the analysis result, so it stays; delete the last one too, and it goes
         client.delete(f"/api/jobs/{a['id']}")
         assert plan.is_file()
         client.delete(f"/api/jobs/{b['id']}")
@@ -226,7 +228,7 @@ def test_the_same_file_uploaded_twice_is_stored_once(app_env):
         assert usage == main.jobs.disk_usage()
         client.delete(f"/api/jobs/{a['id']}")
         assert second.read_bytes() == MD
-        # 另一份内容不同的文件不受影响
+        # Another file with different content is not affected
         c = wait_done(client, submit(client, name="other.md", data=MD + b"\nMore.\n")["id"])
         assert main.jobs.source_path(main.jobs.get(c["id"])).stat().st_ino != second.stat().st_ino
 
@@ -235,7 +237,7 @@ def test_layouts_left_in_job_folders_are_adopted_for_new_jobs(app_env):
     main = app_env
     with TestClient(main.app) as client:
         old = main.jobs.get(wait_done(client, submit(client)["id"])["id"])
-        # 共用目录之前的旧记录：版面结果还在记录目录里
+        # An old record from before the shared directory: its layout result is still in the record directory
         (main.jobs.dir(old.id) / "boxes.json").write_text("{}")
         shared = main.jobs.layout_root / old.document
         assert main.jobs.adopt_layouts() == 1
