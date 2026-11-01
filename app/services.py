@@ -1,7 +1,7 @@
-"""翻译服务配置：内置服务 + 用户自定义服务，保存在 data/services.json。
+"""Translation service configuration: built-in services plus user-defined ones, saved in data/services.json.
 
-一个“服务”就是一份引擎配置（类型、名称、Key、地址、模型、并发等），
-同一种类型可以添加多个，比如两个不同 Key 的 OpenAI、或者一个走代理地址的 Claude。
+A service is one engine configuration (type, name, key, URL, model, concurrency and so on). Several services of the
+same type can be added, such as two OpenAI services with different keys, or a Claude service through a proxy URL.
 """
 
 import json
@@ -13,7 +13,8 @@ from . import ccswitch
 
 DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "services.json"
 
-# 预置模型只是方便选择，可能不是最新的；页面上可以“获取模型列表”或手动输入模型名
+# Preset models are only a convenience and may be outdated; the page can fetch the model list ("获取模型列表") or
+# take a model name typed by hand
 PROVIDERS = {
     "google": {
         "label": "谷歌翻译",
@@ -69,7 +70,7 @@ PROVIDERS = {
     },
 }
 
-# 用户可编辑的字段及默认值
+# Fields the user can edit, with their defaults
 FIELDS = {
     "name": "",
     "enabled": True,
@@ -99,7 +100,7 @@ def _mask(key: str) -> str:
     return key[:3] + "…" + key[-4:] if len(key) > 10 else "…" * 3
 
 
-# CC Switch 服务可以在本项目里调整的字段；连接信息（地址、Key）始终以 CC Switch 为准
+# Fields of CC Switch services that can be adjusted here; connection details (URL, key) always come from CC Switch
 CCSWITCH_LOCAL_FIELDS = {
     "enabled",
     "model",
@@ -115,7 +116,7 @@ CCSWITCH_LOCAL_FIELDS = {
 
 
 def public(service: dict) -> dict:
-    """返回给前端的版本：不带明文 Key。"""
+    """The version returned to the frontend, without the plain-text key."""
     out = {k: v for k, v in service.items() if k != "api_key"}
     out["api_key_hint"] = _mask(service.get("api_key", ""))
     return out
@@ -164,16 +165,17 @@ class ServiceStore:
                 if isinstance(loaded, dict):
                     data = loaded
             except (ValueError, OSError):
-                pass  # 文件损坏时回退到空配置，不影响启动
+                pass  # a damaged file falls back to an empty configuration and does not block startup
         self.services: list[dict] = data.get("services", [])
         self.default_id: str = data.get("default", "google")
-        # CC Switch 服务的本地设置：{服务 id: {enabled, model, prompt, ...}}
+        # Local settings of CC Switch services: {service id: {enabled, model, prompt, ...}}
         self.ccswitch_settings: dict[str, dict] = data.get("ccswitch", {})
-        # 内置服务始终存在，用户可以改启用状态
+        # Built-in services always exist; the user can enable or disable them
         for b in BUILTIN:
             if not any(s["id"] == b["id"] for s in self.services):
                 self.services.insert(0, dict(b))
-        # CC Switch 的服务可能暂时读不到（比如数据库被占用），默认值保留，list() 时再兜底
+        # CC Switch services may be temporarily unreadable (for example when the database is locked); the default is
+        # kept and list() handles the fallback
         if not self.get(self.default_id) and not self.default_id.startswith("ccswitch-"):
             self.default_id = "google"
 
@@ -188,13 +190,14 @@ class ServiceStore:
             ),
             encoding="utf-8",
         )
-        tmp.chmod(0o600)  # 里面有 API Key，只允许当前用户读写
+        tmp.chmod(0o600)  # contains API keys; readable and writable by the current user only
         tmp.replace(self.path)
 
     # ---------- CC Switch ----------
 
     def _ccswitch_services(self) -> list[dict]:
-        """CC Switch 当前生效的供应商。连接信息每次现读；本地只保存开关、并发、提示词等设置。"""
+        """The provider currently active in CC Switch. Connection details are read each time; only settings such as
+        enabled, concurrency and prompt are stored locally."""
         out = []
         for cc in ccswitch.read_current(self.ccswitch_db):
             local = self.ccswitch_settings.get(cc["id"], {})
@@ -206,7 +209,7 @@ class ServiceStore:
                 **FIELDS,
                 "enabled": cc["available"],
                 **{k: v for k, v in local.items() if k in CCSWITCH_LOCAL_FIELDS},
-                # 下面这些来自 CC Switch，不能在本项目里改
+                # These come from CC Switch and cannot be changed here
                 "name": f"{cc['label']} · {cc['provider_name']}",
                 "base_url": cc["base_url"],
                 "api_key": cc["api_key"],
@@ -229,7 +232,8 @@ class ServiceStore:
         return next((s for s in self._all() if s["id"] == sid), None)
 
     def effective_default(self) -> str:
-        """实际生效的默认服务 id：配置的服务不存在或已关闭（比如 CC Switch 暂时读不到）时退回谷歌翻译。"""
+        """Id of the effective default service: falls back to Google Translate when the configured service does not
+        exist or is disabled (for example when CC Switch is temporarily unreadable)."""
         svc = self.get(self.default_id)
         return self.default_id if svc and svc.get("enabled") else "google"
 
@@ -247,7 +251,7 @@ class ServiceStore:
             raise ServiceError(f"无法启用：{svc['unavailable_reason']}")
         if changes.get("enabled") is False and self.default_id == svc["id"]:
             raise ServiceError("默认服务不能关闭，请先将其他服务设为默认")
-        # 模型和 CC Switch 一致时不单独保存，这样在 CC Switch 里改模型也会跟着变
+        # A model equal to CC Switch's is not saved separately, so changing the model in CC Switch takes effect here
         if "model" in changes and changes["model"] in ("", svc["ccswitch_model"]):
             changes["model"] = ""
         self.ccswitch_settings.setdefault(svc["id"], {}).update(changes)
@@ -278,7 +282,7 @@ class ServiceStore:
             if svc.get("source") == "ccswitch":
                 return self._update_ccswitch(svc, data)
             changes = _clean(data)
-            # Key 留空表示不修改；要清空 Key 需显式传 clear_api_key
+            # An empty key means unchanged; clearing the key requires clear_api_key explicitly
             if not changes.get("api_key") and not data.get("clear_api_key"):
                 changes.pop("api_key", None)
             if svc.get("builtin"):
@@ -306,7 +310,8 @@ class ServiceStore:
             self._save()
 
     def clone_to_local(self, sid: str) -> dict:
-        """把 CC Switch 服务复制成本地服务：地址、Key、模型等连接信息固化，之后不再跟随 CC Switch。"""
+        """Copy a CC Switch service into a local service: connection details such as URL, key and model are fixed
+        and no longer follow CC Switch."""
         with self.lock:
             svc = self.get(sid)
             if not svc:
@@ -322,7 +327,8 @@ class ServiceStore:
                 **{k: svc.get(k, v) for k, v in FIELDS.items()},
                 "name": f"{svc['name']}（本地）",
             }
-            # api_format/auth_style 不在 FIELDS 里，但创建引擎时要用（Claude 系走 Responses/Bearer 的情况）
+            # api_format/auth_style are not in FIELDS but are needed to create the engine (Claude models served
+            # through Responses/Bearer)
             for k in ("api_format", "auth_style"):
                 if svc.get(k):
                     clone[k] = svc[k]
@@ -345,7 +351,8 @@ class ServiceStore:
             self._save()
 
     def resolve(self, data: dict) -> dict:
-        """把前端表单里的（可能未保存的）配置和已保存的配置合并，用于测试服务、获取模型列表。"""
+        """Merge the (possibly unsaved) configuration from the frontend form with the saved one, for testing the
+        service and fetching the model list."""
         sid = data.get("id")
         found = self.get(sid) if sid else None
         base = dict(found) if found else {"provider": data.get("provider"), **FIELDS}
@@ -355,7 +362,7 @@ class ServiceStore:
         if base.get("source") == "ccswitch":
             if not base["available"]:
                 raise ServiceError(base["unavailable_reason"])
-            # 地址和 Key 以 CC Switch 为准，表单里只有本地设置能临时覆盖
+            # URL and key come from CC Switch; the form can temporarily override only local settings
             changes = {k: v for k, v in changes.items() if k in CCSWITCH_LOCAL_FIELDS}
             if not changes.get("model"):
                 changes.pop("model", None)

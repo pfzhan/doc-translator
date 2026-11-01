@@ -1,14 +1,18 @@
-"""清理一条翻译记录留下的缓存痕迹，原文件和记录本身保留。
+"""Clear what a translation record left in caches, keeping the source file and the record itself.
 
-包括四处：
-- 翻译缓存里这份文件的译文和术语表。按缓存登记的归属找（见 runner.Cache.owner），
-  登记归属之前存下的，按上次版面分析的送翻原文和服务现在的配置反推键再找一遍；
-- 记录目录里生成的文件：译文（out/）、预览快照、补生成的临时目录；
-- 这本书的版面分析结果（layout/<文件摘要>/plan.pickle）；
-- 版面模型框出的区域（同一目录的 boxes.json）。和译文无关，重新识别要几分钟，用户勾选了才清。
+Four places are covered:
+- Translations and glossary of this file in the translation cache, found by the owner registered in the cache
+  (see runner.Cache.owner). Entries saved before owners were registered are found again by recomputing their keys
+  from the source text of the last layout analysis and the service's current configuration;
+- Files generated in the record directory: translations (out/), the preview snapshot, temporary directories for
+  regeneration;
+- The book's layout analysis result (layout/<file digest>/plan.pickle);
+- Regions boxed by the layout model (boxes.json in the same directory). Unrelated to translations and taking
+  minutes to recompute, they are cleared only when the user ticks the option.
 
-同一份文件可以传成几条记录，翻译缓存和版面分析结果都是它们共用的。清理一条时照样删，
-界面上提示共用的条数；删除记录时只在没有别的记录用这份文件时才删，免得删掉一条重复的连累另一条。
+One file can be uploaded as several records, which share the translation cache and the layout analysis result.
+Clearing one record deletes them anyway, and the interface shows how many records share them; deleting a record
+removes them only when no other record uses the file, so deleting a duplicate does not affect the other one.
 """
 
 from __future__ import annotations
@@ -22,19 +26,20 @@ from .formats.pdf import saved_texts
 from .history import Job, JobStore
 from .runner import Cache, noted_key
 
-# 记录目录里翻译时生成的文件和目录。原文件、job.json 不在其中；out/ 只清里面的译文，目录留着写下一次的
+# Files and directories generated in the record directory during translation. The source file and job.json are not
+# among them; only the translations inside out/ are cleared, and the directory stays for the next run
 _GENERATED = ("preview.json", ".variant")
 
 
 @dataclass
 class Footprint:
-    """一条记录留下的痕迹。keys 是缓存里还在的条目。"""
+    """What a record left behind. keys are the entries still in the cache."""
 
     doc: str
     keys: set[str] = field(default_factory=set)
     generated: list[Path] = field(default_factory=list)
     boxes: Path | None = None
-    shared: int = 0  # 用同一份文件的其他记录数
+    shared: int = 0  # number of other records using the same file
 
     def summary(self, outputs: int) -> dict:
         return {
@@ -60,8 +65,9 @@ def _remove(path: Path) -> None:
 
 
 def _legacy_keys(job: Job, jobs: JobStore, cache: Cache, translator, doc: str) -> set[str]:
-    """登记归属之前存下的条目：用上次版面分析的送翻原文、服务现在的配置算键。
-    服务的配置后来改过（换模型、改提示词）就对不上，那些条目只能等缓存满了被挤掉。"""
+    """Entries saved before owners were registered: keys computed from the source text of the last layout analysis
+    and the service's current configuration. When the service configuration changed since (another model, another
+    prompt), the keys no longer match, and those entries are only evicted when the cache fills up."""
     plan = jobs.plan_path(job)
     texts = saved_texts(plan) if plan else []
     if translator is None or not texts:
@@ -71,14 +77,16 @@ def _legacy_keys(job: Job, jobs: JobStore, cache: Cache, translator, doc: str) -
     keys = Cache.keys(terms, [f"file:{doc}"])
     found = cache.get_many(terms, [f"file:{doc}"])
     if found and hasattr(translator, "doc_glossary"):
-        # 术语表是缓存键的一部分，有术语表的文件要带上它才算得对
+        # The glossary is part of the cache key, so files with a glossary need it for the key to be correct
         translator.doc_glossary = glossary.parse(next(iter(found.values())))
     return keys | Cache.keys(translator.cache_key, [noted_key(text, note) for text, note in texts])
 
 
 def footprint(job: Job, jobs: JobStore, cache: Cache, translator=None) -> Footprint:
-    """找出记录留下的痕迹，不删任何东西（存在记录目录里的旧版面分析结果会顺带搬到共用目录，见 JobStore.layout_dir）。
-    translator 按记录的服务现在的配置创建，用来反推旧条目；服务已经删了就传 None。"""
+    """Find what a record left behind without deleting anything (old layout analysis results in the record directory
+    are moved to the shared directory along the way, see JobStore.layout_dir). translator is created from the
+    current configuration of the record's service and used to recompute old entries; None when the service has
+    been deleted."""
     doc = jobs.document(job)
     found = Footprint(doc)
     outputs = jobs.out_dir(job.id)
@@ -99,7 +107,8 @@ def footprint(job: Job, jobs: JobStore, cache: Cache, translator=None) -> Footpr
 
 
 def purge(job: Job, jobs: JobStore, cache: Cache, translator=None, boxes: bool = False) -> int:
-    """清理记录留下的痕迹，返回删掉的缓存条目数。调用方保证记录不在翻译、补生成或删除中。"""
+    """Clear what a record left behind and return the number of cache entries deleted. The caller ensures the record
+    is not being translated, regenerated or deleted."""
     found = footprint(job, jobs, cache, translator)
     removed = cache.purge(found.doc, found.keys) if found.doc else 0
     for path in found.generated + ([found.boxes] if boxes and found.boxes else []):
@@ -108,7 +117,8 @@ def purge(job: Job, jobs: JobStore, cache: Cache, translator=None, boxes: bool =
 
 
 def forget(job: Job, jobs: JobStore, cache: Cache, translator=None) -> int:
-    """删除记录前清掉这本书的缓存和版面分析结果。还有别的记录用同一份文件时不动，返回 0。"""
+    """Before a record is deleted, clear the book's cache and layout analysis result. Nothing is touched, and 0 is
+    returned, when another record uses the same file."""
     found = footprint(job, jobs, cache, translator)
     if not found.doc or found.shared:
         return 0
@@ -118,7 +128,8 @@ def forget(job: Job, jobs: JobStore, cache: Cache, translator=None) -> int:
 
 
 def prune_layouts(jobs: JobStore) -> list[str]:
-    """删掉已经没有记录用到的书的版面分析结果（记录被删时没清掉的、原文件已经不在的），返回删掉的摘要。"""
+    """Delete layout analysis results of books no record uses any more (left over when records were deleted, or
+    whose source file is gone) and return the deleted digests."""
     if not jobs.layout_root.is_dir():
         return []
     used = {jobs.document(job) for job in jobs.list()}

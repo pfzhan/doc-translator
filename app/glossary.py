@@ -1,9 +1,11 @@
-"""术语表：用户在翻译服务里填的，加上翻译前从整份文档里找出来的。
+"""Glossary: the entries the user entered for the translation service, plus those found in the whole document
+before translation.
 
-找术语分两步。先在本地数：同一串实词在全文反复出现（data cube、greedy algorithm），
-全大写的缩写（OLAP、TPC-D），以及出现很多次的长词。这一步只求不漏。
-再把候选一次交给模型，按文档标题定下译名，普通词由它删掉。
-翻译时每一批只带这一批原文里出现了的条目，提示词不随术语表变长。
+Terms are found in two steps. First they are counted locally: sequences of content words repeated across the text
+(data cube, greedy algorithm), all-caps acronyms (OLAP, TPC-D), and long words occurring many times. This step only
+aims to miss nothing. The candidates are then given to the model at once, which fixes translations based on the
+document title and removes common words. Each translation batch carries only the entries occurring in its source
+text, so the prompt does not grow with the glossary.
 """
 
 from __future__ import annotations
@@ -14,17 +16,19 @@ from collections.abc import Iterable, Sequence
 
 Entry = tuple[str, str]
 
-# 送翻文本里的占位符（{v1}、{b}、{|}）和电子书片段的标签，数词时去掉
+# Placeholders in the text sent for translation ({v1}, {b}, {|}) and tags of ebook fragments, removed when
+# counting words
 _MARKUP_RE = re.compile(r"\{[^{}\s]{1,8}\}|<[^<>]+>")
-# 句内的停顿处断开，术语不跨标点。撇号只在词边上才是引号，夹在字母中间是词的一部分（don't）
+# Split at pauses within a sentence; terms do not cross punctuation. An apostrophe is a quote only at a word
+# boundary; between letters it is part of the word (don't)
 _CLAUSE_RE = re.compile(r"[.,;:!?()\[\]{}\"“”‘/|=+*<>…—–]+|(?<![^\W\d_])['’]|['’](?![^\W\d_])|\s-\s|\n")
-# 所有格 view's set：在这里断开，不让 s 和后面的词连成一条
+# Possessives such as view's set: split here so that s does not join the following word
 _POSSESSIVE_RE = re.compile(r"(?<=[^\W\d_])['’]s\b")
 _WORD_RE = re.compile(r"[^\W\d_][\w’'-]*[^\W_]|[^\W\d_]")
-# 汉字、假名、谚文。这类文字词间没有空格，按空格数词数不出东西
+# Han characters, kana and hangul. These scripts have no spaces between words, so counting by spaces finds nothing
 _CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 
-# 英文虚词和论文里的套话。术语里不含这些词，它们也不单独成词
+# English function words and stock phrases of papers. Terms do not contain them, nor are they terms on their own
 _STOPWORDS = frozenset(
     """
 a an the and or nor but if then else when while where which who whom whose what that this these those
@@ -42,19 +46,20 @@ e.g i.e etc vs al fig eq ref
 """.split()
 )
 
-_MIN_PHRASE = 3  # 多词术语至少出现几次
-_MIN_ACRONYM = 2  # 缩写至少出现几次
-_MIN_WORD = 6  # 单个词至少出现几次
-_MIN_WORD_LEN = 4  # 单个词至少几个字母，更短的多是普通词
-_MAX_WORDS = 4  # 多词术语最长几个词
-_LIMIT = 80  # 交给模型的候选上限
-_EXCERPT = 1500  # 给模型看的开头一段（字符）
-# 在这么大比例的段落里都出现的短词按虚词算（法语、德语等没有内置虚词表的语言靠它）
+_MIN_PHRASE = 3  # minimum occurrences of a multi-word term
+_MIN_ACRONYM = 2  # minimum occurrences of an acronym
+_MIN_WORD = 6  # minimum occurrences of a single word
+_MIN_WORD_LEN = 4  # minimum letters of a single word; shorter ones are mostly common words
+_MAX_WORDS = 4  # maximum words of a multi-word term
+_LIMIT = 80  # maximum candidates given to the model
+_EXCERPT = 1500  # characters of the document start shown to the model
+# Short words occurring in at least this share of paragraphs count as function words (needed for languages such
+# as French and German without a built-in list)
 _COMMON_SHARE = 0.3
 
 
 def parse(text: str) -> list[Entry]:
-    """每行“原文 = 译文”。没有等号的行、两边有一边为空的行忽略。"""
+    """One "source = translation" per line. Lines without an equals sign or with an empty side are ignored."""
     entries: list[Entry] = []
     for line in (text or "").splitlines():
         source, sep, target = line.partition("=")
@@ -69,7 +74,7 @@ def render(entries: Iterable[Entry]) -> str:
 
 
 def merge(user: Sequence[Entry], found: Sequence[Entry]) -> list[Entry]:
-    """用户填的优先。同一个原文（不分大小写）只留一条。"""
+    """User entries take precedence. Only one entry is kept per source term (case-insensitive)."""
     seen: set[str] = set()
     out: list[Entry] = []
     for source, target in [*user, *found]:
@@ -81,9 +86,9 @@ def merge(user: Sequence[Entry], found: Sequence[Entry]) -> list[Entry]:
 
 
 def relevant(entries: Sequence[Entry], texts: Sequence[str]) -> list[Entry]:
-    """只留这一批原文里出现了的条目。英文复数（-s、-es）也算出现。
+    """Keep only the entries occurring in this batch's source text. English plurals (-s, -es) count as occurring.
 
-    样式标记常落在术语中间（word{b} type{/b}），先去掉再找。
+    Style markers often fall inside a term (word{b} type{/b}) and are removed before searching.
     """
     if not entries:
         return []
@@ -104,13 +109,14 @@ def _mentions(haystack: str, term: str) -> bool:
     else:
         tail = "(?:s|es)?"
     body = r"\s+".join(map(re.escape, [*words[:-1], last]))
-    # 缩写分大小写：SQL 不等于句子里的 sql，IS 不等于 is
+    # Acronyms are case-sensitive: SQL is not sql in a sentence, IS is not is
     flags = 0 if _is_acronym(term) else re.I
     return re.search(r"(?<![\w-])" + body + tail + r"(?![\w-])", haystack, flags) is not None
 
 
 def excerpt(texts: Sequence[str]) -> str:
-    """文档开头的几段，让模型知道是哪个领域。短的标题、作者行跳过。"""
+    """The first paragraphs of the document, so the model knows the field. Short titles and author lines are
+    skipped."""
     out: list[str] = []
     size = 0
     for text in texts:
@@ -125,7 +131,8 @@ def excerpt(texts: Sequence[str]) -> str:
 
 
 def candidates(texts: Sequence[str]) -> list[str]:
-    """在本地找候选术语，按重要程度排好。中日韩为主的文档返回空。"""
+    """Find candidate terms locally, sorted by importance. Empty for documents mainly in Chinese, Japanese or
+    Korean."""
     clean = [_POSSESSIVE_RE.sub("\n", _MARKUP_RE.sub(" ", text)) for text in texts if text.strip()]
     if not clean:
         return []
@@ -148,7 +155,7 @@ def candidates(texts: Sequence[str]) -> list[str]:
                     continue
                 if size > 1 and any(_is_acronym(word) for word in gram):
                     continue
-                # 表格相邻两格写着同一个词时会连成 “semi-supervised semi-supervised”
+                # Two adjacent table cells with the same word would join into “semi-supervised semi-supervised”
                 if len({word.casefold() for word in gram}) < size:
                     continue
                 surface = " ".join(gram)
@@ -173,7 +180,8 @@ def candidates(texts: Sequence[str]) -> list[str]:
 
 
 def _common_words(texts: Sequence[str]) -> set[str]:
-    """在很多段落里都出现的短词。文档太短时不算，免得把术语当成虚词。"""
+    """Short words occurring in many paragraphs. Not computed for short documents, so terms are not taken for
+    function words."""
     if len(texts) < 20:
         return set()
     seen: Counter[str] = Counter()
@@ -188,7 +196,8 @@ def _is_acronym(word: str) -> bool:
 
 
 def _key(surface: str) -> str:
-    """大小写和英文复数不算不同的词。缩写保留大小写：IS 和 is 不是一个词。"""
+    """Case and English plurals do not make different words. Acronyms keep their case: IS and is are different
+    words."""
     words = surface.split()
     if len(words) == 1 and _is_acronym(surface):
         return surface
@@ -201,16 +210,17 @@ def _key(surface: str) -> str:
 
 
 def _surface(forms: Counter[str]) -> str:
-    """出现最多的写法。句首大写的那种不算，除非全文只有这种写法。"""
+    """The most frequent spelling. The sentence-initial capitalized form does not count unless it is the only one."""
     ranked = sorted(forms.items(), key=lambda item: (-item[1], item[0]))
     lower = [form for form, _count in ranked if form[:1].islower()]
     return lower[0] if lower else ranked[0][0]
 
 
 def _drop_covered(terms: list[str], counts: Counter[str]) -> list[str]:
-    """data 和 cube 几乎只出现在 data cube 里时，只留 data cube。"""
+    """When data and cube occur almost only within data cube, keep only data cube."""
     keys = {term: _key(term) for term in terms}
-    # 词组里连续的几个词 → 含有它们的更长词组。整本书的候选有几万个，不能两两比
+    # Consecutive words of a phrase → longer phrases containing them. A book has tens of thousands of candidates,
+    # too many to compare pairwise
     holders: dict[str, list[str]] = defaultdict(list)
     for other in terms:
         words = keys[other].split()
