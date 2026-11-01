@@ -1,0 +1,30 @@
+[project]
+name = "doc-translator"
+version = "0.1.0"
+description = "Web app that translates EPUB, MOBI/AZW3, PDF and Markdown documents while keeping their layout"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "pfzhan", email = "pfzhan@apache.org" }]
+requires-python = ">=3.12"
+# Pinned versions live in requirements.txt.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = [".venv", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+ignore = [
+    "B008",    # FastAPI and dataclass defaults call functions on purpose
+    "B905",    # zip() without strict= is intended where lengths may differ
+    "SIM108",  # a ternary is not always clearer than if/else
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]  # conftest sets environment variables before importing the app
+"eval/*" = ["E402"]   # scripts put the project directory on sys.path before importing it
