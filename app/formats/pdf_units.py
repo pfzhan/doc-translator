@@ -86,7 +86,8 @@ from .pdf_vision import FormulaModel, ModelBoxes, formula_detector, layout_detec
 
 
 def _is_symbol_span(text: str) -> bool:
-    """正文字体里整段都是希腊字母或数学符号。纯重音留给重音吸收，不当成公式。"""
+    """The whole span in a text font consists of Greek letters or math symbols. Pure accents are left to accent
+    absorption and are not treated as a formula."""
     stripped = text.strip()
     if not stripped or all(unicodedata.category(c) in ("Sk", "Mn") for c in stripped):
         return False
@@ -94,7 +95,8 @@ def _is_symbol_span(text: str) -> bool:
 
 
 def _smaller_prose_line(spans: list[dict], main_size: float) -> bool:
-    """这一行整体都比块里最大的标题小，而且是完整句子。那是标题下的正文，不是角标。"""
+    """The whole line is smaller than the largest heading in the block and is a complete sentence. That is body text
+    under the heading, not a script."""
     visible = [span for span in spans if str(span.get("text") or "").strip()]
     if not visible or main_size <= 0:
         return False
@@ -110,22 +112,27 @@ def _light_text(span: dict) -> bool:
 
 
 def _is_formula_span(span: dict, main_size: float, *, prose_line: bool = False, code: bool = False) -> bool:
-    """行内公式：数学字体的 span、公式检测模型框出的字，或明显小于正文的角标 span（引用编号等）。
-    粗体 CM（CMBX 等）的一两个字符按 mathbf 单字母算公式；粗体单词仍是正文。
-    正文字体里的希腊字母和数学符号也是公式。单个拉丁字母不是，除非贴在角标上。
-    prose_line 为真时，整行都是比标题小的正文，不能单凭字号收成公式。"""
+    """Inline formula: a span in a math font, characters boxed by the formula detection model, or a script span
+    clearly smaller than body text (citation numbers and the like).
+    One or two characters in bold CM (CMBX and similar) count as a single mathbf letter; bold words are still body text.
+    Greek letters and math symbols in a text font are formulas too. A single Latin letter is not, unless it is attached
+    to a script.
+    When prose_line is true, the whole line is body text smaller than the heading and size alone cannot make it a
+    formula."""
     if _span_is_math(span) or span.get("detected_formula"):
         return True
-    # 近白的字压在深色底上（黑底白字的图注标签）。重写会用正文的颜色，和底色混成一片，原样贴回
+    # Near-white text on a dark background (white-on-black caption labels). Rewriting would use the body color and
+    # blend into the background, so it is pasted back unchanged
     if _light_text(span):
         return True
-    # 句子里的等宽词是属性名、函数名，照原样贴回，不让模型有的译有的不译
+    # Monospaced words in a sentence are attribute or function names; they are pasted back unchanged so the model
+    # cannot translate some of them and leave others
     if code and MONO_FONT_RE.search(span["font"]) and re.search(r"[A-Za-z]", span["text"]):
         return True
     if span["size"] < main_size * 0.79 and not prose_line:
         return True
     if re.match(r"^CMB", span["font"]) and len(span["text"].strip()) <= 2:
-        # 图注里的 of / to 也是两个字母，但是词，不是 mathbf 变量。
+        # of / to in a caption are also two letters, but they are words, not mathbf variables.
         token = span["text"].strip()
         if len(token) == 2 and token.isalpha() and token.islower():
             return False
@@ -134,9 +141,12 @@ def _is_formula_span(span: dict, main_size: float, *, prose_line: bool = False, 
 
 
 def _formula_markup(run_spans: list[dict], main_size: float) -> str:
-    """把公式 run 拼成带上下标哨兵的字符串（\\x01s\\x02..\\x01/s\\x02 上标，b 为下标）。
-    恢复进译文后由渲染层换成 <sup>/<sub>，y_1^T 不再被拍平成 y1T。
-    上/下标按 baseline 偏移判定：比正文 baseline 高的是上标，低的是下标。"""
+    """Join a formula run into a string with superscript and subscript sentinels (\\x01s\\x02..\\x01/s\\x02 for a
+    superscript, b for a subscript).
+    After they are restored into the translation the rendering layer turns them into <sup>/<sub>, so y_1^T is no
+    longer flattened into y1T.
+    Superscript and subscript are decided by baseline offset: above the body baseline is a superscript, below it a
+    subscript."""
     text_spans = [s for s in run_spans if s["size"] >= main_size * 0.79]
     origins = [s["origin"][1] for s in text_spans if s.get("origin")]
     main_origin = origins[0] if origins else None
@@ -163,25 +173,28 @@ def _formula_markup(run_spans: list[dict], main_size: float) -> str:
     return "".join(out)
 
 
-# 孤立标点不当公式：<EOS> 这类 token 的尖括号是数学字体，单独抽出来会把 token 拆散、
-# 还把上下行的括号粘成跨行怪图。括号/标点留在正文里排版（正文字体本来就画得出）。
-# 符号字体里没有正文标点：CMSY 的 < 是 ≺ 这类关系符，单独一个也是公式
+# Isolated punctuation is not a formula: the angle brackets of a token such as <EOS> are in a math font, and pulling
+# them out alone would break the token apart and glue brackets of adjacent lines into odd images spanning lines.
+# Brackets and punctuation stay in the body text for typesetting (the text font can draw them).
+# Symbol fonts have no text punctuation: < in CMSY is a relation symbol such as ≺, and even a lone one is a formula
 _SYMBOL_FONT_RE = re.compile(r"^CMSY|^MSAM|^MSBM", re.I)
 _LONE_PUNCT_RE = re.compile(r"^[\s<>[\]{}()|/\\=+\-_.,;:'\"~·，。；：！？（）【】]+$")
-# 贴在角标上的正体变量。两个字母会把 of/to 吸进上标，只收一个字母。
+# Upright variable attached to a script. Two letters would pull of/to into a superscript, so only one letter is taken.
 _VARIABLE_BASE_RE = re.compile(r"^[A-Za-z]['′]?$")
 
 
-# 后面的数字算进公式的运算符
+# Operators whose following number belongs to the formula
 _ASSIGN_OPS = {"=", "<", ">", "+", "-", "−"}
 
 
 def _letter_formula_runs(span_lines: list[list[dict]], runs: list[dict]) -> list[dict]:
-    """正文字体的斜体单字母，夹着按全文字体标成公式的括号、等号（P(y = 1)、f(x)）：
-    P、y 是正文的斜体，括号、等号各自是孤立标点，单看哪个都不成公式。同一行上连着的一串里
-    既有标成公式的标点、又有斜体单字母的，整串是行内公式。中间的数字是公式里的，首尾的不收。
-    等号后面的数字也收（y = 1）。公式的括号里的斜体词、已经认出的符号也在串里（P(to|want) 的 to、|、want），
-    被整串盖住的公式并进来。返回新的整串，盖住的公式从 runs 里拿掉"""
+    """Single italic letters in a text font mixed with brackets and equals signs that the whole-text font pass marked
+    as formula (P(y = 1), f(x)): P and y are body italics and the brackets and equals signs are each isolated
+    punctuation, so none of them is a formula alone. A contiguous sequence on one line that contains both punctuation
+    marked as formula and single italic letters is an inline formula. Digits inside it belong to the formula; digits
+    at either end are not taken. A digit after an equals sign is taken too (y = 1). Italic words inside the formula's
+    brackets and symbols already recognized are part of the sequence (to, | and want in P(to|want)), and formulas the
+    sequence covers are merged into it. Returns the new sequences; covered formulas are removed from runs"""
     taken = {id(span) for run in runs for span in run["spans"]}
 
     def math_mark(span: dict) -> bool:
@@ -197,7 +210,7 @@ def _letter_formula_runs(span_lines: list[list[dict]], runs: list[dict]) -> list
         return math_mark(span) or letter(span) or id(span) in taken
 
     def assigned(window: list[dict]) -> bool:
-        """串尾是数字，前面紧挨着的是标成公式的运算符（= 1、< 0）"""
+        """The sequence ends with a number directly preceded by an operator marked as formula (= 1, < 0)"""
         words = [span for span in window if span["text"].strip()]
         return (
             len(words) >= 2
@@ -254,10 +267,12 @@ def _script_base(
     math: bool = False,
     script_y: float | None = None,
 ) -> bool:
-    """单字母贴在较小角标上，才并进公式。引用上标在字母右侧，中心出了字框，不收；
-    数学字体的角标（inf、tr 这样宽的）不是引用，只要紧贴字母右缘。
-    script_y 是角标的基线，下标比底低不过半个字。
-    下一行 H^enc 的 enc 字框碰到上一行的 X，基线却低了大半行，不是 X 的下标。"""
+    """A single letter is merged into a formula only when it is attached to a smaller script. A citation superscript
+    sits to the right of the letter with its center outside the letter's box and is not taken; a script in a math
+    font (wide ones such as inf or tr) is not a citation and only needs to touch the letter's right edge.
+    script_y is the baseline of the script; a subscript is no more than half a character below its base.
+    The box of enc in H^enc on the next line touches the X on the line above, but its baseline is most of a line lower,
+    so it is not a subscript of X."""
     if not _VARIABLE_BASE_RE.match(str(span.get("text") or "").strip()):
         return False
     if float(span.get("size") or 0) < block_size * 0.79:
@@ -268,9 +283,12 @@ def _script_base(
     base = pymupdf.Rect(raw)
     y_gap = max(base.y0, bbox.y0) - min(base.y1, bbox.y1)
     center = (bbox.x0 + bbox.x1) / 2
-    # 角标可以略伸出字母右缘。再往右就是引用上标，中心已经离开字框。
-    # 同一行上的底和角标字框叠着或贴着；上下隔开几磅的是上一行的字母（w_end 的 w 不是下一行 mention 的底）。
-    # 整个在字母左边的不是它的角标：行内分式的分子和同一行后面的 x 上下交叠，中间隔着正文
+    # A script may extend slightly past the letter's right edge. Further right it is a citation superscript whose
+    # center has left the letter's box.
+    # On one line the boxes of a base and its script overlap or touch; a letter a few points above or below is on the
+    # previous line (the w of w_end is not the base of mention on the next line).
+    # A script entirely left of the letter is not its script: the numerator of an inline fraction overlaps vertically
+    # with an x later on the same line, with body text between them
     if y_gap >= block_size * 0.3 or bbox.x0 > base.x1 + 0.4 or bbox.x1 <= base.x0:
         return False
     if script_y is not None and span.get("origin"):
@@ -281,7 +299,8 @@ def _script_base(
 
 
 def _has_text_base(run: dict, span_lines: list[list[dict]], members: set[int], block_size: float) -> bool:
-    """只有小字的 run 左边紧贴着同一行一个正文字号、不在公式里的字：那个字是它的底。"""
+    """A run of small characters only has a character at body size, not in a formula, directly to its left on the same
+    line: that character is its base."""
     if run["max_size"] >= block_size * 0.79:
         return False
     box = run["bbox"]
@@ -301,8 +320,9 @@ def _has_text_base(run: dict, span_lines: list[list[dict]], members: set[int], b
 
 
 def _absorb_script_bases(runs: list[dict], span_lines: list[list[dict]], block_size: float) -> None:
-    """把贴在角标上的正体变量并进该角标。单词和引用编号留在正文。
-    只看 run 开头的角标：N 的上下标后面接着箭头、等号时，字母仍是它们的底。"""
+    """Merge upright variables attached to a script into that script. Words and citation numbers stay in body text.
+    Only the scripts at the start of a run are considered: when the scripts of N are followed by an arrow or equals
+    sign, the letter is still their base."""
     taken = {id(span) for run in runs for span in run["spans"]}
     for run in runs:
         scripts = pymupdf.Rect()
@@ -331,7 +351,8 @@ def _absorb_script_bases(runs: list[dict], span_lines: list[list[dict]], block_s
                 continue
             run["spans"].insert(0, span)
             run["bbox"] |= pymupdf.Rect(span["bbox"])
-            # 有了正文字号的底就不再是单独的角标，不能再按拆开的上下标并到别的式子上
+            # With a base at body size it is no longer a lone script and must not be merged into another formula as a
+            # detached script
             run["max_size"] = max(float(run["max_size"]), float(span.get("size") or 0))
             if other_no == line_no:
                 run["pos"] = (line_no, index, end)
@@ -339,8 +360,8 @@ def _absorb_script_bases(runs: list[dict], span_lines: list[list[dict]], block_s
             break
 
 
-# 数学罗马体（CMR、Latin Modern 的 LMRoman）在黑名单里，不当公式字体。贴着公式的数字、括号、
-# 等号加号这类算子、算子名仍是式子的一部分
+# Math roman fonts (CMR, LMRoman of Latin Modern) are on the blocklist and are not treated as math fonts. Digits,
+# brackets, operators such as equals and plus signs, and operator names attached to a formula are still part of it
 _CM_ROMAN_RE = re.compile(r"CMR\d|LMRoman\d")
 _GLUE_ATOM = rf"(?:[\d.()\[\]{{}}|=+<>≤≥×]+|(?:{_OPERATOR_NAMES}))"
 _MATH_GLUE_RE = re.compile(rf"^(?:{_GLUE_ATOM})(?:\s+{_GLUE_ATOM})*$")
@@ -348,13 +369,14 @@ _ORDINAL_SUFFIXES = {"st", "nd", "rd", "th"}
 
 
 def _absorb_inner_blanks(runs: list[dict], span_lines: list[list[dict]]) -> None:
-    """同一行上夹在一个公式两个成员之间的空白 span 并进公式。几段并成一个以后，
-    中间的空格不属于哪一段，留在正文里就成了占位符后面多出来的一个空格。"""
+    """Merge whitespace spans between two members of one formula on the same line into the formula. Once several
+    pieces are merged into one, a space between them belongs to no piece, and left in body text it becomes an extra
+    space after the placeholder."""
     owner = {id(span): index for index, run in enumerate(runs) for span in run["spans"]}
     for line in span_lines:
         shown = [index for index, span in enumerate(line) if str(span.get("text") or "").strip()]
         for left, right in zip(shown, shown[1:]):
-            # 两边最近的字都在同一个公式里，中间夹着的空白才是它的
+            # The whitespace belongs to the formula only when the nearest characters on both sides are in it
             run = owner.get(id(line[left]))
             if run is None or owner.get(id(line[right])) != run:
                 continue
@@ -369,14 +391,17 @@ _ITALIC_OPERATOR_RE = re.compile(r"[()\[\]{}=<>+\-*/]")
 
 
 def _is_math_glue(span: dict) -> bool:
-    """CMR 上的数字、括号、算子或算子名；正文斜体写的变量、括号、算子。正文正体里的同形字不收。
-    数学字体的 span 只收单个标点：别的没进公式的是有意放回正文的（序数 t-th 的 t）。"""
+    """Digits, brackets, operators or operator names in CMR; variables, brackets and operators in a body italic. The
+    same characters in an upright text font are not taken.
+    Spans in a math font are taken only as single punctuation: other ones outside a formula were put back into body
+    text on purpose (the t of the ordinal t-th)."""
     font = str(span.get("font") or "")
     text = str(span.get("text") or "").strip()
     if _CM_ROMAN_RE.search(font):
         return bool(_MATH_GLUE_RE.match(text))
     if _span_is_math(span):
-        # 单独成段时当标点放回正文的 >、小数点，贴着公式就是式子里的（> = 10、0.31）
+        # > and decimal points put back into body text as punctuation when alone belong to the formula when attached
+        # to it (> = 10, 0.31)
         return bool(text) and bool(_LONE_PUNCT_RE.match(text))
     if not (_ITALIC_FONT_RE.search(font) or int(span.get("flags") or 0) & 2):
         return False
@@ -407,7 +432,7 @@ def _gap_is_clear(
     span_lines: list[list[dict]],
     taken: set[int],
 ) -> bool:
-    """两框之间不能隔着还没收进公式的字。空白可以。"""
+    """No characters outside a formula may lie between the two boxes. Whitespace may."""
     box = pymupdf.Rect(span["bbox"])
     other = run["bbox"]
     if box.x0 <= other.x0:
@@ -437,7 +462,8 @@ def _glue_host(
     taken: set[int],
 ) -> dict | None:
     box = pymupdf.Rect(span["bbox"])
-    # 纵向按字高比：CMSY 的减号、竖线的字体框伸到下一行，下一行行首的 P( 会挂到上一行的式子上
+    # Vertical comparison uses character height: the font boxes of the CMSY minus sign and vertical bar reach the next
+    # line, and P( at the start of the next line would attach to the formula on the line above
     text = _text_box(span)
     best: tuple[float, dict] | None = None
     for run in runs:
@@ -462,7 +488,8 @@ def _blanks_between(
     span_lines: list[list[dict]],
     taken: set[int],
 ) -> list[tuple[int, int, dict]]:
-    """公式和这段胶水之间的空白。收进公式后，送翻文本里不再留一个空档。"""
+    """Whitespace between the formula and this glue span. Once it is merged into the formula, the text sent for
+    translation has no leftover gap."""
     box = pymupdf.Rect(span["bbox"])
     other = run["bbox"]
     if box.x0 <= other.x0:
@@ -490,7 +517,7 @@ def _absorb_math_glue(
     span_lines: list[list[dict]],
     block_size: float,
 ) -> None:
-    """把贴着公式的 CMR 数字、括号、算子名并进公式。远处的数字仍是正文。"""
+    """Merge CMR digits, brackets and operator names attached to a formula into it. Distant digits stay body text."""
     taken = {id(span) for run in runs for span in run["spans"]}
     pending = [
         (line_no, index, span)
@@ -498,7 +525,8 @@ def _absorb_math_glue(
         for index, span in enumerate(line)
         if id(span) not in taken
         and _is_math_glue(span)
-        # 斜体变量后面贴着下标、正文是常事（∂L 接 CE），只有正体的数字、算子、标点怕拆开一个数
+        # An italic variable is often followed directly by a subscript or body text (∂L then CE); only upright digits,
+        # operators and punctuation risk splitting a number
         and not (
             (_CM_ROMAN_RE.search(str(span.get("font") or "")) or _span_is_math(span))
             and _runs_into_word(line, index, taken)
@@ -524,8 +552,9 @@ def _absorb_math_glue(
 
 
 def _runs_into_word(line: list[dict], index: int, taken: set[int]) -> bool:
-    """span 后面没隔空格就接着正文的字母、数字：B/T = 0.31 的「= 0」后面是「.」和「31 likely」。
-    收进公式会把一个数拆成两半，这一串都留在正文。中间也能收的 span 跳过去接着看。"""
+    """The span is followed without a space by letters or digits of body text: in B/T = 0.31, "= 0" is followed by "."
+    and "31 likely". Merging it into a formula would split a number in two, so the whole sequence stays in body text.
+    Spans in between that could also be merged are skipped over."""
     for item in line[index + 1 :]:
         text = str(item.get("text") or "")
         if id(item) in taken or not text or text[0].isspace():
@@ -543,7 +572,7 @@ def _runs_into_word(line: list[dict], index: int, taken: set[int]) -> bool:
 
 
 def _ordinal_reading(run: dict, block_size: float) -> str | None:
-    """i^{th}、1^{st} 这类序数。上标不是 st/nd/rd/th 的角标不是序数。"""
+    """Ordinals such as i^{th} and 1^{st}. A script whose superscript is not st/nd/rd/th is not an ordinal."""
     base: list[str] = []
     suffix: list[str] = []
     for span in run["spans"]:
@@ -562,7 +591,8 @@ def _ordinal_reading(run: dict, block_size: float) -> str | None:
 
 
 def _release_ordinals(runs: list[dict], block_size: float) -> tuple[dict[int, str], set[int]]:
-    """序数不做成公式图，改成 i-th 送翻，模型才能译成「第 i 个」。"""
+    """Ordinals are not turned into formula images; they are sent for translation as i-th so the model can translate
+    them as "第 i 个"."""
     kept: list[dict] = []
     ordinal_at: dict[int, str] = {}
     ordinal_skip: set[int] = set()
@@ -590,23 +620,28 @@ def _release_ordinals(runs: list[dict], block_size: float) -> tuple[dict[int, st
     return ordinal_at, ordinal_skip
 
 
-# 重音符号（hat/tilde/bar/dot 等）：落在公式 bbox 上的要并进公式，不能留在正文
+# Accent marks (hat/tilde/bar/dot and others): those falling on a formula bbox must be merged into it and must not
+# stay in body text
 _ACCENT_CHARS = {"^", "ˆ", "̂", "~", "˜", "̃", "¯", "̄", "´", "`", "˙", "̇", "¨", "̈", "ˇ", "̌", "˘", "̆", "˚", "̊", "⃗"}
 
 
 def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[dict]]:
-    """把块里的行内公式换成 {vN} 占位符（BabelDOC 的翻译协议），返回 (送翻文本, 公式记录列表)。
+    """Replace the inline formulas in the block with {vN} placeholders (the BabelDOC translation protocol) and return
+    (text sent for translation, list of formula records).
 
-    每条公式记录：bbox（原页裁剪区域）、name、w/h/d（落位几何）、text（无图环境回退）。
-    渲染时以 show_pdf_page 矢量透传，视觉和原版一致。
-    关键归并：上下标常被 PyMuPDF 拆到另一个 dict 行，按行收集的 run 会把一个公式
-    拆成互相交叠的两段（画两遍、上标错位），所以先全块收集 run，再把 x 区间交叠的
-    归并成一个。没有公式时返回的文本与原文逐字一致，缓存照常命中。
+    Each formula record has bbox (crop area on the original page), name, w/h/d (placement geometry) and text (fallback
+    when images are unavailable).
+    When rendering, formulas are passed through as vectors with show_pdf_page and look the same as in the original.
+    Key merging step: PyMuPDF often puts superscripts and subscripts in a separate dict line, and runs collected per
+    line would split one formula into two overlapping pieces (drawn twice, superscript misplaced). So runs are first
+    collected over the whole block, and runs whose x ranges overlap are merged into one. Without formulas the returned
+    text matches the original character for character, so the cache still hits.
     """
     if not block.span_lines:
         return block.text, []
 
-    # 1) 按 dict 行收集公式 run，并记录在块 span 流里的位置（供阅读序邻接判断）
+    # 1) Collect formula runs per dict line and record their position in the block's span stream (for checking
+    # adjacency in reading order)
     runs: list[dict] = []
     code = not _code_block(block)
     for line_no, spans in enumerate(block.span_lines):
@@ -625,7 +660,8 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 while run_spans and not run_spans[-1]["text"].strip():
                     run_spans.pop()
                 if run_spans and any(s["text"].strip() for s in run_spans):
-                    # 孤立标点 run 不当公式（<EOS> 的尖括号、括号、等号），留在正文里
+                    # Runs of isolated punctuation are not formulas (the angle brackets of <EOS>, brackets, equals
+                    # signs) and stay in body text
                     joined = "".join(s["text"] for s in run_spans).strip()
                     if not _LONE_PUNCT_RE.match(joined) or any(_SYMBOL_FONT_RE.search(s["font"]) for s in run_spans):
                         bbox = _glyph_box(run_spans[0])
@@ -647,15 +683,18 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
     ordinal_at, ordinal_skip = _release_ordinals(runs, block.size)
     _absorb_math_glue(runs, block.span_lines, block.size)
 
-    # 2) 归并 run，三种情形：
-    # a) 上下标拆到不同 dict 行：x 交叠够深（≥30% 较窄 run 的宽）且必有一方是小字号
-    #    （<0.79 正文）；两个正文字号 run 即使 x 深度交叠也是相邻文本行上碰巧对齐
-    #    的两个公式（如行末 (X,Y) 和下一行的 y_1,…,y_T）。
-    # b) 阅读序上真正邻接（中间只有空白 span）且 x 间距小于一个字号、纵向相交
-    #    （同一可视行）：同一数学表达式被拆成的连续片段（y^i_1, y^i_2, … 的元素），
-    #    并回一个公式，否则下标会被占位符间的空格推到离基底很远的位置。
-    #    行间隔着正文的不并（(X,Y) vs y_1,…,y_T）。跨行折行的两半不在这里并 bbox。
-    # c) 行内分式的分子分母：上下贴着、左右居中（见 _fraction_pair），阅读序上不必相邻。
+    # 2) Merge runs, in three cases:
+    # a) Scripts split into different dict lines: the x overlap is deep enough (≥30% of the width of the narrower run)
+    #    and at least one side is small (<0.79 of body size); two runs at body size, even with deep x overlap, are two
+    #    formulas on adjacent text lines that happen to align (such as (X,Y) at a line end and y_1,…,y_T on the next).
+    # b) Truly adjacent in reading order (only whitespace spans between), x gap smaller than one font size, and
+    #    vertically overlapping (the same visual line): consecutive pieces of one math expression (the elements of
+    #    y^i_1, y^i_2, …) are merged back into one formula, or the spaces between placeholders would push the
+    #    subscripts far from their base.
+    #    Runs separated by body text between lines are not merged ((X,Y) vs y_1,…,y_T). The bboxes of the two halves of
+    #    a formula wrapped across lines are not merged here.
+    # c) Numerator and denominator of an inline fraction: touching vertically and centered horizontally (see
+    #    _fraction_pair); they need not be adjacent in reading order.
     member_ids = {id(s) for r in runs for s in r["spans"]}
 
     def flow_adjacent(a: dict, b: dict) -> bool:
@@ -672,8 +711,10 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
 
     runs.sort(key=lambda r: r["pos"])
 
-    # 只有小字的 run 紧贴在本行一个正文的字后面，是那个字的角标（H^enc 的 H 是正文的粗体）。
-    # 下一行行首的 H^enc 正好在上一行 X 的下面，不能按 x 交叠并成 X 的下标
+    # A run of small characters only, directly after a body text character on the same line, is that character's
+    # script (the H of H^enc is in the body bold).
+    # H^enc at the start of the next line sits right below the X on the line above and must not become a subscript of
+    # X by x overlap
     based = {id(r) for r in runs if _has_text_base(r, block.span_lines, member_ids, block.size)}
 
     def geometric(m: dict, r: dict) -> bool:
@@ -686,12 +727,15 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         return x_overlap > max(1.0, 0.3 * min_w) and y_gap < block.size and lo < hi * 0.79
 
     def adjacent(m: dict, r: dict) -> bool:
-        # b) 同一可视行上、阅读序邻接、x 间距小于一个字号。跨行折行的两半
-        #    纵向不相交，不在这里并成一个大框。
+        # b) On the same visual line, adjacent in reading order, x gap smaller than one font size. The two halves of a
+        #    formula wrapped across lines do not overlap vertically and are not merged into one large box here.
         y_overlap = min(m["bbox"].y1, r["bbox"].y1) - max(m["bbox"].y0, r["bbox"].y0)
-        # 前一段收住一行，后一段整个在它左下方：折到了下一行行首。
-        # 分子右边还有式子，分母的根号也在左下方，不算折行
-        # 数学字体的字框很高，上下两行的框会交叠，再按基线比：低了半行以上就是下一行
+        # The first piece ends a line and the second lies entirely below and to its left: it wrapped to the start of
+        # the next line.
+        # A numerator with more formula to its right, with the radical of the denominator also below left, is not a
+        # wrap
+        # Math font boxes are tall and boxes of two lines can overlap, so baselines are compared as well: more than
+        # half a line lower means the next line
         wrapped = (
             r["bbox"].x1 <= m["bbox"].x0
             and (_run_text_box(r).y0 >= _run_text_box(m).y1 or _run_baseline(r) - _run_baseline(m) > block.size * 0.6)
@@ -705,7 +749,8 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         )
 
     merged: list[dict] = []
-    # 刚收过一段的 run。分子并进前面的分母以后，分子的下标要接着找到它
+    # The run that most recently took in a piece. After a numerator is merged into the preceding denominator, the
+    # numerator's subscript must still find it
     recent: dict | None = None
     for r in runs:
         target = next((m for m in (recent, merged[-1] if merged else None) if m is not None and geometric(m, r)), None)
@@ -728,16 +773,20 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
 
     _absorb_inner_blanks(merged, block.span_lines)
 
-    # 2.5) 吸收落在公式 bbox 上的重音符 span（ŷ 的 ^、x̄ 的 ¯ 等）：
-    # 它们常是不被判定为公式的独立 span，留在正文里会在公式图边上多出一个孤符号；
-    # 并进 run 后 bbox 上移把符头顶部也包进裁剪，正文里删掉
+    # 2.5) Absorb accent spans that fall on a formula bbox (the ^ of ŷ, the ¯ of x̄, and so on):
+    # they are often separate spans not judged to be formulas, and left in body text they add a stray symbol beside
+    # the formula image;
+    # once merged into the run, the bbox extends upward so the crop includes the top of the accent, and it is removed
+    # from body text
     for spans in block.span_lines:
         for s in spans:
             if s["text"].strip() not in _ACCENT_CHARS:
                 continue
             sb = pymupdf.Rect(s["bbox"])
-            # 重音盖在公式里同一行的某一截字上：横向交叠，基线相近（大写字母上的帽子抬高一点）。
-            # 按公式框比，上一行 naïve 的两点会算到下一行的公式上
+            # The accent covers a span of the formula on the same line: horizontal overlap and a similar baseline (a
+            # hat over a capital letter sits a little higher).
+            # Compared against the formula box instead, the two dots of naïve on the line above would be assigned to a
+            # formula on the next line
             base = float(s["origin"][1]) if s.get("origin") else (sb.y0 + sb.y1) / 2
 
             def covers(span: dict) -> bool:
@@ -745,8 +794,9 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 raised = float(span["origin"][1]) - base
                 return min(box.x1, sb.x1) - max(box.x0, sb.x0) > 0 and -0.2 <= raised / block.size <= 0.6
 
-            # 重音自己可能单独成了一个式子（CMR10 的 ˆ 单成一行）。并进它盖着的式子以后，
-            # 原来那个就不再单列，不然送翻文本里多出一个只有 ˆ 的占位符
+            # The accent may have become a formula of its own (ˆ of CMR10 on a line by itself). After it is merged
+            # into the formula it covers, the original is no longer listed, or the text sent for translation would get
+            # an extra placeholder holding only ˆ
             owner = next((m for m in merged if any(s is x for x in m["spans"])), None)
             if owner is not None and any(
                 str(x.get("text") or "").strip() not in _ACCENT_CHARS
@@ -767,11 +817,12 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
 
     formulas: list[dict] = []
     formula_runs: dict[int, FormulaRun] = {}
-    first_span: dict[int, int] = {}  # span id → 公式序号
+    first_span: dict[int, int] = {}  # span id → formula number
     span_line = {id(s): li for li, line in enumerate(block.span_lines) for s in line}
 
     def text_baseline(spans: list[dict]) -> float | None:
-        """几截字所在行正文的基线：这几行里正文字号的字 origin 的中位数，不能按全块算"""
+        """Body baseline of the lines that hold these spans: the median origin of body-size characters on those lines,
+        not over the whole block"""
         lines = {span_line.get(id(span)) for span in spans}
         origins = sorted(
             span["origin"][1]
@@ -788,9 +839,11 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         spans = sorted(m["spans"], key=lambda s: (s["bbox"][0], s["bbox"][1]))
         main_span = max(spans, key=lambda s: s["size"])
         baseline = main_span["origin"][1] if main_span.get("origin") else bbox.y1
-        # 孤立角标公式（(1−ε_i)² 的 ²）的 origin 是抬高的：渲染时按它所在
-        # 正文行的 baseline 高差抬回去，否则平方落到正文基线上像个普通数字。
-        # 高差必须相对本行正文（正文行 origin 的中位数），不能相对全块
+        # The origin of an isolated script formula (the ² of (1−ε_i)²) is raised: when rendering it is raised back by
+        # its offset from the baseline of its body line, or the square would land on the body baseline like an
+        # ordinary digit.
+        # The offset must be relative to the body text of its own line (median origin of the body line), not to the
+        # whole block
         own_origin = text_baseline(m["spans"]) or baseline
         raise_dy = max(0.0, own_origin - baseline)
         anchor = min(m["spans"], key=lambda s: s["bbox"][0])
@@ -831,8 +884,9 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         formulas.append(record)
         first_span[id(anchor)] = n
 
-    # 3) 按行重建送翻文本，并记下有序 run。公式锚点是一个 FormulaRun，
-    # 同行同风格的文字并成一个 TextRun。和底色不同的强调、字号才写标记。
+    # 3) Rebuild the text sent for translation line by line and record the ordered runs. A formula anchor is one
+    # FormulaRun, and text on the same line in the same style becomes one TextRun. Marks are written only for emphasis
+    # and sizes that differ from the base style.
     formula_ids = {id(s) for m in merged for s in m["spans"]}
     formula_ids |= {id(s) for m in merged for extra in m.get("extras") or [] for s in extra["spans"]}
     caps = _small_caps_sizes(block.span_lines)
@@ -842,7 +896,8 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
 
     text_spans = [s for line in block.span_lines for s in line if id(s) not in formula_ids]
     sizes = {round(size_of(s), 1) for s in text_spans if str(s.get("text") or "").strip()}
-    # 整块小型大写：大小写各一个字号，其实是一种字，不写字号标记
+    # The whole block in small caps: capitals and small letters have one size each but are one typeface, so no size
+    # marks are written
     base_size = sizes.pop() if caps and len(sizes) == 1 else block.size
     writer = writer_for([{**s, "size": size_of(s)} for s in text_spans], base_size, _color_value(block.color))
     runs: list[Run] = []
@@ -864,7 +919,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                 runs.append(formula_runs[n])
                 parts.append(writer.atom(f"{{v{n}}}"))
             elif id(s) in formula_ids or id(s) in ordinal_skip:
-                continue  # 已被某个公式吞掉，或是序数的上标
+                continue  # Already taken by a formula, or the superscript of an ordinal
             elif id(s) in ordinal_at:
                 reading = ordinal_at[id(s)]
                 emphasis = span_emphasis(s)
@@ -898,8 +953,8 @@ def _span_box(span: dict) -> pymupdf.Rect:
 
 
 def _union_box(a: pymupdf.Rect, b: pymupdf.Rect) -> pymupdf.Rect:
-    """和 a | b 一样：空框不算，结果按 MuPDF 存成单精度。
-    每个 span 都要并一次，Rect 的 | 要先复制再逐项检查参数，慢。"""
+    """Same as a | b: empty boxes are ignored and the result is stored in single precision as MuPDF does.
+    It runs once per span, and Rect's | copies first and then checks each argument, which is slow."""
     if a.is_infinite or b.is_infinite:
         return a | b
     if b.is_empty:
@@ -919,7 +974,7 @@ def _same_text_style(pending: TextRun, span: dict, emphasis: Emphasis) -> bool:
 
 
 def _extend_text_run(pending: TextRun | None, span: dict, emphasis: Emphasis, line: int) -> TextRun:
-    """同行、同字体、同强调的相邻 span 并成一个文字 run。"""
+    """Merge adjacent spans on the same line with the same font and emphasis into one text run."""
     bbox = _span_box(span)
     baseline = span["origin"][1] if span.get("origin") else bbox.y1
     font = str(span.get("font") or "")
@@ -962,7 +1017,8 @@ def _continues_wrapped_formula(
     span_lines: list[list[dict]],
     block_size: float,
 ) -> bool:
-    """行末公式接到下一行行首，是同一式子被换行切开。中间不能还有正文。"""
+    """A formula at a line end continues at the start of the next line: one formula split by a line break. No body
+    text may lie between."""
     last = (prev.get("extras") or [prev])[-1]
     last_line, _, _ = last["pos"]
     next_line, _, _ = nxt["pos"]
@@ -974,13 +1030,13 @@ def _continues_wrapped_formula(
         return False
     if nxt["bbox"].x0 - _line_edge(span_lines, next_line, "x0") > block_size * 1.2:
         return False
-    # 按字高量行距：CMSY 的字体框伸到下一行，两行看着像交叠
+    # Measure line spacing by character height: CMSY font boxes reach the next line and make two lines look overlapped
     y_gap = _run_text_box(nxt).y0 - _run_text_box(last).y1
     return -block_size * 0.5 <= y_gap < block_size * 1.8
 
 
 def _ends_row(run: dict, span_lines: list[list[dict]]) -> bool:
-    """run 右边、同一行高上没有别的字。"""
+    """No other characters to the right of run at the same line height."""
     box = _run_text_box(run)
     own = {id(span) for span in run["spans"]}
     for spans in span_lines:
@@ -1003,8 +1059,10 @@ def _run_text_box(run: dict) -> pymupdf.Rect:
 
 
 def _fraction_pair(a: dict, b: dict, block_size: float) -> bool:
-    """一段全是小字号，和另一段里的一截小字号上下贴着、左右居中：是同一个行内分式的分子分母。
-    相邻两行行首的脚注记号也上下对齐，但隔着一行，不贴着。"""
+    """One run is entirely small and touches a small band of the other run vertically, centered horizontally: they are
+    the numerator and denominator of one inline fraction.
+    Footnote marks at the start of two adjacent lines also align vertically, but they are a line apart and do not
+    touch."""
     small = block_size * 0.79
     for whole, other in ((a, b), (b, a)):
         if whole["max_size"] >= small:
@@ -1023,7 +1081,7 @@ def _fraction_pair(a: dict, b: dict, block_size: float) -> bool:
 
 
 def _run_baseline(run: dict) -> float:
-    """公式 run 里正文字号的那几截的基线，取中位数。角标抬高、压低，不算。"""
+    """Median baseline of the body-size spans in a formula run. Raised and lowered scripts do not count."""
     sizes = [float(span.get("size") or 0) for span in run["spans"] if span.get("origin") is not None]
     top = max(sizes, default=0.0)
     lows = sorted(
@@ -1039,9 +1097,11 @@ def _join_line_wrapped_formulas(
     span_lines: list[list[dict]],
     block_size: float,
 ) -> list[dict]:
-    """换行切开的公式收成一个占位符的多片。不并 bbox，否则裁进两行之间的整栏空白。
-    几片并排起来比一行还宽的不收（跨两行的长网址）：占位符整个排在一行里，放不下就把整段缩小，
-    分开的几片可以像原文一样在断处换行。"""
+    """Collect a formula split by line breaks into several pieces of one placeholder. The bboxes are not merged, or
+    the crop would include the full column width of blank space between the two lines.
+    Pieces wider than a line when placed side by side are not collected (a long URL across two lines): a placeholder
+    is set entirely on one line, and if it does not fit the whole paragraph is shrunk, while separate pieces can break
+    at the same place as in the original."""
     if len(runs) < 2:
         return runs
     line_width = max(
@@ -1064,8 +1124,9 @@ def _join_line_wrapped_formulas(
 
 
 def _part_record(run: dict, page: int, name: str, baseline: float | None = None) -> dict:
-    """换行切开的公式后面的一片。baseline 是这一片所在行正文的基线；分式的分子分母一样大，
-    按片里最大的字量会量到分母的基线上，贴的时候整个分式往上抬"""
+    """A later piece of a formula split by a line break. baseline is the body baseline of the line holding this piece;
+    the numerator and denominator of a fraction are the same size, so measuring by the largest character in the piece
+    would hit the denominator's baseline and the whole fraction would be pasted too high"""
     bbox = pymupdf.Rect(run["bbox"])
     spans = run["spans"]
     main = max(spans, key=lambda span: span["size"])
@@ -1085,14 +1146,16 @@ def _part_record(run: dict, page: int, name: str, baseline: float | None = None)
     }
 
 
-# 一片里有空格隔开的两个词：是一句等宽字体的例句，断行处也是词间
+# Two words separated by a space within a piece: it is a monospaced example sentence, and the break also falls
+# between words
 _SPACED_WORDS_RE = re.compile(r"[^\W_]\s+[^\W_]")
 
 
 def _wrap_gap(before: list[dict], after: list[dict]) -> float:
-    """换行切开的公式两片之间的空。等宽字体的例句在词间断行（my dog is | hairy），留一个词距，
-    取片里空格的宽度。片里的词本来就用空格隔开、断处两边都是字母或数字才算；
-    网址、标识符在词中间断行，式子在运算符后面断行，都挨着排。"""
+    """Gap between two pieces of a formula split by a line break. A monospaced example sentence breaks between words
+    (my dog is | hairy) and gets one word space, taken as the width of the spaces in the pieces. This applies only
+    when the words in the pieces are already separated by spaces and both sides of the break are letters or digits;
+    URLs and identifiers break inside a word and formulas break after an operator, and those pieces are set flush."""
 
     def text(spans: list[dict]) -> str:
         return "".join(str(span.get("text") or "") for span in sorted(spans, key=lambda span: span["bbox"][0]))
@@ -1110,7 +1173,7 @@ def _wrap_gap(before: list[dict], after: list[dict]) -> float:
 
 
 def _formula_record(run: FormulaRun, spans: list[dict]) -> dict:
-    """渲染层仍读这条记录。框和曲线随后可能变，run 再同步回去。"""
+    """The rendering layer still reads this record. The box and curves may change later, and the run is synced back."""
     return {
         "page": run.page,
         "bbox": pymupdf.Rect(run.bbox),
@@ -1128,14 +1191,15 @@ def _formula_record(run: FormulaRun, spans: list[dict]) -> dict:
 
 
 _OPERATOR_CHARS = "+−×±"
-# 式子里的正文词不到这个数：argmax、Precision 这种名字
+# A formula has fewer prose words than this: names such as argmax and Precision
 _EQUATION_PROSE = 3
 
 
 def _equation_block(block: TextBlock) -> bool:
-    """带关系符或公式字体的运算符、式子外几乎没有正文词的块：T̂ = argmax s(T)、
-    Precision = |R|、对齐的第二行 + max[…]。并完块再判断：一个式子常被拆成好几截，
-    逐截判断会把剩下的截断开。图注带编号，不算；算法框里的一行有一个词也照翻（Output: …）。"""
+    """A block with a relation symbol or an operator in a math font and almost no prose words outside the formula:
+    T̂ = argmax s(T), Precision = |R|, an aligned second line + max[…]. Checked after blocks are merged: a formula is
+    often split into several spans, and checking span by span would cut off the remaining ones. Numbered captions do
+    not count; a line in an algorithm box with a single word is still translated (Output: ...)."""
     if block.clip is not None:
         return False
     spans = [span for line in block.span_lines or [] for span in line if span["text"].strip()]
@@ -1148,18 +1212,21 @@ def _equation_block(block: TextBlock) -> bool:
 
 
 def _margin_term(block: TextBlock) -> bool:
-    """页边的术语注（perplexity、log probability）：几个词、不成句。留原文。
-    译文比原文宽，挤在窄窄的页边要换好几行，还会顶到上下的注；原文的术语也正是读者要对照的。
-    成句的旁注照常翻译。"""
+    """A term in the margin (perplexity, log probability): a few words, not a sentence. The original is kept.
+    The translation is wider than the original, would wrap over several lines in the narrow margin and push into the
+    notes above and below; the original term is also what the reader wants to compare against.
+    Marginal notes that form sentences are translated as usual."""
     text = block.text.strip()
     return block.side_note and len(text.split()) <= 4 and not text.endswith((".", "?", "!", "。", "？", "！"))
 
 
 def _colored_examples(blocks: list[TextBlock], geometries: list[PageGeometry]) -> set[int]:
-    """正文中间单独排开的一句彩色例句（讲指代、句法时举的句子）。下文拿原句里的英文词来讲，留原文。
+    """A colored example sentence set apart in the body text (sentences illustrating coreference or syntax). The text
+    that follows discusses English words of the original sentence, so the original is kept.
 
-    整块一种鲜明的颜色、正体不加粗、正文字号，左边缩进一两个字宽，说完一句。
-    章首题词也这样排，但后面跟着出处，照常翻译。"""
+    The whole block is in one vivid color, upright and not bold, at body size, indented one or two em on the left,
+    and forms a complete sentence.
+    Chapter epigraphs are set the same way but are followed by their source and are translated as usual."""
     by_page: dict[int, list[TextBlock]] = {}
     for block in blocks:
         if not block.side_note:
@@ -1178,7 +1245,8 @@ def _colored_examples(blocks: list[TextBlock], geometries: list[PageGeometry]) -
 
 
 def _attribution(quote: TextBlock, below: TextBlock) -> bool:
-    """题词的出处：紧跟在下面，小一号，或者是靠右排的短行（可以和末行同一行）。"""
+    """Source of an epigraph: directly below, one size smaller, or a short flush-right line (possibly on the same line
+    as the last line)."""
     if below.rect.y0 - quote.rect.y1 >= quote.size * 1.5:
         return False
     flush_right = below.rect.width < quote.rect.width * 0.5 and abs(below.rect.x1 - quote.rect.x1) < quote.size
@@ -1187,7 +1255,7 @@ def _attribution(quote: TextBlock, below: TextBlock) -> bool:
 
 def _colored_example(block: TextBlock, frame: TextFrame) -> bool:
     spans = [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
-    # 单独排开的一行例句常常不带句号（The green witch arrived）
+    # A single example line set apart often has no period (The green witch arrived)
     if (
         not spans
         or block.bold
@@ -1211,8 +1279,9 @@ def _colored_example(block: TextBlock, frame: TextFrame) -> bool:
 
 
 def _mono_share(block: TextBlock) -> float:
-    """块里正文字（公式除外）有多少是等宽字体。只数字母：行首的计数、编号用正文字体排，
-    不说明这一行是正文（语料表的 2 n e w）。"""
+    """Share of the block's text characters (excluding formulas) set in a monospaced font. Only letters are counted:
+    counts and numbers at the start of a line are set in the text font and do not make the line body text (2 n e w in
+    a corpus table)."""
     total = mono = 0
     for span in _block_spans(block):
         if _span_is_math(span):
@@ -1225,13 +1294,15 @@ def _mono_share(block: TextBlock) -> float:
 
 
 def _code_block(block: TextBlock) -> bool:
-    """整块正文几乎都是等宽字体：程序、SQL、命令行，还有照录的提示词、对话。
-    译了会把关键字也换掉，照录的文字也不再是原样，留下原字。
+    """Almost all text in the block is monospaced: programs, SQL, command lines, and verbatim prompts and dialogs.
+    Translating them would also replace keywords and the verbatim text would no longer be verbatim, so the original
+    is kept.
 
-    句子里夹着的等宽单词（属性名、函数名）不在这里。块里八成以上是等宽字才算，
-    FROM R 这种短行认不出等宽也不影响整块。
-    正文字只有一个词、等宽字占三分之二以上的，是表格一行的行名带着几格记号（rooster -female,
-    +chicken, +adult），和同表的其他行一样留原字。
+    Monospaced words inside a sentence (attribute names, function names) are not handled here. A block counts only
+    when at least 80% of it is monospaced, so a short line such as FROM R whose monospacing goes unrecognized does not
+    affect the whole block.
+    A block whose non-monospaced text is a single word, with at least two thirds monospaced, is a table row name with
+    a few cells of marks (rooster -female, +chicken, +adult) and keeps the original like the other rows of the table.
     """
     share = _mono_share(block)
     if share >= 0.8:
@@ -1246,7 +1317,9 @@ def _split_gloss_lines(
     blocks: list[TextBlock],
     glosses: dict[int, tuple[pymupdf.Rect, ...]],
 ) -> list[TextBlock]:
-    """对译行和下面的意译常分在同一块里。按行拆开，对译留原文，意译另成一块：不在编号例句里的照翻。"""
+    """Interlinear gloss lines and the free translation below them often end up in one block. Split them by line: the
+    gloss keeps the original, and the free translation becomes its own block, translated as usual unless it is in a
+    numbered example."""
     out: list[TextBlock] = []
     for block in blocks:
         rects = glosses.get(block.page, ())
@@ -1267,25 +1340,27 @@ def _split_gloss_lines(
 
 
 def _table_cell(block: TextBlock, geo: PageGeometry) -> bool:
-    """表格里的字不翻译，留原文。算法框的伪代码虽然也切成格子，照样逐行翻译。"""
+    """Text in a table is not translated and keeps the original. Pseudocode in an algorithm box is also cut into
+    cells but is still translated line by line."""
     return block.clip is not None and any(
         not table.algorithm and any(_clip_key(cell) == block.clip for cell in table.cells) for table in geo.tables
     )
 
 
 def _scan_status(doc: pymupdf.Document) -> str:
-    """ok=正常；hidden_text=带隐藏 OCR 文本层（render mode 3，文字不可见但可提取）；
-    scanned=完全没有文本层的纯扫描件。
+    """ok = normal; hidden_text = has a hidden OCR text layer (render mode 3, invisible but extractable);
+    scanned = a pure scan with no text layer at all.
 
-    隐藏层文件照翻：OCR 层的坐标通常和图像对齐，译文写回原位置后是可见的，
-    效果和 BabelDOC 的 ocr_workaround 一样。纯扫描件没有可翻的东西，明确拒绝。
+    Files with a hidden layer are translated: the coordinates of the OCR layer usually align with the image, and the
+    translation written back in place is visible, with the same effect as BabelDOC's ocr_workaround. A pure scan has
+    nothing to translate and is rejected explicitly.
     """
     text_pages = hidden_pages = 0
     for page in doc:
         if not page.get_text().strip():
             continue
         text_pages += 1
-        if b" 3 Tr" in page.read_contents():  # 渲染模式 3 = 不可见文字
+        if b" 3 Tr" in page.read_contents():  # render mode 3 = invisible text
             hidden_pages += 1
     if text_pages == 0:
         return "scanned"
@@ -1295,7 +1370,7 @@ def _scan_status(doc: pymupdf.Document) -> str:
 
 
 def _retag_runs(runs: list[Run], owner: int, index_offset: int) -> list[Run]:
-    """公式序号改成单元内的全局序号，归属记在 run 上。"""
+    """Renumber formulas with numbers global to the unit and record the owner on the run."""
     retagged: list[Run] = []
     for run in runs:
         if isinstance(run, FormulaRun):
@@ -1306,7 +1381,8 @@ def _retag_runs(runs: list[Run], owner: int, index_offset: int) -> list[Run]:
 
 
 def _bridge_hyphen(left: str, right: str) -> tuple[str, str]:
-    """行尾连字符断词时，把词补全再送翻。分界仍留在两页之间。"""
+    """When a word is hyphenated at the line end, complete the word before sending it for translation. The boundary
+    stays between the two pages."""
     stripped = left.rstrip()
     if not stripped.endswith("-"):
         return left, right
@@ -1317,8 +1393,9 @@ def _bridge_hyphen(left: str, right: str) -> tuple[str, str]:
     return stripped[:-1] + head, tail if sep else ""
 
 
-# TeX 的 \' \` \^ \" \~ 把重音画成单独的字形，提出来是“Montr´eal”“Fr´ed´eric”。
-# 送翻前合成 é：模型认得出人名地名，写回的译文里也不再出现散开的重音。
+# TeX's \' \` \^ \" \~ draw accents as separate glyphs, extracted as "Montr´eal" and "Fr´ed´eric".
+# They are composed into é before translation: the model recognizes the person and place names, and the written
+# translation no longer contains detached accents.
 _SPACING_ACCENTS = {
     "´": "\u0301",
     "`": "\u0300",
@@ -1330,11 +1407,11 @@ _SPACING_ACCENTS = {
     "˙": "\u0307",
     "˚": "\u030a",
 }
-# 重音和字母之间可能隔着样式标记：ŷ 的 y 是斜体，提出来是 ˆ{i}y{/i}
+# Style marks may lie between the accent and the letter: the y of ŷ is italic and is extracted as ˆ{i}y{/i}
 _ACCENT_BEFORE_RE = re.compile(
     "([" + "".join(_SPACING_ACCENTS) + r"])((?:\{[biu]\}|\{z\d+\}|\{c[0-9a-f]{6}\})*)([A-Za-zıȷ])"
 )
-# 软音符只挂在 c、s、t 下面，提出来可能在字母前，也可能在后：c¸、¸c → ç
+# A cedilla hangs only under c, s and t, and is extracted either before or after the letter: c¸, ¸c → ç
 _CEDILLA_RE = re.compile(r"([cCsStT])\s?¸|¸\s?([cCsStT])")
 
 
@@ -1348,16 +1425,19 @@ def _compose_accents(text: str) -> str:
 
 
 def _only_formulas(sent: str) -> bool:
-    """送翻文本里除了公式占位符、样式标记，只剩标点和空白。"""
+    """Apart from formula placeholders and style marks, the text sent for translation holds only punctuation and
+    whitespace."""
     return not re.search(r"[^\W\d_]", _MARKUP_RE.sub("", sent))
 
 
 def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dict], int]:
-    """一个翻译单元的送翻文本和公式记录。公式名按块递增，避免跨页两块撞名。
+    """Text sent for translation and formula records of one translation unit. Formula names increase per block so
+    that two blocks across a page break do not collide.
 
-    两块合成一段时，中间插入 {| }。同一页共基线的半句已经是一句，不插分界。
-    译完收成一段，按满行排，排满再接到下一页。
-    行尾连字符先把词补全，模型看到的是完整单词，分界仍在。
+    When two blocks form one paragraph, {| } is inserted between them. Half sentences on the same page sharing a
+    baseline are already one sentence and get no boundary.
+    After translation the paragraph is set in full lines and continues on the next page once the page is full.
+    A word hyphenated at the line end is completed first, so the model sees the whole word, and the boundary remains.
     """
     texts: list[str] = []
     formulas: list[dict] = []
@@ -1379,7 +1459,8 @@ def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dic
         texts.append(sent)
     if len(texts) == 2:
         left, right = _bridge_hyphen(texts[0], texts[1])
-        # 同一页的半句已经是一句。换栏和跨页仍留分界，写回再按满行接。
+        # Half sentences on the same page are already one sentence. Column and page breaks keep the boundary and are
+        # joined in full lines when writing.
         if _same_page_line_pair(unit[0], unit[1]):
             return _compose_accents(_join_lines([left, right] if right else [left])), formulas, name_i
         parts = [left, BOUNDARY]
@@ -1390,10 +1471,13 @@ def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dic
 
 
 def _peel_number(sent: str, kind: str) -> tuple[str, str]:
-    """摘下单元开头的节号、条目号，只送后面的文字，写回时原样接回去（见 _with_label）。
-    连编号一起送，模型会把 4 Experiments 译成「第四 实验」，把 B.3.2 写成 B.三.二、1. 写成「一，」。
-    不以点收尾的数（2 samples、1.5 times）、单个大写字母、罗马数字也可能是正文句首
-    （I. Goodfellow），只在标题和不成句的短行上摘。"""
+    """Peel the section or item number off the start of the unit, send only the text after it, and attach it back
+    unchanged when writing (see _with_label).
+    Sent together with the number, the model translates 4 Experiments as "第四 实验", writes B.3.2 as "B.三.二" and
+    1. as "一，".
+    Numbers not ending with a period (2 samples, 1.5 times), single capital letters and Roman numerals can also start
+    a sentence of body text (I. Goodfellow), so these are peeled only from headings and short lines that are not
+    sentences."""
     m = _NUMBER_LABEL_RE.match(sent)
     if not m:
         return "", sent
@@ -1406,7 +1490,8 @@ def _peel_number(sent: str, kind: str) -> tuple[str, str]:
     )
     if not sure and kind == "p" and (len(sent) > 80 or _ends_sentence(sent)):
         return "", sent
-    # 粗体从编号一直延续到标题文字（{b}17.2.1 The Encoder{/b}）：编号这边关上，文字这边重开
+    # Bold runs from the number into the heading text ({b}17.2.1 The Encoder{/b}): close it on the number side and
+    # reopen it on the text side
     closed = re.findall(r"\{/([bizu])\}", m.group(3))
     still_open: list[str] = []
     for mark in re.findall(r"\{[bizu]\d*\}", m.group(1)):
@@ -1419,7 +1504,8 @@ def _peel_number(sent: str, kind: str) -> tuple[str, str]:
 
 
 def _label_styled(block: TextBlock) -> bool:
-    """开头一段（图注的 Figure 2.4）和正文主体的字体不同。颜色不算：正文里的图号常是蓝色链接。"""
+    """The leading span (Figure 2.4 of a caption) has a different font from the main text. Color does not count:
+    figure numbers in body text are often blue links."""
     spans = [span for line in block.span_lines or [] for span in line if span["text"].strip()]
     if len(spans) < 2:
         return False
@@ -1435,7 +1521,8 @@ _REPORT_UNITS = 200
 
 @dataclass
 class _PdfPlan:
-    """送翻前准备好的东西：原书、块、每页的几何，和按单元整理好的送翻文本。"""
+    """Everything prepared before translation: the source document, blocks, per-page geometry, and the text sent for
+    translation arranged by unit."""
 
     src_doc: pymupdf.Document
     blocks: list[TextBlock]
@@ -1449,9 +1536,9 @@ class _PdfPlan:
     skip_ids: set[int]
     block_kind: dict[int, str]
     title: str = ""
-    labels: list[str] = field(default_factory=list)  # 每个单元开头摘下的编号，见 _peel_number
-    notes: list[str] = field(default_factory=list)  # 每个单元在书里所处位置的说明，见 _index_notes
-    aparts: list[bool] = field(default_factory=list)  # 两块中间隔着行间公式、例句的单元，见 _seam_apart
+    labels: list[str] = field(default_factory=list)  # Number peeled off the start of each unit, see _peel_number
+    notes: list[str] = field(default_factory=list)  # Note on where each unit sits in the book, see _index_notes
+    aparts: list[bool] = field(default_factory=list)  # Display formula or example between its blocks, see _seam_apart
 
 
 def _plan_document(
@@ -1462,7 +1549,8 @@ def _plan_document(
     formula_model: FormulaModel | None = None,
     boxes: ModelBoxes | None = None,
 ) -> _PdfPlan:
-    # 逐页读线、表、字占准备时间的大半，按页报进度
+    # Reading lines, tables and text page by page takes most of the preparation time, so progress is reported per
+    # page
     formulas = formula_detector(src_doc, formula_model, boxes)
     blocks, frames, scans = _extract(
         src_doc,
@@ -1474,22 +1562,24 @@ def _plan_document(
         pno: interlinear_glosses(src_doc[pno], scans[pno].words) for pno in sorted({block.page for block in blocks})
     }
     blocks = _split_gloss_lines(blocks, glosses)
-    # 纯扫描件提不出块。有块的文件不必再逐页查文本层
+    # A pure scan yields no blocks. Files with blocks need no page-by-page check of the text layer
     if not blocks and _scan_status(src_doc) == "scanned":
         raise ValueError(
             "此 PDF 为没有文本层的扫描件，请先使用 Acrobat、ABBYY 或 WPS 的 OCR 功能识别文字，再上传识别后的文件"
         )
     if not blocks:
         raise ValueError("未提取到可用的文字：页面可能为图片，或 OCR 文本层质量过低")
-    toc = src_doc.get_toc()  # 输出文件带上原书签
-    # PDF 元数据里的标题经常是 "Microsoft Word - xxx.docx" 之类，看起来像文件名就不用
+    toc = src_doc.get_toc()  # The output file keeps the original bookmarks
+    # The title in PDF metadata is often something like "Microsoft Word - xxx.docx"; it is not used when it looks
+    # like a file name
     meta_title = ((src_doc.metadata or {}).get("title") or "").strip()
     if re.search(r"\.(docx?|pdf|tex|indd)$|^untitled$", meta_title, re.I):
         meta_title = ""
     title = meta_title or src.stem
     runner.set_title(title)
     median = _median_size(blocks)
-    # 栏和障碍先于角色、也先于跨页合并：图内文字和图注靠这些框来认
+    # Columns and obstacles come before roles and before merging across pages: text inside figures and captions are
+    # recognized by these boxes
     rects_by_page: dict[int, list[pymupdf.Rect]] = {}
     for b in blocks:
         rects_by_page.setdefault(b.page, []).append(b.rect)
@@ -1498,7 +1588,8 @@ def _plan_document(
         for i in range(src_doc.page_count)
     ]
     detector = layout_detector(src_doc, layout_model, boxes)
-    # 开了版面模型时逐页推好、按页报进度，推完回到「整理段落」
+    # With the layout model enabled, run inference page by page and report progress per page, then return to the
+    # "整理段落" stage
     modeled: list[int] = []
 
     def on_model_page(done: int, total: int) -> None:
@@ -1531,13 +1622,15 @@ def _plan_document(
     numbers = {pno: example_numbers(scans[pno].words) for pno in sorted({block.page for block in blocks})}
     examples = _example_ids(blocks, numbers) | _role_pattern_ids(blocks) | _concordance_ids(blocks)
     displayed |= _display_example_ids(blocks, geometries, displayed | examples)
-    # 页眉不进大纲，旁注、目录条目不是标题
+    # Running headers do not go into the outline; marginal notes and table of contents entries are not headings
     kinds = [
         "h2" if role is Role.HEADING and not edge and not block.side_note and block.leader is None else "p"
         for role, edge, block in zip(roles, edges, blocks)
     ]
     cell_ids = {id(block) for block in blocks if _table_cell(block, geometries[block.page])}
-    # 书后的索引留原文：条目按原文字母排序，页码指向原书页，译过来既查不到，也和页码对不上
+    # The index at the back of the book keeps the original: entries are sorted alphabetically in the original and the
+    # page numbers point to pages of the original, so a translated index could not be looked up and would not match
+    # the page numbers
     skips = [
         bib
         or role is Role.FIGURE
@@ -1554,15 +1647,19 @@ def _plan_document(
     ]
     skip_ids = {id(b) for b, s in zip(blocks, skips) if s}
     margin_ids = {id(b) for b, edge in zip(blocks, edges) if edge}
-    # 目录条目到点线就完了，索引条目到页码就完了，不和下一栏、下一页的条目并段
+    # A table of contents entry ends at its leader and an index entry ends at its page number; neither is merged
+    # with entries in the next column or on the next page
     halt_ids = {
         id(b)
         for b, role in zip(blocks, roles)
         if role is not Role.BODY or b.side_note or b.leader is not None or b.entry
     } | margin_ids
     aside_ids = {id(b) for b, role in zip(blocks, roles) if role in (Role.CAPTION, Role.FIGURE)}
-    # 跨页合并照旧把格子当正文看：栏底是格子时不接下一页，格子上面的表头、图里的字不能顶上去当页末
-    # 跨页的例句：下一页接着的半句也留原文。先让例句照正文接段，找出接在它后面的块
+    # Merging across pages still treats table cells as body text: when a cell is at the bottom of a column, nothing
+    # is joined from the next page, and the table header above the cell or text in a figure cannot move up to become
+    # the end of the page
+    # Example sentences across pages: the half sentence continued on the next page also keeps the original. First
+    # let examples join like body text, and find the blocks joined after them
     if examples:
         skip_ids |= {
             id(block)
@@ -1599,11 +1696,12 @@ def _plan_document(
     flat_units: list[list[TextBlock]] = []
     name_i = 0
     for unit_no, unit in enumerate(units):
-        # 一本书有上万个单元，要算好几秒
+        # A book has tens of thousands of units, which takes several seconds
         if unit_no % _REPORT_UNITS == 0:
             runner.report_stage("准备译文", unit_no, len(units), "段")
-        # 整单元都跳过时不打占位符、也不标斜体。标记后的字符串和原文不同，
-        # 写回会把原字擦掉重排，参考文献的悬挂缩进和行尾断词就没了。
+        # When the whole unit is skipped, no placeholders or italic marks are added. A marked string differs from the
+        # original, and writing would erase and reflow the original text, losing the hanging indents and line-end
+        # hyphenation of the bibliography.
         if all(id(b) in skip_ids for b in unit):
             flat_units.append(unit)
             sent_texts.append(_join_lines(b.text for b in unit))
@@ -1616,8 +1714,9 @@ def _plan_document(
         flat_units.append(unit)
         sent_kinds.append(block_kind[id(unit[0])])
         if formulas and _only_formulas(sent):
-            # 占位以后没有字可译：正文斜体写变量的独立公式行。和跳过的块一样留原字，
-            # 擦掉重排会把两行的式子当成一个高公式缩小
+            # Nothing left to translate after placeholders: a standalone formula line with variables in body italic.
+            # Like skipped blocks it keeps the original text; erasing and reflowing would shrink a two-line formula as
+            # one tall formula
             sent_texts.append(_join_lines(b.text for b in unit))
             sent_formulas.append([])
             sent_skips.append(True)
@@ -1648,16 +1747,19 @@ def _plan_document(
     )
 
 
-# 比所在那一栏的条目左缘缩进这么多（字号的倍数）才是子条目
+# An entry is a sub-entry only when indented this much (multiple of font size) from the left edge of entries in
+# its column
 _SUBENTRY_INDENT = 0.4
-# 说明里最多举几个子条目
+# Maximum number of sub-entries listed in a note
 _NOTE_CHILDREN = 3
 
 
 def _index_notes(units: list[list[TextBlock]], texts: list[str], skips: list[bool]) -> list[str]:
-    """索引条目单独送翻没有上下文，log 译成「日志」，MT 下面的 divergences 译成「散度」。
-    给每条写一句说明：它是书后索引的条目，子条目在哪一条下面，有子条目的举出前几个。
-    子条目按缩进认：比同一栏最靠左的条目缩进的，挂在前面最近一条缩进更浅的条目下面。"""
+    """An index entry sent for translation on its own has no context: log becomes "日志", and divergences under MT
+    becomes "散度". Each entry gets a one-sentence note: it is an entry of the index at the back of the book, which
+    entry a sub-entry is listed under, and the first few sub-entries of an entry that has them.
+    Sub-entries are recognized by indent: an entry indented relative to the leftmost entry of its column belongs under
+    the nearest preceding entry with a smaller indent."""
     notes = [""] * len(units)
     by_page: dict[int, list[pymupdf.Rect]] = {}
     for unit in units:
