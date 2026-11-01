@@ -42,9 +42,11 @@ for fa in sorted(a_dir.glob("*.json")):
 print(files, "files")
 for label in sorted(ref | extra, key=lambda name: -ref[name]):
     print(
-        f"{label:16s} ref {ref[label]:6d}  matched {hit[label]:6d} ({100 * hit[label] / max(ref[label], 1):5.1f}%)  extra {extra[label]:5d}"
+        f"{label:16s} ref {ref[label]:6d}  matched {hit[label]:6d} "
+        f"({100 * hit[label] / max(ref[label], 1):5.1f}%)  extra {extra[label]:5d}"
     )
 t = sum(ref.values())
 print(
-    f"{'all':16s} ref {t:6d}  matched {sum(hit.values()):6d} ({100 * sum(hit.values()) / max(t, 1):5.1f}%)  extra {sum(extra.values()):5d}"
+    f"{'all':16s} ref {t:6d}  matched {sum(hit.values()):6d} "
+    f"({100 * sum(hit.values()) / max(t, 1):5.1f}%)  extra {sum(extra.values()):5d}"
 )

@@ -66,7 +66,10 @@ body = re.split(r"\\bibliography\{|\\begin\{thebibliography\}|\\printbibliograph
 
 # A float inside a paragraph does not break it; the paragraph still breaks only on blank lines around it. Custom
 # environments with figure or table in their names count too
-FLOATS = r"\w*figure\*?|\w*table\*?|algorithm\*?|algorithmic|tabular\*?|tikzpicture|lstlisting|verbatim|minted|wrapfigure|subfigure|thebibliography|keywords|IEEEkeywords|CCSXML|acks|acknowledgements|acknowledgments"
+FLOATS = (
+    r"\w*figure\*?|\w*table\*?|algorithm\*?|algorithmic|tabular\*?|tikzpicture|lstlisting|verbatim|minted|wrapfigure"
+    r"|subfigure|thebibliography|keywords|IEEEkeywords|CCSXML|acks|acknowledgements|acknowledgments"
+)
 body = re.sub(r"\\begin\{(" + FLOATS + r")\}.*?\\end\{\1\}", " \x01 ", body, flags=re.S)
 DISPLAY = r"equation\*?|align\*?|gather\*?|multline\*?|eqnarray\*?|displaymath|flalign\*?|alignat\*?|split|cases|array"
 body = re.sub(r"\\begin\{(" + DISPLAY + r")\}.*?\\end\{\1\}", " \x00MATH\x00 ", body, flags=re.S)

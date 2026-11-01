@@ -150,5 +150,6 @@ for group in ("cm", "other", "all"):
         ok = s["full"] + s["minor"] + s["empty"]
         print(
             f"{tag} {group:5} n={scored} ok={ok} ({100 * ok / scored:.1f}%) full={s['full']} minor={s['minor']} "
-            f"bad_partial={s['bad_partial']} bad_missed={s['bad_missed']} lost={s['lost']} fp={s['anchor_fp']}/{s['anchor_words']}"
+            f"bad_partial={s['bad_partial']} bad_missed={s['bad_missed']} lost={s['lost']} "
+            f"fp={s['anchor_fp']}/{s['anchor_words']}"
         )

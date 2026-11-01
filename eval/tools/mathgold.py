@@ -82,7 +82,10 @@ main = max(mains, key=lambda p: len(read(p)))
 text = expand(main)
 body = text.split("\\begin{document}", 1)[1].split("\\end{document}", 1)[0]
 body = re.split(r"\\bibliography\{|\\begin\{thebibliography\}|\\printbibliography", body)[0]
-FLOATS = r"\w*figure\*?|\w*table\*?|algorithm\*?|algorithmic|tabular\*?|tikzpicture|lstlisting|verbatim|minted|wrapfigure|subfigure|thebibliography|keywords|IEEEkeywords|CCSXML|acks|acknowledgements|acknowledgments"
+FLOATS = (
+    r"\w*figure\*?|\w*table\*?|algorithm\*?|algorithmic|tabular\*?|tikzpicture|lstlisting|verbatim|minted|wrapfigure"
+    r"|subfigure|thebibliography|keywords|IEEEkeywords|CCSXML|acks|acknowledgements|acknowledgments"
+)
 body = re.sub(r"\\begin\{(" + FLOATS + r")\}.*?\\end\{\1\}", " \x02 ", body, flags=re.S)
 DISPLAY = r"equation\*?|align\*?|gather\*?|multline\*?|eqnarray\*?|displaymath|flalign\*?|alignat\*?|split|cases|array"
 body = re.sub(r"\\begin\{(" + DISPLAY + r")\}.*?\\end\{\1\}", " \x02 ", body, flags=re.S)

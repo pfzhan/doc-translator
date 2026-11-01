@@ -62,7 +62,7 @@ PROVIDERS = {
     },
     "custom": {
         "label": "OpenAI 兼容接口",
-        "desc": "任何兼容 OpenAI Chat Completions 格式的服务：DeepSeek、通义千问、Kimi、OpenRouter、Ollama、各类中转站等。",
+        "desc": "任何兼容 OpenAI Chat Completions 格式的服务：DeepSeek、通义千问、Kimi、OpenRouter、Ollama、各类中转站等。",  # noqa: E501
         "base_url": "",
         "needs_key": False,
         "llm": True,
