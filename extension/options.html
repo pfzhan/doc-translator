@@ -84,6 +84,13 @@
     <p class="hint">在网页空白处点右键，选「总是翻译此网站」，以后打开这个网站的网页会自动开始翻译。列表随浏览器账号同步，但每台电脑上要各自授权一次。</p>
   </section>
 
+  <section>
+    <label>翻译缓存</label>
+    <p>网页译文缓存：<span id="cache-count">…</span></p>
+    <button id="clear-cache" type="button">清理网页翻译缓存</button>
+    <p id="cache-status" class="hint" role="status"></p>
+    <p class="hint">同一段文字再次出现时直接使用缓存，不再请求翻译服务。清理后，之后打开的网页会重新翻译；已经显示在网页上的译文不受影响。和文档共有的段落留给文档使用，不会清掉。</p>
+  </section>
 </main>
 <script src="settings.js"></script>
 <script src="sites.js"></script>

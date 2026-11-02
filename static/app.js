@@ -1463,6 +1463,59 @@ async function clearJobCache(job, boxes) {
   }
 }
 
+// Clear unused cache: keep the translations records use, and clear the rest (web pages, records deleted earlier).
+// Uses the record cache dialog with its own text
+async function sweepCache() {
+  const dialog = $("purge-dialog");
+  const list = $("purge-list");
+  const ok = $("purge-ok");
+  $("purge-title").textContent = "清理无用缓存";
+  $("purge-text").textContent =
+    "清除网页翻译的译文，以及已删除记录留下的译文；翻译记录用到的译文保留，记录本身和生成的文件不受影响。";
+  list.replaceChildren(el("div", "purge-loading", "正在统计…"));
+  $("purge-shared").hidden = true;
+  $("purge-boxes-row").hidden = true;
+  ok.disabled = true;
+  dialog.returnValue = "";
+  dialog.addEventListener("close", async () => {
+    $("purge-title").textContent = "清理缓存";
+    if (dialog.returnValue !== "ok") return;
+    try {
+      const { removed } = await api("/api/cache/unused", { method: "DELETE" });
+      toast(removed ? `已清理 ${removed.toLocaleString()} 条缓存` : "没有需要清理的缓存");
+    } catch (err) {
+      toast(`清理失败：${err.message}`);
+    }
+  }, { once: true });
+  dialog.showModal();
+
+  let info;
+  try {
+    info = await api("/api/cache/unused");
+  } catch (err) {
+    list.replaceChildren(el("div", "purge-loading", `无法统计：${err.message}`));
+    return;
+  }
+  if (!dialog.open) return;
+  list.replaceChildren(...[
+    ["可清除", info.removed ? `${info.removed.toLocaleString()} 条` : "无"],
+    ...(info.untracked ? [["无法判断", `${info.untracked.toLocaleString()} 条，保留`]] : []),
+  ].flatMap(([k, v]) => [el("dt", "", k), el("dd", "", v)]));
+  if (info.untracked) {
+    $("purge-shared").textContent =
+      "“无法判断”的是较早版本缓存的译文，当时没有记下属于哪条记录，可能仍被记录使用，所以不清除；缓存满 5 万条时会自动淘汰最旧的。";
+    $("purge-shared").hidden = false;
+  }
+  if (state.jobs.some((j) => ACTIVE.has(j.status))) {
+    $("purge-shared").textContent = "有任务正在翻译，请等它完成或暂停后再清理。";
+    $("purge-shared").hidden = false;
+    return;
+  }
+  ok.disabled = !info.removed;
+}
+
+$("sweep-cache").addEventListener("click", sweepCache);
+
 // Retention period
 function renderRetention() {
   const sel = $("retention-days");

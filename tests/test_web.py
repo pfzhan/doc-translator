@@ -6,7 +6,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.translators import MockTranslator, TranslatorError
+from app.runner import get_cache
+from app.translators import MockTranslator, TranslatorError, create_translator
 
 EN = "The quick brown fox jumps over the lazy dog near the river bank."
 ZH = "这是一段已经是中文的文字，不需要再翻译一遍。"
@@ -98,3 +99,37 @@ def test_engine_errors_map_to_502(app_env: ModuleType, monkeypatch: pytest.Monke
 
 def test_empty_request(app_env: ModuleType) -> None:
     assert post(app_env, {"texts": [], "service_id": "mock"}).json() == {"translations": [], "detected_lang": ""}
+
+
+def test_clear_web_cache(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+    original: Callable[[MockTranslator, list[str]], Awaitable[list[str]]] = MockTranslator.translate_batch
+
+    async def counting(self: MockTranslator, texts: list[str]) -> list[str]:
+        calls.append(list(texts))
+        return await original(self, texts)
+
+    monkeypatch.setattr(MockTranslator, "translate_batch", counting)
+    client = TestClient(app_env.app)
+    shared = "A sentence that a translated document also contains, word for word."
+    # A document translated earlier uses one of the sentences: it keeps it after the web cache is cleared
+    cache = get_cache()
+    translator = create_translator(app_env.store.get("mock"), "zh-CN")
+    cache.put_many(translator.cache_key, {shared: f"[zh-CN] {shared}"})
+    cache.claim("documentdigest", translator.cache_key, [shared])
+
+    assert post(app_env, {"texts": [EN, shared], "service_id": "mock"}).status_code == 200
+    assert calls == [[EN]]
+    assert client.get("/api/web/cache").json() == {"entries": 1}
+    assert client.delete("/api/web/cache").json() == {"entries": 1}
+    assert client.get("/api/web/cache").json() == {"entries": 0}
+
+    # The page's sentence is translated again; the document's stays cached
+    assert post(app_env, {"texts": [EN, shared], "service_id": "mock"}).status_code == 200
+    assert calls == [[EN], [EN]]
+    assert cache.get_many(translator.cache_key, [shared]) == {shared: f"[zh-CN] {shared}"}
+
+
+def test_clear_web_cache_rejects_other_pages(app_env: ModuleType) -> None:
+    resp = TestClient(app_env.app).delete("/api/web/cache", headers={"origin": "https://evil.example"})
+    assert resp.status_code == 403

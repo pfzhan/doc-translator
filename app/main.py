@@ -454,6 +454,8 @@ async def web_translate(data: WebTranslateRequest) -> WebTranslateResponse:
     if hasattr(translator, "auto_glossary"):
         translator.auto_glossary = False
     runner = Runner(translator)
+    # Web page translations are recorded under one owner, so that they can be cleared without touching documents
+    runner.set_document(WEB_CACHE_OWNER)
     runner.set_title(data.title)
     try:
         results = await runner.translate_all(data.texts, html=data.html)
@@ -463,6 +465,27 @@ async def web_translate(data: WebTranslateRequest) -> WebTranslateResponse:
         await translator.aclose()
     translations: list[str | None] = [dst if dst != src else None for src, dst in zip(data.texts, results)]
     return WebTranslateResponse(translations=translations, detected_lang=str(runner.info["detected_lang"]))
+
+
+class WebCacheInfo(BaseModel):
+    entries: int
+
+
+# Owner of web page translations in the cache's owner table, where documents are recorded by the digest of their
+# content (a hex string, so the two cannot collide)
+WEB_CACHE_OWNER = "web"
+
+
+@app.get("/api/web/cache")
+async def web_cache() -> WebCacheInfo:
+    """How many cached translations clearing the web page cache would remove."""
+    return WebCacheInfo(entries=await asyncio.to_thread(get_cache().count_only, WEB_CACHE_OWNER))
+
+
+@app.delete("/api/web/cache")
+async def clear_web_cache() -> WebCacheInfo:
+    """Clear the translations of web pages. Sentences a document also uses stay, for that document."""
+    return WebCacheInfo(entries=await asyncio.to_thread(get_cache().purge_only, WEB_CACHE_OWNER))
 
 
 # ---------- Translation jobs / translation records ----------
@@ -658,6 +681,36 @@ async def clear_job_cache(job_id: str, boxes: bool = False):
     job.clear_results()
     jobs.save(job)
     return {**job.to_dict(), "removed": removed}
+
+
+class CacheSweep(BaseModel):
+    removed: int  # entries cleared, or that would be
+    # Entries saved before the cache recorded whose they are: they may belong to a record, so they stay
+    untracked: int
+
+
+def _record_docs() -> set[str]:
+    return {doc for job in jobs.list() if (doc := jobs.document(job))}
+
+
+@app.get("/api/cache/unused")
+async def unused_cache() -> CacheSweep:
+    """How many cache entries belong only to web pages and to records deleted earlier."""
+    removed, untracked = await asyncio.to_thread(get_cache().unused, await asyncio.to_thread(_record_docs))
+    return CacheSweep(removed=removed, untracked=untracked)
+
+
+@app.delete("/api/cache/unused")
+async def clear_unused_cache() -> CacheSweep:
+    """Clear the cache entries that belong only to web pages and to records deleted earlier; what a record uses
+    stays. Refused while a job is translating, generating the other version or being cleaned: a new record's
+    entries are recorded as they are written, but the list of records is taken before."""
+    if any(job.status in ACTIVE for job in jobs.list()) or running or variant_tasks or cleaning:
+        raise HTTPException(409, "有任务正在翻译或处理，请等它完成或暂停后再清理")
+    docs = await asyncio.to_thread(_record_docs)
+    removed = await asyncio.to_thread(get_cache().purge_unused, docs)
+    _, untracked = await asyncio.to_thread(get_cache().unused, docs)
+    return CacheSweep(removed=removed, untracked=untracked)
 
 
 @app.post("/api/jobs/pause-all")

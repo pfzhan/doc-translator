@@ -3,6 +3,7 @@ and when records are deleted."""
 
 import asyncio
 import hashlib
+from types import ModuleType
 
 from fastapi.testclient import TestClient
 
@@ -134,6 +135,39 @@ def test_entries_saved_before_ownership_are_found_from_the_saved_plan(app_env, m
         assert client.get(f"/api/jobs/{job['id']}/cache").json()["entries"] == 1
         client.delete(f"/api/jobs/{job['id']}/cache")
         assert cache.get_many(tr.cache_key, ["An old paragraph."]) == {}
+
+
+def test_clearing_unused_cache_keeps_what_records_use(app_env: ModuleType) -> None:
+    main = app_env
+    cache = runner.get_cache()
+    with TestClient(main.app) as client:
+        kept = wait_done(client, submit(client)["id"])
+        other = b"# Another\n\nA paragraph of a book deleted later on.\n"
+        gone = wait_done(client, submit(client, name="gone.md", data=other)["id"])
+        # Removed without clearing its cache, as records deleted before clearing existed were
+        main.jobs.delete(gone["id"])
+        r = client.post("/api/web/translate", json={"texts": ["Some text from a web page."], "service_id": "mock"})
+        assert r.status_code == 200
+        # Saved before the cache recorded owners: nothing tells whose it is, so it stays
+        cache.put_many("old-prefix", {"An untracked paragraph.": "旧译文"})
+        before = _rows(cache)
+
+        info = client.get("/api/cache/unused").json()
+        assert info == {"removed": 3, "untracked": 1}  # the deleted book's title and paragraph, and the page
+        assert _rows(cache) == before  # counting deletes nothing
+        assert client.delete("/api/cache/unused").json() == {"removed": info["removed"], "untracked": 1}
+        assert _rows(cache) == before - info["removed"]
+        assert cache.get_many("old-prefix", ["An untracked paragraph."]) == {"An untracked paragraph.": "旧译文"}
+        assert client.get(f"/api/jobs/{kept['id']}/cache").json()["entries"] == 3
+        assert client.get("/api/cache/unused").json() == {"removed": 0, "untracked": 1}
+
+
+def test_clearing_unused_cache_waits_for_running_jobs(app_env: ModuleType) -> None:
+    main = app_env
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        main.jobs.get(job["id"]).status = "running"
+        assert client.delete("/api/cache/unused").status_code == 409
 
 
 def test_document_digest_is_stored_on_the_job(app_env):

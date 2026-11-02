@@ -1,5 +1,6 @@
 import json
 import time
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,21 +11,25 @@ from app.settings import Settings, SettingsError
 MD = b"# A Title\n\nFirst paragraph of the document is here.\n\nSecond paragraph goes right after it.\n"
 
 
-def wait_done(client, job_id, timeout=30):
+# A record as the API returns it (JSON)
+JobJSON = dict[str, Any]
+
+
+def wait_done(client: TestClient, job_id: str, timeout: float = 30) -> JobJSON:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         job = client.get(f"/api/jobs/{job_id}").json()
         if job["status"] not in ("queued", "running"):
-            return job
+            return job  # type: ignore[no-any-return]
         time.sleep(0.05)
     raise AssertionError("job did not finish")
 
 
-def submit(client, name="book.md", data=MD, **form):
-    form = {"service_id": "mock", "target_lang": "zh-CN", **form}
+def submit(client: TestClient, name: str = "book.md", data: bytes = MD, **extra: str) -> JobJSON:
+    form = {"service_id": "mock", "target_lang": "zh-CN", **extra}
     r = client.post("/api/jobs", files={"file": (name, data)}, data=form)
     assert r.status_code == 200, r.text
-    return r.json()
+    return r.json()  # type: ignore[no-any-return]
 
 
 def test_sync_info_clears_failed_after_retry():

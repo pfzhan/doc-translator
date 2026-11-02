@@ -111,6 +111,36 @@ async function connect(byUser = false) {
   fill($('target'), names.filter(([code]) => code !== 'auto'), s.targetLang);
   fill($('source'), names, s.sourceLang);
   setStatus('已连接', 'ok');
+  showCache(server);
+}
+
+// ---------- Translation cache ----------
+
+async function showCache(server) {
+  try {
+    const { entries } = await getJSON(server, '/api/web/cache');
+    $('cache-count').textContent = `${entries.toLocaleString()} 条`;
+    $('clear-cache').disabled = entries === 0;
+  } catch {
+    // The server predates the cache endpoints, or went away since connecting
+    $('cache-count').textContent = '无法获取';
+    $('clear-cache').disabled = true;
+  }
+}
+
+async function clearCache() {
+  const { server } = await loadSettings();
+  if (!confirm('清理网页翻译的缓存？之后打开的网页会重新请求翻译服务。')) return;
+  $('clear-cache').disabled = true;
+  try {
+    const resp = await fetch(`${server}/api/web/cache`, { method: 'DELETE' });
+    if (!resp.ok) throw new HTTPError(resp.status);
+    const { entries } = await resp.json();
+    $('cache-status').textContent = `已清理 ${entries.toLocaleString()} 条`;
+  } catch {
+    $('cache-status').textContent = `清理失败，请确认 ${server} 的服务已启动`;
+  }
+  await showCache(server);
 }
 
 async function showShortcut() {
@@ -130,6 +160,7 @@ async function init() {
   const s = await loadSettings();
   $('server').value = s.server;
   $('connect').addEventListener('click', () => connect(true));
+  $('clear-cache').addEventListener('click', clearCache);
   $('server').addEventListener('keydown', (e) => e.key === 'Enter' && connect(true));
   $('service').addEventListener('change', (e) => chrome.storage.sync.set({ serviceId: e.target.value }));
   $('target').addEventListener('change', (e) => chrome.storage.sync.set({ targetLang: e.target.value }));

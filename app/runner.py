@@ -82,6 +82,46 @@ class Cache:
             self.conn.commit()
         return removed
 
+    def count_only(self, doc: str) -> int:
+        """How many entries in the cache are used by doc and by no other file."""
+        with self.lock:
+            (n,) = self.conn.execute(_ONLY_OWNED_COUNT, (doc,)).fetchone()
+        return int(n)
+
+    def purge_only(self, doc: str) -> int:
+        """Delete the entries used by doc alone and forget doc's records, and return the number deleted. Entries
+        other files use too stay for them."""
+        with self.lock:
+            keys = [(k,) for (k,) in self.conn.execute(_ONLY_OWNED, (doc,))]
+            removed = self.conn.executemany("DELETE FROM t WHERE k=?", keys).rowcount
+            self.conn.execute("DELETE FROM owner WHERE doc=?", (doc,))
+            self.conn.commit()
+        return removed
+
+    def unused(self, used_docs: set[str]) -> tuple[int, int]:
+        """(entries whose owners are all outside used_docs, entries with no owner at all). Entries saved before
+        owners were registered have none, and nothing tells whose they are."""
+        with self.lock:
+            self._fill_used(used_docs)
+            (unused,) = self.conn.execute(f"SELECT COUNT(*) FROM t WHERE {_UNUSED}").fetchone()
+            (untracked,) = self.conn.execute("SELECT COUNT(*) FROM t WHERE k NOT IN (SELECT k FROM owner)").fetchone()
+        return int(unused), int(untracked)
+
+    def purge_unused(self, used_docs: set[str]) -> int:
+        """Delete the entries whose owners are all outside used_docs, with their owner records; entries with no owner
+        stay. Return the number deleted."""
+        with self.lock:
+            self._fill_used(used_docs)
+            removed = self.conn.execute(f"DELETE FROM t WHERE {_UNUSED}").rowcount
+            self.conn.execute("DELETE FROM owner WHERE k NOT IN (SELECT k FROM t)")
+            self.conn.commit()
+        return int(removed)
+
+    def _fill_used(self, used_docs: set[str]) -> None:
+        self.conn.execute("CREATE TEMP TABLE IF NOT EXISTS used (doc TEXT PRIMARY KEY)")
+        self.conn.execute("DELETE FROM used")
+        self.conn.executemany("INSERT OR IGNORE INTO used (doc) VALUES (?)", [(d,) for d in used_docs])
+
     def get_many(self, prefix: str, texts: list[str]) -> dict[str, str]:
         out = {}
         with self.lock:
@@ -121,6 +161,18 @@ class Cache:
 
 
 _cache: Cache | None = None
+
+# Entries in the cache that doc uses and no other owner does
+_ONLY_OWNED = """
+    SELECT o.k FROM owner o JOIN t ON t.k = o.k
+    WHERE o.doc = ? AND NOT EXISTS (SELECT 1 FROM owner other WHERE other.k = o.k AND other.doc != o.doc)
+"""
+_ONLY_OWNED_COUNT = f"SELECT COUNT(*) FROM ({_ONLY_OWNED})"
+# Entries that have owners, none of them in the temporary table used (see Cache.unused)
+_UNUSED = """
+    k IN (SELECT k FROM owner)
+    AND NOT EXISTS (SELECT 1 FROM owner o JOIN used u ON u.doc = o.doc WHERE o.k = t.k)
+"""
 
 
 def get_cache() -> Cache:

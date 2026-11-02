@@ -89,6 +89,12 @@ Records survive page reloads and server restarts.
   back as long as the source file and the models are unchanged, and only the rules run again: for an 86-page
   paper with both models enabled, analysis drops from 4.5 minutes to just over 20 seconds.
 - A failed job can be retried (重试).
+- 清理无用缓存… (Clear unused cache), under the retention period on the Records page, clears the cached
+  translations no record uses: those of web pages and of records deleted before deleting cleared their cache.
+  What records use stays, so they continue and regenerate without new requests. Entries cached before the cache
+  recorded whose they are (before 2026-10-31) cannot be told apart and stay too; the dialog counts them, and the
+  cache drops them when it fills up. It is refused while a job is translating. The API is `GET` /
+  `DELETE /api/cache/unused`.
 - Generated PDFs and EPUBs can be previewed (预览) in a new browser tab without downloading. When both versions
   exist, there are separate buttons for the translation and the bilingual version. PDFs use the browser's
   built-in viewer. EPUBs are served chapter by chapter from the file, with the book's table of contents on the
@@ -238,6 +244,10 @@ and each paragraph's translation appears below it. The server must be running.
   service chosen, and only when the shortcut is pressed or on sites chosen for automatic translation (below).
 - Web page translations share the translation cache with documents but are not saved as records, and do not build
   a document glossary (one more request per page); the glossary typed into the service still applies.
+- The options page shows how many web page translations are cached and clears them (清理网页翻译缓存); pages
+  opened afterwards are translated again, and translations already shown stay. Sentences a document also uses are
+  kept for the document. Translations of pages from before this option existed were not marked as such and are
+  not cleared; the cache drops them when it fills up. The API is `GET` / `DELETE /api/web/cache`.
 - The API is `POST /api/web/translate` with `{"texts": [...], "html": [...], "target_lang", "source_lang",
   "service_id", "title"}`, at most 50 texts of 10,000 characters each; `html` is aligned with `texts` and marks HTML
   fragments, which LLM services get the HTML prompt for and Google Translate gets `format=html` for. It answers
