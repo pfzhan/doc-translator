@@ -388,7 +388,12 @@ eval/              evaluation scripts for PDF segmentation, inline formulas and 
 - Scanned PDFs that need OCR are not supported yet. Tables without rules and without aligned column edges are not
   recognized, and their text is translated. When gutters are unclear, the reading order may not follow the
   columns. A line break followed by an English capital letter still starts a new paragraph.
-- The server has no authentication and is meant for local use only (bound to 127.0.0.1 by default).
+- The server has no authentication and is meant for local use only (bound to 127.0.0.1 by default). Web pages
+  open in the same browser can still send requests to it, so requests that change something (POST, PUT, PATCH,
+  DELETE) are accepted only from the server's own pages, browser extensions, and tools that send no `Origin`
+  header (curl, scripts); any other `Origin` gets 403. Otherwise any site could pause or delete jobs or spend the
+  translation quota without being able to read the answer. Reads are not checked: without CORS headers other pages
+  cannot read them.
 
 ## License
 

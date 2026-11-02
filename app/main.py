@@ -10,8 +10,10 @@ import time
 import traceback
 import uuid
 import zipfile
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -112,6 +114,31 @@ ALLOWED_HOSTS = [
     *(h.strip() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip()),
 ]
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
+
+# Requests that change state are accepted only from this server's own pages, from browser extensions, and from
+# clients that send no Origin (curl and other tools). TrustedHostMiddleware does not cover this: any web page the
+# user visits can POST to 127.0.0.1 across origins. With a form, or fetch in mode "no-cors" and a simple content
+# type, there is no preflight, so the request runs even though the page cannot read the answer: it could pause all
+# jobs, delete records or spend the translation quota. Browsers always send Origin on such requests.
+SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+EXTENSION_ORIGINS = ("chrome-extension://", "moz-extension://")
+
+
+def _origin_allowed(origin: str | None, host: str) -> bool:
+    if origin is None or origin.startswith(EXTENSION_ORIGINS):
+        return True
+    # Host and port only: behind an HTTPS reverse proxy the page's scheme differs from the one the server sees
+    parsed = urlsplit(origin)
+    return bool(parsed.netloc) and parsed.netloc.lower() == host.lower()
+
+
+@app.middleware("http")
+async def check_origin(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    if request.method not in SAFE_METHODS and not _origin_allowed(
+        request.headers.get("origin"), request.headers.get("host", "")
+    ):
+        return JSONResponse({"detail": "不接受来自其他网页的请求"}, status_code=403)
+    return await call_next(request)
 
 
 @app.middleware("http")
