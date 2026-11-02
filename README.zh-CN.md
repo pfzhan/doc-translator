@@ -146,6 +146,12 @@ python3 scripts/build_firefox.py
 
 然后打开 `about:debugging`，选「此 Firefox」，点「临时载入附加组件…」，选择 `dist/firefox/manifest.json`。扩展更新后要重新生成一次。临时附加组件在退出 Firefox 后会被移除，长期安装需要经 Mozilla 签名。快捷键在 `about:addons` 齿轮菜单的「管理扩展快捷键」里修改，Firefox 137 起设置页的按钮可以直接打开它。
 
+扩展的图标画在 `extension/icons/icon.svg` 里。Chrome 的 manifest 只接受 PNG 图标，所以改了它之后要用 [librsvg](https://gitlab.gnome.org/GNOME/librsvg) 重新生成 PNG：
+
+```bash
+for s in 16 32 48 128; do rsvg-convert -w $s -h $s extension/icons/icon.svg -o extension/icons/icon-$s.png; done
+```
+
 ## 各格式的处理方式
 
 | 格式 | 做法 | 输出 |

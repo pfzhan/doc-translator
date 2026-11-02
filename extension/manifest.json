@@ -3,11 +3,15 @@
   "name": "Doc Translator 网页翻译",
   "version": "0.1.0",
   "description": "按快捷键翻译当前网页，译文显示在原文下方。翻译由本机的 Doc Translator 服务完成。",
+  "icons": { "16": "icons/icon-16.png", "32": "icons/icon-32.png", "48": "icons/icon-48.png", "128": "icons/icon-128.png" },
   "permissions": ["activeTab", "scripting", "storage", "contextMenus"],
   "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],
   "background": { "service_worker": "background.js" },
-  "action": { "default_title": "翻译当前网页" },
+  "action": {
+    "default_title": "翻译当前网页",
+    "default_icon": { "16": "icons/icon-16.png", "32": "icons/icon-32.png" }
+  },
   "options_ui": { "page": "options.html", "open_in_tab": true },
   "commands": {
     "toggle-translate": {

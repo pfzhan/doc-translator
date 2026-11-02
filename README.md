@@ -303,6 +303,13 @@ Then open `about:debugging`, choose "This Firefox", click "Load Temporary Add-on
 quits, and a permanent install needs the add-on signed by Mozilla. Shortcuts are changed under "Manage Extension
 Shortcuts" in the gear menu of `about:addons`, which the options page's button opens from Firefox 137 on.
 
+The extension's icon is drawn in `extension/icons/icon.svg`. Chrome takes only PNG icons in the manifest, so
+after changing it, render the PNGs again with [librsvg](https://gitlab.gnome.org/GNOME/librsvg):
+
+```bash
+for s in 16 32 48 128; do rsvg-convert -w $s -h $s extension/icons/icon.svg -o extension/icons/icon-$s.png; done
+```
+
 ## How each format is handled
 
 | Format | Approach | Output |

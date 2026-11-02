@@ -24,6 +24,15 @@ def test_background_scripts_match_what_chrome_imports() -> None:
     assert build_firefox.BACKGROUND_SCRIPTS[-1] == CHROME_MANIFEST["background"]["service_worker"]
 
 
+def test_manifest_icons_exist_at_their_sizes() -> None:
+    icons = {**CHROME_MANIFEST["icons"], **CHROME_MANIFEST["action"]["default_icon"]}
+    for size, name in icons.items():
+        png = (build_firefox.SOURCE / name).read_bytes()
+        # The PNG header holds width and height as 4-byte big-endian numbers after the IHDR tag
+        assert png[12:16] == b"IHDR", name
+        assert (int.from_bytes(png[16:20], "big"), int.from_bytes(png[20:24], "big")) == (int(size), int(size)), name
+
+
 def test_build_writes_firefox_manifest(tmp_path: Path) -> None:
     out = build_firefox.build(tmp_path / "firefox")
     manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
