@@ -6,3 +6,4 @@ samples/
 reference/
 server.log
 .ruff_cache/
+dist/

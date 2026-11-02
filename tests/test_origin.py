@@ -40,6 +40,7 @@ def test_state_changes_from_other_pages_are_rejected(app_env: ModuleType) -> Non
         ("POST", "/api/jobs/resume-all"),
         ("DELETE", "/api/services/mock"),
         ("PUT", "/api/settings"),
+        ("POST", "/api/web/translate"),
     ]:
         resp = request(app_env, method, path, origin="https://evil.example")
         assert resp.status_code == 403, (method, path)

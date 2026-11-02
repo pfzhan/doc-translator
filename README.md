@@ -183,6 +183,116 @@ cache; after changing the model, prompt or glossary, the whole document is trans
 configuration, and switching back hits the original cache entries. A job that failed midway continues from where
 it stopped when submitted again.
 
+## Web page translation (Chrome extension)
+
+The browser extension in `extension/` translates the web page being viewed through this server: press the shortcut
+and each paragraph's translation appears below it. The server must be running.
+
+1. Open `chrome://extensions`, turn on developer mode, click "Load unpacked" and choose the `extension/` directory.
+2. Press `Alt+T` (Option+T on macOS) or click the extension's toolbar button. The first press starts translating;
+   the next ones hide and show the translations. After a failed request, the next press retries it.
+3. The shortcut is changed on Chrome's `chrome://extensions/shortcuts` page (extensions cannot set it themselves).
+   The extension's options page shows the current shortcut with a button that opens that page, and sets the server
+   address, the translation service and the languages; the services are those enabled on the server, and keys,
+   models and prompts are set on the server's page.
+
+- Paragraphs come from the page's layout: inline elements belong to the surrounding paragraph, and a blank line
+  (`<br><br>`) starts a new one. Code blocks, form controls, editable content (`contenteditable`) and blocks marked
+  `translate="no"` or `notranslate` are skipped, as are paragraphs already in the target language and text visible
+  only to screen readers. Marked text inside a sentence (a command name) stays in the translation unchanged. A
+  translation goes below its original, except in flex and grid rows and inside inline boxes (tag chips,
+  button-like links), where it follows the original on the same line so the layout holds.
+- The translation scope (翻译范围) on the options page is the whole page (the default) or only the main content
+  (只翻译正文). With only the main content, a page that marks it (`<main>` or `role="main"`) has only that
+  translated, without the navigation and sidebars inside it; a page that does not has everything translated except
+  its header, footer, navigation and sidebars (a header or footer inside an article or section is part of it). A
+  change applies to pages translated from then on.
+- Text the page changes later (chat replies streamed in, counters, content swapped by single-page apps) is
+  translated again once it has stayed the same for a second, replacing the old translation; a paragraph replaced
+  more than ten times (a ticker) is left in the original from then on.
+- Translations keep the font of their paragraph but are marked so they can be told from the page's own text: a
+  light blue tint, a blue bar on the left (not for translations on the original's line) and their own text color,
+  also in translation-only mode. Light or dark colors are chosen from the background really behind each
+  translation, the nearest opaque one among its ancestors, so a dark header on a light page or a dark site in a
+  light browser gets the dark colors; where the page sets no background, its `color-scheme` and the browser's dark
+  mode decide. Text contrast is above 9:1 on white and on dark backgrounds (WCAG asks for 4.5:1).
+- The display is either bilingual (the default) or translation only, chosen on the options page or with the
+  shortcut "切换双语对照 / 仅显示译文" (Switch bilingual / translation only; no key by default, assign one on
+  `chrome://extensions/shortcuts`); translated pages switch at once. In translation-only mode the original of each
+  translated paragraph is hidden (its nodes stay in the page with their text emptied), while images and form
+  controls stay visible; hiding the translations brings the originals back.
+- Only paragraphs within a screen of the viewport are sent; the rest are translated as the page scrolls, and
+  content the page adds later (infinite scrolling, single-page apps) is picked up too.
+- Links and inline formatting (bold, italic, underline, strikethrough, inline code, sub- and superscript,
+  highlighting) are kept in translations. Such a paragraph is sent as HTML with only those tags, each numbered and
+  without attributes. The translation is never inserted as HTML: it is parsed in an inert document and rebuilt
+  with DOM APIs, every tag that matches one of the paragraph's (by number, else by tag in order) becoming a copy of
+  that page element without its `id`, so `href` and other attributes come from the page, never from the model; any
+  other tag keeps only its text, and scripts, images and the like are dropped. Paragraphs without formatting are
+  sent and inserted as plain text.
+- The extension asks for the current tab only when the shortcut is pressed or the button clicked (`activeTab`). At
+  install it can reach only `127.0.0.1` and `localhost`; connecting to a server on another machine on the options
+  page makes the browser ask for access to that address (the server must listen on an outside address and list it
+  in `ALLOWED_HOSTS`; the options page says which is missing). An http address is not encrypted, so page text
+  crosses the network in the clear: use one only on a trusted network. Page text is sent to the translation
+  service chosen, and only when the shortcut is pressed or on sites chosen for automatic translation (below).
+- Web page translations share the translation cache with documents but are not saved as records, and do not build
+  a document glossary (one more request per page); the glossary typed into the service still applies.
+- The API is `POST /api/web/translate` with `{"texts": [...], "html": [...], "target_lang", "source_lang",
+  "service_id", "title"}`, at most 50 texts of 10,000 characters each; `html` is aligned with `texts` and marks HTML
+  fragments, which LLM services get the HTML prompt for and Google Translate gets `format=html` for. It answers
+  `{"translations": [...], "detected_lang"}`, where `null` keeps the original. Like every request that changes
+  something, it is rejected when another web page sends it (see Known limitations).
+- iframes are translated along with the page when the extension may access their site (frames of the page's own
+  site always; others only with access to that site) and follow the shortcut with it; an iframe added later starts
+  on the next press. Input placeholders are translated with the page, and tooltips (`title`) when hovered, since
+  most are never seen. In bilingual mode an attribute shows both texts (`original / translation`, tooltips on two
+  lines); hiding the translations restores it, and a value the page set since is left alone. `alt` and
+  `aria-label` are not translated: they are not shown on the page.
+- Not supported yet: shadow DOM. Chrome's own pages, the Web Store and the built-in PDF viewer cannot be translated;
+  the toolbar button shows `×` there.
+
+### Translating selected text
+
+Select some text, right-click it and choose "翻译选中的文字" (translate selected text): the translation appears in
+a small bubble below the selection, or above it near the bottom of the window. Esc or a click elsewhere closes it.
+The command has no shortcut by default; one can be set on `chrome://extensions/shortcuts`.
+
+- Each line of the selection is translated as a paragraph; lines longer than 10,000 characters are cut at a
+  sentence end, and long selections are sent 50 paragraphs per request.
+- Text selected in text boxes works too, except in password and one-time-code fields and other fields for
+  secrets, which are never sent. With the shortcut, the selection is taken from the frame the user is in; text in
+  iframes the extension may enter works too (with `activeTab`, those from the same origin as the page).
+
+### Sites translated automatically
+
+Right-click an empty part of a page and choose "总是翻译此网站" (always translate this site): the browser asks for
+access to that site, and from then on its pages start translating as soon as they load, as if the shortcut had
+been pressed; the shortcut still hides and shows the translations. On such a site the entry reads "不再自动翻译此网站"
+(stop translating this site automatically). The options page lists the sites, with a button to remove each.
+
+- A site is a hostname, over both http and https; other subdomains are separate sites. Only the top frame is
+  translated.
+- These are the only sites the extension can access without the shortcut being pressed. Removing a site gives up
+  that access, as does revoking it in the browser's settings, which also stops the automatic translation.
+- The list is synced with the browser account (`chrome.storage.sync`), but access is granted per browser: on
+  another computer the options page marks the site until access is granted there from the same menu entry.
+
+### Firefox
+
+Firefox 128 or later can run the extension too, though it is tested in Chrome only. Firefox needs a different
+manifest (its background is an event page listed in `background.scripts`, a key Chrome warns about), so
+`extension/` is the Chrome version and the Firefox one is built from it into `dist/firefox/`:
+
+```bash
+python3 scripts/build_firefox.py
+```
+
+Then open `about:debugging`, choose "This Firefox", click "Load Temporary Add-on…" and pick
+`dist/firefox/manifest.json`. Build again after updating the extension. A temporary add-on is removed when Firefox
+quits, and a permanent install needs the add-on signed by Mozilla. Shortcuts are changed under "Manage Extension
+Shortcuts" in the gear menu of `about:addons`, which the options page's button opens from Firefox 137 on.
+
 ## How each format is handled
 
 | Format | Approach | Output |
@@ -378,6 +488,8 @@ app/
   quantize.py      generating int8 versions of both models
   formats/         parsing and writing back each format
 static/            frontend pages
+extension/         Chrome extension for web page translation
+scripts/           build_firefox.py: writes the Firefox version of the extension to dist/firefox/
 tests/             tests (pytest)
 eval/              evaluation scripts for PDF segmentation, inline formulas and models; usage and the paper list
                    are in eval/README.md

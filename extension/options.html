@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Doc Translator 网页翻译设置</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #fff;
+      --fg: #202124;
+      --muted: #5f6368;
+      --line: #dadce0;
+      --error: #c5221f;
+      --ok: #188038;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg: #202124; --fg: #e8eaed; --muted: #9aa0a6; --line: #3c4043; --error: #f28b82; --ok: #81c995; }
+    }
+    body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.6 system-ui, sans-serif; }
+    main { max-width: 560px; margin: 0 auto; padding: 24px 16px; }
+    h1 { font-size: 20px; margin: 0 0 20px; }
+    section { border-top: 1px solid var(--line); padding: 16px 0; }
+    label { display: block; margin: 10px 0 4px; }
+    input, select { width: 100%; box-sizing: border-box; padding: 6px 8px; font: inherit; }
+    .row { display: flex; gap: 8px; }
+    .row input { flex: 1; }
+    button { padding: 6px 12px; font: inherit; cursor: pointer; }
+    .hint { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
+    .error { color: var(--error); }
+    .ok { color: var(--ok); }
+    kbd { padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; font: inherit; }
+    code { font-size: 12px; }
+    .sites { list-style: none; margin: 4px 0 0; padding: 0; }
+    .sites li { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+    .sites .host { flex: 1; overflow-wrap: anywhere; }
+    .sites .hint { margin: 0; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Doc Translator 网页翻译</h1>
+
+  <section>
+    <label for="server">服务地址</label>
+    <div class="row">
+      <input id="server" type="url" placeholder="http://127.0.0.1:8765">
+      <button id="connect" type="button">连接</button>
+    </div>
+    <p id="status" class="hint" role="status"></p>
+    <p class="hint">通常是本机的服务。连接其他机器上的服务时，浏览器会请求访问该地址的权限；服务端要监听外部地址并把它加入 ALLOWED_HOSTS。页面文字经网络发给该服务，http 地址不加密，请只在可信的网络里使用。</p>
+  </section>
+
+  <section>
+    <label for="service">翻译服务</label>
+    <select id="service"></select>
+    <label for="target">目标语言</label>
+    <select id="target"></select>
+    <label for="source">源语言</label>
+    <select id="source"></select>
+    <label for="mode">显示方式</label>
+    <select id="mode">
+      <option value="bilingual">双语对照（译文在原文下方）</option>
+      <option value="translated">仅显示译文</option>
+    </select>
+    <label for="scope">翻译范围</label>
+    <select id="scope">
+      <option value="page">整个网页</option>
+      <option value="main">只翻译正文（不翻译页头、页脚、导航和侧栏）</option>
+    </select>
+    <p class="hint">修改后立即生效，对之后发出的翻译请求有效；翻译范围对之后打开或开始翻译的网页有效。翻译服务的 Key、模型和提示词在 Doc Translator 页面上设置。</p>
+  </section>
+
+  <section>
+    <label>快捷键</label>
+    <ul id="shortcut-list"></ul>
+    <button id="shortcuts" type="button">修改快捷键</button>
+    <p class="hint">翻译当前网页：第一次按开始翻译，再按隐藏或显示译文；翻译出错后再按会重试。点击工具栏上的扩展按钮效果相同。翻译选中的文字也可以在选中的文字上点右键。</p>
+  </section>
+
+  <section>
+    <label>自动翻译的网站</label>
+    <ul id="sites" class="sites"></ul>
+    <p class="hint">在网页空白处点右键，选「总是翻译此网站」，以后打开这个网站的网页会自动开始翻译。列表随浏览器账号同步，但每台电脑上要各自授权一次。</p>
+  </section>
+
+</main>
+<script src="settings.js"></script>
+<script src="sites.js"></script>
+<script src="options.js"></script>
+</body>
+</html>

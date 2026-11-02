@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Doc Translator 网页翻译",
+  "version": "0.1.0",
+  "description": "按快捷键翻译当前网页，译文显示在原文下方。翻译由本机的 Doc Translator 服务完成。",
+  "permissions": ["activeTab", "scripting", "storage", "contextMenus"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_title": "翻译当前网页" },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "commands": {
+    "toggle-translate": {
+      "suggested_key": { "default": "Alt+T" },
+      "description": "翻译当前网页 / 显示或隐藏译文"
+    },
+    "toggle-mode": {
+      "description": "切换双语对照 / 仅显示译文"
+    },
+    "translate-selection": {
+      "description": "翻译选中的文字"
+    }
+  }
+}

@@ -76,7 +76,7 @@ class Translator:
     async def translate_batch(self, texts: list[str]) -> list[str]:
         raise NotImplementedError
 
-    async def aclose(self):
+    async def aclose(self) -> None:
         pass
 
 

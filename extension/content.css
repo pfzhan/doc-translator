@@ -1,0 +1,46 @@
+/* Translations inserted by content.js. They keep the font of their paragraph, so a heading's translation looks like
+   a heading, but get their own tint, bar and text color so they can be told from the page's own text. content.js
+   sets data-dt-backdrop from the background really behind each one (light or dark). */
+dt-trans {
+  --dt-accent: #2563eb;
+  --dt-tint: rgba(37, 99, 235, 0.08);
+  --dt-text: #1e3a8a;
+  display: block;
+  margin: 0.25em 0 0;
+  padding: 0.1em 0.5em;
+  border-left: 3px solid var(--dt-accent);
+  border-radius: 0 3px 3px 0;
+  background: var(--dt-tint);
+  color: var(--dt-text);
+}
+
+dt-trans[data-dt-backdrop='dark'] {
+  --dt-accent: #60a5fa;
+  --dt-tint: rgba(96, 165, 250, 0.16);
+  --dt-text: #bfdbfe;
+}
+
+/* In flex and grid rows and inline boxes, the translation follows the original on the same line */
+dt-trans[data-dt-inline] {
+  display: inline;
+  margin: 0 0 0 0.4em;
+  padding: 0 0.25em;
+  border-left: 0;
+  border-radius: 3px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+html[data-dt-hidden] dt-trans {
+  display: none;
+}
+
+/* Translation-only mode: content.js empties the original's text nodes and marks its elements. The translation
+   takes the original's place and keeps its tint, so changed text is still marked. */
+html[data-dt-translated]:not([data-dt-hidden]) [data-dt-original] {
+  display: none !important;
+}
+
+html[data-dt-translated]:not([data-dt-hidden]) dt-trans:not([data-dt-inline]) {
+  margin: 0;
+}
