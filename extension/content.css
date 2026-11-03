@@ -2,8 +2,10 @@
    a heading, but get their own tint, bar and text color so they can be told from the page's own text. content.js
    sets data-dt-backdrop from the background really behind each one (light or dark).
 
-   content.js also puts a copy of this file into each shadow root it enters, where selectors cannot see <html>: the
-   state content.js sets on <html> reaches them through the inherited custom properties --dt-shown and --dt-gap. */
+   The state content.js sets on <html> is read in two ways. On the page, rules start from <html>, which makes them
+   specific enough to win over the page's rules on all children. content.js also puts a copy of this file into each
+   shadow root it enters, where selectors cannot see <html>: there the state comes through the inherited custom
+   properties --dt-shown and --dt-gap. */
 dt-trans {
   --dt-accent: #2563eb;
   --dt-tint: rgba(37, 99, 235, 0.08);
@@ -38,12 +40,21 @@ html[data-dt-hidden] {
   --dt-shown: none;
 }
 
+html[data-dt-hidden] dt-trans {
+  display: none;
+}
+
 /* Translation-only mode: content.js empties the original's text nodes and marks its elements while the translation
    is shown. The translation takes the original's place and keeps its tint, so changed text is still marked. */
+html[data-dt-translated]:not([data-dt-hidden]) [data-dt-original],
 [data-dt-original] {
   display: none !important;
 }
 
 html[data-dt-translated]:not([data-dt-hidden]) {
   --dt-gap: 0;
+}
+
+html[data-dt-translated]:not([data-dt-hidden]) dt-trans:not([data-dt-inline]) {
+  margin: 0;
 }
