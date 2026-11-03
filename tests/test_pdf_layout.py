@@ -172,7 +172,7 @@ def test_the_indented_next_line_does_not_stop_widening():
     extra space reaches into that line, but the subentry is not an obstacle beside the box. An algorithm box that
     sits beside the first line of a paragraph over a dozen points must be avoided even when it is much taller than
     the paragraph."""
-    from app.formats.pdf_write import _beside_rows
+    from app.formats.pdf_write_geometry import _beside_rows
 
     entry_row = pymupdf.Rect(197, 130.4, 234, 140.8)
     entry_box = pymupdf.Rect(197, 131.2, 236, 144.8)
@@ -191,7 +191,7 @@ def test_an_equation_number_between_two_rows_is_beside_them():
     """In a display formula with cases, the equation number on the right sits between the "if …" and "otherwise"
     rows and overlaps less than half of each; it is still beside those rows, and widening to the right must avoid it.
     One below the last row does not count."""
-    from app.formats.pdf_write import _beside_rows, _on_rows
+    from app.formats.pdf_write_geometry import _beside_rows, _on_rows
 
     rows = [pymupdf.Rect(351.4, 215.1, 422.0, 227.1), pymupdf.Rect(351.4, 229.4, 390.1, 241.4)]
     number = pymupdf.Rect(471.5, 222.8, 493.2, 233.6)

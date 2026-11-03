@@ -1296,7 +1296,8 @@ def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
     paragraph. When the next paragraph does not fill its box, its start moves down to leave half a line between the
     two"""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_write import _render_translated, _row_neighbor
+    from app.formats.pdf_write import _render_translated
+    from app.formats.pdf_write_geometry import _row_neighbor
 
     src = pymupdf.open()
     page = src.new_page(width=400, height=300)
@@ -5062,7 +5063,7 @@ def test_formulas_on_a_page_filter_their_own_lines():
     formula is filtered on the smallest part; the glyphs kept are the same as when filtering on the whole page. A
     formula that was not registered still finds the part that covers it."""
     from app.formats.pdf_place import _FormulaSources, _keep_marks, _pdf_rect
-    from app.formats.pdf_write import _page_form
+    from app.formats.pdf_write_geometry import _page_form
 
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=400)
@@ -5170,7 +5171,7 @@ def test_formula_glyphs_stay_in_place_after_a_size_change_on_their_line():
     """When a line changes font size midway (small caps), MuPDF misplaces the formula after deleting the glyphs before
     it. If it is misplaced the whole line is kept, and the other lines are still deleted."""
     from app.formats.pdf_place import _keep_marks, _pdf_rect
-    from app.formats.pdf_write import _page_form
+    from app.formats.pdf_write_geometry import _page_form
 
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=200)
@@ -6144,7 +6145,7 @@ def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
     quotation)."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_place import _place_plain
-    from app.formats.pdf_write import _wrap_holes
+    from app.formats.pdf_write_geometry import _wrap_holes
 
     image = pymupdf.Rect(380, 268, 493, 428)
     caption = pymupdf.Rect(380, 432, 486, 443)
@@ -8113,7 +8114,7 @@ def test_cross_page_paragraph_continues_on_the_next_page(tmp_path):
 def test_split_filled_lines_keeps_breaks_when_the_page_has_room():
     """When the text fits on this page, the lines already broken are returned. Returning the original text would make
     the caller shrink the font size to fit one line."""
-    from app.formats.pdf_write import _split_filled_lines
+    from app.formats.pdf_write_geometry import _split_filled_lines
 
     text = "在实验研究中我们首先比较旧优化器与新优化器的计划质量并说明新优化器的收益"
     head, rest = _split_filled_lines(text, [], em=8.8, block_size=10, width=120, cjk=True, y0=100, limit=400)
@@ -8125,7 +8126,7 @@ def test_split_filled_lines_fills_the_last_lines_of_the_page():
     """The page bottom has room for one or two original lines. The translation does not fit at the original line
     spacing, so the spacing tightens and the line spacing of the last line extends past the box, keeping the text
     on this page."""
-    from app.formats.pdf_write import _filled_bottom, _split_filled_lines
+    from app.formats.pdf_write_geometry import _filled_bottom, _split_filled_lines
 
     text = "人工智能领域的一项名为发展的研究计划的成员，并发表了一篇论文。" * 3
     head, rest = _split_filled_lines(text, [], em=8.8, block_size=10, width=300, cjk=True, y0=700, limit=712)
@@ -8159,7 +8160,7 @@ def test_split_filled_lines_fills_the_last_lines_of_the_page():
 def test_split_filled_lines_keeps_the_line_gap_when_the_continuation_has_room():
     """The page bottom holds one line at normal line spacing or two when tightened. When the tail block can hold the
     remaining lines this page does not tighten; it tightens only when they do not fit."""
-    from app.formats.pdf_write import _split_filled_lines
+    from app.formats.pdf_write_geometry import _split_filled_lines
 
     text = "人工智能领域的一项名为发展的研究计划的成员，并发表了一篇论文。" * 3
     args = dict(em=8.8, block_size=10, width=300, cjk=True, y0=696.5, limit=719.5)
@@ -8783,7 +8784,7 @@ def test_right_fragment_stays_on_its_own_line():
     """The first line that makes room for a side label is still written from that line, using its own left edge, and
     the paragraph does not move down."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_write import _flow_y0, _inset_write_boxes
+    from app.formats.pdf_write_geometry import _flow_y0, _inset_write_boxes
 
     fragment = pymupdf.Rect(190, 40, 360, 52)
     nxt = pymupdf.Rect(40, 56, 360, 68)
@@ -8840,7 +8841,7 @@ def test_right_fragment_stays_on_its_own_line():
 def test_affiliation_tails_split_and_stack():
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_paragraphs import _split_affiliation_tails
-    from app.formats.pdf_write import _affiliation_write_rects
+    from app.formats.pdf_write_geometry import _affiliation_write_rects
 
     names = [
         pymupdf.Rect(100, 120, 400, 132),
@@ -8880,7 +8881,7 @@ def test_write_helpers_only_need_the_blocks_on_their_page():
     import random
 
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_write import (
+    from app.formats.pdf_write_geometry import (
         _affiliation_write_rects,
         _beside_body,
         _body_first_starts,
@@ -9023,7 +9024,7 @@ def test_inset_rest_reflows_at_the_column_width():
     """After the first line making room for a side label is broken at the narrow width, the rest carries no line
     breaks and is laid out again in the boxes of the continuation lines when writing. Line breaks fixed in advance
     would leave short half lines where the continuation lines make room for a figure."""
-    from app.formats.pdf_write import _split_own_lines
+    from app.formats.pdf_write_geometry import _split_own_lines
 
     text = "Orca 包含一个可扩展框架, 用于基于形式化的属性规范描述查询需求和计划特征。属性有不同类型, 包括逻辑属性。"
     head, rest = _split_own_lines(text, [], 7.92, 9.0, 120.0)
@@ -9042,7 +9043,7 @@ def test_inset_rest_reflows_at_the_column_width():
 def test_a_word_too_wide_for_the_shared_line_moves_whole_to_the_next_line():
     """When the rest of a line is only one short word wide and BERT does not fit, the whole word goes to the
     continuation line and is not cut into BER / T."""
-    from app.formats.pdf_write import _split_own_lines
+    from app.formats.pdf_write_geometry import _split_own_lines
 
     assert _split_own_lines("BERT 和 GPT 在所有任务上的表现", [], 8.8, 10.0, 20.0) == (
         "",
@@ -9165,7 +9166,8 @@ def test_cross_page_stops_above_the_page_number(tmp_path):
     not in the block list, and the text must not run over it."""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_layout import content_floor
-    from app.formats.pdf_write import _render_translated, _room_below
+    from app.formats.pdf_write import _render_translated
+    from app.formats.pdf_write_geometry import _room_below
 
     src = tmp_path / "src.pdf"
     doc = pymupdf.open()
@@ -9289,7 +9291,8 @@ def test_page_margins_stay_with_the_source(tmp_path):
     """The page top aligns with the top edge of the original, and body text is not written below the bottom edge of
     the original. Footnotes in the footer band still get no extra cut."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_write import _render_translated, _room_below
+    from app.formats.pdf_write import _render_translated
+    from app.formats.pdf_write_geometry import _room_below
 
     src = tmp_path / "src.pdf"
     doc = pymupdf.open()
@@ -10721,7 +10724,7 @@ def test_formula_holes_follow_the_neighbours_ink_not_their_font_box():
     """The font box of a large brace on the previous line reaches the N on the next line, but its ink does not. Cutting
     holes by ink leaves the corner of N intact."""
     from app.formats.pdf_place import _formula_form
-    from app.formats.pdf_write import _page_form
+    from app.formats.pdf_write_geometry import _page_form
 
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
@@ -10750,7 +10753,7 @@ def test_a_formula_cut_from_a_text_span_is_not_holed_by_that_span():
     span keeps only the glyphs left after the cut, and the space has no ink, so no hole is cut. Glyphs reaching
     down from the line above still get holes"""
     from app.formats.pdf_place import _formula_form
-    from app.formats.pdf_write import _page_form
+    from app.formats.pdf_write_geometry import _page_form
 
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
@@ -10778,7 +10781,7 @@ def test_list_item_near_the_page_middle_stays_left_aligned():
     """A list item whose center line happens to match the center line of the widest block is still left-aligned and
     not written back centered. The (a) subcaption below a subfigure stays centered."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_write import _write_rect
+    from app.formats.pdf_write_rect import _write_rect
 
     def blk(text, x0, y0, x1):
         rect = pymupdf.Rect(x0, y0, x1, y0 + 23.7)
@@ -10803,7 +10806,7 @@ def test_heading_at_the_frame_edge_stays_left_aligned():
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
-    from app.formats.pdf_write import _write_rect
+    from app.formats.pdf_write_rect import _write_rect
 
     def blk(text, x0, y0, x1, y1, size=10.0):
         rect = pymupdf.Rect(x0, y0, x1, y1)
@@ -10831,7 +10834,7 @@ def test_epigraph_and_attribution_at_the_frame_right_edge_are_written_flush_righ
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
     from app.formats.pdf_typeset import typeset_lines
-    from app.formats.pdf_write import _write_rect
+    from app.formats.pdf_write_rect import _write_rect
 
     def blk(text, rows, size=10.0):
         rects = [pymupdf.Rect(*row) for row in rows]
@@ -10892,7 +10895,7 @@ def test_attribution_short_of_the_frame_edge_by_a_trailing_space_is_written_flus
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
-    from app.formats.pdf_write import _write_rect
+    from app.formats.pdf_write_rect import _write_rect
 
     def blk(text, rows, size=10.0):
         rects = [pymupdf.Rect(*row) for row in rows]
@@ -11000,7 +11003,7 @@ def test_header_cells_near_the_column_middle_are_not_all_centred_on_it():
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
-    from app.formats.pdf_write import _write_rect
+    from app.formats.pdf_write_rect import _write_rect
 
     def blk(text, x0, x1, y0=676.0, size=10.0):
         rect = pymupdf.Rect(x0, y0, x1, y0 + 11.6)
@@ -11033,7 +11036,8 @@ def test_a_paragraph_with_an_overfull_line_is_written_to_the_frame_edge():
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import Column, PageGeometry
-    from app.formats.pdf_write import _write_limit, _write_rect
+    from app.formats.pdf_write_geometry import _write_limit
+    from app.formats.pdf_write_rect import _write_rect
 
     def blk(rows):
         rects = [pymupdf.Rect(*row) for row in rows]
@@ -11101,7 +11105,7 @@ def test_two_line_title_centered_on_the_page_is_written_centered():
     off to the right; the title is still written back centered on the page."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_layout import PageGeometry
-    from app.formats.pdf_write import _write_rect
+    from app.formats.pdf_write_rect import _write_rect
 
     def blk(text, x0, y0, x1, y1, size):
         rect = pymupdf.Rect(x0, y0, x1, y1)
@@ -11134,7 +11138,7 @@ def test_title_page_centered_off_the_page_middle_is_written_centered():
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
-    from app.formats.pdf_write import _write_rect
+    from app.formats.pdf_write_rect import _write_rect
 
     def blk(text, x0, y0, x1, y1, size):
         rect = pymupdf.Rect(x0, y0, x1, y1)
@@ -11161,7 +11165,7 @@ def test_body_lines_beside_margin_notes_do_not_make_a_centered_page():
     count as short lines. The body lines are all on the center line of the text area, and an indented example whose
     center line happens to lie near it does not make the page centered."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_write import _centered_axis
+    from app.formats.pdf_write_rect import _centered_axis
 
     def blk(text, x0, y0, x1, size=10.0):
         rect = pymupdf.Rect(x0, y0, x1, y0 + 12)
@@ -11238,7 +11242,7 @@ def test_left_aligned_dialogue_lines_are_not_centered():
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import PageGeometry
-    from app.formats.pdf_write import _write_rect
+    from app.formats.pdf_write_rect import _write_rect
 
     def blk(text, y0, x1):
         rect = pymupdf.Rect(221, y0, x1, y0 + 9)
@@ -13083,7 +13087,7 @@ def test_a_formula_clip_reaches_into_its_own_gaps_beside_a_comma():
     rightmost rectangle must make room for the comma; the middle rectangles widen as usual, so the gap is not
     cut off."""
     from app.formats.pdf_place import _formula_form
-    from app.formats.pdf_write import _page_form
+    from app.formats.pdf_write_geometry import _page_form
 
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
@@ -13580,8 +13584,8 @@ def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down():
     tightens a little, and the last entry stays within the bottom edge; other columns do not move. With too many
     extra lines nothing moves, as before."""
     from app.formats.pdf_blocks import TextBlock
+    from app.formats.pdf_index_reflow import _index_reflow
     from app.formats.pdf_layout import Column, PageGeometry
-    from app.formats.pdf_write import _index_reflow
 
     def blk(text, x0, row):
         rect = pymupdf.Rect(x0, 100 + row * 9.6, x0 + 60, 110 + row * 9.6)
@@ -13626,7 +13630,7 @@ def test_an_index_entry_is_never_centered():
     """An indented subentry that falls exactly in the middle of the column is still left-aligned."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_layout import Column, PageGeometry
-    from app.formats.pdf_write import _write_rect
+    from app.formats.pdf_write_rect import _write_rect
 
     geo = PageGeometry(612, (Column(80, 280), Column(300, 500)), ())
     rect = pymupdf.Rect(150, 100, 210, 110)
@@ -14539,7 +14543,7 @@ def test_a_formula_form_box_keeps_the_overhang_of_an_italic_letter():
     not included."""
     from app.formats.pdf_blocks import _GlyphInk
     from app.formats.pdf_place import _formula_form
-    from app.formats.pdf_write import _page_form
+    from app.formats.pdf_write_geometry import _page_form
 
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
@@ -14606,7 +14610,7 @@ def test_a_one_line_paragraph_is_written_from_the_column_edge():
     from app.formats.pdf_blocks import TextBlock, _paragraph_indent
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import Column, PageGeometry
-    from app.formats.pdf_write import _indent_edge
+    from app.formats.pdf_write_geometry import _indent_edge
 
     def blk(rows, text):
         rects = [pymupdf.Rect(*row) for row in rows]
@@ -14746,7 +14750,8 @@ def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_layout import Column, PageGeometry
-    from app.formats.pdf_write import _indented_start, _render_translated
+    from app.formats.pdf_write import _render_translated
+    from app.formats.pdf_write_geometry import _indented_start
 
     def blk(page, rows, text):
         rects = [pymupdf.Rect(*row) for row in rows]
@@ -14914,7 +14919,7 @@ def test_a_numbered_item_with_hanging_lines_keeps_the_hang():
     not count."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_place import _hang_lanes
-    from app.formats.pdf_write import _hang_indent
+    from app.formats.pdf_write_geometry import _hang_indent
 
     def blk(text, lefts):
         rects = [pymupdf.Rect(x0, 170 + 12 * i, 475, 180 + 12 * i) for i, x0 in enumerate(lefts)]
