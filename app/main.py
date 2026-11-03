@@ -13,7 +13,7 @@ import zipfile
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -21,12 +21,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from . import cleanup, history, layout_model, quantize
+from . import cleanup, glossary, history, layout_model, quantize
 from .formats import PREVIEW_FORMATS, SUPPORTED, output_variant, translate_file
 from .formats.epub import book_outline
 from .formats.pdf import mupdf_turn
 from .formats.pdf_output import translated_from_bilingual
 from .formats.pdf_vision import FormulaModel, formula_parallel
+from .glossaries import GlossaryError, GlossaryNotFound, GlossaryStore
 from .history import Job, JobStore
 from .languages import GOOGLE_CODES, LANGUAGES
 from .prompts import default_prompts
@@ -43,6 +44,7 @@ MAX_WEB_REQUEST = 4 * 1024 * 1024
 CLEANUP_INTERVAL = 3600
 
 store = ServiceStore()
+glossaries = GlossaryStore()
 settings = Settings()
 jobs = JobStore(history.JOBS_DIR)
 # Running translation jobs; keeps them from being garbage collected and is used to cancel on pause or delete
@@ -226,11 +228,22 @@ async def _run_job(job: Job, translator, bilingual: bool):
         await translator.aclose()
 
 
-def _make_translator(job: Job, service: dict):
+def _with_glossaries(service: dict, text: str) -> dict:
+    """The service with entries of the job's glossaries added after its own glossary, which takes precedence. They
+    enter the cache key like the service's own entries."""
+    if not text:
+        return service
+    return {**service, "glossary": "\n".join(part for part in (service.get("glossary") or "", text) if part)}
+
+
+def _make_translator(job: Job, service: dict, glossary_text: str | None = None):
     """Create the translation engine from the service's current configuration. Raise 400 for an invalid
-    configuration; job status and files have not been touched at that point."""
+    configuration; job status and files have not been touched at that point.
+    Without glossary_text the glossary entries of the latest run are used, so the cache keys match the
+    translations made."""
+    text = job.glossary_text if glossary_text is None else glossary_text
     try:
-        return create_translator(service, job.target_lang, job.source_lang)
+        return create_translator(_with_glossaries(service, text), job.target_lang, job.source_lang)
     except TranslatorError as e:
         raise HTTPException(400, str(e)) from e
 
@@ -279,8 +292,10 @@ async def _resume(job: Job, service_id: str | None = None, fresh: bool = False) 
     if not service:
         raise HTTPException(400, "原翻译服务已不存在，请选择其他服务")
     # Validate the configuration first and reset status and delete old translations only after it passes;
-    # otherwise the translations would be lost when the configuration is invalid
-    translator = _make_translator(job, service)
+    # otherwise the translations would be lost when the configuration is invalid. The glossaries are read again, so
+    # edited entries take effect
+    glossary_text = glossaries.entries_text(job.glossary_ids)
+    translator = _make_translator(job, service, glossary_text)
     if fresh:
         try:
             await _clear(job)
@@ -289,6 +304,7 @@ async def _resume(job: Job, service_id: str | None = None, fresh: bool = False) 
             raise
         job.clear_results()
     job.service_id, job.service_name = service["id"], service.get("name", "")
+    job.glossary_text = glossary_text
     job.status, job.error, job.done, job.total, job.outputs, job.finished = "queued", "", 0, 0, [], 0.0
     # Recompute the preview flag: old records may have been created before the preview feature (stored as False)
     job.preview = Path(job.filename).suffix.lower() in PREVIEW_FORMATS
@@ -436,6 +452,63 @@ class WebTranslateResponse(BaseModel):
 MAX_WEB_TEXT = 10000
 
 
+@app.get("/api/glossaries")
+def list_glossaries():
+    return glossaries.list()
+
+
+@app.post("/api/glossaries")
+def create_glossary(data: dict = Body(...)):
+    try:
+        return glossaries.create(data)
+    except GlossaryError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.put("/api/glossaries/{gid}")
+def update_glossary(gid: str, data: dict = Body(...)):
+    try:
+        return glossaries.update(gid, data)
+    except GlossaryNotFound as e:
+        raise HTTPException(404, str(e)) from e
+    except GlossaryError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+@app.delete("/api/glossaries/{gid}")
+def delete_glossary(gid: str):
+    try:
+        glossaries.delete(gid)
+    except GlossaryNotFound as e:
+        raise HTTPException(404, str(e)) from e
+    return {"ok": True}
+
+
+@app.post("/api/glossaries/import")
+def import_glossary(data: dict = Body(...)):
+    """Parse an uploaded CSV / TSV / "source = translation" file into entry text; nothing is saved until the user
+    saves the glossary."""
+    entries = glossary.parse_table(str(data.get("text") or ""))
+    if not entries:
+        raise HTTPException(400, "没有读到术语：每行应为“原文,译文”、“原文⇥译文”或“原文 = 译文”")
+    return {"entries": glossary.render(entries), "count": len(entries)}
+
+
+@app.get("/api/glossaries/{gid}/export")
+def export_glossary(gid: str):
+    item = glossaries.get(gid)
+    if not item:
+        raise HTTPException(404, "术语表不存在")
+    body = glossary.to_csv(glossary.parse(item["entries"]))
+    name = quote(f"{item['name']}.csv")
+    return Response(
+        # The BOM lets Excel open the UTF-8 file with the right encoding
+        "\ufeff" + body,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{name}"},
+    )
+
+
 @app.post("/api/web/translate")
 async def web_translate(data: WebTranslateRequest) -> WebTranslateResponse:
     if any(len(t) > MAX_WEB_TEXT for t in data.texts):
@@ -505,6 +578,7 @@ async def create_job(
     source_lang: str = Form("auto"),
     service_id: str = Form(""),
     mode: str = Form("bilingual"),
+    glossary_ids: list[str] = Form([]),
 ):
     await _cleanup()
     name = Path(file.filename or "upload").name
@@ -520,6 +594,7 @@ async def create_job(
     except TranslatorError as e:
         raise HTTPException(400, str(e)) from e
 
+    glossary_ids = [gid for gid in dict.fromkeys(glossary_ids) if glossaries.get(gid)]
     job = Job(
         id=uuid.uuid4().hex[:12],
         filename=name,
@@ -528,6 +603,8 @@ async def create_job(
         mode="translated" if mode == "translated" else "bilingual",
         service_id=service["id"],
         service_name=service.get("name", ""),
+        glossary_ids=glossary_ids,
+        glossary_text=glossaries.entries_text(glossary_ids),
         preview=ext in PREVIEW_FORMATS,
     )
     jobs.out_dir(job.id).mkdir(parents=True)
@@ -574,7 +651,7 @@ def _service_translator(job: Job):
     if not service:
         return None
     try:
-        return create_translator(service, job.target_lang, job.source_lang)
+        return create_translator(_with_glossaries(service, job.glossary_text), job.target_lang, job.source_lang)
     except TranslatorError:
         return None
 

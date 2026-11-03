@@ -14,6 +14,7 @@
     <button role="tab" class="tab" data-view="translate" aria-selected="true">翻译</button>
     <button role="tab" class="tab" data-view="history" aria-selected="false">记录<span class="tab-badge" id="running-badge" hidden></span></button>
     <button role="tab" class="tab" data-view="services" aria-selected="false">翻译服务</button>
+    <button role="tab" class="tab" data-view="glossaries" aria-selected="false">术语表</button>
     <button role="tab" class="tab" data-view="layout" aria-selected="false">版面模型</button>
   </nav>
 </header>
@@ -57,6 +58,11 @@
           <select name="service_id" id="service_id"></select>
         </label>
       </div>
+
+      <fieldset class="field" id="glossary-pick" hidden>
+        <legend>术语表</legend>
+        <div class="glossary-checks" id="glossary-checks"></div>
+      </fieldset>
 
       <div class="form-foot">
         <span class="hint">可在「翻译服务」中添加 OpenAI、Claude、Gemini、Grok 或任意 OpenAI 兼容接口。</span>
@@ -277,6 +283,44 @@
         <button type="button" class="btn danger-ghost" id="delete-btn">删除此服务</button>
       </div>
     </form>
+  </div>
+</main>
+
+<!-- ============ Glossaries ============ -->
+<main id="view-glossaries" class="page wide" hidden>
+  <div class="page-head row-head">
+    <div>
+      <h1>术语表</h1>
+      <p class="hint">按领域或系列书籍分别维护术语，提交翻译时在翻译页选用。翻译服务自己的术语表优先于这里的条目。</p>
+    </div>
+    <div class="add-service">
+      <button type="button" id="glossary-add" class="btn primary">新建术语表</button>
+    </div>
+  </div>
+
+  <div class="services card">
+    <ul id="glossary-list" class="service-list"></ul>
+
+    <form id="glossary-form" class="svc-detail" autocomplete="off" hidden>
+      <label class="field">名称
+        <input name="name" maxlength="80" required>
+      </label>
+      <label class="field">术语（每行一条：原文 = 译文）
+        <textarea name="entries" rows="14" spellcheck="false" placeholder="Book = 卷&#10;The Spirit of the Laws = 论法的精神"></textarea>
+      </label>
+      <div class="inline">
+        <button type="button" class="link" id="glossary-import">从 CSV / TSV 文件导入…</button>
+        <a class="link" id="glossary-export" download>导出 CSV</a>
+        <input type="file" id="glossary-file" accept=".csv,.tsv,.txt" hidden>
+      </div>
+      <p class="hint">导入的第一列是原文，第二列是译文，追加到下面的文本框，保存后生效。修改术语表后，用到它的记录继续或重新翻译时，按新的术语表重新翻译全部段落。</p>
+      <div class="actions">
+        <button type="submit" class="btn primary" id="glossary-save">保存</button>
+        <span id="glossary-status" class="hint" aria-live="polite"></span>
+        <button type="button" class="btn danger-ghost" id="glossary-delete">删除此术语表</button>
+      </div>
+    </form>
+    <p class="hint service-empty" id="glossary-empty">还没有术语表。</p>
   </div>
 </main>
 

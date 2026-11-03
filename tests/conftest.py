@@ -31,6 +31,7 @@ def app_env(tmp_path, monkeypatch):
     translation service. The model directory is replaced too: the formula detection model is on by default, and a
     model downloaded on this machine must not make tests run the real model."""
     from app import layout_model, main, quantize
+    from app.glossaries import GlossaryStore
     from app.history import JobStore
     from app.services import ServiceStore
     from app.settings import Settings
@@ -38,6 +39,7 @@ def app_env(tmp_path, monkeypatch):
     store = ServiceStore(tmp_path / "services.json")
     store.services.append({"id": "mock", "provider": "mock", "builtin": True, "name": "Mock", "enabled": True})
     monkeypatch.setattr(main, "store", store)
+    monkeypatch.setattr(main, "glossaries", GlossaryStore(tmp_path / "glossaries.json"))
     monkeypatch.setattr(main, "jobs", JobStore(tmp_path / "jobs"))
     monkeypatch.setattr(main, "settings", Settings(tmp_path / "settings.json"))
     monkeypatch.setattr(layout_model, "MODELS_DIR", tmp_path / "models")

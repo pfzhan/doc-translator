@@ -74,6 +74,11 @@ class Job:
     # Digest of the source file's content, used to register cache entries as belonging to this file. Older records
     # lack it and compute it when needed
     document: str = ""
+    # Glossaries of the glossary library chosen when the job was submitted, merged after the service's own glossary
+    glossary_ids: list[str] = field(default_factory=list)
+    # Entries of those glossaries when the latest run started. The other version and cache clearing use them, so
+    # editing or deleting a glossary does not change the cache keys of translations already made
+    glossary_text: str = ""
 
     # Runtime fields that are not saved
     runner: object = field(default=None, repr=False, compare=False)
@@ -112,6 +117,7 @@ class Job:
             "mode": self.mode,
             "service_id": self.service_id,
             "service_name": self.service_name,
+            "glossary_ids": self.glossary_ids,
             "model": self.model,
             "size": self.size,
             "detected_lang": self.detected_lang,

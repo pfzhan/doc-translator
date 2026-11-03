@@ -58,6 +58,25 @@ source text, and entries typed by hand take precedence. The generated glossary i
 cache, so continuing, retrying and generating the other version reuse the same one. The extra request can be
 turned off in the advanced settings.
 
+### Glossary library
+
+The 术语表 (Glossaries) page keeps named glossaries, for example one per field or per book series, in
+`data/glossaries.json`. Each has a name and entries in the same `source = translation` format. Glossaries are chosen
+on the translate page when a file is submitted (several can be ticked) and are stored with the record, so
+continuing, retrying and generating the other version use the same ones.
+
+- A chosen glossary is added after the service's own glossary, which takes precedence; like it, only the entries
+  occurring in a batch are sent. Glossary entries are part of the cache key: after a glossary is edited, continuing
+  or retranslating a record that uses it translates every paragraph again with the new entries, while generating
+  the other version and clearing the cache keep using the entries of the latest run. A record whose glossary was
+  deleted continues without it.
+- 从 CSV / TSV 文件导入 (Import from a CSV / TSV file) appends the file's first two columns (source, translation) to
+  the entries; a header row and `source = translation` lines are accepted too. Nothing is saved until the glossary
+  is saved. 导出 CSV (Export CSV) downloads a UTF-8 file that Excel opens correctly.
+- The API is `GET` / `POST /api/glossaries`, `PUT` / `DELETE /api/glossaries/{id}`, `POST /api/glossaries/import`
+  with `{"text": ...}` and `GET /api/glossaries/{id}/export`. Submitting a job takes the ids as repeated
+  `glossary_ids` form fields.
+
 ### Translation records
 
 Every translation is saved as a record (on the 记录 (Records) page; the translate page shows the latest 3).

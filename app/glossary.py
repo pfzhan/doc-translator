@@ -10,6 +10,8 @@ text, so the prompt does not grow with the glossary.
 
 from __future__ import annotations
 
+import csv
+import io
 import re
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Sequence
@@ -46,6 +48,9 @@ e.g i.e etc vs al fig eq ref
 """.split()
 )
 
+# First cells of the header row of an imported table
+_HEADERS = frozenset({"原文", "source", "term", "术语"})
+
 _MIN_PHRASE = 3  # minimum occurrences of a multi-word term
 _MIN_ACRONYM = 2  # minimum occurrences of an acronym
 _MIN_WORD = 6  # minimum occurrences of a single word
@@ -59,10 +64,11 @@ _COMMON_SHARE = 0.3
 
 
 def parse(text: str) -> list[Entry]:
-    """One "source = translation" per line. Lines without an equals sign or with an empty side are ignored."""
+    """One "source = translation" per line. Lines without an equals sign or with an empty side are ignored. An
+    equals sign with spaces around it separates first, so a term may contain one (E=mc2 = 质能方程)."""
     entries: list[Entry] = []
     for line in (text or "").splitlines():
-        source, sep, target = line.partition("=")
+        source, sep, target = line.partition(" = ") if " = " in line else line.partition("=")
         source, target = source.strip(), target.strip()
         if sep and source and target:
             entries.append((source, target))
@@ -71,6 +77,42 @@ def parse(text: str) -> list[Entry]:
 
 def render(entries: Iterable[Entry]) -> str:
     return "\n".join(f"{source} = {target}" for source, target in entries)
+
+
+def parse_table(text: str) -> list[Entry]:
+    """Entries from an imported file: CSV or TSV with the source in the first column and the translation in the
+    second, or "source = translation" lines. A header row of 原文 / source is skipped.
+
+    A file with a tab anywhere is TSV and one with an equals sign on every line is "source = translation" lines,
+    whose terms may contain commas; anything else is CSV."""
+    text = (text or "").lstrip("\ufeff")
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
+    if "\t" in text:
+        delimiter = "\t"
+    elif all("=" in line for line in lines):
+        return parse(text)
+    else:
+        delimiter = ","
+    entries: list[Entry] = []
+    for row in csv.reader(lines, delimiter=delimiter):
+        if len(row) < 2:
+            continue
+        source, target = row[0].strip(), row[1].strip()
+        if source and target:
+            entries.append((source, target))
+    if entries and entries[0][0].casefold() in _HEADERS:
+        entries.pop(0)
+    return entries
+
+
+def to_csv(entries: Iterable[Entry]) -> str:
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow(("原文", "译文"))
+    writer.writerows(entries)
+    return out.getvalue()
 
 
 def merge(user: Sequence[Entry], found: Sequence[Entry]) -> list[Entry]:

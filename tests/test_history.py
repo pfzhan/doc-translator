@@ -644,7 +644,12 @@ def test_failed_upload_leaves_no_orphan_dir(app_env):
     with pytest.raises(OSError):
         asyncio.run(
             main.create_job(
-                BrokenUpload(), target_lang="zh-CN", source_lang="auto", service_id="mock", mode="bilingual"
+                BrokenUpload(),
+                target_lang="zh-CN",
+                source_lang="auto",
+                service_id="mock",
+                mode="bilingual",
+                glossary_ids=[],
             )
         )
     root = main.jobs.root

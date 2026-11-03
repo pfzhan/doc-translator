@@ -2,10 +2,14 @@ import asyncio
 import json
 
 import httpx
+import pytest
+from fastapi.testclient import TestClient
 
-from app.glossary import candidates, merge, parse, relevant
+from app.glossaries import GlossaryError, GlossaryNotFound, GlossaryStore
+from app.glossary import candidates, merge, parse, parse_table, relevant, render, to_csv
 from app.runner import Cache, Runner
-from app.translators import OpenAITranslator
+from app.translators import OpenAITranslator, create_translator
+from tests.test_history import submit, wait_done
 
 DOC = [
     "Implementing Data Cubes Efficiently",
@@ -206,3 +210,120 @@ def test_covered_terms_are_found_anywhere_inside_longer_ones():
     terms = ["language", "model", "language model", "large language model"]
     # language model and model mostly occur within large language model; language occurs often on its own and stays
     assert _drop_covered(terms, counts) == ["language", "large language model"]
+
+
+def test_parse_table_reads_csv_tsv_and_equals_lines():
+    assert parse_table('原文,译文\ndata cube,数据立方体\n"a, b",甲乙\n') == [
+        ("data cube", "数据立方体"),
+        ("a, b", "甲乙"),
+    ]
+    assert parse_table("﻿Source\tTarget\nOLAP\t联机分析处理\n") == [("OLAP", "联机分析处理")]
+    assert parse_table("OLAP = 联机分析处理\nview = 视图") == [("OLAP", "联机分析处理"), ("view", "视图")]
+    # The format is decided from all lines: a comma in the first term does not make the file CSV
+    assert parse_table("Smith, J. = 史密斯\nview = 视图") == [("Smith, J.", "史密斯"), ("view", "视图")]
+    # A first line that is an ordinary entry is not mistaken for a header; rows with an empty side are dropped
+    assert parse_table("term,术语\nx,\n") == []
+    assert parse_table("view,视图\nx,\n") == [("view", "视图")]
+    assert parse_table("") == []
+
+
+def test_csv_export_imports_back():
+    entries = [("a, b", '甲"乙"'), ("view", "视图")]
+    assert parse_table(to_csv(entries)) == entries
+
+
+def test_terms_with_an_equals_sign_survive_saving():
+    assert parse("view=视图\nE=mc2 = 质能方程") == [("view", "视图"), ("E=mc2", "质能方程")]
+    entries = parse_table("E=mc2,质能方程\nview,视图")
+    assert entries == [("E=mc2", "质能方程"), ("view", "视图")] and parse(render(entries)) == entries
+
+
+def test_glossary_store_saves_only_entries(tmp_path):
+    path = tmp_path / "glossaries.json"
+    store = GlossaryStore(path)
+    item = store.create({"name": " 数据库 ", "entries": "view = 视图\nnot an entry\n= x\nOLAP = 联机分析处理"})
+    assert item["name"] == "数据库" and item["entries"] == "view = 视图\nOLAP = 联机分析处理"
+    assert store.list()[0]["count"] == 2
+    store.update(item["id"], {"name": "数据库 2", "entries": "view = 视图"})
+    assert GlossaryStore(path).get(item["id"])["name"] == "数据库 2"
+    with pytest.raises(GlossaryError):
+        store.create({"name": "  "})
+    with pytest.raises(GlossaryNotFound):
+        store.update("nope", {"name": "x"})
+    store.delete(item["id"])
+    assert GlossaryStore(path).list() == []
+    with pytest.raises(GlossaryNotFound):
+        store.delete(item["id"])
+
+
+def test_entries_text_keeps_order_and_skips_deleted(tmp_path):
+    store = GlossaryStore(tmp_path / "glossaries.json")
+    a = store.create({"name": "a", "entries": "view = 视图"})["id"]
+    b = store.create({"name": "b", "entries": "cube = 立方体"})["id"]
+    assert store.entries_text([b, "gone", a]) == "cube = 立方体\nview = 视图"
+    assert store.entries_text([]) == ""
+
+
+def test_glossary_api_and_job_selection(app_env):
+    main = app_env
+    with TestClient(main.app) as client:
+        made = client.post("/api/glossaries", json={"name": "法学", "entries": "Book = 卷"}).json()
+        assert client.get("/api/glossaries").json()[0]["count"] == 1
+        assert (
+            client.put(f"/api/glossaries/{made['id']}", json={"name": "法学", "entries": "Book = 篇"}).status_code
+            == 200
+        )
+        assert client.post("/api/glossaries", json={"name": ""}).status_code == 400
+        assert client.put("/api/glossaries/nope", json={"name": "x"}).status_code == 404
+
+        imported = client.post("/api/glossaries/import", json={"text": "term,术语\nBook,卷\n"}).json()
+        assert imported == {"entries": "Book = 卷", "count": 1}
+        assert client.post("/api/glossaries/import", json={"text": "nothing here"}).status_code == 400
+
+        export = client.get(f"/api/glossaries/{made['id']}/export")
+        assert export.status_code == 200 and "attachment" in export.headers["content-disposition"]
+        assert export.content.decode("utf-8-sig").splitlines() == ["原文,译文", "Book,篇"]
+
+        # Ids of glossaries that do not exist are dropped when the job is submitted
+        form = {"service_id": "mock", "target_lang": "zh-CN", "glossary_ids": [made["id"], "gone"]}
+        r = client.post("/api/jobs", files={"file": ("a.md", b"# T\n\nSome text here.\n")}, data=form)
+        assert r.status_code == 200 and r.json()["glossary_ids"] == [made["id"]]
+
+        assert client.delete(f"/api/glossaries/{made['id']}").json() == {"ok": True}
+        assert client.delete(f"/api/glossaries/{made['id']}").status_code == 404
+
+
+def test_job_glossaries_follow_the_services_own_entries(app_env):
+    main = app_env
+    service = {"id": "s", "glossary": "OLAP = 联机分析"}
+    assert main._with_glossaries(service, "view = 视图")["glossary"] == "OLAP = 联机分析\nview = 视图"
+    assert main._with_glossaries({"id": "s"}, "view = 视图")["glossary"] == "view = 视图"
+    # Without a glossary the service is returned unchanged, so the cache key of earlier records stays the same
+    assert main._with_glossaries(service, "") is service
+
+
+def test_job_keeps_the_glossary_entries_its_translations_were_made_with(app_env, monkeypatch):
+    main = app_env
+    used = []
+
+    def recording(service, *args):
+        used.append(service.get("glossary", ""))
+        return create_translator(service, *args)
+
+    monkeypatch.setattr(main, "create_translator", recording)
+    gid = main.glossaries.create({"name": "g", "entries": "view = 视图"})["id"]
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client, name="a.md", glossary_ids=gid)["id"])
+        # The first call checks the service before the upload
+        assert used == ["", "view = 视图"]
+        main.glossaries.update(gid, {"name": "g", "entries": "view = 视界"})
+        # The other version and cache clearing compute the keys of the translations already made
+        assert client.post(f"/api/jobs/{job['id']}/variant").status_code == 200
+        assert client.get(f"/api/jobs/{job['id']}/cache").status_code == 200
+        assert used[2:] == ["view = 视图", "view = 视图"]
+        # Translating again uses the edited glossary, and later keys follow it
+        wait_done(client, client.post(f"/api/jobs/{job['id']}/retry").json()["id"])
+        assert main.jobs.get(job["id"]).glossary_text == "view = 视界"
+        main.glossaries.delete(gid)
+        assert client.get(f"/api/jobs/{job['id']}/cache").status_code == 200
+        assert used[4:] == ["view = 视界", "view = 视界"]

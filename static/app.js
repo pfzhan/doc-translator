@@ -2,7 +2,7 @@ const $ = (id) => document.getElementById(id);
 const SETTINGS_KEY = "doc-translator-settings";
 
 const state = {
-  providers: {}, services: [], defaultId: "google", selectedId: null,
+  providers: {}, services: [], glossaries: [], glossaryId: null, defaultId: "google", selectedId: null,
   jobs: [], diskUsage: 0, retentionDays: 30, readerView: "both", view: "translate",
   selected: new Set(),  // ids of records ticked on the records page, for batch deletion
   historyPage: 1,  // current page of the records page (from 1)
@@ -29,10 +29,11 @@ async function api(url, options = {}) {
 }
 
 // ---------- Views ----------
-// Pages: translate / history (translation records) / services (translation services) / layout (layout models);
+// Pages: translate / history (translation records) / services (translation services) / glossaries / layout (layout
+// models);
 // the reader is a full-screen layer on top
 
-const VIEWS = ["translate", "history", "services", "layout"];
+const VIEWS = ["translate", "history", "services", "glossaries", "layout"];
 
 function showView(name) {
   if (!VIEWS.includes(name)) name = "translate";
@@ -95,6 +96,119 @@ async function loadServices() {
   renderServiceSelect();
   renderDetail();
 }
+
+// ---------- Glossaries ----------
+
+async function loadGlossaries() {
+  state.glossaries = await api("/api/glossaries");
+  if (!state.glossaries.some((g) => g.id === state.glossaryId)) state.glossaryId = state.glossaries[0]?.id ?? null;
+  renderGlossaryList();
+  renderGlossaryDetail();
+  renderGlossaryPick();
+}
+
+function renderGlossaryList() {
+  const list = $("glossary-list");
+  list.replaceChildren();
+  for (const g of state.glossaries) {
+    const li = el("li", "service-item");
+    li.classList.toggle("active", g.id === state.glossaryId);
+    const pick = el("button", "service-pick");
+    pick.type = "button";
+    pick.append(el("span", "service-name", g.name), el("span", "tag", `${g.count} 条`));
+    pick.addEventListener("click", () => {
+      state.glossaryId = g.id;
+      renderGlossaryList();
+      renderGlossaryDetail();
+    });
+    li.append(pick);
+    list.append(li);
+  }
+}
+
+function renderGlossaryDetail() {
+  const g = state.glossaries.find((x) => x.id === state.glossaryId);
+  const form = $("glossary-form");
+  form.hidden = !g;
+  $("glossary-empty").hidden = !!g;
+  $("glossary-status").textContent = "";
+  if (!g) return;
+  form.elements.name.value = g.name;
+  form.elements.entries.value = g.entries;
+  $("glossary-export").href = `/api/glossaries/${g.id}/export`;
+}
+
+// The translate page lists the glossaries as checkboxes; a choice is kept while the list refreshes
+function renderGlossaryPick() {
+  const box = $("glossary-checks");
+  const kept = new Set([...box.querySelectorAll("input:checked")].map((i) => i.value));
+  box.replaceChildren();
+  for (const g of state.glossaries) {
+    const label = el("label", "check");
+    const input = document.createElement("input");
+    input.type = "checkbox";
+    input.name = "glossary_ids";
+    input.value = g.id;
+    input.checked = kept.has(g.id);
+    label.append(input, el("span", "", `${g.name}（${g.count} 条）`));
+    box.append(label);
+  }
+  $("glossary-pick").hidden = !state.glossaries.length;
+}
+
+$("glossary-add").addEventListener("click", async () => {
+  try {
+    const g = await api("/api/glossaries", { json: { name: `术语表 ${state.glossaries.length + 1}`, entries: "" } });
+    state.glossaryId = g.id;
+    await loadGlossaries();
+    $("glossary-form").elements.name.select();
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$("glossary-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target.elements;
+  await busy($("glossary-save"), "保存中…", async () => {
+    try {
+      await api(`/api/glossaries/${state.glossaryId}`, {
+        method: "PUT",
+        json: { name: f.name.value, entries: f.entries.value },
+      });
+      await loadGlossaries();
+      $("glossary-status").textContent = "已保存";
+    } catch (err) {
+      $("glossary-status").textContent = `保存失败：${err.message}`;
+    }
+  });
+});
+
+$("glossary-delete").addEventListener("click", async () => {
+  const g = state.glossaries.find((x) => x.id === state.glossaryId);
+  if (!g || !confirm(`确定删除「${g.name}」吗？已用它翻译的记录继续翻译时不再带这些术语。`)) return;
+  try {
+    await api(`/api/glossaries/${g.id}`, { method: "DELETE" });
+    await loadGlossaries();
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$("glossary-import").addEventListener("click", () => $("glossary-file").click());
+$("glossary-file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    const got = await api("/api/glossaries/import", { json: { text: await file.text() } });
+    const box = $("glossary-form").elements.entries;
+    box.value = [box.value.trimEnd(), got.entries].filter(Boolean).join("\n");
+    $("glossary-status").textContent = `读入 ${got.count} 条，保存后生效`;
+  } catch (err) {
+    $("glossary-status").textContent = `导入失败：${err.message}`;
+  }
+});
 
 // 24x24 vector icons, colored by currentColor
 const ICONS = {
@@ -1999,7 +2113,7 @@ async function init() {
     /* ignore */
   }
   setReaderView(["both", "dst", "src"].includes(readerView) ? readerView : "both");
-  await Promise.all([loadServices(), refreshJobs(), api("/api/settings").then((s) => (state.retentionDays = s.retention_days))]);
+  await Promise.all([loadServices(), loadGlossaries(), refreshJobs(), api("/api/settings").then((s) => (state.retentionDays = s.retention_days))]);
   renderRetention();
   renderJobs();
   checkLangPair();
