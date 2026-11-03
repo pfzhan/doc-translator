@@ -8,7 +8,7 @@ from tests.helpers import _glyph
 def test_mid_line_capital_stays_in_the_sentence():
     """When a line is split into words, a capitalized word inside the line stays in the sentence. The next sentence
     after a sentence end, and markup, are still split off."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     items = [
         _line("The", 325.8, 341.6, 590.3, size=9),
@@ -43,7 +43,7 @@ def test_a_full_row_split_after_a_sentence_stays_in_the_paragraph():
     first starts at the left edge of the paragraph, the second reaches the right edge, and the lines above and
     below are full. This is one line and does not start a new paragraph (third line of the abstract,
     "bles.  To realize")."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def line(text, x0, x1, y0):
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 10), [{"size": 9.0, "font": "Times-Roman", "text": text}])
@@ -63,7 +63,7 @@ def test_a_number_wrapped_to_its_own_line_ends_the_sentence():
     """After a full line with an unfinished sentence, a number wrapped onto its own line ends the sentence and is not
     split off as a symbol line. A section number at the start of a line is followed by a heading and is still
     split off."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def line(text, x0, x1, y0):
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"size": 10.0, "font": "Times-Roman", "text": text}])
@@ -92,7 +92,7 @@ def test_lines_wrapping_around_a_figure_stay_in_one_paragraph():
     """In a paragraph set around a figure, the lines beside the figure end at the same x, far from the right edge of
     the block. Smilodon, starting with a capital below a line that fills the narrow column, is a wrapped line and
     no hard break. A line ending well before the right edge of the narrow column is still split as a hard break."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def line(text, x0, x1, y0):
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"size": 10.0, "font": "Times-Roman", "text": text}])
@@ -142,7 +142,8 @@ def test_a_table_row_name_is_cut_from_its_numbers_and_the_rows_around():
     """A table row name, the number cells in the same row and the group name above each become a paragraph of their
     own. Numbers close together are split as well; the number cells PyMuPDF merged into the row-name line are taken
     out of the line and stay on the original page like the numbers of the other rows."""
-    from app.formats.pdf_rows import _drop_number_tails, _split_lines
+    from app.formats.pdf_rows import _drop_number_tails
+    from app.formats.pdf_split_lines import _split_lines
 
     def span(text, x0, x1, y):
         return {"text": text, "size": 9.0, "bbox": (x0, y, x1, y + 9), "origin": (x0, y + 7), "font": "Times"}
@@ -240,7 +241,7 @@ def test_a_numbered_lemma_and_a_displayed_formula_start_their_own_paragraphs():
     """A numbered lemma label starts a new paragraph, also when the previous line ends in a formula. A line indented
     on both sides, with only math fonts and a relation symbol, is a displayed formula and is not joined even when
     the previous line ends with a comma. The summation piece split out of a fraction does not count."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def line(text, x0, x1, y, font="NimbusRomNo9L-Regu", flags=0):
         return (
@@ -294,7 +295,7 @@ def test_a_numbered_lemma_and_a_displayed_formula_start_their_own_paragraphs():
 def test_wrapped_letter_period_stays_in_the_paragraph():
     """When the full previous line has no sentence end, Q. on the next line is a wrapped line and no list item. a.
     after a sentence end is still split off."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     wrapped = [
         _line("corresponding to QA to answer", 72, 540, 414, size=12),
@@ -321,7 +322,7 @@ def test_a_dash_after_a_full_line_continues_the_sentence():
     sentence and is no bullet. The same holds when the previous line is a monospace URL one size larger. A dash
     below an item that starts with a dash is the next item at the same level; an indented dash or one in another
     font size is a bullet one level down."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     wrapped = [
         _line(
@@ -356,7 +357,7 @@ def test_a_dash_after_a_full_line_continues_the_sentence():
 def test_justified_rows_are_not_a_centered_stack():
     """Full body lines whose left edges differ by a point or two have almost the same width and are no stack of
     centered lines. Author names, affiliations and emails vary in width."""
-    from app.formats.pdf_rows import _centered_rows
+    from app.formats.pdf_split_lines import _centered_rows
 
     paragraph = [
         pymupdf.Rect(x0, y, x1, y + 11)
@@ -373,7 +374,7 @@ def test_justified_rows_are_not_a_centered_stack():
 def test_the_tail_of_a_wrapped_url_does_not_end_the_verbatim_text():
     """The tail of a wrapped URL lands at the start of the next line and body text follows it. The line start is still
     monospace and has not switched back to the body font, so the paragraph is not split."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def span(text, mono):
         return {
@@ -406,7 +407,7 @@ def test_the_tail_of_a_wrapped_url_does_not_end_the_verbatim_text():
 def test_an_equals_sign_at_the_end_of_a_list_item_line_keeps_the_item_whole():
     """Justification stretches the space before an equals sign at the line end to more than one em; the equals sign
     still joins this line, and the next line indented to the right of the entry number continues the entry."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def piece(text, x0, x1, y0, font="Times-Roman"):
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 10), [{"size": 10.0, "font": font, "text": text}])
@@ -440,7 +441,7 @@ def test_an_equals_sign_at_the_end_of_a_list_item_line_keeps_the_item_whole():
 def test_pdf_left_jump_keeps_full_width_wrap():
     """An indented first line with both lines reaching the right margin is an automatic wrap and is not split into two
     paragraphs."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     items = [
         _line("started", 120, 400, 10),
@@ -452,7 +453,7 @@ def test_pdf_left_jump_keeps_full_width_wrap():
 def test_pdf_short_indent_stays_one_segment():
     """A short indented first line followed by a longer continuation line is still an automatic wrap and is not split.
     A Chinese continuation line is not split just because it looks like a new sentence."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     latin = [
         _line("Hello", 64, 140, 10, size=12),
@@ -469,7 +470,7 @@ def test_pdf_short_indent_stays_one_segment():
 def test_pdf_list_continuation_keeps_capital():
     """A continuation line of a list item belongs to the item even when it starts with a capital, and does not start a
     new paragraph."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     items = [
         _line("- First item", 40, 120, 10),
@@ -480,7 +481,7 @@ def test_pdf_list_continuation_keeps_capital():
 
 def test_pdf_cjk_indent_wrap_stays_one_segment():
     """A 2em first-line indent with a continuation line that is not full is still one paragraph."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     items = [
         _line("第一行撑满右边距", 64, 400, 10, size=12),
@@ -492,7 +493,7 @@ def test_pdf_cjk_indent_wrap_stays_one_segment():
 def test_pdf_left_jump_splits_stacked_labels():
     """An upper line that is not full and a lower line jumping clearly to the left are parallel short labels and are
     split."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     items = [
         _line("Fig", 180, 210, 10),
@@ -504,7 +505,7 @@ def test_pdf_left_jump_splits_stacked_labels():
 def test_pdf_far_apart_labels_on_one_row_split():
     """Two pieces on the same line several em apart are side-by-side labels (a slide caption and a node in the
     figure) and are split."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     items = [
         _line("Candidate 1:", 61, 154, 119, size=12),
@@ -516,7 +517,7 @@ def test_pdf_far_apart_labels_on_one_row_split():
 def test_pdf_cjk_straight_quote_ends_sentence():
     """An ASCII straight quote at a sentence end counts as a sentence end like a curly quote; a semicolon joins
     clauses and does not split the paragraph."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def pair(end: str) -> list[tuple[str, pymupdf.Rect, list[dict[str, float]]]]:
         return [
@@ -609,7 +610,7 @@ def test_rows_of_a_table_or_a_list_with_one_opening_are_cut_into_lines():
 def test_smaller_body_under_a_heading_splits():
     """A 12pt heading and a 9pt lead paragraph are often in the same dict block. The left edge of the lead only makes
     room for the section number and must not be taken as an indent that keeps it in the heading."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     items = [
         _line("4.", 316, 326, 674, size=12),
@@ -632,7 +633,7 @@ def test_affiliation_under_an_author_name_splits():
     separate paragraph even with only two words. When an asterisk at the line start is one size larger than the
     text after it, the comparison uses the size of the majority of characters, and a continuation line of the same
     size on the next line is not split."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     author = [
         _line("Daniel Jurafsky", 247, 355, 333.4, size=17.2),
@@ -656,7 +657,7 @@ def test_section_number_stays_with_heading():
     """The dict lines '2.2' + 'Training' must not be split: once the digits-only line is split off as a symbol line,
     the number is filtered out and not masked (the original stays visible), the heading is translated alone, and
     the baselines of the two do not line up."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     items = [
         ("2.2", pymupdf.Rect(108, 84, 120, 94), [{"text": "2.2", "size": 10.0}], None),
@@ -681,7 +682,8 @@ def test_a_chapter_number_across_a_rule_is_not_joined_to_the_title():
     """A two-digit chapter number at the chapter start sits close to the heading, so word spacing would join them into
     one sentence and rewriting the line would cover the vertical bar between them. A vertical bar between them
     splits them."""
-    from app.formats.pdf_rows import _cut_at_posts, _split_lines
+    from app.formats.pdf_rows import _cut_at_posts
+    from app.formats.pdf_split_lines import _split_lines
 
     items = [
         ("10", pymupdf.Rect(98.4, 132.0, 158.2, 204.1), [{"text": "10", "size": 59.8}], None),
@@ -884,7 +886,7 @@ def test_a_split_line_goes_to_its_nearest_left_neighbour():
 def test_a_justified_heading_split_word_by_word_stays_one_paragraph():
     """A justified heading in a narrow column has word spacing stretched to two em, so PyMuPDF makes one line per word.
     It is recognized as one paragraph by whole line."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def item(text, x0, x1, y0):
         span = {"text": text, "font": "Times-Bold", "size": 14.3}
@@ -901,7 +903,7 @@ def test_a_justified_heading_split_word_by_word_stays_one_paragraph():
 
 
 def test_table_cells_on_one_baseline_stay_apart():
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def item(text, x0, x1):
         span = {"text": text, "font": "Times-Roman", "size": 9.0}
@@ -962,7 +964,7 @@ def test_math_line_box_follows_glyph_ink():
 def test_formula_pieces_touching_on_one_line_stay_one_paragraph():
     """Fractions and large braces split a formula line into several pieces. A piece of symbols only must not cut the
     sentence apart."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def item(text, x0, x1, y0, y1, *spans):
         spans = spans or ((text, "CMMI10", 10.0),)
@@ -1088,7 +1090,7 @@ def test_large_chapter_number_stays_apart_from_the_title():
     """A 60pt number and a 25pt heading at a chapter start are one large em apart: the number stays as it is, and the
     heading is written back alone at its original position. 2.2 Training at a single font size is still one
     line."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def item(text, rect, size):
         span = {"text": text, "size": size, "font": "Times", "flags": 0}
@@ -1209,7 +1211,7 @@ def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
 def test_an_example_number_stays_apart_from_its_sentence():
     """The example number (25.4) is a label and is not joined to the sentence on its right: once joined, the left edge
     of the block moves back to the number and the third, hanging-indent line can no longer be joined."""
-    from app.formats.pdf_rows import _same_line_word
+    from app.formats.pdf_split_lines import _same_line_word
 
     assert not _same_line_word(
         "(25.4)",
@@ -1223,7 +1225,7 @@ def test_an_example_number_stays_apart_from_its_sentence():
 def test_numbered_examples_in_one_block_are_split_apart():
     """One block holds two example lines (1.2) and (1.3), the first being the longest, so the right edge does not show
     a hard break. The previous sentence is finished and the next line starts with an example number, so they split."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def item(text, bbox):
         return (text, pymupdf.Rect(bbox), [{"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}])
@@ -1244,7 +1246,7 @@ def test_a_paragraph_after_a_hanging_list_line_is_split_off():
     """A list item wraps with a hanging indent, and the next paragraph has a first-line indent left of the continuation
     lines: the list has ended. The second line of a paragraph with a first-line indent returns to the column edge
     and is joined as usual."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def item(text, bbox):
         return (text, pymupdf.Rect(bbox), [{"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}])
@@ -1423,7 +1425,7 @@ def test_a_paragraph_indented_under_an_inset_line_starts_on_its_own():
     """The translation of an example is set as one indented line; the next paragraph has a first-line indent left of
     it and right of the lines that follow, so it is a new paragraph. A justified reference line split into pieces
     is compared by the left edge of the whole line and is not split. Centered lines do not count as indented."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def item(text, x0, y0, x1):
         return (
@@ -1462,7 +1464,7 @@ def test_an_indented_line_after_a_full_line_that_ends_a_sentence_starts_a_paragr
     """The previous line is full and ends exactly at a sentence end, the next line is indented by one and a half em
     and reaches the right edge, and the line after it returns to the left edge: a new paragraph. With numbered
     entries above and below, it is a hanging-indent continuation line of a reference and is not split."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def item(text, x0, y0, x1):
         return (
@@ -1492,7 +1494,7 @@ def test_numbers_wrapped_under_an_indented_first_line_stay_in_the_paragraph():
     """A paragraph with a first-line indent has an unfinished list of numbers wrapped to the left edge of the next line
     (13 tokens: 11865, … | 885, 220, … 0)): this line aligns with the previous one and ends the sentence, so it
     does not become a new paragraph."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def item(text, x0, y0, x1):
         return (
@@ -1526,7 +1528,7 @@ def test_caption_lines_wrapped_back_under_the_label_stay_in_the_caption():
     wrapped line returns to the left edge of the label, which is no jump to the left when compared by whole line,
     so it does not start a new paragraph: if the line with only (2012). became a paragraph of its own, it would
     keep the original text and still sit on the next line after the translation."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def item(text, x0, y0, x1, font="NimbusRomNo9L-Regu"):
         return (
@@ -1548,7 +1550,8 @@ def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
     """An index entry stops on a comma, and its page numbers wrap to the next line, indented below the entry text.
     The page number line is sent for translation together with the entry, the entry ends at the page numbers, and
     the next entry starts anew as usual."""
-    from app.formats.pdf_rows import _index_entry_ends, _split_lines
+    from app.formats.pdf_rows import _index_entry_ends
+    from app.formats.pdf_split_lines import _split_lines
 
     def item(text, x0, y0, x1):
         return (
@@ -1601,7 +1604,7 @@ def test_a_displayed_line_inside_a_block_is_its_own_paragraph():
     """An indented example line that is not full shares a block with the body text on the next line: the example is a
     paragraph of its own, and the next line is not merged into it even when it starts lowercase. In a paragraph
     set around a figure, the first and next lines end at the same x and are still one paragraph."""
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     def item(text, x0, y0, x1):
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"text": text, "size": 10.0}], [])
@@ -1641,7 +1644,7 @@ def test_a_bold_run_in_label_starts_a_paragraph():
     """The previous line ends a sentence and the next line starts with a bold label: a paragraph heading of a few
     words (eight words count too), a bold theorem name with a number, and a numbered item such as Q2 all start a
     new paragraph. Spaces are added between spans split by word before recognizing them."""
-    from app.formats.pdf_rows import _label_lead, _split_lines
+    from app.formats.pdf_split_lines import _label_lead, _split_lines
 
     def span(text, x0, x1, bold=False):
         return {
@@ -1695,7 +1698,7 @@ def test_a_roman_numbered_item_does_not_continue_the_paragraph_above():
     assert _can_continue(blk("(ii) it must be light, and"), blk("(iii) the arm must have few actuators."), 10, None)
     assert _can_continue(prev, blk("(see below) which holds."), 10, None)
 
-    from app.formats.pdf_rows import _split_lines
+    from app.formats.pdf_split_lines import _split_lines
 
     # The previous line stops on a formula and is not full, so (iii) starts a new item; after a full line it is an
     # enumeration inside the paragraph wrapped to the line start

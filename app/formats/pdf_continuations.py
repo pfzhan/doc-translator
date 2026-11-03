@@ -27,15 +27,8 @@ from .pdf_math import (
     _prose_units,
 )
 from .pdf_paragraphs import _absorb_block, _index_refs_tail, _verbatim_seam
-from .pdf_rows import (
-    _INDEX_REFS_ONLY_RE,
-    _MID_ABBREV_RE,
-    _centered_rows,
-    _label_lead,
-    _open_operator_end,
-    _row_boxes,
-    _row_style,
-)
+from .pdf_rows import _INDEX_REFS_ONLY_RE
+from .pdf_split_lines import _MID_ABBREV_RE, _centered_rows, _label_lead, _open_operator_end, _row_boxes, _row_style
 
 
 def _new_voice(host: TextBlock, guest: TextBlock) -> bool:

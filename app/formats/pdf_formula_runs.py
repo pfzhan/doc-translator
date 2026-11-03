@@ -17,10 +17,11 @@ from .pdf_flow import (
 from .pdf_math import _glyph_box, _prose_units
 from .pdf_paragraphs import _OPERATOR_NAMES, _is_formula_char
 from .pdf_rejoin import _ITALIC_FONT_RE, _small_band
-from .pdf_rows import MONO_FONT_RE, _text_box
+from .pdf_rows import _text_box
 from .pdf_runs import (
     TextRun,
 )
+from .pdf_split_lines import MONO_FONT_RE
 
 
 def _is_symbol_span(text: str) -> bool:

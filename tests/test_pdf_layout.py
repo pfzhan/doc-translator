@@ -971,7 +971,7 @@ def _algorithm_page(caption_below: bool) -> pymupdf.Page:
 
 def test_algorithm_box_lines_become_cells():
     """Each pseudocode line is one cell, and the caption is recognized both above and below the box."""
-    from app.formats.pdf_tables import algorithm_tables
+    from app.formats.pdf_algorithm_tables import algorithm_tables
 
     for below in (False, True):
         [table] = algorithm_tables(_algorithm_page(below))
@@ -984,8 +984,8 @@ def test_algorithm_box_lines_become_cells():
 def test_algorithm_boxes_are_looked_for_only_on_pages_naming_one():
     """When the words of the page are given, captions are searched line by line only if the words include Algorithm;
     the boxes found are the same as without the words."""
+    from app.formats.pdf_algorithm_tables import algorithm_tables
     from app.formats.pdf_drawings import page_words
-    from app.formats.pdf_tables import algorithm_tables
 
     page = _algorithm_page(False)
     assert algorithm_tables(page, words=page_words(page)) == algorithm_tables(page) != ()
@@ -1037,7 +1037,7 @@ def test_table_cells_stay_original_but_algorithm_lines_are_translated(tmp_path):
 def test_side_by_side_algorithm_boxes_are_both_found():
     """With two algorithm boxes side by side, both captions are in the same PyMuPDF line; the lines of the other box
     beside it do not count."""
-    from app.formats.pdf_tables import algorithm_tables
+    from app.formats.pdf_algorithm_tables import algorithm_tables
 
     doc = pymupdf.open()
     page = doc.new_page(width=600, height=300)
@@ -1055,7 +1055,7 @@ def test_side_by_side_algorithm_boxes_are_both_found():
 def test_algorithm_rows_ignore_radical_origins():
     """The origin of a radical sign is at the top of the glyph and must not be taken as the baseline of a row that gets
     its own cell."""
-    from app.formats.pdf_tables import _code_rows
+    from app.formats.pdf_algorithm_tables import _code_rows
 
     def line(y, *spans):
         return {
@@ -1070,7 +1070,7 @@ def test_algorithm_rows_ignore_radical_origins():
 def test_algorithm_rows_ignore_fraction_numerators_and_denominators():
     """Numerators and denominators of a display formula are as large as body text, with origins most of a character
     height above and below the baseline. Text touching a fraction bar does not get its own cell."""
-    from app.formats.pdf_tables import _code_rows
+    from app.formats.pdf_algorithm_tables import _code_rows
 
     def span(text, font, x0, x1, y):
         return {"text": text, "font": font, "size": 10.0, "origin": (x0, y), "bbox": (x0, y - 7.5, x1, y + 2.5)}
@@ -1092,7 +1092,7 @@ def test_algorithm_rows_ignore_fraction_numerators_and_denominators():
 def test_unnumbered_algorithm_rows_join_full_width_wraps():
     """In an algorithm without line numbers, a line that reaches the right edge of the box with an unfinished sentence
     wraps to the next line, and the two lines are one cell."""
-    from app.formats.pdf_tables import _code_rows
+    from app.formats.pdf_algorithm_tables import _code_rows
 
     def line(y, text, x1):
         return {
@@ -1240,7 +1240,7 @@ def test_book_headers_above_the_text_frame_are_margins():
 
 
 def test_word_by_word_gloss_is_found_but_a_table_is_not():
-    from app.formats.pdf_tables import interlinear_glosses
+    from app.formats.pdf_glosses import interlinear_glosses
 
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
@@ -1284,7 +1284,7 @@ def test_indented_examples_are_not_a_column_that_ends_the_page():
 def test_short_and_morpheme_glosses_are_found():
     """A three-word gloss of Chinese characters, and a morpheme-by-morpheme gloss (with abbreviations such as 1SG and
     PFV). Two short English lines that happen to align do not count."""
-    from app.formats.pdf_tables import interlinear_glosses
+    from app.formats.pdf_glosses import interlinear_glosses
 
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
@@ -1306,7 +1306,7 @@ def test_pinyin_under_a_line_of_hanzi_is_a_gloss():
     modifier letters. The English free translation below is translated. An English sentence below the characters
     whose syllable count does not match does not count."""
     from app.formats.pdf_drawings import _TextWord
-    from app.formats.pdf_tables import interlinear_glosses
+    from app.formats.pdf_glosses import interlinear_glosses
 
     def row(y: float, *texts: str) -> list[_TextWord]:
         words, x = [], 164.0
@@ -1333,7 +1333,7 @@ def test_role_labels_under_an_example_are_a_gloss():
     box is made taller by a subscript (ARG0) also counts. Abbreviations in margin notes, subscripts and the TBD below
     a heading do not count."""
     from app.formats.pdf_drawings import _TextWord
-    from app.formats.pdf_tables import interlinear_glosses
+    from app.formats.pdf_glosses import interlinear_glosses
 
     def word(x0: float, y0: float, x1: float, y1: float, text: str) -> _TextWord:
         return _TextWord(x0, y0, x1, y1, text)
@@ -1380,7 +1380,7 @@ def test_example_numbers_standing_apart_from_the_sentence():
     """(22.9) and (22.11) at the start of a line are example numbers, and the position where the text after the number
     starts is recorded. A (22.9) cited in body text does not count"""
     from app.formats.pdf_drawings import _TextWord
-    from app.formats.pdf_tables import example_numbers
+    from app.formats.pdf_glosses import example_numbers
 
     words = [
         _TextWord(142.2, 352.2, 166.3, 364.2, "(22.9)"),
@@ -1993,7 +1993,7 @@ def test_two_list_items_with_the_same_opening_are_not_a_gloss():
     line up, but each position holds the same word. A gloss line is written in another language, so this does not
     happen, and both items are sent for translation as usual."""
     from app.formats.pdf_drawings import _TextWord
-    from app.formats.pdf_tables import interlinear_glosses
+    from app.formats.pdf_glosses import interlinear_glosses
 
     def row(y: float, *texts: str) -> list[_TextWord]:
         words, x = [], 177.0

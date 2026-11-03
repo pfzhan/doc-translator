@@ -19,11 +19,7 @@ from .pdf_frame import TextFrame
 from .pdf_layout import PageGeometry
 from .pdf_math import _plain_units
 from .pdf_paragraphs import _block_slice, _block_spans, _clip_key
-from .pdf_rows import (
-    _RELATION_RE,
-    _mono_span,
-    _vivid,
-)
+from .pdf_rows import _vivid
 from .pdf_runs import (
     FormulaRun,
     Run,
@@ -31,6 +27,7 @@ from .pdf_runs import (
 from .pdf_skip import (
     _in_gloss,
 )
+from .pdf_split_lines import _RELATION_RE, _mono_span
 
 
 def _part_record(run: dict, page: int, name: str, baseline: float | None = None) -> dict:

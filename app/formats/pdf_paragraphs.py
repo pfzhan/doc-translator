@@ -29,16 +29,13 @@ from .pdf_math import (
 from .pdf_rows import (
     _INDEX_REFS_ONLY_RE,
     _LIST_RUN,
-    _OPERATOR_RE,
-    NO_TEXT_RE,
     _breaks_early,
-    _label_lead,
     _same_opening,
     _stacked_rows,
     _text_box,
-    _typewriter_line,
     _voted_right,
 )
+from .pdf_split_lines import _OPERATOR_RE, NO_TEXT_RE, _label_lead, _typewriter_line
 
 
 def _verbatim_block(block: TextBlock) -> bool:

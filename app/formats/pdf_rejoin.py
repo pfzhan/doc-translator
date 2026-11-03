@@ -14,7 +14,8 @@ from .pdf_math import (
     _line_box,
     _plain_units,
 )
-from .pdf_rows import _math_seam, _text_box
+from .pdf_rows import _text_box
+from .pdf_split_lines import _math_seam
 
 # Column edge: at least this many lines, each at least this many ems long, start at the same x
 _COLUMN_LINES = 3

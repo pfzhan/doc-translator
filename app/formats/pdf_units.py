@@ -50,6 +50,7 @@ from .pdf_formula_runs import (
     _same_text_style,
     _smaller_prose_line,
 )
+from .pdf_glosses import example_numbers, interlinear_glosses
 from .pdf_layout import PageGeometry, margin_skips
 from .pdf_math import _glyph_box
 from .pdf_merge import _cross_page_units, _region_joins, _seam_apart
@@ -78,7 +79,6 @@ from .pdf_skip import (
     _item_example_ids,
     _role_pattern_ids,
 )
-from .pdf_tables import example_numbers, interlinear_glosses
 from .pdf_unit_blocks import (
     _ACCENT_BEFORE_RE,
     _CEDILLA_RE,

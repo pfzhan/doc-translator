@@ -23,7 +23,7 @@ from .pdf_flow import (
 )
 from .pdf_paragraphs import _caption_label
 from .pdf_roles import is_size_heading
-from .pdf_rows import _MID_ABBREV_RE
+from .pdf_split_lines import _MID_ABBREV_RE
 
 
 def _preview_kind(block: TextBlock, median: float) -> str:

@@ -57,7 +57,6 @@ from .pdf_rows import (
     _INDEX_REF_RE,
     _INDEX_REFS_ONLY_RE,
     _LEADER_RE,
-    NO_TEXT_RE,
     _cut_after,
     _cut_at_posts,
     _cut_header_cells,
@@ -71,8 +70,8 @@ from .pdf_rows import (
     _left_to_right,
     _near_votes,
     _number_cell,
-    _split_lines,
 )
+from .pdf_split_lines import NO_TEXT_RE, _split_lines
 from .pdf_type3 import Type3Reader, recover_type3_page
 from .pdf_vision import FormulaDetector
 

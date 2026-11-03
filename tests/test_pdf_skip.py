@@ -1191,8 +1191,8 @@ def test_sentences_after_a_separate_example_number_stay_original():
     are the aligned b. below and the free translation below a word-by-word gloss. The next body paragraph and body
     sentences referring to the number are translated."""
     from app.formats.pdf_blocks import TextBlock
+    from app.formats.pdf_glosses import ExampleNumber
     from app.formats.pdf_skip import _example_ids
-    from app.formats.pdf_tables import ExampleNumber
 
     def blk(text, rect):
         rect = pymupdf.Rect(rect)
@@ -1219,8 +1219,8 @@ def test_lines_under_a_number_row_without_a_block_stay_original():
     aligned after a blank line are examples. The next paragraph starting with a first-line indent does not
     count"""
     from app.formats.pdf_blocks import TextBlock
+    from app.formats.pdf_glosses import ExampleNumber
     from app.formats.pdf_skip import _example_ids, _example_tails, _ExampleHead
-    from app.formats.pdf_tables import ExampleNumber
 
     def blk(text, rect):
         rect = pymupdf.Rect(rect)
