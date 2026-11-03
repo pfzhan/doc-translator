@@ -805,11 +805,14 @@ form.addEventListener("submit", async (e) => {
   const jobs = [];
   const failed = [];
   const errors = [];
+  // The settings are read once, so changing the form during the upload does not affect the remaining files
+  const fields = [...new FormData(form)].filter(([name]) => name !== "file");
   try {
     for (const [i, file] of files.entries()) {
       btn.textContent = files.length > 1 ? `上传中 ${i + 1} / ${files.length}…` : "上传中…";
-      const body = new FormData(form);
-      body.set("file", file);
+      const body = new FormData();
+      for (const [name, value] of fields) body.append(name, value);
+      body.append("file", file);
       try {
         const job = await api("/api/jobs", { method: "POST", body });
         jobs.push(job);
