@@ -93,7 +93,7 @@ def test_cross_page_does_not_merge_a_caption():
 
 def test_figure_label_stays_original_and_caption_is_translated(tmp_path: Path):
     from app.formats import translate_file
-    from tests.test_formats import run, runner
+    from tests.helpers import run, runner
 
     src = tmp_path / "fig.pdf"
     doc = pymupdf.open()
