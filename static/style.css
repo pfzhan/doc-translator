@@ -189,7 +189,7 @@ label.check input { flex: none; width: 16px; height: 16px; min-height: 0; margin
 
 .inline-msg { margin: 10px 0 0; padding: 8px 12px; border-radius: var(--radius-sm); font-size: 13px; }
 .inline-msg.warn { background: var(--warn-soft); color: var(--warn); }
-.inline-msg.error { background: var(--error-soft); color: var(--error); }
+.inline-msg.error { background: var(--error-soft); color: var(--error); white-space: pre-line; }
 
 /* ============ Translate page ============ */
 /* The upload area need not be wide, so the right side gets more room: the target language

@@ -754,10 +754,20 @@ function formatSize(bytes) {
 }
 
 function showFile() {
-  const f = fileInput.files[0];
-  drop.classList.toggle("has-file", !!f);
-  $("drop-text").textContent = f ? f.name : "选择文件，或将文件拖放到此处";
-  $("drop-sub").textContent = f ? `${formatSize(f.size)} · 点击更换` : "最大 200 MB";
+  const files = [...fileInput.files];
+  drop.classList.toggle("has-file", files.length > 0);
+  const size = formatSize(files.reduce((sum, f) => sum + f.size, 0));
+  if (!files.length) {
+    $("drop-text").textContent = "选择文件，或将文件拖放到此处";
+    $("drop-sub").textContent = "可选多个文件，每个最大 200 MB";
+  } else if (files.length === 1) {
+    $("drop-text").textContent = files[0].name;
+    $("drop-sub").textContent = `${size} · 点击更换`;
+  } else {
+    $("drop-text").textContent = `${files.length} 个文件`;
+    $("drop-sub").textContent = `共 ${size} · 点击更换`;
+  }
+  drop.title = files.map((f) => f.name).join("\n");
 }
 fileInput.addEventListener("change", showFile);
 drop.addEventListener("dragover", (e) => {
@@ -780,23 +790,46 @@ function showSubmitError(text) {
   el.hidden = !text;
 }
 
+// Several files are uploaded one by one, each as its own job with the same settings. A file that fails does not stop
+// the others; the failures are listed below the button
 form.addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (!fileInput.files.length) return;
+  const files = [...fileInput.files];
+  if (!files.length) return;
   saveSettings();
   showSubmitError("");
   const btn = $("submit");
   btn.disabled = true;
-  btn.textContent = "上传中…";
+  const jobs = [];
+  const failed = [];
+  const errors = [];
   try {
-    const job = await api("/api/jobs", { method: "POST", body: new FormData(form) });
-    fileInput.value = "";
+    for (const [i, file] of files.entries()) {
+      btn.textContent = files.length > 1 ? `上传中 ${i + 1} / ${files.length}…` : "上传中…";
+      const body = new FormData(form);
+      body.set("file", file);
+      try {
+        const job = await api("/api/jobs", { method: "POST", body });
+        jobs.push(job);
+        upsertJob(job);
+      } catch (err) {
+        failed.push(file);
+        errors.push(files.length > 1 ? `${file.name}：${err.message}` : err.message);
+      }
+    }
+    // Files that failed stay selected, so they can be submitted again after the cause is fixed
+    const keep = new DataTransfer();
+    for (const file of failed) keep.items.add(file);
+    fileInput.files = keep.files;
     showFile();
-    upsertJob(job);
-    // Stay on this page: the new job appears under "最近翻译" below, and "查看进度" opens it in the reader
-    toast(startedText(job, "已开始翻译"));
-  } catch (err) {
-    showSubmitError(err.message);
+    showSubmitError(errors.join("\n"));
+    // Stay on this page: the new jobs appear under "最近翻译" below, and "查看进度" opens them in the reader
+    if (jobs.length === 1) {
+      toast(startedText(jobs[0], "已开始翻译"));
+    } else if (jobs.length) {
+      const queued = jobs.filter((j) => j.queue_position).length;
+      toast(`已提交 ${jobs.length} 个文件${queued ? `，其中 ${queued} 个在排队` : ""}`);
+    }
   } finally {
     btn.textContent = "开始翻译";
     btn.disabled = false;

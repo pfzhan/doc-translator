@@ -80,7 +80,9 @@ continuing, retrying and generating the other version use the same ones.
 ### Translation records
 
 Every translation is saved as a record (on the 记录 (Records) page; the translate page shows the latest 3).
-Records survive page reloads and server restarts.
+Records survive page reloads and server restarts. Several files can be chosen or dropped on the translate page at
+once; each becomes its own record with the same settings. Files that fail to upload are listed below the button
+and stay selected, so they can be submitted again once the cause is fixed.
 
 - A record and its files (source file, translations, preview) are deleted only when deleted from the list by
   hand or when the retention period runs out.
