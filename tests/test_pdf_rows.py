@@ -702,7 +702,7 @@ def test_a_chapter_number_across_a_rule_is_not_joined_to_the_title():
 def test_a_line_split_into_two_blocks_is_put_back_together():
     """When PyMuPDF cuts a line at a superscript and puts the second half into another block, it is moved back after
     the first half."""
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, text):
         return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
@@ -723,7 +723,7 @@ def test_a_line_split_into_two_blocks_is_put_back_together():
 
 
 def test_a_two_column_gutter_is_not_a_split_line():
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     def line(x0, x1, text):
         return {"bbox": (x0, 150, x1, 162), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
@@ -742,7 +742,7 @@ def test_a_two_column_gutter_is_not_a_split_line():
 def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
     """With a column gap narrower than one em, a right-column line starting with a formula or a section number is not
     joined after the left-column paragraph either."""
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     def line(x0, x1, y0, text, font="Times-Roman", size=10.0, y1=None):
         box = (x0, y0, x1, y1 if y1 is not None else y0 + 13)
@@ -814,7 +814,7 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
 def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line():
     """The font box of ϵ reaches into the next line. Measured by the font box, the denominator is on the same row
     as the next line, so it would be attached after that line and the numerator would follow it."""
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     def span(text, font, size, box, ink=None):
         item = {"text": text, "font": font, "size": size, "bbox": box, "origin": (box[0], box[3] - 2)}
@@ -859,7 +859,7 @@ def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line():
 def test_a_split_line_goes_to_its_nearest_left_neighbour():
     """Two blocks both have a left half that could be joined: the piece joins the nearest one and does not move back
     and forth between the two blocks."""
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     def line(x0, x1, y0, text, font="CMMI10"):
         box = (x0, y0, x1, y0 + 10)
@@ -914,7 +914,7 @@ def test_table_cells_on_one_baseline_stay_apart():
 def test_fraction_pieces_rejoin_their_line_with_less_overlap():
     """Denominators and large braces pull the box down, so two pieces of the same line overlap vertically by only 30 to
     40 percent."""
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, text):
         return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
@@ -991,7 +991,7 @@ def test_an_inline_fraction_rejoins_its_line_in_reading_order():
     """g(x) = 1/(1+exp(−x)): the denominator is in another block, farther from the equals sign than a word space, and
     the numerator comes before the denominator. After moving them back, they are ordered left to right so the
     denominator can join the equals sign."""
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, *spans):
         # CMR inside Times body text is already marked as formula during extraction
@@ -1034,7 +1034,7 @@ def test_pieces_of_one_row_are_read_left_to_right():
 
 
 def test_plain_words_a_wide_gap_apart_are_not_rejoined():
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     def line(x0, x1, text):
         return {
@@ -1057,7 +1057,7 @@ def test_plain_words_a_wide_gap_apart_are_not_rejoined():
 def test_a_lone_numerator_goes_back_to_its_fraction():
     """A numerator left alone in a block is moved next to the formula line right below it. Body text on the previous
     line also covers it horizontally, but that does not count."""
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, *spans):
         return {
@@ -1139,7 +1139,7 @@ def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
     the font does not reveal a formula; it is recognized as a smaller italic centered below small italics in the
     body line and moved back to the line of the numerator. It is not moved when the italics above are at body size,
     or when they are only a superscript and subscript aligned at the left edge."""
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     reg, ital, cmr = "NimbusRomNo9L-Regu", "NimbusRomNo9L-ReguItal", "CMR10"
 
@@ -1266,7 +1266,7 @@ def test_a_line_in_a_column_of_its_own_font_stays_in_its_block():
     """A monospace example in the right column of a slide is level with the body text on the left and overlaps it a
     little horizontally. In its own block it shares the left edge and font of the line above, so it is a line of
     that column and is not moved over as the cut-off second half of the body text on the left."""
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     def line(text, bbox, font):
         return {
@@ -1308,7 +1308,7 @@ def test_a_small_fraction_after_a_relation_joins_the_line():
     """The 1/L after ≃ is one size smaller than the body and one body em away from ≃. Measured by the small em it
     would not be joined, so numerator and denominator together with the following sum would stay in another
     block and be skipped as a formula line, leaving the right half of the formula missing from the translation."""
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, text, font, size):
         return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "font": font, "size": size}]}
@@ -1332,7 +1332,7 @@ def test_a_numerator_left_in_its_own_block_rejoins_the_paragraph():
     """The numerator g⁴ and its subscript T,i were put into a separate block, so moving line by line always finds a
     line of the same block next to it. The whole block sits on the denominator formula in the paragraph, level
     with the body lines of the paragraph, and moves back into the paragraph as one."""
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     reg, cmmi = "NimbusRomNo9L-Regu", "CMMI7"
 
@@ -1622,7 +1622,7 @@ def test_a_displayed_line_inside_a_block_is_its_own_paragraph():
 def test_a_period_after_a_small_denominator_does_not_make_it_a_heading():
     """The denominator Σ_j e^{S·T_j} is followed by a body-size period. The period does not count as a body-size
     character, so the denominator is still joined back to the line of the fraction."""
-    from app.formats.pdf_rows import _larger_text
+    from app.formats.pdf_rejoin import _larger_text
 
     denominator = {
         "spans": [
@@ -1718,7 +1718,7 @@ def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator():
     """For the numeric fraction 24000/75 in the body font, PyMuPDF puts the denominator 75 into the next block. The
     denominator is moved back to the line of the numerator; otherwise it would be a block of its own keeping the
     original glyphs, on top of the translation."""
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     def span(text, x0, y0, x1, y1, size, base):
         return {

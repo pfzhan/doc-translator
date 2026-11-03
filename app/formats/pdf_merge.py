@@ -25,6 +25,7 @@ from .pdf_blocks import (
     _styled_edge,
     _visual_lines,
 )
+from .pdf_continuations import _FOOTNOTE_LEAD_RE, _closes_first, _is_float_text, _opens_with_math, _unclosed_bracket
 from .pdf_flow import (
     emphasis_of,
 )
@@ -32,18 +33,7 @@ from .pdf_layout import (
     PageGeometry,
 )
 from .pdf_math import _prose_units
-from .pdf_paragraphs import (
-    _FOOTNOTE_LEAD_RE,
-    _caption_label,
-    _closes_first,
-    _earlier_on_page,
-    _is_float_text,
-    _is_line_tail,
-    _line_tail_blocked,
-    _line_tail_match,
-    _opens_with_math,
-    _unclosed_bracket,
-)
+from .pdf_paragraphs import _caption_label, _earlier_on_page, _is_line_tail, _line_tail_blocked, _line_tail_match
 from .pdf_roles import is_size_heading
 from .pdf_rows import _MID_ABBREV_RE
 

@@ -3,11 +3,11 @@ from dataclasses import replace
 import pymupdf
 
 from app.formats.pdf_blocks import TextBlock
+from app.formats.pdf_continuations import _merge_continuations
 from app.formats.pdf_drawings import RuledTable
 from app.formats.pdf_extract import extract_blocks
 from app.formats.pdf_layout import PageGeometry, margin_skips, reading_order
 from app.formats.pdf_merge import _cross_page_units
-from app.formats.pdf_paragraphs import _merge_continuations
 from app.formats.pdf_place import _expand_right
 from app.formats.pdf_write import _render_translated
 

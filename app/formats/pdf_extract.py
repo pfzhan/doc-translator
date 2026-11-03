@@ -20,6 +20,7 @@ from .pdf_blocks import (
     _small_caps_sizes,
     _span_is_math,
 )
+from .pdf_continuations import _merge_continuations
 from .pdf_drawings import RuledTable
 from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, note_pitch, text_frames
 from .pdf_layout import PageGeometry, PageScan, cell_containing, margin_skips, reading_order, scan_page
@@ -43,7 +44,6 @@ from .pdf_paragraphs import (
     _line_lists,
     _merge_caption_fragments,
     _merge_cells,
-    _merge_continuations,
     _merge_line_tails,
     _merge_same_line_sentences,
     _merge_visual_lines,
@@ -52,6 +52,7 @@ from .pdf_paragraphs import (
     _untranslatable,
     _wraps_from_above,
 )
+from .pdf_rejoin import _rejoin_split_lines
 from .pdf_rows import (
     _INDEX_REF_RE,
     _INDEX_REFS_ONLY_RE,
@@ -70,7 +71,6 @@ from .pdf_rows import (
     _left_to_right,
     _near_votes,
     _number_cell,
-    _rejoin_split_lines,
     _split_lines,
 )
 from .pdf_type3 import Type3Reader, recover_type3_page

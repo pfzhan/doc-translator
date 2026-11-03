@@ -19,13 +19,14 @@ from .pdf_blocks import (
     _span_is_math,
     _visual_lines,
 )
+from .pdf_continuations import _plain_words
 from .pdf_flow import (
     emphasis_of,
 )
 from .pdf_layout import PageGeometry, PageScan
 from .pdf_math import _BIG_DELIMITER_FONT_RE
 from .pdf_merge import _x_overlap
-from .pdf_paragraphs import _block_spans, _plain_words
+from .pdf_paragraphs import _block_spans
 from .pdf_roles import Role
 from .pdf_rows import _EXAMPLE_NUMBER_RE, _RELATION_RE, _mono_span, _vivid, _vivid_share
 from .pdf_tables import ExampleNumber

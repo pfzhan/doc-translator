@@ -516,7 +516,7 @@ def test_a_heading_across_a_narrow_gutter_is_not_joined_to_the_left_line():
     page.insert_text((352, 318), "Ensemble Classification", fontsize=10, fontname="hebo")
     for i in range(6):
         page.insert_text((311, 340 + 12 * i), f"The current reported best results on ImageNet line {i}", fontsize=10)
-    from app.formats.pdf_rows import _rejoin_split_lines
+    from app.formats.pdf_rejoin import _rejoin_split_lines
 
     data = page.get_text("dict")
     _rejoin_split_lines(data)
@@ -639,7 +639,7 @@ def test_a_centered_name_list_wrapping_at_commas_stays_one_unit():
     """A centered author list wraps at commas and PyMuPDF splits it into several blocks. A next line starting with a
     capital still continues it; a name left alone on a line would be transliterated."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_paragraphs import _merge_continuations
+    from app.formats.pdf_continuations import _merge_continuations
 
     def row(text, x0, y0, x1):
         rect = pymupdf.Rect(x0, y0, x1, y0 + 10)

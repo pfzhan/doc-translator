@@ -484,7 +484,7 @@ def test_inserted_text_is_not_treated_as_bitmap_font():
 def test_centered_author_is_not_a_title_fragment():
     """A centered byline one line below the title also has a drifting left edge. It must not join the title. A next
     line right below still joins."""
-    from app.formats.pdf_paragraphs import _merge_continuations
+    from app.formats.pdf_continuations import _merge_continuations
 
     def blk(text: str, y: float, x0: float, x1: float, size: float) -> TextBlock:
         rect = pymupdf.Rect(x0, y, x1, y + size)
