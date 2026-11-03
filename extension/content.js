@@ -289,6 +289,8 @@
       // split like a block's
       if (kind === 'inline' && !hasBlockChild(node)) {
         run.push(node);
+        // Custom elements in it defined later may change how it is read (see rescan)
+        for (const el of node.querySelectorAll(':not(:defined)')) noteShadow(el, kind);
         return;
       }
       flush();
@@ -297,8 +299,8 @@
       flush();
     };
     if (inScopeTree(root)) {
-      // A host rescanned on its own (its shadow root came late)
-      if (root.nodeType === Node.ELEMENT_NODE) noteShadow(root, classify(root));
+      // A host scanned on its own (added to body, or its shadow root came late) stands alone
+      if (root.nodeType === Node.ELEMENT_NODE) noteShadow(root, 'block');
       if (root.nodeType !== Node.ELEMENT_NODE || !slotless(root)) root.childNodes.forEach(visit);
     }
     flush();
@@ -431,9 +433,10 @@
   /** A translation no current paragraph owns: left by an earlier version of one, or by one the page removed. */
   const free = (el) => el?.localName === TRANS_TAG && el.isConnected && !current(ownerOf.get(el));
 
-  /** Whether a run found again is the paragraph collected before, unchanged. */
+  /** Whether a run found again is the paragraph collected before, unchanged. One marked redo is read again anyway:
+   * a custom element in it was defined since. */
   const sameUnit = (old, unit) =>
-    old.nodes.length === unit.nodes.length && old.nodes.every((node, i) => node === unit.nodes[i]) &&
+    !old.redo && old.nodes.length === unit.nodes.length && old.nodes.every((node, i) => node === unit.nodes[i]) &&
     textOf(unit.nodes) === old.text;
 
   /** Translations a rescan may remove, unless a paragraph found again takes them over. */
@@ -783,12 +786,16 @@
     rescanTimer = 0;
     if (document.body && observedBody !== document.body) watchBody();
     const orphans = prune();
-    // Custom elements that got their shadow root after they were scanned (defined late)
+    // Custom elements that got their shadow root after they were scanned (defined late). The paragraph they were read
+    // in is read again: the host may now end it, or be copied whole into its translation
     for (const host of bareHosts) {
-      if (shadowOf(host)) {
-        bareHosts.delete(host);
-        dirty.add(host);
-      }
+      if (!shadowOf(host)) continue;
+      bareHosts.delete(host);
+      let node = host;
+      while (node && !unitOf.has(node)) node = node.parentNode;
+      if (node) unitOf.get(node).redo = true;
+      const parent = parentOf(host);
+      dirty.add(parent && parent !== document.body ? parent : host);
     }
     const roots = new Set();
     for (const target of dirty) {
