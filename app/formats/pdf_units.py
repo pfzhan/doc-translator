@@ -10,6 +10,7 @@ from pathlib import Path
 import pymupdf
 
 from .. import prompts
+from .pdf_biblio import _median_size, biblio_skips
 from .pdf_blocks import (
     _MARKUP_RE,
     _NUMBER_LABEL_RE,
@@ -74,9 +75,7 @@ from .pdf_skip import (
     _gloss_ids,
     _isolated_formula_ids,
     _item_example_ids,
-    _median_size,
     _role_pattern_ids,
-    biblio_skips,
 )
 from .pdf_tables import example_numbers, interlinear_glosses
 from .pdf_unit_blocks import (

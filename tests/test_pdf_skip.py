@@ -10,8 +10,8 @@ def test_pdf_biblio_skips_alpha_labels_at_uniform_size():
     """References with author-abbreviation labels at the body size (OCR of bitmap fonts makes the sizes uniform): a
     label whose [ was lost by OCR, a label on its own line and a short continuation line ending with a period must
     not be taken for the next chapter, and the whole section keeps the original text."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size=10):
         return TextBlock(
@@ -42,8 +42,8 @@ def test_pdf_biblio_skips_weigh_sizes_by_text():
     and citations at body size look like headings. The median is taken by character count. A heading one size
     smaller than the body, in a references section that is one size smaller throughout (ICASSP), is bold and no
     smaller than the citations, so it is a heading too."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -74,8 +74,8 @@ def test_pdf_biblio_skips_weigh_sizes_by_text():
 
 
 def test_pdf_biblio_skips_follows_font_size():
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, page=0, bold=False):
         return TextBlock(
@@ -125,8 +125,8 @@ def test_pdf_biblio_skips_follows_font_size():
 def test_pdf_biblio_entry_needs_a_citation_not_a_year_in_prose():
     """Years and the word arXiv in body text, and a smaller next heading, do not confirm entering the references
     section."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -165,8 +165,8 @@ def test_pdf_biblio_numbered_entries_without_a_heading():
     """The revtex journal layout does not print References: a run starting at [1] with consecutive numbers below is
     the references section. It stops at a heading and resumes at the next number continuing in another column. A
     body sentence starting with [1] does not count."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size=9.0, bold=False):
         return TextBlock(
@@ -196,8 +196,8 @@ def test_pdf_biblio_numbered_entries_without_a_heading():
 def test_pdf_biblio_bold_heading_as_large_as_the_entries():
     """A run of author names from the broken first line of an entry, and short title lines after the author names,
     are not the next chapter even at heading size; the bold appendix heading after them is."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, bold=False):
         return TextBlock(
@@ -229,8 +229,8 @@ def test_pdf_biblio_author_year_entries_after_the_heading():
     """Author-year entries have no numbers and no parenthesized years. Several consecutive entries starting with
     "Surname, Initials." after the heading enter the references section; a single body sentence starting this way
     does not count."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size):
         return TextBlock(
@@ -258,8 +258,8 @@ def test_pdf_biblio_author_year_entries_after_the_heading():
 def test_pdf_biblio_numbered_entry_ending_with_pages():
     """Entries in old database papers read "venue year, pages", so the line ends with pages instead of a year; they
     also enter the references section."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -299,8 +299,8 @@ def test_pdf_biblio_numbered_entry_ending_with_pages():
 def test_pdf_biblio_same_size_citations_do_not_exit():
     """A bare year at the line end, CoRR, numbered entries and wrapped continuation lines are not the next chapter; a
     bold heading at body size ends the section."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -350,8 +350,8 @@ def test_pdf_biblio_same_size_citations_do_not_exit():
 def test_pdf_biblio_author_lists_and_url_halves_stay_in():
     """ACL style (Author. Year. Title. In Venue) enters the references section; when the entries are one size larger
     than the body, an author line and half of a wrapped URL are not the next chapter."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -388,8 +388,8 @@ def test_pdf_biblio_skips_on_attention_paper():
     src = SAMPLES / "attention.pdf"
     if not src.exists():
         pytest.skip("sample missing")
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_extract import extract_blocks
-    from app.formats.pdf_skip import biblio_skips
 
     blocks = extract_blocks(pymupdf.open(src))
     skips = biblio_skips(blocks)
@@ -404,8 +404,8 @@ def test_pdf_biblio_skips_on_attention_paper():
 
 def test_pdf_biblio_entry_with_bold_subheadings():
     """Bold subheadings (Books/Articles) under References followed by citations also enter the references section."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -428,8 +428,8 @@ def test_pdf_biblio_entry_with_bold_subheadings():
 def test_pdf_biblio_section_title_stops_lookahead():
     """A larger References must not enter through Endnotes, otherwise the next heading at body size cannot end the
     section."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -452,8 +452,8 @@ def test_pdf_biblio_section_title_stops_lookahead():
 def test_pdf_biblio_journal_line_does_not_end_numbered_entry():
     """Journal on a line of its own inside a citation is no subheading, and the lowercase continuation lines after it
     stay in the references section."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -476,8 +476,8 @@ def test_pdf_biblio_journal_line_does_not_end_numbered_entry():
 def test_pdf_biblio_chapter_titled_books_or_paper_does_not_enter():
     """Books and "论文" at the same size or larger are the next chapter. A smaller Paper is still an inner
     subheading."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -514,8 +514,8 @@ def test_pdf_biblio_chapter_titled_books_or_paper_does_not_enter():
 def test_pdf_biblio_chinese_gbt_citations():
     """Chinese GB/T citations ([J][M] type markers): a smaller "论文" is a group heading, the citations are skipped,
     and body text mentioning a publisher does not enter the references section."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -537,8 +537,8 @@ def test_pdf_biblio_chinese_gbt_citations():
 def test_pdf_biblio_type_mark_does_not_swallow_headings():
     """Inline [J]/[M] is no citation. A next chapter heading containing a marker ends the section, and the heading
     itself is not skipped."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -586,8 +586,8 @@ def test_pdf_biblio_type_mark_does_not_swallow_headings():
 def test_pdf_biblio_numbered_publisher_entry_without_space():
     """No space after [1], or the publisher in the next block, still enters. A publisher in unnumbered body text does
     not."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -623,8 +623,8 @@ def test_pdf_biblio_numbered_publisher_entry_without_space():
 def test_pdf_biblio_edition_heading_exits():
     """A short numbered heading ending with an edition year ("年版") is the next chapter, and the heading itself is not
     skipped. Real bibliographic lines are still skipped."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -652,8 +652,8 @@ def test_pdf_biblio_edition_heading_exits():
 def test_pdf_biblio_type_mark_in_prose_does_not_enter():
     """A "[M]。" in the middle of a body sentence is no citation (no year), so the body text after it must not keep
     the original text."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -680,8 +680,8 @@ def test_pdf_biblio_type_mark_in_prose_does_not_enter():
 def test_pdf_biblio_type_mark_year_on_next_block_enters():
     """A type marker and year split apart still enter. The next block must be a volume/issue or a publisher, not any
     following text."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -720,8 +720,8 @@ def test_pdf_biblio_type_mark_year_on_next_block_enters():
 def test_pdf_biblio_year_continuation_tightened():
     """Confirming a year on a split line must not be loose enough to accept body text: an English sentence starting
     with a year and body text mentioning a publisher and a year are not continuation lines."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -757,8 +757,8 @@ def test_pdf_biblio_year_continuation_tightened():
 
 def test_pdf_biblio_vol_abbreviation_also_needs_digit():
     """The abbreviation Vol works like the full Volume: a number must follow, so "2020, Vol were…" is body text."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -788,8 +788,8 @@ def test_pdf_biblio_vol_abbreviation_also_needs_digit():
 def test_pdf_biblio_volume_lines_protected_at_same_size():
     """When the references heading has the body size, volume/issue and publisher continuation lines must not be taken
     for the next chapter either."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -814,8 +814,8 @@ def test_pdf_biblio_volume_lines_protected_at_same_size():
 def test_pdf_biblio_year_prefixed_chapter_still_exits():
     """A next chapter starting with a year is no volume/issue continuation line. A long bold heading ends the section
     too."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -857,8 +857,8 @@ def test_pdf_biblio_year_prefixed_chapter_still_exits():
 def test_pdf_biblio_long_bold_chapter_title_exits():
     """A bold chapter heading longer than 80 characters also ends the section (the bold branch of heading_like has an
     80-character limit and cannot be relied on)."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -879,8 +879,8 @@ def test_pdf_biblio_long_bold_chapter_title_exits():
 def test_pdf_biblio_long_bold_citation_stays():
     """A bold bibliographic line longer than 80 characters is not the next chapter. Lines with a type marker or a year
     at the end are still skipped."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size, bold=False):
         return TextBlock(
@@ -1008,8 +1008,8 @@ def test_a_concordance_with_aligned_bold_keywords_stays_original():
 def test_pdf_biblio_bare_label_line_does_not_exit():
     """With a hanging indent the label is far from its entry, so [ESS] forms a block of its own. It is the label of the
     entry, and the citation after it is still skipped."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size=10.7):
         return TextBlock(
@@ -1031,8 +1031,8 @@ def test_bibliography_without_a_heading_stays_original():
     """References at a chapter end follow the exercises directly, without a References heading. A run of entries
     starting with "Surname, Initials." keeps the original text; a single body sentence starting this way does not
     count."""
+    from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_skip import biblio_skips
 
     def blk(text, size=10.0, page=0):
         rect = pymupdf.Rect(40, 40, 300, 50)
