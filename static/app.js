@@ -1559,12 +1559,21 @@ async function refreshJobs() {
 }
 
 // Refresh the list every 2 seconds while jobs are running. The reader polls its own job; while it is open the list
-// is refreshed every 10 seconds only for the other jobs, so their finishing is still announced
+// is refreshed every 10 seconds only for the other jobs, so their finishing is still announced. The reader's poll
+// calls this every second, so a timer already waiting is kept, or it would never fire
 let jobsTimer;
 function scheduleJobsPoll() {
+  if (!state.jobs.some((j) => ACTIVE.has(j.status) && j.id !== reader.jobId)) {
+    clearTimeout(jobsTimer);
+    jobsTimer = undefined;
+    return;
+  }
+  if (reader.jobId && jobsTimer) return;
   clearTimeout(jobsTimer);
-  if (!state.jobs.some((j) => ACTIVE.has(j.status) && j.id !== reader.jobId)) return;
-  jobsTimer = setTimeout(refreshJobs, reader.jobId ? 10000 : 2000);
+  jobsTimer = setTimeout(() => {
+    jobsTimer = undefined;
+    refreshJobs();
+  }, reader.jobId ? 10000 : 2000);
 }
 
 async function deleteJob(job) {
