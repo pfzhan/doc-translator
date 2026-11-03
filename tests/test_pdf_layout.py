@@ -3,9 +3,10 @@ from dataclasses import replace
 import pymupdf
 
 from app.formats.pdf_blocks import TextBlock
-from app.formats.pdf_extract import _merge_continuations, extract_blocks
+from app.formats.pdf_extract import extract_blocks
 from app.formats.pdf_layout import PageGeometry, RuledTable, margin_skips, reading_order
 from app.formats.pdf_merge import _cross_page_units
+from app.formats.pdf_paragraphs import _merge_continuations
 from app.formats.pdf_place import _expand_right
 from app.formats.pdf_write import _render_translated
 
@@ -1169,7 +1170,7 @@ def test_an_algorithm_formula_beside_a_distant_comment_keeps_its_glyphs():
     """A display formula of an algorithm step shares a cell with a comment far to its right: the comment is
     translated, and the formula keeps its glyphs instead of being squeezed to one line height into the comment. A
     formula right next to the text is still part of the sentence."""
-    from app.formats.pdf_extract import _merge_cells
+    from app.formats.pdf_paragraphs import _merge_cells
 
     clip = (307.7, 576.4, 543.5, 608.1)
 
@@ -1191,7 +1192,7 @@ def test_an_algorithm_formula_beside_a_distant_comment_keeps_its_glyphs():
 def test_far_apart_labels_in_one_box_stay_separate():
     """Separated node labels in a box are not one sentence; each is translated and written back at its own position.
     Adjacent wrapped lines are still merged into one sentence."""
-    from app.formats.pdf_extract import _merge_cells
+    from app.formats.pdf_paragraphs import _merge_cells
 
     clip = (388.0, 163.0, 687.0, 373.0)
 

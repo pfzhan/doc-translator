@@ -703,7 +703,7 @@ def test_pdf_list_items_split_into_segments():
 def test_mid_line_capital_stays_in_the_sentence():
     """When a line is split into words, a capitalized word inside the line stays in the sentence. The next sentence
     after a sentence end, and markup, are still split off."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     items = [
         _line("The", 325.8, 341.6, 590.3, size=9),
@@ -738,7 +738,7 @@ def test_a_full_row_split_after_a_sentence_stays_in_the_paragraph():
     first starts at the left edge of the paragraph, the second reaches the right edge, and the lines above and
     below are full. This is one line and does not start a new paragraph (third line of the abstract,
     "bles.  To realize")."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def line(text, x0, x1, y0):
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 10), [{"size": 9.0, "font": "Times-Roman", "text": text}])
@@ -758,7 +758,7 @@ def test_a_number_wrapped_to_its_own_line_ends_the_sentence():
     """After a full line with an unfinished sentence, a number wrapped onto its own line ends the sentence and is not
     split off as a symbol line. A section number at the start of a line is followed by a heading and is still
     split off."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def line(text, x0, x1, y0):
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"size": 10.0, "font": "Times-Roman", "text": text}])
@@ -797,7 +797,7 @@ def test_lines_wrapping_around_a_figure_stay_in_one_paragraph():
     """In a paragraph set around a figure, the lines beside the figure end at the same x, far from the right edge of
     the block. Smilodon, starting with a capital below a line that fills the narrow column, is a wrapped line and
     no hard break. A line ending well before the right edge of the narrow column is still split as a hard break."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def line(text, x0, x1, y0):
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"size": 10.0, "font": "Times-Roman", "text": text}])
@@ -847,7 +847,7 @@ def test_a_table_row_name_is_cut_from_its_numbers_and_the_rows_around():
     """A table row name, the number cells in the same row and the group name above each become a paragraph of their
     own. Numbers close together are split as well; the number cells PyMuPDF merged into the row-name line are taken
     out of the line and stay on the original page like the numbers of the other rows."""
-    from app.formats.pdf_extract import _drop_number_tails, _split_lines
+    from app.formats.pdf_rows import _drop_number_tails, _split_lines
 
     def span(text, x0, x1, y):
         return {"text": text, "size": 9.0, "bbox": (x0, y, x1, y + 9), "origin": (x0, y + 7), "font": "Times"}
@@ -900,7 +900,7 @@ def test_header_cells_over_number_columns_are_cut_apart():
     """The cells of a header row sit close together and were merged into one line. They are split when each piece is
     right above a column of numbers; the header of the leading row-name column need not line up. Splitting a
     justified body line would give half sentences, so it is not split."""
-    from app.formats.pdf_extract import _cut_header_cells
+    from app.formats.pdf_rows import _cut_header_cells
 
     def span(text, x0, x1, y=238.1):
         return {"text": text, "size": 9.0, "bbox": (x0, y, x1, y + 9), "origin": (x0, y + 7), "font": "Times"}
@@ -1001,7 +1001,7 @@ def test_a_numbered_lemma_and_a_displayed_formula_start_their_own_paragraphs():
     """A numbered lemma label starts a new paragraph, also when the previous line ends in a formula. A line indented
     on both sides, with only math fonts and a relation symbol, is a displayed formula and is not joined even when
     the previous line ends with a comma. The summation piece split out of a fraction does not count."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def line(text, x0, x1, y, font="NimbusRomNo9L-Regu", flags=0):
         return (
@@ -1055,7 +1055,7 @@ def test_a_numbered_lemma_and_a_displayed_formula_start_their_own_paragraphs():
 def test_wrapped_letter_period_stays_in_the_paragraph():
     """When the full previous line has no sentence end, Q. on the next line is a wrapped line and no list item. a.
     after a sentence end is still split off."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     wrapped = [
         _line("corresponding to QA to answer", 72, 540, 414, size=12),
@@ -1082,7 +1082,7 @@ def test_a_dash_after_a_full_line_continues_the_sentence():
     sentence and is no bullet. The same holds when the previous line is a monospace URL one size larger. A dash
     below an item that starts with a dash is the next item at the same level; an indented dash or one in another
     font size is a bullet one level down."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     wrapped = [
         _line(
@@ -1117,7 +1117,7 @@ def test_a_dash_after_a_full_line_continues_the_sentence():
 def test_justified_rows_are_not_a_centered_stack():
     """Full body lines whose left edges differ by a point or two have almost the same width and are no stack of
     centered lines. Author names, affiliations and emails vary in width."""
-    from app.formats.pdf_extract import _centered_rows
+    from app.formats.pdf_rows import _centered_rows
 
     paragraph = [
         pymupdf.Rect(x0, y, x1, y + 11)
@@ -1134,7 +1134,7 @@ def test_justified_rows_are_not_a_centered_stack():
 def test_the_tail_of_a_wrapped_url_does_not_end_the_verbatim_text():
     """The tail of a wrapped URL lands at the start of the next line and body text follows it. The line start is still
     monospace and has not switched back to the body font, so the paragraph is not split."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def span(text, mono):
         return {
@@ -1167,7 +1167,7 @@ def test_the_tail_of_a_wrapped_url_does_not_end_the_verbatim_text():
 def test_an_equals_sign_at_the_end_of_a_list_item_line_keeps_the_item_whole():
     """Justification stretches the space before an equals sign at the line end to more than one em; the equals sign
     still joins this line, and the next line indented to the right of the entry number continues the entry."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def piece(text, x0, x1, y0, font="Times-Roman"):
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 10), [{"size": 10.0, "font": font, "text": text}])
@@ -1201,7 +1201,7 @@ def test_an_equals_sign_at_the_end_of_a_list_item_line_keeps_the_item_whole():
 def test_pdf_left_jump_keeps_full_width_wrap():
     """An indented first line with both lines reaching the right margin is an automatic wrap and is not split into two
     paragraphs."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     items = [
         _line("started", 120, 400, 10),
@@ -1213,7 +1213,7 @@ def test_pdf_left_jump_keeps_full_width_wrap():
 def test_pdf_short_indent_stays_one_segment():
     """A short indented first line followed by a longer continuation line is still an automatic wrap and is not split.
     A Chinese continuation line is not split just because it looks like a new sentence."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     latin = [
         _line("Hello", 64, 140, 10, size=12),
@@ -1230,7 +1230,7 @@ def test_pdf_short_indent_stays_one_segment():
 def test_pdf_list_continuation_keeps_capital():
     """A continuation line of a list item belongs to the item even when it starts with a capital, and does not start a
     new paragraph."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     items = [
         _line("- First item", 40, 120, 10),
@@ -1241,7 +1241,7 @@ def test_pdf_list_continuation_keeps_capital():
 
 def test_pdf_cjk_indent_wrap_stays_one_segment():
     """A 2em first-line indent with a continuation line that is not full is still one paragraph."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     items = [
         _line("第一行撑满右边距", 64, 400, 10, size=12),
@@ -1253,7 +1253,7 @@ def test_pdf_cjk_indent_wrap_stays_one_segment():
 def test_pdf_left_jump_splits_stacked_labels():
     """An upper line that is not full and a lower line jumping clearly to the left are parallel short labels and are
     split."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     items = [
         _line("Fig", 180, 210, 10),
@@ -1265,7 +1265,7 @@ def test_pdf_left_jump_splits_stacked_labels():
 def test_pdf_far_apart_labels_on_one_row_split():
     """Two pieces on the same line several em apart are side-by-side labels (a slide caption and a node in the
     figure) and are split."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     items = [
         _line("Candidate 1:", 61, 154, 119, size=12),
@@ -2548,7 +2548,7 @@ def test_pdf_cjk_continuation_needs_sentence_end():
 def test_pdf_cjk_straight_quote_ends_sentence():
     """An ASCII straight quote at a sentence end counts as a sentence end like a curly quote; a semicolon joins
     clauses and does not split the paragraph."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def pair(end: str) -> list[tuple[str, pymupdf.Rect, list[dict[str, float]]]]:
         return [
@@ -2922,7 +2922,7 @@ def test_a_number_heavy_results_paragraph_is_prose():
 def test_a_body_sentence_that_starts_with_figure_is_not_a_caption():
     """A number followed by a lowercase word is body text (Figure 8(a) shows that …); a number followed by a colon,
     a period or a capital is a caption."""
-    from app.formats.pdf_extract import _is_float_text
+    from app.formats.pdf_paragraphs import _is_float_text
 
     assert not _is_float_text("Figure 8(a) shows that the fidelity converges.")
     assert not _is_float_text("Table 5 evaluates the out-of-distribution results.")
@@ -2936,7 +2936,7 @@ def test_a_body_sentence_that_starts_with_figure_is_not_a_caption():
 def test_roman_and_appendix_numbers_are_captions():
     """IEEE table numbers are Roman numerals (TABLE IV: …) and appendix figure and table numbers carry a letter
     (Figure S1: …); followed by a lowercase word they are still body text."""
-    from app.formats.pdf_extract import _is_float_text
+    from app.formats.pdf_paragraphs import _is_float_text
 
     assert _is_float_text("TABLE II: For different values of the number of observed e-folds")
     assert _is_float_text("TABLE I")
@@ -4258,7 +4258,7 @@ def test_typesetting_ladder_expands_before_shrinking():
 
 def test_formula_font_and_char_rules():
     from app.formats.pdf_blocks import _font_is_math
-    from app.formats.pdf_extract import _is_formula_char, _math_chars
+    from app.formats.pdf_paragraphs import _is_formula_char, _math_chars
 
     assert _font_is_math("CMMI10") and _font_is_math("STIXTwoMath")
     assert _font_is_math("LibertinusMath-Regular")
@@ -5975,8 +5975,8 @@ def test_same_line_gap_stays_inside_one_column():
     """When a formula splits a line into two blocks, they are joined if the gap is narrower than the column gap. A block
     in the other column is not joined even 4pt away."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_visual_lines
     from app.formats.pdf_layout import Column, PageGeometry
+    from app.formats.pdf_paragraphs import _merge_visual_lines
 
     def blk(text, x0, x1, y=100.0):
         rect = pymupdf.Rect(x0, y, x1, y + 11)
@@ -6003,7 +6003,7 @@ def test_paragraph_split_by_a_caption_beside_it_is_joined():
     below the first half and beside the second, the two halves are joined into one paragraph. A cell to the right
     in the same table row sits beside the previous cell, and a cell in the next row is not joined to it."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, x0, y0, x1, y1):
         rect = pymupdf.Rect(x0, y0, x1, y1)
@@ -6026,7 +6026,7 @@ def test_a_larger_heading_below_a_title_is_not_its_wrapped_line():
     """A line one size larger right below a subsection name is the heading of the next section, not the second line of
     a wrapped subsection name."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, x0, y0, x1, y1, size):
         rect = pymupdf.Rect(x0, y0, x1, y1)
@@ -6217,7 +6217,7 @@ def test_a_running_head_does_not_run_into_the_first_line_below():
     """A running header ending on et al. looks like an unfinished sentence. A block recognized as a running header is
     not joined to the body text below that starts lowercase."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blocks():
         head = TextBlock(
@@ -6251,7 +6251,7 @@ def test_a_word_cut_after_a_run_in_label_continues_at_the_column_edge():
     """The half line after an inline label starts right of the label, and the word broken at the line end (temper-)
     continues at the column edge on the next line."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blocks(x1=522):
         half = TextBlock(
@@ -6283,7 +6283,7 @@ def test_a_line_inside_an_open_bracket_runs_on_below():
     """A line break inside an open parenthesis, with the next line starting with a capital or digit and closing the
     parenthesis in its first sentence, is still the same sentence."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y, rows=2):
         lines = [pymupdf.Rect(72, y + 24 * i, 540, y + 24 * i + 12) for i in range(rows)]
@@ -6314,7 +6314,7 @@ def test_a_line_after_an_inline_formula_wraps_to_the_column_edge():
     """A line with a formula on the left and body text continuing on the right: this half line reaches the right edge
     unfinished, and the next line continues lowercase at the column edge."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blocks(x1=521, text="This no longer agrees with the asymptotic distribution of the MLE under"):
         half = TextBlock(
@@ -6401,7 +6401,7 @@ def test_a_full_line_wraps_into_a_capitalized_next_line():
     edge starting with a capitalized proper name (RNNs, one where…): still the same sentence. A last line that is
     not full, or that has a period, is not joined."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y, x0=160.2, x1=493.2, rows=1):
         lines = [pymupdf.Rect(x0 if i == 0 else 160.2, y + 12 * i, x1, y + 12 * i + 12) for i in range(rows)]
@@ -6424,7 +6424,7 @@ def test_an_indented_first_line_cut_by_a_margin_note_runs_on_after_a_full_stop()
     breaking exactly at a sentence end, is followed by a line back at the left edge that continues the same
     paragraph."""
     from app.formats.pdf_blocks import TextBlock, _indents_paragraphs
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y, rows):
         lines = [pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 12.9) for i, (x0, x1) in enumerate(rows)]
@@ -6454,8 +6454,8 @@ def test_a_numbered_example_under_a_full_line_stays_on_its_own():
     and the body text continuing flush below is not merged into it. The same across pages: when the page ends with
     an example, a paragraph starting flush on the next page is not joined after it."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
     from app.formats.pdf_merge import _can_continue
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y, rows, page=0):
         lines = [pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 12.9) for i, (x0, x1) in enumerate(rows)]
@@ -6571,7 +6571,7 @@ def test_a_document_that_spaces_paragraphs_joins_blocks_at_the_normal_line_gap()
     manuscripts often cut one paragraph into several blocks). A block with the extra space above starts a new
     paragraph."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     size, pitch = 10.9, 21.0
 
@@ -6605,7 +6605,7 @@ def test_a_full_line_in_a_document_that_indents_paragraphs_runs_on_below():
     indent below (also when the continuation forms a separate block), and a line below table cells each start a
     new paragraph."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y, rows):
         # A row may have several pieces: [(x0, x1), ...]
@@ -6645,7 +6645,7 @@ def test_theorem_labels_do_not_count_as_flush_paragraphs():
     """Theorem and proof labels always start flush and are no evidence of unindented paragraphs. The width of a body
     line is measured over the whole line, joining the pieces cut by inline formulas."""
     from app.formats.pdf_blocks import TextBlock, _indents_paragraphs
-    from app.formats.pdf_extract import _body_measure
+    from app.formats.pdf_paragraphs import _body_measure
 
     def blk(text, y, rows):
         lines = [
@@ -6679,7 +6679,7 @@ def test_theorem_labels_do_not_count_as_flush_paragraphs():
 def test_one_query_per_line_in_one_block_is_cut_into_lines():
     """PyMuPDF groups queries of one sentence per line into one block. Every line breaks early (the first word of the
     next line would fit), so the block is split by line. A full paragraph stays one paragraph."""
-    from app.formats.pdf_extract import _cut_line_list
+    from app.formats.pdf_rows import _cut_line_list
 
     def item(text, y, x1):
         rect = pymupdf.Rect(167.1, y, x1, y + 10.8)
@@ -6715,7 +6715,7 @@ def test_rows_of_a_table_or_a_list_with_one_opening_are_cut_into_lines():
     """A line split into several pieces is first joined into one line. When every line starts a new column at the
     same x (row name and features), or every line starts with the same word (feature templates), the block is split
     by line even if the lines have similar lengths."""
-    from app.formats.pdf_extract import _cut_line_list
+    from app.formats.pdf_rows import _cut_line_list
 
     def item(text, x0, y, x1, size=9.96):
         rect = pymupdf.Rect(x0, y, x1, y + 11.9)
@@ -6756,8 +6756,8 @@ def test_cjk_wrap_merges_and_short_labels_stay():
     """Chinese lines with aligned left edges and a long enough previous line are joined back into one paragraph. Short
     labels and indented new paragraphs are not joined."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
     from app.formats.pdf_merge import _cross_page_units
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y, x0=40.0, x1=280.0, page=0, size=10.0):
         rect = pymupdf.Rect(x0, y, x1, y + 12)
@@ -6809,7 +6809,7 @@ def test_cjk_wrap_merges_and_short_labels_stay():
 def test_caption_label_without_colon_merges():
     """The note after "图 2" or "Fig. 1." is joined. Headings and table rows are not."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_caption_fragments
+    from app.formats.pdf_paragraphs import _merge_caption_fragments
 
     def blk(text, x0, y0, x1, size=10.0):
         rect = pymupdf.Rect(x0, y0, x1, y0 + 10)
@@ -6846,7 +6846,7 @@ def test_caption_fragments_merge_into_one_block():
     separately and put back into small boxes they wrap badly and the translation is broken up. Headings and blocks
     without a colon are not affected."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_caption_fragments
+    from app.formats.pdf_paragraphs import _merge_caption_fragments
 
     def blk(text, x0, y0, x1, size=10.0):
         return TextBlock(
@@ -6886,7 +6886,7 @@ def test_heading_beside_the_first_line_is_not_absorbed():
     """A short heading sits beside only the first body line. Using the union of the blocks would swallow it into the
     body text."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_visual_lines
+    from app.formats.pdf_paragraphs import _merge_visual_lines
 
     memo_line = pymupdf.Rect(40, 100, 72, 111)
     memo = TextBlock(page=0, rect=memo_line, line_rects=[memo_line], text="Memo.", size=9, color="#000", bold=False)
@@ -6907,7 +6907,7 @@ def test_heading_beside_the_first_line_is_not_absorbed():
 def test_right_fragment_joins_the_following_line():
     """A half sentence on the right of a line joins the next line, not the finished sentence on the left."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_line_tails
+    from app.formats.pdf_paragraphs import _merge_line_tails
 
     left_lines = [pymupdf.Rect(40, 100, 180, 112), pymupdf.Rect(40, 112, 90, 124)]
     left = TextBlock(
@@ -6973,7 +6973,7 @@ def test_same_line_sentence_joins_the_paragraph_and_keeps_side_labels():
     """A next sentence starting at the line end joins the previous paragraph. Short bold side labels and labels inside
     figures do not. A continuation line is joined first even when a following sentence is in the way."""
     from app.formats.pdf_blocks import TextBlock, _with_source_bold
-    from app.formats.pdf_extract import _merge_same_line_sentences
+    from app.formats.pdf_paragraphs import _merge_same_line_sentences
 
     def line(text, x0, y0, x1, y1, bold=False):
         rect = pymupdf.Rect(x0, y0, x1, y1)
@@ -7076,7 +7076,7 @@ def test_same_line_sentence_joins_the_paragraph_and_keeps_side_labels():
 
 def _reference_same_line_merge(blocks):
     """The implementation before merging by page. Each merge restarts the search from the beginning."""
-    from app.formats.pdf_extract import _absorb_block, _continues_fragment, _sits_on_last_line
+    from app.formats.pdf_paragraphs import _absorb_block, _continues_fragment, _sits_on_last_line
 
     out = list(blocks)
     changed = True
@@ -7137,7 +7137,7 @@ def test_same_line_merge_by_page_matches_the_rescan():
     import copy
 
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_same_line_sentences
+    from app.formats.pdf_paragraphs import _merge_same_line_sentences
 
     def shape(blocks):
         return [(b.page, b.text, tuple(b.rect), [tuple(r) for r in b.line_rects]) for b in blocks]
@@ -7173,7 +7173,7 @@ def test_a_displayed_formula_does_not_swallow_the_prose_below_it():
     """A displayed formula has space on both sides; numerator, denominator and semicolon are separate pieces, and the
     last piece lands on the right. Body text below at the column edge starts a new paragraph."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _continues_fragment
+    from app.formats.pdf_paragraphs import _continues_fragment
 
     lines = [pymupdf.Rect(117, 145, 173, 158), pymupdf.Rect(178, 145, 253, 165), pymupdf.Rect(254, 157, 257, 164)]
     host = TextBlock(
@@ -7202,7 +7202,7 @@ def test_finished_condition_line_does_not_swallow_the_next_paragraph():
     """When a formula condition line ends with a period, the body text below at the column edge is not joined to it.
     An unfinished right half sentence still joins the next line."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _continues_fragment, _merge_same_line_sentences
+    from app.formats.pdf_paragraphs import _continues_fragment, _merge_same_line_sentences
 
     formula = pymupdf.Rect(254.4, 329.7, 333.6, 340.5)
     condition = pymupdf.Rect(343.5, 329.9, 384.8, 339.9)
@@ -7295,8 +7295,8 @@ def test_shared_baseline_continuation_is_one_translation():
     are still sent for translation as a pair, without a boundary between them and without joining the finished
     sentence on the left."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_line_tails
     from app.formats.pdf_merge import _cross_page_units
+    from app.formats.pdf_paragraphs import _merge_line_tails
     from app.formats.pdf_units import _prepare_unit
 
     def line(text, x0, y0, x1, y1):
@@ -7568,9 +7568,9 @@ def test_page_end_does_not_take_a_block_already_paired_to_the_next_column():
 def test_capital_continuation_joins_across_columns_only():
     """A column change may continue with a proper noun. A capitalized line break within the same column still splits."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
     from app.formats.pdf_layout import Column, PageGeometry
     from app.formats.pdf_merge import _cross_page_units
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, x0, y, page=0):
         rect = pymupdf.Rect(x0, y, x0 + 180, y + 12)
@@ -7629,7 +7629,7 @@ def test_same_page_continuations_merge():
     into one block: translated separately the pieces give half translations with forced line breaks at the cuts.
     Headings and table rows are not affected."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y, x0=108.0, size=10.0, nwords_pad=0):
         return TextBlock(
@@ -7679,7 +7679,7 @@ def test_line_end_colon_inside_a_sentence_merges():
     """A colon at the line end with full lines above and below is a line break inside a sentence and is merged into one
     paragraph; when the next line is a short example or a table header, it is not merged."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y, x0=142.0, x1=475.0):
         rect = pymupdf.Rect(x0, y, x1, y + 11)
@@ -7706,7 +7706,7 @@ def test_slide_sub_item_is_not_a_title_fragment():
     """On a slide, a second-level item after a first-level list item has a larger font size and a different left edge,
     and is not the second line of a heading."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, x0, y0, y1, size):
         rect = pymupdf.Rect(x0, y0, 682, y1)
@@ -7725,7 +7725,7 @@ def test_slide_sub_item_is_not_a_title_fragment():
 def test_smaller_body_under_a_heading_splits():
     """A 12pt heading and a 9pt lead paragraph are often in the same dict block. The left edge of the lead only makes
     room for the section number and must not be taken as an indent that keeps it in the heading."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     items = [
         _line("4.", 316, 326, 674, size=12),
@@ -7748,7 +7748,7 @@ def test_affiliation_under_an_author_name_splits():
     separate paragraph even with only two words. When an asterisk at the line start is one size larger than the
     text after it, the comparison uses the size of the majority of characters, and a continuation line of the same
     size on the next line is not split."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     author = [
         _line("Daniel Jurafsky", 247, 355, 333.4, size=17.2),
@@ -7799,7 +7799,7 @@ def test_section_number_stays_with_heading():
     """The dict lines '2.2' + 'Training' must not be split: once the digits-only line is split off as a symbol line,
     the number is filtered out and not masked (the original stays visible), the heading is translated alone, and
     the baselines of the two do not line up."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     items = [
         ("2.2", pymupdf.Rect(108, 84, 120, 94), [{"text": "2.2", "size": 10.0}], None),
@@ -7824,7 +7824,7 @@ def test_a_chapter_number_across_a_rule_is_not_joined_to_the_title():
     """A two-digit chapter number at the chapter start sits close to the heading, so word spacing would join them into
     one sentence and rewriting the line would cover the vertical bar between them. A vertical bar between them
     splits them."""
-    from app.formats.pdf_extract import _cut_at_posts, _split_lines
+    from app.formats.pdf_rows import _cut_at_posts, _split_lines
 
     items = [
         ("10", pymupdf.Rect(98.4, 132.0, 158.2, 204.1), [{"text": "10", "size": 59.8}], None),
@@ -7963,7 +7963,7 @@ def test_punct_fragment_uses_line_end_not_union():
     """A formula fragment inside the block union but more than 2pt from the end of the previous line must not be
     donated for masking."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _donate_punct_rects
+    from app.formats.pdf_paragraphs import _donate_punct_rects
 
     line1 = pymupdf.Rect(72, 80, 400, 92)
     line2 = pymupdf.Rect(72, 96, 200, 108)
@@ -8839,7 +8839,7 @@ def test_right_fragment_stays_on_its_own_line():
 
 def test_affiliation_tails_split_and_stack():
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _split_affiliation_tails
+    from app.formats.pdf_paragraphs import _split_affiliation_tails
     from app.formats.pdf_write import _affiliation_write_rects
 
     names = [
@@ -9971,7 +9971,7 @@ def test_a_font_that_writes_math_alphabet_letters_is_math():
 def test_a_line_split_into_two_blocks_is_put_back_together():
     """When PyMuPDF cuts a line at a superscript and puts the second half into another block, it is moved back after
     the first half."""
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, text):
         return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
@@ -9992,7 +9992,7 @@ def test_a_line_split_into_two_blocks_is_put_back_together():
 
 
 def test_a_two_column_gutter_is_not_a_split_line():
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     def line(x0, x1, text):
         return {"bbox": (x0, 150, x1, 162), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
@@ -10011,7 +10011,7 @@ def test_a_two_column_gutter_is_not_a_split_line():
 def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
     """With a column gap narrower than one em, a right-column line starting with a formula or a section number is not
     joined after the left-column paragraph either."""
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     def line(x0, x1, y0, text, font="Times-Roman", size=10.0, y1=None):
         box = (x0, y0, x1, y1 if y1 is not None else y0 + 13)
@@ -10104,7 +10104,7 @@ def test_the_hole_for_a_neighbour_stays_inside_its_font_box():
 def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line():
     """The font box of ϵ reaches into the next line. Measured by the font box, the denominator is on the same row
     as the next line, so it would be attached after that line and the numerator would follow it."""
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     def span(text, font, size, box, ink=None):
         item = {"text": text, "font": font, "size": size, "bbox": box, "origin": (box[0], box[3] - 2)}
@@ -10149,7 +10149,7 @@ def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line():
 def test_a_split_line_goes_to_its_nearest_left_neighbour():
     """Two blocks both have a left half that could be joined: the piece joins the nearest one and does not move back
     and forth between the two blocks."""
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     def line(x0, x1, y0, text, font="CMMI10"):
         box = (x0, y0, x1, y0 + 10)
@@ -10174,7 +10174,7 @@ def test_a_split_line_goes_to_its_nearest_left_neighbour():
 def test_a_justified_heading_split_word_by_word_stays_one_paragraph():
     """A justified heading in a narrow column has word spacing stretched to two em, so PyMuPDF makes one line per word.
     It is recognized as one paragraph by whole line."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, x0, x1, y0):
         span = {"text": text, "font": "Times-Bold", "size": 14.3}
@@ -10191,7 +10191,7 @@ def test_a_justified_heading_split_word_by_word_stays_one_paragraph():
 
 
 def test_table_cells_on_one_baseline_stay_apart():
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, x0, x1):
         span = {"text": text, "font": "Times-Roman", "size": 9.0}
@@ -10247,8 +10247,8 @@ def test_a_formula_line_wrapped_from_a_full_line_is_kept():
     and W^O ∈ … continues from the left edge: it is the second half of the sentence, not a displayed formula.
     Stacked formulas do not reach the right edge."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _wraps_from_above
     from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_paragraphs import _wraps_from_above
 
     frame = TextFrame(108, 504, 72, 720, 10)
     line = pymupdf.Rect(107.5, 203.1, 502.8, 217.6)
@@ -10408,7 +10408,7 @@ def test_bare_chinese_section_number_is_restored():
 def test_fraction_pieces_rejoin_their_line_with_less_overlap():
     """Denominators and large braces pull the box down, so two pieces of the same line overlap vertically by only 30 to
     40 percent."""
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, text):
         return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
@@ -10428,8 +10428,8 @@ def test_fraction_pieces_rejoin_their_line_with_less_overlap():
 def test_math_line_box_follows_glyph_ink():
     """A CMSY box from the font extent can be two lines high. Line boxes and cells are computed from ink; the radical
     has its origin at the top, so it is measured by ink as well."""
-    from app.formats.pdf_extract import _text_box
     from app.formats.pdf_math import _line_box
+    from app.formats.pdf_rows import _text_box
 
     arrow = {
         "text": "←",
@@ -10456,7 +10456,7 @@ def test_math_line_box_follows_glyph_ink():
 def test_formula_pieces_touching_on_one_line_stay_one_paragraph():
     """Fractions and large braces split a formula line into several pieces. A piece of symbols only must not cut the
     sentence apart."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, x0, x1, y0, y1, *spans):
         spans = spans or ((text, "CMMI10", 10.0),)
@@ -10484,7 +10484,7 @@ def test_formula_pieces_touching_on_one_line_stay_one_paragraph():
 def test_a_line_with_three_words_among_formulas_is_translated():
     """Therefore, ∫… = ∫… It follows: many formulas and a low share of letters, but three body words make it a
     sentence."""
-    from app.formats.pdf_extract import _untranslatable
+    from app.formats.pdf_paragraphs import _untranslatable
 
     def span(text, font):
         return {"text": text, "font": font}
@@ -10507,7 +10507,7 @@ def test_an_inline_fraction_rejoins_its_line_in_reading_order():
     """g(x) = 1/(1+exp(−x)): the denominator is in another block, farther from the equals sign than a word space, and
     the numerator comes before the denominator. After moving them back, they are ordered left to right so the
     denominator can join the equals sign."""
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, *spans):
         # CMR inside Times body text is already marked as formula during extraction
@@ -10535,7 +10535,7 @@ def test_an_inline_fraction_rejoins_its_line_in_reading_order():
 def test_pieces_of_one_row_are_read_left_to_right():
     """When the numerator comes before the denominator, they are reordered left to right; two lines one above the other
     are not treated as one line."""
-    from app.formats.pdf_extract import _left_to_right
+    from app.formats.pdf_rows import _left_to_right
 
     def item(text, x0, y0, x1, y1):
         return (text, pymupdf.Rect(x0, y0, x1, y1), [])
@@ -10550,7 +10550,7 @@ def test_pieces_of_one_row_are_read_left_to_right():
 
 
 def test_plain_words_a_wide_gap_apart_are_not_rejoined():
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     def line(x0, x1, text):
         return {
@@ -10574,7 +10574,8 @@ def test_a_centred_definition_line_keeps_its_glyphs():
     """A centered displayed formula with only a few connecting words (if and only if, for all) is not translated as a
     sentence. A formula line starting at the left edge of the column and continuing the previous line is still
     translated as a sentence."""
-    from app.formats.pdf_extract import _displayed, _left_margins, _untranslatable
+    from app.formats.pdf_extract import _displayed, _left_margins
+    from app.formats.pdf_paragraphs import _untranslatable
 
     body = {"bbox": (72, 0, 540, 12), "spans": [{"text": "A body line long enough to count as the column margin."}]}
     data = {"blocks": [{"type": 0, "lines": [body] * 4}]}
@@ -10597,7 +10598,7 @@ def test_a_centred_definition_line_keeps_its_glyphs():
 def test_a_lone_numerator_goes_back_to_its_fraction():
     """A numerator left alone in a block is moved next to the formula line right below it. Body text on the previous
     line also covers it horizontally, but that does not count."""
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, *spans):
         return {
@@ -11081,7 +11082,7 @@ def test_slide_title_and_a_box_label_below_stay_apart():
     """Small text boxes in a figure below a large slide title are not caption continuation lines, and the text in a
     star shape beside the title is not the next line of the title."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_caption_fragments, _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_caption_fragments, _merge_continuations
 
     def blk(text, x0, y0, x1, y1, size):
         rect = pymupdf.Rect(x0, y0, x1, y1)
@@ -11254,7 +11255,7 @@ def test_large_chapter_number_stays_apart_from_the_title():
     """A 60pt number and a 25pt heading at a chapter start are one large em apart: the number stays as it is, and the
     heading is written back alone at its original position. 2.2 Training at a single font size is still one
     line."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, rect, size):
         span = {"text": text, "size": size, "font": "Times", "flags": 0}
@@ -11933,7 +11934,7 @@ def test_a_long_toc_title_with_two_leader_dots_keeps_its_page_number():
     """When a long title reaches close to the page number, only two dots of leader remain. On a contents page the
     leader and page number are still cut off and the page number stays in place. Such lines on other pages are
     left alone."""
-    from app.formats.pdf_extract import _cut_leaders
+    from app.formats.pdf_rows import _cut_leaders
 
     def span(text, x0, x1, y=278.7):
         return {"text": text, "size": 10.0, "bbox": (x0, y, x1, y + 12), "origin": (x0, y + 9.5), "color": 0}
@@ -12043,7 +12044,7 @@ def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
     the font does not reveal a formula; it is recognized as a smaller italic centered below small italics in the
     body line and moved back to the line of the numerator. It is not moved when the italics above are at body size,
     or when they are only a superscript and subscript aligned at the left edge."""
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     reg, ital, cmr = "NimbusRomNo9L-Regu", "NimbusRomNo9L-ReguItal", "CMR10"
 
@@ -12115,7 +12116,7 @@ def test_a_citation_year_after_et_al_continues_the_sentence():
     with a parenthesis is the citation year. A number such as (a) is the next item, (2.11) is an example number, an
     indented line is a displayed formula, and a previous line ending with a period is not joined either."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y, x1=493.0):
         rect = pymupdf.Rect(160, y, x1, y + 12)
@@ -12214,7 +12215,7 @@ def test_the_short_centered_last_line_of_a_caption_continues_it():
     """The last line of a centered table note is short and indented on both sides. With a matching center line and a
     lowercase start, it is joined to the previous line."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, x0, x1, y):
         rect = pymupdf.Rect(x0, y, x1, y + 12)
@@ -12249,7 +12250,7 @@ def test_a_line_ending_on_a_function_word_continues_into_a_capital():
     paragraph starting with a capital is joined, a smaller source below an epigraph is not. A line starting with a
     period is joined."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, x0, x1, y, size=10.9):
         rect = pymupdf.Rect(x0, y, x1, y + 11)
@@ -12300,7 +12301,7 @@ def test_a_centered_formula_or_a_hanging_item_line_keeps_its_place():
     """A centered formula line below a paragraph is not the last line of a centered paragraph; a continuation line of a
     hanging-indent entry is joined even when it starts with an opening parenthesis."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, x0, x1, y, lines=None):
         rects = lines or [pymupdf.Rect(x0, y, x1, y + 12)]
@@ -12360,7 +12361,7 @@ def test_a_block_inside_an_open_code_fence_continues_with_a_capital():
     """The previous block stops inside an unclosed code fence ("‘sql opened and not yet closed), so JOIN in the next
     block continues the code; once the fence is closed, a capitalized start splits as usual."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y):
         return TextBlock(
@@ -12391,7 +12392,7 @@ def test_a_line_opening_with_an_inline_formula_continues_the_sentence():
     """A line starting with an inline formula at the column edge and continuing with body text is a wrapped line of
     the previous sentence; an indented displayed formula is not."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(spans, x0, x1, y):
         rect = pymupdf.Rect(x0, y, x1, y + 12)
@@ -12464,7 +12465,7 @@ def test_a_line_far_below_by_the_documents_own_spacing_is_not_a_continuation():
     a subtitle is still within line spacing by a fixed 1.5 em, but with the line gap of this document subtracted
     it is a separate block."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y0, y1, size, line_gap):
         rect = pymupdf.Rect(114, y0, 1122, y1)
@@ -12508,7 +12509,7 @@ def test_a_running_head_does_not_take_the_first_line_below_it():
     the next line returns to the column edge starting lowercase. Once recognized as a running header it is not
     joined, wherever the line spacing threshold lies."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_same_line_sentences
+    from app.formats.pdf_paragraphs import _merge_same_line_sentences
 
     def blocks():
         head = [
@@ -12548,7 +12549,7 @@ def test_a_slide_sub_point_is_not_a_wrapped_title():
     Large sizes are compared with the body size of this document; when no body size was measured, 12pt is used
     as before."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def slide(body_size):
         def blk(text, x0, y0, x1, y1):
@@ -12616,7 +12617,7 @@ def test_a_bracket_or_quote_closes_a_sentence_only_after_its_end_mark():
     parenthesis right after a function name or variable ends a formula, and a formula or where below it is not
     joined."""
     from app.formats.pdf_blocks import TextBlock, _ends_sentence
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     assert _ends_sentence("found it.)") and _ends_sentence('he said."')
     assert not _ends_sentence("The MUC F-measure (Vilain et al., 1995)")
@@ -12640,7 +12641,7 @@ def test_a_list_ends_where_the_next_block_starts_left_of_the_item():
     """The first line after a list item that starts further left than the item is body text after the list;
     hanging-indent continuation lines are joined as usual."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, x0, y0, x1, y1):
         rect = pymupdf.Rect(x0, y0, x1, y1)
@@ -12667,7 +12668,7 @@ def test_a_list_ends_where_the_next_block_starts_left_of_the_item():
 def test_an_example_number_stays_apart_from_its_sentence():
     """The example number (25.4) is a label and is not joined to the sentence on its right: once joined, the left edge
     of the block moves back to the number and the third, hanging-indent line can no longer be joined."""
-    from app.formats.pdf_extract import _same_line_word
+    from app.formats.pdf_rows import _same_line_word
 
     assert not _same_line_word(
         "(25.4)",
@@ -12681,7 +12682,7 @@ def test_an_example_number_stays_apart_from_its_sentence():
 def test_numbered_examples_in_one_block_are_split_apart():
     """One block holds two example lines (1.2) and (1.3), the first being the longest, so the right edge does not show
     a hard break. The previous sentence is finished and the next line starts with an example number, so they split."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, bbox):
         return (text, pymupdf.Rect(bbox), [{"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}])
@@ -12702,7 +12703,7 @@ def test_a_paragraph_after_a_hanging_list_line_is_split_off():
     """A list item wraps with a hanging indent, and the next paragraph has a first-line indent left of the continuation
     lines: the list has ended. The second line of a paragraph with a first-line indent returns to the column edge
     and is joined as usual."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, bbox):
         return (text, pymupdf.Rect(bbox), [{"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}])
@@ -12831,7 +12832,7 @@ def test_a_verbatim_line_does_not_run_into_the_prose_below():
     """A question and answer reproduced in monospace, Q: ... A: Charles, has no sentence-final punctuation; the body
     text on the next line, back at the column edge and starting lowercase, is not its continuation line."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _line_tail_match
+    from app.formats.pdf_paragraphs import _line_tail_match
 
     def blk(text, rect, font):
         rect = pymupdf.Rect(rect)
@@ -12866,7 +12867,7 @@ def test_a_line_in_a_column_of_its_own_font_stays_in_its_block():
     """A monospace example in the right column of a slide is level with the body text on the left and overlaps it a
     little horizontally. In its own block it shares the left edge and font of the line above, so it is a line of
     that column and is not moved over as the cut-off second half of the body text on the left."""
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     def line(text, bbox, font):
         return {
@@ -12908,7 +12909,7 @@ def test_a_small_fraction_after_a_relation_joins_the_line():
     """The 1/L after ≃ is one size smaller than the body and one body em away from ≃. Measured by the small em it
     would not be joined, so numerator and denominator together with the following sum would stay in another
     block and be skipped as a formula line, leaving the right half of the formula missing from the translation."""
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     def line(x0, x1, y0, y1, text, font, size):
         return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "font": font, "size": size}]}
@@ -12933,7 +12934,7 @@ def test_a_full_line_ending_in_a_call_runs_on_into_the_next_line():
     followed by a line starting with a body word is joined as usual; a following line that is another formula is
     not."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y, font="NimbusRomNo9L-Regu"):
         rect = pymupdf.Rect(108, y, 504, y + 11)
@@ -12960,8 +12961,8 @@ def test_table_split_keeps_space_spans():
     """In justified lines the word spaces are separate spans. They must be included when text is reassembled by cells,
     otherwise the words run together."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _split_table_blocks
     from app.formats.pdf_layout import RuledTable
+    from app.formats.pdf_paragraphs import _split_table_blocks
 
     def span(text, x0, x1):
         return {"text": text, "bbox": (x0, 100, x1, 110), "origin": (x0, 108), "font": "Times", "size": 10.0}
@@ -13020,7 +13021,7 @@ def test_a_numerator_left_in_its_own_block_rejoins_the_paragraph():
     """The numerator g⁴ and its subscript T,i were put into a separate block, so moving line by line always finds a
     line of the same block next to it. The whole block sits on the denominator formula in the paragraph, level
     with the body lines of the paragraph, and moves back into the paragraph as one."""
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     reg, cmmi = "NimbusRomNo9L-Regu", "CMMI7"
 
@@ -13115,7 +13116,7 @@ def test_a_displayed_formula_set_in_the_text_italic_is_kept():
     """In a book writing variables in body italics, the font does not reveal formula characters in displayed
     formulas. Those with an operator and at most two body words keep the original glyphs; a whole sentence set on
     its own line (L(ŷ,y) = How much ŷ differs from the true y) is translated."""
-    from app.formats.pdf_extract import _untranslatable
+    from app.formats.pdf_paragraphs import _untranslatable
 
     def spans(*parts):
         return [{"text": text, "font": font, "size": 10.0, "flags": 2 if "Ital" in font else 0} for text, font in parts]
@@ -13216,7 +13217,7 @@ def test_a_smaller_line_in_another_colour_does_not_continue_a_title():
     """A smaller purple example below a slide title (51pt, gray) is not a wrapped line of the title and is not merged
     with it."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     title = pymupdf.Rect(97.9, 63.0, 859.0, 125.3)
     item = pymupdf.Rect(112.3, 151.7, 1087.7, 198.1)
@@ -13249,7 +13250,8 @@ def test_an_index_entry_ends_at_its_page_numbers():
     """On an index page an entry is complete at its page number: a next line starting lowercase is another entry and is
     not merged. Body lines rarely stop on ", number"."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _index_page, _merge_continuations
+    from app.formats.pdf_extract import _index_page
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def page(lines):
         return {"blocks": [{"type": 0, "lines": [{"spans": [{"text": line}]} for line in lines]}]}
@@ -13360,7 +13362,7 @@ def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
     """A wrapped index entry has hanging-indent continuation lines. A next line starting no further right than this
     one is another entry (see references have no page numbers); page numbers wrapped to the next line form a line
     of only page numbers, possibly in another block; a line split by justification is judged as a whole line."""
-    from app.formats.pdf_extract import _index_entry_ends
+    from app.formats.pdf_rows import _index_entry_ends
 
     def item(text, x0, y0, x1):
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 9.6), [{"text": text, "size": 8.0}], [])
@@ -13404,7 +13406,7 @@ def test_a_paragraph_indented_under_an_inset_line_starts_on_its_own():
     """The translation of an example is set as one indented line; the next paragraph has a first-line indent left of
     it and right of the lines that follow, so it is a new paragraph. A justified reference line split into pieces
     is compared by the left edge of the whole line and is not split. Centered lines do not count as indented."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, x0, y0, x1):
         return (
@@ -13443,7 +13445,7 @@ def test_an_indented_line_after_a_full_line_that_ends_a_sentence_starts_a_paragr
     """The previous line is full and ends exactly at a sentence end, the next line is indented by one and a half em
     and reaches the right edge, and the line after it returns to the left edge: a new paragraph. With numbered
     entries above and below, it is a hanging-indent continuation line of a reference and is not split."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, x0, y0, x1):
         return (
@@ -13473,7 +13475,7 @@ def test_numbers_wrapped_under_an_indented_first_line_stay_in_the_paragraph():
     """A paragraph with a first-line indent has an unfinished list of numbers wrapped to the left edge of the next line
     (13 tokens: 11865, … | 885, 220, … 0)): this line aligns with the previous one and ends the sentence, so it
     does not become a new paragraph."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, x0, y0, x1):
         return (
@@ -13507,7 +13509,7 @@ def test_caption_lines_wrapped_back_under_the_label_stay_in_the_caption():
     wrapped line returns to the left edge of the label, which is no jump to the left when compared by whole line,
     so it does not start a new paragraph: if the line with only (2012). became a paragraph of its own, it would
     keep the original text and still sit on the next line after the translation."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, x0, y0, x1, font="NimbusRomNo9L-Regu"):
         return (
@@ -13529,7 +13531,7 @@ def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
     """An index entry stops on a comma, and its page numbers wrap to the next line, indented below the entry text.
     The page number line is sent for translation together with the entry, the entry ends at the page numbers, and
     the next entry starts anew as usual."""
-    from app.formats.pdf_extract import _index_entry_ends, _split_lines
+    from app.formats.pdf_rows import _index_entry_ends, _split_lines
 
     def item(text, x0, y0, x1):
         return (
@@ -13556,7 +13558,7 @@ def test_page_numbers_in_the_next_block_join_the_index_entry():
     """The page numbers wrap to the next line and land in the next block. A line with only page numbers right below an
     entry ending on a comma is joined to the entry; the entry starting below is not."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations, _wraps_from_above
+    from app.formats.pdf_paragraphs import _merge_continuations, _wraps_from_above
 
     def blk(text, x0, y0, x1, entry=False):
         rect = pymupdf.Rect(x0, y0, x1, y0 + 9.6)
@@ -13649,7 +13651,7 @@ def test_the_rest_of_a_broken_word_continues_the_line_above():
     (expres- | sions, 50, 65), and despite few letters it is not kept in the original as a line of page numbers.
     On an index page a line indented deeper than the previous one is a continuation line too (as, 51)."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _wraps_from_above
+    from app.formats.pdf_paragraphs import _wraps_from_above
 
     def blk(text, rect):
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=8.0, color="#000", bold=False)
@@ -13668,8 +13670,8 @@ def test_one_sentence_per_line_is_not_joined_into_a_paragraph():
     word of the next line would still fit after the previous line, and even with a lowercase start they are not
     merged. In a paragraph, a wrapped line with no room for the next word is joined as usual."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _line_lists, _merge_continuations
     from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_paragraphs import _line_lists, _merge_continuations
 
     def blk(text, y, x1, size=38.0):
         rect = pymupdf.Rect(112.3, y, x1, y + 46.4)
@@ -13729,7 +13731,7 @@ def test_a_glyph_arrow_over_a_word_marks_both_as_formula():
 def test_a_word_grid_is_translated_cell_by_cell():
     """A word table with one word per cell: each cell is its own entry, and cells in the same row are not joined into a
     sentence. A caption label in the same block below the table is not a cell."""
-    from app.formats.pdf_extract import _grid_cells
+    from app.formats.pdf_rows import _grid_cells
 
     words = [
         ["dwindle", "move", "soar", "shift"],
@@ -13767,7 +13769,7 @@ def test_a_word_broken_at_the_block_end_continues_in_the_next_block():
     """When the previous block stops on half a hyphenated word, it is joined to the next block even with only two words
     (retrieval-augmented genera- | tion, 267)."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, x0, y0, x1, entry=False):
         rect = pymupdf.Rect(x0, y0, x1, y0 + 9.6)
@@ -13796,7 +13798,7 @@ def test_a_model_name_broken_at_its_hyphen_continues_with_the_number():
     """The line ends on the hyphen of a model name (VE- | 8. Both datasets …), so the number on the next line is the
     second half of the model name, not a list number. When joined, the hyphen stays and no space is inserted"""
     from app.formats.pdf_blocks import TextBlock, _join_lines
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y0, x1):
         rect = pymupdf.Rect(54.0, y0, x1, y0 + 10.0)
@@ -13948,7 +13950,7 @@ def test_a_displayed_line_inside_a_block_is_its_own_paragraph():
     """An indented example line that is not full shares a block with the body text on the next line: the example is a
     paragraph of its own, and the next line is not merged into it even when it starts lowercase. In a paragraph
     set around a figure, the first and next lines end at the same x and are still one paragraph."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, x0, y0, x1):
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"text": text, "size": 10.0}], [])
@@ -14071,7 +14073,7 @@ def test_formula_pieces_keep_their_source_order():
 def test_a_period_after_a_small_denominator_does_not_make_it_a_heading():
     """The denominator Σ_j e^{S·T_j} is followed by a body-size period. The period does not count as a body-size
     character, so the denominator is still joined back to the line of the fraction."""
-    from app.formats.pdf_extract import _larger_text
+    from app.formats.pdf_rows import _larger_text
 
     denominator = {
         "spans": [
@@ -14216,7 +14218,7 @@ def test_a_bold_run_in_label_starts_a_paragraph():
     """The previous line ends a sentence and the next line starts with a bold label: a paragraph heading of a few
     words (eight words count too), a bold theorem name with a number, and a numbered item such as Q2 all start a
     new paragraph. Spaces are added between spans split by word before recognizing them."""
-    from app.formats.pdf_extract import _label_lead, _split_lines
+    from app.formats.pdf_rows import _label_lead, _split_lines
 
     def span(text, x0, x1, bold=False):
         return {
@@ -14258,7 +14260,7 @@ def test_an_indented_paragraph_start_is_not_a_continuation():
     new paragraph and is not joined even when the previous block stops on and (with a displayed formula below).
     A block starting lowercase or with a formula at the line start is joined as before."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y, rows):
         lines = [pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 12) for i, (x0, x1) in enumerate(rows)]
@@ -14360,7 +14362,7 @@ def test_a_roman_numbered_item_does_not_continue_the_paragraph_above():
     assert _can_continue(blk("(ii) it must be light, and"), blk("(iii) the arm must have few actuators."), 10, None)
     assert _can_continue(prev, blk("(see below) which holds."), 10, None)
 
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     # The previous line stops on a formula and is not full, so (iii) starts a new item; after a full line it is an
     # enumeration inside the paragraph wrapped to the line start
@@ -14413,7 +14415,7 @@ def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator():
     """For the numeric fraction 24000/75 in the body font, PyMuPDF puts the denominator 75 into the next block. The
     denominator is moved back to the line of the numerator; otherwise it would be a block of its own keeping the
     original glyphs, on top of the translation."""
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     def span(text, x0, y0, x1, y1, size, base):
         return {
@@ -14472,8 +14474,8 @@ def test_a_fraction_wrapped_to_the_line_start_ends_the_sentence_above():
     ends the sentence and is joined back to the previous paragraph. One set apart by space and indented is a
     displayed formula."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations, _wraps_from_above
     from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_paragraphs import _merge_continuations, _wraps_from_above
 
     frame = TextFrame(142, 475, 72, 720, 10)
     rows = [pymupdf.Rect(142.2, y, 475.2, y + 12) for y in (488.8, 500.8, 512.8, 524.7)]
@@ -14845,7 +14847,7 @@ def test_examples_listed_under_a_bullet_get_their_own_line():
     would fit: the next line is an example listed under the item, so they split. When the item fills its line, a
     next line whose letters are mostly colored, below a line with no colored text, also splits. A continuation
     line wrapped from a full line does not split, and neither does a reference starting with name initials"""
-    from app.formats.pdf_extract import _cut_item_breaks
+    from app.formats.pdf_rows import _cut_item_breaks
 
     def item(text, rect, color=0):
         return (text, pymupdf.Rect(rect), [{"text": text, "size": 10.0, "color": color}])
@@ -14995,7 +14997,7 @@ def test_a_line_ending_on_an_equals_sign_runs_on():
     """When the previous line stops on an equals sign, a next line starting with a digit is the other half of the
     formula and is joined into one paragraph."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def blk(text, y0, y1):
         rect = pymupdf.Rect(167, y0, 475, y1)

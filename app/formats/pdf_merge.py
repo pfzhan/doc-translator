@@ -25,9 +25,15 @@ from .pdf_blocks import (
     _styled_edge,
     _visual_lines,
 )
-from .pdf_extract import (
+from .pdf_flow import (
+    emphasis_of,
+)
+from .pdf_layout import (
+    PageGeometry,
+)
+from .pdf_math import _prose_units
+from .pdf_paragraphs import (
     _FOOTNOTE_LEAD_RE,
-    _MID_ABBREV_RE,
     _caption_label,
     _closes_first,
     _earlier_on_page,
@@ -38,14 +44,8 @@ from .pdf_extract import (
     _opens_with_math,
     _unclosed_bracket,
 )
-from .pdf_flow import (
-    emphasis_of,
-)
-from .pdf_layout import (
-    PageGeometry,
-)
-from .pdf_math import _prose_units
 from .pdf_roles import is_size_heading
+from .pdf_rows import _MID_ABBREV_RE
 
 
 def _preview_kind(block: TextBlock, median: float) -> str:

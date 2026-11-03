@@ -309,7 +309,7 @@ def test_a_bold_caption_label_starts_its_own_paragraph():
     """The caption of a wide figure is less than three characters left of the figure text, like an indent. The label
     is set alone in bold and is the first line of the caption. A body sentence starting with Figure 3.8 keeps its
     font and is not split."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(*spans, x0, y0):
         parts = [
@@ -338,7 +338,7 @@ def test_a_bold_caption_label_starts_its_own_paragraph():
 
 
 def test_typewriter_dialogue_keeps_one_line_per_turn():
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, x0, y0, x1, font="txtt", flags=8):
         span = {"text": text, "size": 9.0, "font": font, "flags": flags}
@@ -359,7 +359,7 @@ def test_typewriter_dialogue_keeps_one_line_per_turn():
 def test_prose_after_typewriter_lines_starts_a_new_paragraph():
     """A small list item in monospace is directly followed by the first body line. The first-line indent differs only
     slightly from the item's left edge, and they must still be split."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, x0, y0, x1, size, font, flags):
         span = {"text": text, "size": size, "font": font, "flags": flags}
@@ -388,7 +388,7 @@ def test_a_larger_line_below_a_slide_formula_starts_a_new_paragraph():
     """On a slide, an indented formula is followed by a subheading one size larger whose left edge is just over one
     character away, like a first-line indent; they must be split. The rest of a sentence returning to body size
     after small capitals is not split."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, x0, y0, x1, size, font="TimesNewRomanPSMT"):
         span = {"text": text, "size": size, "font": font, "flags": 0}
@@ -411,7 +411,7 @@ def test_the_short_last_line_of_an_example_does_not_open_the_next_paragraph():
     """The hanging continuation line of an example is not full and ends with a period, and the next paragraph starts
     at the column edge, just over one character to the left; this is not a first-line indent. The full first line of
     an indented paragraph still continues as before."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, x0, y0, x1):
         span = {"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}
@@ -442,7 +442,7 @@ def test_a_bold_label_after_a_finished_sentence_opens_the_next_item():
     """A definition list with one nearly full line per item, so hard line breaks do not show the items. After a
     finished sentence, a line starting with a bold label is the next item. A bold word that wraps to a line start
     mid-sentence is not split."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(label, rest, y0, x1):
         spans = [{"text": label, "size": 10.0, "font": "NimbusRomNo9L-Medi", "flags": 16}] if label else []
@@ -466,7 +466,7 @@ def test_a_bold_label_after_a_short_unfinished_item_opens_the_next_item():
     """Definition list items are partial example sentences without sentence-ending punctuation (mouse² : ... a quiet
     animal like a mouse). The previous item also starts with a bold label and does not reach the right edge, so the
     bold label on the next line is the next item"""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(label, rest, y0, x1):
         spans = [
@@ -484,7 +484,7 @@ def test_a_bold_label_after_a_short_unfinished_item_opens_the_next_item():
     assert _split_lines(rows) == [[0], [1], [2], [3]]
     # Once split into two blocks, they are not joined back as caption continuation lines either
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_caption_fragments
+    from app.formats.pdf_paragraphs import _merge_caption_fragments
 
     boxes = [pymupdf.Rect(142, 584, 307, 596), pymupdf.Rect(142, 596, 412, 608)]
     blocks = [
@@ -516,7 +516,7 @@ def test_a_heading_across_a_narrow_gutter_is_not_joined_to_the_left_line():
     page.insert_text((352, 318), "Ensemble Classification", fontsize=10, fontname="hebo")
     for i in range(6):
         page.insert_text((311, 340 + 12 * i), f"The current reported best results on ImageNet line {i}", fontsize=10)
-    from app.formats.pdf_extract import _rejoin_split_lines
+    from app.formats.pdf_rows import _rejoin_split_lines
 
     data = page.get_text("dict")
     _rejoin_split_lines(data)
@@ -527,7 +527,7 @@ def test_a_heading_across_a_narrow_gutter_is_not_joined_to_the_left_line():
 def test_an_inline_enumeration_wrapping_onto_a_new_line_is_not_a_list():
     """In a caption, (a) is mid-line and (b) happens to start a line after a full one: a wrapped line of the same
     paragraph. When every item starts a line, it is a list."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, y, x1=504):
         span = {"text": text, "size": 9.0, "font": "Times-Roman", "flags": 0}
@@ -639,7 +639,7 @@ def test_a_centered_name_list_wrapping_at_commas_stays_one_unit():
     """A centered author list wraps at commas and PyMuPDF splits it into several blocks. A next line starting with a
     capital still continues it; a name left alone on a line would be transliterated."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_continuations
+    from app.formats.pdf_paragraphs import _merge_continuations
 
     def row(text, x0, y0, x1):
         rect = pymupdf.Rect(x0, y0, x1, y0 + 10)
@@ -667,7 +667,7 @@ def test_a_formula_wrapping_after_an_operator_keeps_its_tail():
     """A line ending at > is continued by 100) at the start of the next line, the second half of an expression, not
     a number or a symbol line. A display formula whose numerator starts right of the equals sign is still split;
     numbers after ===Instructions=== are still a list."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, x0, y, x1=504):
         span = {"text": text, "size": 10.0, "font": "Times-Roman", "flags": 0}
@@ -689,7 +689,7 @@ def test_a_formula_wrapping_after_an_operator_keeps_its_tail():
 def test_a_justified_row_with_an_italic_variable_stays_one_row():
     """PyMuPDF splits a justified line by words, one piece holding the italic variable AVG(E). It is still one line and
     the paragraph is not split in the middle."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def piece(x0, x1, y, *spans):
         text = "".join(t for t, _ in spans)
@@ -716,7 +716,7 @@ def test_a_justified_row_with_an_italic_variable_stays_one_row():
 def test_a_line_opening_with_a_closing_bracket_continues_the_row():
     """A monospace [ split off at the line end, with the next line continuing with ]). This is not a symbol line
     followed by a new paragraph."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def piece(x0, x1, y, *spans):
         text = "".join(t for t, _ in spans)
@@ -756,7 +756,7 @@ def test_a_figure_row_pressed_onto_the_caption_is_its_own_row():
     """An operation line in a figure overlaps the first caption line, with ink boxes overlapping by more than half,
     the same size and baselines 4pt apart: two separate lines, not merged with the caption. The small numerator and
     denominator of an inline fraction are on other baselines, and that line is still one line."""
-    from app.formats.pdf_extract import _left_to_right, _split_lines
+    from app.formats.pdf_rows import _left_to_right, _split_lines
 
     def item(text, x0, y0, x1, y1, base, font="NimbusRomNo9L-Regu", size=9.0):
         span = {"text": text, "size": size, "font": font, "flags": 0, "origin": (x0, base)}
@@ -801,7 +801,7 @@ def test_a_figure_row_pressed_onto_the_caption_is_its_own_row():
     assert _split_lines(_left_to_right(row)) == [[0, 1]]
     # The two lines went into two blocks, which are not merged as one line either
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_visual_lines
+    from app.formats.pdf_paragraphs import _merge_visual_lines
 
     def blk(entry):
         text, rect, spans = entry
@@ -936,7 +936,7 @@ def test_an_underline_is_written_as_a_mark_and_drawn_under_the_words():
 def test_a_value_column_beside_a_word_label_is_its_own_paragraph():
     """Labels and values in two columns: the next line of a value starts at the value's left edge. The value becomes
     its own paragraph and the label is translated alone; a hanging indent after an item number is still one item."""
-    from app.formats.pdf_extract import _split_lines
+    from app.formats.pdf_rows import _split_lines
 
     def item(text, x0, y0, x1):
         span = {"text": text, "size": 9.0, "font": "Times-Roman", "flags": 0}
@@ -964,7 +964,7 @@ def test_a_word_label_does_not_absorb_the_value_column_block_beside_it():
     """When label and value are in two blocks, the value is a column of several lines and is not merged into the
     label; the rest of a sentence after a caption label is still merged."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_extract import _merge_caption_fragments
+    from app.formats.pdf_paragraphs import _merge_caption_fragments
 
     def blk(text, rects):
         rect = pymupdf.Rect(rects[0])

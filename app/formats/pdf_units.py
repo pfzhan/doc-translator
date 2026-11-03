@@ -27,22 +27,7 @@ from .pdf_blocks import (
     _span_is_math,
     _visual_lines,
 )
-from .pdf_extract import (
-    _INDEX_REF_RE,
-    _ITALIC_FONT_RE,
-    _OPERATOR_NAMES,
-    _RELATION_RE,
-    MONO_FONT_RE,
-    _block_slice,
-    _block_spans,
-    _clip_key,
-    _extract,
-    _is_formula_char,
-    _mono_span,
-    _small_band,
-    _text_box,
-    _vivid,
-)
+from .pdf_extract import _extract
 from .pdf_flow import (
     Emphasis,
     span_emphasis,
@@ -58,7 +43,18 @@ from .pdf_layout import (
 )
 from .pdf_math import _glyph_box, _plain_units, _prose_units
 from .pdf_merge import _all_styled, _cross_page_units, _region_joins, _seam_apart
+from .pdf_paragraphs import _OPERATOR_NAMES, _block_slice, _block_spans, _clip_key, _is_formula_char
 from .pdf_roles import LayoutItem, Role
+from .pdf_rows import (
+    _INDEX_REF_RE,
+    _ITALIC_FONT_RE,
+    _RELATION_RE,
+    MONO_FONT_RE,
+    _mono_span,
+    _small_band,
+    _text_box,
+    _vivid,
+)
 from .pdf_runs import (
     BOUNDARY,
     FormulaRun,

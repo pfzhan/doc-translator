@@ -10,10 +10,11 @@
    footers and page numbers keep the original text.
 4. Bilingual version: the original page and the translated page sit side by side on one page.
 
-The stages live in separate modules: pdf_extract reads pages into blocks, pdf_merge joins paragraphs
-across pages and columns, pdf_skip picks the blocks to keep, pdf_units builds the translation units,
-pdf_restore puts the translations back together, pdf_crop cuts out formula images, pdf_write and pdf_place
-write the translations, and pdf_output assembles the output files. This module runs them in order.
+The stages live in separate modules: pdf_extract reads pages into blocks (with pdf_rows splitting lines and
+pdf_paragraphs joining them), pdf_merge joins paragraphs across pages and columns, pdf_skip picks the blocks to
+keep, pdf_units builds the translation units, pdf_restore puts the translations back together, pdf_crop cuts out
+formula images, pdf_write and pdf_place write the translations, and pdf_output assembles the output files. This
+module runs them in order.
 """
 
 import asyncio
