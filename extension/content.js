@@ -132,7 +132,7 @@
   }
 
   const shadowRoots = new Set(); // shadow roots entered: watched for changes like body
-  const bareHosts = new Set(); // custom elements without a shadow root yet; checked again on each rescan
+  const bareHosts = new Set(); // custom elements not defined yet when scanned; checked for a shadow root once they are
   const ownStyles = new WeakMap(); // shadow root -> its copy of content.css
   const styleEls = new WeakSet(); // those copies: their mutation records are ours
   let css = null; // promise of the text of content.css
@@ -251,7 +251,7 @@
       const shadow = shadowOf(el);
       if (shadow) {
         if (kind === 'block') shadows.push(shadow);
-      } else if (el.localName.includes('-') && !OWN_HOSTS.has(el.localName)) bareHosts.add(el);
+      } else if (el.matches(':not(:defined)') && !OWN_HOSTS.has(el.localName)) bareHosts.add(el);
     };
     let run = [];
     let breaks = 0; // <br> in a row since the last text
@@ -786,11 +786,12 @@
     rescanTimer = 0;
     if (document.body && observedBody !== document.body) watchBody();
     const orphans = prune();
-    // Custom elements that got their shadow root after they were scanned (defined late). The paragraph they were read
-    // in is read again: the host may now end it, or be copied whole into its translation
+    // Custom elements defined since they were scanned. The paragraph one with a shadow root was read in is read
+    // again: the host may now end it, or be copied whole into its translation
     for (const host of bareHosts) {
-      if (!shadowOf(host)) continue;
+      if (!host.matches(':defined')) continue;
       bareHosts.delete(host);
+      if (!shadowOf(host)) continue;
       let node = host;
       while (node && !unitOf.has(node)) node = node.parentNode;
       if (node) unitOf.get(node).redo = true;
