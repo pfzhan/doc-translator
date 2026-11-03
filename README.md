@@ -96,7 +96,9 @@ HTTP on a LAN address only the message in the page is shown.
   `max_jobs` in `data/settings.json`. Further jobs show 排队中 (Queued) with their place in the queue and start in
   the order they were submitted when a job finishes, fails, is paused or is deleted. 优先翻译 (Translate next)
   moves a queued job to the front, so it takes the next free place; jobs already translating go on. A paused job
-  leaves the queue and joins its end when continued.
+  leaves the queue and joins its end when continued. A queued job takes the translation service's configuration
+  when it starts, so a model or key changed while it waits applies; a job whose service was deleted fails when its
+  turn comes, and the queue goes on.
 - A running job can be paused (暂停, in the list and in the reader's top bar). A PDF paused while its layout is
   analyzed or its translation written stops after the current page. With several jobs running, 全部暂停 (Pause
   all) appears above the list. A paused job is resumed with 继续翻译 (Continue) or 全部继续 (Continue all), or

@@ -599,6 +599,25 @@ def test_jobs_beyond_the_limit_wait_in_order_and_can_go_first(app_env, slow_mock
         assert {wait_done(client, i)["status"] for i in (b, c)} == {"done"}
 
 
+def test_queued_jobs_start_with_the_services_configuration_then(app_env, slow_mock):
+    main = app_env
+    state.store.get("mock")["model"] = "m-old"
+    with TestClient(main.app) as client:
+        client.put("/api/settings", json={"max_jobs": 1})
+        a, b, c = (submit(client, name=f"s{i}.md", data=LONG_MD + str(i).encode())["id"] for i in range(3))
+        wait_until(client, a, lambda j: j["status"] == "running")
+        # The model changes while b waits: b starts with the new one
+        state.store.get("mock")["model"] = "m-new"
+        assert wait_done(client, a)["model"] == "m-old"
+        wait_until(client, b, lambda j: j["status"] == "running")
+        assert client.get(f"/api/jobs/{b}").json()["model"] == "m-new"
+        # The service is deleted while c waits: c fails when its turn comes, and the queue goes on
+        state.store.services[:] = [s for s in state.store.services if s["id"] != "mock"]
+        assert wait_done(client, b)["status"] == "done"
+        failed = wait_done(client, c)
+        assert failed["status"] == "error" and "服务已不存在" in failed["error"]
+
+
 def test_max_jobs_setting_is_checked(app_env):
     with TestClient(app_env.app) as client:
         assert client.get("/api/settings").json()["max_jobs"] == 2

@@ -67,9 +67,10 @@ async def create_job(
         raise HTTPException(400, "翻译服务不存在")
     # Check the configuration first, so an unusable service is not discovered only after the upload
     try:
-        await create_translator(service, target_lang, source_lang).aclose()
+        checked = create_translator(service, target_lang, source_lang)
     except TranslatorError as e:
         raise HTTPException(400, str(e)) from e
+    await checked.aclose()
 
     glossary_ids = [gid for gid in dict.fromkeys(glossary_ids) if state.glossaries.get(gid)]
     job = Job(
@@ -80,6 +81,8 @@ async def create_job(
         mode="translated" if mode == "translated" else "bilingual",
         service_id=service["id"],
         service_name=service.get("name", ""),
+        # Shown while the job waits; set again when it starts, from the service's configuration then
+        model=getattr(checked, "model", ""),
         glossary_ids=glossary_ids,
         glossary_text=state.glossaries.entries_text(glossary_ids),
         preview=ext in PREVIEW_FORMATS,
@@ -105,7 +108,7 @@ async def create_job(
     job.size, job.document = size, digest.hexdigest()
     await asyncio.to_thread(state.jobs.share_source, job)
     state.jobs.add(job)
-    _start(job, _make_translator(job, service))
+    _start(job)
     return job.to_dict()
 
 

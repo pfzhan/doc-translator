@@ -324,4 +324,5 @@ def test_job_keeps_the_glossary_entries_its_translations_were_made_with(app_env,
         assert state.jobs.get(job["id"]).glossary_text == "view = 视界"
         state.glossaries.delete(gid)
         assert client.get(f"/api/jobs/{job['id']}/cache").status_code == 200
-        assert used[3:] == ["view = 视界", "view = 视界"]
+        # Continuing checks the configuration, the job creates its engine when it starts, then the cache is read
+        assert used[3:] == ["view = 视界", "view = 视界", "view = 视界"]

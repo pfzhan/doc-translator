@@ -43,6 +43,24 @@ async def _cleanup() -> None:
     await asyncio.to_thread(state.jobs.share_sources)
 
 
+async def _start_job(job: Job):
+    """Translate a job taken from the queue. The engine is created now from the service's current configuration, so
+    changes made while the job waited apply; a deleted service or an invalid configuration fails the job."""
+    service = state.store.get(job.service_id)
+    try:
+        if not service:
+            raise TranslatorError("原翻译服务已不存在，请选择其他服务")
+        translator = create_translator(_with_glossaries(service, job.glossary_text), job.target_lang, job.source_lang)
+    except TranslatorError as e:
+        job.status, job.error, job.finished = "error", str(e), time.time()
+        state.jobs.save(job)
+        state.running.pop(job.id, None)
+        _dispatch()
+        return
+    job.model = getattr(translator, "model", "")
+    await _run_job(job, translator, job.mode == "bilingual")
+
+
 async def _run_job(job: Job, translator, bilingual: bool):
     last_save = 0.0
 
@@ -126,47 +144,44 @@ def _make_translator(job: Job, service: dict, glossary_text: str | None = None):
         raise HTTPException(400, str(e)) from e
 
 
-def _start(job: Job, translator):
+def _start(job: Job):
     """Start (or resume) translation: the job joins the end of the queue and starts once fewer than max_jobs jobs
-    are translating. The engine is created from the service's current configuration each time, so resuming uses the
-    model now selected in the service."""
-    job.model = getattr(translator, "model", "")
-    state.waiting[job.id] = (job, translator)
+    are translating. The engine is created from the service's configuration when it starts (see _start_job), so
+    resuming uses the model now selected in the service."""
+    state.waiting[job.id] = job
     _dispatch()
 
 
 def _number_queue() -> None:
-    for position, (job, _) in enumerate(state.waiting.values(), 1):
+    for position, job in enumerate(state.waiting.values(), 1):
         job.queue_position = position
 
 
 def _dispatch() -> None:
     """Start the jobs at the front of the queue while fewer than max_jobs jobs are translating."""
     while state.waiting and len(state.running) < state.settings.max_jobs:
-        job, translator = state.waiting.pop(next(iter(state.waiting)))
+        job = state.waiting.pop(next(iter(state.waiting)))
         job.queue_position = 0
-        state.running[job.id] = asyncio.create_task(_run_job(job, translator, job.mode == "bilingual"))
+        state.running[job.id] = asyncio.create_task(_start_job(job))
     _number_queue()
 
 
 def _prioritize(job: Job) -> None:
     """Move a waiting job to the front of the queue: it starts at the next free place. Jobs already translating go
     on."""
-    entry = state.waiting.pop(job.id, None)
-    if entry is None:
+    if state.waiting.pop(job.id, None) is None:
         raise HTTPException(400, "该任务不在排队中")
-    state.waiting = {job.id: entry, **state.waiting}
+    state.waiting = {job.id: job, **state.waiting}
     _number_queue()
 
 
 async def _cancel(job_id: str):
     """Cancel a running translation job and return once it has actually stopped (finished writing its record). A
     job still in the queue only leaves it."""
-    entry = state.waiting.pop(job_id, None)
-    if entry is not None:
-        entry[0].queue_position = 0
+    waiting = state.waiting.pop(job_id, None)
+    if waiting is not None:
+        waiting.queue_position = 0
         _number_queue()
-        await entry[1].aclose()
         return
     task = state.running.pop(job_id, None)
     if task and not task.done():
@@ -205,17 +220,16 @@ async def _resume(job: Job, service_id: str | None = None, fresh: bool = False) 
         raise HTTPException(400, "原翻译服务已不存在，请选择其他服务")
     # Validate the configuration first and reset status and delete old translations only after it passes;
     # otherwise the translations would be lost when the configuration is invalid. The glossaries are read again, so
-    # edited entries take effect
+    # edited entries take effect. The engine made here only checks; the job creates its own when it starts
     glossary_text = state.glossaries.entries_text(job.glossary_ids)
-    translator = _make_translator(job, service, glossary_text)
+    checked = _make_translator(job, service, glossary_text)
+    await checked.aclose()
     if fresh:
-        try:
-            await _clear(job)
-        except BaseException:
-            await translator.aclose()
-            raise
+        await _clear(job)
         job.clear_results()
     job.service_id, job.service_name = service["id"], service.get("name", "")
+    # Shown while the job waits; set again when it starts, from the service's configuration then
+    job.model = getattr(checked, "model", "")
     job.glossary_text = glossary_text
     job.status, job.error, job.done, job.total, job.outputs, job.finished = "queued", "", 0, 0, [], 0.0
     # Recompute the preview flag: old records may have been created before the preview feature (stored as False)
@@ -223,7 +237,7 @@ async def _resume(job: Job, service_id: str | None = None, fresh: bool = False) 
     for old in state.jobs.out_dir(job.id).glob("*"):
         old.unlink()
     (state.jobs.dir(job.id) / "preview.json").unlink(missing_ok=True)
-    _start(job, translator)
+    _start(job)
     state.jobs.save(job)
     return job
 
