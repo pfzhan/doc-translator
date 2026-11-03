@@ -87,6 +87,11 @@ Records survive page reloads and server restarts.
 - The retention period is set at the top of the Records page: 7 days, 30 days (default), 90 days, 1 year,
   forever, or a custom number of days. It is stored as `retention_days` in `data/settings.json` (0 means
   forever). It is checked when the server starts and then every hour.
+- How many jobs translate at once is set at the top of the Records page (1 to 8, default 2) and stored as
+  `max_jobs` in `data/settings.json`. Further jobs show 排队中 (Queued) with their place in the queue and start in
+  the order they were submitted when a job finishes, fails, is paused or is deleted. 优先翻译 (Translate next)
+  moves a queued job to the front, so it takes the next free place; jobs already translating go on. A paused job
+  leaves the queue and joins its end when continued.
 - A running job can be paused (暂停, in the list and in the reader's top bar). A PDF paused while its layout is
   analyzed or its translation written stops after the current page. With several jobs running, 全部暂停 (Pause
   all) appears above the list. A paused job is resumed with 继续翻译 (Continue) or 全部继续 (Continue all), or

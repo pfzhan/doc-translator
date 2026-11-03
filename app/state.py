@@ -5,9 +5,10 @@ import asyncio
 
 from . import history, layout_model, quantize
 from .glossaries import GlossaryStore
-from .history import JobStore
+from .history import Job, JobStore
 from .services import ServiceStore
 from .settings import Settings
+from .translators import Translator
 
 store = ServiceStore()
 
@@ -19,6 +20,9 @@ jobs = JobStore(history.JOBS_DIR)
 
 # Running translation jobs; keeps them from being garbage collected and is used to cancel on pause or delete
 running: dict[str, asyncio.Task] = {}
+
+# Jobs waiting for a free place (settings.max_jobs), in the order they start, with the engine created for each
+waiting: dict[str, tuple[Job, Translator]] = {}
 
 # Requests generating the other version. Deletion and expiry cleanup wait until they finish writing; a second
 # request is rejected.

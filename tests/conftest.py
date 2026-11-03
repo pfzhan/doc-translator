@@ -44,6 +44,7 @@ def app_env(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "settings", Settings(tmp_path / "settings.json"))
     monkeypatch.setattr(layout_model, "MODELS_DIR", tmp_path / "models")
     monkeypatch.setattr(state, "running", {})
+    monkeypatch.setattr(state, "waiting", {})
     monkeypatch.setattr(state, "variant_tasks", {})
     monkeypatch.setattr(state, "cleaning", set())
     monkeypatch.setattr(state, "pause_requested", set())

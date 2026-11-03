@@ -23,6 +23,7 @@ from ..job_control import (
     _delete,
     _make_translator,
     _pause,
+    _prioritize,
     _resume,
     _service_translator,
     _start,
@@ -223,7 +224,8 @@ async def resume_all_jobs():
     """Resume all paused and interrupted jobs, each with its original translation service (the model currently
     selected in that service)."""
     resumed, failed = 0, []
-    for job in state.jobs.list():
+    # Oldest first, so they queue in the order they were submitted
+    for job in reversed(state.jobs.list()):
         if job.status not in ("paused", "interrupted"):
             continue
         try:
@@ -243,6 +245,14 @@ async def pause_job(job_id: str):
     # The record may be deleted concurrently during the pause; do not return a stale result
     if state.jobs.get(job_id) is None:
         raise HTTPException(404, "翻译记录不存在")
+    return job.to_dict()
+
+
+@router.post("/api/jobs/{job_id}/prioritize")
+async def prioritize_job(job_id: str):
+    """Move a queued job to the front of the queue."""
+    job = _job_or_404(job_id)
+    _prioritize(job)
     return job.to_dict()
 
 

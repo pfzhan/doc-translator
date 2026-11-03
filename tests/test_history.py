@@ -479,7 +479,7 @@ def test_settings_endpoint_triggers_cleanup(app_env):
         job = wait_done(client, submit(client)["id"])
         record = state.jobs.get(job["id"])
         record.finished = record.created = time.time() - 10 * DAY
-        assert client.put("/api/settings", json={"retention_days": 30}).json() == {"retention_days": 30}
+        assert client.put("/api/settings", json={"retention_days": 30}).json()["retention_days"] == 30
         assert client.get(f"/api/jobs/{job['id']}").status_code == 200
         client.put("/api/settings", json={"retention_days": 7})
         assert client.get(f"/api/jobs/{job['id']}").status_code == 404
@@ -572,6 +572,38 @@ def test_pause_all_and_resume_all(app_env, slow_mock):
         assert client.post("/api/jobs/resume-all").json() == {"resumed": 2, "failed": []}
         assert {wait_done(client, i)["status"] for i in ids} == {"done"}
         assert client.post("/api/jobs/resume-all").json() == {"resumed": 0, "failed": []}
+
+
+def test_jobs_beyond_the_limit_wait_in_order_and_can_go_first(app_env, slow_mock):
+    main = app_env
+    with TestClient(main.app) as client:
+        assert client.put("/api/settings", json={"max_jobs": 1}).json()["max_jobs"] == 1
+        a, b, c = (submit(client, name=f"q{i}.md", data=LONG_MD + str(i).encode())["id"] for i in range(3))
+        wait_until(client, a, lambda j: j["status"] == "running")
+        assert [client.get(f"/api/jobs/{i}").json()["queue_position"] for i in (b, c)] == [1, 2]
+        assert client.post(f"/api/jobs/{c}/prioritize").json()["queue_position"] == 1
+        assert client.get(f"/api/jobs/{b}").json()["queue_position"] == 2
+        assert client.post(f"/api/jobs/{a}/prioritize").status_code == 400
+        # The job moved to the front starts when the running one finishes
+        assert wait_done(client, a)["status"] == "done"
+        wait_until(client, c, lambda j: j["status"] == "running")
+        assert client.get(f"/api/jobs/{b}").json()["queue_position"] == 1
+
+        # A paused job leaves the queue; continuing puts it at the end
+        paused = client.post(f"/api/jobs/{b}/pause").json()
+        assert paused["status"] == "paused" and paused["queue_position"] == 0
+        assert client.post(f"/api/jobs/{b}/retry", json={}).json()["queue_position"] == 1
+        # A higher limit starts it at once
+        client.put("/api/settings", json={"max_jobs": 2})
+        wait_until(client, b, lambda j: j["status"] == "running")
+        assert {wait_done(client, i)["status"] for i in (b, c)} == {"done"}
+
+
+def test_max_jobs_setting_is_checked(app_env):
+    with TestClient(app_env.app) as client:
+        assert client.get("/api/settings").json()["max_jobs"] == 2
+        for bad in (0, 9, "2", True):
+            assert client.put("/api/settings", json={"max_jobs": bad}).status_code == 400
 
 
 def test_pause_queued_job(app_env):

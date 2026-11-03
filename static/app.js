@@ -3,7 +3,7 @@ const SETTINGS_KEY = "doc-translator-settings";
 
 const state = {
   providers: {}, services: [], glossaries: [], glossaryId: null, defaultId: "google", selectedId: null,
-  jobs: [], diskUsage: 0, retentionDays: 30, readerView: "both", view: "translate",
+  jobs: [], diskUsage: 0, retentionDays: 30, maxJobs: 2, readerView: "both", view: "translate",
   selected: new Set(),  // ids of records ticked on the records page, for batch deletion
   historyPage: 1,  // current page of the records page (from 1)
   pageSize: 20,  // records per page, adjustable on the page (one of PAGE_SIZES)
@@ -794,7 +794,7 @@ form.addEventListener("submit", async (e) => {
     showFile();
     upsertJob(job);
     // Stay on this page: the new job appears under "最近翻译" below, and "查看进度" opens it in the reader
-    toast("已开始翻译");
+    toast(startedText(job, "已开始翻译"));
   } catch (err) {
     showSubmitError(err.message);
   } finally {
@@ -1238,6 +1238,8 @@ function jobRow(job, selectable = false) {
   };
   const readable = job.preview && (job.status === "done" || job.done > 0);
   if (ACTIVE.has(job.status)) {
+    // The first in the queue is already next
+    if (job.queue_position > 1) actions.append(button("优先翻译", "btn sm", (b) => prioritizeJob(job.id, b)));
     if (job.preview) actions.append(button("查看进度", "btn sm", () => openReader(job.id)));
     actions.append(button("暂停", "btn sm", (b) => pauseJob(job.id, b)));
   } else if (job.status === "idle") {
@@ -1398,7 +1400,9 @@ function renderBulk(all) {
     }
   }
   const parts = [];
-  if (active) parts.push(`${active} 本正在翻译`);
+  const queued = all.filter((j) => j.queue_position).length;
+  if (active - queued) parts.push(`${active - queued} 本正在翻译`);
+  if (queued) parts.push(`${queued} 本排队`);
   if (resumable) parts.push(`${resumable} 本已暂停或中断`);
   $("history-bulk-text").textContent = parts.join("，");
 }
@@ -1414,6 +1418,23 @@ async function pauseJob(id, btn) {
     if (btn) btn.disabled = false;
     toast(`暂停失败：${err.message}`);
   }
+}
+
+async function prioritizeJob(id, btn) {
+  btn.disabled = true;
+  try {
+    upsertJob(await api(`/api/jobs/${id}/prioritize`, { method: "POST" }));
+    await refreshJobs();
+    toast("已移到队列最前，将在下一个空位开始翻译");
+  } catch (err) {
+    btn.disabled = false;
+    toast(`操作失败：${err.message}`);
+  }
+}
+
+// After submitting or continuing: a job beyond the limit of jobs translating at once waits in the queue
+function startedText(job, started) {
+  return job.queue_position ? `已加入队列，排在第 ${job.queue_position} 位` : started;
 }
 
 async function pauseAll(btn) {
@@ -1493,7 +1514,7 @@ async function retryJob(id, options = {}) {
   try {
     const job = await api(`/api/jobs/${id}/retry`, { method: "POST", json: options });
     upsertJob(job);
-    toast("已重新开始翻译");
+    toast(startedText(job, "已重新开始翻译"));
   } catch (err) {
     toast(`无法重新翻译：${err.message}`);
   }
@@ -1630,6 +1651,21 @@ async function sweepCache() {
 }
 
 $("sweep-cache").addEventListener("click", sweepCache);
+
+// Jobs translating at once; the others wait in the queue
+const MAX_JOBS = 8;
+for (let n = 1; n <= MAX_JOBS; n++) $("max-jobs").add(new Option(`${n} 本`, String(n)));
+$("max-jobs").addEventListener("change", async (e) => {
+  try {
+    const r = await api("/api/settings", { method: "PUT", json: { max_jobs: Number(e.target.value) } });
+    state.maxJobs = r.max_jobs;
+    toast(`已保存：同时翻译 ${r.max_jobs} 本，其余排队`);
+    refreshJobs();
+  } catch (err) {
+    toast(`保存失败：${err.message}`);
+  }
+  e.target.value = String(state.maxJobs);
+});
 
 // Retention period
 function renderRetention() {
@@ -1777,6 +1813,7 @@ function inStage(job) {
 }
 
 function stageText(job) {
+  if (job.queue_position) return `排在队列第 ${job.queue_position} 位`;
   const stage = job.stage;
   if (!stage || !stage.name) return "解析文档…";
   return stage.total ? `${stage.name} ${stage.done} / ${stage.total} ${stage.unit}` : `${stage.name}…`;
@@ -2114,8 +2151,17 @@ async function init() {
     /* ignore */
   }
   setReaderView(["both", "dst", "src"].includes(readerView) ? readerView : "both");
-  await Promise.all([loadServices(), loadGlossaries(), refreshJobs(), api("/api/settings").then((s) => (state.retentionDays = s.retention_days))]);
+  await Promise.all([
+    loadServices(),
+    loadGlossaries(),
+    refreshJobs(),
+    api("/api/settings").then((s) => {
+      state.retentionDays = s.retention_days;
+      state.maxJobs = s.max_jobs;
+    }),
+  ]);
   renderRetention();
+  $("max-jobs").value = String(state.maxJobs);
   renderJobs();
   checkLangPair();
   showView(view);

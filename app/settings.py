@@ -1,6 +1,7 @@
 """Application settings, saved in data/settings.json.
 
 - retention_days: how long translation records are kept; 0 keeps them forever.
+- max_jobs: how many jobs translate at once; the others wait in the queue in order.
 - layout_model: the PDF layout model, {"enabled": whether to use it, "path": model file, empty for the default
   location, "precision": int8 or fp32}. precision defaults to int8: the int8 file is used once generated (see
   quantize.py), fp32 otherwise.
@@ -21,6 +22,7 @@ from .quantize import PRECISIONS
 PATH = Path(__file__).resolve().parent.parent / "data" / "settings.json"
 DEFAULTS = {
     "retention_days": 30,
+    "max_jobs": 2,
     "layout_model": {"enabled": False, "path": "", "precision": PRECISIONS[0]},
     # workers and threads are how many pages the formula detection model infers at once and with how many threads
     # each; 0 decides by core count
@@ -34,6 +36,7 @@ DEFAULTS = {
     },
 }
 MAX_RETENTION_DAYS = 3650
+MAX_JOBS = 8
 # Upper limits for the pages inferred at once by the formula detection model and the threads per page
 MAX_FORMULA_WORKERS = 8
 MAX_FORMULA_THREADS = 64
@@ -64,6 +67,13 @@ class Settings:
             return DEFAULTS["retention_days"]
 
     @property
+    def max_jobs(self) -> int:
+        try:
+            return max(1, min(int(self.data.get("max_jobs", DEFAULTS["max_jobs"])), MAX_JOBS))
+        except (TypeError, ValueError):
+            return DEFAULTS["max_jobs"]
+
+    @property
     def layout_model(self) -> dict:
         return self.model("layout_model")
 
@@ -92,7 +102,7 @@ class Settings:
     def public(self) -> dict:
         # The two models have their own pages and endpoints (/api/layout-model, /api/formula-model) and are not
         # included here
-        return {"retention_days": self.retention_days}
+        return {"retention_days": self.retention_days, "max_jobs": self.max_jobs}
 
     def update(self, changes: dict) -> dict:
         if "retention_days" in changes:
@@ -104,6 +114,13 @@ class Settings:
                 raise SettingsError(f"保留天数须在 0 到 {MAX_RETENTION_DAYS} 之间（0 表示永久保留）")
             with self.lock:
                 self.data["retention_days"] = days
+                self._save()
+        if "max_jobs" in changes:
+            count = changes["max_jobs"]
+            if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_JOBS:
+                raise SettingsError(f"同时翻译的任务数须为 1 到 {MAX_JOBS} 的整数")
+            with self.lock:
+                self.data["max_jobs"] = count
                 self._save()
         for key, name in (("layout_model", "版面模型"), ("formula_model", "公式检测模型")):
             if key not in changes:

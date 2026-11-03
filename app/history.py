@@ -82,6 +82,8 @@ class Job:
 
     # Runtime fields that are not saved
     runner: object = field(default=None, repr=False, compare=False)
+    # Place in the queue while waiting to start, 1 for the next one; 0 otherwise
+    queue_position: int = field(default=0, repr=False, compare=False)
 
     def sync_info(self):
         """Copy the live detection results from the Runner to the record."""
@@ -118,6 +120,7 @@ class Job:
             "service_id": self.service_id,
             "service_name": self.service_name,
             "glossary_ids": self.glossary_ids,
+            "queue_position": self.queue_position,
             "model": self.model,
             "size": self.size,
             "detected_lang": self.detected_lang,
@@ -135,8 +138,8 @@ class Job:
         }
 
 
-# Fields saved to disk: all except the runtime runner
-_PERSISTED = [f for f in Job.__dataclass_fields__ if f != "runner"]
+# Fields saved to disk: all except the runtime ones
+_PERSISTED = [f for f in Job.__dataclass_fields__ if f not in ("runner", "queue_position")]
 
 
 # Layout analysis results of each book are stored under layout/<file digest>/
