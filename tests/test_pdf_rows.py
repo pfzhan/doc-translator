@@ -1683,7 +1683,7 @@ def test_a_roman_numbered_item_does_not_continue_the_paragraph_above():
     (iii) followed by a capital is not joined to it either; an (iii) in an enumeration inside a sentence is
     followed by lowercase, as is a lowercase word in parentheses, and is joined as usual."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_merge import _can_continue
+    from app.formats.pdf_page_continue import _can_continue
 
     def blk(text):
         return TextBlock(

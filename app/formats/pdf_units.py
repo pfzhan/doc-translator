@@ -52,7 +52,8 @@ from .pdf_formula_runs import (
 )
 from .pdf_layout import PageGeometry, margin_skips
 from .pdf_math import _glyph_box
-from .pdf_merge import _all_styled, _cross_page_units, _region_joins, _seam_apart
+from .pdf_merge import _cross_page_units, _region_joins, _seam_apart
+from .pdf_page_continue import _all_styled
 from .pdf_roles import LayoutItem, Role
 from .pdf_rows import (
     _INDEX_REF_RE,

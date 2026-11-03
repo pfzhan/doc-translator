@@ -937,7 +937,7 @@ def test_open_edged_table_gets_its_header_row_and_outer_columns():
 def test_table_cells_never_continue_into_each_other():
     """Columns of cells look like text columns, but the last cell of one column must not continue into the header of
     the next."""
-    from app.formats.pdf_merge import _can_continue
+    from app.formats.pdf_page_continue import _can_continue
 
     def cell(text, x0, y0, clip):
         rect = pymupdf.Rect(x0, y0, x0 + 80, y0 + 12)

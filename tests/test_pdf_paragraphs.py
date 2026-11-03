@@ -7,7 +7,7 @@ def test_a_proof_mark_after_the_full_stop_still_ends_the_paragraph():
     """The end-of-proof mark at the paragraph end comes out of the Symbol font as \x00, with the period before it. A
     paragraph starting with a capital on the next page is a new paragraph and is not joined."""
     from app.formats.pdf_blocks import TextBlock, _ends_sentence
-    from app.formats.pdf_merge import _can_continue
+    from app.formats.pdf_page_continue import _can_continue
 
     def blk(text, page):
         return TextBlock(
@@ -34,7 +34,7 @@ def test_a_column_break_inside_brackets_or_after_et_al_continues():
     items, phonetic transcriptions and citations start anew, and an all-italic subheading at the column bottom is
     not continued either."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_merge import _can_continue
+    from app.formats.pdf_page_continue import _can_continue
 
     def blk(text, page):
         return TextBlock(
@@ -126,7 +126,7 @@ def test_a_block_at_the_text_edge_starts_where_the_body_lines_start():
     the same column, so first-line indents have no effect, and centered continuation lines of captions do not
     count."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_merge import _at_text_edge
+    from app.formats.pdf_page_continue import _at_text_edge
 
     def blk(text, lefts, y, x1=493.0):
         lines = [pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 10) for i, x0 in enumerate(lefts)]
@@ -151,7 +151,7 @@ def test_a_block_at_the_text_edge_starts_where_the_body_lines_start():
 def test_a_number_heavy_results_paragraph_is_prose():
     """A results paragraph full of numbers has a low share of letters but is still body text and can be the column top
     that continues a sentence. Short lines such as axis tick numbers are not."""
-    from app.formats.pdf_merge import _is_code_line
+    from app.formats.pdf_columns import _is_code_line
 
     assert not _is_code_line(
         "and lower mean WER (0.009 vs. 0.013); paired differences are +0.017 [−0.043, 0.077] "
@@ -193,7 +193,7 @@ def test_table_cells_do_not_set_the_column_body_size():
     """A table at the column top has one block per cell at a size larger than the body; the body size still comes from
     the body blocks, so the body paragraph at the column bottom is not taken for a smaller footnote."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_merge import _column_body
+    from app.formats.pdf_columns import _column_body
 
     def blk(text, y, size, clip=None):
         return TextBlock(
@@ -219,7 +219,7 @@ def test_a_table_with_its_caption_above_is_skipped_at_the_column_top():
     continuing sentence is the first block below that fills the column width. A figure caption is set below the
     figure, so short lines below it (subject to after a formula) are body text."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_merge import _float_contents
+    from app.formats.pdf_columns import _float_contents
 
     def blk(text, y, x1, rows=1):
         lines = [pymupdf.Rect(318, y + 11 * i, x1, y + 11 * i + 9) for i in range(rows)]
@@ -250,7 +250,7 @@ def test_a_column_does_not_continue_under_a_heading_at_its_top():
     sentence of the left column is not continued there; when other text lies between the subheading and the column
     top (large text in a figure recognized as a heading), it is continued as usual."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_merge import _column_continuations
+    from app.formats.pdf_columns import _column_continuations
 
     def blk(text, x0, y, rows=3):
         return TextBlock(
@@ -292,9 +292,9 @@ def test_the_page_end_is_not_in_a_column_with_body_text_to_its_right(monkeypatch
     """When the right column was not detected and no block was assigned to a column, the last column is the left one:
     body text still runs on the right, so the bottom of the left column is not the page end and does not continue at
     the top of the next page."""
-    from app.formats import pdf_merge
+    from app.formats import pdf_columns
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_merge import _column_continuations
+    from app.formats.pdf_columns import _column_continuations
 
     def blk(text, x0, y, page=0):
         return TextBlock(
@@ -317,7 +317,7 @@ def test_the_page_end_is_not_in_a_column_with_body_text_to_its_right(monkeypatch
     ]
     head = blk("results under the conversational-history condition in the rest of the paper.", 54, 80, page=1)
     monkeypatch.setattr(
-        pdf_merge,
+        pdf_columns,
         "_assigned_columns",
         lambda blocks, anchors: (
             [[block for block in blocks if block.rect.x0 < 300]],
@@ -335,7 +335,7 @@ def test_a_flush_paragraph_under_a_table_continues_the_column_above():
     right below a short body-size line (PROMPT, a missed subheading) starts a new paragraph; in a document without
     first-line indents it is not joined"""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_merge import _column_continuations
+    from app.formats.pdf_columns import _column_continuations
 
     def blk(text, x0, y, rows=3, size=10.0, indent=0.0):
         lines = [
@@ -742,7 +742,7 @@ def test_a_numbered_example_under_a_full_line_stays_on_its_own():
     an example, a paragraph starting flush on the next page is not joined after it."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_continuations import _merge_continuations
-    from app.formats.pdf_merge import _can_continue
+    from app.formats.pdf_page_continue import _can_continue
 
     def blk(text, y, rows, page=0):
         lines = [pymupdf.Rect(x0, y + 12 * i, x1, y + 12 * i + 12.9) for i, (x0, x1) in enumerate(rows)]
