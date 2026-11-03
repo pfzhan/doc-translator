@@ -32,7 +32,7 @@ async function sendToTab(tab, message) {
       subframes.map((frameId) => chrome.tabs.sendMessage(tab.id, { type: 'dt-sync', ...state }, { frameId })),
     );
   } catch {
-    // chrome:// pages, the Web Store and the built-in PDF viewer cannot be injected
+    // chrome:// pages and the Web Store cannot be injected
     if (!state) await flashBadge(tab.id, '×');
   }
 }
@@ -43,8 +43,9 @@ async function inject(tabId, frameId) {
   await chrome.scripting.executeScript({ target, files: ['content.js'] });
 }
 
-function toggle(tab) {
-  return sendToTab(tab, { type: 'dt-toggle' });
+async function toggle(tab) {
+  if (await showsPdf(tab)) await translatePdf(tab);
+  else await sendToTab(tab, { type: 'dt-toggle' });
 }
 
 async function toggleMode(tab) {
@@ -61,6 +62,131 @@ chrome.commands.onCommand.addListener(async (command, tab) => {
   if (command === 'toggle-translate') await toggle(tab);
   else if (command === 'toggle-mode') await toggleMode(tab);
 });
+
+// ---------- PDFs ----------
+
+// A PDF open in the browser's viewer is translated as a document: the service worker downloads it, submits it to the
+// server as a translation job and opens the job's reader in a new tab. The button or shortcut gives it access to the
+// tab's site (activeTab), so the download carries the user's cookies.
+
+const MAX_PDF = 200 * 1024 * 1024; // the server's upload limit
+const SAVE_AND_UPLOAD = '请保存后在 Doc Translator 网页上传';
+const pdfBusy = new Set(); // addresses being downloaded or submitted: pressing again meanwhile does nothing
+
+/** Chrome's viewer page takes scripts and reports the PDF's type; Firefox's takes none, so the address decides. */
+async function showsPdf(tab) {
+  if (!tab?.id) return false;
+  try {
+    const [frame] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => document.contentType,
+    });
+    return frame?.result === 'application/pdf';
+  } catch {
+    return /^https?:/.test(tab.url || '') && /\.pdf$/i.test(new URL(tab.url).pathname);
+  }
+}
+
+async function translatePdf(tab) {
+  const url = tab.url;
+  if (pdfBusy.has(url)) return;
+  pdfBusy.add(url);
+  await chrome.action.setBadgeText({ tabId: tab.id, text: '…' });
+  let error = '';
+  try {
+    const s = await loadSettings();
+    // The same file with the same settings opens the job submitted before, while the server still has it
+    const key = `pdf ${JSON.stringify([s.server, url, s.targetLang, s.sourceLang, s.serviceId, s.mode])}`;
+    const { [key]: known } = await chrome.storage.session.get(key);
+    const kept = known && (await fetch(`${s.server}/api/jobs/${known}`).catch(() => null))?.ok;
+    const id = kept ? known : await submitPdf(s, await downloadPdf(url));
+    await chrome.storage.session.set({ [key]: id });
+    await chrome.tabs.create({ url: `${s.server}/#read/${id}`, index: tab.index + 1, openerTabId: tab.id });
+  } catch (e) {
+    error = e.message;
+  } finally {
+    pdfBusy.delete(url);
+  }
+  await chrome.action.setBadgeText({ tabId: tab.id, text: '' });
+  if (error) {
+    await notice(tab.id, error);
+    await flashBadge(tab.id, '×');
+  }
+}
+
+async function downloadPdf(url) {
+  // A PDF from the user's disk, or one made by the page (blob:, the answer to a form), cannot be fetched again here
+  if (!/^https?:/.test(url)) throw new Error(`这个 PDF 无法直接提交，${SAVE_AND_UPLOAD}`);
+  let resp;
+  try {
+    resp = await fetch(url, { credentials: 'include' });
+  } catch {
+    throw new Error(`PDF 下载失败，${SAVE_AND_UPLOAD}`);
+  }
+  if (!resp.ok) throw new Error(`PDF 下载失败（HTTP ${resp.status}），${SAVE_AND_UPLOAD}`);
+  const tooLarge = '文件太大（上限 200MB）';
+  if (Number(resp.headers.get('content-length')) > MAX_PDF) throw new Error(tooLarge);
+  const blob = await resp.blob();
+  if (blob.size > MAX_PDF) throw new Error(tooLarge);
+  // A site that wants a login answers the second request with a page instead. The header may follow some junk
+  const head = new TextDecoder('latin1').decode(await blob.slice(0, 1024).arrayBuffer());
+  if (!head.includes('%PDF-')) throw new Error(`下载到的不是 PDF，网站可能要求登录，${SAVE_AND_UPLOAD}`);
+  return { blob, name: pdfName(url, resp.headers.get('content-disposition')) };
+}
+
+/** The file name the site gives, else the last part of the address. The server takes files by their suffix, and
+ * addresses such as /pdf/2401.01234 have none. */
+function pdfName(url, disposition) {
+  const given = disposition?.match(/filename\*=(?:UTF-8'')?"?([^";]+)/i) || disposition?.match(/filename="?([^";]+)/i);
+  let name = given ? given[1] : new URL(url).pathname.split('/').pop();
+  try {
+    name = decodeURIComponent(name);
+  } catch {
+    // not percent-encoded
+  }
+  name = name.trim() || 'document';
+  return /\.pdf$/i.test(name) ? name : `${name}.pdf`;
+}
+
+async function submitPdf(s, { blob, name }) {
+  const form = new FormData();
+  form.append('file', blob, name);
+  form.append('target_lang', s.targetLang);
+  form.append('source_lang', s.sourceLang);
+  form.append('service_id', s.serviceId);
+  form.append('mode', s.mode);
+  let resp;
+  try {
+    resp = await fetch(`${s.server}/api/jobs`, { method: 'POST', body: form });
+  } catch {
+    throw new Error(unreachable(s.server));
+  }
+  const body = await resp.json().catch(() => null);
+  if (!resp.ok) throw new Error(errorText(body, resp.status));
+  if (typeof body?.id !== 'string') {
+    throw new Error(`${s.server} 的回应不是 Doc Translator 的翻译任务，请检查扩展设置里的服务地址`);
+  }
+  return body.id;
+}
+
+/** A message at the corner of the tab. Firefox's viewer takes no scripts: there only the badge shows. */
+async function notice(tabId, text) {
+  await chrome.scripting.executeScript({ target: { tabId }, func: showNotice, args: [text] }).catch(() => {});
+}
+
+/** Runs in the page; looks like the status box of content.js. */
+function showNotice(text) {
+  const host = document.createElement('dt-toast');
+  const shadow = host.attachShadow({ mode: 'closed' });
+  shadow.innerHTML = `<style>
+    div { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; max-width: 360px;
+      padding: 8px 12px; border-radius: 8px; background: rgba(32, 33, 36, .92); color: #fff;
+      font: 13px/1.5 system-ui, sans-serif; box-shadow: 0 2px 8px rgba(0, 0, 0, .3); }
+  </style><div role="status"></div>`;
+  shadow.querySelector('div').textContent = text;
+  document.documentElement.append(host);
+  setTimeout(() => host.remove(), 6000);
+}
 
 // ---------- Selected text ----------
 
@@ -118,6 +244,9 @@ function errorText(body, status) {
   return `HTTP ${status}`;
 }
 
+// Also the error when access to a server on another machine was not granted (see options.js)
+const unreachable = (server) => `连不上翻译服务（${server}），请先启动 Doc Translator，或在扩展的设置页重新连接`;
+
 // A request the server has not answered by then has failed; LLM services take tens of seconds for a full batch
 const REQUEST_TIMEOUT = 120000;
 
@@ -141,8 +270,7 @@ async function translate(texts, title, html = []) {
     });
   } catch (e) {
     if (e.name === 'TimeoutError') return { error: `翻译服务 ${REQUEST_TIMEOUT / 1000} 秒内没有回应` };
-    // Also the error when access to a server on another machine was not granted (see options.js)
-    return { error: `连不上翻译服务（${s.server}），请先启动 Doc Translator，或在扩展的设置页重新连接` };
+    return { error: unreachable(s.server) };
   }
   const body = await resp.json().catch(() => null);
   if (!resp.ok) return { error: errorText(body, resp.status) };

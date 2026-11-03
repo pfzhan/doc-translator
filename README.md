@@ -290,8 +290,25 @@ and each paragraph's translation appears below it. The server must be running.
   most are never seen. In bilingual mode an attribute shows both texts (`original / translation`, tooltips on two
   lines); hiding the translations restores it, and a value the page set since is left alone. `alt` and
   `aria-label` are not translated: they are not shown on the page.
-- Not supported yet: shadow DOM. Chrome's own pages, the Web Store and the built-in PDF viewer cannot be translated;
-  the toolbar button shows `×` there.
+- Not supported yet: shadow DOM. Chrome's own pages and the Web Store cannot be translated; the toolbar button shows
+  `×` there.
+
+### PDFs open in the browser
+
+Pressing the shortcut or clicking the extension's button in the browser's own PDF viewer submits that PDF to this
+server as a translation job, as an upload on the web page would, and opens its reader in a new tab. The button shows
+`…` meanwhile. The target and source languages, the translation service and the display come from the extension's
+options page.
+
+- The extension downloads the PDF again from its address, with the browser's login on that site; it gets access to
+  the site only when the button is pressed (`activeTab`).
+- An address is submitted once per set of options: pressing again opens the earlier job. After its record is
+  deleted on the server, or after the browser restarts, pressing again submits it anew.
+- These cannot be submitted, and a notice at the bottom right of the page says to save the file and upload it on
+  the web page: local files (`file://`), PDFs the page made (`blob:` addresses, answers to a form), downloads that
+  turn out not to be a PDF (the site wants a login, the link expired), and files over 200 MB.
+- Firefox's viewer cannot show the notice, so there only the button shows `×` on failure; a PDF whose address does
+  not end in `.pdf` is not recognized in Firefox.
 
 ### Translating selected text
 
