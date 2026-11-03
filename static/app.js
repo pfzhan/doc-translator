@@ -796,8 +796,9 @@ form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const files = [...fileInput.files];
   if (!files.length) return;
-  // Asked here, on a click, as browsers require; the answer is remembered by the browser
-  if (canNotify() && Notification.permission === "default") Notification.requestPermission().catch(() => {});
+  // Asked here, on a click, as browsers require; the answer is remembered by the browser. Safari before 15 takes a
+  // callback and returns nothing
+  if (canNotify() && Notification.permission === "default") Notification.requestPermission()?.catch(() => {});
   saveSettings();
   showSubmitError("");
   const btn = $("submit");
