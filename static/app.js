@@ -1501,8 +1501,10 @@ async function resumeAll(btn) {
 
 // Finishing jobs are announced: a toast while the page is in view, a system notification while it is in the
 // background (when the browser allows it; permission is asked on the first submit). Only changes seen by this page
-// count, so records finished before it was opened are not announced
-const lastStatus = new Map();
+// count, so records finished before it was opened are not announced. The list and the reader poll separately and
+// their answers can arrive out of order, so each run is announced once, by its finish time
+const seenActive = new Set();
+const announced = new Map();
 
 function canNotify() {
   return "Notification" in window && window.isSecureContext;
@@ -1511,8 +1513,16 @@ function canNotify() {
 function finishedAmong(jobs) {
   const out = [];
   for (const job of jobs) {
-    if (ACTIVE.has(lastStatus.get(job.id)) && (job.status === "done" || job.status === "error")) out.push(job);
-    lastStatus.set(job.id, job.status);
+    if (ACTIVE.has(job.status)) {
+      seenActive.add(job.id);
+      continue;
+    }
+    const ended = job.status === "done" || job.status === "error";
+    if (ended && seenActive.has(job.id) && announced.get(job.id) !== job.finished) {
+      announced.set(job.id, job.finished);
+      out.push(job);
+    }
+    seenActive.delete(job.id);
   }
   return out;
 }
