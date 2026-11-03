@@ -833,10 +833,11 @@ function isEbookJob(job) {
   return /\.(epub|mobi|azw3?|azw)$/i.test(job?.filename || "");
 }
 
-// For display in the reader: strip inline tags from ebooks, and formula placeholders ({vN}), script sentinels and
-// formula image sentinels from PDFs
+// For display in the reader: strip inline tags from ebooks and web pages, tags and content placeholders ({vN}) from
+// Word documents, and formula placeholders, script sentinels and formula image sentinels from PDFs
 function previewText(job, s) {
-  if (isEbookJob(job)) return htmlToText(s);
+  if (isEbookJob(job) || /\.(html?|xhtml)$/i.test(job?.filename || "")) return htmlToText(s);
+  if (/\.docx$/i.test(job?.filename || "")) return htmlToText(s).replace(/\s*\{\s*v\s*\d+\s*\}\s*/g, " ").trim();
   if (/\.pdf$/i.test(job?.filename || "")) {
     // and the bold, italic and size markers of the text sent for translation, and the page break marker {|}
     return s.replace(/\s*\{\|\}\s*/g, " ").replace(/\{\/?[bi]\}|\{z\d+\}|\{\/z\}/g, "").replace(/\{\s*v\s*\d+\s*\}/g, "").replace(/\x01i\x02\d+\x01\/i\x02/g, "").replace(/\x01\/?[sb]\x02/g, "");

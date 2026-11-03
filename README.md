@@ -2,8 +2,8 @@
 
 English | [简体中文](README.zh-CN.md)
 
-A web application that translates documents in EPUB, MOBI / AZW3, PDF and Markdown, producing either a bilingual
-version or a translation only. The interface is in Chinese; this README gives each interface label in Chinese
+A web application that translates documents in EPUB, MOBI / AZW3, PDF, Word (.docx), HTML, Markdown and subtitles
+(SRT, VTT, ASS), producing either a bilingual version or a translation only. The interface is in Chinese; this README gives each interface label in Chinese
 followed by an English gloss.
 
 ## Getting started
@@ -125,7 +125,7 @@ Records survive page reloads and server restarts.
 
 ### Reader (preview while translating)
 
-After a Markdown, EPUB, MOBI / AZW3 or PDF job is submitted, the page stays on the translate page and the job
+After a job is submitted, the page stays on the translate page and the job
 appears under 最近翻译 (Recent translations). 查看进度 (View progress) or 阅读 (Read) opens the full-screen
 reader, which shows each paragraph as soon as it is translated. A PDF needs its layout analyzed before
 translation and every page written after it, each taking from a minute or two to several minutes for a whole
@@ -337,6 +337,9 @@ for s in 16 32 48 128; do rsvg-convert -w $s -h $s extension/icons/icon.svg -o e
 | EPUB | Find the body files through the OPF spine and translate the innermost block elements, including the table of contents (nav / ncx); inline formatting within paragraphs (bold, italic, links, page anchors) is kept, and other resources are packed back unchanged | `.epub` |
 | MOBI / AZW3 | Unpacked first. KF8 files yield their EPUB directly; old MOBI7 files are converted to XHTML and assembled into an EPUB. Then translated as EPUB | `.epub`, plus a copy in the original format when Calibre is installed |
 | PDF | Extract text blocks, erase the original text and write the translation in its place; images, vector graphics and bookmarks are kept. See the PDF section below | Translation only: the original layout; bilingual: original and translation side by side |
+| Word (.docx) | Translate the paragraphs of the body, tables, text boxes, headers, footers, footnotes and endnotes. Runs whose formatting differs from the rest of the paragraph (bold, italic, links) are sent as tags, so the formatting follows the translated words; images, tabs, breaks, footnote references and fields stay in place. Styles, numbering and the rest of the package are copied unchanged. A bibliography section keeps the original | `.docx`; bilingual: each paragraph followed by its translation, without list numbering |
+| HTML (.html, .htm, .xhtml) | Translated like an EPUB chapter: innermost block elements, keeping inline formatting and links; scripts, styles and code blocks are left alone, and the page title is translated too. Read in the encoding the page declares | Same format, in UTF-8; bilingual: each translated block followed by its translation |
+| Subtitles (.srt, .vtt, .ass, .ssa) | One paragraph per cue, its lines joined; a cue whose lines all start with a dash (two speakers) is translated line by line. Timings, cue numbers, cue settings, VTT headers and notes, ASS styles, override tags at the start of a line and vector drawings are kept; tags inside the text (VTT classes, ASS overrides mid-line) are dropped from the translation. Legacy encodings such as GBK, Big5 and Windows-1252 are detected | Same format, in UTF-8 with the original line endings; bilingual: original lines with the translation below |
 
 ### PDF
 
@@ -527,7 +530,8 @@ app/
   glossaries.py    the glossary library (data/glossaries.json)
   layout_model.py  status, download and test of the layout and formula detection models
   quantize.py      generating int8 versions of both models
-  formats/         parsing and writing back each format
+  formats/         parsing and writing back each format (docx.py, html_page.py and subtitles.py for Word, HTML
+                   and subtitles)
 static/            frontend pages
 extension/         Chrome extension for web page translation
 scripts/           build_firefox.py: writes the Firefox version of the extension to dist/firefox/
@@ -541,6 +545,9 @@ eval/              evaluation scripts for PDF segmentation, inline formulas and 
 - Scanned PDFs that need OCR are not supported yet. Tables without rules and without aligned column edges are not
   recognized, and their text is translated. When gutters are unclear, the reading order may not follow the
   columns. A line break followed by an English capital letter still starts a new paragraph.
+- In Word documents, text in inline content controls, comments, charts and SmartArt is not translated. A subtitle
+  sentence split over several cues is translated cue by cue. A translated HTML page refers to its images and styles
+  by the same relative paths, so it shows them only when saved next to the original's files.
 - The server has no authentication and is meant for local use only (bound to 127.0.0.1 by default). Web pages
   open in the same browser can still send requests to it, so requests that change something (POST, PUT, PATCH,
   DELETE) are accepted only from the server's own pages, browser extensions, and tools that send no `Origin`

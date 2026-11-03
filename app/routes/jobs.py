@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from .. import cleanup, state
-from ..formats import PREVIEW_FORMATS, SUPPORTED, output_variant, translate_file
+from ..formats import PREVIEW_FORMATS, SUPPORTED, html_page, output_variant, translate_file
 from ..formats.epub import book_outline
 from ..history import Job
 from ..job_control import (
@@ -386,7 +386,14 @@ def download(job_id: str, name: str, inline: bool = False):
     if name in job.outputs:
         path = state.jobs.out_dir(job.id) / name
         if path.exists():
-            return FileResponse(path, filename=name, content_disposition_type="inline" if inline else "attachment")
+            # A translated web page opened with inline=1 would run its scripts under this site's origin
+            headers = _BOOK_PAGE_HEADERS if path.suffix.lower() in html_page.SUFFIXES else None
+            return FileResponse(
+                path,
+                filename=name,
+                content_disposition_type="inline" if inline else "attachment",
+                headers=headers,
+            )
     raise HTTPException(404, "文件不存在")
 
 

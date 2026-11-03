@@ -1,15 +1,30 @@
 import hashlib
 from pathlib import Path
 
+from . import docx, html_page, subtitles
+from .docx import translate_docx
 from .epub import translate_epub
+from .html_page import translate_html
 from .markdown import translate_markdown
 from .mobi import translate_mobi
 from .pdf import translate_pdf
 from .pdf_vision import FormulaModel
+from .subtitles import translate_subtitles
 
-SUPPORTED = {".md", ".markdown", ".epub", ".mobi", ".azw3", ".azw", ".pdf"}
+SUPPORTED = {
+    ".md",
+    ".markdown",
+    ".epub",
+    ".mobi",
+    ".azw3",
+    ".azw",
+    ".pdf",
+    *docx.SUFFIXES,
+    *html_page.SUFFIXES,
+    *subtitles.SUFFIXES,
+}
 # Formats that support preview while translation is running
-PREVIEW_FORMATS = {".md", ".markdown", ".epub", ".mobi", ".azw3", ".azw", ".pdf"}
+PREVIEW_FORMATS = set(SUPPORTED)
 # Output file names are {name}.{bilingual|translated}.{extension}. The marker must sit right before the
 # extension, and a substring match is not enough: uploading book.bilingual.md again gives
 # book.bilingual.translated.md.
@@ -51,6 +66,12 @@ async def translate_file(
         return await translate_epub(src, out_dir, runner, bilingual, target_lang)
     if ext in (".mobi", ".azw3", ".azw"):
         return await translate_mobi(src, out_dir, runner, bilingual, target_lang)
+    if ext in docx.SUFFIXES:
+        return await translate_docx(src, out_dir, runner, bilingual)
+    if ext in html_page.SUFFIXES:
+        return await translate_html(src, out_dir, runner, bilingual, target_lang)
+    if ext in subtitles.SUFFIXES:
+        return await translate_subtitles(src, out_dir, runner, bilingual)
     if ext == ".pdf":
         return await translate_pdf(src, out_dir, runner, bilingual, target_lang, layout_model, plan_path, formula_model)
     raise ValueError(f"不支持的格式: {ext}")
