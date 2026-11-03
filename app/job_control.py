@@ -186,12 +186,15 @@ async def _cancel(job_id: str):
         waiting.queue_position = 0
         _number_queue()
         return
-    task = state.running.pop(job_id, None)
+    task = state.running.get(job_id)
     if task and not task.done():
         task.cancel()
         # Swallow only the cancellation and exceptions of the awaited task; cancellation of the current coroutine
         # itself still propagates
         await asyncio.gather(task, return_exceptions=True)
+    # The job keeps its place until it has stopped (a PDF finishes its current page first), so the queue does not
+    # start another job meanwhile. A task cancelled before it started never freed its place itself
+    state.running.pop(job_id, None)
 
 
 async def _pause(job: Job) -> bool:

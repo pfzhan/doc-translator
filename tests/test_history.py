@@ -660,6 +660,35 @@ def test_pause_queued_job(app_env):
     assert JobStore(state.jobs.root).get("q1").status == "paused"
 
 
+def test_a_job_being_paused_keeps_its_place_until_it_stops(app_env):
+    import asyncio
+
+    async def scenario():
+        async def finishing_its_page():
+            try:
+                await asyncio.sleep(10)
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.2)  # A PDF stops only after the current page
+                raise
+
+        state.settings.update({"max_jobs": 1})
+        job = Job(id="p1", filename="x.pdf", status="running")
+        state.jobs.dir(job.id).mkdir(parents=True)
+        state.jobs.add(job)
+        state.running[job.id] = asyncio.create_task(finishing_its_page())
+        state.waiting["w1"] = Job(id="w1", filename="y.md", status="queued")
+        pausing = asyncio.create_task(job_control._pause(job))
+        await asyncio.sleep(0.05)
+        job_control._dispatch()  # Another job finishing meanwhile
+        assert "w1" in state.waiting and list(state.running) == ["p1"]
+        state.waiting.clear()
+        await pausing
+        return job
+
+    job = asyncio.run(scenario())
+    assert job.status == "paused" and not state.running
+
+
 def test_runner_released_after_finish(app_env):
     """After a job finishes the Runner releases its memory and the preview is read from the preview.json snapshot."""
     main = app_env
