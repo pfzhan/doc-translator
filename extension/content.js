@@ -106,6 +106,12 @@
     return el.openOrClosedShadowRoot || null;
   }
 
+  /** Whether el is a shadow host that does not show its own children: its shadow root has no slot for them. */
+  function slotless(el) {
+    const shadow = shadowOf(el);
+    return !!shadow && !shadow.querySelector('slot');
+  }
+
   const isShadow = (node) => node?.nodeType === Node.DOCUMENT_FRAGMENT_NODE && !!node.host;
   /** The element itself, or the host of a shadow root. */
   const elementOf = (node) => (isShadow(node) ? node.host : node);
@@ -167,6 +173,10 @@
     return el !== document.body && el !== document.documentElement && el.matches(OPT_OUT);
   }
 
+  /** Copied whole into the translation: text marked not to translate, and inline shadow hosts whose text is all in
+   * their shadow root. */
+  const keptWhole = (el) => optedOut(el) || slotless(el);
+
   /** ignore: contributes nothing; inline: part of the current paragraph; block: ends it; skip: ends it, not entered */
   function classify(el) {
     if (IGNORED_TAGS.has(el.localName)) return 'ignore';
@@ -178,9 +188,12 @@
     // Text marked not to translate stays in its sentence and comes back unchanged (see richOf); editable content
     // and marked blocks are left out
     if (optedOut(el)) return inline && !el.matches(EDITABLE) ? 'inline' : 'skip';
-    // A shadow host shows its shadow root, with its own children placed at the slots: not part of the sentence
-    // around it, whatever its display (custom elements are inline unless styled)
-    if (shadowOf(el)) return 'block';
+    // A shadow host shows its shadow root, with its own children placed at the slots. An inline one holding only
+    // inline content stays in its sentence: one that shows its children (a styled link) like any inline element, one
+    // that does not (a date, a badge) copied whole into the translation (see keptWhole). Any other is laid out apart
+    // from the text around it
+    const shadow = shadowOf(el);
+    if (shadow) return inline && !hasBlockChild(shadow) && !hasBlockChild(el) ? 'inline' : 'block';
     // Icon fonts write their icon names as aria-hidden text
     if (inline) return el.getAttribute('aria-hidden') === 'true' ? 'ignore' : 'inline';
     if (SKIP_TAGS.includes(el.localName)) return 'skip';
@@ -231,19 +244,23 @@
     if (scope === 'main') pageHasMain = !!document.querySelector(MAIN_SELECTOR);
     const out = [];
     const shadows = [];
-    /** Note the shadow root of el, scanned after this tree; one under an opt-out stays as it is. */
-    const noteShadow = (el) => {
+    /** Note the shadow root of el, scanned after this tree when el is a block (see classify); one under an opt-out
+     * stays as it is. */
+    const noteShadow = (el, kind) => {
       if (optedOut(el)) return;
       const shadow = shadowOf(el);
-      if (shadow) shadows.push(shadow);
-      else if (el.localName.includes('-') && !OWN_HOSTS.has(el.localName)) bareHosts.add(el);
+      if (shadow) {
+        if (kind === 'block') shadows.push(shadow);
+      } else if (el.localName.includes('-') && !OWN_HOSTS.has(el.localName)) bareHosts.add(el);
     };
     let run = [];
     let breaks = 0; // <br> in a row since the last text
     const flush = () => {
       // Line breaks at the end belong to the layout, not to the paragraph
       while (run.length && run[run.length - 1].localName === 'br') run.pop();
-      if (run.length) {
+      const hosts = run.length ? hostsAlone(run) : null;
+      if (hosts) shadows.push(...hosts.map(shadowOf));
+      else if (run.length) {
         const last = run[run.length - 1];
         out.push({ nodes: run, parent: last.parentNode, after: last.nextSibling });
       }
@@ -267,7 +284,7 @@
       const kind = classify(node);
       if (kind === 'ignore') return;
       breaks = 0;
-      if (kind !== 'skip') noteShadow(node);
+      if (kind !== 'skip') noteShadow(node, kind);
       // An inline element is taken whole, unless it wraps blocks (a card inside a link): then its children are
       // split like a block's
       if (kind === 'inline' && !hasBlockChild(node)) {
@@ -280,7 +297,7 @@
     };
     if (inScopeTree(root)) {
       // A host rescanned on its own (its shadow root came late)
-      if (root.nodeType === Node.ELEMENT_NODE) noteShadow(root);
+      if (root.nodeType === Node.ELEMENT_NODE) noteShadow(root, classify(root));
       root.childNodes.forEach(visit);
     }
     flush();
@@ -305,6 +322,21 @@
     return text.replace(/\s+/g, ' ').trim();
   }
 
+  /** The shadow hosts copied whole in a run that has no text of its own to translate (a date alone in a table cell):
+   * not part of a sentence, so their shadow roots are translated instead. Null when the run is a paragraph. */
+  function hostsAlone(nodes) {
+    const hosts = [];
+    let text = '';
+    const walk = (node) => {
+      if (node.nodeType === Node.TEXT_NODE) text += dataOf(node);
+      else if (node.nodeType !== Node.ELEMENT_NODE || optedOut(node) || classify(node) === 'ignore') return;
+      else if (slotless(node)) hosts.push(node);
+      else node.childNodes.forEach(walk);
+    };
+    nodes.forEach(walk);
+    return hosts.length && !worth(text) ? hosts : null;
+  }
+
   function worth(text) {
     if (/^(https?:\/\/|www\.)\S+$/i.test(text)) return false;
     return (text.match(/\p{L}/gu) || []).length >= 2;
@@ -312,15 +344,15 @@
 
   const escapeHTML = (s) => s.replace(/[&<>"]/g, (c) => `&${{ '&': 'amp', '<': 'lt', '>': 'gt', '"': 'quot' }[c]};`);
 
-  /** The paragraph as HTML keeping only RICH_TAGS and text marked not to translate (as <span translate="no">, which
-   * engines leave alone), with those elements in order of their i; null when it has none. */
+  /** The paragraph as HTML keeping only RICH_TAGS and what is copied whole (as <span translate="no">, which engines
+   * leave alone), with those elements in order of their i; null when it has none. */
   function richOf(nodes) {
     const refs = [];
     const walk = (node) => {
       if (node.nodeType === Node.TEXT_NODE) return escapeHTML(dataOf(node));
       if (node.localName === 'br') return ' ';
       if (node.nodeType !== Node.ELEMENT_NODE || classify(node) === 'ignore') return '';
-      if (optedOut(node)) {
+      if (keptWhole(node)) {
         refs.push(node);
         return `<span translate="no" i="${refs.length - 1}">${escapeHTML(textOf([node]))}</span>`;
       }
@@ -335,8 +367,8 @@
 
   /** Rebuild a translated HTML fragment with DOM APIs. The model decides only the text and where the paragraph's own
    * tags go: every element is a copy of the original element it stands for (matched by i, else by tag in order),
-   * so attributes such as href come from the page, never from the model. Text marked not to translate is copied
-   * whole from the page, whatever the model put inside. Other tags keep only their text. */
+   * so attributes such as href come from the page, never from the model. What is copied whole (see keptWhole) comes
+   * from the page, whatever the model put inside. Other tags keep only their text. */
   function buildRich(translated, refs) {
     // DOMParser documents are inert: no scripts run and no resources load
     const doc = new DOMParser().parseFromString(`<body>${translated}`, 'text/html');
@@ -344,11 +376,11 @@
     const original = (el) => {
       const i = el.getAttribute('i');
       const ref = i === null ? null : refs[Number(i)];
-      if (ref && !used.has(ref) && (optedOut(ref) ? el.localName === 'span' : ref.localName === el.localName)) {
+      if (ref && !used.has(ref) && (keptWhole(ref) ? el.localName === 'span' : ref.localName === el.localName)) {
         return ref;
       }
       if (!RICH_TAGS.has(el.localName)) return null;
-      return refs.find((r) => r.localName === el.localName && !optedOut(r) && !used.has(r));
+      return refs.find((r) => r.localName === el.localName && !keptWhole(r) && !used.has(r));
     };
     const build = (node, into) => {
       for (const child of node.childNodes) {
@@ -361,7 +393,7 @@
             continue;
           }
           used.add(ref);
-          const kept = optedOut(ref);
+          const kept = keptWhole(ref);
           const copy = ref.cloneNode(kept);
           // The original keeps its ids; marks of this extension describe the original only
           for (const el of [copy, ...(kept ? copy.querySelectorAll('*') : [])]) {

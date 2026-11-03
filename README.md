@@ -290,11 +290,13 @@ and each paragraph's translation appears below it. The server must be running.
   most are never seen. In bilingual mode an attribute shows both texts (`original / translation`, tooltips on two
   lines); hiding the translations restores it, and a value the page set since is left alone. `alt` and
   `aria-label` are not translated: they are not shown on the page.
-- Text in shadow DOM is translated too, closed shadow roots included. A shadow host does not join the sentence
-  around it: the text in its shadow root and the children placed at its slots make paragraphs of their own, and the
-  translation of an original placed at a named slot goes to the same slot. The page's styles do not reach into
-  shadow roots, so each shadow root holding translations gets a `<style>` with the same rules as the page. Custom
-  elements defined after the page loaded are translated on the page's next change.
+- Text in shadow DOM is translated too, closed shadow roots included. In a shadow host laid out as a block, the text
+  in its shadow root and the children placed at its slots make paragraphs of their own, and the translation of an
+  original placed at a named slot goes to the same slot. An inline host stays in the sentence around it: one that
+  shows its children at a slot is read like any inline element, and one that shows only its own content (a relative
+  date, a badge) is copied into the translation unchanged; standing alone, its content is translated. The page's
+  styles do not reach into shadow roots, so each shadow root holding translations gets a `<style>` with the same
+  rules as the page. Custom elements defined after the page loaded are translated on the page's next change.
 - Chrome's own pages and the Web Store cannot be translated; the toolbar button shows `×` there.
 
 ### PDFs open in the browser
