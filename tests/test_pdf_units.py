@@ -15,7 +15,7 @@ def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces():
     than a line (a long URL across two lines) they are not joined: one placeholder must fit on a single line, so a
     placeholder that does not fit shrinks the whole paragraph, while two separate pieces can break at the original
     break point."""
-    from app.formats.pdf_units import _join_line_wrapped_formulas
+    from app.formats.pdf_formula_runs import _join_line_wrapped_formulas
 
     def span(text, x0, x1, y, font="LMMono10-Regular"):
         return {
@@ -52,7 +52,7 @@ def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces():
 
 
 def test_scan_status_detection():
-    from app.formats.pdf_units import _scan_status
+    from app.formats.pdf_unit_blocks import _scan_status
 
     # Normal PDF
     doc = _pdf_with_text("Visible paragraph text here.")
@@ -406,7 +406,7 @@ def test_placeholderize_no_formula_keeps_text_identical():
 def test_an_equation_in_an_algorithm_box_or_a_caption_is_translated():
     """A line in an algorithm box with a single word is translated; a caption with a number is a caption no matter how
     many equals signs it has."""
-    from app.formats.pdf_units import _equation_block
+    from app.formats.pdf_unit_blocks import _equation_block
 
     def spans(*texts):
         return [[{"text": text, "font": "Times-Roman", "size": 10.0} for text in texts]]
@@ -1238,7 +1238,7 @@ def test_wrapped_formula_tail_stays_one_placeholder_without_a_wide_box():
 
 
 def test_caption_word_in_bold_cm_is_not_a_formula():
-    from app.formats.pdf_units import _is_formula_span
+    from app.formats.pdf_formula_runs import _is_formula_span
 
     assert _is_formula_span({"font": "CMBX8", "text": "of", "size": 8.0}, 9.0) is False
     assert _is_formula_span({"font": "CMBX10", "text": "x", "size": 10.0}, 10.0) is True
@@ -1247,7 +1247,7 @@ def test_caption_word_in_bold_cm_is_not_a_formula():
 def test_block_of_typewriter_lines_is_code_and_inline_names_are_not():
     """A block that is almost all monospace (SQL) is kept as it is. A sentence with a few monospace attribute names in
     it is translated."""
-    from app.formats.pdf_units import _code_block
+    from app.formats.pdf_unit_blocks import _code_block
 
     def span(text, font):
         return {"text": text, "font": font, "size": 10.0, "bbox": (0, 0, 10, 10), "origin": (0, 8)}
@@ -1356,8 +1356,8 @@ def _page_data(*lines):
 def test_computer_modern_upright_is_math_when_the_body_is_times():
     """In a paper set in Times, CMR only writes log, min, parentheses and equals signs, so it is a formula. In a paper
     set in CM it is body text."""
+    from app.formats.pdf_formula_runs import _is_formula_span
     from app.formats.pdf_math import _mark_math_roman
-    from app.formats.pdf_units import _is_formula_span
 
     times = _page_data([("NimbusRomNo9L-Regu", "We train the model to minimize " * 20), ("ABCDEF+CMR10", "log(1")])
     _mark_math_roman([times])
@@ -1506,7 +1506,7 @@ def test_bare_chinese_section_number_is_restored():
 
 
 def test_union_box_matches_rect_union():
-    from app.formats.pdf_units import _union_box
+    from app.formats.pdf_formula_runs import _union_box
 
     rects = [
         pymupdf.Rect(378.9772014701512, 294.40010658, 391.92303898, 300.53540323),
@@ -1697,7 +1697,7 @@ def test_a_colored_example_sentence_stays_original_but_an_epigraph_does_not():
     after it and is translated as usual."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
-    from app.formats.pdf_units import _attribution, _colored_example
+    from app.formats.pdf_unit_blocks import _attribution, _colored_example
 
     frame = TextFrame(142.2, 475.2, 82.0, 719.0, 10.0)
 
@@ -1823,7 +1823,7 @@ def test_a_colored_example_on_its_own_line_needs_no_period():
     """A colored example set on its own line often has no period (The green witch arrived)."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
-    from app.formats.pdf_units import _colored_example
+    from app.formats.pdf_unit_blocks import _colored_example
 
     frame = TextFrame(160.2, 493.2, 82.0, 719.0, 10.0)
     rect = pymupdf.Rect(185.1, 473.7, 280.2, 485.7)
@@ -1965,7 +1965,7 @@ def test_wrapped_monospace_phrase_keeps_its_word_space():
     as wide as the original space; for a URL broken inside a word or a formula broken after an operator, the two
     pieces still touch."""
     from app.formats.pdf_blocks import _PART_GAP
-    from app.formats.pdf_units import _wrap_gap
+    from app.formats.pdf_unit_blocks import _wrap_gap
 
     def span(text, x0, x1):
         return {"text": text, "font": "NimbusMonL-Regu", "size": 9.0, "bbox": (x0, 0, x1, 9)}
@@ -2028,7 +2028,7 @@ def test_a_font_that_only_writes_single_marks_beside_formulas_is_math():
 def test_a_script_left_of_a_letter_is_not_its_script():
     """The numerator of an inline fraction (one size smaller) overlaps vertically with an italic x later on the same
     line, with . Each token in between them; x is not its base."""
-    from app.formats.pdf_units import _script_base
+    from app.formats.pdf_formula_runs import _script_base
 
     x = {
         "text": " x",

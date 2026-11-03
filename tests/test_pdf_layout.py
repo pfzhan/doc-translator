@@ -1838,7 +1838,7 @@ def test_filled_cells_overlapping_along_their_edges_are_a_table():
 
 def test_short_margin_terms_stay_original():
     """Terms in the margin keep the original; margin notes that form sentences are translated as usual."""
-    from app.formats.pdf_units import _margin_term
+    from app.formats.pdf_unit_blocks import _margin_term
 
     def note(text):
         return replace(_block(text, 0, pymupdf.Rect(80, 100, 128, 110), 7.2), side_note=True)

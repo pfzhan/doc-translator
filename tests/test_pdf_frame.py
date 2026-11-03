@@ -552,7 +552,7 @@ def test_blocks_in_a_flagged_monospace_font_are_code():
     """Fonts such as txtt have no Mono in their names, only the PDF monospace flag. A block entirely in such a font
     keeps the original."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_units import _code_block
+    from app.formats.pdf_unit_blocks import _code_block
 
     def block(*spans):
         return TextBlock(
@@ -587,7 +587,7 @@ def test_blocks_in_a_flagged_monospace_font_are_code():
 def test_gloss_line_is_split_from_its_free_translation():
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import _gloss_ids
-    from app.formats.pdf_units import _split_gloss_lines
+    from app.formats.pdf_unit_blocks import _split_gloss_lines
 
     lines = [pymupdf.Rect(174, 400, 399, 410), pymupdf.Rect(174, 414, 389, 424)]
     spans = [

@@ -29,7 +29,7 @@ from app.formats.pdf_type3 import (
     broken_type3_names,
     recover_type3_page,
 )
-from app.formats.pdf_units import _code_block
+from app.formats.pdf_unit_blocks import _code_block
 
 PAPER = next(iter(sorted(Path("data/jobs").glob("*/implementing_data_cube.pdf"))), None)
 needs_paper = pytest.mark.skipif(PAPER is None, reason="样例论文不在本机")
