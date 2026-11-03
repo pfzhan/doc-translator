@@ -20,16 +20,9 @@ from .pdf_blocks import (
     _small_caps_sizes,
     _span_is_math,
 )
+from .pdf_drawings import RuledTable
 from .pdf_frame import FrameLine, TextFrame, margin_notes, note_groups, note_pitch, text_frames
-from .pdf_layout import (
-    PageGeometry,
-    PageScan,
-    RuledTable,
-    cell_containing,
-    margin_skips,
-    reading_order,
-    scan_page,
-)
+from .pdf_layout import PageGeometry, PageScan, cell_containing, margin_skips, reading_order, scan_page
 from .pdf_math import (
     _fraction_parts,
     _line_box,

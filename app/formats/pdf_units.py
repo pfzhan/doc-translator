@@ -35,12 +35,7 @@ from .pdf_flow import (
     writer_for,
 )
 from .pdf_frame import TextFrame
-from .pdf_layout import (
-    PageGeometry,
-    example_numbers,
-    interlinear_glosses,
-    margin_skips,
-)
+from .pdf_layout import PageGeometry, margin_skips
 from .pdf_math import _glyph_box, _plain_units, _prose_units
 from .pdf_merge import _all_styled, _cross_page_units, _region_joins, _seam_apart
 from .pdf_paragraphs import _OPERATOR_NAMES, _block_slice, _block_spans, _clip_key, _is_formula_char
@@ -78,6 +73,7 @@ from .pdf_skip import (
     _role_pattern_ids,
     biblio_skips,
 )
+from .pdf_tables import example_numbers, interlinear_glosses
 from .pdf_vision import FormulaModel, ModelBoxes, formula_detector, layout_detector
 
 

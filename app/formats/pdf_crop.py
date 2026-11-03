@@ -17,11 +17,7 @@ from .pdf_blocks import (
     _outside_formula,
     _page_char_index,
 )
-from .pdf_layout import (
-    light_fill,
-    text_page_rect,
-    visible_drawings,
-)
+from .pdf_drawings import light_fill, text_page_rect, visible_drawings
 from .pdf_runs import (
     FormulaRun,
     expand_box,

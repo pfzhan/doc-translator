@@ -9,6 +9,7 @@ import pymupdf
 
 from .pdf_align import FIRST_BASELINE, SQUEEZE, draw_cjk_lines, page_origin
 from .pdf_blocks import _PART_GAP, _formula_parts, _FormulaImage, _GlyphInk, _outside_formula
+from .pdf_drawings import text_page_rect
 from .pdf_flow import (
     balance_marks,
     measure_width,
@@ -17,9 +18,6 @@ from .pdf_flow import (
     separate_after_formula,
     space_around_latin,
     strip_style_marks,
-)
-from .pdf_layout import (
-    text_page_rect,
 )
 from .pdf_typeset import (
     FORMULA_PAD,

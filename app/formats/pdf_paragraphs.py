@@ -30,12 +30,9 @@ from .pdf_blocks import (
     _styled_edge,
     _visual_lines,
 )
+from .pdf_drawings import RuledTable
 from .pdf_frame import TextFrame
-from .pdf_layout import (
-    PageGeometry,
-    RuledTable,
-    cell_containing,
-)
+from .pdf_layout import PageGeometry, cell_containing
 from .pdf_math import (
     _prose_units,
     _script_seam,

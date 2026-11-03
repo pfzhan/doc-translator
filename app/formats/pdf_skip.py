@@ -22,16 +22,13 @@ from .pdf_blocks import (
 from .pdf_flow import (
     emphasis_of,
 )
-from .pdf_layout import (
-    ExampleNumber,
-    PageGeometry,
-    PageScan,
-)
+from .pdf_layout import PageGeometry, PageScan
 from .pdf_math import _BIG_DELIMITER_FONT_RE
 from .pdf_merge import _x_overlap
 from .pdf_paragraphs import _block_spans, _plain_words
 from .pdf_roles import Role
 from .pdf_rows import _EXAMPLE_NUMBER_RE, _RELATION_RE, _mono_span, _vivid, _vivid_share
+from .pdf_tables import ExampleNumber
 from .pdf_vision import FormulaDetector
 
 # Maximum length of a bracketed label in an example sentence (Arg0, ArgM-TMP, PER)

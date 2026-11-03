@@ -20,6 +20,7 @@ from .pdf_blocks import (
     _span_is_math,
     _with_source_bold,
 )
+from .pdf_drawings import text_page_rect
 from .pdf_erase import Erasure, erase, restore_glyphs, type3_glyphs
 from .pdf_flow import (
     measure_width,
@@ -28,10 +29,7 @@ from .pdf_flow import (
 )
 from .pdf_formula_images import _place_formula_images
 from .pdf_index_reflow import _index_reflow
-from .pdf_layout import (
-    PageGeometry,
-    text_page_rect,
-)
+from .pdf_layout import PageGeometry
 from .pdf_order import ReadingOrder
 from .pdf_place import (
     _box_height,

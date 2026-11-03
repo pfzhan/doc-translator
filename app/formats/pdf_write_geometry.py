@@ -25,6 +25,7 @@ from .pdf_blocks import (
     _page_char_index,
     _visual_lines,
 )
+from .pdf_drawings import text_page_rect, visible_drawings
 from .pdf_erase import single_precision
 from .pdf_flow import (
     STYLE_MARK_RE,
@@ -38,13 +39,7 @@ from .pdf_flow import (
     span_emphasis,
     writer_for,
 )
-from .pdf_layout import (
-    PageGeometry,
-    content_floor,
-    is_page_number,
-    text_page_rect,
-    visible_drawings,
-)
+from .pdf_layout import PageGeometry, content_floor, is_page_number
 from .pdf_place import (
     _formula_metrics,
     _formula_slot,

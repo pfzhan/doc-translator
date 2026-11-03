@@ -12965,7 +12965,7 @@ def test_table_split_keeps_space_spans():
     """In justified lines the word spaces are separate spans. They must be included when text is reassembled by cells,
     otherwise the words run together."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_layout import RuledTable
+    from app.formats.pdf_drawings import RuledTable
     from app.formats.pdf_paragraphs import _split_table_blocks
 
     def span(text, x0, x1):
@@ -13294,7 +13294,7 @@ def test_no_borderless_table_is_found_on_an_index_page(monkeypatch):
     from dataclasses import replace
 
     from app.formats import pdf_extract
-    from app.formats.pdf_layout import RuledTable
+    from app.formats.pdf_drawings import RuledTable
 
     doc = pymupdf.open()
     page = doc.new_page(width=500, height=700)
@@ -13887,8 +13887,8 @@ def test_sentences_after_a_separate_example_number_stay_original():
     are the aligned b. below and the free translation below a word-by-word gloss. The next body paragraph and body
     sentences referring to the number are translated."""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_layout import ExampleNumber
     from app.formats.pdf_skip import _example_ids
+    from app.formats.pdf_tables import ExampleNumber
 
     def blk(text, rect):
         rect = pymupdf.Rect(rect)
@@ -13915,8 +13915,8 @@ def test_lines_under_a_number_row_without_a_block_stay_original():
     aligned after a blank line are examples. The next paragraph starting with a first-line indent does not
     count"""
     from app.formats.pdf_blocks import TextBlock
-    from app.formats.pdf_layout import ExampleNumber
     from app.formats.pdf_skip import _example_ids, _example_tails, _ExampleHead
+    from app.formats.pdf_tables import ExampleNumber
 
     def blk(text, rect):
         rect = pymupdf.Rect(rect)
@@ -14202,7 +14202,7 @@ def test_a_clipped_plot_path_does_not_cover_the_text_below_it():
     """The path box of a curve clipped into a figure frame reaches tens of thousands of points off the page. Clipped
     to the clip area, only the part inside the frame remains, so it cannot cover the body text below. Paths entirely
     outside the clip area are removed."""
-    from app.formats.pdf_layout import visible_drawings
+    from app.formats.pdf_drawings import visible_drawings
 
     doc = pymupdf.open()
     page = doc.new_page(width=595, height=842)

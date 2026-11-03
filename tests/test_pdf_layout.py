@@ -3,8 +3,9 @@ from dataclasses import replace
 import pymupdf
 
 from app.formats.pdf_blocks import TextBlock
+from app.formats.pdf_drawings import RuledTable
 from app.formats.pdf_extract import extract_blocks
-from app.formats.pdf_layout import PageGeometry, RuledTable, margin_skips, reading_order
+from app.formats.pdf_layout import PageGeometry, margin_skips, reading_order
 from app.formats.pdf_merge import _cross_page_units
 from app.formats.pdf_paragraphs import _merge_continuations
 from app.formats.pdf_place import _expand_right
@@ -26,7 +27,8 @@ def test_a_plot_on_a_white_ground_covers_its_title_and_axis_labels():
     the curves. A white ground that holds curves and is less than twice their size is a figure, counted only to a
     margin around the curves. A white ground much larger than the plot inside is not a figure; when the grid is taken
     as a table, a white ground slightly larger than the table is still a figure."""
-    from app.formats.pdf_layout import PageGeometry, RuledTable, _figure_rects
+    from app.formats.pdf_drawings import RuledTable
+    from app.formats.pdf_layout import PageGeometry, _figure_rects
 
     page = pymupdf.open().new_page(width=400, height=500)
     page.draw_rect(pymupdf.Rect(40, 30, 260, 200), fill=(1, 1, 1), color=None, width=0)
@@ -783,7 +785,7 @@ def test_text_alignment_is_not_a_table():
 def test_nested_boxes_of_a_diagram_are_not_a_table():
     """Nested boxes of a flowchart: the cells find_tables finds contain each other, so this is not a table. Taken as a
     table, all the text in the boxes would merge into one cell."""
-    from app.formats.pdf_layout import ruled_tables
+    from app.formats.pdf_tables import ruled_tables
 
     doc = pymupdf.open()
     page = doc.new_page(width=720, height=405)
@@ -803,7 +805,8 @@ def test_ruled_tables_read_only_the_text_near_the_lines_and_find_the_same_tables
     the whole page. For a patch of connected lines missing its right and bottom sides, find_tables adds the frame
     only when it sees text inside the patch, and it compares vertically flipped positions, so the text in the flipped
     band is read too. Reading only the text near the lines misses this table."""
-    from app.formats.pdf_layout import _page_drawings, _table_clip, ruled_tables
+    from app.formats.pdf_drawings import _page_drawings
+    from app.formats.pdf_tables import _table_clip, ruled_tables
 
     def found(page, clip):
         pymupdf.no_recommend_layout()
@@ -920,7 +923,7 @@ def _rule_page() -> pymupdf.Page:
 
 
 def test_open_edged_table_gets_its_header_row_and_outer_columns():
-    from app.formats.pdf_layout import ruled_tables
+    from app.formats.pdf_tables import ruled_tables
 
     [table] = ruled_tables(_rule_page())
     assert table.rect == pymupdf.Rect(50, 80, 370, 180)
@@ -968,7 +971,7 @@ def _algorithm_page(caption_below: bool) -> pymupdf.Page:
 
 def test_algorithm_box_lines_become_cells():
     """Each pseudocode line is one cell, and the caption is recognized both above and below the box."""
-    from app.formats.pdf_layout import algorithm_tables
+    from app.formats.pdf_tables import algorithm_tables
 
     for below in (False, True):
         [table] = algorithm_tables(_algorithm_page(below))
@@ -981,7 +984,8 @@ def test_algorithm_box_lines_become_cells():
 def test_algorithm_boxes_are_looked_for_only_on_pages_naming_one():
     """When the words of the page are given, captions are searched line by line only if the words include Algorithm;
     the boxes found are the same as without the words."""
-    from app.formats.pdf_layout import algorithm_tables, page_words
+    from app.formats.pdf_drawings import page_words
+    from app.formats.pdf_tables import algorithm_tables
 
     page = _algorithm_page(False)
     assert algorithm_tables(page, words=page_words(page)) == algorithm_tables(page) != ()
@@ -1033,7 +1037,7 @@ def test_table_cells_stay_original_but_algorithm_lines_are_translated(tmp_path):
 def test_side_by_side_algorithm_boxes_are_both_found():
     """With two algorithm boxes side by side, both captions are in the same PyMuPDF line; the lines of the other box
     beside it do not count."""
-    from app.formats.pdf_layout import algorithm_tables
+    from app.formats.pdf_tables import algorithm_tables
 
     doc = pymupdf.open()
     page = doc.new_page(width=600, height=300)
@@ -1051,7 +1055,7 @@ def test_side_by_side_algorithm_boxes_are_both_found():
 def test_algorithm_rows_ignore_radical_origins():
     """The origin of a radical sign is at the top of the glyph and must not be taken as the baseline of a row that gets
     its own cell."""
-    from app.formats.pdf_layout import _code_rows
+    from app.formats.pdf_tables import _code_rows
 
     def line(y, *spans):
         return {
@@ -1066,7 +1070,7 @@ def test_algorithm_rows_ignore_radical_origins():
 def test_algorithm_rows_ignore_fraction_numerators_and_denominators():
     """Numerators and denominators of a display formula are as large as body text, with origins most of a character
     height above and below the baseline. Text touching a fraction bar does not get its own cell."""
-    from app.formats.pdf_layout import _code_rows
+    from app.formats.pdf_tables import _code_rows
 
     def span(text, font, x0, x1, y):
         return {"text": text, "font": font, "size": 10.0, "origin": (x0, y), "bbox": (x0, y - 7.5, x1, y + 2.5)}
@@ -1088,7 +1092,7 @@ def test_algorithm_rows_ignore_fraction_numerators_and_denominators():
 def test_unnumbered_algorithm_rows_join_full_width_wraps():
     """In an algorithm without line numbers, a line that reaches the right edge of the box with an unfinished sentence
     wraps to the next line, and the two lines are one cell."""
-    from app.formats.pdf_layout import _code_rows
+    from app.formats.pdf_tables import _code_rows
 
     def line(y, text, x1):
         return {
@@ -1236,7 +1240,7 @@ def test_book_headers_above_the_text_frame_are_margins():
 
 
 def test_word_by_word_gloss_is_found_but_a_table_is_not():
-    from app.formats.pdf_layout import interlinear_glosses
+    from app.formats.pdf_tables import interlinear_glosses
 
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
@@ -1280,7 +1284,7 @@ def test_indented_examples_are_not_a_column_that_ends_the_page():
 def test_short_and_morpheme_glosses_are_found():
     """A three-word gloss of Chinese characters, and a morpheme-by-morpheme gloss (with abbreviations such as 1SG and
     PFV). Two short English lines that happen to align do not count."""
-    from app.formats.pdf_layout import interlinear_glosses
+    from app.formats.pdf_tables import interlinear_glosses
 
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
@@ -1301,7 +1305,8 @@ def test_pinyin_under_a_line_of_hanzi_is_a_gloss():
     """A line of Chinese characters over a line of pinyin, one syllable per character, with tones extracted as separate
     modifier letters. The English free translation below is translated. An English sentence below the characters
     whose syllable count does not match does not count."""
-    from app.formats.pdf_layout import _TextWord, interlinear_glosses
+    from app.formats.pdf_drawings import _TextWord
+    from app.formats.pdf_tables import interlinear_glosses
 
     def row(y: float, *texts: str) -> list[_TextWord]:
         words, x = [], 164.0
@@ -1327,7 +1332,8 @@ def test_role_labels_under_an_example_are_a_gloss():
     keep the original. A number set between the two lines ((22.27)) is merged into the example line. A label whose
     box is made taller by a subscript (ARG0) also counts. Abbreviations in margin notes, subscripts and the TBD below
     a heading do not count."""
-    from app.formats.pdf_layout import _TextWord, interlinear_glosses
+    from app.formats.pdf_drawings import _TextWord
+    from app.formats.pdf_tables import interlinear_glosses
 
     def word(x0: float, y0: float, x1: float, y1: float, text: str) -> _TextWord:
         return _TextWord(x0, y0, x1, y1, text)
@@ -1373,7 +1379,8 @@ def test_role_labels_under_an_example_are_a_gloss():
 def test_example_numbers_standing_apart_from_the_sentence():
     """(22.9) and (22.11) at the start of a line are example numbers, and the position where the text after the number
     starts is recorded. A (22.9) cited in body text does not count"""
-    from app.formats.pdf_layout import _TextWord, example_numbers
+    from app.formats.pdf_drawings import _TextWord
+    from app.formats.pdf_tables import example_numbers
 
     words = [
         _TextWord(142.2, 352.2, 166.3, 364.2, "(22.9)"),
@@ -1401,7 +1408,8 @@ def test_columns_with_empty_cells_are_a_table():
     no example) is recognized by the columns the left edges of its cells fall in. A caption below the table with the
     same line spacing is not part of the table. Index entries set in several columns and ending in page numbers, and a
     table in the left column next to body text in the right column of a two-column page, are not tables"""
-    from app.formats.pdf_layout import _sparse_grid, _TextCell, _TextWord, unruled_tables
+    from app.formats.pdf_drawings import _TextWord
+    from app.formats.pdf_tables import _sparse_grid, _TextCell, unruled_tables
 
     rows = [
         ("TMP", "when?", "yesterday evening, now"),
@@ -1480,7 +1488,7 @@ def test_columns_with_empty_cells_are_a_table():
 def test_page_without_two_ruled_lines_each_way_skips_the_table_search(monkeypatch):
     """Without two horizontal and two vertical lines no cell can be enclosed: footnote rules and colored backgrounds
     are not worth parsing the whole page character by character."""
-    from app.formats.pdf_layout import ruled_tables
+    from app.formats.pdf_tables import ruled_tables
 
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=300)
@@ -1501,7 +1509,7 @@ def test_page_without_two_ruled_lines_each_way_skips_the_table_search(monkeypatc
 
 
 def test_table_drawn_with_dashed_rules_is_still_found():
-    from app.formats.pdf_layout import ruled_tables
+    from app.formats.pdf_tables import ruled_tables
 
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=300)
@@ -1520,7 +1528,7 @@ def test_table_drawn_with_dashed_rules_is_still_found():
 
 def test_table_ruled_with_one_pixel_images_is_found():
     """Old TeX draws table rules with stretched one-pixel images, and the page has no vector lines."""
-    from app.formats.pdf_layout import ruled_tables
+    from app.formats.pdf_tables import ruled_tables
 
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=300)
@@ -1541,7 +1549,7 @@ def test_table_ruled_with_one_pixel_images_is_found():
 def test_rows_without_rules_between_them_are_split_into_cells():
     """In a table with only column rules, several body rows stack in one cell and are cut at the aligned rows. A
     wrapped header where some cells hold only one line is not cut."""
-    from app.formats.pdf_layout import page_tables
+    from app.formats.pdf_tables import page_tables
 
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=300)
@@ -1570,7 +1578,7 @@ def test_rows_without_rules_between_them_are_split_into_cells():
 def test_header_between_top_and_mid_rules_joins_the_unruled_table():
     """The header of a three-line table is wider than the data columns, so their left and right edges do not line up.
     Text between the top rule and the middle rule is split into cells by column and merged into the table."""
-    from app.formats.pdf_layout import page_tables
+    from app.formats.pdf_tables import page_tables
 
     doc = pymupdf.open()
     page = doc.new_page(width=600, height=400)
@@ -1594,7 +1602,8 @@ def test_header_between_top_and_mid_rules_joins_the_unruled_table():
 def test_rows_of_one_shaded_column_split_by_blanks_are_a_table():
     """A one-column table shaded row by row: each row holds an example sentence, a blank line to fill in and the
     answer, separated by large gaps. Shading behind rows that each hold one continuous sentence is not a table."""
-    from app.formats.pdf_layout import filled_tables, page_words
+    from app.formats.pdf_drawings import page_words
+    from app.formats.pdf_tables import filled_tables
 
     blue = (0.77, 0.86, 0.99)
 
@@ -1627,7 +1636,7 @@ def test_rows_of_one_shaded_column_split_by_blanks_are_a_table():
 def test_a_table_ruled_only_between_columns_is_found():
     """A table without an outer frame and with vertical rules only between columns, with centered numbers. A vertical
     rule between two columns of body text has long sentences on both sides and is not a table."""
-    from app.formats.pdf_layout import page_tables
+    from app.formats.pdf_tables import page_tables
 
     doc = pymupdf.open()
     page = doc.new_page(width=600, height=400)
@@ -1661,7 +1670,7 @@ def test_a_three_rule_table_is_found_whole():
     """A three-line table whose top, middle and bottom rules have the same length: the header wraps and horizontal
     rules also separate groups of data, and the whole table is recognized. Body text or pseudocode set between three
     rules is not a table."""
-    from app.formats.pdf_layout import page_tables
+    from app.formats.pdf_tables import page_tables
 
     doc = pymupdf.open()
     page = doc.new_page(width=600, height=400)
@@ -1699,7 +1708,7 @@ def test_a_three_rule_table_is_found_whole():
 def test_a_three_rule_table_with_group_names_is_found():
     """Each group of data has a row with the group name followed by data separated by a horizontal rule; the group name
     takes only one cell, and the whole is still a table."""
-    from app.formats.pdf_layout import page_tables
+    from app.formats.pdf_tables import page_tables
 
     page = pymupdf.open().new_page(width=600, height=400)
     for y in (100, 113, 126, 152, 165, 191):
@@ -1721,7 +1730,7 @@ def test_a_three_rule_table_with_group_names_is_found():
 def test_a_two_column_three_rule_table_with_long_row_names_is_found():
     """A two-column three-line table is a table even when the row names take most of the width. Rules with a caption
     set between them are not a table, and the caption is translated as usual."""
-    from app.formats.pdf_layout import page_tables
+    from app.formats.pdf_tables import page_tables
 
     page = pymupdf.open().new_page(width=600, height=400)
     for y in (100, 114, 160):
@@ -1756,7 +1765,8 @@ def test_a_two_column_three_rule_table_with_long_row_names_is_found():
 def test_table_of_abutting_filled_cells_is_found():
     """A table with one fill per cell and only top and bottom horizontal rules. A text box on one large fill, a figure
     on a white ground and cells covered by a caption spanning them are not tables."""
-    from app.formats.pdf_layout import filled_tables, page_words
+    from app.formats.pdf_drawings import page_words
+    from app.formats.pdf_tables import filled_tables
 
     doc = pymupdf.open()
     page = doc.new_page(width=600, height=400)
@@ -1790,7 +1800,8 @@ def test_filled_cells_overlapping_along_their_edges_are_a_table():
     """In a table colored cell by cell, vertically adjacent cells overlap slightly along their edges (LaTeX paints a
     little extra to avoid white seams); every row overlaps and the total area is almost a tenth larger, and it is
     still a table. A box with several fills nested inside does not count"""
-    from app.formats.pdf_layout import filled_tables, page_words
+    from app.formats.pdf_drawings import page_words
+    from app.formats.pdf_tables import filled_tables
 
     doc = pymupdf.open()
     page = doc.new_page(width=600, height=400)
@@ -1885,7 +1896,8 @@ def test_header_rows_above_a_three_line_table_join_it():
     """The header and body of a three-line table are separated by a rule, so the rules find only the body. Rows right
     above it whose words all fall in the table columns are the header; the description further up is continuous
     sentences that cross the column lines and does not count."""
-    from app.formats.pdf_layout import RuledTable, _TextWord, _with_header_rows
+    from app.formats.pdf_drawings import RuledTable, _TextWord
+    from app.formats.pdf_tables import _with_header_rows
 
     columns = [(115, 213), (213, 266), (266, 320), (320, 373), (373, 426), (426, 480)]
     body = RuledTable(pymupdf.Rect(115, 227, 480, 273), tuple(pymupdf.Rect(x0, 227, x1, 273) for x0, x1 in columns))
@@ -1959,7 +1971,8 @@ def test_image_box_is_clipped_to_what_shows():
     the clipped-away part is not text inside the figure."""
     import pymupdf
 
-    from app.formats.pdf_layout import _image_infos, scan_page
+    from app.formats.pdf_drawings import _image_infos
+    from app.formats.pdf_layout import scan_page
 
     doc = pymupdf.open()
     page = doc.new_page(width=600, height=800)
@@ -1979,7 +1992,8 @@ def test_two_list_items_with_the_same_opening_are_not_a_gloss():
     """Two list items start the same way (Else search from right to left for ...) and the left edges of their words
     line up, but each position holds the same word. A gloss line is written in another language, so this does not
     happen, and both items are sent for translation as usual."""
-    from app.formats.pdf_layout import _TextWord, interlinear_glosses
+    from app.formats.pdf_drawings import _TextWord
+    from app.formats.pdf_tables import interlinear_glosses
 
     def row(y: float, *texts: str) -> list[_TextWord]:
         words, x = [], 177.0
