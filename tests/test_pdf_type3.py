@@ -5,30 +5,24 @@ import numpy as np
 import pymupdf
 import pytest
 
-from app.formats import pdf_type3
+from app.formats import pdf_type3_ocr
 from app.formats.pdf_blocks import TextBlock
 from app.formats.pdf_extract import extract_blocks
 from app.formats.pdf_paragraphs import _numbered_list_item
 from app.formats.pdf_type3 import (
-    Glyph,
-    Label,
-    OcrChar,
-    OcrWord,
     Type3Reader,
     _build_lines,
     _bullets,
     _drop_broken_lines,
-    _glyph_styles,
     _group_lines,
-    _HocrWords,
-    _is_script,
-    _learn_roles,
-    _Line,
     _mono_kinds,
-    _vote_labels,
     broken_type3_names,
     recover_type3_page,
 )
+from app.formats.pdf_type3_glyphs import Glyph, Label, OcrChar, OcrWord, _Line
+from app.formats.pdf_type3_lines import _glyph_styles, _is_script
+from app.formats.pdf_type3_ocr import _HocrWords, _vote_labels
+from app.formats.pdf_type3_roles import _learn_roles
 from app.formats.pdf_unit_blocks import _code_block
 
 PAPER = next(iter(sorted(Path("data/jobs").glob("*/implementing_data_cube.pdf"))), None)
@@ -571,8 +565,8 @@ def _fake_ocr(path: Path, scale: float = 3.0) -> list[OcrWord]:
 
 def test_bitmap_page_reads_back_its_letters(tmp_path, monkeypatch):
     """OCR only names the glyphs; position, lines and font size all come from the bitmap glyphs themselves."""
-    monkeypatch.setattr(pdf_type3, "ocr_image", _fake_ocr)
-    monkeypatch.setattr(pdf_type3.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(pdf_type3_ocr, "ocr_image", _fake_ocr)
+    monkeypatch.setattr(pdf_type3_ocr.shutil, "which", lambda name: "/usr/bin/" + name)
     src = tmp_path / "bitmap.pdf"
     _bitmap_font_pdf(src)
     blocks = extract_blocks(pymupdf.open(src))
@@ -592,8 +586,8 @@ def test_unreadable_bitmap_page_keeps_its_glyphs(tmp_path, monkeypatch, failure)
             raise subprocess.TimeoutExpired("tesseract", 90)
         return []
 
-    monkeypatch.setattr(pdf_type3, "ocr_image", broken)
-    monkeypatch.setattr(pdf_type3.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(pdf_type3_ocr, "ocr_image", broken)
+    monkeypatch.setattr(pdf_type3_ocr.shutil, "which", lambda name: "/usr/bin/" + name)
     src = tmp_path / "bitmap.pdf"
     _bitmap_font_pdf(src)
     doc = pymupdf.open(src)

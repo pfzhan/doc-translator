@@ -9,144 +9,105 @@ occasional misreadings no longer reach the translation.
 
 Math italic a, v, S only occur on their own and never inside words; math symbols are recognized differently each
 time. These two kinds are written in math fonts, and superscripts and subscripts are written with their actual size
-and position. Formula placeholders and paragraph splitting downstream follow the same logic as ordinary TeX PDFs.
-"""
+and position. Formula placeholders and paragraph splitting downstream follow the same logic as ordinary TeX PDFs."""
 
 from __future__ import annotations
 
-import bisect
-import os
 import re
-import shutil
 import statistics
-import subprocess
-import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
-from html.parser import HTMLParser
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pymupdf
 
+from .pdf_type3_glyphs import (
+    _HEIGHT_RATIO,
+    _MONO_FONT,
+    _RULE,
+    _SCRIPT,
+    _TEXT_FONT,
+    Glyph,
+    Key,
+    Label,
+    OcrWord,
+    _glyph_size,
+    _GlyphCenters,
+    _letter_class,
+    _Line,
+    _middle,
+    _steps,
+    _sure_word,
+    _text_of,
+)
+from .pdf_type3_lines import _line_dict
+from .pdf_type3_ocr import _ocr_pages, _vote_labels
+from .pdf_type3_roles import _learn_roles
+
 _CUSTOM_NAME = re.compile(r"^[A-Za-z]\d+$")
+
+
 # Share of the page's text in broken fonts. A few characters in a symbol font do not rebuild the whole page.
 _BROKEN_SHARE = 0.4
+
+
 _MIN_BROKEN_CHARS = 20
-_OCR_SCALE = 3.0
-_OCR_TIMEOUT = 90
-# Agreement ratio of the recognition. Glyphs below it are recognized differently each time: math symbols or
-# math italic.
-_SURE = 0.8
+
+
 # A page is rebuilt only when this share of its glyphs has a recognized letter. Otherwise the original glyphs stay.
 _READABLE = 0.8
-# A glyph with more than a quarter of its occurrences inside words is a body-text letter
-_IN_WORD = 0.25
+
+
 # Gaps in x-heights: up to 0.4 is letter spacing, from 0.6 on is a space. The band in between has both; it is
 # split by the letter and word spacing of the line, and when the line has no clear word spacing OCR words decide
 _TIGHT = 0.4
+
+
 _WIDE = 0.6
+
+
 # Largest horizontal gap within one line, in font sizes. Even stretched word spaces stay under half a font size;
 # wider gaps separate side-by-side author names, another column, or another table column
 _RUN_GAP = 1.6
-# Glyphs this much smaller than the line's font size are superscripts or subscripts. So are glyphs of full size
-# whose baseline is shifted by this much (in font sizes)
-_SCRIPT = 0.8
-_SHIFT = 0.18
-# Two bitmaps of the same letter with this similarity are the same font
-_SAME_SHAPE = 0.85
-_SAME_MARK = 0.5
+
+
 # The ink of a filled dot covers more than 70% of its box, a letter less than half
 _FILLED = 0.65
+
+
 _SHAPE_DPI = 600
+
+
 _SHAPE_GRID = 16
+
+
 # The next line joins the same block when its baseline is within this many font sizes. TeX leading is 1.2 font
 # sizes, a bit more where an inline formula makes the line taller
 _LEADING = 1.6
-_MATH_SYMBOLS = set("<>=+|{}^~*∑∏√∞≤≥≠≈∈∉⊂⊃±×÷→←")
-_SENTENCE_MARKS = set(".,;:")
-_OPERATORS = set("=<>+-−–—≤≥≠×")
-_RELATIONS = set("=<>≤≥≠≺⪯≈∈")
+
+
 _TRAILING_MARKS = set(",.;:)")
-# Numbers such as section numbers, item numbers and years
-_NUMBER = re.compile(r"\(?\d+(?:\.\d+)*[.:,)]?")
-_LIGATURES = {"ﬁ": "fi", "ﬂ": "fl", "ﬀ": "ff", "ﬃ": "ffi", "ﬄ": "ffl"}
+
+
 # Lower bound of the monospace cell width, in font sizes. Monospace is 0.525; the most evenly spaced body-text
 # words (each, latter) stay below 0.48
 _MONO_PITCH = 0.5
-# Capital letters that form a word on their own in English
-_LETTER_WORDS = {"A", "I"}
+
+
 # Characters that are very narrow in body-text fonts (around 0.28 font sizes). In monospace fonts they also fill a
 # whole cell
 _NARROW = set("iljI.,;:’'!|")
-# Ink height of each letter class as a share of the font size (about the same in Computer Modern and Times)
-_X_LETTERS = set("acemnorsuvwxz")
-_TALL_LETTERS = set("bdhkl") | set("ABCDEFGHIKLMNOPRSTUVWXYZ") | set("0123456789")
-_DESCENDERS = set("gpqy")
-_UNSTEADY = set("fjJQ")
-_HEIGHT_RATIO = {"x": 0.45, "tall": 0.69, "desc": 0.64, "i": 0.67, "t": 0.62}
-# Height of the center of each letter class above the baseline
-_CENTER_RATIO = {"x": 0.225, "tall": 0.345, "desc": 0.13, "i": 0.335, "t": 0.31}
-_QUOTES = set("‘’“”'\"`")
-_DASHES = set("-–—−~")
-# Ink width of the minus sign (in font sizes). En dash 0.5, em dash 1.0, hyphen 0.3
-_MINUS_WIDTH = (0.55, 0.8)
-_TEXT_FONT = "Times-Roman"
-_MONO_FONT = "Courier"
-_MATH_FONT = "CMMI10"
-_SYMBOL_FONT = "CMSY10"
+
+
 # Structure of PyMuPDF get_text("dict"). Its fields change between versions, so it only passes through this layer.
 PageData = dict[str, Any]
-Key = tuple[int, int]
-# Thin rules: the underline of \_ and inline fraction bars. Rules longer than 30pt are table rules and footnote rules
-_RULE: Key = (-2, 0)
+
+
 _RULE_HEIGHT = 1.2
+
+
 _RULE_LENGTH = 30.0
-_PAD = 0.6
-
-
-@dataclass(frozen=True)
-class OcrChar:
-    text: str
-    rect: pymupdf.Rect
-    conf: float
-
-
-@dataclass(frozen=True)
-class OcrWord:
-    text: str
-    rect: pymupdf.Rect
-    conf: float
-    chars: tuple[OcrChar, ...] = ()
-
-
-@dataclass(frozen=True)
-class Glyph:
-    """One glyph drawn on the page. key is (font xref, character code), rect is the ink box of the bitmap, origin is
-    the glyph origin."""
-
-    key: Key
-    rect: pymupdf.Rect
-    color: int = 0
-    origin: tuple[float, float] | None = None
-
-
-@dataclass(frozen=True)
-class Label:
-    text: str
-    agreement: float
-
-
-@dataclass
-class _Line:
-    glyphs: list[Glyph]
-    tokens: list[list[Glyph]] = field(default_factory=list)
-    baseline: float = 0.0
-    xheight: float = 0.0
-    size: float = 0.0
 
 
 def broken_type3_names(doc: pymupdf.Document, page: pymupdf.Page) -> set[str]:
@@ -382,195 +343,6 @@ def _rgb(color: object) -> int:
     return (red << 16) | (green << 8) | blue
 
 
-# ---- Recognition ----
-
-
-def _ocr_pages(doc: pymupdf.Document, numbers: list[int]) -> dict[int, list[OcrWord]]:
-    """Recognize the whole document together. Rendering runs on the main thread and tesseract in parallel; each page
-    is recognized as soon as it is rendered. A page that times out casts no votes."""
-    if shutil.which("tesseract") is None:
-        raise ValueError("此 PDF 的文字为不含 Unicode 编码的点阵字体，需要安装 tesseract 才能识别原文")
-
-    def read(path: Path) -> list[OcrWord]:
-        try:
-            return ocr_image(path)
-        except subprocess.TimeoutExpired:
-            return []
-
-    workers = max(1, min(4, os.cpu_count() or 1, len(numbers)))
-    with tempfile.TemporaryDirectory(prefix="type3-") as tmp, ThreadPoolExecutor(max_workers=workers) as pool:
-        pending = {}
-        for pno in numbers:
-            path = Path(tmp) / f"p{pno}.png"
-            doc[pno].get_pixmap(matrix=pymupdf.Matrix(_OCR_SCALE, _OCR_SCALE), alpha=False).save(path)
-            pending[pno] = pool.submit(read, path)
-        return {pno: future.result() for pno, future in pending.items()}
-
-
-def ocr_image(path: Path, scale: float = _OCR_SCALE) -> list[OcrWord]:
-    exe = shutil.which("tesseract")
-    if exe is None:
-        return []
-    env = {**os.environ, "OMP_THREAD_LIMIT": "1"}
-    proc = subprocess.run(
-        [exe, str(path), "stdout", "--psm", "3", "-l", "eng", "-c", "hocr_char_boxes=1", "hocr"],
-        capture_output=True,
-        text=True,
-        timeout=_OCR_TIMEOUT,
-        check=False,
-        env=env,
-    )
-    if proc.returncode != 0 and "traineddata" in proc.stderr:
-        raise ValueError("点阵字体页面未识别出文字，请确认已安装 tesseract 英文语言包")
-    parser = _HocrWords(scale)
-    parser.feed(proc.stdout)
-    return parser.words
-
-
-class _HocrWords(HTMLParser):
-    """Words and per-character boxes in hOCR. Character boxes and confidences are on ocrx_cinfo."""
-
-    def __init__(self, scale: float):
-        super().__init__()
-        self.scale = scale
-        self.words: list[OcrWord] = []
-        self._stack: list[str] = []
-        self._word: tuple[pymupdf.Rect, float] | None = None
-        self._chars: list[OcrChar] = []
-        self._char: tuple[pymupdf.Rect, float] | None = None
-        self._text = ""
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag != "span":
-            return
-        info = dict(attrs)
-        kind = info.get("class") or ""
-        title = info.get("title") or ""
-        self._stack.append(kind)
-        if kind == "ocrx_word":
-            box = re.search(r"bbox (\d+) (\d+) (\d+) (\d+)", title)
-            conf = re.search(r"x_wconf ([\d.]+)", title)
-            self._word = (self._rect(box), float(conf.group(1)) if conf else 0.0) if box else None
-            self._chars = []
-        elif kind == "ocrx_cinfo":
-            box = re.search(r"x_bboxes (\d+) (\d+) (\d+) (\d+)", title)
-            conf = re.search(r"x_conf ([\d.]+)", title)
-            self._char = (self._rect(box), float(conf.group(1)) if conf else 0.0) if box else None
-            self._text = ""
-
-    def handle_data(self, data: str) -> None:
-        if self._char is not None:
-            self._text += data
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag != "span" or not self._stack:
-            return
-        kind = self._stack.pop()
-        if kind == "ocrx_cinfo" and self._char is not None:
-            text = _LIGATURES.get(self._text.strip(), self._text.strip())
-            if text:
-                self._chars.append(OcrChar(text, *self._char))
-            self._char = None
-        elif kind == "ocrx_word" and self._word is not None:
-            text = "".join(char.text for char in self._chars)
-            if text:
-                self.words.append(OcrWord(text, self._word[0], self._word[1], tuple(self._chars)))
-            self._word = None
-
-    def _rect(self, box: re.Match[str]) -> pymupdf.Rect:
-        return pymupdf.Rect(*(int(box.group(index)) / self.scale for index in range(1, 5)))
-
-
-def _vote_labels(glyphs: dict[int, list[Glyph]], words: dict[int, list[OcrWord]]) -> dict[Key, Label]:
-    """Recognized characters vote on the glyphs they fall on by position.
-
-    Words whose character count matches the glyph count are paired one by one, which settles most glyphs. Words that
-    do not match (the ligature ffi is one glyph, OCR missed or added a character) are then aligned by the settled
-    glyphs and by position: a reliably recognized glyph takes its own character, and the remaining characters go to
-    the unsettled glyphs.
-    """
-    votes: dict[Key, Counter[str]] = defaultdict(Counter)
-    uneven: list[tuple[list[Glyph], tuple[OcrChar, ...]]] = []
-    for pno, page_words in words.items():
-        centers = _GlyphCenters(glyphs.get(pno, []))
-        for word in page_words:
-            box = pymupdf.Rect(word.rect.x0 - 0.7, word.rect.y0 - 0.7, word.rect.x1 + 0.7, word.rect.y1 + 0.7)
-            inside = sorted(centers.inside(box), key=lambda glyph: glyph.rect.x0)
-            if not inside or not word.chars:
-                continue
-            # When the counts match, pair in order: the OCR character order is reliable, while per-character boxes
-            # are often two or three points off
-            if len(inside) == len(word.chars):
-                for glyph, char in zip(inside, word.chars):
-                    votes[glyph.key][char.text] += char.conf
-            else:
-                uneven.append((inside, word.chars))
-    first = _best_labels(votes)
-    for inside, chars in uneven:
-        for glyph, taken in zip(inside, _align(inside, chars, first)):
-            if taken and not _sure(first.get(glyph.key)):
-                votes[glyph.key]["".join(char.text for char in taken)] += min(char.conf for char in taken) / 2
-    return _best_labels(votes)
-
-
-def _best_labels(votes: dict[Key, Counter[str]]) -> dict[Key, Label]:
-    labels: dict[Key, Label] = {}
-    for key, counter in votes.items():
-        total = sum(counter.values())
-        if total > 0:
-            text, weight = counter.most_common(1)[0]
-            labels[key] = Label(text, weight / total)
-    return labels
-
-
-def _sure(label: Label | None) -> bool:
-    return label is not None and label.agreement >= _SURE
-
-
-def _align(
-    glyphs: list[Glyph],
-    chars: tuple[OcrChar, ...],
-    labels: dict[Key, Label],
-) -> list[tuple[OcrChar, ...]]:
-    """Assign the recognized characters to the glyphs in order, 0 to 3 characters per glyph, with the lowest cost.
-
-    A settled glyph should get its own character; a character that does not overlap its glyph horizontally adds cost,
-    so an extra dot recognized by OCR does not push all following characters out of place.
-    """
-    count, total = len(glyphs), len(chars)
-    inf = float("inf")
-    cost = [[inf] * (total + 1) for _ in range(count + 1)]
-    back = [[0] * (total + 1) for _ in range(count + 1)]
-    cost[0][0] = 0.0
-    for index in range(1, count + 1):
-        label = labels.get(glyphs[index - 1].key)
-        for used in range(total + 1):
-            for take in range(0, min(3, used) + 1):
-                prev = cost[index - 1][used - take]
-                if prev == inf:
-                    continue
-                taken = chars[used - take : used]
-                text = "".join(char.text for char in taken)
-                if _sure(label):
-                    step = 0.0 if text == label.text else 2.0
-                else:
-                    step = 1.5 if take == 0 else 0.3 * (take - 1)
-                # Characters assigned to a glyph must overlap it horizontally
-                step += sum(1.0 for char in taken if _overlap(glyphs[index - 1].rect, char.rect) <= 0)
-                if prev + step < cost[index][used]:
-                    cost[index][used] = prev + step
-                    back[index][used] = take
-    if cost[count][total] == inf:
-        return [() for _ in glyphs]
-    taken: list[tuple[OcrChar, ...]] = []
-    used = total
-    for index in range(count, 0, -1):
-        take = back[index][used]
-        taken.append(tuple(chars[used - take : used]))
-        used -= take
-    return taken[::-1]
-
-
 def _readable(glyphs: list[Glyph], labels: dict[Key, Label]) -> bool:
     known = sum(1 for glyph in glyphs if glyph.key in labels)
     return bool(glyphs) and known >= len(glyphs) * _READABLE
@@ -718,34 +490,6 @@ def _host_line(
     return best[1] if best is not None else None
 
 
-def _letter_class(text: str) -> str | None:
-    """Letter class by ink height. f, j, J and Q reach below the baseline in italic and have no fixed height, so they
-    get no class."""
-    if len(text) != 1 or text in _UNSTEADY:
-        return None
-    if text in _X_LETTERS:
-        return "x"
-    if text in _DESCENDERS:
-        return "desc"
-    if text in ("i", "t"):
-        return text
-    if text in _TALL_LETTERS:
-        return "tall"
-    return None
-
-
-def _glyph_size(glyph: Glyph, labels: dict[Key, Label], sure: bool = True) -> float | None:
-    """Convert the ink height back to a font size by letter class. Glyphs not recognized reliably have no font
-    size."""
-    label = labels.get(glyph.key)
-    if label is None or (sure and label.agreement < _SURE):
-        return None
-    kind = _letter_class(label.text)
-    if kind is None:
-        return None
-    return glyph.rect.height / _HEIGHT_RATIO[kind]
-
-
 def _measure(line: _Line, labels: dict[Key, Label]) -> None:
     sizes = [size for glyph in line.glyphs if (size := _glyph_size(glyph, labels))]
     line.size = statistics.median(sizes) if sizes else statistics.median(g.rect.height for g in line.glyphs) / 0.7
@@ -870,198 +614,6 @@ def _word_owners(glyphs: list[Glyph], words: list[OcrWord]) -> dict[int, int]:
     return owners
 
 
-class _GlyphCenters:
-    """The glyphs of one page sorted by the vertical coordinate of their center. A page has a thousand glyphs and
-    hundreds of words, and comparing every word with every glyph is too slow, so a box lookup only checks the range
-    whose centers lie between the top and bottom of the box."""
-
-    def __init__(self, glyphs: list[Glyph]) -> None:
-        self._glyphs = glyphs
-        self._order = sorted(range(len(glyphs)), key=lambda index: (glyphs[index].rect.y0 + glyphs[index].rect.y1) / 2)
-        self._middles = [(glyphs[index].rect.y0 + glyphs[index].rect.y1) / 2 for index in self._order]
-
-    def inside(self, box: pymupdf.Rect) -> list[Glyph]:
-        """Glyphs whose center lies in box, in their original order."""
-        low = bisect.bisect_left(self._middles, box.y0)
-        high = bisect.bisect_right(self._middles, box.y1)
-        found = sorted(index for index in self._order[low:high] if _center_in(self._glyphs[index].rect, box))
-        return [self._glyphs[index] for index in found]
-
-
-def _learn_roles(
-    pages: dict[int, list[_Line]],
-    labels: dict[Key, Label],
-    shapes: Callable[[set[Key]], dict[Key, np.ndarray]],
-) -> tuple[dict[Key, str], set[Key]]:
-    """Count across the document how often each glyph occurs inside words, and decide whether it is body text, math,
-    or a digit or punctuation mark.
-
-    First, words of four or more letters with every character recognized reliably settle a set of body-text glyphs
-    (view names such as psc and cp are math italic and do not count). All letters of such words count as inside a
-    word. Short words come next: a letter counts as inside a word when another letter of the same word is a body-text
-    glyph and none of them is a variable letter that often stands alone (monospace S is also used alone as a variable
-    in pseudocode). This fills in the ligature ff, the W of We, and T and h that occur in headings only in The.
-    Math italic a and v almost never occur in words (v’s counts once in a while).
-    Letters that never occur in a word are variables. In English only A and I form words on their own: their bitmaps
-    are compared with A and I in body text, and a similar one is body text (the A one size smaller in the abstract).
-    Italic body text and math italic look the same, so other letters cannot be told apart by comparison.
-    """
-    tokens = [
-        _without_plural(_main_glyphs(line, token, labels), labels)
-        for lines in pages.values()
-        for line in lines
-        for token in line.tokens
-    ]
-    seen = Counter(glyph.key for token in tokens for glyph in token)
-    seeds = {
-        glyph.key for token in tokens if _sure_word(token, labels) for glyph in token if _letter(labels.get(glyph.key))
-    }
-    alone = Counter(token[0].key for token in tokens if len(token) == 1 and _letter(labels.get(token[0].key)))
-    loner = {key for key, count in alone.items() if count * 3 >= seen[key]}
-    in_word: Counter[Key] = Counter()
-    for token in tokens:
-        if not _alpha_core(token, labels, 2):
-            continue
-        letters = [glyph for glyph in token if _letter(labels.get(glyph.key))]
-        sure = _sure_word(token, labels)
-        for glyph in letters:
-            others = [item for item in letters if item is not glyph]
-            if sure or (any(item.key in seeds for item in others) and not any(item.key in loner for item in others)):
-                in_word[glyph.key] += 1
-    numeral: Counter[Key] = Counter()
-    for token in tokens:
-        text = "".join(_text_of(glyph, labels) for glyph in token)
-        # At least two digits: math italic b is often read as 6, and followed by a comma it also looks like a number
-        if sum(ch.isdigit() for ch in text) >= 2 and _NUMBER.fullmatch(text):
-            for glyph in token:
-                numeral[glyph.key] += 1
-    roles = {key: _role(labels.get(key), in_word[key], count, numeral[key] * 2 >= count) for key, count in seen.items()}
-    # Dashes are told apart by width: the minus sign is 0.6 font sizes, and hyphen, en dash and em dash each have
-    # their own width; marks taller than a dash are arrows
-    dashes: dict[Key, list[tuple[float, float]]] = defaultdict(list)
-    for line in (line for lines in pages.values() for line in lines):
-        for glyph in line.glyphs:
-            if _text_of(glyph, labels) in _DASHES:
-                dashes[glyph.key].append((glyph.rect.width / line.size, glyph.rect.height / line.size))
-    for key, shapes_seen in dashes.items():
-        width = statistics.median(shape[0] for shape in shapes_seen)
-        height = statistics.median(shape[1] for shape in shapes_seen)
-        if height > 0.15 or _MINUS_WIDTH[0] <= width <= _MINUS_WIDTH[1]:
-            roles[key] = "symbol"
-    # The article A starts a sentence, the variable A sits inside one. It is the article only when it mostly starts
-    # sentences and its bitmap looks like the body-text A.
-    # Punctuation that occurs only once or twice is also compared by bitmap with common glyphs of the same name
-    opening = Counter()
-    for lines in pages.values():
-        previous = "."
-        for line in lines:
-            for token in line.tokens:
-                if len(token) == 1:
-                    if previous[-1:] in ".!?:":
-                        opening[token[0].key] += 1
-                previous = "".join(_text_of(glyph, labels) for glyph in token) or previous
-    words = {
-        key
-        for key, role in roles.items()
-        if role == "letter" and labels[key].text in _LETTER_WORDS and opening[key] * 2 >= seen[key]
-    }
-    odd = {
-        key for key, role in roles.items() if role == "neutral" and seen[key] <= 2 and not labels[key].text.isalnum()
-    }
-    names = {labels[key].text for key in words | odd}
-    refs = {
-        key
-        for key, role in roles.items()
-        if key not in odd
-        and labels.get(key) is not None
-        and labels[key].text in names
-        and (role == "text" or (role == "neutral" and seen[key] >= 4))
-    }
-    doubtful: set[Key] = set()
-    if words or odd:
-        images = shapes(words | odd | refs)
-        for key in words:
-            if _looks_like(key, refs, labels, images, _SAME_SHAPE):
-                roles[key] = "text"
-        # A footnote asterisk read as a quote mark does not look like real quote marks, so its recognition is not
-        # trusted
-        doubtful = {key for key in odd if not _looks_like(key, refs, labels, images, _SAME_MARK)}
-    return {key: "math" if role == "letter" else role for key, role in roles.items()}, doubtful
-
-
-def _without_plural(token: list[Glyph], labels: dict[Key, Label]) -> list[Glyph]:
-    """Plurals of variables in math: the a’s, v’s. After removing ’s, the single letter left is not a word."""
-    texts = [_text_of(glyph, labels) for glyph in token]
-    while texts and not texts[-1].isalnum():
-        texts.pop()
-    if len(texts) >= 3 and texts[-1] == "s" and texts[-2] in ("’", "'"):
-        return token[: len(texts) - 2]
-    return token
-
-
-def _letter(label: Label | None) -> bool:
-    return label is not None and label.text.isalpha()
-
-
-def _core(token: list[Glyph], labels: dict[Key, Label]) -> str:
-    """Strip punctuation, quote marks and footnote marks (the asterisk of Efficiently*) from both ends and return the
-    characters in between."""
-    texts = [(labels.get(glyph.key) or Label("?", 0)).text for glyph in token]
-    start, end = 0, len(texts)
-    while start < end and not texts[start].isalpha():
-        start += 1
-    while end > start and not texts[end - 1].isalpha():
-        end -= 1
-    return "".join(texts[start:end])
-
-
-def _alpha_core(token: list[Glyph], labels: dict[Key, Label], length: int) -> bool:
-    core = _core(token, labels)
-    return sum(ch.isalpha() for ch in core) >= length and core.replace("-", "").replace("’", "").isalpha()
-
-
-def _sure_word(token: list[Glyph], labels: dict[Key, Label]) -> bool:
-    if any((label := labels.get(glyph.key)) is None or label.agreement < _SURE for glyph in token):
-        return False
-    return _alpha_core(token, labels, 4)
-
-
-def _role(label: Label | None, in_word: int, count: int, numeral: bool = False) -> str:
-    """Digits are recognized unsteadily (bold 1 is sometimes read as l), but they mostly occur in numbers such as 1.1
-    and 12, so they are still digits."""
-    if label is None:
-        return "symbol"
-    if count and in_word / count >= _IN_WORD:
-        return "text"
-    if any(ch in _MATH_SYMBOLS for ch in label.text):
-        return "symbol"
-    if label.agreement < _SURE and not (numeral and label.text.isdigit()):
-        return "math" if label.text.isalpha() else "symbol"
-    if label.text.isalpha():
-        return "letter"
-    return "neutral"
-
-
-def _text_of(glyph: Glyph, labels: dict[Key, Label]) -> str:
-    label = labels.get(glyph.key)
-    return label.text if label is not None else "?"
-
-
-def _looks_like(
-    key: Key,
-    refs: set[Key],
-    labels: dict[Key, Label],
-    images: dict[Key, np.ndarray],
-    threshold: float,
-) -> bool:
-    image = images.get(key)
-    label = labels.get(key)
-    if image is None or label is None:
-        return False
-    same = [images[other] for other in refs if other in images and labels[other].text == label.text]
-    return any(float(np.dot(image, other)) >= threshold for other in same)
-
-
 def _bullets(
     pages: dict[int, list[_Line]],
     labels: dict[Key, Label],
@@ -1131,340 +683,6 @@ def _glyph_shapes(
     return found
 
 
-# ---- Writing PyMuPDF lines ----
-
-
-def _line_dict(line: _Line, reader: Type3Reader) -> dict[str, Any] | None:
-    styles = _glyph_styles(line, reader)
-    items: list[tuple[str, Glyph]] = []
-    for index, token in enumerate(line.tokens):
-        if index:
-            items.append(("", _SPACE))
-        items.extend((styles[id(glyph)], glyph) for glyph in token)
-    # Spaces between words go with the body text: a formula span is replaced as a whole by a placeholder, and a space
-    # inside it would be lost with it
-    for index, (_style, glyph) in enumerate(items):
-        if glyph is _SPACE:
-            before, after = items[index - 1][0], items[index + 1][0]
-            items[index] = (before if before in _PROSE or after not in _PROSE else after, glyph)
-    spans: list[dict[str, Any]] = []
-    run: list[Glyph] = []
-    current = ""
-    for style, glyph in items:
-        if run and style != current:
-            spans.append(_span(run, current, line, reader))
-            run = []
-        run.append(glyph)
-        current = style
-    if run:
-        spans.append(_span(run, current, line, reader))
-    spans = [span for span in spans if span["text"].strip()]
-    if not spans:
-        return None
-    box = pymupdf.Rect()
-    for span in spans:
-        box |= pymupdf.Rect(span["bbox"])
-    return {"spans": spans, "wmode": 0, "dir": (1.0, 0.0), "bbox": (box.x0, box.y0, box.x1, box.y1)}
-
-
-# Space between words
-_SPACE = Glyph((-1, -1), pymupdf.Rect())
-# Spaces only go with plain body text: monospace words are replaced by placeholders like formulas
-_PROSE = ("text",)
-
-
-def _glyph_styles(line: _Line, reader: Type3Reader) -> dict[int, str]:
-    """What each glyph is written as: text, mono, math, symbol, script.
-
-    A word containing math glyphs is a formula as a whole; digits and brackets between two formula words join it, so
-    (p, s, c) is one formula. A period or comma at the end of a run of formula words is sentence punctuation and stays
-    in the body text.
-    """
-    mono = _mono_tokens(line, reader)
-    kinds: list[str] = []
-    for index, token in enumerate(line.tokens):
-        roles = [_role_of(glyph, line, reader) for glyph in token if not _is_script(glyph, line, reader)]
-        if index in mono:
-            # Monospace fonts have no math: the braces and @ in {venky, anand}@db are literal characters
-            kinds.append("text")
-        elif any(role in ("math", "symbol") for role in roles):
-            kinds.append("math")
-        elif "text" in roles:
-            kinds.append("text")
-        else:
-            kinds.append("neutral")
-    for index, kind in enumerate(kinds):
-        if kind != "neutral":
-            continue
-        before = next((item for item in reversed(kinds[:index]) if item != "neutral"), "")
-        after = next((item for item in kinds[index + 1 :] if item != "neutral"), "")
-        # k = 2, 1 − (…): a number right next to an operator is also part of the formula
-        # A list number 1. followed by ≺ is not a minuend either: numbers with a period do not count
-        operand = (
-            index > 0 and kinds[index - 1] == "math" and _ends_with_operator(line.tokens[index - 1], reader)
-        ) or (
-            index + 1 < len(kinds)
-            and kinds[index + 1] == "math"
-            and _starts_with_operator(line.tokens[index + 1], reader)
-            and not _sentence_mark(line.tokens[index][-1], reader)
-        )
-        kinds[index] = "math" if (before == "math" and after == "math") or operand else "text"
-    absorbed = _close_brackets(line.tokens, kinds, reader)
-    prose_tails = _hyphen_tails(line, kinds, reader)
-    splits = _clause_splits(line.tokens, kinds, reader)
-    styles: dict[int, str] = {}
-    for index, (token, kind) in enumerate(zip(line.tokens, kinds)):
-        tail = len(token)
-        phrase_end = (
-            index + 1 == len(kinds) or kinds[index + 1] != "math" or _ends_sentence(token, reader) or index in splits
-        )
-        if index in mono and index + 1 not in mono:
-            # A period or comma at the end of a run of monospace words belongs to the sentence. The comma in C1, C2
-            # is still code
-            while tail > 1 and _sentence_mark(token[tail - 1], reader):
-                tail -= 1
-        if kind == "math" and phrase_end:
-            opened = _phrase_depth(line.tokens, kinds, index, reader)
-            while tail > 1:
-                last = token[tail - 1]
-                if _sentence_mark(last, reader):
-                    tail -= 1
-                elif _bracket(last, reader) < 0 and opened < 0:
-                    # The closing parenthesis of (using d) was opened in the body text and stays there
-                    opened += 1
-                    tail -= 1
-                else:
-                    break
-        for position, glyph in enumerate(token):
-            if _is_script(glyph, line, reader):
-                styles[id(glyph)] = "script"
-            elif id(glyph) in prose_tails:
-                styles[id(glyph)] = "text"
-            elif (kind == "math" and position < tail) or id(glyph) in absorbed:
-                styles[id(glyph)] = "symbol" if _role_of(glyph, line, reader) == "symbol" else "math"
-            else:
-                styles[id(glyph)] = "mono" if index in mono and position < tail else "text"
-    return styles
-
-
-def _hyphen_tails(line: _Line, kinds: list[str], reader: Type3Reader) -> set[int]:
-    """In n-dimensional, the body-text word after the hyphen stays in the body text and only n is a formula.
-    Otherwise the model does not see the word and translates it again."""
-    tails: set[int] = set()
-    for token, kind in zip(line.tokens, kinds):
-        if kind != "math":
-            continue
-        for position, glyph in enumerate(token):
-            if _label_text(glyph, reader) not in "-‐" or position == 0:
-                continue
-            rest = [item for item in token[position + 1 :] if _label_text(item, reader).isalpha()]
-            if len(rest) >= 3 and all(reader.roles.get(item.key) == "text" for item in rest):
-                tails.update(id(item) for item in token[position:])
-            break
-    return tails
-
-
-def _close_brackets(tokens: list[list[Glyph]], kinds: list[str], reader: Type3Reader) -> set[int]:
-    """A bracket opened in a formula must close in the formula: in (i + 1)st, 1) goes to the formula and st stays in
-    the body text."""
-    absorbed: set[int] = set()
-    depth = 0
-    for token, kind in zip(tokens, kinds):
-        if kind == "math":
-            for glyph in token:
-                depth = max(depth + _bracket(glyph, reader), 0)
-            continue
-        if depth <= 0:
-            continue
-        for glyph in token:
-            absorbed.add(id(glyph))
-            depth += _bracket(glyph, reader)
-            if depth <= 0:
-                break
-        depth = max(depth, 0)
-    return absorbed
-
-
-def _phrase_depth(tokens: list[list[Glyph]], kinds: list[str], end: int, reader: Type3Reader) -> int:
-    """How many more opening than closing brackets the run of formula words ending at end has. A negative number
-    means extra closing brackets."""
-    start = end
-    while start > 0 and kinds[start - 1] == "math":
-        start -= 1
-    return sum(_bracket(glyph, reader) for token in tokens[start : end + 1] for glyph in token)
-
-
-def _clause_splits(tokens: list[list[Glyph]], kinds: list[str], reader: Type3Reader) -> set[int]:
-    """The words in a run of formula words whose trailing comma splits the formula.
-
-    A comma inside brackets does not split: (p, s, c). When the part left of the comma has no relation symbol yet and
-    is a single variable or one bracketed group, it splits: d, e, g and h are one formula each, ⟨L, ⪯⟩, a ≺ b is two.
-    When the left part already has a relation symbol (i = 1, 2, …, k), what follows is only an enumeration, unless
-    another relation follows (a = b, c = d).
-    """
-    splits: set[int] = set()
-    depth = 0
-    related = False
-    for index, (token, kind) in enumerate(zip(tokens, kinds)):
-        if kind != "math":
-            depth, related = 0, False
-            continue
-        depth = max(depth + sum(_bracket(glyph, reader) for glyph in token), 0)
-        related = related or _has_relation(token, reader)
-        last = token[-1]
-        if depth > 0 or not _sentence_mark(last, reader) or _label_text(last, reader) not in ",;":
-            continue
-        if not related or _relation_follows(tokens, kinds, index, reader):
-            splits.add(index)
-            depth, related = 0, False
-    return splits
-
-
-def _has_relation(token: list[Glyph], reader: Type3Reader) -> bool:
-    return any(reader.roles.get(glyph.key) == "symbol" and _label_text(glyph, reader) in _RELATIONS for glyph in token)
-
-
-def _relation_follows(tokens: list[list[Glyph]], kinds: list[str], index: int, reader: Type3Reader) -> bool:
-    for after in range(index + 1, len(tokens)):
-        if kinds[after] != "math":
-            return False
-        if _has_relation(tokens[after], reader):
-            return True
-        if _sentence_mark(tokens[after][-1], reader) and _label_text(tokens[after][-1], reader) in ",;":
-            return False
-    return False
-
-
-def _ends_sentence(token: list[Glyph], reader: Type3Reader) -> bool:
-    """size S. c gives: the period after S separates two formulas. An ellipsis ... does not count."""
-    if len(token) < 2 or not _sentence_mark(token[-1], reader) or _label_text(token[-1], reader) != ".":
-        return False
-    return _label_text(token[-2], reader) != "."
-
-
-def _starts_with_operator(token: list[Glyph], reader: Type3Reader) -> bool:
-    first = token[0]
-    return reader.roles.get(first.key) == "symbol" and _label_text(first, reader) in _OPERATORS
-
-
-def _ends_with_operator(token: list[Glyph], reader: Type3Reader) -> bool:
-    last = token[-1]
-    return reader.roles.get(last.key) == "symbol" and _label_text(last, reader) in _OPERATORS
-
-
-def _bracket(glyph: Glyph, reader: Type3Reader) -> int:
-    text = _label_text(glyph, reader)
-    return text.count("(") + text.count("[") - text.count(")") - text.count("]")
-
-
-def _sentence_mark(glyph: Glyph, reader: Type3Reader) -> bool:
-    """Sentence punctuation recognized reliably. Subscript i is often read as a semicolon, but unsteadily, so it does
-    not count."""
-    label = reader.labels.get(glyph.key)
-    return _sure(label) and label is not None and label.text in _SENTENCE_MARKS
-
-
-def _role_of(glyph: Glyph, line: _Line, reader: Type3Reader) -> str:
-    """A thin rule at the baseline is an underline and counts as a character; above the baseline it is a fraction
-    bar and belongs to the formula."""
-    if glyph.key == _RULE:
-        center = (glyph.rect.y0 + glyph.rect.y1) / 2
-        return "neutral" if abs(center - line.baseline) <= line.size * 0.12 else "symbol"
-    return reader.roles.get(glyph.key, "symbol")
-
-
-def _is_script(glyph: Glyph, line: _Line, reader: Type3Reader) -> bool:
-    """Superscript or subscript: a clearly smaller font size, or the same size with the whole glyph shifted up or
-    down (the upright supplier below N).
-
-    The shift is measured at the glyph center, not the bottom edge: italic f reaches below the baseline anyway.
-    Symbols without a recognized letter have no font size; those whose bottom edge hangs above three quarters of the
-    x-height (footnote marks) count as superscripts. Quote marks hang anyway and hyphens sit around half the
-    x-height; neither counts.
-    """
-    # For letters recognized unsteadily (subscript N is sometimes read as M) the class is usually right, so the font
-    # size can still be estimated
-    size = _glyph_size(glyph, reader.labels, sure=False)
-    if size is None:
-        text = _label_text(glyph, reader)
-        role = reader.roles.get(glyph.key, "symbol")
-        trusted = role != "symbol" and glyph.key not in reader.doubtful
-        if role == "text" or (trusted and (text in _QUOTES or text in _DASHES)):
-            return False
-        return glyph.rect.y1 < line.baseline - line.xheight * 0.75
-    return _off_size(glyph, line, reader.labels, size)
-
-
-def _off_size(glyph: Glyph, line: _Line, labels: dict[Key, Label], size: float) -> bool:
-    """The font size is clearly smaller than the line's, or the center is off the height expected for its letter
-    class."""
-    if size < line.size * _SCRIPT:
-        return True
-    kind = _letter_class(labels[glyph.key].text)
-    center = (glyph.rect.y0 + glyph.rect.y1) / 2
-    expected = line.baseline - _CENTER_RATIO.get(kind or "", 0.3) * line.size
-    return abs(center - expected) > line.size * _SHIFT
-
-
-def _main_glyphs(line: _Line, token: list[Glyph], labels: dict[Key, Label]) -> list[Glyph]:
-    """Remove superscripts and subscripts. The supplier below N sits in one word with N and must not make N look
-    like part of a word."""
-    kept = []
-    for glyph in token:
-        size = _glyph_size(glyph, labels, sure=False)
-        if size is None or not _off_size(glyph, line, labels, size):
-            kept.append(glyph)
-    return kept or token
-
-
-def _mono_tokens(line: _Line, reader: Type3Reader) -> set[int]:
-    """Words in which at least half of the letters are monospace glyphs. Words next to a monospace word whose letter
-    spacing is also the cell width (SELECT, AS, FROM) count as well."""
-    found: dict[int, float] = {}
-    for index, token in enumerate(line.tokens):
-        # Only letters count: the parentheses of (year) are upright. Subscripts do not count either: the monospace
-        # supplier below N does not make N monospace
-        letters = [
-            glyph for glyph in token if _label_text(glyph, reader).isalpha() and not _is_script(glyph, line, reader)
-        ]
-        known = [reader.mono[glyph.key] for glyph in letters if glyph.key in reader.mono]
-        # Monospace and body text use two sets of bitmaps; a word with half of its letters in monospace glyphs is a
-        # monospace word (the y of (day) occurs only once)
-        if letters and len(known) * 2 >= len(letters):
-            found[index] = statistics.median(known)
-    # Letter spacing exactly at a monospace cell width, with glyphs that never occur in proportional-font words (the
-    # FROM line has no other monospace word)
-    pitches = set(reader.mono.values())
-    for index, token in enumerate(line.tokens):
-        gaps = _steps(token)
-        if index in found or not gaps or min(gaps) <= 0:
-            continue
-        if any(
-            reader.roles.get(glyph.key) in ("math", "symbol") or glyph.key in reader.proportional for glyph in token
-        ):
-            continue
-        pitch = next((value for value in pitches if all(abs(gap - value) <= value * 0.12 for gap in gaps)), None)
-        if pitch is not None:
-            found[index] = pitch
-    grown = bool(found)
-    while grown:
-        grown = False
-        for index, token in enumerate(line.tokens):
-            near = [found[other] for other in (index - 1, index + 1) if other in found]
-            if index in found or not near:
-                continue
-            # part p: a single variable next to a monospace word is still a formula. Glyphs seen in body text, as in
-            # So and the, do not follow either
-            if any(
-                reader.roles.get(glyph.key) in ("math", "symbol") or glyph.key in reader.proportional for glyph in token
-            ):
-                continue
-            if all(abs(gap - near[0]) <= near[0] * 0.12 for gap in _steps(token)):
-                found[index] = near[0]
-                grown = True
-    return set(found)
-
-
 def _mono_kinds(pages: dict[int, list[_Line]], labels: dict[Key, Label]) -> dict[Key, float]:
     """Monospace glyphs and their cell widths.
 
@@ -1517,59 +735,6 @@ def _proportional_kinds(pages: dict[int, list[_Line]], mono: dict[Key, float]) -
             if not any(glyph.key in mono for glyph in token):
                 found.update(glyph.key for glyph in token)
     return found
-
-
-def _steps(token: list[Glyph]) -> list[float]:
-    return [_middle(right) - _middle(left) for left, right in zip(token, token[1:])]
-
-
-def _middle(glyph: Glyph) -> float:
-    return (glyph.rect.x0 + glyph.rect.x1) / 2
-
-
-def _label_text(glyph: Glyph, reader: Type3Reader) -> str:
-    return _text_of(glyph, reader.labels)
-
-
-def _span(run: list[Glyph], style: str, line: _Line, reader: Type3Reader) -> dict[str, Any]:
-    glyphs = [glyph for glyph in run if glyph is not _SPACE]
-    text = "".join(" " if glyph is _SPACE else _label_text(glyph, reader) for glyph in run)
-    ink = pymupdf.Rect()
-    for glyph in glyphs:
-        ink |= glyph.rect
-    if style == "script":
-        sizes = [size for glyph in glyphs if (size := _glyph_size(glyph, reader.labels))]
-        size = round(statistics.median(sizes), 1) if sizes else round(line.size * 0.7, 1)
-        baseline = ink.y1
-        box = pymupdf.Rect(ink)
-    else:
-        size = round(line.size, 1)
-        baseline = line.baseline
-        box = ink | pymupdf.Rect(ink.x0, baseline - size * 0.72, ink.x1, baseline + size * 0.22)
-    # Formulas are cropped from the original page with this box; a small margin on all sides keeps the pixels at the
-    # bitmap edges
-    box = pymupdf.Rect(box.x0 - _PAD, box.y0 - _PAD, box.x1 + _PAD, box.y1 + _PAD)
-    font = {
-        "text": _TEXT_FONT,
-        "mono": _MONO_FONT,
-        "math": _MATH_FONT,
-        "symbol": _SYMBOL_FONT,
-        "script": _MATH_FONT,
-    }[style]
-    return {
-        "text": text,
-        "bbox": (box.x0, box.y0, box.x1, box.y1),
-        "size": size,
-        "font": font,
-        "flags": 0,
-        "color": glyphs[0].color if glyphs else 0,
-        "origin": (ink.x0, baseline),
-        # Erasing the original text finds characters by these origins. The font box of a bitmap font is half a line
-        # taller than the ink, so finding them by box would catch other characters
-        "origins": [glyph.origin for glyph in glyphs if glyph.origin is not None],
-        "ascender": 0.75,
-        "descender": -0.25,
-    }
 
 
 def _group_lines(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
@@ -1679,13 +844,3 @@ def _union_bbox(lines: list[dict[str, Any]]) -> tuple[float, float, float, float
         if raw:
             box |= pymupdf.Rect(raw)
     return (box.x0, box.y0, box.x1, box.y1)
-
-
-def _center_in(rect: pymupdf.Rect, box: pymupdf.Rect) -> bool:
-    cx = (rect.x0 + rect.x1) / 2
-    cy = (rect.y0 + rect.y1) / 2
-    return box.x0 <= cx <= box.x1 and box.y0 <= cy <= box.y1
-
-
-def _overlap(left: pymupdf.Rect, right: pymupdf.Rect) -> float:
-    return min(left.x1, right.x1) - max(left.x0, right.x0)
