@@ -35,12 +35,12 @@ from .pdf_place import (
     _box_height,
     _expand_left,
     _formula_metrics,
-    _FormulaSources,
     _glyph_bottom,
     _insert_fitting,
     _place_plain,
     _place_typeset,
 )
+from .pdf_place_formulas import _FormulaSources
 from .pdf_type3 import broken_type3_names
 from .pdf_typeset import (
     typeset_lines,

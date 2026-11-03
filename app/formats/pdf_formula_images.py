@@ -2,10 +2,7 @@
 
 import pymupdf
 
-from .pdf_place import (
-    _FormulaSources,
-    _paint_formula,
-)
+from .pdf_place_formulas import _FormulaSources, _paint_formula
 
 
 def _white_pixmap(doc) -> "pymupdf.Pixmap":

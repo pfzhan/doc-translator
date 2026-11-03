@@ -1052,7 +1052,7 @@ def test_formulas_on_a_page_filter_their_own_lines():
     """The formulas of a page are halved top and bottom repeatedly, each part keeping only its own lines, and each
     formula is filtered on the smallest part; the glyphs kept are the same as when filtering on the whole page. A
     formula that was not registered still finds the part that covers it."""
-    from app.formats.pdf_place import _FormulaSources, _keep_marks, _pdf_rect
+    from app.formats.pdf_place_formulas import _FormulaSources, _keep_marks, _pdf_rect
     from app.formats.pdf_write_geometry import _page_form
 
     doc = pymupdf.open()
@@ -1088,7 +1088,7 @@ def test_glyph_places_match_when_a_column_jitters_in_the_last_digits():
     """The content stream rewritten after filtering has numbers with fewer digits, so the x of the first glyph on
     lines in the same column differs by ten-thousandths and the order after sorting by position changes. Each
     glyph is still in place, so the position check passes; a glyph that really moved fails it."""
-    from app.formats.pdf_place import _same_places
+    from app.formats.pdf_place_formulas import _same_places
 
     before = [(72.0001, 500.9), (71.9999, 169.0), (72.0, 181.0), (80.0, 169.0)]
     after = [(71.9999, 500.9), (72.0001, 169.0), (71.9998, 181.0), (80.05, 169.0)]
@@ -1102,7 +1102,7 @@ def test_a_formula_bitmap_is_rendered_only_when_used(monkeypatch):
     """Cropping a formula image only records where to crop; it is rendered only when vector placement fails and a
     bitmap is needed, and only once."""
     from app.formats.pdf_blocks import _FormulaImage
-    from app.formats.pdf_place import _formula_png
+    from app.formats.pdf_place_formulas import _formula_png
 
     doc = pymupdf.open()
     page = doc.new_page(width=200, height=100)
@@ -1120,7 +1120,7 @@ def test_a_formula_bitmap_is_rendered_only_when_used(monkeypatch):
 def test_formula_glyphs_stay_in_place_after_a_size_change_on_their_line():
     """When a line changes font size midway (small caps), MuPDF misplaces the formula after deleting the glyphs before
     it. If it is misplaced the whole line is kept, and the other lines are still deleted."""
-    from app.formats.pdf_place import _keep_marks, _pdf_rect
+    from app.formats.pdf_place_formulas import _keep_marks, _pdf_rect
     from app.formats.pdf_write_geometry import _page_form
 
     doc = pymupdf.open()
@@ -1562,7 +1562,7 @@ def test_a_bitmap_glyph_without_its_own_box_is_kept_by_its_extent():
     before."""
     from types import SimpleNamespace as NS
 
-    from app.formats.pdf_place import _GlyphKeeper
+    from app.formats.pdf_place_formulas import _GlyphKeeper
 
     keeper = _GlyphKeeper([(484.9, 240.1, 490.5, 244.7)])
     trm = NS(a=0.1, b=0.0, c=0.0, d=-0.1, e=485.5, f=249.8)
@@ -3045,7 +3045,7 @@ def test_the_hole_for_a_neighbour_stays_inside_its_font_box():
     """The exact box of a URL on the previous line extends half a line down, and cutting a hole by it would clip the
     tops of the glyphs of the URL on the next line. The hole is clamped to the font box; ink measured by drawing
     single glyphs (when the font box is wrong) is used as before."""
-    from app.formats.pdf_place import _hole_ink
+    from app.formats.pdf_place_formulas import _hole_ink
 
     def box(span):
         return tuple(round(v, 1) for v in _hole_ink(span))
@@ -3181,7 +3181,7 @@ def test_a_formula_leaves_the_edge_of_a_proof_box():
 def test_formula_holes_follow_the_neighbours_ink_not_their_font_box():
     """The font box of a large brace on the previous line reaches the N on the next line, but its ink does not. Cutting
     holes by ink leaves the corner of N intact."""
-    from app.formats.pdf_place import _formula_form
+    from app.formats.pdf_place_formulas import _formula_form
     from app.formats.pdf_write_geometry import _page_form
 
     doc = pymupdf.open()
@@ -3210,7 +3210,7 @@ def test_a_formula_cut_from_a_text_span_is_not_holed_by_that_span():
     cutting a hole by that box would remove the σ (leaving only the superscript in the translation). The original
     span keeps only the glyphs left after the cut, and the space has no ink, so no hole is cut. Glyphs reaching
     down from the line above still get holes"""
-    from app.formats.pdf_place import _formula_form
+    from app.formats.pdf_place_formulas import _formula_form
     from app.formats.pdf_write_geometry import _page_form
 
     doc = pymupdf.open()
@@ -3672,7 +3672,7 @@ def test_a_formula_clip_reaches_into_its_own_gaps_beside_a_comma():
     """The strokes of 𝒩 reach into the gap between it and (. When a comma follows the formula directly, only the
     rightmost rectangle must make room for the comma; the middle rectangles widen as usual, so the gap is not
     cut off."""
-    from app.formats.pdf_place import _formula_form
+    from app.formats.pdf_place_formulas import _formula_form
     from app.formats.pdf_write_geometry import _page_form
 
     doc = pymupdf.open()
@@ -3796,7 +3796,7 @@ def test_a_formula_form_box_keeps_the_overhang_of_an_italic_letter():
     own ink: a does not reach past its width, and the hook of the f of the preceding If reaching into the gap is
     not included."""
     from app.formats.pdf_blocks import _GlyphInk
-    from app.formats.pdf_place import _formula_form
+    from app.formats.pdf_place_formulas import _formula_form
     from app.formats.pdf_write_geometry import _page_form
 
     doc = pymupdf.open()
@@ -3831,7 +3831,7 @@ def test_a_formula_bitmap_keeps_the_overhang_of_an_italic_letter_on_a_clear_back
     measured from the glyphs, and the placement widens on both sides by the scale. The background is transparent,
     so placing it on a frame line does not hide the line."""
     from app.formats.pdf_blocks import _FormulaImage
-    from app.formats.pdf_place import _formula_png_rect
+    from app.formats.pdf_place_formulas import _formula_png_rect
 
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
