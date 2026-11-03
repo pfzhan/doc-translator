@@ -292,13 +292,14 @@
         return;
       }
       flush();
-      if (kind !== 'skip' && inScopeTree(node)) node.childNodes.forEach(visit);
+      // A host's own children show only at a slot of its shadow root
+      if (kind !== 'skip' && !slotless(node) && inScopeTree(node)) node.childNodes.forEach(visit);
       flush();
     };
     if (inScopeTree(root)) {
       // A host rescanned on its own (its shadow root came late)
       if (root.nodeType === Node.ELEMENT_NODE) noteShadow(root, classify(root));
-      root.childNodes.forEach(visit);
+      if (root.nodeType !== Node.ELEMENT_NODE || !slotless(root)) root.childNodes.forEach(visit);
     }
     flush();
     shadows.forEach(enterShadow);
