@@ -20,10 +20,20 @@
 
   let bubble = null; // the open bubble: {host, box, text, status, rect, scroll}
 
+  /** The focused element. For one in a shadow root, document.activeElement is the host; closed roots are open to
+   * extensions only (chrome.dom in Chrome, openOrClosedShadowRoot in Firefox). */
+  function focusedElement() {
+    const shadowOf = (el) => el.shadowRoot || chrome.dom?.openOrClosedShadowRoot?.(el) || el.openOrClosedShadowRoot;
+    let el = document.activeElement;
+    while (el && shadowOf(el)?.activeElement) el = shadowOf(el).activeElement;
+    return el;
+  }
+
   /** The selected text and the box to show the bubble next to; null when nothing is selected. */
   function selection() {
-    // Text selected in a form field is not part of the document's selection
-    const field = document.activeElement;
+    // Text selected in a form field is not part of the document's selection (Chrome still gives it as the
+    // document's selected text, so a field inside a shadow root must be found too, or secrets would get through)
+    const field = focusedElement();
     let text, rect;
     if (field && ['input', 'textarea'].includes(field.localName)) {
       const plain = field.localName === 'textarea' || TEXT_FIELDS.has(field.type);

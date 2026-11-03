@@ -207,7 +207,10 @@ async function selectionFrame(tabId) {
   const frames = await chrome.scripting.executeScript({
     target: { tabId, allFrames: true },
     func: () => {
-      const field = document.activeElement;
+      // The focused element, also in a shadow root (see focusedElement in selection.js)
+      const shadowOf = (el) => el.shadowRoot || chrome.dom?.openOrClosedShadowRoot?.(el) || el.openOrClosedShadowRoot;
+      let field = document.activeElement;
+      while (field && shadowOf(field)?.activeElement) field = shadowOf(field).activeElement;
       const inField = field?.selectionEnd > field?.selectionStart;
       return { focused: document.hasFocus(), selected: inField || !!getSelection()?.toString().trim() };
     },

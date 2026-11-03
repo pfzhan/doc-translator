@@ -322,8 +322,8 @@ The command has no shortcut by default; one can be set on `chrome://extensions/s
 
 - Each line of the selection is translated as a paragraph; lines longer than 10,000 characters are cut at a
   sentence end, and long selections are sent 50 paragraphs per request.
-- Text selected in text boxes works too, except in password and one-time-code fields and other fields for
-  secrets, which are never sent. With the shortcut, the selection is taken from the frame the user is in; text in
+- Text selected in text boxes works too, also in shadow DOM, except in password and one-time-code fields and other
+  fields for secrets, which are never sent. With the shortcut, the selection is taken from the frame the user is in; text in
   iframes the extension may enter works too (with `activeTab`, those from the same origin as the page).
 
 ### Sites translated automatically
