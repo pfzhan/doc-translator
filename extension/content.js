@@ -15,12 +15,15 @@
   // The script runs in every frame it may access; the top frame owns the status box and the shortcut's state, and
   // iframes follow it (see dt-sync)
   const IS_TOP = window === window.top;
-  // Never translated, and not part of the surrounding sentence either
+  // Never translated, and not part of the surrounding sentence either. A <slot> shows light DOM content, which is
+  // collected where it is; its own children show only when nothing is assigned to it
   const IGNORED_TAGS = new Set([
     'script', 'style', 'noscript', 'template', 'link', 'meta', 'wbr', 'hr',
     'img', 'picture', 'video', 'audio', 'canvas', 'iframe', 'object', 'embed',
-    'svg', 'math', 'input', 'textarea', 'select', 'button', 'option', TRANS_TAG,
+    'svg', 'math', 'input', 'textarea', 'select', 'button', 'option', 'slot', TRANS_TAG,
   ]);
+  // Hosts of this extension's own boxes (status, selected text, PDF notices)
+  const OWN_HOSTS = new Set(['dt-toast', 'dt-selection']);
   // Blocks kept as they are. Inline code inside a sentence stays part of the sentence
   const SKIP_TAGS = ['pre', 'code', 'kbd', 'samp'];
   // Tags that only occur inside a sentence. Hidden ones are dropped instead of splitting the sentence around them
@@ -88,6 +91,74 @@
     { rootMargin: '100% 0px' }, // one screen above and below
   );
 
+  // ---------- Shadow DOM ----------
+
+  // Shadow roots are entered like the rest of the page. closest() and contains() stop at a shadow root, so the
+  // helpers below go on to its host. The page's styles and content.css do not reach into shadow roots either: each
+  // root a translation goes into gets content.css as a <style> of its own
+
+  /** The shadow root of el. Closed ones are open to extensions only: chrome.dom in Chrome, openOrClosedShadowRoot in
+   * Firefox. Those are only looked for on custom elements, where nearly all are; an open one on any element. */
+  function shadowOf(el) {
+    if (el.shadowRoot) return el.shadowRoot;
+    if (!el.localName.includes('-') || OWN_HOSTS.has(el.localName)) return null;
+    if (chrome.dom?.openOrClosedShadowRoot) return chrome.dom.openOrClosedShadowRoot(el) || null;
+    return el.openOrClosedShadowRoot || null;
+  }
+
+  const isShadow = (node) => node?.nodeType === Node.DOCUMENT_FRAGMENT_NODE && !!node.host;
+  /** The element itself, or the host of a shadow root. */
+  const elementOf = (node) => (isShadow(node) ? node.host : node);
+  /** The parent element, or the host for an element at the top of a shadow root. */
+  const parentOf = (el) => el.parentElement || (isShadow(el.parentNode) ? el.parentNode.host : null);
+
+  function closestComposed(node, selector) {
+    for (let el = elementOf(node); el; el = el.getRootNode().host) {
+      const found = el.closest(selector);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function containsComposed(outer, node) {
+    for (let n = node; n; n = n.getRootNode().host) if (outer.contains(n)) return true;
+    return false;
+  }
+
+  const shadowRoots = new Set(); // shadow roots entered: watched for changes like body
+  const bareHosts = new Set(); // custom elements without a shadow root yet; checked again on each rescan
+  const ownStyles = new WeakMap(); // shadow root -> its copy of content.css
+  const styleEls = new WeakSet(); // those copies: their mutation records are ours
+  let css = null; // promise of the text of content.css
+
+  async function loadCss() {
+    // Content scripts cannot fetch the extension's files; the service worker can
+    try {
+      return (await chrome.runtime.sendMessage({ type: 'dt-css' })) || '';
+    } catch {
+      return '';
+    }
+  }
+
+  function enterShadow(root) {
+    if (shadowRoots.has(root)) return;
+    shadowRoots.add(root);
+    mutations.observe(root, CHANGES);
+    css ||= loadCss();
+  }
+
+  /** Give the shadow root el is in content.css, again if the page replaced the root's content since. */
+  async function styleShadow(el) {
+    const root = el.getRootNode();
+    if (!isShadow(root) || ownStyles.get(root)?.parentNode === root) return;
+    const style = document.createElement('style');
+    styleEls.add(style);
+    ownStyles.set(root, style);
+    style.textContent = await (css ||= loadCss());
+    // At the end, so the page's own first children keep their places
+    if (ownStyles.get(root) === style) root.append(style);
+  }
+
   // ---------- Finding paragraphs ----------
 
   function optedOut(el) {
@@ -107,6 +178,9 @@
     // Text marked not to translate stays in its sentence and comes back unchanged (see richOf); editable content
     // and marked blocks are left out
     if (optedOut(el)) return inline && !el.matches(EDITABLE) ? 'inline' : 'skip';
+    // A shadow host shows its shadow root, with its own children placed at the slots: not part of the sentence
+    // around it, whatever its display (custom elements are inline unless styled)
+    if (shadowOf(el)) return 'block';
     // Icon fonts write their icon names as aria-hidden text
     if (inline) return el.getAttribute('aria-hidden') === 'true' ? 'ignore' : 'inline';
     if (SKIP_TAGS.includes(el.localName)) return 'skip';
@@ -126,19 +200,23 @@
   /** The page's header, footer, navigation or sidebar that el is part of. A header or footer of an article or
    * section is part of that (its title, byline). */
   function landmarkOf(el) {
-    for (let mark = el.closest(CHROME_SELECTOR); mark; mark = mark.parentElement?.closest(CHROME_SELECTOR)) {
-      if (!/^(header|footer)$/.test(mark.localName) || !mark.parentElement?.closest('article, section')) return mark;
+    const above = (mark, selector) => {
+      const parent = parentOf(mark);
+      return parent && closestComposed(parent, selector);
+    };
+    for (let mark = closestComposed(el, CHROME_SELECTOR); mark; mark = above(mark, CHROME_SELECTOR)) {
+      if (!/^(header|footer)$/.test(mark.localName) || !above(mark, 'article, section')) return mark;
     }
     return null;
   }
 
-  /** Whether el is part of what the user asked to translate (setting "scope"). */
+  /** Whether el (an element or a shadow root) is part of what the user asked to translate (setting "scope"). */
   function inScope(el) {
     if (scope !== 'main') return true;
-    const main = el.closest(MAIN_SELECTOR);
+    const main = closestComposed(el, MAIN_SELECTOR);
     if (main) {
-      const aside = el.closest(CHROME_IN_MAIN);
-      return !aside || !main.contains(aside);
+      const aside = closestComposed(el, CHROME_IN_MAIN);
+      return !aside || !containsComposed(main, aside);
     }
     // Pages that mark no main content: everything but the header, footer, navigation and sidebars
     return !pageHasMain && !landmarkOf(el);
@@ -147,10 +225,19 @@
   /** Whether anything under el can be in scope; a wrapper outside it may still hold the main content. */
   const inScopeTree = (el) => inScope(el) || (pageHasMain && !!el.querySelector(MAIN_SELECTOR));
 
-  /** Paragraphs under root (a block, or an element the page added). Shadow DOM is not entered. */
+  /** Paragraphs under root (a block, an element the page added, or a shadow root), with those in the shadow roots
+   * below it. A shadow root holds paragraphs of its own: its text is laid out apart from its host's children. */
   function collect(root) {
     if (scope === 'main') pageHasMain = !!document.querySelector(MAIN_SELECTOR);
     const out = [];
+    const shadows = [];
+    /** Note the shadow root of el, scanned after this tree; one under an opt-out stays as it is. */
+    const noteShadow = (el) => {
+      if (optedOut(el)) return;
+      const shadow = shadowOf(el);
+      if (shadow) shadows.push(shadow);
+      else if (el.localName.includes('-') && !OWN_HOSTS.has(el.localName)) bareHosts.add(el);
+    };
     let run = [];
     let breaks = 0; // <br> in a row since the last text
     const flush = () => {
@@ -180,6 +267,7 @@
       const kind = classify(node);
       if (kind === 'ignore') return;
       breaks = 0;
+      if (kind !== 'skip') noteShadow(node);
       // An inline element is taken whole, unless it wraps blocks (a card inside a link): then its children are
       // split like a block's
       if (kind === 'inline' && !hasBlockChild(node)) {
@@ -190,9 +278,16 @@
       if (kind !== 'skip' && inScopeTree(node)) node.childNodes.forEach(visit);
       flush();
     };
-    if (inScopeTree(root)) root.childNodes.forEach(visit);
+    if (inScopeTree(root)) {
+      // A host rescanned on its own (its shadow root came late)
+      if (root.nodeType === Node.ELEMENT_NODE) noteShadow(root);
+      root.childNodes.forEach(visit);
+    }
     flush();
-    return out.filter((unit) => inScope(unit.parent)).concat(placeholders(root));
+    shadows.forEach(enterShadow);
+    return out
+      .filter((unit) => inScope(unit.parent))
+      .concat(placeholders(root), ...shadows.map(collect));
   }
 
   /** A text node's text, also while translation-only mode keeps it empty. */
@@ -287,10 +382,10 @@
   /** Input fields in root (or root itself) whose placeholder is collected along with the paragraphs. */
   function placeholders(root) {
     const selector = 'input[placeholder], textarea[placeholder]';
-    const fields = [...root.querySelectorAll(selector), ...(root.matches(selector) ? [root] : [])];
+    const fields = [...root.querySelectorAll(selector), ...(root.matches?.(selector) ? [root] : [])];
     return fields
       .filter((el) => {
-        const opt = el.closest(OPT_OUT); // one on body or html does not count, see optedOut
+        const opt = closestComposed(el, OPT_OUT); // one on body or html does not count, see optedOut
         return (!opt || opt === document.body || opt === document.documentElement) && inScope(el);
       })
       .map((target) => ({ attr: 'placeholder', target }));
@@ -351,7 +446,7 @@
     }
     if (unit.reuse) reused.add(unit.reuse);
     // A changed paragraph waits until the page stops changing it
-    const observed = boxOf(unit.parent); // text nodes cannot be observed; their parent element is
+    const observed = boxOf(elementOf(unit.parent)); // text nodes cannot be observed; their parent element is
     if (olds.size) setTimeout(() => current(unit) && watch(unit, observed), SETTLE_DELAY);
     else watch(unit, observed);
   }
@@ -366,7 +461,7 @@
 
   /** The nearest element that has a box: display:contents elements never intersect the viewport. */
   function boxOf(el) {
-    while (el.parentElement && getComputedStyle(el).display === 'contents') el = el.parentElement;
+    while (parentOf(el) && getComputedStyle(el).display === 'contents') el = parentOf(el);
     return el;
   }
 
@@ -455,19 +550,26 @@
     const el = [unit.reuse, after].find(free) || document.createElement(TRANS_TAG);
     el.setAttribute('lang', lang);
     el.setAttribute('translate', 'no');
+    // Text at the top of a shadow root is laid out in its host
+    const box = elementOf(unit.parent);
     // In a flex or grid row, or inside an inline box (a tag chip, a button-like link), a block below the original
     // would become a squeezed item beside it or break the line; such translations follow the original inline
-    const display = getComputedStyle(unit.parent).display;
+    const display = getComputedStyle(box).display;
     el.toggleAttribute('data-dt-inline', /flex|grid/.test(display) || display.startsWith('inline'));
-    el.setAttribute('data-dt-backdrop', darkBehind(unit.parent) ? 'dark' : 'light');
+    el.setAttribute('data-dt-backdrop', darkBehind(box) ? 'dark' : 'light');
     // The paragraph's text can have another size than its parent (font-size: 0 on a parent hides the gaps between
     // inline blocks): the translation takes the size of the text
     const textEl = unit.nodes.find((n) => n.nodeType === Node.ELEMENT_NODE);
     const size = textEl && getComputedStyle(textEl).fontSize;
-    el.style.fontSize = size && size !== getComputedStyle(unit.parent).fontSize ? size : '';
+    el.style.fontSize = size && size !== getComputedStyle(box).fontSize ? size : '';
+    // Among a shadow host's children, the translation goes into the slot its original is shown in
+    const slot = textEl?.getAttribute('slot');
+    if (slot) el.setAttribute('slot', slot);
+    else el.removeAttribute('slot');
     if (unit.rich) el.replaceChildren(buildRich(translation, unit.rich.refs));
     else el.textContent = translation;
     if (el.parentNode !== unit.parent) unit.parent.insertBefore(el, after);
+    styleShadow(el);
     unit.el = el;
     ownerOf.set(el, unit);
     shown.add(unit);
@@ -503,8 +605,8 @@
         return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
       });
       dark = 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.18;
-    } else if (el.parentElement) {
-      dark = darkBehind(el.parentElement);
+    } else if (parentOf(el)) {
+      dark = darkBehind(parentOf(el));
     } else {
       // No background set anywhere: the canvas is dark only when the page allows a dark scheme and the browser uses one
       const scheme = getComputedStyle(el).colorScheme;
@@ -584,6 +686,7 @@
       waiting.delete(el);
     }
     for (const node of originals.keys()) if (!node.isConnected) originals.delete(node);
+    for (const set of [shadowRoots, bareHosts]) for (const node of set) if (!node.isConnected) set.delete(node);
     if (dirty.size) scheduleRescan();
     return orphans;
   }
@@ -597,16 +700,22 @@
 
   const scheduleRescan = () => rescanTimer || (rescanTimer = setTimeout(rescan, RESCAN_DELAY));
 
+  /** Nodes this script adds: translations, its own boxes and the styles in shadow roots. */
+  const ours = (node) => node.localName === TRANS_TAG || OWN_HOSTS.has(node.localName) || styleEls.has(node);
+
+  const CHANGES = { childList: true, subtree: true, characterData: true };
+
   const mutations = new MutationObserver((records) => {
     for (const record of records) {
       if (record.type === 'characterData') {
-        const parent = record.target.parentElement;
-        if (!ourWrites.has(record.target) && parent && !parent.closest(TRANS_TAG)) dirty.add(parent);
+        // At the top of a shadow root, a text node's parent is the root
+        const parent = record.target.parentNode;
+        if (!ourWrites.has(record.target) && parent && !parent.closest?.(TRANS_TAG)) dirty.add(parent);
         continue;
       }
       // Our own insertions and their text
       if (record.target.closest?.(TRANS_TAG)) continue;
-      const added = [...record.addedNodes].filter((n) => n.localName !== TRANS_TAG && n.localName !== 'dt-toast');
+      const added = [...record.addedNodes].filter((n) => !ours(n));
       if (record.target === document.body || record.target === document.documentElement) {
         // Content added to the page itself (popups, a replaced <body>): only the new content is scanned
         for (const node of added) dirty.add(node.nodeType === Node.ELEMENT_NODE ? node : record.target);
@@ -621,13 +730,19 @@
   function watchBody() {
     observedBody = document.body;
     mutations.disconnect();
-    mutations.observe(document.body, { childList: true, subtree: true, characterData: true });
+    mutations.observe(document.body, CHANGES);
     // Navigation that replaces <body> (Turbo and the like) is seen on its parent
     mutations.observe(document.documentElement, { childList: true });
+    for (const root of shadowRoots) mutations.observe(root, CHANGES);
   }
 
+  /** The nearest block around el, or the shadow root at the top of its tree. */
   function blockAncestor(el) {
-    while (el !== document.body && el.parentElement && classify(el) !== 'block') el = el.parentElement;
+    while (el.nodeType === Node.ELEMENT_NODE && el !== document.body && classify(el) !== 'block') {
+      const up = el.parentElement || (isShadow(el.parentNode) ? el.parentNode : null);
+      if (!up) break;
+      el = up;
+    }
     return el;
   }
 
@@ -635,13 +750,21 @@
     rescanTimer = 0;
     if (document.body && observedBody !== document.body) watchBody();
     const orphans = prune();
+    // Custom elements that got their shadow root after they were scanned (defined late)
+    for (const host of bareHosts) {
+      if (shadowOf(host)) {
+        bareHosts.delete(host);
+        dirty.add(host);
+      }
+    }
     const roots = new Set();
     for (const target of dirty) {
-      if (target.nodeType !== Node.ELEMENT_NODE || !target.isConnected || target === document.documentElement) continue;
+      if (target.nodeType !== Node.ELEMENT_NODE && !isShadow(target)) continue;
+      if (!target.isConnected || target === document.documentElement) continue;
       // An element added to body is scanned on its own: scanning body again would scan the whole page
       const root = target.parentElement === document.body ? target : blockAncestor(target);
       // Inside a skipped block, or below an opt-out (one on body or html does not count, see optedOut)
-      const skipped = root.closest(`${SKIP_TAGS.join(',')}, ${OPT_OUT}`);
+      const skipped = closestComposed(root, `${SKIP_TAGS.join(',')}, ${OPT_OUT}`);
       if (skipped && skipped !== document.body && skipped !== document.documentElement) continue;
       roots.add(root);
     }
@@ -649,7 +772,7 @@
     reused.clear();
     // A root inside another root is scanned with it
     for (const root of roots) {
-      if (![...roots].some((other) => other !== root && other.contains(root))) register(collect(root));
+      if (![...roots].some((other) => other !== root && containsComposed(other, root))) register(collect(root));
     }
     for (const el of orphans) if (!reused.has(el)) el.remove();
   }
@@ -661,10 +784,12 @@
   let hoverTimer = 0;
 
   function onPointerOver(e) {
-    const target = e.target.closest?.('[title]');
+    // e.target is the host for an element in a shadow root; the path starts at the element (in open roots only)
+    const origin = e.composedPath()[0];
+    const target = origin?.nodeType === Node.ELEMENT_NODE ? closestComposed(origin, '[title]') : null;
     clearTimeout(hoverTimer);
     if (!target || seenAttrs.title.has(target) || target.closest(TRANS_TAG) || !inScope(target)) return;
-    const opt = target.closest(OPT_OUT);
+    const opt = closestComposed(target, OPT_OUT);
     if (opt && opt !== document.body && opt !== document.documentElement) return;
     hoverTimer = setTimeout(() => {
       const unit = { attr: 'title', target };

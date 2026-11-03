@@ -283,6 +283,13 @@ async function translate(texts, title, html = []) {
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type === 'dt-css') {
+    // For the shadow roots content.js enters, which content.css injected into the page does not reach
+    fetch(chrome.runtime.getURL('content.css'))
+      .then((resp) => resp.text())
+      .then(sendResponse, () => sendResponse(''));
+    return true;
+  }
   if (msg?.type !== 'dt-translate') return false;
   // Whatever goes wrong, the page gets an answer: an unanswered message would leave it waiting for good
   translate(msg.texts, msg.title, msg.html)

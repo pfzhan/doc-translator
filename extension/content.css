@@ -1,12 +1,15 @@
 /* Translations inserted by content.js. They keep the font of their paragraph, so a heading's translation looks like
    a heading, but get their own tint, bar and text color so they can be told from the page's own text. content.js
-   sets data-dt-backdrop from the background really behind each one (light or dark). */
+   sets data-dt-backdrop from the background really behind each one (light or dark).
+
+   content.js also puts a copy of this file into each shadow root it enters, where selectors cannot see <html>: the
+   state content.js sets on <html> reaches them through the inherited custom properties --dt-shown and --dt-gap. */
 dt-trans {
   --dt-accent: #2563eb;
   --dt-tint: rgba(37, 99, 235, 0.08);
   --dt-text: #1e3a8a;
-  display: block;
-  margin: 0.25em 0 0;
+  display: var(--dt-shown, block);
+  margin: var(--dt-gap, 0.25em 0 0);
   padding: 0.1em 0.5em;
   border-left: 3px solid var(--dt-accent);
   border-radius: 0 3px 3px 0;
@@ -22,7 +25,7 @@ dt-trans[data-dt-backdrop='dark'] {
 
 /* In flex and grid rows and inline boxes, the translation follows the original on the same line */
 dt-trans[data-dt-inline] {
-  display: inline;
+  display: var(--dt-shown, inline);
   margin: 0 0 0 0.4em;
   padding: 0 0.25em;
   border-left: 0;
@@ -31,16 +34,16 @@ dt-trans[data-dt-inline] {
   box-decoration-break: clone;
 }
 
-html[data-dt-hidden] dt-trans {
-  display: none;
+html[data-dt-hidden] {
+  --dt-shown: none;
 }
 
-/* Translation-only mode: content.js empties the original's text nodes and marks its elements. The translation
-   takes the original's place and keeps its tint, so changed text is still marked. */
-html[data-dt-translated]:not([data-dt-hidden]) [data-dt-original] {
+/* Translation-only mode: content.js empties the original's text nodes and marks its elements while the translation
+   is shown. The translation takes the original's place and keeps its tint, so changed text is still marked. */
+[data-dt-original] {
   display: none !important;
 }
 
-html[data-dt-translated]:not([data-dt-hidden]) dt-trans:not([data-dt-inline]) {
-  margin: 0;
+html[data-dt-translated]:not([data-dt-hidden]) {
+  --dt-gap: 0;
 }
