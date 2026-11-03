@@ -796,6 +796,8 @@ form.addEventListener("submit", async (e) => {
   e.preventDefault();
   const files = [...fileInput.files];
   if (!files.length) return;
+  // Asked here, on a click, as browsers require; the answer is remembered by the browser
+  if (canNotify() && Notification.permission === "default") Notification.requestPermission().catch(() => {});
   saveSettings();
   showSubmitError("");
   const btn = $("submit");
@@ -1497,7 +1499,44 @@ async function resumeAll(btn) {
   }
 }
 
+// Finishing jobs are announced: a toast while the page is in view, a system notification while it is in the
+// background (when the browser allows it; permission is asked on the first submit). Only changes seen by this page
+// count, so records finished before it was opened are not announced
+const lastStatus = new Map();
+
+function canNotify() {
+  return "Notification" in window && window.isSecureContext;
+}
+
+function finishedAmong(jobs) {
+  const out = [];
+  for (const job of jobs) {
+    if (ACTIVE.has(lastStatus.get(job.id)) && (job.status === "done" || job.status === "error")) out.push(job);
+    lastStatus.set(job.id, job.status);
+  }
+  return out;
+}
+
+function announceFinished(jobs) {
+  if (!jobs.length) return;
+  const failed = jobs.filter((j) => j.status === "error").length;
+  const done = jobs.length - failed;
+  const summary = [done ? `${done} 本翻译完成` : "", failed ? `${failed} 本翻译失败` : ""].filter(Boolean).join("，");
+  const title = jobs.length === 1 ? (failed ? "翻译失败" : "翻译完成") : summary;
+  const body = jobs.map((j) => j.filename).join("\n");
+  if (document.visibilityState === "visible") {
+    toast(jobs.length === 1 ? `「${jobs[0].filename}」${title}` : summary);
+  } else if (canNotify() && Notification.permission === "granted") {
+    const n = new Notification(title, { body, tag: jobs.length === 1 ? jobs[0].id : "doc-translator" });
+    n.onclick = () => {
+      window.focus();
+      n.close();
+    };
+  }
+}
+
 function upsertJob(job) {
+  announceFinished(finishedAmong([job]));
   const i = state.jobs.findIndex((j) => j.id === job.id);
   if (i >= 0) state.jobs[i] = job;
   else state.jobs.unshift(job);
@@ -1508,6 +1547,7 @@ function upsertJob(job) {
 async function refreshJobs() {
   try {
     const data = await api("/api/jobs");
+    announceFinished(finishedAmong(data.jobs));
     state.jobs = data.jobs;
     state.diskUsage = data.disk_usage;
     state.retentionDays = data.retention_days;
@@ -1518,12 +1558,13 @@ async function refreshJobs() {
   scheduleJobsPoll();
 }
 
-// Refresh the list every 2 seconds while jobs are running (the reader polls on its own, not duplicated here)
+// Refresh the list every 2 seconds while jobs are running. The reader polls its own job; while it is open the list
+// is refreshed every 10 seconds only for the other jobs, so their finishing is still announced
 let jobsTimer;
 function scheduleJobsPoll() {
   clearTimeout(jobsTimer);
-  if (reader.jobId) return;
-  if (state.jobs.some((j) => ACTIVE.has(j.status))) jobsTimer = setTimeout(refreshJobs, 2000);
+  if (!state.jobs.some((j) => ACTIVE.has(j.status) && j.id !== reader.jobId)) return;
+  jobsTimer = setTimeout(refreshJobs, reader.jobId ? 10000 : 2000);
 }
 
 async function deleteJob(job) {

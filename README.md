@@ -82,7 +82,10 @@ continuing, retrying and generating the other version use the same ones.
 Every translation is saved as a record (on the 记录 (Records) page; the translate page shows the latest 3).
 Records survive page reloads and server restarts. Several files can be chosen or dropped on the translate page at
 once; each becomes its own record with the same settings. Files that fail to upload are listed below the button
-and stay selected, so they can be submitted again once the cause is fixed.
+and stay selected, so they can be submitted again once the cause is fixed. When a job finishes or fails, the page
+shows a message while it is in view and a system notification while it is in the background; the browser asks
+whether to allow notifications on the first submit. Notifications need localhost, 127.0.0.1 or HTTPS; over plain
+HTTP on a LAN address only the message in the page is shown.
 
 - A record and its files (source file, translations, preview) are deleted only when deleted from the list by
   hand or when the retention period runs out.
