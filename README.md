@@ -507,7 +507,11 @@ translated and marked as skipped in the preview.
 
 ```
 app/
-  main.py          FastAPI server: upload, jobs, preview, download, settings
+  main.py          FastAPI app: middleware, startup cleanup, and the routes below
+  routes/          the API by area: services, glossaries, web, jobs, settings, models
+  state.py         stores, running jobs and model downloads shared by the routes (read as state.jobs)
+  job_control.py   starting, pausing, resuming, deleting and clearing jobs
+  model_files.py   which layout and formula model files translation uses
   history.py       translation records (data/jobs/<id>/job.json) and retention cleanup
   cleanup.py       clearing the caches and layout analysis results a record left behind
   settings.py      application settings (data/settings.json)
@@ -519,7 +523,8 @@ app/
   prompts.py       default prompts and the segment protocol
   languages.py     language table, prompt override rules, Google language code mapping
   langdetect.py    document language detection
-  glossary.py      glossary: finding candidate terms, filtering per batch
+  glossary.py      glossary: finding candidate terms, filtering per batch, CSV import and export
+  glossaries.py    the glossary library (data/glossaries.json)
   layout_model.py  status, download and test of the layout and formula detection models
   quantize.py      generating int8 versions of both models
   formats/         parsing and writing back each format

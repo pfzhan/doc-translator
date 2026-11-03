@@ -224,7 +224,11 @@ int8 版把模型的权重和中间结果换成 8 位整数。公式检测模型
 
 ```
 app/
-  main.py          FastAPI 服务：上传、任务、预览、下载、设置
+  main.py          FastAPI 应用：中间件、启动时清理，挂载下面的路由
+  routes/          按功能分的接口：services、glossaries、web、jobs、settings、models
+  state.py         各路由共用的存储、运行中的任务和模型下载（以 state.jobs 的形式读取）
+  job_control.py   任务的启动、暂停、继续、删除和清理
+  model_files.py   翻译时用哪个版面模型、公式检测模型文件
   history.py       翻译记录（data/jobs/<id>/job.json）和保留时间清理
   cleanup.py       清理一条记录留下的缓存和版面分析结果
   settings.py      应用设置（data/settings.json）
@@ -236,7 +240,8 @@ app/
   prompts.py       默认提示词和分段协议
   languages.py     语言表、提示词覆盖规则、谷歌语言码映射
   langdetect.py    文档语言检测
-  glossary.py      术语表：找候选术语、按批筛选
+  glossary.py      术语表：找候选术语、按批筛选、CSV 导入导出
+  glossaries.py    术语表库（data/glossaries.json）
   layout_model.py  版面模型、公式检测模型的状态、下载、测试
   quantize.py      生成两个模型的 int8 版
   formats/         各格式的解析和回写

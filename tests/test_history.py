@@ -5,7 +5,9 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from app import job_control, state
 from app.history import DAY, Job, JobStore
+from app.routes import jobs as jobs_routes
 from app.settings import Settings, SettingsError
 
 MD = b"# A Title\n\nFirst paragraph of the document is here.\n\nSecond paragraph goes right after it.\n"
@@ -54,7 +56,7 @@ def test_records_persist_across_restart(app_env, tmp_path):
 
     # Simulate a restart: load again from disk
     store = JobStore(tmp_path / "jobs")
-    main.jobs = store
+    state.jobs = store
     with TestClient(main.app) as client:
         again = client.get(f"/api/jobs/{job['id']}").json()
         assert again["status"] == "done" and again["outputs"] == job["outputs"]
@@ -125,7 +127,7 @@ def test_retry_reuses_cache_and_can_switch_service(app_env):
             again = wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={}).json()["id"])
             assert again["status"] == "done" and sum(calls) == first  # Same service hits the cache
 
-            main.store.services.append(
+            state.store.services.append(
                 {"id": "mock2", "provider": "mock", "builtin": True, "name": "Mock 2", "enabled": True}
             )
             switched = client.post(f"/api/jobs/{job['id']}/retry", json={"service_id": "mock2"}).json()
@@ -185,7 +187,7 @@ def test_redo_from_scratch_analyses_the_pdf_again(app_env, monkeypatch):
     doc.set_toc([[1, "Closing Remarks", 1]])
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client, name="paper.pdf", data=doc.tobytes())["id"])
-        assert job["status"] == "done" and main.jobs.plan_path(main.jobs.get(job["id"])).exists() and len(calls) == 1
+        assert job["status"] == "done" and state.jobs.plan_path(state.jobs.get(job["id"])).exists() and len(calls) == 1
         wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={}).json()["id"])
         assert len(calls) == 1
         again = wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={"fresh": True}).json()["id"])
@@ -203,7 +205,7 @@ def test_delete_several_records_at_once(app_env):
         assert r.json() == {"deleted": 2, "missing": ["nosuchjob"]}
         left = [j["id"] for j in client.get("/api/jobs").json()["jobs"]]
         assert left == [ids[1]]
-        assert not main.jobs.dir(ids[0]).exists() and main.jobs.dir(ids[1]).exists()
+        assert not state.jobs.dir(ids[0]).exists() and state.jobs.dir(ids[1]).exists()
 
 
 def test_retry_recomputes_preview_flag_for_legacy_jobs(app_env):
@@ -214,10 +216,10 @@ def test_retry_recomputes_preview_flag_for_legacy_jobs(app_env):
         job = wait_done(client, submit(client)["id"])
         assert job["status"] == "done"
         # Simulate an old record: preview=False and no preview snapshot
-        legacy = main.jobs.get(job["id"])
+        legacy = state.jobs.get(job["id"])
         legacy.preview = False
-        main.jobs.save(legacy)
-        (main.jobs.dir(job["id"]) / "preview.json").unlink(missing_ok=True)
+        state.jobs.save(legacy)
+        (state.jobs.dir(job["id"]) / "preview.json").unlink(missing_ok=True)
 
         again = wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={}).json()["id"])
         assert again["status"] == "done" and again["preview"] is True
@@ -280,7 +282,7 @@ def test_pdf_translated_variant_is_cut_from_the_bilingual_output(app_env, monkey
         async def no_render(*args: object, **kwargs: object) -> list[object]:
             raise AssertionError("不该重新排版")
 
-        monkeypatch.setattr(main, "translate_file", no_render)
+        monkeypatch.setattr(jobs_routes, "translate_file", no_render)
         again = client.post(f"/api/jobs/{job['id']}/variant")
         assert again.status_code == 200, again.text
         url = next(o["url"] for o in again.json()["outputs"] if o["name"] == "paper.translated.pdf")
@@ -324,7 +326,7 @@ def test_variant_refuses_cache_miss_and_closes_client(app_env):
             assert sum(calls) == before
             assert closed
             assert client.get(job["outputs"][0]["url"]).status_code == 200
-            assert job["id"] not in main.variant_tasks
+            assert job["id"] not in state.variant_tasks
     finally:
         MockTranslator.translate_batch = original
         MockTranslator.aclose = original_close
@@ -335,20 +337,20 @@ def test_variant_pins_the_model_that_produced_the_job(app_env, monkeypatch):
     service has selected now."""
     main = app_env
     seen: list[str] = []
-    original = main._make_translator
+    original = jobs_routes._make_translator
 
     def wrapped(job, service):
         seen.append(str(service.get("model") or ""))
         return original(job, service)
 
-    monkeypatch.setattr(main, "_make_translator", wrapped)
+    monkeypatch.setattr(jobs_routes, "_make_translator", wrapped)
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
         seen.clear()
-        stored = main.jobs.get(job["id"])
+        stored = state.jobs.get(job["id"])
         assert stored is not None
         stored.model = "old-model"
-        service = main.store.get("mock")
+        service = state.store.get("mock")
         service["model"] = "new-model"
         again = client.post(f"/api/jobs/{job['id']}/variant")
         assert again.status_code == 200, again.text
@@ -379,10 +381,10 @@ def test_variant_rejects_second_request_and_discards_partial(app_env, monkeypatc
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        main.variant_tasks[job["id"]] = object()  # Only checks whether generation is running; no real Task is needed
+        state.variant_tasks[job["id"]] = object()  # Only checks whether generation is running; no real Task is needed
         busy = client.post(f"/api/jobs/{job['id']}/variant")
         assert busy.status_code == 409
-        main.variant_tasks.pop(job["id"])
+        state.variant_tasks.pop(job["id"])
 
         async def boom(
             src: object,
@@ -399,21 +401,21 @@ def test_variant_rejects_second_request_and_discards_partial(app_env, monkeypatc
             (Path(str(out_dir)) / "partial.md").write_text("x", encoding="utf-8")
             raise ValueError("boom")
 
-        monkeypatch.setattr(main, "translate_file", boom)
+        monkeypatch.setattr(jobs_routes, "translate_file", boom)
         failed = client.post(f"/api/jobs/{job['id']}/variant")
         assert failed.status_code == 400
         again = client.get(f"/api/jobs/{job['id']}").json()
         assert [o["name"] for o in again["outputs"]] == [o["name"] for o in job["outputs"]]
-        assert not (main.jobs.out_dir(job["id"]) / "partial.md").exists()
-        assert not (main.jobs.dir(job["id"]) / ".variant").exists()
-        assert job["id"] not in main.variant_tasks
+        assert not (state.jobs.out_dir(job["id"]) / "partial.md").exists()
+        assert not (state.jobs.dir(job["id"]) / ".variant").exists()
+        assert job["id"] not in state.variant_tasks
 
 
 def test_delete_removes_record_and_files(app_env):
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        job_dir = main.jobs.dir(job["id"])
+        job_dir = state.jobs.dir(job["id"])
         assert job_dir.exists()
         assert client.delete(f"/api/jobs/{job['id']}").json() == {"ok": True}
         assert not job_dir.exists()
@@ -461,12 +463,12 @@ def test_cleanup_skips_inflight_variant(app_env):
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        record = main.jobs.get(job["id"])
+        record = state.jobs.get(job["id"])
         record.finished = record.created = time.time() - 10 * DAY
-        main.variant_tasks[job["id"]] = object()
+        state.variant_tasks[job["id"]] = object()
         assert client.put("/api/settings", json={"retention_days": 7}).status_code == 200
         assert client.get(f"/api/jobs/{job['id']}").status_code == 200
-        main.variant_tasks.pop(job["id"])
+        state.variant_tasks.pop(job["id"])
         client.put("/api/settings", json={"retention_days": 7})
         assert client.get(f"/api/jobs/{job['id']}").status_code == 404
 
@@ -475,7 +477,7 @@ def test_settings_endpoint_triggers_cleanup(app_env):
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        record = main.jobs.get(job["id"])
+        record = state.jobs.get(job["id"])
         record.finished = record.created = time.time() - 10 * DAY
         assert client.put("/api/settings", json={"retention_days": 30}).json() == {"retention_days": 30}
         assert client.get(f"/api/jobs/{job['id']}").status_code == 200
@@ -504,7 +506,7 @@ def slow_mock(app_env, monkeypatch):
         calls.append((getattr(self, "model", ""), len(texts)))
         return await original(self, texts)
 
-    real_create = app_env.create_translator
+    real_create = job_control.create_translator
 
     def create(service, *a, **kw):
         tr = real_create(service, *a, **kw)
@@ -512,7 +514,7 @@ def slow_mock(app_env, monkeypatch):
         return tr
 
     monkeypatch.setattr(MockTranslator, "translate_batch", slow)
-    monkeypatch.setattr(app_env, "create_translator", create)
+    monkeypatch.setattr(job_control, "create_translator", create)
     return calls
 
 
@@ -528,7 +530,7 @@ def wait_until(client, job_id, pred, timeout=30):
 
 def test_pause_then_resume_with_current_model(app_env, slow_mock):
     main = app_env
-    main.store.get("mock")["model"] = "m-old"
+    state.store.get("mock")["model"] = "m-old"
     with TestClient(main.app) as client:
         job_id = submit(client, data=LONG_MD)["id"]
         wait_until(client, job_id, lambda j: j["done"] > 0)
@@ -543,7 +545,7 @@ def test_pause_then_resume_with_current_model(app_env, slow_mock):
         assert client.post(f"/api/jobs/{job_id}/pause").status_code == 400  # A paused job cannot be paused again
 
         # The model changed while paused: resuming uses the new model and does not request translated paragraphs again
-        main.store.get("mock")["model"] = "m-new"
+        state.store.get("mock")["model"] = "m-new"
         resumed = client.post(f"/api/jobs/{job_id}/retry", json={}).json()
         assert resumed["model"] == "m-new"
         done = wait_done(client, job_id)
@@ -564,7 +566,7 @@ def test_pause_all_and_resume_all(app_env, slow_mock):
         assert client.post("/api/jobs/pause-all").json() == {"paused": 0}
 
         # A paused record is still paused after a restart and does not become "interrupted"
-        reloaded = JobStore(main.jobs.root)
+        reloaded = JobStore(state.jobs.root)
         assert {reloaded.get(i).status for i in ids} == {"paused"}
 
         assert client.post("/api/jobs/resume-all").json() == {"resumed": 2, "failed": []}
@@ -575,19 +577,17 @@ def test_pause_all_and_resume_all(app_env, slow_mock):
 def test_pause_queued_job(app_env):
     import asyncio
 
-    main = app_env
-
     async def scenario():
         job = Job(id="q1", filename="x.md", status="queued")
-        main.jobs.dir(job.id).mkdir(parents=True)
-        main.jobs.add(job)
-        main.running[job.id] = asyncio.create_task(asyncio.sleep(10))  # A job that has not entered _run_job yet
-        assert await main._pause(job)
+        state.jobs.dir(job.id).mkdir(parents=True)
+        state.jobs.add(job)
+        state.running[job.id] = asyncio.create_task(asyncio.sleep(10))  # A job that has not entered _run_job yet
+        assert await job_control._pause(job)
         return job
 
     job = asyncio.run(scenario())
-    assert job.status == "paused" and job.finished > 0 and "q1" not in main.running
-    assert JobStore(main.jobs.root).get("q1").status == "paused"
+    assert job.status == "paused" and job.finished > 0 and "q1" not in state.running
+    assert JobStore(state.jobs.root).get("q1").status == "paused"
 
 
 def test_runner_released_after_finish(app_env):
@@ -598,9 +598,9 @@ def test_runner_released_after_finish(app_env):
         # The status becomes done first and the Runner is released only after the snapshot is written, one thread
         # switch later
         deadline = time.monotonic() + 10
-        while main.jobs.get(job["id"]).runner is not None and time.monotonic() < deadline:
+        while state.jobs.get(job["id"]).runner is not None and time.monotonic() < deadline:
             time.sleep(0.02)
-        assert main.jobs.get(job["id"]).runner is None
+        assert state.jobs.get(job["id"]).runner is None
         p = client.get(f"/api/jobs/{job['id']}/preview").json()
         assert p["ready"] and p["status"] == "done" and len(p["updates"]) == 3
 
@@ -611,7 +611,7 @@ def test_resume_with_invalid_service_keeps_result(app_env):
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        main.store.services.append(
+        state.store.services.append(
             {
                 "id": "broken",
                 "provider": "claude",
@@ -633,8 +633,6 @@ def test_failed_upload_leaves_no_orphan_dir(app_env):
     """A read fails halfway through an upload: the directory is removed and no orphan directory is left."""
     import asyncio
 
-    main = app_env
-
     class BrokenUpload:
         filename = "broken.md"
 
@@ -643,7 +641,7 @@ def test_failed_upload_leaves_no_orphan_dir(app_env):
 
     with pytest.raises(OSError):
         asyncio.run(
-            main.create_job(
+            jobs_routes.create_job(
                 BrokenUpload(),
                 target_lang="zh-CN",
                 source_lang="auto",
@@ -652,7 +650,7 @@ def test_failed_upload_leaves_no_orphan_dir(app_env):
                 glossary_ids=[],
             )
         )
-    root = main.jobs.root
+    root = state.jobs.root
     assert not root.exists() or not list(root.iterdir())
 
 
@@ -662,10 +660,10 @@ def test_download_rejects_path_traversal(app_env):
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        record = main.jobs.get(job["id"])
+        record = state.jobs.get(job["id"])
         record.outputs.append("../job.json")  # Simulate a tampered job.json
         with pytest.raises(HTTPException) as e:
-            main.download(job["id"], "../job.json")
+            jobs_routes.download(job["id"], "../job.json")
         assert e.value.status_code == 404
 
 
@@ -755,15 +753,15 @@ def test_oversized_upload_rejected_before_reading_body(app_env, monkeypatch):
     """A Content-Length above the limit returns 413 at once and the request never reaches create_job (without waiting
     for the whole file to be written to a temporary file)."""
     main = app_env
-    monkeypatch.setattr(main, "MAX_UPLOAD", 1000)
+    monkeypatch.setattr(jobs_routes, "MAX_UPLOAD", 1000)
     entered = []
-    real_get = main.store.get
+    real_get = state.store.get
 
     def get(sid):
         entered.append(sid)  # create_job looks up the translation service as soon as it is entered
         return real_get(sid)
 
-    monkeypatch.setattr(main.store, "get", get)
+    monkeypatch.setattr(state.store, "get", get)
     with TestClient(main.app) as client:
         r = client.post(
             "/api/jobs",

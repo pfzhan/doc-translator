@@ -7,7 +7,7 @@ from types import ModuleType
 
 from fastapi.testclient import TestClient
 
-from app import cleanup, runner
+from app import cleanup, runner, state
 from app.runner import Cache, Runner
 from app.translators import MockTranslator
 from tests.test_history import MD, submit, wait_done
@@ -63,8 +63,8 @@ def test_clearing_a_job_removes_its_cache_and_generated_files(app_env):
     cache = runner.get_cache()
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        folder = main.jobs.dir(job["id"])
-        boxes = main.jobs.layout_dir(main.jobs.get(job["id"])) / "boxes.json"
+        folder = state.jobs.dir(job["id"])
+        boxes = state.jobs.layout_dir(state.jobs.get(job["id"])) / "boxes.json"
         boxes.write_text("{}")
         info = client.get(f"/api/jobs/{job['id']}/cache").json()
         assert info["entries"] == 3 and info["outputs"] == 1 and info["shared"] == 0
@@ -89,7 +89,7 @@ def test_clearing_can_include_model_boxes(app_env):
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        boxes = main.jobs.layout_dir(main.jobs.get(job["id"])) / "boxes.json"
+        boxes = state.jobs.layout_dir(state.jobs.get(job["id"])) / "boxes.json"
         boxes.write_text("{}")
         assert client.delete(f"/api/jobs/{job['id']}/cache?boxes=true").status_code == 200
         assert not boxes.exists()
@@ -99,7 +99,7 @@ def test_clearing_is_refused_while_translating(app_env):
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        main.jobs.get(job["id"]).status = "running"
+        state.jobs.get(job["id"]).status = "running"
         r = client.delete(f"/api/jobs/{job['id']}/cache")
         assert r.status_code == 409
 
@@ -145,7 +145,7 @@ def test_clearing_unused_cache_keeps_what_records_use(app_env: ModuleType) -> No
         other = b"# Another\n\nA paragraph of a book deleted later on.\n"
         gone = wait_done(client, submit(client, name="gone.md", data=other)["id"])
         # Removed without clearing its cache, as records deleted before clearing existed were
-        main.jobs.delete(gone["id"])
+        state.jobs.delete(gone["id"])
         r = client.post("/api/web/translate", json={"texts": ["Some text from a web page."], "service_id": "mock"})
         assert r.status_code == 200
         # Saved before the cache recorded owners: nothing tells whose it is, so it stays
@@ -166,7 +166,7 @@ def test_clearing_unused_cache_waits_for_running_jobs(app_env: ModuleType) -> No
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        main.jobs.get(job["id"]).status = "running"
+        state.jobs.get(job["id"]).status = "running"
         assert client.delete("/api/cache/unused").status_code == 409
 
 
@@ -174,7 +174,7 @@ def test_document_digest_is_stored_on_the_job(app_env):
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        assert main.jobs.get(job["id"]).document == hashlib.sha1(MD).hexdigest()
+        assert state.jobs.get(job["id"]).document == hashlib.sha1(MD).hexdigest()
 
 
 def test_redo_from_scratch_clears_stale_entries_first(app_env):
@@ -182,7 +182,7 @@ def test_redo_from_scratch_clears_stale_entries_first(app_env):
     cache = runner.get_cache()
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        doc = main.jobs.get(job["id"]).document
+        doc = state.jobs.get(job["id"]).document
         # A paragraph cut by old code and no longer used
         cache.put_many("old-prefix", {"A stale paragraph.": "旧译文"})
         cache.claim(doc, "old-prefix", ["A stale paragraph."])
@@ -217,8 +217,8 @@ def test_jobs_of_the_same_book_share_the_layout_analysis(app_env, monkeypatch):
         a = wait_done(client, submit(client, name="paper.pdf", data=data)["id"])
         b = wait_done(client, submit(client, name="copy.pdf", data=data, mode="translated")["id"])
         assert a["status"] == b["status"] == "done" and len(calls) == 1
-        plan = main.jobs.plan_path(main.jobs.get(a["id"]))
-        assert plan == main.jobs.plan_path(main.jobs.get(b["id"])) and plan.is_file()
+        plan = state.jobs.plan_path(state.jobs.get(a["id"]))
+        assert plan == state.jobs.plan_path(state.jobs.get(b["id"])) and plan.is_file()
         # Delete one; the other still uses the analysis result, so it stays; delete the last one too, and it goes
         client.delete(f"/api/jobs/{a['id']}")
         assert plan.is_file()
@@ -229,11 +229,11 @@ def test_jobs_of_the_same_book_share_the_layout_analysis(app_env, monkeypatch):
 def test_layout_saved_in_the_job_folder_moves_to_the_shared_place(app_env):
     main = app_env
     with TestClient(main.app) as client:
-        job = main.jobs.get(wait_done(client, submit(client)["id"])["id"])
-        folder = main.jobs.dir(job.id)
+        job = state.jobs.get(wait_done(client, submit(client)["id"])["id"])
+        folder = state.jobs.dir(job.id)
         (folder / "plan.pickle").write_bytes(b"plan")
         (folder / "boxes.json").write_text("{}")
-        plan = main.jobs.plan_path(job)
+        plan = state.jobs.plan_path(job)
         assert plan.read_bytes() == b"plan" and (plan.parent / "boxes.json").is_file()
         assert not (folder / "plan.pickle").exists() and not (folder / "boxes.json").exists()
 
@@ -241,12 +241,12 @@ def test_layout_saved_in_the_job_folder_moves_to_the_shared_place(app_env):
 def test_layouts_no_job_uses_are_pruned(app_env):
     main = app_env
     with TestClient(main.app) as client:
-        job = main.jobs.get(wait_done(client, submit(client)["id"])["id"])
-        used = main.jobs.layout_dir(job)
-        stale = main.jobs.layout_root / ("0" * 40)
+        job = state.jobs.get(wait_done(client, submit(client)["id"])["id"])
+        used = state.jobs.layout_dir(job)
+        stale = state.jobs.layout_root / ("0" * 40)
         stale.mkdir()
         (stale / "plan.pickle").write_bytes(b"old")
-        assert cleanup.prune_layouts(main.jobs) == [stale.name]
+        assert cleanup.prune_layouts(state.jobs) == [stale.name]
         assert used.is_dir() and not stale.exists()
 
 
@@ -255,24 +255,24 @@ def test_the_same_file_uploaded_twice_is_stored_once(app_env):
     with TestClient(main.app) as client:
         a = wait_done(client, submit(client)["id"])
         b = wait_done(client, submit(client, name="again.md")["id"])
-        first = main.jobs.source_path(main.jobs.get(a["id"]))
-        second = main.jobs.source_path(main.jobs.get(b["id"]))
+        first = state.jobs.source_path(state.jobs.get(a["id"]))
+        second = state.jobs.source_path(state.jobs.get(b["id"]))
         assert first.stat().st_ino == second.stat().st_ino and second.read_bytes() == MD
         usage = client.get("/api/jobs").json()["disk_usage"]
-        assert usage == main.jobs.disk_usage()
+        assert usage == state.jobs.disk_usage()
         client.delete(f"/api/jobs/{a['id']}")
         assert second.read_bytes() == MD
         # Another file with different content is not affected
         c = wait_done(client, submit(client, name="other.md", data=MD + b"\nMore.\n")["id"])
-        assert main.jobs.source_path(main.jobs.get(c["id"])).stat().st_ino != second.stat().st_ino
+        assert state.jobs.source_path(state.jobs.get(c["id"])).stat().st_ino != second.stat().st_ino
 
 
 def test_layouts_left_in_job_folders_are_adopted_for_new_jobs(app_env):
     main = app_env
     with TestClient(main.app) as client:
-        old = main.jobs.get(wait_done(client, submit(client)["id"])["id"])
+        old = state.jobs.get(wait_done(client, submit(client)["id"])["id"])
         # An old record from before the shared directory: its layout result is still in the record directory
-        (main.jobs.dir(old.id) / "boxes.json").write_text("{}")
-        shared = main.jobs.layout_root / old.document
-        assert main.jobs.adopt_layouts() == 1
-        assert (shared / "boxes.json").is_file() and not (main.jobs.dir(old.id) / "boxes.json").exists()
+        (state.jobs.dir(old.id) / "boxes.json").write_text("{}")
+        shared = state.jobs.layout_root / old.document
+        assert state.jobs.adopt_layouts() == 1
+        assert (shared / "boxes.json").is_file() and not (state.jobs.dir(old.id) / "boxes.json").exists()

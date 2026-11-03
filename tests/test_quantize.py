@@ -5,7 +5,7 @@ import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 
-from app import layout_model, quantize
+from app import layout_model, model_files, quantize, state
 from app.formats.pdf_vision import FormulaModel
 from app.history import Job
 from app.settings import Settings, SettingsError
@@ -146,12 +146,12 @@ def test_translation_uses_the_int8_file_once_it_exists(app_env, monkeypatch):
         status = client.get("/api/formula-model").json()
         assert status["precision"] == "int8" and status["in_use"] == str(fp32)
         assert status["int8"]["file"]["exists"] is False and status["int8"]["path"] == str(int8)
-        assert main._formula_model() == FormulaModel(str(fp32), 1024)
+        assert model_files._formula_model() == FormulaModel(str(fp32), 1024)
         int8.write_bytes(b"y")
         assert client.get("/api/formula-model").json()["in_use"] == str(int8)
-        assert main._formula_model() == FormulaModel(str(int8), 1024)
+        assert model_files._formula_model() == FormulaModel(str(int8), 1024)
         assert client.put("/api/formula-model", json={"precision": "fp32"}).json()["in_use"] == str(fp32)
-        assert main._formula_model() == FormulaModel(str(fp32), 1024)
+        assert model_files._formula_model() == FormulaModel(str(fp32), 1024)
         assert client.put("/api/formula-model", json={"precision": "bf16"}).status_code == 400
 
 
@@ -165,13 +165,13 @@ def test_layout_model_uses_its_int8_file_too(app_env, monkeypatch):
     int8 = quantize.int8_path(fp32)
     int8.write_bytes(b"y")
     with TestClient(main.app) as client:
-        assert main._model_path("layout") == ""
+        assert model_files._model_path("layout") == ""
         status = client.put("/api/layout-model", json={"enabled": True}).json()
         assert status["precision"] == "int8" and status["in_use"] == str(int8)
         assert status["int8"]["file"]["exists"] is True
-        assert main._model_path("layout") == str(int8)
+        assert model_files._model_path("layout") == str(int8)
         assert client.put("/api/layout-model", json={"precision": "fp32"}).json()["in_use"] == str(fp32)
-        assert main._model_path("layout") == str(fp32)
+        assert model_files._model_path("layout") == str(fp32)
 
 
 def test_generating_int8_needs_onnx_and_the_model(app_env, monkeypatch):
@@ -179,7 +179,7 @@ def test_generating_int8_needs_onnx_and_the_model(app_env, monkeypatch):
     the result is written next to the fp32 file"""
     main = app_env
     started = []
-    for quantizer in main.quantizers.values():
+    for quantizer in state.quantizers.values():
         monkeypatch.setattr(
             quantizer, "start", lambda src, dest, images, spec: started.append((src, dest, images, spec))
         )
@@ -200,10 +200,10 @@ def test_generating_int8_needs_onnx_and_the_model(app_env, monkeypatch):
         assert spec == quantize.SPECS["formula"]
         assert images[0].shape == (1, 3, 1024, 736)
         for job in (Job(id="p1", filename="paper.pdf", status="done"), Job(id="m1", filename="notes.md")):
-            main.jobs.dir(job.id).mkdir(parents=True)
-            main.jobs.add(job)
-        _pdf(main.jobs.source_path(main.jobs.get("p1")), 3)
-        main.jobs.source_path(main.jobs.get("m1")).write_text("# notes")
+            state.jobs.dir(job.id).mkdir(parents=True)
+            state.jobs.add(job)
+        _pdf(state.jobs.source_path(state.jobs.get("p1")), 3)
+        state.jobs.source_path(state.jobs.get("m1")).write_text("# notes")
         assert client.post("/api/formula-model/quantize").status_code == 200
         assert [image.shape for image in started[-1][2]] == [(1, 3, 1024, 768)] * 3
 
@@ -214,7 +214,7 @@ def test_only_one_model_is_quantized_at_a_time(app_env, monkeypatch):
     started = []
     monkeypatch.setattr(quantize, "available", lambda: True)
     monkeypatch.setattr(
-        main.quantizers["layout"], "start", lambda src, dest, images, spec: started.append((src, dest, spec))
+        state.quantizers["layout"], "start", lambda src, dest, images, spec: started.append((src, dest, spec))
     )
 
     class Busy:
@@ -229,7 +229,7 @@ def test_only_one_model_is_quantized_at_a_time(app_env, monkeypatch):
         fp32.write_bytes(b"x")
         assert client.post("/api/layout-model/quantize").status_code == 200
         assert started == [(fp32, quantize.int8_path(fp32), quantize.SPECS["layout"])]
-        monkeypatch.setattr(main.quantizers["formula"], "task", Busy())
+        monkeypatch.setattr(state.quantizers["formula"], "task", Busy())
         r = client.post("/api/layout-model/quantize")
         assert r.status_code == 400 and "另一个模型" in r.json()["detail"]
         assert client.post("/api/model-model/quantize").status_code == 404

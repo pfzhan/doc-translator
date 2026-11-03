@@ -6,7 +6,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app import layout_model
+from app import layout_model, model_files
 from app.formats.pdf import _plan_key
 from app.formats.pdf_vision import FormulaModel
 from app.settings import Settings, SettingsError
@@ -129,14 +129,14 @@ def test_layout_model_page_api(app_env, monkeypatch, tmp_path):
         assert status["enabled"] is False and status["runtime"] == ""
         assert status["install_hint"] == layout_model.INSTALL_HINT
         assert {source["id"] for source in status["sources"]} == set(layout_model.LAYOUT.sources)
-        assert main._model_path("layout") == ""
+        assert model_files._model_path("layout") == ""
 
         model = tmp_path / "m.onnx"
         model.write_bytes(b"x")
         saved = client.put("/api/layout-model", json={"enabled": True, "path": str(model)}).json()
         assert saved["enabled"] is True and saved["file"] == {"exists": True, "size": 1}
         # With the model enabled, translation passes the file path to the PDF pipeline
-        assert main._model_path("layout") == str(model)
+        assert model_files._model_path("layout") == str(model)
 
         tested = client.post("/api/layout-model/test", json={"path": str(model)})
         assert tested.status_code == 400 and "onnxruntime" in tested.json()["detail"]
@@ -155,24 +155,24 @@ def test_formula_model_page_api(app_env, monkeypatch, tmp_path):
         assert status["enabled"] is True and status["file"]["exists"] is False
         assert status["default_path"] == str(layout_model.FORMULA.default_path())
         assert {source["id"] for source in status["sources"]} == set(layout_model.FORMULA.sources)
-        assert main._model_path("formula") == str(layout_model.FORMULA.default_path())
+        assert model_files._model_path("formula") == str(layout_model.FORMULA.default_path())
 
         model = tmp_path / "mfd.onnx"
         model.write_bytes(b"x")
         saved = client.put("/api/formula-model", json={"path": str(model)}).json()
         assert saved["enabled"] is True and saved["file"] == {"exists": True, "size": 1}
-        assert main._model_path("formula") == str(model) and main._model_path("layout") == ""
-        assert main._formula_model() == FormulaModel(str(model), 1024)
+        assert model_files._model_path("formula") == str(model) and model_files._model_path("layout") == ""
+        assert model_files._formula_model() == FormulaModel(str(model), 1024)
         assert client.put("/api/formula-model", json={"size": 768}).json()["size"] == 768
-        assert main._formula_model() == FormulaModel(str(model), 768)
+        assert model_files._formula_model() == FormulaModel(str(model), 768)
         assert client.put("/api/formula-model", json={"size": "big"}).status_code == 400
         assert status["auto"]["workers"] >= 1 and status["auto"]["threads"] >= 1
         saved = client.put("/api/formula-model", json={"workers": 1, "threads": 4}).json()
         assert (saved["workers"], saved["threads"]) == (1, 4)
-        assert main._formula_model() == FormulaModel(str(model), 768, 1, 4)
+        assert model_files._formula_model() == FormulaModel(str(model), 768, 1, 4)
         assert client.put("/api/formula-model", json={"threads": 100}).status_code == 400
         client.put("/api/formula-model", json={"enabled": False})
-        assert main._model_path("formula") == "" and main._formula_model() is None
+        assert model_files._model_path("formula") == "" and model_files._formula_model() is None
 
         tested = client.post("/api/formula-model/test", json={"path": str(model)})
         assert tested.status_code == 400 and "onnxruntime" in tested.json()["detail"]

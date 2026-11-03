@@ -6,6 +6,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from app import state
 from app.runner import get_cache
 from app.translators import MockTranslator, TranslatorError, create_translator
 
@@ -44,7 +45,7 @@ def test_uses_cache_across_requests(app_env: ModuleType, monkeypatch: pytest.Mon
 
 def test_unknown_or_disabled_service(app_env: ModuleType) -> None:
     assert post(app_env, {"texts": [EN], "service_id": "nope"}).status_code == 400
-    app_env.store.get("mock")["enabled"] = False
+    state.store.get("mock")["enabled"] = False
     assert post(app_env, {"texts": [EN], "service_id": "mock"}).status_code == 400
 
 
@@ -114,7 +115,7 @@ def test_clear_web_cache(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -
     shared = "A sentence that a translated document also contains, word for word."
     # A document translated earlier uses one of the sentences: it keeps it after the web cache is cleared
     cache = get_cache()
-    translator = create_translator(app_env.store.get("mock"), "zh-CN")
+    translator = create_translator(state.store.get("mock"), "zh-CN")
     cache.put_many(translator.cache_key, {shared: f"[zh-CN] {shared}"})
     cache.claim("documentdigest", translator.cache_key, [shared])
 

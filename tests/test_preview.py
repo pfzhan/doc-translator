@@ -9,7 +9,8 @@ import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main
+from app import main, state
+from app.history import Job
 from app.runner import Runner
 from app.translators import MockTranslator, TranslatorError
 
@@ -526,13 +527,13 @@ def test_stray_placeholders_cleaned_from_formula_free_blocks():
 def test_finished_job_preview_returns_updates_after_last_poll(app_env):
     """When the last batch finishes between two polls and the job ends right after, the next incremental poll gets
     the translations of that batch."""
-    job = main.Job(id="snap1", filename="a.md", preview=True, status="done")
-    main.jobs.out_dir(job.id).mkdir(parents=True)
-    main.jobs.add(job)
+    job = Job(id="snap1", filename="a.md", preview=True, status="done")
+    state.jobs.out_dir(job.id).mkdir(parents=True)
+    state.jobs.add(job)
     runner = Runner(MockTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
     asyncio.run(runner.translate_all(paras(3), preview=True))
     job.runner = runner
-    main.jobs.save_preview(job)
+    state.jobs.save_preview(job)
     job.runner = None
     with TestClient(main.app) as client:
         snap = client.get("/api/jobs/snap1/preview").json()

@@ -5,6 +5,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from app import job_control, state
 from app.glossaries import GlossaryError, GlossaryNotFound, GlossaryStore
 from app.glossary import candidates, merge, parse, parse_table, relevant, render, to_csv
 from app.runner import Cache, Runner
@@ -293,37 +294,34 @@ def test_glossary_api_and_job_selection(app_env):
         assert client.delete(f"/api/glossaries/{made['id']}").status_code == 404
 
 
-def test_job_glossaries_follow_the_services_own_entries(app_env):
-    main = app_env
+def test_job_glossaries_follow_the_services_own_entries():
     service = {"id": "s", "glossary": "OLAP = 联机分析"}
-    assert main._with_glossaries(service, "view = 视图")["glossary"] == "OLAP = 联机分析\nview = 视图"
-    assert main._with_glossaries({"id": "s"}, "view = 视图")["glossary"] == "view = 视图"
+    assert job_control._with_glossaries(service, "view = 视图")["glossary"] == "OLAP = 联机分析\nview = 视图"
+    assert job_control._with_glossaries({"id": "s"}, "view = 视图")["glossary"] == "view = 视图"
     # Without a glossary the service is returned unchanged, so the cache key of earlier records stays the same
-    assert main._with_glossaries(service, "") is service
+    assert job_control._with_glossaries(service, "") is service
 
 
 def test_job_keeps_the_glossary_entries_its_translations_were_made_with(app_env, monkeypatch):
-    main = app_env
     used = []
 
     def recording(service, *args):
         used.append(service.get("glossary", ""))
         return create_translator(service, *args)
 
-    monkeypatch.setattr(main, "create_translator", recording)
-    gid = main.glossaries.create({"name": "g", "entries": "view = 视图"})["id"]
-    with TestClient(main.app) as client:
+    monkeypatch.setattr(job_control, "create_translator", recording)
+    gid = state.glossaries.create({"name": "g", "entries": "view = 视图"})["id"]
+    with TestClient(app_env.app) as client:
         job = wait_done(client, submit(client, name="a.md", glossary_ids=gid)["id"])
-        # The first call checks the service before the upload
-        assert used == ["", "view = 视图"]
-        main.glossaries.update(gid, {"name": "g", "entries": "view = 视界"})
+        assert used == ["view = 视图"]
+        state.glossaries.update(gid, {"name": "g", "entries": "view = 视界"})
         # The other version and cache clearing compute the keys of the translations already made
         assert client.post(f"/api/jobs/{job['id']}/variant").status_code == 200
         assert client.get(f"/api/jobs/{job['id']}/cache").status_code == 200
-        assert used[2:] == ["view = 视图", "view = 视图"]
+        assert used[1:] == ["view = 视图", "view = 视图"]
         # Translating again uses the edited glossary, and later keys follow it
         wait_done(client, client.post(f"/api/jobs/{job['id']}/retry").json()["id"])
-        assert main.jobs.get(job["id"]).glossary_text == "view = 视界"
-        main.glossaries.delete(gid)
+        assert state.jobs.get(job["id"]).glossary_text == "view = 视界"
+        state.glossaries.delete(gid)
         assert client.get(f"/api/jobs/{job['id']}/cache").status_code == 200
-        assert used[4:] == ["view = 视界", "view = 视界"]
+        assert used[3:] == ["view = 视界", "view = 视界"]

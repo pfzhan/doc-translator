@@ -4,6 +4,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from app import state
 from app.main import _origin_allowed
 
 
@@ -45,7 +46,7 @@ def test_state_changes_from_other_pages_are_rejected(app_env: ModuleType) -> Non
         resp = request(app_env, method, path, origin="https://evil.example")
         assert resp.status_code == 403, (method, path)
         assert resp.json()["detail"] == "不接受来自其他网页的请求"
-    assert app_env.store.get("mock") is not None
+    assert state.store.get("mock") is not None
 
 
 def test_own_pages_extensions_and_tools_pass(app_env: ModuleType) -> None:

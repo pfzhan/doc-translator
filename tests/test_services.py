@@ -6,7 +6,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app import main
+from app import main, state
 from app.services import ServiceError, ServiceStore
 from app.translators import (
     ClaudeTranslator,
@@ -444,7 +444,7 @@ def test_store_crud(tmp_path):
 
 
 def test_api_endpoints(tmp_path, monkeypatch):
-    monkeypatch.setattr(main, "store", ServiceStore(tmp_path / "s.json"))
+    monkeypatch.setattr(state, "store", ServiceStore(tmp_path / "s.json"))
     client = TestClient(main.app)
     providers = client.get("/api/providers").json()
     assert {"openai", "claude", "gemini", "grok", "custom"} <= providers.keys()
