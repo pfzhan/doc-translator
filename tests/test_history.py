@@ -618,6 +618,25 @@ def test_queued_jobs_start_with_the_services_configuration_then(app_env, slow_mo
         assert failed["status"] == "error" and "服务已不存在" in failed["error"]
 
 
+def test_queue_goes_on_when_a_finished_job_cannot_be_saved(app_env, monkeypatch):
+    main = app_env
+    real = state.jobs.save_preview
+    failed = []
+
+    def full_disk(job):
+        if not failed:
+            failed.append(job.id)
+            raise OSError(28, "No space left on device")
+        real(job)
+
+    monkeypatch.setattr(state.jobs, "save_preview", full_disk)
+    with TestClient(main.app) as client:
+        client.put("/api/settings", json={"max_jobs": 1})
+        a, b = (submit(client, name=f"d{i}.md", data=MD + str(i).encode())["id"] for i in range(2))
+        assert wait_done(client, b)["status"] == "done"
+        assert failed == [a] and a not in state.running
+
+
 def test_max_jobs_setting_is_checked(app_env):
     with TestClient(app_env.app) as client:
         assert client.get("/api/settings").json()["max_jobs"] == 2

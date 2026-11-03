@@ -102,26 +102,29 @@ async def _run_job(job: Job, translator, bilingual: bool):
         traceback.print_exc()
         job.status, job.error = "error", f"{type(e).__name__}: {e}"
     finally:
-        job.finished = time.time()
-        # Accumulate the token usage of this run (resume/retry adds to the earlier count)
-        usage = getattr(translator, "usage", None)
-        if usage:
-            job.prompt_tokens += usage.get("prompt", 0)
-            job.completion_tokens += usage.get("completion", 0)
-        # The snapshot may be large, so it is written in a thread
-        await asyncio.to_thread(state.jobs.save_preview, job)
-        job.sync_info()
-        job.document = job.runner.document or job.document
-        # Release the memory held by the Runner; the preview API then reads from the preview.json snapshot
-        job.runner = None
-        state.jobs.save(job)
-        state.running.pop(job.id, None)
-        state.pause_requested.discard(job.id)
-        # The next job in the queue takes the place. A paused or deleted job starts it in _pause or _delete; one
-        # interrupted by server shutdown does not
-        if job.status in ("done", "error"):
-            _dispatch()
-        await translator.aclose()
+        try:
+            job.finished = time.time()
+            # Accumulate the token usage of this run (resume/retry adds to the earlier count)
+            usage = getattr(translator, "usage", None)
+            if usage:
+                job.prompt_tokens += usage.get("prompt", 0)
+                job.completion_tokens += usage.get("completion", 0)
+            # The snapshot may be large, so it is written in a thread
+            await asyncio.to_thread(state.jobs.save_preview, job)
+            job.sync_info()
+            job.document = job.runner.document or job.document
+            # Release the memory held by the Runner; the preview API then reads from the preview.json snapshot
+            job.runner = None
+            state.jobs.save(job)
+        finally:
+            # The place is freed even when writing the record fails (a full disk), or the queue would stop for good
+            state.running.pop(job.id, None)
+            state.pause_requested.discard(job.id)
+            # The next job in the queue takes the place. A paused or deleted job starts it in _pause or _delete;
+            # one interrupted by server shutdown does not
+            if job.status in ("done", "error"):
+                _dispatch()
+            await translator.aclose()
 
 
 def _with_glossaries(service: dict, text: str) -> dict:
