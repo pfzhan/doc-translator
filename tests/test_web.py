@@ -62,9 +62,12 @@ def test_alt_lang_same_as_target_keeps_texts(app_env: ModuleType) -> None:
     assert post(app_env, body).json()["translations"] == [None]
 
 
-def test_unsupported_alt_lang_fails_before_translating(app_env: ModuleType) -> None:
+def test_unsupported_alt_lang_fails_only_texts_needing_it(app_env: ModuleType) -> None:
     body = {"texts": [EN], "target_lang": "zh-CN", "alt_lang": "xx", "service_id": "mock"}
-    assert post(app_env, body).status_code == 400
+    assert post(app_env, body).json()["translations"] == [f"[zh-CN] {EN}"]
+    resp = post(app_env, {**body, "texts": [EN, ZH]})
+    assert resp.status_code == 400
+    assert resp.json()["detail"].startswith("改译已是目标语言的段落时出错：")
 
 
 def test_uses_cache_across_requests(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:

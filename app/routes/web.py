@@ -54,30 +54,36 @@ async def web_translate(data: WebTranslateRequest) -> WebTranslateResponse:
     service = state.store.get(data.service_id or state.store.effective_default())
     if not service or not service.get("enabled"):
         raise HTTPException(400, "翻译服务不存在或未启用")
+    try:
+        translator = create_translator(service, data.target_lang, data.source_lang)
+    except TranslatorError as e:
+        raise HTTPException(400, str(e)) from e
     async with AsyncExitStack() as stack:
-        # Both engines are created before translating, so that an unsupported alt_lang fails the request at once
-        try:
-            translator = create_translator(service, data.target_lang, data.source_lang)
-            stack.push_async_callback(translator.aclose)
-            alt_translator = None
-            if data.alt_lang and data.alt_lang != data.target_lang:
-                # The source is detected again: target_lang may not be a source language the service accepts
-                alt_translator = create_translator(service, data.alt_lang, "auto")
-                stack.push_async_callback(alt_translator.aclose)
-        except TranslatorError as e:
-            raise HTTPException(400, str(e)) from e
+        stack.push_async_callback(translator.aclose)
         try:
             results, runner = await _translate(translator, data.texts, data.html, data.title)
-            langs = [data.target_lang] * len(data.texts)
-            again = [i for i, text in enumerate(data.texts) if text in runner.same_lang]
-            if alt_translator and again:
-                html = [i < len(data.html) and data.html[i] for i in again]
-                alt_results, _ = await _translate(alt_translator, [data.texts[i] for i in again], html, data.title)
-                for i, dst in zip(again, alt_results):
-                    results[i] = dst
-                    langs[i] = data.alt_lang
         except TranslatorError as e:
             raise HTTPException(502, str(e)) from e
+        langs = [data.target_lang] * len(data.texts)
+        again = []
+        if data.alt_lang and data.alt_lang != data.target_lang:
+            again = [i for i, text in enumerate(data.texts) if text in runner.same_lang]
+        if again:
+            # Created only when a text needs it, so that an alt_lang the service does not support fails no other
+            # request. The source is detected again: target_lang may not be a source language the service accepts
+            try:
+                alt_translator = create_translator(service, data.alt_lang, "auto")
+            except TranslatorError as e:
+                raise HTTPException(400, f"改译已是目标语言的段落时出错：{e}") from e
+            stack.push_async_callback(alt_translator.aclose)
+            html = [i < len(data.html) and data.html[i] for i in again]
+            try:
+                alt_results, _ = await _translate(alt_translator, [data.texts[i] for i in again], html, data.title)
+            except TranslatorError as e:
+                raise HTTPException(502, str(e)) from e
+            for i, dst in zip(again, alt_results):
+                results[i] = dst
+                langs[i] = data.alt_lang
     translations: list[str | None] = [dst if dst != src else None for src, dst in zip(data.texts, results)]
     return WebTranslateResponse(
         translations=translations,
