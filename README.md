@@ -280,10 +280,12 @@ and each paragraph's translation appears below it. The server must be running.
   kept for the document. Translations of pages from before this option existed were not marked as such and are
   not cleared; the cache drops them when it fills up. The API is `GET` / `DELETE /api/web/cache`.
 - The API is `POST /api/web/translate` with `{"texts": [...], "html": [...], "target_lang", "source_lang",
-  "service_id", "title"}`, at most 50 texts of 10,000 characters each; `html` is aligned with `texts` and marks HTML
-  fragments, which LLM services get the HTML prompt for and Google Translate gets `format=html` for. It answers
-  `{"translations": [...], "detected_lang"}`, where `null` keeps the original. Like every request that changes
-  something, it is rejected when another web page sends it (see Known limitations).
+  "alt_lang", "service_id", "title"}`, at most 50 texts of 10,000 characters each; `html` is aligned with `texts` and
+  marks HTML fragments, which LLM services get the HTML prompt for and Google Translate gets `format=html` for.
+  Texts already in `target_lang` are kept, or translated into `alt_lang` when it is given. It answers
+  `{"translations": [...], "langs": [...], "detected_lang"}`, where `null` keeps the original and `langs` gives the
+  language of each translation. Like every request that changes something, it is rejected when another web page
+  sends it (see Known limitations).
 - iframes are translated along with the page when the extension may access their site (frames of the page's own
   site always; others only with access to that site) and follow the shortcut with it; an iframe added later starts
   on the next press. Input placeholders are translated with the page, and tooltips (`title`) when hovered, since
@@ -324,6 +326,9 @@ The command has no shortcut by default; one can be set on `chrome://extensions/s
 
 - Each line of the selection is translated as a paragraph; lines longer than 10,000 characters are cut at a
   sentence end, and long selections are sent 50 paragraphs per request.
+- Paragraphs already in the target language are translated into the language chosen under "选中的文字已是目标语言时译成"
+  (when the selection is already in the target language) on the options page, English by default: with Chinese as
+  the target, foreign text is translated into Chinese and Chinese text into English.
 - Text selected in text boxes works too, also in shadow DOM, except in password and one-time-code fields and other
   fields for secrets, which are never sent. With the shortcut, the selection is taken from the frame the user is in; text in
   iframes the extension may enter works too (with `activeTab`, those from the same origin as the page).

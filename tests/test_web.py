@@ -24,7 +24,47 @@ def test_translates_aligned_and_keeps_skipped(app_env: ModuleType) -> None:
     assert resp.status_code == 200
     data = resp.json()
     assert data["translations"] == [f"[zh-CN] {EN}", None, None]
+    assert data["langs"] == ["zh-CN", None, None]
     assert data["detected_lang"]
+
+
+def test_alt_lang_takes_texts_already_in_target(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    closed: list[str] = []
+
+    async def aclose(self: MockTranslator) -> None:
+        closed.append(self.target_lang)
+
+    monkeypatch.setattr(MockTranslator, "aclose", aclose)
+    body = {"texts": [EN, "  ", ZH], "target_lang": "zh-CN", "alt_lang": "en", "service_id": "mock"}
+    data = post(app_env, body).json()
+    assert data["translations"] == [f"[zh-CN] {EN}", None, f"[en] {ZH}"]
+    assert data["langs"] == ["zh-CN", None, "en"]
+    assert sorted(closed) == ["en", "zh-CN"]
+
+
+def test_alt_lang_skips_texts_translated_unchanged(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    async def echoing(self: MockTranslator, texts: list[str]) -> list[str]:
+        calls.append((self.target_lang, list(texts)))
+        return list(texts)
+
+    monkeypatch.setattr(MockTranslator, "translate_batch", echoing)
+    body = {"texts": [EN], "target_lang": "zh-CN", "alt_lang": "en", "service_id": "mock"}
+    data = post(app_env, body).json()
+    assert data["translations"] == [None]
+    assert data["langs"] == [None]
+    assert calls == [("zh-CN", [EN])]
+
+
+def test_alt_lang_same_as_target_keeps_texts(app_env: ModuleType) -> None:
+    body = {"texts": [ZH], "target_lang": "zh-CN", "alt_lang": "zh-CN", "service_id": "mock"}
+    assert post(app_env, body).json()["translations"] == [None]
+
+
+def test_unsupported_alt_lang_fails_before_translating(app_env: ModuleType) -> None:
+    body = {"texts": [EN], "target_lang": "zh-CN", "alt_lang": "xx", "service_id": "mock"}
+    assert post(app_env, body).status_code == 400
 
 
 def test_uses_cache_across_requests(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -99,7 +139,11 @@ def test_engine_errors_map_to_502(app_env: ModuleType, monkeypatch: pytest.Monke
 
 
 def test_empty_request(app_env: ModuleType) -> None:
-    assert post(app_env, {"texts": [], "service_id": "mock"}).json() == {"translations": [], "detected_lang": ""}
+    assert post(app_env, {"texts": [], "service_id": "mock"}).json() == {
+        "translations": [],
+        "langs": [],
+        "detected_lang": "",
+    }
 
 
 def test_clear_web_cache(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:

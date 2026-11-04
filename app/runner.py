@@ -207,6 +207,8 @@ class Runner:
         self.cache_only = cache_only
         # Shown on the job page: detected document language, number of skipped paragraphs
         self.info = {"detected_lang": "", "skipped": 0}
+        # Texts the last translate_all kept because they are already in the target language
+        self.same_lang: set[str] = set()
         # How far preparation before translation and writing after translation have got (see report_stage)
         self.stage = {"name": "", "done": 0, "total": 0, "unit": ""}
         # Digest of the file content (set_document); the glossary is cached by it
@@ -389,6 +391,7 @@ class Runner:
         # Only paragraphs flagged by the caller are sent as HTML; a <Note> in body text is not a tag
         unique = list(dict.fromkeys(t for t in texts if t.strip()))
         lang_skipped = await asyncio.to_thread(self._detect, unique)
+        self.same_lang = lang_skipped
 
         def kept(i: int) -> bool:
             text = texts[i]

@@ -4,6 +4,7 @@ const DEFAULTS = {
   server: 'http://127.0.0.1:8765',
   targetLang: 'zh-CN',
   sourceLang: 'auto',
+  altLang: 'en', // selected text already in the target language is translated into this one
   serviceId: '', // empty: the server's default service
   mode: 'bilingual', // or 'translated': hide the originals of translated paragraphs (read by content.js directly)
   scope: 'page', // or 'main': leave out the header, footer, navigation and sidebars (read by content.js directly)

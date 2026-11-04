@@ -110,6 +110,7 @@ async function connect(byUser = false) {
   const names = languages.map((l) => [l.code, l.code === 'auto' ? '自动检测' : `${l.native}（${l.name}）`]);
   fill($('target'), names.filter(([code]) => code !== 'auto'), s.targetLang);
   fill($('source'), names, s.sourceLang);
+  fill($('alt'), names.filter(([code]) => code !== 'auto'), s.altLang);
   setStatus('已连接', 'ok');
   showCache(server);
 }
@@ -165,6 +166,7 @@ async function init() {
   $('service').addEventListener('change', (e) => chrome.storage.sync.set({ serviceId: e.target.value }));
   $('target').addEventListener('change', (e) => chrome.storage.sync.set({ targetLang: e.target.value }));
   $('source').addEventListener('change', (e) => chrome.storage.sync.set({ sourceLang: e.target.value }));
+  $('alt').addEventListener('change', (e) => chrome.storage.sync.set({ altLang: e.target.value }));
   $('mode').value = s.mode;
   $('mode').addEventListener('change', (e) => chrome.storage.sync.set({ mode: e.target.value }));
   $('scope').value = s.scope;

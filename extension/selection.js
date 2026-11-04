@@ -150,13 +150,14 @@
     place();
   }
 
-  function append(texts, lang) {
-    bubble.text.lang = lang;
-    for (const text of texts) {
+  /** langs: aligned with texts, the language of each translation; null for an original kept as it is. */
+  function append(texts, langs) {
+    texts.forEach((text, i) => {
       const p = document.createElement('p');
+      if (langs[i]) p.lang = langs[i];
       p.textContent = text;
       bubble.text.append(p);
-    }
+    });
     place();
   }
 
@@ -173,7 +174,11 @@
       const batch = texts.slice(i, i + MAX_TEXTS);
       let result;
       try {
-        result = await chrome.runtime.sendMessage({ type: 'dt-translate', texts: batch, title: document.title });
+        result = await chrome.runtime.sendMessage({
+          type: 'dt-translate-selected',
+          texts: batch,
+          title: document.title,
+        });
       } catch {
         // The extension was reloaded or removed; the script left in this page can no longer reach it
         result = { error: '扩展已更新，请刷新页面后重试' };
@@ -185,7 +190,10 @@
       }
       // null keeps the original, so the bubble still reads in the order of the selection
       translated ||= result.translations.some((t) => t);
-      append(batch.map((text, j) => result.translations[j] || text), result.lang);
+      append(
+        batch.map((text, j) => result.translations[j] || text),
+        result.langs,
+      );
     }
     if (!translated) bubble.text.replaceChildren();
     setStatus(translated ? '' : '选中的文字不需要翻译');

@@ -59,6 +59,8 @@
     <select id="target"></select>
     <label for="source">源语言</label>
     <select id="source"></select>
+    <label for="alt">选中的文字已是目标语言时译成</label>
+    <select id="alt"></select>
     <label for="mode">显示方式</label>
     <select id="mode">
       <option value="bilingual">双语对照（译文在原文下方）</option>
@@ -69,7 +71,7 @@
       <option value="page">整个网页</option>
       <option value="main">只翻译正文（不翻译页头、页脚、导航和侧栏）</option>
     </select>
-    <p class="hint">修改后立即生效，对之后发出的翻译请求有效；翻译范围对之后打开或开始翻译的网页有效。翻译服务的 Key、模型和提示词在 Doc Translator 页面上设置。</p>
+    <p class="hint">修改后立即生效，对之后发出的翻译请求有效；翻译范围对之后打开或开始翻译的网页有效。翻译选中的文字时，已是目标语言的段落改译成「选中的文字已是目标语言时译成」选的语言，网页翻译不受影响。翻译服务的 Key、模型和提示词在 Doc Translator 页面上设置。</p>
   </section>
 
   <section>
