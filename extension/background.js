@@ -253,10 +253,10 @@ const unreachable = (server) => `连不上翻译服务（${server}），请先�
 // A request the server has not answered by then has failed; LLM services take tens of seconds for a full batch
 const REQUEST_TIMEOUT = 120000;
 
-/** html: aligned with texts, which are HTML fragments (see richOf in content.js); empty means none. altLang: the
- * language for texts already in the target language (for selected text); empty keeps them as they are. langs in the
- * answer is aligned with texts and gives the language of each translation. */
-async function translate(texts, title, html = [], altLang = '') {
+/** html: aligned with texts, which are HTML fragments (see richOf in content.js); empty means none. selected: the
+ * texts are selected text, and those already in the target language go into the second language (altLang) instead
+ * of being kept. langs in the answer is aligned with texts and gives the language of each translation. */
+async function translate(texts, title, html = [], selected = false) {
   const s = await loadSettings();
   let resp;
   try {
@@ -269,7 +269,7 @@ async function translate(texts, title, html = [], altLang = '') {
         title,
         target_lang: s.targetLang,
         source_lang: s.sourceLang,
-        alt_lang: altLang,
+        alt_lang: selected ? s.altLang : '',
         service_id: s.serviceId,
       }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT),
@@ -302,10 +302,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
   if (msg?.type !== 'dt-translate' && msg?.type !== 'dt-translate-selected') return false;
   // Whatever goes wrong, the page gets an answer: an unanswered message would leave it waiting for good
-  const translated =
-    msg.type === 'dt-translate'
-      ? translate(msg.texts, msg.title, msg.html)
-      : loadSettings().then((s) => translate(msg.texts, msg.title, [], s.altLang));
-  translated.catch((e) => ({ error: `翻译失败：${e.message}` })).then(sendResponse);
+  translate(msg.texts, msg.title, msg.html, msg.type === 'dt-translate-selected')
+    .catch((e) => ({ error: `翻译失败：${e.message}` }))
+    .then(sendResponse);
   return true; // respond asynchronously
 });
