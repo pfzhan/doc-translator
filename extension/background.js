@@ -281,15 +281,14 @@ async function translate(texts, title, html = [], altLang = '') {
   const body = await resp.json().catch(() => null);
   if (!resp.ok) return { error: errorText(body, resp.status) };
   // Another program on the configured port, or a proxy page, answers 200 with something else
+  const aligned = (list) =>
+    Array.isArray(list) && list.length === texts.length && list.every((t) => t === null || typeof t === 'string');
+  const notOurs = { error: `${s.server} 的回应不是 Doc Translator 的翻译结果，请检查扩展设置里的服务地址` };
   const list = body?.translations;
-  if (!Array.isArray(list) || list.length !== texts.length || list.some((t) => t !== null && typeof t !== 'string')) {
-    return { error: `${s.server} 的回应不是 Doc Translator 的翻译结果，请检查扩展设置里的服务地址` };
-  }
+  if (!aligned(list)) return notOurs;
   // Servers from before alt_lang leave langs out and translate everything into the target language
-  const langs =
-    Array.isArray(body.langs) && body.langs.length === texts.length
-      ? body.langs
-      : list.map((t) => (t === null ? null : s.targetLang));
+  const langs = body.langs ?? list.map((t) => (t === null ? null : s.targetLang));
+  if (!aligned(langs)) return notOurs;
   return { translations: list, lang: s.targetLang, langs };
 }
 
