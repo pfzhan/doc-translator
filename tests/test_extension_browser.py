@@ -253,6 +253,29 @@ def test_options_keep_a_service_the_server_has(browser: BrowserContext, worker: 
     options.close()
 
 
+def test_a_press_before_the_page_has_a_body_can_be_repeated(
+    fake_server: FakeServer, worker: Worker, page: Page
+) -> None:
+    html = f"""<!doctype html><title>t</title><script>
+      window.addEventListener('DOMContentLoaded', () => document.body.remove());
+    </script><body><p>{VISIBLE}</p></body>"""
+    page.goto(fake_server.add_page("/no-body", html))
+    assert page.evaluate("document.body === null")
+    assert press_shortcut(worker, page), "the press got no answer"
+
+    page.evaluate(
+        """(text) => {
+          const body = document.createElement('body');
+          body.innerHTML = `<p>${text}</p>`;
+          document.documentElement.append(body);
+        }""",
+        VISIBLE,
+    )
+    assert press_shortcut(worker, page), "the second press got no answer"
+    wait_for_translations(page, 1)
+    assert translations(page) == [TRANSLATED + VISIBLE]
+
+
 def test_a_document_without_html_elements_shows_a_failure_on_the_button(
     fake_server: FakeServer, worker: Worker, page: Page
 ) -> None:

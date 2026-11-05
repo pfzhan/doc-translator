@@ -916,7 +916,14 @@
   async function toggle() {
     if (!starting) {
       starting = start();
-      await starting;
+      try {
+        await starting;
+      } catch (e) {
+        // The next press starts over (the page may have no <body> yet)
+        starting = null;
+        started = false;
+        throw e;
+      }
     } else {
       await starting;
       if (failed.length && !hidden) {
@@ -943,11 +950,16 @@
     pump();
   }
 
+  /** Whatever goes wrong, the service worker gets an answer: an unanswered message would leave it waiting for good. */
   async function handle(msg) {
-    if (msg.type === 'dt-toggle') await toggle();
-    // Switching the display mode on a page not translated yet starts translating, in the new mode
-    else if (msg.type === 'dt-start' && !starting) await toggle();
-    else if (msg.type === 'dt-sync') await sync(msg);
+    try {
+      if (msg.type === 'dt-toggle') await toggle();
+      // Switching the display mode on a page not translated yet starts translating, in the new mode
+      else if (msg.type === 'dt-start' && !starting) await toggle();
+      else if (msg.type === 'dt-sync') await sync(msg);
+    } catch {
+      toast('现在无法翻译这个页面，请稍后再按快捷键重试');
+    }
     return { started, hidden };
   }
 
@@ -972,5 +984,5 @@
 
   // autostart.js runs just before this file on the sites in the options page's list (sites.js): start as if the
   // shortcut had been pressed
-  if (window.__docTranslatorAuto && !starting) toggle();
+  if (window.__docTranslatorAuto && !starting) handle({ type: 'dt-toggle' });
 })();
