@@ -76,20 +76,36 @@
   const waiting = new Map(); // observed element -> its paragraphs not yet near the viewport
   const queue = []; // paragraphs near the viewport, not sent yet
 
+  /** Screen-reader-only text is clipped to a 1px box, and a collapsed panel has no height: translating what such a
+   * box holds would only spend quota. */
+  const hasArea = ({ width, height }) => width > 1 && height > 1;
+
   const visibility = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
         visibility.unobserve(entry.target);
-        const { width, height } = entry.boundingClientRect;
-        // Screen-reader-only text is clipped to a 1px box: translating it would only spend quota
-        if (width > 1 && height > 1) queue.push(...(waiting.get(entry.target) || []).filter(current));
+        if (!hasArea(entry.boundingClientRect)) {
+          // Still in view when it opens, so the visibility observer would not report it again
+          growth.observe(entry.target);
+          continue;
+        }
+        queue.push(...(waiting.get(entry.target) || []).filter(current));
         waiting.delete(entry.target);
       }
       pump();
     },
     { rootMargin: '100% 0px' }, // one screen above and below
   );
+
+  /** Boxes too small to translate what they hold, until they grow. */
+  const growth = new ResizeObserver((entries) => {
+    for (const { target } of entries) {
+      if (!hasArea(target.getBoundingClientRect())) continue;
+      growth.unobserve(target);
+      visibility.observe(target);
+    }
+  });
 
   // ---------- Shadow DOM ----------
 
@@ -719,6 +735,7 @@
     for (const [el, units] of waiting) {
       if (el.isConnected && units.some(current)) continue;
       visibility.unobserve(el);
+      growth.unobserve(el);
       waiting.delete(el);
     }
     for (const node of originals.keys()) if (!node.isConnected) originals.delete(node);

@@ -185,6 +185,22 @@ def test_translates_a_paragraph_below_its_original(fake_server: FakeServer, work
     assert page.locator("p").text_content() == VISIBLE + TRANSLATED + VISIBLE
 
 
+def test_text_in_a_collapsed_box_is_translated_once_expanded(
+    fake_server: FakeServer, worker: Worker, page: Page
+) -> None:
+    hidden = "This text sits directly in a panel that starts collapsed."
+    html = f"""<!doctype html><title>t</title><p>{VISIBLE}</p>
+      <div id="panel" style="height: 0; overflow: hidden">{hidden}</div>"""
+    page.goto(fake_server.add_page("/collapsed", html))
+    press_shortcut(worker, page)
+    wait_for_translations(page, 1)
+    assert hidden not in fake_server.sent_texts()
+
+    page.evaluate("document.getElementById('panel').style.height = 'auto'")
+    wait_for_translations(page, 2)
+    assert TRANSLATED + hidden in translations(page)
+
+
 def test_screen_reader_text_is_not_sent(fake_server: FakeServer, worker: Worker, page: Page) -> None:
     clipped = "Text only screen readers get to read."
     html = f"""<!doctype html><title>t</title><p>{VISIBLE}</p>

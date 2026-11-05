@@ -280,8 +280,9 @@ and each paragraph's translation appears below it. The server must be running.
   `chrome://extensions/shortcuts`); translated pages switch at once. In translation-only mode the original of each
   translated paragraph is hidden (its nodes stay in the page with their text emptied), while images and form
   controls stay visible; hiding the translations brings the originals back.
-- Only paragraphs within a screen of the viewport are sent; the rest are translated as the page scrolls, and
-  content the page adds later (infinite scrolling, single-page apps) is picked up too.
+- Only paragraphs within a screen of the viewport are sent; the rest are translated as the page scrolls, a
+  collapsed panel once it opens, and content the page adds later (infinite scrolling, single-page apps) is picked up
+  too.
 - Links and inline formatting (bold, italic, underline, strikethrough, inline code, sub- and superscript,
   highlighting) are kept in translations. Such a paragraph is sent as HTML with only those tags, each numbered and
   without attributes. The translation is never inserted as HTML: it is parsed in an inert document and rebuilt
