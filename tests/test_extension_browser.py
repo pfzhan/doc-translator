@@ -218,6 +218,16 @@ def saved_service(worker: Worker) -> str:
     return service
 
 
+def test_options_drop_a_service_the_server_no_longer_has(browser: BrowserContext, worker: Worker) -> None:
+    worker.evaluate("chrome.storage.sync.set({ serviceId: 'gone' })")
+    options = open_options(browser, worker)
+    assert options.locator("#service").input_value() == ""
+    # What the page shows is what translations use
+    assert saved_service(worker) == ""
+    assert "默认服务" in (options.locator("#status").text_content() or "")
+    options.close()
+
+
 def test_options_keep_a_service_the_server_has(browser: BrowserContext, worker: Worker) -> None:
     worker.evaluate("chrome.storage.sync.set({ serviceId: 'mock' })")
     options = open_options(browser, worker)

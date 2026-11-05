@@ -102,16 +102,17 @@ async function connect(byUser = false) {
   }
   if (stale()) return;
   const defaultName = services.services.find((x) => x.id === services.default)?.name || services.default;
-  fill(
-    $('service'),
-    [['', `默认服务（${defaultName}）`], ...services.services.filter((x) => x.enabled).map((x) => [x.id, x.name])],
-    s.serviceId,
-  );
+  const enabled = services.services.filter((x) => x.enabled);
+  fill($('service'), [['', `默认服务（${defaultName}）`], ...enabled.map((x) => [x.id, x.name])], s.serviceId);
+  // Removed or disabled on the server since: the list falls back to the default, and translations must use what it
+  // shows, or each would fail while this page looks fine
+  const serviceGone = s.serviceId !== '' && !enabled.some((x) => x.id === s.serviceId);
+  if (serviceGone) await chrome.storage.sync.set({ serviceId: '' });
   const names = languages.map((l) => [l.code, l.code === 'auto' ? '自动检测' : `${l.native}（${l.name}）`]);
   fill($('target'), names.filter(([code]) => code !== 'auto'), s.targetLang);
   fill($('source'), names, s.sourceLang);
   fill($('alt'), names.filter(([code]) => code !== 'auto'), s.altLang);
-  setStatus('已连接', 'ok');
+  setStatus(serviceGone ? '已连接。之前选的翻译服务已删除或停用，已改用默认服务' : '已连接', 'ok');
   showCache(server);
 }
 

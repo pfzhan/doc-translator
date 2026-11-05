@@ -252,7 +252,8 @@ and each paragraph's translation appears below it. The server must be running.
 3. The shortcut is changed on Chrome's `chrome://extensions/shortcuts` page (extensions cannot set it themselves).
    The extension's options page shows the current shortcut with a button that opens that page, and sets the server
    address, the translation service and the languages; the services are those enabled on the server, and keys,
-   models and prompts are set on the server's page.
+   models and prompts are set on the server's page. When the chosen service was removed or disabled, opening the
+   options page switches to the default service and says so.
 
 - Paragraphs come from the page's layout: inline elements belong to the surrounding paragraph, and a blank line
   (`<br><br>`) starts a new one. Code blocks, form controls, editable content (`contenteditable`) and blocks marked
