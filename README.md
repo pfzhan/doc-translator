@@ -598,7 +598,8 @@ app/
 static/            frontend pages
 extension/         Chrome extension for web page translation
 scripts/           build_firefox.py: writes the Firefox version of the extension to dist/firefox/
-tests/             tests (pytest)
+tests/             tests (pytest); test_extension_browser.py runs the extension in Chromium and is skipped without
+                   requirements-dev.txt and `playwright install chromium`
 eval/              evaluation scripts for PDF segmentation, inline formulas and models; usage and the paper list
                    are in eval/README.md
 ```

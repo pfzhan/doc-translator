@@ -1,5 +1,6 @@
 -r requirements.txt
 ruff==0.17.4
 mypy==2.4.1
-# tests/test_web_ui.py runs the web page in Chromium: also run `playwright install chromium`
+# tests/test_web_ui.py and tests/test_extension_browser.py run the web page and the browser extension in
+# Chromium: also run `playwright install chromium`
 playwright==1.58.0

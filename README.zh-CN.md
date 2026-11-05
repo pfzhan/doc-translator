@@ -271,7 +271,7 @@ app/
 static/            前端页面
 extension/         网页翻译的 Chrome 扩展
 scripts/           build_firefox.py：生成 Firefox 版扩展到 dist/firefox/
-tests/             测试（pytest）
+tests/             测试（pytest）；test_extension_browser.py 在 Chromium 里运行扩展，没有安装 requirements-dev.txt 和 `playwright install chromium` 时跳过
 eval/              PDF 分段、行内公式和模型的评测脚本，用法和论文列表见 eval/README.zh-CN.md
 ```
 
