@@ -252,6 +252,8 @@ const unreachable = (server) => `连不上翻译服务（${server}），请先�
 
 // A request the server has not answered by then has failed; LLM services take tens of seconds for a full batch
 const REQUEST_TIMEOUT = 120000;
+// The server rejects a longer page title, and uses only the start of one as context
+const MAX_TITLE = 1000;
 
 /** html: aligned with texts, which are HTML fragments (see richOf in content.js); empty means none. selected: the
  * texts are selected text, and those already in the target language go into the second language (altLang) instead
@@ -266,7 +268,7 @@ async function translate(texts, title, html = [], selected = false) {
       body: JSON.stringify({
         texts,
         html,
-        title,
+        title: title.slice(0, MAX_TITLE),
         target_lang: s.targetLang,
         source_lang: s.sourceLang,
         alt_lang: selected ? s.altLang : '',

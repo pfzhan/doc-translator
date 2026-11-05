@@ -195,6 +195,15 @@ def test_screen_reader_text_is_not_sent(fake_server: FakeServer, worker: Worker,
     assert fake_server.sent_texts() == [VISIBLE]
 
 
+def test_a_long_page_title_does_not_fail_the_translation(fake_server: FakeServer, worker: Worker, page: Page) -> None:
+    html = f"<!doctype html><title>{'long title ' * 200}</title><p>{VISIBLE}</p>"
+    page.goto(fake_server.add_page("/long-title", html))
+    press_shortcut(worker, page)
+    wait_for_translations(page, 1)
+    assert all(len(request.title) <= MAX_TITLE for request in fake_server.requests)
+    assert fake_server.requests[0].title.startswith("long title")
+
+
 def open_options(browser: BrowserContext, worker: Worker) -> Page:
     extension_id = worker.url.split("/")[2]
     options = browser.new_page()
