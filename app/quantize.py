@@ -38,6 +38,7 @@ import numpy as np
 import pymupdf
 
 from .formats import pdf_vision
+from .json_types import JSONDict
 
 INSTALL_HINT = ".venv/bin/pip install onnx"
 # Pages sampled for calibration. More pages bring no clear benefit and each one costs another inference
@@ -144,9 +145,9 @@ class Quantizer:
     """Generate one model at a time. Quantizes in a thread with progress polled by the page; writes a temporary
     file and replaces the real one only after the box count check (see _check)."""
 
-    def __init__(self):
-        self.task: asyncio.Task | None = None
-        self.state: dict = {"running": False, "done": 0, "total": 0, "error": ""}
+    def __init__(self) -> None:
+        self.task: asyncio.Task[None] | None = None
+        self.state: JSONDict = {"running": False, "done": 0, "total": 0, "error": ""}
 
     @property
     def running(self) -> bool:
@@ -173,12 +174,13 @@ class Quantizer:
 
         state = self.state
 
-        class Pages(CalibrationDataReader):
-            def __init__(self, input_name: str):
+        # onnxruntime has no type information, so its base class is Any to mypy
+        class Pages(CalibrationDataReader):  # type: ignore[misc]
+            def __init__(self, input_name: str) -> None:
                 self.input_name = input_name
                 self.left = iter(images)
 
-            def get_next(self):
+            def get_next(self) -> dict[str, np.ndarray] | None:
                 image = next(self.left, None)
                 if image is None:
                     return None

@@ -180,12 +180,12 @@ def lang_name(code: str) -> str:
     return LANG_EN.get(code, code)
 
 
-def default_prompts(target_lang: str, source_lang: str = "auto") -> dict:
+def default_prompts(target_lang: str, source_lang: str = "auto") -> dict[str, str]:
     """Compute the default prompts for a language pair by the plugin's langOverrides rules (placeholders not
     filled)."""
     result = {"system": TASK_SYSTEM_PROMPT, "user": USER_PROMPT}
 
-    def apply(item):
+    def apply(item: dict[str, str]) -> None:
         for key in ("system", "user"):
             if item.get(key):
                 result[key] = item[key]
@@ -199,7 +199,7 @@ def default_prompts(target_lang: str, source_lang: str = "auto") -> dict:
     return result
 
 
-def fill(template: str, values: dict) -> str:
+def fill(template: str, values: dict[str, str]) -> str:
     # Expand fragments such as {{title_prompt}} first; a fragment may contain {{imt_title}} in turn
     for _ in range(2):
         template = re.sub(r"\{\{(\w+)\}\}", lambda m: values.get(m.group(1), m.group(0)), template)
@@ -399,7 +399,7 @@ def parse_markers(content: str, count: int, marker: str = "p") -> dict[int, str]
     current: int | None = None
     buf: list[str] = []
 
-    def flush():
+    def flush() -> None:
         if current is not None and 0 <= current < count and current not in result:
             result[current] = "\n".join(buf).strip()
 

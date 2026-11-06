@@ -1,5 +1,6 @@
 import hashlib
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import docx, html_page, subtitles
 from .docx import translate_docx
@@ -10,6 +11,9 @@ from .mobi import translate_mobi
 from .pdf import translate_pdf
 from .pdf_vision import FormulaModel
 from .subtitles import translate_subtitles
+
+if TYPE_CHECKING:
+    from ..runner import Runner
 
 SUPPORTED = {
     ".md",
@@ -48,7 +52,7 @@ def document_digest(src: Path) -> str:
 async def translate_file(
     src: Path,
     out_dir: Path,
-    runner,
+    runner: "Runner",
     bilingual: bool,
     target_lang: str,
     layout_model: str = "",

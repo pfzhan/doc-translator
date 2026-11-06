@@ -19,6 +19,7 @@ import httpx
 import pymupdf
 
 from .formats import pdf_vision
+from .json_types import JSONDict
 from .paths import DATA_DIR
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -92,7 +93,7 @@ def runtime_version() -> str:
     return str(getattr(onnxruntime, "__version__", "") or "unknown")
 
 
-def file_status(path: Path) -> dict:
+def file_status(path: Path) -> JSONDict:
     if not path.is_file():
         return {"exists": False, "size": 0}
     return {"exists": True, "size": path.stat().st_size}
@@ -105,8 +106,8 @@ class Downloader:
     def __init__(self, spec: ModelSpec, transport: httpx.AsyncBaseTransport | None = None):
         self.spec = spec
         self.transport = transport
-        self.task: asyncio.Task | None = None
-        self.state: dict = {"running": False, "done": 0, "total": 0, "error": "", "source": ""}
+        self.task: asyncio.Task[None] | None = None
+        self.state: JSONDict = {"running": False, "done": 0, "total": 0, "error": "", "source": ""}
 
     @property
     def running(self) -> bool:
@@ -145,7 +146,7 @@ class Downloader:
             self.state["running"] = False
 
 
-def check(spec: ModelSpec, path: Path, size: int | None = None) -> dict:
+def check(spec: ModelSpec, path: Path, size: int | None = None) -> JSONDict:
     """Load the model, run it once on a generated page, and report the time taken and the classes boxed. size is
     the input side of the formula detection model."""
     if not runtime_version():
