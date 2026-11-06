@@ -656,3 +656,45 @@ def test_a_cached_translation_of_a_neighbor_is_retranslated():
     near = list(good)[2]
     assert shifted in sent and cut in sent and near in sent
     assert not any(source in sent for source in list(good)[:2])
+
+
+def test_other_workers_stop_when_one_fails():
+    """When a batch fails, translate_all raises only after the other workers stopped: none of them goes on
+    requesting or reporting progress for a run that already failed."""
+    import time
+
+    from app.runner import Runner
+    from app.translators import Translator, TranslatorError
+    from tests import helpers
+
+    class Engine(Translator):
+        concurrency = 2
+        max_batch_items = 1
+
+        def __init__(self) -> None:
+            super().__init__("zh-CN", "en")
+            self.calls = 0
+
+        async def translate_batch(self, texts: list[str]) -> list[str]:
+            self.calls += 1
+            if self.calls == 2:
+                await asyncio.sleep(0.01)
+                raise TranslatorError("boom")
+            await asyncio.sleep(0.2)
+            return ["译文" * 20 for _ in texts]
+
+    ticks: list[float] = []
+
+    async def scenario() -> float:
+        runner = Runner(
+            Engine(), progress=lambda done, total: ticks.append(time.perf_counter()), cache=helpers.MemCache()
+        )
+        runner.first_batch_items = 1
+        with pytest.raises(TranslatorError):
+            await runner.translate_all([f"Paragraph number {i} of the document." for i in range(3)])
+        raised = time.perf_counter()
+        await asyncio.sleep(0.4)
+        return raised
+
+    raised = run(scenario())
+    assert not [t for t in ticks if t > raised]

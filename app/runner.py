@@ -604,8 +604,16 @@ class Runner:
                 # and the server would not respond during the whole translation
                 await asyncio.sleep(0)
 
-        workers = min(self.translator.concurrency, len(pending))
-        await asyncio.gather(*(worker() for _ in range(workers)))
+        workers = [asyncio.create_task(worker()) for _ in range(min(self.translator.concurrency, len(pending)))]
+        try:
+            await asyncio.gather(*workers)
+        except BaseException:
+            # One worker failed (or this run was cancelled): stop the others before the error reaches the caller.
+            # Otherwise they finish their batches in the background and report progress for a job already failed
+            for task in workers:
+                task.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
+            raise
         self.info["failed"] = len(failed)
         if failed and (len(failed) == total or len(failed) > max(3, total // 10)):
             raise TranslatorError(f"翻译服务持续返回空译文（{len(failed)} / {total} 段），请重试或更换服务")
