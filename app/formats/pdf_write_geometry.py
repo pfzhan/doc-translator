@@ -409,7 +409,10 @@ def _beside_body(block: TextBlock, blocks: list[TextBlock]) -> TextBlock | None:
 
 def _source_marked(block: TextBlock) -> str:
     """The source text with bold and italic marks written out span by span. When a block that keeps the original
-    text is rewritten, bold page numbers stay bold."""
+    text is rewritten, bold page numbers stay bold. A block merged from fragments without spans has none: its plain
+    text is used."""
+    if not block.span_lines:
+        return block.text
     spans = [s for line in block.span_lines for s in line]
     writer = writer_for(spans, block.size, _color_value(block.color))
     return _join_lines(

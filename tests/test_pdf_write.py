@@ -3750,6 +3750,38 @@ def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down():
     assert not any(id(b) in moved for b in rest)
 
 
+def test_an_index_entry_without_spans_that_keeps_its_text_still_moves():
+    """An entry merged from fragments of which one had no spans has no span lines. When it keeps the original
+    text and the entries above it push the column down, it moves with them, rewritten from its plain text."""
+    from app.formats.pdf_blocks import TextBlock
+    from app.formats.pdf_index_reflow import _index_reflow
+    from app.formats.pdf_layout import Column, PageGeometry
+
+    def blk(text, x0, row, spans=True):
+        rect = pymupdf.Rect(x0, 100 + row * 9.6, x0 + 60, 110 + row * 9.6)
+        span = {"text": text, "size": 8.0, "font": "Times-Roman", "flags": 0, "color": 0, "bbox": tuple(rect)}
+        return TextBlock(
+            page=0,
+            rect=rect,
+            line_rects=[rect],
+            text=text,
+            size=8.0,
+            color="#000",
+            bold=False,
+            span_lines=[[span]] if spans else None,
+            entry=True,
+            index=True,
+        )
+
+    left = [blk(f"entry {n}, {n}", 80, n, spans=n != 6) for n in range(10)]
+    right = [blk(f"other {n}, {n}", 180, n) for n in range(10)]
+    geo = PageGeometry(612, (Column(80, 280),), ())
+    items = [(b, f"条目{n}, {n}") for n, b in enumerate(left) if n != 6] + [(b, "其他") for b in right]
+    items[2] = (left[2], "在命名实体识别(NER)中, 241, 419")
+    moved = _index_reflow(items, [*left, *right], geo, True, {}, set(), left[-1].rect.y1)
+    assert moved[id(left[6])].rect.y0 > left[6].rect.y0
+
+
 def test_an_index_entry_is_never_centered():
     """An indented subentry that falls exactly in the middle of the column is still left-aligned."""
     from app.formats.pdf_blocks import TextBlock

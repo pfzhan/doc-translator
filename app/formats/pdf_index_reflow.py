@@ -53,7 +53,7 @@ def _index_reflow(
     texts.update(
         (id(b), _source_marked(b))
         for b in blocks
-        if b.index and id(b) not in texts and not any(_span_is_math(s) for line in b.span_lines for s in line)
+        if b.index and id(b) not in texts and not any(_span_is_math(s) for line in b.span_lines or [] for s in line)
     )
     moved: dict[int, TextBlock] = {}
     for column, right in _index_columns(blocks, geo):
