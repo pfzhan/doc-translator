@@ -50,12 +50,6 @@ strict = true
 # pymupdf ships type information but leaves some constructors (Document, Rect, ...) unannotated
 untyped_calls_exclude = [
     "pymupdf",
-    "app.formats.docx",
-    "app.formats.epub",
-    "app.formats.html_blocks",
-    "app.formats.html_page",
-    "app.formats.markdown",
-    "app.formats.mobi",
     "app.formats.pdf",
     "app.formats.pdf_algorithm_tables",
     "app.formats.pdf_align",
@@ -101,17 +95,10 @@ untyped_calls_exclude = [
     "app.formats.pdf_write",
     "app.formats.pdf_write_geometry",
     "app.formats.pdf_write_rect",
-    "app.formats.subtitles",
 ]
 
 [[tool.mypy.overrides]]
 module = [
-    "app.formats.docx",
-    "app.formats.epub",
-    "app.formats.html_blocks",
-    "app.formats.html_page",
-    "app.formats.markdown",
-    "app.formats.mobi",
     "app.formats.pdf",
     "app.formats.pdf_algorithm_tables",
     "app.formats.pdf_align",
@@ -157,7 +144,6 @@ module = [
     "app.formats.pdf_write",
     "app.formats.pdf_write_geometry",
     "app.formats.pdf_write_rect",
-    "app.formats.subtitles",
 ]
 ignore_errors = true
 

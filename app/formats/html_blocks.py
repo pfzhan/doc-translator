@@ -10,7 +10,8 @@ import copy
 import re
 from html.entities import html5
 
-from bs4 import BeautifulSoup, NavigableString, Tag
+from bs4 import BeautifulSoup, Tag
+from bs4.element import NavigableString, PageElement
 from lxml import etree
 
 from ..languages import RTL_LANGUAGES
@@ -103,7 +104,16 @@ def _local(name: str | None) -> str:
     return (name or "").split(":")[-1].lower()
 
 
-def _is_block(el) -> bool:
+def attr_text(el: Tag, name: str) -> str:
+    """The value of an attribute as a string, "" when it is missing. Multi-valued attributes such as class are
+    joined with spaces, as they are written in the document."""
+    value = el.get(name)
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else " ".join(value)
+
+
+def _is_block(el: PageElement) -> bool:
     return isinstance(el, Tag) and _local(el.name) in BLOCK_TAGS
 
 
@@ -428,11 +438,12 @@ def preview_kind(el: Tag) -> str:
     return "p"
 
 
-def _inline_runs(container: Tag, soup) -> list[Tag]:
+def _inline_runs(container: Tag, soup: BeautifulSoup) -> list[Tag]:
     """Merge adjacent inline nodes in a container into a <span> so they can be handled as a paragraph."""
-    runs, cur = [], []
+    runs: list[Tag] = []
+    cur: list[PageElement] = []
 
-    def flush():
+    def flush() -> None:
         if cur and "".join(n.get_text() if isinstance(n, Tag) else str(n) for n in cur).strip():
             wrapper = soup.new_tag("span")
             cur[0].insert_before(wrapper)
@@ -450,7 +461,7 @@ def _inline_runs(container: Tag, soup) -> list[Tag]:
     return runs
 
 
-def _set_text(soup, el: Tag, text: str, media: list[Tag] | None = None):
+def _set_text(soup: BeautifulSoup, el: Tag, text: str, media: list[Tag] | None = None) -> None:
     """Clear el and write text into it. media holds the media elements of the original paragraph: each {vN}
     in text is replaced by the matching one, and those the translation left out are appended at the end. When
     media is None (the source already contains {vN}), placeholders are not interpreted."""
@@ -488,7 +499,7 @@ def _place_media(target: Tag, media: list[Tag]) -> None:
     for node in list(target.descendants):
         if type(node) is not NavigableString or not SLOT_RE.search(node):
             continue
-        pieces: list = []
+        pieces: list[PageElement] = []
         pos = 0
         for m in SLOT_RE.finditer(node):
             pieces.append(NavigableString(node[pos : m.start()]))
@@ -501,12 +512,12 @@ def _place_media(target: Tag, media: list[Tag]) -> None:
         for piece in pieces:
             node.insert_before(piece)
         node.extract()
-    for index, m in enumerate(media):
+    for index, item in enumerate(media):
         if index not in used:
-            target.append(m)
+            target.append(item)
 
 
-def lang_attrs(lang: str) -> dict:
+def lang_attrs(lang: str) -> dict[str, str]:
     """Language attributes of a translated element: readers use them to choose fonts and line breaking;
     Arabic and similar languages need right-to-left layout."""
     if not lang:
@@ -517,7 +528,9 @@ def lang_attrs(lang: str) -> dict:
     return attrs
 
 
-def apply_translation(soup, el: Tag, text: str, translated: str, bilingual: bool, lang: str = "") -> Tag | None:
+def apply_translation(
+    soup: BeautifulSoup, el: Tag, text: str, translated: str, bilingual: bool, lang: str = ""
+) -> Tag | None:
     """Write back a plain text translation and return the element that holds it (el itself / an inner span /
     a cloned block); return None when skipped."""
     if not translated or translated.strip() == text.strip():
@@ -547,10 +560,7 @@ def apply_translation(soup, el: Tag, text: str, translated: str, bilingual: bool
     for attr in ("id", "name"):
         if clone.has_attr(attr):
             del clone[attr]
-    classes = clone.get("class") or []
-    if isinstance(classes, str):
-        classes = classes.split()
-    clone["class"] = [*classes, TRANSLATION_CLASS]
+    clone["class"] = " ".join([*attr_text(clone, "class").split(), TRANSLATION_CLASS])
     for k, v in attrs.items():
         clone[k] = v
     _set_text(soup, clone, translated, _slot_media(el, copies=True))
@@ -641,7 +651,7 @@ def _prose_of(el: Tag) -> str:
     return _join_lines("".join(parts))
 
 
-def _sanitize_translation(src_html: str, translated_html: str) -> list | None:
+def _sanitize_translation(src_html: str, translated_html: str) -> list[PageElement] | None:
     """Validate and clean a translated HTML fragment and return the list of nodes to insert; return None when
     it is rejected (the caller falls back to plain text).
 
@@ -690,7 +700,9 @@ def _strip_ids(target: Tag) -> None:
                 del t[attr]
 
 
-def apply_translation_html(soup, el: Tag, src_html: str, translated_html: str, bilingual: bool, lang: str = ""):
+def apply_translation_html(
+    soup: BeautifulSoup, el: Tag, src_html: str, translated_html: str, bilingual: bool, lang: str = ""
+) -> None:
     """Write back a rich text paragraph: the translation keeps inline tags (bold, links, etc.). Falls back to
     the plain text path when the translation is rejected."""
     if translated_html.strip() == src_html.strip():
@@ -719,7 +731,7 @@ def apply_translation_html(soup, el: Tag, src_html: str, translated_html: str, b
         for n in nodes
     )
 
-    def fill(target: Tag, media: list[Tag] | None):
+    def fill(target: Tag, media: list[Tag] | None) -> None:
         target.clear()
         for n in nodes:
             target.append(n)
@@ -745,10 +757,7 @@ def apply_translation_html(soup, el: Tag, src_html: str, translated_html: str, b
     for attr in ("id", "name"):
         if clone.has_attr(attr):
             del clone[attr]
-    classes = clone.get("class") or []
-    if isinstance(classes, str):
-        classes = classes.split()
-    clone["class"] = [*classes, TRANSLATION_CLASS]
+    clone["class"] = " ".join([*attr_text(clone, "class").split(), TRANSLATION_CLASS])
     fill(clone, _slot_media(el, copies=True))
     _strip_ids(clone)
     for k, v in attrs.items():
@@ -766,19 +775,25 @@ def _numeric_entities(content: bytes | str) -> bytes | str:
     """Convert HTML named entities such as &rsquo; and &nbsp; to numeric references. Unknown entities are kept
     as is."""
 
-    def repl(m: re.Match) -> bytes | str:
-        name = m.group(1)
-        if isinstance(name, bytes):
-            name = name.decode("ascii")
-        chars = None if name in _XML_ENTITIES else html5.get(name + ";")
-        if chars is None:
-            return m.group(0)
-        out = "".join(f"&#{ord(c)};" for c in chars)
-        return out.encode("ascii") if isinstance(m.group(0), bytes) else out
-
     if isinstance(content, bytes):
-        return _NAMED_ENTITY_BYTES_RE.sub(repl, content)
+
+        def repl_bytes(m: re.Match[bytes]) -> bytes:
+            ref = _numeric_ref(m.group(1).decode("ascii"))
+            return m.group(0) if ref is None else ref.encode("ascii")
+
+        return _NAMED_ENTITY_BYTES_RE.sub(repl_bytes, content)
+
+    def repl(m: re.Match[str]) -> str:
+        ref = _numeric_ref(m.group(1))
+        return m.group(0) if ref is None else ref
+
     return _NAMED_ENTITY_RE.sub(repl, content)
+
+
+def _numeric_ref(name: str) -> str | None:
+    """The numeric references for a named entity, or None when it is built into XML or unknown."""
+    chars = None if name in _XML_ENTITIES else html5.get(name + ";")
+    return None if chars is None else "".join(f"&#{ord(c)};" for c in chars)
 
 
 # Void elements written HTML-style: unclosed <br> and <img ...> are invalid in XML
@@ -836,7 +851,7 @@ def parse(content: bytes | str, xml: bool) -> BeautifulSoup:
     return soup
 
 
-def add_style(soup, css: str = BILINGUAL_CSS):
+def add_style(soup: BeautifulSoup, css: str = BILINGUAL_CSS) -> None:
     head = soup.find(lambda t: _local(t.name) == "head")
     if head is None:
         return
@@ -845,9 +860,9 @@ def add_style(soup, css: str = BILINGUAL_CSS):
     head.append(style)
 
 
-def translate_nav_links(soup) -> list[tuple[Tag, str]]:
+def translate_nav_links(soup: BeautifulSoup) -> list[tuple[Tag, str]]:
     """EPUB3 navigation document: translate only the text of <a>/<span>, without changing the structure."""
-    out = []
+    out: list[tuple[Tag, str]] = []
     for el in soup.find_all(lambda t: _local(t.name) in ("a", "span")):
         if el.find(lambda t: _local(t.name) in ("a", "span")):
             continue
@@ -857,7 +872,7 @@ def translate_nav_links(soup) -> list[tuple[Tag, str]]:
     return out
 
 
-def set_label(el: Tag, text: str, translated: str, bilingual: bool):
+def set_label(el: Tag, text: str, translated: str, bilingual: bool) -> None:
     if not translated or translated == text:
         return
     el.string = f"{text} / {translated}" if bilingual else translated

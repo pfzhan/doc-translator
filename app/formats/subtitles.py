@@ -9,10 +9,14 @@ import html
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from bs4 import UnicodeDammit
 
 from .html_blocks import translatable
+
+if TYPE_CHECKING:
+    from ..runner import Runner
 
 TIMING_RE = re.compile(r"^\s*(?:\d+:)?\d{1,2}:\d{2}[,.]\d{1,3}\s+-->\s+(?:\d+:)?\d{1,2}:\d{2}[,.]\d{1,3}")
 # Speaker dashes of a cue holding two speakers: - Where to? / - Home.
@@ -30,6 +34,8 @@ DRAWING_RE = re.compile(r"\\p[1-9]")
 # Han characters, kana and hangul: lines in these scripts join without a space
 CJK_RE = re.compile(r"[぀-ヿ㐀-鿿가-힯]")
 SUFFIXES = {".srt", ".vtt", ".ass", ".ssa"}
+# Override blocks at the start of an ASS dialogue text
+ASS_LEAD_RE = re.compile(r"^(?:\{[^{}]*\})*")
 
 
 @dataclass
@@ -93,6 +99,12 @@ def _join(lines: list[str]) -> str:
             out += " "
         out += line
     return out
+
+
+def _prefix(pattern: re.Pattern[str], text: str) -> str:
+    """The text that pattern matches at the start of text, or "" when it does not match."""
+    m = pattern.match(text)
+    return m.group(0) if m else ""
 
 
 def _speaker_lines(lines: list[str]) -> bool:
@@ -164,7 +176,7 @@ def parse_ass(lines: list[str]) -> list[Cue]:
         text = parts[-1]
         if DRAWING_RE.search("".join(OVERRIDE_RE.findall(text))):
             continue
-        lead = re.match(r"^(?:\{[^{}]*\})*", text).group(0)
+        lead = _prefix(ASS_LEAD_RE, text)
         body = re.split(r"\\[Nn]", OVERRIDE_RE.sub("", text[len(lead) :]).replace("\\h", " "))
         cues.append(Cue(i, i + 1, body, head=",".join(parts[:-1]) + ",", lead=lead))
     return cues
@@ -180,9 +192,9 @@ def _render_srt(cue: Cue, bilingual: bool, vtt: bool) -> list[str]:
     """Translated text lines of an SRT or VTT cue. A cue set wholly in italics keeps the italics, a VTT voice tag
     at the start keeps its speaker and override blocks at the start stay in front."""
     first = cue.lines[0].strip()
-    lead = LEAD_RE.match(first).group(0) if LEAD_RE.match(first) else ""
+    lead = _prefix(LEAD_RE, first)
     first = first[len(lead) :]
-    voice = VOICE_RE.match(first).group(0) if vtt and VOICE_RE.match(first) else ""
+    voice = _prefix(VOICE_RE, first) if vtt else ""
     whole = WHOLE_ITALIC_RE.match("\n".join([first, *(line.strip() for line in cue.lines[1:])]))
 
     def wrap(text: str) -> str:
@@ -190,7 +202,7 @@ def _render_srt(cue: Cue, bilingual: bool, vtt: bool) -> list[str]:
         return f"<i>{text}</i>" if whole else text
 
     if _speaker_lines(cue.lines):
-        out = [f"{DASH_RE.match(line).group(0)}{wrap(part)}" for line, part in zip(cue.lines, cue.parts)]
+        out = [f"{_prefix(DASH_RE, line)}{wrap(part)}" for line, part in zip(cue.lines, cue.parts)]
     else:
         out = [voice + wrap(cue.parts[0])]
     out[0] = lead + out[0]
@@ -199,7 +211,7 @@ def _render_srt(cue: Cue, bilingual: bool, vtt: bool) -> list[str]:
 
 def _render_ass(cue: Cue, original: str, bilingual: bool) -> str:
     if _speaker_lines(cue.lines):
-        text = "\\N".join(f"{DASH_RE.match(line).group(0)}{part}" for line, part in zip(cue.lines, cue.parts))
+        text = "\\N".join(f"{_prefix(DASH_RE, line)}{part}" for line, part in zip(cue.lines, cue.parts))
     else:
         text = cue.parts[0]
     if bilingual:
@@ -214,7 +226,7 @@ def _ass_title(lines: list[str]) -> str:
     return ""
 
 
-async def translate_subtitles(src: Path, out_dir: Path, runner, bilingual: bool) -> list[Path]:
+async def translate_subtitles(src: Path, out_dir: Path, runner: "Runner", bilingual: bool) -> list[Path]:
     content = read_text(src)
     newline = "\r\n" if "\r\n" in content else "\n"
     lines = content.replace("\r\n", "\n").replace("\r", "\n").split("\n")

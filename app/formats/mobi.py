@@ -12,6 +12,7 @@ import shutil
 import tempfile
 import zipfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 from xml.sax.saxutils import escape
 
 from bs4 import BeautifulSoup
@@ -19,7 +20,11 @@ from lxml import etree
 from lxml import html as lxml_html
 from mobi.kindleunpack import unpackBook
 
+from . import html_blocks as hb
 from .epub import translate_epub
+
+if TYPE_CHECKING:
+    from ..runner import Runner
 
 
 def _xhtml_from_mobi7(src_html: str) -> bytes:
@@ -50,7 +55,7 @@ def _read_mobi7_html(html_path: Path) -> str:
         return raw.decode("cp1252", errors="replace")
 
 
-def _epub_from_mobi7(html_path: Path, epub_path: Path):
+def _epub_from_mobi7(html_path: Path, epub_path: Path) -> None:
     base = html_path.parent
     opf = BeautifulSoup((base / "content.opf").read_text(encoding="utf-8"), "lxml-xml")
     for item in opf.find_all("item"):
@@ -58,8 +63,9 @@ def _epub_from_mobi7(html_path: Path, epub_path: Path):
             item["href"] = "book.xhtml"
             item["media-type"] = "application/xhtml+xml"
     for ref in opf.find_all("reference"):
-        if ref.get("href", "").startswith("book.html"):
-            ref["href"] = ref["href"].replace("book.html", "book.xhtml", 1)
+        href = hb.attr_text(ref, "href")
+        if href.startswith("book.html"):
+            ref["href"] = href.replace("book.html", "book.xhtml", 1)
     ncx = (base / "toc.ncx").read_text(encoding="utf-8").replace('src="book.html', 'src="book.xhtml')
 
     with zipfile.ZipFile(epub_path, "w", zipfile.ZIP_DEFLATED) as z:
@@ -106,7 +112,9 @@ def _extract(src: Path, tmpdir: Path) -> Path:
     raise ValueError("无法解包此电子书，可能受 DRM 保护或文件已损坏")
 
 
-async def translate_mobi(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "") -> list[Path]:
+async def translate_mobi(
+    src: Path, out_dir: Path, runner: "Runner", bilingual: bool, target_lang: str = ""
+) -> list[Path]:
     tmpdir = Path(tempfile.mkdtemp(prefix="mobiex"))
     # On pause or delete the coroutine is cancelled while the unpacking thread is still writing to the directory.
     # shield lets it finish, and the directory is deleted after it ends
@@ -136,7 +144,7 @@ async def translate_mobi(src: Path, out_dir: Path, runner, bilingual: bool, targ
             extract.add_done_callback(lambda task: _remove_after(task, tmpdir))
 
 
-def _remove_after(task: asyncio.Future, tmpdir: Path):
+def _remove_after(task: asyncio.Future[Path], tmpdir: Path) -> None:
     if not task.cancelled():
         task.exception()  # Retrieve the exception, otherwise the event loop reports exception was never retrieved
     shutil.rmtree(tmpdir, ignore_errors=True)

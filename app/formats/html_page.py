@@ -2,13 +2,19 @@
 inline formatting, links and the page's styles and scripts."""
 
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from bs4 import BeautifulSoup
 
 from . import html_blocks as hb
+
+if TYPE_CHECKING:
+    from ..runner import Runner
 
 SUFFIXES = {".html", ".htm", ".xhtml"}
 
 
-def _set_language(soup, lang: str) -> None:
+def _set_language(soup: BeautifulSoup, lang: str) -> None:
     root = soup.find(lambda t: hb._local(t.name) == "html")
     if root is None:
         return
@@ -17,7 +23,9 @@ def _set_language(soup, lang: str) -> None:
             root[key] = value
 
 
-async def translate_html(src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "") -> list[Path]:
+async def translate_html(
+    src: Path, out_dir: Path, runner: "Runner", bilingual: bool, target_lang: str = ""
+) -> list[Path]:
     xml = src.suffix.lower() == ".xhtml"
     soup = hb.parse(src.read_bytes(), xml=xml)
     if soup.find(True) is None:
@@ -27,7 +35,7 @@ async def translate_html(src: Path, out_dir: Path, runner, bilingual: bool, targ
     # The page title is translated like a table of contents entry: the bilingual version shows both
     title_el = soup.find(lambda t: hb._local(t.name) == "title")
     title = title_el.get_text(strip=True) if title_el else ""
-    labels = [(title_el, title)] if title and hb.translatable(title) else []
+    labels = [(title_el, title)] if title_el is not None and title and hb.translatable(title) else []
     runner.set_title(title or src.stem)
     texts = [html or text for _, text, html in blocks] + [text for _, text in labels]
     results = await runner.translate_all(

@@ -8,11 +8,16 @@ import posixpath
 import re
 import zipfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import unquote
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
+from ..json_types import JSONDict
 from . import html_blocks as hb
+
+if TYPE_CHECKING:
+    from ..runner import Runner
 
 HTML_TYPES = {"application/xhtml+xml", "text/html"}
 # Only the file name stem is matched. A substring match would lock the whole of chapter-references as
@@ -44,25 +49,26 @@ def _opf_path(zf: zipfile.ZipFile) -> str:
     rootfile = container.find("rootfile")
     if rootfile is None:
         raise ValueError("不是有效的 EPUB：container.xml 中缺少 rootfile")
-    return rootfile["full-path"]
+    return hb.attr_text(rootfile, "full-path")
 
 
-def _content_docs(zf: zipfile.ZipFile, opf_path: str):
+def _content_docs(zf: zipfile.ZipFile, opf_path: str) -> tuple[list[str], str | None, str | None, BeautifulSoup]:
     """Return (list of content XHTML, nav document, ncx document, opf soup)."""
     opf = BeautifulSoup(zf.read(opf_path), "lxml-xml")
     base = posixpath.dirname(opf_path)
-    items = {}
-    nav = ncx = None
+    items: dict[str, tuple[str, str]] = {}
+    nav: str | None = None
+    ncx: str | None = None
     for it in opf.find_all("item"):
-        href = posixpath.normpath(posixpath.join(base, unquote(it.get("href", ""))))
-        items[it.get("id")] = (href, it.get("media-type", ""))
-        if "nav" in (it.get("properties") or "").split():
+        href = posixpath.normpath(posixpath.join(base, unquote(hb.attr_text(it, "href"))))
+        items[hb.attr_text(it, "id")] = (href, hb.attr_text(it, "media-type"))
+        if "nav" in hb.attr_text(it, "properties").split():
             nav = href
         if it.get("media-type") == "application/x-dtbncx+xml":
             ncx = href
-    docs = []
+    docs: list[str] = []
     for ref in opf.find_all("itemref"):
-        href, mt = items.get(ref.get("idref"), (None, None))
+        href, mt = items.get(hb.attr_text(ref, "idref"), ("", ""))
         # nav often also appears in the spine: skip it here and leave it to the dedicated label translation path,
         # so that the same document is not parsed twice with the first translation discarded
         if href and mt in HTML_TYPES and href not in docs and href != nav:
@@ -74,14 +80,14 @@ def _content_docs(zf: zipfile.ZipFile, opf_path: str):
     return docs, nav, ncx, opf
 
 
-def book_outline(zf: zipfile.ZipFile) -> dict:
+def book_outline(zf: zipfile.ZipFile) -> JSONDict:
     """For the online preview: title, reading order and table of contents. Paths are member names in the zip;
     table of contents entries keep the anchor after #."""
     docs, nav, ncx, opf = _content_docs(zf, _opf_path(zf))
     names = set(zf.namelist())
     title = opf.find("title")
-    toc = _nav_toc(zf, nav) if nav in names else []
-    if not toc and ncx in names:
+    toc = _nav_toc(zf, nav) if nav and nav in names else []
+    if not toc and ncx and ncx in names:
         toc = _ncx_toc(zf, ncx)
     return {
         "title": title.get_text(strip=True) if title is not None else "",
@@ -90,24 +96,26 @@ def book_outline(zf: zipfile.ZipFile) -> dict:
     }
 
 
-def _toc_entry(base: str, href: str, label: str, depth: int) -> dict:
+def _toc_entry(base: str, href: str, label: str, depth: int) -> JSONDict:
     path, _, anchor = href.partition("#")
     member = posixpath.normpath(posixpath.join(posixpath.dirname(base), unquote(path))) if path else base
     return {"label": label, "path": member, "anchor": anchor, "depth": depth}
 
 
-def _nav_toc(zf: zipfile.ZipFile, nav: str) -> list[dict]:
+def _nav_toc(zf: zipfile.ZipFile, nav: str) -> list[JSONDict]:
     soup = BeautifulSoup(zf.read(nav), "lxml-xml")
     navs = soup.find_all("nav")
-    root = next((el for el in navs if "toc" in (el.get("epub:type") or el.get("type") or "").split()), None)
+    root = next(
+        (el for el in navs if "toc" in (hb.attr_text(el, "epub:type") or hb.attr_text(el, "type")).split()), None
+    )
     root = root or (navs[0] if navs else None)
-    entries: list[dict] = []
+    entries: list[JSONDict] = []
 
-    def walk(ol, depth: int) -> None:
+    def walk(ol: Tag, depth: int) -> None:
         for li in ol.find_all("li", recursive=False):
             link = li.find("a", recursive=False)
             if link is not None and link.get("href"):
-                entries.append(_toc_entry(nav, link["href"], link.get_text(" ", strip=True), depth))
+                entries.append(_toc_entry(nav, hb.attr_text(link, "href"), link.get_text(" ", strip=True), depth))
             sub = li.find("ol", recursive=False)
             if sub is not None:
                 walk(sub, depth + 1)
@@ -118,16 +126,16 @@ def _nav_toc(zf: zipfile.ZipFile, nav: str) -> list[dict]:
     return entries
 
 
-def _ncx_toc(zf: zipfile.ZipFile, ncx: str) -> list[dict]:
+def _ncx_toc(zf: zipfile.ZipFile, ncx: str) -> list[JSONDict]:
     soup = BeautifulSoup(zf.read(ncx), "lxml-xml")
-    entries: list[dict] = []
+    entries: list[JSONDict] = []
 
-    def walk(parent, depth: int) -> None:
+    def walk(parent: Tag, depth: int) -> None:
         for point in parent.find_all("navPoint", recursive=False):
             label, content = point.find("navLabel"), point.find("content")
             if content is not None and content.get("src"):
                 text = label.get_text(" ", strip=True) if label is not None else ""
-                entries.append(_toc_entry(ncx, content["src"], text, depth))
+                entries.append(_toc_entry(ncx, hb.attr_text(content, "src"), text, depth))
             walk(point, depth + 1)
 
     nav_map = soup.find("navMap")
@@ -143,7 +151,7 @@ def _is_biblio_doc(name: str) -> bool:
     return stem in _BIBLIO_DOC_STEMS
 
 
-def _set_language(opf: BeautifulSoup, lang: str, bilingual: bool):
+def _set_language(opf: BeautifulSoup, lang: str, bilingual: bool) -> None:
     if bilingual:
         return
     el = opf.find("dc:language") or opf.find("language")
@@ -152,7 +160,7 @@ def _set_language(opf: BeautifulSoup, lang: str, bilingual: bool):
 
 
 async def translate_epub(
-    src: Path, out_dir: Path, runner, bilingual: bool, target_lang: str = "", dst: Path | None = None
+    src: Path, out_dir: Path, runner: "Runner", bilingual: bool, target_lang: str = "", dst: Path | None = None
 ) -> list[Path]:
     try:
         zin = zipfile.ZipFile(src)
@@ -165,7 +173,7 @@ async def translate_epub(
 
         # 1. Parse all documents and collect paragraphs
         soups: dict[str, BeautifulSoup] = {}
-        tasks: list[tuple[str, object, str, str, str | None, bool]] = []  # (doc, element, text, kind, rich HTML, skip)
+        tasks: list[tuple[str, Tag, str, str, str | None, bool]] = []  # (doc, element, text, kind, rich HTML, skip)
         carry = 0
         for name in docs:
             if name not in names:

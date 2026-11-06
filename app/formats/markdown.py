@@ -4,8 +4,12 @@ structure of lists, quotes and tables."""
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .html_blocks import BIBLIO_HEADING_RE
+
+if TYPE_CHECKING:
+    from ..runner import Runner
 
 FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
 # A line starting with $$ opens a formula block, which runs to the line ending with $$
@@ -120,7 +124,7 @@ def split_blocks(text: str) -> list[Block]:
     # still belongs to that list item
     list_offset: int | None = None
 
-    def flush():
+    def flush() -> None:
         if para:
             blocks.append(Block("para", para.copy()))
             para.clear()
@@ -216,7 +220,10 @@ def split_blocks(text: str) -> list[Block]:
                 j += 1
             blocks.append(Block("list", lines[i:j]))
             last_item = _list_items(lines[i:j])[-1][3][0]
-            list_offset = len(LIST_CONTENT_RE.match(last_item).group(0))
+            # The last item starts with its own marker line (a list block starts with one)
+            marker = LIST_CONTENT_RE.match(last_item)
+            assert marker is not None
+            list_offset = len(marker.group(0))
             i = j
             continue
         if QUOTE_RE.match(line) and not para:
@@ -251,7 +258,7 @@ def _quote_end(lines: list[str], start: int) -> int:
             body = m.group(2)
             fm = FENCE_RE.match(body)
             if fence or fm:
-                fence = "" if fence and _closes_fence(body, fence) else (fence or fm.group(1))
+                fence = "" if fence and _closes_fence(body, fence) else (fence or (fm.group(1) if fm else ""))
                 in_text = False
             else:
                 in_text = bool(body.strip()) and not (
@@ -286,10 +293,11 @@ def _split_cells(line: str) -> tuple[str, list[str], str]:
 
 def collect_segments(blocks: list[Block]) -> list[str]:
     """Fill the segments of each block and return all texts to translate."""
-    texts = []
+    texts: list[str] = []
     for b in blocks:
         if b.kind == "heading":
             m = HEADING_RE.match(b.lines[0])
+            assert m is not None  # heading blocks are the lines HEADING_RE matched
             b.segments = [(0, m.group(1), m.group(2))]
         elif b.kind == "para":
             # The prefix is the first-line indentation: a continuation paragraph in a list item must stay in its
@@ -345,8 +353,10 @@ def segment_skips(blocks: list[Block]) -> list[bool]:
     for b in blocks:
         if b.kind in ("heading", "setext"):
             if b.kind == "heading":
-                lv = HEADING_RE.match(b.lines[0]).group(1).count("#")
-                title = HEADING_RE.match(b.lines[0]).group(2).strip()
+                m = HEADING_RE.match(b.lines[0])
+                assert m is not None  # heading blocks are the lines HEADING_RE matched
+                lv = m.group(1).count("#")
+                title = m.group(2).strip()
             else:
                 lv = 1 if b.lines[-1].strip().startswith("=") else 2
                 title = " ".join(line.strip() for line in b.lines[:-1])
@@ -363,7 +373,7 @@ def segment_skips(blocks: list[Block]) -> list[bool]:
 def _list_items(lines: list[str]) -> list[tuple[int, str, str, list[str]]]:
     """Split a list block into items: (start line index, marker prefix, joined text, raw lines). Lazy
     continuation lines join the previous item."""
-    items = []
+    items: list[tuple[int, str, str, list[str]]] = []
     for idx, line in enumerate(lines):
         m = LIST_RE.match(line)
         if m or not items:
@@ -399,7 +409,7 @@ def _quote_units(lines: list[str]) -> list[tuple[str, int, str, str, str, list[s
         if fence or fm:
             if fence and _closes_fence(body, fence):
                 fence = ""
-            elif not fence:
+            elif fm:
                 fence = fm.group(1)
             units.append(("raw", idx, qpre, "", body, [line]))
             continue
@@ -503,7 +513,7 @@ def render(blocks: list[Block], translations: list[str], bilingual: bool) -> str
     return "\n".join(out)
 
 
-async def translate_markdown(src: Path, out_dir: Path, runner, bilingual: bool) -> list[Path]:
+async def translate_markdown(src: Path, out_dir: Path, runner: "Runner", bilingual: bool) -> list[Path]:
     text = src.read_text(encoding="utf-8", errors="replace").replace("\r\n", "\n")
     blocks = split_blocks(text)
     texts = collect_segments(blocks)

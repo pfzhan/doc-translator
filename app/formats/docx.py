@@ -14,11 +14,15 @@ import re
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from lxml import etree
 from lxml import html as lxml_html
 
 from .html_blocks import BIBLIO_HEADING_RE, translatable
+
+if TYPE_CHECKING:
+    from ..runner import Runner
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -217,7 +221,7 @@ def _pieces(items: list[_Segment | _Atom], translated: str, rich: bool) -> list[
         return [(None, re.sub(r"<[^<>]*>", "", translated))]
     out: list[tuple[int | None, str]] = []
 
-    def collect(el, owner: int | None) -> None:
+    def collect(el: etree._Element, owner: int | None) -> None:
         mark = el.get("id") or ""
         if mark[:1] == "s" and mark[1:].isdigit() and int(mark[1:]) < len(items):
             if isinstance(items[int(mark[1:])], _Segment):
@@ -261,7 +265,9 @@ def _write(para: _Paragraph, translated: str, drop_unique: bool = False) -> None
     def text_out(index: int | None, text: str) -> None:
         if not text:
             return
-        segment = items[index] if index is not None else main_segment
+        item = items[index] if index is not None else main_segment
+        # _pieces gives only the indexes of segments
+        segment = item if isinstance(item, _Segment) else main_segment
         emitted.append((_new_run(segment.runs[0], text), segment.wrapper))
 
     def atom_out(atom: _Atom) -> None:
@@ -450,7 +456,7 @@ def _bilingual_copy(para: _Paragraph) -> _Paragraph:
     return _Paragraph(clone, _items(clone), para.text, para.html, para.kind)
 
 
-async def translate_docx(src: Path, out_dir: Path, runner, bilingual: bool) -> list[Path]:
+async def translate_docx(src: Path, out_dir: Path, runner: "Runner", bilingual: bool) -> list[Path]:
     try:
         zin = zipfile.ZipFile(src)
     except zipfile.BadZipFile:
