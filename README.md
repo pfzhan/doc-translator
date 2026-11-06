@@ -223,6 +223,8 @@ The default prompts and the segment protocol are taken from Immersive Translate 
   `{{title_prompt}}`; the segment protocol is appended automatically.
 
 The configuration is saved in `data/services.json` (mode 600), and API keys are never returned to the frontend.
+A saved key is sent only to the API URL it was saved with: changing the URL, whether saving, testing or fetching
+models, requires typing the key again.
 
 Translations are cached in `data/cache.sqlite3`. The cache key includes the service id, provider, model, prompt,
 glossary, source language and target language. With the same configuration, the same text is taken from the

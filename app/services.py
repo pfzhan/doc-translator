@@ -151,6 +151,20 @@ def _clean(data: dict) -> dict:
     return out
 
 
+def _same_url(a: object, b: object) -> bool:
+    return str(a or "").strip().rstrip("/") == str(b or "").strip().rstrip("/")
+
+
+def _check_key_follows_url(saved: dict, changes: dict) -> None:
+    """A saved key is sent only to the address it was saved with. Changing the address requires typing the key
+    again: otherwise anyone who can reach the server (on a LAN, with ALLOWED_HOSTS) could point a service at a host
+    of their choice and test it, which sends the saved key there."""
+    # A key in changes (a new one, or "" when clearing it) replaces the saved one, so nothing saved is sent
+    if saved.get("api_key") and "base_url" in changes and "api_key" not in changes:
+        if not _same_url(saved.get("base_url"), changes["base_url"]):
+            raise ServiceError("修改 API 地址后需要重新填写 API Key")
+
+
 class ServiceStore:
     def __init__(self, path: Path = DATA_PATH, ccswitch_db: Path | None = None):
         self.path = path
@@ -288,6 +302,7 @@ class ServiceStore:
                 changes.pop("api_key", None)
             if svc.get("builtin"):
                 changes = {k: v for k, v in changes.items() if k == "enabled"}
+            _check_key_follows_url(svc, changes)
             if "name" in changes and not changes["name"]:
                 changes.pop("name")
             if changes.get("enabled") is False and self.default_id == sid:
@@ -367,6 +382,8 @@ class ServiceStore:
             changes = {k: v for k, v in changes.items() if k in CCSWITCH_LOCAL_FIELDS}
             if not changes.get("model"):
                 changes.pop("model", None)
+        elif found:
+            _check_key_follows_url(found, changes)
         base.update(changes)
         if base.get("provider") not in PROVIDERS:
             raise ServiceError("不支持的服务类型")

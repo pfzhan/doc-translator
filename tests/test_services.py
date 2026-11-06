@@ -443,6 +443,42 @@ def test_store_crud(tmp_path):
     assert store2.default_id == "google"
 
 
+def test_a_saved_key_is_sent_only_to_its_own_address(tmp_path, monkeypatch):
+    """Testing a service, fetching its models or saving it with another API address used to reuse the saved key,
+    sending it to whatever host the form named. A changed address now needs the key typed again."""
+    store = ServiceStore(tmp_path / "s.json")
+    svc = store.create({"provider": "custom", "base_url": "https://relay.example.com/v1", "api_key": "sk-secret-1"})
+    sid = svc["id"]
+    elsewhere = {"id": sid, "base_url": "https://attacker.example/v1", "api_key": ""}
+
+    with pytest.raises(ServiceError, match="API Key"):
+        store.resolve(elsewhere)
+    with pytest.raises(ServiceError, match="API Key"):
+        store.update(sid, elsewhere)
+    assert store.get(sid)["base_url"] == "https://relay.example.com/v1"
+
+    # The same address, written with a trailing slash, keeps the saved key
+    assert store.resolve({"id": sid, "base_url": "https://relay.example.com/v1/"})["api_key"] == "sk-secret-1"
+    # A new key, or clearing the key, goes with the new address
+    assert store.resolve({**elsewhere, "api_key": "sk-new"})["api_key"] == "sk-new"
+    store.update(sid, {"base_url": "https://other.example.com/v1", "api_key": "", "clear_api_key": True})
+    assert store.get(sid)["api_key"] == "" and store.get(sid)["base_url"] == "https://other.example.com/v1"
+
+    # Through the API nothing is sent upstream
+    sent: list[httpx.Request] = []
+    store.update(sid, {"base_url": "https://relay.example.com/v1", "api_key": "sk-secret-1"})
+    monkeypatch.setattr(state, "store", store)
+    monkeypatch.setattr(
+        "app.routes.services.create_translator",
+        lambda *a, **kw: create_translator(*a, **kw, transport=httpx.MockTransport(lambda r: sent.append(r))),
+    )
+    client = TestClient(main.app)
+    for path in ("/api/services/test", "/api/services/models"):
+        r = client.post(path, json=elsewhere)
+        assert r.status_code == 400 and "API Key" in r.json()["detail"]
+    assert sent == []
+
+
 def test_api_endpoints(tmp_path, monkeypatch):
     monkeypatch.setattr(state, "store", ServiceStore(tmp_path / "s.json"))
     client = TestClient(main.app)
