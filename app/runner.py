@@ -35,6 +35,10 @@ class Cache:
         path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(path, check_same_thread=False)
         self.conn.execute("CREATE TABLE IF NOT EXISTS t (k TEXT PRIMARY KEY, v TEXT)")
+        # ok = 1: the translation passed the checks for shifted batches (see Runner.translate_all), so it is not
+        # checked against the rest of the document again. Storing a translation again resets it
+        if "ok" not in {row[1] for row in self.conn.execute("PRAGMA table_info(t)")}:
+            self.conn.execute("ALTER TABLE t ADD COLUMN ok INTEGER NOT NULL DEFAULT 0")
         # Which files (digests of file content) the entries belong to. Keys are hashes that do not show which file
         # they came from, so cleaning up a job deletes by this table
         self.conn.execute(
@@ -134,6 +138,24 @@ class Cache:
                 if row:
                     out[t] = row[0]
         return out
+
+    def verified(self, prefix: str, texts: list[str]) -> set[str]:
+        """The texts whose stored translation has passed the checks (see mark_verified)."""
+        out = set()
+        with self.lock:
+            for t in texts:
+                row = self.conn.execute("SELECT ok FROM t WHERE k=?", (self._key(prefix, t),)).fetchone()
+                if row and row[0]:
+                    out.add(t)
+        return out
+
+    def mark_verified(self, prefix: str, texts: list[str]) -> None:
+        """Record that the stored translations of these texts passed the checks for shifted batches."""
+        if not texts:
+            return
+        with self.lock:
+            self.conn.executemany("UPDATE t SET ok=1 WHERE k=?", [(self._key(prefix, t),) for t in texts])
+            self.conn.commit()
 
     def drop_many(self, prefix: str, texts: list[str]) -> None:
         """Drop cache entries that should not be kept. A whole English sentence echoed back must be translated
@@ -441,11 +463,18 @@ class Runner:
         # translation also got into the cache; drop them and translate again too. When only typesetting they cannot
         # be retranslated and are kept.
         # Other paragraphs in a shifted batch were most likely shifted by one as well, so paragraphs within one
-        # batch length before and after are dropped too
+        # batch length before and after are dropped too.
+        # Only translations not checked before are compared with the rest of the document: those stored by a batch
+        # that passed the engine's own checks, or that passed here once, are left alone. A long but correct
+        # translation would otherwise be dropped on every run, and its neighbors with it, paid for again each time
+        trusted = cache.verified(prefix, list(done_map))
         if not self.cache_only:
+            unchecked = set(done_map) - trusted
             typical = typical_ratio(done_map.items())
-            shifted = {src for src, dst in done_map.items() if src not in echoed and misplaced(src, dst, typical)}
-            shifted |= {src for src in _batch_around(need, shifted, self.translator.max_batch_chars) if src in done_map}
+            shifted = {src for src in unchecked if src not in echoed and misplaced(src, done_map[src], typical)}
+            shifted |= {
+                src for src in _batch_around(need, shifted, self.translator.max_batch_chars) if src in unchecked
+            }
             echoed += [
                 src
                 for src, dst in done_map.items()
@@ -471,6 +500,10 @@ class Runner:
         if rewrites:
             cache.put_many(prefix, rewrites)
             done_map.update(rewrites)
+        # Hits that passed the checks above are not checked again next time. Storing a rewrite cleared the flag, so
+        # it is set again for rewrites of entries that had it. When only typesetting nothing was checked
+        passed = set() if self.cache_only else set(done_map)
+        cache.mark_verified(prefix, list((passed - trusted) | (rewrites.keys() & trusted)))
         todo = [t for t in need if t not in done_map]
         if self.cache_only and todo:
             raise ValueError("部分段落不在翻译缓存中，无法仅重新排版，请重新翻译。")
@@ -554,6 +587,8 @@ class Runner:
                 empty = [s for s in batch if s not in good]
                 if good:
                     cache.put_many(prefix, good)
+                    # The engine already checked these against the rest of their batch
+                    cache.mark_verified(prefix, list(good))
                     done_map.update(good)
                     if preview:
                         self._record(list(good))
@@ -625,6 +660,16 @@ class _OwnedCache:
     def drop_many(self, prefix: str, texts: list[str]) -> None:
         self.cache.drop_many(prefix, texts)
 
+    def verified(self, prefix: str, texts: list[str]) -> set[str]:
+        """Caches without the flag (the in-memory cache in tests) treat every hit as unchecked."""
+        verified = getattr(self.cache, "verified", None)
+        return verified(prefix, texts) if callable(verified) else set()
+
+    def mark_verified(self, prefix: str, texts: list[str]) -> None:
+        mark = getattr(self.cache, "mark_verified", None)
+        if callable(mark):
+            mark(prefix, texts)
+
 
 class _NotedCache:
     """Store and fetch translations by source text, with the key replaced by key(source): a paragraph with a note
@@ -644,6 +689,14 @@ class _NotedCache:
 
     def drop_many(self, prefix: str, texts: list[str]) -> None:
         self.cache.drop_many(prefix, [self.key(text) for text in texts])
+
+    def verified(self, prefix: str, texts: list[str]) -> set[str]:
+        keys = {text: self.key(text) for text in texts}
+        found = self.cache.verified(prefix, list(dict.fromkeys(keys.values())))
+        return {text for text, k in keys.items() if k in found}
+
+    def mark_verified(self, prefix: str, texts: list[str]) -> None:
+        self.cache.mark_verified(prefix, [self.key(text) for text in texts])
 
 
 _CN_DIGITS = "零一二三四五六七八九"

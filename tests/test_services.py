@@ -558,6 +558,49 @@ def test_a_marker_the_model_made_up_is_dropped():
     assert drop_invented_marks("write [[link]] here", "在这里写 [[link]]") == "在这里写 [[link]]"
 
 
+def test_checked_translations_are_not_dropped_again_on_every_run(tmp_path):
+    """A correct translation of unusual length (a long footnote, a pasted table) used to be dropped as shifted on
+    every run, with the paragraphs around it, so continuing the same document sent dozens of paragraphs again each
+    time. Translations that passed the checks once are now kept; an entry stored without checks is still checked
+    once."""
+    from app.runner import Cache, Runner
+    from app.translators import Translator
+
+    texts = [
+        f"The committee reviewed paragraph number {i} carefully and published its findings about models today."
+        for i in range(60)
+    ]
+    long_one = texts[30]
+
+    class Engine(Translator):
+        concurrency = 1
+
+        def __init__(self) -> None:
+            super().__init__("zh-CN", "en")
+            self.sent: list[str] = []
+
+        async def translate_batch(self, batch: list[str]) -> list[str]:
+            self.sent += batch
+            return ["译" * int(len(t) * (2.0 if t == long_one else 0.35)) for t in batch]
+
+    cache = Cache(tmp_path / "c.sqlite3")
+    runs = []
+    for _ in range(3):
+        engine = Engine()
+        run(Runner(engine, cache=cache).translate_all(texts))
+        runs.append(len(engine.sent))
+    assert runs == [60, 0, 0]
+
+    # An entry stored without checks (by an older version) is still checked: dropped with its neighbors, once
+    engine = Engine()
+    cache.put_many(engine.cache_key, {texts[10]: "{v1} 一段属于别处的译文"})
+    run(Runner(engine, cache=cache).translate_all(texts))
+    assert texts[10] in engine.sent and long_one not in engine.sent
+    again = Engine()
+    run(Runner(again, cache=cache).translate_all(texts))
+    assert again.sent == []
+
+
 def test_a_cached_translation_of_a_neighbor_is_retranslated():
     """Shifted translations from earlier batch translation got into the cache: they carry formula placeholders the
     source does not have, or their length is far from the usual value of the document. They are dropped and

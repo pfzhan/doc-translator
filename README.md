@@ -230,7 +230,9 @@ cache; after changing the model, prompt or glossary, the whole document is trans
 configuration, and switching back hits the original cache entries. A job that failed midway continues from where
 it stopped when submitted again. The cache keeps up to 50,000 entries; when it is full, the oldest entries no
 document uses (web page translations, and entries saved before the cache recorded whose they are) are dropped
-first, so browsing does not push a book's translations out.
+first, so browsing does not push a book's translations out. A cached translation whose length is far from the
+rest of the document is checked once for having slipped from a neighboring paragraph, and kept from then on
+once it passes, so continuing a document does not send the same paragraphs again on every run.
 
 When a model stops at its output limit (`finish_reason: length`, `stop_reason: max_tokens`, `MAX_TOKENS`, or an
 incomplete Responses reply), the cut-off reply is not used: a batch is translated again in two halves, and a
