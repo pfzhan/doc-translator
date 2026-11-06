@@ -89,7 +89,9 @@ once; each becomes its own record with the same settings. Files that fail to upl
 and stay selected, so they can be submitted again once the cause is fixed. When a job finishes or fails, the page
 shows a message while it is in view and a system notification while it is in the background; the browser asks
 whether to allow notifications on the first submit. Notifications need localhost, 127.0.0.1 or HTTPS; over plain
-HTTP on a LAN address only the message in the page is shown.
+HTTP on a LAN address only the message in the page is shown. A file name longer than 180 bytes (about 60
+Chinese characters) is shortened, keeping its extension, so the translation files made from it fit the file
+system's limit.
 
 - A record and its files (source file, translations, preview) are deleted only when deleted from the list by
   hand or when the retention period runs out.

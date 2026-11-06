@@ -36,6 +36,20 @@ from ..translators import TranslatorError, create_translator
 router = APIRouter()
 
 MAX_UPLOAD = 200 * 1024 * 1024
+# Most file systems allow 255 bytes per file name. The record stores the upload under its own name, and the files
+# made from it add to that: ".translated" before the extension of a translation, ".<32 hex>.link" while a duplicate
+# source is replaced by a hard link. Names are shortened to leave room for those
+MAX_NAME_BYTES = 180
+
+
+def fit_filename(name: str) -> str:
+    """Shorten a file name to MAX_NAME_BYTES of UTF-8, keeping the extension and whole characters."""
+    if len(name.encode()) <= MAX_NAME_BYTES:
+        return name
+    path = Path(name)
+    room = MAX_NAME_BYTES - len(path.suffix.encode())
+    stem = path.stem.encode()[:room].decode(errors="ignore").rstrip()
+    return (stem or "upload") + path.suffix
 
 
 # ---------- Translation jobs / translation records ----------
@@ -62,6 +76,7 @@ async def create_job(
     ext = Path(name).suffix.lower()
     if ext not in SUPPORTED:
         raise HTTPException(400, f"不支持的格式 {ext}，支持的格式：{', '.join(sorted(SUPPORTED))}")
+    name = fit_filename(name)
     service = state.store.get(service_id or state.store.effective_default())
     if not service:
         raise HTTPException(400, "翻译服务不存在")

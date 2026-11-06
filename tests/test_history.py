@@ -838,6 +838,19 @@ def test_resume_with_invalid_service_keeps_result(app_env):
         assert client.get(job["outputs"][0]["url"]).status_code == 200
 
 
+@pytest.mark.parametrize("stem", ["a" * 300, "中" * 90, "a" * 246])
+def test_long_file_names_are_shortened_on_upload(app_env, stem):
+    """A name near the 255-byte limit used to be accepted and fail only when the translation was written, after the
+    paragraphs had been paid for; a longer one failed the upload with a 500."""
+    main = app_env
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client, name=stem + ".md")["id"])
+    assert job["status"] == "done", job["error"]
+    assert job["filename"].endswith(".md") and len(job["filename"].encode()) <= jobs_routes.MAX_NAME_BYTES
+    assert job["filename"][:-3] == stem[: len(job["filename"]) - 3]
+    assert job["outputs"] and all(len(o["name"].encode()) < 255 for o in job["outputs"])
+
+
 def test_retry_is_refused_while_the_other_version_is_generated(app_env):
     """Retrying while the other version is being written would delete files under it; it is refused and the
     translations stay."""
