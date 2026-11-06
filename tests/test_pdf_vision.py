@@ -1,5 +1,6 @@
 import numpy as np
 import pymupdf
+import pytest
 
 from app.formats import pdf_vision
 from app.formats.pdf_layout import PageGeometry
@@ -325,7 +326,8 @@ def test_several_pages_infer_at_once_each_with_its_own_copy():
 def test_formula_sessions_do_not_spin_while_waiting(monkeypatch, tmp_path):
     """Inference threads that do not spin give up their cores while waiting; each copy of a model is its own
     session"""
-    import onnxruntime
+    # Optional: the models need it, translation does not (see the README)
+    onnxruntime = pytest.importorskip("onnxruntime")
 
     made = []
     broken = set()
