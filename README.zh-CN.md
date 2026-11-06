@@ -287,6 +287,8 @@ eval/              PDF 分段、行内公式和模型的评测脚本，用法和
 
 `mypy` 的设置在 `pyproject.toml` 里：`app/` 按 `--strict` 检查，那里列出的、严格类型之前写的模块除外（`app/formats/` 里的各格式转换、`layout_model`、`prompts`、`quantize`）。新模块一律严格检查；某个模块单独通过后就从列表里去掉。测试使用临时数据目录（见上文 `DOC_TRANSLATOR_DATA`），不会用到项目的 `data/`。`tests/test_web_ui.py` 在 Chromium 里打开网页，出现任何脚本错误都会失败；没装 Playwright 或 Chromium 时跳过。
 
+GitHub Actions（`.github/workflows/ci.yml`）在每个 pull request 和推送到 `main` 时，用 Python 3.12 和 3.14 运行同样的检查。它只安装 `requirements-dev.txt`，所以需要可选依赖的测试（例如模型用到的 `onnxruntime`）在那里会被跳过。
+
 ## 已知限制
 
 - Word 文档中行内内容控件、批注、图表和 SmartArt 里的文字不翻译。一句话跨几条字幕时按条分别翻译。译好的 HTML 页面仍按原来的相对路径引用图片和样式，放在原页面的文件旁边才能显示。

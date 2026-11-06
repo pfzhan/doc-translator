@@ -619,6 +619,10 @@ that were written before strict typing (the format converters in `app/formats/`,
 against a temporary data directory (see `DOC_TRANSLATOR_DATA` above), never the project's `data/`. `tests/test_web_ui.py` opens the web page in Chromium
 and fails on any script error; it is skipped when Playwright or Chromium is missing.
 
+GitHub Actions (`.github/workflows/ci.yml`) runs the same checks on Python 3.12 and 3.14 for every pull request and
+push to `main`. It installs only `requirements-dev.txt`, so tests that need an optional package (such as
+`onnxruntime` for the models) are skipped there.
+
 ## Known limitations
 
 - Scanned PDFs that need OCR are not supported yet. Tables without rules and without aligned column edges are not
