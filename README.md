@@ -31,6 +31,10 @@ The server accepts requests only for local host names such as `127.0.0.1` and `l
 LAN IP address or a domain name, add them to the environment variable `ALLOWED_HOSTS` (comma-separated), for
 example `ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8765`.
 
+Records, the translation cache, settings, services, glossaries and models are kept in `data/` in the project. To
+keep them elsewhere, set the environment variable `DOC_TRANSLATOR_DATA` to that directory. The tests set it to a
+temporary directory, so running them never touches the data of a server started from the same checkout.
+
 ## Translation services
 
 Services are managed under 翻译服务 (Translation services) at the top of the page. Several services of the same

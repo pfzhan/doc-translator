@@ -10,8 +10,9 @@ import uuid
 from pathlib import Path
 
 from . import glossary
+from .paths import DATA_DIR
 
-DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "glossaries.json"
+DATA_PATH = DATA_DIR / "glossaries.json"
 MAX_NAME = 80
 
 

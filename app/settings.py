@@ -17,9 +17,10 @@ import threading
 from pathlib import Path
 
 from .formats.pdf_vision import FORMULA_SIZES
+from .paths import DATA_DIR
 from .quantize import PRECISIONS
 
-PATH = Path(__file__).resolve().parent.parent / "data" / "settings.json"
+PATH = DATA_DIR / "settings.json"
 DEFAULTS = {
     "retention_days": 30,
     "max_jobs": 2,

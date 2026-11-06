@@ -10,8 +10,9 @@ import uuid
 from pathlib import Path
 
 from . import ccswitch
+from .paths import DATA_DIR
 
-DATA_PATH = Path(__file__).resolve().parent.parent / "data" / "services.json"
+DATA_PATH = DATA_DIR / "services.json"
 
 # Preset models are only a convenience and may be outdated; the page can fetch the model list ("获取模型列表") or
 # take a model name typed by hand

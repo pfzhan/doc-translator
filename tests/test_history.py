@@ -80,6 +80,46 @@ def test_interrupted_job_after_restart_can_resume(tmp_path):
     assert json.loads((root / "abc" / "job.json").read_text())["status"] == "interrupted"
 
 
+def test_loading_records_leaves_unchanged_ones_alone(tmp_path):
+    """Opening the store must not rewrite every job.json: another process (the server, while tests import the app)
+    may be saving the same records."""
+    root = tmp_path / "jobs"
+    for jid, status in (("done1", "done"), ("run1", "running")):
+        (root / jid).mkdir(parents=True)
+        (root / jid / "job.json").write_text(json.dumps({"id": jid, "filename": "x.md", "status": status}))
+    before = (root / "done1" / "job.json").read_text()
+    mtime = (root / "done1" / "job.json").stat().st_mtime_ns
+    time.sleep(0.01)
+
+    store = JobStore(root)
+
+    assert store.get("done1").status == "done" and store.get("run1").status == "interrupted"
+    assert (root / "done1" / "job.json").read_text() == before
+    assert (root / "done1" / "job.json").stat().st_mtime_ns == mtime
+    assert json.loads((root / "run1" / "job.json").read_text())["status"] == "interrupted"
+
+
+def test_data_directory_follows_the_environment(tmp_path):
+    """DOC_TRANSLATOR_DATA moves every store. Importing the app in a fresh interpreter must neither read nor write
+    the project's data/ directory."""
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    code = (
+        "from app import history, layout_model, runner, services, settings, glossaries\n"
+        "print(history.JOBS_DIR, runner.CACHE_PATH, services.DATA_PATH, settings.PATH, glossaries.DATA_PATH,"
+        " layout_model.MODELS_DIR, sep='\\n')"
+    )
+    env = {**os.environ, "DOC_TRANSLATOR_DATA": str(tmp_path)}
+    root = Path(__file__).resolve().parent.parent
+    out = subprocess.run([sys.executable, "-c", code], env=env, cwd=root, capture_output=True, text=True, check=True)
+    assert all(Path(line).is_relative_to(tmp_path) for line in out.stdout.split())
+    # The test session itself runs against a temporary directory, not the project's data/
+    assert not state.jobs.root.is_relative_to(root / "data")
+
+
 def test_concurrent_saves_of_one_job_do_not_collide(tmp_path):
     """The translation thread updating progress and an API request may save the same record at the same time; a
     temporary file name collision must not raise an error."""

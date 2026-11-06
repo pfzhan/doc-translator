@@ -15,10 +15,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import background, glossary, langdetect
+from .paths import DATA_DIR
 from .prompts import drop_added_braces, drop_invented_marks, strip_control_marks, tidy_marks
 from .translators import Translator, TranslatorError, misplaced, stray_chars, typical_ratio
 
-CACHE_PATH = Path(__file__).resolve().parent.parent / "data" / "cache.sqlite3"
+CACHE_PATH = DATA_DIR / "cache.sqlite3"
 # Documents with fewer candidate terms than this (short texts, dialogues) are not worth an extra request
 _MIN_TERMS = 3
 

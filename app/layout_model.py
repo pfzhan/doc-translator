@@ -19,9 +19,10 @@ import httpx
 import pymupdf
 
 from .formats import pdf_vision
+from .paths import DATA_DIR
 
 ROOT = Path(__file__).resolve().parent.parent
-MODELS_DIR = ROOT / "data" / "models"
+MODELS_DIR = DATA_DIR / "models"
 
 
 @dataclass(frozen=True)

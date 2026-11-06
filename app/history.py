@@ -23,6 +23,7 @@ from urllib.parse import quote
 
 from .formats import document_digest
 from .langdetect import same_language
+from .paths import DATA_DIR
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -40,8 +41,7 @@ def _write_atomic(path: Path, text: str) -> None:
         tmp.unlink(missing_ok=True)
 
 
-ROOT = Path(__file__).resolve().parent.parent
-JOBS_DIR = ROOT / "data" / "jobs"
+JOBS_DIR = DATA_DIR / "jobs"
 DAY = 24 * 3600
 
 
@@ -253,12 +253,13 @@ class JobStore:
                 job = Job(**{k: v for k, v in data.items() if k in _PERSISTED})
             except (ValueError, TypeError, OSError):
                 continue  # skip a damaged record and leave its directory in place
+            self.jobs[job.id] = job
+            # Only records that change are written back: rewriting every job.json on load would race with another
+            # process using the same directory
             if job.status in ("queued", "running"):
                 job.status = "interrupted"
                 job.error = "服务重启导致翻译中断。已翻译的段落已缓存，继续翻译时直接复用。"
-            self.jobs[job.id] = job
-        for job in self.jobs.values():
-            self.save(job)
+                self.save(job)
 
     def save(self, job: Job):
         job.sync_info()

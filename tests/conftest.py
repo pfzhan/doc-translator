@@ -1,12 +1,22 @@
 import os
+import shutil
+import tempfile
 
 import pytest
 
 # TestClient requests come from testserver, and main accepts only local addresses. This must be set before main is
 # imported
 os.environ["ALLOWED_HOSTS"] = "testserver"
+# The stores in app.state load at import time. Point them at an empty directory before anything imports the app, so
+# the tests never read or rewrite the records of a server running from this checkout
+_DATA_DIR = tempfile.mkdtemp(prefix="doc-translator-tests-")
+os.environ["DOC_TRANSLATOR_DATA"] = _DATA_DIR
 
 from app import ccswitch  # noqa: E402
+
+
+def pytest_sessionfinish(session, exitstatus):
+    shutil.rmtree(_DATA_DIR, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)
