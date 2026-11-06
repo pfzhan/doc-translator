@@ -525,3 +525,79 @@ def test_a_reply_asking_for_the_full_text_is_not_kept():
     assert out[1] == "" and out[0] == out[2] == out[3] == "单独重翻的译文，长度和原文相称。"
     assert len(asks) == 2 and "never ask for more context" in asks[0]
     run(tr.aclose())
+
+
+TRUNCATED_SOURCES = ["The first short sentence.", "The second short sentence."]
+TRUNCATED_TRANSLATIONS = {"first": "第一句短句。", "second": "第二句短句。"}
+
+
+def _truncating_reply(provider: str, text: str, truncated: bool) -> dict:
+    """A reply in the provider's format, cut off at the output limit when truncated."""
+    if provider == "openai":
+        return {"choices": [{"message": {"content": text}, "finish_reason": "length" if truncated else "stop"}]}
+    if provider == "responses":
+        if truncated:
+            return {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}, "output_text": text}
+        return {"status": "completed", "output_text": text}
+    if provider == "claude":
+        return {"content": [{"type": "text", "text": text}], "stop_reason": "max_tokens" if truncated else "end_turn"}
+    finish = "MAX_TOKENS" if truncated else "STOP"
+    return {"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": finish}]}
+
+
+def _truncating_translator(provider: str, cut_single: bool = False):
+    """A model that runs out of output for a batch of two paragraphs and translates one paragraph in full, or cuts
+    that off too with cut_single."""
+    from app.translators import ClaudeTranslator, GeminiTranslator
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = request.content.decode()
+        words = [word for word in TRUNCATED_TRANSLATIONS if word in body]
+        if len(words) > 1:
+            # The first paragraph is complete and the second stops halfway, markers and all
+            first, second = (TRUNCATED_TRANSLATIONS[word] for word in words)
+            return httpx.Response(200, json=_truncating_reply(provider, f"[[p0]]\n{first}\n[[p1]]\n{second[:2]}", True))
+        text = TRUNCATED_TRANSLATIONS[words[0]]
+        return httpx.Response(200, json=_truncating_reply(provider, text[:2] if cut_single else text, cut_single))
+
+    cls = {"claude": ClaudeTranslator, "gemini": GeminiTranslator}.get(provider, OpenAITranslator)
+    extra = {"api_format": "responses"} if provider == "responses" else {}
+    return cls(
+        "zh-CN",
+        "en",
+        api_key="k",
+        base_url="https://api.example.com/v1",
+        model="m",
+        transport=httpx.MockTransport(handler),
+        **extra,
+    )
+
+
+@pytest.mark.parametrize("provider", ["openai", "responses", "claude", "gemini"])
+def test_a_batch_cut_off_at_the_output_limit_is_split(provider):
+    """A reply stopped at the model's output limit holds only part of the batch; it used to be accepted (and cached)
+    as the translation. The batch is now translated again in halves."""
+
+    async def scenario():
+        tr = _truncating_translator(provider)
+        try:
+            return await tr.translate_batch(TRUNCATED_SOURCES)
+        finally:
+            await tr.aclose()
+
+    assert run(scenario()) == list(TRUNCATED_TRANSLATIONS.values())
+
+
+@pytest.mark.parametrize("provider", ["openai", "claude"])
+def test_a_single_paragraph_cut_off_is_an_empty_translation(provider):
+    """One paragraph that still does not fit gives an empty translation: Runner keeps the original, caches nothing
+    and counts the paragraph as failed."""
+
+    async def scenario():
+        tr = _truncating_translator(provider, cut_single=True)
+        try:
+            return await tr.translate_batch(TRUNCATED_SOURCES[:1])
+        finally:
+            await tr.aclose()
+
+    assert run(scenario()) == [""]

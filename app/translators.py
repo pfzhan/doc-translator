@@ -29,6 +29,14 @@ class TranslatorError(Exception):
         self.status = status
 
 
+class TruncatedError(TranslatorError):
+    """The model stopped at its output limit, so the reply holds only part of the translation. A batch is split and
+    translated again in halves; for a single paragraph the result is empty and Runner keeps the original."""
+
+    def __init__(self) -> None:
+        super().__init__("模型输出达到长度上限，译文不完整")
+
+
 class Translator:
     # Maximum paragraphs and characters per batch, used by Runner to split batches
     max_batch_items = 20
@@ -445,8 +453,12 @@ class LLMTranslator(Translator):
             # paragraphs got a 400 every time, while each part translated after splitting).
             # Retrying unchanged does not help, so split into two halves translated separately. This is done only
             # for 400: splitting does not help configuration errors (401/403/404), and 429 and 5xx were already
-            # retried with backoff in _post, so splitting would only multiply requests
-            if len(texts) == 1 or e.status != 400:
+            # retried with backoff in _post, so splitting would only multiply requests.
+            # A reply cut off at the model's output limit is split the same way: half the batch needs half the output
+            truncated = isinstance(e, TruncatedError)
+            if len(texts) == 1 and truncated:
+                return [""]  # Runner keeps the original and does not cache it
+            if len(texts) == 1 or (e.status != 400 and not truncated):
                 raise
             mid = len(texts) // 2
             # Translate both halves in parallel: serially, the deeper the splitting goes, the longer the last
@@ -458,8 +470,11 @@ class LLMTranslator(Translator):
             # Ask again for a translation carrying foreign text; if it still does, accept it, and Runner drops and
             # retranslates it at the next re-layout
             if stray_chars(texts[0], out, self.target_lang):
-                async with self._sem:
-                    again = prompts.clean_output(await self._complete(system, user))
+                try:
+                    async with self._sem:
+                        again = prompts.clean_output(await self._complete(system, user))
+                except TruncatedError:
+                    again = ""
                 if again.strip() and not stray_chars(texts[0], again, self.target_lang):
                     out = again
             return [out]
@@ -517,9 +532,12 @@ class OpenAITranslator(LLMTranslator):
         usage = data.get("usage") or {}
         self._record_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
         try:
-            message = data["choices"][0]["message"]
+            choice = data["choices"][0]
+            message = choice["message"]
         except (KeyError, IndexError, TypeError) as e:
             raise TranslatorError(f"返回格式异常: {str(data)[:200]}") from e
+        if isinstance(choice, dict) and choice.get("finish_reason") == "length":
+            raise TruncatedError()
         # Relay services occasionally return a message without content; treat it as an empty reply, like an empty
         # reply from other APIs
         return (message.get("content") if isinstance(message, dict) else "") or ""
@@ -532,6 +550,10 @@ class OpenAITranslator(LLMTranslator):
         data = await self._post(f"{self.base_url}/responses", payload, self._headers())
         usage = data.get("usage") or {}
         self._record_usage(usage.get("input_tokens"), usage.get("output_tokens"))
+        if data.get("status") == "incomplete" and (data.get("incomplete_details") or {}).get("reason") == (
+            "max_output_tokens"
+        ):
+            raise TruncatedError()
         if isinstance(data.get("output_text"), str):
             return data["output_text"]
         texts = [
@@ -583,6 +605,8 @@ class ClaudeTranslator(LLMTranslator):
         data = await self._post(f"{self.base_url}/messages", payload, self._headers())
         usage = data.get("usage") or {}
         self._record_usage(usage.get("input_tokens"), usage.get("output_tokens"))
+        if data.get("stop_reason") == "max_tokens":
+            raise TruncatedError()
         return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
 
     async def list_models(self):
@@ -617,6 +641,8 @@ class GeminiTranslator(LLMTranslator):
         if not candidates:
             reason = (data.get("promptFeedback") or {}).get("blockReason", "无返回内容")
             raise TranslatorError(f"Gemini 未返回结果: {reason}")
+        if candidates[0].get("finishReason") == "MAX_TOKENS":
+            raise TruncatedError()
         parts = (candidates[0].get("content") or {}).get("parts", [])
         # Thinking models may include thought parts; take only the main text
         return "".join(p.get("text", "") for p in parts if not p.get("thought"))

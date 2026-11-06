@@ -229,6 +229,11 @@ cache; after changing the model, prompt or glossary, the whole document is trans
 configuration, and switching back hits the original cache entries. A job that failed midway continues from where
 it stopped when submitted again.
 
+When a model stops at its output limit (`finish_reason: length`, `stop_reason: max_tokens`, `MAX_TOKENS`, or an
+incomplete Responses reply), the cut-off reply is not used: a batch is translated again in two halves, and a
+single paragraph that still does not fit keeps its original text and is not cached. Lowering the characters per
+batch in the service's advanced settings avoids the extra requests.
+
 ## Web page translation (Chrome extension)
 
 The browser extension in `extension/` translates the web page being viewed through this server: press the shortcut
