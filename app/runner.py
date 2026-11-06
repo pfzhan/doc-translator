@@ -20,6 +20,9 @@ from .prompts import drop_added_braces, drop_invented_marks, strip_control_marks
 from .translators import Translator, TranslatorError, misplaced, stray_chars, typical_ratio
 
 CACHE_PATH = DATA_DIR / "cache.sqlite3"
+# Owner of web page translations in the cache's owner table, where documents are recorded by the digest of their
+# content (a hex string, so the two cannot collide)
+WEB_CACHE_OWNER = "web"
 # Documents with fewer candidate terms than this (short texts, dialogues) are not worth an extra request
 _MIN_TERMS = 3
 
@@ -145,20 +148,33 @@ class Cache:
 
     def put_many(self, prefix: str, pairs: dict[str, str]):
         with self.lock:
+            (last,) = self.conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM t").fetchone()
             self.conn.executemany(
                 "INSERT OR REPLACE INTO t (k, v) VALUES (?, ?)",
                 [(self._key(prefix, s), d) for s, d in pairs.items()],
             )
             (n,) = self.conn.execute("SELECT COUNT(*) FROM t").fetchone()
             if n > self.MAX_ENTRIES:
-                # rowid increases with each write (entries refreshed by REPLACE count as new); delete the oldest,
-                # leaving 10% headroom
-                self.conn.execute(
-                    "DELETE FROM t WHERE rowid IN (SELECT rowid FROM t ORDER BY rowid LIMIT ?)",
-                    (n - self.MAX_ENTRIES + self.MAX_ENTRIES // 10,),
-                )
-                self.conn.execute("DELETE FROM owner WHERE k NOT IN (SELECT k FROM t)")
+                # Leave 10% headroom
+                self._evict(n - self.MAX_ENTRIES + self.MAX_ENTRIES // 10, last)
             self.conn.commit()
+
+    def _evict(self, count: int, last: int) -> None:
+        """Delete count entries, oldest first (rowid increases with each write; entries refreshed by REPLACE count
+        as new). Entries no document uses go first: web page translations and entries saved before owners were
+        recorded. Otherwise browsing could push a book's translations out, and continuing it or generating its other
+        version would have to translate (and pay for) them again. The entries this write just stored have rowids
+        above last and have no owner yet, so the first round leaves them alone."""
+        removed = self.conn.execute(
+            "DELETE FROM t WHERE rowid IN (SELECT rowid FROM t WHERE rowid <= ? AND NOT EXISTS"
+            " (SELECT 1 FROM owner o WHERE o.k = t.k AND o.doc != ?) ORDER BY rowid LIMIT ?)",
+            (last, WEB_CACHE_OWNER, count),
+        ).rowcount
+        if removed < count:
+            self.conn.execute(
+                "DELETE FROM t WHERE rowid IN (SELECT rowid FROM t ORDER BY rowid LIMIT ?)", (count - removed,)
+            )
+        self.conn.execute("DELETE FROM owner WHERE k NOT IN (SELECT k FROM t)")
 
 
 _cache: Cache | None = None

@@ -44,6 +44,44 @@ def test_dropped_entries_lose_their_owner(tmp_path):
     assert cache.conn.execute("SELECT COUNT(*) FROM owner").fetchone()[0] == 0
 
 
+def _fill(cache: Cache, owner: str, texts: list[str]) -> None:
+    """Store and claim entries ten at a time, as runs and page requests do."""
+    for i in range(0, len(texts), 10):
+        batch = texts[i : i + 10]
+        cache.put_many("p", {t: t.upper() for t in batch})
+        if owner:
+            cache.claim(owner, "p", batch)
+
+
+def test_a_full_cache_drops_web_and_ownerless_entries_before_documents(tmp_path):
+    """Browsing used to push a book's translations out of a full cache, so continuing the book or generating its
+    other version had to translate them again. Entries a document uses now go last."""
+    cache = Cache(tmp_path / "c.sqlite3")
+    cache.MAX_ENTRIES = 100
+    book = [f"book {i}" for i in range(50)]
+    shared = [f"shared {i}" for i in range(5)]
+    _fill(cache, "", [f"legacy {i}" for i in range(20)])  # Saved before owners were recorded
+    _fill(cache, "bookdoc", book + shared)
+    _fill(cache, runner.WEB_CACHE_OWNER, shared)
+    _fill(cache, runner.WEB_CACHE_OWNER, [f"page {i}" for i in range(500)])
+    assert len(cache.get_many("p", book + shared)) == 55
+    assert _rows(cache) <= cache.MAX_ENTRIES
+    assert cache.get_many("p", ["legacy 0"]) == {}
+    # The newest web entries stay; only older ones were dropped
+    assert cache.get_many("p", ["page 499"]) == {"page 499": "PAGE 499"}
+
+
+def test_a_cache_full_of_documents_drops_their_oldest_entries_first(tmp_path):
+    """With only document entries left, the oldest go, and the entries a run has just stored are kept even though
+    they get their owner only after being stored."""
+    cache = Cache(tmp_path / "c.sqlite3")
+    cache.MAX_ENTRIES = 100
+    _fill(cache, "old", [f"old {i}" for i in range(100)])
+    _fill(cache, "new", [f"new {i}" for i in range(30)])
+    assert len(cache.get_many("p", [f"new {i}" for i in range(30)])) == 30
+    assert cache.get_many("p", ["old 0"]) == {} and cache.get_many("p", ["old 99"]) == {"old 99": "OLD 99"}
+
+
 def test_runner_claims_written_and_hit_entries(tmp_path):
     cache = Cache(tmp_path / "c.sqlite3")
     tr = MockTranslator("zh-CN")

@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import state
-from ..runner import Runner, get_cache
+from ..runner import WEB_CACHE_OWNER, Runner, get_cache
 from ..translators import Translator, TranslatorError, create_translator
 
 router = APIRouter()
@@ -109,11 +109,6 @@ async def _translate(
 
 class WebCacheInfo(BaseModel):
     entries: int
-
-
-# Owner of web page translations in the cache's owner table, where documents are recorded by the digest of their
-# content (a hex string, so the two cannot collide)
-WEB_CACHE_OWNER = "web"
 
 
 @router.get("/api/web/cache")
