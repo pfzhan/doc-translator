@@ -607,6 +607,7 @@ eval/              evaluation scripts for PDF segmentation, inline formulas and 
 
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/playwright install chromium
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 .venv/bin/mypy
 .venv/bin/pytest
@@ -615,7 +616,8 @@ eval/              evaluation scripts for PDF segmentation, inline formulas and 
 `mypy` reads its settings from `pyproject.toml`: `app/` is checked with `--strict`, except the modules listed there
 that were written before strict typing (the format converters in `app/formats/`, `layout_model`, `prompts`,
 `quantize`). New modules are checked strictly; a module comes off the list once it passes on its own. Tests run
-against a temporary data directory (see `DOC_TRANSLATOR_DATA` above), never the project's `data/`.
+against a temporary data directory (see `DOC_TRANSLATOR_DATA` above), never the project's `data/`. `tests/test_web_ui.py` opens the web page in Chromium
+and fails on any script error; it is skipped when Playwright or Chromium is missing.
 
 ## Known limitations
 

@@ -279,12 +279,13 @@ eval/              PDF 分段、行内公式和模型的评测脚本，用法和
 
 ```bash
 .venv/bin/pip install -r requirements-dev.txt
+.venv/bin/playwright install chromium
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 .venv/bin/mypy
 .venv/bin/pytest
 ```
 
-`mypy` 的设置在 `pyproject.toml` 里：`app/` 按 `--strict` 检查，那里列出的、严格类型之前写的模块除外（`app/formats/` 里的各格式转换、`layout_model`、`prompts`、`quantize`）。新模块一律严格检查；某个模块单独通过后就从列表里去掉。测试使用临时数据目录（见上文 `DOC_TRANSLATOR_DATA`），不会用到项目的 `data/`。
+`mypy` 的设置在 `pyproject.toml` 里：`app/` 按 `--strict` 检查，那里列出的、严格类型之前写的模块除外（`app/formats/` 里的各格式转换、`layout_model`、`prompts`、`quantize`）。新模块一律严格检查；某个模块单独通过后就从列表里去掉。测试使用临时数据目录（见上文 `DOC_TRANSLATOR_DATA`），不会用到项目的 `data/`。`tests/test_web_ui.py` 在 Chromium 里打开网页，出现任何脚本错误都会失败；没装 Playwright 或 Chromium 时跳过。
 
 ## 已知限制
 
