@@ -53,9 +53,12 @@ async def _start_job(job: Job):
         translator = create_translator(_with_glossaries(service, job.glossary_text), job.target_lang, job.source_lang)
     except TranslatorError as e:
         job.status, job.error, job.finished = "error", str(e), time.time()
-        state.jobs.save(job)
-        state.running.pop(job.id, None)
-        _dispatch()
+        try:
+            state.jobs.save(job)
+        finally:
+            # The place is freed even when the record cannot be written, or the queue would stop for good
+            state.running.pop(job.id, None)
+            _dispatch()
         return
     job.model = getattr(translator, "model", "")
     await _run_job(job, translator, job.mode == "bilingual")
@@ -73,10 +76,12 @@ async def _run_job(job: Job, translator, bilingual: bool):
             last_save = time.time()
             state.jobs.save(job)
 
-    job.status = "running"
-    job.runner = Runner(translator, progress)
-    state.jobs.save(job)
     try:
+        # Inside the try: when the record cannot be written at start (a full disk), the job fails and frees its place
+        # below instead of staying "running" for good
+        job.status = "running"
+        job.runner = Runner(translator, progress)
+        state.jobs.save(job)
         outputs = await translate_file(
             state.jobs.source_path(job),
             state.jobs.out_dir(job.id),
@@ -112,7 +117,8 @@ async def _run_job(job: Job, translator, bilingual: bool):
             # The snapshot may be large, so it is written in a thread
             await asyncio.to_thread(state.jobs.save_preview, job)
             job.sync_info()
-            job.document = job.runner.document or job.document
+            if job.runner is not None:
+                job.document = job.runner.document or job.document
             # Release the memory held by the Runner; the preview API then reads from the preview.json snapshot
             job.runner = None
             state.jobs.save(job)

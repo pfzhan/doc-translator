@@ -677,6 +677,60 @@ def test_queue_goes_on_when_a_finished_job_cannot_be_saved(app_env, monkeypatch)
         assert failed == [a] and a not in state.running
 
 
+def test_queue_goes_on_when_a_starting_job_cannot_be_saved(app_env, monkeypatch):
+    """The record cannot be written as the job starts: the job fails and frees its place for the next one."""
+    main = app_env
+    real = state.jobs.save
+    failed: list[str] = []
+
+    def full_disk(job: Job) -> None:
+        if job.status == "running" and not failed:
+            failed.append(job.id)
+            raise OSError(28, "No space left on device")
+        real(job)
+
+    monkeypatch.setattr(state.jobs, "save", full_disk)
+    with TestClient(main.app) as client:
+        client.put("/api/settings", json={"max_jobs": 1})
+        a, b = (submit(client, name=f"s{i}.md", data=MD + str(i).encode())["id"] for i in range(2))
+        assert wait_done(client, b)["status"] == "done"
+        stuck = wait_done(client, a)
+        assert failed == [a] and stuck["status"] == "error" and "No space left" in stuck["error"]
+        assert not state.running
+
+
+def test_queue_goes_on_when_a_job_without_service_cannot_be_saved(app_env, monkeypatch):
+    """A queued job whose service is gone fails when its turn comes; a failure to write that record must not keep
+    its place either."""
+    import asyncio
+
+    async def scenario() -> None:
+        state.settings.update({"max_jobs": 1})
+        job = Job(id="g1", filename="x.md", service_id="gone", target_lang="zh-CN", status="queued")
+        state.jobs.dir(job.id).mkdir(parents=True)
+        state.jobs.add(job)
+        state.waiting["n1"] = Job(id="n1", filename="y.md", service_id="mock", target_lang="zh-CN", status="queued")
+
+        def full_disk(_job: Job) -> None:
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(state.jobs, "save", full_disk)
+        started: list[str] = []
+
+        async def fake_start(j: Job) -> None:
+            started.append(j.id)
+
+        monkeypatch.setattr(job_control, "_run_job", lambda j, *_: fake_start(j))
+        state.running[job.id] = asyncio.create_task(job_control._start_job(job))
+        with pytest.raises(OSError):
+            await state.running[job.id]
+        assert "g1" not in state.running and "n1" not in state.waiting
+        await state.running["n1"]
+        assert started == ["n1"]
+
+    asyncio.run(scenario())
+
+
 def test_max_jobs_setting_is_checked(app_env):
     with TestClient(app_env.app) as client:
         assert client.get("/api/settings").json()["max_jobs"] == 2
