@@ -15,7 +15,8 @@ from .formats.pdf_output import translated_from_bilingual
 from .history import Job
 from .model_files import _formula_model, _model_path
 from .runner import Runner, get_cache
-from .translators import TranslatorError, create_translator
+from .services import Service
+from .translators import Translator, TranslatorError, create_translator
 
 PROGRESS_SAVE_INTERVAL = 5
 # Directory in the record where a run writes its translations before they replace those in out/
@@ -74,7 +75,7 @@ async def _cleanup() -> None:
     await asyncio.to_thread(state.jobs.share_sources)
 
 
-async def _start_job(job: Job):
+async def _start_job(job: Job) -> None:
     """Translate a job taken from the queue. The engine is created now from the service's current configuration, so
     changes made while the job waited apply; a deleted service or an invalid configuration fails the job."""
     service = state.store.get(job.service_id)
@@ -95,10 +96,10 @@ async def _start_job(job: Job):
     await _run_job(job, translator, job.mode == "bilingual")
 
 
-async def _run_job(job: Job, translator, bilingual: bool):
+async def _run_job(job: Job, translator: Translator, bilingual: bool) -> None:
     last_save = 0.0
 
-    def progress(done, total):
+    def progress(done: int, total: int) -> None:
         nonlocal last_save
         job.done, job.total = done, total
         # Save progress every few seconds, so the record still shows how far translation got after the server
@@ -169,7 +170,7 @@ async def _run_job(job: Job, translator, bilingual: bool):
             await translator.aclose()
 
 
-def _with_glossaries(service: dict, text: str) -> dict:
+def _with_glossaries(service: Service, text: str) -> Service:
     """The service with entries of the job's glossaries added after its own glossary, which takes precedence. They
     enter the cache key like the service's own entries."""
     if not text:
@@ -177,7 +178,7 @@ def _with_glossaries(service: dict, text: str) -> dict:
     return {**service, "glossary": "\n".join(part for part in (service.get("glossary") or "", text) if part)}
 
 
-def _make_translator(job: Job, service: dict, glossary_text: str | None = None):
+def _make_translator(job: Job, service: Service, glossary_text: str | None = None) -> Translator:
     """Create the translation engine from the service's current configuration. Raise 400 for an invalid
     configuration; job status and files have not been touched at that point.
     Without glossary_text the glossary entries of the latest run are used, so the cache keys match the
@@ -189,7 +190,7 @@ def _make_translator(job: Job, service: dict, glossary_text: str | None = None):
         raise HTTPException(400, str(e)) from e
 
 
-def _start(job: Job):
+def _start(job: Job) -> None:
     """Start (or resume) translation: the job joins the end of the queue and starts once fewer than max_jobs jobs
     are translating. The engine is created from the service's configuration when it starts (see _start_job), so
     resuming uses the model now selected in the service."""
@@ -220,7 +221,7 @@ def _prioritize(job: Job) -> None:
     _number_queue()
 
 
-async def _cancel(job_id: str):
+async def _cancel(job_id: str) -> None:
     """Cancel a running translation job and return once it has actually stopped (finished writing its record). A
     job still in the queue only leaves it."""
     waiting = state.waiting.pop(job_id, None)
@@ -301,7 +302,7 @@ async def _resume(job: Job, service_id: str | None = None, fresh: bool = False) 
     return job
 
 
-def _service_translator(job: Job):
+def _service_translator(job: Job) -> Translator | None:
     """Create an engine from the current configuration of the record's service, only to compute cache keys,
     without sending requests. Return None when the service was deleted or its configuration is invalid."""
     service = state.store.get(job.service_id)
@@ -367,7 +368,7 @@ async def _clear(job: Job, boxes: bool = False) -> int:
             await translator.aclose()
 
 
-def _variant_service(job: Job, service: dict) -> dict:
+def _variant_service(job: Job, service: Service) -> Service:
     """Match the cache with the model used for the original translation. The model currently selected in the
     service is not changed."""
     if not job.model:

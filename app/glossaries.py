@@ -4,12 +4,14 @@ the glossary of a translation service."""
 
 from __future__ import annotations
 
+import builtins
 import json
 import threading
 import uuid
 from pathlib import Path
 
 from . import glossary
+from .json_types import JSONDict
 from .paths import DATA_DIR
 
 DATA_PATH = DATA_DIR / "glossaries.json"
@@ -28,7 +30,7 @@ class GlossaryStore:
     def __init__(self, path: Path = DATA_PATH):
         self.path = path
         self.lock = threading.Lock()
-        self.items: list[dict] = []
+        self.items: list[JSONDict] = []
         if path.exists():
             try:
                 loaded = json.loads(path.read_text(encoding="utf-8"))
@@ -37,14 +39,14 @@ class GlossaryStore:
             except (ValueError, OSError):
                 pass  # a damaged file falls back to an empty library and does not block startup
 
-    def _save(self):
+    def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps({"glossaries": self.items}, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.path)
 
     @staticmethod
-    def _clean(data: dict) -> dict:
+    def _clean(data: JSONDict) -> JSONDict:
         name = str(data.get("name") or "").strip()
         if not name:
             raise GlossaryError("请填写术语表名称")
@@ -54,40 +56,41 @@ class GlossaryStore:
         entries = glossary.render(glossary.parse(str(data.get("entries") or "")))
         return {"name": name, "entries": entries}
 
-    def _find(self, gid: str) -> dict:
+    def _find(self, gid: str) -> JSONDict:
         for g in self.items:
             if g["id"] == gid:
                 return g
         raise GlossaryNotFound("术语表不存在")
 
-    def list(self) -> list[dict]:
+    def list(self) -> list[JSONDict]:
         with self.lock:
             return [{**g, "count": len(glossary.parse(g.get("entries", "")))} for g in self.items]
 
-    def get(self, gid: str) -> dict | None:
+    def get(self, gid: str) -> JSONDict | None:
         with self.lock:
             return next((dict(g) for g in self.items if g["id"] == gid), None)
 
-    def create(self, data: dict) -> dict:
+    def create(self, data: JSONDict) -> JSONDict:
         with self.lock:
             item = {"id": uuid.uuid4().hex[:8], **self._clean(data)}
             self.items.append(item)
             self._save()
             return dict(item)
 
-    def update(self, gid: str, data: dict) -> dict:
+    def update(self, gid: str, data: JSONDict) -> JSONDict:
         with self.lock:
             item = self._find(gid)
             item.update(self._clean(data))
             self._save()
             return dict(item)
 
-    def delete(self, gid: str):
+    def delete(self, gid: str) -> None:
         with self.lock:
             self.items.remove(self._find(gid))
             self._save()
 
-    def entries_text(self, ids: list[str]) -> str:
+    # `list` is a method of this class, so the builtin is named explicitly
+    def entries_text(self, ids: builtins.list[str]) -> str:
         """Entries of the glossaries with these ids, in that order. Ids of deleted glossaries are skipped."""
         with self.lock:
             by_id = {g["id"]: g.get("entries", "") for g in self.items}

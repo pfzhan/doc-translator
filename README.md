@@ -579,6 +579,8 @@ app/
   history.py       translation records (data/jobs/<id>/job.json) and retention cleanup
   cleanup.py       clearing the caches and layout analysis results a record left behind
   settings.py      application settings (data/settings.json)
+  paths.py         where data is kept (data/, or DOC_TRANSLATOR_DATA)
+  json_types.py    types for JSON request bodies and answers
   runner.py        deduplication, caching, batching, concurrency
   background.py    threaded work such as reading layout and writing output, stopped when a job is paused
   translators.py   translation engines (Google / OpenAI / Claude / Gemini / Grok / compatible APIs)
@@ -600,6 +602,20 @@ tests/             tests (pytest)
 eval/              evaluation scripts for PDF segmentation, inline formulas and models; usage and the paper list
                    are in eval/README.md
 ```
+
+## Development
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/ruff check . && .venv/bin/ruff format --check .
+.venv/bin/mypy
+.venv/bin/pytest
+```
+
+`mypy` reads its settings from `pyproject.toml`: `app/` is checked with `--strict`, except the modules listed there
+that were written before strict typing (the format converters in `app/formats/`, `layout_model`, `prompts`,
+`quantize`). New modules are checked strictly; a module comes off the list once it passes on its own. Tests run
+against a temporary data directory (see `DOC_TRANSLATOR_DATA` above), never the project's `data/`.
 
 ## Known limitations
 

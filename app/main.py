@@ -3,9 +3,10 @@ result. Translation records are persisted in data/jobs/."""
 
 import asyncio
 import os
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
@@ -21,10 +22,10 @@ CLEANUP_INTERVAL = 3600
 
 
 @asynccontextmanager
-async def lifespan(_app):
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Clean up expired records once at startup, then check every hour."""
 
-    async def loop():
+    async def loop() -> None:
         while True:
             # Disk scans run in threads inside _cleanup, so the event loop is not blocked. A failed round is logged
             # and tried again next time; the background task must not end
@@ -79,7 +80,7 @@ async def check_origin(request: Request, call_next: Callable[[Request], Awaitabl
 
 
 @app.middleware("http")
-async def limit_upload_size(request: Request, call_next):
+async def limit_upload_size(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
     """Reject an upload above the limit before the request body is read. Otherwise Starlette first writes the whole
     file to a temporary file before the check in create_job runs."""
     if request.method == "POST" and request.url.path == "/api/jobs":
@@ -106,7 +107,8 @@ class NoCacheStaticFiles(StaticFiles):
     Otherwise, after app.js changes, the browser may keep using the old version (this happened: after a commit it
     still jumped into the reader)."""
 
-    def file_response(self, *args, **kwargs):
+    # Passed through to StaticFiles unchanged, so its own signature applies
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
         response = super().file_response(*args, **kwargs)
         response.headers["Cache-Control"] = "no-cache"
         return response

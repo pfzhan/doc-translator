@@ -11,12 +11,14 @@ import hashlib
 import re
 import unicodedata
 import weakref
+from collections.abc import Iterable
 from urllib.parse import urlparse
 
 import httpx
 
 from . import glossary as glossary_mod
 from . import prompts
+from .json_types import JSONDict
 from .languages import GOOGLE_CODES, LANGUAGES
 
 # Language list for the frontend drop-down: [(code, English name, native name)], in the same order as the plugin
@@ -24,7 +26,7 @@ LANG_CODES = {code for code, _, _ in LANGUAGES}
 
 
 class TranslatorError(Exception):
-    def __init__(self, message: str = "", status: int | None = None):
+    def __init__(self, message: str = "", status: int | None = None) -> None:
         super().__init__(message)
         # HTTP status code returned by the API; None when there is none, such as for network or parse errors
         self.status = status
@@ -51,7 +53,7 @@ class Translator:
     max_batch_chars = 3000
     concurrency = 4
 
-    def __init__(self, target_lang: str, source_lang: str = "auto"):
+    def __init__(self, target_lang: str, source_lang: str = "auto") -> None:
         if target_lang not in LANG_CODES or target_lang == "auto":
             raise TranslatorError(f"不支持的目标语言: {target_lang}")
         if source_lang not in LANG_CODES:
@@ -96,7 +98,7 @@ class Translator:
     def is_html_item(self, text: str) -> bool:
         return text in self.html_texts
 
-    def _record_usage(self, prompt: int, completion: int):
+    def _record_usage(self, prompt: int | None, completion: int | None) -> None:
         self.usage["prompt"] += prompt or 0
         self.usage["completion"] += completion or 0
 
@@ -160,7 +162,7 @@ def _length_ratio(source: str, translation: str) -> float | None:
     return len(prompts.without_marks(translation).strip()) / length
 
 
-def typical_ratio(pairs) -> float | None:
+def typical_ratio(pairs: Iterable[tuple[str, str]]) -> float | None:
     """Median length ratio of a batch of (source, translation). Not computed when there are too few
     paragraphs."""
     ratios = sorted(r for source, translation in pairs if (r := _length_ratio(source, translation)) is not None)
@@ -270,7 +272,7 @@ def _retry_delay(resp: httpx.Response, default: float) -> float:
     return min(delay, 60) if delay > 0 else default
 
 
-def _json_or_error(resp: httpx.Response, url: str) -> dict:
+def _json_or_error(resp: httpx.Response, url: str) -> JSONDict:
     """Parse a JSON response. Give a readable error when a web page comes back (common when the API address lacks
     /v1 and the request lands on the relay service's home page)."""
     try:
@@ -307,24 +309,24 @@ class LLMTranslator(Translator):
 
     def __init__(
         self,
-        target_lang,
-        source_lang="auto",
+        target_lang: str,
+        source_lang: str = "auto",
         *,
-        api_key="",
-        base_url="",
-        model="",
-        concurrency=4,
-        max_items=20,
-        max_chars=3000,
-        temperature=0.0,
-        prompt="",
-        user_prompt="",
-        api_format="",
-        auth_style="",
-        transport=None,
-        glossary="",
-        auto_glossary=True,
-    ):
+        api_key: str = "",
+        base_url: str = "",
+        model: str = "",
+        concurrency: int = 4,
+        max_items: int = 20,
+        max_chars: int = 3000,
+        temperature: float | None = 0.0,
+        prompt: str = "",
+        user_prompt: str = "",
+        api_format: str = "",
+        auth_style: str = "",
+        transport: httpx.AsyncBaseTransport | None = None,
+        glossary: str = "",
+        auto_glossary: bool = True,
+    ) -> None:
         super().__init__(target_lang, source_lang)
         if not model:
             raise TranslatorError("未设置模型")
@@ -352,7 +354,7 @@ class LLMTranslator(Translator):
         self.client = httpx.AsyncClient(timeout=180, transport=transport)
 
     @property
-    def cache_key(self):
+    def cache_key(self) -> str:
         # Model, prompts and glossary are part of the cache key: changing them retranslates the whole book
         # automatically, and changing back still hits that configuration's own cache.
         # The source language affects the prompts ({{from}}, overrides such as wyw2zh-CN), so the actual detected
@@ -412,7 +414,7 @@ class LLMTranslator(Translator):
     async def _complete(self, system: str, user: str) -> str:
         raise NotImplementedError
 
-    async def _post(self, url: str, payload: dict, headers: dict) -> dict:
+    async def _post(self, url: str, payload: JSONDict, headers: dict[str, str]) -> JSONDict:
         """POST with retries. Some reasoning models do not accept temperature; on such a 400 it is removed and the
         request is sent again.
 
@@ -448,7 +450,7 @@ class LLMTranslator(Translator):
             raise TranslatorError(f"接口错误 {resp.status_code}: {msg}", status=resp.status_code)
         raise TranslatorError("已达到最大重试次数")
 
-    async def _get(self, url: str, headers: dict, params: dict | None = None) -> dict:
+    async def _get(self, url: str, headers: dict[str, str], params: JSONDict | None = None) -> JSONDict:
         try:
             resp = await self.client.get(url, headers=headers, params=params)
         except httpx.HTTPError as e:
@@ -460,7 +462,7 @@ class LLMTranslator(Translator):
     async def list_models(self) -> list[str]:
         raise NotImplementedError
 
-    async def translate_batch(self, texts):
+    async def translate_batch(self, texts: list[str]) -> list[str]:
         system, user = self.build_messages(texts)
         try:
             # The only place that actually sends requests; recursive batch splitting / retranslation ends up here too,
@@ -526,12 +528,12 @@ class LLMTranslator(Translator):
             # cached
             typical = typical_ratio((texts[i], found[i]) for i in found)
             wrong = [i for i in missing if misplaced(texts[i], found[i], typical)]
-            again = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in wrong))
-            for i, [text] in zip(wrong, again):
-                found[i] = "" if misplaced(texts[i], text, typical) else text
+            rechecked = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in wrong))
+            for i, [retried] in zip(wrong, rechecked):
+                found[i] = "" if misplaced(texts[i], retried, typical) else retried
         return [found[i] for i in range(len(texts))]
 
-    async def aclose(self):
+    async def aclose(self) -> None:
         await self.client.aclose()
 
 
@@ -540,13 +542,13 @@ class OpenAITranslator(LLMTranslator):
 
     provider = "openai"
 
-    def _headers(self):
+    def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
-    async def _complete(self, system, user):
+    async def _complete(self, system: str, user: str) -> str:
         if self.api_format == "responses":
             return await self._complete_responses(system, user)
-        payload = {
+        payload: JSONDict = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         }
@@ -566,7 +568,7 @@ class OpenAITranslator(LLMTranslator):
         # reply from other APIs
         return (message.get("content") if isinstance(message, dict) else "") or ""
 
-    async def _complete_responses(self, system, user):
+    async def _complete_responses(self, system: str, user: str) -> str:
         """OpenAI Responses API (the default for Codex / Grok Build)."""
         payload = {"model": self.model, "instructions": system, "input": user, "store": False}
         if self.temperature is not None:
@@ -578,8 +580,9 @@ class OpenAITranslator(LLMTranslator):
             "max_output_tokens"
         ):
             raise TruncatedError()
-        if isinstance(data.get("output_text"), str):
-            return data["output_text"]
+        output_text = data.get("output_text")
+        if isinstance(output_text, str):
+            return output_text
         texts = [
             c.get("text", "")
             for item in data.get("output") or []
@@ -593,7 +596,7 @@ class OpenAITranslator(LLMTranslator):
             )
         return "".join(texts)
 
-    async def list_models(self):
+    async def list_models(self) -> list[str]:
         data = await self._get(f"{self.base_url}/models", self._headers())
         return sorted(m["id"] for m in data.get("data", []))
 
@@ -612,12 +615,12 @@ class ClaudeTranslator(LLMTranslator):
     provider = "claude"
     api_version = "2023-06-01"
 
-    def _headers(self):
+    def _headers(self) -> dict[str, str]:
         if self.auth_style == "bearer":
             return {"Authorization": f"Bearer {self.api_key}", "anthropic-version": self.api_version}
         return {"x-api-key": self.api_key, "anthropic-version": self.api_version}
 
-    async def _complete(self, system, user):
+    async def _complete(self, system: str, user: str) -> str:
         payload = {
             "model": self.model,
             "max_tokens": 8192,
@@ -633,7 +636,7 @@ class ClaudeTranslator(LLMTranslator):
             raise TruncatedError()
         return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
 
-    async def list_models(self):
+    async def list_models(self) -> list[str]:
         data = await self._get(f"{self.base_url}/models", self._headers(), {"limit": 1000})
         return [m["id"] for m in data.get("data", [])]
 
@@ -643,10 +646,10 @@ class GeminiTranslator(LLMTranslator):
 
     provider = "gemini"
 
-    def _headers(self):
+    def _headers(self) -> dict[str, str]:
         return {"x-goog-api-key": self.api_key}
 
-    async def _complete(self, system, user):
+    async def _complete(self, system: str, user: str) -> str:
         gen = {}
         if self.temperature is not None:
             gen["temperature"] = self.temperature
@@ -671,7 +674,7 @@ class GeminiTranslator(LLMTranslator):
         # Thinking models may include thought parts; take only the main text
         return "".join(p.get("text", "") for p in parts if not p.get("thought"))
 
-    async def list_models(self):
+    async def list_models(self) -> list[str]:
         data = await self._get(f"{self.base_url}/models", self._headers(), {"pageSize": 1000})
         return [
             m["name"].removeprefix("models/")
@@ -690,7 +693,9 @@ class GoogleTranslator(Translator):
     concurrency = 3
     retries = 6
 
-    def __init__(self, target_lang, source_lang="auto", transport=None):
+    def __init__(
+        self, target_lang: str, source_lang: str = "auto", transport: httpx.AsyncBaseTransport | None = None
+    ) -> None:
         super().__init__(target_lang, source_lang)
         # The plugin's Google language mapping: zh-HK->zh-TW, pt-br->pt, pt->pt-PT, fil->tl; languages not in the
         # table are not supported
@@ -705,10 +710,10 @@ class GoogleTranslator(Translator):
         self.client = httpx.AsyncClient(timeout=60, transport=transport)
 
     @property
-    def cache_key(self):
+    def cache_key(self) -> str:
         return f"{self.service_id}:google:{self.source_lang}:{self.target_lang}"
 
-    async def translate_batch(self, texts):
+    async def translate_batch(self, texts: list[str]) -> list[str]:
         # A mixed batch is split into two groups by the caller's flags: the rich-text group uses format=html to keep
         # inline formatting, and the plain-text group keeps format=text so that characters such as & are not
         # entity-escaped. Nothing is guessed from angle brackets.
@@ -727,7 +732,7 @@ class GoogleTranslator(Translator):
             out[i] = t
         return out
 
-    async def _request(self, texts, html: bool):
+    async def _request(self, texts: list[str], html: bool) -> list[str]:
         params = {"client": "gtx", "sl": self.sl, "tl": self.tl, "format": "html" if html else "text"}
         for attempt in range(self.retries):
             last = attempt == self.retries - 1
@@ -766,14 +771,14 @@ class GoogleTranslator(Translator):
             await asyncio.sleep(_retry_delay(resp, min(2 ** (attempt + 1), 30)))
         raise TranslatorError("已达到最大重试次数")
 
-    async def aclose(self):
+    async def aclose(self) -> None:
         await self.client.aclose()
 
 
 class MockTranslator(Translator):
     """For tests: prefix the text with a marker."""
 
-    async def translate_batch(self, texts):
+    async def translate_batch(self, texts: list[str]) -> list[str]:
         return [f"[{self.target_lang}] {t}" for t in texts]
 
 
@@ -786,17 +791,24 @@ LLM_CLASSES = {
 }
 
 
-def create_translator(service: dict, target_lang: str, source_lang: str = "auto", transport=None) -> Translator:
+def create_translator(
+    service: JSONDict,
+    target_lang: str,
+    source_lang: str = "auto",
+    transport: httpx.AsyncBaseTransport | None = None,
+) -> Translator:
     """Create an engine from a translation service configuration (see services.py)."""
     translator = _build_translator(service, target_lang, source_lang, transport)
     translator.service_id = service.get("id") or ""
     return translator
 
 
-def _build_translator(service: dict, target_lang: str, source_lang: str, transport) -> Translator:
+def _build_translator(
+    service: JSONDict, target_lang: str, source_lang: str, transport: httpx.AsyncBaseTransport | None
+) -> Translator:
     from .services import PROVIDERS
 
-    provider = service.get("provider")
+    provider = str(service.get("provider") or "")
     if provider == "google":
         return GoogleTranslator(target_lang, source_lang, transport=transport)
     if provider == "mock":

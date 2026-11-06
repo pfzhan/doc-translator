@@ -11,13 +11,16 @@ import hashlib
 import re
 import sqlite3
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from . import background, glossary, langdetect
+from .json_types import JSONDict
 from .paths import DATA_DIR
 from .prompts import drop_added_braces, drop_invented_marks, strip_control_marks, tidy_marks
-from .translators import Translator, TranslatorError, misplaced, stray_chars, typical_ratio
+from .translators import LLMTranslator, Translator, TranslatorError, misplaced, stray_chars, typical_ratio
 
 CACHE_PATH = DATA_DIR / "cache.sqlite3"
 # Owner of web page translations in the cache's owner table, where documents are recorded by the digest of their
@@ -52,7 +55,7 @@ class Cache:
         return hashlib.sha1(f"{prefix}\n{text}".encode()).hexdigest()
 
     @classmethod
-    def keys(cls, prefix: str, texts) -> set[str]:
+    def keys(cls, prefix: str, texts: Iterable[str]) -> set[str]:
         return {cls._key(prefix, text) for text in texts}
 
     def claim(self, doc: str, prefix: str, texts: list[str]) -> None:
@@ -66,7 +69,7 @@ class Cache:
             )
             self.conn.commit()
 
-    def owned(self, doc: str, extra: set[str] = frozenset()) -> set[str]:
+    def owned(self, doc: str, extra: frozenset[str] | set[str] = frozenset()) -> set[str]:
         """Entries owned by file doc that are still in the cache. extra holds keys computed from other clues; only
         those present in the cache are kept."""
         with self.lock:
@@ -168,7 +171,7 @@ class Cache:
             self.conn.executemany("DELETE FROM owner WHERE k=?", rows)
             self.conn.commit()
 
-    def put_many(self, prefix: str, pairs: dict[str, str]):
+    def put_many(self, prefix: str, pairs: dict[str, str]) -> None:
         with self.lock:
             (last,) = self.conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM t").fetchone()
             self.conn.executemany(
@@ -221,6 +224,25 @@ def get_cache() -> Cache:
     return _cache
 
 
+class TranslationCache(Protocol):
+    """What Runner needs from a cache: Cache, or a dict-backed stand-in in tests. Cache's other methods (claim,
+    drop_many, verified, mark_verified) are used when the cache has them."""
+
+    def get_many(self, prefix: str, texts: list[str]) -> dict[str, str]: ...
+
+    def put_many(self, prefix: str, pairs: dict[str, str]) -> None: ...
+
+
+@dataclass
+class RunInfo:
+    """What a run found out, shown on the job page."""
+
+    detected_lang: str = ""  # language detected for the document
+    skipped: int = 0  # paragraphs kept because they are already in the target language or the caller skips them
+    failed: int | None = None  # paragraphs left in the original after empty translations; None before the count
+    terms: int = 0  # entries of the document glossary
+
+
 class Runner:
     # The first batch sends only a few paragraphs so that the preview appears quickly; later batches are normal
     # size
@@ -230,13 +252,13 @@ class Runner:
         self,
         translator: Translator,
         progress: Callable[[int, int], None] | None = None,
-        cache=None,
+        cache: TranslationCache | None = None,
         skip_same_lang: bool = True,
         cache_only: bool = False,
-    ):
+    ) -> None:
         self.translator = translator
         self.progress = progress or (lambda done, total: None)
-        self.cache = cache if cache is not None else get_cache()
+        self.cache: TranslationCache = cache if cache is not None else get_cache()
         # All reads and writes go through it, which also records which file the entries belong to
         self.owned_cache = _OwnedCache(self.cache, lambda: self.document)
         # Paragraphs already in the target language are not translated (the plugin's paragraph language detection)
@@ -245,23 +267,23 @@ class Runner:
         # entries, so that nothing is silently retranslated with another configuration
         self.cache_only = cache_only
         # Shown on the job page: detected document language, number of skipped paragraphs
-        self.info = {"detected_lang": "", "skipped": 0}
+        self.info = RunInfo()
         # Texts the last translate_all kept because they are already in the target language
         self.same_lang: set[str] = set()
         # How far preparation before translation and writing after translation have got (see report_stage)
-        self.stage = {"name": "", "done": 0, "total": 0, "unit": ""}
+        self.stage: JSONDict = {"name": "", "done": 0, "total": 0, "unit": ""}
         # Digest of the file content (set_document); the glossary is cached by it
         self.document = ""
         # Preview translations overridden by paragraph index (heading rewrites, deduplication at paragraph
         # boundaries); the same sentence may differ at different positions
         self._index_overrides: dict[int, str] = {}
         # Cache used by the last translate_all: keys include each paragraph's note (see _NotedCache)
-        self.keyed_cache = None
+        self.keyed_cache: _NotedCache | None = None
 
         # ---- Preview during translation ----
         # segments: paragraphs in document order [{"s": source text, "k": kind}], filled by
         # translate_all(preview=True)
-        self.segments: list[dict] | None = None
+        self.segments: list[JSONDict] | None = None
         self._indices: dict[str, list[int]] = {}  # source text -> its paragraph indices (may occur several times)
         self._done: dict[str, str] = {}
         self._skipped: set[str] = set()
@@ -271,18 +293,20 @@ class Runner:
         # Position the user is viewing (paragraph index); content after it is translated first
         self._focus: int | None = None
 
-    def set_document(self, digest: str):
+    def set_document(self, digest: str) -> None:
         """The file being translated (content digest). The same file keeps the glossary fixed the first time."""
         self.document = digest
 
-    def set_title(self, title: str):
+    def set_title(self, title: str) -> None:
         """Document title as translation context (used only by LLM engines)."""
         if hasattr(self.translator, "title"):
             self.translator.title = (title or "").strip()[:200]
 
     def _make_batches(self, texts: list[str]) -> list[list[str]]:
         tr = self.translator
-        batches, cur, size = [], [], 0
+        batches: list[list[str]] = []
+        cur: list[str] = []
+        size = 0
         for t in texts:
             limit = min(self.first_batch_items, tr.max_batch_items) if not batches else tr.max_batch_items
             if cur and (len(cur) >= limit or size + len(t) > tr.max_batch_chars):
@@ -296,11 +320,11 @@ class Runner:
 
     # ---------- Preview ----------
 
-    def focus(self, index: int):
+    def focus(self, index: int) -> None:
         """The user scrolled or jumped to paragraph index in the preview; translate around it first from now on."""
         self._focus = max(0, int(index))
 
-    def _record(self, texts: list[str]):
+    def _record(self, texts: list[str]) -> None:
         self._log.extend(texts)
 
     def report_stage(self, name: str, done: int = 0, total: int = 0, unit: str = "") -> None:
@@ -311,7 +335,7 @@ class Runner:
         self.stage = {"name": name, "done": done, "total": total, "unit": unit}
         background.check_stop()
 
-    def preview(self, since: int = -1) -> dict:
+    def preview(self, since: int = -1) -> JSONDict:
         """With since < 0, return all paragraphs and all finished translations; otherwise only those finished
         after version since."""
         if self.segments is None:
@@ -332,7 +356,7 @@ class Runner:
             out["segments"] = self.segments
         return out
 
-    def _next_batch(self, pending: list[tuple[int, list[str]]]):
+    def _next_batch(self, pending: list[tuple[int, list[str]]]) -> list[str] | None:
         """Take the next batch: the nearest one after the focus position if there is one, otherwise in document
         order."""
         if not pending:
@@ -346,7 +370,7 @@ class Runner:
         """Detect the document language and return the paragraphs to skip (already in the target language)."""
         tr = self.translator
         doc_lang = langdetect.detect_document(unique)
-        self.info["detected_lang"] = doc_lang or ""
+        self.info.detected_lang = doc_lang or ""
         if tr.source_lang == "auto" and doc_lang:
             tr.detected_source = doc_lang
         if not self.skip_same_lang:
@@ -366,7 +390,7 @@ class Runner:
         A failure to fix the translations does not affect translation; this run just has no glossary.
         """
         tr = self.translator
-        if not getattr(tr, "auto_glossary", False) or not hasattr(tr, "define_terms"):
+        if not isinstance(tr, LLMTranslator) or not tr.auto_glossary:
             return
         tr.doc_glossary = []
         terms = glossary.candidates(texts)
@@ -390,7 +414,7 @@ class Runner:
         elif keys[0] not in cached:
             self.owned_cache.put_many(prefix, {keys[0]: found})
         tr.doc_glossary = glossary.parse(found)
-        self.info["terms"] = len(tr.doc_glossary)
+        self.info.terms = len(tr.doc_glossary)
 
     async def translate_all(
         self,
@@ -436,7 +460,7 @@ class Runner:
             text = texts[i]
             return bool(text.strip()) and (skip_flags[i] or text in lang_skipped)
 
-        self.info["skipped"] = sum(1 for i in range(n) if kept(i))
+        self.info.skipped = sum(1 for i in range(n) if kept(i))
         self.translator.html_texts = {texts[i] for i in range(n) if html_flags[i] and texts[i].strip() and not kept(i)}
         need = list(dict.fromkeys(texts[i] for i in range(n) if texts[i].strip() and not kept(i)))
         note_of: dict[str, str] = {}
@@ -547,7 +571,7 @@ class Runner:
 
         pending = [(first_pos[b[0]], b) for b in self._make_batches(todo)]
 
-        async def worker():
+        async def worker() -> None:
             nonlocal done
             while (batch := self._next_batch(pending)) is not None:
                 try:
@@ -559,8 +583,6 @@ class Runner:
                 # Echo detection (LLM engines only): a long paragraph whose translation is still detected as the source
                 # language was not translated (common in batch mode). Retranslate each such paragraph once; if the
                 # retry is still in the source language, the first result is kept (no worse for proper nouns and code)
-                from .translators import LLMTranslator
-
                 src_lang = getattr(self.translator, "detected_source", "") or getattr(
                     self.translator, "source_lang", ""
                 )
@@ -614,7 +636,7 @@ class Runner:
                 task.cancel()
             await asyncio.gather(*workers, return_exceptions=True)
             raise
-        self.info["failed"] = len(failed)
+        self.info.failed = len(failed)
         if failed and (len(failed) == total or len(failed) > max(3, total // 10)):
             raise TranslatorError(f"翻译服务持续返回空译文（{len(failed)} / {total} 段），请重试或更换服务")
         return [texts[i] if not texts[i].strip() or kept(i) else done_map.get(texts[i], texts[i]) for i in range(n)]
@@ -647,7 +669,7 @@ class _OwnedCache:
     digest of the file content). When the underlying cache does not support recording (the in-memory cache in
     tests) or the file is unknown, it only forwards."""
 
-    def __init__(self, cache, doc: Callable[[], str]):
+    def __init__(self, cache: TranslationCache, doc: Callable[[], str]) -> None:
         self.cache = cache
         self.doc = doc
 
@@ -666,12 +688,14 @@ class _OwnedCache:
         self._claim(prefix, list(pairs))
 
     def drop_many(self, prefix: str, texts: list[str]) -> None:
-        self.cache.drop_many(prefix, texts)
+        drop = getattr(self.cache, "drop_many", None)
+        if callable(drop):
+            drop(prefix, texts)
 
     def verified(self, prefix: str, texts: list[str]) -> set[str]:
         """Caches without the flag (the in-memory cache in tests) treat every hit as unchecked."""
         verified = getattr(self.cache, "verified", None)
-        return verified(prefix, texts) if callable(verified) else set()
+        return set(verified(prefix, texts)) if callable(verified) else set()
 
     def mark_verified(self, prefix: str, texts: list[str]) -> None:
         mark = getattr(self.cache, "mark_verified", None)
@@ -683,7 +707,7 @@ class _NotedCache:
     """Store and fetch translations by source text, with the key replaced by key(source): a paragraph with a note
     includes the note in its key."""
 
-    def __init__(self, cache, key: Callable[[str], str]):
+    def __init__(self, cache: _OwnedCache, key: Callable[[str], str]) -> None:
         self.cache = cache
         self.key = key
 
@@ -840,7 +864,8 @@ _SELFCLOSED_INLINE_RE = re.compile(r"<(a|span)\b([^>]*?)\s*/>")
 def _fix_html_unit(dst: str) -> str:
     """In rich text, change only the text nodes holding the digits. Return the text unchanged when the parser
     altered tags or dropped text."""
-    from bs4 import BeautifulSoup, NavigableString, Tag
+    from bs4 import BeautifulSoup, Tag
+    from bs4.element import NavigableString
 
     from .formats.html_blocks import _is_page_anchor
 

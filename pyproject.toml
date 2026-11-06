@@ -40,3 +40,20 @@ ignore = [
 "eval/tools/gold.py" = ["B023"]
 # Prompt texts are sent to the model as written; wrapping them would change the prompts
 "app/{languages,prompts}.py" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["app"]
+# New code must pass strict checking. Modules written before it are listed below and checked leniently; remove a
+# module from both lists once `mypy --strict` passes on it
+strict = true
+untyped_calls_exclude = ["app.formats", "app.layout_model", "app.prompts", "app.quantize"]
+
+[[tool.mypy.overrides]]
+module = ["app.formats.*", "app.layout_model", "app.prompts", "app.quantize"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+# Third-party packages without type information
+module = ["py3langid.*", "mobi.*"]
+ignore_missing_imports = true

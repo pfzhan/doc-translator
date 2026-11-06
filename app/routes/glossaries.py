@@ -7,17 +7,18 @@ from fastapi.responses import Response
 
 from .. import glossary, state
 from ..glossaries import GlossaryError, GlossaryNotFound
+from ..json_types import JSONDict
 
 router = APIRouter()
 
 
 @router.get("/api/glossaries")
-def list_glossaries():
+def list_glossaries() -> list[JSONDict]:
     return state.glossaries.list()
 
 
 @router.post("/api/glossaries")
-def create_glossary(data: dict = Body(...)):
+def create_glossary(data: JSONDict = Body(...)) -> JSONDict:
     try:
         return state.glossaries.create(data)
     except GlossaryError as e:
@@ -25,7 +26,7 @@ def create_glossary(data: dict = Body(...)):
 
 
 @router.put("/api/glossaries/{gid}")
-def update_glossary(gid: str, data: dict = Body(...)):
+def update_glossary(gid: str, data: JSONDict = Body(...)) -> JSONDict:
     try:
         return state.glossaries.update(gid, data)
     except GlossaryNotFound as e:
@@ -35,7 +36,7 @@ def update_glossary(gid: str, data: dict = Body(...)):
 
 
 @router.delete("/api/glossaries/{gid}")
-def delete_glossary(gid: str):
+def delete_glossary(gid: str) -> JSONDict:
     try:
         state.glossaries.delete(gid)
     except GlossaryNotFound as e:
@@ -44,7 +45,7 @@ def delete_glossary(gid: str):
 
 
 @router.post("/api/glossaries/import")
-def import_glossary(data: dict = Body(...)):
+def import_glossary(data: JSONDict = Body(...)) -> JSONDict:
     """Parse an uploaded CSV / TSV / "source = translation" file into entry text; nothing is saved until the user
     saves the glossary."""
     entries = glossary.parse_table(str(data.get("text") or ""))
@@ -54,7 +55,7 @@ def import_glossary(data: dict = Body(...)):
 
 
 @router.get("/api/glossaries/{gid}/export")
-def export_glossary(gid: str):
+def export_glossary(gid: str) -> Response:
     item = state.glossaries.get(gid)
     if not item:
         raise HTTPException(404, "术语表不存在")

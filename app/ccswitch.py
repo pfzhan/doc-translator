@@ -20,6 +20,8 @@ import tomllib
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .json_types import JSONDict
+
 DB_PATH = Path(os.environ.get("CC_SWITCH_DB", "~/.cc-switch/cc-switch.db")).expanduser()
 
 # CC Switch app → (service id in this project, engine type, display name)
@@ -52,7 +54,7 @@ def _openai_base(url: str) -> str:
     return url + "/v1" if not urlparse(url).path else url
 
 
-def _parse_claude(cfg: dict, common: dict) -> dict:
+def _parse_claude(cfg: JSONDict, common: JSONDict) -> JSONDict:
     env = {**common.get("env", {}), **cfg.get("env", {})}
     token = env.get("ANTHROPIC_AUTH_TOKEN", "")
     key = env.get("ANTHROPIC_API_KEY", "")
@@ -81,7 +83,7 @@ def _parse_claude(cfg: dict, common: dict) -> dict:
     }
 
 
-def _parse_codex(cfg: dict, common_toml: str, use_common: bool) -> dict:
+def _parse_codex(cfg: JSONDict, common_toml: str, use_common: bool) -> JSONDict:
     conf = tomllib.loads(common_toml) if use_common and common_toml else {}
     conf.update(tomllib.loads(cfg.get("config") or ""))
     provider_id = conf.get("model_provider") or "openai"
@@ -100,7 +102,7 @@ def _parse_codex(cfg: dict, common_toml: str, use_common: bool) -> dict:
     }
 
 
-def _parse_gemini(cfg: dict, common: dict, use_common: bool) -> dict:
+def _parse_gemini(cfg: JSONDict, common: JSONDict, use_common: bool) -> JSONDict:
     # The common configuration of Gemini is a set of environment variables
     common_env = (common.get("env", common) if use_common else {}) or {}
     env = {**common_env, **cfg.get("env", {})}
@@ -117,7 +119,7 @@ def _parse_gemini(cfg: dict, common: dict, use_common: bool) -> dict:
     }
 
 
-def _parse_grok(cfg: dict) -> dict:
+def _parse_grok(cfg: JSONDict) -> JSONDict:
     conf = tomllib.loads(cfg.get("config") or "")
     models = conf.get("model") or {}
     default = (conf.get("models") or {}).get("default")
@@ -133,14 +135,14 @@ def _parse_grok(cfg: dict) -> dict:
     }
 
 
-def _common_configs(con) -> dict:
+def _common_configs(con: sqlite3.Connection) -> JSONDict:
     out = {}
     for key, value in con.execute("SELECT key, value FROM settings WHERE key LIKE 'common_config_%'"):
         out[key.removeprefix("common_config_")] = value or ""
     return out
 
 
-def read_current(db_path: Path | None = None) -> list[dict]:
+def read_current(db_path: Path | None = None) -> list[JSONDict]:
     """Return the active configuration of each app. An empty list when the database does not exist."""
     path = Path(db_path or DB_PATH)
     if not path.exists():

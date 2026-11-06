@@ -15,13 +15,15 @@ The settings can be changed on the page, or by editing this file and restarting 
 import json
 import threading
 from pathlib import Path
+from typing import Any
 
 from .formats.pdf_vision import FORMULA_SIZES
+from .json_types import JSONDict
 from .paths import DATA_DIR
 from .quantize import PRECISIONS
 
 PATH = DATA_DIR / "settings.json"
-DEFAULTS = {
+DEFAULTS: JSONDict = {
     "retention_days": 30,
     "max_jobs": 2,
     "layout_model": {"enabled": False, "path": "", "precision": PRECISIONS[0]},
@@ -51,7 +53,7 @@ class Settings:
     def __init__(self, path: Path = PATH):
         self.path = path
         self.lock = threading.Lock()
-        self.data = dict(DEFAULTS)
+        self.data: JSONDict = dict(DEFAULTS)
         if path.exists():
             try:
                 loaded = json.loads(path.read_text(encoding="utf-8"))
@@ -63,32 +65,37 @@ class Settings:
     @property
     def retention_days(self) -> int:
         try:
-            return max(0, min(int(self.data.get("retention_days", DEFAULTS["retention_days"])), MAX_RETENTION_DAYS))
+            days: Any = self.data.get("retention_days", DEFAULTS["retention_days"])
+            return max(0, min(int(days), MAX_RETENTION_DAYS))
         except (TypeError, ValueError):
-            return DEFAULTS["retention_days"]
+            return int(DEFAULTS["retention_days"])
 
     @property
     def max_jobs(self) -> int:
         try:
-            return max(1, min(int(self.data.get("max_jobs", DEFAULTS["max_jobs"])), MAX_JOBS))
+            count: Any = self.data.get("max_jobs", DEFAULTS["max_jobs"])
+            return max(1, min(int(count), MAX_JOBS))
         except (TypeError, ValueError):
-            return DEFAULTS["max_jobs"]
+            return int(DEFAULTS["max_jobs"])
 
     @property
-    def layout_model(self) -> dict:
+    def layout_model(self) -> JSONDict:
         return self.model("layout_model")
 
     @property
-    def formula_model(self) -> dict:
+    def formula_model(self) -> JSONDict:
         return self.model("formula_model")
 
-    def model(self, key: str) -> dict:
+    def model(self, key: str) -> JSONDict:
         """Settings of layout_model or formula_model."""
         value = self.data.get(key)
         if not isinstance(value, dict):
             value = {}
-        default = DEFAULTS[key]
-        conf = {"enabled": bool(value.get("enabled", default["enabled"])), "path": str(value.get("path") or "")}
+        default: JSONDict = DEFAULTS[key]
+        conf: JSONDict = {
+            "enabled": bool(value.get("enabled", default["enabled"])),
+            "path": str(value.get("path") or ""),
+        }
         if "size" in default:
             conf["size"] = value.get("size") if value.get("size") in FORMULA_SIZES else default["size"]
         if "precision" in default:
@@ -100,12 +107,12 @@ class Settings:
                 conf[name] = count if valid else default[name]
         return conf
 
-    def public(self) -> dict:
+    def public(self) -> JSONDict:
         # The two models have their own pages and endpoints (/api/layout-model, /api/formula-model) and are not
         # included here
         return {"retention_days": self.retention_days, "max_jobs": self.max_jobs}
 
-    def update(self, changes: dict) -> dict:
+    def update(self, changes: JSONDict) -> JSONDict:
         if "retention_days" in changes:
             try:
                 days = int(changes["retention_days"])
@@ -130,10 +137,10 @@ class Settings:
             if not isinstance(value, dict):
                 raise SettingsError(f"{name}设置格式错误")
             merged = {**self.model(key), **value}
-            conf = {"enabled": bool(merged.get("enabled")), "path": str(merged.get("path") or "").strip()}
+            conf: JSONDict = {"enabled": bool(merged.get("enabled")), "path": str(merged.get("path") or "").strip()}
             if "size" in DEFAULTS[key]:
                 try:
-                    conf["size"] = int(merged.get("size"))
+                    conf["size"] = int(merged.get("size") or 0)
                 except (TypeError, ValueError):
                     conf["size"] = 0
                 if conf["size"] not in FORMULA_SIZES:
@@ -159,7 +166,7 @@ class Settings:
                 self._save()
         return self.public()
 
-    def _save(self):
+    def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(self.data, ensure_ascii=False, indent=2), encoding="utf-8")

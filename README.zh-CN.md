@@ -253,6 +253,8 @@ app/
   history.py       翻译记录（data/jobs/<id>/job.json）和保留时间清理
   cleanup.py       清理一条记录留下的缓存和版面分析结果
   settings.py      应用设置（data/settings.json）
+  paths.py         数据存放位置（data/，或 DOC_TRANSLATOR_DATA）
+  json_types.py    JSON 请求体和返回值的类型
   runner.py        去重、缓存、切批、并发
   background.py    读版面、写回等线程里的活，任务暂停时让线程停下
   translators.py   翻译引擎（Google / OpenAI / Claude / Gemini / Grok / 兼容接口）
@@ -272,6 +274,17 @@ scripts/           build_firefox.py：生成 Firefox 版扩展到 dist/firefox/
 tests/             测试（pytest）
 eval/              PDF 分段、行内公式和模型的评测脚本，用法和论文列表见 eval/README.zh-CN.md
 ```
+
+## 开发
+
+```bash
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/ruff check . && .venv/bin/ruff format --check .
+.venv/bin/mypy
+.venv/bin/pytest
+```
+
+`mypy` 的设置在 `pyproject.toml` 里：`app/` 按 `--strict` 检查，那里列出的、严格类型之前写的模块除外（`app/formats/` 里的各格式转换、`layout_model`、`prompts`、`quantize`）。新模块一律严格检查；某个模块单独通过后就从列表里去掉。测试使用临时数据目录（见上文 `DOC_TRANSLATOR_DATA`），不会用到项目的 `data/`。
 
 ## 已知限制
 

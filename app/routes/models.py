@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, HTTPException
 from .. import layout_model, quantize, state
 from ..formats.pdf import mupdf_turn
 from ..formats.pdf_vision import formula_parallel
+from ..json_types import JSONDict
 from ..model_files import _model_file
 from ..settings import SettingsError
 
@@ -24,7 +25,7 @@ def _spec(kind: str) -> layout_model.ModelSpec:
     return layout_model.MODELS[kind]
 
 
-def _model_status(kind: str) -> dict:
+def _model_status(kind: str) -> JSONDict:
     spec = _spec(kind)
     conf = state.settings.model(spec.key)
     path = spec.resolve(conf["path"])
@@ -57,12 +58,12 @@ def _model_status(kind: str) -> dict:
 
 
 @router.get("/api/{kind}-model")
-def get_model(kind: str):
+def get_model(kind: str) -> JSONDict:
     return _model_status(kind)
 
 
 @router.put("/api/{kind}-model")
-def update_model(kind: str, data: dict = Body(...)):
+def update_model(kind: str, data: JSONDict = Body(...)) -> JSONDict:
     spec = _spec(kind)
     try:
         state.settings.update(
@@ -78,7 +79,7 @@ def update_model(kind: str, data: dict = Body(...)):
 
 
 @router.post("/api/{kind}-model/download")
-async def download_model(kind: str, data: dict = Body(...)):
+async def download_model(kind: str, data: JSONDict = Body(...)) -> JSONDict:
     """Download to the path in the settings (empty means the default location). The page polls GET for
     progress."""
     spec = _spec(kind)
@@ -91,15 +92,16 @@ async def download_model(kind: str, data: dict = Body(...)):
 
 
 @router.post("/api/{kind}-model/test")
-async def test_model(kind: str, data: dict | None = Body(None)):
+async def test_model(kind: str, data: JSONDict | None = Body(None)) -> JSONDict:
     """Load the model from the path in the form (possibly unsaved) and run it once on a sample page."""
     spec = _spec(kind)
     conf = state.settings.model(spec.key)
-    raw = (data or {}).get("path", conf["path"])
-    size = (data or {}).get("size", conf.get("size"))
+    form: JSONDict = data or {}
+    raw = form.get("path", conf["path"])
+    size = form.get("size", conf.get("size"))
     path = spec.resolve(str(raw or ""))
     # Test the file that translation would use
-    path = Path(_model_file(str(path), (data or {}).get("precision", conf["precision"])))
+    path = Path(_model_file(str(path), str(form.get("precision", conf["precision"]))))
     try:
         async with mupdf_turn():  # The sample page is rendered with MuPDF, taking turns with running jobs
             return await asyncio.to_thread(layout_model.check, spec, path, size)
@@ -108,7 +110,7 @@ async def test_model(kind: str, data: dict | None = Body(None)):
 
 
 @router.post("/api/{kind}-model/quantize")
-async def quantize_model(kind: str):
+async def quantize_model(kind: str) -> JSONDict:
     """Generate the int8 version of the model, calibrated on pages sampled from translated PDFs. The page polls
     GET for progress."""
     spec = _spec(kind)

@@ -456,7 +456,7 @@ def test_lost_placeholder_is_retried_once(tmp_path):
     assert len(tr.calls) == 2 and tr.calls[1] == tr.calls[0]
     assert "当参数" in pymupdf.open(out)[0].get_text()
     assert any("{v1}" in v for v in cache.d.values())
-    assert r.info["failed"] == 0
+    assert r.info.failed == 0
 
 
 def test_lost_small_placeholder_keeps_the_translation(tmp_path):
@@ -468,7 +468,7 @@ def test_lost_small_placeholder_keeps_the_translation(tmp_path):
     [out] = run(translate_file(src, tmp_path, r, False, "zh-CN"))
     text = pymupdf.open(out)[0].get_text()
     assert "贪心算法" in text and "greedy" not in text
-    assert r.info["failed"] == 0
+    assert r.info.failed == 0
 
 
 def test_lost_large_placeholder_falls_back_and_counts_as_failed(tmp_path):
@@ -479,7 +479,7 @@ def test_lost_large_placeholder_falls_back_and_counts_as_failed(tmp_path):
     r = Runner(_PlaceholderDropper("zh-CN"), cache=MemCache(), skip_same_lang=False)
     [out] = run(translate_file(src, tmp_path, r, False, "zh-CN"))
     assert "greedy" in pymupdf.open(out)[0].get_text()
-    assert r.info["failed"] == 1
+    assert r.info.failed == 1
 
 
 def test_equation_vs_prose_with_formula():

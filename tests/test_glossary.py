@@ -116,7 +116,7 @@ def test_terms_are_defined_once_and_sent_only_where_they_appear(tmp_path):
     assert "everyday words" in term_system
     # Extra entries from the model that were not candidates are not accepted
     assert tr.doc_glossary == [("data cube", "数据立方体"), ("greedy algorithm", "贪心算法"), ("OLAP", "OLAP")]
-    assert runner.info["terms"] == 3
+    assert runner.info.terms == 3
     batches = [(system, user) for system, user in requests if "terminology list" not in system]
     for system, user in batches:
         assert ("data cube = 数据立方体" in system) == ("data cube" in user)

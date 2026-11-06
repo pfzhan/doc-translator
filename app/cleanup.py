@@ -25,6 +25,7 @@ from . import glossary
 from .formats.pdf import saved_texts
 from .history import Job, JobStore
 from .runner import Cache, noted_key
+from .translators import Translator
 
 # Files and directories generated in the record directory during translation. The source file and job.json are not
 # among them; only the translations inside out/ are cleared, and the directory stays for the next run
@@ -41,7 +42,7 @@ class Footprint:
     boxes: Path | None = None
     shared: int = 0  # number of other records using the same file
 
-    def summary(self, outputs: int) -> dict:
+    def summary(self, outputs: int) -> dict[str, int]:
         return {
             "entries": len(self.keys),
             "outputs": outputs,
@@ -64,7 +65,7 @@ def _remove(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def _legacy_keys(job: Job, jobs: JobStore, cache: Cache, translator, doc: str) -> set[str]:
+def _legacy_keys(job: Job, jobs: JobStore, cache: Cache, translator: Translator | None, doc: str) -> set[str]:
     """Entries saved before owners were registered: keys computed from the source text of the last layout analysis
     and the service's current configuration. When the service configuration changed since (another model, another
     prompt), the keys no longer match, and those entries are only evicted when the cache fills up."""
@@ -82,7 +83,7 @@ def _legacy_keys(job: Job, jobs: JobStore, cache: Cache, translator, doc: str) -
     return keys | Cache.keys(translator.cache_key, [noted_key(text, note) for text, note in texts])
 
 
-def footprint(job: Job, jobs: JobStore, cache: Cache, translator=None) -> Footprint:
+def footprint(job: Job, jobs: JobStore, cache: Cache, translator: Translator | None = None) -> Footprint:
     """Find what a record left behind without deleting anything (old layout analysis results in the record directory
     are moved to the shared directory along the way, see JobStore.layout_dir). translator is created from the
     current configuration of the record's service and used to recompute old entries; None when the service has
@@ -99,6 +100,8 @@ def footprint(job: Job, jobs: JobStore, cache: Cache, translator=None) -> Footpr
     found.keys = cache.owned(doc, _legacy_keys(job, jobs, cache, translator, doc))
     found.shared = sum(1 for other in jobs.list() if other.id != job.id and jobs.document(other) == doc)
     layout = jobs.layout_dir(job)
+    if layout is None:  # Only when the source file is gone, and then doc is empty too
+        return found
     if (layout / "plan.pickle").is_file():
         found.generated.append(layout / "plan.pickle")
     if (layout / "boxes.json").is_file():
@@ -106,7 +109,7 @@ def footprint(job: Job, jobs: JobStore, cache: Cache, translator=None) -> Footpr
     return found
 
 
-def purge(job: Job, jobs: JobStore, cache: Cache, translator=None, boxes: bool = False) -> int:
+def purge(job: Job, jobs: JobStore, cache: Cache, translator: Translator | None = None, boxes: bool = False) -> int:
     """Clear what a record left behind and return the number of cache entries deleted. The caller ensures the record
     is not being translated, regenerated or deleted."""
     found = footprint(job, jobs, cache, translator)
@@ -116,7 +119,7 @@ def purge(job: Job, jobs: JobStore, cache: Cache, translator=None, boxes: bool =
     return removed
 
 
-def forget(job: Job, jobs: JobStore, cache: Cache, translator=None) -> int:
+def forget(job: Job, jobs: JobStore, cache: Cache, translator: Translator | None = None) -> int:
     """Before a record is deleted, clear the book's cache and layout analysis result. Nothing is touched, and 0 is
     returned, when another record uses the same file."""
     found = footprint(job, jobs, cache, translator)

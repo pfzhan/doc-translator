@@ -546,7 +546,7 @@ def test_empty_translation_is_not_cached(tmp_path):
     out = run(runner.translate_all(["good one", "bad one"]))
     # Below the threshold: empty translations are filled with the source text and not cached
     assert out == ["译:good one", "bad one"]
-    assert runner.info["failed"] == 1
+    assert runner.info.failed == 1
     assert cache.get_many("t", ["good one", "bad one"]) == {"good one": "译:good one"}
     # Retry: cache hits are not requested again, empty translations are translated again
     assert run(Runner(tr, cache=cache).translate_all(["good one", "bad one"])) == ["译:good one", "译:bad one"]
@@ -571,7 +571,7 @@ def test_all_empty_translations_fail_on_short_doc(tmp_path):
     runner = Runner(AlwaysEmpty(), cache=Cache(tmp_path / "c.sqlite3"))
     with pytest.raises(TranslatorError, match="2 / 2"):
         run(runner.translate_all(["one sentence", "two sentence"]))
-    assert runner.info["failed"] == 2
+    assert runner.info.failed == 2
 
 
 def test_rejects_requests_for_other_host_names():

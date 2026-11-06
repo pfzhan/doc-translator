@@ -88,7 +88,7 @@ async def web_translate(data: WebTranslateRequest) -> WebTranslateResponse:
     return WebTranslateResponse(
         translations=translations,
         langs=[lang if dst is not None else None for lang, dst in zip(langs, translations)],
-        detected_lang=str(runner.info["detected_lang"]),
+        detected_lang=runner.info.detected_lang,
     )
 
 

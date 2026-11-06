@@ -11,6 +11,7 @@ translations in the same directory.
 
 from __future__ import annotations
 
+import builtins
 import json
 import os
 import shutil
@@ -19,11 +20,16 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
 from .formats import document_digest
+from .json_types import JSONDict
 from .langdetect import same_language
 from .paths import DATA_DIR
+
+if TYPE_CHECKING:
+    from .runner import Runner
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -81,21 +87,21 @@ class Job:
     glossary_text: str = ""
 
     # Runtime fields that are not saved
-    runner: object = field(default=None, repr=False, compare=False)
+    runner: Runner | None = field(default=None, repr=False, compare=False)
     # Place in the queue while waiting to start, 1 for the next one; 0 otherwise
     queue_position: int = field(default=0, repr=False, compare=False)
 
-    def sync_info(self):
+    def sync_info(self) -> None:
         """Copy the live detection results from the Runner to the record."""
         if self.runner is not None:
             info = self.runner.info
-            self.detected_lang = info.get("detected_lang", "") or self.detected_lang
-            self.skipped = info.get("skipped", 0) or self.skipped
+            self.detected_lang = info.detected_lang or self.detected_lang
+            self.skipped = info.skipped or self.skipped
             # 0 is a valid new count (everything succeeded after a retry), so `or` must not treat it as missing
-            if "failed" in info:
-                self.failed = int(info["failed"])
+            if info.failed is not None:
+                self.failed = info.failed
 
-    def clear_results(self):
+    def clear_results(self) -> None:
         """Return to untranslated after the cache is cleared: translations, progress, detection results and usage no
         longer match any cache and are all reset."""
         self.status, self.error = "idle", ""
@@ -103,7 +109,7 @@ class Job:
         self.prompt_tokens = self.completion_tokens = 0
         self.outputs, self.finished, self.detected_lang = [], 0.0, ""
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> JSONDict:
         self.sync_info()
         return {
             "id": self.id,
@@ -244,7 +250,7 @@ class JobStore:
 
     # ---------- Reading and writing ----------
 
-    def _load(self):
+    def _load(self) -> None:
         if not self.root.exists():
             return
         for meta in self.root.glob("*/job.json"):
@@ -261,14 +267,14 @@ class JobStore:
                 job.error = "服务重启导致翻译中断。已翻译的段落已缓存，继续翻译时直接复用。"
                 self.save(job)
 
-    def save(self, job: Job):
+    def save(self, job: Job) -> None:
         job.sync_info()
         path = self.dir(job.id) / "job.json"
         if not path.parent.exists():
             return  # the record has been deleted
         _write_atomic(path, json.dumps({k: getattr(job, k) for k in _PERSISTED}, ensure_ascii=False, indent=1))
 
-    def add(self, job: Job):
+    def add(self, job: Job) -> None:
         with self.lock:
             self.jobs[job.id] = job
         self.save(job)
@@ -287,7 +293,7 @@ class JobStore:
         shutil.rmtree(self.dir(job_id), ignore_errors=True)
         return True
 
-    def expired_ids(self, retention_days: int, now: float | None = None) -> list[str]:
+    def expired_ids(self, retention_days: int, now: float | None = None) -> builtins.list[str]:
         """Ids of records past the retention period and not being translated. They are not deleted here, since the
         caller must also skip jobs that are regenerating outputs."""
         if retention_days <= 0:
@@ -300,7 +306,9 @@ class JobStore:
                 if j.status not in ("queued", "running") and now - (j.finished or j.created) > retention_days * DAY
             ]
 
-    def cleanup(self, retention_days: int, now: float | None = None, busy: frozenset[str] | None = None) -> list[str]:
+    def cleanup(
+        self, retention_days: int, now: float | None = None, busy: frozenset[str] | None = None
+    ) -> builtins.list[str]:
         """Delete records past the retention period (except running ones and those in busy). retention_days=0 keeps
         records forever."""
         busy = busy or frozenset()
@@ -311,7 +319,7 @@ class JobStore:
 
     # ---------- Preview snapshots ----------
 
-    def save_preview(self, job: Job):
+    def save_preview(self, job: Job) -> None:
         if job.runner is None or not job.preview:
             return
         data = job.runner.preview(-1)
@@ -321,14 +329,15 @@ class JobStore:
         if path.parent.exists():
             _write_atomic(path, json.dumps(data, ensure_ascii=False))
 
-    def load_preview(self, job: Job) -> dict | None:
+    def load_preview(self, job: Job) -> JSONDict | None:
         path = self.dir(job.id) / "preview.json"
         if not path.exists():
             return None
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
         except (ValueError, OSError):
             return None
+        return data if isinstance(data, dict) else None
 
     def disk_usage(self) -> int:
         """Disk space used by records and layout analysis results. Source files shared by hard links count once."""

@@ -18,7 +18,7 @@ settings = Settings()
 jobs = JobStore(history.JOBS_DIR)
 
 # Running translation jobs; keeps them from being garbage collected and is used to cancel on pause or delete
-running: dict[str, asyncio.Task] = {}
+running: dict[str, asyncio.Task[None]] = {}
 
 # Jobs waiting for a free place (settings.max_jobs), in the order they start
 waiting: dict[str, Job] = {}

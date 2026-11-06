@@ -37,10 +37,12 @@ def submit(client: TestClient, name: str = "book.md", data: bytes = MD, **extra:
 def test_sync_info_clears_failed_after_retry():
     job = Job(id="x", filename="a.pdf", failed=4)
 
-    class Runner:
-        info = {"failed": 0, "detected_lang": "en", "skipped": 0}
+    from app.runner import RunInfo, Runner
+    from app.translators import MockTranslator
 
-    job.runner = Runner()
+    runner = Runner(MockTranslator("zh-CN"))
+    runner.info = RunInfo(failed=0, detected_lang="en")
+    job.runner = runner
     job.sync_info()
     assert job.failed == 0
 

@@ -82,7 +82,7 @@ def test_positional_skip_does_not_suppress_the_same_sentence():
     updates = {u[0]: u for u in runner.preview()["updates"]}
     assert updates[0][2] == 0 and updates[0][1].startswith("[zh-CN]")
     assert updates[2][2] == 1 and updates[2][1] == cite
-    assert runner.info["skipped"] == 1
+    assert runner.info.skipped == 1
 
 
 def test_cached_and_skipped_segments_show_immediately():
@@ -435,7 +435,7 @@ def test_empty_translations_backfilled_below_threshold():
     runner = Runner(FlakyEmpty("zh-CN", empty_at={texts[3]}), cache=MemCache(), skip_same_lang=False)
     out = asyncio.run(runner.translate_all(texts))
     assert out[3] == texts[3]  # Filled with the source text
-    assert runner.info["failed"] == 1
+    assert runner.info.failed == 1
     assert out[4].startswith("[zh-CN]")
 
     runner2 = Runner(FlakyEmpty("zh-CN", empty_at=set(texts[:8])), cache=MemCache(), skip_same_lang=False)

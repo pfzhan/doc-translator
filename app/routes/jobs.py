@@ -29,6 +29,7 @@ from ..job_control import (
     _start,
     _variant_service,
 )
+from ..json_types import JSONDict
 from ..model_files import _formula_model, _model_path
 from ..runner import Runner, get_cache
 from ..translators import TranslatorError, create_translator
@@ -70,7 +71,7 @@ async def create_job(
     service_id: str = Form(""),
     mode: str = Form("bilingual"),
     glossary_ids: list[str] = Form([]),
-):
+) -> JSONDict:
     await _cleanup_quietly()
     name = Path(file.filename or "upload").name
     ext = Path(name).suffix.lower()
@@ -128,7 +129,7 @@ async def create_job(
 
 
 @router.get("/api/jobs")
-async def list_jobs():
+async def list_jobs() -> JSONDict:
     # Walking all job directories to compute sizes runs in a thread, so the event loop is not blocked
     usage = await asyncio.to_thread(state.jobs.disk_usage)
     return {
@@ -139,19 +140,19 @@ async def list_jobs():
 
 
 @router.get("/api/jobs/{job_id}")
-def get_job(job_id: str):
+def get_job(job_id: str) -> JSONDict:
     return _job_or_404(job_id).to_dict()
 
 
 @router.delete("/api/jobs/{job_id}")
-async def delete_job(job_id: str):
+async def delete_job(job_id: str) -> JSONDict:
     _job_or_404(job_id)
     await _delete(job_id)
     return {"ok": True}
 
 
 @router.post("/api/jobs/delete")
-async def delete_jobs(data: dict = Body(...)):
+async def delete_jobs(data: JSONDict = Body(...)) -> JSONDict:
     """Delete the selected records in bulk. Ids that no longer exist are returned in missing and do not affect
     the others."""
     ids = data.get("ids")
@@ -168,7 +169,7 @@ async def delete_jobs(data: dict = Body(...)):
 
 
 @router.get("/api/jobs/{job_id}/cache")
-async def get_job_cache(job_id: str):
+async def get_job_cache(job_id: str) -> JSONDict:
     """List what clearing would remove: number of cache entries, number of translation files, size of generated
     files and layout recognition results, and number of records sharing the same file."""
     job = _job_or_404(job_id)
@@ -182,7 +183,7 @@ async def get_job_cache(job_id: str):
 
 
 @router.delete("/api/jobs/{job_id}/cache")
-async def clear_job_cache(job_id: str, boxes: bool = False):
+async def clear_job_cache(job_id: str, boxes: bool = False) -> JSONDict:
     """Clear what a record left in the caches; the record returns to untranslated. With boxes=true the layout
     model's recognition results are cleared too."""
     job = _job_or_404(job_id)
@@ -230,7 +231,7 @@ async def clear_unused_cache() -> CacheSweep:
 
 
 @router.post("/api/jobs/pause-all")
-async def pause_all_jobs():
+async def pause_all_jobs() -> JSONDict:
     """Pause all jobs that are translating or queued."""
     targets = [j for j in state.jobs.list() if j.status in state.ACTIVE]
     results = await asyncio.gather(*(_pause(j) for j in targets))
@@ -238,7 +239,7 @@ async def pause_all_jobs():
 
 
 @router.post("/api/jobs/resume-all")
-async def resume_all_jobs():
+async def resume_all_jobs() -> JSONDict:
     """Resume all paused and interrupted jobs, each with its original translation service (the model currently
     selected in that service)."""
     resumed, failed = 0, []
@@ -255,7 +256,7 @@ async def resume_all_jobs():
 
 
 @router.post("/api/jobs/{job_id}/pause")
-async def pause_job(job_id: str):
+async def pause_job(job_id: str) -> JSONDict:
     """Pause: stop sending requests at once. Translated paragraphs are in the cache and are reused on resume."""
     job = _job_or_404(job_id)
     if not await _pause(job):
@@ -267,7 +268,7 @@ async def pause_job(job_id: str):
 
 
 @router.post("/api/jobs/{job_id}/prioritize")
-async def prioritize_job(job_id: str):
+async def prioritize_job(job_id: str) -> JSONDict:
     """Move a queued job to the front of the queue."""
     job = _job_or_404(job_id)
     _prioritize(job)
@@ -275,7 +276,7 @@ async def prioritize_job(job_id: str):
 
 
 @router.post("/api/jobs/{job_id}/retry")
-async def retry_job(job_id: str, data: dict | None = Body(None)):
+async def retry_job(job_id: str, data: JSONDict | None = Body(None)) -> JSONDict:
     """Resume translation (after pause, interruption or failure), or retranslate a finished record. Translated
     paragraphs are in the cache and are not requested again.
 
@@ -293,7 +294,7 @@ async def retry_job(job_id: str, data: dict | None = Body(None)):
 
 
 @router.post("/api/jobs/{job_id}/variant")
-async def build_variant(job_id: str):
+async def build_variant(job_id: str) -> JSONDict:
     """Generate the other version (bilingual <-> translated-only). The translated-only version of a PDF is taken
     from the bilingual version; everything else is laid out again from the cache of that run, without requests to
     the translation service."""
@@ -364,7 +365,7 @@ async def build_variant(job_id: str):
 
 
 @router.get("/api/jobs/{job_id}/preview")
-def job_preview(job_id: str, since: int = -1):
+def job_preview(job_id: str, since: int = -1) -> JSONDict:
     """Preview during translation. since=-1 returns all paragraphs and finished translations; later calls fetch
     increments with the returned version."""
     job = _job_or_404(job_id)
@@ -387,7 +388,7 @@ def job_preview(job_id: str, since: int = -1):
 
 
 @router.post("/api/jobs/{job_id}/focus")
-def job_focus(job_id: str, data: dict = Body(...)):
+def job_focus(job_id: str, data: JSONDict = Body(...)) -> JSONDict:
     """The paragraph the user jumped to in the preview; translation then prioritizes the area around it."""
     job = _job_or_404(job_id)
     try:
@@ -404,7 +405,7 @@ def job_focus(job_id: str, data: dict = Body(...)):
 
 
 @router.get("/api/jobs/{job_id}/files/{name}")
-def download(job_id: str, name: str, inline: bool = False):
+def download(job_id: str, name: str, inline: bool = False) -> FileResponse:
     """With inline=1 the browser opens the file directly (a PDF in its built-in viewer) instead of downloading
     it."""
     job = _job_or_404(job_id)
@@ -444,7 +445,7 @@ def _epub_output(job_id: str, name: str) -> Path:
 
 
 @router.get("/api/jobs/{job_id}/epub/{name}")
-def epub_outline(job_id: str, name: str):
+def epub_outline(job_id: str, name: str) -> JSONDict:
     """Online EPUB preview: title, chapters ordered by spine, and table of contents. Chapter content is fetched
     by member name from the endpoint below."""
     path = _epub_output(job_id, name)
@@ -456,7 +457,7 @@ def epub_outline(job_id: str, name: str):
 
 
 @router.get("/api/jobs/{job_id}/epub/{name}/{member:path}")
-def epub_member(job_id: str, name: str, member: str):
+def epub_member(job_id: str, name: str, member: str) -> Response:
     path = _epub_output(job_id, name)
     try:
         with zipfile.ZipFile(path) as zf:

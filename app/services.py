@@ -8,15 +8,20 @@ import json
 import threading
 import uuid
 from pathlib import Path
+from typing import Any
 
 from . import ccswitch
 from .paths import DATA_DIR
 
 DATA_PATH = DATA_DIR / "services.json"
 
+# A translation service's configuration as stored in services.json and passed to create_translator. Values are mixed
+# JSON (strings, numbers, booleans), hence Any; turning it into a model would change every module that reads one
+Service = dict[str, Any]
+
 # Preset models are only a convenience and may be outdated; the page can fetch the model list ("获取模型列表") or
 # take a model name typed by hand
-PROVIDERS = {
+PROVIDERS: dict[str, dict[str, Any]] = {
     "google": {
         "label": "谷歌翻译",
         "desc": "免费的机器翻译，无需 API Key。文档较大时可能被限流。",
@@ -116,14 +121,14 @@ CCSWITCH_LOCAL_FIELDS = {
 }
 
 
-def public(service: dict) -> dict:
+def public(service: Service) -> Service:
     """The version returned to the frontend, without the plain-text key."""
     out = {k: v for k, v in service.items() if k != "api_key"}
     out["api_key_hint"] = _mask(service.get("api_key", ""))
     return out
 
 
-def _clean(data: dict) -> dict:
+def _clean(data: Service) -> Service:
     out = {}
     for k, default in FIELDS.items():
         if k not in data:
@@ -155,7 +160,7 @@ def _same_url(a: object, b: object) -> bool:
     return str(a or "").strip().rstrip("/") == str(b or "").strip().rstrip("/")
 
 
-def _check_key_follows_url(saved: dict, changes: dict) -> None:
+def _check_key_follows_url(saved: Service, changes: Service) -> None:
     """A saved key is sent only to the address it was saved with. Changing the address requires typing the key
     again: otherwise anyone who can reach the server (on a LAN, with ALLOWED_HOSTS) could point a service at a host
     of their choice and test it, which sends the saved key there."""
@@ -172,7 +177,7 @@ class ServiceStore:
         self.lock = threading.Lock()
         self._load()
 
-    def _load(self):
+    def _load(self) -> None:
         data = {}
         if self.path.exists():
             try:
@@ -181,10 +186,10 @@ class ServiceStore:
                     data = loaded
             except (ValueError, OSError):
                 pass  # a damaged file falls back to an empty configuration and does not block startup
-        self.services: list[dict] = data.get("services", [])
+        self.services: list[Service] = data.get("services", [])
         self.default_id: str = data.get("default", "google")
         # Local settings of CC Switch services: {service id: {enabled, model, prompt, ...}}
-        self.ccswitch_settings: dict[str, dict] = data.get("ccswitch", {})
+        self.ccswitch_settings: dict[str, Service] = data.get("ccswitch", {})
         # Built-in services always exist; the user can enable or disable them
         for b in BUILTIN:
             if not any(s["id"] == b["id"] for s in self.services):
@@ -194,7 +199,7 @@ class ServiceStore:
         if not self.get(self.default_id) and not self.default_id.startswith("ccswitch-"):
             self.default_id = "google"
 
-    def _save(self):
+    def _save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(
@@ -210,7 +215,7 @@ class ServiceStore:
 
     # ---------- CC Switch ----------
 
-    def _ccswitch_services(self) -> list[dict]:
+    def _ccswitch_services(self) -> list[Service]:
         """The provider currently active in CC Switch. Connection details are read each time; only settings such as
         enabled, concurrency and prompt are stored locally."""
         out = []
@@ -240,10 +245,10 @@ class ServiceStore:
             out.append(svc)
         return out
 
-    def _all(self) -> list[dict]:
+    def _all(self) -> list[Service]:
         return [*self.services, *self._ccswitch_services()]
 
-    def get(self, sid: str) -> dict | None:
+    def get(self, sid: str) -> Service | None:
         return next((s for s in self._all() if s["id"] == sid), None)
 
     def effective_default(self) -> str:
@@ -252,7 +257,7 @@ class ServiceStore:
         svc = self.get(self.default_id)
         return self.default_id if svc and svc.get("enabled") else "google"
 
-    def list(self) -> dict:
+    def list(self) -> Service:
         all_services = self._all()
         return {
             "default": self.effective_default(),
@@ -260,7 +265,7 @@ class ServiceStore:
             "ccswitch": {"db": str(self.ccswitch_db), "found": self.ccswitch_db.exists()},
         }
 
-    def _update_ccswitch(self, svc: dict, data: dict) -> dict:
+    def _update_ccswitch(self, svc: Service, data: Service) -> Service:
         changes = {k: v for k, v in _clean(data).items() if k in CCSWITCH_LOCAL_FIELDS}
         if changes.get("enabled") and not svc["available"]:
             raise ServiceError(f"无法启用：{svc['unavailable_reason']}")
@@ -271,9 +276,13 @@ class ServiceStore:
             changes["model"] = ""
         self.ccswitch_settings.setdefault(svc["id"], {}).update(changes)
         self._save()
-        return public(self.get(svc["id"]))
+        # CC Switch services are read again on each get, and the database may have become unreadable meanwhile
+        updated = self.get(svc["id"])
+        if updated is None:
+            raise ServiceError("服务不存在")
+        return public(updated)
 
-    def create(self, data: dict) -> dict:
+    def create(self, data: Service) -> Service:
         provider = data.get("provider")
         if provider not in PROVIDERS or provider == "google":
             raise ServiceError("不支持的服务类型")
@@ -289,7 +298,7 @@ class ServiceStore:
             self._save()
         return public(svc)
 
-    def update(self, sid: str, data: dict) -> dict:
+    def update(self, sid: str, data: Service) -> Service:
         with self.lock:
             svc = self.get(sid)
             if not svc:
@@ -311,7 +320,7 @@ class ServiceStore:
             self._save()
         return public(svc)
 
-    def delete(self, sid: str):
+    def delete(self, sid: str) -> None:
         with self.lock:
             svc = self.get(sid)
             if not svc:
@@ -325,7 +334,7 @@ class ServiceStore:
                 self.default_id = "google"
             self._save()
 
-    def clone_to_local(self, sid: str) -> dict:
+    def clone_to_local(self, sid: str) -> Service:
         """Copy a CC Switch service into a local service: connection details such as URL, key and model are fixed
         and no longer follow CC Switch."""
         with self.lock:
@@ -352,7 +361,7 @@ class ServiceStore:
             self._save()
         return public(clone)
 
-    def set_default(self, sid: str):
+    def set_default(self, sid: str) -> None:
         with self.lock:
             svc = self.get(sid)
             if not svc:
@@ -366,7 +375,7 @@ class ServiceStore:
             self.default_id = sid
             self._save()
 
-    def resolve(self, data: dict) -> dict:
+    def resolve(self, data: Service) -> Service:
         """Merge the (possibly unsaved) configuration from the frontend form with the saved one, for testing the
         service and fetching the model list."""
         sid = data.get("id")

@@ -33,6 +33,7 @@ from pathlib import Path
 import pymupdf
 
 from .. import background
+from ..runner import RunInfo
 from .pdf_blocks import _CAMEL_WORDS, SPILL_TAIL, _join_lines
 from .pdf_crop import _crop_formulas
 from .pdf_flow import (
@@ -287,8 +288,8 @@ async def translate_pdf(
     # Units that fell back to the original count as failed segments, so the job page reports them instead of
     # showing everything as translated
     info = getattr(runner, "info", None)
-    if fallbacks and isinstance(info, dict):
-        info["failed"] = int(info.get("failed") or 0) + fallbacks
+    if fallbacks and isinstance(info, RunInfo):
+        info.failed = (info.failed or 0) + fallbacks
     translations = [per_block[id(b)] for b in blocks]
     for i in range(1, len(blocks)):
         if translations[i] == SPILL_TAIL or translations[i - 1] == SPILL_TAIL:

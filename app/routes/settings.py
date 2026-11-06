@@ -4,6 +4,7 @@ from fastapi import APIRouter, Body, HTTPException
 
 from .. import state
 from ..job_control import _cleanup_quietly, _dispatch
+from ..json_types import JSONDict
 from ..settings import SettingsError
 
 router = APIRouter()
@@ -12,12 +13,12 @@ router = APIRouter()
 
 
 @router.get("/api/settings")
-def get_settings():
+def get_settings() -> JSONDict:
     return state.settings.public()
 
 
 @router.put("/api/settings")
-async def update_settings(data: dict = Body(...)):
+async def update_settings(data: JSONDict = Body(...)) -> JSONDict:
     try:
         result = state.settings.update(data)
     except SettingsError as e:
