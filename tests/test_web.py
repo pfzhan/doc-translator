@@ -181,3 +181,45 @@ def test_clear_web_cache(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -
 def test_clear_web_cache_rejects_other_pages(app_env: ModuleType) -> None:
     resp = TestClient(app_env.app).delete("/api/web/cache", headers={"origin": "https://evil.example"})
     assert resp.status_code == 403
+
+
+def test_requests_to_one_service_share_its_concurrency(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each web request makes its own engine. The service's concurrency limits them together; a limit of 1 used to
+    let 8 simultaneous page requests send 8 upstream requests at once."""
+    import asyncio
+    import functools
+
+    from app.routes import web
+
+    live = {"now": 0, "peak": 0}
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        live["now"] += 1
+        live["peak"] = max(live["peak"], live["now"])
+        await asyncio.sleep(0.02)
+        live["now"] -= 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": "敏捷的棕色狐狸跳过了河边的懒狗。"}}]})
+
+    state.store.services.append(
+        {
+            "id": "llm",
+            "provider": "custom",
+            "name": "LLM",
+            "enabled": True,
+            "base_url": "http://upstream.test/v1",
+            "model": "m",
+            "concurrency": 1,
+        }
+    )
+    monkeypatch.setattr(
+        web, "create_translator", functools.partial(create_translator, transport=httpx.MockTransport(upstream))
+    )
+
+    async def scenario() -> None:
+        requests = [
+            web.WebTranslateRequest(texts=[f"{EN} Number {i}."], source_lang="en", service_id="llm") for i in range(8)
+        ]
+        await asyncio.gather(*(web.web_translate(r) for r in requests))
+
+    asyncio.run(scenario())
+    assert live["peak"] == 1

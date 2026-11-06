@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import re
 import unicodedata
+import weakref
 from urllib.parse import urlparse
 
 import httpx
@@ -35,6 +36,13 @@ class TruncatedError(TranslatorError):
 
     def __init__(self) -> None:
         super().__init__("模型输出达到长度上限，译文不完整")
+
+
+# Concurrency gates by event loop, then by (service id, concurrency); see Translator._sem. A semaphore belongs to the
+# loop it is first used in, and the tests run each scenario in a loop of its own
+_GATES: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[tuple[str, int], asyncio.Semaphore]] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 class Translator:
@@ -65,6 +73,25 @@ class Translator:
         # Filled in by Runner from the notes the caller gives: source text -> note on where it appears in the
         # document (used only by LLM engines)
         self.notes: dict[str, str] = {}
+
+    @property
+    def _sem(self) -> asyncio.Semaphore:
+        """The concurrency gate every request of this engine goes through, including the batch splitting and
+        retranslation inside translate_batch, which would otherwise bypass Runner's worker limit.
+
+        Engines made from the same service share one gate, so the service's concurrency limits all of its requests
+        together: several jobs, web page requests and service tests. Each job and request makes its own engine, and
+        a gate per engine let them add up to many times the limit and run into rate limits. An engine without a
+        service id (tests) has a gate of its own."""
+        loop = asyncio.get_running_loop()
+        gates = _GATES.setdefault(loop, {})
+        key = (self.service_id, self.concurrency) if self.service_id else (f"engine:{id(self)}", self.concurrency)
+        gate = gates.get(key)
+        if gate is None:
+            gate = gates[key] = asyncio.Semaphore(self.concurrency)
+            if not self.service_id:
+                weakref.finalize(self, gates.pop, key, None)
+        return gate
 
     def is_html_item(self, text: str) -> bool:
         return text in self.html_texts
@@ -310,9 +337,6 @@ class LLMTranslator(Translator):
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.concurrency = max(1, int(concurrency))
-        # Concurrency limit: the gather calls for batch splitting / retranslation in translate_batch also go through
-        # this semaphore; otherwise they would bypass Runner's worker limit
-        self._sem = asyncio.Semaphore(self.concurrency)
         self.max_batch_items = max(1, int(max_items))
         self.max_batch_chars = max(200, int(max_chars))
         self.temperature = temperature
@@ -678,8 +702,6 @@ class GoogleTranslator(Translator):
             )
         self.tl = GOOGLE_CODES[target_lang]
         self.sl = "auto" if source_lang == "auto" else GOOGLE_CODES[source_lang]
-        # As with the LLM engines, all actual requests go through the same semaphore
-        self._sem = asyncio.Semaphore(self.concurrency)
         self.client = httpx.AsyncClient(timeout=60, transport=transport)
 
     @property

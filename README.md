@@ -52,7 +52,8 @@ tested on its own.
 
 Each service has an API key, a name, an API URL and a model (from a preset list, typed in, or fetched from the
 API). The advanced settings cover concurrency, paragraphs and characters per batch, temperature, the system
-prompt and the prompt.
+prompt and the prompt. Concurrency limits the service as a whole: jobs, web page requests and service tests
+using the same service share it.
 
 The glossary is kept in the advanced settings, one `source = translation` entry per line. By default, LLM
 services also count terms that recur in the document before translating (multi-word phrases, acronyms,

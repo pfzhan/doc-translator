@@ -601,3 +601,36 @@ def test_a_single_paragraph_cut_off_is_an_empty_translation(provider):
             await tr.aclose()
 
     assert run(scenario()) == [""]
+
+
+def test_engines_of_one_service_share_a_gate_and_others_do_not():
+    """Two engines from the same service share its concurrency; another service, or an engine without a service,
+    has its own."""
+    from app.translators import create_translator
+
+    live = {"now": 0, "peak": 0}
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        live["now"] += 1
+        live["peak"] = max(live["peak"], live["now"])
+        await asyncio.sleep(0.02)
+        live["now"] -= 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": "译文"}}]})
+
+    def service(sid: str) -> dict:
+        return {"id": sid, "provider": "custom", "base_url": "http://x/v1", "model": "m", "concurrency": 2}
+
+    async def peak(services: list[str]) -> int:
+        live["peak"] = 0
+        engines = [
+            create_translator(service(s), "zh-CN", "en", transport=httpx.MockTransport(handler)) for s in services
+        ]
+        try:
+            await asyncio.gather(*(e.translate_batch([f"Text {i}"]) for e in engines for i in range(3)))
+        finally:
+            for e in engines:
+                await e.aclose()
+        return live["peak"]
+
+    assert run(peak(["a", "a"])) == 2
+    assert run(peak(["a", "b"])) == 4
