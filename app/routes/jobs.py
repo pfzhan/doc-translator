@@ -17,7 +17,7 @@ from ..formats import PREVIEW_FORMATS, SUPPORTED, html_page, output_variant, tra
 from ..formats.epub import book_outline
 from ..history import Job
 from ..job_control import (
-    _cleanup,
+    _cleanup_quietly,
     _clear,
     _cut_from_bilingual,
     _delete,
@@ -57,7 +57,7 @@ async def create_job(
     mode: str = Form("bilingual"),
     glossary_ids: list[str] = Form([]),
 ):
-    await _cleanup()
+    await _cleanup_quietly()
     name = Path(file.filename or "upload").name
     ext = Path(name).suffix.lower()
     if ext not in SUPPORTED:

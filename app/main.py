@@ -3,7 +3,6 @@ result. Translation records are persisted in data/jobs/."""
 
 import asyncio
 import os
-import traceback
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,7 +13,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .job_control import _cleanup
+from .job_control import _cleanup_quietly
 from .routes import glossaries, jobs, models, services, settings, web
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -27,10 +26,9 @@ async def lifespan(_app):
 
     async def loop():
         while True:
-            try:
-                await _cleanup()  # Disk scans run in threads inside _cleanup, so the event loop is not blocked
-            except Exception:  # noqa: BLE001
-                traceback.print_exc()  # Log a failed cleanup and retry next round; the background task must not end
+            # Disk scans run in threads inside _cleanup, so the event loop is not blocked. A failed round is logged
+            # and tried again next time; the background task must not end
+            await _cleanup_quietly()
             await asyncio.sleep(CLEANUP_INTERVAL)
 
     task = asyncio.create_task(loop())

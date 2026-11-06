@@ -526,6 +526,22 @@ def test_settings_endpoint_triggers_cleanup(app_env):
         assert client.put("/api/settings", json={"retention_days": -3}).status_code == 400
 
 
+def test_failed_housekeeping_does_not_fail_uploads_or_settings(app_env, monkeypatch, capsys):
+    """Cleanup runs before an upload and after the settings change; when it fails, the request still succeeds and
+    the error is logged."""
+    main = app_env
+
+    def broken_scan() -> int:
+        raise OSError("transient scan failure")
+
+    monkeypatch.setattr(state.jobs, "share_sources", broken_scan)
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        assert job["status"] == "done"
+        assert client.put("/api/settings", json={"retention_days": 10}).json()["retention_days"] == 10
+    assert "transient scan failure" in capsys.readouterr().err
+
+
 LONG_MD = "\n\n".join(f"Paragraph number {i} of the long test document goes here." for i in range(80)).encode()
 
 

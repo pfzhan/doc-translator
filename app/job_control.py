@@ -41,6 +41,15 @@ def _install_outputs(out_dir: Path, outputs: list[Path]) -> list[str]:
     return names
 
 
+async def _cleanup_quietly() -> None:
+    """Run _cleanup for a request that does something else (an upload, saving the settings). Housekeeping that fails
+    is logged and tried again in the hourly round; it must not fail the request."""
+    try:
+        await _cleanup()
+    except Exception:  # noqa: BLE001
+        traceback.print_exc()
+
+
 async def _cleanup() -> None:
     """Delete expired records; move layout analysis results from record directories to the shared directory and
     delete those no record uses; replace duplicate source files with hard links.
