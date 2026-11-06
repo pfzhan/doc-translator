@@ -111,6 +111,9 @@ HTTP on a LAN address only the message in the page is shown.
   was paused, the cache key changes, and translated paragraphs are translated again with the new model instead
   of being reused; with an unchanged configuration they are reused. The reader can also switch to another
   translation service.
+- Continuing or retranslating a finished record keeps its translation files downloadable until the new run
+  succeeds; a run that fails or is paused leaves them as they were. Retranslating is refused while the other
+  version is being generated.
 - Jobs unfinished when the server restarts are marked 已中断 (Interrupted) and can be continued; paused jobs stay
   paused after a restart.
 - The layout analysis result of a PDF is stored by file content under `data/layout/<file digest>/` and shared by

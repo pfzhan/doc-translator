@@ -28,7 +28,7 @@ from .runner import Cache, noted_key
 
 # Files and directories generated in the record directory during translation. The source file and job.json are not
 # among them; only the translations inside out/ are cleared, and the directory stays for the next run
-_GENERATED = ("preview.json", ".variant")
+_GENERATED = ("preview.json", ".variant", ".run")
 
 
 @dataclass

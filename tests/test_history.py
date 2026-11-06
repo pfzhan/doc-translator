@@ -822,6 +822,82 @@ def test_resume_with_invalid_service_keeps_result(app_env):
         assert client.get(job["outputs"][0]["url"]).status_code == 200
 
 
+def test_retry_is_refused_while_the_other_version_is_generated(app_env):
+    """Retrying while the other version is being written would delete files under it; it is refused and the
+    translations stay."""
+    import asyncio
+
+    main = app_env
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        loop = asyncio.new_event_loop()
+        try:
+            state.variant_tasks[job["id"]] = loop.create_future()
+            r = client.post(f"/api/jobs/{job['id']}/retry", json={})
+        finally:
+            state.variant_tasks.clear()
+            loop.close()
+        assert r.status_code == 409
+        after = client.get(f"/api/jobs/{job['id']}").json()
+        assert after["status"] == "done" and after["outputs"] == job["outputs"]
+        assert client.get(job["outputs"][0]["url"]).status_code == 200
+
+
+def test_a_failed_retry_keeps_the_last_translation(app_env, monkeypatch):
+    """The last run's files stay downloadable until a new run succeeds; a successful run replaces them and leaves
+    no staging directory behind."""
+    from app.translators import TranslatorError
+
+    main = app_env
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        before = client.get(job["outputs"][0]["url"]).content
+
+        async def broken(src, out_dir, *args, **kwargs):
+            (out_dir / "half-written.md").write_text("partial")
+            raise TranslatorError("服务暂时不可用")
+
+        real_translate = job_control.translate_file
+        monkeypatch.setattr(job_control, "translate_file", broken)
+        assert client.post(f"/api/jobs/{job['id']}/retry", json={"fresh": False}).status_code == 200
+        failed = wait_done(client, job["id"])
+        assert failed["status"] == "error" and failed["outputs"] == job["outputs"]
+        assert client.get(job["outputs"][0]["url"]).content == before
+
+        monkeypatch.setattr(job_control, "translate_file", real_translate)
+        assert client.post(f"/api/jobs/{job['id']}/retry", json={}).status_code == 200
+        done = wait_done(client, job["id"])
+        assert done["status"] == "done" and done["outputs"] == job["outputs"]
+        folder = state.jobs.dir(job["id"])
+        assert not (folder / job_control.RUN_STAGE).exists()
+        assert sorted(p.name for p in state.jobs.out_dir(job["id"]).iterdir()) == [o["name"] for o in job["outputs"]]
+
+
+def test_retry_of_a_record_deleted_meanwhile_does_not_start(app_env, monkeypatch):
+    """The record is deleted while a retry checks the service: the retry fails and no job is queued for it."""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    async def scenario() -> None:
+        job = Job(id="r1", filename="x.md", service_id="mock", target_lang="zh-CN", status="paused")
+        state.jobs.dir(job.id).mkdir(parents=True)
+        state.jobs.source_path(job).write_bytes(MD)
+        state.jobs.add(job)
+
+        class Checked:
+            async def aclose(self) -> None:
+                state.jobs.delete(job.id)  # Another request deletes the record during this await
+
+        monkeypatch.setattr(job_control, "_make_translator", lambda *_: Checked())
+        with pytest.raises(HTTPException) as caught:
+            await job_control._resume(job)
+        assert caught.value.status_code == 404
+        assert not state.waiting and not state.running
+
+    asyncio.run(scenario())
+
+
 def test_failed_upload_leaves_no_orphan_dir(app_env):
     """A read fails halfway through an upload: the directory is removed and no orphan directory is left."""
     import asyncio

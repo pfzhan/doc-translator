@@ -1,6 +1,7 @@
 """Run, pause, resume, delete and clear translation jobs. Shared by the job routes and the server's cleanup."""
 
 import asyncio
+import shutil
 import time
 import traceback
 from pathlib import Path
@@ -17,6 +18,27 @@ from .runner import Runner, get_cache
 from .translators import TranslatorError, create_translator
 
 PROGRESS_SAVE_INTERVAL = 5
+# Directory in the record where a run writes its translations before they replace those in out/
+RUN_STAGE = ".run"
+
+
+def _empty_dir(path: Path) -> None:
+    shutil.rmtree(path, ignore_errors=True)
+    path.mkdir(parents=True)
+
+
+def _install_outputs(out_dir: Path, outputs: list[Path]) -> list[str]:
+    """Replace the translations of the last run in out_dir with the files of this run and return their names. Files
+    of the last run this run did not write again (the other version generated earlier) are removed, so out/ holds
+    only translations of the same run."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    names = [path.name for path in outputs]
+    for old in out_dir.iterdir():
+        if old.name not in names and old.is_file():
+            old.unlink()
+    for path in outputs:
+        path.replace(out_dir / path.name)
+    return names
 
 
 async def _cleanup() -> None:
@@ -76,15 +98,18 @@ async def _run_job(job: Job, translator, bilingual: bool):
             last_save = time.time()
             state.jobs.save(job)
 
+    # Files are written here and replace the translations of the last run only when this run succeeds
+    stage = state.jobs.dir(job.id) / RUN_STAGE
     try:
         # Inside the try: when the record cannot be written at start (a full disk), the job fails and frees its place
         # below instead of staying "running" for good
         job.status = "running"
         job.runner = Runner(translator, progress)
         state.jobs.save(job)
+        await asyncio.to_thread(_empty_dir, stage)
         outputs = await translate_file(
             state.jobs.source_path(job),
-            state.jobs.out_dir(job.id),
+            stage,
             job.runner,
             bilingual,
             job.target_lang,
@@ -92,7 +117,8 @@ async def _run_job(job: Job, translator, bilingual: bool):
             plan_path=state.jobs.plan_path(job),
             formula_model=_formula_model(),
         )
-        job.outputs = [p.name for p in outputs]
+        # No await between moving the files and recording them: a cancellation cannot leave the two out of step
+        job.outputs = _install_outputs(state.jobs.out_dir(job.id), outputs)
         job.status = "done"
     except asyncio.CancelledError:
         if job.id in state.pause_requested:
@@ -123,6 +149,7 @@ async def _run_job(job: Job, translator, bilingual: bool):
             job.runner = None
             state.jobs.save(job)
         finally:
+            shutil.rmtree(stage, ignore_errors=True)
             # The place is freed even when writing the record fails (a full disk), or the queue would stop for good
             state.running.pop(job.id, None)
             state.pause_requested.discard(job.id)
@@ -217,37 +244,48 @@ async def _pause(job: Job) -> bool:
     return True
 
 
-async def _resume(job: Job, service_id: str | None = None, fresh: bool = False) -> Job:
-    """Resume (or redo) translation of the same file. Translated paragraphs are in the cache and are not requested
-    again; with fresh true, what this record left in the caches is cleared first (see _clear), and everything starts
-    over from layout analysis with all paragraphs requested again."""
+def _check_resumable(job: Job) -> None:
+    """A record can start translating again only when it still exists and nothing else is working on it."""
+    if state.jobs.get(job.id) is None:
+        raise HTTPException(404, "翻译记录不存在")
     if job.status in state.ACTIVE:
         raise HTTPException(400, "该任务正在翻译")
     if job.id in state.cleaning:
         raise HTTPException(409, "该记录正在清理，请稍后重试")
+    if job.id in state.variant_tasks:
+        raise HTTPException(409, "正在生成另一种版本，请稍候")
+
+
+async def _resume(job: Job, service_id: str | None = None, fresh: bool = False) -> Job:
+    """Resume (or redo) translation of the same file. Translated paragraphs are in the cache and are not requested
+    again; with fresh true, what this record left in the caches is cleared first (see _clear), and everything starts
+    over from layout analysis with all paragraphs requested again."""
+    _check_resumable(job)
     if not state.jobs.source_path(job).exists():
         raise HTTPException(400, "原文件已不存在，无法重新翻译")
     service = state.store.get(service_id or job.service_id)
     if not service:
         raise HTTPException(400, "原翻译服务已不存在，请选择其他服务")
-    # Validate the configuration first and reset status and delete old translations only after it passes;
-    # otherwise the translations would be lost when the configuration is invalid. The glossaries are read again, so
+    # Validate the configuration first and reset status only after it passes. The glossaries are read again, so
     # edited entries take effect. The engine made here only checks; the job creates its own when it starts
     glossary_text = state.glossaries.entries_text(job.glossary_ids)
     checked = _make_translator(job, service, glossary_text)
     await checked.aclose()
+    # The awaits above let other requests run: a second retry, generating the other version, or deleting the record
+    _check_resumable(job)
     if fresh:
         await _clear(job)
         job.clear_results()
+        _check_resumable(job)
     job.service_id, job.service_name = service["id"], service.get("name", "")
     # Shown while the job waits; set again when it starts, from the service's configuration then
     job.model = getattr(checked, "model", "")
     job.glossary_text = glossary_text
-    job.status, job.error, job.done, job.total, job.outputs, job.finished = "queued", "", 0, 0, [], 0.0
+    # The translations of the last run stay in out/ and in job.outputs until this run succeeds (see _run_job), so a
+    # retry that fails or is paused does not lose them
+    job.status, job.error, job.done, job.total, job.finished = "queued", "", 0, 0, 0.0
     # Recompute the preview flag: old records may have been created before the preview feature (stored as False)
     job.preview = Path(job.filename).suffix.lower() in PREVIEW_FORMATS
-    for old in state.jobs.out_dir(job.id).glob("*"):
-        old.unlink()
     (state.jobs.dir(job.id) / "preview.json").unlink(missing_ok=True)
     _start(job)
     state.jobs.save(job)
