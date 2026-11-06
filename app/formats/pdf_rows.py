@@ -17,9 +17,10 @@ from .pdf_math import (
     _line_box,
     _text_bounds,
 )
+from .pdf_types import LineItem, PdfDict
 
 
-def _text_box(span: dict) -> pymupdf.Rect:
+def _text_box(span: PdfDict) -> pymupdf.Rect:
     """The height of the line the span occupies. Math fonts are measured by glyph ink, the rest by PyMuPDF's
     box.
 
@@ -28,7 +29,7 @@ def _text_box(span: dict) -> pymupdf.Rect:
     return pymupdf.Rect(_text_bounds(span))
 
 
-def _stacked_rows(upper: list[dict], lower: list[dict]) -> bool:
+def _stacked_rows(upper: list[PdfDict], lower: list[PdfDict]) -> bool:
     """Both pieces are body text of the same size and their baselines differ by more than about a third of the
     font size: they are two lines close above each other, not one line (an action line in a figure pressed onto
     the caption, with ink boxes overlapping by more than half). Superscripts and subscripts are smaller, and
@@ -45,15 +46,15 @@ def _stacked_rows(upper: list[dict], lower: list[dict]) -> bool:
         float(_by_chars([span for span in part if span["size"] >= size * 0.9], lambda span: span["origin"][1]))
         for part in pieces
     ]
-    return abs(baselines[0] - baselines[1]) > size * 0.3
+    return bool(abs(baselines[0] - baselines[1]) > size * 0.3)
 
 
-def _left_to_right(items: list[tuple]) -> list[tuple]:
+def _left_to_right(items: list[LineItem]) -> list[LineItem]:
     """Sort the pieces of one visual line from left to right. The numerator of a fraction often comes before
     the denominator, which then no longer follows the equals sign before it.
     Line boxes are ink boxes, so two lines above each other overlap little and are not taken as one line."""
-    out: list[tuple] = []
-    run: list[tuple] = []
+    out: list[LineItem] = []
+    run: list[LineItem] = []
     for item in items:
         if run:
             first, rect = run[0][1], item[1]
@@ -102,7 +103,7 @@ _GRID_COLUMNS = 3
 _GRID_ROWS = 3
 
 
-def _grid_cells(items: list[tuple]) -> set[int]:
+def _grid_cells(items: list[LineItem]) -> set[int]:
     """Cells of a word grid inside one block, one word per cell (FrameNet's VERBS: dwindle move soar ...):
     short lines of one or two words whose left edges fall on three or more columns of several lines each, and
     which lie vertically within the range of those columns. Merging lines into paragraphs would join the cells
@@ -129,7 +130,7 @@ def _grid_cell(text: str) -> bool:
     return len(text.split()) <= 2 and len(text.strip()) <= 25
 
 
-def _index_entry_ends(items: list[tuple], ref_rows: Sequence[pymupdf.Rect]) -> set[int]:
+def _index_entry_ends(items: list[LineItem], ref_rows: Sequence[pymupdf.Rect]) -> set[int]:
     """The last line (index) of each entry in a block of an index page. When an entry wraps, its continuation
     lines are indented deeper than its first line, all by the same amount: when the next line starts no
     further right than the first line of this entry, or steps back from the continuation indent (to a
@@ -169,7 +170,9 @@ def _index_entry_ends(items: list[tuple], ref_rows: Sequence[pymupdf.Rect]) -> s
         # translation
         refs_next = (
             text.endswith(",")
+            # below is set exactly when nxt is; both checks are for the type checker
             and below is not None
+            and nxt is not None
             and below.y0 - rect.y1 <= size * 0.5
             and _INDEX_REFS_ONLY_RE.match(" ".join(items[index][0].strip() for index in nxt)) is not None
         )
@@ -180,6 +183,7 @@ def _index_entry_ends(items: list[tuple], ref_rows: Sequence[pymupdf.Rect]) -> s
         broken = (
             re.search(r"[A-Za-z]-$", text) is not None
             and below is not None
+            and nxt is not None
             and below.y0 - rect.y1 <= size * 0.5
             and items[nxt[0]][0].lstrip()[:1].islower()
         )
@@ -218,7 +222,7 @@ def _number_cell(text: str) -> bool:
     return _NUMBER_CELL_RE.fullmatch(text.strip()) is not None
 
 
-def _number_cells(items: list[tuple]) -> set[int]:
+def _number_cells(items: list[LineItem]) -> set[int]:
     """Pieces of a table that hold only numbers: the left or right edge aligns with numbers on two other lines
     (the same column), or the piece sits on one row beside such a number.
     A number ending with a period (a year in references, 2015.) does not count."""
@@ -256,7 +260,7 @@ def _number_cells(items: list[tuple]) -> set[int]:
 _HEADER_CELL_WORDS = 3
 
 
-def _cut_header_cells(items: list[tuple], columns: Sequence[float]) -> tuple[list[tuple], set[int]]:
+def _cut_header_cells(items: list[LineItem], columns: Sequence[float]) -> tuple[list[LineItem], set[int]]:
     """The cells of a header row (Fine-tune Fine-tune Feature-based) are close together and PyMuPDF merges
     them into one line, so the translation is squeezed to the left and does not line up with the columns
     below. Split the line at gaps of half an em or more; when each piece sits directly over a different
@@ -274,11 +278,11 @@ def _cut_header_cells(items: list[tuple], columns: Sequence[float]) -> tuple[lis
                 rows[-1].append(index)
                 continue
         rows.append([index])
-    out: list[tuple] = []
+    out: list[LineItem] = []
     found: set[int] = set()
     for row in rows:
         spans = sorted((span for index in row for span in items[index][2]), key=lambda span: span["bbox"][0])
-        pieces: list[list[dict]] = []
+        pieces: list[list[PdfDict]] = []
         for span in spans:
             if pieces and float(span["bbox"][0]) - float(pieces[-1][-1]["bbox"][2]) < float(span["size"]) * 0.5:
                 pieces[-1].append(span)
@@ -320,7 +324,7 @@ def _cut_header_cells(items: list[tuple], columns: Sequence[float]) -> tuple[lis
     return out, found
 
 
-def _drop_number_tails(items: list[tuple]) -> list[tuple]:
+def _drop_number_tails(items: list[LineItem]) -> list[LineItem]:
     """The row label is too long and PyMuPDF has merged the following number cells into the same line
     (BERT (Ens.+TriviaQA) 86.2 92.2 ...). When the rest of the line is all numbers and the left edge of its
     first cell aligns with a standalone number cell on another line, remove it from the line and leave it on
@@ -329,7 +333,7 @@ def _drop_number_tails(items: list[tuple]) -> list[tuple]:
     starts = [items[index][1].x0 for index in _number_cells(items)]
     if not starts:
         return items
-    out: list[tuple] = []
+    out: list[LineItem] = []
     for item in items:
         text, rect, spans, raw = item[:4]
         cut = None
@@ -367,7 +371,7 @@ def _drop_number_tails(items: list[tuple]) -> list[tuple]:
     return out
 
 
-def _cut_leaders(items: list[tuple], toc_page: bool = False) -> tuple[list[tuple], dict[int, Leader]]:
+def _cut_leaders(items: list[LineItem], toc_page: bool = False) -> tuple[list[LineItem], dict[int, Leader]]:
     """Remove the leaders and page numbers of contents entries from their lines so that only the titles are
     sent for translation. Returns the new lines and {line index: leader}.
     With toc_page (the page has entries with leaders), a line without a leader whose page number sits to the
@@ -390,7 +394,7 @@ def _cut_leaders(items: list[tuple], toc_page: bool = False) -> tuple[list[tuple
                 rows[-1].append(index)
                 continue
         rows.append([index])
-    replaced: dict[int, tuple | None] = {}
+    replaced: dict[int, LineItem | None] = {}
     marked: dict[int, Leader] = {}
     for row in rows:
         pieces = [(index, span) for index in row for span in items[index][3]]
@@ -398,9 +402,9 @@ def _cut_leaders(items: list[tuple], toc_page: bool = False) -> tuple[list[tuple
         cut = _leader_start(pieces, text, toc_page)
         if cut is None or not re.search(r"[^\W\d_]", text[:cut]):
             continue
-        kept: dict[int, list[dict]] = {index: [] for index in row}
-        dropped: list[dict] = []
-        shared: list[dict] = []
+        kept: dict[int, list[PdfDict]] = {index: [] for index in row}
+        dropped: list[PdfDict] = []
+        shared: list[PdfDict] = []
         offset = 0
         for index, span in pieces:
             body = str(span["text"])
@@ -435,19 +439,19 @@ def _cut_leaders(items: list[tuple], toc_page: bool = False) -> tuple[list[tuple
             last = index
         if last is not None:
             marked[last] = leader
-    out: list[tuple] = []
+    out: list[LineItem] = []
     leaders: dict[int, Leader] = {}
     for index, item in enumerate(items):
-        item = replaced.get(index, item)
-        if item is None:
+        new_item = replaced.get(index, item)
+        if new_item is None:
             continue
         if index in marked:
             leaders[len(out)] = marked[index]
-        out.append(item)
+        out.append(new_item)
     return out, leaders
 
 
-def _leader_start(pieces: list[tuple[int, dict]], text: str, toc_page: bool) -> int | None:
+def _leader_start(pieces: list[tuple[int, PdfDict]], text: str, toc_page: bool) -> int | None:
     """Character position where the leader starts. On a contents page a leader may have only two or three
     dots; without a leader, check whether the last piece is a page number far from the rest."""
     found = _LEADER_RE.search(text)
@@ -469,8 +473,8 @@ def _leader_start(pieces: list[tuple[int, dict]], text: str, toc_page: bool) -> 
     return None
 
 
-def _span_offsets(pieces: list[tuple[int, dict]]) -> list[tuple[int, dict]]:
-    out: list[tuple[int, dict]] = []
+def _span_offsets(pieces: list[tuple[int, PdfDict]]) -> list[tuple[int, PdfDict]]:
+    out: list[tuple[int, PdfDict]] = []
     offset = 0
     for _, span in pieces:
         out.append((offset, span))
@@ -478,7 +482,7 @@ def _span_offsets(pieces: list[tuple[int, dict]]) -> list[tuple[int, dict]]:
     return out
 
 
-def _split_span(span: dict, at: int) -> tuple[dict, dict]:
+def _split_span(span: PdfDict, at: int) -> tuple[PdfDict, PdfDict]:
     """Cut span in two at character at, dividing the box in proportion to character counts. Used when the
     leader and the title are in the same span."""
     body = str(span["text"])
@@ -489,7 +493,7 @@ def _split_span(span: dict, at: int) -> tuple[dict, dict]:
     return left, right
 
 
-def _leader_of(spans: list[dict], shared: list[dict]) -> Leader | None:
+def _leader_of(spans: list[PdfDict], shared: list[PdfDict]) -> Leader | None:
     """spans are the leader and page number cut off; shared are the original spans that held the title as
     well and were cut."""
     visible = [span for span in spans if str(span["text"]).strip()]
@@ -542,7 +546,7 @@ def _cut_after(group: list[int], ends: Collection[int]) -> list[list[int]]:
     return [part for part in parts if part]
 
 
-def _cut_at_posts(group: list[int], items: list[tuple], posts: Sequence[pymupdf.Rect]) -> list[list[int]]:
+def _cut_at_posts(group: list[int], items: list[LineItem], posts: Sequence[pymupdf.Rect]) -> list[list[int]]:
     """Two pieces on the same row with a vertical rule between them are not joined into one sentence: a large
     chapter number at the start of a chapter sits close to the title, with a vertical rule between."""
     parts = [group[:1]]
@@ -596,7 +600,7 @@ def _vivid(color: int) -> bool:
     return max(rgb) - min(rgb) >= 0x60
 
 
-def _vivid_share(spans: Sequence[dict]) -> float:
+def _vivid_share(spans: Sequence[PdfDict]) -> float:
     """Share of letters in vivid colors, 0 when there are no letters"""
     letters = sum(char.isalpha() for span in spans for char in str(span.get("text") or ""))
     vivid = sum(
@@ -626,7 +630,7 @@ def _breaks_early(
     return early >= at_least and early * 2 >= len(rows) - 1
 
 
-def _cut_line_list(group: list[int], items: list[tuple], page_rows: Sequence[pymupdf.Rect]) -> list[list[int]]:
+def _cut_line_list(group: list[int], items: list[LineItem], page_rows: Sequence[pymupdf.Rect]) -> list[list[int]]:
     """PyMuPDF often puts a list with one sentence per line (examples, queries) into one block. The test is
     the same as for lists across blocks (see _line_lists): several lines, one per row, aligned on the left,
     same size, equal line spacing, and at more than half of the line breaks the first word of the next line
@@ -695,7 +699,7 @@ def _cut_line_list(group: list[int], items: list[tuple], page_rows: Sequence[pym
     return parts
 
 
-def _cut_item_breaks(group: list[int], items: list[tuple], page_rows: Sequence[pymupdf.Rect]) -> list[list[int]]:
+def _cut_item_breaks(group: list[int], items: list[LineItem], page_rows: Sequence[pymupdf.Rect]) -> list[list[int]]:
     """A list item breaks the line before reaching the right edge of the column although the first word of the
     next line would fit: the next line is a new line of its own (examples listed under an entry, American,
     Airlines, Tim, Wagner ...), so split it. Automatic wrapping only moves a word down when the line above
@@ -729,7 +733,7 @@ def _cut_item_breaks(group: list[int], items: list[tuple], page_rows: Sequence[p
     lefts = sorted({round(row.x0) for row in page_rows if first.x0 - 3 * size <= row.x0 <= first.x0 + 1})
     right = next((edge for left in lefts if (edge := _voted_right(left, size, page_rows)) is not None), None)
 
-    def spans(row: list[int]) -> list[dict]:
+    def spans(row: list[int]) -> list[PdfDict]:
         return [span for i in row for span in items[i][2]]
 
     parts = [list(rows[0])]
@@ -747,7 +751,7 @@ def _cut_item_breaks(group: list[int], items: list[tuple], page_rows: Sequence[p
     return parts
 
 
-def _column_rows(rows: list[list[int]], items: list[tuple], size: float) -> bool:
+def _column_rows(rows: list[list[int]], items: list[LineItem], size: float) -> bool:
     """Every line starts a new run of text at the same x (other than the line start), and at least one line has
     a gap of more than one em before it: a table column.
     In lines wrapped from a paragraph, word starts do not fall at the same x on every line, and the space

@@ -27,8 +27,10 @@ import re
 import tempfile
 import weakref
 import zlib
+from collections.abc import AsyncIterator, Callable, Collection
 from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pymupdf
 
@@ -55,9 +57,13 @@ from .pdf_restore import (
     _sync_unit_preview,
     _with_label,
 )
+from .pdf_types import PdfDict
 from .pdf_units import _PdfPlan, _plan_document
 from .pdf_vision import FormulaModel, ModelBoxes
 from .pdf_write import _render_translated
+
+if TYPE_CHECKING:
+    from ..runner import Runner
 
 _CAMEL_RE = re.compile(r"[A-Za-z]*[a-z][A-Z][A-Za-z]*")
 
@@ -79,7 +85,7 @@ def mupdf_turn() -> asyncio.Lock:
 
 
 @contextlib.asynccontextmanager
-async def _job_turn(runner):
+async def _job_turn(runner: "Runner") -> AsyncIterator[None]:
     """Wait for this job's turn with MuPDF. While another job reads or writes a large book the wait can take
     minutes, and the job page shows that it is waiting."""
     turn = mupdf_turn()
@@ -91,7 +97,7 @@ async def _job_turn(runner):
 
 def _plan_pdf(
     src: Path,
-    runner,
+    runner: "Runner",
     layout_model: str,
     formula_model: FormulaModel | None = None,
     boxes: ModelBoxes | None = None,
@@ -104,7 +110,7 @@ def _plan_pdf(
     src_doc = pymupdf.open(src)
     if src_doc.needs_pass:
         raise ValueError("不支持有密码保护的 PDF")
-    words = frozenset(word for page in src_doc for word in _CAMEL_RE.findall(page.get_text("text")))
+    words = frozenset(word for page in src_doc.pages() for word in _CAMEL_RE.findall(page.get_text("text")))
     token = _CAMEL_WORDS.set(words)
     try:
         return _plan_document(src, src_doc, runner, layout_model, formula_model, boxes)
@@ -114,7 +120,7 @@ def _plan_pdf(
 
 def _saved_plan(
     src: Path,
-    runner,
+    runner: "Runner",
     layout_model: str,
     path: Path | None,
     formula_model: FormulaModel | None = None,
@@ -174,8 +180,11 @@ def _save_plan(path: Path, key: str, plan: _PdfPlan) -> None:
     try:
         with os.fdopen(handle, "wb") as out:
             pickle.dump(key, out)
+            # A Document cannot be pickled: the stored copy has none and _load_plan opens the source again, so
+            # src_doc is None only between here and there
+            stored = replace(plan, src_doc=None, skip_ids=set(), block_kind={})  # type: ignore[arg-type]
             body = pickle.dumps(
-                (replace(plan, src_doc=None, skip_ids=set(), block_kind={}), skipped, kinds),
+                (stored, skipped, kinds),
                 protocol=pickle.HIGHEST_PROTOCOL,
             )
             out.write(zlib.compress(body, 1))
@@ -184,12 +193,15 @@ def _save_plan(path: Path, key: str, plan: _PdfPlan) -> None:
         tmp.unlink(missing_ok=True)
 
 
-def _load_plan(path: Path, key: str, src: Path, runner) -> _PdfPlan | None:
+def _load_plan(path: Path, key: str, src: Path, runner: "Runner") -> _PdfPlan | None:
     try:
         with path.open("rb") as saved:
             if pickle.load(saved) != key:
                 return None
             runner.report_stage("读取上次的版面分析结果")
+            plan: _PdfPlan
+            skipped: list[int]
+            kinds: list[str]
             plan, skipped, kinds = pickle.loads(zlib.decompress(saved.read()))
     except Exception:  # noqa: BLE001 - missing, unreadable or an old format: analyse again
         return None
@@ -215,7 +227,7 @@ def saved_texts(path: Path) -> list[tuple[str, str]]:
 async def translate_pdf(
     src: Path,
     out_dir: Path,
-    runner,
+    runner: "Runner",
     bilingual: bool,
     target_lang: str = "",
     layout_model: str = "",
@@ -232,7 +244,7 @@ async def translate_pdf(
     can do its own preparation. When the job is paused, the thread stops at the next page and releases MuPDF
     only after it has stopped (see background.run)."""
     async with _job_turn(runner):
-        plan = await background.run(_saved_plan, src, runner, layout_model, plan_path, formula_model)
+        plan: _PdfPlan = await background.run(_saved_plan, src, runner, layout_model, plan_path, formula_model)
     src_doc, blocks, geometries, toc = plan.src_doc, plan.blocks, plan.geometries, plan.toc
     flat_units, sent_texts, sent_formulas = plan.units, plan.texts, plan.formulas
     skip_ids, block_kind = plan.skip_ids, plan.block_kind
@@ -243,7 +255,7 @@ async def translate_pdf(
         archive = await background.run(_crop_formulas, src_doc, flat_units, sent_formulas)
 
     per_block: dict[int, str] = {}
-    block_formulas: dict[int, list] = {}
+    block_formulas: dict[int, list[PdfDict]] = {}
     fallbacks = 0
     kept_ids = set(skip_ids)
     labels = plan.labels or [""] * len(flat_units)
@@ -267,7 +279,7 @@ async def translate_pdf(
         if restored is None:
             fallbacks += 1
             parts = [b.text for b in unit]  # the model lost a placeholder: the whole unit falls back to the original
-            formula_lists: list[list[dict]] = [[] for _ in unit]
+            formula_lists: list[list[PdfDict]] = [[] for _ in unit]
             shown = _join_lines(parts)
         else:
             parts, formula_lists = _assign_restored_parts(restored, unit, formulas, apart)
@@ -315,8 +327,8 @@ async def translate_pdf(
         if len(unit) == 2 and not all(id(b) in skip_ids for b in unit) and id(unit[0]) not in apart_hosts
     }
 
-    def build():
-        def render(pages, on_page):
+    def build() -> Path:
+        def render(pages: Collection[int] | None, on_page: Callable[[int, int], None] | None) -> pymupdf.Document:
             return _render_translated(
                 src,
                 blocks,

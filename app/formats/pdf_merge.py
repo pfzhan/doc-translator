@@ -3,6 +3,7 @@ layout-model region, and pair the blocks into one translation unit."""
 
 import re
 from collections.abc import Callable, Sequence
+from collections.abc import Set as AbstractSet
 
 import pymupdf
 
@@ -140,7 +141,7 @@ def _left_column_head(page_blocks: list[TextBlock], geo: PageGeometry) -> TextBl
 
 def _region_joins(
     units: list[list[TextBlock]],
-    skip_ids: set[int],
+    skip_ids: AbstractSet[int],
     halt_ids: set[int],
     regions_of: Callable[[int], list[pymupdf.Rect]],
 ) -> list[list[TextBlock]]:
@@ -231,6 +232,9 @@ _REGION_WORDS = 3
 _REGION_GAP = 1.5
 
 
+# One entry of get_text("words"): x0, y0, x1, y1, word, block number, line number, word number
+PageWord = tuple[float, float, float, float, str, int, int, int]
+
 # Algorithm line numbers: 6: until converged
 _ALGO_LINE_RE = re.compile(r"\d{1,3}:\s")
 
@@ -238,11 +242,11 @@ _ALGO_LINE_RE = re.compile(r"\d{1,3}:\s")
 def _cross_page_units(
     blocks: list[TextBlock],
     median: float,
-    skip_ids: set[int] = frozenset(),
+    skip_ids: AbstractSet[int] = frozenset(),
     geometries: list[PageGeometry] | None = None,
     halt_ids: set[int] | None = None,
     ignore_ids: set[int] | None = None,
-    aside_ids: set[int] = frozenset(),
+    aside_ids: AbstractSet[int] = frozenset(),
 ) -> list[list[TextBlock]]:
     """Pair paragraphs carried over to the next page into translation units (a list of block lists, one or two
     blocks per unit).
@@ -373,7 +377,7 @@ def _seam_apart(
     covered: set[int],
     shown: set[int],
     median: float,
-    words_of: Callable[[int], list[tuple]],
+    words_of: Callable[[int], list[PageWord]],
 ) -> bool:
     """A two-block unit across pages, across columns or cut by a formula, with a display formula or example
     between the blocks: right below the first block or right above the second there is a body-text block, or
@@ -400,7 +404,7 @@ def _content_next(
     covered: set[int],
     shown: set[int],
     median: float,
-    words_of: Callable[[int], list[tuple]],
+    words_of: Callable[[int], list[PageWord]],
     below: bool,
 ) -> bool:
     """The nearest thing directly below the block (above when below is false) is body content: a recognized

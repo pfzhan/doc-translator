@@ -7,7 +7,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections import Counter, defaultdict
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from html.parser import HTMLParser
 from pathlib import Path
@@ -132,7 +132,8 @@ def _vote_labels(glyphs: dict[int, list[Glyph]], words: dict[int, list[OcrWord]]
     glyphs and by position: a reliably recognized glyph takes its own character, and the remaining characters go to
     the unsettled glyphs.
     """
-    votes: dict[Key, Counter[str]] = defaultdict(Counter)
+    # Votes are confidences, not counts: a plain float dict, since Counter is typed with int values
+    votes: dict[Key, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     uneven: list[tuple[list[Glyph], tuple[OcrChar, ...]]] = []
     for pno, page_words in words.items():
         centers = _GlyphCenters(glyphs.get(pno, []))
@@ -156,12 +157,13 @@ def _vote_labels(glyphs: dict[int, list[Glyph]], words: dict[int, list[OcrWord]]
     return _best_labels(votes)
 
 
-def _best_labels(votes: dict[Key, Counter[str]]) -> dict[Key, Label]:
+def _best_labels(votes: dict[Key, dict[str, float]]) -> dict[Key, Label]:
     labels: dict[Key, Label] = {}
     for key, counter in votes.items():
         total = sum(counter.values())
         if total > 0:
-            text, weight = counter.most_common(1)[0]
+            # The first highest entry, as Counter.most_common(1) picked
+            text, weight = max(counter.items(), key=lambda item: item[1])
             labels[key] = Label(text, weight / total)
     return labels
 
@@ -201,13 +203,13 @@ def _align(
                     back[index][used] = take
     if cost[count][total] == inf:
         return [() for _ in glyphs]
-    taken: list[tuple[OcrChar, ...]] = []
+    assigned: list[tuple[OcrChar, ...]] = []
     used = total
     for index in range(count, 0, -1):
         take = back[index][used]
-        taken.append(tuple(chars[used - take : used]))
+        assigned.append(tuple(chars[used - take : used]))
         used -= take
-    return taken[::-1]
+    return assigned[::-1]
 
 
 def _overlap(left: pymupdf.Rect, right: pymupdf.Rect) -> float:

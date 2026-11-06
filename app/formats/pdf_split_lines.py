@@ -15,10 +15,9 @@ from .pdf_blocks import (
 from .pdf_flow import (
     emphasis_of,
 )
-from .pdf_math import (
-    _prose_units,
-)
+from .pdf_math import _prose_units
 from .pdf_rows import _INDEX_REFS_ONLY_RE, _number_cells, _stacked_rows
+from .pdf_types import LineItem, PdfDict
 
 MONO_FONT_RE = re.compile(
     r"Courier|NimbusMon|Mono|Consolas|Menlo|Monaco|CMTT|Typewriter|Inconsolata|Fira ?Code|Lucida ?Console|Source ?Code",
@@ -97,7 +96,7 @@ def _same_line_word(
 _NUMBERED_LABEL_RE = re.compile(r"[A-Z][a-z]+\s+\d+(?:\.\d+)*\.\s")
 
 
-def _label_lead(spans: list[dict]) -> bool:
+def _label_lead(spans: list[PdfDict]) -> bool:
     """The line starts with a bold label ending in a colon or period, followed by body text that is not bold
     (Speaker demographics: What..., On the Optimality of the Level Schedule. Recall...). One bold word followed
     by a number is a label of the theorem kind (Proposition 5 (Efficiency ...). Under...); the number is often
@@ -143,7 +142,7 @@ def _label_lead(spans: list[dict]) -> bool:
 _LABEL_WORDS = 10
 
 
-def _justified_joins(items: list[tuple], max_x1: float, whole_rows: bool = False) -> set[int]:
+def _justified_joins(items: list[LineItem], max_x1: float, whole_rows: bool = False) -> set[int]:
     """Indices of the later words when PyMuPDF splits a justified line by word.
 
     A justified heading in a narrow column can have word spacing stretched to two ems; splitting by word
@@ -176,7 +175,7 @@ def _justified_joins(items: list[tuple], max_x1: float, whole_rows: bool = False
     return joins
 
 
-def _full_row(row: list[tuple], items: list[tuple], max_x1: float) -> bool:
+def _full_row(row: list[LineItem], items: list[LineItem], max_x1: float) -> bool:
     """The two pieces together are one full line of a paragraph: the first starts at the left edge of the
     paragraph, the second reaches the right edge, only one wide space lies between them, and the block has
     other full lines from the same left edge to the same right edge. In justified text the space after a
@@ -193,7 +192,7 @@ def _full_row(row: list[tuple], items: list[tuple], max_x1: float) -> bool:
     )
 
 
-def _same_row(left: tuple, right: tuple) -> bool:
+def _same_row(left: LineItem, right: LineItem) -> bool:
     a, b = left[1], right[1]
     overlap = min(a.y1, b.y1) - max(a.y0, b.y0)
     if overlap < min(a.height, b.height) * 0.7 or b.x0 <= a.x1:
@@ -201,7 +200,7 @@ def _same_row(left: tuple, right: tuple) -> bool:
 
     # Same size, sharing a font. A piece with an italic variable inside it (AVG(E)) also counts; cells side by
     # side often differ entirely in font and size
-    def styles(item: tuple) -> set[tuple]:
+    def styles(item: LineItem) -> set[tuple[str | None, float]]:
         return {
             (s.get("font"), round(float(s.get("size") or 0), 1)) for s in item[2] if str(s.get("text") or "").strip()
         }
@@ -210,7 +209,7 @@ def _same_row(left: tuple, right: tuple) -> bool:
     return len({size for _, size in ours | theirs}) == 1 and bool(ours & theirs)
 
 
-def _spread_evenly(row: list[tuple], max_x1: float) -> bool:
+def _spread_evenly(row: list[LineItem], max_x1: float) -> bool:
     size = max((float(s.get("size") or 0) for s in row[0][2]), default=10.0)
     if row[-1][1].x1 < max_x1 - 1:
         return False
@@ -224,7 +223,7 @@ def _spread_evenly(row: list[tuple], max_x1: float) -> bool:
     return max(gaps) <= min(gaps) * 1.5 + size * 0.2
 
 
-def _row_labels(items: list[tuple], cells: Collection[int]) -> set[int]:
+def _row_labels(items: list[LineItem], cells: Collection[int]) -> set[int]:
     """Row labels of a table: a number cell lies more than one em to the right on the same row."""
     found: set[int] = set()
     for index, (text, rect, spans, *_rest) in enumerate(items):
@@ -242,7 +241,7 @@ def _row_labels(items: list[tuple], cells: Collection[int]) -> set[int]:
     return found
 
 
-def _math_seam(left: list[dict], right: list[dict]) -> bool:
+def _math_seam(left: list[PdfDict], right: list[PdfDict]) -> bool:
     """The seam is math: the left side ends with a formula, the right side starts with one, or one side is all
     symbols.
     Only the seam is checked: a line in the left column that starts with a formula and ends with body text
@@ -256,7 +255,7 @@ def _math_seam(left: list[dict], right: list[dict]) -> bool:
     return _span_is_math(left[-1]) or _span_is_math(right[0])
 
 
-def _typewriter_line(spans: list[dict]) -> bool:
+def _typewriter_line(spans: list[PdfDict]) -> bool:
     """The whole line is monospaced Latin text. Chinese and Japanese fonts are also often marked monospaced and
     do not count."""
     visible = [span for span in spans if str(span.get("text") or "").strip()]
@@ -265,7 +264,7 @@ def _typewriter_line(spans: list[dict]) -> bool:
     return all(_mono_span(span) for span in visible)
 
 
-def _row_style(spans: list[dict]) -> tuple[bool, bool]:
+def _row_style(spans: list[PdfDict]) -> tuple[bool, bool]:
     """Style of a line: whether the whole line is bold, and whether it is all monospaced. Only body spans with
     letters are considered; superscript asterisks after names and braces in a math font around email
     addresses do not count."""
@@ -354,18 +353,19 @@ _SIZE_RISE = 1.15
 _SIZE_ROW_CHARS = 6
 
 
-def _row_left(items: list[tuple], index: int) -> float:
+def _row_left(items: list[LineItem], index: int) -> float:
     """Left edge of the line that piece index is on: the leftmost of the pieces overlapping it vertically by
     more than half."""
     box = items[index][1]
-    return min(
+    left: float = min(
         other[1].x0
         for other in items
         if min(other[1].y1, box.y1) - max(other[1].y0, box.y0) > min(other[1].height, box.height) * 0.5
     )
+    return left
 
 
-def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]]:
+def _split_lines(items: list[LineItem], whole_rows: bool = False) -> list[list[int]]:
     """Split the lines of one text block into separate paragraphs (returns the line indices of each group).
 
     On slides PyMuPDF often puts several list items, or even unrelated caption labels, into one block;
@@ -734,18 +734,20 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         # into several pieces is compared by the left edge of the whole line.
         # Three lines on the same center line are centered (author affiliations), wider further down, and not
         # indented
-        above = _row_left(items, i - 1)
-        below = _row_left(items, i + 1) if i + 1 < len(items) and items[i + 1][1].y0 >= rect.y1 - 0.5 * psize else None
-        centered_rows = below is not None and all(
+        above_left = _row_left(items, i - 1)
+        below_left = (
+            _row_left(items, i + 1) if i + 1 < len(items) and items[i + 1][1].y0 >= rect.y1 - 0.5 * psize else None
+        )
+        centered_rows = below_left is not None and all(
             abs((other.x0 + other.x1) - (rect.x0 + rect.x1)) / 2 <= 0.15 * psize for other in (prect, items[i + 1][1])
         )
         opens_indent = (
             own_row
             and seg_start
-            and below is not None
+            and below_left is not None
             and not centered_rows
-            and above - rect.x0 > 0.5 * psize
-            and 0.5 * psize < rect.x0 - below <= 3 * psize
+            and above_left - rect.x0 > 0.5 * psize
+            and 0.5 * psize < rect.x0 - below_left <= 3 * psize
             and not ptext.rstrip().endswith((",", "，", "、", ";", "；", ":", "："))
         )
         # The line above ends a sentence (even when full), this line is indented one or two ems and runs to the
@@ -755,13 +757,13 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
         indent_after_end = (
             own_row
             and seg_start
-            and below is not None
+            and below_left is not None
             and not centered_rows
             and _ends_sentence(ptext)
             and not _list_item(items[i - 1][0])
             and not _list_item(items[i + 1][0])
-            and 0.5 * psize < rect.x0 - above <= 3 * psize
-            and abs(below - above) <= 0.5 * psize
+            and 0.5 * psize < rect.x0 - above_left <= 3 * psize
+            and abs(below_left - above_left) <= 0.5 * psize
             and rect.x1 >= max_x1 - 2 * psize
         )
         # A numbered theorem or lemma label (Lemma 10.3.) always starts a new paragraph, even when the line
@@ -830,7 +832,7 @@ def _split_lines(items: list[tuple], whole_rows: bool = False) -> list[list[int]
     return groups
 
 
-def _caption_opens(spans: list[dict], above: list[dict]) -> bool:
+def _caption_opens(spans: list[PdfDict], above: list[PdfDict]) -> bool:
     """The line starts with a caption label set apart (Figure 21.17 in bold or in another font): the first line
     of a caption.
     The caption of a wide figure sits further out on the left than the text in the figure, which looks like
@@ -847,12 +849,12 @@ def _caption_opens(spans: list[dict], above: list[dict]) -> bool:
 _CAPTION_SPAN_RE = re.compile(r"^(?:Figure|Fig\.?|Table|Tab\.?)\s*\d+(?:[.\-]\d+)*\s*[:.]?$", re.I)
 
 
-def _text_size(spans: list[dict]) -> float:
+def _text_size(spans: list[PdfDict]) -> float:
     """The font size with the most characters in a line."""
     count: dict[float, int] = {}
     for span in spans:
         count[span["size"]] = count.get(span["size"], 0) + len(span.get("text", "").strip())
-    return max(count, key=count.get, default=10)
+    return max(count, key=count.__getitem__, default=10)
 
 
 # Relation symbols of display formulas. Plus, minus and times signs must be in a math font: in a body font
@@ -861,7 +863,7 @@ def _text_size(spans: list[dict]) -> float:
 _RELATION_RE = re.compile(r"[=≤≥≈≡≠∝∈∉⊂⊆⊇≜]|(?:^|\s)[<>](?=\s|$)")
 
 
-def _mono_span(span: dict) -> bool:
+def _mono_span(span: PdfDict) -> bool:
     """Monospaced font: recognized by font name, and also by the monospace flag in the PDF (fonts such as txtt
     whose names lack Mono)."""
     return bool(MONO_FONT_RE.search(str(span.get("font") or "")) or int(span.get("flags") or 0) & 8)

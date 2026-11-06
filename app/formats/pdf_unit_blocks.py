@@ -28,9 +28,10 @@ from .pdf_skip import (
     _in_gloss,
 )
 from .pdf_split_lines import _RELATION_RE, _mono_span
+from .pdf_types import PdfDict
 
 
-def _part_record(run: dict, page: int, name: str, baseline: float | None = None) -> dict:
+def _part_record(run: PdfDict, page: int, name: str, baseline: float | None = None) -> PdfDict:
     """A later piece of a formula split by a line break. baseline is the body baseline of the line holding this piece;
     the numerator and denominator of a fraction are the same size, so measuring by the largest character in the piece
     would hit the denominator's baseline and the whole fraction would be pasted too high"""
@@ -58,13 +59,13 @@ def _part_record(run: dict, page: int, name: str, baseline: float | None = None)
 _SPACED_WORDS_RE = re.compile(r"[^\W_]\s+[^\W_]")
 
 
-def _wrap_gap(before: list[dict], after: list[dict]) -> float:
+def _wrap_gap(before: list[PdfDict], after: list[PdfDict]) -> float:
     """Gap between two pieces of a formula split by a line break. A monospaced example sentence breaks between words
     (my dog is | hairy) and gets one word space, taken as the width of the spaces in the pieces. This applies only
     when the words in the pieces are already separated by spaces and both sides of the break are letters or digits;
     URLs and identifiers break inside a word and formulas break after an operator, and those pieces are set flush."""
 
-    def text(spans: list[dict]) -> str:
+    def text(spans: list[PdfDict]) -> str:
         return "".join(str(span.get("text") or "") for span in sorted(spans, key=lambda span: span["bbox"][0]))
 
     head, tail = text(before), text(after)
@@ -79,7 +80,7 @@ def _wrap_gap(before: list[dict], after: list[dict]) -> float:
     return max(_PART_GAP, spaces[len(spaces) // 2]) if spaces else _PART_GAP
 
 
-def _formula_record(run: FormulaRun, spans: list[dict]) -> dict:
+def _formula_record(run: FormulaRun, spans: list[PdfDict]) -> PdfDict:
     """The rendering layer still reads this record. The box and curves may change later, and the run is synced back."""
     return {
         "page": run.page,
@@ -265,7 +266,7 @@ def _scan_status(doc: pymupdf.Document) -> str:
     nothing to translate and is rejected explicitly.
     """
     text_pages = hidden_pages = 0
-    for page in doc:
+    for page in doc.pages():
         if not page.get_text().strip():
             continue
         text_pages += 1

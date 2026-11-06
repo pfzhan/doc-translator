@@ -3,9 +3,10 @@
 import pymupdf
 
 from .pdf_place_formulas import _FormulaSources, _paint_formula
+from .pdf_types import PdfDict
 
 
-def _white_pixmap(doc) -> "pymupdf.Pixmap":
+def _white_pixmap(doc: "pymupdf.Document") -> "pymupdf.Pixmap":
     pix = pymupdf.Pixmap(pymupdf.csRGB, pymupdf.IRect(0, 0, 1, 1))
     pix.set_pixel(0, 0, (255, 255, 255))
     return pix
@@ -15,10 +16,10 @@ def _place_formula_images(
     page: "pymupdf.Page",
     doc: "pymupdf.Document",
     before: set[int],
-    mid_map: dict[int, dict],
+    mid_map: dict[int, PdfDict],
     forms: "_FormulaSources | None" = None,
-    page_spans: list[dict] | None = None,
-):
+    page_spans: list[PdfDict] | None = None,
+) -> None:
     """Replace the placeholder markers with formula content and correct the baseline.
 
     htmlbox aligns an <img> only by its bottom, while the baseline of a formula lies inside the image (sub- and
@@ -34,7 +35,7 @@ def _place_formula_images(
     a marker is painted white the white patch stays in that block's stream, so a formula drawn in an earlier
     stream would have its upper half covered by the white patches of later blocks.
     """
-    draws = []
+    draws: list[str] = []
     # Text spans after rendering: htmlbox aligns img only by its bottom, and the marker bottom has a systematic
     # offset of ~1pt from the text baseline, so anchoring the formula baseline to the origin of text on the same
     # line is the most reliable

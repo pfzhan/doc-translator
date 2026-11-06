@@ -2,7 +2,7 @@
 
 import re
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import pymupdf
 
@@ -16,6 +16,7 @@ from .pdf_math import (
 )
 from .pdf_rows import _text_box
 from .pdf_split_lines import _math_seam
+from .pdf_types import PdfDict
 
 # Column edge: at least this many lines, each at least this many ems long, start at the same x
 _COLUMN_LINES = 3
@@ -23,8 +24,11 @@ _COLUMN_LINES = 3
 
 _COLUMN_LINE_EMS = 15
 
+# The box of a line used for band comparisons: _line_box, or a cached wrapper of it
+LineBox = Callable[[PdfDict], pymupdf.Rect]
 
-def _rejoin_split_lines(data: dict) -> None:
+
+def _rejoin_split_lines(data: PdfDict) -> None:
     """PyMuPDF sometimes cuts a line in the middle and puts the second half into another block (often at
     superscripts and subscripts). Move the second half back into the block of the first half, right after that
     line.
@@ -42,7 +46,7 @@ def _rejoin_split_lines(data: dict) -> None:
     # seconds. Lines only change blocks and their content stays the same, so each box is computed once
     boxes: dict[int, pymupdf.Rect] = {}
 
-    def line_box(line: dict) -> pymupdf.Rect:
+    def line_box(line: PdfDict) -> pymupdf.Rect:
         box = boxes.get(id(line))
         if box is None:
             box = boxes[id(line)] = _line_box(line)
@@ -57,7 +61,7 @@ def _rejoin_split_lines(data: dict) -> None:
     _embed_math_blocks(blocks, line_box)
 
 
-def _column_starts(blocks: list[dict]) -> list[float]:
+def _column_starts(blocks: list[PdfDict]) -> list[float]:
     """Left edges where several long lines start together: the edges of the columns."""
     counter: Counter[int] = Counter()
     for block in blocks:
@@ -69,7 +73,7 @@ def _column_starts(blocks: list[dict]) -> list[float]:
     return [x for x in counter if sum(n for other, n in counter.items() if abs(other - x) <= 1) >= _COLUMN_LINES]
 
 
-def _rejoin_pass(blocks: list[dict], line_box=None, starts: Sequence[float] = ()) -> bool:
+def _rejoin_pass(blocks: list[PdfDict], line_box: LineBox | None = None, starts: Sequence[float] = ()) -> bool:
     line_box = line_box or _line_box
     moved = False
     for block in blocks:
@@ -92,7 +96,7 @@ def _rejoin_pass(blocks: list[dict], line_box=None, starts: Sequence[float] = ()
     return moved
 
 
-def _embed_math_blocks(blocks: list[dict], line_box) -> None:
+def _embed_math_blocks(blocks: list[PdfDict], line_box: LineBox) -> None:
     """The pieces at one line height in a block are all math (a numerator, or half an expression joined to a
     numerator), they overlap the math on a line of another block, and they share the height of a body line in
     that block: PyMuPDF has split the math out of that line, so move them back together.
@@ -128,12 +132,12 @@ def _embed_math_blocks(blocks: list[dict], line_box) -> None:
 
 
 def _math_host(
-    blocks: list[dict],
-    own: dict,
-    spans: list[dict],
+    blocks: list[PdfDict],
+    own: PdfDict,
+    spans: list[PdfDict],
     box: pymupdf.Rect,
-    line_box,
-) -> tuple[dict, dict] | None:
+    line_box: LineBox,
+) -> tuple[PdfDict, PdfDict] | None:
     """The block with a math line that box lies on, where that block also has a body line (three or more body
     words) at the same line height. A box level with formula lines only is not moved: moving a split brace of a
     display formula into another piece of the formula is of no use."""
@@ -152,12 +156,12 @@ def _math_host(
 
 
 def _line_host(
-    line: dict,
-    own: dict,
-    blocks: list[dict],
-    line_box=None,
+    line: PdfDict,
+    own: PdfDict,
+    blocks: list[PdfDict],
+    line_box: LineBox | None = None,
     starts: Sequence[float] = (),
-) -> tuple[dict, dict] | None:
+) -> tuple[PdfDict, PdfDict] | None:
     """The piece right next to the left of line. Nothing moves when it is already in line's block:
     taking the first one found, when two blocks each have a piece that could join, line would move to the
     other block on every pass.
@@ -171,7 +175,7 @@ def _line_host(
     column_font = _column_font(line, own, size)
     pieces = [span for span in line["spans"] if span["text"].strip()]
     all_math = bool(pieces) and all(_span_is_math(span) for span in pieces)
-    best: tuple[float, dict, dict] | None = None
+    best: tuple[float, PdfDict, PdfDict] | None = None
     for block in blocks:
         for other in block["lines"]:
             if other is line or abs(other["dir"][1]) > 0.01:
@@ -210,7 +214,7 @@ def _line_host(
     return best[1], best[2]
 
 
-def _column_font(line: dict, own: dict, size: float) -> str:
+def _column_font(line: PdfDict, own: PdfDict, size: float) -> str:
     """The font of this column, when the line above or below in the block aligns with it on the left, sits
     right against it and uses the same font.
     A line on the left in a different font is not its first half: an example set in a monospaced font in the
@@ -231,16 +235,16 @@ def _column_font(line: dict, own: dict, size: float) -> str:
     return ""
 
 
-def _main_font(line: dict) -> str:
+def _main_font(line: PdfDict) -> str:
     spans = [span for span in line["spans"] if span["text"].strip()]
     return str(_by_chars(spans, lambda span: span.get("font") or "")) if spans else ""
 
 
-def _font_box(line: dict) -> pymupdf.Rect:
+def _font_box(line: PdfDict) -> pymupdf.Rect:
     return pymupdf.Rect(line["bbox"])
 
 
-def _past_column(block: dict, line: dict, x: float, size: float, line_box=None) -> bool:
+def _past_column(block: PdfDict, line: PdfDict, x: float, size: float, line_box: LineBox | None = None) -> bool:
     """All other lines of line's paragraph stop before x, and one of them stops at the same right edge as line
     (a justified column): x is outside the column and the text there belongs to the neighbouring column. A
     line cut in the middle is cut inside the column, and the lines above and below extend past that point.
@@ -259,7 +263,7 @@ def _past_column(block: dict, line: dict, x: float, size: float, line_box=None) 
     return bool(rows) and all(row.x1 < x for row in rows) and any(abs(row.x1 - box.x1) <= size * 0.5 for row in rows)
 
 
-def _larger_text(line: dict, host: dict) -> bool:
+def _larger_text(line: PdfDict, host: PdfDict) -> bool:
     """The body text in line is clearly larger than in host: it is a heading in the neighbouring column on the
     same baseline, since the second half of a cut line keeps its size.
     A piece with only punctuation does not count: the period after an expression is at body size and follows
@@ -273,7 +277,7 @@ def _larger_text(line: dict, host: dict) -> bool:
     return bool(sizes) and host_size > 0 and max(sizes) > host_size * 1.2
 
 
-def _stack_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] | None:
+def _stack_host(line: PdfDict, own: PdfDict, blocks: list[PdfDict]) -> tuple[PdfDict, PdfDict] | None:
     """Small blocks stacked above or below math, such as numerators, denominators and summation limits: the
     whole block is formula, it falls horizontally within the extent of a math line, and it sits right above
     or below that line. Body lines above and below also cover it horizontally, but they are not math.
@@ -306,22 +310,23 @@ def _stack_host(line: dict, own: dict, blocks: list[dict]) -> tuple[dict, dict] 
     return None
 
 
-def _italic_span(span: dict) -> bool:
+def _italic_span(span: PdfDict) -> bool:
     return bool(_ITALIC_FONT_RE.search(str(span.get("font") or "")) or int(span.get("flags") or 0) & 2)
 
 
-def _numeral_span(span: dict) -> bool:
+def _numeral_span(span: PdfDict) -> bool:
     return bool(_NUMERAL_RE.fullmatch(str(span.get("text") or "").strip()))
 
 
-def _line_size(line: dict) -> float:
+def _line_size(line: PdfDict) -> float:
     return max((float(span["size"]) for span in line["spans"] if span["text"].strip()), default=0.0)
 
 
-def _stacked_on(block: dict, line: dict, box: pymupdf.Rect, size: float, italic: bool) -> dict | None:
+def _stacked_on(block: PdfDict, line: PdfDict, box: pymupdf.Rect, size: float, italic: bool) -> PdfDict | None:
     """The math line in block directly above or below line and touching it. It must have math characters over
     line; covering it with the line's extent is not enough."""
-    for other in block["lines"]:
+    lines: list[PdfDict] = block["lines"]
+    for other in lines:
         if other is line or abs(other["dir"][1]) > 0.01:
             continue
         small = _line_size(other) * 0.79
@@ -353,7 +358,7 @@ def _stacked_on(block: dict, line: dict, box: pymupdf.Rect, size: float, italic:
     return None
 
 
-def _same_band(a: dict, b: dict, box=None) -> bool:
+def _same_band(a: PdfDict, b: PdfDict, box: LineBox | None = None) -> bool:
     """Enough vertical overlap. Denominators of fractions and large braces pull the box down, so two pieces of
     the same line overlap by less than half.
     By default the comparison uses glyph height: the font box of a math font reaches into the next line and
@@ -364,7 +369,7 @@ def _same_band(a: dict, b: dict, box=None) -> bool:
 
 def _band_overlap(ra: pymupdf.Rect, rb: pymupdf.Rect) -> bool:
     overlap = min(ra.y1, rb.y1) - max(ra.y0, rb.y0)
-    return overlap >= min(ra.height, rb.height) * 0.35
+    return bool(overlap >= min(ra.height, rb.height) * 0.35)
 
 
 # Expressions not set in a math font (older papers use Times-Italic for variables and Symbol for operators):
@@ -378,7 +383,7 @@ _ITALIC_FONT_RE = re.compile(r"Italic|Oblique", re.I)
 _NUMERAL_RE = re.compile(r"\d+(?:[.,]\d+)*")
 
 
-def _small_band(run: dict, over: pymupdf.Rect, small: float) -> pymupdf.Rect | None:
+def _small_band(run: PdfDict, over: pymupdf.Rect, small: float) -> pymupdf.Rect | None:
     """The whole band of small text in run that falls horizontally below or above over (a denominator or a
     numerator)."""
     spans = [span for span in run["spans"] if str(span.get("text") or "").strip() and float(span["size"]) < small]

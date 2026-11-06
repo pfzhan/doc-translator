@@ -31,6 +31,7 @@ from .pdf_paragraphs import _block_spans
 from .pdf_roles import Role
 from .pdf_rows import _vivid, _vivid_share
 from .pdf_split_lines import _EXAMPLE_NUMBER_RE, _RELATION_RE, _mono_span
+from .pdf_types import PdfDict
 from .pdf_vision import FormulaDetector
 
 # Maximum length of a bracketed label in an example sentence (Arg0, ArgM-TMP, PER)
@@ -111,6 +112,8 @@ def _display_example_ids(blocks: list[TextBlock], geometries: list[PageGeometry]
             first, last = run[0], run[-1]
             size = first.size
             edge = _column_left(first.rect, geo)
+            # A block only joins a run when it has a column edge, which needs a page geometry
+            assert geo is not None and edge is not None
             right = geo.column_of(first.rect).x1 if len(geo.columns) >= 2 else geo.frame.x1 if geo.frame else None
             if (
                 len(run) == 1
@@ -431,7 +434,8 @@ def _after_number_x0(block: TextBlock) -> float:
             offset = max(label - seen, 0) + start
             while offset < len(text) and text[offset].isspace():
                 offset += 1
-            return box.x0 + box.width * offset / max(len(text), 1)
+            x: float = box.x0 + box.width * offset / max(len(text), 1)
+            return x
         seen += len(stripped)
     return block.rect.x1
 
@@ -497,7 +501,7 @@ def _concordance_ids(blocks: list[TextBlock]) -> set[int]:
             ),
             key=lambda span: float(span["origin"][1]),
         )
-        rows: list[list[dict]] = []
+        rows: list[list[PdfDict]] = []
         for span in spans:
             if rows and float(span["origin"][1]) - float(rows[-1][0]["origin"][1]) <= block.size * 0.3:
                 rows[-1].append(span)
@@ -547,7 +551,7 @@ def _foreign_ids(blocks: list[TextBlock]) -> set[int]:
         if not cjk_doc and len(CJK_RE.findall(text)) >= _FOREIGN_CJK and not re.search(r"[A-Za-z]", text):
             return True
         lang = langdetect.detect(text, min_letters=_FOREIGN_LETTERS)
-        return bool(lang) and lang.split("-")[0] != doc_lang.split("-")[0]
+        return bool(lang and lang.split("-")[0] != doc_lang.split("-")[0])
 
     found = {id(block) for block in blocks if foreign(block.text)}
     by_page: dict[int, list[TextBlock]] = {}

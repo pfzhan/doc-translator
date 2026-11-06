@@ -3,6 +3,7 @@ footnotes, flush starts and floating pages."""
 
 import re
 from collections import Counter
+from collections.abc import Set as AbstractSet
 
 from .pdf_blocks import (
     _END_MARK_RE,
@@ -195,7 +196,9 @@ def _at_text_edge(head: TextBlock, page_blocks: list[TextBlock]) -> bool:
     return abs(first - lefts.most_common(1)[0][0]) <= 0.3 * head.size
 
 
-def _resumes(head: TextBlock, page_blocks: list[TextBlock], skip_ids: set[int], passed: set[int]) -> bool:
+def _resumes(
+    head: TextBlock, page_blocks: list[TextBlock], skip_ids: AbstractSet[int], passed: AbstractSet[int]
+) -> bool:
     """The block is where text from the previous column or page would resume: nothing is directly above it
     (top of a column or page), or what is above is a skipped figure or formula, a smaller table cell, or a
     caption (passed holds running headers and footers, figures and captions). When a short line at body size
@@ -231,8 +234,8 @@ def _next_text_page(
     by_page: dict[int, list[TextBlock]],
     pno: int,
     median: float,
-    skip_ids: set[int],
-    ignored: set[int],
+    skip_ids: AbstractSet[int],
+    ignored: AbstractSet[int],
 ) -> int:
     """The first page after pno with body text. Pages holding only figures, captions (with the subfigure
     descriptions right below them) and running headers and footers are passed over: an unfinished paragraph
@@ -245,7 +248,7 @@ def _next_text_page(
     return later if later <= pno + _FLOAT_PAGES else pno + 1
 
 
-def _float_page(blocks: list[TextBlock], median: float, skip_ids: set[int], ignored: set[int]) -> bool:
+def _float_page(blocks: list[TextBlock], median: float, skip_ids: AbstractSet[int], ignored: AbstractSet[int]) -> bool:
     prose = [
         block
         for block in blocks

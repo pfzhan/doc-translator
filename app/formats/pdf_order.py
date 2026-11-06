@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 import pymupdf
 import pymupdf.mupdf as mupdf
 
+from .pdf_blocks import TextBlock
 from .pdf_erase import _NUMBER_RE, _operators, _page_point
 
 _MARK_RE = re.compile(rb"/DTr(\d+)\s+MP")
@@ -53,43 +54,71 @@ _RESET = "0 Tc 0 Tw 100 Tz 0 Ts 0 Tr 0 g 0 G 1 w 0 J 0 j [] 0 d"
 class _Probe(mupdf.PdfSanitizeFilterOptions2):
     """Read the top-level content stream once: the origin of each glyph in each text object (page coordinates)."""
 
-    def __init__(self, page: pymupdf.Page):
-        super().__init__()
-        self.use_virtual_text_filter()
-        self.use_virtual_after_text_object()
-        self.use_virtual_culler(False)
-        self.use_virtual_image_filter()
+    def __init__(self, page: pymupdf.Page) -> None:
+        # The SWIG bindings are unannotated; mypy accepts calls into them only through the binding's own class
+        # (untyped_calls_exclude), not through this subclass
+        mupdf.PdfSanitizeFilterOptions2.__init__(self)
+        base: mupdf.PdfSanitizeFilterOptions2 = self
+        base.use_virtual_text_filter()
+        base.use_virtual_after_text_object()
+        base.use_virtual_culler(False)
+        base.use_virtual_image_filter()
         self.to_page = mupdf.FzMatrix(*page.transformation_matrix)
         self.objects: list[list[tuple[float, float]]] = [[]]
         self.error: BaseException | None = None
 
-    def text_filter(self, ctx, ucsbuf, ucslen, trm, ctm, bbox, *_rest):
+    def text_filter(
+        self,
+        ctx: mupdf.fz_context,
+        ucsbuf: object,
+        ucslen: int,
+        trm: mupdf.fz_matrix,
+        ctm: mupdf.fz_matrix,
+        bbox: mupdf.fz_rect,
+        *_rest: object,
+    ) -> int:
         try:
             self.objects[-1].append(_page_point(trm.e, trm.f, ctm, self.to_page))
         except BaseException as exc:  # noqa: BLE001 - MuPDF cannot handle exceptions in the callback; keep and reraise
             self.error = self.error or exc
         return 0
 
-    def image_filter(self, ctx, ctm, name, image, scissor):
-        return mupdf.ll_fz_keep_image(image)
+    def image_filter(
+        self, ctx: mupdf.fz_context, ctm: mupdf.fz_matrix, name: str, image: mupdf.fz_image, scissor: mupdf.fz_rect
+    ) -> mupdf.fz_image:
+        kept: mupdf.fz_image = mupdf.ll_fz_keep_image(image)
+        return kept
 
-    def after_text_object(self, *_args):
+    def after_text_object(self, *_args: object) -> None:
         self.objects.append([])
 
 
 class _Factory(mupdf.PdfFilterFactory2):
-    def __init__(self, probe: _Probe):
-        super().__init__()
-        self.use_virtual_filter()
-        self.probe = probe
+    def __init__(self, probe: _Probe) -> None:
+        # Base-class calls for the same reason as in _Probe
+        mupdf.PdfFilterFactory2.__init__(self)
+        base: mupdf.PdfFilterFactory2 = self
+        base.use_virtual_filter()
+        self.probe: mupdf.PdfSanitizeFilterOptions2 = probe
 
-    def filter(self, ctx, doc, chain, struct_parents, transform, options):
-        return mupdf.ll_pdf_new_sanitize_filter(doc, chain, struct_parents, transform, options, self.probe.internal())
+    def filter(
+        self,
+        ctx: mupdf.fz_context,
+        doc: mupdf.pdf_document,
+        chain: mupdf.pdf_processor,
+        struct_parents: int,
+        transform: mupdf.fz_matrix,
+        options: mupdf.pdf_filter_options,
+    ) -> mupdf.pdf_processor:
+        processor: mupdf.pdf_processor = mupdf.ll_pdf_new_sanitize_filter(
+            doc, chain, struct_parents, transform, options, self.probe.internal()
+        )
+        return processor
 
 
 def _probe(page: pymupdf.Page) -> list[list[tuple[float, float]]]:
     probe = _Probe(page)
-    factory = _Factory(probe)
+    factory: mupdf.PdfFilterFactory2 = _Factory(probe)
     options = mupdf.PdfFilterOptions()
     options.recurse = 0
     options.instance_forms = 0
@@ -217,7 +246,7 @@ class ReadingOrder:
     """Reading order of one page: mark() before erasing, record() when writing each paragraph, assemble() after the
     page is written."""
 
-    def __init__(self, page: pymupdf.Page, moved: Iterable, enabled: bool = True):
+    def __init__(self, page: pymupdf.Page, moved: Iterable[TextBlock], enabled: bool = True) -> None:
         self.page = page
         self.doc = page.parent
         self.marks: list[_Mark] = []
@@ -277,7 +306,7 @@ class ReadingOrder:
         clips: list[pymupdf.Rect] | None = []
         bounds = pymupdf.Rect(whole)
         leading, render = 0.0, 0
-        stack: list[tuple] = []
+        stack: list[tuple[pymupdf.Matrix, list[pymupdf.Rect] | None, pymupdf.Rect, float, int]] = []
         group: int | None = None
         groups = 0
         line = pymupdf.Matrix(1, 0, 0, 1, 0, 0)
@@ -412,7 +441,7 @@ class ReadingOrder:
                 paint(whole)
         return ops
 
-    def _mark(self, moved: list) -> None:
+    def _mark(self, moved: list[TextBlock]) -> None:
         raw = self.page.read_contents()
         ops = self._walk(raw)
         if ops is None:
@@ -452,6 +481,8 @@ class ReadingOrder:
         for index, op in enumerate(ops):
             if op.name == b"BT":
                 points, taken = next(cursor), 0
+            # _walk gives every operator the clip bounds in effect
+            assert op.bounds is not None
             for x, y in points[taken : taken + op.glyphs]:
                 glyphs.append((index, owner(x, y, op.bounds)))
             taken += op.glyphs
@@ -490,7 +521,8 @@ class ReadingOrder:
                 and not paints_between(glyphs[j][0], glyphs[j + 1][0])
             ):
                 j += 1
-            run = list(dict.fromkeys(key for _, key in glyphs[i : j + 1] if key not in assigned))
+            # Every glyph from i to j has an owner (see the loops above)
+            run = list(dict.fromkeys(key for _, key in glyphs[i : j + 1] if key is not None and key not in assigned))
             at = None
             if run:
                 if i == 0:
@@ -532,7 +564,10 @@ class ReadingOrder:
         for mark in sorted(self.marks, key=lambda m: m.at):
             pieces.append(raw[last : mark.at])
             if mark.inside:
-                line = " ".join(_num(v) for v in mark.line)
+                # A mark inside a text object takes the line matrix of an operator in that object, always set
+                assert mark.line is not None
+                m = mark.line
+                line = " ".join(_num(v) for v in (m.a, m.b, m.c, m.d, m.e, m.f))
                 pieces.append(f"\nET\n/DTr{mark.number} MP\nBT\n{line} Tm\n".encode())
             else:
                 pieces.append(f"\n/DTr{mark.number} MP\n".encode())
@@ -556,7 +591,7 @@ class ReadingOrder:
     def snapshot(self) -> set[int]:
         return set(self.page.get_contents()) if self.marks else set()
 
-    def record(self, block, before: set[int], rect: pymupdf.Rect) -> None:
+    def record(self, block: TextBlock, before: set[int], rect: pymupdf.Rect) -> None:
         if not self.marks:
             return
         added = [xref for xref in self.page.get_contents() if xref not in before]
@@ -625,6 +660,7 @@ class ReadingOrder:
             mark = by_number.get(int(found.group(1)))
             if mark is None:
                 continue
+            assert op.ctm is not None  # _walk gives every operator the CTM in effect
             cut = _Cut(found.end(), op.ctm, op.clips, [rect for at, rect in self.paints if at > index])
             blocks = [key for key in mark.blocks if self._movable(key, cut)]
             if blocks:
@@ -663,7 +699,7 @@ class ReadingOrder:
         self.doc.xref_set_key(self.page.xref, "Contents", "[" + " ".join(f"{x} 0 R" for x in order) + "]")
 
     def _stream(self, data: bytes) -> int:
-        xref = self.doc.get_new_xref()
+        xref: int = self.doc.get_new_xref()
         self.doc.update_object(xref, "<<>>")
         self.doc.update_stream(xref, b"\n" + data + b"\n")
         return xref

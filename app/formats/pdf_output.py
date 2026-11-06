@@ -4,6 +4,7 @@ bilingual one, translated bookmarks, and font subsetting."""
 import re
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pymupdf
 
@@ -12,7 +13,11 @@ from .pdf_dedupe import merge_duplicates
 from .pdf_flow import (
     strip_style_marks,
 )
-from .pdf_parts import plan_parts, render_in_parts, worker_count
+from .pdf_parts import Render, plan_parts, render_in_parts, worker_count
+from .pdf_types import PdfDict
+
+if TYPE_CHECKING:
+    from multiprocessing.queues import Queue
 
 
 def _render_by_parts(
@@ -20,7 +25,7 @@ def _render_by_parts(
     blocks: list[TextBlock],
     translations: list[str],
     continuations: dict[int, TextBlock],
-    render,
+    render: Render,
     on_page: Callable[[int, int], None],
 ) -> pymupdf.Document:
     """Write the translations back in several parts in parallel. A paragraph carried over to the next page
@@ -28,7 +33,11 @@ def _render_by_parts(
     weights = {pno: len(items) for pno, items in _pages_to_write(blocks, translations).items()}
     page_of = {id(b): b.page for b in blocks}
     links = [(page_of[host], tail.page) for host, tail in continuations.items() if host in page_of]
-    parts = [list(weights)] if any(page.rotation for page in src_doc) else plan_parts(weights, links, worker_count())
+    parts = (
+        [list(weights)]
+        if any(page.rotation for page in src_doc.pages())
+        else plan_parts(weights, links, worker_count())
+    )
     return render_in_parts(render, parts, on_page) or render(None, on_page)
 
 
@@ -45,7 +54,7 @@ def _render_side_by_side(src: pymupdf.Document, translated: pymupdf.Document) ->
     return out
 
 
-def translated_from_bilingual(src: Path, bilingual: Path, preview: dict | None) -> bytes | None:
+def translated_from_bilingual(src: Path, bilingual: Path, preview: PdfDict | None) -> bytes | None:
     """Build the translated-only PDF from the right halves of the bilingual one, in a few seconds.
 
     Rendering a book again takes minutes. The translated pages go into a copy of the source, which keeps
@@ -58,7 +67,7 @@ def translated_from_bilingual(src: Path, bilingual: Path, preview: dict | None) 
     if len(src_doc) != len(both) or (preview is None and src_doc.get_toc()):
         return None
     forms = []
-    for page, side in zip(src_doc, both):
+    for page, side in zip(src_doc.pages(), both.pages()):
         box = page.mediabox
         if (
             page.rotation
@@ -79,24 +88,25 @@ def translated_from_bilingual(src: Path, bilingual: Path, preview: dict | None) 
     shown = both.get_new_xref()
     both.update_object(shown, "<<>>")
     both.update_stream(shown, b"q /T Do Q")
-    for page, side, form in zip(src_doc, both, forms):
+    for page, side, form in zip(src_doc.pages(), both.pages(), forms):
         both.xref_set_key(side.xref, "Resources", f"<</XObject<</T {form} 0 R>>>>")
         both.xref_set_key(side.xref, "Contents", f"{shown} 0 R")
         side.set_mediabox(pymupdf.Rect(page.rect.width, 0, 2 * page.rect.width, page.rect.height))
     blank = src_doc.get_new_xref()
     src_doc.update_object(blank, "<<>>")
     src_doc.update_stream(blank, b"")
-    for i, page in enumerate(src_doc):
+    for i, page in enumerate(src_doc.pages()):
         src_doc.xref_set_key(page.xref, "Resources", "<<>>")
         src_doc.xref_set_key(page.xref, "Contents", f"{blank} 0 R")
         page.show_pdf_page(page.rect, both, i)
     translate_bookmarks(src_doc, preview)
     # The bilingual file is already merged and subset, so only drop objects the source no longer uses.
     # garbage=3 would compare duplicates again, which takes a minute on a book.
-    return src_doc.tobytes(garbage=2, deflate=True)
+    out: bytes = src_doc.tobytes(garbage=2, deflate=True)
+    return out
 
 
-def translate_bookmarks(doc: pymupdf.Document, preview: dict | None) -> None:
+def translate_bookmarks(doc: pymupdf.Document, preview: PdfDict | None) -> None:
     """Replace the bookmark titles of the translated-only PDF with the translations of the matching headings.
     preview is the result of Runner.preview(-1).
 
@@ -164,13 +174,13 @@ def _translated_form(doc: pymupdf.Document, page: pymupdf.Page, box: pymupdf.Rec
             and matrix[:4] == [1, 0, 0, 1]
             and abs(matrix[4] - box.width) < 0.01
             and matrix[5] == 0
-            and all(abs(a - b) < 0.01 for a, b in zip(bbox, box))
+            and all(abs(a - b) < 0.01 for a, b in zip(bbox, (box.x0, box.y0, box.x1, box.y1)))
         ):
             found.append(xref)
     return found[0] if len(found) == 1 else None
 
 
-def _subset_worker(data: bytes, queue):
+def _subset_worker(data: bytes, queue: "Queue[bytes]") -> None:
     doc = pymupdf.open("pdf", data)
     doc.subset_fonts()
     queue.put(doc.tobytes(garbage=1, deflate=True))
@@ -189,14 +199,15 @@ def _subset_fonts_safe(data: bytes) -> bytes:
         try:
             doc = pymupdf.open("pdf", data)
             doc.subset_fonts()
-            return doc.tobytes(garbage=1, deflate=True)
+            subset: bytes = doc.tobytes(garbage=1, deflate=True)
+            return subset
         except Exception:  # noqa: BLE001
             return data
-    queue = ctx.Queue()
+    queue: Queue[bytes] = ctx.Queue()
     proc = ctx.Process(target=_subset_worker, args=(data, queue))
     proc.start()
     try:
-        out = queue.get(timeout=60)
+        out: bytes = queue.get(timeout=60)
         proc.join(timeout=5)
         return out
     except Exception:  # noqa: BLE001 - fall back on a timeout or a crashed child process

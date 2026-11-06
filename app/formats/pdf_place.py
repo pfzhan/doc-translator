@@ -3,10 +3,11 @@ shrinking the line height or font size when the text does not fit."""
 
 import html
 import re
+from collections.abc import Sequence
 
 import pymupdf
 
-from .pdf_align import FIRST_BASELINE, SQUEEZE, draw_cjk_lines
+from .pdf_align import FIRST_BASELINE, SQUEEZE, FormulaSlot, draw_cjk_lines
 from .pdf_blocks import _formula_parts
 from .pdf_drawings import text_page_rect
 from .pdf_flow import (
@@ -19,6 +20,7 @@ from .pdf_flow import (
     strip_style_marks,
 )
 from .pdf_place_formulas import _FormulaSources, _paint_formula_parts, _part_lead
+from .pdf_types import PdfDict
 from .pdf_typeset import (
     FORMULA_PAD,
     FormulaMetric,
@@ -47,7 +49,7 @@ _FORMULA_DESCENT_EM = 1.3
 
 
 def _formula_metrics(
-    formulas: list[dict],
+    formulas: list[PdfDict],
     block_size: float,
     em: float,
     reference: float | None = None,
@@ -66,7 +68,7 @@ def _formula_metrics(
 
 def _fit_typeset(
     text: str,
-    formulas: list[dict],
+    formulas: list[PdfDict],
     rect: "pymupdf.Rect",
     em: float,
     block_size: float,
@@ -74,7 +76,7 @@ def _fit_typeset(
     page: "pymupdf.Page",
     obstacles: list["pymupdf.Rect"],
     right_limit: float | None,
-    holes: list["pymupdf.Rect"] = (),
+    holes: Sequence["pymupdf.Rect"] = (),
     lower: tuple[float, float] | None = None,
     room: float | None = None,
     left_limit: float | None = None,
@@ -134,7 +136,7 @@ def _fit_typeset(
         # With a single line there is no line spacing to keep: tightening the line spacing does not move the
         # glyphs, the bottom of the last line box is a little higher, and the paragraph below can move up
         relax = cjk and len(lines) > 1 and room is not None and not tightened and not lent
-        bottom = _glyph_bottom(box.y1, room, em, gap) if relax else box.y1
+        bottom = _glyph_bottom(box.y1, room, em, gap) if relax and room is not None else box.y1
         too_tall = box.y0 + height > bottom + 1
         if not overflows and not too_tall:
             # Lines that wrap around figures were computed from the figure positions, so the box cannot move any
@@ -211,7 +213,7 @@ _CLAUSE_MARKS = "，、；：,;:"
 
 def _clause_lines(
     text: str,
-    formulas: list[dict],
+    formulas: list[PdfDict],
     em: float,
     block_size: float,
     width: float,
@@ -242,7 +244,7 @@ def _clause_lines(
 
 def _hole_lanes(
     box: "pymupdf.Rect",
-    holes: list["pymupdf.Rect"],
+    holes: Sequence["pymupdf.Rect"],
     em: float,
     gap: float,
 ) -> list[tuple[float, float]]:
@@ -313,7 +315,7 @@ def _hang_lanes(
 
 
 def _line_baseline(
-    spans: list[dict],
+    spans: list[PdfDict],
     line_top: float,
     line_h: float,
     em: float,
@@ -349,7 +351,7 @@ def _line_baseline(
     return line_top + em * (1.12 if cjk else 1.0)
 
 
-def _typeset_line_html(line: TypesetLine, formulas: list[dict]) -> str:
+def _typeset_line_html(line: TypesetLine, formulas: list[PdfDict]) -> str:
     """HTML of one line. Formulas without an image fall back to the text in their record."""
     parts: list[str] = []
     for piece in line.pieces:
@@ -363,7 +365,7 @@ def _typeset_line_html(line: TypesetLine, formulas: list[dict]) -> str:
     return "".join(parts)
 
 
-def _formula_draw_args(formulas: list[dict]) -> tuple[frozenset[int], dict[int, str]]:
+def _formula_draw_args(formulas: list[PdfDict]) -> tuple[frozenset[int], dict[int, str]]:
     images = frozenset(index for index, formula in enumerate(formulas, 1) if formula.get("has_img"))
     fallback = {
         index: str(formula.get("text") or "") for index, formula in enumerate(formulas, 1) if index not in images
@@ -375,24 +377,24 @@ def _draw_cjk(
     page: "pymupdf.Page",
     doc: "pymupdf.Document",
     lines: list[TypesetLine],
-    formulas: list[dict],
+    formulas: list[PdfDict],
     box: "pymupdf.Rect",
     em: float,
     gap: float,
     color: str,
     align: str,
     forms: "_FormulaSources | None",
-    page_spans: list[dict] | None,
+    page_spans: list[PdfDict] | None,
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
     justify_last: bool = False,
-    lanes: list[tuple[float, float]] = (),
+    lanes: Sequence[tuple[float, float]] = (),
     first_room: float | None = None,
 ) -> bool:
     """Justify Chinese lines by glyph and draw each formula at its position in the content stream (see
     draw_cjk_lines). Returns False when glyphs are missing."""
     images, fallback = _formula_draw_args(formulas)
 
-    def paint(slot) -> str:
+    def paint(slot: FormulaSlot) -> str:
         if not 1 <= slot.index <= len(formulas):
             return ""
         drawn: list[str] = []
@@ -431,7 +433,7 @@ def _draw_cjk(
 def _place_plain(
     page: "pymupdf.Page",
     text: str,
-    formulas: list[dict],
+    formulas: list[PdfDict],
     rect: "pymupdf.Rect",
     em: float,
     block_size: float,
@@ -444,7 +446,7 @@ def _place_plain(
     right_limit: float | None,
     archive: pymupdf.Archive | None,
     justify_last: bool = False,
-    holes: list["pymupdf.Rect"] = (),
+    holes: Sequence["pymupdf.Rect"] = (),
     first_room: float | None = None,
     lower: tuple[float, float] | None = None,
     room: float | None = None,
@@ -552,7 +554,7 @@ def _place_typeset(
     doc: "pymupdf.Document",
     block_size: float,
     text: str,
-    formulas: list[dict],
+    formulas: list[PdfDict],
     rect: "pymupdf.Rect",
     em: float,
     cjk: bool,
@@ -563,10 +565,10 @@ def _place_typeset(
     obstacles: list["pymupdf.Rect"],
     right_limit: float | None,
     forms: "_FormulaSources | None",
-    page_spans: list[dict] | None,
+    page_spans: list[PdfDict] | None,
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
     justify_last: bool = False,
-    holes: list["pymupdf.Rect"] = (),
+    holes: Sequence["pymupdf.Rect"] = (),
     first_room: float | None = None,
     lower: tuple[float, float] | None = None,
     room: float | None = None,
@@ -715,7 +717,7 @@ def _insert_contents_after(page: "pymupdf.Page", doc: "pymupdf.Document", after:
 
 
 def _formula_slot(
-    formula: dict,
+    formula: PdfDict,
     block_size: float,
     render_size: float,
     reference: float | None = None,
@@ -791,13 +793,18 @@ def _expand_left(rect: "pymupdf.Rect", x0: float, obstacles: list["pymupdf.Rect"
 
 
 def _try_insert(
-    page: "pymupdf.Page", rect: "pymupdf.Rect", html_text: str, css: str, scale_low: float, archive=None
+    page: "pymupdf.Page",
+    rect: "pymupdf.Rect",
+    html_text: str,
+    css: str,
+    scale_low: float,
+    archive: pymupdf.Archive | None = None,
 ) -> bool:
     """insert_htmlbox returns a negative value when the text does not fit (and draws nothing). When the scale is
     exactly scale_low, pymupdf can trip an assert from floating-point error (0.8999999999999999 < 0.9); this is
     treated as not fitting."""
     try:
-        return page.insert_htmlbox(rect, html_text, css=css, scale_low=scale_low, archive=archive)[0] >= 0
+        return bool(page.insert_htmlbox(rect, html_text, css=css, scale_low=scale_low, archive=archive)[0] >= 0)
     except AssertionError:
         return False
 
@@ -819,9 +826,9 @@ def _insert_fitting(
     html_text: str,
     css: str,
     obstacles: list["pymupdf.Rect"],
-    archive=None,
+    archive: pymupdf.Archive | None = None,
     right_limit: float | None = None,
-):
+) -> None:
     """Three shrink stages of typesetting (the BabelDOC approach): extend right → tighten the line spacing → only
     then shrink the font size.
 

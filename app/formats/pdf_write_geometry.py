@@ -45,9 +45,10 @@ from .pdf_place import (
     _formula_slot,
     _inline_marks,
 )
+from .pdf_types import PdfDict
 
 
-def _attach_chars(page: pymupdf.Page, spans: list[dict]) -> None:
+def _attach_chars(page: pymupdf.Page, spans: list[PdfDict]) -> None:
     """Record the per-character boxes of each span (span["chars"]), matched by the span's box. Once the page has
     been erased they can no longer be looked up."""
     index = {_rect_key(rect): chars for rect, chars in _page_char_index(page)}
@@ -65,7 +66,7 @@ def _page_form(doc: "pymupdf.Document", page: "pymupdf.Page") -> int:
     """Pack the page content into a Form XObject (called before redaction) and return its xref.
     Formula pass-through references it: it uses the page's own resources, and the BBox is the whole page."""
     mb = page.mediabox
-    fm = doc.get_new_xref()
+    fm: int = doc.get_new_xref()
     doc.update_object(
         fm,
         (
@@ -92,7 +93,7 @@ def _row_neighbor(block: TextBlock, blocks: list[TextBlock], geo: PageGeometry |
         other is not block
         and other.page == block.page
         and not other.side_note
-        and (column is None or geo.index_of(other.rect) == column)
+        and (column is None or (geo is not None and geo.index_of(other.rect) == column))
         and not (other.rect.x0 < block.rect.x1 and block.rect.x0 < other.rect.x1)
         and min(other.rect.y1, block.rect.y1) - max(other.rect.y0, block.rect.y0)
         > min(other.rect.height, block.rect.height) * 0.5
@@ -245,7 +246,7 @@ def _nowrap_parens(body: str) -> str:
     alone on the next line. A group is kept whole (in a group with a formula image, the parentheses move with the
     formula); long groups are not wrapped (to avoid overflow)."""
 
-    def repl(m):
+    def repl(m: re.Match[str]) -> str:
         inner = m.group(0)
         # Estimated rendered width: <img> counts as 3 characters, other tags count as none
         plain = re.sub(r"<[^>]+>", lambda t: "@@@" if t.group(0).startswith("<img") else "", inner)
@@ -258,7 +259,7 @@ def _nowrap_parens(body: str) -> str:
 
 def _translation_html(
     text: str,
-    formulas: list[dict],
+    formulas: list[PdfDict],
     block_size: float,
     render_size: float,
     max_width: float,
@@ -355,7 +356,7 @@ def _body_first_starts(
     blocks: list[TextBlock],
     items: list[tuple[TextBlock, str]],
     cjk: bool,
-    formulas_map: dict[int, list[dict]] | None,
+    formulas_map: dict[int, list[PdfDict]] | None,
 ) -> dict[int, float]:
     """Fill the first-line space left free by a short translated label. When the translation is wider than the
     English, the body moves to the right of the label."""
@@ -567,7 +568,7 @@ class _Carry:
     larger size cannot hold them, and one character is pushed out at the end of each line"""
 
     text: str
-    formulas: list[dict]
+    formulas: list[PdfDict]
     width: float
     size: float
     own_line: bool = False
@@ -611,7 +612,7 @@ def _keeps_line_pad(block: TextBlock) -> bool:
     """
     if block.size <= 0:
         return False
-    return block.rect.height <= block.size * 2.6
+    return bool(block.rect.height <= block.size * 2.6)
 
 
 def _fit_page_margins(
@@ -664,7 +665,10 @@ def _body_ink(page: "pymupdf.Page", kept: list[pymupdf.Rect], marks: list[pymupd
     """Glyphs and figure boxes that stay in place and count as body (see _page_content_bottom): display formulas and
     figures at the bottom of the page. A row holding only the page number does not count; page numbers are often
     plain digits, dropped during extraction and left in place after erasing (see _kept_ink)"""
-    words = {tuple(pymupdf.Rect(word[:4])): word[4] for word in page.get_text("words")}
+    words: dict[tuple[float, float, float, float], str] = {}
+    for word in page.get_text("words"):
+        box = pymupdf.Rect(word[:4])
+        words[(box.x0, box.y0, box.x1, box.y1)] = word[4]
     rows: list[list[pymupdf.Rect]] = []
     for rect in sorted(kept, key=lambda rect: rect.y0):
         if rows and rect.y0 < max(other.y1 for other in rows[-1]) - rect.height * 0.5:
@@ -673,7 +677,9 @@ def _body_ink(page: "pymupdf.Page", kept: list[pymupdf.Rect], marks: list[pymupd
             rows.append([rect])
     ink = list(marks)
     for row in rows:
-        text = " ".join(words.get(tuple(rect), "") for rect in sorted(row, key=lambda rect: rect.x0))
+        text = " ".join(
+            words.get((rect.x0, rect.y0, rect.x1, rect.y1), "") for rect in sorted(row, key=lambda rect: rect.x0)
+        )
         if not is_page_number(text):
             ink += row
     return ink
@@ -826,7 +832,7 @@ def _room_below(
 
 def _split_filled_lines(
     text: str,
-    formulas: list[dict],
+    formulas: list[PdfDict],
     em: float,
     block_size: float,
     width: float,
@@ -916,7 +922,7 @@ def _after_first_line(source: str, head: str) -> str:
 
 def _split_own_lines(
     text: str,
-    formulas: list[dict],
+    formulas: list[PdfDict],
     em: float,
     block_size: float,
     host_width: float,

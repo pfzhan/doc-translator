@@ -73,10 +73,11 @@ from .pdf_rows import (
 )
 from .pdf_split_lines import NO_TEXT_RE, _split_lines
 from .pdf_type3 import Type3Reader, recover_type3_page
+from .pdf_types import PdfDict
 from .pdf_vision import FormulaDetector
 
 
-def _latin_page(data: dict) -> bool:
+def _latin_page(data: PdfDict) -> bool:
     """More than 90% of the characters on the page are not CJK"""
     text = "".join(
         span["text"]
@@ -89,7 +90,7 @@ def _latin_page(data: dict) -> bool:
     return letters > 0 and len(CJK_RE.findall(text)) < letters * 0.1
 
 
-def _has_leader_line(data: dict) -> bool:
+def _has_leader_line(data: PdfDict) -> bool:
     return any(
         _LEADER_RE.search("".join(span["text"] for span in line["spans"]))
         for block in data.get("blocks", [])
@@ -112,7 +113,7 @@ _INDEX_MIN_LINES = 15
 _INDEX_SHARE = 0.4
 
 
-def _index_page(data: dict) -> bool:
+def _index_page(data: PdfDict) -> bool:
     """An index page at the back of a book: 40% or more of the lines end with ", page number". Body lines
     rarely stop at a comma followed by a number."""
     texts = [
@@ -127,7 +128,7 @@ def _index_page(data: dict) -> bool:
     return sum(bool(_INDEX_REF_RE.search(text)) for text in texts) >= len(texts) * _INDEX_SHARE
 
 
-def _index_ref_rows(data: dict) -> list[pymupdf.Rect]:
+def _index_ref_rows(data: PdfDict) -> list[pymupdf.Rect]:
     """Lines on an index page that hold only page numbers. PyMuPDF often puts such a line and the entry on the
     line above into two blocks, so they are collected across the whole page."""
     return [
@@ -139,7 +140,7 @@ def _index_ref_rows(data: dict) -> list[pymupdf.Rect]:
     ]
 
 
-def _toc_pages(pages: list[dict]) -> set[int]:
+def _toc_pages(pages: list[PdfDict]) -> set[int]:
     """Contents pages without leaders: a title line, and page numbers far from the rest of each line,
     right-aligned and increasing down the page.
     When the contents span several pages, the later pages have no title; a page that follows a contents page
@@ -165,7 +166,7 @@ def _toc_pages(pages: list[dict]) -> set[int]:
     return found
 
 
-def _page_number_column(lines: list[dict]) -> bool:
+def _page_number_column(lines: list[PdfDict]) -> bool:
     """Page numbers at the end of lines: a line holding only one number, with other text more than two ems to
     its left on the same row.
     Such page numbers form a right-aligned column that mostly does not decrease from top to bottom. When a
@@ -195,7 +196,7 @@ def _page_number_column(lines: list[dict]) -> bool:
     return len(numbers) >= _TOC_MIN_ENTRIES and drops <= len(numbers) // 5
 
 
-def _number_columns(data: dict) -> list[float]:
+def _number_columns(data: PdfDict) -> list[float]:
     """Center lines of the number columns in tables on this page: three or more number cells whose centers
     fall at the same x (within one point)."""
     centers = sorted(
@@ -221,7 +222,7 @@ def _number_columns(data: dict) -> list[float]:
     return columns
 
 
-def _block_size(main: dict, span_lines: list[list[dict]]) -> float:
+def _block_size(main: PdfDict, span_lines: list[list[PdfDict]]) -> float:
     """Font size of the block: the size of its longest piece. In a small-caps heading (INITIALIZATION, with a
     larger initial) the longest piece is the small part, so the size of the capitals is used. The capitals
     count only on the same baseline; one offset downward is a subscript (BERT_LARGE)."""
@@ -248,10 +249,10 @@ def _block_size(main: dict, span_lines: list[list[dict]]) -> float:
 _WIDE_ALIGN = 4.0
 
 
-def _frame_lines(data: dict) -> tuple[list[FrameLine], list[tuple[dict, dict]]]:
+def _frame_lines(data: PdfDict) -> tuple[list[FrameLine], list[tuple[PdfDict, PdfDict]]]:
     """Lines used to vote on the text frame, and the block and line dict of each line."""
     lines: list[FrameLine] = []
-    refs: list[tuple[dict, dict]] = []
+    refs: list[tuple[PdfDict, PdfDict]] = []
     for block in data.get("blocks", []):
         if block.get("type") != 0:
             continue
@@ -268,9 +269,9 @@ def _frame_lines(data: dict) -> tuple[list[FrameLine], list[tuple[dict, dict]]]:
 
 
 def _detach_margin_notes(
-    data: dict,
+    data: PdfDict,
     lines: list[FrameLine],
-    refs: list[tuple[dict, dict]],
+    refs: list[tuple[PdfDict, PdfDict]],
     notes: set[int],
     pitches: dict[float, float] | None = None,
 ) -> None:
@@ -294,7 +295,7 @@ def _detach_margin_notes(
         data["blocks"].append(
             {
                 "type": 0,
-                "bbox": tuple(rect),
+                "bbox": (rect.x0, rect.y0, rect.x1, rect.y1),
                 "lines": [line for _, line in members],
                 "side_note": True,
             }
@@ -308,7 +309,7 @@ def _detach_margin_notes(
             box = pymupdf.Rect()
             for line in block["lines"]:
                 box |= pymupdf.Rect(line["bbox"])
-            block["bbox"] = tuple(box)
+            block["bbox"] = (box.x0, box.y0, box.x1, box.y1)
         kept.append(block)
     data["blocks"] = kept
 
@@ -326,7 +327,7 @@ _EDGE_NEAR = 2
 
 def _wide_block_lines(
     lines: list[FrameLine],
-    refs: list[tuple[dict, dict]],
+    refs: list[tuple[PdfDict, PdfDict]],
     notes: set[int],
     frame: TextFrame | None,
 ) -> set[int]:
@@ -384,7 +385,7 @@ def _wide_block_lines(
     return kept
 
 
-def _rejoin_note_cuts(data: dict, touched: set[int]) -> None:
+def _rejoin_note_cuts(data: PdfDict, touched: set[int]) -> None:
     """PyMuPDF often cuts a paragraph into two blocks at the line where a margin note sits. Once the notes are
     removed, two blocks right above each other and cut mid-sentence are joined back into one: a line break
     before a capital (Standard / Code for ...) is not recognized by block merging. When the upper block ends
@@ -402,7 +403,7 @@ def _rejoin_note_cuts(data: dict, touched: set[int]) -> None:
         index += 1
 
 
-def _note_cut(upper: dict, lower: dict) -> bool:
+def _note_cut(upper: PdfDict, lower: PdfDict) -> bool:
     above = [line for line in upper["lines"] if abs(line["dir"][1]) <= 0.01]
     below = [line for line in lower["lines"] if abs(line["dir"][1]) <= 0.01]
     if not above or not below:
@@ -446,15 +447,15 @@ def _extract(
     total pages) is called after each page is read.
     formulas is the formula detection model; when given, the inline formulas it boxes are marked on the
     characters. The model runs ahead on the next page in a background thread (see FormulaDetector.pages)."""
-    blocks = []
+    blocks: list[TextBlock] = []
     scans: list[PageScan] = []
     tables_by_page: list[tuple[RuledTable, ...]] = []
     type3 = Type3Reader(doc)
-    pages: list[dict] = []
+    pages: list[PdfDict] = []
     pending_cells: set[int] = set()
     detected = formulas.pages() if formulas is not None else None
     try:
-        for page in doc:
+        for page in doc.pages():
             scans.append(scan_page(page))
             tables_by_page.append(scans[-1].tables)
             data = page.get_text("dict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
@@ -529,7 +530,8 @@ def _extract(
         for b in data["blocks"]:
             if b.get("type") != 0:
                 continue
-            items: list[tuple[str, pymupdf.Rect, list[dict]]] = []
+            # (text, line box, spans with text, all spans of the line)
+            items: list[tuple[str, pymupdf.Rect, list[PdfDict], list[PdfDict]]] = []
             # Chinese source sentences split off (see _script_parts)
             cjk_heads: set[int] = set()
             for ln in b["lines"]:
@@ -610,7 +612,8 @@ def _extract(
                 main = _main_span([items[i][2] for i in group])
                 main_size = _block_size(main, span_lines)
                 color = _by_chars(spans, lambda s: s["color"])
-                bold = _by_chars(spans, lambda s: bool(s["flags"] & 16) or "Bold" in s["font"])
+                # _by_chars returns one of the key's values, here a bool
+                bold = bool(_by_chars(spans, lambda s: bool(s["flags"] & 16) or "Bold" in s["font"]))
                 if in_cell:
                     pending_cells.add(len(blocks))
                 blocks.append(
@@ -639,10 +642,10 @@ def _extract(
         if id(block) in absorbed:
             continue
         tables = tables_by_page[block.page] if block.page < len(tables_by_page) else ()
-        parts = _split_table_blocks([block], tables)
+        pieces = _split_table_blocks([block], tables)
         if index in pending_cells:
-            unchecked.update(id(part) for part in parts)
-        split.extend(parts)
+            unchecked.update(id(piece) for piece in pieces)
+        split.extend(pieces)
     split = _merge_cells(split, unchecked)
     # When the column gaps are clear, sort into reading order first. Continuation within a page looks only at
     # adjacent blocks, and another column in between would keep a block from joining the next line of its
@@ -681,7 +684,7 @@ _DISPLAY_PROSE = 8
 _LINE_GAP_PAIRS = 20
 
 
-def _sized_lines(pages: list[dict]) -> list[list[tuple[pymupdf.Rect, float, int]]]:
+def _sized_lines(pages: list[PdfDict]) -> list[list[tuple[pymupdf.Rect, float, int]]]:
     """The horizontal text lines of each page, with the size holding most characters and the character count,
     from top to bottom."""
     rows: list[list[tuple[pymupdf.Rect, float, int]]] = []
@@ -694,6 +697,7 @@ def _sized_lines(pages: list[dict]) -> list[list[tuple[pymupdf.Rect, float, int]
                 spans = [span for span in line["spans"] if span["text"].strip()]
                 if abs(line["dir"][1]) > 0.01 or not spans:
                     continue
+                # _by_chars returns one of the key's values, here a span size
                 size = round(float(_by_chars(spans, lambda span: span["size"])), 1)
                 row.append((pymupdf.Rect(line["bbox"]), size, sum(len(span["text"].strip()) for span in spans)))
         rows.append(sorted(row, key=lambda item: (item[0].y0, item[0].x0)))
@@ -709,7 +713,7 @@ def _body_size(rows: list[list[tuple[pymupdf.Rect, float, int]]]) -> float:
     return max(chars, key=chars.__getitem__, default=0.0)
 
 
-def _line_gap(pages: list[dict]) -> float:
+def _line_gap(pages: list[PdfDict]) -> float:
     """The gap between adjacent body lines across the document, in units of font size, taking the mode. Line
     box height varies with the font's ascender and descender: for two lines set equally tight, some fonts
     measure a gap of 0.2 em and others an overlap of 0.2 em.
@@ -739,7 +743,7 @@ def _line_gap(pages: list[dict]) -> float:
     return max(counts, key=counts.__getitem__)
 
 
-def _left_margins(data: dict) -> list[float]:
+def _left_margins(data: PdfDict) -> list[float]:
     """Left edges of body lines on this page (one per column): at least three long lines start there."""
     starts: list[float] = []
     for block in data.get("blocks", []):
@@ -753,7 +757,7 @@ def _left_margins(data: dict) -> list[float]:
     return margins
 
 
-def _displayed(rect: pymupdf.Rect, spans: list[dict], margins: list[float]) -> bool:
+def _displayed(rect: pymupdf.Rect, spans: list[PdfDict], margins: list[float]) -> bool:
     """An expression on a line of its own, more than two ems from the left edge of its column. An expression
     continuing the line above within a paragraph starts at the left edge."""
     left = [m for m in margins if m <= rect.x0 + 2]
@@ -763,11 +767,11 @@ def _displayed(rect: pymupdf.Rect, spans: list[dict], margins: list[float]) -> b
     return rect.x0 - max(left) > size * 2.5
 
 
-def _main_span(lines: list[list[dict]]) -> dict:
+def _main_span(lines: list[list[PdfDict]]) -> PdfDict:
     """The piece that sets the block's size and color: the longest body-font piece on the baseline. In lines
     with much math the longest piece is often a subscript (the model of d_model, set small in the body font);
     a size taken from it is half the body size and does not join the line above."""
-    kept: list[dict] = []
+    kept: list[PdfDict] = []
     for spans in lines:
         weights: Counter[int] = Counter()
         for span in spans:

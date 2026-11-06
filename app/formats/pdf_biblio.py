@@ -445,7 +445,12 @@ def _headless_numbered_bibliography(prepared: list[tuple[TextBlock, str]], media
         if not opens and (resume is None or resume not in numbers[index]):
             index += 1
             continue
-        first = 1 if opens else resume
+        if opens:
+            first = 1
+        else:
+            # Without an opening "[1] " entry the check above only lets a block through when resume is set
+            assert resume is not None
+            first = resume
         size = block.size
         expected = first
         last = cursor = index

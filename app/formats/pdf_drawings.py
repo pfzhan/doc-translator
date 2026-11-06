@@ -9,6 +9,8 @@ from dataclasses import dataclass
 
 import pymupdf
 
+from .pdf_types import PdfDict
+
 _GUTTER_MIN = 12.0
 
 
@@ -47,7 +49,7 @@ class RuledTable:
     algorithm: bool = False
 
 
-def _image_infos(page: pymupdf.Page) -> list[dict]:
+def _image_infos(page: pymupdf.Page) -> list[PdfDict]:
     """Images on this page, with their boxes reduced to the clipping paths."""
     try:
         infos = page.get_image_info()
@@ -60,7 +62,7 @@ def _image_infos(page: pymupdf.Page) -> list[dict]:
 _IMAGE_SIZE_RE = re.compile(r"width: (\d+), height: (\d+)")
 
 
-def _clip_images(page: pymupdf.Page, infos: list[dict]) -> list[dict]:
+def _clip_images(page: pymupdf.Page, infos: list[PdfDict]) -> list[PdfDict]:
     """Replace image boxes with the part visible after clipping. get_image_info ignores clipping paths: a sample image
     of 20 lines shows only its top three lines, yet its box reaches the bottom of the page, and the two paragraphs it
     covers are taken as text inside the image. Reading the text layer with clipping gives image blocks whose boxes are
@@ -75,7 +77,7 @@ def _clip_images(page: pymupdf.Page, infos: list[dict]) -> list[dict]:
         size = _IMAGE_SIZE_RE.search(str(block[4])) if block[6] == 1 else None
         if size is not None:
             shown.append((pymupdf.Rect(block[:4]), (int(size.group(1)), int(size.group(2)))))
-    out: list[dict] = []
+    out: list[PdfDict] = []
     for info in infos:
         whole = pymupdf.Rect(info["bbox"])
         found = next(
@@ -90,25 +92,25 @@ def _clip_images(page: pymupdf.Page, infos: list[dict]) -> list[dict]:
             out.append(info)
             continue
         rect, _size = shown.pop(found)
-        out.append({**info, "bbox": tuple(rect)} if rect != whole else info)
+        out.append({**info, "bbox": (rect.x0, rect.y0, rect.x1, rect.y1)} if rect != whole else info)
     return out
 
 
-def visible_drawings(page: pymupdf.Page) -> list[dict]:
+def visible_drawings(page: pymupdf.Page) -> list[PdfDict]:
     """Paths from get_drawings, with boxes clipped to their clipping region. The box of a curve path clipped into a
     figure can reach tens of thousands of points off the page, and the original box would cover the whole column of
     body text below. Paths entirely outside their clipping region are invisible and are dropped"""
     return _drawing_paths(page)[0]
 
 
-def _drawing_paths(page: pymupdf.Page) -> tuple[list[dict], list[dict]]:
+def _drawing_paths(page: pymupdf.Page) -> tuple[list[PdfDict], list[PdfDict]]:
     """Read the paths of this page once and return two lists: clipped (see visible_drawings) and unclipped."""
     try:
         paths = page.get_drawings(extended=True)
     except Exception:  # noqa: BLE001 - the vector graphics of some pages cannot be read; treat as no rules
         return [], []
-    out: list[dict] = []
-    raw: list[dict] = []
+    out: list[PdfDict] = []
+    raw: list[PdfDict] = []
     clips: list[tuple[int, pymupdf.Rect]] = []
     for path in paths:
         level = int(path.get("level") or 0)
@@ -132,13 +134,13 @@ def _drawing_paths(page: pymupdf.Page) -> tuple[list[dict], list[dict]]:
     return out, raw
 
 
-def _page_drawings(page: pymupdf.Page, images: list[dict] | None = None) -> list[dict]:
+def _page_drawings(page: pymupdf.Page, images: list[PdfDict] | None = None) -> list[PdfDict]:
     """Vector graphics of this page plus thin rules drawn as images. images holds the image boxes of this page; read
     now when not given."""
     return [*visible_drawings(page), *_image_rules(_image_infos(page) if images is None else images)]
 
 
-def light_fill(drawing: dict) -> bool:
+def light_fill(drawing: PdfDict) -> bool:
     """Light filled-only shapes made of rectangles and thicker than a rule in both directions: the shading of table
     cells and text boxes. Dark shapes do not count: caption labels are white text on black."""
     rect = pymupdf.Rect(drawing["rect"])
@@ -169,12 +171,12 @@ def text_page_rect(page: pymupdf.Page) -> pymupdf.Rect:
     return pymupdf.Rect(0, 0, page.cropbox.width, page.cropbox.height)
 
 
-def _image_rules(images: Sequence[dict]) -> list[dict]:
+def _image_rules(images: Sequence[PdfDict]) -> list[PdfDict]:
     """Thin strips made by stretching one-pixel images, written as filled rectangles in the get_drawings format.
 
     Old TeX and some converters draw frame lines with images, which get_drawings does not read, so find_tables does not
     see them either."""
-    out: list[dict] = []
+    out: list[PdfDict] = []
     for info in images:
         rect = pymupdf.Rect(info["bbox"])
         if min(rect.width, rect.height) <= _RULE_THICK and max(rect.width, rect.height) >= _RULE_MIN:
@@ -194,7 +196,7 @@ def _image_rules(images: Sequence[dict]) -> list[dict]:
 
 def _rule_segments(
     page: pymupdf.Page,
-    drawings: list[dict] | None = None,
+    drawings: list[PdfDict] | None = None,
 ) -> tuple[list[pymupdf.Rect], list[pymupdf.Rect]]:
     """Thin horizontal and vertical rules on the page. drawings holds the vector graphics of this page (including
     rules drawn as images); read now when not given.

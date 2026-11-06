@@ -44,110 +44,11 @@ ignore = [
 [tool.mypy]
 python_version = "3.12"
 files = ["app"]
-# New code must pass strict checking. The modules listed below were written before it and are checked leniently;
-# remove a module from both lists once `mypy --strict` passes on it
 strict = true
 # pymupdf ships type information but leaves some constructors (Document, Rect, ...) unannotated
-untyped_calls_exclude = [
-    "pymupdf",
-    "app.formats.pdf",
-    "app.formats.pdf_algorithm_tables",
-    "app.formats.pdf_align",
-    "app.formats.pdf_biblio",
-    "app.formats.pdf_blocks",
-    "app.formats.pdf_columns",
-    "app.formats.pdf_continuations",
-    "app.formats.pdf_crop",
-    "app.formats.pdf_dedupe",
-    "app.formats.pdf_drawings",
-    "app.formats.pdf_erase",
-    "app.formats.pdf_extract",
-    "app.formats.pdf_flow",
-    "app.formats.pdf_formula_images",
-    "app.formats.pdf_formula_runs",
-    "app.formats.pdf_glosses",
-    "app.formats.pdf_index_reflow",
-    "app.formats.pdf_layout",
-    "app.formats.pdf_math",
-    "app.formats.pdf_merge",
-    "app.formats.pdf_order",
-    "app.formats.pdf_output",
-    "app.formats.pdf_paragraphs",
-    "app.formats.pdf_parts",
-    "app.formats.pdf_place",
-    "app.formats.pdf_place_formulas",
-    "app.formats.pdf_rejoin",
-    "app.formats.pdf_restore",
-    "app.formats.pdf_roles",
-    "app.formats.pdf_rows",
-    "app.formats.pdf_runs",
-    "app.formats.pdf_skip",
-    "app.formats.pdf_split_lines",
-    "app.formats.pdf_tables",
-    "app.formats.pdf_type3",
-    "app.formats.pdf_type3_glyphs",
-    "app.formats.pdf_type3_lines",
-    "app.formats.pdf_type3_ocr",
-    "app.formats.pdf_type3_roles",
-    "app.formats.pdf_unit_blocks",
-    "app.formats.pdf_units",
-    "app.formats.pdf_vision",
-    "app.formats.pdf_write",
-    "app.formats.pdf_write_geometry",
-    "app.formats.pdf_write_rect",
-]
+untyped_calls_exclude = ["pymupdf"]
 
 [[tool.mypy.overrides]]
-module = [
-    "app.formats.pdf",
-    "app.formats.pdf_algorithm_tables",
-    "app.formats.pdf_align",
-    "app.formats.pdf_biblio",
-    "app.formats.pdf_blocks",
-    "app.formats.pdf_columns",
-    "app.formats.pdf_continuations",
-    "app.formats.pdf_crop",
-    "app.formats.pdf_dedupe",
-    "app.formats.pdf_drawings",
-    "app.formats.pdf_erase",
-    "app.formats.pdf_extract",
-    "app.formats.pdf_flow",
-    "app.formats.pdf_formula_images",
-    "app.formats.pdf_formula_runs",
-    "app.formats.pdf_glosses",
-    "app.formats.pdf_index_reflow",
-    "app.formats.pdf_layout",
-    "app.formats.pdf_math",
-    "app.formats.pdf_merge",
-    "app.formats.pdf_order",
-    "app.formats.pdf_output",
-    "app.formats.pdf_paragraphs",
-    "app.formats.pdf_parts",
-    "app.formats.pdf_place",
-    "app.formats.pdf_place_formulas",
-    "app.formats.pdf_rejoin",
-    "app.formats.pdf_restore",
-    "app.formats.pdf_roles",
-    "app.formats.pdf_rows",
-    "app.formats.pdf_runs",
-    "app.formats.pdf_skip",
-    "app.formats.pdf_split_lines",
-    "app.formats.pdf_tables",
-    "app.formats.pdf_type3",
-    "app.formats.pdf_type3_glyphs",
-    "app.formats.pdf_type3_lines",
-    "app.formats.pdf_type3_ocr",
-    "app.formats.pdf_type3_roles",
-    "app.formats.pdf_unit_blocks",
-    "app.formats.pdf_units",
-    "app.formats.pdf_vision",
-    "app.formats.pdf_write",
-    "app.formats.pdf_write_geometry",
-    "app.formats.pdf_write_rect",
-]
-ignore_errors = true
-
-[[tool.mypy.overrides]]
-# Third-party packages without type information
-module = ["py3langid.*", "mobi.*", "lxml.*", "onnxruntime.*"]
+# Third-party packages without type information, or optional ones (onnx, onnxruntime) that may not be installed
+module = ["py3langid.*", "mobi.*", "lxml.*", "onnx.*", "onnxruntime.*"]
 ignore_missing_imports = true

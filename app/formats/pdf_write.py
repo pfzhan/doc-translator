@@ -42,6 +42,7 @@ from .pdf_place import (
 )
 from .pdf_place_formulas import _FormulaSources
 from .pdf_type3 import broken_type3_names
+from .pdf_types import PdfDict
 from .pdf_typeset import (
     typeset_lines,
 )
@@ -89,8 +90,8 @@ def _render_translated(
     blocks: list[TextBlock],
     translations: list[str],
     target_lang: str = "",
-    formulas_map: dict | None = None,
-    archive=None,
+    formulas_map: dict[int, list[PdfDict]] | None = None,
+    archive: pymupdf.Archive | None = None,
     geometries: list[PageGeometry] | None = None,
     continuations: dict[int, TextBlock] | None = None,
     on_page: Callable[[int, int], None] | None = None,
@@ -145,11 +146,11 @@ def _render_translated(
         kept: list[pymupdf.Rect],
         marks: list[pymupdf.Rect],
         written_ids: set[int],
-        stacked: dict,
-        reflowed: dict,
-        shared_head: dict,
+        stacked: dict[int, pymupdf.Rect],
+        reflowed: dict[int, TextBlock],
+        shared_head: dict[int, tuple[str, pymupdf.Rect, list[PdfDict], bool]],
         hosts: bool = True,
-    ) -> tuple[Callable, Callable, Callable, Callable]:
+    ) -> _PageFlow:
         """spare_below, next_movable, latest_start and movable_box of page pno. Used when writing this page, and
         also when writing a paragraph carried over from the previous page, to estimate how much the tail can
         borrow; then this page is not erased yet, items are the blocks to write, kept and marks come from the
@@ -413,7 +414,7 @@ def _render_translated(
 
     tail_rooms: dict[tuple[int, float, float], float] = {}
 
-    def later_flow(pno: int) -> tuple[Callable, Callable, Callable, Callable]:
+    def later_flow(pno: int) -> _PageFlow:
         """page_flow of page pno, which is not written yet. A paragraph below that is carried over to the next page
         does not move along (see hosts in page_flow)"""
         if pno not in later_flows:
@@ -435,7 +436,7 @@ def _render_translated(
             )
         return later_flows[pno]
 
-    later_flows: dict[int, tuple[Callable, Callable, Callable, Callable]] = {}
+    later_flows: dict[int, _PageFlow] = {}
 
     def measure_tail_room(tail: TextBlock, width: float, em: float) -> float:
         tail_page = doc[tail.page]
@@ -489,7 +490,7 @@ def _render_translated(
         ):
             return None
         _, _, latest_start, movable_box = later_flow(head.page)
-        box = movable_box(head)
+        box = movable_box(head, None)
         if box is None or box.width < width - 2:
             return None
         gap = 1.45 if cjk else 1.2
@@ -558,13 +559,13 @@ def _render_translated(
         )
         # Other blocks extending right or wrapping avoid the moved index entries at their new positions
         layout = [reflowed.get(id(ob), ob) for ob in same_page]
-        written = {id(b) for b, _ in items}
+        item_ids = {id(b) for b, _ in items}
         items = [
             *items,
             *(
                 (b, _with_source_bold(b, _source_marked(b)))
                 for b in same_page
-                if id(b) in reflowed and id(b) not in written
+                if id(b) in reflowed and id(b) not in item_ids
             ),
         ]
         erasure = Erasure(math=_span_is_math)
@@ -579,10 +580,11 @@ def _render_translated(
             erasure.lines.extend(
                 pymupdf.Rect(curve) + (-0.5, -0.5, 0.5, 0.5)
                 for key in (id(b), spill_hosts.get(id(b)))
+                if key is not None
                 for f in (formulas_map or {}).get(key, [])
                 for part in _formula_parts(f)
                 for curve in part.get("curves") or []
-                if curve is not None and int(part.get("page", f.get("page", pno))) == pno
+                if curve is not None and _part_page(part, f, pno) == pno
             )
             # A formula image is cut out by its whole box and pasted at the new position, so every glyph whose
             # origin is in the box must be erased in place. Glyphs without Unicode (the large norm bars of CMEX
@@ -590,9 +592,10 @@ def _render_translated(
             erasure.spanless.extend(
                 pymupdf.Rect(part["bbox"])
                 for key in (id(b), spill_hosts.get(id(b)))
+                if key is not None
                 for f in (formulas_map or {}).get(key, [])
                 for part in _formula_parts(f)
-                if part.get("bbox") is not None and int(part.get("page", f.get("page", pno))) == pno
+                if part.get("bbox") is not None and _part_page(part, f, pno) == pno
             )
         # Before erasing, place markers at the source positions; after writing, the translation is inserted back
         # there, so drag selection and copying follow the reading order
@@ -631,7 +634,7 @@ def _render_translated(
             text: str,
             rect: pymupdf.Rect,
             align: str,
-            formulas: list[dict] | None = None,
+            formulas: list[PdfDict] | None = None,
             justify_last: bool = False,
             # source: the original block when block is a moved copy (index entry); the reading order marker is on
             # the original block
@@ -725,7 +728,7 @@ def _render_translated(
                 )
                 ends[id(source or block)] = (source or block, end, size)
             else:
-                end = _place_plain(
+                plain_end = _place_plain(
                     page,
                     text,
                     bformulas,
@@ -749,8 +752,8 @@ def _render_translated(
                     lent,
                     hang,
                 )
-                if end is not None:
-                    ends[id(source or block)] = (source or block, end, size)
+                if plain_end is not None:
+                    ends[id(source or block)] = (source or block, plain_end, size)
             if block.leader is not None and not page.rotation:
                 _extend_leader(page, block, block.leader)
             # Extending right or left and wrapping write outside the box, so use the leftmost and rightmost reach
@@ -828,7 +831,7 @@ def _render_translated(
 
         # The continuation line may come before the half sentence. The second half goes into carry first so it is
         # not lost when writing.
-        shared_head: dict[int, tuple[str, pymupdf.Rect, list[dict], bool]] = {}
+        shared_head: dict[int, tuple[str, pymupdf.Rect, list[PdfDict], bool]] = {}
         for b, t in items:
             if t == SPILL_TAIL:
                 continue
@@ -1012,7 +1015,7 @@ def _render_translated(
                         page, b, rest_box.y0, rest_box.x0, rest_box.x1, same_page, kept, marks, body_ink(b.page)
                     )
                     floor = write_floor(b, rest_box)
-                    placed, spill = _split_filled_lines(
+                    placed_text, spill = _split_filled_lines(
                         rest,
                         bformulas,
                         size,
@@ -1024,8 +1027,8 @@ def _render_translated(
                         floor,
                         tail_room(tail, rest_box.width, size),
                     )
-                    if placed:
-                        lines = placed.count("\n") + 1
+                    if placed_text:
+                        lines = placed_text.count("\n") + 1
                         bottom = _filled_bottom(rest_box.y0, lines, size, cjk, room, floor)
                         placed_rect = pymupdf.Rect(
                             rest_box.x0,
@@ -1033,7 +1036,7 @@ def _render_translated(
                             rest_box.x1,
                             max(bottom, rest_box.y0 + 4),
                         )
-                        write_one(b, placed, placed_rect, side, bformulas, bool(spill), rest_box.x1)
+                        write_one(b, placed_text, placed_rect, side, bformulas, bool(spill), rest_box.x1)
                     if spill:
                         carried[id(tail)] = _Carry(spill, bformulas, rest_box.width, b.size)
                 continue
@@ -1071,11 +1074,11 @@ def _render_translated(
                 edge = _indent_edge(b, geo, indent) if align == "left" and id(b) not in stacked else None
                 if edge is not None:
                     rect = pymupdf.Rect(edge, rect.y0, rect.x1, rect.y1)
-                carry = spilled.pop(id(b), None)
-                if carry is not None:
+                spilled_lines = spilled.pop(id(b), None)
+                if spilled_lines is not None:
                     # The last lines of the paragraph at the bottom of the previous page come before this paragraph,
                     # which starts half a line below them
-                    box, carry = carry
+                    box, carry = spilled_lines
                     size = carry.size * 0.88 if cjk else carry.size
                     lines = carry.text.count("\n") + 1
                     placed = pymupdf.Rect(
@@ -1098,24 +1101,25 @@ def _render_translated(
                 # move up, at most to half a line below the nearest thing above. The paragraph above was already
                 # moved up the same way when written, so the free space above accumulates paragraph by paragraph
                 link = follows.get(id(b))
-                box = link[1] if link is not None else movable_box(b)
-                if box is not None:
-                    latest = latest_start(b, box)
+                free_box = link[1] if link is not None else movable_box(b, None)
+                if free_box is not None:
+                    latest = latest_start(b, free_box)
                     up = lift_limit(b, rect, b.size * 0.88 if cjk else b.size) if latest < rect.y0 - 0.5 else None
                     if up is not None and max(up, latest) < rect.y0 - 0.5:
                         rect = pymupdf.Rect(rect.x0, max(up, latest), rect.x1, rect.y1)
                         pushed = True
-                room = paragraph_room(b, own) if align == "left" and id(b) not in stacked else None
-                if room is not None:
-                    below = next_movable(b, own, room)
+                own_room = paragraph_room(b, own) if align == "left" and id(b) not in stacked else None
+                if own_room is not None:
+                    below = next_movable(b, own, own_room)
                     if below is not None:
                         follows[id(below[0])] = (b, below[1])
                 # Text in a cell does not reach into the next cell even when it does not fit
-                grow = room if b.clip is None else None
+                grow = own_room if b.clip is None else None
                 borrowed = spare_below(b, own, grow) if grow is not None else None
                 if borrowed is not None:
+                    assert grow is not None  # spare_below is only asked when grow is set
                     grow = max(grow, borrowed[1])
-                if box is not None and grow is not None and borrowed is None and latest < rect.y0 - 0.5:
+                if free_box is not None and grow is not None and borrowed is None and latest < rect.y0 - 0.5:
                     if spill_last_lines(b, t, rect, align, grow, pushed):
                         continue
                 write_one(
@@ -1123,7 +1127,7 @@ def _render_translated(
                     t,
                     rect,
                     align,
-                    lower=paragraph_top(b, rect, room),
+                    lower=paragraph_top(b, rect, own_room),
                     room=grow,
                     pushed=pushed,
                     lent=borrowed is not None,
@@ -1199,3 +1203,19 @@ def _render_translated(
             restore_glyphs(doc, glyphs)
         order.assemble()
     return doc
+
+
+def _part_page(part: PdfDict, formula: PdfDict, pno: int) -> int:
+    """The page a formula part lies on: its own, else the formula's, else the page being written."""
+    # Bound to an int first: with an Any default, mypy picks dict.get's None-default overload
+    default: int = formula.get("page", pno)
+    return int(part.get("page", default))
+
+
+# spare_below, next_movable, latest_start and movable_box of a page (see page_flow in _render_translated)
+_PageFlow = tuple[
+    Callable[[TextBlock, pymupdf.Rect, float], tuple[TextBlock, float] | None],
+    Callable[[TextBlock, pymupdf.Rect, float], tuple[TextBlock, pymupdf.Rect] | None],
+    Callable[[TextBlock, pymupdf.Rect], float],
+    Callable[[TextBlock, TextBlock | None], pymupdf.Rect | None],
+]

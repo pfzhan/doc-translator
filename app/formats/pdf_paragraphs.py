@@ -36,12 +36,13 @@ from .pdf_rows import (
     _voted_right,
 )
 from .pdf_split_lines import _OPERATOR_RE, NO_TEXT_RE, _label_lead, _typewriter_line
+from .pdf_types import PdfDict
 
 
 def _verbatim_block(block: TextBlock) -> bool:
     """The whole block is verbatim text in a monospaced font (example dialogue, code), set as separate
     lines."""
-    return bool(block.span_lines) and all(_typewriter_line(spans) for spans in block.span_lines)
+    return bool(block.span_lines) and all(_typewriter_line(spans) for spans in block.span_lines or [])
 
 
 def _verbatim_seam(host: TextBlock, guest: TextBlock) -> bool:
@@ -66,7 +67,7 @@ def _is_formula_char(c: str) -> bool:
     return unicodedata.category(c) in ("Sm", "Sk", "Mn", "Co")
 
 
-def _math_chars(spans: list[dict]) -> int:
+def _math_chars(spans: list[PdfDict]) -> int:
     """Number of formula characters in a block: all characters in math fonts plus formula characters in body
     fonts."""
     n = 0
@@ -107,7 +108,7 @@ def _blocks_share_column(
     return geo.index_of(left.rect) == geo.index_of(right.rect) and not geo.spans_columns(left.rect | right.rect)
 
 
-def _line_spans(block: TextBlock) -> list[list[dict]]:
+def _line_spans(block: TextBlock) -> list[list[PdfDict]]:
     """Spans per line, one entry for each of line_rects. When they do not match, each line gets an empty list
     and no decision is made by span."""
     rows = len(block.line_rects) or 1
@@ -232,10 +233,10 @@ def _split_one_table_block(block: TextBlock, tables: tuple[RuledTable, ...]) -> 
     if len(lines) != len(block.line_rects):
         block.clip = _clip_key(cell_containing(block.rect, tables))
         return [block]
-    grouped: dict[tuple[float, float, float, float] | None, list[tuple[pymupdf.Rect, list[dict]]]] = {}
+    grouped: dict[tuple[float, float, float, float] | None, list[tuple[pymupdf.Rect, list[PdfDict]]]] = {}
     order: list[tuple[float, float, float, float] | None] = []
     for line_rect, spans in zip(block.line_rects, lines):
-        by_cell: dict[tuple[float, float, float, float] | None, list[dict]] = {}
+        by_cell: dict[tuple[float, float, float, float] | None, list[PdfDict]] = {}
         cell_order: list[tuple[float, float, float, float] | None] = []
         for span in spans:
             if not str(span.get("text", "")).strip():
@@ -290,11 +291,11 @@ def _split_one_table_block(block: TextBlock, tables: tuple[RuledTable, ...]) -> 
 
 
 def _remember_cell(
-    grouped: dict[tuple[float, float, float, float] | None, list[tuple[pymupdf.Rect, list[dict]]]],
+    grouped: dict[tuple[float, float, float, float] | None, list[tuple[pymupdf.Rect, list[PdfDict]]]],
     order: list[tuple[float, float, float, float] | None],
     key: tuple[float, float, float, float] | None,
     line_rect: pymupdf.Rect,
-    spans: list[dict],
+    spans: list[PdfDict],
 ) -> None:
     if key not in grouped:
         order.append(key)
@@ -406,7 +407,7 @@ def _column_right(x0: float, size: float, rows: Sequence[pymupdf.Rect], frame: T
     return frame.x1 if frame is not None else float("inf")
 
 
-def _untranslatable(spans: list[dict], text: str, min_prose: int = 3, displayed: bool = False) -> bool:
+def _untranslatable(spans: list[PdfDict], text: str, min_prose: int = 3, displayed: bool = False) -> bool:
     """Lines that are pure symbols, pure formula, or have almost no letters are not sent for translation and
     keep the original text.
 
@@ -440,7 +441,7 @@ def _untranslatable(spans: list[dict], text: str, min_prose: int = 3, displayed:
 _MATH_NAMES = frozenset(_OPERATOR_NAMES.split("|")) | {"argmax", "argmin", "softmax", "tanh", "sigmoid"}
 
 
-def _prose_words(spans: list[dict], text: str) -> list[str]:
+def _prose_words(spans: list[PdfDict], text: str) -> list[str]:
     """Words in the line separated by spaces on both sides and written in a body font (with lowercase letters,
     two or more letters).
     Words written together with symbols (H_dec, argmax_{char∈Alphabet}), all-capital matrix names (HU) and
@@ -475,12 +476,12 @@ def _merge_cells(blocks: list[TextBlock], unchecked: set[int]) -> list[TextBlock
     A cell is one complete sentence and is translated when it has a single body word (for k = 1 ... K do);
     cells of pure formula or pure numbers keep the original text.
     """
-    cells: dict[tuple, list[TextBlock]] = {}
+    cells: dict[tuple[int, tuple[float, float, float, float] | None], list[TextBlock]] = {}
     for block in blocks:
         if block.clip is not None:
             cells.setdefault((block.page, block.clip), []).append(block)
     out: list[TextBlock] = []
-    done: set[tuple] = set()
+    done: set[tuple[int, tuple[float, float, float, float] | None]] = set()
     for block in blocks:
         key = (block.page, block.clip)
         if block.clip is None:
@@ -581,23 +582,23 @@ def _joined_cell(parts: list[TextBlock]) -> TextBlock:
         rect=rect,
         line_rects=[line for part in parts for line in part.line_rects],
         text=_join_lines([part.text for part in parts]),
-        span_lines=[line for part in parts for line in part.span_lines] if has_spans else None,
+        span_lines=[line for part in parts for line in part.span_lines or []] if has_spans else None,
         runs=[],
     )
 
 
-def _block_spans(block: TextBlock) -> list[dict]:
+def _block_spans(block: TextBlock) -> list[PdfDict]:
     return [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
 
 
-def _line_text(span_lines: list[list[dict]], index: int) -> str:
+def _line_text(span_lines: list[list[PdfDict]], index: int) -> str:
     return "".join(str(span.get("text") or "") for span in span_lines[index])
 
 
 def _block_slice(block: TextBlock, start: int, end: int) -> TextBlock:
     lines = block.line_rects[start:end]
     spans = block.span_lines[start:end] if block.span_lines else None
-    texts = [_line_text(spans, i) for i in range(len(spans or []))]
+    texts = [_line_text(spans, i) for i in range(len(spans))] if spans is not None else []
     rect = pymupdf.Rect()
     for line in lines:
         rect |= line
@@ -661,7 +662,7 @@ def _split_affiliation_tails(blocks: list[TextBlock]) -> list[TextBlock]:
     return out
 
 
-def _absorb_block(p: TextBlock, b: TextBlock):
+def _absorb_block(p: TextBlock, b: TextBlock) -> None:
     p.text = _join_lines([p.text, b.text])
     p.rect |= b.rect
     p.line_rects.extend(b.line_rects)

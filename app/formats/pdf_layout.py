@@ -43,6 +43,7 @@ from .pdf_drawings import (
 )
 from .pdf_frame import TextFrame
 from .pdf_tables import page_tables
+from .pdf_types import PdfDict
 
 _USABLE_W = 8.0
 
@@ -280,7 +281,7 @@ _ARC_MIN_WIDTH = 6.0
 _ARC_FOOT = 3.0
 
 
-def _curved_paths(drawings: list[dict]) -> tuple[tuple[pymupdf.Rect, ...], tuple[pymupdf.Rect, ...]]:
+def _curved_paths(drawings: list[PdfDict]) -> tuple[tuple[pymupdf.Rect, ...], tuple[pymupdf.Rect, ...]]:
     """A stroked-only arch with curves is an arc: start and end points apart, both on the bottom edge of the box, with
     the middle raised. Lines in a plot, with one end high and one low, and circles and rounded boxes, whose ends
     meet, do not count. A filled small box with curves at all four corners is a rounded box."""
@@ -312,7 +313,7 @@ def _curved_paths(drawings: list[dict]) -> tuple[tuple[pymupdf.Rect, ...], tuple
 _VISIBLE_SPACE_WIDTH = (1.0, 6.0)
 
 
-def _visible_spaces(drawings: list[dict]) -> list[pymupdf.Rect]:
+def _visible_spaces(drawings: list[PdfDict]) -> list[pymupdf.Rect]:
     """A short horizontal line with a shorter vertical line standing at each end, whose lower ends sit on the
     horizontal line: the shape of ␣. Only the shape is detected; extraction decides whether it falls in a gap within a
     line of text."""
@@ -351,33 +352,34 @@ _STROKE_MIN = 1.0
 _STROKE_SHAPE_THICK = 3.0
 
 
-def _thin_strokes(drawings: list[dict]) -> list[pymupdf.Rect]:
+def _thin_strokes(drawings: list[PdfDict]) -> list[pymupdf.Rect]:
     """Thin horizontal strokes of any length: each line segment and each flat filled rectangle counts as one. Another
     path whose whole outline is a flat band (a filled long thin polygon) counts as one; taller outlines are edges of
     shapes (trapezoids, rounded boxes, dashed boxes) and do not count."""
     found: list[pymupdf.Rect] = []
     for drawing in drawings:
-        pieces: list[pymupdf.Rect] | None = []
+        pieces: list[pymupdf.Rect] = []
+        flat = True
         for item in drawing.get("items", ()):
             if item[0] == "l":
                 rect = pymupdf.Rect(item[1], item[2]).normalize()
             elif item[0] == "re":
                 rect = pymupdf.Rect(item[1]).normalize()
             else:
-                pieces = None
+                flat = False
                 break
             if rect.height > _RULE_THICK or rect.width < rect.height:
-                pieces = None
+                flat = False
                 break
             pieces.append(rect)
-        if pieces is None:
+        if not flat:
             outline = pymupdf.Rect(drawing.get("rect") or ())
             pieces = [outline] if 0 < outline.height <= _STROKE_SHAPE_THICK or outline.height == 0 else []
         found.extend(rect for rect in pieces if rect.width >= _STROKE_MIN)
     return found
 
 
-def _shaded_areas(drawings: list[dict], bounds: pymupdf.Rect) -> tuple[pymupdf.Rect, ...]:
+def _shaded_areas(drawings: list[PdfDict], bounds: pymupdf.Rect) -> tuple[pymupdf.Rect, ...]:
     """Merge adjacent light shapes into areas. A table often has one shaded shape per cell, with a narrow gap between
     cells. A shape covering the whole page is the paper color and does not count."""
     areas: list[pymupdf.Rect] = []
@@ -593,7 +595,7 @@ def _overlaps_y(a: pymupdf.Rect, b: pymupdf.Rect) -> bool:
 def _page_filling(rect: pymupdf.Rect, page_width: float, page_height: float) -> bool:
     if page_height <= 0:
         return False
-    return rect.width > page_width * _PAGE_FILL and rect.height > page_height * _PAGE_FILL
+    return bool(rect.width > page_width * _PAGE_FILL and rect.height > page_height * _PAGE_FILL)
 
 
 def _voting_rects(
@@ -746,7 +748,7 @@ def is_page_number(text: str) -> bool:
     return len(stripped) >= 1 and _ROMAN_RE.match(stripped) is not None
 
 
-def _is_blank_fill(drawing: dict) -> bool:
+def _is_blank_fill(drawing: PdfDict) -> bool:
     """Near-white, filled rectangles only, no stroke. This is background shading, not a figure. Stroked boxes and
     images still count as figures."""
     if drawing.get("type") != "f":
@@ -762,8 +764,8 @@ def _is_blank_fill(drawing: dict) -> bool:
 
 def _figure_rects(
     page: pymupdf.Page,
-    drawings: list[dict] | None = None,
-    images: list[dict] | None = None,
+    drawings: list[PdfDict] | None = None,
+    images: list[PdfDict] | None = None,
 ) -> list[pymupdf.Rect]:
     bounds = text_page_rect(page)
     width, height = bounds.width, bounds.height
@@ -795,7 +797,7 @@ def _figure_rects(
     return [*found, *_figure_grounds(grounds, found, marks, framed)]
 
 
-def _is_mark(drawing: dict) -> bool:
+def _is_mark(drawing: PdfDict) -> bool:
     """Small marks in a figure: colored ellipses circling words, dashed arrows. Solid thin lines are frame lines or
     underlines and do not count"""
     items = drawing.get("items") or []
@@ -807,7 +809,7 @@ def _is_mark(drawing: dict) -> bool:
     return isinstance(fill, (tuple, list)) and len(fill) >= 3 and any(float(channel) < 0.96 for channel in fill[:3])
 
 
-def _flat_strokes(drawing: dict) -> list[pymupdf.Rect]:
+def _flat_strokes(drawing: PdfDict) -> list[pymupdf.Rect]:
     """Horizontal lines in a stroked path: line segments, and the top and bottom edges of rectangles."""
     out: list[pymupdf.Rect] = []
     for item in drawing.get("items") or []:

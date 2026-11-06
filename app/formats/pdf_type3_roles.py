@@ -113,7 +113,7 @@ def _learn_roles(
     # The article A starts a sentence, the variable A sits inside one. It is the article only when it mostly starts
     # sentences and its bitmap looks like the body-text A.
     # Punctuation that occurs only once or twice is also compared by bitmap with common glyphs of the same name
-    opening = Counter()
+    opening: Counter[Key] = Counter()
     for lines in pages.values():
         previous = "."
         for line in lines:

@@ -25,6 +25,7 @@ from .pdf_drawings import (
     page_words,
     text_page_rect,
 )
+from .pdf_types import PdfDict
 
 _CELL_MIN_W = 18.0
 
@@ -81,7 +82,7 @@ _BAND_SHORT_SHARE = 0.6
 _LABEL_RE = re.compile(r"(?:Figure|Fig\.|Table|Tab\.)\s*\d+(?:\.\d+)*\b")
 
 
-def ruled_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> tuple[RuledTable, ...]:
+def ruled_tables(page: pymupdf.Page, drawings: list[PdfDict] | None = None) -> tuple[RuledTable, ...]:
     """Only cells enclosed by horizontal and vertical rules count. False tables formed by aligned text and grids of
     formula strokes are left out. drawings holds the vector graphics of this page (including rules drawn as images,
     see _page_drawings); read now when not given.
@@ -115,7 +116,7 @@ def ruled_tables(page: pymupdf.Page, drawings: list[dict] | None = None) -> tupl
     return tuple(tables)
 
 
-def _table_clip(page: pymupdf.Page, drawings: Sequence[dict]) -> pymupdf.Rect | None:
+def _table_clip(page: pymupdf.Page, drawings: Sequence[PdfDict]) -> pymupdf.Rect | None:
     """The area from which find_tables takes text. All rules lie inside it, so the tables found are the same as
     without a limit; only the text outside the area is not converted.
 
@@ -136,12 +137,13 @@ def _table_clip(page: pymupdf.Page, drawings: Sequence[dict]) -> pymupdf.Rect | 
     )
     flipped = area * ~page.transformation_matrix
     top, bottom = min(area.y0, flipped.y0), max(area.y1, flipped.y1)
-    return (
+    clip: pymupdf.Rect = (
         pymupdf.Rect(
             area.x0 - _TABLE_CLIP_PAD, top - _TABLE_CLIP_PAD, area.x1 + _TABLE_CLIP_PAD, bottom + _TABLE_CLIP_PAD
         )
         & page.rect
     )
+    return clip
 
 
 # Margin of the text area around the rules: MuPDF decides whether to take a character by its own measured box,
@@ -149,7 +151,7 @@ def _table_clip(page: pymupdf.Page, drawings: Sequence[dict]) -> pymupdf.Rect | 
 _TABLE_CLIP_PAD = 5.0
 
 
-def _grid_possible(drawings: Sequence[dict]) -> bool:
+def _grid_possible(drawings: Sequence[PdfDict]) -> bool:
     """At least two horizontal and two vertical rules.
 
     Counted the way lines_strict takes edges: line segments and the edges of rectangles and quads all count,
@@ -210,10 +212,10 @@ def _with_open_edges(
             max([box.x1, *(h.x1 for h in xs)]),
             max([box.y1, *(v.y1 for v in ys)]),
         )
-        if all(abs(a - b) < 0.5 for a, b in zip(grown, box)):
+        if all(abs(a - b) < 0.5 for a, b in zip(_corners(grown), _corners(box))):
             break
         box = grown
-    if all(abs(a - b) < 0.5 for a, b in zip(box, table.rect)):
+    if all(abs(a - b) < 0.5 for a, b in zip(_corners(box), _corners(table.rect))):
         return table
     col_edges = _edges([box.x0, box.x1, *(v.x0 for v in ys)])
     row_edges = _edges([box.y0, box.y1, *(h.y0 for h in xs)])
@@ -234,6 +236,10 @@ def _with_open_edges(
         found.extend(row)
     added = _merge_rows(found, horizontal)
     return RuledTable(box, (*table.cells, *added))
+
+
+def _corners(rect: pymupdf.Rect) -> tuple[float, float, float, float]:
+    return rect.x0, rect.y0, rect.x1, rect.y1
 
 
 def _edges(values: list[float]) -> list[float]:
@@ -278,7 +284,7 @@ def _merge_rows(cells: list[pymupdf.Rect], horizontal: list[pymupdf.Rect]) -> li
 
 def page_tables(
     page: pymupdf.Page,
-    drawings: list[dict] | None = None,
+    drawings: list[PdfDict] | None = None,
     words: Sequence[_TextWord] | None = None,
 ) -> tuple[RuledTable, ...]:
     """Ruled tables and tables made of shaded cells, plus short-cell tables with aligned column edges and algorithm
@@ -447,15 +453,15 @@ def banded_tables(
             1
             for band in bands
             for index, row in enumerate(band)
-            if len(cells := _row_cells(row)) >= 2
-            or (index == 0 and cells[0].words <= _SHORT_WORDS and cells[0].width <= _SHORT_WIDTH)
+            if len(row_cells := _row_cells(row)) >= 2
+            or (index == 0 and row_cells[0].words <= _SHORT_WORDS and row_cells[0].width <= _SHORT_WIDTH)
         )
         # A cell spanning more than half the table indicates body text only when it is the only cell in its row; row
         # names of a two-column table take up most of the width anyway
         if (
             short < len(pieces) * _BAND_SHORT_SHARE
             or split < len(rows) * 0.8
-            or any(len(cells := _row_cells(row)) == 1 and cells[0].width > (right - left) / 2 for row in rows)
+            or any(len(row_cells := _row_cells(row)) == 1 and row_cells[0].width > (right - left) / 2 for row in rows)
         ):
             continue
         area = pymupdf.Rect(left, group[0].y0, right, group[-1].y1)
@@ -630,7 +636,7 @@ def _header_row(row: Sequence[_TextWord], lines: Sequence[float]) -> bool:
 
 def filled_tables(
     page: pymupdf.Page,
-    drawings: list[dict],
+    drawings: list[PdfDict],
     words: Sequence[_TextWord],
     ruled: Sequence[RuledTable] = (),
 ) -> tuple[RuledTable, ...]:
@@ -882,8 +888,8 @@ def _sparse_grid(
     if not _usable_table(cells):
         return None
     rect = pymupdf.Rect()
-    for cell in cells:
-        rect |= cell
+    for cell_rect in cells:
+        rect |= cell_rect
     return RuledTable(rect, cells)
 
 

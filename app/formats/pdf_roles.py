@@ -8,7 +8,7 @@ layer are not skipped entirely.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
@@ -135,7 +135,7 @@ _BOX_LINE_WORDS = 4
 def _boxed_items(
     items: Sequence[LayoutItem],
     geometries: Sequence[PageGeometry],
-    floats: dict[int, tuple[pymupdf.Rect, ...]],
+    floats: Mapping[int, Sequence[pymupdf.Rect]],
     captions: Sequence[LayoutItem],
 ) -> set[int]:
     """Blocks (ids) in a box that count as body text. A box is decided as a whole: when paragraph text holds most
@@ -256,9 +256,9 @@ def _float_zones(
         right = column.x1 if column is not None else geo.width
         # In a single column body text starts at the left edge of the text frame. The column's left edge is taken
         # from the leftmost block on the page, which may be a running header or a protruding section number
-        framed = geo.frame is not None and len(geo.columns) < 2
-        start = geo.frame.x0 if framed else left
-        end = geo.frame.x1 if framed else right
+        frame = geo.frame if len(geo.columns) < 2 else None
+        start = frame.x0 if frame is not None else left
+        end = frame.x1 if frame is not None else right
         indent = max(median, 8.0) * 2
         top = 0.0
         for item in items:

@@ -6,6 +6,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pymupdf
 
@@ -79,6 +80,7 @@ from .pdf_skip import (
     _item_example_ids,
     _role_pattern_ids,
 )
+from .pdf_types import PdfDict
 from .pdf_unit_blocks import (
     _ACCENT_BEFORE_RE,
     _CEDILLA_RE,
@@ -98,8 +100,11 @@ from .pdf_unit_blocks import (
 )
 from .pdf_vision import FormulaModel, ModelBoxes, formula_detector, layout_detector
 
+if TYPE_CHECKING:
+    from ..runner import Runner
 
-def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[dict]]:
+
+def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[PdfDict]]:
     """Replace the inline formulas in the block with {vN} placeholders (the BabelDOC translation protocol) and return
     (text sent for translation, list of formula records).
 
@@ -113,10 +118,11 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
     """
     if not block.span_lines:
         return block.text, []
+    span_lines: list[list[PdfDict]] = block.span_lines
 
     # 1) Collect formula runs per dict line and record their position in the block's span stream (for checking
     # adjacency in reading order)
-    runs: list[dict] = []
+    runs: list[PdfDict] = []
     code = not _code_block(block)
     for line_no, spans in enumerate(block.span_lines):
         prose_line = _smaller_prose_line(spans, block.size)
@@ -171,11 +177,11 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
     #    _fraction_pair); they need not be adjacent in reading order.
     member_ids = {id(s) for r in runs for s in r["spans"]}
 
-    def flow_adjacent(a: dict, b: dict) -> bool:
+    def flow_adjacent(a: PdfDict, b: PdfDict) -> bool:
         l1, _, e1 = a["pos"]
         l2, s2, _ = b["pos"]
         for ln in range(l1, l2 + 1):
-            line = block.span_lines[ln]
+            line = span_lines[ln]
             lo = e1 + 1 if ln == l1 else 0
             hi = s2 if ln == l2 else len(line)
             for s in line[lo:hi]:
@@ -191,16 +197,16 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
     # X by x overlap
     based = {id(r) for r in runs if _has_text_base(r, block.span_lines, member_ids, block.size)}
 
-    def geometric(m: dict, r: dict) -> bool:
+    def geometric(m: PdfDict, r: PdfDict) -> bool:
         if any(id(x) in based and x["max_size"] < block.size * 0.79 for x in (m, r)):
             return False
         x_overlap = min(m["bbox"].x1, r["bbox"].x1) - max(m["bbox"].x0, r["bbox"].x0)
         y_gap = max(m["bbox"].y0, r["bbox"].y0) - min(m["bbox"].y1, r["bbox"].y1)
         min_w = min(m["bbox"].width, r["bbox"].width)
         lo, hi = sorted([m["max_size"], r["max_size"]])
-        return x_overlap > max(1.0, 0.3 * min_w) and y_gap < block.size and lo < hi * 0.79
+        return bool(x_overlap > max(1.0, 0.3 * min_w) and y_gap < block.size and lo < hi * 0.79)
 
-    def adjacent(m: dict, r: dict) -> bool:
+    def adjacent(m: PdfDict, r: PdfDict) -> bool:
         # b) On the same visual line, adjacent in reading order, x gap smaller than one font size. The two halves of a
         #    formula wrapped across lines do not overlap vertically and are not merged into one large box here.
         y_overlap = min(m["bbox"].y1, r["bbox"].y1) - max(m["bbox"].y0, r["bbox"].y0)
@@ -213,7 +219,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         wrapped = (
             r["bbox"].x1 <= m["bbox"].x0
             and (_run_text_box(r).y0 >= _run_text_box(m).y1 or _run_baseline(r) - _run_baseline(m) > block.size * 0.6)
-            and _ends_row(m, block.span_lines)
+            and _ends_row(m, span_lines)
         )
         return (
             flow_adjacent(m, r)
@@ -222,10 +228,10 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
             and y_overlap > 0.3 * min(m["bbox"].height, r["bbox"].height)
         )
 
-    merged: list[dict] = []
+    merged: list[PdfDict] = []
     # The run that most recently took in a piece. After a numerator is merged into the preceding denominator, the
     # numerator's subscript must still find it
-    recent: dict | None = None
+    recent: PdfDict | None = None
     for r in runs:
         target = next((m for m in (recent, merged[-1] if merged else None) if m is not None and geometric(m, r)), None)
         if target is None:
@@ -263,7 +269,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
             # formula on the next line
             base = float(s["origin"][1]) if s.get("origin") else (sb.y0 + sb.y1) / 2
 
-            def covers(span: dict) -> bool:
+            def covers(span: PdfDict) -> bool:
                 box = pymupdf.Rect(span["bbox"])
                 raised = float(span["origin"][1]) - base
                 return min(box.x1, sb.x1) - max(box.x0, sb.x0) > 0 and -0.2 <= raised / block.size <= 0.6
@@ -289,12 +295,12 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
                     break
     merged = _join_line_wrapped_formulas(merged, block.span_lines, block.size)
 
-    formulas: list[dict] = []
+    formulas: list[PdfDict] = []
     formula_runs: dict[int, FormulaRun] = {}
     first_span: dict[int, int] = {}  # span id → formula number
     span_line = {id(s): li for li, line in enumerate(block.span_lines) for s in line}
 
-    def text_baseline(spans: list[dict]) -> float | None:
+    def text_baseline(spans: list[PdfDict]) -> float | None:
         """Body baseline of the lines that hold these spans: the median origin of body-size characters on those lines,
         not over the whole block"""
         lines = {span_line.get(id(span)) for span in spans}
@@ -302,7 +308,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
             span["origin"][1]
             for li in lines
             if li is not None
-            for span in block.span_lines[li]
+            for span in span_lines[li]
             if span["text"].strip() and span.get("origin") and span["size"] >= block.size * 0.9
         )
         return origins[len(origins) // 2] if origins else None
@@ -365,7 +371,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
     formula_ids |= {id(s) for m in merged for extra in m.get("extras") or [] for s in extra["spans"]}
     caps = _small_caps_sizes(block.span_lines)
 
-    def size_of(span: dict) -> float:
+    def size_of(span: PdfDict) -> float:
         return caps.get(id(span), float(span.get("size") or 0))
 
     text_spans = [s for line in block.span_lines for s in line if id(s) not in formula_ids]
@@ -374,24 +380,24 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
     # marks are written
     base_size = sizes.pop() if caps and len(sizes) == 1 else block.size
     writer = writer_for([{**s, "size": size_of(s)} for s in text_spans], base_size, _color_value(block.color))
-    runs: list[Run] = []
+    ordered: list[Run] = []
     out_lines: list[str] = []
     pending: TextRun | None = None
 
     def flush() -> None:
         nonlocal pending
         if pending is not None:
-            runs.append(pending)
+            ordered.append(pending)
             pending = None
 
     for line_no, spans in enumerate(block.span_lines):
         parts: list[str] = []
         for s in spans:
-            n = first_span.get(id(s))
-            if n is not None:
+            number = first_span.get(id(s))
+            if number is not None:
                 flush()
-                runs.append(formula_runs[n])
-                parts.append(writer.atom(f"{{v{n}}}"))
+                ordered.append(formula_runs[number])
+                parts.append(writer.atom(f"{{v{number}}}"))
             elif id(s) in formula_ids or id(s) in ordinal_skip:
                 continue  # Already taken by a formula, or the superscript of an ordinal
             elif id(s) in ordinal_at:
@@ -412,7 +418,7 @@ def _placeholderize(block: TextBlock, block_index: int = 0) -> tuple[str, list[d
         flush()
         parts.append(writer.close())
         out_lines.append("".join(parts))
-    block.runs = runs
+    block.runs = ordered
     return _join_lines(out_lines), formulas
 
 
@@ -431,7 +437,7 @@ def _only_formulas(sent: str) -> bool:
     return not re.search(r"[^\W\d_]", _MARKUP_RE.sub("", sent))
 
 
-def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dict], int]:
+def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[PdfDict], int]:
     """Text sent for translation and formula records of one translation unit. Formula names increase per block so
     that two blocks across a page break do not collide.
 
@@ -441,7 +447,7 @@ def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dic
     A word hyphenated at the line end is completed first, so the model sees the whole word, and the boundary remains.
     """
     texts: list[str] = []
-    formulas: list[dict] = []
+    formulas: list[PdfDict] = []
     name_i = name_start
     for ui, block in enumerate(unit):
         sent, found = _placeholderize(block, name_i)
@@ -450,7 +456,7 @@ def _prepare_unit(unit: list[TextBlock], name_start: int) -> tuple[str, list[dic
         if offset:
             sent = re.sub(
                 r"\{v(\d+)\}",
-                lambda m, off=offset: f"{{v{int(m.group(1)) + off}}}",
+                lambda m: f"{{v{int(m.group(1)) + offset}}}",
                 sent,
             )
         for rec in found:
@@ -528,10 +534,10 @@ class _PdfPlan:
     src_doc: pymupdf.Document
     blocks: list[TextBlock]
     geometries: list[PageGeometry]
-    toc: list
+    toc: list[list[int | str]]  # get_toc entries: [level, title, page]
     units: list[list[TextBlock]]
     texts: list[str]
-    formulas: list[list[dict]]
+    formulas: list[list[PdfDict]]
     kinds: list[str]
     skips: list[bool]
     skip_ids: set[int]
@@ -545,7 +551,7 @@ class _PdfPlan:
 def _plan_document(
     src: Path,
     src_doc: pymupdf.Document,
-    runner,
+    runner: "Runner",
     layout_model: str,
     formula_model: FormulaModel | None = None,
     boxes: ModelBoxes | None = None,
@@ -690,7 +696,7 @@ def _plan_document(
     ]
 
     sent_texts: list[str] = []
-    sent_formulas: list[list[dict]] = []
+    sent_formulas: list[list[PdfDict]] = []
     sent_kinds: list[str] = []
     sent_skips: list[bool] = []
     sent_labels: list[str] = []
@@ -711,10 +717,10 @@ def _plan_document(
             sent_skips.append(True)
             sent_labels.append("")
             continue
-        sent, formulas, name_i = _prepare_unit(unit, name_i)
+        sent, unit_formulas, name_i = _prepare_unit(unit, name_i)
         flat_units.append(unit)
         sent_kinds.append(block_kind[id(unit[0])])
-        if formulas and _only_formulas(sent):
+        if unit_formulas and _only_formulas(sent):
             # Nothing left to translate after placeholders: a standalone formula line with variables in body italic.
             # Like skipped blocks it keeps the original text; erasing and reflowing would shrink a two-line formula as
             # one tall formula
@@ -726,7 +732,7 @@ def _plan_document(
         label, sent = _peel_number(sent, sent_kinds[-1])
         sent_labels.append(label)
         sent_texts.append(sent)
-        sent_formulas.append(formulas)
+        sent_formulas.append(unit_formulas)
         sent_skips.append(False)
 
     return _PdfPlan(
@@ -795,8 +801,9 @@ def _index_notes(units: list[list[TextBlock]], texts: list[str], skips: list[boo
         if not unit[0].index or skips[n]:
             continue
         note = "An entry in the subject index at the back of the book"
-        if parents[n] is not None:
-            note += f", listed under the entry “{head(parents[n])}”"
+        parent = parents[n]
+        if parent is not None:
+            note += f", listed under the entry “{head(parent)}”"
         if children.get(n):
             note += "; its sub-entries include " + ", ".join(f"“{head(c)}”" for c in children[n][:_NOTE_CHILDREN])
         notes[n] = note + "."

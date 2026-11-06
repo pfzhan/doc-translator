@@ -24,7 +24,7 @@ import re
 import tempfile
 import threading
 from collections import deque
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,6 +52,11 @@ _FORMULA_SCORE = 0.25
 _FORMULA_IOU = 0.45
 _INLINE_FORMULA = "embedding"
 _DISPLAY_FORMULA = "isolated"
+
+# One formula box in the model input: (class, input pixel coordinates x0, y0, x1, y1, score)
+Detection = tuple[str, tuple[float, float, float, float], float]
+# Saved formula boxes: per page, [inline boxes, display boxes], each box as [x0, y0, x1, y1]
+SavedPages = list[list[list[list[float]]]]
 
 # Model class names mapped to roles. Classes not listed (body text, tables, running headers and footers) are left
 # to the rules
@@ -102,6 +107,7 @@ class ModelBoxes:
         self.path = path
         self.src = src
 
+    # The boxes are JSON read back as written (layout regions or SavedPages), so they are Any
     def load(self, kind: str, model_path: str, size: int) -> Any | None:
         key = self._key(kind, model_path, size)
         if key is None:
@@ -152,11 +158,11 @@ def _runtime_version() -> str:
         import onnxruntime
     except ImportError:
         return ""
-    return onnxruntime.__version__
+    return str(onnxruntime.__version__)
 
 
 # Loaded model sessions per model file: (threads, spin) and the sessions. A change of thread settings replaces
-# them, and the old ones are dropped
+# them, and the old ones are dropped. onnxruntime has no type information, so sessions are Any
 _SESSIONS: dict[str, tuple[tuple[int, bool], list[Any]]] = {}
 _SESSIONS_LOCK = threading.Lock()
 
@@ -269,7 +275,7 @@ class ModelLayout:
                 "layout",
                 model_path,
                 _INPUT,
-                {str(pno): [[r.label, list(r.rect), r.score] for r in found] for pno, found in self._pages.items()},
+                {str(pno): [[r.label, _corners(r.rect), r.score] for r in found] for pno, found in self._pages.items()},
             )
 
     def page_regions(self, pno: int) -> list[Region]:
@@ -311,7 +317,8 @@ def _page_batch(page: pymupdf.Page, size: int) -> tuple[np.ndarray, Callable[...
 
     def to_page(x0: float, y0: float, x1: float, y1: float) -> pymupdf.Rect:
         rect = pymupdf.Rect((x0 - left) / zoom, (y0 - top) / zoom, (x1 - left) / zoom, (y1 - top) / zoom)
-        return rect * page.derotation_matrix
+        on_page: pymupdf.Rect = rect * page.derotation_matrix
+        return on_page
 
     return batch, to_page
 
@@ -350,7 +357,7 @@ class FormulaDetector:
         # original (see pdf_skip._isolated_formula_ids)
         self.isolated: dict[int, list[pymupdf.Rect]] = {}
         # Where to save after the whole document is inferred (see formula_detector)
-        self.keep: Callable[[list], None] | None = None
+        self.keep: Callable[[SavedPages], None] | None = None
 
     def regions(self, pno: int) -> list[Region]:
         batch, to_page = _page_batch(self.doc[pno], self.size)
@@ -359,7 +366,7 @@ class FormulaDetector:
     def inline(self, pno: int) -> list[pymupdf.Rect]:
         return [region.rect for region in self.regions(pno) if region.label == _INLINE_FORMULA]
 
-    def pages(self) -> Iterator[list[pymupdf.Rect]]:
+    def pages(self) -> Generator[list[pymupdf.Rect]]:
         """Yield inline formula boxes page by page. With k sessions, background threads infer the next k pages at
         once, one session per page: while the caller processes page n, the model works on pages n + 1 to n + k.
         Rendering pages and converting coordinates happen in the caller's thread: MuPDF cannot use one document
@@ -369,7 +376,7 @@ class FormulaDetector:
         pages: list[tuple[list[pymupdf.Rect], list[pymupdf.Rect]]] = []
         with ThreadPoolExecutor(max_workers=workers) as pool:
 
-            def submit(pno: int) -> tuple[Future, Callable[..., pymupdf.Rect]]:
+            def submit(pno: int) -> tuple[Future[list[Detection]], Callable[..., pymupdf.Rect]]:
                 batch, to_page = _page_batch(self.doc[pno], self.size)
                 return pool.submit(self._detect, batch, pno % workers), to_page
 
@@ -386,14 +393,16 @@ class FormulaDetector:
                 # Save as soon as the last page is inferred: the caller closes the generator after taking the last
                 # page, so code after the loop never runs. Stopping halfway (pause) saves nothing
                 if pno == count - 1 and self.keep is not None:
-                    self.keep([[[list(r) for r in kept], [list(r) for r in isolated]] for kept, isolated in pages])
+                    self.keep(
+                        [[[_corners(r) for r in kept], [_corners(r) for r in isolated]] for kept, isolated in pages]
+                    )
                 yield inline
 
     def _detect(
         self,
         batch: np.ndarray,
         worker: int = 0,
-    ) -> list[tuple[str, tuple[float, float, float, float], float]]:
+    ) -> list[Detection]:
         """Infer with session number worker and return boxes in the model input: (class, input pixel coordinates,
         score). Does not touch MuPDF and can run in a background thread."""
         rows = self.sessions[worker].run(None, {self.input: batch})[0][0].T
@@ -411,14 +420,15 @@ class FormulaDetector:
             ],
             1,
         )
-        found = []
+        found: list[Detection] = []
         for cls in np.unique(classes):
             index = np.flatnonzero(classes == cls)
             for k in _nms(boxes[index], best[index]):
+                box = boxes[index[k]]
                 found.append(
                     (
                         self.names.get(int(cls), str(int(cls))),
-                        tuple(float(v) for v in boxes[index[k]]),
+                        (float(box[0]), float(box[1]), float(box[2]), float(box[3])),
                         float(best[index[k]]),
                     )
                 )
@@ -458,12 +468,12 @@ class SavedFormulas(FormulaDetector):
     """Formula detection boxes read back (see ModelBoxes): no model is loaded; pages() yields the saved inline
     formula boxes page by page and records the display formula boxes."""
 
-    def __init__(self, pages: list):
+    def __init__(self, pages: SavedPages) -> None:
         self.saved = pages
         self.isolated = {}
         self.keep = None
 
-    def pages(self) -> Iterator[list[pymupdf.Rect]]:
+    def pages(self) -> Generator[list[pymupdf.Rect]]:
         for pno, (inline, isolated) in enumerate(self.saved):
             self.isolated[pno] = [pymupdf.Rect(rect) for rect in isolated]
             yield [pymupdf.Rect(rect) for rect in inline]
@@ -478,6 +488,10 @@ def formula_parallel(workers: int = 0, threads: int = 0) -> tuple[int, int]:
     cores = os.cpu_count() or 1
     workers = workers or (2 if cores >= 4 else 1)
     return workers, threads or max(1, cores // workers)
+
+
+def _corners(rect: pymupdf.Rect) -> list[float]:
+    return [rect.x0, rect.y0, rect.x1, rect.y1]
 
 
 def _nms(boxes: np.ndarray, scores: np.ndarray) -> list[int]:

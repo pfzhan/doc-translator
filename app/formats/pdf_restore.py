@@ -25,6 +25,7 @@ from .pdf_runs import (
     split_page_boundary,
     strip_boundary,
 )
+from .pdf_types import PdfDict
 
 
 def _snap_cut(text: str, cut: int) -> int:
@@ -61,7 +62,7 @@ def _split_translation(t: str, ratio: float) -> tuple[str, str]:
 _STRAY_PLACEHOLDER_RE = re.compile(r"\{\s*v\s*\d+\s*\}")
 
 
-def _restore_placeholders(translation: str, formulas: list[dict], lenient: bool = False) -> str | None:
+def _restore_placeholders(translation: str, formulas: list[PdfDict], lenient: bool = False) -> str | None:
     """Restore {vN} after translation (tolerating spaces the model put inside a placeholder). Returns None,
     falling back to the original, when a placeholder is missing. Each placeholder becomes an image sentinel
     (\\x01i\\x02N\\x01/i\\x02), which the renderer replaces with the <img> of the formula. Extra placeholders
@@ -135,19 +136,19 @@ def _keep_formula_chains(translation: str, source: str) -> str:
 _RELATION_WORD_RE = r"(?:(?:大于|小于|不)?等于|约为|大于|小于|为|是)\s*(?=[-−+]?\d)"
 
 
-def _ends_in_relation(formula: dict) -> bool:
+def _ends_in_relation(formula: PdfDict) -> bool:
     text = re.sub(r"\x01[^\x02]*\x02", "", str(formula.get("text") or "")).strip()
     return text.endswith(("=", "<", ">", "≤", "≥", "≠", "≈"))
 
 
-def _small_formula(formula: dict) -> bool:
+def _small_formula(formula: PdfDict) -> bool:
     return len((formula.get("text") or "").strip()) <= 2
 
 
 async def _retry_lost_placeholders(
     runner: object,
     sent_texts: list[str],
-    sent_formulas: list[list[dict]],
+    sent_formulas: list[list[PdfDict]],
     raw: list[str],
 ) -> None:
     """Translate units whose translation lost a {vN} once more, one at a time. Results with all placeholders
@@ -205,7 +206,7 @@ _TRANS_HEAD_NUM_RE = re.compile(
 )
 
 
-def _take_owner(text: str, formulas: list[dict], owner: int) -> tuple[str, list[str]]:
+def _take_owner(text: str, formulas: list[PdfDict], owner: int) -> tuple[str, list[str]]:
     """Keep the formula sentinels that belong to owner and take the others out unchanged, in their order."""
     kept: list[str] = []
     foreign: list[str] = []
@@ -222,7 +223,7 @@ def _take_owner(text: str, formulas: list[dict], owner: int) -> tuple[str, list[
     return "".join(kept), foreign
 
 
-def _localize_sentinels(text: str, formulas: list[dict], owner: int) -> tuple[str, list[dict]]:
+def _localize_sentinels(text: str, formulas: list[PdfDict], owner: int) -> tuple[str, list[PdfDict]]:
     """Renumber sentinels by their index in this block's formula list; rendering looks images up by index."""
     local = [f for f in formulas if f.get("owner", 0) == owner]
     index_map: dict[int, int] = {}
@@ -253,9 +254,9 @@ def _join_boundary(text: str) -> str:
 def _assign_restored_parts(
     restored: str,
     unit: list[TextBlock],
-    formulas: list[dict],
+    formulas: list[PdfDict],
     apart: bool = False,
-) -> tuple[list[str], list[list[dict]]]:
+) -> tuple[list[str], list[list[PdfDict]]]:
     """The whole translation of a unit across two pages stays in the first block. The original text on the
     next page is only erased; the translation is no longer split back at the boundary.
 
@@ -295,11 +296,14 @@ def _normalize_heading_number(src_text: str, translation: str) -> str:
         return translation
     # The number may be wrapped in size or bold marks: {z125}二{/z} 算法
     lead = re.match(r"^\s*((?:\{[bizu]\d*\})*)", translation)
+    # Every pattern part is optional (star / \s*), so it matches any string
+    assert lead is not None
     body = translation[lead.end() :]
     if not _TRANS_HEAD_NUM_RE.match(body):
         return translation
     rest = _TRANS_HEAD_NUM_RE.sub("", body, count=1)
     close = re.match(r"^((?:\{/[bizu]\})*)\s*", rest)
+    assert close is not None  # all optional: always matches
     rest = rest[close.end() :]
     return f"{lead.group(1)}{m.group(1)}{close.group(1)} {rest}" if rest else translation
 

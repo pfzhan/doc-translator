@@ -21,6 +21,7 @@ from .pdf_layout import (
 from .pdf_place import (
     _formula_metrics,
 )
+from .pdf_types import PdfDict
 from .pdf_typeset import (
     typeset_lines,
 )
@@ -32,7 +33,7 @@ def _index_reflow(
     blocks: list[TextBlock],
     geo: PageGeometry | None,
     cjk: bool,
-    formulas_map: dict[int, list[dict]],
+    formulas_map: dict[int, list[PdfDict]],
     fixed: set[int],
     bottom: float,
     ink: Sequence[pymupdf.Rect] = (),
@@ -65,9 +66,8 @@ def _index_reflow(
         segment: list[tuple[TextBlock, int, int]] = []
         x0, x1 = min(b.rect.x0 for b in column), max(b.rect.x1 for b in column)
         stops = [rect for rect in ink if x0 <= (rect.x0 + rect.x1) / 2 <= x1]
-        for b in sorted(
-            [*column, *stops], key=lambda item: item.y0 if isinstance(item, pymupdf.Rect) else item.rect.y0
-        ):
+        entries: list[TextBlock | pymupdf.Rect] = [*column, *stops]
+        for b in sorted(entries, key=lambda item: item.y0 if isinstance(item, pymupdf.Rect) else item.rect.y0):
             if isinstance(b, pymupdf.Rect):
                 moved.update(_restack(segment, pitch, b.y0))
                 segment = []

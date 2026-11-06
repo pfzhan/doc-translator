@@ -39,7 +39,7 @@ def _row_span(block: TextBlock, others: list[TextBlock], col_x0: float, col_x1: 
     rows = block.line_rects or [block.rect]
 
     def same_row(rect: pymupdf.Rect, row: pymupdf.Rect) -> bool:
-        return min(rect.y1, row.y1) - max(rect.y0, row.y0) > min(rect.height, row.height) * 0.5
+        return bool(min(rect.y1, row.y1) - max(rect.y0, row.y0) > min(rect.height, row.height) * 0.5)
 
     mates = [
         other.rect
@@ -166,6 +166,7 @@ def _write_rect(
     on_page_mid = (
         page_mid is not None
         and block.size > sizes[len(sizes) // 2] * 1.15
+        and geo is not None
         and block.rect.width < geo.width * 0.85
         and all(abs((line.x0 + line.x1) / 2 - page_mid) < 4 for line in block.line_rects or [block.rect])
     )
@@ -226,12 +227,13 @@ def _write_rect(
     if axis is not None:
         # With asymmetric page margins neither the text frame nor the widest block is on this center line, so the
         # width comes from the distance between the center line and the sides of the page's text
-        left = min(other.rect.x0 for other, _ in items if other.page == block.page)
-        right = max(other.rect.x1 for other, _ in items if other.page == block.page)
-        half = max(block.rect.width / 2, min(axis - left, right - axis))
+        left_edge = min(other.rect.x0 for other, _ in items if other.page == block.page)
+        right_edge = max(other.rect.x1 for other, _ in items if other.page == block.page)
+        half = max(block.rect.width / 2, min(axis - left_edge, right_edge - axis))
         rect = pymupdf.Rect(axis - half, y0, axis + half, block.rect.y1 + pad)
         return _clip_write_rect(rect, block.clip), "center"
     if centered and on_page_mid:
+        assert page_mid is not None  # on_page_mid requires it
         half = max(block.rect.width / 2, min(page_mid - col_x0, col_x1 - page_mid))
         rect = pymupdf.Rect(page_mid - half, y0, page_mid + half, block.rect.y1 + pad)
     elif centered:

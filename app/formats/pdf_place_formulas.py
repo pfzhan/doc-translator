@@ -2,29 +2,32 @@
 the bitmap fallback."""
 
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
 import pymupdf
+import pymupdf.mupdf as mupdf
 
 from .pdf_align import page_origin
 from .pdf_blocks import _PART_GAP, _formula_parts, _FormulaImage, _GlyphInk, _outside_formula
+from .pdf_types import PdfDict
 from .pdf_typeset import (
     FORMULA_PAD,
 )
 
 
-def _part_lead(part: dict, scale: float) -> float:
+def _part_lead(part: PdfDict, scale: float) -> float:
     """The gap between this part and the previous one, scaled with the formula."""
     return max(_PART_GAP, float(part.get("lead") or 0) * scale)
 
 
-def _formula_png(formula: dict) -> bytes | None:
+def _formula_png(formula: PdfDict) -> bytes | None:
     """The bitmap of a formula: tests give a PNG directly, the normal pipeline gives a _FormulaImage."""
     png = formula.get("png")
     return png.png() if isinstance(png, _FormulaImage) else png
 
 
-def _formula_png_rect(formula: dict, target: pymupdf.Rect) -> pymupdf.Rect:
+def _formula_png_rect(formula: PdfDict, target: pymupdf.Rect) -> pymupdf.Rect:
     """Where the bitmap goes. The parts of the cropped image that extend past the formula box (see
     _FormulaImage.area) are placed on both sides, scaled by the same factor as the formula box to target."""
     png, bbox = formula.get("png"), formula.get("bbox")
@@ -47,25 +50,40 @@ def _pdf_rect(page: "pymupdf.Page", rect: "pymupdf.Rect") -> "pymupdf.Rect":
     return pymupdf.Rect(rect.x0 + left, top - rect.y1, rect.x1 + left, top - rect.y0)
 
 
-class _GlyphKeeper(pymupdf.mupdf.PdfSanitizeFilterOptions2):
+class _GlyphKeeper(mupdf.PdfSanitizeFilterOptions2):
     """Delete glyphs only: glyphs whose center lies outside keep are deleted, and the positions of the kept ones
     are recorded to be checked after filtering. Paths and images are not deleted; the clipping path hides them.
     Deleting paths by position would also delete the strokes inside Type3 glyph procedures (bitmap glyphs such
     as 𝟙 would disappear). The callback runs once per glyph, so the simpler it is, the faster."""
 
-    def __init__(self, keep: list[tuple[float, float, float, float]]):
-        super().__init__()
+    def __init__(self, keep: list[tuple[float, float, float, float]]) -> None:
+        # The SWIG bindings are unannotated; mypy accepts calls into them only through the binding's own class
+        # (untyped_calls_exclude), not through this subclass (as in pdf_erase)
+        mupdf.PdfSanitizeFilterOptions2.__init__(self)
+        base: mupdf.PdfSanitizeFilterOptions2 = self
         self.keep = keep
         self.kept: list[tuple[float, float]] = []
-        self.use_virtual_text_filter()
+        base.use_virtual_text_filter()
         # The filter also calls this callback when there are images, and raises an error if it is not implemented
-        self.use_virtual_image_filter()
+        base.use_virtual_image_filter()
 
-    def image_filter(self, ctx, ctm, name, image, scissor):
+    def image_filter(
+        self, ctx: mupdf.fz_context, ctm: mupdf.fz_matrix, name: str, image: mupdf.fz_image, scissor: mupdf.fz_rect
+    ) -> mupdf.fz_image:
         # The returned image is released once after use, so keeping it unchanged needs one extra reference first
-        return pymupdf.mupdf.ll_fz_keep_image(image)
+        kept: mupdf.fz_image = mupdf.ll_fz_keep_image(image)
+        return kept
 
-    def text_filter(self, ctx, ucs, length, trm, ctm, bbox, *rest):
+    def text_filter(
+        self,
+        ctx: mupdf.fz_context,
+        ucs: object,
+        length: int,
+        trm: mupdf.fz_matrix,
+        ctm: mupdf.fz_matrix,
+        bbox: mupdf.fz_rect,
+        *rest: object,
+    ) -> int:
         # The glyph center is computed from the glyph's own box. The box of the whole font is wider than a
         # parenthesis, and the center would fall outside the parenthesis. Returning 1 deletes the glyph
         gx, gy = (bbox.x0 + bbox.x1) / 2, (bbox.y0 + bbox.y1) / 2
@@ -87,16 +105,26 @@ class _GlyphKeeper(pymupdf.mupdf.PdfSanitizeFilterOptions2):
         return 1
 
 
-class _SanitizeFactory(pymupdf.mupdf.PdfFilterFactory2):
+class _SanitizeFactory(mupdf.PdfFilterFactory2):
     # The attribute must not be called options: that is a field name of the underlying struct, and assigning to it
     # writes into the C struct
-    def __init__(self, sanitize: pymupdf.mupdf.PdfSanitizeFilterOptions2):
-        super().__init__()
+    def __init__(self, sanitize: mupdf.PdfSanitizeFilterOptions2) -> None:
+        # Base-class calls for the same reason as in _GlyphKeeper
+        mupdf.PdfFilterFactory2.__init__(self)
+        base: mupdf.PdfFilterFactory2 = self
         self.sanitize = sanitize
-        self.use_virtual_filter()
+        base.use_virtual_filter()
 
-    def filter(self, ctx, doc, chain, struct_parents, transform, options):
-        return pymupdf.mupdf.ll_pdf_new_sanitize_filter(
+    def filter(
+        self,
+        ctx: mupdf.fz_context,
+        doc: mupdf.pdf_document,
+        chain: mupdf.pdf_processor,
+        struct_parents: int,
+        transform: mupdf.fz_matrix,
+        options: mupdf.pdf_filter_options,
+    ) -> mupdf.pdf_processor:
+        processor: mupdf.pdf_processor = mupdf.ll_pdf_new_sanitize_filter(
             doc,
             chain,
             struct_parents,
@@ -104,6 +132,7 @@ class _SanitizeFactory(pymupdf.mupdf.PdfFilterFactory2):
             options,
             self.sanitize.internal(),
         )
+        return processor
 
 
 def _filter_form(
@@ -111,9 +140,8 @@ def _filter_form(
 ) -> tuple[int, list[tuple[float, float]]]:
     """Filter a Form once and return the xref of the new Form and the positions of the kept glyphs. When recurse
     is false, only this level is filtered and nested Forms are referenced unchanged."""
-    mupdf = pymupdf.mupdf
     keeper = _GlyphKeeper(keep)
-    factory = _SanitizeFactory(keeper)
+    factory: mupdf.PdfFilterFactory2 = _SanitizeFactory(keeper)
     options = mupdf.PdfFilterOptions()
     # Forms nested in the page (figures) are filtered too. The result is stored as a new object because the page
     # itself still uses the original one, and changing it in place would delete the figure.
@@ -235,11 +263,11 @@ class _FormulaSources:
     line all lie inside. A lookup finds by position the smallest part that covers the whole formula, so formulas
     that were not registered are found too; at worst it is the whole page."""
 
-    def __init__(self, doc: "pymupdf.Document", page: "pymupdf.Page", form: int, formulas):
+    def __init__(self, doc: "pymupdf.Document", page: "pymupdf.Page", form: int, formulas: Iterable[PdfDict]) -> None:
         # Keep only the page top needed for converting to PDF coordinates (see _pdf_rect), not the page object
         self.top = page_origin(page)[1]
         self.glyphs = _GlyphInk(page)
-        group: list[tuple[tuple[float, float], dict]] = []
+        group: list[tuple[tuple[float, float], PdfDict]] = []
         for formula in formulas:
             for part in _formula_parts(formula):
                 source_page = part.get("page")
@@ -247,7 +275,7 @@ class _FormulaSources:
                 if band is not None and (source_page is None or int(source_page) == page.number):
                     group.append((band, part))
 
-        def build(source: int, group: list[tuple[tuple[float, float], dict]]) -> _LinesNode:
+        def build(source: int, group: list[tuple[tuple[float, float], PdfDict]]) -> _LinesNode:
             bands = _merge_bands([band for band, _part in group])
             node = _LinesNode(bands, _lines_form(doc, source, bands), [])
             if len(group) > 4:
@@ -258,7 +286,7 @@ class _FormulaSources:
 
         self.root = _LinesNode([], form, [build(form, group)] if group else [])
 
-    def _band(self, formula: dict) -> tuple[float, float] | None:
+    def _band(self, formula: PdfDict) -> tuple[float, float] | None:
         rects = [s["bbox"] for s in formula.get("spans") or []] + list(formula.get("curves") or [])
         if formula.get("bbox") is not None:
             rects.append(formula["bbox"])
@@ -266,7 +294,7 @@ class _FormulaSources:
             return None
         return self.top - max(rect[3] for rect in rects) - 2, self.top - min(rect[1] for rect in rects) + 2
 
-    def source(self, formula: dict) -> int:
+    def source(self, formula: PdfDict) -> int:
         band = self._band(formula)
         node = self.root
         while band is not None:
@@ -280,7 +308,7 @@ class _FormulaSources:
         return node.xref
 
 
-def _hole_ink(span: dict) -> pymupdf.Rect:
+def _hole_ink(span: PdfDict) -> pymupdf.Rect:
     """The hole a foreign span cuts in the formula clip: its ink box, clipped to its font box. An exact box larger
     than the font box (the exact box of LMMono extends half a line downward) is not ink, so the hole follows the
     font box; otherwise it would shave off the tops of the glyphs on the next line. Ink measured by drawing the
@@ -296,9 +324,9 @@ def _formula_form(
     doc: "pymupdf.Document",
     page: "pymupdf.Page",
     fmS: int,
-    f: dict,
+    f: PdfDict,
     f_name: str,
-    page_spans: list[dict] | None = None,
+    page_spans: list[PdfDict] | None = None,
     glyphs: _GlyphInk | None = None,
 ) -> int:
     """Build a wrapper Form with a tight BBox for one formula (clipped span by span, then referencing the source
@@ -405,7 +433,7 @@ def _formula_form(
         reach_x1 = max(r.x1 for r in our_rects)
         reach_y1 = max(r.y1 for r in our_rects)
 
-        def touches(box) -> bool:
+        def touches(box: Sequence[float]) -> bool:
             return box[0] <= reach_x1 and box[2] >= reach_x0 and box[1] <= reach_y1 and box[3] >= reach_y0
 
         for fb in page_spans:
@@ -462,16 +490,16 @@ def _formula_form(
     # the formula box: extend left and right to the ink measured from the glyphs, no further than the clipping
     # path. Extend only to the formula's own ink, so strokes of neighbouring glyphs reaching into the space (the f
     # of If) are not brought in
-    inks = [glyphs.x_bounds(span) for span in f["spans"]] if glyphs is not None and our_rects else []
-    inks = [ink for ink in inks if ink is not None]
+    bounds = [glyphs.x_bounds(span) for span in f["spans"]] if glyphs is not None and our_rects else []
+    inks = [ink for ink in bounds if ink is not None]
     if inks:
         left = max(min(ink[0] for ink in inks), min(r.x0 for r in our_rects))
         right = min(max(ink[1] for ink in inks), max(r.x1 for r in our_rects))
-        reach = _pdf_rect(page, pymupdf.Rect(left, bbox.y0, right, bbox.y1))
+        ink_rect = _pdf_rect(page, pymupdf.Rect(left, bbox.y0, right, bbox.y1))
         clip_outer = pymupdf.Rect(
-            min(clip_outer.x0, reach.x0), clip_outer.y0, max(clip_outer.x1, reach.x1), clip_outer.y1
+            min(clip_outer.x0, ink_rect.x0), clip_outer.y0, max(clip_outer.x1, ink_rect.x1), clip_outer.y1
         )
-    fmT = doc.get_new_xref()
+    fmT: int = doc.get_new_xref()
     doc.update_object(
         fmT,
         (
@@ -485,26 +513,26 @@ def _formula_form(
     # After redaction /Resources becomes a direct dictionary (keys need the Resources/ prefix);
     # for an indirect reference the keys are set directly on the resource object
     m = re.match(r"(\d+) \d+ R", res_v)
-    res_xref, base = (int(m.group(1)), "") if m else (page.xref, "Resources/")
-    xo_v = doc.xref_get_key(res_xref, f"{base}XObject")[1]
+    res_xref, key_prefix = (int(m.group(1)), "") if m else (page.xref, "Resources/")
+    xo_v = doc.xref_get_key(res_xref, f"{key_prefix}XObject")[1]
     if xo_v == "null":
-        doc.xref_set_key(res_xref, f"{base}XObject", "<<>>")
+        doc.xref_set_key(res_xref, f"{key_prefix}XObject", "<<>>")
         xo_v = "<<"
     m = re.match(r"(\d+) \d+ R", xo_v)
     if m:
         doc.xref_set_key(int(m.group(1)), f_name, f"{fmT} 0 R")
     else:
-        doc.xref_set_key(res_xref, f"{base}XObject/{f_name}", f"{fmT} 0 R")
+        doc.xref_set_key(res_xref, f"{key_prefix}XObject/{f_name}", f"{fmT} 0 R")
     return fmT
 
 
 def _paint_formula(
     page: "pymupdf.Page",
     doc: "pymupdf.Document",
-    formula: dict,
+    formula: PdfDict,
     target: "pymupdf.Rect",
     forms: "_FormulaSources | None",
-    page_spans: list[dict] | None,
+    page_spans: list[PdfDict] | None,
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]] | None = None,
 ) -> None:
@@ -555,11 +583,11 @@ def _paint_formula(
 def _paint_formula_parts(
     page: "pymupdf.Page",
     doc: "pymupdf.Document",
-    formula: dict,
+    formula: PdfDict,
     slot_x: float,
     baseline: float,
     forms: "_FormulaSources | None",
-    page_spans: list[dict] | None,
+    page_spans: list[PdfDict] | None,
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
 ) -> None:

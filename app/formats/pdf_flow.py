@@ -17,6 +17,8 @@ from dataclasses import dataclass
 
 import pymupdf
 
+from .pdf_types import PdfDict
+
 _SENTINEL_RE = re.compile(r"\x01i\x02(\d+)\x01/i\x02")
 STYLE_MARK_RE = re.compile(r"\{z\d+\}|\{/z\}|\{c[0-9a-f]{6}\}|\{/c\}|\{/?[biu]\}")
 _ATOM_RE = re.compile(rf"\x01i\x02\d+\x01/i\x02|{STYLE_MARK_RE.pattern}")
@@ -188,14 +190,14 @@ def emphasis_of(font: str, flags: int) -> Emphasis:
     return Emphasis(bold, italic)
 
 
-def span_emphasis(span: dict[str, object]) -> Emphasis:
+def span_emphasis(span: PdfDict) -> Emphasis:
     """Weight and italic of the span, plus the underline found during extraction."""
-    mark = emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0))  # type: ignore[arg-type]
+    mark = emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0))
     return Emphasis(mark.bold, mark.italic, bool(span.get("underline")))
 
 
 def writer_for(
-    spans: list[dict[str, object]],
+    spans: list[PdfDict],
     base_size: float = 0,
     base_color: int | None = None,
 ) -> EmphasisWriter:
@@ -334,10 +336,10 @@ def _break_lines(
     first_widths: Sequence[float] = (),
 ) -> list[str]:
     if "\n" in text:
-        lines: list[str] = []
+        broken: list[str] = []
         for part in text.split("\n"):
-            lines.extend(_break_lines(part, em, max_width, formula_widths, first_widths[len(lines) :]))
-        return lines
+            broken.extend(_break_lines(part, em, max_width, formula_widths, first_widths[len(broken) :]))
+        return broken
     if not text or max_width <= 0:
         return [text]
     tokens = _tokenize(text)
@@ -400,14 +402,14 @@ def _break_lines(
             index += 1
             continue
         if buf and width + token_width > room():
-            start = group_of.get(index)
-            if start is not None and any(token_index >= start for token_index, _ in buf):
-                buf[:] = [(token_index, item) for token_index, item in buf if token_index < start]
+            group_start = group_of.get(index)
+            if group_start is not None and any(token_index >= group_start for token_index, _ in buf):
+                buf[:] = [(token_index, item) for token_index, item in buf if token_index < group_start]
                 # The opening bracket before the group also moves to the next line with it
                 carried = _detach_opener(buf)
                 width = sum(_token_width(item, em, formula_widths) for _, item in buf)
                 flush()
-                index = carried[0][0] if carried else start
+                index = carried[0][0] if carried else group_start
                 continue
             if token in _NO_LINE_START:
                 detached = _detach_for_punct(buf)
@@ -445,7 +447,9 @@ def _break_lines(
         return [text]
     widths = [first_widths[k] if k < len(first_widths) else max_width for k in range(len(lines))]
     for k in _even_out(rows, widths, em, formula_widths, group_of):
-        lines[k] = _trim_line_end("".join(token for _, token in rows[k]))
+        row = rows[k]
+        assert row is not None  # _even_out only changes rows of words, never hard cuts
+        lines[k] = _trim_line_end("".join(token for _, token in row))
     return lines
 
 
@@ -481,7 +485,9 @@ def _even_out(
             if _SENTINEL_RE.fullmatch(token):
                 texts.extend([None, ""])
             elif not STYLE_MARK_RE.fullmatch(token):
-                texts[-1] += token
+                tail = texts[-1]
+                assert tail is not None  # every None is followed by a text slot
+                texts[-1] = tail + token
         slots = sum(1 for extra in line_extras(texts, slack, em) if extra)
         return slack / slots if slots else 0.0
 

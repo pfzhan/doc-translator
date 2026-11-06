@@ -144,7 +144,7 @@ class Type3Reader:
     def _read(self) -> dict[int, list[_Line]]:
         shapes: dict[int, dict[int, tuple[float, float, float, float]]] = {}
         pages: dict[int, list[tuple[Key, float, float, float, int]]] = {}
-        for page in self.doc:
+        for page in self.doc.pages():
             fonts = _broken_fonts(self.doc, page)
             if not fonts:
                 continue

@@ -21,8 +21,12 @@ import time
 import traceback
 from collections.abc import Callable, Collection, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pymupdf
+
+if TYPE_CHECKING:
+    from multiprocessing.sharedctypes import Synchronized
 
 # Minimum pages per part. With fewer pages, starting subprocesses and combining pages costs more than it saves
 _MIN_PART_PAGES = 12
@@ -115,7 +119,7 @@ def render_in_parts(
     return base
 
 
-def _render_part(render: Render, part: list[int], path: Path, started) -> None:
+def _render_part(render: Render, part: list[int], path: Path, started: Synchronized[int]) -> None:
     """Exit right after writing. The process is forked from a worker thread of the service, and the thread
     cleanup in multiprocessing shutdown would fail and make the exit code 1."""
 

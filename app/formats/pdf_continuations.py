@@ -29,6 +29,7 @@ from .pdf_math import (
 from .pdf_paragraphs import _absorb_block, _index_refs_tail, _verbatim_seam
 from .pdf_rows import _INDEX_REFS_ONLY_RE
 from .pdf_split_lines import _MID_ABBREV_RE, _centered_rows, _label_lead, _open_operator_end, _row_boxes, _row_style
+from .pdf_types import PdfDict
 
 
 def _new_voice(host: TextBlock, guest: TextBlock) -> bool:
@@ -52,10 +53,10 @@ def _restyled_seam(host: TextBlock, guest: TextBlock) -> bool:
         return False
     gap = max(host.size * 0.4, 2.0)
 
-    def row_spans(block: TextBlock, at: pymupdf.Rect) -> list[dict]:
+    def row_spans(block: TextBlock, at: pymupdf.Rect) -> list[PdfDict]:
         return [
             span
-            for rect, spans in zip(block.line_rects, block.span_lines)
+            for rect, spans in zip(block.line_rects, block.span_lines or [])
             if abs(rect.y0 - at.y0) <= gap
             for span in spans
         ]
@@ -270,8 +271,8 @@ def _merge_continuations(
             # column header such as (Acc).
             # When an entry starting with a bold label has only one line, there is no continuation line to
             # compare with, and a line with a hanging indent of one or two ems is also its continuation
-            label_hang = (
-                bool(p.span_lines)
+            label_hang = bool(
+                p.span_lines
                 and 0 < b.rect.x0 - p.rect.x0 <= 3 * p.size
                 and _label_lead([span for span in p.span_lines[0] if str(span.get("text") or "").strip()])
             )

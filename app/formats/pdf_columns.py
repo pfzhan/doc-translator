@@ -2,6 +2,7 @@
 
 import re
 from collections import Counter
+from collections.abc import Set as AbstractSet
 
 from .pdf_blocks import (
     _AFFIL_MARK_RE,
@@ -49,7 +50,7 @@ def _is_code_line(text: str) -> bool:
 def _continuation_prose(
     block: TextBlock,
     median: float,
-    skip_ids: set[int],
+    skip_ids: AbstractSet[int],
     halt_ids: set[int] | None,
     ignored: set[int],
 ) -> bool:
@@ -186,7 +187,7 @@ def _try_column_pair(
     tail: TextBlock | None,
     median: float,
     halt_ids: set[int] | None,
-    skip_ids: set[int],
+    skip_ids: AbstractSet[int],
     allow_capital: bool = True,
     flush: bool = False,
     at_edge: bool = True,
@@ -252,10 +253,10 @@ def _float_contents(column: list[TextBlock], page_blocks: list[TextBlock]) -> se
 def _column_continuations(
     by_page: dict[int, list[TextBlock]],
     median: float,
-    skip_ids: set[int],
+    skip_ids: AbstractSet[int],
     halt_ids: set[int] | None,
     ignored: set[int],
-    aside_ids: set[int] = frozenset(),
+    aside_ids: AbstractSet[int] = frozenset(),
     indents: bool = False,
 ) -> dict[int, TextBlock]:
     """Join the end of the left column to the top of the right column, and the end of the right column to the

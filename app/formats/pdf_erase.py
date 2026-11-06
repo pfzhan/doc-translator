@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
 import pymupdf
 import pymupdf.mupdf as mupdf
 
+from .pdf_types import PdfDict
+
 # Allowed distance between an origin and the baseline (as a share of the font size). Glyphs of one span share
 # exactly one baseline, superscripts and subscripts are separate spans, and another line is at least one font
 # size away.
@@ -71,13 +73,13 @@ class Erasure:
     """What to erase on a page. lines are the line boxes being reflowed: blocks without spans match glyphs by
     them, and lines and thin images are removed by them too."""
 
-    spans: list[dict] = field(default_factory=list)
+    spans: list[PdfDict] = field(default_factory=list)
     lines: list[pymupdf.Rect] = field(default_factory=list)
     spanless: list[pymupdf.Rect] = field(default_factory=list)
     # Tells whether a span is formula text. A horizontal line below formula text is not erased as an underline
-    math: Callable[[dict], bool] = lambda span: False
+    math: Callable[[PdfDict], bool] = lambda span: False
 
-    def add_block(self, span_lines: Sequence[Sequence[dict]] | None, line_rects: Iterable[pymupdf.Rect]) -> None:
+    def add_block(self, span_lines: Sequence[Sequence[PdfDict]] | None, line_rects: Iterable[pymupdf.Rect]) -> None:
         rects = [pymupdf.Rect(rect) for rect in line_rects]
         self.lines.extend(rects)
         if not span_lines:
@@ -107,7 +109,7 @@ class _Owners:
         self.lines: list[_Line] = []
         self.boxes: list[pymupdf.Rect] = []
         chars = chars or {}
-        lined: list[dict] = []
+        lined: list[PdfDict] = []
         for span in erasure.spans:
             origins = span.get("origins")
             if origins is not None:
@@ -190,7 +192,7 @@ def _key(x: float, y: float) -> tuple[float, float]:
 
 
 def _box_key(box: pymupdf.Rect) -> tuple[float, ...]:
-    return tuple(round(value, 1) for value in box)
+    return tuple(round(value, 1) for value in (box.x0, box.y0, box.x1, box.y1))
 
 
 _BLANKS = frozenset(" \t\n\u00a0\u2002\u2003\u2009\u3000")
@@ -218,7 +220,7 @@ def _char_origins(page: pymupdf.Page) -> dict[tuple[float, ...], list[tuple[floa
     return out
 
 
-def _page_point(x: float, y: float, ctm, to_page: mupdf.FzMatrix) -> tuple[float, float]:
+def _page_point(x: float, y: float, ctm: mupdf.fz_matrix, to_page: mupdf.FzMatrix) -> tuple[float, float]:
     """Convert a content stream point to page coordinates. Calls the same MuPDF function as Point * Matrix with
     the same result, but it runs for every glyph, so the argument handling of the PyMuPDF wrappers is skipped.
     ctm is the low-level matrix given to the callback and is passed directly instead of being read entry by
@@ -228,18 +230,21 @@ def _page_point(x: float, y: float, ctm, to_page: mupdf.FzMatrix) -> tuple[float
     return point.x, point.y
 
 
-def _rect(r) -> pymupdf.Rect:
+def _rect(r: mupdf.fz_rect) -> pymupdf.Rect:
     return pymupdf.Rect(r.x0, r.y0, r.x1, r.y1)
 
 
 class _Sanitizer(mupdf.PdfSanitizeFilterOptions2):
-    def __init__(self, page: pymupdf.Page, erasure: Erasure):
-        super().__init__()
+    def __init__(self, page: pymupdf.Page, erasure: Erasure) -> None:
+        # The SWIG bindings are unannotated; mypy accepts calls into them only through the binding's own class
+        # (untyped_calls_exclude), not through this subclass
+        mupdf.PdfSanitizeFilterOptions2.__init__(self)
+        base: mupdf.PdfSanitizeFilterOptions2 = self
         # Every callback is explicitly enabled or disabled instead of relying on constructor defaults
-        self.use_virtual_text_filter()
-        self.use_virtual_culler()
-        self.use_virtual_image_filter()
-        self.use_virtual_after_text_object(False)
+        base.use_virtual_text_filter()
+        base.use_virtual_culler()
+        base.use_virtual_image_filter()
+        base.use_virtual_after_text_object(False)
         self.to_page = page.transformation_matrix
         self.to_page_fz = mupdf.FzMatrix(*self.to_page)
         self.owners = _Owners(erasure, _char_origins(page))
@@ -248,7 +253,16 @@ class _Sanitizer(mupdf.PdfSanitizeFilterOptions2):
         # MuPDF treats an exception in the callback as "keep", so it is recorded and raised again
         self.error: BaseException | None = None
 
-    def text_filter(self, ctx, ucsbuf, ucslen, trm, ctm, bbox, *_rest):
+    def text_filter(
+        self,
+        ctx: mupdf.fz_context,
+        ucsbuf: object,
+        ucslen: int,
+        trm: mupdf.fz_matrix,
+        ctm: mupdf.fz_matrix,
+        bbox: mupdf.fz_rect,
+        *_rest: object,
+    ) -> int:
         try:
             if self.owners.owns(*_page_point(trm.e, trm.f, ctm, self.to_page_fz)):
                 self.removed += 1
@@ -257,12 +271,15 @@ class _Sanitizer(mupdf.PdfSanitizeFilterOptions2):
             self.error = self.error or exc
         return 0
 
-    def image_filter(self, ctx, ctm, name, image, scissor):
+    def image_filter(
+        self, ctx: mupdf.fz_context, ctm: mupdf.fz_matrix, name: str, image: mupdf.fz_image, scissor: mupdf.fz_rect
+    ) -> mupdf.fz_image:
         # Images are always kept; thin images are removed by box in the culler. MuPDF releases the return value,
         # so a reference is added first
-        return mupdf.ll_fz_keep_image(image)
+        kept: mupdf.fz_image = mupdf.ll_fz_keep_image(image)
+        return kept
 
-    def culler(self, ctx, bbox, kind):
+    def culler(self, ctx: mupdf.fz_context, bbox: mupdf.fz_rect, kind: int) -> int:
         try:
             if kind not in _PAINTED_PATHS and kind != mupdf.FZ_CULL_IMAGE:
                 return 0
@@ -287,17 +304,28 @@ def _covers(line: pymupdf.Rect, rect: pymupdf.Rect) -> bool:
 
 
 class _Factory(mupdf.PdfFilterFactory2):
-    def __init__(self, sanitizer: _Sanitizer):
-        super().__init__()
-        self.use_virtual_filter()
+    def __init__(self, sanitizer: _Sanitizer) -> None:
+        # Base-class calls for the same reason as in _Sanitizer
+        mupdf.PdfFilterFactory2.__init__(self)
+        base: mupdf.PdfFilterFactory2 = self
+        base.use_virtual_filter()
         # Must not be named options: the base class has a field of that name, and assigning it would change the
         # pointer in the C structure
-        self.sanitizer = sanitizer
+        self.sanitizer: mupdf.PdfSanitizeFilterOptions2 = sanitizer
 
-    def filter(self, ctx, doc, chain, struct_parents, transform, options):
-        return mupdf.ll_pdf_new_sanitize_filter(
+    def filter(
+        self,
+        ctx: mupdf.fz_context,
+        doc: mupdf.pdf_document,
+        chain: mupdf.pdf_processor,
+        struct_parents: int,
+        transform: mupdf.fz_matrix,
+        options: mupdf.pdf_filter_options,
+    ) -> mupdf.pdf_processor:
+        processor: mupdf.pdf_processor = mupdf.ll_pdf_new_sanitize_filter(
             doc, chain, struct_parents, transform, options, self.sanitizer.internal()
         )
+        return processor
 
 
 def erase(page: pymupdf.Page, erasure: Erasure) -> int:
@@ -315,7 +343,7 @@ def erase(page: pymupdf.Page, erasure: Erasure) -> int:
     bare = any(_paints_in_bare_space(doc.xref_stream(xref) or b"") for xref in streams)
     first_new = doc.xref_length()
     sanitizer = _Sanitizer(page, erasure)
-    factory = _Factory(sanitizer)
+    factory: mupdf.PdfFilterFactory2 = _Factory(sanitizer)
     options = mupdf.PdfFilterOptions()
     # The constructor does not guarantee zeroed fields, and a garbage value in no_update would silently discard
     # the filter result

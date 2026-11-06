@@ -93,11 +93,11 @@ def _near_formula_stroke(box: pymupdf.Rect, rect: pymupdf.Rect) -> bool:
     if min(rect.width, rect.height) <= _STROKE_THIN and rect.height <= rect.width:
         overlap = _axis_overlap(rect.x0, rect.x1, box.x0, box.x1)
         cap = max(box.width * 2.5, box.width + 16)
-        return overlap >= 0.55 * min(rect.width, box.width) and rect.width <= cap and rect.width < 200
+        return bool(overlap >= 0.55 * min(rect.width, box.width) and rect.width <= cap and rect.width < 200)
     if min(rect.width, rect.height) <= _STROKE_THIN:
         overlap = _axis_overlap(rect.y0, rect.y1, box.y0, box.y1)
         cap = max(box.height * 2.5, box.height + 12)
-        return overlap >= 0.55 * min(rect.height, box.height) and rect.height <= cap
+        return bool(overlap >= 0.55 * min(rect.height, box.height) and rect.height <= cap)
     beside = rect.x1 <= box.x0 + 1 and _axis_overlap(
         rect.y0,
         rect.y1,
@@ -113,7 +113,7 @@ def intersecting_curves(box: pymupdf.Rect, drawings: list[pymupdf.Rect]) -> tupl
     """Fraction bars and radical signs that intersect the formula box or sit right outside it. Rules across the
     full page width are not included."""
     found: list[pymupdf.Rect] = []
-    x0, y0, x1, y1 = box
+    x0, y0, x1, y1 = box.x0, box.y0, box.x1, box.y1
     for rect in drawings:
         if rect.width < 0.4 or rect.height < 0.3:
             continue

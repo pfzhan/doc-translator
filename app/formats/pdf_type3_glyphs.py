@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import bisect
 from dataclasses import dataclass, field
+from typing import TypeGuard
 
 import pymupdf
 
@@ -98,7 +99,7 @@ class _Line:
     size: float = 0.0
 
 
-def _sure(label: Label | None) -> bool:
+def _sure(label: Label | None) -> TypeGuard[Label]:
     return label is not None and label.agreement >= _SURE
 
 
@@ -127,7 +128,8 @@ def _glyph_size(glyph: Glyph, labels: dict[Key, Label], sure: bool = True) -> fl
     kind = _letter_class(label.text)
     if kind is None:
         return None
-    return glyph.rect.height / _HEIGHT_RATIO[kind]
+    size: float = glyph.rect.height / _HEIGHT_RATIO[kind]
+    return size
 
 
 class _GlyphCenters:
