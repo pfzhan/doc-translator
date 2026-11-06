@@ -1,9 +1,9 @@
 """Run, pause, resume, delete and clear translation jobs. Shared by the job routes and the server's cleanup."""
 
 import asyncio
+import logging
 import shutil
 import time
-import traceback
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -17,6 +17,8 @@ from .model_files import _formula_model, _model_path
 from .runner import Runner, get_cache
 from .services import Service
 from .translators import Translator, TranslatorError, create_translator
+
+log = logging.getLogger(__name__)
 
 PROGRESS_SAVE_INTERVAL = 5
 # Directory in the record where a run writes its translations before they replace those in out/
@@ -48,7 +50,7 @@ async def _cleanup_quietly() -> None:
     try:
         await _cleanup()
     except Exception:  # noqa: BLE001
-        traceback.print_exc()
+        log.exception("Cleaning up records failed; trying again in the next round")
 
 
 async def _cleanup() -> None:
@@ -140,7 +142,7 @@ async def _run_job(job: Job, translator: Translator, bilingual: bool) -> None:
     except (TranslatorError, ValueError) as e:
         job.status, job.error = "error", str(e)
     except Exception as e:  # noqa: BLE001
-        traceback.print_exc()
+        log.exception("Job %s (%s) failed", job.id, job.filename)
         job.status, job.error = "error", f"{type(e).__name__}: {e}"
     finally:
         try:
@@ -324,7 +326,7 @@ async def _forget_cache(job_id: str) -> None:
     try:
         await asyncio.to_thread(cleanup.forget, job, state.jobs, get_cache(), translator)
     except Exception:  # noqa: BLE001
-        traceback.print_exc()
+        log.exception("Clearing the cache of record %s failed; it is deleted anyway", job_id)
     finally:
         if translator is not None:
             await translator.aclose()

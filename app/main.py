@@ -2,6 +2,7 @@
 result. Translation records are persisted in data/jobs/."""
 
 import asyncio
+import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -40,6 +41,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Doc Translator", lifespan=lifespan)
+
+# Uvicorn configures only its own loggers. Give the app's a handler with a time stamp, unless the process set up
+# logging itself (a root handler)
+_log = logging.getLogger("app")
+if not _log.handlers and not logging.getLogger().handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    _log.addHandler(_handler)
+    _log.setLevel(logging.INFO)
 
 # Accept only local addresses. Otherwise a malicious web page could resolve its own domain to 127.0.0.1 (DNS
 # rebinding) and call these APIs as the same origin, for example to test an API address of its choice with a saved
