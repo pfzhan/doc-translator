@@ -2,7 +2,7 @@
 
 Writing typesets page by page and takes several minutes for a book of a few hundred pages, and pages are almost
 independent of each other. The only dependency is a paragraph carried over to the next page: the part a page
-cannot fit is left to the tail block on the next page (see carried in pdf_write._render_translated), so a host
+cannot fit is left to the tail block on the next page (see carried in pdf_write._DocumentWriter), so a host
 and its tail must be in the same part.
 
 Subprocesses are started with fork: the blocks, translations and formula images that writing needs are in
