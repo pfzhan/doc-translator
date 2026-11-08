@@ -638,8 +638,20 @@ page in Chromium and fails on any script error; it is skipped when Playwright or
 `--cov` measures line and branch coverage of `app/` and lists the lines tests do not reach; it fails below the
 `fail_under` in `pyproject.toml` (90%). `--cov-report=html` writes a browsable report to `htmlcov/`.
 
-GitHub Actions (`.github/workflows/ci.yml`) runs the same checks on Python 3.12 and 3.14 for every pull request and
-push to `main`. It installs only `requirements-dev.txt`, so tests that need an optional package (such as
+The web page (`static/`) and the browser extension (`extension/`) are plain JavaScript with no build step. TypeScript
+checks them in strict mode from their JSDoc annotations (Node.js 22 or later):
+
+```bash
+npm ci
+npm run typecheck
+```
+
+`tsconfig.static.json` covers the page and `tsconfig.extension.json` the extension, whose scripts share one global
+scope; `types/extension.d.ts` declares what the type libraries lack, including the messages between the extension's
+scripts. Both configurations live outside `extension/`, so the extension is still loaded and packaged as it is.
+
+GitHub Actions (`.github/workflows/ci.yml`) runs the same checks, the Python ones on 3.12 and 3.14, for every pull
+request and push to `main`. It installs only `requirements-dev.txt`, so tests that need an optional package (such as
 `onnxruntime` for the models) are skipped there.
 
 ## Known limitations

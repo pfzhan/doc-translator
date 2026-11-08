@@ -3,11 +3,43 @@
 
 const START_COMMAND = '.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765';
 
-const $ = (id) => document.getElementById(id);
+/**
+ * The element with this id, which options.html always has.
+ * @param {string} id
+ * @returns {HTMLElement}
+ */
+function $(id) {
+  const el = document.getElementById(id);
+  if (!el) throw new Error(`#${id} is missing`);
+  return el;
+}
+
+/**
+ * The same, of a given kind.
+ * @template {HTMLElement} T
+ * @param {string} id
+ * @param {{ new (): T, name: string }} kind
+ * @returns {T}
+ */
+function byId(id, kind) {
+  const el = $(id);
+  if (!(el instanceof kind)) throw new Error(`#${id} is not a ${kind.name}`);
+  return el;
+}
+
+/**
+ * The server's answers this page reads (app/routes/services.py, app/routes/web.py, app/languages.py).
+ * @typedef {{ services: { id: string, name: string, enabled: boolean }[], default: string }} ServiceList
+ * @typedef {{ code: string, name: string, native: string }} Language
+ * @typedef {{ entries: number }} CacheSize
+ */
 
 const LOCAL_HOSTS = ['127.0.0.1', 'localhost'];
 
-/** The server's origin, or null when the value is not an http(s) URL. */
+/**
+ * The server's origin, or null when the value is not an http(s) URL.
+ * @param {string} value
+ */
 function normalizeServer(value) {
   let url;
   try {
@@ -18,8 +50,12 @@ function normalizeServer(value) {
   return ['http:', 'https:'].includes(url.protocol) ? url.origin : null;
 }
 
-/** Access to this machine over http is granted at install (host_permissions); other servers, and https here, are
- * optional_host_permissions, asked for when the user connects to one. */
+/**
+ * Access to this machine over http is granted at install (host_permissions); other servers, and https here, are
+ * optional_host_permissions, asked for when the user connects to one.
+ * @param {string} server
+ * @returns {chrome.permissions.Permissions | null}
+ */
 function accessFor(server) {
   const url = new URL(server);
   const local = url.protocol === 'http:' && LOCAL_HOSTS.includes(url.hostname);
@@ -27,31 +63,51 @@ function accessFor(server) {
 }
 
 class HTTPError extends Error {
+  /** @param {number} status */
   constructor(status) {
     super(`HTTP ${status}`);
     this.status = status;
   }
 }
 
+/**
+ * @param {string} text
+ * @param {'' | 'error' | 'ok'} [kind]
+ */
 function setStatus(text, kind = '') {
   const el = $('status');
   el.textContent = text;
   el.className = `hint ${kind}`;
 }
 
+/**
+ * @param {HTMLSelectElement} select
+ * @param {[string, string][]} options value and label of each option
+ * @param {string} value the option to select, when there is one with it
+ */
 function fill(select, options, value) {
   select.replaceChildren(...options.map(([v, label]) => new Option(label, v)));
   select.value = options.some(([v]) => v === value) ? value : options[0]?.[0] ?? '';
 }
 
+/**
+ * The answer of the server the user chose; its shape is taken on trust, as the rest of the page uses it.
+ * @template T
+ * @param {Settings} s
+ * @param {string} path
+ * @returns {Promise<T>}
+ */
 async function getJSON(s, path) {
   const resp = await fetch(s.server + path, { headers: authHeaders(s) });
   if (!resp.ok) throw new HTTPError(resp.status);
   return resp.json();
 }
 
-/** Give up access to a server the extension no longer uses, unless it is also a site translated automatically.
- * Access to this machine over http comes from manifest.json and cannot be given up. */
+/**
+ * Give up access to a server the extension no longer uses, unless it is also a site translated automatically.
+ * Access to this machine over http comes from manifest.json and cannot be given up.
+ * @param {string} server
+ */
 async function releaseServer(server) {
   const access = normalizeServer(server || '') && accessFor(server);
   if (!access || (await loadAutoSites()).includes(siteOf(server))) return;
@@ -60,12 +116,16 @@ async function releaseServer(server) {
 
 let attempts = 0;
 
-/** byUser: the user pressed 连接; only then may the browser ask for access to another server. */
+/**
+ * byUser: the user pressed 连接; only then may the browser ask for access to another server.
+ * @param {boolean} [byUser]
+ */
 async function connect(byUser = false) {
   // A slower earlier attempt (the one on page load, say) must not overwrite what a later one shows
   const attempt = ++attempts;
   const stale = () => attempt !== attempts;
-  const server = normalizeServer($('server').value);
+  const serverInput = byId('server', HTMLInputElement);
+  const server = normalizeServer(serverInput.value);
   if (!server) {
     setStatus('地址要以 http:// 或 https:// 开头，例如 http://127.0.0.1:8765', 'error');
     return;
@@ -73,7 +133,7 @@ async function connect(byUser = false) {
   const access = accessFor(server);
   // permissions.request needs the user's click, so it comes before anything is awaited
   const granted = !access || (byUser ? chrome.permissions.request(access) : chrome.permissions.contains(access));
-  $('server').value = server;
+  serverInput.value = server;
   if (!(await granted)) {
     // Not saved: every translation would fail, and the address would sync to the user's other browsers
     if (!stale()) setStatus(`没有访问 ${server} 的权限，请点「连接」并在浏览器的提示中允许`, 'error');
@@ -81,23 +141,30 @@ async function connect(byUser = false) {
   }
   const previous = (await loadSettings()).server;
   await chrome.storage.sync.set({ server });
-  await chrome.storage.local.set({ token: $('token').value.trim() });
+  await chrome.storage.local.set({ token: byId('token', HTMLInputElement).value.trim() });
   if (byUser && previous !== server) await releaseServer(previous);
   const s = await loadSettings();
   if (stale()) return;
   setStatus('连接中…');
-  let services, languages;
+  /** @type {ServiceList} */
+  let services;
+  /** @type {Language[]} */
+  let languages;
   try {
-    [services, languages] = await Promise.all([getJSON(s, '/api/services'), getJSON(s, '/api/languages')]);
+    [services, languages] = await Promise.all([
+      getJSON(s, '/api/services'),
+      /** @type {Promise<Language[]>} */ (getJSON(s, '/api/languages')),
+    ]);
   } catch (e) {
     if (stale()) return;
-    if (e.status === 401) {
+    const status = e instanceof HTTPError ? e.status : 0; // 0: no answer at all
+    if (status === 401) {
       const problem = s.token ? '访问令牌不对' : `${server} 需要访问令牌`;
       setStatus(`${problem}，请填服务端 ACCESS_TOKEN 的值`, 'error');
-    } else if (e.status === 403 && access) {
+    } else if (status === 403 && access) {
       // The server has no ACCESS_TOKEN and answers only requests from its own machine
       setStatus(`${server} 只接受本机的请求：请在服务端设置环境变量 ACCESS_TOKEN，并在这里填它的值`, 'error');
-    } else if (e.status === 400 && access) {
+    } else if (status === 400 && access) {
       // TrustedHostMiddleware rejects host names that are not in ALLOWED_HOSTS
       setStatus(`${server} 拒绝了请求：请在服务端的环境变量 ALLOWED_HOSTS 中加入 ${new URL(server).hostname}`, 'error');
     } else if (access) {
@@ -110,30 +177,38 @@ async function connect(byUser = false) {
   if (stale()) return;
   const defaultName = services.services.find((x) => x.id === services.default)?.name || services.default;
   const enabled = services.services.filter((x) => x.enabled);
-  fill($('service'), [['', `默认服务（${defaultName}）`], ...enabled.map((x) => [x.id, x.name])], s.serviceId);
+  /** @type {[string, string][]} */
+  const serviceOptions = [['', `默认服务（${defaultName}）`]];
+  for (const x of enabled) serviceOptions.push([x.id, x.name]);
+  fill(byId('service', HTMLSelectElement), serviceOptions, s.serviceId);
   // Removed or disabled on the server since: the list falls back to the default, and translations must use what it
   // shows, or each would fail while this page looks fine
   const serviceGone = s.serviceId !== '' && !enabled.some((x) => x.id === s.serviceId);
   if (serviceGone) await chrome.storage.sync.set({ serviceId: '' });
-  const names = languages.map((l) => [l.code, l.code === 'auto' ? '自动检测' : `${l.native}（${l.name}）`]);
-  fill($('target'), names.filter(([code]) => code !== 'auto'), s.targetLang);
-  fill($('source'), names, s.sourceLang);
-  fill($('alt'), names.filter(([code]) => code !== 'auto'), s.altLang);
+  const names = languages.map(
+    (l) => /** @type {[string, string]} */ ([l.code, l.code === 'auto' ? '自动检测' : `${l.native}（${l.name}）`]),
+  );
+  fill(byId('target', HTMLSelectElement), names.filter(([code]) => code !== 'auto'), s.targetLang);
+  fill(byId('source', HTMLSelectElement), names, s.sourceLang);
+  fill(byId('alt', HTMLSelectElement), names.filter(([code]) => code !== 'auto'), s.altLang);
   setStatus(serviceGone ? '已连接。之前选的翻译服务已删除或停用，已改用默认服务' : '已连接', 'ok');
   showCache(s);
 }
 
 // ---------- Translation cache ----------
 
+/** @param {Settings} s */
 async function showCache(s) {
+  const clear = byId('clear-cache', HTMLButtonElement);
   try {
+    /** @type {CacheSize} */
     const { entries } = await getJSON(s, '/api/web/cache');
     $('cache-count').textContent = `${entries.toLocaleString()} 条`;
-    $('clear-cache').disabled = entries === 0;
+    clear.disabled = entries === 0;
   } catch {
     // The server predates the cache endpoints, or went away since connecting
     $('cache-count').textContent = '无法获取';
-    $('clear-cache').disabled = true;
+    clear.disabled = true;
   }
 }
 
@@ -141,10 +216,11 @@ async function clearCache() {
   const s = await loadSettings();
   const { server } = s;
   if (!confirm('清理网页翻译的缓存？之后打开的网页会重新请求翻译服务。')) return;
-  $('clear-cache').disabled = true;
+  byId('clear-cache', HTMLButtonElement).disabled = true;
   try {
     const resp = await fetch(`${server}/api/web/cache`, { method: 'DELETE', headers: authHeaders(s) });
     if (!resp.ok) throw new HTTPError(resp.status);
+    /** @type {CacheSize} */
     const { entries } = await resp.json();
     $('cache-status').textContent = `已清理 ${entries.toLocaleString()} 条`;
   } catch {
@@ -168,22 +244,34 @@ async function showShortcut() {
 
 async function init() {
   const s = await loadSettings();
-  $('server').value = s.server;
-  $('token').value = s.token;
+  const server = byId('server', HTMLInputElement);
+  const token = byId('token', HTMLInputElement);
+  server.value = s.server;
+  token.value = s.token;
   $('connect').addEventListener('click', () => connect(true));
   $('clear-cache').addEventListener('click', clearCache);
-  $('server').addEventListener('keydown', (e) => e.key === 'Enter' && connect(true));
-  $('token').addEventListener('keydown', (e) => e.key === 'Enter' && connect(true));
-  $('service').addEventListener('change', (e) => chrome.storage.sync.set({ serviceId: e.target.value }));
-  $('target').addEventListener('change', (e) => chrome.storage.sync.set({ targetLang: e.target.value }));
-  $('source').addEventListener('change', (e) => chrome.storage.sync.set({ sourceLang: e.target.value }));
-  $('alt').addEventListener('change', (e) => chrome.storage.sync.set({ altLang: e.target.value }));
-  $('mode').value = s.mode;
-  $('mode').addEventListener('change', (e) => chrome.storage.sync.set({ mode: e.target.value }));
-  $('scope').value = s.scope;
-  $('scope').addEventListener('change', (e) => chrome.storage.sync.set({ scope: e.target.value }));
+  server.addEventListener('keydown', (e) => e.key === 'Enter' && connect(true));
+  token.addEventListener('keydown', (e) => e.key === 'Enter' && connect(true));
+  /** @type {[string, keyof SyncedSettings][]} */
+  const selects = [
+    ['service', 'serviceId'],
+    ['target', 'targetLang'],
+    ['source', 'sourceLang'],
+    ['alt', 'altLang'],
+    ['mode', 'mode'],
+    ['scope', 'scope'],
+  ];
+  for (const [id, key] of selects) {
+    const select = byId(id, HTMLSelectElement);
+    select.addEventListener('change', () => chrome.storage.sync.set({ [key]: select.value }));
+  }
+  const mode = byId('mode', HTMLSelectElement);
+  mode.value = s.mode;
+  byId('scope', HTMLSelectElement).value = s.scope;
   // The toggle-mode shortcut changes the setting while this page may be open
-  chrome.storage.onChanged.addListener((changes) => changes.mode && ($('mode').value = changes.mode.newValue));
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.mode) mode.value = String(changes.mode.newValue);
+  });
   // Extensions cannot set shortcuts themselves; the browser's own page does it. Firefox opens its page through the
   // API, and does not open chrome:// URLs
   $('shortcuts').addEventListener('click', () => {
@@ -208,6 +296,7 @@ let siteListVersion = 0;
 async function showSites() {
   // Several events redraw the list; a slower earlier call must not draw an older list over a newer one
   const version = ++siteListVersion;
+  /** @type {HTMLLIElement[]} */
   const items = [];
   for (const host of await loadAutoSites()) {
     const li = document.createElement('li');

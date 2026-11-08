@@ -297,7 +297,16 @@ eval/              PDF 分段、行内公式和模型的评测脚本，用法和
 
 `--cov` 统计 `app/` 的行覆盖率和分支覆盖率，并列出测试没有覆盖到的行；低于 `pyproject.toml` 里的 `fail_under`（90%）时失败。加 `--cov-report=html` 会在 `htmlcov/` 生成可浏览的报告。
 
-GitHub Actions（`.github/workflows/ci.yml`）在每个 pull request 和推送到 `main` 时，用 Python 3.12 和 3.14 运行同样的检查。它只安装 `requirements-dev.txt`，所以需要可选依赖的测试（例如模型用到的 `onnxruntime`）在那里会被跳过。
+网页（`static/`）和浏览器扩展（`extension/`）是不需要构建的原生 JavaScript，由 TypeScript 按 JSDoc 注解以严格模式检查（需要 Node.js 22 或更高版本）：
+
+```bash
+npm ci
+npm run typecheck
+```
+
+`tsconfig.static.json` 检查网页，`tsconfig.extension.json` 检查扩展（扩展的脚本共用一个全局作用域）；类型库里没有的声明，包括扩展各脚本之间的消息，写在 `types/extension.d.ts`。两份配置都放在 `extension/` 外面，扩展仍可原样加载和打包。
+
+GitHub Actions（`.github/workflows/ci.yml`）在每个 pull request 和推送到 `main` 时运行同样的检查，Python 部分用 3.12 和 3.14。它只安装 `requirements-dev.txt`，所以需要可选依赖的测试（例如模型用到的 `onnxruntime`）在那里会被跳过。
 
 ## 已知限制
 

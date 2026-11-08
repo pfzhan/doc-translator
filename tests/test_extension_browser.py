@@ -5,6 +5,7 @@ Needs the packages in requirements-dev.txt and `playwright install chromium`; sk
 
 import json
 import threading
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -187,6 +188,42 @@ def test_translates_a_paragraph_below_its_original(fake_server: FakeServer, work
     assert page.locator("p").text_content() == VISIBLE + TRANSLATED + VISIBLE
 
 
+def test_a_formatted_paragraph_keeps_the_pages_own_link(fake_server: FakeServer, worker: Worker, page: Page) -> None:
+    html = """<!doctype html><title>t</title>
+      <p>Read <a href="/guide" id="guide" class="nav">the <b>full</b> guide</a> before you start.</p>"""
+    page.goto(fake_server.add_page("/rich", html))
+    press_shortcut(worker, page)
+    wait_for_translations(page, 1)
+    # Sent as HTML with only the formatting tags, numbered and without their attributes
+    assert fake_server.sent_texts() == ['Read <a i="1">the <b i="0">full</b> guide</a> before you start.']
+    # Rebuilt from copies of the page's elements: the href comes from the page, the id stays on the original only
+    link = page.locator("dt-trans a")
+    assert link.get_attribute("href") == "/guide" and link.get_attribute("class") == "nav"
+    assert link.get_attribute("id") is None and link.get_attribute("i") is None
+    assert page.locator("dt-trans").text_content() == TRANSLATED + "Read the full guide before you start."
+
+
+def test_translation_only_mode_hides_the_originals_of_what_it_translated(
+    fake_server: FakeServer, worker: Worker, page: Page
+) -> None:
+    worker.evaluate("chrome.storage.sync.set({ mode: 'translated' })")
+    html = f"""<!doctype html><title>t</title><p>{VISIBLE}</p>
+      <input placeholder="Search the whole archive">"""
+    page.goto(fake_server.add_page("/translated-only", html))
+    press_shortcut(worker, page)
+    wait_for_translations(page, 1)
+    original = "() => document.querySelector('p').firstChild.data"
+    placeholder = "() => document.querySelector('input').placeholder"
+    page.wait_for_function(f"({placeholder})() !== 'Search the whole archive'", timeout=WAIT_MS)
+    assert page.evaluate(original) == "" and translations(page) == [TRANSLATED + VISIBLE]
+    assert page.evaluate(placeholder) == TRANSLATED + "Search the whole archive"
+
+    # The next press hides the translations, and the originals come back
+    press_shortcut(worker, page)
+    assert page.evaluate(original) == VISIBLE
+    assert page.evaluate(placeholder) == "Search the whole archive"
+
+
 def test_text_in_a_collapsed_box_is_translated_once_expanded(
     fake_server: FakeServer, worker: Worker, page: Page
 ) -> None:
@@ -326,3 +363,33 @@ def test_options_keep_the_access_token_out_of_synced_settings(browser: BrowserCo
     # A secret must not sync to the other browsers of the account
     assert stored == ["a-token-of-sixteen-chars", None]
     options.close()
+
+
+def translate_selection(worker: Worker, page: Page) -> None:
+    """Do what the shortcut for selected text does on the page's tab."""
+    worker.evaluate(
+        "async (url) => { const [tab] = await chrome.tabs.query({ url }); await translateSelection(tab); }", page.url
+    )
+
+
+def test_selected_text_is_sent_for_translation(fake_server: FakeServer, worker: Worker, page: Page) -> None:
+    password = "hunter2-is-a-secret"
+    html = f"""<!doctype html><title>t</title><input id="secret" type="password" value="{password}">
+      <p id="chosen">{VISIBLE}</p><p>Text that was not selected.</p>"""
+    page.goto(fake_server.add_page("/selection", html))
+    # Text selected in a password field never leaves the page
+    page.focus("#secret")
+    page.evaluate("document.getElementById('secret').select()")
+    translate_selection(worker, page)
+
+    page.evaluate(
+        """() => {
+          document.activeElement.blur();
+          getSelection().selectAllChildren(document.getElementById('chosen'));
+        }"""
+    )
+    translate_selection(worker, page)
+    deadline = time.monotonic() + WAIT_MS / 1000
+    while not fake_server.requests and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert fake_server.sent_texts() == [VISIBLE]

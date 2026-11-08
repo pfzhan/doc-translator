@@ -18,29 +18,54 @@
   const TEXT_FIELDS = new Set(['text', 'search', 'url', 'tel', 'email']);
   const SECRET_AUTOCOMPLETE = /\b(one-time-code|cc-[a-z-]+|current-password|new-password)\b/;
 
-  let bubble = null; // the open bubble: {host, box, text, status, rect, scroll}
+  /**
+   * The open bubble. rect: the selection's box; scroll: the page's scroll position when the bubble opened.
+   * @typedef {{ host: HTMLElement, box: HTMLElement, text: HTMLElement, status: HTMLElement, rect: DOMRect,
+   *   scroll: { x: number, y: number } }} Bubble
+   */
+  /** @type {Bubble | null} */
+  let bubble = null;
 
-  /** The focused element. For one in a shadow root, document.activeElement is the host; closed roots are open to
-   * extensions only (chrome.dom in Chrome, openOrClosedShadowRoot in Firefox). */
+  /**
+   * The focused element. For one in a shadow root, document.activeElement is the host; closed roots are open to
+   * extensions only (chrome.dom in Chrome, openOrClosedShadowRoot in Firefox).
+   * @returns {Element | null}
+   */
   function focusedElement() {
-    const shadowOf = (el) => el.shadowRoot || chrome.dom?.openOrClosedShadowRoot?.(el) || el.openOrClosedShadowRoot;
+    /** @param {Element} el */
+    const shadowOf = (el) =>
+      el.shadowRoot ||
+      chrome.dom?.openOrClosedShadowRoot?.(/** @type {HTMLElement} */ (el)) ||
+      el.openOrClosedShadowRoot;
     let el = document.activeElement;
-    while (el && shadowOf(el)?.activeElement) el = shadowOf(el).activeElement;
+    for (let inner = el && shadowOf(el)?.activeElement; inner; inner = shadowOf(inner)?.activeElement) el = inner;
     return el;
   }
 
-  /** The selected text and the box to show the bubble next to; null when nothing is selected. */
+  /**
+   * The selected text and the box to show the bubble next to; null when nothing is selected.
+   * @returns {{ text: string, rect: DOMRect } | null}
+   */
   function selection() {
     // Text selected in a form field is not part of the document's selection (Chrome still gives it as the
     // document's selected text, so a field inside a shadow root must be found too, or secrets would get through)
-    const field = focusedElement();
+    const focused = focusedElement();
     let text, rect;
-    if (field && ['input', 'textarea'].includes(field.localName)) {
+    // Told apart by localName rather than instanceof: page elements come from the page's world, not this one
+    if (focused && ['input', 'textarea'].includes(focused.localName)) {
+      const field = /** @type {HTMLInputElement | HTMLTextAreaElement} */ (focused);
       const plain = field.localName === 'textarea' || TEXT_FIELDS.has(field.type);
-      if (!plain || SECRET_AUTOCOMPLETE.test(field.autocomplete) || !(field.selectionEnd > field.selectionStart)) {
+      const { selectionStart, selectionEnd } = field;
+      if (
+        !plain ||
+        SECRET_AUTOCOMPLETE.test(field.autocomplete) ||
+        selectionStart === null ||
+        selectionEnd === null ||
+        !(selectionEnd > selectionStart)
+      ) {
         return null;
       }
-      text = field.value.slice(field.selectionStart, field.selectionEnd);
+      text = field.value.slice(selectionStart, selectionEnd);
       rect = field.getBoundingClientRect();
     } else {
       const sel = getSelection();
@@ -51,8 +76,12 @@
     return text.trim() ? { text, rect } : null;
   }
 
-  /** The selection split into paragraphs, the longer ones cut so that each fits in a request. */
+  /**
+   * The selection split into paragraphs, the longer ones cut so that each fits in a request.
+   * @param {string} text
+   */
   function paragraphs(text) {
+    /** @type {string[]} */
     const out = [];
     for (const line of text.split(/\n+/)) {
       let rest = line.replace(/\s+/g, ' ').trim();
@@ -66,7 +95,10 @@
     return out;
   }
 
-  /** Where to cut text too long for a request: after a sentence, else between words, else at the limit. */
+  /**
+   * Where to cut text too long for a request: after a sentence, else between words, else at the limit.
+   * @param {string} head
+   */
   function cutPoint(head) {
     const sentence = head.match(/^[\s\S]*[.!?。！？]/)?.[0].length || 0;
     if (sentence > head.length / 2) return sentence;
@@ -76,10 +108,12 @@
 
   // ---------- Bubble ----------
 
+  /** @param {PointerEvent} e */
   function onPointerDown(e) {
-    if (!e.composedPath().includes(bubble.host)) close();
+    if (bubble && !e.composedPath().includes(bubble.host)) close();
   }
 
+  /** @param {KeyboardEvent} e */
   function onKeyDown(e) {
     if (e.key === 'Escape') close();
   }
@@ -92,6 +126,10 @@
     bubble = null;
   }
 
+  /**
+   * @param {DOMRect} rect
+   * @returns {Bubble}
+   */
   function open(rect) {
     close();
     const host = document.createElement('dt-selection');
@@ -116,22 +154,29 @@
     </div>`;
     // Outside body, like content.js's status box, so content.js's MutationObserver does not see it
     document.documentElement.append(host);
-    const box = shadow.querySelector('.bubble');
-    bubble = {
+    /** @param {string} selector one of the divs of the markup above */
+    const part = (selector) => {
+      const el = /** @type {HTMLElement | null} */ (shadow.querySelector(selector));
+      if (!el) throw new Error(`${selector} is missing`);
+      return el;
+    };
+    const opened = {
       host,
-      box,
-      text: shadow.querySelector('.text'),
-      status: shadow.querySelector('.status'),
+      box: part('.bubble'),
+      text: part('.text'),
+      status: part('.status'),
       rect,
       scroll: { x: scrollX, y: scrollY },
     };
+    bubble = opened;
     document.addEventListener('pointerdown', onPointerDown, true);
     document.addEventListener('keydown', onKeyDown, true);
-    return bubble;
+    return opened;
   }
 
   /** Below the selection, or above it when there is more room there; kept inside the viewport horizontally. */
   function place() {
+    if (!bubble) return;
     const { box, rect, scroll } = bubble;
     const view = document.documentElement;
     const left = Math.max(GAP, Math.min(rect.left, view.clientWidth - box.offsetWidth - GAP));
@@ -145,18 +190,28 @@
     box.style.top = `${top + scroll.y}px`;
   }
 
-  function setStatus(message) {
-    bubble.status.textContent = message;
+  /**
+   * @param {Bubble} open
+   * @param {string} message
+   */
+  function setStatus(open, message) {
+    open.status.textContent = message;
     place();
   }
 
-  /** langs: aligned with texts, the language of each translation; null for an original kept as it is. */
-  function append(texts, langs) {
+  /**
+   * langs: aligned with texts, the language of each translation; null for an original kept as it is.
+   * @param {Bubble} open
+   * @param {string[]} texts
+   * @param {(string | null)[]} langs
+   */
+  function append(open, texts, langs) {
     texts.forEach((text, i) => {
       const p = document.createElement('p');
-      if (langs[i]) p.lang = langs[i];
+      const lang = langs[i];
+      if (lang) p.lang = lang;
       p.textContent = text;
-      bubble.text.append(p);
+      open.text.append(p);
     });
     place();
   }
@@ -168,35 +223,36 @@
     if (!sel) return;
     const texts = paragraphs(sel.text);
     const current = open(sel.rect);
-    setStatus('翻译中…');
+    setStatus(current, '翻译中…');
     let translated = false;
     for (let i = 0; i < texts.length; i += MAX_TEXTS) {
       const batch = texts.slice(i, i + MAX_TEXTS);
+      /** @type {TranslateMessage} */
+      const message = { type: 'dt-translate-selected', texts: batch, title: document.title };
+      /** @type {TranslateAnswer | undefined} */
       let result;
       try {
-        result = await chrome.runtime.sendMessage({
-          type: 'dt-translate-selected',
-          texts: batch,
-          title: document.title,
-        });
+        result = await chrome.runtime.sendMessage(message);
       } catch {
         // The extension was reloaded or removed; the script left in this page can no longer reach it
         result = { error: '扩展已更新，请刷新页面后重试' };
       }
       if (bubble !== current) return; // closed, or replaced by a newer selection
-      if (!result || result.error) {
-        setStatus(`翻译失败：${result?.error || '未知错误'}`);
+      if (!result || 'error' in result) {
+        setStatus(current, `翻译失败：${result?.error || '未知错误'}`);
         return;
       }
+      const { translations, langs } = result;
       // null keeps the original, so the bubble still reads in the order of the selection
-      translated ||= result.translations.some((t) => t);
+      translated ||= translations.some((t) => t);
       append(
-        batch.map((text, j) => result.translations[j] || text),
-        result.langs,
+        current,
+        batch.map((text, j) => translations[j] || text),
+        langs,
       );
     }
-    if (!translated) bubble.text.replaceChildren();
-    setStatus(translated ? '' : '选中的文字不需要翻译');
+    if (!translated) current.text.replaceChildren();
+    setStatus(current, translated ? '' : '选中的文字不需要翻译');
   }
 
   window.__docTranslatorSelection = translateSelection;

@@ -7,11 +7,17 @@
 
 const SCRIPT_PREFIX = 'dt-site:';
 
+/** @returns {Promise<string[]>} hostnames, as listed in storage.sync */
 async function loadAutoSites() {
-  return (await chrome.storage.sync.get({ autoSites: [] })).autoSites;
+  // Only this extension writes autoSites, always a list of hostnames
+  const { autoSites } = /** @type {{ autoSites: string[] }} */ (await chrome.storage.sync.get({ autoSites: [] }));
+  return autoSites;
 }
 
-/** The hostname of an http(s) URL; '' for other pages. */
+/**
+ * The hostname of an http(s) URL; '' for other pages.
+ * @param {string} url
+ */
 function siteOf(url) {
   try {
     const { protocol, hostname } = new URL(url);
@@ -21,16 +27,24 @@ function siteOf(url) {
   }
 }
 
-/** Host permission patterns for a site, each within one entry of optional_host_permissions in manifest.json. */
+/**
+ * Host permission patterns for a site, each within one entry of optional_host_permissions in manifest.json.
+ * @param {string} host
+ */
 function siteOrigins(host) {
   return [`http://${host}/*`, `https://${host}/*`];
 }
 
+/** @param {string} host */
 function hasSitePermission(host) {
   return chrome.permissions.contains({ origins: siteOrigins(host) });
 }
 
-/** From the context menu. permissions.request needs the click's user gesture, so it comes before any await. */
+/**
+ * From the context menu. permissions.request needs the click's user gesture, so it comes before any await.
+ * @param {string} host
+ * @param {number} tabId the tab the menu was opened on
+ */
 async function addAutoSite(host, tabId) {
   if (!(await chrome.permissions.request({ origins: siteOrigins(host) }))) return;
   const sites = await loadAutoSites();
@@ -47,7 +61,10 @@ async function addAutoSite(host, tabId) {
   }
 }
 
-/** From the context menu or the options page. */
+/**
+ * From the context menu or the options page.
+ * @param {string} host
+ */
 async function removeAutoSite(host) {
   await chrome.storage.sync.set({ autoSites: (await loadAutoSites()).filter((h) => h !== host) });
   // The service worker unregisters the script when it sees the change (syncAutoScripts). Access to the translation
@@ -61,6 +78,7 @@ async function removeAutoSite(host) {
 
 // ---------- Service worker only ----------
 
+/** @type {Promise<void>} */
 let syncing = Promise.resolve();
 
 /** Registers the content script for each listed site granted here, and unregisters it for the others. */
@@ -71,6 +89,7 @@ function syncAutoScripts() {
 }
 
 async function reconcileAutoScripts() {
+  /** @type {string[]} */
   const wanted = [];
   for (const host of await loadAutoSites()) {
     if (await hasSitePermission(host)) wanted.push(SCRIPT_PREFIX + host);
@@ -95,6 +114,7 @@ async function reconcileAutoScripts() {
 }
 
 function createSiteMenus() {
+  /** @type {Pick<chrome.contextMenus.CreateProperties, 'contexts' | 'documentUrlPatterns'>} */
   const pages = { contexts: ['page'], documentUrlPatterns: ['http://*/*', 'https://*/*'] };
   // Menus persist across updates: creating the same ids again would fail
   for (const id of ['dt-site-add', 'dt-site-remove']) chrome.contextMenus.remove(id, () => void chrome.runtime.lastError);
@@ -112,10 +132,14 @@ async function refreshSiteMenu() {
   await chrome.contextMenus.update('dt-site-remove', { visible: on });
 }
 
+/**
+ * @param {chrome.contextMenus.OnClickData} info
+ * @param {chrome.tabs.Tab} [tab] missing when the menu was not opened on a tab
+ */
 function onSiteMenuClicked(info, tab) {
-  const host = siteOf(info.pageUrl);
+  const host = siteOf(info.pageUrl || '');
   if (!host) return;
-  if (info.menuItemId === 'dt-site-add') addAutoSite(host, tab.id).then(refreshSiteMenu);
+  if (info.menuItemId === 'dt-site-add' && tab?.id !== undefined) addAutoSite(host, tab.id).then(refreshSiteMenu);
   if (info.menuItemId === 'dt-site-remove') removeAutoSite(host).then(refreshSiteMenu);
 }
 

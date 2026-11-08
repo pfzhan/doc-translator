@@ -1,0 +1,12 @@
+{
+  "name": "doc-translator-frontend",
+  "private": true,
+  "description": "Type checking of the web page (static/) and the browser extension (extension/); nothing is built",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.static.json && tsc -p tsconfig.extension.json"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.3.5",
+    "typescript": "7.0.2"
+  }
+}

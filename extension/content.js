@@ -57,27 +57,66 @@
   // Elements that keep showing in translation-only mode: hiding them would lose content the translation lacks
   const KEEP_SELECTOR = 'img, picture, svg, video, audio, canvas, iframe, object, embed, input, select, textarea, button';
 
+  /**
+   * A paragraph: a run of inline content with the same parent. Its translation el goes before after (null: at the
+   * end of parent). A paragraph the page changed later is stale: a new one takes its place.
+   * @typedef {object} Paragraph
+   * @property {undefined} [attr]
+   * @property {ChildNode[]} nodes
+   * @property {Element | ShadowRoot} parent
+   * @property {ChildNode | null} after
+   * @property {string} text what the paragraph says; set when registered
+   * @property {string} payload what is sent: its text, or its HTML when it has inline formatting (see richOf)
+   * @property {Rich | null} rich
+   * @property {HTMLElement} [el] its translation, once shown
+   * @property {HTMLElement} [reuse] the translation of its earlier version, which it takes over
+   * @property {boolean} [stale]
+   * @property {boolean} [redo] read again on the next scan even if unchanged (see rescan)
+   */
+  /**
+   * An attribute translated along with the paragraphs.
+   * @typedef {object} AttrUnit
+   * @property {'placeholder' | 'title'} attr
+   * @property {Element} target the element carrying it
+   * @property {string} text
+   * @property {string} payload
+   * @property {string} [translation]
+   * @property {string | null} [current] the value this script last wrote into the attribute
+   * @property {boolean} [stale]
+   */
+  /** @typedef {Paragraph | AttrUnit} Unit */
+  /** @typedef {{ html: string, refs: Element[] }} Rich a paragraph as HTML, and the elements its i numbers stand for */
+
   let started = false;
   let hidden = false;
-  let mode = 'bilingual'; // or 'translated'
-  let scope = 'page'; // or 'main'
+  /** @type {'bilingual' | 'translated'} */
+  let mode = 'bilingual';
+  /** @type {'page' | 'main'} */
+  let scope = 'page';
   let pageHasMain = false; // whether the page marks its main content; updated by collect
+  /** @type {Unit[]} */
   let failed = []; // paragraphs of failed requests; non-empty means the next press retries
   let inflight = 0;
-  // A paragraph is a run of inline content with the same parent: {nodes, text, parent, after, el}. The translation
-  // el goes before after (null: at the end of parent). An attribute (placeholder, title) is {attr, target, text}.
-  // A paragraph the page changed later is stale: a new one takes its place
+  /** @type {WeakMap<Node, Paragraph>} */
   const unitOf = new WeakMap(); // node of a collected paragraph -> that paragraph
+  /** @type {WeakMap<Element, Paragraph>} */
   const ownerOf = new WeakMap(); // dt-trans -> the paragraph it translates
+  /** @type {WeakMap<Node, number>} */
   const churn = new WeakMap(); // parent element -> how many of its translations were replaced
+  /** @type {Record<AttrUnit['attr'], WeakSet<Element>>} */
   const seenAttrs = { placeholder: new WeakSet(), title: new WeakSet() }; // elements whose attribute was collected
+  /** @type {Set<Unit>} */
   const shown = new Set(); // paragraphs and attributes whose translation is on the page
+  /** @type {Map<Node, string>} */
   const originals = new Map(); // text node emptied in translation-only mode -> its text
+  /** @type {Map<Element, Unit[]>} */
   const waiting = new Map(); // observed element -> its paragraphs not yet near the viewport
+  /** @type {Unit[]} */
   const queue = []; // paragraphs near the viewport, not sent yet
 
   /** Screen-reader-only text is clipped to a 1px box, and a collapsed panel has no height: translating what such a
-   * box holds would only spend quota. */
+   * box holds would only spend quota.
+   * @param {DOMRectReadOnly} box */
   const hasArea = ({ width, height }) => width > 1 && height > 1;
 
   const visibility = new IntersectionObserver(
@@ -115,53 +154,91 @@
 
   /** The shadow root of el. Closed ones are open to extensions only: chrome.dom in Chrome, openOrClosedShadowRoot in
    * Firefox. Those are only looked for on custom elements, where nearly all are; an open one on any element. */
+  /** @param {Element} el
+   * @returns {ShadowRoot | null} */
   function shadowOf(el) {
     if (el.shadowRoot) return el.shadowRoot;
     if (!el.localName.includes('-') || OWN_HOSTS.has(el.localName)) return null;
-    if (chrome.dom?.openOrClosedShadowRoot) return chrome.dom.openOrClosedShadowRoot(el) || null;
+    // Custom elements (a hyphen in the name) are HTML elements
+    const custom = /** @type {HTMLElement} */ (el);
+    if (chrome.dom?.openOrClosedShadowRoot) return chrome.dom.openOrClosedShadowRoot(custom) || null;
     return el.openOrClosedShadowRoot || null;
   }
 
-  /** Whether el is a shadow host that does not show its own children: its shadow root has no slot for them. */
+  /** Whether el is a shadow host that does not show its own children: its shadow root has no slot for them.
+   * @param {Element} el */
   function slotless(el) {
     const shadow = shadowOf(el);
     return !!shadow && !shadow.querySelector('slot');
   }
 
-  const isShadow = (node) => node?.nodeType === Node.DOCUMENT_FRAGMENT_NODE && !!node.host;
-  /** The element itself, or the host of a shadow root. */
+  // Node types and casts rather than instanceof: content scripts run in an isolated world, where nodes of other
+  // frames' documents are not instances of this world's classes
+  /** @param {Node | null | undefined} node
+   * @returns {node is ShadowRoot} */
+  const isShadow = (node) =>
+    node?.nodeType === Node.DOCUMENT_FRAGMENT_NODE && !!(/** @type {ShadowRoot} */ (node)).host;
+  /** @param {Node} node
+   * @returns {node is Element} */
+  const isElement = (node) => node.nodeType === Node.ELEMENT_NODE;
+  /** @param {Node} node
+   * @returns {node is Text} */
+  const isText = (node) => node.nodeType === Node.TEXT_NODE;
+  /** The element itself, or the host of a shadow root.
+   * @param {Element | ShadowRoot} node */
   const elementOf = (node) => (isShadow(node) ? node.host : node);
-  /** The parent element, or the host for an element at the top of a shadow root. */
+  /** The parent element, or the host for an element at the top of a shadow root.
+   * @param {Element} el */
   const parentOf = (el) => el.parentElement || (isShadow(el.parentNode) ? el.parentNode.host : null);
+  /** The host of the shadow root node is in; null in the document itself.
+   * @param {Node} node */
+  const hostOf = (node) => {
+    const root = node.getRootNode();
+    return isShadow(root) ? root.host : null;
+  };
 
+  /** @param {Element | ShadowRoot} node
+   * @param {string} selector */
   function closestComposed(node, selector) {
-    for (let el = elementOf(node); el; el = el.getRootNode().host) {
+    for (let /** @type {Element | null} */ el = elementOf(node); el; el = hostOf(el)) {
       const found = el.closest(selector);
       if (found) return found;
     }
     return null;
   }
 
+  /** @param {Node} outer
+   * @param {Node} node */
   function containsComposed(outer, node) {
-    for (let n = node; n; n = n.getRootNode().host) if (outer.contains(n)) return true;
+    for (let /** @type {Node | null} */ n = node; n; n = hostOf(n)) if (outer.contains(n)) return true;
     return false;
   }
 
+  /** @type {Set<ShadowRoot>} */
   const shadowRoots = new Set(); // shadow roots entered: watched for changes like body
+  /** @type {Set<Element>} */
   const bareHosts = new Set(); // custom elements not defined yet when scanned; checked for a shadow root once they are
+  /** @type {WeakMap<ShadowRoot, HTMLStyleElement>} */
   const ownStyles = new WeakMap(); // shadow root -> its copy of content.css
+  /** @type {WeakSet<Node>} */
   const styleEls = new WeakSet(); // those copies: their mutation records are ours
+  /** @type {Promise<string> | null} */
   let css = null; // promise of the text of content.css
 
+  /** @returns {Promise<string>} */
   async function loadCss() {
     // Content scripts cannot fetch the extension's files; the service worker can
     try {
-      return (await chrome.runtime.sendMessage({ type: 'dt-css' })) || '';
+      /** @type {CssMessage} */
+      const message = { type: 'dt-css' };
+      const text = await chrome.runtime.sendMessage(message);
+      return typeof text === 'string' ? text : '';
     } catch {
       return '';
     }
   }
 
+  /** @param {ShadowRoot} root */
   function enterShadow(root) {
     if (shadowRoots.has(root)) return;
     shadowRoots.add(root);
@@ -169,7 +246,8 @@
     css ||= loadCss();
   }
 
-  /** Give the shadow root el is in content.css, again if the page replaced the root's content since. */
+  /** Give the shadow root el is in content.css, again if the page replaced the root's content since.
+   * @param {Element} el */
   async function styleShadow(el) {
     const root = el.getRootNode();
     if (!isShadow(root) || ownStyles.get(root)?.parentNode === root) return;
@@ -183,6 +261,7 @@
 
   // ---------- Finding paragraphs ----------
 
+  /** @param {Element} el */
   function optedOut(el) {
     // translate="no" on <html> or <body> is usually aimed at the browser's own translator; the user asked for this
     // page explicitly, so only opt-outs below body count
@@ -190,10 +269,13 @@
   }
 
   /** Copied whole into the translation: text marked not to translate, and inline shadow hosts whose text is all in
-   * their shadow root. */
+   * their shadow root.
+   * @param {Element} el */
   const keptWhole = (el) => optedOut(el) || slotless(el);
 
-  /** ignore: contributes nothing; inline: part of the current paragraph; block: ends it; skip: ends it, not entered */
+  /** ignore: contributes nothing; inline: part of the current paragraph; block: ends it; skip: ends it, not entered
+   * @param {Element} el
+   * @returns {'ignore' | 'inline' | 'block' | 'skip'} */
   function classify(el) {
     if (IGNORED_TAGS.has(el.localName)) return 'ignore';
     // Hidden by translation-only mode: still the inline element it was when collected
@@ -217,6 +299,7 @@
     return 'block';
   }
 
+  /** @param {Element | ShadowRoot} el */
   function hasBlockChild(el) {
     for (const child of el.children) {
       const kind = classify(child);
@@ -227,8 +310,11 @@
   }
 
   /** The page's header, footer, navigation or sidebar that el is part of. A header or footer of an article or
-   * section is part of that (its title, byline). */
+   * section is part of that (its title, byline).
+   * @param {Element | ShadowRoot} el */
   function landmarkOf(el) {
+    /** @param {Element} mark
+     * @param {string} selector */
     const above = (mark, selector) => {
       const parent = parentOf(mark);
       return parent && closestComposed(parent, selector);
@@ -239,7 +325,8 @@
     return null;
   }
 
-  /** Whether el (an element or a shadow root) is part of what the user asked to translate (setting "scope"). */
+  /** Whether el (an element or a shadow root) is part of what the user asked to translate (setting "scope").
+   * @param {Element | ShadowRoot} el */
   function inScope(el) {
     if (scope !== 'main') return true;
     const main = closestComposed(el, MAIN_SELECTOR);
@@ -251,17 +338,24 @@
     return !pageHasMain && !landmarkOf(el);
   }
 
-  /** Whether anything under el can be in scope; a wrapper outside it may still hold the main content. */
+  /** Whether anything under el can be in scope; a wrapper outside it may still hold the main content.
+   * @param {Element | ShadowRoot} el */
   const inScopeTree = (el) => inScope(el) || (pageHasMain && !!el.querySelector(MAIN_SELECTOR));
 
   /** Paragraphs under root (a block, an element the page added, or a shadow root), with those in the shadow roots
-   * below it. A shadow root holds paragraphs of its own: its text is laid out apart from its host's children. */
+   * below it. A shadow root holds paragraphs of its own: its text is laid out apart from its host's children.
+   * @param {Element | ShadowRoot} root
+   * @returns {Unit[]} */
   function collect(root) {
     if (scope === 'main') pageHasMain = !!document.querySelector(MAIN_SELECTOR);
+    /** @type {Paragraph[]} */
     const out = [];
+    /** @type {ShadowRoot[]} */
     const shadows = [];
     /** Note the shadow root of el, scanned after this tree when el is a block (see classify); one under an opt-out
-     * stays as it is. */
+     * stays as it is.
+     * @param {Element} el
+     * @param {string} kind */
     const noteShadow = (el, kind) => {
       if (optedOut(el)) return;
       const shadow = shadowOf(el);
@@ -269,28 +363,33 @@
         if (kind === 'block') shadows.push(shadow);
       } else if (el.matches(':not(:defined)') && !OWN_HOSTS.has(el.localName)) bareHosts.add(el);
     };
+    /** @type {ChildNode[]} */
     let run = [];
     let breaks = 0; // <br> in a row since the last text
     const flush = () => {
       // Line breaks at the end belong to the layout, not to the paragraph
-      while (run.length && run[run.length - 1].localName === 'br') run.pop();
+      while (run.length && isBreak(run[run.length - 1])) run.pop();
       const hosts = run.length ? hostsAlone(run) : null;
-      if (hosts) shadows.push(...hosts.map(shadowOf));
+      // Each host was found by shadowOf
+      if (hosts) shadows.push(...hosts.map((host) => /** @type {ShadowRoot} */ (shadowOf(host))));
       else if (run.length) {
         const last = run[run.length - 1];
-        out.push({ nodes: run, parent: last.parentNode, after: last.nextSibling });
+        // The nodes of a run are children of the element or shadow root being visited
+        const parent = /** @type {Element | ShadowRoot} */ (last.parentNode);
+        out.push({ nodes: run, parent, after: last.nextSibling, text: '', payload: '', rich: null });
       }
       run = [];
       breaks = 0;
     };
+    /** @param {ChildNode} node */
     const visit = (node) => {
-      if (node.nodeType === Node.TEXT_NODE) {
+      if (isText(node)) {
         // Emptied by translation-only mode: still part of its paragraph
         if (run.length || node.data.trim() || originals.has(node)) run.push(node);
         if (node.data.trim()) breaks = 0;
         return;
       }
-      if (node.nodeType !== Node.ELEMENT_NODE) return;
+      if (!isElement(node)) return;
       if (node.localName === 'br') {
         // A blank line (<br><br>) separates paragraphs, as in poems and old forum posts
         if (++breaks === 2) flush();
@@ -316,39 +415,46 @@
     };
     if (inScopeTree(root)) {
       // A host scanned on its own (added to body, or its shadow root came late) stands alone
-      if (root.nodeType === Node.ELEMENT_NODE) noteShadow(root, 'block');
-      if (root.nodeType !== Node.ELEMENT_NODE || !slotless(root)) root.childNodes.forEach(visit);
+      if (isElement(root)) noteShadow(root, 'block');
+      if (!isElement(root) || !slotless(root)) root.childNodes.forEach(visit);
     }
     flush();
     shadows.forEach(enterShadow);
-    return out
-      .filter((unit) => inScope(unit.parent))
-      .concat(placeholders(root), ...shadows.map(collect));
+    return [...out.filter((unit) => inScope(unit.parent)), ...placeholders(root), ...shadows.flatMap(collect)];
   }
 
-  /** A text node's text, also while translation-only mode keeps it empty. */
-  const dataOf = (node) => (node.data === '' && originals.has(node) ? originals.get(node) : node.data);
+  /** A text node's text, also while translation-only mode keeps it empty.
+   * @param {Text} node */
+  const dataOf = (node) => (node.data === '' ? originals.get(node) ?? '' : node.data);
 
-  /** The text of a paragraph, without what classify ignores (hidden labels, icon names). */
+  /** @param {Node} node */
+  const isBreak = (node) => isElement(node) && node.localName === 'br';
+
+  /** The text of a paragraph, without what classify ignores (hidden labels, icon names).
+   * @param {Node[]} nodes */
   function textOf(nodes) {
     let text = '';
+    /** @param {Node} node */
     const walk = (node) => {
-      if (node.nodeType === Node.TEXT_NODE) text += dataOf(node);
-      else if (node.localName === 'br') text += ' ';
-      else if (node.nodeType === Node.ELEMENT_NODE && classify(node) !== 'ignore') node.childNodes.forEach(walk);
+      if (isText(node)) text += dataOf(node);
+      else if (isBreak(node)) text += ' ';
+      else if (isElement(node) && classify(node) !== 'ignore') node.childNodes.forEach(walk);
     };
     nodes.forEach(walk);
     return text.replace(/\s+/g, ' ').trim();
   }
 
   /** The shadow hosts copied whole in a run that has no text of its own to translate (a date alone in a table cell):
-   * not part of a sentence, so their shadow roots are translated instead. Null when the run is a paragraph. */
+   * not part of a sentence, so their shadow roots are translated instead. Null when the run is a paragraph.
+   * @param {Node[]} nodes */
   function hostsAlone(nodes) {
+    /** @type {Element[]} */
     const hosts = [];
     let text = '';
+    /** @param {Node} node */
     const walk = (node) => {
-      if (node.nodeType === Node.TEXT_NODE) text += dataOf(node);
-      else if (node.nodeType !== Node.ELEMENT_NODE || optedOut(node) || classify(node) === 'ignore') return;
+      if (isText(node)) text += dataOf(node);
+      else if (!isElement(node) || optedOut(node) || classify(node) === 'ignore') return;
       else if (slotless(node)) hosts.push(node);
       else node.childNodes.forEach(walk);
     };
@@ -356,21 +462,30 @@
     return hosts.length && !worth(text) ? hosts : null;
   }
 
+  /** @param {string} text */
   function worth(text) {
     if (/^(https?:\/\/|www\.)\S+$/i.test(text)) return false;
     return (text.match(/\p{L}/gu) || []).length >= 2;
   }
 
-  const escapeHTML = (s) => s.replace(/[&<>"]/g, (c) => `&${{ '&': 'amp', '<': 'lt', '>': 'gt', '"': 'quot' }[c]};`);
+  /** @type {Record<string, string>} */
+  const ENTITIES = { '&': 'amp', '<': 'lt', '>': 'gt', '"': 'quot' };
+  /** @param {string} s */
+  const escapeHTML = (s) => s.replace(/[&<>"]/g, (c) => `&${ENTITIES[c]};`);
 
   /** The paragraph as HTML keeping only RICH_TAGS and what is copied whole (as <span translate="no">, which engines
-   * leave alone), with those elements in order of their i; null when it has none. */
+   * leave alone), with those elements in order of their i; null when it has none.
+   * @param {Node[]} nodes
+   * @returns {Rich | null} */
   function richOf(nodes) {
+    /** @type {Element[]} */
     const refs = [];
+    /** @param {Node} node
+     * @returns {string} */
     const walk = (node) => {
-      if (node.nodeType === Node.TEXT_NODE) return escapeHTML(dataOf(node));
-      if (node.localName === 'br') return ' ';
-      if (node.nodeType !== Node.ELEMENT_NODE || classify(node) === 'ignore') return '';
+      if (isText(node)) return escapeHTML(dataOf(node));
+      if (isBreak(node)) return ' ';
+      if (!isElement(node) || classify(node) === 'ignore') return '';
       if (keptWhole(node)) {
         refs.push(node);
         return `<span translate="no" i="${refs.length - 1}">${escapeHTML(textOf([node]))}</span>`;
@@ -387,11 +502,15 @@
   /** Rebuild a translated HTML fragment with DOM APIs. The model decides only the text and where the paragraph's own
    * tags go: every element is a copy of the original element it stands for (matched by i, else by tag in order),
    * so attributes such as href come from the page, never from the model. What is copied whole (see keptWhole) comes
-   * from the page, whatever the model put inside. Other tags keep only their text. */
+   * from the page, whatever the model put inside. Other tags keep only their text.
+   * @param {string} translated
+   * @param {Element[]} refs */
   function buildRich(translated, refs) {
     // DOMParser documents are inert: no scripts run and no resources load
     const doc = new DOMParser().parseFromString(`<body>${translated}`, 'text/html');
+    /** @type {Set<Element>} */
     const used = new Set();
+    /** @param {Element} el */
     const original = (el) => {
       const i = el.getAttribute('i');
       const ref = i === null ? null : refs[Number(i)];
@@ -401,11 +520,13 @@
       if (!RICH_TAGS.has(el.localName)) return null;
       return refs.find((r) => r.localName === el.localName && !keptWhole(r) && !used.has(r));
     };
+    /** @param {Node} node
+     * @param {Element | DocumentFragment} into */
     const build = (node, into) => {
       for (const child of node.childNodes) {
-        if (child.nodeType === Node.TEXT_NODE) {
+        if (isText(child)) {
           into.append(child.data);
-        } else if (child.nodeType === Node.ELEMENT_NODE && !IGNORED_TAGS.has(child.localName)) {
+        } else if (isElement(child) && !IGNORED_TAGS.has(child.localName)) {
           const ref = original(child);
           if (!ref) {
             build(child, into);
@@ -413,7 +534,7 @@
           }
           used.add(ref);
           const kept = keptWhole(ref);
-          const copy = ref.cloneNode(kept);
+          const copy = /** @type {Element} */ (ref.cloneNode(kept));
           // The original keeps its ids; marks of this extension describe the original only
           for (const el of [copy, ...(kept ? copy.querySelectorAll('*') : [])]) {
             for (const name of el.getAttributeNames()) {
@@ -430,34 +551,47 @@
     return out;
   }
 
-  /** Input fields in root (or root itself) whose placeholder is collected along with the paragraphs. */
+  /** Input fields in root (or root itself) whose placeholder is collected along with the paragraphs.
+   * @param {Element | ShadowRoot} root
+   * @returns {AttrUnit[]} */
   function placeholders(root) {
     const selector = 'input[placeholder], textarea[placeholder]';
-    const fields = [...root.querySelectorAll(selector), ...(root.matches?.(selector) ? [root] : [])];
+    const fields = [...root.querySelectorAll(selector), ...(isElement(root) && root.matches(selector) ? [root] : [])];
     return fields
       .filter((el) => {
         const opt = closestComposed(el, OPT_OUT); // one on body or html does not count, see optedOut
         return (!opt || opt === document.body || opt === document.documentElement) && inScope(el);
       })
-      .map((target) => ({ attr: 'placeholder', target }));
+      .map((target) => ({ attr: 'placeholder', target, text: '', payload: '' }));
   }
 
-  /** Paragraphs and attributes still on the page. */
+  /** Paragraphs and attributes still on the page.
+   * @param {Unit} unit */
   const alive = (unit) => (unit.attr ? unit.target.isConnected : unit.nodes[0].isConnected);
-  /** Still on the page and not replaced by a newer version. */
+  /** Still on the page and not replaced by a newer version.
+   * @template {Unit} T
+   * @param {T | undefined} unit
+   * @returns {unit is T} */
   const current = (unit) => !!unit && !unit.stale && alive(unit);
-  /** A translation no current paragraph owns: left by an earlier version of one, or by one the page removed. */
-  const free = (el) => el?.localName === TRANS_TAG && el.isConnected && !current(ownerOf.get(el));
+  /** A translation no current paragraph owns: left by an earlier version of one, or by one the page removed.
+   * @param {ChildNode | null | undefined} el
+   * @returns {el is HTMLElement} */
+  const free = (el) =>
+    !!el && isElement(el) && el.localName === TRANS_TAG && el.isConnected && !current(ownerOf.get(el));
 
   /** Whether a run found again is the paragraph collected before, unchanged. One marked redo is read again anyway:
-   * a custom element in it was defined since. */
+   * a custom element in it was defined since.
+   * @param {Paragraph} old
+   * @param {Paragraph} unit */
   const sameUnit = (old, unit) =>
     !old.redo && old.nodes.length === unit.nodes.length && old.nodes.every((node, i) => node === unit.nodes[i]) &&
     textOf(unit.nodes) === old.text;
 
-  /** Translations a rescan may remove, unless a paragraph found again takes them over. */
+  /** Translations a rescan may remove, unless a paragraph found again takes them over.
+   * @type {Set<Element>} */
   const reused = new Set();
 
+  /** @param {Unit[]} units */
   function register(units) {
     for (const unit of units) {
       if (unit.attr) registerAttr(unit);
@@ -465,15 +599,18 @@
     }
   }
 
+  /** @param {AttrUnit} unit */
   function registerAttr(unit) {
     if (seenAttrs[unit.attr].has(unit.target)) return;
     seenAttrs[unit.attr].add(unit.target);
-    unit.text = unit.payload = unit.target.getAttribute(unit.attr).trim();
+    // Collected for having the attribute (see placeholders, onPointerOver)
+    unit.text = unit.payload = (unit.target.getAttribute(unit.attr) ?? '').trim();
     if (!worth(unit.text) || unit.text.length > MAX_TEXT) return;
     if (unit.attr === 'title') queue.push(unit); // hovered, so in view already
     else watch(unit, unit.target);
   }
 
+  /** @param {Paragraph} unit */
   function registerParagraph(unit) {
     const olds = new Set(unit.nodes.map((node) => unitOf.get(node)).filter(current));
     if (olds.size === 1 && sameUnit([...olds][0], unit)) return;
@@ -503,21 +640,27 @@
     else watch(unit, observed);
   }
 
+  /** @param {Unit} unit
+   * @param {Element} observed */
   function watch(unit, observed) {
-    if (!waiting.has(observed)) {
-      waiting.set(observed, []);
+    let units = waiting.get(observed);
+    if (!units) {
+      waiting.set(observed, (units = []));
       visibility.observe(observed);
     }
-    waiting.get(observed).push(unit);
+    units.push(unit);
   }
 
-  /** The nearest element that has a box: display:contents elements never intersect the viewport. */
+  /** The nearest element that has a box: display:contents elements never intersect the viewport.
+   * @param {Element} el */
   function boxOf(el) {
-    while (parentOf(el) && getComputedStyle(el).display === 'contents') el = parentOf(el);
+    let up;
+    while ((up = parentOf(el)) && getComputedStyle(el).display === 'contents') el = up;
     return el;
   }
 
-  /** A paragraph is no longer current: its original is shown again, and a newer version may take its translation. */
+  /** A paragraph is no longer current: its original is shown again, and a newer version may take its translation.
+   * @param {Unit} unit */
   function retire(unit) {
     if (shown.has(unit) && !unit.attr) churn.set(unit.parent, (churn.get(unit.parent) || 0) + 1);
     unit.stale = true;
@@ -528,6 +671,7 @@
   // ---------- Translating ----------
 
   function nextBatch() {
+    /** @type {Unit[]} */
     const batch = [];
     let size = 0;
     while (queue.length && batch.length < BATCH_ITEMS) {
@@ -537,7 +681,8 @@
         continue;
       }
       if (batch.length && size + unit.payload.length > BATCH_CHARS) break;
-      batch.push(queue.shift());
+      queue.shift();
+      batch.push(unit);
       size += unit.payload.length;
     }
     return batch;
@@ -550,40 +695,57 @@
     }
   }
 
-  /** A reply the content script can use: one string or null per paragraph sent. */
+  /** A reply the content script can use: one string or null per paragraph sent.
+   * @param {unknown} result
+   * @param {Unit[]} batch
+   * @returns {result is { translations: (string | null)[], lang: string }} */
   function usable(result, batch) {
-    const list = result?.translations;
-    return Array.isArray(list) && list.length === batch.length && typeof result.lang === 'string' &&
+    if (typeof result !== 'object' || result === null) return false;
+    const { translations: list, lang } = /** @type {{ translations?: unknown, lang?: unknown }} */ (result);
+    return Array.isArray(list) && list.length === batch.length && typeof lang === 'string' &&
       list.every((t) => t === null || typeof t === 'string');
   }
 
+  /** The error the service worker reported, or '' when there is none.
+   * @param {unknown} result */
+  const errorOf = (result) =>
+    typeof result === 'object' && result !== null && 'error' in result && result.error ? String(result.error) : '';
+
+  /** @param {Unit[]} batch */
   async function send(batch) {
     inflight++;
     toast('翻译中…', true);
+    /** @type {TranslateMessage} */
+    const message = {
+      type: 'dt-translate',
+      texts: batch.map((u) => u.payload),
+      html: batch.map((u) => !u.attr && !!u.rich),
+      title: document.title,
+    };
+    /** @type {unknown} */
     let result;
     try {
-      result = await chrome.runtime.sendMessage({
-        type: 'dt-translate',
-        texts: batch.map((u) => u.payload),
-        html: batch.map((u) => !!u.rich),
-        title: document.title,
-      });
+      result = await chrome.runtime.sendMessage(message);
     } catch {
       // The extension was reloaded or removed; the script left in this page can no longer reach it
       result = { error: '扩展已更新，请刷新页面后重试' };
     }
     inflight--;
-    if (!result?.error && !usable(result, batch)) result = { error: '翻译服务返回的结果无法识别' };
-    if (result.error) {
+    const error = errorOf(result);
+    if (error || !usable(result, batch)) {
       failed.push(...batch);
-      toast(`翻译失败：${result.error}。按快捷键重试`, true);
+      toast(`翻译失败：${error || '翻译服务返回的结果无法识别'}。按快捷键重试`, true);
       return;
     }
-    batch.forEach((unit, i) => show(unit, result.translations[i], result.lang));
+    const { translations, lang } = result;
+    batch.forEach((unit, i) => show(unit, translations[i], lang));
     pump();
     if (!inflight && !failed.length && !hidden) toast('');
   }
 
+  /** @param {Unit} unit
+   * @param {string | null} translation
+   * @param {string} lang */
   function show(unit, translation, lang) {
     if (!translation || !current(unit)) return;
     if (unit.attr) {
@@ -611,7 +773,7 @@
     el.setAttribute('data-dt-backdrop', darkBehind(box) ? 'dark' : 'light');
     // The paragraph's text can have another size than its parent (font-size: 0 on a parent hides the gaps between
     // inline blocks): the translation takes the size of the text
-    const textEl = unit.nodes.find((n) => n.nodeType === Node.ELEMENT_NODE);
+    const textEl = unit.nodes.find(isElement);
     const size = textEl && getComputedStyle(textEl).fontSize;
     el.style.fontSize = size && size !== getComputedStyle(box).fontSize ? size : '';
     // Among a shadow host's children, the translation goes into the slot its original is shown in
@@ -633,11 +795,16 @@
   // Translations are tinted so they can be told from the page's own text. Whether the tint is for a light or a dark
   // background is decided by what is really behind each one: the browser's dark mode says nothing about a site that
   // keeps its own colors, and a light page can still have a dark header
+  /** @type {WeakMap<Element, boolean>} */
   const backdrops = new WeakMap(); // element -> whether its background is dark
-  const painter = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  // A new canvas always has a 2d context to give
+  const painter = /** @type {CanvasRenderingContext2D} */ (
+    document.createElement('canvas').getContext('2d', { willReadFrequently: true })
+  );
 
   /** [r, g, b, a] in 0-255 of a CSS color in any syntax (rgb, oklch, lab, color()), by painting one pixel. A color the
-   * canvas cannot read comes out transparent, so the parent's background decides instead. */
+   * canvas cannot read comes out transparent, so the parent's background decides instead.
+   * @param {string} color */
   function rgbaOf(color) {
     painter.clearRect(0, 0, 1, 1);
     painter.fillStyle = 'transparent';
@@ -646,9 +813,13 @@
     return painter.getImageData(0, 0, 1, 1).data;
   }
 
+  /** @param {Element} el
+   * @returns {boolean} */
   function darkBehind(el) {
-    if (backdrops.has(el)) return backdrops.get(el);
+    const known = backdrops.get(el);
+    if (known !== undefined) return known;
     let dark;
+    let parent;
     const [r8, g8, b8, a8] = rgbaOf(getComputedStyle(el).backgroundColor);
     if (a8 >= 128) {
       // Relative luminance of sRGB (WCAG)
@@ -657,8 +828,8 @@
         return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
       });
       dark = 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.18;
-    } else if (parentOf(el)) {
-      dark = darkBehind(parentOf(el));
+    } else if ((parent = parentOf(el))) {
+      dark = darkBehind(parent);
     } else {
       // No background set anywhere: the canvas is dark only when the page allows a dark scheme and the browser uses one
       const scheme = getComputedStyle(el).colorScheme;
@@ -674,10 +845,12 @@
 
   /** Hide or show the original of a translated paragraph. Text nodes are emptied in place rather than removed or
    * wrapped, so frameworks that later update or remove them still find them where they left them. forget: the
-   * paragraph is being dropped, so nodes no longer on the page are forgotten too. */
+   * paragraph is being dropped, so nodes no longer on the page are forgotten too.
+   * @param {Paragraph} unit
+   * @param {boolean} visible */
   function setOriginalVisible(unit, visible, forget = false) {
     for (const node of unit.nodes) {
-      if (node.nodeType === Node.TEXT_NODE) {
+      if (isText(node)) {
         if (!visible && !originals.has(node)) {
           originals.set(node, node.data);
           ourWrites.add(node);
@@ -686,11 +859,11 @@
           // Text the page wrote since is newer than ours
           if (node.data === '') {
             ourWrites.add(node);
-            node.data = originals.get(node);
+            node.data = originals.get(node) ?? '';
           }
           originals.delete(node);
         }
-      } else if (node.nodeType === Node.ELEMENT_NODE) {
+      } else if (isElement(node)) {
         const keep = node.matches(KEEP_SELECTOR) || node.querySelector(KEEP_SELECTOR);
         node.toggleAttribute('data-dt-original', !visible && !keep);
       }
@@ -698,14 +871,16 @@
     if (forget) unit.nodes.forEach((node) => originals.delete(node));
   }
 
-  /** Attributes cannot show two texts apart: bilingual mode joins them (tooltips on two lines). */
+  /** Attributes cannot show two texts apart: bilingual mode joins them (tooltips on two lines).
+   * @param {AttrUnit} unit
+   * @param {boolean} originalShown */
   function setAttrVisible(unit, originalShown) {
     const { target, attr } = unit;
     if (target.getAttribute(attr) !== unit.current) {
       shown.delete(unit); // the page set its own value since; it is the page's now
       return;
     }
-    if (!originalShown) unit.current = unit.translation;
+    if (!originalShown) unit.current = unit.translation ?? unit.text;
     else if (hidden) unit.current = unit.text;
     else unit.current = `${unit.text}${attr === 'title' ? '\n' : ' / '}${unit.translation}`;
     target.setAttribute(attr, unit.current);
@@ -724,13 +899,15 @@
    * translations it left behind. A paragraph whose translation the page removed while keeping the original gets its
    * original back and is translated again. */
   function prune() {
+    /** @type {HTMLElement[]} */
     const orphans = [];
     for (const unit of shown) {
-      if (alive(unit) && (unit.attr || unit.el.isConnected)) continue;
+      // A paragraph is shown with its translation el
+      if (alive(unit) && (unit.attr || unit.el?.isConnected)) continue;
       retire(unit);
       if (unit.attr) continue;
       if (alive(unit)) dirty.add(unit.parent);
-      else if (unit.el.isConnected) orphans.push(unit.el);
+      else if (unit.el?.isConnected) orphans.push(unit.el);
     }
     for (const [el, units] of waiting) {
       if (el.isConnected && units.some(current)) continue;
@@ -739,22 +916,29 @@
       waiting.delete(el);
     }
     for (const node of originals.keys()) if (!node.isConnected) originals.delete(node);
-    for (const set of [shadowRoots, bareHosts]) for (const node of set) if (!node.isConnected) set.delete(node);
+    /** @type {Set<Node>[]} */
+    const nodeSets = [shadowRoots, bareHosts];
+    for (const set of nodeSets) for (const node of set) if (!node.isConnected) set.delete(node);
     if (dirty.size) scheduleRescan();
     return orphans;
   }
 
   // ---------- Content added or changed later (infinite scrolling, single-page apps) ----------
 
+  /** @type {Set<Node>} */
   const dirty = new Set();
+  /** @type {Set<Node>} */
   const ourWrites = new Set(); // text nodes this script just emptied or restored: their mutation records are ours
   let rescanTimer = 0;
+  /** @type {HTMLElement | null} */
   let observedBody = null;
 
   const scheduleRescan = () => rescanTimer || (rescanTimer = setTimeout(rescan, RESCAN_DELAY));
 
-  /** Nodes this script adds: translations, its own boxes and the styles in shadow roots. */
-  const ours = (node) => node.localName === TRANS_TAG || OWN_HOSTS.has(node.localName) || styleEls.has(node);
+  /** Nodes this script adds: translations, its own boxes and the styles in shadow roots.
+   * @param {Node} node */
+  const ours = (node) =>
+    isElement(node) && (node.localName === TRANS_TAG || OWN_HOSTS.has(node.localName) || styleEls.has(node));
 
   const CHANGES = { childList: true, subtree: true, characterData: true };
 
@@ -763,11 +947,13 @@
       if (record.type === 'characterData') {
         // At the top of a shadow root, a text node's parent is the root
         const parent = record.target.parentNode;
-        if (!ourWrites.has(record.target) && parent && !parent.closest?.(TRANS_TAG)) dirty.add(parent);
+        if (!ourWrites.has(record.target) && parent && !(isElement(parent) && parent.closest(TRANS_TAG))) {
+          dirty.add(parent);
+        }
         continue;
       }
       // Our own insertions and their text
-      if (record.target.closest?.(TRANS_TAG)) continue;
+      if (isElement(record.target) && record.target.closest(TRANS_TAG)) continue;
       const added = [...record.addedNodes].filter((n) => !ours(n));
       if (record.target === document.body || record.target === document.documentElement) {
         // Content added to the page itself (popups, a replaced <body>): only the new content is scanned
@@ -780,18 +966,20 @@
     if (dirty.size) scheduleRescan();
   });
 
-  function watchBody() {
-    observedBody = document.body;
+  /** @param {HTMLElement} body */
+  function watchBody(body) {
+    observedBody = body;
     mutations.disconnect();
-    mutations.observe(document.body, CHANGES);
+    mutations.observe(body, CHANGES);
     // Navigation that replaces <body> (Turbo and the like) is seen on its parent
     mutations.observe(document.documentElement, { childList: true });
     for (const root of shadowRoots) mutations.observe(root, CHANGES);
   }
 
-  /** The nearest block around el, or the shadow root at the top of its tree. */
+  /** The nearest block around el, or the shadow root at the top of its tree.
+   * @param {Element | ShadowRoot} el */
   function blockAncestor(el) {
-    while (el.nodeType === Node.ELEMENT_NODE && el !== document.body && classify(el) !== 'block') {
+    while (isElement(el) && el !== document.body && classify(el) !== 'block') {
       const up = el.parentElement || (isShadow(el.parentNode) ? el.parentNode : null);
       if (!up) break;
       el = up;
@@ -801,7 +989,7 @@
 
   function rescan() {
     rescanTimer = 0;
-    if (document.body && observedBody !== document.body) watchBody();
+    if (document.body && observedBody !== document.body) watchBody(document.body);
     const orphans = prune();
     // Custom elements defined since they were scanned. The paragraph one with a shadow root was read in is read
     // again: the host may now end it, or be copied whole into its translation
@@ -809,15 +997,18 @@
       if (!host.matches(':defined')) continue;
       bareHosts.delete(host);
       if (!shadowOf(host)) continue;
+      /** @type {Node | null} */
       let node = host;
       while (node && !unitOf.has(node)) node = node.parentNode;
-      if (node) unitOf.get(node).redo = true;
+      const unit = node && unitOf.get(node);
+      if (unit) unit.redo = true;
       const parent = parentOf(host);
       dirty.add(parent && parent !== document.body ? parent : host);
     }
+    /** @type {Set<Element | ShadowRoot>} */
     const roots = new Set();
     for (const target of dirty) {
-      if (target.nodeType !== Node.ELEMENT_NODE && !isShadow(target)) continue;
+      if (!isElement(target) && !isShadow(target)) continue;
       if (!target.isConnected || target === document.documentElement) continue;
       // An element added to body is scanned on its own: scanning body again would scan the whole page
       const root = target.parentElement === document.body ? target : blockAncestor(target);
@@ -841,16 +1032,18 @@
   const HOVER_DELAY = 300;
   let hoverTimer = 0;
 
+  /** @param {PointerEvent} e */
   function onPointerOver(e) {
     // e.target is the host for an element in a shadow root; the path starts at the element (in open roots only)
-    const origin = e.composedPath()[0];
-    const target = origin?.nodeType === Node.ELEMENT_NODE ? closestComposed(origin, '[title]') : null;
+    const origin = /** @type {Node | undefined} */ (e.composedPath()[0]);
+    const target = origin && isElement(origin) ? closestComposed(origin, '[title]') : null;
     clearTimeout(hoverTimer);
     if (!target || seenAttrs.title.has(target) || target.closest(TRANS_TAG) || !inScope(target)) return;
     const opt = closestComposed(target, OPT_OUT);
     if (opt && opt !== document.body && opt !== document.documentElement) return;
     hoverTimer = setTimeout(() => {
-      const unit = { attr: 'title', target };
+      /** @type {AttrUnit} */
+      const unit = { attr: 'title', target, text: '', payload: '' };
       register([unit]);
       // register queued nothing when the title is not worth translating; otherwise send it now, it is being looked at
       if (queue.includes(unit)) {
@@ -863,9 +1056,11 @@
 
   // ---------- Status ----------
 
+  /** @type {HTMLElement | null} */
   let toastBox = null;
   let toastTimer = 0;
 
+  /** @param {string} message */
   function toast(message, sticky = false) {
     if (!IS_TOP) return; // one status box for the whole tab, shown by the top frame
     clearTimeout(toastTimer);
@@ -880,30 +1075,35 @@
           font: 13px/1.5 system-ui, sans-serif; box-shadow: 0 2px 8px rgba(0, 0, 0, .3); }
         div:empty { display: none; }
       </style><div role="status"></div>`;
-      toastBox = shadow.querySelector('div');
+      toastBox = /** @type {HTMLElement} */ (shadow.querySelector('div'));
       // Outside body, so the MutationObserver on body does not see it
       document.documentElement.append(host);
     }
-    toastBox.textContent = message;
-    if (message && !sticky) toastTimer = setTimeout(() => (toastBox.textContent = ''), 2000);
+    const box = toastBox;
+    box.textContent = message;
+    if (message && !sticky) toastTimer = setTimeout(() => (box.textContent = ''), 2000);
   }
 
   // ---------- Shortcut ----------
 
+  /** @param {boolean} value */
   function setHidden(value) {
     hidden = value;
     document.documentElement.toggleAttribute('data-dt-hidden', value);
     applyMode();
   }
 
+  /** @type {Promise<void> | null} */
   let starting = null; // the first press's setup; later presses wait for it
 
   async function start() {
-    ({ mode, scope } = await chrome.storage.sync.get({ mode: 'bilingual', scope: 'page' }));
+    const stored = await chrome.storage.sync.get({ mode: 'bilingual', scope: 'page' });
+    mode = stored.mode === 'translated' ? 'translated' : 'bilingual';
+    scope = stored.scope === 'main' ? 'main' : 'page';
     started = true;
     applyMode();
     register(collect(document.body));
-    watchBody();
+    watchBody(document.body);
     document.addEventListener('pointerover', onPointerOver, true);
     if (!waiting.size) toast('没有找到需要翻译的内容');
   }
@@ -938,7 +1138,8 @@
   }
 
   /** An iframe follows the top frame: started when it is and not hidden, hidden when it is. Failures in iframes have
-   * no status box of their own, so every press that leaves the page shown retries them. */
+   * no status box of their own, so every press that leaves the page shown retries them.
+   * @param {PageState} state */
   async function sync({ hidden: topHidden }) {
     if (!starting) {
       if (!topHidden) await toggle();
@@ -950,7 +1151,9 @@
     pump();
   }
 
-  /** Whatever goes wrong, the service worker gets an answer: an unanswered message would leave it waiting for good. */
+  /** Whatever goes wrong, the service worker gets an answer: an unanswered message would leave it waiting for good.
+   * @param {ControlMessage} msg
+   * @returns {Promise<PageState>} */
   async function handle(msg) {
     try {
       if (msg.type === 'dt-toggle') await toggle();
