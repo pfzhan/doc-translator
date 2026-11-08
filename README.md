@@ -644,6 +644,8 @@ push to `main`. It installs only `requirements-dev.txt`, so tests that need an o
 
 ## Known limitations
 
+Planned improvements are listed in [docs/ROADMAP.md](docs/ROADMAP.md).
+
 - Scanned PDFs that need OCR are not supported yet. Tables without rules and without aligned column edges are not
   recognized, and their text is translated. When gutters are unclear, the reading order may not follow the
   columns. A line break followed by an English capital letter still starts a new paragraph.
