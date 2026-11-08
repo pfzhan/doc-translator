@@ -102,8 +102,19 @@ def translated_from_bilingual(src: Path, bilingual: Path, preview: PdfDict | Non
     translate_bookmarks(src_doc, preview)
     # The bilingual file is already merged and subset, so only drop objects the source no longer uses.
     # garbage=3 would compare duplicates again, which takes a minute on a book.
-    out: bytes = src_doc.tobytes(garbage=2, deflate=True)
-    return out
+    return _save(src_doc, deflate=True)
+
+
+def _save(doc: pymupdf.Document, deflate: bool = False) -> bytes:
+    """The bytes of doc without the objects nothing refers to any more.
+
+    Only garbage=1: from garbage=2 on, MuPDF (1.28) also renumbers the objects, and it leaves one reference of
+    a dictionary of exactly 101 entries pointing to the old number. That number lies past the end of the
+    renumbered file and reads as null, so a page whose resources held 101 formulas showed one of them as
+    missing. Not renumbering leaves a free entry of 20 bytes in the cross-reference table per object
+    dropped."""
+    data: bytes = doc.tobytes(garbage=1, deflate=deflate)
+    return data
 
 
 def translate_bookmarks(doc: pymupdf.Document, preview: PdfDict | None) -> None:
@@ -183,7 +194,7 @@ def _translated_form(doc: pymupdf.Document, page: pymupdf.Page, box: pymupdf.Rec
 def _subset_worker(data: bytes, queue: "Queue[bytes]") -> None:
     doc = pymupdf.open("pdf", data)
     doc.subset_fonts()
-    queue.put(doc.tobytes(garbage=1, deflate=True))
+    queue.put(_save(doc, deflate=True))
 
 
 def _subset_fonts_safe(data: bytes) -> bytes:
@@ -199,8 +210,7 @@ def _subset_fonts_safe(data: bytes) -> bytes:
         try:
             doc = pymupdf.open("pdf", data)
             doc.subset_fonts()
-            subset: bytes = doc.tobytes(garbage=1, deflate=True)
-            return subset
+            return _save(doc, deflate=True)
         except Exception:  # noqa: BLE001
             return data
     queue: Queue[bytes] = ctx.Queue()
@@ -233,6 +243,6 @@ def _compact(doc: pymupdf.Document) -> bytes:
     the duplicate fonts add up to hundreds of MB, and most of them would be merged away after being
     compressed. Compressing afterwards saves 20 seconds on a 25-page paper.
     """
-    doc = pymupdf.open("pdf", doc.tobytes(garbage=2))
+    doc = pymupdf.open("pdf", _save(doc))
     merge_duplicates(doc)
-    return _subset_fonts_safe(doc.tobytes(garbage=1, deflate=True))
+    return _subset_fonts_safe(_save(doc, deflate=True))
