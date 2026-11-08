@@ -12,11 +12,12 @@ from app.formats.pdf_flow import (
     strip_style_marks,
     writer_for,
 )
+from app.formats.pdf_types import PdfDict
 
 _SENTINEL = "\x01i\x021\x01/i\x02"
 
 
-def test_formula_sentinel_is_not_split():
+def test_formula_sentinel_is_not_split() -> None:
     text = "甲" * 8 + _SENTINEL + "乙" * 8
     lines = break_lines(text, em=10, max_width=50, formula_widths={1: 30})
     assert "".join(lines) == text
@@ -24,37 +25,37 @@ def test_formula_sentinel_is_not_split():
     assert all("\x01i\x02" not in line or _SENTINEL in line for line in lines)
 
 
-def test_wide_formula_takes_its_own_line():
+def test_wide_formula_takes_its_own_line() -> None:
     lines = break_lines("甲" + _SENTINEL + "乙", em=10, max_width=20, formula_widths={1: 40})
     assert _SENTINEL in lines
     assert lines[lines.index(_SENTINEL)] == _SENTINEL
 
 
-def test_cjk_wraps_by_character():
+def test_cjk_wraps_by_character() -> None:
     assert break_lines("甲乙丙丁戊", em=10, max_width=25, formula_widths={}) == ["甲乙", "丙丁", "戊"]
 
 
-def test_first_lines_take_their_own_widths():
+def test_first_lines_take_their_own_widths() -> None:
     """The first lines making room for a figure break at their own widths, the other lines at the full width."""
     lines = break_lines("甲" * 12, em=10, max_width=50, formula_widths={}, first_widths=[20, 30])
     assert lines == ["甲甲", "甲甲甲", "甲甲甲甲甲", "甲甲"]
 
 
-def test_a_paren_group_wider_than_a_narrow_line_still_breaks():
+def test_a_paren_group_wider_than_a_narrow_line_still_breaks() -> None:
     """Bracket groups are locked against the narrowest line. A group that fits the full width but not a narrow line
     must not roll back repeatedly."""
     lines = break_lines("甲（乙丙）丁", em=10, max_width=60, formula_widths={}, first_widths=[30])
     assert "".join(lines) == "甲（乙丙）丁"
 
 
-def test_decimal_number_is_not_split_at_its_point():
+def test_decimal_number_is_not_split_at_its_point() -> None:
     """The line must not break after the decimal point of "2.07 秒"."""
     lines = break_lines("甲乙丙丁戊 2.07 秒", em=10, max_width=70, formula_widths={})
     assert any("2.07" in line for line in lines)
     assert not any(line.rstrip().endswith("2.") for line in lines)
 
 
-def test_a_long_hyphenated_word_breaks_after_its_hyphen():
+def test_a_long_hyphenated_word_breaks_after_its_hyphen() -> None:
     """When (Super-NaturalInstructions does not fit, the previous line breaks early and the Chinese is spread out.
     A line may break after a hyphen with words of three or more letters on both sides; GPT-4 and x-axis do not
     break."""
@@ -65,20 +66,20 @@ def test_a_long_hyphenated_word_breaks_after_its_hyphen():
     assert not any(line.endswith(("GPT-", "x-")) for line in lines)
 
 
-def test_punctuation_does_not_start_a_line():
+def test_punctuation_does_not_start_a_line() -> None:
     lines = break_lines("甲乙丙丁。", em=10, max_width=40, formula_widths={})
     assert lines == ["甲乙丙", "丁。"]
     assert all(not line.startswith("。") for line in lines)
 
 
-def test_halfwidth_punct_drops_the_trailing_space():
+def test_halfwidth_punct_drops_the_trailing_space() -> None:
     lines = break_lines("甲乙, 丙丁", em=10, max_width=32, formula_widths={})
     assert any(line.endswith(",") for line in lines)
     assert all(not line.endswith(", ") for line in lines)
     assert "".join(lines).replace(" ", "") == "甲乙,丙丁"
 
 
-def test_short_parentheses_stay_on_one_line():
+def test_short_parentheses_stay_on_one_line() -> None:
     text = "甲甲甲（如序列）乙乙乙"
     lines = break_lines(text, em=10, max_width=50, formula_widths={})
     assert any("（如序列）" in line for line in lines)
@@ -87,38 +88,38 @@ def test_short_parentheses_stay_on_one_line():
     assert any("(term)" in line for line in ascii_lines)
 
 
-def test_parentheses_around_a_formula_stay_together():
+def test_parentheses_around_a_formula_stay_together() -> None:
     text = "甲（" + _SENTINEL + "）乙"
     lines = break_lines(text, em=10, max_width=40, formula_widths={1: 20})
     assert any("（" + _SENTINEL + "）" in line for line in lines)
 
 
-def test_long_parentheses_may_split():
+def test_long_parentheses_may_split() -> None:
     lines = break_lines("（" + "甲" * 20 + "）", em=10, max_width=50, formula_widths={})
     assert len(lines) > 1
     assert not any("（" in line and "）" in line for line in lines)
 
 
-def test_style_marks_have_zero_width():
+def test_style_marks_have_zero_width() -> None:
     assert break_lines("{b}甲乙丙{/b}", em=10, max_width=30, formula_widths={}) == ["{b}甲乙丙{/b}"]
     assert break_lines("{z85}甲乙{/z}丙", em=10, max_width=30, formula_widths={}) == ["{z85}甲乙{/z}丙"]
 
 
-def test_nowrap_html_keeps_each_line_intact():
+def test_nowrap_html_keeps_each_line_intact() -> None:
     html_text = nowrap_lines(["甲" + _SENTINEL, "乙"])
     assert html_text.count("white-space:nowrap") == 2
     assert "<br>" in html_text
     assert _SENTINEL in html_text
 
 
-def test_restore_emphasis_after_escape():
+def test_restore_emphasis_after_escape() -> None:
     assert restore_emphasis(html.escape("{b}a&b{/b}")) == "<b>a&amp;b</b>"
     assert restore_emphasis("{i}x{/i}") == "<i>x</i>"
     assert restore_emphasis(html.escape("{z85}a&b{/z}")) == '<span style="font-size:85%">a&amp;b</span>'
     assert strip_style_marks("See {z85}{b}this{/b}{/z} word") == "See this word"
 
 
-def test_writer_marks_only_a_mixed_block():
+def test_writer_marks_only_a_mixed_block() -> None:
     writer = EmphasisWriter(Emphasis(False, False), mixed=True)
     assert writer.text("see ", Emphasis(False, False)) + writer.text(
         "this", Emphasis(True, False)
@@ -127,7 +128,7 @@ def test_writer_marks_only_a_mixed_block():
     assert plain.text("see this", Emphasis(True, False)) + plain.atom("{v1}") + plain.close() == "see this{v1}"
 
 
-def test_writer_marks_size_outside_emphasis():
+def test_writer_marks_size_outside_emphasis() -> None:
     writer = EmphasisWriter(Emphasis(False, False), mixed=True, base_size=12)
     sent = (
         writer.text("See ", Emphasis(False, False), 12)
@@ -140,7 +141,7 @@ def test_writer_marks_size_outside_emphasis():
     assert size_percent(10, 12) == 85
 
 
-def test_writer_for_marks_the_differing_span():
+def test_writer_for_marks_the_differing_span() -> None:
     spans = [
         {"text": "See ", "font": "TimesNewRomanPSMT", "flags": 0},
         {"text": "this", "font": "TimesNewRomanPS-BoldMT", "flags": 16},
@@ -155,17 +156,17 @@ def test_writer_for_marks_the_differing_span():
     assert uniform.text("All regular words", Emphasis(False, False)) == "All regular words"
 
 
-def _span(text: str, bold: bool = False, italic: bool = False) -> dict:
+def _span(text: str, bold: bool = False, italic: bool = False) -> PdfDict:
     font = "Times-" + ("Bold" if bold else "") + ("Italic" if italic else "") if bold or italic else "Times-Roman"
     return {"text": text, "font": font, "flags": (16 if bold else 0) | (2 if italic else 0)}
 
 
-def _write(spans: list[dict]) -> str:
+def _write(spans: list[PdfDict]) -> str:
     writer = writer_for(spans)
     return "".join(writer.text(s["text"], emphasis_of(s["font"], s["flags"])) for s in spans) + writer.close()
 
 
-def test_a_bold_label_before_body_split_into_short_spans_keeps_its_mark():
+def test_a_bold_label_before_body_split_into_short_spans_keeps_its_mark() -> None:
     """When citations cut the body into many short spans, the longest one is the bold label. Bold is written only
     through {b}, so the base style must not be bold."""
     spans = [
@@ -196,7 +197,7 @@ def test_a_bold_label_before_body_split_into_short_spans_keeps_its_mark():
     assert _write([_span("Bold title", bold=True), _span(" 3")]) == "Bold title 3"
 
 
-def test_spaces_do_not_open_a_mark_and_close_the_one_that_ends():
+def test_spaces_do_not_open_a_mark_and_close_the_one_that_ends() -> None:
     spans = [
         _span("Theorem 1.", bold=True),
         _span(" ", bold=False),
@@ -207,7 +208,7 @@ def test_spaces_do_not_open_a_mark_and_close_the_one_that_ends():
     assert _write(spans) == "{b}Theorem 1.{/b} The minimum is {i}unique{/i}"
 
 
-def test_a_mostly_italic_statement_keeps_italic_as_base():
+def test_a_mostly_italic_statement_keeps_italic_as_base() -> None:
     """The italic body of a theorem has an italic base, without {i} on every span."""
     writer = writer_for(
         [_span("Theorem 1.", bold=True), _span(" Assume that the function has bounded gradients", italic=True)]
@@ -215,7 +216,7 @@ def test_a_mostly_italic_statement_keeps_italic_as_base():
     assert writer.base == Emphasis(False, True)
 
 
-def test_paren_group_at_width_edge_terminates():
+def test_paren_group_at_width_edge_terminates() -> None:
     """A bracket group whose width falls in the tolerance band must not loop forever: the locking condition must match
     the overflow test of filling."""
     text = "前面占位" + "（一二三四五六七）" + "尾巴"
@@ -224,7 +225,7 @@ def test_paren_group_at_width_edge_terminates():
         assert "".join(lines) == text
 
 
-def test_oversize_word_split_to_fit():
+def test_oversize_word_split_to_fit() -> None:
     """Overwide words such as long URLs are cut by character instead of running past the right edge with nowrap."""
     text = "见 http://example.com/very/long/path 结束"
     lines = break_lines(text, em=1.0, max_width=8.0, formula_widths={})
@@ -232,13 +233,13 @@ def test_oversize_word_split_to_fit():
     assert all(len(line) <= 20 for line in lines)
 
 
-def test_restore_emphasis_keeps_italic_tag():
+def test_restore_emphasis_keeps_italic_tag() -> None:
     """Italic stays <i>. The fallback font has no bold Chinese, so <b> would neither emphasize the Chinese nor keep the
     Latin italic."""
     assert restore_emphasis("正常{i}强调{/i}文字") == "正常<i>强调</i>文字"
 
 
-def test_space_around_latin_balances_both_sides():
+def test_space_around_latin_balances_both_sides() -> None:
     """One space each between Chinese and i-th. Spaces inside markers move out, and English sentences are unchanged."""
     from app.formats.pdf_flow import space_around_latin
 
@@ -249,7 +250,7 @@ def test_space_around_latin_balances_both_sides():
     assert space_around_latin(f"词元{sentinel},") == f"词元{sentinel},"
 
 
-def test_separate_after_formula_adds_one_space():
+def test_separate_after_formula_adds_one_space() -> None:
     """A space is added when text directly follows a formula. Not before punctuation, existing spaces or style
     markers, and never twice."""
     from app.formats.pdf_flow import separate_after_formula
@@ -262,7 +263,7 @@ def test_separate_after_formula_adds_one_space():
     assert separate_after_formula("没有公式") == "没有公式"
 
 
-def test_fullwidth_punctuation_measures_one_em():
+def test_fullwidth_punctuation_measures_one_em() -> None:
     """Full-width punctuation (，。（） and so on) is not in the CJK regex but still counts as 1em by
     east_asian_width. Underestimating the line width at 0.5em would push justified lines past the right edge."""
     assert measure_token("，", 10.0, {}) == 10.0
@@ -270,7 +271,7 @@ def test_fullwidth_punctuation_measures_one_em():
     assert measure_token("a", 10.0, {}) >= 5.0
 
 
-def test_wide_glyphs_wrap_before_they_pass_the_edge():
+def test_wide_glyphs_wrap_before_they_pass_the_edge() -> None:
     """Dashes and M are wider than 0.5em. Estimated at half a character, they would stick out past the line end."""
     assert measure_token("—", 10.0, {}) >= 10.0
     assert measure_token("M", 10.0, {}) > 5.0
@@ -280,7 +281,7 @@ def test_wide_glyphs_wrap_before_they_pass_the_edge():
     assert "HMM" in lines[1]
 
 
-def test_a_word_split_by_style_marks_is_not_broken_at_the_mark():
+def test_a_word_split_by_style_marks_is_not_broken_at_the_mark() -> None:
     """{b}R{/b}epresentations is one word, so the line must not break after the bold initial; an opening bracket
     before the word moves with it."""
     from app.formats.pdf_flow import break_lines
@@ -295,7 +296,7 @@ def test_a_word_split_by_style_marks_is_not_broken_at_the_mark():
         ).replace("{/b}", "").replace(" ", "")
 
 
-def test_slack_before_a_long_word_is_shared_with_the_line_above():
+def test_slack_before_a_long_word_is_shared_with_the_line_above() -> None:
     """A long word at the start of the next line did not fit, leaving this line several characters short. Chinese
     characters move down from the end of the line above, so both lines are a little short and justification
     spreads each only slightly. The last line is left however short it is."""
@@ -313,7 +314,7 @@ def test_slack_before_a_long_word_is_shared_with_the_line_above():
     assert max(slack) < 30
 
 
-def test_narrow_latin_letters_measure_as_drawn():
+def test_narrow_latin_letters_measure_as_drawn() -> None:
     """i, l and commas are measured at their written width, not the 0.5em default. Measured too wide, mixed Chinese
     and English paragraphs break before lines are full, and justification at its limit still falls short of the
     right edge. Measured widths are never less than the written ones, so lines stay within the right edge."""
@@ -321,7 +322,9 @@ def test_narrow_latin_letters_measure_as_drawn():
     from app.formats.pdf_flow import measure_width
 
     for text in ("illicit little", "{i}decisions, steep hills{/i}", "{b}difficult{/b}", "可能会让你了解到, "):
-        drawn = sum(segment.width for segment in _segments(text, 10.0))
+        segments = _segments(text, 10.0)
+        assert segments is not None
+        drawn = sum(segment.width for segment in segments)
         assert drawn <= measure_width(text, 10.0) <= drawn * 1.1
     text = (
         "分布假说的核心思想是: 看到 {i}difficult{/i} 与 {i}hard{/i} 一样, 出现在相似的语境词"
@@ -330,7 +333,7 @@ def test_narrow_latin_letters_measure_as_drawn():
     assert len(break_lines(text, em=8.8, max_width=335, formula_widths={})) == 2
 
 
-def test_a_formula_at_the_line_start_lines_up_with_the_text_below():
+def test_a_formula_at_the_line_start_lines_up_with_the_text_below() -> None:
     """With a formula at the start of a line, the blank left part of its slot is not drawn, so the formula and the
     text of the next line start at the same left edge."""
     import pymupdf

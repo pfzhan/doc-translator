@@ -4,11 +4,20 @@ from app.formats.pdf_blocks import TextBlock
 from app.formats.pdf_crop import _absorb_curves
 from app.formats.pdf_restore import _assign_restored_parts
 from app.formats.pdf_runs import FormulaRun, TextRun, intersecting_curves, split_page_boundary, strip_boundary
+from app.formats.pdf_types import PdfDict
 from app.formats.pdf_units import _placeholderize, _prepare_unit
 from app.prompts import build_messages
 
 
-def _span(text, font="TimesNewRomanPSMT", size=12.0, flags=0, x0=0.0, y0=0.0, x1=None):
+def _span(
+    text: str,
+    font: str = "TimesNewRomanPSMT",
+    size: float = 12.0,
+    flags: int = 0,
+    x0: float = 0.0,
+    y0: float = 0.0,
+    x1: float | None = None,
+) -> PdfDict:
     width = 12 if x1 is None else x1 - x0
     return {
         "text": text,
@@ -20,7 +29,7 @@ def _span(text, font="TimesNewRomanPSMT", size=12.0, flags=0, x0=0.0, y0=0.0, x1
     }
 
 
-def _block(span_lines, size=12.0):
+def _block(span_lines: list[list[PdfDict]], size: float = 12.0) -> TextBlock:
     return TextBlock(
         page=0,
         rect=pymupdf.Rect(0, 0, 200, 20),
@@ -33,7 +42,7 @@ def _block(span_lines, size=12.0):
     )
 
 
-def test_placeholderize_builds_ordered_runs():
+def test_placeholderize_builds_ordered_runs() -> None:
     block = _block(
         [
             [
@@ -57,7 +66,7 @@ def test_placeholderize_builds_ordered_runs():
     assert block.runs[2].text == " shows energy"
 
 
-def test_mixed_emphasis_is_on_the_text_run():
+def test_mixed_emphasis_is_on_the_text_run() -> None:
     block = _block(
         [
             [
@@ -70,11 +79,13 @@ def test_mixed_emphasis_is_on_the_text_run():
     sent, formulas = _placeholderize(block)
     assert sent == "See {b}this{/b} word" and formulas == []
     assert [run.text for run in block.runs] == ["See ", "this", " word"]
-    assert block.runs[1].emphasis.bold and not block.runs[0].emphasis.bold
+    plain, bold = block.runs[0], block.runs[1]
+    assert isinstance(plain, TextRun) and isinstance(bold, TextRun)
+    assert bold.emphasis.bold and not plain.emphasis.bold
 
 
-def test_prepare_unit_marks_the_run_boundary():
-    def block(page, prose):
+def test_prepare_unit_marks_the_run_boundary() -> None:
+    def block(page: int, prose: str) -> TextBlock:
         spans = [_span(prose, x0=0), _span("E", font="CMMI10", x0=40)]
         item = _block([spans])
         item.page = page
@@ -86,11 +97,13 @@ def test_prepare_unit_marks_the_run_boundary():
     assert sent.index("{v1}") < sent.index("{|}") < sent.index("{v2}")
     assert formulas[0]["owner"] == 0 and formulas[1]["owner"] == 1
     restored = sent.replace("{v1}", "\x01i\x021\x01/i\x02").replace("{v2}", "\x01i\x022\x01/i\x02")
-    left, right = split_page_boundary(restored)
-    assert left is not None and "{|}" not in left and "{|}" not in right
+    split = split_page_boundary(restored)
+    assert split is not None
+    left, right = split
+    assert "{|}" not in left and "{|}" not in right
 
 
-def test_assign_keeps_the_cross_page_paragraph_together():
+def test_assign_keeps_the_cross_page_paragraph_together() -> None:
     """A translation across pages stays whole on the starting page. No space is added at a boundary between Chinese
     characters, or "相当" and "不错" would be separated."""
     from app.formats.pdf_blocks import SPILL_TAIL
@@ -119,7 +132,7 @@ def test_assign_keeps_the_cross_page_paragraph_together():
     assert strip_boundary("甲乙丙丁戊己庚辛，壬癸。{|}续页。") == "甲乙丙丁戊己庚辛，壬癸。 续页。"
 
 
-def test_assign_splits_a_paragraph_cut_by_a_display_at_the_boundary():
+def test_assign_splits_a_paragraph_cut_by_a_display_at_the_boundary() -> None:
     """Two blocks separated by a display formula or example are split back at the boundary, and formula sentinels go
     with their own block. When the model drops the boundary, the whole paragraph stays in the starting block."""
     from app.formats.pdf_blocks import SPILL_TAIL
@@ -151,7 +164,7 @@ def test_assign_splits_a_paragraph_cut_by_a_display_at_the_boundary():
     assert parts == ["初始学习率为 0.1：单次更新步骤。", SPILL_TAIL]
 
 
-def test_stroke_just_outside_the_glyph_box_joins_the_formula():
+def test_stroke_just_outside_the_glyph_box_joins_the_formula() -> None:
     """A fraction bar just outside the box or a radical stroke on the left is taken into the clip. Full-width rules
     and underlines are not."""
     box = pymupdf.Rect(40, 40, 70, 54)
@@ -166,13 +179,13 @@ def test_stroke_just_outside_the_glyph_box_joins_the_formula():
     assert pymupdf.Rect(underline) not in curves
 
 
-def test_intersecting_curve_joins_the_formula_box():
+def test_intersecting_curve_joins_the_formula_box() -> None:
     box = pymupdf.Rect(40, 40, 70, 54)
     bar = pymupdf.Rect(42, 38, 68, 42)  # fraction bar over the box top
     rule = pymupdf.Rect(0, 40, 400, 41)  # full-width rule, not merged
     curves = intersecting_curves(box, [bar, rule])
     assert curves == (pymupdf.Rect(bar),)
-    formula = {
+    formula: PdfDict = {
         "bbox": pymupdf.Rect(box),
         "d": 4.0,
         "dx": 10.0,
@@ -207,18 +220,20 @@ def test_intersecting_curve_joins_the_formula_box():
     assert formula["bbox"].y0 == 38
     assert formula["h"] > 14
     assert len(formula["curves"]) == 1
-    assert block.runs[0].bbox.y0 == 38
-    assert block.runs[0].curves == (pymupdf.Rect(bar),)
+    run = block.runs[0]
+    assert isinstance(run, FormulaRun)
+    assert run.bbox.y0 == 38
+    assert run.curves == (pymupdf.Rect(bar),)
 
 
-def test_boundary_placeholder_is_mentioned_to_the_model():
+def test_boundary_placeholder_is_mentioned_to_the_model() -> None:
     system, _ = build_messages(["quite {|} well"], "zh-CN")
     assert "{|}" in system and "{vN}" in system
     plain, _ = build_messages(["quite well"], "zh-CN")
     assert "Page-boundary" not in plain
 
 
-def test_size_difference_is_a_style_mark():
+def test_size_difference_is_a_style_mark() -> None:
     block = _block(
         [
             [
@@ -230,10 +245,12 @@ def test_size_difference_is_a_style_mark():
     )
     sent, formulas = _placeholderize(block)
     assert sent == "See {z85}{b}this{/b}{/z} word" and formulas == []
-    assert block.runs[1].size == 10
+    sized = block.runs[1]
+    assert isinstance(sized, TextRun)
+    assert sized.size == 10
 
 
-def test_size_mark_does_not_swallow_a_formula():
+def test_size_mark_does_not_swallow_a_formula() -> None:
     block = _block(
         [
             [
@@ -250,7 +267,7 @@ def test_size_mark_does_not_swallow_a_formula():
     assert "{z" not in sent[sent.index("{v1}") : sent.index("{v1}") + 4]
 
 
-def test_style_placeholder_is_mentioned_to_the_model():
+def test_style_placeholder_is_mentioned_to_the_model() -> None:
     system, _ = build_messages(["See {b}this{/b}"], "zh-CN")
     assert "{b}" in system and "{zN}" in system
     sized, _ = build_messages(["See {z85}this{/z}"], "zh-CN")

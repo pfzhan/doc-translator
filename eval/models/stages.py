@@ -12,25 +12,21 @@ sys.path.insert(0, code)
 from app.formats import pdf
 from app.formats.pdf_vision import FormulaModel
 from app.runner import Cache, Runner
+from app.translators import MockTranslator
+
+# When each stage started: (stage name, time.perf_counter())
+marks: list[tuple[str, float]] = []
 
 
-class T:
-    source_lang = "auto"
-    target_lang = "zh-CN"
+class TimedRunner(Runner):
+    def report_stage(self, name: str, done: int = 0, total: int = 0, unit: str = "") -> None:
+        if not marks or marks[-1][0] != name:
+            marks.append((name, time.perf_counter()))
+        super().report_stage(name, done, total, unit)
 
 
-runner = Runner(T(), cache=Cache(Path(tempfile.mkdtemp()) / "c.sqlite3"))
-marks = []
-orig = runner.report_stage
-
-
-def report(name, done=0, total=0, unit=""):
-    if not marks or marks[-1][0] != name:
-        marks.append((name, time.perf_counter()))
-    orig(name, done, total, unit)
-
-
-runner.report_stage = report
+# Nothing is translated: the translator only gives the languages for language detection
+runner = TimedRunner(MockTranslator("zh-CN"), cache=Cache(Path(tempfile.mkdtemp()) / "c.sqlite3"))
 
 t0 = time.perf_counter()
 profiler = cProfile.Profile()

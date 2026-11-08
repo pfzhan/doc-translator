@@ -1,6 +1,8 @@
 import asyncio
 import dataclasses
 import hashlib
+from pathlib import Path
+from types import ModuleType
 
 import httpx
 import pytest
@@ -9,12 +11,13 @@ from fastapi.testclient import TestClient
 from app import layout_model, model_files
 from app.formats.pdf import _plan_key
 from app.formats.pdf_vision import FormulaModel
+from app.json_types import JSONDict
 from app.settings import Settings, SettingsError
 
 PAYLOAD = b"fake onnx model bytes" * 1000
 
 
-def test_settings_keep_the_layout_model_choice(tmp_path):
+def test_settings_keep_the_layout_model_choice(tmp_path: Path) -> None:
     path = tmp_path / "settings.json"
     settings = Settings(path)
     assert settings.layout_model == {"enabled": False, "path": "", "precision": "int8"}
@@ -24,7 +27,7 @@ def test_settings_keep_the_layout_model_choice(tmp_path):
     assert Settings(path).retention_days == 30
 
 
-def test_the_formula_model_is_on_by_default(tmp_path):
+def test_the_formula_model_is_on_by_default(tmp_path: Path) -> None:
     """The formula detection model is on by default, and turning it off is remembered. The settings of the two models
     are independent"""
     path = tmp_path / "settings.json"
@@ -53,7 +56,7 @@ def test_the_formula_model_is_on_by_default(tmp_path):
     assert Settings(path).formula_model["size"] == 768
 
 
-def test_formula_parallel_settings_take_small_whole_numbers(tmp_path):
+def test_formula_parallel_settings_take_small_whole_numbers(tmp_path: Path) -> None:
     """Pages inferred at once and threads per page are stored as integers, empty as 0 (automatic). Other settings are
     not affected"""
     path = tmp_path / "settings.json"
@@ -89,28 +92,31 @@ def test_formula_parallel_settings_take_small_whole_numbers(tmp_path):
     }
 
 
-def test_empty_and_relative_paths_resolve_inside_the_project():
+def test_empty_and_relative_paths_resolve_inside_the_project() -> None:
     for spec in layout_model.MODELS.values():
         assert spec.resolve("") == spec.default_path()
         assert spec.resolve("data/models/a.onnx") == layout_model.ROOT / "data/models/a.onnx"
     assert layout_model.LAYOUT.default_path() != layout_model.FORMULA.default_path()
 
 
-def _download(tmp_path, monkeypatch, body: bytes, status: int = 200):
+def _download(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: bytes, status: int = 200) -> tuple[Path, JSONDict]:
     spec = dataclasses.replace(layout_model.LAYOUT, sha3=hashlib.sha3_256(PAYLOAD).hexdigest())
     transport = httpx.MockTransport(lambda request: httpx.Response(status, content=body))
     dest = tmp_path / "models" / "m.onnx"
 
-    async def run():
+    async def run() -> JSONDict:
         loader = layout_model.Downloader(spec, transport)
         loader.start("hf-mirror", dest)
+        assert loader.task is not None
         await loader.task
         return loader.state
 
     return dest, asyncio.run(run())
 
 
-def test_download_keeps_the_file_only_when_the_checksum_matches(tmp_path, monkeypatch):
+def test_download_keeps_the_file_only_when_the_checksum_matches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     dest, state = _download(tmp_path, monkeypatch, PAYLOAD)
     assert state["error"] == "" and not state["running"]
     assert state["done"] == len(PAYLOAD) and dest.read_bytes() == PAYLOAD
@@ -121,7 +127,7 @@ def test_download_keeps_the_file_only_when_the_checksum_matches(tmp_path, monkey
     assert "404" in state["error"] and not missing.exists()
 
 
-def test_layout_model_page_api(app_env, monkeypatch, tmp_path):
+def test_layout_model_page_api(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     main = app_env
     monkeypatch.setattr(layout_model, "runtime_version", lambda: "")
     with TestClient(main.app) as client:
@@ -144,7 +150,7 @@ def test_layout_model_page_api(app_env, monkeypatch, tmp_path):
         assert bad.status_code == 400
 
 
-def test_formula_model_page_api(app_env, monkeypatch, tmp_path):
+def test_formula_model_page_api(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The formula detection model has the same endpoints as the layout model, is on by default, and its settings are
     stored separately"""
     main = app_env
@@ -179,7 +185,7 @@ def test_formula_model_page_api(app_env, monkeypatch, tmp_path):
         assert client.get("/api/other-model").status_code == 404
 
 
-def test_saved_analysis_depends_on_the_formula_model_and_its_size(tmp_path):
+def test_saved_analysis_depends_on_the_formula_model_and_its_size(tmp_path: Path) -> None:
     """Toggling the formula model or changing its input size changes the analysis result, so a saved one cannot be
     reused"""
     src = tmp_path / "a.pdf"

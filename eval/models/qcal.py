@@ -36,11 +36,12 @@ images = quantize.calibration_images(
 print(len(images), "pages", round(time.perf_counter() - t0, 1), "s", flush=True)
 
 
-class Pages(CalibrationDataReader):
-    def __init__(self):
+# onnxruntime has no type information, so its base class is Any to mypy
+class Pages(CalibrationDataReader):  # type: ignore[misc]
+    def __init__(self) -> None:
         self.left = iter(images)
 
-    def get_next(self):
+    def get_next(self) -> dict[str, np.ndarray] | None:
         image = next(self.left, None)
         return None if image is None else {"images": image.astype(np.float32) / 255.0}
 
@@ -50,16 +51,16 @@ from onnxruntime.quantization.calibrate import HistogramCalibrater
 _collect = HistogramCalibrater.collect_data
 
 
-class One(CalibrationDataReader):
-    def __init__(self, item):
+class One(CalibrationDataReader):  # type: ignore[misc]
+    def __init__(self, item: dict[str, np.ndarray] | None) -> None:
         self.item = item
 
-    def get_next(self):
+    def get_next(self) -> dict[str, np.ndarray] | None:
         item, self.item = self.item, None
         return item
 
 
-def one_page_at_a_time(self, reader):
+def one_page_at_a_time(self: HistogramCalibrater, reader: CalibrationDataReader) -> None:
     # The original implementation keeps the activations of all pages in memory before computing histograms;
     # histograms can be merged page by page
     while item := reader.get_next():
@@ -74,7 +75,7 @@ calib = {
     "percentile": CalibrationMethod.Percentile,
     "entropy": CalibrationMethod.Entropy,
 }[method]
-extra = {"ActivationSymmetric": False}
+extra: dict[str, bool | float] = {"ActivationSymmetric": False}
 if method == "avg":
     extra["CalibMovingAverage"] = True
 if method == "percentile":

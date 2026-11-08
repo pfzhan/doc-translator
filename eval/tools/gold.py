@@ -8,6 +8,7 @@ import re
 import sys
 import unicodedata
 from pathlib import Path
+from typing import TypedDict
 
 home, out = Path(sys.argv[1]), Path(sys.argv[2])
 src = home / "src"
@@ -30,7 +31,7 @@ def expand(path: Path, depth: int = 0) -> str:
     if depth > 6:
         return text
 
-    def sub(match: re.Match) -> str:
+    def sub(match: re.Match[str]) -> str:
         name = match.group(2).strip()
         for candidate in (name, name + ".tex"):
             target = (path.parent / candidate).resolve()
@@ -132,7 +133,13 @@ body = re.sub(
 body = re.sub(r"\\[a-zA-Z]+\*?", " ", body)
 body = re.sub(r"[{}~\\]", " ", body)
 
-segments = []
+
+class Segment(TypedDict):
+    words: list[str]
+    next: str  # what ends the segment: "par" (paragraph boundary) or "math" (display formula)
+
+
+segments: list[Segment] = []
 for para in body.split("\x02"):
     pieces = para.split("\x00MATH\x00")
     for index, piece in enumerate(pieces):
@@ -141,16 +148,16 @@ for para in body.split("\x02"):
         segments.append({"words": words, "next": "math" if index + 1 < len(pieces) else "par"})
 # Very short paragraphs (headings, half sentences after a formula) cannot be located reliably and are not scored.
 # Two remaining paragraphs must be separate when there is a paragraph boundary anywhere between them
-kept = []
+kept: list[Segment] = []
 pending_par = False
 for seg in segments:
     if len(seg["words"]) >= 12:
         if kept and pending_par:
             kept[-1]["next"] = "par"
-        kept.append(dict(seg))
+        kept.append(seg.copy())
         pending_par = False
         continue
-    pending_par = pending_par or seg["next"] == "par" or (kept and kept[-1]["next"] == "par")
+    pending_par = pending_par or seg["next"] == "par" or (bool(kept) and kept[-1]["next"] == "par")
     if kept and kept[-1]["next"] == "par":
         pending_par = True
 json.dump({"main": str(main.relative_to(src)), "segments": kept}, out.open("w"))

@@ -43,12 +43,15 @@ ignore = [
 
 [tool.mypy]
 python_version = "3.12"
-files = ["app"]
+files = ["app", "tests", "scripts", "eval"]
 strict = true
+# tests/, scripts/ and eval/ are directories of scripts, not packages: name their modules by file
+explicit_package_bases = true
 # pymupdf ships type information but leaves some constructors (Document, Rect, ...) unannotated
 untyped_calls_exclude = ["pymupdf"]
 
 [[tool.mypy.overrides]]
-# Third-party packages without type information, or optional ones (onnx, onnxruntime) that may not be installed
-module = ["py3langid.*", "mobi.*", "lxml.*", "onnx.*", "onnxruntime.*"]
+# Third-party packages without type information, or optional ones that may not be installed: onnx and onnxruntime
+# for the models, ultralytics for eval/models/export.py
+module = ["py3langid.*", "mobi.*", "lxml.*", "onnx.*", "onnxruntime.*", "ultralytics.*"]
 ignore_missing_imports = true

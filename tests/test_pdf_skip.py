@@ -3,17 +3,25 @@
 import pymupdf
 import pytest
 
+from app.formats.pdf_types import PdfDict
 from tests.helpers import SAMPLES
 
+# A box as its corner coordinates: x0, y0, x1, y1
+Corners = tuple[float, float, float, float]
 
-def test_pdf_biblio_skips_alpha_labels_at_uniform_size():
+
+def _bbox(rect: pymupdf.Rect) -> Corners:
+    return rect.x0, rect.y0, rect.x1, rect.y1
+
+
+def test_pdf_biblio_skips_alpha_labels_at_uniform_size() -> None:
     """References with author-abbreviation labels at the body size (OCR of bitmap fonts makes the sizes uniform): a
     label whose [ was lost by OCR, a label on its own line and a short continuation line ending with a period must
     not be taken for the next chapter, and the whole section keeps the original text."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size=10):
+    def blk(text: str, size: float = 10) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=False
         )
@@ -37,7 +45,7 @@ def test_pdf_biblio_skips_alpha_labels_at_uniform_size():
     assert biblio_skips(tail) == [False, False, True, False, False]
 
 
-def test_pdf_biblio_skips_weigh_sizes_by_text():
+def test_pdf_biblio_skips_weigh_sizes_by_text() -> None:
     """Runs of small-text table cells outnumber the body blocks, so a median by block count lands on the small size
     and citations at body size look like headings. The median is taken by character count. A heading one size
     smaller than the body, in a references section that is one size smaller throughout (ICASSP), is bold and no
@@ -45,7 +53,7 @@ def test_pdf_biblio_skips_weigh_sizes_by_text():
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -73,11 +81,11 @@ def test_pdf_biblio_skips_weigh_sizes_by_text():
     assert skips[-2:] == [True, True]
 
 
-def test_pdf_biblio_skips_follows_font_size():
+def test_pdf_biblio_skips_follows_font_size() -> None:
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, page=0, bold=False):
+    def blk(text: str, size: float, page: int = 0, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=page, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -122,13 +130,13 @@ def test_pdf_biblio_skips_follows_font_size():
     assert biblio_skips(same) == [False, False, True, False, False]
 
 
-def test_pdf_biblio_entry_needs_a_citation_not_a_year_in_prose():
+def test_pdf_biblio_entry_needs_a_citation_not_a_year_in_prose() -> None:
     """Years and the word arXiv in body text, and a smaller next heading, do not confirm entering the references
     section."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -161,14 +169,14 @@ def test_pdf_biblio_entry_needs_a_citation_not_a_year_in_prose():
     assert biblio_skips(toc) == [False] * 5
 
 
-def test_pdf_biblio_numbered_entries_without_a_heading():
+def test_pdf_biblio_numbered_entries_without_a_heading() -> None:
     """The revtex journal layout does not print References: a run starting at [1] with consecutive numbers below is
     the references section. It stops at a heading and resumes at the next number continuing in another column. A
     body sentence starting with [1] does not count."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size=9.0, bold=False):
+    def blk(text: str, size: float = 9.0, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -193,13 +201,13 @@ def test_pdf_biblio_numbered_entries_without_a_heading():
     ) == [False, False]
 
 
-def test_pdf_biblio_bold_heading_as_large_as_the_entries():
+def test_pdf_biblio_bold_heading_as_large_as_the_entries() -> None:
     """A run of author names from the broken first line of an entry, and short title lines after the author names,
     are not the next chapter even at heading size; the bold appendix heading after them is."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, bold=False):
+    def blk(text: str, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=10.0, color="#000000", bold=bold
         )
@@ -225,14 +233,14 @@ def test_pdf_biblio_bold_heading_as_large_as_the_entries():
     assert biblio_skips(blocks) == [False, False, *[True] * 9, False, False]
 
 
-def test_pdf_biblio_author_year_entries_after_the_heading():
+def test_pdf_biblio_author_year_entries_after_the_heading() -> None:
     """Author-year entries have no numbers and no parenthesized years. Several consecutive entries starting with
     "Surname, Initials." after the heading enter the references section; a single body sentence starting this way
     does not count."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size):
+    def blk(text: str, size: float) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=False
         )
@@ -255,13 +263,13 @@ def test_pdf_biblio_author_year_entries_after_the_heading():
     assert biblio_skips(prose) == [False] * 3
 
 
-def test_pdf_biblio_numbered_entry_ending_with_pages():
+def test_pdf_biblio_numbered_entry_ending_with_pages() -> None:
     """Entries in old database papers read "venue year, pages", so the line ends with pages instead of a year; they
     also enter the references section."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -296,13 +304,13 @@ def test_pdf_biblio_numbered_entry_ending_with_pages():
     assert biblio_skips(prose) == [False] * 4
 
 
-def test_pdf_biblio_same_size_citations_do_not_exit():
+def test_pdf_biblio_same_size_citations_do_not_exit() -> None:
     """A bare year at the line end, CoRR, numbered entries and wrapped continuation lines are not the next chapter; a
     bold heading at body size ends the section."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -347,13 +355,13 @@ def test_pdf_biblio_same_size_citations_do_not_exit():
     assert biblio_skips(appendix) == [False, False, False, True, False, False]
 
 
-def test_pdf_biblio_author_lists_and_url_halves_stay_in():
+def test_pdf_biblio_author_lists_and_url_halves_stay_in() -> None:
     """ACL style (Author. Year. Title. In Venue) enters the references section; when the entries are one size larger
     than the body, an author line and half of a wrapped URL are not the next chapter."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -382,7 +390,7 @@ def test_pdf_biblio_author_lists_and_url_halves_stay_in():
     assert biblio_skips(larger)[6:] == [True] * 6
 
 
-def test_pdf_biblio_skips_on_attention_paper():
+def test_pdf_biblio_skips_on_attention_paper() -> None:
     """arXiv-style citations (year at the line end without parentheses) are recognized too: the whole References
     section of attention.pdf is skipped."""
     src = SAMPLES / "attention.pdf"
@@ -402,12 +410,12 @@ def test_pdf_biblio_skips_on_attention_paper():
     assert not any(skips[viz + 1 :])
 
 
-def test_pdf_biblio_entry_with_bold_subheadings():
+def test_pdf_biblio_entry_with_bold_subheadings() -> None:
     """Bold subheadings (Books/Articles) under References followed by citations also enter the references section."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000", bold=bold
         )
@@ -425,13 +433,13 @@ def test_pdf_biblio_entry_with_bold_subheadings():
     assert biblio_skips(blocks) == [False, False, False, True, False, True, False, False]
 
 
-def test_pdf_biblio_section_title_stops_lookahead():
+def test_pdf_biblio_section_title_stops_lookahead() -> None:
     """A larger References must not enter through Endnotes, otherwise the next heading at body size cannot end the
     section."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -449,13 +457,13 @@ def test_pdf_biblio_section_title_stops_lookahead():
     assert biblio_skips(blocks) == [False, False, False, False, False, True, False, False]
 
 
-def test_pdf_biblio_journal_line_does_not_end_numbered_entry():
+def test_pdf_biblio_journal_line_does_not_end_numbered_entry() -> None:
     """Journal on a line of its own inside a citation is no subheading, and the lowercase continuation lines after it
     stay in the references section."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -473,13 +481,13 @@ def test_pdf_biblio_journal_line_does_not_end_numbered_entry():
     assert biblio_skips(blocks) == [False, False, True, True, True, True, False, False]
 
 
-def test_pdf_biblio_chapter_titled_books_or_paper_does_not_enter():
+def test_pdf_biblio_chapter_titled_books_or_paper_does_not_enter() -> None:
     """Books and "论文" at the same size or larger are the next chapter. A smaller Paper is still an inner
     subheading."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -511,13 +519,13 @@ def test_pdf_biblio_chapter_titled_books_or_paper_does_not_enter():
     assert biblio_skips(paper) == [False, False, False, True, False, False]
 
 
-def test_pdf_biblio_chinese_gbt_citations():
+def test_pdf_biblio_chinese_gbt_citations() -> None:
     """Chinese GB/T citations ([J][M] type markers): a smaller "论文" is a group heading, the citations are skipped,
     and body text mentioning a publisher does not enter the references section."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -534,13 +542,13 @@ def test_pdf_biblio_chinese_gbt_citations():
     assert biblio_skips(blocks) == [False, False, False, True, True, False, False]
 
 
-def test_pdf_biblio_type_mark_does_not_swallow_headings():
+def test_pdf_biblio_type_mark_does_not_swallow_headings() -> None:
     """Inline [J]/[M] is no citation. A next chapter heading containing a marker ends the section, and the heading
     itself is not skipped."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -583,13 +591,13 @@ def test_pdf_biblio_type_mark_does_not_swallow_headings():
     assert biblio_skips(larger) == [False, False, True, False, False]
 
 
-def test_pdf_biblio_numbered_publisher_entry_without_space():
+def test_pdf_biblio_numbered_publisher_entry_without_space() -> None:
     """No space after [1], or the publisher in the next block, still enters. A publisher in unnumbered body text does
     not."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -620,13 +628,13 @@ def test_pdf_biblio_numbered_publisher_entry_without_space():
     assert biblio_skips(prose) == [False, False, False, False]
 
 
-def test_pdf_biblio_edition_heading_exits():
+def test_pdf_biblio_edition_heading_exits() -> None:
     """A short numbered heading ending with an edition year ("年版") is the next chapter, and the heading itself is not
     skipped. Real bibliographic lines are still skipped."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -649,13 +657,13 @@ def test_pdf_biblio_edition_heading_exits():
     assert biblio_skips(press) == [False, False, True, False, False]
 
 
-def test_pdf_biblio_type_mark_in_prose_does_not_enter():
+def test_pdf_biblio_type_mark_in_prose_does_not_enter() -> None:
     """A "[M]。" in the middle of a body sentence is no citation (no year), so the body text after it must not keep
     the original text."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -677,13 +685,13 @@ def test_pdf_biblio_type_mark_in_prose_does_not_enter():
     assert biblio_skips(later) == [False, False, False, False, False]
 
 
-def test_pdf_biblio_type_mark_year_on_next_block_enters():
+def test_pdf_biblio_type_mark_year_on_next_block_enters() -> None:
     """A type marker and year split apart still enter. The next block must be a volume/issue or a publisher, not any
     following text."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -717,18 +725,18 @@ def test_pdf_biblio_type_mark_year_on_next_block_enters():
     assert biblio_skips(press) == [False, False, True, True, False, False]
 
 
-def test_pdf_biblio_year_continuation_tightened():
+def test_pdf_biblio_year_continuation_tightened() -> None:
     """Confirming a year on a split line must not be loose enough to accept body text: an English sentence starting
     with a year and body text mentioning a publisher and a year are not continuation lines."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
 
-    def scenario(second: str):
+    def scenario(second: str) -> list[bool]:
         return biblio_skips(
             [
                 blk("参考文献", 14, bold=True),
@@ -755,17 +763,17 @@ def test_pdf_biblio_year_continuation_tightened():
     assert scenario("北京: 人民出版社2019年.") == [False, True, True]
 
 
-def test_pdf_biblio_vol_abbreviation_also_needs_digit():
+def test_pdf_biblio_vol_abbreviation_also_needs_digit() -> None:
     """The abbreviation Vol works like the full Volume: a number must follow, so "2020, Vol were…" is body text."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
 
-    def scenario(second: str):
+    def scenario(second: str) -> list[bool]:
         return biblio_skips(
             [
                 blk("参考文献", 14, bold=True),
@@ -785,13 +793,13 @@ def test_pdf_biblio_vol_abbreviation_also_needs_digit():
     assert scenario("2020, Vol. xii, pp. 1-10.") == [False, True, True]
 
 
-def test_pdf_biblio_volume_lines_protected_at_same_size():
+def test_pdf_biblio_volume_lines_protected_at_same_size() -> None:
     """When the references heading has the body size, volume/issue and publisher continuation lines must not be taken
     for the next chapter either."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -811,13 +819,13 @@ def test_pdf_biblio_volume_lines_protected_at_same_size():
     assert biblio_skips(blocks) == [False, False, True, True, True, True, True, True, False, False]
 
 
-def test_pdf_biblio_year_prefixed_chapter_still_exits():
+def test_pdf_biblio_year_prefixed_chapter_still_exits() -> None:
     """A next chapter starting with a year is no volume/issue continuation line. A long bold heading ends the section
     too."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -854,13 +862,13 @@ def test_pdf_biblio_year_prefixed_chapter_still_exits():
     assert scenario("2020, Vol. III") == [False, False, True, True, True]
 
 
-def test_pdf_biblio_long_bold_chapter_title_exits():
+def test_pdf_biblio_long_bold_chapter_title_exits() -> None:
     """A bold chapter heading longer than 80 characters also ends the section (the bold branch of heading_like has an
     80-character limit and cannot be relied on)."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -876,13 +884,13 @@ def test_pdf_biblio_long_bold_chapter_title_exits():
     assert biblio_skips(blocks) == [False, False, True, False, False]
 
 
-def test_pdf_biblio_long_bold_citation_stays():
+def test_pdf_biblio_long_bold_citation_stays() -> None:
     """A bold bibliographic line longer than 80 characters is not the next chapter. Lines with a type marker or a year
     at the end are still skipped."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size, bold=False):
+    def blk(text: str, size: float, bold: bool = False) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=bold
         )
@@ -907,17 +915,18 @@ def test_pdf_biblio_long_bold_citation_stays():
     assert biblio_skips(blocks) == [False, False, True, True, True, True, False, False]
 
 
-def test_blocks_inside_a_display_formula_box_are_kept():
+def test_blocks_inside_a_display_formula_box_are_kept() -> None:
     """Blocks the formula detection model boxes as a display formula keep the original text (s.t., otherwise and
     \\text{...} in an align). A block touching the box with only one corner is translated; an explanatory sentence
     inside the box (with three function words) and a heading are translated too"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_roles import Role
     from app.formats.pdf_skip import _isolated_formula_ids
+    from app.formats.pdf_vision import FormulaDetector
 
-    def block(text, rect, page=0):
-        rect = pymupdf.Rect(rect)
-        spans = [{"text": text, "font": "TimesNewRomanPSMT", "size": 10.0, "flags": 0}]
+    def block(text: str, corners: Corners, page: int = 0) -> TextBlock:
+        rect = pymupdf.Rect(corners)
+        spans: list[PdfDict] = [{"text": text, "font": "TimesNewRomanPSMT", "size": 10.0, "flags": 0}]
         return TextBlock(
             page=page, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False, span_lines=[spans]
         )
@@ -927,8 +936,11 @@ def test_blocks_inside_a_display_formula_box_are_kept():
     below = block("and", (390, 230, 450, 242))
     other_page = block("s.t.", (300, 210, 340, 222), page=1)
 
-    class Detector:
-        isolated = {0: [pymupdf.Rect(80, 200, 400, 236)]}
+    class Detector(FormulaDetector):
+        """Only the display formula boxes, without a model behind them."""
+
+        def __init__(self) -> None:
+            self.isolated = {0: [pymupdf.Rect(80, 200, 400, 236)]}
 
     found = _isolated_formula_ids([inside, below, other_page], Detector())
     assert found == {id(inside)}
@@ -942,13 +954,13 @@ def test_blocks_inside_a_display_formula_box_are_kept():
     assert found == {id(inside), id(words)}
 
 
-def test_a_concordance_with_aligned_bold_keywords_stays_original():
+def test_a_concordance_with_aligned_bold_keywords_stays_original() -> None:
     """Search results with one bold word in the middle of each line, aligned left edges and cut-off context on both
     sides keep the original text; scattered bold terms in body text do not count."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import _concordance_ids
 
-    def span(text, x0, x1, y, bold=False):
+    def span(text: str, x0: float, x1: float, y: float, bold: bool = False) -> PdfDict:
         return {
             "text": text,
             "font": "NimbusRomNo9L-Medi" if bold else "NimbusRomNo9L-Regu",
@@ -958,7 +970,7 @@ def test_a_concordance_with_aligned_bold_keywords_stays_original():
             "origin": (x0, y),
         }
 
-    def blk(span_lines):
+    def blk(span_lines: list[list[PdfDict]]) -> TextBlock:
         return TextBlock(
             page=0,
             rect=pymupdf.Rect(161, 108, 492, 157),
@@ -1005,13 +1017,13 @@ def test_a_concordance_with_aligned_bold_keywords_stays_original():
     assert _concordance_ids([concordance, prose]) == {id(concordance)}
 
 
-def test_pdf_biblio_bare_label_line_does_not_exit():
+def test_pdf_biblio_bare_label_line_does_not_exit() -> None:
     """With a hanging indent the label is far from its entry, so [ESS] forms a block of its own. It is the label of the
     entry, and the citation after it is still skipped."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size=10.7):
+    def blk(text: str, size: float = 10.7) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(0, 0, 1, 1), line_rects=[], text=text, size=size, color="#000000", bold=False
         )
@@ -1027,14 +1039,14 @@ def test_pdf_biblio_bare_label_line_does_not_exit():
     assert biblio_skips(blocks) == [False, False, True, True, True, True]
 
 
-def test_bibliography_without_a_heading_stays_original():
+def test_bibliography_without_a_heading_stays_original() -> None:
     """References at a chapter end follow the exercises directly, without a References heading. A run of entries
     starting with "Surname, Initials." keeps the original text; a single body sentence starting this way does not
     count."""
     from app.formats.pdf_biblio import biblio_skips
     from app.formats.pdf_blocks import TextBlock
 
-    def blk(text, size=10.0, page=0):
+    def blk(text: str, size: float = 10.0, page: int = 0) -> TextBlock:
         rect = pymupdf.Rect(40, 40, 300, 50)
         return TextBlock(page=page, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
 
@@ -1055,7 +1067,7 @@ def test_bibliography_without_a_heading_stays_original():
     assert biblio_skips(blocks) == [False, False, *([True] * 10)]
 
 
-def test_shaded_panel_of_monospace_text_is_kept_whole():
+def test_shaded_panel_of_monospace_text_is_kept_whole() -> None:
     """An area of monospace text on a background (code point tables, code) keeps the original glyphs. txtt has no
     Mono in its name and is recognized by the monospace flag. Text without a background, or with body font mixed
     in on the background, is translated; Chinese characters carry the monospace flag too and do not count."""
@@ -1063,11 +1075,11 @@ def test_shaded_panel_of_monospace_text_is_kept_whole():
     from app.formats.pdf_layout import PageScan
     from app.formats.pdf_skip import _code_panel_ids
 
-    def block(y, *spans):
+    def block(y: float, *spans: tuple[str, str, int]) -> TextBlock:
         rect = pymupdf.Rect(160, y, 380, y + 10)
-        span_lines = [
+        span_lines: list[list[PdfDict]] = [
             [
-                {"text": text, "font": font, "flags": flags, "size": 10.0, "bbox": tuple(rect)}
+                {"text": text, "font": font, "flags": flags, "size": 10.0, "bbox": _bbox(rect)}
                 for text, font, flags in spans
             ]
         ]
@@ -1085,7 +1097,7 @@ def test_shaded_panel_of_monospace_text_is_kept_whole():
     assert found == {id(b) for b in table}
 
 
-def test_numbered_and_bracket_labeled_examples_stay_original():
+def test_numbered_and_bracket_labeled_examples_stay_original() -> None:
     """Examples starting with a number whose continuation lines hang right of the number, and examples with [subscript
     …] bracket annotation, keep the original text. A paragraph starting with an equation number whose continuation
     lines return to the column edge, the layer superscript W[1], and [EOS] with a single word in the brackets are
@@ -1093,7 +1105,7 @@ def test_numbered_and_bracket_labeled_examples_stay_original():
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import _example_ids
 
-    def blk(spans, rows):
+    def blk(spans: list[tuple[str, float]], rows: list[Corners]) -> TextBlock:
         rects = [pymupdf.Rect(row) for row in rows]
         rect = pymupdf.Rect(rects[0])
         for row in rects[1:]:
@@ -1156,16 +1168,16 @@ def test_numbered_and_bracket_labeled_examples_stay_original():
     assert found == {id(example), id(labeled)}
 
 
-def test_the_rest_of_a_numbered_example_stays_original():
+def test_the_rest_of_a_numbered_example_stays_original() -> None:
     """The second sentence of a numbered example, the wrapped wine. and the IT gloss became separate blocks: a block
     right below and aligned with the sentence after the number is part of the example too. Body text back at the
     left edge of the number, and a first line with an indent cut out by a side note, are translated."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import _example_ids
 
-    def blk(text, rect, label=""):
-        rect = pymupdf.Rect(rect)
-        spans = [{"text": text, "bbox": tuple(rect), "size": 10.0}]
+    def blk(text: str, corners: Corners, label: str = "") -> TextBlock:
+        rect = pymupdf.Rect(corners)
+        spans: list[PdfDict] = [{"text": text, "bbox": _bbox(rect), "size": 10.0}]
         if label:
             cut = rect.x0 + 30
             spans = [
@@ -1185,7 +1197,7 @@ def test_the_rest_of_a_numbered_example_stays_original():
     assert id(second) in found and id(prose) not in found and id(first_line) not in found
 
 
-def test_sentences_after_a_separate_example_number_stay_original():
+def test_sentences_after_a_separate_example_number_stay_original() -> None:
     """The number (22.9) has few letters and did not get into a block during extraction, so the following a. Shelly
     cut … became a block of its own: a block starting on the same line right of the number is an example, and so
     are the aligned b. below and the free translation below a word-by-word gloss. The next body paragraph and body
@@ -1194,8 +1206,8 @@ def test_sentences_after_a_separate_example_number_stay_original():
     from app.formats.pdf_glosses import ExampleNumber
     from app.formats.pdf_skip import _example_ids
 
-    def blk(text, rect):
-        rect = pymupdf.Rect(rect)
+    def blk(text: str, corners: Corners) -> TextBlock:
+        rect = pymupdf.Rect(corners)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False)
 
     first = blk("a. Shelly cut the banana with a knife.", (190.1, 352.2, 340.0, 364.2))
@@ -1204,7 +1216,7 @@ def test_sentences_after_a_separate_example_number_stay_original():
     glossed = blk("姚明进入总决赛", (190.0, 380.0, 280.0, 392.0))
     free = blk("“Yao Ming reaches the finals”", (190.0, 392.5, 300.0, 404.5))
     cited = blk("as shown in (22.9) the instrument can be the subject.", (142.2, 440.0, 400.0, 452.0))
-    numbers = {
+    numbers: dict[int, tuple[ExampleNumber, ...]] = {
         0: (
             ExampleNumber(pymupdf.Rect(142.2, 352.2, 166.3, 364.2), pymupdf.Rect(142.2, 352.2, 340.0, 364.2), 190.1),
             ExampleNumber(pymupdf.Rect(160.0, 380.0, 180.0, 392.0), pymupdf.Rect(160.0, 380.0, 280.0, 392.0), 190.0),
@@ -1214,7 +1226,7 @@ def test_sentences_after_a_separate_example_number_stay_original():
     assert found == {id(first), id(second), id(glossed), id(free)}
 
 
-def test_lines_under_a_number_row_without_a_block_stay_original():
+def test_lines_under_a_number_row_without_a_block_stay_original() -> None:
     """The line (22.12) fall.01 has few letters and formed no block: Arg1: … indented below the number and Ex1:
     aligned after a blank line are examples. The next paragraph starting with a first-line indent does not
     count"""
@@ -1222,8 +1234,8 @@ def test_lines_under_a_number_row_without_a_block_stay_original():
     from app.formats.pdf_glosses import ExampleNumber
     from app.formats.pdf_skip import _example_ids, _example_tails, _ExampleHead
 
-    def blk(text, rect):
-        rect = pymupdf.Rect(rect)
+    def blk(text: str, corners: Corners) -> TextBlock:
+        rect = pymupdf.Rect(corners)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False)
 
     roles = [
@@ -1235,7 +1247,7 @@ def test_lines_under_a_number_row_without_a_block_stay_original():
     body = blk(
         "Here the body text goes on across the whole column with no indent at all.", (160.2, 540.0, 493.0, 564.0)
     )
-    numbers = {
+    numbers: dict[int, tuple[ExampleNumber, ...]] = {
         0: (
             ExampleNumber(pymupdf.Rect(160.2, 455.4, 189.3, 467.4), pymupdf.Rect(160.2, 455.4, 221.0, 467.4), 194.2),
             ExampleNumber(pymupdf.Rect(160.2, 596.4, 189.3, 608.4), pymupdf.Rect(160.2, 596.4, 330.0, 608.4), 194.2),
@@ -1254,12 +1266,13 @@ def test_lines_under_a_number_row_without_a_block_stay_original():
     assert _example_tails([paragraph], [head], {0: (short,)}, indent=15.0) == set()
 
 
-def test_text_annotated_with_arcs_stays_original():
+def test_text_annotated_with_arcs_stays_original() -> None:
     """Dependency arcs connect words, with labels (nsubj) in rounded boxes on the arcs. Once the sentence is
     translated into Chinese the arcs no longer match the words, so the sentence and labels keep the original text.
     A line in a chart that is high at one end and low at the other is no arc, and the body text beside it is
     translated."""
     from app.formats import pdf_extract, pdf_skip
+    from app.formats.pdf_layout import scan_page
 
     doc = pymupdf.open()
     page = doc.new_page(width=500, height=700)
@@ -1272,7 +1285,7 @@ def test_text_annotated_with_arcs_stays_original():
     page.insert_text((253, 374), "nsubj", fontsize=7)
     page.draw_bezier((300, 470), (330, 420), (360, 440), (400, 430), width=0.4)
     page.insert_text((300, 480), "The loss falls quickly as training goes on.", fontsize=10)
-    scan = pdf_extract.scan_page(page)
+    scan = scan_page(page)
     assert len(scan.arcs) == 1 and len(scan.round_boxes) == 1
     blocks, _frames, scans = pdf_extract._extract(doc)
     found = pdf_skip._arc_figure_ids(blocks, scans)
@@ -1280,7 +1293,7 @@ def test_text_annotated_with_arcs_stays_original():
     assert kept == {"She announced this in January", "nsubj"}
 
 
-def test_role_pattern_lines_keep_the_original():
+def test_role_pattern_lines_keep_the_original() -> None:
     """Role notation listed line by line (AGENT/Subject, THEME/Object) keeps the original text; a body sentence
     mentioning AGENT is translated"""
     from app.formats.pdf_blocks import TextBlock
@@ -1300,7 +1313,7 @@ def test_role_pattern_lines_keep_the_original():
     assert found == {id(b) for b in patterns}
 
 
-def test_a_displayed_example_line_keeps_the_original():
+def test_a_displayed_example_line_keeps_the_original() -> None:
     """In a book with first-line indents, a line set off in the middle of body text and indented deeper than a
     paragraph start is an example and keeps the original text. Lead-in sentences ending with a colon, sources one
     size smaller, centered captions, wrapped lines of list items, "label: explanation" lines, formula descriptions
@@ -1310,7 +1323,7 @@ def test_a_displayed_example_line_keeps_the_original():
     from app.formats.pdf_layout import Column, PageGeometry
     from app.formats.pdf_skip import _display_example_ids
 
-    def blk(rows, text, size=10.0):
+    def blk(rows: list[Corners], text: str, size: float = 10.0) -> TextBlock:
         rects = [pymupdf.Rect(*row) for row in rows]
         rect = pymupdf.Rect(rects[0])
         for row in rects[1:]:
@@ -1319,10 +1332,12 @@ def test_a_displayed_example_line_keeps_the_original():
             page=0, rect=rect, line_rects=rects, text=text, size=size, color="#000000", bold=False, body_size=10.0
         )
 
-    def para(y, text="For example WordNet has the is-a or hypernym relation between classes."):
+    def para(
+        y: float, text: str = "For example WordNet has the is-a or hypernym relation between classes."
+    ) -> TextBlock:
         return blk([(175, y, 493, y + 12), (160, y + 12, 400, y + 24)], text)
 
-    def line(y, x0, x1, text, size=10.0):
+    def line(y: float, x0: float, x1: float, text: str, size: float = 10.0) -> TextBlock:
         return blk([(x0, y, x1, y + 12)], text, size)
 
     geo = PageGeometry(612, (Column(160, 493),), (), 792, frame=TextFrame(160, 493, 109, 718, 10))
@@ -1375,7 +1390,7 @@ def test_a_displayed_example_line_keeps_the_original():
     assert not found & {id(block) for block in blocks if len(block.line_rects) > 1}
 
 
-def test_patterns_keyed_to_examples_by_color_stay_original():
+def test_patterns_keyed_to_examples_by_color_stay_original() -> None:
     """The line below a pattern is an example that marks the matching parts with the same colors in the same order
     (PER and George Marshall are both blue). A translation would change the word order and break the color
     match, so both lines keep the original text. Lines with a different color order, or with only one or two
@@ -1385,7 +1400,7 @@ def test_patterns_keyed_to_examples_by_color_stay_original():
 
     blue, green, red = 0x0000FF, 0x008000, 0xB30000
 
-    def blk(parts, y0):
+    def blk(parts: list[tuple[str, int]], y0: float) -> TextBlock:
         rect = pymupdf.Rect(178, y0, 400, y0 + 12)
         text = "".join(text for text, _color in parts)
         return TextBlock(
@@ -1409,15 +1424,15 @@ def test_patterns_keyed_to_examples_by_color_stay_original():
     assert _color_keyed_ids([pattern, example, shuffled, linked]) == {id(pattern), id(example)}
 
 
-def test_colored_lines_under_a_bullet_stay_original():
+def test_colored_lines_under_a_bullet_stay_original() -> None:
     """An example listed on its own line below a bullet item, with mostly colored letters (M2: -1 spokesman), is made
     of words taken from an example sentence and keeps the original text; several consecutive lines under the same
     item all count. Black explanatory text and colored lines not below an item are translated"""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import _item_example_ids
 
-    def blk(parts, rect):
-        rect = pymupdf.Rect(rect)
+    def blk(parts: list[tuple[str, int]], corners: Corners) -> TextBlock:
+        rect = pymupdf.Rect(corners)
         text = "".join(text for text, _color in parts)
         return TextBlock(
             page=0,
@@ -1442,7 +1457,7 @@ def test_colored_lines_under_a_bullet_stay_original():
     assert found == {id(first), id(second)}
 
 
-def test_a_chinese_line_beside_its_english_rendering_is_kept_apart():
+def test_a_chinese_line_beside_its_english_rendering_is_kept_apart() -> None:
     """An epigraph in an English book with the Chinese original in the left column and the English translation in the
     right on the same line: the two pieces split, and the Chinese original keeps the original text. Western text
     following Chinese at normal character spacing is not split off."""
@@ -1450,7 +1465,7 @@ def test_a_chinese_line_beside_its_english_rendering_is_kept_apart():
     from app.formats.pdf_math import _script_seam
     from app.formats.pdf_skip import _foreign_ids
 
-    def span(text, x0, x1):
+    def span(text: str, x0: float, x1: float) -> PdfDict:
         return {
             "text": text,
             "font": "Times",
@@ -1465,7 +1480,7 @@ def test_a_chinese_line_beside_its_english_rendering_is_kept_apart():
     )
     assert not _script_seam([span("使用", 100, 120)], [span("Python", 122.5, 150)])
 
-    def blk(text, y):
+    def blk(text: str, y: float) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(160, y, 490, y + 10), line_rects=[], text=text, size=10, color="#000", bold=False
         )
@@ -1484,14 +1499,14 @@ def test_a_chinese_line_beside_its_english_rendering_is_kept_apart():
     assert _foreign_ids([quote, *prose]) == {id(quote)}
 
 
-def test_the_english_rendering_below_a_chinese_example_stays_original():
+def test_the_english_rendering_below_a_chinese_example_stays_original() -> None:
     """In an example box, the English translation right below the Chinese characters and pinyin is the author's own and
     keeps the original text; body text below it, after a gap and at a new left edge, is translated."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import _foreign_ids
 
-    def blk(text, x0, y0, y1, first=None):
-        span = {"text": first or text, "font": "Times", "size": 10.0, "flags": 0}
+    def blk(text: str, x0: float, y0: float, y1: float, first: str | None = None) -> TextBlock:
+        span: PdfDict = {"text": first or text, "font": "Times", "size": 10.0, "flags": 0}
         return TextBlock(
             page=0,
             rect=pymupdf.Rect(x0, y0, 470, y1),

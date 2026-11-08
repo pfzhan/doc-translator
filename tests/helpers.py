@@ -2,10 +2,13 @@
 
 import asyncio
 import zipfile
+from collections.abc import Coroutine
 from pathlib import Path
+from typing import Any
 
 import pymupdf
 
+from app.formats.pdf_types import PdfDict
 from app.runner import Runner
 from app.translators import MockTranslator
 
@@ -13,22 +16,23 @@ SAMPLES = Path(__file__).resolve().parent.parent / "samples"
 
 
 class MemCache:
-    def __init__(self):
-        self.d = {}
+    def __init__(self) -> None:
+        self.d: dict[tuple[str, str], str] = {}
 
-    def get_many(self, prefix, texts):
+    def get_many(self, prefix: str, texts: list[str]) -> dict[str, str]:
         return {t: self.d[(prefix, t)] for t in texts if (prefix, t) in self.d}
 
-    def put_many(self, prefix, pairs):
+    def put_many(self, prefix: str, pairs: dict[str, str]) -> None:
         for s, t in pairs.items():
             self.d[(prefix, s)] = t
 
 
-def runner():
+def runner() -> Runner:
     return Runner(MockTranslator("zh-CN"), cache=MemCache())
 
 
-def run(coro):
+# The coroutines of the format functions return different things; each test knows what it gets
+def run[T](coro: Coroutine[Any, Any, T]) -> T:
     return asyncio.run(coro)
 
 
@@ -42,7 +46,7 @@ CONTAINER_XML = (
 )
 
 
-def _write_epub(path, manifest: str, spine: str, docs: dict[str, str]):
+def _write_epub(path: Path, manifest: str, spine: str, docs: dict[str, str]) -> None:
     """Build a minimal EPUB: mimetype first and uncompressed, OEBPS/content.opf plus the given documents."""
     opf = (
         '<?xml version="1.0"?>'
@@ -67,8 +71,16 @@ def _pdf_with_text(text: str, fontname: str = "helv") -> "pymupdf.Document":
     return doc
 
 
-def _glyph(text, font, size, flags, bbox, ink, math=False):
-    span = {
+def _glyph(
+    text: str,
+    font: str,
+    size: float,
+    flags: int,
+    bbox: tuple[float, float, float, float],
+    ink: tuple[float, float, float, float],
+    math: bool = False,
+) -> PdfDict:
+    span: PdfDict = {
         "text": text,
         "font": font,
         "size": size,

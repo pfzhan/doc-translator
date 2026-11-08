@@ -2,10 +2,20 @@
 
 import pymupdf
 
+from app.formats.pdf_types import LineItem, PdfDict
 from tests.helpers import _glyph
 
 
-def test_mid_line_capital_stays_in_the_sentence():
+def _item(text: str, rect: pymupdf.Rect, spans: list[PdfDict]) -> LineItem:
+    """A text line whose spans all carry text, so the spans with text are all the spans of the line."""
+    return (text, rect, spans, spans)
+
+
+def _bbox(rect: pymupdf.Rect) -> tuple[float, float, float, float]:
+    return (rect.x0, rect.y0, rect.x1, rect.y1)
+
+
+def test_mid_line_capital_stays_in_the_sentence() -> None:
     """When a line is split into words, a capitalized word inside the line stays in the sentence. The next sentence
     after a sentence end, and markup, are still split off."""
     from app.formats.pdf_split_lines import _split_lines
@@ -38,15 +48,15 @@ def test_mid_line_capital_stays_in_the_sentence():
     assert _split_lines(markup) == [[0], [1]]
 
 
-def test_a_full_row_split_after_a_sentence_stays_in_the_paragraph():
+def test_a_full_row_split_after_a_sentence_stays_in_the_paragraph() -> None:
     """In a justified paragraph the wide space after a period makes PyMuPDF split a full line into two pieces: the
     first starts at the left edge of the paragraph, the second reaches the right edge, and the lines above and
     below are full. This is one line and does not start a new paragraph (third line of the abstract,
     "bles.  To realize")."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def line(text, x0, x1, y0):
-        return (text, pymupdf.Rect(x0, y0, x1, y0 + 10), [{"size": 9.0, "font": "Times-Roman", "text": text}])
+    def line(text: str, x0: float, x1: float, y0: float) -> LineItem:
+        return _item(text, pymupdf.Rect(x0, y0, x1, y0 + 10), [{"size": 9.0, "font": "Times-Roman", "text": text}])
 
     items = [
         line("processing time, especially for aggregation queries over large ta-", 54.0, 293.8, 190.6),
@@ -59,14 +69,14 @@ def test_a_full_row_split_after_a_sentence_stays_in_the_paragraph():
     assert _split_lines(items[1:3]) == [[0], [1]]
 
 
-def test_a_number_wrapped_to_its_own_line_ends_the_sentence():
+def test_a_number_wrapped_to_its_own_line_ends_the_sentence() -> None:
     """After a full line with an unfinished sentence, a number wrapped onto its own line ends the sentence and is not
     split off as a symbol line. A section number at the start of a line is followed by a heading and is still
     split off."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def line(text, x0, x1, y0):
-        return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"size": 10.0, "font": "Times-Roman", "text": text}])
+    def line(text: str, x0: float, x1: float, y0: float) -> LineItem:
+        return _item(text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"size": 10.0, "font": "Times-Roman", "text": text}])
 
     items = [
         line("perparameter that controls the penalty term; values typically range from 0.01 to", 160.2, 493.2, 121.9),
@@ -82,20 +92,18 @@ def test_a_number_wrapped_to_its_own_line_ends_the_sentence():
     assert [0] in _split_lines(toc)
 
 
-def _line(
-    text: str, x0: float, x1: float, y0: float, size: float = 10
-) -> tuple[str, pymupdf.Rect, list[dict[str, float]]]:
-    return (text, pymupdf.Rect(x0, y0, x1, y0 + size + 2), [{"size": size}])
+def _line(text: str, x0: float, x1: float, y0: float, size: float = 10) -> LineItem:
+    return _item(text, pymupdf.Rect(x0, y0, x1, y0 + size + 2), [{"size": size}])
 
 
-def test_lines_wrapping_around_a_figure_stay_in_one_paragraph():
+def test_lines_wrapping_around_a_figure_stay_in_one_paragraph() -> None:
     """In a paragraph set around a figure, the lines beside the figure end at the same x, far from the right edge of
     the block. Smilodon, starting with a capital below a line that fills the narrow column, is a wrapped line and
     no hard break. A line ending well before the right edge of the narrow column is still split as a hard break."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def line(text, x0, x1, y0):
-        return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"size": 10.0, "font": "Times-Roman", "text": text}])
+    def line(text: str, x0: float, x1: float, y0: float) -> LineItem:
+        return _item(text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"size": 10.0, "font": "Times-Roman", "text": text}])
 
     items = [
         line(
@@ -138,17 +146,17 @@ def test_lines_wrapping_around_a_figure_stay_in_one_paragraph():
     assert _split_lines(answers)[-1] == [6]
 
 
-def test_a_table_row_name_is_cut_from_its_numbers_and_the_rows_around():
+def test_a_table_row_name_is_cut_from_its_numbers_and_the_rows_around() -> None:
     """A table row name, the number cells in the same row and the group name above each become a paragraph of their
     own. Numbers close together are split as well; the number cells PyMuPDF merged into the row-name line are taken
     out of the line and stay on the original page like the numbers of the other rows."""
     from app.formats.pdf_rows import _drop_number_tails
     from app.formats.pdf_split_lines import _split_lines
 
-    def span(text, x0, x1, y):
+    def span(text: str, x0: float, x1: float, y: float) -> PdfDict:
         return {"text": text, "size": 9.0, "bbox": (x0, y, x1, y + 9), "origin": (x0, y + 7), "font": "Times"}
 
-    def item(parts, y):
+    def item(parts: list[tuple[str, float, float]], y: float) -> LineItem:
         spans = [span(text, x0, x1, y) for text, x0, x1 in parts]
         text = "".join(part[0] for part in parts)
         rect = pymupdf.Rect(parts[0][1], y, parts[-1][2], y + 9)
@@ -192,16 +200,16 @@ def test_a_table_row_name_is_cut_from_its_numbers_and_the_rows_around():
     assert "Top Leaderboard Systems (Dec 10th, 2018)" in texts
 
 
-def test_header_cells_over_number_columns_are_cut_apart():
+def test_header_cells_over_number_columns_are_cut_apart() -> None:
     """The cells of a header row sit close together and were merged into one line. They are split when each piece is
     right above a column of numbers; the header of the leading row-name column need not line up. Splitting a
     justified body line would give half sentences, so it is not split."""
     from app.formats.pdf_rows import _cut_header_cells
 
-    def span(text, x0, x1, y=238.1):
+    def span(text: str, x0: float, x1: float, y: float = 238.1) -> PdfDict:
         return {"text": text, "size": 9.0, "bbox": (x0, y, x1, y + 9), "origin": (x0, y + 7), "font": "Times"}
 
-    def item(spans):
+    def item(spans: list[PdfDict]) -> LineItem:
         text = "".join(one["text"] for one in spans)
         rect = pymupdf.Rect(spans[0]["bbox"][0], spans[0]["bbox"][1], spans[-1]["bbox"][2], spans[0]["bbox"][3])
         return (text, rect, [one for one in spans if one["text"].strip()], spans)
@@ -237,14 +245,14 @@ def test_header_cells_over_number_columns_are_cut_apart():
     assert len(items) == 1 and not cells
 
 
-def test_a_numbered_lemma_and_a_displayed_formula_start_their_own_paragraphs():
+def test_a_numbered_lemma_and_a_displayed_formula_start_their_own_paragraphs() -> None:
     """A numbered lemma label starts a new paragraph, also when the previous line ends in a formula. A line indented
     on both sides, with only math fonts and a relation symbol, is a displayed formula and is not joined even when
     the previous line ends with a comma. The summation piece split out of a fraction does not count."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def line(text, x0, x1, y, font="NimbusRomNo9L-Regu", flags=0):
-        return (
+    def line(text: str, x0: float, x1: float, y: float, font: str = "NimbusRomNo9L-Regu", flags: int = 0) -> LineItem:
+        return _item(
             text,
             pymupdf.Rect(x0, y, x1, y + 11),
             [{"text": text, "size": 9.7, "font": font, "flags": flags, "bbox": (x0, y, x1, y + 11)}],
@@ -257,7 +265,7 @@ def test_a_numbered_lemma_and_a_displayed_formula_start_their_own_paragraphs():
             485.6,
             300.0,
         ),
-        (
+        _item(
             "Lemma 10.3. Let gt = ∇ft(θt) and g1:t be defined as above and bounded,",
             pymupdf.Rect(105.0, 314.0, 490.3, 325.0),
             [
@@ -292,7 +300,7 @@ def test_a_numbered_lemma_and_a_displayed_formula_start_their_own_paragraphs():
     assert _split_lines(display) == [[0], [1], [2]]
 
 
-def test_wrapped_letter_period_stays_in_the_paragraph():
+def test_wrapped_letter_period_stays_in_the_paragraph() -> None:
     """When the full previous line has no sentence end, Q. on the next line is a wrapped line and no list item. a.
     after a sentence end is still split off."""
     from app.formats.pdf_split_lines import _split_lines
@@ -317,7 +325,7 @@ def test_wrapped_letter_period_stays_in_the_paragraph():
     assert _split_lines(paren) == [[0], [1, 2], [3]]
 
 
-def test_a_dash_after_a_full_line_continues_the_sentence():
+def test_a_dash_after_a_full_line_continues_the_sentence() -> None:
     """When the full previous line has an unfinished sentence, a dash at the start of the next line belongs to the
     sentence and is no bullet. The same holds when the previous line is a monospace URL one size larger. A dash
     below an item that starts with a dash is the next item at the same level; an indented dash or one in another
@@ -354,7 +362,7 @@ def test_a_dash_after_a_full_line_continues_the_sentence():
     assert _split_lines(nested) == [[0], [1]]
 
 
-def test_justified_rows_are_not_a_centered_stack():
+def test_justified_rows_are_not_a_centered_stack() -> None:
     """Full body lines whose left edges differ by a point or two have almost the same width and are no stack of
     centered lines. Author names, affiliations and emails vary in width."""
     from app.formats.pdf_split_lines import _centered_rows
@@ -371,12 +379,12 @@ def test_justified_rows_are_not_a_centered_stack():
     assert _centered_rows(authors, 10.0)
 
 
-def test_the_tail_of_a_wrapped_url_does_not_end_the_verbatim_text():
+def test_the_tail_of_a_wrapped_url_does_not_end_the_verbatim_text() -> None:
     """The tail of a wrapped URL lands at the start of the next line and body text follows it. The line start is still
     monospace and has not switched back to the body font, so the paragraph is not split."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def span(text, mono):
+    def span(text: str, mono: bool) -> PdfDict:
         return {
             "text": text,
             "size": 12.0 if mono else 11.0,
@@ -385,17 +393,17 @@ def test_the_tail_of_a_wrapped_url_does_not_end_the_verbatim_text():
         }
 
     lines = [
-        (
+        _item(
             "Olympiad https://artofproblemsolving.com/wiki/index.php/AMC_historical_",
             pymupdf.Rect(70.9, 420.0, 525.0, 432.0),
             [span("Olympiad ", False), span("https://artofproblemsolving.com/wiki/index.php/AMC_historical_", True)],
         ),
-        (
+        _item(
             "results?srsltid=AfmBOoqQ6pQic5NCan_NX1wYgr-aoHgJ33hsq7KSekF-rUwY8TBaBao",
             pymupdf.Rect(70.9, 433.5, 524.4, 445.5),
             [span("results?srsltid=AfmBOoqQ6pQic5NCan_NX1wYgr-aoHgJ33hsq7KSekF-rUwY8TBaBao", True)],
         ),
-        (
+        _item(
             "1). This performance positions DeepSeek-R1 among the nation’s top-tier high school students.",
             pymupdf.Rect(70.6, 447.1, 524.0, 459.1),
             [span("1).", True), span(" This performance positions DeepSeek-R1 among the nation’s top-tier", False)],
@@ -404,17 +412,17 @@ def test_the_tail_of_a_wrapped_url_does_not_end_the_verbatim_text():
     assert _split_lines(lines) == [[0, 1, 2]]
 
 
-def test_an_equals_sign_at_the_end_of_a_list_item_line_keeps_the_item_whole():
+def test_an_equals_sign_at_the_end_of_a_list_item_line_keeps_the_item_whole() -> None:
     """Justification stretches the space before an equals sign at the line end to more than one em; the equals sign
     still joins this line, and the next line indented to the right of the entry number continues the entry."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def piece(text, x0, x1, y0, font="Times-Roman"):
-        return (text, pymupdf.Rect(x0, y0, x1, y0 + 10), [{"size": 10.0, "font": font, "text": text}])
+    def piece(text: str, x0: float, x1: float, y0: float, font: str = "Times-Roman") -> LineItem:
+        return _item(text, pymupdf.Rect(x0, y0, x1, y0 + 10), [{"size": 10.0, "font": font, "text": text}])
 
     items = [
         piece("1. Intractability:", 131.4, 199.1, 474.5),
-        (
+        _item(
             "the case where the integral of the marginal likelihood p(x)",
             pymupdf.Rect(210.4, 474.5, 485.9, 485.3),
             [
@@ -438,7 +446,7 @@ def test_an_equals_sign_at_the_end_of_a_list_item_line_keeps_the_item_whole():
     assert _split_lines(loose)[0] == [0]
 
 
-def test_pdf_left_jump_keeps_full_width_wrap():
+def test_pdf_left_jump_keeps_full_width_wrap() -> None:
     """An indented first line with both lines reaching the right margin is an automatic wrap and is not split into two
     paragraphs."""
     from app.formats.pdf_split_lines import _split_lines
@@ -450,7 +458,7 @@ def test_pdf_left_jump_keeps_full_width_wrap():
     assert _split_lines(items) == [[0, 1]]
 
 
-def test_pdf_short_indent_stays_one_segment():
+def test_pdf_short_indent_stays_one_segment() -> None:
     """A short indented first line followed by a longer continuation line is still an automatic wrap and is not split.
     A Chinese continuation line is not split just because it looks like a new sentence."""
     from app.formats.pdf_split_lines import _split_lines
@@ -467,7 +475,7 @@ def test_pdf_short_indent_stays_one_segment():
     assert _split_lines(cjk) == [[0, 1]]
 
 
-def test_pdf_list_continuation_keeps_capital():
+def test_pdf_list_continuation_keeps_capital() -> None:
     """A continuation line of a list item belongs to the item even when it starts with a capital, and does not start a
     new paragraph."""
     from app.formats.pdf_split_lines import _split_lines
@@ -479,7 +487,7 @@ def test_pdf_list_continuation_keeps_capital():
     assert _split_lines(items) == [[0, 1]]
 
 
-def test_pdf_cjk_indent_wrap_stays_one_segment():
+def test_pdf_cjk_indent_wrap_stays_one_segment() -> None:
     """A 2em first-line indent with a continuation line that is not full is still one paragraph."""
     from app.formats.pdf_split_lines import _split_lines
 
@@ -490,7 +498,7 @@ def test_pdf_cjk_indent_wrap_stays_one_segment():
     assert _split_lines(items) == [[0, 1]]
 
 
-def test_pdf_left_jump_splits_stacked_labels():
+def test_pdf_left_jump_splits_stacked_labels() -> None:
     """An upper line that is not full and a lower line jumping clearly to the left are parallel short labels and are
     split."""
     from app.formats.pdf_split_lines import _split_lines
@@ -502,7 +510,7 @@ def test_pdf_left_jump_splits_stacked_labels():
     assert _split_lines(items) == [[0], [1]]
 
 
-def test_pdf_far_apart_labels_on_one_row_split():
+def test_pdf_far_apart_labels_on_one_row_split() -> None:
     """Two pieces on the same line several em apart are side-by-side labels (a slide caption and a node in the
     figure) and are split."""
     from app.formats.pdf_split_lines import _split_lines
@@ -514,12 +522,12 @@ def test_pdf_far_apart_labels_on_one_row_split():
     assert _split_lines(items) == [[0], [1]]
 
 
-def test_pdf_cjk_straight_quote_ends_sentence():
+def test_pdf_cjk_straight_quote_ends_sentence() -> None:
     """An ASCII straight quote at a sentence end counts as a sentence end like a curly quote; a semicolon joins
     clauses and does not split the paragraph."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def pair(end: str) -> list[tuple[str, pymupdf.Rect, list[dict[str, float]]]]:
+    def pair(end: str) -> list[LineItem]:
         return [
             _line(f"完整一句。{end}", 40, 140, 10, size=12),
             _line("而这是一行明显更长的内容用来撑满整行的宽度", 40, 400, 26, size=12),
@@ -531,14 +539,14 @@ def test_pdf_cjk_straight_quote_ends_sentence():
     assert _split_lines(pair("；")) == [[0, 1]]
 
 
-def test_one_query_per_line_in_one_block_is_cut_into_lines():
+def test_one_query_per_line_in_one_block_is_cut_into_lines() -> None:
     """PyMuPDF groups queries of one sentence per line into one block. Every line breaks early (the first word of the
     next line would fit), so the block is split by line. A full paragraph stays one paragraph."""
     from app.formats.pdf_rows import _cut_line_list
 
-    def item(text, y, x1):
+    def item(text: str, y: float, x1: float) -> LineItem:
         rect = pymupdf.Rect(167.1, y, x1, y + 10.8)
-        return (text, rect, [{"text": text, "size": 9.0, "bbox": tuple(rect)}], None)
+        return _item(text, rect, [{"text": text, "size": 9.0, "bbox": _bbox(rect)}])
 
     queries = [
         item("can you tell me about any good cantonese restaurants close by", 356.2, 390.1),
@@ -566,19 +574,19 @@ def test_one_query_per_line_in_one_block_is_cut_into_lines():
     assert _cut_line_list([0, 1, 2, 3], around, [item[1] for item in around]) == [[0, 1, 2, 3]]
 
 
-def test_rows_of_a_table_or_a_list_with_one_opening_are_cut_into_lines():
+def test_rows_of_a_table_or_a_list_with_one_opening_are_cut_into_lines() -> None:
     """A line split into several pieces is first joined into one line. When every line starts a new column at the
     same x (row name and features), or every line starts with the same word (feature templates), the block is split
     by line even if the lines have similar lengths."""
     from app.formats.pdf_rows import _cut_line_list
 
-    def item(text, x0, y, x1, size=9.96):
+    def item(text: str, x0: float, y: float, x1: float, size: float = 9.96) -> LineItem:
         rect = pymupdf.Rect(x0, y, x1, y + 11.9)
-        return (text, rect, [{"text": text, "size": size, "bbox": tuple(rect)}], None)
+        return _item(text, rect, [{"text": text, "size": size, "bbox": _bbox(rect)}])
 
-    def row(parts, y):
-        spans = [{"text": text, "size": 9.96, "bbox": (x0, y, x1, y + 11.9)} for text, x0, x1 in parts]
-        return (" ".join(p[0] for p in parts), pymupdf.Rect(parts[0][1], y, parts[-1][2], y + 11.9), spans, None)
+    def row(parts: list[tuple[str, float, float]], y: float) -> LineItem:
+        spans: list[PdfDict] = [{"text": text, "size": 9.96, "bbox": (x0, y, x1, y + 11.9)} for text, x0, x1 in parts]
+        return _item(" ".join(p[0] for p in parts), pymupdf.Rect(parts[0][1], y, parts[-1][2], y + 11.9), spans)
 
     table = [
         item("hen", 178.1, 414.7, 192.5),
@@ -607,7 +615,7 @@ def test_rows_of_a_table_or_a_list_with_one_opening_are_cut_into_lines():
     assert _cut_line_list([0, 1, 2, 3], templates, rects) == [[0], [1], [2], [3]]
 
 
-def test_smaller_body_under_a_heading_splits():
+def test_smaller_body_under_a_heading_splits() -> None:
     """A 12pt heading and a 9pt lead paragraph are often in the same dict block. The left edge of the lead only makes
     room for the section number and must not be taken as an indent that keeps it in the heading."""
     from app.formats.pdf_split_lines import _split_lines
@@ -628,7 +636,7 @@ def test_smaller_body_under_a_heading_splits():
     assert _split_lines(script) == [[0, 1]]
 
 
-def test_affiliation_under_an_author_name_splits():
+def test_affiliation_under_an_author_name_splits() -> None:
     """On a title page, an affiliation one size smaller below an author name forms a line of its own and becomes a
     separate paragraph even with only two words. When an asterisk at the line start is one size larger than the
     text after it, the comparison uses the size of the majority of characters, and a continuation line of the same
@@ -641,9 +649,9 @@ def test_affiliation_under_an_author_name_splits():
     ]
     assert _split_lines(author) == [[0], [1]]
 
-    def item(spans, x0, x1, y0):
+    def item(spans: list[tuple[str, float]], x0: float, x1: float, y0: float) -> LineItem:
         text = "".join(text for text, _ in spans)
-        return (text, pymupdf.Rect(x0, y0, x1, y0 + 14), [{"text": text, "size": size} for text, size in spans])
+        return _item(text, pymupdf.Rect(x0, y0, x1, y0 + 14), [{"text": text, "size": size} for text, size in spans])
 
     note = [
         item([("*", 15), ("also what standalone", 12), (" ", 15)], 61, 186, 155),
@@ -653,32 +661,31 @@ def test_affiliation_under_an_author_name_splits():
     assert _split_lines(note) == [[0, 1, 2]]
 
 
-def test_section_number_stays_with_heading():
+def test_section_number_stays_with_heading() -> None:
     """The dict lines '2.2' + 'Training' must not be split: once the digits-only line is split off as a symbol line,
     the number is filtered out and not masked (the original stays visible), the heading is translated alone, and
     the baselines of the two do not line up."""
     from app.formats.pdf_split_lines import _split_lines
 
     items = [
-        ("2.2", pymupdf.Rect(108, 84, 120, 94), [{"text": "2.2", "size": 10.0}], None),
-        ("Training", pymupdf.Rect(130, 84, 167, 94), [{"text": "Training", "size": 10.0}], None),
+        _item("2.2", pymupdf.Rect(108, 84, 120, 94), [{"text": "2.2", "size": 10.0}]),
+        _item("Training", pymupdf.Rect(130, 84, 167, 94), [{"text": "Training", "size": 10.0}]),
     ]
     assert _split_lines(items) == [[0, 1]]
     # The page number and body text are not on the same visual line (no vertical overlap), so they are split as
     # usual
     items2 = [
-        ("3", pymupdf.Rect(300, 760, 308, 770), [{"text": "3", "size": 10.0}], None),
-        (
+        _item("3", pymupdf.Rect(300, 760, 308, 770), [{"text": "3", "size": 10.0}]),
+        _item(
             "Next paragraph starts here",
             pymupdf.Rect(108, 700, 500, 712),
             [{"text": "Next paragraph starts here", "size": 10.0}],
-            None,
         ),
     ]
     assert _split_lines(items2) == [[0], [1]]
 
 
-def test_a_chapter_number_across_a_rule_is_not_joined_to_the_title():
+def test_a_chapter_number_across_a_rule_is_not_joined_to_the_title() -> None:
     """A two-digit chapter number at the chapter start sits close to the heading, so word spacing would join them into
     one sentence and rewriting the line would cover the vertical bar between them. A vertical bar between them
     splits them."""
@@ -686,12 +693,11 @@ def test_a_chapter_number_across_a_rule_is_not_joined_to_the_title():
     from app.formats.pdf_split_lines import _split_lines
 
     items = [
-        ("10", pymupdf.Rect(98.4, 132.0, 158.2, 204.1), [{"text": "10", "size": 59.8}], None),
-        (
+        _item("10", pymupdf.Rect(98.4, 132.0, 158.2, 204.1), [{"text": "10", "size": 59.8}]),
+        _item(
             "Interpretability",
             pymupdf.Rect(167.3, 137.3, 331.9, 169.6),
             [{"text": "Interpretability", "size": 24.8}],
-            None,
         ),
     ]
     post = pymupdf.Rect(161.2, 110.8, 162.4, 200.8)
@@ -701,19 +707,19 @@ def test_a_chapter_number_across_a_rule_is_not_joined_to_the_title():
     assert _cut_at_posts([0, 1], items, [pymupdf.Rect(90, 110, 91, 200)]) == [[0, 1]]
 
 
-def test_a_line_split_into_two_blocks_is_put_back_together():
+def test_a_line_split_into_two_blocks_is_put_back_together() -> None:
     """When PyMuPDF cuts a line at a superscript and puts the second half into another block, it is moved back after
     the first half."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0, x1, y0, y1, text):
+    def line(x0: float, x1: float, y0: float, y1: float, text: str) -> PdfDict:
         return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
 
     head = line(100, 400, 150, 162, "All operations are element-wise. With β")
     tail = line(398, 440, 150, 163, "1 and β")
     nxt = line(100, 300, 162, 174, "we denote the power t.")
     other = line(100, 400, 200, 212, "Require: a step size")
-    data = {
+    data: PdfDict = {
         "blocks": [
             {"type": 0, "bbox": (100, 150, 400, 162), "lines": [head]},
             {"type": 0, "bbox": (100, 150, 440, 212), "lines": [tail, nxt, other]},
@@ -724,14 +730,14 @@ def test_a_line_split_into_two_blocks_is_put_back_together():
     assert data["blocks"][1]["lines"] == [nxt, other]
 
 
-def test_a_two_column_gutter_is_not_a_split_line():
+def test_a_two_column_gutter_is_not_a_split_line() -> None:
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0, x1, text):
+    def line(x0: float, x1: float, text: str) -> PdfDict:
         return {"bbox": (x0, 150, x1, 162), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
 
     left, right = line(60, 290, "left column text"), line(305, 540, "right column text")
-    data = {
+    data: PdfDict = {
         "blocks": [
             {"type": 0, "bbox": (60, 150, 290, 162), "lines": [left]},
             {"type": 0, "bbox": (305, 150, 540, 162), "lines": [right]},
@@ -741,12 +747,20 @@ def test_a_two_column_gutter_is_not_a_split_line():
     assert data["blocks"][0]["lines"] == [left] and data["blocks"][1]["lines"] == [right]
 
 
-def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
+def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line() -> None:
     """With a column gap narrower than one em, a right-column line starting with a formula or a section number is not
     joined after the left-column paragraph either."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0, x1, y0, text, font="Times-Roman", size=10.0, y1=None):
+    def line(
+        x0: float,
+        x1: float,
+        y0: float,
+        text: str,
+        font: str = "Times-Roman",
+        size: float = 10.0,
+        y1: float | None = None,
+    ) -> PdfDict:
         box = (x0, y0, x1, y1 if y1 is not None else y0 + 13)
         return {"bbox": box, "dir": (1, 0), "spans": [{"text": text, "font": font, "size": size, "bbox": box}]}
 
@@ -757,7 +771,7 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
     rest = line(311, 540, 662, "the training set, and E[x] is the mean")
     number = line(311, 326, 659, "3.2", "Times-Bold", 14.3)
     title = line(337.9, 540, 659, "Batch-Normalized Convolutional Net-", "Times-Bold", 14.3)
-    data = {
+    data: PdfDict = {
         "blocks": [
             {"type": 0, "bbox": (72, 638, 301.3, 687), "lines": list(para)},
             {"type": 0, "bbox": (311, 650, 540, 675), "lines": [formula, rest]},
@@ -813,22 +827,24 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line():
     assert data["blocks"][1]["lines"] == heading
 
 
-def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line():
+def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line() -> None:
     """The font box of ϵ reaches into the next line. Measured by the font box, the denominator is on the same row
     as the next line, so it would be attached after that line and the numerator would follow it."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def span(text, font, size, box, ink=None):
-        item = {"text": text, "font": font, "size": size, "bbox": box, "origin": (box[0], box[3] - 2)}
+    Box = tuple[float, float, float, float]
+
+    def span(text: str, font: str, size: float, box: Box, ink: Box | None = None) -> PdfDict:
+        item: PdfDict = {"text": text, "font": font, "size": size, "bbox": box, "origin": (box[0], box[3] - 2)}
         if ink is not None:
             item["ink"] = ink
         return item
 
-    def line(*spans):
+    def line(*spans: PdfDict) -> PdfDict:
         box = pymupdf.Rect(spans[0]["bbox"])
         for item in spans[1:]:
             box |= pymupdf.Rect(item["bbox"])
-        return {"bbox": tuple(box), "dir": (1, 0), "spans": list(spans)}
+        return {"bbox": _bbox(box), "dir": (1, 0), "spans": list(spans)}
 
     lead = line(span("Equation (10) reveals that we must predict (", "Times-Roman", 10.0, (108, 187.2, 305, 199.9)))
     minus = line(
@@ -845,7 +861,7 @@ def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line():
     nxt = line(
         span("input to the model, we may choose the parameterization", "Times-Roman", 10.0, (108, 201.7, 331.3, 211.7))
     )
-    data = {
+    data: PdfDict = {
         "blocks": [
             {"type": 0, "bbox": (108, 187.2, 305, 199.9), "lines": [lead]},
             {"type": 0, "bbox": (307.6, 185.3, 361.7, 206.1), "lines": [minus, numerator, denominator]},
@@ -858,12 +874,12 @@ def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line():
     assert nxt not in host["lines"]
 
 
-def test_a_split_line_goes_to_its_nearest_left_neighbour():
+def test_a_split_line_goes_to_its_nearest_left_neighbour() -> None:
     """Two blocks both have a left half that could be joined: the piece joins the nearest one and does not move back
     and forth between the two blocks."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0, x1, y0, text, font="CMMI10"):
+    def line(x0: float, x1: float, y0: float, text: str, font: str = "CMMI10") -> PdfDict:
         box = (x0, y0, x1, y0 + 10)
         return {"bbox": box, "dir": (1, 0), "spans": [{"text": text, "font": font, "size": 10.0, "bbox": box}]}
 
@@ -872,7 +888,7 @@ def test_a_split_line_goes_to_its_nearest_left_neighbour():
     far = line(72, 262, 96, "the rule is", "Times-Roman")
     near = line(250, 264, 104, "c =")
     piece = line(265, 300, 100, "d − e")
-    data = {
+    data: PdfDict = {
         "blocks": [
             {"type": 0, "bbox": (72, 96, 262, 106), "lines": [far]},
             {"type": 0, "bbox": (250, 104, 264, 114), "lines": [near]},
@@ -883,14 +899,14 @@ def test_a_split_line_goes_to_its_nearest_left_neighbour():
     assert data["blocks"][1]["lines"] == [near, piece]
 
 
-def test_a_justified_heading_split_word_by_word_stays_one_paragraph():
+def test_a_justified_heading_split_word_by_word_stays_one_paragraph() -> None:
     """A justified heading in a narrow column has word spacing stretched to two em, so PyMuPDF makes one line per word.
     It is recognized as one paragraph by whole line."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def item(text, x0, x1, y0):
-        span = {"text": text, "font": "Times-Bold", "size": 14.3}
-        return (text, pymupdf.Rect(x0, y0, x1, y0 + 20), [span])
+    def item(text: str, x0: float, x1: float, y0: float) -> LineItem:
+        span: PdfDict = {"text": text, "font": "Times-Bold", "size": 14.3}
+        return _item(text, pymupdf.Rect(x0, y0, x1, y0 + 20), [span])
 
     items = [
         item("2", 311, 318, 31),
@@ -902,28 +918,28 @@ def test_a_justified_heading_split_word_by_word_stays_one_paragraph():
     assert _split_lines(items) == [[0, 1, 2, 3, 4]]
 
 
-def test_table_cells_on_one_baseline_stay_apart():
+def test_table_cells_on_one_baseline_stay_apart() -> None:
     from app.formats.pdf_split_lines import _split_lines
 
-    def item(text, x0, x1):
-        span = {"text": text, "font": "Times-Roman", "size": 9.0}
-        return (text, pymupdf.Rect(x0, 100, x1, 110), [span])
+    def item(text: str, x0: float, x1: float) -> LineItem:
+        span: PdfDict = {"text": text, "font": "Times-Roman", "size": 9.0}
+        return _item(text, pymupdf.Rect(x0, 100, x1, 110), [span])
 
     items = [item("Training", 128, 158), item("Inference needed", 184, 246), item("No difficulties", 437, 489)]
     assert len(_split_lines(items)) == 3
 
 
-def test_fraction_pieces_rejoin_their_line_with_less_overlap():
+def test_fraction_pieces_rejoin_their_line_with_less_overlap() -> None:
     """Denominators and large braces pull the box down, so two pieces of the same line overlap vertically by only 30 to
     40 percent."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0, x1, y0, y1, text):
+    def line(x0: float, x1: float, y0: float, y1: float, text: str) -> PdfDict:
         return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
 
     root = line(188, 202.4, 259.0, 271.2, "√αt")
     paren = line(205.8, 211.7, 253.9, 263.8, "(")
-    data = {
+    data: PdfDict = {
         "blocks": [
             {"type": 0, "bbox": (108, 258, 202, 274), "lines": [line(108, 184, 258, 274, "to compute x ="), root]},
             {"type": 0, "bbox": (205, 253, 212, 264), "lines": [paren]},
@@ -933,13 +949,13 @@ def test_fraction_pieces_rejoin_their_line_with_less_overlap():
     assert data["blocks"][0]["lines"][-1] is paren
 
 
-def test_math_line_box_follows_glyph_ink():
+def test_math_line_box_follows_glyph_ink() -> None:
     """A CMSY box from the font extent can be two lines high. Line boxes and cells are computed from ink; the radical
     has its origin at the top, so it is measured by ink as well."""
     from app.formats.pdf_math import _line_box
     from app.formats.pdf_rows import _text_box
 
-    arrow = {
+    arrow: PdfDict = {
         "text": "←",
         "font": "CMSY10",
         "size": 9.7,
@@ -947,7 +963,7 @@ def test_math_line_box_follows_glyph_ink():
         "origin": (130.2, 226.3),
         "ink": (130.2, 221.3, 139.9, 226.4),
     }
-    word = {
+    word: PdfDict = {
         "text": "(Initialize",
         "font": "NimbusRomNo9L-Regu",
         "size": 9.7,
@@ -955,20 +971,20 @@ def test_math_line_box_follows_glyph_ink():
         "origin": (147.4, 226.3),
         "ink": (147.4, 219.7, 194.8, 228.0),
     }
-    assert [round(v, 1) for v in _text_box(arrow)] == [130.2, 220.7, 139.9, 227.0]
+    assert [round(v, 1) for v in _bbox(_text_box(arrow))] == [130.2, 220.7, 139.9, 227.0]
     assert _text_box(word) == pymupdf.Rect(147.4, 217.3, 194.8, 229.0)
-    line = {"bbox": (130.2, 217.3, 194.8, 235.6), "spans": [arrow, word]}
-    assert [round(v, 1) for v in _line_box(line)] == [130.2, 217.3, 194.8, 229.0]
+    line: PdfDict = {"bbox": (130.2, 217.3, 194.8, 235.6), "spans": [arrow, word]}
+    assert [round(v, 1) for v in _bbox(_line_box(line))] == [130.2, 217.3, 194.8, 229.0]
 
 
-def test_formula_pieces_touching_on_one_line_stay_one_paragraph():
+def test_formula_pieces_touching_on_one_line_stay_one_paragraph() -> None:
     """Fractions and large braces split a formula line into several pieces. A piece of symbols only must not cut the
     sentence apart."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def item(text, x0, x1, y0, y1, *spans):
+    def item(text: str, x0: float, x1: float, y0: float, y1: float, *spans: tuple[str, str, float]) -> LineItem:
         spans = spans or ((text, "CMMI10", 10.0),)
-        return (text, pymupdf.Rect(x0, y0, x1, y1), [{"text": t, "font": f, "size": z} for t, f, z in spans])
+        return _item(text, pymupdf.Rect(x0, y0, x1, y1), [{"text": t, "font": f, "size": z} for t, f, z in spans])
 
     items = [
         item("to compute x =", 108, 184, 258, 268, ("to compute", "NimbusRomNo9L-Regu", 9.9), (" x =", "CMMI10", 10.0)),
@@ -989,13 +1005,13 @@ def test_formula_pieces_touching_on_one_line_stay_one_paragraph():
     assert _split_lines(items) == [[0, 1, 2, 3, 4, 5]]
 
 
-def test_an_inline_fraction_rejoins_its_line_in_reading_order():
+def test_an_inline_fraction_rejoins_its_line_in_reading_order() -> None:
     """g(x) = 1/(1+exp(−x)): the denominator is in another block, farther from the equals sign than a word space, and
     the numerator comes before the denominator. After moving them back, they are ordered left to right so the
     denominator can join the equals sign."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0, x1, y0, y1, *spans):
+    def line(x0: float, x1: float, y0: float, y1: float, *spans: tuple[str, str]) -> PdfDict:
         # CMR inside Times body text is already marked as formula during extraction
         return {
             "bbox": (x0, y0, x1, y1),
@@ -1008,7 +1024,7 @@ def test_an_inline_fraction_rejoins_its_line_in_reading_order():
     host = line(72, 219.4, 136, 149.3, ("rameters to be learned, and", "Times-Roman"), ("g(x) =", "CMR10"))
     numerator = line(243.2, 247.2, 137.3, 143.2, ("1", "CMR7"))
     denominator = line(225.6, 301, 136, 151.7, ("1+exp(−x)", "CMR10"), (". As", "Times-Roman"))
-    data = {
+    data: PdfDict = {
         "blocks": [
             {"type": 0, "bbox": (72, 136, 247, 149), "lines": [host, numerator]},
             {"type": 0, "bbox": (225, 136, 301, 152), "lines": [denominator]},
@@ -1018,13 +1034,13 @@ def test_an_inline_fraction_rejoins_its_line_in_reading_order():
     assert sorted(map(id, data["blocks"][0]["lines"])) == sorted(map(id, [host, numerator, denominator]))
 
 
-def test_pieces_of_one_row_are_read_left_to_right():
+def test_pieces_of_one_row_are_read_left_to_right() -> None:
     """When the numerator comes before the denominator, they are reordered left to right; two lines one above the other
     are not treated as one line."""
     from app.formats.pdf_rows import _left_to_right
 
-    def item(text, x0, y0, x1, y1):
-        return (text, pymupdf.Rect(x0, y0, x1, y1), [])
+    def item(text: str, x0: float, y0: float, x1: float, y1: float) -> LineItem:
+        return _item(text, pymupdf.Rect(x0, y0, x1, y1), [])
 
     host, numerator, denominator = (
         item("g(x) =", 72, 136, 219, 149),
@@ -1035,10 +1051,10 @@ def test_pieces_of_one_row_are_read_left_to_right():
     assert _left_to_right([host, numerator, denominator, nxt]) == [host, denominator, numerator, nxt]
 
 
-def test_plain_words_a_wide_gap_apart_are_not_rejoined():
+def test_plain_words_a_wide_gap_apart_are_not_rejoined() -> None:
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0, x1, text):
+    def line(x0: float, x1: float, text: str) -> PdfDict:
         return {
             "bbox": (x0, 136, x1, 149),
             "dir": (1, 0),
@@ -1046,7 +1062,7 @@ def test_plain_words_a_wide_gap_apart_are_not_rejoined():
         }
 
     left, right = line(72, 219, "learned, and the"), line(227, 301, "output of the layer")
-    data = {
+    data: PdfDict = {
         "blocks": [
             {"type": 0, "bbox": (72, 136, 219, 149), "lines": [left]},
             {"type": 0, "bbox": (227, 136, 301, 149), "lines": [right]},
@@ -1056,12 +1072,14 @@ def test_plain_words_a_wide_gap_apart_are_not_rejoined():
     assert data["blocks"][1]["lines"] == [right]
 
 
-def test_a_lone_numerator_goes_back_to_its_fraction():
+def test_a_lone_numerator_goes_back_to_its_fraction() -> None:
     """A numerator left alone in a block is moved next to the formula line right below it. Body text on the previous
     line also covers it horizontally, but that does not count."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0, x1, y0, y1, *spans):
+    def line(
+        x0: float, x1: float, y0: float, y1: float, *spans: tuple[str, str, float, tuple[float, float, float, float]]
+    ) -> PdfDict:
         return {
             "bbox": (x0, y0, x1, y1),
             "dir": (1, 0),
@@ -1073,7 +1091,7 @@ def test_a_lone_numerator_goes_back_to_its_fraction():
     above = line(108, 504, 243, 262, ("where the model predicts noise", "Times-Roman", 9.9, (108, 243, 504, 262)))
     denominator = line(235, 296, 258, 276, ("√1−αt", "CMSY7", 7.0, (235, 264.4, 260, 270.2)))
     numerator = line(243, 251, 256, 263, ("βt", "CMMI7", 7.0, (243.4, 256.2, 250.7, 262.5)))
-    data = {
+    data: PdfDict = {
         "blocks": [
             {"type": 0, "bbox": (108, 243, 504, 262), "lines": [above]},
             {"type": 0, "bbox": (235, 258, 296, 276), "lines": [denominator]},
@@ -1086,15 +1104,15 @@ def test_a_lone_numerator_goes_back_to_its_fraction():
     assert data["blocks"][0]["lines"] == [above]
 
 
-def test_large_chapter_number_stays_apart_from_the_title():
+def test_large_chapter_number_stays_apart_from_the_title() -> None:
     """A 60pt number and a 25pt heading at a chapter start are one large em apart: the number stays as it is, and the
     heading is written back alone at its original position. 2.2 Training at a single font size is still one
     line."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def item(text, rect, size):
-        span = {"text": text, "size": size, "font": "Times", "flags": 0}
-        return (text, pymupdf.Rect(rect), [span])
+    def item(text: str, rect: tuple[float, float, float, float], size: float) -> LineItem:
+        span: PdfDict = {"text": text, "size": size, "font": "Times", "flags": 0}
+        return _item(text, pymupdf.Rect(rect), [span])
 
     chapter = [item("2", (98, 142, 128, 202), 59.8), item("Words and Tokens", (167, 142, 364, 166), 24.8)]
     assert _split_lines(chapter) == [[0], [1]]
@@ -1102,13 +1120,13 @@ def test_large_chapter_number_stays_apart_from_the_title():
     assert _split_lines(section) == [[0, 1]]
 
 
-def test_a_long_toc_title_with_two_leader_dots_keeps_its_page_number():
+def test_a_long_toc_title_with_two_leader_dots_keeps_its_page_number() -> None:
     """When a long title reaches close to the page number, only two dots of leader remain. On a contents page the
     leader and page number are still cut off and the page number stays in place. Such lines on other pages are
     left alone."""
     from app.formats.pdf_rows import _cut_leaders
 
-    def span(text, x0, x1, y=278.7):
+    def span(text: str, x0: float, x1: float, y: float = 278.7) -> PdfDict:
         return {"text": text, "size": 10.0, "bbox": (x0, y, x1, y + 12), "origin": (x0, y + 9.5), "color": 0}
 
     parts = [
@@ -1123,7 +1141,7 @@ def test_a_long_toc_title_with_two_leader_dots_keeps_its_page_number():
         ("238", 478.3, 493.2),
     ]
     spans = [span(*part) for part in parts]
-    item = (
+    item: LineItem = (
         "".join(part[0] for part in parts),
         pymupdf.Rect(203.0, 278.7, 493.2, 290.7),
         [one for one in spans if one["text"].strip()],
@@ -1136,7 +1154,7 @@ def test_a_long_toc_title_with_two_leader_dots_keeps_its_page_number():
     assert kept[0] == item[0] and not leaders
 
 
-def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
+def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction() -> None:
     """The denominator N of count(w)/N was put into the block of the next line. The whole block is Times italic, so
     the font does not reveal a formula; it is recognized as a smaller italic centered below small italics in the
     body line and moved back to the line of the numerator. It is not moved when the italics above are at body size,
@@ -1145,13 +1163,13 @@ def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
 
     reg, ital, cmr = "NimbusRomNo9L-Regu", "NimbusRomNo9L-ReguItal", "CMR10"
 
-    def line(*spans):
+    def line(*spans: PdfDict) -> PdfDict:
         box = pymupdf.Rect(spans[0]["bbox"])
         for span in spans[1:]:
             box |= pymupdf.Rect(span["bbox"])
-        return {"bbox": tuple(box), "dir": (1, 0), "spans": list(spans)}
+        return {"bbox": _bbox(box), "dir": (1, 0), "spans": list(spans)}
 
-    def data(numerator):
+    def data(numerator: float) -> PdfDict:
         score = line(
             _glyph(
                 "The backoff terminates in the unigram, which has score",
@@ -1208,7 +1226,7 @@ def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction():
     assert sup in script["blocks"][1]["lines"]
 
 
-def test_an_example_number_stays_apart_from_its_sentence():
+def test_an_example_number_stays_apart_from_its_sentence() -> None:
     """The example number (25.4) is a label and is not joined to the sentence on its right: once joined, the left edge
     of the block moves back to the number and the third, hanging-indent line can no longer be joined."""
     from app.formats.pdf_split_lines import _same_line_word
@@ -1222,13 +1240,13 @@ def test_an_example_number_stays_apart_from_its_sentence():
     )
 
 
-def test_numbered_examples_in_one_block_are_split_apart():
+def test_numbered_examples_in_one_block_are_split_apart() -> None:
     """One block holds two example lines (1.2) and (1.3), the first being the longest, so the right edge does not show
     a hard break. The previous sentence is finished and the next line starts with an example number, so they split."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def item(text, bbox):
-        return (text, pymupdf.Rect(bbox), [{"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}])
+    def item(text: str, bbox: tuple[float, float, float, float]) -> LineItem:
+        return _item(text, pymupdf.Rect(bbox), [{"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}])
 
     items = [
         item("(1.2) It was difficult to make it up the steep hill.", (142.2, 595.0, 335.0, 607.0)),
@@ -1242,14 +1260,14 @@ def test_numbered_examples_in_one_block_are_split_apart():
     assert _split_lines(wrapped) == [[0, 1]]
 
 
-def test_a_paragraph_after_a_hanging_list_line_is_split_off():
+def test_a_paragraph_after_a_hanging_list_line_is_split_off() -> None:
     """A list item wraps with a hanging indent, and the next paragraph has a first-line indent left of the continuation
     lines: the list has ended. The second line of a paragraph with a first-line indent returns to the column edge
     and is joined as usual."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def item(text, bbox):
-        return (text, pymupdf.Rect(bbox), [{"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}])
+    def item(text: str, bbox: tuple[float, float, float, float]) -> LineItem:
+        return _item(text, pymupdf.Rect(bbox), [{"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}])
 
     items = [
         item("4. If one word in the question is changed, the human-preferred answer changes", (155, 202, 475, 214)),
@@ -1264,13 +1282,13 @@ def test_a_paragraph_after_a_hanging_list_line_is_split_off():
     assert _split_lines(paragraph) == [[0, 1]]
 
 
-def test_a_line_in_a_column_of_its_own_font_stays_in_its_block():
+def test_a_line_in_a_column_of_its_own_font_stays_in_its_block() -> None:
     """A monospace example in the right column of a slide is level with the body text on the left and overlaps it a
     little horizontally. In its own block it shares the left edge and font of the line above, so it is a line of
     that column and is not moved over as the cut-off second half of the body text on the left."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(text, bbox, font):
+    def line(text: str, bbox: tuple[float, float, float, float], font: str) -> PdfDict:
         return {
             "dir": (1, 0),
             "bbox": bbox,
@@ -1287,7 +1305,7 @@ def test_a_line_in_a_column_of_its_own_font_stays_in_its_block():
             ],
         }
 
-    def page(with_mate):
+    def page(with_mate: bool) -> PdfDict:
         prose = line("according to its probability p(w|<s>)", (38, 221, 523, 256), "Calibri")
         sample = line("I want", (520, 232, 693, 265), "CourierNewPSMT")
         column = [line("<s> I", (520, 194, 607, 227), "CourierNewPSMT")] if with_mate else []
@@ -1306,13 +1324,13 @@ def test_a_line_in_a_column_of_its_own_font_stays_in_its_block():
     assert [len(block["lines"]) for block in data["blocks"]] == [2, 0]
 
 
-def test_a_small_fraction_after_a_relation_joins_the_line():
+def test_a_small_fraction_after_a_relation_joins_the_line() -> None:
     """The 1/L after ≃ is one size smaller than the body and one body em away from ≃. Measured by the small em it
     would not be joined, so numerator and denominator together with the following sum would stay in another
     block and be skipped as a formula line, leaving the right half of the formula missing from the translation."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0, x1, y0, y1, text, font, size):
+    def line(x0: float, x1: float, y0: float, y1: float, text: str, font: str, size: float) -> PdfDict:
         return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "font": font, "size": size}]}
 
     head = line(108, 315, 84, 94, "that a differentiable estimator can be constructed:", "NimbusRomNo9L-Regu", 10.0)
@@ -1320,7 +1338,7 @@ def test_a_small_fraction_after_a_relation_joins_the_line():
     numerator = line(414, 418, 82, 89, "1", "CMR7", 7.0)
     numerator["spans"][0]["math"] = True  # The mark _mark_math_roman puts on upright digits in a formula
     denominator = line(414, 419, 90, 97, "L", "CMMI7", 7.0)
-    data = {
+    data: PdfDict = {
         "blocks": [
             {"type": 0, "bbox": (108, 84, 406, 95), "lines": [head, rel]},
             {"type": 0, "bbox": (414, 82, 419, 97), "lines": [numerator, denominator]},
@@ -1330,7 +1348,7 @@ def test_a_small_fraction_after_a_relation_joins_the_line():
     assert data["blocks"][0]["lines"] == [head, rel, numerator, denominator]
 
 
-def test_a_numerator_left_in_its_own_block_rejoins_the_paragraph():
+def test_a_numerator_left_in_its_own_block_rejoins_the_paragraph() -> None:
     """The numerator g⁴ and its subscript T,i were put into a separate block, so moving line by line always finds a
     line of the same block next to it. The whole block sits on the denominator formula in the paragraph, level
     with the body lines of the paragraph, and moves back into the paragraph as one."""
@@ -1338,11 +1356,11 @@ def test_a_numerator_left_in_its_own_block_rejoins_the_paragraph():
 
     reg, cmmi = "NimbusRomNo9L-Regu", "CMMI7"
 
-    def line(*spans):
+    def line(*spans: PdfDict) -> PdfDict:
         box = pymupdf.Rect(spans[0]["bbox"])
         for span in spans[1:]:
             box |= pymupdf.Rect(span["bbox"])
-        return {"bbox": tuple(box), "dir": (1, 0), "spans": list(spans)}
+        return {"bbox": _bbox(box), "dir": (1, 0), "spans": list(spans)}
 
     lead = line(_glyph("From,", reg, 9.7, 4, (105.0, 558.9, 128.4, 570.6), (105.0, 561.0, 128.4, 569.9)))
     denominator = line(
@@ -1364,7 +1382,7 @@ def test_a_numerator_left_in_its_own_block_rejoins_the_paragraph():
         _glyph("4", "CMR5", 4.8, 0, (223.6, 555.4, 226.9, 560.3), (223.6, 555.4, 226.9, 559.1), math=True),
     )
     sub = line(_glyph("T,i", "CMMI5", 4.8, 0, (223.3, 560.3, 232.7, 565.1), (223.3, 560.3, 232.7, 563.9), math=True))
-    data = {
+    data: PdfDict = {
         "blocks": [
             {"type": 0, "bbox": (105.0, 558.9, 490.3, 573.2), "lines": [lead, denominator, tail]},
             {"type": 0, "bbox": (219.6, 555.4, 232.7, 565.1), "lines": [g4, sub]},
@@ -1377,13 +1395,13 @@ def test_a_numerator_left_in_its_own_block_rejoins_the_paragraph():
     assert data["blocks"][1]["lines"] == []
 
 
-def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
+def test_a_wrapped_index_entry_ends_where_its_page_numbers_do() -> None:
     """A wrapped index entry has hanging-indent continuation lines. A next line starting no further right than this
     one is another entry (see references have no page numbers); page numbers wrapped to the next line form a line
     of only page numbers, possibly in another block; a line split by justification is judged as a whole line."""
     from app.formats.pdf_rows import _index_entry_ends
 
-    def item(text, x0, y0, x1):
+    def item(text: str, x0: float, y0: float, x1: float) -> LineItem:
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 9.6), [{"text": text, "size": 8.0}], [])
 
     see = [
@@ -1421,13 +1439,13 @@ def test_a_wrapped_index_entry_ends_where_its_page_numbers_do():
     assert _index_entry_ends(broken, []) == {1, 2}
 
 
-def test_a_paragraph_indented_under_an_inset_line_starts_on_its_own():
+def test_a_paragraph_indented_under_an_inset_line_starts_on_its_own() -> None:
     """The translation of an example is set as one indented line; the next paragraph has a first-line indent left of
     it and right of the lines that follow, so it is a new paragraph. A justified reference line split into pieces
     is compared by the left edge of the whole line and is not split. Centered lines do not count as indented."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def item(text, x0, y0, x1):
+    def item(text: str, x0: float, y0: float, x1: float) -> LineItem:
         return (
             text,
             pymupdf.Rect(x0, y0, x1, y0 + 12),
@@ -1460,13 +1478,13 @@ def test_a_paragraph_indented_under_an_inset_line_starts_on_its_own():
     assert _split_lines(author) == [[0, 1, 2]]
 
 
-def test_an_indented_line_after_a_full_line_that_ends_a_sentence_starts_a_paragraph():
+def test_an_indented_line_after_a_full_line_that_ends_a_sentence_starts_a_paragraph() -> None:
     """The previous line is full and ends exactly at a sentence end, the next line is indented by one and a half em
     and reaches the right edge, and the line after it returns to the left edge: a new paragraph. With numbered
     entries above and below, it is a hanging-indent continuation line of a reference and is not split."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def item(text, x0, y0, x1):
+    def item(text: str, x0: float, y0: float, x1: float) -> LineItem:
         return (
             text,
             pymupdf.Rect(x0, y0, x1, y0 + 12),
@@ -1490,13 +1508,13 @@ def test_an_indented_line_after_a_full_line_that_ends_a_sentence_starts_a_paragr
     assert [0, 1] in _split_lines(entry)
 
 
-def test_numbers_wrapped_under_an_indented_first_line_stay_in_the_paragraph():
+def test_numbers_wrapped_under_an_indented_first_line_stay_in_the_paragraph() -> None:
     """A paragraph with a first-line indent has an unfinished list of numbers wrapped to the left edge of the next line
     (13 tokens: 11865, … | 885, 220, … 0)): this line aligns with the previous one and ends the sentence, so it
     does not become a new paragraph."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def item(text, x0, y0, x1):
+    def item(text: str, x0: float, y0: float, x1: float) -> LineItem:
         return (
             text,
             pymupdf.Rect(x0, y0, x1, y0 + 12),
@@ -1523,14 +1541,14 @@ def test_numbers_wrapped_under_an_indented_first_line_stay_in_the_paragraph():
     assert _split_lines(cited) == [[0, 1, 2]]
 
 
-def test_caption_lines_wrapped_back_under_the_label_stay_in_the_caption():
+def test_caption_lines_wrapped_back_under_the_label_stay_in_the_caption() -> None:
     """A caption label (Figure 4.12) and the text after it are separated by a gap but are two pieces of one line. The
     wrapped line returns to the left edge of the label, which is no jump to the left when compared by whole line,
     so it does not start a new paragraph: if the line with only (2012). became a paragraph of its own, it would
     keep the original text and still sit on the next line after the translation."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def item(text, x0, y0, x1, font="NimbusRomNo9L-Regu"):
+    def item(text: str, x0: float, y0: float, x1: float, font: str = "NimbusRomNo9L-Regu") -> LineItem:
         return (
             text,
             pymupdf.Rect(x0, y0, x1, y0 + 11),
@@ -1546,14 +1564,14 @@ def test_caption_lines_wrapped_back_under_the_label_stay_in_the_caption():
     ) == [[0, 1, 2]]
 
 
-def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
+def test_page_numbers_wrapped_below_an_index_entry_stay_with_it() -> None:
     """An index entry stops on a comma, and its page numbers wrap to the next line, indented below the entry text.
     The page number line is sent for translation together with the entry, the entry ends at the page numbers, and
     the next entry starts anew as usual."""
     from app.formats.pdf_rows import _index_entry_ends
     from app.formats.pdf_split_lines import _split_lines
 
-    def item(text, x0, y0, x1):
+    def item(text: str, x0: float, y0: float, x1: float) -> LineItem:
         return (
             text,
             pymupdf.Rect(x0, y0, x1, y0 + 9.6),
@@ -1574,7 +1592,7 @@ def test_page_numbers_wrapped_below_an_index_entry_stay_with_it():
     assert 2 not in ends and 3 in ends and 4 in ends
 
 
-def test_a_word_grid_is_translated_cell_by_cell():
+def test_a_word_grid_is_translated_cell_by_cell() -> None:
     """A word table with one word per cell: each cell is its own entry, and cells in the same row are not joined into a
     sentence. A caption label in the same block below the table is not a cell."""
     from app.formats.pdf_rows import _grid_cells
@@ -1584,7 +1602,7 @@ def test_a_word_grid_is_translated_cell_by_cell():
         ["advance", "edge", "swell", "tumble"],
         ["climb", "explode", "swing", "fall"],
     ]
-    items = [
+    items: list[LineItem] = [
         (word, pymupdf.Rect(184 + 60 * col, 180 + 10 * row, 230 + 60 * col, 190 + 10 * row), [], [])
         for row, line in enumerate(words)
         for col, word in enumerate(line)
@@ -1593,20 +1611,20 @@ def test_a_word_grid_is_translated_cell_by_cell():
     items.append(("Some selected ASCII codes for some English letters", pymupdf.Rect(130, 240, 400, 250), [], []))
     cells = _grid_cells(items)
     assert cells == set(range(12))
-    prose = [
+    prose: list[LineItem] = [
         (f"line {i} of an ordinary paragraph that wraps", pymupdf.Rect(80, 100 + 10 * i, 400, 110 + 10 * i), [], [])
         for i in range(12)
     ]
     assert not _grid_cells(prose)
 
 
-def test_a_displayed_line_inside_a_block_is_its_own_paragraph():
+def test_a_displayed_line_inside_a_block_is_its_own_paragraph() -> None:
     """An indented example line that is not full shares a block with the body text on the next line: the example is a
     paragraph of its own, and the next line is not merged into it even when it starts lowercase. In a paragraph
     set around a figure, the first and next lines end at the same x and are still one paragraph."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def item(text, x0, y0, x1):
+    def item(text: str, x0: float, y0: float, x1: float) -> LineItem:
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [{"text": text, "size": 10.0}], [])
 
     witch = [
@@ -1622,7 +1640,7 @@ def test_a_displayed_line_inside_a_block_is_its_own_paragraph():
     assert _split_lines(wrapped) == [[0, 1, 2]]
 
 
-def test_a_period_after_a_small_denominator_does_not_make_it_a_heading():
+def test_a_period_after_a_small_denominator_does_not_make_it_a_heading() -> None:
     """The denominator Σ_j e^{S·T_j} is followed by a body-size period. The period does not count as a body-size
     character, so the denominator is still joined back to the line of the fraction."""
     from app.formats.pdf_rejoin import _larger_text
@@ -1640,13 +1658,13 @@ def test_a_period_after_a_small_denominator_does_not_make_it_a_heading():
     assert _larger_text(heading, {"spans": [{"text": "words", "font": "NimbusRomNo9L-Regu", "size": 9.0}]})
 
 
-def test_a_bold_run_in_label_starts_a_paragraph():
+def test_a_bold_run_in_label_starts_a_paragraph() -> None:
     """The previous line ends a sentence and the next line starts with a bold label: a paragraph heading of a few
     words (eight words count too), a bold theorem name with a number, and a numbered item such as Q2 all start a
     new paragraph. Spaces are added between spans split by word before recognizing them."""
     from app.formats.pdf_split_lines import _label_lead, _split_lines
 
-    def span(text, x0, x1, bold=False):
+    def span(text: str, x0: float, x1: float, bold: bool = False) -> PdfDict:
         return {
             "text": text,
             "size": 10.0,
@@ -1655,8 +1673,9 @@ def test_a_bold_run_in_label_starts_a_paragraph():
             "flags": 20 if bold else 4,
         }
 
-    def words(text, x0, bold_words=0):
-        out, x = [], x0
+    def words(text: str, x0: float, bold_words: int = 0) -> list[PdfDict]:
+        out: list[PdfDict] = []
+        x = x0
         for k, word in enumerate(text.split()):
             out.append(span(word, x, x + 5 * len(word), bold=k < bold_words))
             x += 5 * len(word) + 3
@@ -1669,7 +1688,7 @@ def test_a_bold_run_in_label_starts_a_paragraph():
     assert not _label_lead(words("Important things happen when we look closely", 60, 1))
     assert not _label_lead(words("This whole sentence is set in bold for emphasis and runs on. Then", 60, 12))
 
-    def item(text, x0, y0, x1, bold_words=0):
+    def item(text: str, x0: float, y0: float, x1: float, bold_words: int = 0) -> LineItem:
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), words(text, x0, bold_words), [])
 
     items = [
@@ -1681,14 +1700,14 @@ def test_a_bold_run_in_label_starts_a_paragraph():
     assert _split_lines(items) == [[0, 1], [2, 3]]
 
 
-def test_a_roman_numbered_item_does_not_continue_the_paragraph_above():
+def test_a_roman_numbered_item_does_not_continue_the_paragraph_above() -> None:
     """(iii) in a proof is another item. When the previous paragraph ends on a display formula without a period, an
     (iii) followed by a capital is not joined to it either; an (iii) in an enumeration inside a sentence is
     followed by lowercase, as is a lowercase word in parentheses, and is joined as usual."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_page_continue import _can_continue
 
-    def blk(text):
+    def blk(text: str) -> TextBlock:
         return TextBlock(
             page=0, rect=pymupdf.Rect(72, 500, 540, 530), line_rects=[], text=text, size=10, color="#000000", bold=False
         )
@@ -1717,13 +1736,13 @@ def test_a_roman_numbered_item_does_not_continue_the_paragraph_above():
     ) == [[0, 1]]
 
 
-def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator():
+def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator() -> None:
     """For the numeric fraction 24000/75 in the body font, PyMuPDF puts the denominator 75 into the next block. The
     denominator is moved back to the line of the numerator; otherwise it would be a block of its own keeping the
     original glyphs, on top of the translation."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def span(text, x0, y0, x1, y1, size, base):
+    def span(text: str, x0: float, y0: float, x1: float, y1: float, size: float, base: float) -> PdfDict:
         return {
             "text": text,
             "bbox": (x0, y0, x1, y1),
@@ -1733,11 +1752,11 @@ def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator():
             "flags": 4,
         }
 
-    def line(*spans):
+    def line(*spans: PdfDict) -> PdfDict:
         box = pymupdf.Rect()
         for item in spans:
             box |= pymupdf.Rect(item["bbox"])
-        return {"bbox": tuple(box), "dir": (1, 0), "spans": list(spans)}
+        return {"bbox": _bbox(box), "dir": (1, 0), "spans": list(spans)}
 
     head = line(
         span("this is a downsampling of", 77.4, 623.9, 368.9, 634.7, 9.0, 631.8),
@@ -1745,7 +1764,7 @@ def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator():
     )
     denominator = line(span("75", 377.8, 628.9, 384.8, 637.3, 7.0, 634.4))
     nxt = line(span("the encoder and decoder is a quantization step producing", 77.4, 634.9, 352.1, 645.7, 9.0, 642.6))
-    data = {
+    data: PdfDict = {
         "blocks": [
             {"type": 0, "bbox": head["bbox"], "lines": [head]},
             {"type": 0, "bbox": (77.4, 628.9, 384.8, 645.7), "lines": [denominator, nxt]},
@@ -1756,15 +1775,15 @@ def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator():
     assert data["blocks"][1]["lines"] == [nxt]
 
 
-def test_examples_listed_under_a_bullet_get_their_own_line():
+def test_examples_listed_under_a_bullet_get_their_own_line() -> None:
     """A bullet item breaks before reaching the right edge of the column although the first word of the next line
     would fit: the next line is an example listed under the item, so they split. When the item fills its line, a
     next line whose letters are mostly colored, below a line with no colored text, also splits. A continuation
     line wrapped from a full line does not split, and neither does a reference starting with name initials"""
     from app.formats.pdf_rows import _cut_item_breaks
 
-    def item(text, rect, color=0):
-        return (text, pymupdf.Rect(rect), [{"text": text, "size": 10.0, "color": color}])
+    def item(text: str, rect: tuple[float, float, float, float], color: int = 0) -> LineItem:
+        return _item(text, pymupdf.Rect(rect), [{"text": text, "size": 10.0, "color": color}])
 
     body = [pymupdf.Rect(142, 100 + 12 * i, 475, 110 + 12 * i) for i in range(5)]
     listed = [

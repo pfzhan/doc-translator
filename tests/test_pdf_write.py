@@ -1,15 +1,25 @@
 """Writing translations onto the page (pdf_write, pdf_place, pdf_crop and the modules split from them)."""
 
 import re
+from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
 import pymupdf
 import pytest
 
 from app.formats.pdf_blocks import TextBlock
+from app.formats.pdf_types import PdfDict
+
+# A box as its corner coordinates: x0, y0, x1, y1
+Corners = tuple[float, float, float, float]
 
 
-def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
+def _bbox(rect: pymupdf.Rect) -> Corners:
+    return rect.x0, rect.y0, rect.x1, rect.y1
+
+
+def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path: Path) -> None:
     """The translation of the previous paragraph fills its box and its last line touches the start of the next
     paragraph. When the next paragraph does not fill its box, its start moves down to leave half a line between the
     two"""
@@ -63,7 +73,7 @@ def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
         page.insert_text((40, y + 9), "x " * 10, fontsize=10)
     src.save(tmp_path / "list.pdf")
     # The middle item has a subscript, so its box is taller than the line pitch and reaches into the next item
-    rows = [
+    items = [
         TextBlock(
             page=0,
             rect=pymupdf.Rect(40, y, 160, y + h),
@@ -76,7 +86,7 @@ def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
         for y, h in ((200, 12), (212, 16), (224, 12))
     ]
     out = _render_translated(
-        tmp_path / "list.pdf", rows, ["施事/主语, 主题/宾语", "工具/主语, 主题/宾语", "主题/主语"], "zh-CN"
+        tmp_path / "list.pdf", items, ["施事/主语, 主题/宾语", "工具/主语, 主题/宾语", "主题/主语"], "zh-CN"
     )
     listed = sorted(
         line["spans"][0]["origin"][1]
@@ -122,7 +132,7 @@ def test_a_paragraph_starts_below_a_filled_paragraph_above(tmp_path):
     assert not _row_neighbor(blocks[0], [*blocks, note], None)
 
 
-def test_a_paragraph_borrows_the_spare_height_of_the_next_one(tmp_path):
+def test_a_paragraph_borrows_the_spare_height_of_the_next_one(tmp_path: Path) -> None:
     """The translation is one line longer than the original: the next paragraph is short and has spare room, so this
     paragraph extends into it at normal line spacing and the next paragraph moves down half a line. Only when the
     next paragraph fills its own box and has nothing to lend does this paragraph tighten its line spacing. A next
@@ -150,7 +160,7 @@ def test_a_paragraph_borrows_the_spare_height_of_the_next_one(tmp_path):
             body_size=10,
         )
 
-    def baselines(doc) -> list[float]:
+    def baselines(doc: pymupdf.Document) -> list[float]:
         return sorted(
             line["spans"][0]["origin"][1]
             for item in doc[0].get_text("dict")["blocks"]
@@ -175,7 +185,7 @@ def test_a_paragraph_borrows_the_spare_height_of_the_next_one(tmp_path):
     assert rows[1] - rows[0] < 8.8 * 1.4
 
 
-def test_a_chain_of_paragraphs_moves_down_together(tmp_path):
+def test_a_chain_of_paragraphs_moves_down_together(tmp_path: Path) -> None:
     """The next paragraph fills its own box and the one after it has spare room: both move down together, and the two
     upper paragraphs are written at normal line spacing"""
     from app.formats.pdf_blocks import TextBlock
@@ -201,7 +211,7 @@ def test_a_chain_of_paragraphs_moves_down_together(tmp_path):
             body_size=10,
         )
 
-    def baselines(doc) -> list[float]:
+    def baselines(doc: pymupdf.Document) -> list[float]:
         return sorted(
             line["spans"][0]["origin"][1]
             for item in doc[0].get_text("dict")["blocks"]
@@ -234,7 +244,7 @@ def test_a_chain_of_paragraphs_moves_down_together(tmp_path):
     assert all(lower - upper > 8.8 * 1.4 for upper, lower in zip(rows, rows[1:]))
 
 
-def test_a_paragraph_moves_up_into_the_space_left_above(tmp_path):
+def test_a_paragraph_moves_up_into_the_space_left_above(tmp_path: Path) -> None:
     """Nothing below to borrow from, and the translation of the previous paragraph is short and leaves space: this
     paragraph moves up, is written at normal line spacing and stays half a line below the previous one"""
     from app.formats.pdf_blocks import TextBlock
@@ -260,7 +270,7 @@ def test_a_paragraph_moves_up_into_the_space_left_above(tmp_path):
             body_size=10,
         )
 
-    def baselines(doc) -> list[float]:
+    def baselines(doc: pymupdf.Document) -> list[float]:
         return sorted(
             line["spans"][0]["origin"][1]
             for item in doc[0].get_text("dict")["blocks"]
@@ -280,7 +290,7 @@ def test_a_paragraph_moves_up_into_the_space_left_above(tmp_path):
     assert rows[1] < 88
 
 
-def test_the_first_paragraph_under_a_heading_moves_up(tmp_path):
+def test_the_first_paragraph_under_a_heading_moves_up(tmp_path: Path) -> None:
     """The first paragraph under a heading does not fit and there is nothing below to borrow from: it moves up, at
     most to half a line below the last line of the heading"""
     from app.formats.pdf_blocks import TextBlock
@@ -303,11 +313,11 @@ def test_the_first_paragraph_under_a_heading_moves_up(tmp_path):
         bold=True,
         body_size=10,
     )
-    rows = [pymupdf.Rect(40, 88 + 12 * index, 360, 100 + 12 * index) for index in range(3)]
+    body_rows = [pymupdf.Rect(40, 88 + 12 * index, 360, 100 + 12 * index) for index in range(3)]
     body = TextBlock(
         page=0,
         rect=pymupdf.Rect(40, 88, 360, 124),
-        line_rects=rows,
+        line_rects=body_rows,
         text="x " * 40 + "end.",
         size=10,
         color="#000000",
@@ -329,7 +339,7 @@ def test_the_first_paragraph_under_a_heading_moves_up(tmp_path):
     assert rows[0] < 85
 
 
-def test_a_paragraph_does_not_move_up_past_a_heading_that_touches_it(tmp_path):
+def test_a_paragraph_does_not_move_up_past_a_heading_that_touches_it(tmp_path: Path) -> None:
     """The line box of the heading overlaps the top edge of the paragraph below a little. When moving up, the heading
     still counts as content above, so the paragraph does not move onto it"""
     from app.formats.pdf_blocks import TextBlock
@@ -386,7 +396,7 @@ def test_a_paragraph_does_not_move_up_past_a_heading_that_touches_it(tmp_path):
     assert tops and min(tops) > 72
 
 
-def test_an_empty_tail_above_does_not_stop_a_paragraph_moving_up(tmp_path):
+def test_an_empty_tail_above_does_not_stop_a_paragraph_moving_up(tmp_path: Path) -> None:
     """The translation of the tail block at the column top was written entirely into the host, so nothing is written
     when its turn comes. It does not count as an unwritten block, and the paragraph below still moves up"""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
@@ -441,7 +451,7 @@ def test_an_empty_tail_above_does_not_stop_a_paragraph_moving_up(tmp_path):
 _LONG_ZH = "在实验研究中我们首先比较旧优化器与新优化器的计划质量，并说明新优化器在大规模数据上的收益。"
 
 
-def test_a_paragraph_moves_up_when_the_next_box_overlaps_its_bottom(tmp_path):
+def test_a_paragraph_moves_up_when_the_next_box_overlaps_its_bottom(tmp_path: Path) -> None:
     """The box of the next paragraph overlaps the bottom of this one. It moves along and does not count as fixed
     content inside this box, so this paragraph still moves up"""
     from app.formats.pdf_blocks import TextBlock
@@ -481,7 +491,7 @@ def test_a_paragraph_moves_up_when_the_next_box_overlaps_its_bottom(tmp_path):
     assert rows[4] - rows[3] > 8.8
 
 
-def test_a_cross_page_paragraph_keeps_its_lines_when_lifting_more_does_not_help(tmp_path):
+def test_a_cross_page_paragraph_keeps_its_lines_when_lifting_more_does_not_help(tmp_path: Path) -> None:
     """A paragraph carried over to the next page does not fit at the page bottom at normal line spacing, and its tail
     block has other blocks beside it and cannot take more. Moving up to hold extra lines would still be cramped,
     so the paragraph keeps its original number of lines and moves up to where those lines fit at normal line
@@ -542,7 +552,7 @@ def test_a_cross_page_paragraph_keeps_its_lines_when_lifting_more_does_not_help(
     assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows, rows[1:]))
 
 
-def test_a_cross_page_paragraph_below_moves_down_to_make_room(tmp_path):
+def test_a_cross_page_paragraph_below_moves_down_to_make_room(tmp_path: Path) -> None:
     """A paragraph does not fit, and the paragraph below is carried over to the next page with room left at its tail
     block: the paragraph below moves down, fewer of its lines stay on this page, and the rest go to the tail block"""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
@@ -590,7 +600,7 @@ def test_a_cross_page_paragraph_below_moves_down_to_make_room(tmp_path):
     assert rows[4] - rows[3] > 8.8 * 1.45
 
 
-def test_the_last_paragraph_continues_on_the_next_page(tmp_path):
+def test_the_last_paragraph_continues_on_the_next_page(tmp_path: Path) -> None:
     """The last paragraph at the page bottom does not fit at normal line spacing and there is no room above or below:
     its last lines continue in front of the first paragraph on the next page, which moves down to make room"""
     from app.formats.pdf_blocks import TextBlock
@@ -663,7 +673,7 @@ def _x_block(page: pymupdf.Page, y0: float, count: int, size: float = 10, row: f
     )
 
 
-def test_the_blank_under_the_last_line_may_pass_the_box_bottom(tmp_path):
+def test_the_blank_under_the_last_line_may_pass_the_box_bottom(tmp_path: Path) -> None:
     """Measured by full line pitch the text falls just short of fitting, but the glyphs of the last line are inside
     the box and half a line pitch away from the label below: it is written at normal line spacing without
     tightening"""
@@ -680,7 +690,7 @@ def test_the_blank_under_the_last_line_may_pass_the_box_bottom(tmp_path):
     assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows, rows[1:]))
 
 
-def test_a_single_line_still_tightens_inside_its_box():
+def test_a_single_line_still_tightens_inside_its_box() -> None:
     """A single line has no line spacing to keep: it is measured against the box bottom and fitted into the box with
     tighter spacing, so the bottom of the last line box is higher and the paragraph below can move up"""
     from app.formats.pdf_place import _fit_typeset
@@ -694,7 +704,7 @@ def test_a_single_line_still_tightens_inside_its_box():
         assert (len(lines), size, used) == (rows, em, gap)
 
 
-def test_a_display_formula_left_at_the_page_bottom_is_part_of_the_body(tmp_path):
+def test_a_display_formula_left_at_the_page_bottom_is_part_of_the_body(tmp_path: Path) -> None:
     """A display formula left in place at the page bottom is body content too: the paragraph above extends down to
     just above the formula and does not stop at its own original bottom edge"""
     from app.formats.pdf_write import _render_translated
@@ -711,7 +721,7 @@ def test_a_display_formula_left_at_the_page_bottom_is_part_of_the_body(tmp_path)
     assert all(abs(lower - upper - 8.8 * 1.45) < 0.2 for upper, lower in zip(rows, rows[1:]))
 
 
-def test_a_page_number_left_below_the_text_is_not_part_of_the_body(tmp_path):
+def test_a_page_number_left_below_the_text_is_not_part_of_the_body(tmp_path: Path) -> None:
     """A page number dropped during extraction stays in place and is not body content: the paragraph above does not
     extend down to it"""
     from app.formats.pdf_write import _render_translated
@@ -733,7 +743,7 @@ def test_a_page_number_left_below_the_text_is_not_part_of_the_body(tmp_path):
     assert bottoms and max(bottoms) < 85
 
 
-def test_a_flush_right_attribution_widens_to_the_left(tmp_path):
+def test_a_flush_right_attribution_widens_to_the_left(tmp_path: Path) -> None:
     """A right-aligned byline whose translation is slightly wider than the original widens to the left as one line,
     still ending at the original right edge, without wrapping or a smaller font size"""
     from app.formats.pdf_blocks import TextBlock
@@ -785,7 +795,7 @@ def test_a_flush_right_attribution_widens_to_the_left(tmp_path):
     assert abs(lines[0]["spans"][0]["size"] - 9.0 * 0.88) < 0.05
 
 
-def test_a_last_line_of_one_character_is_pulled_back_by_tightening_the_letter_spacing(tmp_path):
+def test_a_last_line_of_one_character_is_pulled_back_by_tightening_the_letter_spacing(tmp_path: Path) -> None:
     """The last line holds a single character and there is no room above or below: the character spacing tightens a
     little to pull it back into the previous line, the text is written at normal line spacing, and no line goes
     past the right edge"""
@@ -810,7 +820,7 @@ def test_a_last_line_of_one_character_is_pulled_back_by_tightening_the_letter_sp
     assert right < 362.5
 
 
-def test_a_cross_page_paragraph_moves_up_to_keep_its_line_spacing(tmp_path):
+def test_a_cross_page_paragraph_moves_up_to_keep_its_line_spacing(tmp_path: Path) -> None:
     """A paragraph carried over to the next page does not fit on this page at normal line spacing and the next page
     cannot take more: the translation of the paragraph above is short and leaves space, so the whole paragraph
     moves up"""
@@ -860,7 +870,7 @@ def test_a_cross_page_paragraph_moves_up_to_keep_its_line_spacing(tmp_path):
     assert rows[0] < 220
 
 
-def test_pdf_cjk_lines_do_not_overlap(tmp_path):
+def test_pdf_cjk_lines_do_not_overlap(tmp_path: Path) -> None:
     """CJK translations are shrunk and moved down so the two lines do not overlap; non-CJK text keeps the original
     font size."""
     from app.formats.pdf_blocks import TextBlock
@@ -905,7 +915,7 @@ def test_pdf_cjk_lines_do_not_overlap(tmp_path):
     assert cjk[0][0].y1 <= expanded_y1 + 1
 
 
-def test_typesetting_ladder_expands_before_shrinking():
+def test_typesetting_ladder_expands_before_shrinking() -> None:
     """When the text does not fit, the box first widens to the right (avoiding the text block on the right): the font
     size after widening is larger than after shrinking directly, and the right block is not covered."""
     from app.formats.pdf_extract import extract_blocks
@@ -938,16 +948,17 @@ def test_typesetting_ladder_expands_before_shrinking():
     assert "Right block" in out[0].get_text()
 
 
-def test_marker_png_unique_per_formula():
+def test_marker_png_unique_per_formula() -> None:
     """Marker pixels encode a global index: markers of the same color would be deduplicated by MuPDF into one xref and
     every formula would land in the wrong slot."""
     from app.formats.pdf_crop import _marker_png
 
-    def decode(png):
+    def decode(png: bytes) -> int:
         pix = pymupdf.Pixmap(png)
         p = pix.pixel(0, 0)
         assert p[2] == 200  # Marker signature
-        return p[0] + (p[1] << 8) - 1
+        index: int = p[0] + (p[1] << 8) - 1
+        return index
 
     assert decode(_marker_png(0)) == 0
     assert decode(_marker_png(255)) == 255
@@ -955,7 +966,7 @@ def test_marker_png_unique_per_formula():
     assert len({_marker_png(i) for i in range(300)}) == 300
 
 
-def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
+def test_rendered_formulas_placed_once_in_own_slots(tmp_path: Path) -> None:
     """End-to-end vector passthrough: the formulas of two blocks each land in their own slot, are drawn once, and sit
     between the text before and after them in the content stream, so reading in content stream order (drag
     selection, copying) finds each formula in its place.
@@ -980,7 +991,7 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
     r1 = d[0].search_for("BETA")[0]
     r2 = d[0].search_for("EPSILON")[0]
 
-    def record(name, mid, rect):
+    def record(name: str, mid: int, rect: pymupdf.Rect) -> PdfDict:
         return {
             "bbox": rect,
             "name": name,
@@ -991,7 +1002,7 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
             "text": "x",
             "has_img": True,
             "png": d[0].get_pixmap(dpi=150, clip=rect).tobytes("png"),
-            "spans": [{"bbox": tuple(rect), "text": "x", "size": 10, "origin": (rect.x0, rect.y1 - 2)}],
+            "spans": [{"bbox": _bbox(rect), "text": "x", "size": 10, "origin": (rect.x0, rect.y1 - 2)}],
         }
 
     f1, f2 = record("a_1.png", 0, r1), record("b_1.png", 1, r2)
@@ -1000,7 +1011,7 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
     archive.add(_marker_png(0), "ph_a_1.png")
     archive.add(_marker_png(1), "ph_b_1.png")
 
-    def blk(text, y):
+    def blk(text: str, y: float) -> TextBlock:
         rect = pymupdf.Rect(40, y, 200, y + 15)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000", bold=False)
 
@@ -1048,7 +1059,7 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path):
     assert words.count("BETA") == 1 and words.count("EPSILON") == 1
 
 
-def test_formulas_on_a_page_filter_their_own_lines():
+def test_formulas_on_a_page_filter_their_own_lines() -> None:
     """The formulas of a page are halved top and bottom repeatedly, each part keeping only its own lines, and each
     formula is filtered on the smallest part; the glyphs kept are the same as when filtering on the whole page. A
     formula that was not registered still finds the part that covers it."""
@@ -1060,13 +1071,13 @@ def test_formulas_on_a_page_filter_their_own_lines():
     for row in range(16):
         page.insert_text((40, 30 + 22 * row), f"line {row} has v{row} inside", fontsize=10)
     whole = _page_form(doc, page)
-    formulas = []
+    formulas: list[PdfDict] = []
     for row in range(16):
         box = page.search_for(f"v{row} ")[0] + (0, 0, -2, 0)
-        formulas.append({"bbox": box, "spans": [{"bbox": tuple(box)}]})
+        formulas.append({"bbox": box, "spans": [{"bbox": _bbox(box)}]})
     sources = _FormulaSources(doc, page, whole, formulas[:12])
 
-    def shown(form):
+    def shown(form: int) -> list[str]:
         view = doc.new_page(width=400, height=400)
         draw = doc.get_new_xref()
         doc.update_object(draw, "<<>>")
@@ -1084,7 +1095,7 @@ def test_formulas_on_a_page_filter_their_own_lines():
     assert sources.source(formulas[14]) == whole
 
 
-def test_glyph_places_match_when_a_column_jitters_in_the_last_digits():
+def test_glyph_places_match_when_a_column_jitters_in_the_last_digits() -> None:
     """The content stream rewritten after filtering has numbers with fewer digits, so the x of the first glyph on
     lines in the same column differs by ten-thousandths and the order after sorting by position changes. Each
     glyph is still in place, so the position check passes; a glyph that really moved fails it."""
@@ -1098,7 +1109,7 @@ def test_glyph_places_match_when_a_column_jitters_in_the_last_digits():
     assert not _same_places(before, after[:3])
 
 
-def test_a_formula_bitmap_is_rendered_only_when_used(monkeypatch):
+def test_a_formula_bitmap_is_rendered_only_when_used(monkeypatch: pytest.MonkeyPatch) -> None:
     """Cropping a formula image only records where to crop; it is rendered only when vector placement fails and a
     bitmap is needed, and only once."""
     from app.formats.pdf_blocks import _FormulaImage
@@ -1107,17 +1118,25 @@ def test_a_formula_bitmap_is_rendered_only_when_used(monkeypatch):
     doc = pymupdf.open()
     page = doc.new_page(width=200, height=100)
     page.insert_text((20, 50), "x + y", fontsize=12)
-    calls = []
-    original = pymupdf.Page.get_pixmap
-    monkeypatch.setattr(pymupdf.Page, "get_pixmap", lambda self, *a, **k: calls.append(1) or original(self, *a, **k))
-    formula = {"png": _FormulaImage(doc, 0, pymupdf.Rect(15, 35, 60, 55))}
+    calls: list[int] = []
+
+    def counted[**P, R](method: Callable[P, R]) -> Callable[P, R]:
+        def call(*args: P.args, **kwargs: P.kwargs) -> R:
+            calls.append(1)
+            return method(*args, **kwargs)
+
+        return call
+
+    monkeypatch.setattr(pymupdf.Page, "get_pixmap", counted(pymupdf.Page.get_pixmap))
+    formula: PdfDict = {"png": _FormulaImage(doc, 0, pymupdf.Rect(15, 35, 60, 55))}
     assert calls == []
     png = _formula_png(formula)
+    assert png is not None
     assert png.startswith(b"\x89PNG") and _formula_png(formula) is png and len(calls) == 1
     assert _formula_png({"png": b"given"}) == b"given" and _formula_png({}) is None
 
 
-def test_formula_glyphs_stay_in_place_after_a_size_change_on_their_line():
+def test_formula_glyphs_stay_in_place_after_a_size_change_on_their_line() -> None:
     """When a line changes font size midway (small caps), MuPDF misplaces the formula after deleting the glyphs before
     it. If it is misplaced the whole line is kept, and the other lines are still deleted."""
     from app.formats.pdf_place_formulas import _keep_marks, _pdf_rect
@@ -1154,7 +1173,7 @@ def test_formula_glyphs_stay_in_place_after_a_size_change_on_their_line():
 
 
 @pytest.mark.parametrize("box", ["CropBox", "MediaBox"])
-def test_cjk_lines_follow_a_shifted_page_box(tmp_path, box):
+def test_cjk_lines_follow_a_shifted_page_box(tmp_path: Path, box: str) -> None:
     """When the crop box or media box does not start at the origin, Chinese written glyph by glyph still lands at the
     position of the original text."""
     from app.formats.pdf_extract import extract_blocks
@@ -1181,7 +1200,7 @@ def test_cjk_lines_follow_a_shifted_page_box(tmp_path, box):
     assert abs(min(c[3] for c in chars) - (source.y1 - 2)) < 4
 
 
-def test_formula_passthrough_follows_a_shifted_crop_box(tmp_path):
+def test_formula_passthrough_follows_a_shifted_crop_box(tmp_path: Path) -> None:
     """With an offset crop box, formulas are still cropped from their original position and placed back in their own
     slots."""
     from app.formats.pdf_blocks import TextBlock
@@ -1208,7 +1227,7 @@ def test_formula_passthrough_follows_a_shifted_crop_box(tmp_path):
         "text": "x",
         "has_img": True,
         "png": d[0].get_pixmap(dpi=150, clip=rect).tobytes("png"),
-        "spans": [{"bbox": tuple(rect), "text": "x", "size": 10, "origin": (rect.x0, rect.y1 - 2)}],
+        "spans": [{"bbox": _bbox(rect), "text": "x", "size": 10, "origin": (rect.x0, rect.y1 - 2)}],
     }
     line = pymupdf.Rect(rect.x0 - 45, rect.y0 - 2, rect.x1 + 60, rect.y1 + 3)
     d.close()
@@ -1221,7 +1240,7 @@ def test_formula_passthrough_follows_a_shifted_crop_box(tmp_path):
     assert pymupdf.Rect(line.x0 - 10, line.y0 - 10, line.x1 + 10, line.y1 + 10).contains(hits[0])
 
 
-def test_formula_clip_ignores_tall_bitmap_glyph_boxes(tmp_path):
+def test_formula_clip_ignores_tall_bitmap_glyph_boxes(tmp_path: Path) -> None:
     """When the next line is a bitmap font without Unicode, its reported font box is taller than its ink and reaches
     into the lower half of the formula. Such a box must not be used to cut holes, otherwise the lower half of the
     formula is cropped off."""
@@ -1276,7 +1295,7 @@ def test_formula_clip_ignores_tall_bitmap_glyph_boxes(tmp_path):
     )
     assert bitmap["bbox"][1] < rect.y1  # The bitmap glyph box does reach into the lower half of BETA
 
-    def ink_share(pix):
+    def ink_share(pix: pymupdf.Pixmap) -> float:
         return sum(1 for v in pix.samples if v < 128) / len(pix.samples)
 
     ink = ink_share(d[0].get_pixmap(dpi=150, clip=rect, colorspace=pymupdf.csGRAY))
@@ -1290,7 +1309,7 @@ def test_formula_clip_ignores_tall_bitmap_glyph_boxes(tmp_path):
         "text": "x",
         "has_img": True,
         "png": d[0].get_pixmap(dpi=150, clip=rect).tobytes("png"),
-        "spans": [{"bbox": tuple(rect), "text": "x", "size": 10, "origin": (rect.x0, rect.y1 - 2)}],
+        "spans": [{"bbox": _bbox(rect), "text": "x", "size": 10, "origin": (rect.x0, rect.y1 - 2)}],
     }
     line = pymupdf.Rect(45, rect.y0 - 2, 200, rect.y1 + 3)
     d.close()
@@ -1305,7 +1324,7 @@ def test_formula_clip_ignores_tall_bitmap_glyph_boxes(tmp_path):
     assert drawn >= ink * 0.65
 
 
-def test_formula_crop_trims_side_whitespace_to_the_ink():
+def test_formula_crop_trims_side_whitespace_to_the_ink() -> None:
     """Leading spaces inside glyph boxes no longer remain on either side of the formula image. Spaces inside the
     formula stay. A neighboring glyph overlapping from the left does not count as ink of this formula."""
     from app.formats.pdf_crop import _tighten_formula_sides
@@ -1388,7 +1407,7 @@ def test_formula_crop_trims_side_whitespace_to_the_ink():
     doc.close()
 
 
-def test_wrapped_formula_parts_stay_in_order(tmp_path):
+def test_wrapped_formula_parts_stay_in_order(tmp_path: Path) -> None:
     """The two pieces sit side by side in reading order, and the second half no longer stays at the source x at the
     start of the next line."""
     from app.formats.pdf_blocks import TextBlock
@@ -1406,7 +1425,7 @@ def test_wrapped_formula_parts_stay_in_order(tmp_path):
     sh_box = d[0].search_for("sh")[0]
     d.close()
 
-    def part(name, rect, text):
+    def part(name: str, rect: pymupdf.Rect, text: str) -> PdfDict:
         return {
             "bbox": rect,
             "name": name,
@@ -1418,7 +1437,7 @@ def test_wrapped_formula_parts_stay_in_order(tmp_path):
             "has_img": True,
             "page": 0,
             "png": pymupdf.open(src)[0].get_pixmap(clip=rect, dpi=72).tobytes("png"),
-            "spans": [{"bbox": tuple(rect), "text": text, "size": 10, "origin": (rect.x0, rect.y1 - 2)}],
+            "spans": [{"bbox": _bbox(rect), "text": text, "size": 10, "origin": (rect.x0, rect.y1 - 2)}],
         }
 
     first = part("f0_1.png", y_box, "y=")
@@ -1447,7 +1466,7 @@ def test_wrapped_formula_parts_stay_in_order(tmp_path):
     assert abs(y_hit[0].y0 - sh_hit[0].y0) < 8
 
 
-def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
+def test_translation_wraps_around_the_figure_its_paragraph_wraps_around() -> None:
     """The first lines of the original paragraph make room left of a figure and return to full width below it.
     Translated lines at the height of the figure make room the same way, and lines below the figure are written
     full width. A single line beside a figure is not wrapping around it (the source beside the last line of a
@@ -1465,7 +1484,7 @@ def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
         page=0, rect=pymupdf.Rect(160, 385, 493, 517), line_rects=lines, text="x", size=10, color="#000000", bold=False
     )
     holes = _wrap_holes(block, [image, caption, pymupdf.Rect(131, 471, 146, 480)])
-    assert sorted(map(tuple, holes)) == sorted([tuple(image), tuple(caption)])
+    assert sorted(map(_bbox, holes)) == sorted([_bbox(image), _bbox(caption)])
 
     quote = [pymupdf.Rect(167, y, 475, y + 12) for y in (210, 222, 234)] + [pymupdf.Rect(167, 246, 203, 258)]
     quoted = TextBlock(
@@ -1523,7 +1542,7 @@ def test_translation_wraps_around_the_figure_its_paragraph_wraps_around():
     assert any(pymupdf.Rect(span["bbox"]).x1 > 450 and span["bbox"][1] > 443 for span in spans)
 
 
-def test_cjk_bold_strokes_once(tmp_path):
+def test_cjk_bold_strokes_once(tmp_path: Path) -> None:
     """A Chinese character made bold by stroking is still one character after extraction."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
@@ -1555,7 +1574,7 @@ def test_cjk_bold_strokes_once(tmp_path):
     assert "2 Tr" in out[0].read_contents().decode("latin1")
 
 
-def test_a_bitmap_glyph_without_its_own_box_is_kept_by_its_extent():
+def test_a_bitmap_glyph_without_its_own_box_is_kept_by_its_extent() -> None:
     """Bitmap glyphs report no box of their own (width 0), only the vertical bounds of the whole font, so the computed
     center is half a line away from the ink. Horizontally the origin is checked and vertically the overlap of the
     bounds with the keep box, so superscripts still stay; a glyph whose origin is outside the box is deleted as
@@ -1568,15 +1587,21 @@ def test_a_bitmap_glyph_without_its_own_box_is_kept_by_its_extent():
     trm = NS(a=0.1, b=0.0, c=0.0, d=-0.1, e=485.5, f=249.8)
     ctm = NS(a=1.0, b=0.0, c=0.0, d=1.0, e=0.0, f=0.0)
     font_box = NS(x0=0.0, y0=-65.0, x1=0.0, y1=86.0)
-    assert keeper.text_filter(None, None, 0, trm, ctm, font_box) == 0
+
+    def judge(trm: NS, bbox: NS) -> int:
+        # MuPDF passes its own context, matrix and rect structs. The filter reads only the fields, so stand-ins with
+        # the same fields replace them, and no context is needed
+        return keeper.text_filter(None, None, 0, trm, ctm, bbox)  # type: ignore[arg-type]
+
+    assert judge(trm, font_box) == 0
     beside = NS(a=0.1, b=0.0, c=0.0, d=-0.1, e=495.3, f=249.8)
-    assert keeper.text_filter(None, None, 0, beside, ctm, font_box) == 1
+    assert judge(beside, font_box) == 1
     # Glyphs that report their own box are still judged by their center
     own_box = NS(x0=0.0, y0=-65.0, x1=60.0, y1=126.0)
-    assert keeper.text_filter(None, None, 0, trm, ctm, own_box) == 1
+    assert judge(trm, own_box) == 1
 
 
-def test_cross_page_paragraph_continues_on_the_next_page(tmp_path):
+def test_cross_page_paragraph_continues_on_the_next_page(tmp_path: Path) -> None:
     """A translation carried over to the next page is set in full lines. Once this page is full it continues on the
     next page, lines are not drawn past the page margin, and footnotes stay in place."""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
@@ -1655,7 +1680,7 @@ def test_cross_page_paragraph_continues_on_the_next_page(tmp_path):
     assert "相当" not in page1 or "不错" in page1
 
 
-def test_split_filled_lines_keeps_breaks_when_the_page_has_room():
+def test_split_filled_lines_keeps_breaks_when_the_page_has_room() -> None:
     """When the text fits on this page, the lines already broken are returned. Returning the original text would make
     the caller shrink the font size to fit one line."""
     from app.formats.pdf_write_geometry import _split_filled_lines
@@ -1666,7 +1691,7 @@ def test_split_filled_lines_keeps_breaks_when_the_page_has_room():
     assert rest == ""
 
 
-def test_split_filled_lines_fills_the_last_lines_of_the_page():
+def test_split_filled_lines_fills_the_last_lines_of_the_page() -> None:
     """The page bottom has room for one or two original lines. The translation does not fit at the original line
     spacing, so the spacing tightens and the line spacing of the last line extends past the box, keeping the text
     on this page."""
@@ -1701,28 +1726,28 @@ def test_split_filled_lines_fills_the_last_lines_of_the_page():
     assert capped.count("\n") == 4
 
 
-def test_split_filled_lines_keeps_the_line_gap_when_the_continuation_has_room():
+def test_split_filled_lines_keeps_the_line_gap_when_the_continuation_has_room() -> None:
     """The page bottom holds one line at normal line spacing or two when tightened. When the tail block can hold the
     remaining lines this page does not tighten; it tightens only when they do not fit."""
     from app.formats.pdf_write_geometry import _split_filled_lines
 
     text = "人工智能领域的一项名为发展的研究计划的成员，并发表了一篇论文。" * 3
-    args = dict(em=8.8, block_size=10, width=300, cjk=True, y0=696.5, limit=719.5)
-    tight, _ = _split_filled_lines(text, [], **args)
+    split = partial(_split_filled_lines, em=8.8, block_size=10, width=300, cjk=True, y0=696.5, limit=719.5)
+    tight, _ = split(text, [])
     assert tight.count("\n") == 1
-    roomy, rest = _split_filled_lines(text, [], **args, next_room=200)
+    roomy, rest = split(text, [], next_room=200)
     assert roomy and "\n" not in roomy and rest
-    short, _ = _split_filled_lines(text, [], **args, next_room=12)
+    short, _ = split(text, [], next_room=12)
     assert short == tight
     # When the whole paragraph fits after tightening, it still carries over if the tail block has room
     two = "人工智能领域的一项名为发展的研究计划的成员，并发表了一篇论文。" * 2
-    whole, rest = _split_filled_lines(two, [], **args)
+    whole, rest = split(two, [])
     assert whole.count("\n") == 1 and rest == ""
-    head, rest = _split_filled_lines(two, [], **args, next_room=40)
+    head, rest = split(two, [], next_room=40)
     assert "\n" not in head and rest
 
 
-def test_fitted_cross_page_paragraph_keeps_body_size(tmp_path):
+def test_fitted_cross_page_paragraph_keeps_body_size(tmp_path: Path) -> None:
     """A translation carried over to the next page keeps the original font size when it fits on this page and is no
     longer squeezed into a box one line high."""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
@@ -1777,7 +1802,7 @@ def test_fitted_cross_page_paragraph_keeps_body_size(tmp_path):
     assert min(sizes) >= 7
 
 
-def test_a_cross_page_paragraph_borrows_on_the_next_page(tmp_path):
+def test_a_cross_page_paragraph_borrows_on_the_next_page(tmp_path: Path) -> None:
     """The tail block of a paragraph carried over to the next page has a paragraph right below it with spare room:
     this page holds one line fewer at normal line spacing, the extra goes to the next page, and the tail block
     extends into the paragraph below, which moves down"""
@@ -1819,7 +1844,7 @@ def test_a_cross_page_paragraph_borrows_on_the_next_page(tmp_path):
         continuations={id(host): tail},
     )
 
-    def baselines(page) -> list[float]:
+    def baselines(page: pymupdf.Page) -> list[float]:
         return sorted(
             line["spans"][0]["origin"][1]
             for item in page.get_text("dict")["blocks"]
@@ -1844,7 +1869,7 @@ def test_a_cross_page_paragraph_borrows_on_the_next_page(tmp_path):
     assert pitches[-1] >= 8.8 * 1.45 * 1.4
 
 
-def test_carried_lines_keep_the_host_size(tmp_path):
+def test_carried_lines_keep_the_host_size(tmp_path: Path) -> None:
     """The block on the continuation page is extracted with a slightly larger font size. Lines carried over are broken
     at the size of the previous block and written at that size too: written at the size of the tail block, one
     character would be pushed out at the line end, and the text would not fit and shrink."""
@@ -1895,7 +1920,7 @@ def test_carried_lines_keep_the_host_size(tmp_path):
     assert all(len(text.strip()) > 3 for text in list(rows.values())[:-1])
 
 
-def test_narrow_fragment_is_written_at_the_continuation_width(tmp_path):
+def test_narrow_fragment_is_written_at_the_continuation_width(tmp_path: Path) -> None:
     """A half sentence at the line end is not laid out in its own narrow box. The translation continues on the
     continuation page at the body font size."""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
@@ -1935,7 +1960,7 @@ def test_narrow_fragment_is_written_at_the_continuation_width(tmp_path):
     )
     sizes = [
         span["size"]
-        for page in out
+        for page in out.pages()
         for block in page.get_text("dict")["blocks"]
         if block.get("type") == 0
         for line in block["lines"]
@@ -1947,7 +1972,7 @@ def test_narrow_fragment_is_written_at_the_continuation_width(tmp_path):
     assert out[1].get_text().strip()
 
 
-def test_shared_baseline_continuation_stays_in_its_lines(tmp_path):
+def test_shared_baseline_continuation_stays_in_its_lines(tmp_path: Path) -> None:
     """A continuation line sharing a baseline is written only in its own two lines, without covering the next paragraph
     on the right, at the body font size."""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
@@ -2016,7 +2041,7 @@ def test_shared_baseline_continuation_stays_in_its_lines(tmp_path):
     assert "For example" in out[0].get_text()
 
 
-def test_tighten_line_height_for_cjk():
+def test_tighten_line_height_for_cjk() -> None:
     from app.formats.pdf_place import _tighten_line_height
 
     cjk = "* {line-height: 1.45; margin: 0;}"
@@ -2026,7 +2051,7 @@ def test_tighten_line_height_for_cjk():
     assert _tighten_line_height(cjk) != cjk
 
 
-def test_save_after_redact_keeps_resources_indirect(tmp_path):
+def test_save_after_redact_keeps_resources_indirect(tmp_path: Path) -> None:
     """redact turns /Resources into an inline dictionary. Before writing it must become an indirect reference again,
     otherwise a large dictionary gets corrupted when saving with garbage collection."""
     import pymupdf as pm
@@ -2069,28 +2094,34 @@ def test_save_after_redact_keeps_resources_indirect(tmp_path):
     assert "译文第0段" in text and f"译文第{len(blocks) - 1}段" in text
 
 
-def test_a_centered_title_breaks_after_a_clause_mark():
+def test_a_centered_title_breaks_after_a_clause_mark() -> None:
     """A centered subtitle that does not fit on one line breaks after a comma, so "识别" is not left alone on a line;
     when it fits on one line it is not broken."""
     from app.formats.pdf_place import _clause_lines
-    from app.formats.pdf_typeset import typeset_lines
+    from app.formats.pdf_typeset import TextPiece, TypesetLine, typeset_lines
 
     text = "借助语言模型介绍自然语言处理, 计算语言学和语音识别"
 
-    def broken(width):
+    def joined(line: TypesetLine) -> str:
+        # These titles have no formulas, so every piece is text
+        pieces = [piece for piece in line.pieces if isinstance(piece, TextPiece)]
+        assert len(pieces) == len(line.pieces)
+        return "".join(piece.text for piece in pieces)
+
+    def broken(width: float) -> list[str]:
         lines = _clause_lines(text, [], 10.0, 10.0, width, typeset_lines(text, 10.0, width, {}))
-        return ["".join(piece.text for piece in line.pieces) for line in lines]
+        return [joined(line) for line in lines]
 
     assert broken(230.0) == ["借助语言模型介绍自然语言处理,", "计算语言学和语音识别"]
     assert broken(260.0) == [text]
     # An author list that is bold throughout breaks after a comma, and the second line is still bold
     names = "{b}Pierre Stock, Teven Le Scao, Thibaut Lavril, Thomas Wang, Timothée Lacroix, William El Sayed{/b}"
     lines = _clause_lines(names, [], 10.0, 10.0, 300.0, typeset_lines(names, 10.0, 300.0, {}))
-    texts = ["".join(piece.text for piece in line.pieces) for line in lines]
+    texts = [joined(line) for line in lines]
     assert len(texts) == 2 and all(line.startswith("{b}") and line.endswith("{/b}") for line in texts), texts
 
 
-def test_right_fragment_stays_on_its_own_line():
+def test_right_fragment_stays_on_its_own_line() -> None:
     """The first line that makes room for a side label is still written from that line, using its own left edge, and
     the paragraph does not move down."""
     from app.formats.pdf_blocks import TextBlock
@@ -2108,7 +2139,9 @@ def test_right_fragment_stays_on_its_own_line():
         bold=False,
     )
     assert _flow_y0(block, True) == pytest.approx(40 + 0.9, abs=0.01)
-    first, rest = _inset_write_boxes(block, True)
+    boxes = _inset_write_boxes(block, True)
+    assert boxes is not None
+    first, rest = boxes
     assert first.x0 == pytest.approx(190)
     assert rest.x0 == pytest.approx(40)
     assert rest.y0 > first.y0
@@ -2142,13 +2175,15 @@ def test_right_fragment_stays_on_its_own_line():
         color="#000",
         bold=False,
     )
-    torn_first, torn_rest = _inset_write_boxes(torn, True)
+    torn_boxes = _inset_write_boxes(torn, True)
+    assert torn_boxes is not None
+    torn_first, torn_rest = torn_boxes
     assert torn_first.x0 == pytest.approx(127.9)
     assert torn_rest.x0 == pytest.approx(53.8)
     assert torn_rest.y0 > torn_first.y0 + 4
 
 
-def test_write_helpers_only_need_the_blocks_on_their_page():
+def test_write_helpers_only_need_the_blocks_on_their_page() -> None:
     """Writing passes only the blocks of the same page. Each layout check gives the same result with the blocks of the
     whole book as with the blocks of this page only."""
     import random
@@ -2195,7 +2230,7 @@ def test_write_helpers_only_need_the_blocks_on_their_page():
             )
         )
 
-    def fixed(pno, text, lines, bold=False):
+    def fixed(pno: int, text: str, lines: list[Corners], bold: bool = False) -> TextBlock:
         rects = [pymupdf.Rect(*line) for line in lines]
         union = pymupdf.Rect(rects[0])
         for rect in rects[1:]:
@@ -2237,7 +2272,7 @@ def test_write_helpers_only_need_the_blocks_on_their_page():
     assert all(found.values())
 
 
-def test_side_label_stays_beside_the_first_line(tmp_path):
+def test_side_label_stays_beside_the_first_line(tmp_path: Path) -> None:
     """A short heading stays left of the first body line. The body text starts right of the heading, and the next line
     returns to the left edge of the column."""
     from app.formats.pdf_blocks import TextBlock
@@ -2293,7 +2328,7 @@ def test_side_label_stays_beside_the_first_line(tmp_path):
     assert min(item[1] for item in later_body) < 80
 
 
-def test_inset_rest_reflows_at_the_column_width():
+def test_inset_rest_reflows_at_the_column_width() -> None:
     """After the first line making room for a side label is broken at the narrow width, the rest carries no line
     breaks and is laid out again in the boxes of the continuation lines when writing. Line breaks fixed in advance
     would leave short half lines where the continuation lines make room for a figure."""
@@ -2313,7 +2348,7 @@ def test_inset_rest_reflows_at_the_column_width():
     assert rest == "{i}第一行的末尾一直延续到下一行{/i}后面普通"
 
 
-def test_a_word_too_wide_for_the_shared_line_moves_whole_to_the_next_line():
+def test_a_word_too_wide_for_the_shared_line_moves_whole_to_the_next_line() -> None:
     """When the rest of a line is only one short word wide and BERT does not fit, the whole word goes to the
     continuation line and is not cut into BER / T."""
     from app.formats.pdf_write_geometry import _split_own_lines
@@ -2327,7 +2362,7 @@ def test_a_word_too_wide_for_the_shared_line_moves_whole_to_the_next_line():
     assert head == "在所" and rest.startswith("有任务")
 
 
-def test_inset_continuation_fills_the_column(tmp_path):
+def test_inset_continuation_fills_the_column(tmp_path: Path) -> None:
     """For body text beside a side label, the continuation lines return to the left edge of the column and run to its
     right edge, so the font size is no longer reduced by too many narrow lines."""
     from app.formats.pdf_blocks import TextBlock
@@ -2385,7 +2420,7 @@ def test_inset_continuation_fills_the_column(tmp_path):
     assert min(sizes) > 7.5
 
 
-def test_same_baseline_fragments_do_not_cover_the_lead(tmp_path):
+def test_same_baseline_fragments_do_not_cover_the_lead(tmp_path: Path) -> None:
     """Fragments on the same baseline are not continuation lines. The continuation starts on the next line and does not
     overlap the untranslated Cascades on the left."""
     from app.formats.pdf_blocks import TextBlock
@@ -2434,7 +2469,7 @@ def test_same_baseline_fragments_do_not_cover_the_lead(tmp_path):
     assert "Cascades" in out[0].get_text()
 
 
-def test_cross_page_stops_above_the_page_number(tmp_path):
+def test_cross_page_stops_above_the_page_number(tmp_path: Path) -> None:
     """A translation carried over to the next page stops above the page number band. The page number is digits only and
     not in the block list, and the text must not run over it."""
     from app.formats.pdf_blocks import SPILL_TAIL, TextBlock
@@ -2511,7 +2546,7 @@ def test_cross_page_stops_above_the_page_number(tmp_path):
     assert kept > 780
 
 
-def test_cross_column_host_stops_above_kept_formula(tmp_path):
+def test_cross_column_host_stops_above_kept_formula(tmp_path: Path) -> None:
     """When a paragraph at the column bottom continues in another column, the translation stops above the display
     formula below it that keeps its original glyphs, and the rest goes to the tail block.
 
@@ -2529,8 +2564,8 @@ def test_cross_column_host_stops_above_kept_formula(tmp_path):
     doc.close()
     formula_top = pymupdf.open(src)[0].get_text("words")[0][1]
 
-    def block(rect, text):
-        rect = pymupdf.Rect(rect)
+    def block(corners: Corners, text: str) -> TextBlock:
+        rect = pymupdf.Rect(corners)
         lines = [pymupdf.Rect(rect.x0, y, rect.x1, y + 10) for y in range(int(rect.y0), int(rect.y1) - 9, 12)]
         return TextBlock(page=0, rect=rect, line_rects=lines, text=text, size=10, color="#000000", bold=False)
 
@@ -2560,7 +2595,7 @@ def test_cross_column_host_stops_above_kept_formula(tmp_path):
     assert "dl/dTheta" in out[0].get_text()
 
 
-def test_page_margins_stay_with_the_source(tmp_path):
+def test_page_margins_stay_with_the_source(tmp_path: Path) -> None:
     """The page top aligns with the top edge of the original, and body text is not written below the bottom edge of
     the original. Footnotes in the footer band still get no extra cut."""
     from app.formats.pdf_blocks import TextBlock
@@ -2620,7 +2655,7 @@ def test_page_margins_stay_with_the_source(tmp_path):
     assert _room_below(out[0], note, 750, 53, 200, [note]) > 780
 
 
-def test_last_short_line_keeps_body_size(tmp_path):
+def test_last_short_line_keeps_body_size(tmp_path: Path) -> None:
     """The line box slack of the last one or two lines on a page is kept. Without it a Chinese line would not fit, and
     the font size must not become smaller than the body text above because of that."""
     from app.formats.pdf_blocks import TextBlock
@@ -2706,7 +2741,7 @@ def test_last_short_line_keeps_body_size(tmp_path):
     assert min(sizes(out[1], 670)) >= body - 0.05
     bottoms = [
         ch["bbox"][3]
-        for page in out
+        for page in out.pages()
         for block in page.get_text("rawdict")["blocks"]
         if block.get("type") == 0
         for line in block["lines"]
@@ -2718,7 +2753,7 @@ def test_last_short_line_keeps_body_size(tmp_path):
     assert max(bottoms) < 730
 
 
-def test_cjk_lines_share_the_right_edge(tmp_path):
+def test_cjk_lines_share_the_right_edge(tmp_path: Path) -> None:
     """Lines other than the last are right-aligned to the writing box. Punctuation sits against the preceding
     character. The last line stays left-aligned."""
     from app.formats.pdf_blocks import TextBlock
@@ -2754,7 +2789,7 @@ def test_cjk_lines_share_the_right_edge(tmp_path):
     assert rect.y0 - 2 < grouped[0][0][3] < rect.y1
 
 
-def test_em_dash_line_stays_inside_the_box(tmp_path):
+def test_em_dash_line_stays_inside_the_box(tmp_path: Path) -> None:
     """Dashes and HMM are broken by their real character width, so no extra character ends up past the right edge."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
@@ -2787,7 +2822,7 @@ def test_em_dash_line_stays_inside_the_box(tmp_path):
                 assert span["bbox"][2] <= right + 1.0, span["text"]
 
 
-def test_italic_marks_still_justify_the_line(tmp_path):
+def test_italic_marks_still_justify_the_line(tmp_path: Path) -> None:
     """Italic marks no longer switch to HTML. Chinese characters have no italic glyphs, and the line stays justified."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
@@ -2818,7 +2853,7 @@ def test_italic_marks_still_justify_the_line(tmp_path):
     assert grouped[-1][-1][2] < right - 8
 
 
-def test_formula_does_not_jump_to_the_line_above(tmp_path):
+def test_formula_does_not_jump_to_the_line_above(tmp_path: Path) -> None:
     """When the previous line reaches the column edge, the formula on the next line still sits against the text of
     its own line. The glyph boxes of the previous line reach into the writing box of this line, so their right edge
     must not be used as the cursor."""
@@ -2846,7 +2881,7 @@ def test_formula_does_not_jump_to_the_line_above(tmp_path):
         "page": 0,
         "mid": 0,
         "png": pymupdf.open(src)[0].get_pixmap(clip=box, dpi=72).tobytes("png"),
-        "spans": [{"bbox": tuple(box), "text": "t", "size": 10, "origin": (box.x0, box.y1 - 2)}],
+        "spans": [{"bbox": _bbox(box), "text": "t", "size": 10, "origin": (box.x0, box.y1 - 2)}],
     }
     rect = pymupdf.Rect(40, 40, 360, 160)
     block = TextBlock(
@@ -2873,7 +2908,7 @@ def test_formula_does_not_jump_to_the_line_above(tmp_path):
     assert painted[0].x0 < rect.x1 - 40
 
 
-def test_italic_run_does_not_open_a_wide_gap_before_the_formula(tmp_path):
+def test_italic_run_does_not_open_a_wide_gap_before_the_formula(tmp_path: Path) -> None:
     """i-th has one space on each side. Estimating italic width at 0.5em would push the following formula away; it
     belongs right after the written text."""
     from app.formats.pdf_blocks import TextBlock
@@ -2900,7 +2935,7 @@ def test_italic_run_does_not_open_a_wide_gap_before_the_formula(tmp_path):
         "page": 0,
         "mid": 0,
         "png": pymupdf.open(src)[0].get_pixmap(clip=y_box, dpi=72).tobytes("png"),
-        "spans": [{"bbox": tuple(y_box), "text": "y=", "size": 10, "origin": (y_box.x0, y_box.y1 - 2)}],
+        "spans": [{"bbox": _bbox(y_box), "text": "y=", "size": 10, "origin": (y_box.x0, y_box.y1 - 2)}],
     }
     rect = pymupdf.Rect(40, 40, 460, 120)
     block = TextBlock(
@@ -2950,7 +2985,7 @@ def test_italic_run_does_not_open_a_wide_gap_before_the_formula(tmp_path):
     assert painted[0].x0 - yuan["bbox"][2] < 5
 
 
-def test_formula_keeps_a_space_before_following_text(tmp_path):
+def test_formula_keeps_a_space_before_following_text(tmp_path: Path) -> None:
     """When text follows a formula, a gap one space wide separates them and they do not touch."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
@@ -2976,7 +3011,7 @@ def test_formula_keeps_a_space_before_following_text(tmp_path):
         "page": 0,
         "mid": 0,
         "png": pymupdf.open(src)[0].get_pixmap(clip=y_box, dpi=72).tobytes("png"),
-        "spans": [{"bbox": tuple(y_box), "text": "y=", "size": 10, "origin": (y_box.x0, y_box.y1 - 2)}],
+        "spans": [{"bbox": _bbox(y_box), "text": "y=", "size": 10, "origin": (y_box.x0, y_box.y1 - 2)}],
     }
     rect = pymupdf.Rect(40, 50, 420, 110)
     block = TextBlock(
@@ -3041,14 +3076,14 @@ def _group_chars(
     return grouped
 
 
-def test_the_hole_for_a_neighbour_stays_inside_its_font_box():
+def test_the_hole_for_a_neighbour_stays_inside_its_font_box() -> None:
     """The exact box of a URL on the previous line extends half a line down, and cutting a hole by it would clip the
     tops of the glyphs of the URL on the next line. The hole is clamped to the font box; ink measured by drawing
     single glyphs (when the font box is wrong) is used as before."""
     from app.formats.pdf_place_formulas import _hole_ink
 
-    def box(span):
-        return tuple(round(v, 1) for v in _hole_ink(span))
+    def box(span: PdfDict) -> tuple[float, ...]:
+        return tuple(round(v, 1) for v in _bbox(_hole_ink(span)))
 
     url = {
         "text": " https://artofproblemsolving.com",
@@ -3062,14 +3097,14 @@ def test_the_hole_for_a_neighbour_stays_inside_its_font_box():
     assert box(root) == (330.5, 187.2, 337.0, 200.0)
 
 
-def test_formula_box_height_follows_the_glyph_ink():
+def test_formula_box_height_follows_the_glyph_ink() -> None:
     """The CMSY font extent is almost two lines high. A box computed from the font would shrink the formula and crop
     glyphs of the lines above and below."""
     from app.formats.pdf_crop import _tighten_formula_height
 
     arrow = {"text": "←", "ink": (130.2, 221.3, 139.9, 226.4)}
     zero = {"text": "0", "ink": (142.6, 219.8, 147.4, 226.5)}
-    part = {"bbox": pymupdf.Rect(114.7, 218.8, 147.4, 237.1), "h": 18.3, "d": 10.8, "spans": [arrow, zero]}
+    part: PdfDict = {"bbox": pymupdf.Rect(114.7, 218.8, 147.4, 237.1), "h": 18.3, "d": 10.8, "spans": [arrow, zero]}
     _tighten_formula_height(part)
     assert [round(v, 1) for v in part["bbox"]] == [114.7, 219.2, 147.4, 227.1]
     assert part["h"] == 7.9 and part["d"] == 0.8
@@ -3086,7 +3121,7 @@ def test_formula_box_height_follows_the_glyph_ink():
     assert unknown["h"] == 20
 
 
-def test_fraction_bars_drawn_as_one_pixel_images_are_formula_curves():
+def test_fraction_bars_drawn_as_one_pixel_images_are_formula_curves() -> None:
     """Old TeX draws fraction bars and radical bars as stretched one-pixel images. They count as formula curves like
     vector lines, so the line at the original position is erased when the formula moves; illustrations do not
     count."""
@@ -3114,12 +3149,12 @@ def test_fraction_bars_drawn_as_one_pixel_images_are_formula_curves():
     assert intersecting_curves(pymupdf.Rect(234.7, 255.9, 295.8, 276.6), rects)
 
 
-def test_a_formula_only_takes_the_rules_its_glyphs_touch():
+def test_a_formula_only_takes_the_rules_its_glyphs_touch() -> None:
     """The font box of |m/√v| < 1 reaches into the next line and covers the radical bar of √E[g²] there. Judged by ink,
     the bar belongs to the formula on the next line."""
     from app.formats.pdf_crop import _absorb_one_box
 
-    def formula(bbox, inks):
+    def formula(bbox: Corners, inks: list[Corners]) -> PdfDict:
         spans = [{"text": "x", "ink": ink} for ink in inks]
         return {"bbox": pymupdf.Rect(bbox), "d": 3.0, "spans": spans}
 
@@ -3140,7 +3175,7 @@ def test_a_formula_only_takes_the_rules_its_glyphs_touch():
     assert abs(above["bbox"].x1 - 395.7) < 0.01
 
 
-def test_a_fraction_bar_stays_when_its_numerator_stays():
+def test_a_fraction_bar_stays_when_its_numerator_stays() -> None:
     """When the numerator is in another block that stays in place, the fraction bar stays too: moved with the
     denominator, it would leave the numerator hanging in the air."""
     from app.formats.pdf_crop import _absorb_one_box
@@ -3156,7 +3191,7 @@ def test_a_fraction_bar_stays_when_its_numerator_stays():
     assert whole["curves"] == [bar]
 
 
-def test_a_formula_leaves_the_edge_of_a_proof_box():
+def test_a_formula_leaves_the_edge_of_a_proof_box() -> None:
     """An end-of-proof box sits right below the formula at the line end. The top edge of the box meets its two vertical
     sides, so it is a side of the box and does not move with the formula."""
     from app.formats.pdf_crop import _absorb_one_box
@@ -3178,7 +3213,7 @@ def test_a_formula_leaves_the_edge_of_a_proof_box():
     assert lone["curves"] == [bar]
 
 
-def test_formula_holes_follow_the_neighbours_ink_not_their_font_box():
+def test_formula_holes_follow_the_neighbours_ink_not_their_font_box() -> None:
     """The font box of a large brace on the previous line reaches the N on the next line, but its ink does not. Cutting
     holes by ink leaves the corner of N intact."""
     from app.formats.pdf_place_formulas import _formula_form
@@ -3191,20 +3226,21 @@ def test_formula_holes_follow_the_neighbours_ink_not_their_font_box():
     formula = {"bbox": pymupdf.Rect(base["bbox"]), "spans": [base]}
     brace = {"text": "{", "bbox": (328.0, 445.3, 332.9, 462.3)}
 
-    def hole_bottom(neighbour):
+    def hole_bottom(neighbour: PdfDict) -> float:
         """Bottom edge of the hole (page coordinates). The first re is the clip box of the formula itself, the following
         ones are holes."""
         xref = _formula_form(doc, page, fms, formula, "/Fx", [dict(base), neighbour])
         rects = re.findall(r"([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) re", doc.xref_stream(xref).decode())
         [(_, y, _, _)] = rects[1:]
-        return page.rect.height - float(y)
+        bottom: float = page.rect.height - float(y)
+        return bottom
 
     # The ink of N starts at 460.3
     assert hole_bottom(brace) > 460.3
     assert hole_bottom({**brace, "ink": (328.0, 445.6, 332.9, 457.4)}) <= 457.5
 
 
-def test_a_formula_cut_from_a_text_span_is_not_holed_by_that_span():
+def test_a_formula_cut_from_a_text_span_is_not_holed_by_that_span() -> None:
     """The formula detection model cuts the σ out of " σ" as a formula. The page still has the original " σ" span,
     whose box does not match the σ of the formula; when the formula has a superscript and is taller than a line,
     cutting a hole by that box would remove the σ (leaving only the superscript in the translation). The original
@@ -3227,7 +3263,7 @@ def test_a_formula_cut_from_a_text_span_is_not_holed_by_that_span():
     }
     above = {"text": "p", "bbox": (273.0, 196.0, 276.0, 205.5)}
 
-    def clip_rects(page_spans):
+    def clip_rects(page_spans: list[PdfDict]) -> list[tuple[str, str, str, str]]:
         xref = _formula_form(doc, page, fms, formula, "/Fx", page_spans)
         return re.findall(r"([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) re", doc.xref_stream(xref).decode())
 
@@ -3235,13 +3271,13 @@ def test_a_formula_cut_from_a_text_span_is_not_holed_by_that_span():
     assert len(clip_rects([dict(source), dict(square), above])) == 2
 
 
-def test_list_item_near_the_page_middle_stays_left_aligned():
+def test_list_item_near_the_page_middle_stays_left_aligned() -> None:
     """A list item whose center line happens to match the center line of the widest block is still left-aligned and
     not written back centered. The (a) subcaption below a subfigure stays centered."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write_rect import _write_rect
 
-    def blk(text, x0, y0, x1):
+    def blk(text: str, x0: float, y0: float, x1: float) -> TextBlock:
         rect = pymupdf.Rect(x0, y0, x1, y0 + 23.7)
         return TextBlock(page=17, rect=rect, line_rects=[rect], text=text, size=20.4, color="#000", bold=False)
 
@@ -3257,7 +3293,7 @@ def test_list_item_near_the_page_middle_stays_left_aligned():
     assert align == "center"
 
 
-def test_heading_at_the_frame_edge_stays_left_aligned():
+def test_heading_at_the_frame_edge_stays_left_aligned() -> None:
     """The 2.6.1 subheading starts at the left edge of the text area. The widest block is a paragraph merged with a
     side note and reaching further left; their center lines happen to match, but it is still written back
     left-aligned."""
@@ -3266,7 +3302,7 @@ def test_heading_at_the_frame_edge_stays_left_aligned():
     from app.formats.pdf_layout import PageGeometry
     from app.formats.pdf_write_rect import _write_rect
 
-    def blk(text, x0, y0, x1, y1, size=10.0):
+    def blk(text: str, x0: float, y0: float, x1: float, y1: float, size: float = 10.0) -> TextBlock:
         rect = pymupdf.Rect(x0, y0, x1, y1)
         return TextBlock(page=16, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
 
@@ -3282,7 +3318,7 @@ def test_heading_at_the_frame_edge_stays_left_aligned():
     assert align == "center"
 
 
-def test_epigraph_and_attribution_at_the_frame_right_edge_are_written_flush_right():
+def test_epigraph_and_attribution_at_the_frame_right_edge_are_written_flush_right() -> None:
     """Every line of an epigraph and its attribution at a chapter start ends at the right edge of the text area, far
     from the left edge: they are written back right-aligned, and the writing box does not extend to the right.
     When another block lies to the left on the same line, the right block is only the second half of a line and is
@@ -3294,7 +3330,7 @@ def test_epigraph_and_attribution_at_the_frame_right_edge_are_written_flush_righ
     from app.formats.pdf_typeset import typeset_lines
     from app.formats.pdf_write_rect import _write_rect
 
-    def blk(text, rows, size=10.0):
+    def blk(text: str, rows: list[Corners], size: float = 10.0) -> TextBlock:
         rects = [pymupdf.Rect(*row) for row in rows]
         rect = pymupdf.Rect(rects[0])
         for row in rects[1:]:
@@ -3334,9 +3370,11 @@ def test_epigraph_and_attribution_at_the_frame_right_edge_are_written_flush_righ
     lone_geo = PageGeometry.from_rects(612, [lone.rect, short.rect], height=792, frame=frame)
     assert _write_rect(lone, [(short, ""), (lone, "")], True, False, lone_geo)[1] == "left"
 
-    def start(text):
+    def start(text: str) -> tuple[float, float]:
         line = typeset_lines(text, 9.0, 200.0, {})[0]
-        ops = _place_line(line, 100.0, 200.0, 9.0, False, "right", frozenset(), {})[0]
+        placed = _place_line(line, 100.0, 200.0, 9.0, False, "right", frozenset(), {})
+        assert placed is not None
+        ops = placed[0]
         return float(next(op for op in ops if op.endswith("Tm")).split()[4]), line.width
 
     x, width = start("奥卡姆的威廉")
@@ -3345,7 +3383,7 @@ def test_epigraph_and_attribution_at_the_frame_right_edge_are_written_flush_righ
     assert start("William of Occam ")[0] == start("William of Occam")[0]
 
 
-def test_attribution_short_of_the_frame_edge_by_a_trailing_space_is_written_flush_right():
+def test_attribution_short_of_the_frame_edge_by_a_trailing_space_is_written_flush_right() -> None:
     """An attribution with a trailing word space ends two or three points short of the right edge of the text area and
     is still written right-aligned. So is an attribution pushed to the end of the last epigraph line with \\hfill.
     The last word split off a line in a justified narrow column, and a table header aligned with the start of the
@@ -3355,7 +3393,7 @@ def test_attribution_short_of_the_frame_edge_by_a_trailing_space_is_written_flus
     from app.formats.pdf_layout import PageGeometry
     from app.formats.pdf_write_rect import _write_rect
 
-    def blk(text, rows, size=10.0):
+    def blk(text: str, rows: list[Corners], size: float = 10.0) -> TextBlock:
         rects = [pymupdf.Rect(*row) for row in rows]
         rect = pymupdf.Rect(rects[0])
         for row in rects[1:]:
@@ -3364,7 +3402,7 @@ def test_attribution_short_of_the_frame_edge_by_a_trailing_space_is_written_flus
 
     frame = TextFrame(142.0, 475.0, 100, 720, 10)
 
-    def align(block, others):
+    def align(block: TextBlock, others: list[TextBlock]) -> str:
         items = [(other, "") for other in [*others, block]]
         geo = PageGeometry.from_rects(612, [other.rect for other, _ in items], height=792, frame=frame)
         return _write_rect(block, items, True, False, geo)[1]
@@ -3396,7 +3434,7 @@ def test_attribution_short_of_the_frame_edge_by_a_trailing_space_is_written_flus
     assert align(header, [cells, body]) == "left"
 
 
-def test_two_line_attribution_is_split_like_the_source_and_written_flush_right(tmp_path):
+def test_two_line_attribution_is_split_like_the_source_and_written_flush_right(tmp_path: Path) -> None:
     """An epigraph and attribution on two lines, with a short first line starting toward the right: the translation
     breaks at the width of the first line, and both lines end at the original right edge."""
     from app.formats.pdf_blocks import TextBlock
@@ -3422,7 +3460,7 @@ def test_two_line_attribution_is_split_like_the_source_and_written_flush_right(t
     doc.save(path)
     page = pymupdf.open(path)[0]
 
-    def blk(text, rows, size):
+    def blk(text: str, rows: list[str], size: float) -> TextBlock:
         rects = [page.search_for(row)[0] for row in rows]
         rect = pymupdf.Rect(rects[0])
         for row in rects[1:]:
@@ -3453,7 +3491,7 @@ def test_two_line_attribution_is_split_like_the_source_and_written_flush_right(t
     assert all(abs(bbox[2] - author.rect.x1) < 0.5 for bbox, _ in lines)
 
 
-def test_header_cells_near_the_column_middle_are_not_all_centred_on_it():
+def test_header_cells_near_the_column_middle_are_not_all_centred_on_it() -> None:
     """The cells of a header row all have center lines that happen to lie near the column center line, but the row
     is not centered in the column: each is written at its own position and they are not all centered on the
     column center line on top of each other. In a heading split into a number block and a name block, the whole
@@ -3463,7 +3501,7 @@ def test_header_cells_near_the_column_middle_are_not_all_centred_on_it():
     from app.formats.pdf_layout import PageGeometry
     from app.formats.pdf_write_rect import _write_rect
 
-    def blk(text, x0, x1, y0=676.0, size=10.0):
+    def blk(text: str, x0: float, x1: float, y0: float = 676.0, size: float = 10.0) -> TextBlock:
         rect = pymupdf.Rect(x0, y0, x1, y0 + 11.6)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=True)
 
@@ -3487,7 +3525,7 @@ def test_header_cells_near_the_column_middle_are_not_all_centred_on_it():
     assert _write_rect(title, items, True, False, geo)[1] == "center"
 
 
-def test_a_paragraph_with_an_overfull_line_is_written_to_the_frame_edge():
+def test_a_paragraph_with_an_overfull_line_is_written_to_the_frame_edge() -> None:
     """For a paragraph with an unbreakable line reaching into the page margin, the translation is written to the right
     edge of the text area, not to that protruding line. A block mostly outside the text area is still written at
     its own width."""
@@ -3497,7 +3535,7 @@ def test_a_paragraph_with_an_overfull_line_is_written_to_the_frame_edge():
     from app.formats.pdf_write_geometry import _write_limit
     from app.formats.pdf_write_rect import _write_rect
 
-    def blk(rows):
+    def blk(rows: list[Corners]) -> TextBlock:
         rects = [pymupdf.Rect(*row) for row in rows]
         rect = pymupdf.Rect(rects[0])
         for row in rects[1:]:
@@ -3532,7 +3570,8 @@ def test_a_paragraph_with_an_overfull_line_is_written_to_the_frame_edge():
     # area; the right edge of the column was pushed out by the protruding line
     assert geo.columns[-1].x1 > 500
     assert _write_limit(para, rect, geo, []) == 477.0
-    assert _write_limit(wide, rect, geo, []) > 500
+    wide_limit = _write_limit(wide, rect, geo, [])
+    assert wide_limit is not None and wide_limit > 500
     # A two-line paragraph with one protruding line. When side notes form a column of their own, this line pushes
     # out the right edge of the body column, and the text is still written to the right edge of the text area
     pair = blk([(157.1, 300, 489.5, 312), (142.2, 312, 475.2, 324)])
@@ -3540,14 +3579,14 @@ def test_a_paragraph_with_an_overfull_line_is_written_to_the_frame_edge():
     assert _write_rect(pair, [(pair, ""), (para, "")], True, False, geo)[0].x1 == 477.0
 
 
-def test_two_line_title_centered_on_the_page_is_written_centered():
+def test_two_line_title_centered_on_the_page_is_written_centered() -> None:
     """A slide title is in the middle of the page. The widest block is a list item toward the left whose center line is
     off to the right; the title is still written back centered on the page."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_layout import PageGeometry
     from app.formats.pdf_write_rect import _write_rect
 
-    def blk(text, x0, y0, x1, y1, size):
+    def blk(text: str, x0: float, y0: float, x1: float, y1: float, size: float) -> TextBlock:
         rect = pymupdf.Rect(x0, y0, x1, y1)
         return TextBlock(page=29, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
 
@@ -3571,7 +3610,7 @@ def test_two_line_title_centered_on_the_page_is_written_centered():
     assert align == "center"
 
 
-def test_title_page_centered_off_the_page_middle_is_written_centered():
+def test_title_page_centered_off_the_page_middle_is_written_centered() -> None:
     """The lines of a title page share one center line, which is neither the middle of the page (asymmetric left and
     right margins) nor the center line of the text area of the book. Every block is written back centered on this
     line, the widest title too."""
@@ -3580,7 +3619,7 @@ def test_title_page_centered_off_the_page_middle_is_written_centered():
     from app.formats.pdf_layout import PageGeometry
     from app.formats.pdf_write_rect import _write_rect
 
-    def blk(text, x0, y0, x1, y1, size):
+    def blk(text: str, x0: float, y0: float, x1: float, y1: float, size: float) -> TextBlock:
         rect = pymupdf.Rect(x0, y0, x1, y1)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
 
@@ -3600,14 +3639,14 @@ def test_title_page_centered_off_the_page_middle_is_written_centered():
         assert abs((rect.x0 + rect.x1) / 2 - 301) < 1, block.text
 
 
-def test_body_lines_beside_margin_notes_do_not_make_a_centered_page():
+def test_body_lines_beside_margin_notes_do_not_make_a_centered_page() -> None:
     """Side notes in the margin widen the horizontal extent of the text on the page, but full body lines must still not
     count as short lines. The body lines are all on the center line of the text area, and an indented example whose
     center line happens to lie near it does not make the page centered."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write_rect import _centered_axis
 
-    def blk(text, x0, y0, x1, size=10.0):
+    def blk(text: str, x0: float, y0: float, x1: float, size: float = 10.0) -> TextBlock:
         rect = pymupdf.Rect(x0, y0, x1, y0 + 12)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=size, color="#000", bold=False)
 
@@ -3621,7 +3660,7 @@ def test_body_lines_beside_margin_notes_do_not_make_a_centered_page():
     assert _centered_axis(example, blocks) is None
 
 
-def test_left_aligned_dialogue_lines_are_not_centered():
+def test_left_aligned_dialogue_lines_are_not_centered() -> None:
     """The lines of a dialogue share a left edge. Lines whose center line happens to fall near the center line of the
     text area are also written back left-aligned."""
     from app.formats.pdf_blocks import TextBlock
@@ -3629,7 +3668,7 @@ def test_left_aligned_dialogue_lines_are_not_centered():
     from app.formats.pdf_layout import PageGeometry
     from app.formats.pdf_write_rect import _write_rect
 
-    def blk(text, y0, x1):
+    def blk(text: str, y0: float, x1: float) -> TextBlock:
         rect = pymupdf.Rect(221, y0, x1, y0 + 9)
         return TextBlock(page=0, rect=rect, line_rects=[rect], text=text, size=9, color="#000", bold=False)
 
@@ -3640,7 +3679,7 @@ def test_left_aligned_dialogue_lines_are_not_centered():
     assert align == "left" and rect.x0 == first.rect.x0
 
 
-def test_light_cell_shading_is_not_a_formula_stroke():
+def test_light_cell_shading_is_not_a_formula_stroke() -> None:
     """A light cell background under the text is not merged into the formula box; the black background of a caption
     label and fraction bars are still taken in."""
     from app.formats.pdf_crop import _page_curve_rects
@@ -3654,7 +3693,7 @@ def test_light_cell_shading_is_not_a_formula_stroke():
     assert [round(r.x0) for r in rects] == [80, 140]
 
 
-def test_a_radical_bar_moves_with_its_formula_under_the_line_above():
+def test_a_radical_bar_moves_with_its_formula_under_the_line_above() -> None:
     """A descender of the line above touches the top of a radical bar; the left end of the bar meets the upper right
     corner of the radical of this formula, so the bar still goes with the formula."""
     from app.formats.pdf_crop import _absorb_one_box
@@ -3668,7 +3707,7 @@ def test_a_radical_bar_moves_with_its_formula_under_the_line_above():
     assert formula["curves"] == [bar]
 
 
-def test_a_formula_clip_reaches_into_its_own_gaps_beside_a_comma():
+def test_a_formula_clip_reaches_into_its_own_gaps_beside_a_comma() -> None:
     """The strokes of 𝒩 reach into the gap between it and (. When a comma follows the formula directly, only the
     rightmost rectangle must make room for the comma; the middle rectangles widen as usual, so the gap is not
     cut off."""
@@ -3694,7 +3733,7 @@ def test_a_formula_clip_reaches_into_its_own_gaps_beside_a_comma():
         for found in re.findall(r"([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) re", doc.xref_stream(xref).decode())
     ]
 
-    def inside(x, y):
+    def inside(x: float, y: float) -> bool:
         y = page.rect.height - y
         return sum(x0 <= x <= x0 + w and y0 <= y <= y0 + h for x0, y0, w, h in rects) % 2 == 1
 
@@ -3702,7 +3741,7 @@ def test_a_formula_clip_reaches_into_its_own_gaps_beside_a_comma():
     assert not inside(469.0, 495.0)
 
 
-def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down():
+def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down() -> None:
     """An index column is full to the bottom edge. An entry whose translation needs two lines takes one extra line,
     the entries below it (including those keeping the original text) move down, the line spacing of the column
     tightens a little, and the last entry stays within the bottom edge; other columns do not move. With too many
@@ -3711,9 +3750,9 @@ def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down():
     from app.formats.pdf_index_reflow import _index_reflow
     from app.formats.pdf_layout import Column, PageGeometry
 
-    def blk(text, x0, row):
+    def blk(text: str, x0: float, row: int) -> TextBlock:
         rect = pymupdf.Rect(x0, 100 + row * 9.6, x0 + 60, 110 + row * 9.6)
-        span = {"text": text, "size": 8.0, "font": "Times-Roman", "flags": 0, "color": 0, "bbox": tuple(rect)}
+        span: PdfDict = {"text": text, "size": 8.0, "font": "Times-Roman", "flags": 0, "color": 0, "bbox": _bbox(rect)}
         return TextBlock(
             page=0,
             rect=rect,
@@ -3750,16 +3789,16 @@ def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down():
     assert not any(id(b) in moved for b in rest)
 
 
-def test_an_index_entry_without_spans_that_keeps_its_text_still_moves():
+def test_an_index_entry_without_spans_that_keeps_its_text_still_moves() -> None:
     """An entry merged from fragments of which one had no spans has no span lines. When it keeps the original
     text and the entries above it push the column down, it moves with them, rewritten from its plain text."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_index_reflow import _index_reflow
     from app.formats.pdf_layout import Column, PageGeometry
 
-    def blk(text, x0, row, spans=True):
+    def blk(text: str, x0: float, row: int, spans: bool = True) -> TextBlock:
         rect = pymupdf.Rect(x0, 100 + row * 9.6, x0 + 60, 110 + row * 9.6)
-        span = {"text": text, "size": 8.0, "font": "Times-Roman", "flags": 0, "color": 0, "bbox": tuple(rect)}
+        span: PdfDict = {"text": text, "size": 8.0, "font": "Times-Roman", "flags": 0, "color": 0, "bbox": _bbox(rect)}
         return TextBlock(
             page=0,
             rect=rect,
@@ -3782,7 +3821,7 @@ def test_an_index_entry_without_spans_that_keeps_its_text_still_moves():
     assert moved[id(left[6])].rect.y0 > left[6].rect.y0
 
 
-def test_an_index_entry_is_never_centered():
+def test_an_index_entry_is_never_centered() -> None:
     """An indented subentry that falls exactly in the middle of the column is still left-aligned."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_layout import Column, PageGeometry
@@ -3806,7 +3845,7 @@ def test_an_index_entry_is_never_centered():
     assert _write_rect(entry, [(entry, "")], True, False, geo)[1] == "left"
 
 
-def test_inline_formulas_keep_their_size_next_to_chinese():
+def test_inline_formulas_keep_their_size_next_to_chinese() -> None:
     """The Chinese font size is 10 percent smaller than the original and looks the same size. Formulas are scaled
     relative to the Chinese size, so without shrinking they keep their original size instead of becoming 10 percent
     smaller; when the whole paragraph shrinks, formulas shrink with it."""
@@ -3822,7 +3861,7 @@ def test_inline_formulas_keep_their_size_next_to_chinese():
     assert abs(scale - 0.88) < 1e-6
 
 
-def test_a_formula_form_box_keeps_the_overhang_of_an_italic_letter():
+def test_a_formula_form_box_keeps_the_overhang_of_an_italic_letter() -> None:
     """The hook and tail of an italic f reach past its character width. The Form BBox clips too, so horizontally it
     widens to the ink measured from the glyphs and vertically it follows the formula box. It widens only to its
     own ink: a does not reach past its width, and the hook of the f of the preceding If reaching into the gap is
@@ -3835,15 +3874,15 @@ def test_a_formula_form_box_keeps_the_overhang_of_an_italic_letter():
     page = doc.new_page(width=612, height=792)
     page.insert_font(fontname="ti", fontbuffer=pymupdf.Font("tiit").buffer)
     page.insert_text((350, 526), "If f is a", fontname="ti", fontsize=10)
-    spans = {}
+    spans: dict[str, list[PdfDict]] = {}
     for char in page.get_text("rawdict")["blocks"][0]["lines"][0]["spans"][0]["chars"]:
         if char["c"] in "fa":
             spans.setdefault(char["c"], []).append({"text": char["c"], "bbox": char["bbox"], "origin": char["origin"]})
     fms = _page_form(doc, page)
     glyphs = _GlyphInk(page)
 
-    def box(letter):
-        formula = {"bbox": pymupdf.Rect(letter["bbox"]), "spans": [letter]}
+    def box(letter: PdfDict) -> Corners:
+        formula: PdfDict = {"bbox": pymupdf.Rect(letter["bbox"]), "spans": [letter]}
         xref = _formula_form(doc, page, fms, formula, "/Fx", [dict(letter)], glyphs)
         x0, y0, x1, y1 = map(float, doc.xref_get_key(xref, "BBox")[1].strip("[]").split())
         return x0, 792 - y1, x1, 792 - y0
@@ -3857,7 +3896,7 @@ def test_a_formula_form_box_keeps_the_overhang_of_an_italic_letter():
     assert abs(x0 - round(a["bbox"][0], 2)) < 0.02 and abs(x1 - round(a["bbox"][2], 2)) < 0.02
 
 
-def test_a_formula_bitmap_keeps_the_overhang_of_an_italic_letter_on_a_clear_background():
+def test_a_formula_bitmap_keeps_the_overhang_of_an_italic_letter_on_a_clear_background() -> None:
     """Formulas carried over to the next page are placed as bitmaps. Cropping the bitmap to the formula box would cut
     off the hook and tail of an italic f reaching past its character width, so horizontally it widens to the ink
     measured from the glyphs, and the placement widens on both sides by the scale. The background is transparent,
@@ -3890,7 +3929,7 @@ def test_a_formula_bitmap_keeps_the_overhang_of_an_italic_letter_on_a_clear_back
     assert plain.area() == pymupdf.Rect(a["bbox"])
 
 
-def test_a_one_line_paragraph_is_written_from_the_column_edge():
+def test_a_one_line_paragraph_is_written_from_the_column_edge() -> None:
     """In a book with first-line indents, a one-line paragraph is written from the left edge of the column like a
     multi-line paragraph. Indented blocks whose indent width does not match, and list items, stay as before"""
     from app.formats.pdf_blocks import TextBlock, _paragraph_indent
@@ -3898,7 +3937,7 @@ def test_a_one_line_paragraph_is_written_from_the_column_edge():
     from app.formats.pdf_layout import Column, PageGeometry
     from app.formats.pdf_write_geometry import _indent_edge
 
-    def blk(rows, text):
+    def blk(rows: list[Corners], text: str) -> TextBlock:
         rects = [pymupdf.Rect(*row) for row in rows]
         rect = pymupdf.Rect(rects[0])
         for row in rects[1:]:
@@ -3933,7 +3972,7 @@ def test_a_one_line_paragraph_is_written_from_the_column_edge():
     assert _paragraph_indent(flush) is None
 
 
-def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_path):
+def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_path: Path) -> None:
     """Only the indented first line of a paragraph is left above a figure at the page end, and the paragraph continues
     on the next page. The translation is written from the left edge of the column like other paragraphs, and what
     does not fit continues on the next page without running down onto the frame line of the figure. An indented
@@ -3944,7 +3983,7 @@ def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_
     from app.formats.pdf_write import _render_translated
     from app.formats.pdf_write_geometry import _indented_start
 
-    def blk(page, rows, text):
+    def blk(page: int, rows: list[Corners], text: str) -> TextBlock:
         rects = [pymupdf.Rect(*row) for row in rows]
         rect = pymupdf.Rect(rects[0])
         for row in rects[1:]:
@@ -4004,7 +4043,7 @@ def test_a_paragraph_opening_above_a_figure_is_written_from_the_column_edge(tmp_
     assert "偏导数" in out[1].get_text()
 
 
-def test_a_numbered_item_with_hanging_lines_keeps_the_hang():
+def test_a_numbered_item_with_hanging_lines_keeps_the_hang() -> None:
     """For an item with its number flush left and the following lines aligned with the text after the number, the
     continuation lines keep the original indent; paragraphs with a first-line indent and blocks without a number do
     not count."""
@@ -4012,7 +4051,7 @@ def test_a_numbered_item_with_hanging_lines_keeps_the_hang():
     from app.formats.pdf_place import _hang_lanes
     from app.formats.pdf_write_geometry import _hang_indent
 
-    def blk(text, lefts):
+    def blk(text: str, lefts: list[float]) -> TextBlock:
         rects = [pymupdf.Rect(x0, 170 + 12 * i, 475, 180 + 12 * i) for i, x0 in enumerate(lefts)]
         return TextBlock(
             page=0,
@@ -4036,7 +4075,7 @@ def test_a_numbered_item_with_hanging_lines_keeps_the_hang():
     assert _hang_lanes(box, [], 31, 40, 8.8, 1.45, 3) == [(0.0, 297), (40, 257), (40, 257)]
 
 
-def test_the_label_width_is_measured_on_the_translation():
+def test_the_label_width_is_measured_on_the_translation() -> None:
     """Width of the number or bullet at the start of the translation, including the space after it (with a hanging
     indent the first line moves right by this amount)."""
     from app.formats.pdf_flow import measure_width

@@ -34,7 +34,7 @@ def translate(tmp_path: Path, name: str, content: str | bytes, bilingual: bool =
     return out.read_text(encoding="utf-8")
 
 
-def test_srt_translates_each_cue_and_keeps_timings(tmp_path: Path):
+def test_srt_translates_each_cue_and_keeps_timings(tmp_path: Path) -> None:
     out = translate(tmp_path, "a.srt", SRT)
     assert out.split("\n") == [
         "1",
@@ -55,13 +55,13 @@ def test_srt_translates_each_cue_and_keeps_timings(tmp_path: Path):
     ]
 
 
-def test_srt_bilingual_keeps_the_original_above(tmp_path: Path):
+def test_srt_bilingual_keeps_the_original_above(tmp_path: Path) -> None:
     out = translate(tmp_path, "a.srt", SRT, bilingual=True)
     assert "<i>Where are you going\nso late at night?</i>\n<i>[zh-CN] Where are you going so late at night?</i>" in out
     assert "- Home.\n- Me too.\n- [zh-CN] Home.\n- [zh-CN] Me too." in out
 
 
-def test_srt_keeps_crlf_and_reads_legacy_encodings(tmp_path: Path):
+def test_srt_keeps_crlf_and_reads_legacy_encodings(tmp_path: Path) -> None:
     content = SRT.replace("Me too.", "Café.").replace("♪", "*").replace("\n", "\r\n").encode("cp1252")
     out_path = tmp_path / "a.translated.srt"
     translate(tmp_path, "a.srt", content)
@@ -78,13 +78,13 @@ def test_srt_keeps_crlf_and_reads_legacy_encodings(tmp_path: Path):
         ("C'est un résumé déjà vu.", "cp1252"),
     ],
 )
-def test_subtitles_read_legacy_encodings(tmp_path: Path, text: str, codec: str):
+def test_subtitles_read_legacy_encodings(tmp_path: Path, text: str, codec: str) -> None:
     src = tmp_path / "a.srt"
     src.write_bytes(f"1\n00:00:01,000 --> 00:00:02,000\n{text}\n".encode(codec))
     assert read_text(src).split("\n")[2] == text
 
 
-def test_srt_cues_without_a_blank_line_between_stay_apart(tmp_path: Path):
+def test_srt_cues_without_a_blank_line_between_stay_apart(tmp_path: Path) -> None:
     srt = "1\n00:00:01,000 --> 00:00:02,000\nHello there.\n2\n00:00:03,000 --> 00:00:04,000\nSee you.\n"
     assert translate(tmp_path, "a.srt", srt).split("\n") == [
         "1",
@@ -97,12 +97,12 @@ def test_srt_cues_without_a_blank_line_between_stay_apart(tmp_path: Path):
     ]
 
 
-def test_srt_keeps_override_blocks_at_the_start(tmp_path: Path):
+def test_srt_keeps_override_blocks_at_the_start(tmp_path: Path) -> None:
     srt = "1\n00:00:01,000 --> 00:00:02,000\n{\\an8}<i>Hello there,\nmy friend.</i>\n"
     assert translate(tmp_path, "a.srt", srt).split("\n")[2] == "{\\an8}<i>[zh-CN] Hello there, my friend.</i>"
 
 
-def test_vtt_keeps_header_notes_settings_and_voice(tmp_path: Path):
+def test_vtt_keeps_header_notes_settings_and_voice(tmp_path: Path) -> None:
     vtt = (
         "WEBVTT\n\nNOTE a comment\n\nintro\n00:01.000 --> 00:03.000 align:start\n"
         "<v Anna>Hello &amp; welcome\nto the show.\n\n00:04.000 --> 00:05.000\n<c.yellow>Thanks</c> a lot.\n"
@@ -114,7 +114,7 @@ def test_vtt_keeps_header_notes_settings_and_voice(tmp_path: Path):
     assert "\n[zh-CN] Thanks a lot.\n" in out
 
 
-def test_ass_translates_dialogue_and_keeps_overrides(tmp_path: Path):
+def test_ass_translates_dialogue_and_keeps_overrides(tmp_path: Path) -> None:
     ass = (
         "[Script Info]\nTitle: Demo\n\n[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
@@ -130,7 +130,7 @@ def test_ass_translates_dialogue_and_keeps_overrides(tmp_path: Path):
     assert bilingual[5].endswith("{\\an8}Good morning,\\Nmy friend.\\N[zh-CN] Good morning, my friend.")
 
 
-def test_subtitles_without_cues_are_rejected(tmp_path: Path):
+def test_subtitles_without_cues_are_rejected(tmp_path: Path) -> None:
     src = tmp_path / "empty.srt"
     src.write_text("no cues here\n", encoding="utf-8")
     with pytest.raises(ValueError, match="字幕"):

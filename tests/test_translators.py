@@ -4,28 +4,40 @@ collisions."""
 import asyncio
 import json
 import re
+from collections.abc import Callable, Coroutine
+from typing import TypedDict, Unpack
 
 import httpx
 import pytest
 
+from app.json_types import JSONDict
 from app.prompts import drop_added_braces, pick_marker
 from app.translators import (
     GoogleTranslator,
+    LLMTranslator,
     OpenAITranslator,
     TranslatorError,
     _error_text,
 )
+from tests.helpers import run
+
+# What httpx.MockTransport accepts: a function that answers a request, plain or async
+Handler = Callable[[httpx.Request], httpx.Response] | Callable[[httpx.Request], Coroutine[None, None, httpx.Response]]
 
 
-def run(coro):
-    return asyncio.run(coro)
+class _LLMOptions(TypedDict, total=False):
+    """The keyword options of LLMTranslator that the tests set."""
+
+    concurrency: int
+    temperature: float | None
+    api_format: str
 
 
-async def _no_sleep(_seconds):
+async def _no_sleep(_seconds: float) -> None:
     return None
 
 
-def make_openai(handler, **kw):
+def make_openai(handler: Handler, **kw: Unpack[_LLMOptions]) -> OpenAITranslator:
     return OpenAITranslator(
         "zh-CN",
         api_key="k",
@@ -36,13 +48,13 @@ def make_openai(handler, **kw):
     )
 
 
-def test_concurrency_cap_covers_missing_segment_recovery():
+def test_concurrency_cap_covers_missing_segment_recovery() -> None:
     """Requests that recover missing paragraphs also go through the concurrency semaphore: peak concurrency must not
     exceed concurrency=2."""
     current = 0
     peak = 0
 
-    async def handler(request):
+    async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal current, peak
         current += 1
         peak = max(peak, current)
@@ -66,12 +78,12 @@ def test_concurrency_cap_covers_missing_segment_recovery():
     run(tr.aclose())
 
 
-def test_shifted_batch_items_are_retranslated_one_by_one():
+def test_shifted_batch_items_are_retranslated_one_by_one() -> None:
     """When the model merges two paragraphs into one and everything after shifts by one, the marker count still
     matches. If some paragraph has mismatched numbers, the batch is retranslated one paragraph at a time."""
-    singles = []
+    singles: list[str] = []
 
-    async def handler(request):
+    async def handler(request: httpx.Request) -> httpx.Response:
         user = json.loads(request.content)["messages"][-1]["content"]
         if "[[source_end]]" in user:
             content = (
@@ -100,14 +112,14 @@ def test_shifted_batch_items_are_retranslated_one_by_one():
     run(tr.aclose())
 
 
-def test_items_holding_a_neighbors_translation_are_retranslated():
+def test_items_holding_a_neighbors_translation_are_retranslated() -> None:
     """The model dropped a paragraph and the following ones shifted: a translation carries formula placeholders the
     source does not have, or its length ratio is far from the usual value of the batch. The batch is retranslated one
     paragraph at a time: the translation of paragraph 1 happens to match but cannot be trusted, and not every shifted
     paragraph before paragraph 4 can be detected"""
-    singles = []
+    singles: list[str] = []
 
-    async def handler(request):
+    async def handler(request: httpx.Request) -> httpx.Response:
         user = json.loads(request.content)["messages"][-1]["content"]
         if "[[source_end]]" in user:
             content = (
@@ -145,17 +157,17 @@ def test_items_holding_a_neighbors_translation_are_retranslated():
     run(tr.aclose())
 
 
-def test_a_short_heading_holding_the_next_paragraph_shifts_the_batch():
+def test_a_short_heading_holding_the_next_paragraph_shifts_the_batch() -> None:
     """A three-word heading got the translation of the next paragraph, and that paragraph got the one after it. Short
     sentences are not checked by length ratio, only by a translation that is absurdly long"""
-    singles = []
+    singles: list[str] = []
     following = (
         "下一步是提取加窗信号的频谱信息；我们需要知道信号在不同频带上包含多少能量。"
         "对于离散时间（采样）信号，要提取离散频带的频谱信息，所使用的工具是离散傅里叶变换，即 DFT。"
     )
     after = "DFT 的输入是加窗信号，对于每一个离散频带，输出是一个复数，表示该频率分量在原始信号中的幅度和相位。"
 
-    async def handler(request):
+    async def handler(request: httpx.Request) -> httpx.Response:
         user = json.loads(request.content)["messages"][-1]["content"]
         if "[[source_end]]" in user:
             content = (
@@ -189,7 +201,7 @@ def test_a_short_heading_holding_the_next_paragraph_shifts_the_batch():
     run(tr.aclose())
 
 
-def test_error_text_tolerates_non_dict_json():
+def test_error_text_tolerates_non_dict_json() -> None:
     """An error response from a relay service may be a JSON array, a plain string or HTML; none of them may raise
     AttributeError."""
     resp = httpx.Response(500, json=[{"error": "upstream boom"}])
@@ -200,7 +212,7 @@ def test_error_text_tolerates_non_dict_json():
     assert "not json at all" in _error_text(resp)
 
 
-def test_non_dict_error_body_surfaces_as_translator_error(monkeypatch):
+def test_non_dict_error_body_surfaces_as_translator_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
     tr = make_openai(lambda r: httpx.Response(500, json=["relay exploded"]))
     with pytest.raises(TranslatorError, match="relay exploded") as e:
@@ -209,13 +221,13 @@ def test_non_dict_error_body_surfaces_as_translator_error(monkeypatch):
     run(tr.aclose())
 
 
-def test_google_200_html_treated_as_rate_limit(monkeypatch):
+def test_google_200_html_treated_as_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     """A rate-limited Google sometimes returns an HTML captcha page with status 200: retry with rate limit backoff and
     raise TranslatorError once the retries are used up."""
     monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
-    calls = []
+    calls: list[httpx.Request] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         return httpx.Response(200, text="<html><body>captcha</body></html>", headers={"content-type": "text/html"})
 
@@ -227,17 +239,17 @@ def test_google_200_html_treated_as_rate_limit(monkeypatch):
 
 
 @pytest.mark.parametrize("retry_after,expected", [("2", 2.0), ("70", 60.0)])
-def test_retry_after_header_drives_backoff(monkeypatch, retry_after, expected):
+def test_retry_after_header_drives_backoff(monkeypatch: pytest.MonkeyPatch, retry_after: str, expected: float) -> None:
     """A 429 with Retry-After waits for that long (at most 60 s) instead of the default exponential backoff."""
-    delays = []
+    delays: list[float] = []
 
-    async def record_sleep(seconds):
+    async def record_sleep(seconds: float) -> None:
         delays.append(seconds)
 
     monkeypatch.setattr("app.translators.asyncio.sleep", record_sleep)
-    calls = []
+    calls: list[httpx.Request] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         if len(calls) == 1:
             return httpx.Response(
@@ -251,13 +263,13 @@ def test_retry_after_header_drives_backoff(monkeypatch, retry_after, expected):
     run(tr.aclose())
 
 
-def test_temperature_strip_does_not_mask_real_error(monkeypatch):
+def test_temperature_strip_does_not_mask_real_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """On the last remaining attempt temperature is no longer stripped: the 400 with the real message is raised
     instead of "已达到最大重试次数" (maximum retries reached)."""
     monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
-    calls = []
+    calls: list[httpx.Request] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         return httpx.Response(400, json={"error": {"message": "Unsupported value: 'temperature' is not supported"}})
 
@@ -272,19 +284,19 @@ def test_temperature_strip_does_not_mask_real_error(monkeypatch):
     run(tr.aclose())
 
 
-def test_pick_marker_avoids_collision():
+def test_pick_marker_avoids_collision() -> None:
     assert pick_marker(["普通一段", "另一段"]) == "p"
     assert pick_marker(["引用别人的标记\n[[p1]]\n还是同一段"]) == "q"
     assert pick_marker(["[[p1]]\n[[q2]]\n两种前缀都被占了"]) == "s"
     assert pick_marker(["内联的 [[p1]] 不算，独占一行才算"]) == "p"
 
 
-def test_marker_collision_end_to_end():
+def test_marker_collision_end_to_end() -> None:
     """When the source has [[p1]] on a line of its own, the request uses [[qN]] instead, and parsing does not treat
     the [[p1]] line of the source as a protocol marker."""
-    bodies = []
+    bodies: list[str] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         user = json.loads(request.content)["messages"][-1]["content"]
         bodies.append(user)
         # The translation keeps the [[p1]] line of the source
@@ -302,14 +314,14 @@ def test_marker_collision_end_to_end():
     run(tr.aclose())
 
 
-def test_google_splits_html_and_plain_batches():
+def test_google_splits_html_and_plain_batches() -> None:
     """Mixed batch: paragraphs with tags go through format=html, plain text through format=text, and the results are
     reassembled in the original order."""
     from urllib.parse import parse_qs
 
-    formats = []
+    formats: list[str] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         fmt = request.url.params["format"]
         formats.append(fmt)
         qs = parse_qs(request.content.decode())["q"]
@@ -331,10 +343,10 @@ def test_google_splits_html_and_plain_batches():
     run(tr.aclose())
 
 
-def test_llm_token_usage_accumulated():
+def test_llm_token_usage_accumulated() -> None:
     """The usage returned by the API accumulates into translator.usage, counting both batch and recovery requests."""
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
@@ -350,10 +362,10 @@ def test_llm_token_usage_accumulated():
     run(tr.aclose())
 
 
-def test_gemini_token_usage_mapping():
+def test_gemini_token_usage_mapping() -> None:
     """The field names of Gemini usageMetadata map to prompt/completion."""
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
@@ -372,12 +384,12 @@ def test_gemini_token_usage_mapping():
     run(tr.aclose())
 
 
-def test_reply_without_content_is_asked_again():
+def test_reply_without_content_is_asked_again() -> None:
     """A relay service sometimes replies with a message without content (finish_reason is still stop). The same
     request is sent again so the whole book does not fail."""
     calls = 0
 
-    async def handler(request):
+    async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -392,11 +404,11 @@ def test_reply_without_content_is_asked_again():
     run(tr.aclose())
 
 
-def test_reply_that_stays_empty_is_an_empty_translation():
+def test_reply_that_stays_empty_is_an_empty_translation() -> None:
     """A reply that stays empty returns an empty translation: the Runner fills in the source text, and the whole
     document fails only when there are many empty paragraphs."""
 
-    async def handler(request):
+    async def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"choices": [{"message": {"role": "assistant"}}]})
 
     tr = make_openai(handler)
@@ -404,7 +416,7 @@ def test_reply_that_stays_empty_is_an_empty_translation():
     run(tr.aclose())
 
 
-def test_braces_the_model_added_around_marks_are_dropped():
+def test_braces_the_model_added_around_marks_are_dropped() -> None:
     """When the source has {n,m}, the model wraps the marks in braces too. Only braces absent at the same position in
     the source are removed."""
     src = "include {b}disjunction{/b} of symbols, {b}counters{/b} (*, +, and {n,m})"
@@ -420,7 +432,7 @@ def test_braces_the_model_added_around_marks_are_dropped():
     assert drop_added_braces("{b}x{/b}", "{b}x{/b} 和 {n,m}") == "{b}x{/b} 和 {n,m}"
 
 
-def test_marks_written_with_spaces_inside_are_restored():
+def test_marks_written_with_spaces_inside_are_restored() -> None:
     """The model sometimes writes { i}m{/i} or { |}, which are not recognised as marks. Marks present in the source
     are restored to the standard form; others are left alone."""
     from app.prompts import tidy_marks
@@ -437,7 +449,7 @@ def test_marks_written_with_spaces_inside_are_restored():
     assert tidy_marks("x[i] for {i}i{/i}", "x[i] 对 {i}i{/i}") == "x[i] 对 {i}i{/i}"
 
 
-def test_stray_chars_marks_text_neither_language_uses():
+def test_stray_chars_marks_text_neither_language_uses() -> None:
     """A translation containing a script used by neither the source nor the target language is bad; text already in
     the source, text the target language uses and Greek letters in formulas do not count."""
     from app.translators import stray_chars
@@ -451,12 +463,12 @@ def test_stray_chars_marks_text_neither_language_uses():
     assert stray_chars("a text", "テキスト", "zh-CN")
 
 
-def test_items_with_stray_chars_are_retranslated():
+def test_items_with_stray_chars_are_retranslated() -> None:
     """A paragraph in a batch containing foreign script is retranslated on its own; if the single retranslation still
     contains it, the request is sent again."""
-    singles = []
+    singles: list[str] = []
 
-    async def handler(request):
+    async def handler(request: httpx.Request) -> httpx.Response:
         user = json.loads(request.content)["messages"][-1]["content"]
         if "[[source_end]]" in user:
             content = "[[p0]]\n请花一点时间 убед自己。\n[[p1]]\n我们开发了一套方法。"
@@ -472,7 +484,7 @@ def test_items_with_stray_chars_are_retranslated():
     run(tr.aclose())
 
 
-def test_stray_chars_marks_symbols_absent_from_source():
+def test_stray_chars_marks_symbols_absent_from_source() -> None:
     """A translation with miscellaneous symbols, emoji or private use area characters absent from the source is bad;
     those already in the source do not count."""
     from app.translators import stray_chars
@@ -485,7 +497,7 @@ def test_stray_chars_marks_symbols_absent_from_source():
     assert not stray_chars("90 degrees", "90°", "zh-CN")
 
 
-def test_single_item_note_is_written_into_the_system_prompt():
+def test_single_item_note_is_written_into_the_system_prompt() -> None:
     """With a single paragraph the note is written at the end of the system prompt, and the source text stays only in
     the user message."""
     from app.prompts import build_messages
@@ -497,14 +509,14 @@ def test_single_item_note_is_written_into_the_system_prompt():
     assert "## Item notes" not in system
 
 
-def test_a_reply_asking_for_the_full_text_is_not_kept():
+def test_a_reply_asking_for_the_full_text_is_not_kept() -> None:
     """When an example sentence the book leaves unfinished on purpose is retranslated on its own, the model replies
     "请提供完整的原文" (please provide the full source text). The usual length ratio of the batch reveals it; if asking
     again gives the same reply, the result is empty and the Runner fills in the source text"""
     fragment = "IBM, a company with a long..."
-    asks = []
+    asks: list[str] = []
 
-    async def handler(request):
+    async def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         user = body["messages"][-1]["content"]
         if "[[source_end]]" in user:
@@ -531,7 +543,7 @@ TRUNCATED_SOURCES = ["The first short sentence.", "The second short sentence."]
 TRUNCATED_TRANSLATIONS = {"first": "第一句短句。", "second": "第二句短句。"}
 
 
-def _truncating_reply(provider: str, text: str, truncated: bool) -> dict:
+def _truncating_reply(provider: str, text: str, truncated: bool) -> JSONDict:
     """A reply in the provider's format, cut off at the output limit when truncated."""
     if provider == "openai":
         return {"choices": [{"message": {"content": text}, "finish_reason": "length" if truncated else "stop"}]}
@@ -545,7 +557,7 @@ def _truncating_reply(provider: str, text: str, truncated: bool) -> dict:
     return {"candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": finish}]}
 
 
-def _truncating_translator(provider: str, cut_single: bool = False):
+def _truncating_translator(provider: str, cut_single: bool = False) -> LLMTranslator:
     """A model that runs out of output for a batch of two paragraphs and translates one paragraph in full, or cuts
     that off too with cut_single."""
     from app.translators import ClaudeTranslator, GeminiTranslator
@@ -560,8 +572,9 @@ def _truncating_translator(provider: str, cut_single: bool = False):
         text = TRUNCATED_TRANSLATIONS[words[0]]
         return httpx.Response(200, json=_truncating_reply(provider, text[:2] if cut_single else text, cut_single))
 
-    cls = {"claude": ClaudeTranslator, "gemini": GeminiTranslator}.get(provider, OpenAITranslator)
-    extra = {"api_format": "responses"} if provider == "responses" else {}
+    classes: dict[str, type[LLMTranslator]] = {"claude": ClaudeTranslator, "gemini": GeminiTranslator}
+    cls = classes.get(provider, OpenAITranslator)
+    extra: _LLMOptions = {"api_format": "responses"} if provider == "responses" else {}
     return cls(
         "zh-CN",
         "en",
@@ -574,11 +587,11 @@ def _truncating_translator(provider: str, cut_single: bool = False):
 
 
 @pytest.mark.parametrize("provider", ["openai", "responses", "claude", "gemini"])
-def test_a_batch_cut_off_at_the_output_limit_is_split(provider):
+def test_a_batch_cut_off_at_the_output_limit_is_split(provider: str) -> None:
     """A reply stopped at the model's output limit holds only part of the batch; it used to be accepted (and cached)
     as the translation. The batch is now translated again in halves."""
 
-    async def scenario():
+    async def scenario() -> list[str]:
         tr = _truncating_translator(provider)
         try:
             return await tr.translate_batch(TRUNCATED_SOURCES)
@@ -589,11 +602,11 @@ def test_a_batch_cut_off_at_the_output_limit_is_split(provider):
 
 
 @pytest.mark.parametrize("provider", ["openai", "claude"])
-def test_a_single_paragraph_cut_off_is_an_empty_translation(provider):
+def test_a_single_paragraph_cut_off_is_an_empty_translation(provider: str) -> None:
     """One paragraph that still does not fit gives an empty translation: Runner keeps the original, caches nothing
     and counts the paragraph as failed."""
 
-    async def scenario():
+    async def scenario() -> list[str]:
         tr = _truncating_translator(provider, cut_single=True)
         try:
             return await tr.translate_batch(TRUNCATED_SOURCES[:1])
@@ -603,7 +616,7 @@ def test_a_single_paragraph_cut_off_is_an_empty_translation(provider):
     assert run(scenario()) == [""]
 
 
-def test_engines_of_one_service_share_a_gate_and_others_do_not():
+def test_engines_of_one_service_share_a_gate_and_others_do_not() -> None:
     """Two engines from the same service share its concurrency; another service, or an engine without a service,
     has its own."""
     from app.translators import create_translator
@@ -617,7 +630,7 @@ def test_engines_of_one_service_share_a_gate_and_others_do_not():
         live["now"] -= 1
         return httpx.Response(200, json={"choices": [{"message": {"content": "译文"}}]})
 
-    def service(sid: str) -> dict:
+    def service(sid: str) -> JSONDict:
         return {"id": sid, "provider": "custom", "base_url": "http://x/v1", "model": "m", "concurrency": 2}
 
     async def peak(services: list[str]) -> int:

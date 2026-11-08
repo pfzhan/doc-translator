@@ -3,7 +3,7 @@ import pymupdf
 from app.formats.pdf_dedupe import merge_duplicates, replace_refs
 
 
-def test_references_inside_strings_are_left_alone():
+def test_references_inside_strings_are_left_alone() -> None:
     text = "<</A 12 0 R/B (see 12 0 R \\) 12 0 R)/C <3132>/D [12 0 R 120 0 R]/E<</F 12 0 R>>>>"
     assert replace_refs(text, {12: 5}) == (
         "<</A 5 0 R/B (see 12 0 R \\) 12 0 R)/C <3132>/D [5 0 R 120 0 R]/E<</F 5 0 R>>>>"
@@ -18,7 +18,8 @@ def _book_with_a_picture() -> bytes:
         page = doc.new_page(width=300, height=200)
         page.insert_image(pymupdf.Rect(20, 20, 120, 120), pixmap=picture)
         page.insert_text((140, 60), "Body text beside the picture.", fontsize=10)
-    return doc.tobytes()
+    data: bytes = doc.tobytes()
+    return data
 
 
 def _side_by_side(data: bytes) -> pymupdf.Document:
@@ -36,9 +37,9 @@ def _images(doc: pymupdf.Document) -> int:
     return sum(1 for xref in range(1, doc.xref_length()) if doc.xref_get_key(xref, "Subtype")[1] == "/Image")
 
 
-def test_copies_of_the_same_picture_and_font_become_one():
+def test_copies_of_the_same_picture_and_font_become_one() -> None:
     doc = _side_by_side(_book_with_a_picture())
-    before = [page.get_pixmap(dpi=72).samples for page in doc]
+    before = [page.get_pixmap(dpi=72).samples for page in doc.pages()]
     # Each copy is an image with its soft mask. The masks are merged first so that the two image dictionaries match
     assert _images(doc) == 4
     assert merge_duplicates(doc) > 0
@@ -46,10 +47,10 @@ def test_copies_of_the_same_picture_and_font_become_one():
     assert _images(merged) == 2
     # Merging changes only references. After the stream dictionaries change the streams remain, and the page renders
     # as before
-    assert [page.get_pixmap(dpi=72).samples for page in merged] == before
+    assert [page.get_pixmap(dpi=72).samples for page in merged.pages()] == before
 
 
-def test_pages_with_the_same_content_stay_two_pages():
+def test_pages_with_the_same_content_stay_two_pages() -> None:
     doc = pymupdf.open()
     for _ in range(2):
         doc.new_page(width=300, height=200).insert_text((40, 60), "Same text.", fontsize=10)
@@ -57,4 +58,4 @@ def test_pages_with_the_same_content_stay_two_pages():
     merge_duplicates(doc)
     merged = pymupdf.open("pdf", doc.tobytes(garbage=1))
     assert merged.page_count == 2 and merged[0].xref != merged[1].xref
-    assert [page.get_text().strip() for page in merged] == ["Same text.", "Same text."]
+    assert [page.get_text().strip() for page in merged.pages()] == ["Same text.", "Same text."]

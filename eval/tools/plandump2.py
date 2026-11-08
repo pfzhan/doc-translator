@@ -7,15 +7,27 @@ from pathlib import Path
 
 code, src, out = sys.argv[1:4]
 sys.path.insert(0, code)
+import pymupdf
+
 from app.formats import pdf
+from app.runner import Runner
 
 
-class R:
-    def report_stage(self, *a, **k):
+class R(Runner):
+    """Planning only reports stages and sets the title: no translator or cache is set up."""
+
+    def __init__(self) -> None:
         pass
 
-    def set_title(self, t):
+    def report_stage(self, name: str, done: int = 0, total: int = 0, unit: str = "") -> None:
         pass
+
+    def set_title(self, title: str) -> None:
+        pass
+
+
+def corners(rect: pymupdf.Rect) -> list[float]:
+    return [round(rect.x0, 1), round(rect.y0, 1), round(rect.x1, 1), round(rect.y1, 1)]
 
 
 plan = pdf._plan_pdf(Path(src), R(), "")
@@ -30,9 +42,9 @@ for u, t, s in zip(plan.units, plan.texts, plan.skips):
             [],
             [
                 last.page,
-                [round(v, 1) for v in first.rect],
-                [round(v, 1) for v in last.rect],
-                [round(v, 1) for v in first.line_rects[0]] if first.line_rects else None,
+                corners(first.rect),
+                corners(last.rect),
+                corners(first.line_rects[0]) if first.line_rects else None,
             ],
         ]
     )

@@ -1,4 +1,6 @@
+import shutil
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -19,10 +21,11 @@ from app.formats.pdf_type3 import (
     broken_type3_names,
     recover_type3_page,
 )
-from app.formats.pdf_type3_glyphs import Glyph, Label, OcrChar, OcrWord, _Line
+from app.formats.pdf_type3_glyphs import Glyph, Key, Label, OcrChar, OcrWord, _Line
 from app.formats.pdf_type3_lines import _glyph_styles, _is_script
 from app.formats.pdf_type3_ocr import _HocrWords, _vote_labels
 from app.formats.pdf_type3_roles import _learn_roles
+from app.formats.pdf_types import PdfDict
 from app.formats.pdf_unit_blocks import _code_block
 
 PAPER = next(iter(sorted(Path("data/jobs").glob("*/implementing_data_cube.pdf"))), None)
@@ -60,7 +63,7 @@ def _box(ch: str, x: float, baseline: float, size: float) -> tuple[pymupdf.Rect,
 
 def _set(
     words: list[tuple[str, int]],
-    labels: dict,
+    labels: dict[Key, Label],
     x: float = 72.0,
     baseline: float = 100.0,
     size: float = SIZE,
@@ -84,11 +87,11 @@ def _set(
     return glyphs
 
 
-def _text(line: _Line, labels: dict) -> str:
+def _text(line: _Line, labels: dict[Key, Label]) -> str:
     return " ".join("".join(labels[glyph.key].text for glyph in token) for token in line.tokens)
 
 
-def _reader(labels: dict, roles: dict, mono: dict | None = None) -> Type3Reader:
+def _reader(labels: dict[Key, Label], roles: dict[Key, str], mono: dict[Key, float] | None = None) -> Type3Reader:
     reader = Type3Reader(pymupdf.open())
     reader.labels = labels
     reader.roles = roles
@@ -112,7 +115,7 @@ def _styled(line: _Line, reader: Type3Reader) -> str:
     return " ".join(out)
 
 
-def test_hocr_gives_words_with_letter_boxes():
+def test_hocr_gives_words_with_letter_boxes() -> None:
     raw = (
         "<span class='ocrx_word' title='bbox 30 60 90 90; x_wconf 96'>"
         "<span class='ocrx_cinfo' title='x_bboxes 30 60 45 90; x_conf 99.1'>o</span>"
@@ -127,7 +130,7 @@ def test_hocr_gives_words_with_letter_boxes():
     assert word.chars[1].conf == 90.5
 
 
-def test_votes_pair_letters_and_give_a_ligature_its_letters():
+def test_votes_pair_letters_and_give_a_ligature_its_letters() -> None:
     """Words whose letter count matches the glyph count are paired letter by letter. office has two glyphs fewer: o, c
     and e are known, so the remaining glyph is the ffi ligature."""
 
@@ -155,7 +158,11 @@ def test_votes_pair_letters_and_give_a_ligature_its_letters():
     assert labels[(1, ffi)].text == "ffi"
 
 
-def _roles(lines: list[list[tuple[str, int]]], labels: dict, shapes=None) -> dict:
+def _roles(
+    lines: list[list[tuple[str, int]]],
+    labels: dict[Key, Label],
+    shapes: Callable[[set[Key]], dict[Key, np.ndarray]] | None = None,
+) -> dict[Key, str]:
     page = [
         _line
         for glyphs in (_set(words, labels, baseline=100 + 14 * row) for row, words in enumerate(lines))
@@ -165,10 +172,10 @@ def _roles(lines: list[list[tuple[str, int]]], labels: dict, shapes=None) -> dic
     return roles
 
 
-def test_letters_that_never_join_a_word_are_variables():
+def test_letters_that_never_join_a_word_are_variables() -> None:
     """Math italic p and s occur only alone; text p and s occur in price and sales. The article a and the a inside
     words are the same bitmap."""
-    labels: dict = {}
+    labels: dict[Key, Label] = {}
     sentence = [
         ("each", ROMAN),
         ("price", ROMAN),
@@ -189,10 +196,10 @@ def test_letters_that_never_join_a_word_are_variables():
     assert roles[(ROMAN, ord("a"))] == "text"
 
 
-def test_ligature_and_short_word_capitals_count_as_text():
+def test_ligature_and_short_word_capitals_count_as_text() -> None:
     """ff is recognized inconsistently, and W occurs only in We. The other letters of the word are text, so these are
     too."""
-    labels: dict = {(ROMAN, ord("F")): Label("ff", 0.6)}
+    labels: dict[Key, Label] = {(ROMAN, ord("F")): Label("ff", 0.6)}
     labels[(ROMAN, ord("W"))] = Label("W", 1.0)
     sentence = [("We", ROMAN), ("diFer", ROMAN), ("from", ROMAN), ("others", ROMAN)]
     roles = _roles([sentence] * 3, labels)
@@ -200,26 +207,26 @@ def test_ligature_and_short_word_capitals_count_as_text():
     assert roles[(ROMAN, ord("W"))] == "text"
 
 
-def test_plural_of_a_variable_is_not_a_word():
+def test_plural_of_a_variable_is_not_a_word() -> None:
     """the v’s: v followed by a text s is still a variable."""
-    labels: dict = {}
+    labels: dict[Key, Label] = {}
     roles = _roles([[("the", ROMAN), ("v’s", MATH), ("and", ROMAN), ("v", MATH), ("only", ROMAN)]] * 3, labels)
     assert roles[(MATH, ord("v"))] == "math"
 
 
-def test_unsteady_digit_is_a_number_only_inside_numbers():
+def test_unsteady_digit_is_a_number_only_inside_numbers() -> None:
     """Bold 1 is recognized inconsistently but is a section number in 1.1 and 1.2. b recognized as 6 does not count as a
     number even when followed by a comma."""
-    labels: dict = {(ROMAN, ord("1")): Label("1", 0.75), (MATH, ord("6")): Label("6", 0.6)}
+    labels: dict[Key, Label] = {(ROMAN, ord("1")): Label("1", 0.75), (MATH, ord("6")): Label("6", 0.6)}
     roles = _roles([[("1.1", ROMAN), ("The", ROMAN), ("cube", ROMAN), ("6,", MATH), ("then", ROMAN)]] * 3, labels)
     assert roles[(ROMAN, ord("1"))] == "neutral"
     assert roles[(MATH, ord("6"))] == "symbol"
 
 
-def test_article_a_starts_a_sentence_and_variable_a_does_not():
+def test_article_a_starts_a_sentence_and_variable_a_does_not() -> None:
     """A single letter that looks like text A: an article at the start of a sentence, a variable inside one. Italic
     text and math italic cannot be told apart from the bitmap alone."""
-    labels: dict = {}
+    labels: dict[Key, Label] = {}
     same = lambda keys: {key: np.ones(4) / 2 for key in keys}  # noqa: E731
     lines = [
         [("data.", ROMAN), ("A", 4), ("common", ROMAN), ("Also", ROMAN)],
@@ -230,9 +237,9 @@ def test_article_a_starts_a_sentence_and_variable_a_does_not():
     assert roles[(MATH, ord("A"))] == "math"
 
 
-def test_minus_is_math_and_dashes_in_prose_are_not():
+def test_minus_is_math_and_dashes_in_prose_are_not() -> None:
     """OCR reads both minus signs and dashes as —. A minus sign is 0.6 font sizes wide, an em dash 1."""
-    labels: dict = {(5, 1): Label("—", 1.0), (5, 2): Label("—", 1.0)}
+    labels: dict[Key, Label] = {(5, 1): Label("—", 1.0), (5, 2): Label("—", 1.0)}
     glyphs = _set([("cost", ROMAN), ("of", ROMAN), ("views", ROMAN)], labels)
     x = glyphs[-1].rect.x1 + 4
     em = Glyph((5, 2), pymupdf.Rect(x, 96.5, x + 10, 97))
@@ -246,9 +253,9 @@ def test_minus_is_math_and_dashes_in_prose_are_not():
     assert roles[(5, 2)] == "neutral"
 
 
-def test_filled_square_at_line_starts_is_a_bullet():
+def test_filled_square_at_line_starts_is_a_bullet() -> None:
     """A bullet is always alone at the start of a line with ink filling its box. OCR reading it as e is not trusted."""
-    labels: dict = {(6, 1): Label("e", 1.0)}
+    labels: dict[Key, Label] = {(6, 1): Label("e", 1.0)}
     lines = []
     for row in range(3):
         dot = Glyph((6, 1), pymupdf.Rect(72, 94 + 14 * row, 76, 98 + 14 * row))
@@ -258,10 +265,10 @@ def test_filled_square_at_line_starts_is_a_bullet():
     assert found == {(6, 1)}
 
 
-def test_line_follows_baselines_not_the_fraction_order():
+def test_line_follows_baselines_not_the_fraction_order() -> None:
     """The content stream draws the denominator (moving back to the left of the fraction) and then continues with
     text. The text is still on the same line, after the fraction."""
-    labels: dict = {}
+    labels: dict[Key, Label] = {}
     head = _set([("we", ROMAN), ("conclude", ROMAN), ("that", ROMAN), ("a", MATH), ("=", MATH)], labels)
     x = head[-1].rect.x1 + 2
     numerator = _set([("k", MATH)], labels, x=x, baseline=96, size=7)
@@ -275,9 +282,9 @@ def test_line_follows_baselines_not_the_fraction_order():
     assert text.endswith("For these values")
 
 
-def test_lowered_full_size_letters_are_a_subscript():
+def test_lowered_full_size_letters_are_a_subscript() -> None:
     """supplier below N is the same size as the text, only lowered as a whole."""
-    labels: dict = {}
+    labels: dict[Key, Label] = {}
     line = _build_lines(
         [
             *_set([("where", ROMAN), ("N", MATH)], labels),
@@ -294,10 +301,10 @@ def test_lowered_full_size_letters_are_a_subscript():
     assert not any(_is_script(glyph, line, reader) for glyph in plain)
 
 
-def test_variable_with_a_typewriter_subscript_stays_a_formula():
+def test_variable_with_a_typewriter_subscript_stays_a_formula() -> None:
     """The subscript supplier of N is monospace. The subscript neither makes N monospace nor makes N look like a
     word."""
-    labels: dict = {}
+    labels: dict[Key, Label] = {}
     glyphs = [
         *_set([("where", ROMAN), ("N", MATH)], labels),
         *_set([("supplier", TYPE)], labels, x=110, size=7.5, shift=2.0),
@@ -311,8 +318,8 @@ def test_variable_with_a_typewriter_subscript_stays_a_formula():
     assert styled.startswith("where [N][s][u][p][p][l][i][e][r] is")
 
 
-def test_formula_keeps_inner_commas_and_brackets_and_leaves_the_period():
-    labels: dict = {}
+def test_formula_keeps_inner_commas_and_brackets_and_leaves_the_period() -> None:
+    labels: dict[Key, Label] = {}
     glyphs = _set(
         [
             ("cell", ROMAN),
@@ -356,9 +363,9 @@ def test_formula_keeps_inner_commas_and_brackets_and_leaves_the_period():
     assert _styled(item, _reader(labels, roles)).startswith("1. [<] is")
 
 
-def test_comma_outside_brackets_separates_two_formulas():
+def test_comma_outside_brackets_separates_two_formulas() -> None:
     """⟨L, ⪯⟩, a ≺ b: the comma outside the brackets belongs to the sentence, with one formula on each side."""
-    labels: dict = {}
+    labels: dict[Key, Label] = {}
     glyphs = _set(
         [("lattice", ROMAN), ("(L,", MATH), ("<),", MATH), ("a", MATH), ("<", MATH), ("b", MATH), ("means", ROMAN)],
         labels,
@@ -414,10 +421,10 @@ def test_comma_outside_brackets_separates_two_formulas():
     assert _styled(line, _reader(labels, roles)) == "an [n]-dimensional cube"
 
 
-def test_typewriter_letters_are_learned_from_even_words_with_narrow_letters():
+def test_typewriter_letters_are_learned_from_even_words_with_narrow_letters() -> None:
     """In monospace words l and commas also fill a whole cell. latter and each are evenly spaced too, but at only 0.4
     font sizes they do not count."""
-    labels: dict = {}
+    labels: dict[Key, Label] = {}
     words = [("TotalSales", TYPE), ("supplier", TYPE), ("Customer,", TYPE), ("latter", ROMAN), ("each,", ROMAN)]
     page = [
         _line for row in range(2) for _line in _build_lines(_set(words, labels, baseline=100 + 14 * row), labels, {})
@@ -427,11 +434,11 @@ def test_typewriter_letters_are_learned_from_even_words_with_narrow_letters():
     assert (ROMAN, ord("l")) not in mono and (ROMAN, ord("e")) not in mono
 
 
-def test_lines_join_by_baseline_even_when_their_boxes_overlap():
+def test_lines_join_by_baseline_even_when_their_boxes_overlap() -> None:
     """A tall inline bracket stretches the line box into the line above, but by baseline distance it is still the same
     paragraph."""
 
-    def line(y: float, top: float) -> dict:
+    def line(y: float, top: float) -> PdfDict:
         span = {
             "text": "word word",
             "font": "Times-Roman",
@@ -445,8 +452,8 @@ def test_lines_join_by_baseline_even_when_their_boxes_overlap():
     assert [len(group) for group in groups] == [2, 1]
 
 
-def test_drop_broken_lines_keeps_images_and_normal_spans():
-    data = {
+def test_drop_broken_lines_keeps_images_and_normal_spans() -> None:
+    data: PdfDict = {
         "blocks": [
             {"type": 1, "bbox": (0, 0, 10, 10)},
             {
@@ -466,7 +473,7 @@ def test_drop_broken_lines_keeps_images_and_normal_spans():
     assert data["blocks"][1]["lines"][0]["spans"][0]["text"] == "keep"
 
 
-def test_inserted_text_is_not_treated_as_bitmap_font():
+def test_inserted_text_is_not_treated_as_bitmap_font() -> None:
     doc = pymupdf.open()
     page = doc.new_page()
     page.insert_text((72, 72), "This is a normal paragraph with enough letters to translate.", fontsize=11)
@@ -475,7 +482,7 @@ def test_inserted_text_is_not_treated_as_bitmap_font():
     assert recover_type3_page(page, data) is False
 
 
-def test_centered_author_is_not_a_title_fragment():
+def test_centered_author_is_not_a_title_fragment() -> None:
     """A centered byline one line below the title also has a drifting left edge. It must not join the title. A next
     line right below still joins."""
     from app.formats.pdf_continuations import _merge_continuations
@@ -501,7 +508,7 @@ def test_centered_author_is_not_a_title_fragment():
     assert "Recurrent" in joined[0].text
 
 
-def test_short_numbered_list_item_is_not_a_formula_line():
+def test_short_numbered_list_item_is_not_a_formula_line() -> None:
     assert _numbered_list_item("5. part (0.2M)")
     assert _numbered_list_item("8. none (1)")
     assert not _numbered_list_item("5.")
@@ -563,10 +570,10 @@ def _fake_ocr(path: Path, scale: float = 3.0) -> list[OcrWord]:
     return words
 
 
-def test_bitmap_page_reads_back_its_letters(tmp_path, monkeypatch):
+def test_bitmap_page_reads_back_its_letters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """OCR only names the glyphs; position, lines and font size all come from the bitmap glyphs themselves."""
     monkeypatch.setattr(pdf_type3_ocr, "ocr_image", _fake_ocr)
-    monkeypatch.setattr(pdf_type3_ocr.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
     src = tmp_path / "bitmap.pdf"
     _bitmap_font_pdf(src)
     blocks = extract_blocks(pymupdf.open(src))
@@ -577,17 +584,17 @@ def test_bitmap_page_reads_back_its_letters(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("failure", ["no_words", "timeout"])
-def test_unreadable_bitmap_page_keeps_its_glyphs(tmp_path, monkeypatch, failure):
+def test_unreadable_bitmap_page_keeps_its_glyphs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str) -> None:
     """When recognizing a page of bitmap glyphs times out or finds no letters, that page stays as it is and the others
     are translated as usual, so the whole book does not fail."""
 
-    def broken(path, scale=3.0):
+    def broken(path: Path, scale: float = 3.0) -> list[OcrWord]:
         if failure == "timeout":
             raise subprocess.TimeoutExpired("tesseract", 90)
         return []
 
     monkeypatch.setattr(pdf_type3_ocr, "ocr_image", broken)
-    monkeypatch.setattr(pdf_type3_ocr.shutil, "which", lambda name: "/usr/bin/" + name)
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/" + name)
     src = tmp_path / "bitmap.pdf"
     _bitmap_font_pdf(src)
     doc = pymupdf.open(src)
@@ -608,7 +615,7 @@ def _paper_pages(*numbers: int) -> pymupdf.Document:
 
 @needs_paper
 @needs_tesseract
-def test_paper_reads_as_english_with_exact_words():
+def test_paper_reads_as_english_with_exact_words() -> None:
     blocks = extract_blocks(_paper_pages(1, 2, 3))
     texts = [block.text for block in blocks]
     joined = " ".join(texts)
@@ -620,6 +627,7 @@ def test_paper_reads_as_english_with_exact_words():
     # The old approach recognized the math italic R as FR and sent it for translation. Now it is a formula and the
     # original glyph is pasted back
     here = next(block for block in blocks if "refers to the raw-data relation" in block.text)
+    assert here.span_lines is not None
     spans = [span for line in here.span_lines for span in line]
     index = next(i for i, span in enumerate(spans) if span["text"].endswith("Here, "))
     assert spans[index + 1]["font"] == "CMMI10"
@@ -627,9 +635,10 @@ def test_paper_reads_as_english_with_exact_words():
 
 @needs_paper
 @needs_tesseract
-def test_paper_variables_are_formulas_and_sql_is_code():
+def test_paper_variables_are_formulas_and_sql_is_code() -> None:
     blocks = extract_blocks(_paper_pages(2, 3, 12, 18))
     sales = next(block for block in blocks if "total sales of part" in block.text)
+    assert sales.span_lines is not None
     math = {span["text"].strip() for line in sales.span_lines for span in line if span["font"] == "CMMI10"}
     assert {"p", "s", "c"} <= math
     sql = next(block for block in blocks if block.text.startswith("SELECT"))

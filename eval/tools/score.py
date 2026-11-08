@@ -16,7 +16,9 @@ plan = json.loads(Path(sys.argv[1]).read_text())
 gold = json.loads(Path(sys.argv[2]).read_text())["segments"]
 show = len(sys.argv) > 3
 
-stream, unit_of, unit_text = [], [], []
+stream: list[str] = []
+unit_of: list[int] = []
+unit_text: list[str] = []
 for index, row in enumerate(plan):
     text = re.sub(r"\{/?[a-z]\}|\{[a-z]?\d+\}|\{z\d+\}|\{c[0-9a-f]{6}\}|\{/[cz]\}", " ", row[2])
     text = re.sub(r"(\w)-\s+(\w)", r"\1\2", text)
@@ -25,12 +27,12 @@ for index, row in enumerate(plan):
     unit_of.extend([index] * len(words))
     unit_text.append(row[2])
 
-grams = defaultdict(list)
+grams: defaultdict[tuple[str, ...], list[int]] = defaultdict(list)
 for i in range(len(stream) - 3):
     grams[tuple(stream[i : i + 4])].append(i)
 
 
-def locate(words, from_end):
+def locate(words: list[str], from_end: bool) -> int | None:
     offsets = range(len(words) - 4, max(len(words) - 16, -1), -1) if from_end else range(0, min(12, len(words) - 3))
     for k in offsets:
         hits = grams.get(tuple(words[k : k + 4]))
@@ -42,8 +44,8 @@ def locate(words, from_end):
 spans = [(locate(seg["words"], False), locate(seg["words"], True)) for seg in gold]
 found = sum(1 for a, b in spans if a is not None and b is not None)
 split = merged = boundaries = 0
-causes = defaultdict(int)
-errors = []
+causes: defaultdict[str, int] = defaultdict(int)
+errors: list[tuple[str, ...]] = []
 for i, ((a, b), seg) in enumerate(zip(spans, gold)):
     if a is not None and b is not None and a != b:
         split += 1

@@ -21,7 +21,8 @@ def get(url: str) -> bytes:
     # arXiv asks for at least 3 seconds between requests
     time.sleep(3.1)
     with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=120) as r:
-        return r.read()
+        data: bytes = r.read()
+        return data
 
 
 def safe_extract(blob: bytes, dest: Path) -> None:
@@ -44,7 +45,9 @@ def safe_extract(blob: bytes, dest: Path) -> None:
                 continue
             target = dest / name
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(tar.extractfile(m).read())
+            content = tar.extractfile(m)
+            assert content is not None  # m is a regular file
+            target.write_bytes(content.read())
 
 
 rows = [line.split("\t") for line in tsv.read_text().splitlines()[1:] if line.strip()]

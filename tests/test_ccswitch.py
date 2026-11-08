@@ -1,17 +1,19 @@
-import asyncio
 import json
 import sqlite3
+from pathlib import Path
 
 import httpx
 import pytest
 
 from app import ccswitch
+from app.json_types import JSONDict
 from app.services import ServiceError, ServiceStore
 from app.translators import ClaudeTranslator, GeminiTranslator, OpenAITranslator, create_translator
+from tests.helpers import run
+from tests.test_services import _saved
 
-
-def run(coro):
-    return asyncio.run(coro)
+# A provider row of the CC Switch database: app type, name, settings_config, meta, is_current
+ProviderRow = tuple[str, str, JSONDict, JSONDict, int]
 
 
 CODEX_TOML = """model_provider = "custom"
@@ -35,7 +37,7 @@ api_backend = "responses"
 """
 
 
-def make_db(path, rows, common=None):
+def make_db(path: Path, rows: list[ProviderRow], common: dict[str, str] | None = None) -> Path:
     con = sqlite3.connect(path)
     con.execute("""CREATE TABLE providers (id TEXT, app_type TEXT, name TEXT, settings_config TEXT,
                    meta TEXT DEFAULT '{}', is_current BOOLEAN DEFAULT 0)""")
@@ -53,7 +55,7 @@ def make_db(path, rows, common=None):
 
 
 @pytest.fixture
-def cc_db(tmp_path):
+def cc_db(tmp_path: Path) -> Path:
     return make_db(
         tmp_path / "cc.db",
         [
@@ -90,7 +92,7 @@ def cc_db(tmp_path):
     )
 
 
-def test_read_current(cc_db):
+def test_read_current(cc_db: Path) -> None:
     items = {i["app"]: i for i in ccswitch.read_current(cc_db)}
     assert set(items) == {"claude", "codex", "gemini", "grokbuild"}
 
@@ -124,7 +126,7 @@ def test_read_current(cc_db):
     )
 
 
-def test_official_login_is_unavailable(tmp_path):
+def test_official_login_is_unavailable(tmp_path: Path) -> None:
     db = make_db(
         tmp_path / "cc.db",
         [
@@ -137,13 +139,13 @@ def test_official_login_is_unavailable(tmp_path):
     assert not items["claude"]["available"]
 
 
-def test_missing_or_broken_db(tmp_path):
+def test_missing_or_broken_db(tmp_path: Path) -> None:
     assert ccswitch.read_current(tmp_path / "missing.db") == []
     (tmp_path / "bad.db").write_text("not sqlite")
     assert ccswitch.read_current(tmp_path / "bad.db") == []
 
 
-def test_store_merges_ccswitch_services(tmp_path, cc_db):
+def test_store_merges_ccswitch_services(tmp_path: Path, cc_db: Path) -> None:
     store = ServiceStore(tmp_path / "s.json", ccswitch_db=cc_db)
     listed = store.list()
     ids = [s["id"] for s in listed["services"]]
@@ -157,7 +159,7 @@ def test_store_merges_ccswitch_services(tmp_path, cc_db):
         "ccswitch-claude",
         {"model": "claude-other", "concurrency": 2, "base_url": "https://evil.example.com", "api_key": "x"},
     )
-    svc = store.get("ccswitch-claude")
+    svc = _saved(store, "ccswitch-claude")
     assert (svc["model"], svc["concurrency"], svc["base_url"], svc["api_key"]) == (
         "claude-other",
         2,
@@ -177,24 +179,24 @@ def test_store_merges_ccswitch_services(tmp_path, cc_db):
     assert ServiceStore(tmp_path / "s.json", ccswitch_db=tmp_path / "gone.db").list()["default"] == "google"
 
 
-def test_unavailable_service_cannot_be_enabled(tmp_path):
+def test_unavailable_service_cannot_be_enabled(tmp_path: Path) -> None:
     db = make_db(tmp_path / "cc.db", [("grokbuild", "Grok Official", {"config": ""}, {}, 1)])
     store = ServiceStore(tmp_path / "s.json", ccswitch_db=db)
-    assert store.get("ccswitch-grok")["enabled"] is False
+    assert _saved(store, "ccswitch-grok")["enabled"] is False
     with pytest.raises(ServiceError, match="无法启用"):
         store.update("ccswitch-grok", {"enabled": True})
     with pytest.raises(ServiceError):
         store.set_default("ccswitch-grok")
 
 
-def test_clone_ccswitch_service_to_local(tmp_path, cc_db):
+def test_clone_ccswitch_service_to_local(tmp_path: Path, cc_db: Path) -> None:
     store = ServiceStore(tmp_path / "s.json", ccswitch_db=cc_db)
     clone = store.clone_to_local("ccswitch-codex")
     assert "api_key" not in clone  # the version returned to the frontend has no plain-text key
     assert clone["name"].endswith("（本地）")
 
     # Connection details (URL, key, model, api_format) are fixed from CC Switch into the local configuration
-    saved = store.get(clone["id"])
+    saved = _saved(store, clone["id"])
     assert (saved["provider"], saved["base_url"], saved["model"], saved["api_key"]) == (
         "openai",
         "https://relay.example.com/v1",
@@ -205,7 +207,7 @@ def test_clone_ccswitch_service_to_local(tmp_path, cc_db):
 
     # Saved and no longer following CC Switch: the local copy works even when the database cannot be read
     again = ServiceStore(tmp_path / "s.json", ccswitch_db=tmp_path / "gone.db")
-    assert again.get(clone["id"])["api_key"] == "sk-openai-key-123456"
+    assert _saved(again, clone["id"])["api_key"] == "sk-openai-key-123456"
 
     with pytest.raises(ServiceError, match="无需复制"):
         store.clone_to_local(clone["id"])
@@ -213,28 +215,28 @@ def test_clone_ccswitch_service_to_local(tmp_path, cc_db):
         store.clone_to_local("nope")
 
 
-def test_unavailable_service_cannot_be_cloned(tmp_path):
+def test_unavailable_service_cannot_be_cloned(tmp_path: Path) -> None:
     db = make_db(tmp_path / "cc.db", [("grokbuild", "Grok Official", {"config": ""}, {}, 1)])
     store = ServiceStore(tmp_path / "s.json", ccswitch_db=db)
     with pytest.raises(ServiceError, match="无法复制"):
         store.clone_to_local("ccswitch-grok")
 
 
-def capture(reply):
-    log = []
+def capture(reply: JSONDict) -> tuple[list[httpx.Request], httpx.MockTransport]:
+    log: list[httpx.Request] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         log.append(request)
         return httpx.Response(200, json=reply)
 
     return log, httpx.MockTransport(handler)
 
 
-def test_translators_from_ccswitch(tmp_path, cc_db):
+def test_translators_from_ccswitch(tmp_path: Path, cc_db: Path) -> None:
     store = ServiceStore(tmp_path / "s.json", ccswitch_db=cc_db)
 
     log, t = capture({"content": [{"type": "text", "text": "你好"}]})
-    tr = create_translator(store.get("ccswitch-claude"), "zh-CN", transport=t)
+    tr = create_translator(_saved(store, "ccswitch-claude"), "zh-CN", transport=t)
     assert isinstance(tr, ClaudeTranslator) and run(tr.translate_batch(["hi"])) == ["你好"]
     assert str(log[0].url) == "https://claude.example.com/v1/messages"
     assert log[0].headers["authorization"] == "Bearer sk-claude-token-123456"
@@ -242,24 +244,24 @@ def test_translators_from_ccswitch(tmp_path, cc_db):
     assert json.loads(log[0].content)["model"] == "claude-test"
 
     log, t = capture({"output": [{"type": "message", "content": [{"type": "output_text", "text": "你好"}]}]})
-    tr = create_translator(store.get("ccswitch-codex"), "zh-CN", transport=t)
+    tr = create_translator(_saved(store, "ccswitch-codex"), "zh-CN", transport=t)
     assert isinstance(tr, OpenAITranslator) and run(tr.translate_batch(["hi"])) == ["你好"]
     assert str(log[0].url) == "https://relay.example.com/v1/responses"
     body = json.loads(log[0].content)
     assert body["instructions"].startswith("你是专业的简体中文母语译者") and body["input"].endswith("hi")
 
     log, t = capture({"output_text": "你好"})
-    tr = create_translator(store.get("ccswitch-grok"), "zh-CN", transport=t)
+    tr = create_translator(_saved(store, "ccswitch-grok"), "zh-CN", transport=t)
     assert run(tr.translate_batch(["hi"])) == ["你好"]
     assert str(log[0].url) == "https://grok.example.com/v1/responses"
 
     log, t = capture({"candidates": [{"content": {"parts": [{"text": "你好"}]}}]})
-    tr = create_translator(store.get("ccswitch-gemini"), "zh-CN", transport=t)
+    tr = create_translator(_saved(store, "ccswitch-gemini"), "zh-CN", transport=t)
     assert isinstance(tr, GeminiTranslator) and run(tr.translate_batch(["hi"])) == ["你好"]
     assert str(log[0].url) == "https://gemini.example.com/v1beta/models/gemini-test:generateContent"
 
 
-def test_resolve_ignores_connection_overrides(tmp_path, cc_db):
+def test_resolve_ignores_connection_overrides(tmp_path: Path, cc_db: Path) -> None:
     store = ServiceStore(tmp_path / "s.json", ccswitch_db=cc_db)
     svc = store.resolve({"id": "ccswitch-gemini", "base_url": "https://evil.example.com", "model": ""})
     assert svc["base_url"] == "https://gemini.example.com/v1beta" and svc["model"] == "gemini-test"

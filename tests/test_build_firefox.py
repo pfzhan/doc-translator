@@ -1,12 +1,9 @@
 import json
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
-
-import build_firefox  # noqa: E402
+from scripts import build_firefox
 
 CHROME_MANIFEST = json.loads((build_firefox.SOURCE / "manifest.json").read_text(encoding="utf-8"))
 

@@ -1,18 +1,21 @@
 import asyncio
 import threading
 import time
+from pathlib import Path
+from typing import Never
 
 import pytest
 
 from app import background
 from app.formats import pdf
 from app.runner import Cache, Runner
+from app.translators import MockTranslator
 
 
-def test_run_returns_the_result_and_passes_errors_through():
+def test_run_returns_the_result_and_passes_errors_through() -> None:
     assert asyncio.run(background.run(lambda a, b: a + b, 1, 2)) == 3
 
-    def broken():
+    def broken() -> Never:
         raise ValueError("bad page")
 
     with pytest.raises(ValueError):
@@ -21,13 +24,13 @@ def test_run_returns_the_result_and_passes_errors_through():
     background.check_stop()
 
 
-def test_a_cancelled_run_stops_the_thread_and_waits_for_it():
+def test_a_cancelled_run_stops_the_thread_and_waits_for_it() -> None:
     """When the job is cancelled the thread stops at its next check_stop, and the cancellation is raised only after
     the thread has stopped"""
     steps = []
     finished = threading.Event()
 
-    def work():
+    def work() -> None:
         try:
             for step in range(200):
                 background.check_stop()
@@ -37,7 +40,7 @@ def test_a_cancelled_run_stops_the_thread_and_waits_for_it():
             time.sleep(0.05)
             finished.set()
 
-    async def main():
+    async def main() -> None:
         task = asyncio.ensure_future(background.run(work))
         await asyncio.sleep(0.1)
         task.cancel()
@@ -49,13 +52,15 @@ def test_a_cancelled_run_stops_the_thread_and_waits_for_it():
     assert len(steps) < 50
 
 
-def test_pausing_a_pdf_during_analysis_stops_it_before_freeing_mupdf(monkeypatch, tmp_path):
+def test_pausing_a_pdf_during_analysis_stops_it_before_freeing_mupdf(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Pause while reading layout: analysis stops at the next page (when reporting progress), and MuPDF is handed to
     another job only after the analysis has stopped"""
-    pages = []
+    pages: list[int] = []
     finished = threading.Event()
 
-    def analysis(src, runner, *args):
+    def analysis(src: Path, runner: Runner, *args: object) -> None:
         try:
             for page in range(300):
                 runner.report_stage("分析版面", page, 300, "页")
@@ -66,9 +71,9 @@ def test_pausing_a_pdf_during_analysis_stops_it_before_freeing_mupdf(monkeypatch
             finished.set()
 
     monkeypatch.setattr(pdf, "_saved_plan", analysis)
-    runner = Runner(object(), cache=Cache(tmp_path / "c.sqlite3"))
+    runner = Runner(MockTranslator("zh-CN"), cache=Cache(tmp_path / "c.sqlite3"))
 
-    async def main():
+    async def main() -> None:
         task = asyncio.ensure_future(pdf.translate_pdf(tmp_path / "a.pdf", tmp_path, runner, False))
         await asyncio.sleep(0.1)
         task.cancel()

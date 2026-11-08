@@ -90,7 +90,7 @@ FOOTNOTE = (
 )
 
 
-def test_docx_translates_body_tables_headers_and_footnotes(tmp_path: Path):
+def test_docx_translates_body_tables_headers_and_footnotes(tmp_path: Path) -> None:
     body = (
         '<w:p><w:pPr><w:pStyle w:val="1"/></w:pPr><w:bookmarkStart w:id="0" w:name="_Toc1"/>'
         '<w:r><w:t>Introduction to data</w:t></w:r><w:bookmarkEnd w:id="0"/></w:p>'
@@ -121,7 +121,7 @@ def test_docx_translates_body_tables_headers_and_footnotes(tmp_path: Path):
 class Reordering(MockTranslator):
     """Moves the formatted word to the front and the content placeholders out of order, as target word order can."""
 
-    async def translate_batch(self, texts):
+    async def translate_batch(self, texts: list[str]) -> list[str]:
         out = []
         for t in texts:
             if '<b id="s1">red</b>' in t:
@@ -133,7 +133,7 @@ class Reordering(MockTranslator):
         return out
 
 
-def test_docx_follows_the_translation_order_and_keeps_fields_whole(tmp_path: Path):
+def test_docx_follows_the_translation_order_and_keeps_fields_whole(tmp_path: Path) -> None:
     src = make_docx(tmp_path / "a.docx", RICH + FIELD)
     out = run(translate_docx(src, tmp_path, Runner(Reordering("zh-CN"), cache=MemCache()), False))[0]
     rich, field = paragraphs(part(out))
@@ -149,7 +149,7 @@ def test_docx_follows_the_translation_order_and_keeps_fields_whole(tmp_path: Pat
     assert text(field) == "见报告第 3 页"
 
 
-def test_docx_bilingual_adds_a_copy_without_numbering_or_unique_content(tmp_path: Path):
+def test_docx_bilingual_adds_a_copy_without_numbering_or_unique_content(tmp_path: Path) -> None:
     body = (
         '<w:p><w:pPr><w:pStyle w:val="1"/><w:keepNext/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="3"/></w:numPr>'
         '<w:jc w:val="left"/></w:pPr><w:bookmarkStart w:id="0" w:name="_Toc1"/><w:r><w:t>Methods used</w:t></w:r>'
@@ -172,7 +172,7 @@ def test_docx_bilingual_adds_a_copy_without_numbering_or_unique_content(tmp_path
     assert note.find(f".//{W}footnoteRef") is not None and note_copy.find(f".//{W}footnoteRef") is None
 
 
-def test_docx_bilingual_section_break_moves_to_the_copy(tmp_path: Path):
+def test_docx_bilingual_section_break_moves_to_the_copy(tmp_path: Path) -> None:
     body = (
         '<w:p><w:pPr><w:jc w:val="left"/><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:pPr>'
         "<w:r><w:t>Last paragraph of section one.</w:t></w:r></w:p><w:p><w:r><w:t>Next section here.</w:t></w:r></w:p>"
@@ -183,7 +183,7 @@ def test_docx_bilingual_section_break_moves_to_the_copy(tmp_path: Path):
     assert last_copy.find(f"{W}pPr/{W}sectPr") is not None
 
 
-def test_docx_bilingual_copy_keeps_field_results_without_the_fields(tmp_path: Path):
+def test_docx_bilingual_copy_keeps_field_results_without_the_fields(tmp_path: Path) -> None:
     caption = (
         '<w:p><w:r><w:t xml:space="preserve">Figure </w:t></w:r><w:fldSimple w:instr=" SEQ Figure \\* ARABIC ">'
         '<w:r><w:t>1</w:t></w:r></w:fldSimple><w:r><w:t xml:space="preserve">: A caption here</w:t></w:r></w:p>'
@@ -197,7 +197,7 @@ def test_docx_bilingual_copy_keeps_field_results_without_the_fields(tmp_path: Pa
     assert field_copy.find(f".//{W}instrText") is None and text(field_copy) == "[zh-CN] See page 3 of the report"
 
 
-def test_docx_bookmarks_inside_a_link_stay_around_its_text(tmp_path: Path):
+def test_docx_bookmarks_inside_a_link_stay_around_its_text(tmp_path: Path) -> None:
     body = (
         '<w:p><w:r><w:t xml:space="preserve">See </w:t></w:r><w:hyperlink r:id="rL">'
         '<w:bookmarkStart w:id="5" w:name="target"/><w:r><w:rPr><w:rStyle w:val="Hyperlink"/></w:rPr>'
@@ -210,7 +210,7 @@ def test_docx_bookmarks_inside_a_link_stay_around_its_text(tmp_path: Path):
     assert text(link) == "this link"
 
 
-def test_docx_placeholders_written_in_the_text_stay(tmp_path: Path):
+def test_docx_placeholders_written_in_the_text_stay(tmp_path: Path) -> None:
     body = (
         '<w:p><w:r><w:t xml:space="preserve">Write {v1} where </w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r>'
         "<w:r><w:t>the value goes.</w:t></w:r></w:p>"
@@ -222,16 +222,16 @@ def test_docx_placeholders_written_in_the_text_stay(tmp_path: Path):
     assert tags == ["t", "footnoteReference", "t"]
 
 
-def test_docx_smart_tag_properties_stay_first_and_are_not_sent(tmp_path: Path):
+def test_docx_smart_tag_properties_stay_first_and_are_not_sent(tmp_path: Path) -> None:
     body = (
         '<w:p><w:r><w:t xml:space="preserve">Meet me in </w:t></w:r><w:smartTag w:uri="u" w:element="place">'
         '<w:smartTagPr><w:attr w:name="n" w:val="v"/></w:smartTagPr><w:bookmarkStart w:id="1" w:name="m"/>'
         '<w:r><w:t>Boston</w:t></w:r><w:bookmarkEnd w:id="1"/></w:smartTag><w:r><w:t> tomorrow.</w:t></w:r></w:p>'
     )
-    sent = []
+    sent: list[str] = []
 
     class Recording(MockTranslator):
-        async def translate_batch(self, texts):
+        async def translate_batch(self, texts: list[str]) -> list[str]:
             sent.extend(texts)
             return await super().translate_batch(texts)
 
@@ -243,7 +243,7 @@ def test_docx_smart_tag_properties_stay_first_and_are_not_sent(tmp_path: Path):
     assert [el.tag.split("}")[1] for el in tag] == ["smartTagPr", "bookmarkStart", "r", "bookmarkEnd"]
 
 
-def test_docx_text_beside_a_tab_in_one_run_is_translated(tmp_path: Path):
+def test_docx_text_beside_a_tab_in_one_run_is_translated(tmp_path: Path) -> None:
     body = "<w:p><w:r><w:t>Name</w:t><w:tab/><w:t>Value here</w:t></w:r></w:p>"
     out = run(translate_file(make_docx(tmp_path / "a.docx", body), tmp_path, runner(), False, "zh-CN"))[0]
     p = paragraphs(part(out))[0]
@@ -251,7 +251,7 @@ def test_docx_text_beside_a_tab_in_one_run_is_translated(tmp_path: Path):
     assert p.find(f".//{W}tab") is not None
 
 
-def test_docx_bibliography_keeps_the_original(tmp_path: Path):
+def test_docx_bibliography_keeps_the_original(tmp_path: Path) -> None:
     body = (
         '<w:p><w:pPr><w:pStyle w:val="1"/></w:pPr><w:r><w:t>References</w:t></w:r></w:p>'
         "<w:p><w:r><w:t>Smith, J. (2020). Some book. Press.</w:t></w:r></w:p>"
@@ -267,21 +267,25 @@ def test_docx_bibliography_keeps_the_original(tmp_path: Path):
     ]
 
 
-def test_docx_preview_kinds_and_title(tmp_path: Path):
+def test_docx_preview_kinds_and_title(tmp_path: Path) -> None:
     body = (
         '<w:p><w:pPr><w:pStyle w:val="1"/></w:pPr><w:r><w:t>Chapter heading</w:t></w:r></w:p>'
         '<w:p><w:pPr><w:numPr><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>A list item</w:t></w:r></w:p>'
         "<w:p><w:r><w:t>Body paragraph.</w:t></w:r></w:p>"
     )
-    translator = MockTranslator("zh-CN")
-    translator.title = ""  # LLM engines have a title; set_title fills it
+
+    class Titled(MockTranslator):
+        title = ""  # LLM engines have a title; set_title fills it
+
+    translator = Titled("zh-CN")
     r = Runner(translator, cache=MemCache())
     run(translate_file(make_docx(tmp_path / "a.docx", body, title="Report title"), tmp_path, r, False, "zh-CN"))
+    assert r.segments is not None
     assert [s["k"] for s in r.segments] == ["h1", "li", "p"]
     assert translator.title == "Report title"
 
 
-def test_docx_other_parts_are_copied_unchanged(tmp_path: Path):
+def test_docx_other_parts_are_copied_unchanged(tmp_path: Path) -> None:
     src = make_docx(tmp_path / "a.docx", "<w:p><w:r><w:t>Hello there</w:t></w:r></w:p>")
     out = run(translate_file(src, tmp_path, runner(), False, "zh-CN"))[0]
     with zipfile.ZipFile(src) as a, zipfile.ZipFile(out) as b:

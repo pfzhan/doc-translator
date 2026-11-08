@@ -1,14 +1,22 @@
+import asyncio
+import io
 import json
 import time
-from typing import Any
+from collections.abc import Callable
+from pathlib import Path
+from types import ModuleType
+from typing import Any, Never
 
 import pytest
+from fastapi import UploadFile
 from fastapi.testclient import TestClient
 
 from app import job_control, state
 from app.history import DAY, Job, JobStore
 from app.routes import jobs as jobs_routes
+from app.services import Service
 from app.settings import Settings, SettingsError
+from app.translators import MockTranslator, Translator
 
 MD = b"# A Title\n\nFirst paragraph of the document is here.\n\nSecond paragraph goes right after it.\n"
 
@@ -20,9 +28,9 @@ JobJSON = dict[str, Any]
 def wait_done(client: TestClient, job_id: str, timeout: float = 30) -> JobJSON:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        job = client.get(f"/api/jobs/{job_id}").json()
+        job: JobJSON = client.get(f"/api/jobs/{job_id}").json()
         if job["status"] not in ("queued", "running"):
-            return job  # type: ignore[no-any-return]
+            return job
         time.sleep(0.05)
     raise AssertionError("job did not finish")
 
@@ -31,10 +39,43 @@ def submit(client: TestClient, name: str = "book.md", data: bytes = MD, **extra:
     form = {"service_id": "mock", "target_lang": "zh-CN", **extra}
     r = client.post("/api/jobs", files={"file": (name, data)}, data=form)
     assert r.status_code == 200, r.text
-    return r.json()  # type: ignore[no-any-return]
+    job: JobJSON = r.json()
+    return job
 
 
-def test_sync_info_clears_failed_after_retry():
+def _pending_future() -> asyncio.Future[None]:
+    """A future that never finishes, standing for the other version being generated."""
+    loop = asyncio.new_event_loop()
+    future: asyncio.Future[None] = loop.create_future()
+    loop.close()
+    return future
+
+
+def _job(store: JobStore, job_id: str) -> Job:
+    """The record, which the test expects to exist."""
+    job = store.get(job_id)
+    assert job is not None
+    return job
+
+
+def _service(sid: str) -> Service:
+    """The configured service, which the test expects to exist."""
+    service = state.store.get(sid)
+    assert service is not None
+    return service
+
+
+def _counted[**P, R](fn: Callable[P, R], calls: list[int]) -> Callable[P, R]:
+    """fn, appending 1 to calls on every call."""
+
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        calls.append(1)
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def test_sync_info_clears_failed_after_retry() -> None:
     job = Job(id="x", filename="a.pdf", failed=4)
 
     from app.runner import RunInfo, Runner
@@ -47,7 +88,7 @@ def test_sync_info_clears_failed_after_retry():
     assert job.failed == 0
 
 
-def test_records_persist_across_restart(app_env, tmp_path):
+def test_records_persist_across_restart(app_env: ModuleType, tmp_path: Path) -> None:
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
@@ -69,20 +110,20 @@ def test_records_persist_across_restart(app_env, tmp_path):
         assert client.get(f"/api/jobs/{job['id']}/preview?since={p['version']}").json()["updates"] == []
 
 
-def test_interrupted_job_after_restart_can_resume(tmp_path):
+def test_interrupted_job_after_restart_can_resume(tmp_path: Path) -> None:
     root = tmp_path / "jobs"
     (root / "abc").mkdir(parents=True)
     (root / "abc" / "job.json").write_text(
         json.dumps({"id": "abc", "filename": "x.md", "status": "running", "done": 3, "total": 9})
     )
     store = JobStore(root)
-    job = store.get("abc")
+    job = _job(store, "abc")
     assert job.status == "interrupted" and "中断" in job.error
     # The status was written back to disk too
     assert json.loads((root / "abc" / "job.json").read_text())["status"] == "interrupted"
 
 
-def test_loading_records_leaves_unchanged_ones_alone(tmp_path):
+def test_loading_records_leaves_unchanged_ones_alone(tmp_path: Path) -> None:
     """Opening the store must not rewrite every job.json: another process (the server, while tests import the app)
     may be saving the same records."""
     root = tmp_path / "jobs"
@@ -95,13 +136,13 @@ def test_loading_records_leaves_unchanged_ones_alone(tmp_path):
 
     store = JobStore(root)
 
-    assert store.get("done1").status == "done" and store.get("run1").status == "interrupted"
+    assert _job(store, "done1").status == "done" and _job(store, "run1").status == "interrupted"
     assert (root / "done1" / "job.json").read_text() == before
     assert (root / "done1" / "job.json").stat().st_mtime_ns == mtime
     assert json.loads((root / "run1" / "job.json").read_text())["status"] == "interrupted"
 
 
-def test_data_directory_follows_the_environment(tmp_path):
+def test_data_directory_follows_the_environment(tmp_path: Path) -> None:
     """DOC_TRANSLATOR_DATA moves every store. Importing the app in a fresh interpreter must neither read nor write
     the project's data/ directory."""
     import os
@@ -122,7 +163,7 @@ def test_data_directory_follows_the_environment(tmp_path):
     assert not state.jobs.root.is_relative_to(root / "data")
 
 
-def test_concurrent_saves_of_one_job_do_not_collide(tmp_path):
+def test_concurrent_saves_of_one_job_do_not_collide(tmp_path: Path) -> None:
     """The translation thread updating progress and an API request may save the same record at the same time; a
     temporary file name collision must not raise an error."""
     import threading
@@ -133,7 +174,7 @@ def test_concurrent_saves_of_one_job_do_not_collide(tmp_path):
     store.add(job)
     errors: list[Exception] = []
 
-    def hammer():
+    def hammer() -> None:
         for _ in range(200):
             try:
                 store.save(job)
@@ -150,75 +191,67 @@ def test_concurrent_saves_of_one_job_do_not_collide(tmp_path):
     assert not list(store.dir(job.id).glob("*.tmp"))
 
 
-def test_retry_reuses_cache_and_can_switch_service(app_env):
+def test_retry_reuses_cache_and_can_switch_service(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     main = app_env
-    calls = []
-    from app.translators import MockTranslator
+    calls: list[int] = []
 
     original = MockTranslator.translate_batch
 
-    async def counting(self, texts):
+    async def counting(self: MockTranslator, texts: list[str]) -> list[str]:
         calls.append(len(texts))
         return await original(self, texts)
 
-    MockTranslator.translate_batch = counting
-    try:
-        with TestClient(main.app) as client:
-            job = wait_done(client, submit(client)["id"])
-            first = sum(calls)
-            again = wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={}).json()["id"])
-            assert again["status"] == "done" and sum(calls) == first  # Same service hits the cache
+    monkeypatch.setattr(MockTranslator, "translate_batch", counting)
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        first = sum(calls)
+        again = wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={}).json()["id"])
+        assert again["status"] == "done" and sum(calls) == first  # Same service hits the cache
 
-            state.store.services.append(
-                {"id": "mock2", "provider": "mock", "builtin": True, "name": "Mock 2", "enabled": True}
-            )
-            switched = client.post(f"/api/jobs/{job['id']}/retry", json={"service_id": "mock2"}).json()
-            assert switched["service_name"] == "Mock 2"
-            wait_done(client, job["id"])
-            assert sum(calls) > first  # A different service translates again
-    finally:
-        MockTranslator.translate_batch = original
+        state.store.services.append(
+            {"id": "mock2", "provider": "mock", "builtin": True, "name": "Mock 2", "enabled": True}
+        )
+        switched = client.post(f"/api/jobs/{job['id']}/retry", json={"service_id": "mock2"}).json()
+        assert switched["service_name"] == "Mock 2"
+        wait_done(client, job["id"])
+        assert sum(calls) > first  # A different service translates again
 
 
-def test_redo_can_ignore_cached_translations(app_env):
+def test_redo_can_ignore_cached_translations(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """Retranslating with "全部重新翻译" (retranslate everything) checked clears the existing translations first and
     requests every paragraph again; without it the existing translations are reused."""
     main = app_env
-    calls = []
-    from app.translators import MockTranslator
+    calls: list[str] = []
 
     original = MockTranslator.translate_batch
 
-    async def counting(self, texts):
+    async def counting(self: MockTranslator, texts: list[str]) -> list[str]:
         calls.extend(texts)
         return await original(self, texts)
 
-    MockTranslator.translate_batch = counting
-    try:
-        with TestClient(main.app) as client:
-            job = wait_done(client, submit(client)["id"])
-            first = len(calls)
-            assert first == 3
-            again = wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={"fresh": True}).json()["id"])
-            assert again["status"] == "done" and again["outputs"]
-            assert len(calls) == first * 2
-            wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={}).json()["id"])
-            assert len(calls) == first * 2
-    finally:
-        MockTranslator.translate_batch = original
+    monkeypatch.setattr(MockTranslator, "translate_batch", counting)
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        first = len(calls)
+        assert first == 3
+        again = wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={"fresh": True}).json()["id"])
+        assert again["status"] == "done" and again["outputs"]
+        assert len(calls) == first * 2
+        wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={}).json()["id"])
+        assert len(calls) == first * 2
 
 
-def test_redo_from_scratch_analyses_the_pdf_again(app_env, monkeypatch):
+def test_redo_from_scratch_analyses_the_pdf_again(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """The PDF layout analysis is stored in the job directory and read back on resume and retranslation; with
     "全部重新翻译" checked the layout is analysed again."""
     import pymupdf
 
     from app.formats import pdf_units
+    from app.formats.pdf_extract import _extract
 
     main = app_env
-    calls = []
-    real_extract = pdf_units._extract
-    monkeypatch.setattr(pdf_units, "_extract", lambda *a, **k: calls.append(1) or real_extract(*a, **k))
+    calls: list[int] = []
+    monkeypatch.setattr(pdf_units, "_extract", _counted(_extract, calls))
     doc = pymupdf.open()
     doc.new_page(width=420, height=240).insert_text(
         (40, 60),
@@ -229,14 +262,15 @@ def test_redo_from_scratch_analyses_the_pdf_again(app_env, monkeypatch):
     doc.set_toc([[1, "Closing Remarks", 1]])
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client, name="paper.pdf", data=doc.tobytes())["id"])
-        assert job["status"] == "done" and state.jobs.plan_path(state.jobs.get(job["id"])).exists() and len(calls) == 1
+        plan = state.jobs.plan_path(_job(state.jobs, job["id"]))
+        assert job["status"] == "done" and plan is not None and plan.exists() and len(calls) == 1
         wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={}).json()["id"])
         assert len(calls) == 1
         again = wait_done(client, client.post(f"/api/jobs/{job['id']}/retry", json={"fresh": True}).json()["id"])
         assert again["status"] == "done" and len(calls) == 2
 
 
-def test_delete_several_records_at_once(app_env):
+def test_delete_several_records_at_once(app_env: ModuleType) -> None:
     """Bulk delete: the selected records are deleted together with their files and unselected ones stay; ids that no
     longer exist are reported without affecting the others."""
     main = app_env
@@ -250,7 +284,7 @@ def test_delete_several_records_at_once(app_env):
         assert not state.jobs.dir(ids[0]).exists() and state.jobs.dir(ids[1]).exists()
 
 
-def test_retry_recomputes_preview_flag_for_legacy_jobs(app_env):
+def test_retry_recomputes_preview_flag_for_legacy_jobs(app_env: ModuleType) -> None:
     """Records created before the preview feature store preview=False; retranslation must recompute it from the
     format."""
     main = app_env
@@ -258,7 +292,7 @@ def test_retry_recomputes_preview_flag_for_legacy_jobs(app_env):
         job = wait_done(client, submit(client)["id"])
         assert job["status"] == "done"
         # Simulate an old record: preview=False and no preview snapshot
-        legacy = state.jobs.get(job["id"])
+        legacy = _job(state.jobs, job["id"])
         legacy.preview = False
         state.jobs.save(legacy)
         (state.jobs.dir(job["id"]) / "preview.json").unlink(missing_ok=True)
@@ -269,41 +303,39 @@ def test_retry_recomputes_preview_flag_for_legacy_jobs(app_env):
         assert p["ready"] and p["segments"]
 
 
-def test_variant_generates_other_mode(app_env):
+def test_variant_generates_other_mode(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """A finished job can generate the other version later (bilingual <-> translated-only) without requesting the
     translation service again."""
     main = app_env
-    from app.translators import MockTranslator
 
-    calls = []
+    calls: list[int] = []
     original = MockTranslator.translate_batch
 
-    async def counting(self, texts):
+    async def counting(self: MockTranslator, texts: list[str]) -> list[str]:
         calls.append(len(texts))
         return await original(self, texts)
 
-    MockTranslator.translate_batch = counting
-    try:
-        with TestClient(main.app) as client:
-            job = wait_done(client, submit(client)["id"])  # Bilingual by default
-            assert job["status"] == "done"
-            assert any("bilingual" in o["name"] for o in job["outputs"])
-            first = sum(calls)
+    monkeypatch.setattr(MockTranslator, "translate_batch", counting)
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])  # Bilingual by default
+        assert job["status"] == "done"
+        assert any("bilingual" in o["name"] for o in job["outputs"])
+        first = sum(calls)
 
-            again = client.post(f"/api/jobs/{job['id']}/variant").json()
-            names = [o["name"] for o in again["outputs"]]
-            assert any("translated" in n for n in names) and any("bilingual" in n for n in names)
-            assert sum(calls) == first  # Everything hits the cache
-            url = next(o["url"] for o in again["outputs"] if "translated" in o["name"])
-            assert client.get(url).status_code == 200
+        again = client.post(f"/api/jobs/{job['id']}/variant").json()
+        names = [o["name"] for o in again["outputs"]]
+        assert any("translated" in n for n in names) and any("bilingual" in n for n in names)
+        assert sum(calls) == first  # Everything hits the cache
+        url = next(o["url"] for o in again["outputs"] if "translated" in o["name"])
+        assert client.get(url).status_code == 200
 
-            once_more = client.post(f"/api/jobs/{job['id']}/variant").json()
-            assert [o["name"] for o in once_more["outputs"]] == names  # Idempotent
-    finally:
-        MockTranslator.translate_batch = original
+        once_more = client.post(f"/api/jobs/{job['id']}/variant").json()
+        assert [o["name"] for o in once_more["outputs"]] == names  # Idempotent
 
 
-def test_pdf_translated_variant_is_cut_from_the_bilingual_output(app_env, monkeypatch):
+def test_pdf_translated_variant_is_cut_from_the_bilingual_output(
+    app_env: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The translated-only version of a PDF is taken from the existing bilingual version without typesetting again,
     and the bookmarks are replaced with translations from the preview snapshot."""
     import pymupdf
@@ -333,55 +365,50 @@ def test_pdf_translated_variant_is_cut_from_the_bilingual_output(app_env, monkey
         assert cut.get_toc() == [[1, "[zh-CN] Closing Remarks", 1]]
 
 
-def test_variant_refuses_cache_miss_and_closes_client(app_env):
+def test_variant_refuses_cache_miss_and_closes_client(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """When the cache does not match, the request does not retranslate, and the translation client is closed whether
     it succeeds or fails."""
     main = app_env
     from app.runner import get_cache
-    from app.translators import MockTranslator
 
-    calls = []
-    closed = []
+    calls: list[int] = []
+    closed: list[MockTranslator] = []
     original = MockTranslator.translate_batch
     original_close = MockTranslator.aclose
 
-    async def counting(self, texts):
+    async def counting(self: MockTranslator, texts: list[str]) -> list[str]:
         calls.append(len(texts))
         return await original(self, texts)
 
-    async def close(self):
+    async def close(self: MockTranslator) -> None:
         closed.append(self)
         await original_close(self)
 
-    MockTranslator.translate_batch = counting
-    MockTranslator.aclose = close
-    try:
-        with TestClient(main.app) as client:
-            job = wait_done(client, submit(client)["id"])
-            before = sum(calls)
-            cache = get_cache()
-            cache.conn.execute("DELETE FROM t")
-            cache.conn.commit()
-            missed = client.post(f"/api/jobs/{job['id']}/variant")
-            assert missed.status_code == 400
-            assert "重新翻译" in missed.json()["detail"]
-            assert sum(calls) == before
-            assert closed
-            assert client.get(job["outputs"][0]["url"]).status_code == 200
-            assert job["id"] not in state.variant_tasks
-    finally:
-        MockTranslator.translate_batch = original
-        MockTranslator.aclose = original_close
+    monkeypatch.setattr(MockTranslator, "translate_batch", counting)
+    monkeypatch.setattr(MockTranslator, "aclose", close)
+    with TestClient(main.app) as client:
+        job = wait_done(client, submit(client)["id"])
+        before = sum(calls)
+        cache = get_cache()
+        cache.conn.execute("DELETE FROM t")
+        cache.conn.commit()
+        missed = client.post(f"/api/jobs/{job['id']}/variant")
+        assert missed.status_code == 400
+        assert "重新翻译" in missed.json()["detail"]
+        assert sum(calls) == before
+        assert closed
+        assert client.get(job["outputs"][0]["url"]).status_code == 200
+        assert job["id"] not in state.variant_tasks
 
 
-def test_variant_pins_the_model_that_produced_the_job(app_env, monkeypatch):
+def test_variant_pins_the_model_that_produced_the_job(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """Generating the other version looks up the cache with the model stored in the job record, not the model the
     service has selected now."""
     main = app_env
     seen: list[str] = []
-    original = jobs_routes._make_translator
+    original = job_control._make_translator
 
-    def wrapped(job, service):
+    def wrapped(job: Job, service: Service) -> Translator:
         seen.append(str(service.get("model") or ""))
         return original(job, service)
 
@@ -392,14 +419,14 @@ def test_variant_pins_the_model_that_produced_the_job(app_env, monkeypatch):
         stored = state.jobs.get(job["id"])
         assert stored is not None
         stored.model = "old-model"
-        service = state.store.get("mock")
+        service = _service("mock")
         service["model"] = "new-model"
         again = client.post(f"/api/jobs/{job['id']}/variant")
         assert again.status_code == 200, again.text
         assert seen == ["old-model"]
 
 
-def test_variant_matches_marker_at_extension(app_env):
+def test_variant_matches_marker_at_extension(app_env: ModuleType) -> None:
     """When the original file name itself contains .bilingual., the other version can still be generated; the
     substring does not count as an existing output."""
     main = app_env
@@ -417,13 +444,16 @@ def test_variant_matches_marker_at_extension(app_env):
         assert output_variant("book.bilingual.bilingual.md") == "bilingual"
 
 
-def test_variant_rejects_second_request_and_discards_partial(app_env, monkeypatch):
+def test_variant_rejects_second_request_and_discards_partial(
+    app_env: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A second request is rejected while generation is running; a failure halfway through writing leaves the record
     unchanged and removes the temporary directory."""
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        state.variant_tasks[job["id"]] = object()  # Only checks whether generation is running; no real Task is needed
+        # Only checks whether generation is running; no real Task is needed
+        state.variant_tasks[job["id"]] = _pending_future()
         busy = client.post(f"/api/jobs/{job['id']}/variant")
         assert busy.status_code == 409
         state.variant_tasks.pop(job["id"])
@@ -453,7 +483,7 @@ def test_variant_rejects_second_request_and_discards_partial(app_env, monkeypatc
         assert job["id"] not in state.variant_tasks
 
 
-def test_delete_removes_record_and_files(app_env):
+def test_delete_removes_record_and_files(app_env: ModuleType) -> None:
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
@@ -466,7 +496,7 @@ def test_delete_removes_record_and_files(app_env):
         assert client.delete(f"/api/jobs/{job['id']}").status_code == 404
 
 
-def test_cleanup_respects_retention(tmp_path):
+def test_cleanup_respects_retention(tmp_path: Path) -> None:
     store = JobStore(tmp_path / "jobs")
     now = time.time()
     for jid, age_days, status in [("old", 40, "done"), ("new", 5, "done"), ("busy", 40, "running")]:
@@ -486,7 +516,7 @@ def test_cleanup_respects_retention(tmp_path):
     assert not store.dir("old").exists() and store.get("new") and store.get("busy")
 
 
-def test_settings(tmp_path):
+def test_settings(tmp_path: Path) -> None:
     s = Settings(tmp_path / "settings.json")
     assert s.retention_days == 30
     s.update({"retention_days": 7})
@@ -500,14 +530,14 @@ def test_settings(tmp_path):
     assert Settings(tmp_path / "broken.json").retention_days == 30
 
 
-def test_cleanup_skips_inflight_variant(app_env):
+def test_cleanup_skips_inflight_variant(app_env: ModuleType) -> None:
     """Expiry cleanup does not delete a record whose other version is being generated."""
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        record = state.jobs.get(job["id"])
+        record = _job(state.jobs, job["id"])
         record.finished = record.created = time.time() - 10 * DAY
-        state.variant_tasks[job["id"]] = object()
+        state.variant_tasks[job["id"]] = _pending_future()  # Only whether one runs is checked
         assert client.put("/api/settings", json={"retention_days": 7}).status_code == 200
         assert client.get(f"/api/jobs/{job['id']}").status_code == 200
         state.variant_tasks.pop(job["id"])
@@ -515,11 +545,11 @@ def test_cleanup_skips_inflight_variant(app_env):
         assert client.get(f"/api/jobs/{job['id']}").status_code == 404
 
 
-def test_settings_endpoint_triggers_cleanup(app_env):
+def test_settings_endpoint_triggers_cleanup(app_env: ModuleType) -> None:
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        record = state.jobs.get(job["id"])
+        record = _job(state.jobs, job["id"])
         record.finished = record.created = time.time() - 10 * DAY
         assert client.put("/api/settings", json={"retention_days": 30}).json()["retention_days"] == 30
         assert client.get(f"/api/jobs/{job['id']}").status_code == 200
@@ -528,7 +558,9 @@ def test_settings_endpoint_triggers_cleanup(app_env):
         assert client.put("/api/settings", json={"retention_days": -3}).status_code == 400
 
 
-def test_failed_housekeeping_does_not_fail_uploads_or_settings(app_env, monkeypatch, caplog):
+def test_failed_housekeeping_does_not_fail_uploads_or_settings(
+    app_env: ModuleType, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """Cleanup runs before an upload and after the settings change; when it fails, the request still succeeds and
     the error is logged."""
     main = app_env
@@ -542,34 +574,35 @@ def test_failed_housekeeping_does_not_fail_uploads_or_settings(app_env, monkeypa
         assert job["status"] == "done"
         assert client.put("/api/settings", json={"retention_days": 10}).json()["retention_days"] == 10
     logged = [r for r in caplog.records if r.name == "app.job_control" and r.exc_info]
-    assert logged and "transient scan failure" in str(logged[0].exc_info[1])
+    assert logged
+    exc_info = logged[0].exc_info
+    assert exc_info and "transient scan failure" in str(exc_info[1])
 
 
 LONG_MD = "\n\n".join(f"Paragraph number {i} of the long test document goes here." for i in range(80)).encode()
 
 
 @pytest.fixture
-def slow_mock(app_env, monkeypatch):
+def slow_mock(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, int]]:
     """Slows down each batch and records the model used by each request (the model field of the mock service)."""
     import asyncio
 
-    from app.translators import MockTranslator
+    from app.translators import create_translator
 
     calls: list[tuple[str, int]] = []
     original = MockTranslator.translate_batch
 
-    async def slow(self, texts):
+    async def slow(self: MockTranslator, texts: list[str]) -> list[str]:
         # If it is too fast the whole document is translated before the pause request is sent, especially under high
         # machine load
         await asyncio.sleep(0.2)
         calls.append((getattr(self, "model", ""), len(texts)))
         return await original(self, texts)
 
-    real_create = job_control.create_translator
-
-    def create(service, *a, **kw):
-        tr = real_create(service, *a, **kw)
-        tr.model = service.get("model", "")
+    def create(service: Service, target_lang: str, source_lang: str = "auto") -> Translator:
+        tr = create_translator(service, target_lang, source_lang)
+        # MockTranslator has no model: tag each engine with the one its service had
+        setattr(tr, "model", service.get("model", ""))  # noqa: B010
         return tr
 
     monkeypatch.setattr(MockTranslator, "translate_batch", slow)
@@ -577,19 +610,19 @@ def slow_mock(app_env, monkeypatch):
     return calls
 
 
-def wait_until(client, job_id, pred, timeout=30):
+def wait_until(client: TestClient, job_id: str, pred: Callable[[JobJSON], bool], timeout: float = 30) -> JobJSON:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        job = client.get(f"/api/jobs/{job_id}").json()
+        job: JobJSON = client.get(f"/api/jobs/{job_id}").json()
         if pred(job):
             return job
         time.sleep(0.02)
     raise AssertionError("condition not reached")
 
 
-def test_pause_then_resume_with_current_model(app_env, slow_mock):
+def test_pause_then_resume_with_current_model(app_env: ModuleType, slow_mock: list[tuple[str, int]]) -> None:
     main = app_env
-    state.store.get("mock")["model"] = "m-old"
+    _service("mock")["model"] = "m-old"
     with TestClient(main.app) as client:
         job_id = submit(client, data=LONG_MD)["id"]
         wait_until(client, job_id, lambda j: j["done"] > 0)
@@ -604,7 +637,7 @@ def test_pause_then_resume_with_current_model(app_env, slow_mock):
         assert client.post(f"/api/jobs/{job_id}/pause").status_code == 400  # A paused job cannot be paused again
 
         # The model changed while paused: resuming uses the new model and does not request translated paragraphs again
-        state.store.get("mock")["model"] = "m-new"
+        _service("mock")["model"] = "m-new"
         resumed = client.post(f"/api/jobs/{job_id}/retry", json={}).json()
         assert resumed["model"] == "m-new"
         done = wait_done(client, job_id)
@@ -614,7 +647,7 @@ def test_pause_then_resume_with_current_model(app_env, slow_mock):
         assert sum(n for _, n in slow_mock) == done["total"]  # Each paragraph was translated once
 
 
-def test_pause_all_and_resume_all(app_env, slow_mock):
+def test_pause_all_and_resume_all(app_env: ModuleType, slow_mock: list[tuple[str, int]]) -> None:
     main = app_env
     with TestClient(main.app) as client:
         ids = [submit(client, name=f"b{i}.md", data=LONG_MD + str(i).encode())["id"] for i in range(2)]
@@ -626,14 +659,16 @@ def test_pause_all_and_resume_all(app_env, slow_mock):
 
         # A paused record is still paused after a restart and does not become "interrupted"
         reloaded = JobStore(state.jobs.root)
-        assert {reloaded.get(i).status for i in ids} == {"paused"}
+        assert {_job(reloaded, i).status for i in ids} == {"paused"}
 
         assert client.post("/api/jobs/resume-all").json() == {"resumed": 2, "failed": []}
         assert {wait_done(client, i)["status"] for i in ids} == {"done"}
         assert client.post("/api/jobs/resume-all").json() == {"resumed": 0, "failed": []}
 
 
-def test_jobs_beyond_the_limit_wait_in_order_and_can_go_first(app_env, slow_mock):
+def test_jobs_beyond_the_limit_wait_in_order_and_can_go_first(
+    app_env: ModuleType, slow_mock: list[tuple[str, int]]
+) -> None:
     main = app_env
     with TestClient(main.app) as client:
         assert client.put("/api/settings", json={"max_jobs": 1}).json()["max_jobs"] == 1
@@ -658,15 +693,17 @@ def test_jobs_beyond_the_limit_wait_in_order_and_can_go_first(app_env, slow_mock
         assert {wait_done(client, i)["status"] for i in (b, c)} == {"done"}
 
 
-def test_queued_jobs_start_with_the_services_configuration_then(app_env, slow_mock):
+def test_queued_jobs_start_with_the_services_configuration_then(
+    app_env: ModuleType, slow_mock: list[tuple[str, int]]
+) -> None:
     main = app_env
-    state.store.get("mock")["model"] = "m-old"
+    _service("mock")["model"] = "m-old"
     with TestClient(main.app) as client:
         client.put("/api/settings", json={"max_jobs": 1})
         a, b, c = (submit(client, name=f"s{i}.md", data=LONG_MD + str(i).encode())["id"] for i in range(3))
         wait_until(client, a, lambda j: j["status"] == "running")
         # The model changes while b waits: b starts with the new one
-        state.store.get("mock")["model"] = "m-new"
+        _service("mock")["model"] = "m-new"
         assert wait_done(client, a)["model"] == "m-old"
         wait_until(client, b, lambda j: j["status"] == "running")
         assert client.get(f"/api/jobs/{b}").json()["model"] == "m-new"
@@ -677,12 +714,14 @@ def test_queued_jobs_start_with_the_services_configuration_then(app_env, slow_mo
         assert failed["status"] == "error" and "服务已不存在" in failed["error"]
 
 
-def test_queue_goes_on_when_a_finished_job_cannot_be_saved(app_env, monkeypatch):
+def test_queue_goes_on_when_a_finished_job_cannot_be_saved(
+    app_env: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     main = app_env
     real = state.jobs.save_preview
-    failed = []
+    failed: list[str] = []
 
-    def full_disk(job):
+    def full_disk(job: Job) -> None:
         if not failed:
             failed.append(job.id)
             raise OSError(28, "No space left on device")
@@ -696,7 +735,9 @@ def test_queue_goes_on_when_a_finished_job_cannot_be_saved(app_env, monkeypatch)
         assert failed == [a] and a not in state.running
 
 
-def test_queue_goes_on_when_a_starting_job_cannot_be_saved(app_env, monkeypatch):
+def test_queue_goes_on_when_a_starting_job_cannot_be_saved(
+    app_env: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The record cannot be written as the job starts: the job fails and frees its place for the next one."""
     main = app_env
     real = state.jobs.save
@@ -718,7 +759,9 @@ def test_queue_goes_on_when_a_starting_job_cannot_be_saved(app_env, monkeypatch)
         assert not state.running
 
 
-def test_queue_goes_on_when_a_job_without_service_cannot_be_saved(app_env, monkeypatch):
+def test_queue_goes_on_when_a_job_without_service_cannot_be_saved(
+    app_env: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A queued job whose service is gone fails when its turn comes; a failure to write that record must not keep
     its place either."""
     import asyncio
@@ -750,17 +793,17 @@ def test_queue_goes_on_when_a_job_without_service_cannot_be_saved(app_env, monke
     asyncio.run(scenario())
 
 
-def test_max_jobs_setting_is_checked(app_env):
+def test_max_jobs_setting_is_checked(app_env: ModuleType) -> None:
     with TestClient(app_env.app) as client:
         assert client.get("/api/settings").json()["max_jobs"] == 2
         for bad in (0, 9, "2", True):
             assert client.put("/api/settings", json={"max_jobs": bad}).status_code == 400
 
 
-def test_pause_queued_job(app_env):
+def test_pause_queued_job(app_env: ModuleType) -> None:
     import asyncio
 
-    async def scenario():
+    async def scenario() -> Job:
         job = Job(id="q1", filename="x.md", status="queued")
         state.jobs.dir(job.id).mkdir(parents=True)
         state.jobs.add(job)
@@ -770,14 +813,14 @@ def test_pause_queued_job(app_env):
 
     job = asyncio.run(scenario())
     assert job.status == "paused" and job.finished > 0 and "q1" not in state.running
-    assert JobStore(state.jobs.root).get("q1").status == "paused"
+    assert _job(JobStore(state.jobs.root), "q1").status == "paused"
 
 
-def test_a_job_being_paused_keeps_its_place_until_it_stops(app_env):
+def test_a_job_being_paused_keeps_its_place_until_it_stops(app_env: ModuleType) -> None:
     import asyncio
 
-    async def scenario():
-        async def finishing_its_page():
+    async def scenario() -> Job:
+        async def finishing_its_page() -> None:
             try:
                 await asyncio.sleep(10)
             except asyncio.CancelledError:
@@ -802,7 +845,7 @@ def test_a_job_being_paused_keeps_its_place_until_it_stops(app_env):
     assert job.status == "paused" and not state.running
 
 
-def test_runner_released_after_finish(app_env):
+def test_runner_released_after_finish(app_env: ModuleType) -> None:
     """After a job finishes the Runner releases its memory and the preview is read from the preview.json snapshot."""
     main = app_env
     with TestClient(main.app) as client:
@@ -810,14 +853,14 @@ def test_runner_released_after_finish(app_env):
         # The status becomes done first and the Runner is released only after the snapshot is written, one thread
         # switch later
         deadline = time.monotonic() + 10
-        while state.jobs.get(job["id"]).runner is not None and time.monotonic() < deadline:
+        while _job(state.jobs, job["id"]).runner is not None and time.monotonic() < deadline:
             time.sleep(0.02)
-        assert state.jobs.get(job["id"]).runner is None
+        assert _job(state.jobs, job["id"]).runner is None
         p = client.get(f"/api/jobs/{job['id']}/preview").json()
         assert p["ready"] and p["status"] == "done" and len(p["updates"]) == 3
 
 
-def test_resume_with_invalid_service_keeps_result(app_env):
+def test_resume_with_invalid_service_keeps_result(app_env: ModuleType) -> None:
     """The configuration is invalid on resume: the response is 400, and the old translations and the job status are
     kept."""
     main = app_env
@@ -842,7 +885,7 @@ def test_resume_with_invalid_service_keeps_result(app_env):
 
 
 @pytest.mark.parametrize("stem", ["a" * 300, "中" * 90, "a" * 246])
-def test_long_file_names_are_shortened_on_upload(app_env, stem):
+def test_long_file_names_are_shortened_on_upload(app_env: ModuleType, stem: str) -> None:
     """A name near the 255-byte limit used to be accepted and fail only when the translation was written, after the
     paragraphs had been paid for; a longer one failed the upload with a 500."""
     main = app_env
@@ -854,7 +897,7 @@ def test_long_file_names_are_shortened_on_upload(app_env, stem):
     assert job["outputs"] and all(len(o["name"].encode()) < 255 for o in job["outputs"])
 
 
-def test_retry_is_refused_while_the_other_version_is_generated(app_env):
+def test_retry_is_refused_while_the_other_version_is_generated(app_env: ModuleType) -> None:
     """Retrying while the other version is being written would delete files under it; it is refused and the
     translations stay."""
     import asyncio
@@ -875,7 +918,7 @@ def test_retry_is_refused_while_the_other_version_is_generated(app_env):
         assert client.get(job["outputs"][0]["url"]).status_code == 200
 
 
-def test_a_failed_retry_keeps_the_last_translation(app_env, monkeypatch):
+def test_a_failed_retry_keeps_the_last_translation(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """The last run's files stay downloadable until a new run succeeds; a successful run replaces them and leaves
     no staging directory behind."""
     from app.translators import TranslatorError
@@ -885,11 +928,12 @@ def test_a_failed_retry_keeps_the_last_translation(app_env, monkeypatch):
         job = wait_done(client, submit(client)["id"])
         before = client.get(job["outputs"][0]["url"]).content
 
-        async def broken(src, out_dir, *args, **kwargs):
+        async def broken(src: Path, out_dir: Path, *args: object, **kwargs: object) -> Never:
             (out_dir / "half-written.md").write_text("partial")
             raise TranslatorError("服务暂时不可用")
 
-        real_translate = job_control.translate_file
+        from app.formats import translate_file as real_translate
+
         monkeypatch.setattr(job_control, "translate_file", broken)
         assert client.post(f"/api/jobs/{job['id']}/retry", json={"fresh": False}).status_code == 200
         failed = wait_done(client, job["id"])
@@ -905,7 +949,9 @@ def test_a_failed_retry_keeps_the_last_translation(app_env, monkeypatch):
         assert sorted(p.name for p in state.jobs.out_dir(job["id"]).iterdir()) == [o["name"] for o in job["outputs"]]
 
 
-def test_retry_of_a_record_deleted_meanwhile_does_not_start(app_env, monkeypatch):
+def test_retry_of_a_record_deleted_meanwhile_does_not_start(
+    app_env: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The record is deleted while a retry checks the service: the retry fails and no job is queued for it."""
     import asyncio
 
@@ -930,20 +976,18 @@ def test_retry_of_a_record_deleted_meanwhile_does_not_start(app_env, monkeypatch
     asyncio.run(scenario())
 
 
-def test_failed_upload_leaves_no_orphan_dir(app_env):
+def test_failed_upload_leaves_no_orphan_dir(app_env: ModuleType) -> None:
     """A read fails halfway through an upload: the directory is removed and no orphan directory is left."""
     import asyncio
 
-    class BrokenUpload:
-        filename = "broken.md"
-
-        async def read(self, size=-1):
+    class BrokenFile(io.BytesIO):
+        def read(self, size: int | None = -1, /) -> Never:
             raise OSError("read failed")
 
     with pytest.raises(OSError):
         asyncio.run(
             jobs_routes.create_job(
-                BrokenUpload(),
+                UploadFile(BrokenFile(), filename="broken.md"),
                 target_lang="zh-CN",
                 source_lang="auto",
                 service_id="mock",
@@ -955,20 +999,20 @@ def test_failed_upload_leaves_no_orphan_dir(app_env):
     assert not root.exists() or not list(root.iterdir())
 
 
-def test_download_rejects_path_traversal(app_env):
+def test_download_rejects_path_traversal(app_env: ModuleType) -> None:
     from fastapi import HTTPException
 
     main = app_env
     with TestClient(main.app) as client:
         job = wait_done(client, submit(client)["id"])
-        record = state.jobs.get(job["id"])
+        record = _job(state.jobs, job["id"])
         record.outputs.append("../job.json")  # Simulate a tampered job.json
         with pytest.raises(HTTPException) as e:
             jobs_routes.download(job["id"], "../job.json")
         assert e.value.status_code == 404
 
 
-def test_download_url_encodes_hash_and_question_mark(app_env):
+def test_download_url_encodes_hash_and_question_mark(app_env: ModuleType) -> None:
     """When the file name contains # or ?, the download link is encoded; otherwise the browser requests only the part
     before #."""
     main = app_env
@@ -979,7 +1023,7 @@ def test_download_url_encodes_hash_and_question_mark(app_env):
         assert client.get(out["url"]).status_code == 200
 
 
-def test_inline_file_opens_in_the_browser(app_env):
+def test_inline_file_opens_in_the_browser(app_env: ModuleType) -> None:
     """With inline=1 the response header is inline and the browser opens the file; by default it is still an
     attachment download."""
     main = app_env
@@ -1026,7 +1070,7 @@ def _small_epub() -> bytes:
     return buf.getvalue()
 
 
-def test_epub_output_is_previewed_chapter_by_chapter(app_env):
+def test_epub_output_is_previewed_chapter_by_chapter(app_env: ModuleType) -> None:
     """EPUB preview: the table of contents and reading order are read from the book, chapters are fetched by their
     path in the zip, and scripts in the book are not allowed to run."""
     main = app_env
@@ -1050,15 +1094,15 @@ def test_epub_output_is_previewed_chapter_by_chapter(app_env):
         assert client.get(f"/api/jobs/{job['id']}/epub/small.epub").status_code == 404
 
 
-def test_oversized_upload_rejected_before_reading_body(app_env, monkeypatch):
+def test_oversized_upload_rejected_before_reading_body(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
     """A Content-Length above the limit returns 413 at once and the request never reaches create_job (without waiting
     for the whole file to be written to a temporary file)."""
     main = app_env
     monkeypatch.setattr(jobs_routes, "MAX_UPLOAD", 1000)
-    entered = []
+    entered: list[str] = []
     real_get = state.store.get
 
-    def get(sid):
+    def get(sid: str) -> Service | None:
         entered.append(sid)  # create_job looks up the translation service as soon as it is entered
         return real_get(sid)
 
@@ -1075,12 +1119,12 @@ def test_oversized_upload_rejected_before_reading_body(app_env, monkeypatch):
         assert submit(client)["status"] in ("queued", "running", "done")
 
 
-def test_running_job_shows_its_preparation_stage():
+def test_running_job_shows_its_preparation_stage() -> None:
     from app.runner import Runner
-    from app.translators import MockTranslator
+    from tests.helpers import MemCache
 
     job = Job(id="x", filename="a.pdf")
     assert job.to_dict()["stage"] is None
-    job.runner = Runner(MockTranslator("zh-CN"), cache=object())
+    job.runner = Runner(MockTranslator("zh-CN"), cache=MemCache())
     job.runner.report_stage("分析版面", 120, 646, "页")
     assert job.to_dict()["stage"] == {"name": "分析版面", "done": 120, "total": 646, "unit": "页"}

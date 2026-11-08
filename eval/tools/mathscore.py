@@ -16,6 +16,7 @@ import sys
 import unicodedata
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Any
 
 E = Path(os.environ.get("EVALSET", Path.home() / "doc-translator-evalset"))
 tag = sys.argv[1]
@@ -30,14 +31,15 @@ KINDS = ("full", "minor", "empty", "bad_partial", "bad_missed")
 def body_fonts() -> dict[str, str]:
     cache = E / "mathgold" / "fonts.json"
     if cache.is_file():
-        return json.load(cache.open())
+        cached: dict[str, str] = json.load(cache.open())
+        return cached
     import pymupdf
 
-    out = {}
+    out: dict[str, str] = {}
     for g in sorted((E / "mathgold").glob("2*.json")):
         doc = pymupdf.open(E / "raw" / g.stem / "paper.pdf")
-        counts: Counter = Counter()
-        for page in doc:
+        counts: Counter[str] = Counter()
+        for page in doc.pages():
             for block in page.get_text("dict")["blocks"]:
                 for line in block.get("lines", []):
                     for span in line["spans"]:
@@ -47,10 +49,11 @@ def body_fonts() -> dict[str, str]:
     return out
 
 
-def tokens(rows) -> list[tuple[str, str, str]]:
+# Plan rows are JSON arrays of mixed types: [page, skip, text sent for translation, [formula text...]]
+def tokens(rows: list[list[Any]]) -> list[tuple[str, str, str]]:
     """(label t/f, token, kind w/s): w is an alphanumeric string, s a single math symbol. A placeholder adds
     ("f", "§", "s")"""
-    out = []
+    out: list[tuple[str, str, str]] = []
 
     def add(text: str, label: str) -> None:
         for match in re.finditer(r"[^\W_]+|[^\w\s]", unicodedata.normalize("NFKC", text)):
@@ -76,7 +79,7 @@ def tokens(rows) -> list[tuple[str, str, str]]:
 
 
 fonts = body_fonts()
-totals = defaultdict(Counter)
+totals: defaultdict[str, Counter[str]] = defaultdict(Counter)
 for g in sorted((E / "mathgold").glob("2*.json")):
     pid = g.stem
     if only and pid != only:
@@ -88,11 +91,11 @@ for g in sorted((E / "mathgold").glob("2*.json")):
     stream = tokens(json.load(plan.open()))
     eligible = [i for i, tok in enumerate(stream) if tok[2] == "w" and re.fullmatch(r"[a-z0-9]+", tok[1])]
     words = [stream[i][1] for i in eligible]
-    starts = defaultdict(list)
+    starts: defaultdict[str, list[int]] = defaultdict(list)
     for k in range(len(words)):
         starts[words[k]].append(k)
     group = "cm" if re.match(r"(?:SF|CM|LM|Latin Modern)", fonts.get(pid, ""), re.I) else "other"
-    stat = Counter()
+    stat: Counter[str] = Counter()
     for item in gold["items"]:
         if item["trivial"]:
             continue

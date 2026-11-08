@@ -2,22 +2,32 @@
 
 import asyncio
 import re
+from collections.abc import Callable, Generator
+from pathlib import Path
 
 import pymupdf
 import pytest
 
 from app.formats import translate_file
+from app.formats.pdf_blocks import TextBlock
+from app.formats.pdf_types import PdfDict
 from tests.helpers import SAMPLES, _glyph, _pdf_with_text, run, runner
 
+Box = tuple[float, float, float, float]
 
-def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces():
+
+def _bbox(rect: pymupdf.Rect) -> Box:
+    return (rect.x0, rect.y0, rect.x1, rect.y1)
+
+
+def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces() -> None:
     """Pieces of a formula cut by a line break are joined into one placeholder. When the pieces side by side are wider
     than a line (a long URL across two lines) they are not joined: one placeholder must fit on a single line, so a
     placeholder that does not fit shrinks the whole paragraph, while two separate pieces can break at the original
     break point."""
     from app.formats.pdf_formula_runs import _join_line_wrapped_formulas
 
-    def span(text, x0, x1, y, font="LMMono10-Regular"):
+    def span(text: str, x0: float, x1: float, y: float, font: str = "LMMono10-Regular") -> PdfDict:
         return {
             "text": text,
             "size": 12.0,
@@ -27,7 +37,7 @@ def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces():
             "origin": (x0, y + 9),
         }
 
-    def lines(head_x0, tail_x1):
+    def lines(head_x0: float, tail_x1: float) -> list[list[PdfDict]]:
         return [
             [
                 span("Olympiad ", 70.9, head_x0, 420.0, "URWPalladioL"),
@@ -39,7 +49,7 @@ def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces():
             ],
         ]
 
-    def runs(span_lines):
+    def runs(span_lines: list[list[PdfDict]]) -> list[PdfDict]:
         return [
             {"spans": [span_lines[0][1]], "bbox": pymupdf.Rect(span_lines[0][1]["bbox"]), "pos": (0, 1, 1)},
             {"spans": [span_lines[1][0]], "bbox": pymupdf.Rect(span_lines[1][0]["bbox"]), "pos": (1, 0, 0)},
@@ -51,7 +61,7 @@ def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces():
     assert len(_join_line_wrapped_formulas(runs(long), long, 12.0)) == 2
 
 
-def test_scan_status_detection():
+def test_scan_status_detection() -> None:
     from app.formats.pdf_unit_blocks import _scan_status
 
     # Normal PDF
@@ -72,9 +82,7 @@ def test_scan_status_detection():
     assert _scan_status(doc) == "scanned"
 
 
-def _block_with_spans(span_lines, size=12.0):
-    from app.formats.pdf_blocks import TextBlock
-
+def _block_with_spans(span_lines: list[list[PdfDict]], size: float = 12.0) -> TextBlock:
     return TextBlock(
         page=0,
         rect=pymupdf.Rect(0, 0, 1, 1),
@@ -87,7 +95,7 @@ def _block_with_spans(span_lines, size=12.0):
     )
 
 
-def test_italic_letters_between_math_brackets_are_a_formula():
+def test_italic_letters_between_math_brackets_are_a_formula() -> None:
     """In a book set in Times, the P and y of P(y = 1) are body-font italics and the parentheses and equals sign are
     CMR marked as math: none is a formula on its own, together they form one inline formula. Italic words inside
     the parentheses (P(to|want)) are part of the formula too. Italic words without formula punctuation do not
@@ -96,10 +104,10 @@ def test_italic_letters_between_math_brackets_are_a_formula():
 
     x = [0.0]
 
-    def span(text, font, flags=4, math=False):
+    def span(text: str, font: str, flags: int = 4, math: bool = False) -> PdfDict:
         x0 = x[0]
         x[0] += 5.0 * len(text)
-        out = {
+        out: PdfDict = {
             "text": text,
             "font": font,
             "size": 10.0,
@@ -109,10 +117,10 @@ def test_italic_letters_between_math_brackets_are_a_formula():
         }
         return {**out, "math": True} if math else out
 
-    def italic(text):
+    def italic(text: str) -> PdfDict:
         return span(text, "NimbusRomNo9L-ReguItal", flags=6)
 
-    def cm(text):
+    def cm(text: str) -> PdfDict:
         return span(text, "CMR10", math=True)
 
     line = [
@@ -151,12 +159,13 @@ def test_italic_letters_between_math_brackets_are_a_formula():
     assert _CM_UPRIGHT_RE.match("CMSSBX10") and _CM_UPRIGHT_RE.match("ABCDEF+CMSS10")
 
 
-def test_detected_formula_boxes_mark_their_letters():
+def test_detected_formula_boxes_mark_their_letters() -> None:
     """x and y = 1 boxed by the formula detection model are inline formulas; y = 1 is set entirely in the upright body
     font and cannot be recognized by font. When the box also covers the comma after it, the comma stays in the
     body text; a box around just 0 is not a formula"""
     from app.formats.pdf_extract import _extract
     from app.formats.pdf_units import _placeholderize
+    from app.formats.pdf_vision import FormulaDetector
 
     doc = pymupdf.open()
     page = doc.new_page(width=400, height=200)
@@ -167,8 +176,13 @@ def test_detected_formula_boxes_mark_their_letters():
     page.insert_text((x1, 60), ", and set y = 1, then 0 and 1.", fontsize=10, fontname="tiro")
     boxes = [page.search_for("x,")[0], page.search_for("y = 1,")[0], page.search_for("0")[0]]
 
-    class Detector:
-        def pages(self):
+    class Detector(FormulaDetector):
+        """Stands in for the model with fixed boxes: _extract only calls pages()."""
+
+        def __init__(self) -> None:
+            pass  # No model to load
+
+        def pages(self) -> Generator[list[pymupdf.Rect]]:
             yield boxes
 
     [block], _frames, _scans = _extract(doc, formulas=Detector())
@@ -184,12 +198,12 @@ def test_detected_formula_boxes_mark_their_letters():
     assert _placeholderize(block, 0)[0] == "We call the input {i}x{/i}, and set y = 1, then 0 and 1."
 
 
-def test_accent_on_its_own_line_joins_the_formula_once():
+def test_accent_on_its_own_line_joins_the_formula_once() -> None:
     """The ˆ of ŝ forms a line of its own after the line with s and is judged a formula by itself. Once merged into the
     formula it covers, it no longer gets a placeholder of its own."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, font, size, x0, x1, y0, y1, base):
+    def span(text: str, font: str, size: float, x0: float, x1: float, y0: float, y1: float, base: float) -> PdfDict:
         return {"text": text, "font": font, "size": size, "flags": 0, "bbox": (x0, y0, x1, y1), "origin": (x0, base)}
 
     # Recognized earlier as part of the formula and marked math
@@ -206,11 +220,11 @@ def test_accent_on_its_own_line_joins_the_formula_once():
     assert formulas[0]["bbox"].x1 >= 317.4
 
 
-def test_placeholderize_and_restore_roundtrip():
+def test_placeholderize_and_restore_roundtrip() -> None:
     from app.formats.pdf_restore import _restore_placeholders
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, font, size, x0=0, y0=0):
+    def span(text: str, font: str, size: float, x0: float = 0, y0: float = 0) -> PdfDict:
         return {"text": text, "font": font, "size": size, "bbox": (x0, y0, x0 + 10, y0 + 10), "origin": (x0, y0 + 8)}
 
     spans = [
@@ -232,10 +246,10 @@ def test_placeholderize_and_restore_roundtrip():
     assert _restore_placeholders("公式 {v1} {v9}", formulas) == "公式 \x01i\x021\x01/i\x02 "
 
 
-def test_placeholderize_marks_mixed_emphasis_only():
+def test_placeholderize_marks_mixed_emphasis_only() -> None:
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, font="TimesNewRomanPSMT", flags=0, x0=0):
+    def span(text: str, font: str = "TimesNewRomanPSMT", flags: int = 0, x0: float = 0) -> PdfDict:
         return {
             "text": text,
             "font": font,
@@ -272,14 +286,16 @@ def test_placeholderize_marks_mixed_emphasis_only():
     assert "{b}" not in _placeholderize(uniform)[0]
 
 
-def test_formulas_set_in_text_italic_stay_whole():
+def test_formulas_set_in_text_italic_stay_whole() -> None:
     """Old papers set variables in Times-Italic and operators in Symbol, so only small scripts and Symbol glyphs count
     as formulas. Italic variables, parentheses and equals signs next to a formula are part of it too:
     (T_i.C_p = T_j.C_r) is one whole formula and must not be split into half image, half text. Italic letters far
     from a formula and lowercase italic words (is) are still body text."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, x0, x1, font="Times-Italic", size=9.0, y0=652.5):
+    def span(
+        text: str, x0: float, x1: float, font: str = "Times-Italic", size: float = 9.0, y0: float = 652.5
+    ) -> PdfDict:
         y1 = y0 + (11.2 if size > 8 else 7.7)
         return {
             "text": text,
@@ -290,7 +306,7 @@ def test_formulas_set_in_text_italic_stay_whole():
             "origin": (x0, y0 + (8.5 if size > 8 else 5.7)),
         }
 
-    def sub(text, x0, x1, y0=656.9):
+    def sub(text: str, x0: float, x1: float, y0: float = 656.9) -> PdfDict:
         return span(text, x0, x1, size=6.0, y0=y0)
 
     roman = "Times-Roman"
@@ -362,12 +378,12 @@ def test_formulas_set_in_text_italic_stay_whole():
     assert "t-th" in sent
 
 
-def test_punctuation_alone_does_not_switch_the_font_size():
+def test_punctuation_alone_does_not_switch_the_font_size() -> None:
     """The period of "in PE." is set at script size. A size change on a single punctuation mark carries no meaning, and
     if marked, the model applies {z65} to half a sentence."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, size=9.0, font="Times-Roman", x0=0.0):
+    def span(text: str, size: float = 9.0, font: str = "Times-Roman", x0: float = 0.0) -> PdfDict:
         return {
             "text": text,
             "font": font,
@@ -390,10 +406,10 @@ def test_punctuation_alone_does_not_switch_the_font_size():
     assert "{z" in sent.split("An equivalence")[1]
 
 
-def test_placeholderize_no_formula_keeps_text_identical():
+def test_placeholderize_no_formula_keeps_text_identical() -> None:
     from app.formats.pdf_units import _placeholderize
 
-    spans = [
+    spans: list[PdfDict] = [
         {"text": "Plain sentence ", "font": "TimesNewRomanPSMT", "size": 12.0},
         {"text": "without any math.", "font": "ArialMT", "size": 12.0},
     ]
@@ -403,12 +419,12 @@ def test_placeholderize_no_formula_keeps_text_identical():
     assert sent == b.text and formulas == []
 
 
-def test_an_equation_in_an_algorithm_box_or_a_caption_is_translated():
+def test_an_equation_in_an_algorithm_box_or_a_caption_is_translated() -> None:
     """A line in an algorithm box with a single word is translated; a caption with a number is a caption no matter how
     many equals signs it has."""
     from app.formats.pdf_unit_blocks import _equation_block
 
-    def spans(*texts):
+    def spans(*texts: str) -> list[list[PdfDict]]:
         return [[{"text": text, "font": "Times-Roman", "size": 10.0} for text in texts]]
 
     assert _equation_block(_block_with_spans(spans("T = argmax s(T)")))
@@ -420,7 +436,7 @@ def test_an_equation_in_an_algorithm_box_or_a_caption_is_translated():
     assert not _equation_block(cell)
 
 
-def test_attention_formula_placeholders_end_to_end(tmp_path):
+def test_attention_formula_placeholders_end_to_end(tmp_path: Path) -> None:
     src = SAMPLES / "attention.pdf"
     if not src.exists():
         pytest.skip("sample missing")
@@ -436,7 +452,7 @@ def test_attention_formula_placeholders_end_to_end(tmp_path):
     assert "{v" not in text  # All restored
 
 
-def test_split_translation_at_clause_boundary():
+def test_split_translation_at_clause_boundary() -> None:
     from app.formats.pdf_restore import _split_translation
 
     t = "可以看出，基线模型的性能优于采样模型。这是意料之中的。然而还可以看出模型的表现相当好。我们推测原因在此。"
@@ -448,12 +464,14 @@ def test_split_translation_at_clause_boundary():
     assert a2.endswith("fox") and a2 + b2 == "the quick brown fox jumps over the lazy dog"
 
 
-def test_formula_runs_merge_requires_deep_x_overlap():
+def test_formula_runs_merge_requires_deep_x_overlap() -> None:
     """Merging runs across dict lines: scripts (deep overlap in x) merge into one formula; separate formulas on two
     adjacent lines (touching by only 1pt in x) must not merge."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, font, size, x0, y0, x1=None, y1=None):
+    def span(
+        text: str, font: str, size: float, x0: float, y0: float, x1: float | None = None, y1: float | None = None
+    ) -> PdfDict:
         return {
             "text": text,
             "font": font,
@@ -494,12 +512,21 @@ def test_formula_runs_merge_requires_deep_x_overlap():
     assert "{v1}" in sent2 and "{v2}" in sent2
 
 
-def test_body_font_symbols_and_script_bases_become_formulas():
+def test_body_font_symbols_and_script_bases_become_formulas() -> None:
     """Greek letters in Times are formulas. A single letter touching a script joins the script. Italic words, an
     isolated equals sign and the a before a citation superscript stay in the body text."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, font, size, x0, y0, x1=None, y1=None, flags=0):
+    def span(
+        text: str,
+        font: str,
+        size: float,
+        x0: float,
+        y0: float,
+        x1: float | None = None,
+        y1: float | None = None,
+        flags: int = 0,
+    ) -> PdfDict:
         return {
             "text": text,
             "font": font,
@@ -577,13 +604,13 @@ def test_body_font_symbols_and_script_bases_become_formulas():
     assert "=" in _placeholderize(equals)[0]
 
 
-def test_a_script_on_the_next_line_does_not_join_the_letter_above_it():
+def test_a_script_on_the_next_line_does_not_join_the_letter_above_it() -> None:
     """The glyph box of enc in H^enc at the start of the next line touches the X on the line above, with a baseline
     most of a line lower: it is the superscript of H, not a subscript of X. When X is body text it is not taken as
     the base of the script, and when X is a formula the two are not merged into one formula."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, font, size, x0, y0, x1, y1, base):
+    def span(text: str, font: str, size: float, x0: float, y0: float, x1: float, y1: float, base: float) -> PdfDict:
         return {"text": text, "font": font, "size": size, "flags": 0, "bbox": (x0, y0, x1, y1), "origin": (x0, base)}
 
     for x_font in ("CMSSBX10", "CMBX10"):
@@ -608,12 +635,12 @@ def test_a_script_on_the_next_line_does_not_join_the_letter_above_it():
         assert "H{v" in sent or "H{/b}{v" in sent, sent
 
 
-def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
+def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text() -> None:
     """CMR digits, parentheses and operator names touching a formula join the same placeholder. i^{th} stays in the
     body text and is sent for translation as i-th. Distant digits and digits in Times are not taken in."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, font, size, x0, y0, x1, y1=None):
+    def span(text: str, font: str, size: float, x0: float, y0: float, x1: float, y1: float | None = None) -> PdfDict:
         return {
             "text": text,
             "font": font,
@@ -671,7 +698,7 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
 
     # The ∪ at the line end reaches into the next line by its CMSY font box and overlaps the {γ} at the start of
     # that line: they are still two pieces of a wrapped formula
-    def ink(item, top, bottom):
+    def ink(item: PdfDict, top: float, bottom: float) -> PdfDict:
         item["ink"] = (item["bbox"][0], top, item["bbox"][2], bottom)
         return item
 
@@ -847,13 +874,13 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text():
     assert formulas_p[0]["text"].replace(" ", "").startswith("∂L")
 
 
-def test_line_wrapped_formula_is_one_placeholder():
+def test_line_wrapped_formula_is_one_placeholder() -> None:
     """y_{t-1}= at the line end and s|h_{t-1} at the start of the next line are one formula: one placeholder, two
     pieces, not merged into a large box spanning the whole line. A formula in the middle of a line is not merged
     with a formula at the start of the next line."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, font, size, x0, y0, x1, y1=None):
+    def span(text: str, font: str, size: float, x0: float, y0: float, x1: float, y1: float | None = None) -> PdfDict:
         return {
             "text": text,
             "font": font,
@@ -899,13 +926,15 @@ def test_line_wrapped_formula_is_one_placeholder():
     assert "{v1}" in sent2 and "{v2}" in sent2
 
 
-def test_placeholderize_absorbs_accent_over_formula():
+def test_placeholderize_absorbs_accent_over_formula() -> None:
     """The ^ of ŷ is often a separate span (body font, not judged a formula); left in the body text it adds a stray
     symbol next to the formula image. An accent that falls on the formula bbox joins the formula and is removed
     from the body text."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, font, size, x0, y0, x1=None, y1=None):
+    def span(
+        text: str, font: str, size: float, x0: float, y0: float, x1: float | None = None, y1: float | None = None
+    ) -> PdfDict:
         return {
             "text": text,
             "font": font,
@@ -917,7 +946,7 @@ def test_placeholderize_absorbs_accent_over_formula():
     b = _block_with_spans(
         [
             [
-                span("an estimate ", "TimesNewRomanPSMT", 10, 0, 50),
+                span("an estimate", "TimesNewRomanPSMT", 10, 0, 50),
                 span("y", "CMMI10", 10, 40, 50, x1=48, y1=60),
                 span(" coming", "TimesNewRomanPSMT", 10, 60, 50),
             ],
@@ -969,12 +998,12 @@ def test_placeholderize_absorbs_accent_over_formula():
     assert "\u00a8" in sent3
 
 
-def test_heading_does_not_turn_the_following_sentence_into_a_formula():
+def test_heading_does_not_turn_the_following_sentence_into_a_formula() -> None:
     """Even when the heading and the lead paragraph are still in one block, 9pt body text must not be cropped as a
     formula image for being smaller than 12pt."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, size: float, x0: float, y0: float, font: str) -> dict[str, object]:
+    def span(text: str, size: float, x0: float, y0: float, font: str) -> PdfDict:
         return {
             "text": text,
             "font": font,
@@ -996,7 +1025,7 @@ def test_heading_does_not_turn_the_following_sentence_into_a_formula():
     assert "workflow" in sent
 
 
-def test_heading_number_kept_in_source_form():
+def test_heading_number_kept_in_source_form() -> None:
     """Heading section numbers keep their original form: the model follows the prompt and writes Chinese numerals
     ("第二章第一节"), which academic papers need back as '2.1'. Sentences in paragraphs that start with a number are
     not affected."""
@@ -1021,7 +1050,7 @@ def test_heading_number_kept_in_source_form():
     assert norm("1. Exploited the sortedness of join input", "1. 利用了连接输入的有序性") == "1. 利用了连接输入的有序性"
 
 
-def test_section_and_item_numbers_are_not_sent_for_translation():
+def test_section_and_item_numbers_are_not_sent_for_translation() -> None:
     """Section and item numbers are taken off before translation and put back unchanged when writing. A number at the
     start of a body sentence is not taken off."""
     from app.formats.pdf_restore import _with_label
@@ -1048,7 +1077,7 @@ def test_section_and_item_numbers_are_not_sent_for_translation():
     assert _with_label("", "实验") == "实验"
 
 
-def test_stray_braces_around_marks_are_dropped():
+def test_stray_braces_around_marks_are_dropped() -> None:
     """Extra braces the model puts around marks are removed. Braces present in the original (the set {k=1}) stay."""
     from app.formats.pdf_restore import _drop_stray_braces
 
@@ -1058,7 +1087,7 @@ def test_stray_braces_around_marks_are_dropped():
     assert _drop_stray_braces("集合 {k=1} 是", "the set {k=1} is") == "集合 {k=1} 是"
 
 
-def test_heading_number_skips_body_blocks():
+def test_heading_number_skips_body_blocks() -> None:
     from app.formats.pdf_restore import _heading_number_for
 
     assert _heading_number_for("p", "2 samples", "第二章 样本") == "第二章 样本"
@@ -1092,7 +1121,7 @@ def test_heading_number_skips_body_blocks():
     )
 
 
-def test_split_translation_does_not_break_sentinel():
+def test_split_translation_does_not_break_sentinel() -> None:
     from app.formats.pdf_restore import _split_translation
 
     sentinel = "\x01i\x0212\x01/i\x02"
@@ -1104,11 +1133,10 @@ def test_split_translation_does_not_break_sentinel():
     assert "\x01" not in b.replace(sentinel, "")
 
 
-def test_hyphen_bridge_keeps_the_page_boundary():
-    from app.formats.pdf_blocks import TextBlock
+def test_hyphen_bridge_keeps_the_page_boundary() -> None:
     from app.formats.pdf_units import _prepare_unit
 
-    def blk(text, page):
+    def blk(text: str, page: int) -> TextBlock:
         return TextBlock(
             page=page, rect=pymupdf.Rect(40, 40, 200, 52), line_rects=[], text=text, size=9, color="#000", bold=False
         )
@@ -1122,14 +1150,14 @@ def test_hyphen_bridge_keeps_the_page_boundary():
     assert name_i == 2
 
 
-def test_cross_page_formulas_keep_own_page_and_name():
+def test_cross_page_formulas_keep_own_page_and_name() -> None:
     from app.formats.pdf_restore import _assign_restored_parts
     from app.formats.pdf_units import _prepare_unit
 
-    def span(text, font, size, x0, y0):
+    def span(text: str, font: str, size: float, x0: float, y0: float) -> PdfDict:
         return {"text": text, "font": font, "size": size, "bbox": (x0, y0, x0 + 12, y0 + 10), "origin": (x0, y0 + 8)}
 
-    def block(page, prose):
+    def block(page: int, prose: str) -> TextBlock:
         spans = [span(prose, "TimesNewRomanPSMT", 12, 0, 0), span("E", "CMMI10", 12, 40, 0)]
         b = _block_with_spans([spans])
         b.page = page
@@ -1153,7 +1181,7 @@ def test_cross_page_formulas_keep_own_page_and_name():
     assert parts[0].count("\x01i\x022\x01/i\x02") == 1
 
 
-def test_boundary_echo_keeps_repeated_cells_and_short_phrases():
+def test_boundary_echo_keeps_repeated_cells_and_short_phrases() -> None:
     from app.formats.pdf_restore import _strip_boundary_echo
 
     assert _strip_boundary_echo("WSJ only", "WSJ only", "仅 WSJ", "仅 WSJ") == "仅 WSJ"
@@ -1170,7 +1198,7 @@ def test_boundary_echo_keeps_repeated_cells_and_short_phrases():
     assert _strip_boundary_echo(head_src, para_src, head_t, para_t) == para_t
 
 
-def test_split_translation_balances_style_marks():
+def test_split_translation_balances_style_marks() -> None:
     """Style marks stay paired when text is split across pages: the left half gets the closing marks, the right half
     the opening ones, and the font size reopened is the one still open."""
     from app.formats.pdf_flow import strip_style_marks
@@ -1198,12 +1226,14 @@ def test_split_translation_balances_style_marks():
     assert strip_style_marks(left) + strip_style_marks(right) == strip_style_marks(nested)
 
 
-def test_wrapped_formula_tail_stays_one_placeholder_without_a_wide_box():
+def test_wrapped_formula_tail_stays_one_placeholder_without_a_wide_box() -> None:
     """A formula wrapped across visual lines becomes two pieces of one placeholder. The bboxes are not merged,
     otherwise the crop would include the full-width blank space between the two lines."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, font, size, x0, y0, x1=None, y1=None):
+    def span(
+        text: str, font: str, size: float, x0: float, y0: float, x1: float | None = None, y1: float | None = None
+    ) -> PdfDict:
         return {
             "text": text,
             "font": font,
@@ -1215,7 +1245,7 @@ def test_wrapped_formula_tail_stays_one_placeholder_without_a_wide_box():
     b = _block_with_spans(
         [
             [
-                span("taken as ", "TimesNewRomanPSMT", 10, 100, 100),
+                span("taken as", "TimesNewRomanPSMT", 10, 100, 100),
                 span("y", "CMMI10", 10, 400, 100, x1=405, y1=110),
                 span("t−1 =", "CMR7", 7, 405, 104, x1=415, y1=110),
             ],
@@ -1237,19 +1267,19 @@ def test_wrapped_formula_tail_stays_one_placeholder_without_a_wide_box():
     assert parts[0]["bbox"] | parts[1]["bbox"] != formulas[0]["bbox"]
 
 
-def test_caption_word_in_bold_cm_is_not_a_formula():
+def test_caption_word_in_bold_cm_is_not_a_formula() -> None:
     from app.formats.pdf_formula_runs import _is_formula_span
 
     assert _is_formula_span({"font": "CMBX8", "text": "of", "size": 8.0}, 9.0) is False
     assert _is_formula_span({"font": "CMBX10", "text": "x", "size": 10.0}, 10.0) is True
 
 
-def test_block_of_typewriter_lines_is_code_and_inline_names_are_not():
+def test_block_of_typewriter_lines_is_code_and_inline_names_are_not() -> None:
     """A block that is almost all monospace (SQL) is kept as it is. A sentence with a few monospace attribute names in
     it is translated."""
     from app.formats.pdf_unit_blocks import _code_block
 
-    def span(text, font):
+    def span(text: str, font: str) -> PdfDict:
         return {"text": text, "font": font, "size": 10.0, "bbox": (0, 0, 10, 10), "origin": (0, 8)}
 
     sql = _block_with_spans(
@@ -1285,12 +1315,12 @@ def test_block_of_typewriter_lines_is_code_and_inline_names_are_not():
     assert _code_block(row)
 
 
-def test_lone_relation_symbol_from_a_symbol_font_stays_a_formula():
+def test_lone_relation_symbol_from_a_symbol_font_stays_a_formula() -> None:
     """The ≺ in CMSY is recognized by OCR as <. Even on its own it is a formula and must not be taken for a less-than
     sign in body text."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, font, x0):
+    def span(text: str, font: str, x0: float) -> PdfDict:
         return {"text": text, "font": font, "size": 10.0, "bbox": (x0, 0, x0 + 20, 10), "origin": (x0, 8)}
 
     block = _block_with_spans(
@@ -1307,12 +1337,12 @@ def test_lone_relation_symbol_from_a_symbol_font_stays_a_formula():
     assert sent == "Thus (part) {v1} (part, customer)." and len(formulas) == 1
 
 
-def test_inline_typewriter_words_keep_their_glyphs():
+def test_inline_typewriter_words_keep_their_glyphs() -> None:
     """Monospace attribute names in a sentence are replaced by placeholders and put back as the original glyphs. Blocks
     entirely in monospace are not handled here; those are code blocks."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, font, x0):
+    def span(text: str, font: str, x0: float) -> PdfDict:
         return {"text": text, "font": font, "size": 10.0, "bbox": (x0, 0, x0 + 40, 10), "origin": (x0, 8)}
 
     block = _block_with_spans(
@@ -1329,7 +1359,7 @@ def test_inline_typewriter_words_keep_their_glyphs():
     assert sent == "the total sales of {v1} that was bought" and len(formulas) == 1
 
 
-def test_list_number_keeps_its_point():
+def test_list_number_keeps_its_point() -> None:
     from app.formats.pdf_restore import _list_number
 
     assert _list_number("1. x is a partial order, and", "1。x 是一个偏序，并且") == "1. x 是一个偏序，并且"
@@ -1339,7 +1369,7 @@ def test_list_number_keeps_its_point():
     assert _list_number("Figure 12: Bars", "图 12: 条") == "图 12: 条"
 
 
-def _page_data(*lines):
+def _page_data(*lines: list[tuple[str, str]]) -> PdfDict:
     """Minimal get_text("dict") structure: each argument is the span list of one line as (font, text)."""
     return {
         "blocks": [
@@ -1353,7 +1383,7 @@ def _page_data(*lines):
     }
 
 
-def test_computer_modern_upright_is_math_when_the_body_is_times():
+def test_computer_modern_upright_is_math_when_the_body_is_times() -> None:
     """In a paper set in Times, CMR only writes log, min, parentheses and equals signs, so it is a formula. In a paper
     set in CM it is body text."""
     from app.formats.pdf_formula_runs import _is_formula_span
@@ -1370,7 +1400,7 @@ def test_computer_modern_upright_is_math_when_the_body_is_times():
     assert "math" not in modern["blocks"][0]["lines"][0]["spans"][0]
 
 
-def test_a_font_that_writes_math_alphabet_letters_is_math():
+def test_a_font_that_writes_math_alphabet_letters_is_math() -> None:
     """A math italic missing from the font list (newtxmath with Cochineal is called cochMI) maps letters to math
     letters such as 𝑁 and 𝑡, and parentheses and commas in the same font count as formula too. A font that only
     occasionally puts a math letter into body text does not count."""
@@ -1393,7 +1423,7 @@ def test_a_font_that_writes_math_alphabet_letters_is_math():
     assert _font_is_math("NewTXMI7") and _font_is_math("cochMRM") and not _font_is_math("Cochineal-Italic")
 
 
-def test_tex_spacing_accents_are_composed_before_translation():
+def test_tex_spacing_accents_are_composed_before_translation() -> None:
     from app.formats.pdf_units import _compose_accents
 
     assert _compose_accents("Universit´e de Montr´eal") == "Université de Montréal"
@@ -1405,7 +1435,7 @@ def test_tex_spacing_accents_are_composed_before_translation():
     assert _compose_accents("output ˆ{b}Y{/b}") == "output {b}Ŷ{/b}"
 
 
-def test_a_stacked_accent_is_split_from_the_glyphs_before_it():
+def test_a_stacked_accent_is_split_from_the_glyphs_before_it() -> None:
     """The hat in "(ˆ" overlaps the following y and is cut into a separate piece. The ˜ in a URL and the ˆ in a regex
     take their own width; they are ~ and ^ and are not cut."""
     from app.formats.pdf_math import _PageChars, _split_accents
@@ -1426,20 +1456,19 @@ def test_a_stacked_accent_is_split_from_the_glyphs_before_it():
     assert texts == ["(", "\u02c6", "y", "nyu.edu/~roweis", 'r"^The"']
 
 
-def test_caption_number_is_restored_inside_style_marks():
+def test_caption_number_is_restored_inside_style_marks() -> None:
     from app.formats.pdf_restore import _list_number
 
     assert _list_number("Figure 2: Samples", "{z110}图二:{/z} 模型样本") == "{z110}图 2:{/z} 模型样本"
     assert _list_number("Table 1: Parzen", "{z110}{b}表一：{/b}{/z} 基于") == "{z110}{b}表 1：{/b}{/z} 基于"
 
 
-def test_small_caps_heading_is_sent_without_size_marks():
+def test_small_caps_heading_is_sent_without_size_marks() -> None:
     """A small-caps heading with the initial one size larger and the rest one size smaller is one font, so no size mark
     is inserted inside the word."""
-    from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, size, x0):
+    def span(text: str, size: float, x0: float) -> PdfDict:
         return {
             "text": text,
             "font": "NimbusRomNo9L-Regu",
@@ -1465,13 +1494,12 @@ def test_small_caps_heading_is_sent_without_size_marks():
     assert sent == "2.1 ADAM’S UPDATE"
 
 
-def test_small_caps_words_in_body_text_take_the_body_size():
+def test_small_caps_words_in_body_text_take_the_body_size() -> None:
     """A whole word in small caps in body text (AGENT) is one size smaller than the body; copying the small size into
     the Chinese translation would cram it together."""
-    from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, size, x0, base=110):
+    def span(text: str, size: float, x0: float, base: float = 110) -> PdfDict:
         return {
             "text": text,
             "font": "NimbusRomNo9L-Regu",
@@ -1496,7 +1524,7 @@ def test_small_caps_words_in_body_text_take_the_body_size():
     assert sent.startswith("roles like AGENT, or the{z")
 
 
-def test_bare_chinese_section_number_is_restored():
+def test_bare_chinese_section_number_is_restored() -> None:
     from app.formats.pdf_restore import _normalize_heading_number
 
     assert _normalize_heading_number("2 ALGORITHM", "二 算法") == "2 算法"
@@ -1505,7 +1533,7 @@ def test_bare_chinese_section_number_is_restored():
     assert _normalize_heading_number("1 A new idea", "一种新想法") == "一种新想法"
 
 
-def test_union_box_matches_rect_union():
+def test_union_box_matches_rect_union() -> None:
     from app.formats.pdf_formula_runs import _union_box
 
     rects = [
@@ -1517,16 +1545,22 @@ def test_union_box_matches_rect_union():
     ]
     for a in rects:
         for b in rects:
-            assert tuple(_union_box(a, b)) == tuple(a | b)
+            assert _bbox(_union_box(a, b)) == _bbox(a | b)
 
 
-def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monkeypatch):
+def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Two jobs running at the same time must not use MuPDF together (find_tables changes a process-wide glyph box
     setting); the MuPDF work runs in a thread, so the event loop keeps answering other requests."""
     import threading
     import time
 
     from app.formats import pdf, pdf_extract, pdf_units
+    from app.formats.pdf_extract import _extract
+    from app.formats.pdf_frame import TextFrame
+    from app.formats.pdf_layout import PageGeometry, PageScan
+    from app.formats.pdf_output import _render_by_parts
 
     src = tmp_path / "a.pdf"
     doc = pymupdf.open()
@@ -1534,12 +1568,12 @@ def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monk
     doc.save(src)
 
     inside = most = 0
-    stages: list[tuple] = []
+    stages: list[tuple[str, int, int, str]] = []
     # Calls made on the main thread that runs the event loop
     on_loop: list[str] = []
 
-    def counted(real):
-        def wrapper(*args, **kwargs):
+    def counted[**P, R](real: Callable[P, R]) -> Callable[P, R]:
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             nonlocal inside, most
             if threading.current_thread() is threading.main_thread():
                 on_loop.append(real.__name__)
@@ -1553,27 +1587,35 @@ def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monk
 
         return wrapper
 
-    real_geometry = pdf_units.PageGeometry
-
     # Previously computed page by page on the event loop
-    class SlowGeometry(real_geometry):
+    class SlowGeometry(PageGeometry):
         @classmethod
-        def from_page(cls, *args, **kwargs):
+        def from_page(
+            cls,
+            page: pymupdf.Page,
+            text_rects: list[pymupdf.Rect],
+            frame: TextFrame | None = None,
+            scan: PageScan | None = None,
+        ) -> PageGeometry:
             if threading.current_thread() is threading.main_thread():
                 on_loop.append("from_page")
-            return real_geometry.from_page(*args, **kwargs)
+            return PageGeometry.from_page(page, text_rects, frame=frame, scan=scan)
 
-    monkeypatch.setattr(pdf_units, "_extract", counted(pdf_units._extract))
-    monkeypatch.setattr(pdf, "_render_by_parts", counted(pdf._render_by_parts))
+    # pdf_units and pdf use these through their own imports, which are replaced there
+    monkeypatch.setattr(pdf_units, "_extract", counted(_extract))
+    monkeypatch.setattr(pdf, "_render_by_parts", counted(_render_by_parts))
     monkeypatch.setattr(pdf_extract, "PageGeometry", SlowGeometry)
     monkeypatch.setattr(pdf_units, "PageGeometry", SlowGeometry)
 
-    async def scenario():
+    def report_stage(name: str, done: int = 0, total: int = 0, unit: str = "") -> None:
+        stages.append((name, done, total, unit))
+
+    async def scenario() -> list[list[Path]]:
         for name in "ab":
             (tmp_path / name).mkdir()
         runners = [runner() for _ in "ab"]
         for r in runners:
-            r.report_stage = lambda name, done=0, total=0, unit="": stages.append((name, done, total, unit))
+            monkeypatch.setattr(r, "report_stage", report_stage)
         return await asyncio.gather(
             *(pdf.translate_pdf(src, tmp_path / name, r, False, "zh-CN") for name, r in zip("ab", runners))
         )
@@ -1588,12 +1630,23 @@ def test_pdf_jobs_take_turns_with_mupdf_and_keep_the_loop_running(tmp_path, monk
     assert [pymupdf.open(out)[0].get_text() for [out] in outs] == [pymupdf.open(outs[0][0])[0].get_text()] * 2
 
 
-def test_resumed_pdf_job_reads_back_its_layout_analysis(tmp_path, monkeypatch):
+def test_resumed_pdf_job_reads_back_its_layout_analysis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When a job is resumed and neither the source file nor the code has changed, the previous layout analysis is
     read back instead of analyzing page by page again; the output matches the first run. When the source file has
     changed, it is analyzed again."""
     from app.formats import pdf_units
     from app.formats.pdf import translate_pdf
+    from app.formats.pdf_extract import _extract
+    from app.runner import Runner
+    from app.translators import MockTranslator
+    from tests.helpers import MemCache
+
+    class TitledTranslator(MockTranslator):
+        """A mock engine with the title attribute that Runner.set_title fills, as LLM engines have."""
+
+        def __init__(self, target_lang: str) -> None:
+            super().__init__(target_lang)
+            self.title = ""
 
     doc = pymupdf.open()
     page = doc.new_page(width=420, height=300)
@@ -1603,18 +1656,30 @@ def test_resumed_pdf_job_reads_back_its_layout_analysis(tmp_path, monkeypatch):
     src = tmp_path / "book.pdf"
     doc.save(src)
     saved = tmp_path / "plan.pickle"
-    calls = []
-    real_extract = pdf_units._extract
-    monkeypatch.setattr(pdf_units, "_extract", lambda *a, **k: calls.append(1) or real_extract(*a, **k))
+    calls: list[int] = []
 
-    def translate(out):
+    def recorded[**P, R](real: Callable[P, R]) -> Callable[P, R]:
+        def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+            calls.append(1)
+            return real(*args, **kwargs)
+
+        return wrapper
+
+    # pdf_units uses _extract through its own import, which is replaced there
+    monkeypatch.setattr(pdf_units, "_extract", recorded(_extract))
+
+    def translate(out: Path) -> tuple[pymupdf.Document, str, list[str]]:
         out.mkdir()
-        r = runner()
-        r.translator.title = ""
-        stages = []
-        r.report_stage = lambda name, *a: stages.append(name)
+        translator = TitledTranslator("zh-CN")
+        r = Runner(translator, cache=MemCache())
+        stages: list[str] = []
+
+        def report_stage(name: str, done: int = 0, total: int = 0, unit: str = "") -> None:
+            stages.append(name)
+
+        monkeypatch.setattr(r, "report_stage", report_stage)
         [path] = run(translate_pdf(src, out, r, False, "zh-CN", plan_path=saved))
-        return pymupdf.open(path), r.translator.title, stages
+        return pymupdf.open(path), translator.title, stages
 
     first, title, _ = translate(tmp_path / "a")
     assert saved.exists() and len(calls) == 1
@@ -1631,7 +1696,7 @@ def test_resumed_pdf_job_reads_back_its_layout_analysis(tmp_path, monkeypatch):
     assert len(calls) == 2
 
 
-def test_a_formula_at_a_line_start_keeps_its_opening_glue():
+def test_a_formula_at_a_line_start_keeps_its_opening_glue() -> None:
     """P( at the start of the next line begins the formula of that line. The font box of a CMSY minus sign in the
     formula on the line above reaches into this line, so comparing font boxes would attach P( to w_{n-2}w_{n-1}w_n
     on the line above and each formula would lose a piece."""
@@ -1691,18 +1756,17 @@ def test_a_formula_at_a_line_start_keeps_its_opening_glue():
     assert "bigram probability" in sent and sent.endswith("{v2}. Similarly, if we don’t have")
 
 
-def test_a_colored_example_sentence_stays_original_but_an_epigraph_does_not():
+def test_a_colored_example_sentence_stays_original_but_an_epigraph_does_not() -> None:
     """A colored example sentence set off with an indent in the middle of body text keeps the original text, because the
     following text discusses words of the original sentence. A chapter epigraph is set the same way with its source
     after it and is translated as usual."""
-    from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_unit_blocks import _attribution, _colored_example
 
     frame = TextFrame(142.2, 475.2, 82.0, 719.0, 10.0)
 
-    def blk(text, rect, color=0x0000FF, size=10.0, flags=0):
-        rect = pymupdf.Rect(rect)
+    def blk(text: str, bbox: Box, color: int = 0x0000FF, size: float = 10.0, flags: int = 0) -> TextBlock:
+        rect = pymupdf.Rect(bbox)
         return TextBlock(
             page=0,
             rect=rect,
@@ -1727,7 +1791,7 @@ def test_a_colored_example_sentence_stays_original_but_an_epigraph_does_not():
     )
 
 
-def test_a_split_off_period_keeps_its_own_baseline():
+def test_a_split_off_period_keeps_its_own_baseline() -> None:
     """The space of " ." lies on the baseline of a subscript inside a radical; after the split the period must use its
     own origin so erasing can find it."""
     from app.formats.pdf_math import _split_covered
@@ -1746,7 +1810,7 @@ def test_a_split_off_period_keeps_its_own_baseline():
     assert pieces[1]["origin"] == (457.0, 613.0)
 
 
-def test_text_under_a_big_cmex_radical_is_part_of_the_formula():
+def test_text_under_a_big_cmex_radical_is_part_of_the_formula() -> None:
     """The large CMEX radical is extracted as the letter p, with a font box taller than the glyph. The bar starts at
     the upper right corner of its ink, and the Var below the bar is the radicand."""
     from app.formats.pdf_math import _mark_radicands, _PageChars
@@ -1775,7 +1839,7 @@ def test_text_under_a_big_cmex_radical_is_part_of_the_formula():
     assert marked and marked[0].get("math")
 
 
-def test_a_glyph_arrow_over_a_word_marks_both_as_formula():
+def test_a_glyph_arrow_over_a_word_marks_both_as_formula() -> None:
     """esvect's \\vv{woman} is extracted as "#    »": no letters, ink that is a thin band, and a baseline less than an
     em above the word, right on top of woman. The arrow and woman are a formula, and the is close to after them is
     translated. Punctuation on the previous line does not count."""
@@ -1808,7 +1872,7 @@ def test_a_glyph_arrow_over_a_word_marks_both_as_formula():
     assert not marked["end of the line above, ..."] and not marked["____"]
 
 
-def test_a_relation_word_after_an_equals_sign_in_the_formula_is_dropped():
+def test_a_relation_word_after_an_equals_sign_in_the_formula_is_dropped() -> None:
     """y_c = went into the formula image, and the 1 after it is body text. The model writes "为 1" once more, so the
     result reads "y_c = 为 1"."""
     from app.formats.pdf_restore import _restore_placeholders
@@ -1819,9 +1883,8 @@ def test_a_relation_word_after_an_equals_sign_in_the_formula_is_dropped():
     assert _restore_placeholders("而 {v1} 大于 1 时", [{"text": "β <"}]) == "而 \x01i\x021\x01/i\x02 1 时"
 
 
-def test_a_colored_example_on_its_own_line_needs_no_period():
+def test_a_colored_example_on_its_own_line_needs_no_period() -> None:
     """A colored example set on its own line often has no period (The green witch arrived)."""
-    from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_frame import TextFrame
     from app.formats.pdf_unit_blocks import _colored_example
 
@@ -1841,14 +1904,14 @@ def test_a_colored_example_on_its_own_line_needs_no_period():
     assert _colored_example(block, frame)
 
 
-def test_a_wrapped_formula_with_tall_glyph_boxes_is_split_by_baseline():
+def test_a_wrapped_formula_with_tall_glyph_boxes_is_split_by_baseline() -> None:
     """The upper and lower pieces of a wrapped formula ((o_i ≻ | o_j|x)) have slightly overlapping font boxes; by
     baseline they are two lines, so they become two pieces and are not merged into one box spanning the column.
     Values from ed3book p226."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, font, size, box, base, ink=None):
-        out = {"text": text, "font": font, "size": size, "bbox": box, "origin": (box[0], base)}
+    def span(text: str, font: str, size: float, box: Box, base: float, ink: Box | None = None) -> PdfDict:
+        out: PdfDict = {"text": text, "font": font, "size": size, "bbox": box, "origin": (box[0], base)}
         if ink is not None:
             out["ink"] = ink
         return out
@@ -1880,7 +1943,7 @@ def test_a_wrapped_formula_with_tall_glyph_boxes_is_split_by_baseline():
     assert len(parts) == 2 and parts[0]["bbox"].x0 >= 450 and parts[1]["bbox"].x1 <= 170
 
 
-def test_formula_pieces_keep_their_source_order():
+def test_formula_pieces_keep_their_source_order() -> None:
     """A formula cut into pieces by a body-size variable ({v2} {b}W{/b}{v3}) whose order the model changed is put
     back in the original order. Pieces with Chinese between them are left alone; two or more letters form a word,
     which is not part of the formula sequence."""
@@ -1895,14 +1958,14 @@ def test_formula_pieces_keep_their_source_order():
     assert _keep_formula_chains("{v3} 是 {v2} 的一部分", source) == "{v3} 是 {v2} 的一部分"
 
 
-def _draw_visible_space(page, x, baseline):
+def _draw_visible_space(page: pymupdf.Page, x: float, baseline: float) -> None:
     """Draw a ␣ from three short lines the way LaTeX does: a 3pt base line with a 1.4pt vertical line at each end."""
     page.draw_line((x, baseline - 1.4), (x, baseline), width=0.4)
     page.draw_line((x, baseline), (x + 3, baseline), width=0.4)
     page.draw_line((x + 3, baseline - 1.4), (x + 3, baseline), width=0.4)
 
 
-def test_drawn_visible_space_is_read_into_the_text():
+def test_drawn_visible_space_is_read_into_the_text() -> None:
     """A drawn ␣ yields no text on extraction. One covering a space replaces the space, and one in a gap without text
     adds a ␣, separated from the preceding text by a space. The same shape off the text baseline (a tick mark in a
     figure) does not count."""
@@ -1928,14 +1991,13 @@ def test_drawn_visible_space_is_read_into_the_text():
     assert " ".join(lines[1:]) == "Next ␣ r (total)"
 
 
-def test_index_entries_get_notes_with_their_parent_entry():
+def test_index_entries_get_notes_with_their_parent_entry() -> None:
     """Notes for index entries: a subentry is attached by indent to the nearest preceding entry with a shallower
     indent, and an entry with subentries lists the first few. Across columns the indent is measured from the left
     edge of each column. Units not on an index page have no note."""
-    from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_units import _index_notes
 
-    def block(text, x0, y0, index=True):
+    def block(text: str, x0: float, y0: float, index: bool = True) -> list[TextBlock]:
         rect = pymupdf.Rect(x0, y0, x0 + 80, y0 + 10)
         return [TextBlock(5, rect, [rect], text, 9.0, "#000", False, index=index)]
 
@@ -1960,14 +2022,14 @@ def test_index_entries_get_notes_with_their_parent_entry():
     assert "listed under the entry “log”" in notes[6]
 
 
-def test_wrapped_monospace_phrase_keeps_its_word_space():
+def test_wrapped_monospace_phrase_keeps_its_word_space() -> None:
     """The monospace example my dog is | hairy breaks between words, so the two pieces side by side keep a word space
     as wide as the original space; for a URL broken inside a word or a formula broken after an operator, the two
     pieces still touch."""
     from app.formats.pdf_blocks import _PART_GAP
     from app.formats.pdf_unit_blocks import _wrap_gap
 
-    def span(text, x0, x1):
+    def span(text: str, x0: float, x1: float) -> PdfDict:
         return {"text": text, "font": "NimbusMonL-Regu", "size": 9.0, "bbox": (x0, 0, x1, 9)}
 
     line = [
@@ -1985,17 +2047,17 @@ def test_wrapped_monospace_phrase_keeps_its_word_space():
     )
 
 
-def test_a_font_that_only_writes_single_marks_beside_formulas_is_math():
+def test_a_font_that_only_writes_single_marks_beside_formulas_is_math() -> None:
     """The bitmap double-struck 1 (𝟙) is a Type3 font whose name is only a number, and it is extracted as 1. A font
     that writes only one or two characters in the whole text, mostly next to formulas, is a formula font. A
     footnote mark font appearing alone in body text is not next to formulas and does not count."""
     from app.formats.pdf_blocks import _span_is_math
     from app.formats.pdf_math import _mark_formula_only_fonts
 
-    def span(font, text, x0, x1):
+    def span(font: str, text: str, x0: float, x1: float) -> PdfDict:
         return {"font": font, "text": text, "size": 10.0, "bbox": (x0, 50, x1, 60)}
 
-    data = {
+    data: PdfDict = {
         "blocks": [
             {
                 "type": 0,
@@ -2025,7 +2087,7 @@ def test_a_font_that_only_writes_single_marks_beside_formulas_is_math():
     assert not _span_is_math(second[1]) and not _span_is_math(first[0])
 
 
-def test_a_script_left_of_a_letter_is_not_its_script():
+def test_a_script_left_of_a_letter_is_not_its_script() -> None:
     """The numerator of an inline fraction (one size smaller) overlaps vertically with an italic x later on the same
     line, with . Each token in between them; x is not its base."""
     from app.formats.pdf_formula_runs import _script_base
@@ -2043,14 +2105,14 @@ def test_a_script_left_of_a_letter_is_not_its_script():
     )
 
 
-def test_a_wrapped_fraction_piece_sits_on_its_line_baseline():
+def test_a_wrapped_fraction_piece_sits_on_its_line_baseline() -> None:
     """A fraction wrapped to the start of the next line (… and λ2 = | 1/2, what is …) measures its descent from the
     baseline of the body text on that line, not from the baseline of the denominator: numerator and denominator are
     the same size, so measuring to the denominator would raise the whole fraction on placement and push the
     numerator onto the previous line."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text, font, size, x0, x1, base, top=None):
+    def span(text: str, font: str, size: float, x0: float, x1: float, base: float, top: float | None = None) -> PdfDict:
         return {
             "text": text,
             "font": font,

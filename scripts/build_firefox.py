@@ -24,6 +24,7 @@ BACKGROUND_SCRIPTS = ["settings.js", "sites.js", "background.js"]
 GECKO = {"id": "doc-translator@pfzhan", "strict_min_version": "128.0"}
 
 
+# A manifest is a JSON object with values of mixed types, hence Any
 def firefox_manifest(chrome: dict[str, Any]) -> dict[str, Any]:
     """The Chrome manifest with Firefox's background and add-on id."""
     manifest = dict(chrome)

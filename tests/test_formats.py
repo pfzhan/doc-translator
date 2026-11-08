@@ -1,9 +1,12 @@
 import asyncio
+import shutil
+import tempfile
 import zipfile
 from pathlib import Path
+from typing import Never
 
 import pytest
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from app.formats import translate_file
 from app.formats.epub import _content_docs, translate_epub
@@ -13,6 +16,7 @@ from app.formats.pdf_blocks import _join_lines
 from app.runner import Runner
 from app.translators import MockTranslator, OpenAITranslator
 from tests.helpers import SAMPLES, MemCache, _write_epub, run, runner
+from tests.test_html_page import _attr, _tag
 
 MD = """---
 title: Demo
@@ -41,7 +45,7 @@ print("keep me")
 """
 
 
-def test_markdown_translated_only():
+def test_markdown_translated_only() -> None:
     blocks = split_blocks(MD)
     texts = collect_segments(blocks)
     assert "Hello World" in texts
@@ -59,7 +63,7 @@ def test_markdown_translated_only():
     assert out.startswith("---\ntitle: Demo\n---")
 
 
-def test_markdown_bilingual_keeps_original():
+def test_markdown_bilingual_keeps_original() -> None:
     blocks = split_blocks(MD)
     texts = collect_segments(blocks)
     out = render(blocks, ["T:" + t for t in texts], bilingual=True)
@@ -68,7 +72,7 @@ def test_markdown_bilingual_keeps_original():
     assert "foo<br>T:foo" in out
 
 
-def _epub_texts(path):
+def _epub_texts(path: Path) -> str:
     z = zipfile.ZipFile(path)
     assert z.infolist()[0].filename == "mimetype"
     assert z.infolist()[0].compress_type == zipfile.ZIP_STORED
@@ -78,7 +82,7 @@ def _epub_texts(path):
 
 @pytest.mark.parametrize("name", ["alice.epub", "alice.mobi", "alice.azw3"])
 @pytest.mark.parametrize("bilingual", [True, False])
-def test_ebooks(tmp_path, name, bilingual):
+def test_ebooks(tmp_path: Path, name: str, bilingual: bool) -> None:
     src = SAMPLES / name
     if not src.exists():
         pytest.skip("sample missing")
@@ -92,20 +96,20 @@ def test_ebooks(tmp_path, name, bilingual):
     assert ("Alice was beginning to get very tired" in plain) == bilingual
 
 
-def test_llm_unparseable_batch_falls_back_to_single():
+def test_llm_unparseable_batch_falls_back_to_single(monkeypatch: pytest.MonkeyPatch) -> None:
     tr = OpenAITranslator("zh-CN", api_key="x", base_url="http://localhost", model="m")
-    calls = []
+    calls: list[str] = []
 
-    async def fake_complete(system, content):
+    async def fake_complete(system: str, content: str) -> str:
         calls.append(content)
         return "garbage" if len(calls) == 1 else "你好"
 
-    tr._complete = fake_complete
+    monkeypatch.setattr(tr, "_complete", fake_complete)
     assert run(tr.translate_batch(["a", "b"])) == ["你好", "你好"]  # Batch result unparseable, translate one by one
     assert len(calls) == 3
 
 
-def test_epub_chapter_with_internal_dtd_not_dropped(tmp_path):
+def test_epub_chapter_with_internal_dtd_not_dropped(tmp_path: Path) -> None:
     """XHTML chapter with an internal DTD subset: lxml-xml silently produces an empty document, so the fallback must
     keep the content."""
     chapter = (
@@ -127,7 +131,7 @@ def test_epub_chapter_with_internal_dtd_not_dropped(tmp_path):
     assert "[zh-CN] Chapter one text here" in text
 
 
-def test_epub_named_entities_survive_xml_parsing(tmp_path):
+def test_epub_named_entities_survive_xml_parsing(tmp_path: Path) -> None:
     """lxml-xml must not drop &rsquo;, &nbsp; and &mdash; in an XHTML 1.1 chapter; both the original and the
     translation keep these characters."""
     chapter = (
@@ -144,7 +148,7 @@ def test_epub_named_entities_survive_xml_parsing(tmp_path):
     assert "[zh-CN] Don\u2019t stop" in text
 
 
-def test_epub_html_style_void_tags_and_bare_ampersands_keep_text(tmp_path):
+def test_epub_html_style_void_tags_and_bare_ampersands_keep_text(tmp_path: Path) -> None:
     """EPUB2 files often have unclosed <br> and <img ...> tags and bare &. lxml-xml's recovering parser drops &amp;
     and &lt; from the first error on and nests paragraphs inside each other. The markup is first repaired into
     well-formed XML and then parsed; case-sensitive attributes such as the SVG viewBox are not affected."""
@@ -170,7 +174,7 @@ def test_epub_html_style_void_tags_and_bare_ampersands_keep_text(tmp_path):
     assert b'viewBox="0 0 10 10"' in data
 
 
-def test_mobi7_cp1252_decoding(tmp_path):
+def test_mobi7_cp1252_decoding(tmp_path: Path) -> None:
     """book.html of an old MOBI7 file is decoded as cp1252: characters such as é must not become U+FFFD."""
     html_file = tmp_path / "book.html"
     html_file.write_bytes("<html><body><p>café et naïve</p></body></html>".encode("cp1252"))
@@ -181,14 +185,20 @@ def test_mobi7_cp1252_decoding(tmp_path):
     assert "café et naïve" in _xhtml_from_mobi7(text).decode("utf-8")
 
 
-def test_mobi_temp_dir_removed_when_unpack_fails(tmp_path, monkeypatch):
+def test_mobi_temp_dir_removed_when_unpack_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The temporary directory is removed when unpacking fails (DRM, broken file) too."""
     from app.formats import mobi as mobi_format
 
     work = tmp_path / "mobiex-fail"
-    monkeypatch.setattr(mobi_format.tempfile, "mkdtemp", lambda prefix="": (work.mkdir(), str(work))[1])
 
-    def broken(*a, **kw):
+    def make_work(prefix: str = "") -> str:
+        work.mkdir()
+        return str(work)
+
+    # mobi uses the tempfile module itself
+    monkeypatch.setattr(tempfile, "mkdtemp", make_work)
+
+    def broken(*a: object, **kw: object) -> Never:
         (work / "partial.bin").write_bytes(b"x")
         raise ValueError("DRM")
 
@@ -200,7 +210,7 @@ def test_mobi_temp_dir_removed_when_unpack_fails(tmp_path, monkeypatch):
     assert not work.exists()
 
 
-def test_mobi_temp_dir_removed_after_cancelled_unpack(tmp_path, monkeypatch):
+def test_mobi_temp_dir_removed_after_cancelled_unpack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Job cancelled during unpacking: the directory is removed after the unpacking thread finishes writing, so no
     file written later by the thread is left behind."""
     import time
@@ -208,9 +218,15 @@ def test_mobi_temp_dir_removed_after_cancelled_unpack(tmp_path, monkeypatch):
     from app.formats import mobi as mobi_format
 
     work = tmp_path / "mobiex-cancel"
-    monkeypatch.setattr(mobi_format.tempfile, "mkdtemp", lambda prefix="": (work.mkdir(), str(work))[1])
 
-    def slow(src, out, **kw):
+    def make_work(prefix: str = "") -> str:
+        work.mkdir()
+        return str(work)
+
+    # mobi uses the tempfile module itself
+    monkeypatch.setattr(tempfile, "mkdtemp", make_work)
+
+    def slow(src: str, out: str, **kw: object) -> None:
         time.sleep(0.3)
         (Path(out) / "mobi7").mkdir()
         (Path(out) / "mobi7" / "book.html").write_text("<html></html>")
@@ -219,7 +235,7 @@ def test_mobi_temp_dir_removed_after_cancelled_unpack(tmp_path, monkeypatch):
     src = tmp_path / "book.mobi"
     src.write_bytes(b"not a real book")
 
-    async def scenario():
+    async def scenario() -> None:
         task = asyncio.create_task(mobi_format.translate_mobi(src, tmp_path, runner(), False, "zh-CN"))
         await asyncio.sleep(0.05)
         task.cancel()
@@ -231,7 +247,7 @@ def test_mobi_temp_dir_removed_after_cancelled_unpack(tmp_path, monkeypatch):
     assert not work.exists()
 
 
-def test_cancelled_calibre_conversion_is_killed(tmp_path, monkeypatch):
+def test_cancelled_calibre_conversion_is_killed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Job paused or deleted during MOBI conversion: ebook-convert stops too and does not keep writing to the output
     directory in the background."""
     import os
@@ -242,7 +258,7 @@ def test_cancelled_calibre_conversion_is_killed(tmp_path, monkeypatch):
     exe = tmp_path / "ebook-convert"
     exe.write_text(f"#!/bin/sh\necho $$ > {pid_file}\nexec sleep 30\n")
     exe.chmod(0o755)
-    monkeypatch.setattr(mobi_format.shutil, "which", lambda name: str(exe))
+    monkeypatch.setattr(shutil, "which", lambda name: str(exe))  # mobi uses the shutil module itself
 
     def alive(pid: int) -> bool:
         try:
@@ -251,7 +267,7 @@ def test_cancelled_calibre_conversion_is_killed(tmp_path, monkeypatch):
             return False
         return state != "Z"
 
-    async def scenario():
+    async def scenario() -> int:
         task = asyncio.create_task(mobi_format._calibre_convert(tmp_path / "a.epub", tmp_path / "a.mobi"))
         while not pid_file.exists() or not pid_file.read_text().strip():
             await asyncio.sleep(0.02)
@@ -269,7 +285,7 @@ def test_cancelled_calibre_conversion_is_killed(tmp_path, monkeypatch):
     run(scenario())
 
 
-def test_markdown_list_does_not_swallow_following_blocks():
+def test_markdown_list_does_not_swallow_following_blocks() -> None:
     """A heading or quote right after a list without a blank line is a separate block and is not merged into the last
     list item."""
     blocks = split_blocks("- item\n# Heading\n> quote")
@@ -277,7 +293,7 @@ def test_markdown_list_does_not_swallow_following_blocks():
     assert collect_segments(blocks) == ["item", "Heading", "quote"]
 
 
-def test_markdown_list_and_quote_interrupt_paragraph():
+def test_markdown_list_and_quote_interrupt_paragraph() -> None:
     """A list or quote right after a paragraph without a blank line is a separate block and is not merged into the
     paragraph."""
     blocks = split_blocks("Steps to install:\n- download\n- run setup\n\nSee below:\n> note here")
@@ -288,7 +304,7 @@ def test_markdown_list_and_quote_interrupt_paragraph():
     assert out == "T:Steps to install:\n- T:download\n- T:run setup\n\nT:See below:\n> T:note here"
 
 
-def test_markdown_quote_keeps_paragraphs_alerts_and_lists():
+def test_markdown_quote_keeps_paragraphs_alerts_and_lists() -> None:
     """Admonition markers, blank-line paragraph breaks, lists and code blocks inside a quote are kept, and each
     paragraph is translated separately."""
     src = (
@@ -308,7 +324,7 @@ def test_markdown_quote_keeps_paragraphs_alerts_and_lists():
     assert "> - first point  \n>   T:first point" in both
 
 
-def test_markdown_lazy_quote_continuation_stays_in_the_quote():
+def test_markdown_lazy_quote_continuation_stays_in_the_quote() -> None:
     """A line without > after a quoted paragraph still belongs to that paragraph (CommonMark lazy continuation), so
     one sentence is not translated as two. Lines after a heading, a list or a code block inside a quote are not
     continuation lines."""
@@ -339,7 +355,7 @@ def test_markdown_lazy_quote_continuation_stays_in_the_quote():
     assert out.endswith("> # T:Title\nT:plain") and "> # Title\n> # T:Title\n" in both
 
 
-def test_markdown_link_definitions_kept_verbatim():
+def test_markdown_link_definitions_kept_verbatim() -> None:
     """Link reference definitions are kept as they are and not joined into one line; footnote definitions have body
     text and are translated as usual."""
     src = (
@@ -353,7 +369,7 @@ def test_markdown_link_definitions_kept_verbatim():
     assert "\n[d]: https://example.com/docs\n[c]: https://img.shields.io/ci.svg\n" in out
 
 
-def test_markdown_title_skips_heading_without_text(tmp_path):
+def test_markdown_title_skips_heading_without_text(tmp_path: Path) -> None:
     """A first level-1 heading made only of digits has no translatable segment; taking the title must not index out of
     range."""
     src = tmp_path / "notes.md"
@@ -362,7 +378,7 @@ def test_markdown_title_skips_heading_without_text(tmp_path):
     assert out.read_text(encoding="utf-8") == "# 2024\n\n[zh-CN] Some body text here.\n"
 
 
-def test_markdown_toml_front_matter_kept():
+def test_markdown_toml_front_matter_kept() -> None:
     """Hugo +++ front matter is kept as it is, like YAML, and not sent for translation."""
     blocks = split_blocks('+++\ntitle = "Demo post"\ndraft = false\n+++\n\nBody text.')
     texts = collect_segments(blocks)
@@ -370,7 +386,7 @@ def test_markdown_toml_front_matter_kept():
     assert render(blocks, ["T"], bilingual=False).startswith('+++\ntitle = "Demo post"\ndraft = false\n+++\n')
 
 
-def test_markdown_long_fence_not_closed_by_inner_fence():
+def test_markdown_long_fence_not_closed_by_inner_fence() -> None:
     """``` inside a four-backtick fence is content and does not end the code block early."""
     src = "````markdown\n```python\nprint(1)\n```\n````\n\nAfter the block."
     blocks = split_blocks(src)
@@ -378,7 +394,7 @@ def test_markdown_long_fence_not_closed_by_inner_fence():
     assert blocks[0].kind == "raw" and blocks[0].lines[-1] == "````"
 
 
-def test_markdown_loose_list_continuation_translated_in_place():
+def test_markdown_loose_list_continuation_translated_in_place() -> None:
     """An indented continuation paragraph in a loose list belongs to the list item and is translated as usual with its
     indentation kept; only a paragraph indented 4 more spaces is a code block."""
     src = (
@@ -395,7 +411,7 @@ def test_markdown_loose_list_continuation_translated_in_place():
     )
 
 
-def test_markdown_tab_indented_code_kept_verbatim():
+def test_markdown_tab_indented_code_kept_verbatim() -> None:
     """Tab indentation makes a code block like four spaces; a tab-indented continuation paragraph in a list item is
     still body text."""
     src = "Run this:\n\n\tpip install foo\n\tfoo --help\n\nDone.\n\n- item one\n\n\tcontinued paragraph."
@@ -406,7 +422,7 @@ def test_markdown_tab_indented_code_kept_verbatim():
     assert "\n\tpip install foo\n\tfoo --help\n" in out and "\n\tT:continued paragraph." in out
 
 
-def test_markdown_paragraph_starting_with_inline_tag_is_translated():
+def test_markdown_paragraph_starting_with_inline_tag_is_translated() -> None:
     """A paragraph starting with an inline tag or an autolink is translated as usual; block-level tags and a single tag
     on its own line are still kept as HTML blocks."""
     src = (
@@ -417,7 +433,7 @@ def test_markdown_paragraph_starting_with_inline_tag_is_translated():
     assert collect_segments(blocks) == ["<kbd>Ctrl</kbd> copies the selection.", "<https://example.com> is our site."]
 
 
-def test_markdown_references_kept_original(tmp_path):
+def test_markdown_references_kept_original(tmp_path: Path) -> None:
     """The references section keeps the original text: a citation the model returns unchanged counts as an echo and
     fails, and with many entries the whole book fails."""
     src = tmp_path / "paper.md"
@@ -435,7 +451,7 @@ def test_markdown_references_kept_original(tmp_path):
     assert "[zh-CN] Body paragraph here." in text and "[zh-CN] Appendix text." in text
 
 
-def test_markdown_repeated_text_in_body_and_references(tmp_path):
+def test_markdown_repeated_text_in_body_and_references(tmp_path: Path) -> None:
     """The same sentence appears in the body and in the references: writing goes by position, so the body occurrence
     is translated and the references occurrence keeps the original text."""
     src = tmp_path / "paper.md"
@@ -450,14 +466,14 @@ def test_markdown_repeated_text_in_body_and_references(tmp_path):
     )
 
 
-def test_markdown_numbers_inside_paragraph_stay_in_paragraph():
+def test_markdown_numbers_inside_paragraph_stay_in_paragraph() -> None:
     """An ordered list interrupts a paragraph only when it starts at 1; a year after a line break in body text is not a
     list."""
     blocks = split_blocks("It happened in\n1990. Then more text.")
     assert [b.kind for b in blocks] == ["para"]
 
 
-def test_markdown_display_math_kept_verbatim():
+def test_markdown_display_math_kept_verbatim() -> None:
     """$$ formula blocks are kept as they are: not sent for translation, and lines starting with + or - inside them are
     not list items."""
     src = (
@@ -471,13 +487,13 @@ def test_markdown_display_math_kept_verbatim():
     assert "$$\nL = a\n+ b\n- c\n$$" in out and out.count("E = mc^2") == 1
 
 
-def test_markdown_unclosed_display_math_is_text():
+def test_markdown_unclosed_display_math_is_text() -> None:
     """An unclosed $$ stops being a formula at a blank line, and the following paragraphs are translated as usual."""
     blocks = split_blocks("$$ broken formula\n\nNext paragraph.")
     assert collect_segments(blocks) == ["$$ broken formula", "Next paragraph."]
 
 
-def test_markdown_tables_with_short_or_aligned_separators():
+def test_markdown_tables_with_short_or_aligned_separators() -> None:
     """One - per cell is enough for a GFM delimiter row, and colons may set alignment; a delimiter row whose column
     count differs from the header is not a table."""
     for sep in ("|-|-|", "| :-: | -: |", ":--|--:"):
@@ -492,7 +508,7 @@ def test_markdown_tables_with_short_or_aligned_separators():
     assert [b.kind for b in blocks] == ["setext"]
 
 
-def test_epub_nav_in_spine_parsed_once(tmp_path):
+def test_epub_nav_in_spine_parsed_once(tmp_path: Path) -> None:
     """The EPUB3 nav document is also in the spine: it goes through the label translation path once, without being
     parsed again or losing translations."""
     nav = (
@@ -528,7 +544,7 @@ def test_epub_nav_in_spine_parsed_once(tmp_path):
     assert "[zh-CN] Body paragraph" in ch_html
 
 
-def test_a_url_broken_across_lines_is_joined_without_a_space():
+def test_a_url_broken_across_lines_is_joined_without_a_space() -> None:
     """A URL wrapped at a / or after the scheme is joined back without a space; when the URL has ended and the next
     line is an ordinary word, a space is added as usual."""
     assert _join_lines(["available at https://github.com/", "tensorflow/tensor2tensor."]) == (
@@ -541,7 +557,7 @@ def test_a_url_broken_across_lines_is_joined_without_a_space():
     assert _join_lines(["the ratio a:", "b holds"]) == "the ratio a: b holds"
 
 
-def test_a_mark_closed_at_a_line_end_and_reopened_continues():
+def test_a_mark_closed_at_a_line_end_and_reopened_continues() -> None:
     """Each line closes its own marks. A next line that reopens the same marks continues the previous one, so the
     hyphen of a broken word can be recognized."""
     assert _join_lines(["In {i}Proceedings of the 2006 confer-{/i}", "{i}ence on methods{/i}, pages"]) == (
@@ -563,7 +579,7 @@ RICH_CHAPTER = (
 )
 
 
-def _rich_epub(path):
+def _rich_epub(path: Path) -> None:
     _write_epub(
         path,
         '<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>',
@@ -572,20 +588,23 @@ def _rich_epub(path):
     )
 
 
-def test_find_blocks_marks_rich_paragraphs():
+def test_find_blocks_marks_rich_paragraphs() -> None:
     from app.formats import html_blocks as hb
 
     soup = hb.parse(RICH_CHAPTER, xml=True)
     blocks = hb.find_blocks(soup)
     assert [html is not None for _, _, html in blocks] == [False, True]
-    assert "<b>bold</b>" in blocks[1][2] and 'href="https://example.com"' in blocks[1][2]
+    rich = blocks[1][2]
+    assert rich is not None
+    assert "<b>bold</b>" in rich and 'href="https://example.com"' in rich
 
 
-def test_apply_translation_html_keeps_tags_and_strips_script():
+def test_apply_translation_html_keeps_tags_and_strips_script() -> None:
     from app.formats import html_blocks as hb
 
     soup = hb.parse(RICH_CHAPTER, xml=True)
     el, _, html = hb.find_blocks(soup)[1]
+    assert html is not None
     hb.apply_translation_html(
         soup,
         el,
@@ -595,18 +614,19 @@ def test_apply_translation_html_keeps_tags_and_strips_script():
         "zh-CN",
     )
     p = soup.find_all("p")[1]
-    assert p.find("b").get_text() == "粗体"
-    assert p.find("a")["href"] == "https://example.com"
+    assert _tag(p.find("b")).get_text() == "粗体"
+    assert _attr(_tag(p.find("a")), "href") == "https://example.com"
     assert p.find("script") is None
 
 
-def test_apply_translation_html_falls_back_when_tags_lost():
+def test_apply_translation_html_falls_back_when_tags_lost() -> None:
     """The translation lost all inline tags (when the model ignores the rules): fall back to plain text and do not
     write an empty shell."""
     from app.formats import html_blocks as hb
 
     soup = hb.parse(RICH_CHAPTER, xml=True)
     el, _, html = hb.find_blocks(soup)[1]
+    assert html is not None
     hb.apply_translation_html(soup, el, html, "第一行<br>第二行，完全没有标签。", False, "zh-CN")
     p = soup.find_all("p")[1]
     assert p.find("b") is None
@@ -614,7 +634,7 @@ def test_apply_translation_html_falls_back_when_tags_lost():
     assert p.find("br") is not None
 
 
-def test_pagebreak_anchor_kept_without_rich_tags():
+def test_pagebreak_anchor_kept_without_rich_tags() -> None:
     """A paragraph whose only markup is a page-break anchor also takes the rich-text path; the anchor is restored when
     the translation drops it."""
     from app.formats import html_blocks as hb
@@ -631,16 +651,18 @@ def test_pagebreak_anchor_kept_without_rich_tags():
     assert len(blocks) == 1 and blocks[0][2] is not None
     assert 'id="page7"' in blocks[0][2]
     el, _, html = blocks[0]
+    assert html is not None
     hb.apply_translation_html(soup, el, html, "章节从这里继续。", False, "zh-CN")
     anchor = soup.find(id="page7")
     assert anchor is not None and "pagebreak" in str(anchor.get("epub:type") or anchor.get("type") or "")
 
 
-def test_sanitize_drops_event_handlers_and_script_urls():
+def test_sanitize_drops_event_handlers_and_script_urls() -> None:
     from app.formats import html_blocks as hb
 
     soup = hb.parse(RICH_CHAPTER, xml=True)
     el, _, html = hb.find_blocks(soup)[1]
+    assert html is not None
     hb.apply_translation_html(
         soup,
         el,
@@ -652,10 +674,11 @@ def test_sanitize_drops_event_handlers_and_script_urls():
     p = soup.find_all("p")[1]
     link = p.find("a")
     assert link is not None and "href" not in link.attrs and "onclick" not in link.attrs
-    assert p.find("b") is not None and "onerror" not in p.find("b").attrs
+    bold = p.find("b")
+    assert bold is not None and "onerror" not in bold.attrs
 
 
-def test_epub_rich_paragraphs_keep_inline_formatting(tmp_path):
+def test_epub_rich_paragraphs_keep_inline_formatting(tmp_path: Path) -> None:
     src = tmp_path / "book.epub"
     _rich_epub(src)
     [out] = run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))
@@ -665,7 +688,7 @@ def test_epub_rich_paragraphs_keep_inline_formatting(tmp_path):
     assert "[zh-CN]" in html
 
 
-def test_epub_kbd_text_kept_in_translation_only_mode(tmp_path):
+def test_epub_kbd_text_kept_in_translation_only_mode(tmp_path: Path) -> None:
     """When a paragraph has only inline tags such as <kbd>, the key text is sent to the translation service and is not
     lost in the translated-only version either."""
     src = tmp_path / "book.epub"
@@ -673,12 +696,12 @@ def test_epub_kbd_text_kept_in_translation_only_mode(tmp_path):
     [out] = run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))
     z = zipfile.ZipFile(out)
     html = z.read("OEBPS/ch1.xhtml").decode()
-    p = BeautifulSoup(html, "lxml").find("p")
+    p = _tag(BeautifulSoup(html, "lxml").find("p"))
     assert "[zh-CN]" in p.get_text() and "Ctrl+C" in p.get_text()
     assert "<kbd>Ctrl</kbd>" in html
 
 
-def test_epub_bilingual_translation_has_no_duplicate_ids(tmp_path):
+def test_epub_bilingual_translation_has_no_duplicate_ids(tmp_path: Path) -> None:
     """In the bilingual version the translated paragraph must not carry the original id and page-break anchor,
     otherwise the id is duplicated and the page number shows twice."""
     body = (
@@ -695,7 +718,7 @@ def test_epub_bilingual_translation_has_no_duplicate_ids(tmp_path):
     assert "[zh-CN]" in html and 'href="#n3"' in html
 
 
-def test_sanitize_rejects_anchor_only_translation():
+def test_sanitize_rejects_anchor_only_translation() -> None:
     """The original has text and the translation has only the anchor (model misbehaving): the translation is rejected
     and falls back without emptying the original paragraph."""
     from app.formats import html_blocks as hb
@@ -704,11 +727,11 @@ def test_sanitize_rejects_anchor_only_translation():
     el, _, html = hb.find_blocks(soup)[0]
     assert html is not None  # The anchor paragraph takes the rich-text path
     hb.apply_translation_html(soup, el, html, '<a id="page42"/>', False, "zh-CN")
-    p = soup.find("p")
+    p = _tag(soup.find("p"))
     assert p.get_text()  # Fallback keeps content: the original or a plain-text translation, never an empty shell
 
 
-def test_sanitize_rejects_numbered_pagebreak_as_only_text():
+def test_sanitize_rejects_numbered_pagebreak_as_only_text() -> None:
     """A pagebreak with a page number is not a surviving translation. A reply with only the anchor, a <br>, or empty
     tags plus the page number must not reduce the body text to the page number."""
     from app.formats import html_blocks as hb
@@ -727,7 +750,7 @@ def test_sanitize_rejects_numbered_pagebreak_as_only_text():
         el, _, html = hb.find_blocks(soup)[0]
         assert html is not None
         hb.apply_translation_html(soup, el, html, translated, False, "zh-CN")
-        text = soup.find("p").get_text()
+        text = _tag(soup.find("p")).get_text()
         assert soup.find(id="page7") is not None
         return text
 
@@ -738,7 +761,7 @@ def test_sanitize_rejects_numbered_pagebreak_as_only_text():
     assert "章节从这里继续。" in kept
 
 
-def test_sanitize_keeps_raster_data_image_but_strips_script_url():
+def test_sanitize_keeps_raster_data_image_but_strips_script_url() -> None:
     from app.formats import html_blocks as hb
 
     # Images are normally replaced by placeholders and not sent to the model; they go with the HTML only when the
@@ -750,11 +773,13 @@ def test_sanitize_keeps_raster_data_image_but_strips_script_url():
         '<img src="data:image/svg+xml;base64,PHN2Zw=="/> 和 '
         '<a href="javascript:alert(1)">坏链接</a><a href="https://x">链接</a>',
     )
+    assert nodes is not None
     soup = BeautifulSoup("<p></p>", "lxml")
+    p = _tag(soup.p)
     for n in nodes:
-        soup.p.append(n)
+        p.append(n)
     raster, svg = soup.find_all("img")
-    assert raster["src"].startswith("data:image/png") and not raster.has_attr("onerror")
+    assert _attr(raster, "src").startswith("data:image/png") and not raster.has_attr("onerror")
     assert not svg.has_attr("src")
     bad, good = soup.find_all("a")
     assert not bad.has_attr("href") and good["href"] == "https://x"
@@ -768,12 +793,12 @@ MATH_PARA = (
 )
 
 
-def _order(p) -> list[str]:
+def _order(p: Tag | None) -> list[str]:
     """Order of text and media elements in a paragraph: text as it is, media elements by tag name."""
-    return [c.name if getattr(c, "name", None) else str(c) for c in p.contents]
+    return [c.name if isinstance(c, Tag) else str(c) for c in _tag(p).contents]
 
 
-def test_epub_inline_math_and_images_stay_in_place(tmp_path):
+def test_epub_inline_math_and_images_stay_in_place(tmp_path: Path) -> None:
     """MathML and images in a paragraph are sent to the model as {vN} and put back at their original positions after
     translation; the bilingual version has them too."""
     from app.formats import html_blocks as hb
@@ -794,7 +819,7 @@ def test_epub_inline_math_and_images_stay_in_place(tmp_path):
     assert _order(translated) == ["[zh-CN] Let ", "math", " be a variable and ", "img", " holds."]
 
 
-def test_rich_paragraph_sends_placeholders_instead_of_mathml():
+def test_rich_paragraph_sends_placeholders_instead_of_mathml() -> None:
     """MathML in a rich-text paragraph is not sent to the model (<mtext> would get translated); it is replaced by a
     placeholder as on the plain-text path."""
     from app.formats import html_blocks as hb
@@ -807,12 +832,12 @@ def test_rich_paragraph_sends_placeholders_instead_of_mathml():
     [(el, text, html)] = hb.find_blocks(soup)
     assert html == "Let <em>f</em> be {v1} here." and text == "Let f be {v1} here."
     hb.apply_translation_html(soup, el, html, "设 <em>f</em> 为 {v1}。", False, "zh-CN")
-    p = soup.find("p")
+    p = _tag(soup.find("p"))
     assert _order(p) == ["设 ", "em", " 为 ", "math", "。"]
-    assert p.find("mtext").get_text() == "for all"
+    assert _tag(p.find("mtext")).get_text() == "for all"
 
 
-def test_lost_or_repeated_placeholders_keep_every_formula():
+def test_lost_or_repeated_placeholders_keep_every_formula() -> None:
     """The model drops, repeats or misnumbers placeholders: extra ones are removed, and formulas not put back are
     appended to the paragraph end in their original order, so none is lost."""
     from app.formats import html_blocks as hb
@@ -824,7 +849,7 @@ def test_lost_or_repeated_placeholders_keep_every_formula():
     assert _order(p) == ["设 ", "img", " 和 ", " 以及 ", "。", "math"]
 
 
-def test_identical_images_get_their_own_placeholders():
+def test_identical_images_get_their_own_placeholders() -> None:
     """Two identical images get a number each: bs4 Tag equality compares content, so lookup cannot use equality."""
     from app.formats import html_blocks as hb
 
@@ -835,7 +860,7 @@ def test_identical_images_get_their_own_placeholders():
     assert len(soup.find_all("img")) == 4
 
 
-def test_literal_placeholder_text_is_not_a_slot():
+def test_literal_placeholder_text_is_not_a_slot() -> None:
     """When the original already contains {v1} (template syntax), no placeholders are used and the original {v1} is
     translated as it is."""
     from app.formats import html_blocks as hb
@@ -848,7 +873,7 @@ def test_literal_placeholder_text_is_not_a_slot():
     assert _order(p) == ["img", "模板里用 {v1}。"]
 
 
-def test_source_line_wraps_are_spaces_not_line_breaks(tmp_path):
+def test_source_line_wraps_are_spaces_not_line_breaks(tmp_path: Path) -> None:
     """In a typeset XHTML paragraph the text spans several source lines and newlines are only whitespace; only <br>
     is a line break."""
     body = (
@@ -869,20 +894,20 @@ def test_source_line_wraps_are_spaces_not_line_breaks(tmp_path):
     # Two consecutive <br> between stanzas keep the blank line; <br> at the start or end of the paragraph does not
     # count
     assert poem.get_text("|") == "[zh-CN] First stanza line,|second line.|Next stanza here."
-    assert [c.name for c in poem.contents if c.name] == ["br", "br", "br"]
+    assert [c.name for c in poem.contents if isinstance(c, Tag)] == ["br", "br", "br"]
 
 
-def test_body_with_only_bare_text_is_translated(tmp_path):
+def test_body_with_only_bare_text_is_translated(tmp_path: Path) -> None:
     """Text directly inside <body> without any block-level element (common in chapters converted from MOBI) is
     translated as well."""
     src = tmp_path / "book.epub"
     _one_epub(src, {"ch1.xhtml": _xhtml("Some chapter text.<br/>More <i>text</i>.")})
     [out] = run(translate_epub(src, tmp_path, runner(), False, "zh-CN"))
-    body = BeautifulSoup(zipfile.ZipFile(out).read("OEBPS/ch1.xhtml"), "lxml-xml").find("body")
+    body = _tag(BeautifulSoup(zipfile.ZipFile(out).read("OEBPS/ch1.xhtml"), "lxml-xml").find("body"))
     assert "[zh-CN] Some chapter text." in body.get_text() and body.find("i") is not None
 
 
-def test_paragraph_with_only_a_formula_is_not_sent():
+def test_paragraph_with_only_a_formula_is_not_sent() -> None:
     """A paragraph with a single formula and no text is not sent for translation."""
     from app.formats import html_blocks as hb
 
@@ -893,7 +918,7 @@ def test_paragraph_with_only_a_formula_is_not_sent():
 # --- The references section keeps the original text ---
 
 
-def _biblio_epub(path):
+def _biblio_epub(path: Path) -> None:
     ch1 = (
         '<html xmlns="http://www.w3.org/1999/xhtml"><body>'
         "<h1>Chapter One</h1><p>Normal paragraph here.</p>"
@@ -914,7 +939,7 @@ def _biblio_epub(path):
     )
 
 
-def test_epub_bibliography_kept_original(tmp_path):
+def test_epub_bibliography_kept_original(tmp_path: Path) -> None:
     src = tmp_path / "book.epub"
     _biblio_epub(src)
     r = runner()
@@ -935,7 +960,7 @@ def test_epub_bibliography_kept_original(tmp_path):
     assert any("Doe, B." in s for s in skipped_srcs)
 
 
-def _one_epub(path, docs: dict[str, str]):
+def _one_epub(path: Path, docs: dict[str, str]) -> None:
     items = "".join(
         f'<item id="d{i}" href="{name}" media-type="application/xhtml+xml"/>' for i, name in enumerate(docs)
     )
@@ -950,7 +975,7 @@ def _xhtml(body: str) -> str:
     )
 
 
-def test_epub_chapter_titled_papers_ends_bibliography(tmp_path):
+def test_epub_chapter_titled_papers_ends_bibliography(tmp_path: Path) -> None:
     """In a flat document h2 Papers is the next chapter and must not keep the original text because the word looks
     like a subheading."""
     src = tmp_path / "book.epub"
@@ -970,7 +995,7 @@ def test_epub_chapter_titled_papers_ends_bibliography(tmp_path):
     assert "[zh-CN] Appendix paragraph here." in text
 
 
-def test_epub_deeper_heading_ends_flat_bibliography(tmp_path):
+def test_epub_deeper_heading_ends_flat_bibliography(tmp_path: Path) -> None:
     """In a single file the h2 appendix after the h1 references is the next chapter, so the rest of the document
     must not keep the original text.
 
@@ -995,7 +1020,7 @@ def test_epub_deeper_heading_ends_flat_bibliography(tmp_path):
     assert "[zh-CN] Second appendix paragraph." in text
 
 
-def test_epub_filename_substring_does_not_skip_chapter(tmp_path):
+def test_epub_filename_substring_does_not_skip_chapter(tmp_path: Path) -> None:
     src = tmp_path / "book.epub"
     _one_epub(
         src,
@@ -1010,7 +1035,7 @@ def test_epub_filename_substring_does_not_skip_chapter(tmp_path):
     assert "[zh-CN] Another normal paragraph." in text
 
 
-def test_epub_bibliography_file_still_exits_on_next_heading(tmp_path):
+def test_epub_bibliography_file_still_exits_on_next_heading(tmp_path: Path) -> None:
     src = tmp_path / "book.epub"
     _one_epub(
         src,
@@ -1025,7 +1050,7 @@ def test_epub_bibliography_file_still_exits_on_next_heading(tmp_path):
     assert "[zh-CN] Index entry text here." in text
 
 
-def test_epub_bibliography_continues_across_spine(tmp_path):
+def test_epub_bibliography_continues_across_spine(tmp_path: Path) -> None:
     src = tmp_path / "book.epub"
     _one_epub(
         src,
@@ -1042,7 +1067,7 @@ def test_epub_bibliography_continues_across_spine(tmp_path):
     assert "[zh-CN] Appendix paragraph here." in text
 
 
-def test_epub_repeated_citation_in_body_is_translated(tmp_path):
+def test_epub_repeated_citation_in_body_is_translated(tmp_path: Path) -> None:
     src = tmp_path / "book.epub"
     cite = "Smith, J. (2020). Some book. Press."
     _one_epub(
@@ -1065,7 +1090,7 @@ def test_epub_repeated_citation_in_body_is_translated(tmp_path):
     assert updates[cite_idxs[1]][2] == 1
 
 
-def test_epub_styled_heading_colon_and_epub_type(tmp_path):
+def test_epub_styled_heading_colon_and_epub_type(tmp_path: Path) -> None:
     src = tmp_path / "book.epub"
     _one_epub(
         src,
@@ -1096,7 +1121,7 @@ def test_epub_styled_heading_colon_and_epub_type(tmp_path):
     assert "[zh-CN] Glossary paragraph here." in text
 
 
-def test_preview_override_replaces_shared_translation():
+def test_preview_override_replaces_shared_translation() -> None:
     runner = Runner(MockTranslator("zh-CN"), cache=MemCache())
     runner.segments = [{"s": "2 Proposed", "k": "h2"}]
     runner._indices = {"2 Proposed": [0]}

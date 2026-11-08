@@ -293,7 +293,7 @@ eval/              PDF 分段、行内公式和模型的评测脚本，用法和
 .venv/bin/pytest
 ```
 
-`mypy` 的设置在 `pyproject.toml` 里，`app/` 全部按 `--strict` 检查。pymupdf 返回的字典（文字 span、绘图路径）在 `app/formats/pdf_types.py` 里统一标注为 `PdfDict`。测试使用临时数据目录（见上文 `DOC_TRANSLATOR_DATA`），不会用到项目的 `data/`。`tests/test_web_ui.py` 在 Chromium 里打开网页，出现任何脚本错误都会失败；没装 Playwright 或 Chromium 时跳过。
+`mypy` 的设置在 `pyproject.toml` 里，`app/`、`tests/`、`scripts/` 和 `eval/` 全部按 `--strict` 检查。pymupdf 返回的字典（文字 span、绘图路径）在 `app/formats/pdf_types.py` 里统一标注为 `PdfDict`。测试使用临时数据目录（见上文 `DOC_TRANSLATOR_DATA`），不会用到项目的 `data/`。`tests/test_web_ui.py` 在 Chromium 里打开网页，出现任何脚本错误都会失败；没装 Playwright 或 Chromium 时跳过。
 
 GitHub Actions（`.github/workflows/ci.yml`）在每个 pull request 和推送到 `main` 时，用 Python 3.12 和 3.14 运行同样的检查。它只安装 `requirements-dev.txt`，所以需要可选依赖的测试（例如模型用到的 `onnxruntime`）在那里会被跳过。
 

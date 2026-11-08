@@ -1,31 +1,33 @@
 import asyncio
 import json
 import re
+from pathlib import Path
+from typing import Never
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from app import main, state
-from app.services import ServiceError, ServiceStore
+from app.json_types import JSONDict
+from app.services import Service, ServiceError, ServiceStore
 from app.translators import (
     ClaudeTranslator,
     GeminiTranslator,
     GrokTranslator,
+    LLMTranslator,
     OpenAITranslator,
+    Translator,
     TranslatorError,
     create_translator,
 )
+from tests.helpers import run
 
 
-def run(coro):
-    return asyncio.run(coro)
-
-
-def fake_llm(provider: str, log: list):
+def fake_llm(provider: str, log: list[httpx.Request]) -> httpx.MockTransport:
     """A fake server that answers in each provider's API format with "translation = source prefixed with T:"."""
 
-    def handler(request: httpx.Request):
+    def handler(request: httpx.Request) -> httpx.Response:
         log.append(request)
         if request.method == "GET":
             if provider == "gemini":
@@ -82,8 +84,8 @@ def fake_marker_reply(user: str) -> str:
         ),
     ],
 )
-def test_providers_request_format(provider, cls, url):
-    log = []
+def test_providers_request_format(provider: str, cls: type[LLMTranslator], url: str) -> None:
+    log: list[httpx.Request] = []
     svc = {"provider": provider, "api_key": "sk-test", "model": "gemini-x" if provider == "gemini" else "m"}
     tr = create_translator(svc, "zh-CN", transport=fake_llm(provider, log))
     assert isinstance(tr, cls)
@@ -109,20 +111,22 @@ def test_providers_request_format(provider, cls, url):
     run(tr.aclose())
 
 
-def test_list_models():
-    log = []
+def test_list_models() -> None:
+    log: list[httpx.Request] = []
     tr = create_translator(
         {"provider": "gemini", "api_key": "k", "model": "x"}, "zh-CN", transport=fake_llm("gemini", log)
     )
+    assert isinstance(tr, LLMTranslator)
     assert run(tr.list_models()) == ["gemini-x"]
     tr = create_translator(
         {"provider": "openai", "api_key": "k", "model": "x"}, "zh-CN", transport=fake_llm("openai", log)
     )
+    assert isinstance(tr, LLMTranslator)
     assert run(tr.list_models()) == ["m-a", "m-b"]
 
 
-def test_custom_base_url_and_missing_key():
-    log = []
+def test_custom_base_url_and_missing_key() -> None:
+    log: list[httpx.Request] = []
     tr = create_translator(
         {"provider": "custom", "base_url": "http://localhost:11434/v1/", "model": "qwen"},
         "en",
@@ -137,7 +141,7 @@ def test_custom_base_url_and_missing_key():
         create_translator({"provider": "custom", "model": "m"}, "zh-CN")
 
 
-def test_build_messages_and_custom_prompt():
+def test_build_messages_and_custom_prompt() -> None:
     from app.prompts import build_messages
 
     system, user = build_messages(["a", "b"], "de", title="My Book")
@@ -154,7 +158,7 @@ def test_build_messages_and_custom_prompt():
     assert user == "Render:\n\nonly {{to}} literal"  # {{to}} in the source text must not be replaced
 
 
-def test_marker_parse_missing_item_is_retranslated():
+def test_marker_parse_missing_item_is_retranslated() -> None:
     from app.prompts import parse_markers
 
     assert parse_markers("```\n[[p1]]\nB\n[[p0]]\nA\nmore\n[[end]]\nignored\n```", 2) == {0: "A\nmore", 1: "B"}
@@ -162,9 +166,9 @@ def test_marker_parse_missing_item_is_retranslated():
     assert parse_markers("[[p0]]\n甲\n[[p1]]\n乙。\n[[END]]", 2) == {0: "甲", 1: "乙。"}
     assert parse_markers("[[p0]]\n甲\n[[p1]]\n乙。[[END]]\n多余", 2) == {0: "甲", 1: "乙。"}
 
-    calls = []
+    calls: list[str] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         user = json.loads(request.content)["messages"][-1]["content"]
         calls.append(user)
         # The batch reply deliberately omits p1
@@ -188,10 +192,10 @@ def test_marker_parse_missing_item_is_retranslated():
         ("gemini", "https://relay.example.com", "https://relay.example.com/v1beta/models/m:generateContent"),
     ],
 )
-def test_domain_only_base_url_gets_version_path(provider, base, expected):
-    log = []
+def test_domain_only_base_url_gets_version_path(provider: str, base: str, expected: str) -> None:
+    log: list[httpx.Request] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         log.append(request)
         if provider == "claude":
             return httpx.Response(200, json={"content": [{"type": "text", "text": "好"}]})
@@ -208,7 +212,7 @@ def test_domain_only_base_url_gets_version_path(provider, base, expected):
     assert str(log[0].url) == expected
 
 
-def test_html_response_gives_readable_error():
+def test_html_response_gives_readable_error() -> None:
     # A relay service answers an unknown path with its home page (200 + HTML), which used to raise JSONDecodeError
     # and become a 500
     tr = create_translator(
@@ -222,13 +226,13 @@ def test_html_response_gives_readable_error():
         run(tr.translate_batch(["good"]))
 
 
-def test_transient_400_from_relay_is_retried(monkeypatch):
+def test_transient_400_from_relay_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     # A relay service wraps an occasional upstream failure as 400 INVALID_MODEL_ID, and the same request succeeds a
     # few seconds later
     monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
-    calls = []
+    calls: list[httpx.Request] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         if len(calls) == 1:
             return httpx.Response(
@@ -244,11 +248,11 @@ def test_transient_400_from_relay_is_retried(monkeypatch):
 
 
 @pytest.mark.parametrize("status", [401, 403, 404])
-def test_config_errors_fail_fast(monkeypatch, status):
+def test_config_errors_fail_fast(monkeypatch: pytest.MonkeyPatch, status: int) -> None:
     monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
-    calls = []
+    calls: list[httpx.Request] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         return httpx.Response(status, json={"error": {"message": "bad key"}})
 
@@ -260,13 +264,13 @@ def test_config_errors_fail_fast(monkeypatch, status):
     assert len(calls) == 1  # Wrong key, no permission, wrong URL: retrying does not help, fail at once
 
 
-def test_batch_rejected_by_relay_is_split(monkeypatch):
+def test_batch_rejected_by_relay_is_split(monkeypatch: pytest.MonkeyPatch) -> None:
     # Measured: a batch of 8 paragraphs was rejected by a relay service with 400 every time, and each part translated
     # after splitting
     monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
-    sizes = []
+    sizes: list[int] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         user = json.loads(request.content)["messages"][-1]["content"]
         n = user.count("[[p") if "[[source_end]]" in user else 1
         sizes.append(n)
@@ -282,7 +286,7 @@ def test_batch_rejected_by_relay_is_split(monkeypatch):
     assert sizes == [8, 8, 4, 4]  # Retry once unchanged, then split in half
 
 
-def test_single_segment_400_still_fails(monkeypatch):
+def test_single_segment_400_still_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("app.translators.asyncio.sleep", _no_sleep)
     tr = create_translator(
         {"provider": "openai", "api_key": "k", "model": "m"},
@@ -294,14 +298,14 @@ def test_single_segment_400_still_fails(monkeypatch):
     assert e.value.status == 400
 
 
-async def _no_sleep(_seconds):
+async def _no_sleep(_seconds: float) -> None:
     return None
 
 
-def test_temperature_retry_without_it():
-    calls = []
+def test_temperature_retry_without_it() -> None:
+    calls: list[JSONDict] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         calls.append(body)
         if "temperature" in body:
@@ -317,8 +321,8 @@ def test_temperature_retry_without_it():
     assert len(calls) == 2 and "temperature" not in calls[1]
 
 
-def test_cache_key_follows_model_and_prompt():
-    def tr(sid, **kw):
+def test_cache_key_follows_model_and_prompt() -> None:
+    def tr(sid: str, **kw: str) -> Translator:
         return create_translator({"id": sid, "provider": "openai", "api_key": "k", "model": "a", **kw}, "zh-CN")
 
     a, b, c, d, e = tr("s1"), tr("s1"), tr("s1", model="b"), tr("s1", prompt="x"), tr("s2")
@@ -329,12 +333,12 @@ def test_cache_key_follows_model_and_prompt():
     assert len({a.cache_key, c.cache_key, d.cache_key, e.cache_key}) == 4
 
 
-def test_switching_model_retranslates_and_switching_back_hits_cache(tmp_path):
+def test_switching_model_retranslates_and_switching_back_hits_cache(tmp_path: Path) -> None:
     from app.runner import Cache, Runner
 
-    calls = []
+    calls: list[str] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         calls.append(json.loads(request.content)["model"])
         return httpx.Response(200, json={"choices": [{"message": {"content": "新译文"}}]})
 
@@ -342,7 +346,7 @@ def test_switching_model_retranslates_and_switching_back_hits_cache(tmp_path):
     cache = Cache(tmp_path / "cache.sqlite3")
     text = "A sentence long enough to be translated by the model."
 
-    def run_with(model):
+    def run_with(model: str) -> list[str]:
         tr = create_translator({**svc, "model": model}, "zh-CN", transport=httpx.MockTransport(handler))
         return run(Runner(tr, cache=cache).translate_all([text]))
 
@@ -355,26 +359,26 @@ def test_switching_model_retranslates_and_switching_back_hits_cache(tmp_path):
     assert calls == ["a", "b"]
 
 
-def test_cache_reused_only_for_same_service_id():
+def test_cache_reused_only_for_same_service_id() -> None:
     from app.runner import Runner
 
     class Cache:
-        def __init__(self):
-            self.d = {}
+        def __init__(self) -> None:
+            self.d: dict[tuple[str, str], str] = {}
 
-        def get_many(self, prefix, texts):
+        def get_many(self, prefix: str, texts: list[str]) -> dict[str, str]:
             return {t: self.d[(prefix, t)] for t in texts if (prefix, t) in self.d}
 
-        def put_many(self, prefix, pairs):
+        def put_many(self, prefix: str, pairs: dict[str, str]) -> None:
             self.d.update({(prefix, s): t for s, t in pairs.items()})
 
-    calls = []
+    calls: list[httpx.Request] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         return httpx.Response(200, json={"choices": [{"message": {"content": "译文"}}]})
 
-    def svc(sid):
+    def svc(sid: str) -> JSONDict:
         # The two services are identical except for the id (same relay service, same model)
         return {"id": sid, "provider": "openai", "api_key": "k", "model": "m", "base_url": "https://r.example.com/v1"}
 
@@ -388,22 +392,22 @@ def test_cache_reused_only_for_same_service_id():
     assert {k[0].split(":")[0] for k in cache.d} == {"svc-a", "svc-b"}
 
 
-def test_leaked_end_marker_is_cleaned_from_cached_translations():
+def test_leaked_end_marker_is_cleaned_from_cached_translations() -> None:
     """Translations in an old cache carry an extra [[END]] written by the model. On a cache hit it is removed and
     the result is written back to the cache."""
     from app.runner import Runner
 
     class Cache:
-        def __init__(self):
-            self.d = {}
+        def __init__(self) -> None:
+            self.d: dict[tuple[str, str], str] = {}
 
-        def get_many(self, prefix, texts):
+        def get_many(self, prefix: str, texts: list[str]) -> dict[str, str]:
             return {t: self.d[(prefix, t)] for t in texts if (prefix, t) in self.d}
 
-        def put_many(self, prefix, pairs):
+        def put_many(self, prefix: str, pairs: dict[str, str]) -> None:
             self.d.update({(prefix, s): t for s, t in pairs.items()})
 
-    def handler(request):
+    def handler(request: httpx.Request) -> Never:
         raise AssertionError("命中缓存，不该请求")
 
     svc = {"id": "svc-a", "provider": "openai", "api_key": "k", "model": "m", "base_url": "https://r.example.com/v1"}
@@ -416,7 +420,14 @@ def test_leaked_end_marker_is_cleaned_from_cached_translations():
     assert cache.d[(tr.cache_key, text)] == out[0]
 
 
-def test_store_crud(tmp_path):
+def _saved(store: ServiceStore, sid: str) -> Service:
+    """The stored service, which the test expects to exist."""
+    service = store.get(sid)
+    assert service is not None
+    return service
+
+
+def test_store_crud(tmp_path: Path) -> None:
     store = ServiceStore(tmp_path / "s.json")
     assert [s["id"] for s in store.services] == ["google"]
     svc = store.create({"provider": "claude", "name": "my-claude", "api_key": "sk-ant-1234567890"})
@@ -425,8 +436,8 @@ def test_store_crud(tmp_path):
 
     # An empty key does not overwrite the stored one
     store.update(svc["id"], {"api_key": "", "model": "claude-x"})
-    assert store.get(svc["id"])["api_key"] == "sk-ant-1234567890"
-    assert store.get(svc["id"])["model"] == "claude-x"
+    assert _saved(store, svc["id"])["api_key"] == "sk-ant-1234567890"
+    assert _saved(store, svc["id"])["model"] == "claude-x"
 
     store.set_default(svc["id"])
     with pytest.raises(ServiceError):
@@ -443,7 +454,7 @@ def test_store_crud(tmp_path):
     assert store2.default_id == "google"
 
 
-def test_a_saved_key_is_sent_only_to_its_own_address(tmp_path, monkeypatch):
+def test_a_saved_key_is_sent_only_to_its_own_address(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Testing a service, fetching its models or saving it with another API address used to reuse the saved key,
     sending it to whatever host the form named. A changed address now needs the key typed again."""
     store = ServiceStore(tmp_path / "s.json")
@@ -455,23 +466,28 @@ def test_a_saved_key_is_sent_only_to_its_own_address(tmp_path, monkeypatch):
         store.resolve(elsewhere)
     with pytest.raises(ServiceError, match="API Key"):
         store.update(sid, elsewhere)
-    assert store.get(sid)["base_url"] == "https://relay.example.com/v1"
+    assert _saved(store, sid)["base_url"] == "https://relay.example.com/v1"
 
     # The same address, written with a trailing slash, keeps the saved key
     assert store.resolve({"id": sid, "base_url": "https://relay.example.com/v1/"})["api_key"] == "sk-secret-1"
     # A new key, or clearing the key, goes with the new address
     assert store.resolve({**elsewhere, "api_key": "sk-new"})["api_key"] == "sk-new"
     store.update(sid, {"base_url": "https://other.example.com/v1", "api_key": "", "clear_api_key": True})
-    assert store.get(sid)["api_key"] == "" and store.get(sid)["base_url"] == "https://other.example.com/v1"
+    assert _saved(store, sid)["api_key"] == "" and _saved(store, sid)["base_url"] == "https://other.example.com/v1"
 
     # Through the API nothing is sent upstream
     sent: list[httpx.Request] = []
     store.update(sid, {"base_url": "https://relay.example.com/v1", "api_key": "sk-secret-1"})
     monkeypatch.setattr(state, "store", store)
-    monkeypatch.setattr(
-        "app.routes.services.create_translator",
-        lambda *a, **kw: create_translator(*a, **kw, transport=httpx.MockTransport(lambda r: sent.append(r))),
-    )
+
+    def record(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200)
+
+    def offline(service: JSONDict, target_lang: str, source_lang: str = "auto") -> Translator:
+        return create_translator(service, target_lang, source_lang, transport=httpx.MockTransport(record))
+
+    monkeypatch.setattr("app.routes.services.create_translator", offline)
     client = TestClient(main.app)
     for path in ("/api/services/test", "/api/services/models"):
         r = client.post(path, json=elsewhere)
@@ -479,7 +495,7 @@ def test_a_saved_key_is_sent_only_to_its_own_address(tmp_path, monkeypatch):
     assert sent == []
 
 
-def test_api_endpoints(tmp_path, monkeypatch):
+def test_api_endpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(state, "store", ServiceStore(tmp_path / "s.json"))
     client = TestClient(main.app)
     providers = client.get("/api/providers").json()
@@ -496,7 +512,7 @@ def test_api_endpoints(tmp_path, monkeypatch):
     assert r.status_code == 400 and "API Key" in r.json()["detail"]
 
 
-def test_corrupted_services_json_falls_back(tmp_path):
+def test_corrupted_services_json_falls_back(tmp_path: Path) -> None:
     """A corrupted services.json falls back to an empty configuration; the built-in Google Translate remains and
     startup is not affected."""
     path = tmp_path / "s.json"
@@ -507,7 +523,7 @@ def test_corrupted_services_json_falls_back(tmp_path):
     assert store.list()["default"] == "google"
 
 
-def test_ccswitch_default_unreadable_db_falls_back(tmp_path):
+def test_ccswitch_default_unreadable_db_falls_back(tmp_path: Path) -> None:
     """The default service comes from CC Switch but its database is temporarily unreadable: the setting is kept, and
     the effective default falls back to Google Translate."""
     path = tmp_path / "s.json"
@@ -518,23 +534,22 @@ def test_ccswitch_default_unreadable_db_falls_back(tmp_path):
     assert store.list()["default"] == "google"
 
 
-def test_empty_translation_is_not_cached(tmp_path):
+def test_empty_translation_is_not_cached(tmp_path: Path) -> None:
     """An empty translation is not cached and the source text is filled in (below the failure threshold); on retry
     the empty paragraphs are requested again."""
     from app.runner import Cache, Runner
 
-    class SometimesEmpty:
+    class SometimesEmpty(Translator):
         cache_key = "t"
         concurrency = 1
         max_batch_items = 20
         max_batch_chars = 3000
-        source_lang = "en"
-        target_lang = "zh-CN"
 
-        def __init__(self):
+        def __init__(self) -> None:
+            super().__init__("zh-CN", "en")
             self.calls = 0
 
-        async def translate_batch(self, texts):
+        async def translate_batch(self, texts: list[str]) -> list[str]:
             self.calls += 1
             if self.calls == 1 and len(texts) > 1:
                 return ["译:" + texts[0]] + [""] * (len(texts) - 1)  # First paragraph normal, the rest empty
@@ -553,19 +568,20 @@ def test_empty_translation_is_not_cached(tmp_path):
     assert tr.calls == 2
 
 
-def test_all_empty_translations_fail_on_short_doc(tmp_path):
+def test_all_empty_translations_fail_on_short_doc(tmp_path: Path) -> None:
     """With at most 3 paragraphs, an all-empty batch also fails and does not count as a finished translation."""
     from app.runner import Cache, Runner
 
-    class AlwaysEmpty:
+    class AlwaysEmpty(Translator):
         cache_key = "t"
         concurrency = 1
         max_batch_items = 20
         max_batch_chars = 3000
-        source_lang = "en"
-        target_lang = "zh-CN"
 
-        async def translate_batch(self, texts):
+        def __init__(self) -> None:
+            super().__init__("zh-CN", "en")
+
+        async def translate_batch(self, texts: list[str]) -> list[str]:
             return [""] * len(texts)
 
     runner = Runner(AlwaysEmpty(), cache=Cache(tmp_path / "c.sqlite3"))
@@ -574,7 +590,7 @@ def test_all_empty_translations_fail_on_short_doc(tmp_path):
     assert runner.info.failed == 2
 
 
-def test_rejects_requests_for_other_host_names():
+def test_rejects_requests_for_other_host_names() -> None:
     """DNS rebinding: after the domain of a malicious page resolves to 127.0.0.1, the Host header still carries that
     domain, and the request is rejected."""
     with TestClient(main.app, base_url="http://evil.example") as client:
@@ -583,7 +599,7 @@ def test_rejects_requests_for_other_host_names():
         assert client.get("/api/services").status_code == 200
 
 
-def test_a_marker_the_model_made_up_is_dropped():
+def test_a_marker_the_model_made_up_is_dropped() -> None:
     """Imitating the protocol markers, the model makes up [[toolong]] after the translation. A [[word]] absent from
     the source is removed, one present in the source stays."""
     from app.prompts import drop_invented_marks
@@ -594,7 +610,7 @@ def test_a_marker_the_model_made_up_is_dropped():
     assert drop_invented_marks("write [[link]] here", "在这里写 [[link]]") == "在这里写 [[link]]"
 
 
-def test_checked_translations_are_not_dropped_again_on_every_run(tmp_path):
+def test_checked_translations_are_not_dropped_again_on_every_run(tmp_path: Path) -> None:
     """A correct translation of unusual length (a long footnote, a pasted table) used to be dropped as shifted on
     every run, with the paragraphs around it, so continuing the same document sent dozens of paragraphs again each
     time. Translations that passed the checks once are now kept; an entry stored without checks is still checked
@@ -620,7 +636,7 @@ def test_checked_translations_are_not_dropped_again_on_every_run(tmp_path):
             return ["译" * int(len(t) * (2.0 if t == long_one else 0.35)) for t in batch]
 
     cache = Cache(tmp_path / "c.sqlite3")
-    runs = []
+    runs: list[int] = []
     for _ in range(3):
         engine = Engine()
         run(Runner(engine, cache=cache).translate_all(texts))
@@ -637,7 +653,7 @@ def test_checked_translations_are_not_dropped_again_on_every_run(tmp_path):
     assert again.sent == []
 
 
-def test_a_cached_translation_of_a_neighbor_is_retranslated():
+def test_a_cached_translation_of_a_neighbor_is_retranslated() -> None:
     """Shifted translations from earlier batch translation got into the cache: they carry formula placeholders the
     source does not have, or their length is far from the usual value of the document. They are dropped and
     retranslated together with the paragraphs within one batch size before and after, since neighbors in the same batch
@@ -645,22 +661,22 @@ def test_a_cached_translation_of_a_neighbor_is_retranslated():
     from app.runner import Runner
 
     class Cache:
-        def __init__(self):
-            self.d = {}
+        def __init__(self) -> None:
+            self.d: dict[tuple[str, str], str] = {}
 
-        def get_many(self, prefix, texts):
+        def get_many(self, prefix: str, texts: list[str]) -> dict[str, str]:
             return {t: self.d[(prefix, t)] for t in texts if (prefix, t) in self.d}
 
-        def put_many(self, prefix, pairs):
+        def put_many(self, prefix: str, pairs: dict[str, str]) -> None:
             self.d.update({(prefix, s): t for s, t in pairs.items()})
 
-        def drop_many(self, prefix, texts):
+        def drop_many(self, prefix: str, texts: list[str]) -> None:
             for t in texts:
                 self.d.pop((prefix, t), None)
 
-    asked = []
+    asked: list[str] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         user = json.loads(request.content)["messages"][-1]["content"]
         asked.append(user)
         return httpx.Response(200, json={"choices": [{"message": {"content": "重新翻译的译文"}}]})
@@ -694,7 +710,7 @@ def test_a_cached_translation_of_a_neighbor_is_retranslated():
     assert not any(source in sent for source in list(good)[:2])
 
 
-def test_other_workers_stop_when_one_fails():
+def test_other_workers_stop_when_one_fails() -> None:
     """When a batch fails, translate_all raises only after the other workers stopped: none of them goes on
     requesting or reporting progress for a run that already failed."""
     import time

@@ -16,9 +16,16 @@ from app.formats.pdf_vision import FormulaModel, formula_detector
 
 doc = pymupdf.open(src)
 detector = formula_detector(doc, FormulaModel(model, size))
+assert detector is not None, "the formula detection model could not be loaded"
+
+
+def corners(rect: pymupdf.Rect) -> list[float]:
+    return [round(rect.x0, 1), round(rect.y0, 1), round(rect.x1, 1), round(rect.y1, 1)]
+
+
 pages = []
 for pno, inline in enumerate(detector.pages()):
-    found = [["embedding", [round(v, 1) for v in r], None] for r in inline]
-    found += [["isolated", [round(v, 1) for v in r], None] for r in detector.isolated[pno]]
+    found = [["embedding", corners(r), None] for r in inline]
+    found += [["isolated", corners(r), None] for r in detector.isolated[pno]]
     pages.append(found)
 Path(out).write_text(json.dumps(pages))

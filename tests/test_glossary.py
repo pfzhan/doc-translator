@@ -1,5 +1,7 @@
 import asyncio
 import json
+from pathlib import Path
+from types import ModuleType
 
 import httpx
 import pytest
@@ -9,8 +11,9 @@ from app import job_control, state
 from app.glossaries import GlossaryError, GlossaryNotFound, GlossaryStore
 from app.glossary import candidates, merge, parse, parse_table, relevant, render, to_csv
 from app.runner import Cache, Runner
-from app.translators import OpenAITranslator, create_translator
-from tests.test_history import submit, wait_done
+from app.services import Service
+from app.translators import OpenAITranslator, Translator, create_translator
+from tests.test_history import _job, submit, wait_done
 
 DOC = [
     "Implementing Data Cubes Efficiently",
@@ -24,7 +27,7 @@ DOC = [
 ]
 
 
-def test_candidates_keep_repeated_phrases_and_acronyms():
+def test_candidates_keep_repeated_phrases_and_acronyms() -> None:
     found = candidates(DOC)
     assert "data cube" in found
     assert "greedy algorithm" in found
@@ -35,7 +38,7 @@ def test_candidates_keep_repeated_phrases_and_acronyms():
     assert "Summary statistics" not in found and "summary statistics" not in found
 
 
-def test_possessives_do_not_leave_word_fragments():
+def test_possessives_do_not_leave_word_fragments() -> None:
     """An apostrophe does not split phrases: view's set must not yield “s set”, nor don't yield “t …”."""
     text = [
         "The view's set of output columns must cover the query's set of output columns, and we don't drop columns."
@@ -45,38 +48,41 @@ def test_possessives_do_not_leave_word_fragments():
     assert not any(term.split()[0] in ("s", "t") for term in found), found
 
 
-def test_a_word_repeated_across_table_cells_is_not_a_phrase():
+def test_a_word_repeated_across_table_cells_is_not_a_phrase() -> None:
     """Two adjacent table cells both reading semi-supervised do not make “semi-supervised semi-supervised” a term."""
     rows = ["Vinyals & Kaiser el al. (2014) semi-supervised semi-supervised 92.1"] * 4
     assert not any(len(set(term.casefold().split())) < len(term.split()) for term in candidates(rows))
 
 
-def test_candidates_skip_text_without_spaces_between_words():
+def test_candidates_skip_text_without_spaces_between_words() -> None:
     assert candidates(["数据立方体的实现。数据立方体很大。"] * 10) == []
 
 
-def test_relevant_entries_follow_the_batch_text():
+def test_relevant_entries_follow_the_batch_text() -> None:
     entries = [("query", "查询"), ("data cube", "数据立方体"), ("SQL", "SQL"), ("view", "视图")]
     assert relevant(entries, ["Two queries over data  cubes"]) == [("query", "查询"), ("data cube", "数据立方体")]
     # Acronyms are case-sensitive, and view inside a word does not count
     assert relevant(entries, ["no sql in this review"]) == []
 
 
-def test_relevant_entries_see_through_style_marks():
+def test_relevant_entries_see_through_style_marks() -> None:
     entries = [("word types", "词型")]
     assert relevant(entries, ["to be the same word{b} type{/b}?"]) == [("word types", "词型")]
 
 
-def test_user_entries_win_over_found_ones():
+def test_user_entries_win_over_found_ones() -> None:
     user = parse("Data Cube = 数据立方\nnot an entry\n = empty")
     assert user == [("Data Cube", "数据立方")]
     assert merge(user, [("data cube", "数据立方体"), ("view", "视图")]) == [("Data Cube", "数据立方"), ("view", "视图")]
 
 
 def _translator(
-    requests, terms_reply="data cube = 数据立方体\ngreedy algorithm = 贪心算法\nOLAP = OLAP\nnot asked = 无"
-):
-    async def handler(request):
+    requests: list[tuple[str, str]],
+    terms_reply: str = "data cube = 数据立方体\ngreedy algorithm = 贪心算法\nOLAP = OLAP\nnot asked = 无",
+) -> OpenAITranslator:
+    """An engine whose requests, (system prompt, user message), go into requests."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         system = body["messages"][0]["content"]
         user = body["messages"][-1]["content"]
@@ -102,8 +108,8 @@ def _translator(
     return tr
 
 
-def test_terms_are_defined_once_and_sent_only_where_they_appear(tmp_path):
-    requests = []
+def test_terms_are_defined_once_and_sent_only_where_they_appear(tmp_path: Path) -> None:
+    requests: list[tuple[str, str]] = []
     tr = _translator(requests)
     runner = Runner(tr, cache=Cache(tmp_path / "c.sqlite3"), skip_same_lang=False)
     asyncio.run(runner.translate_all(DOC))
@@ -123,39 +129,40 @@ def test_terms_are_defined_once_and_sent_only_where_they_appear(tmp_path):
         assert ("OLAP = OLAP" in system) == ("OLAP" in user)
 
 
-def test_resuming_reuses_the_same_glossary_and_cache(tmp_path):
+def test_resuming_reuses_the_same_glossary_and_cache(tmp_path: Path) -> None:
     cache = Cache(tmp_path / "c.sqlite3")
-    first = []
+    first: list[tuple[str, str]] = []
     asyncio.run(Runner(_translator(first), cache=cache, skip_same_lang=False).translate_all(DOC))
-    again = []
+    again: list[tuple[str, str]] = []
     tr = _translator(again)
     out = asyncio.run(Runner(tr, cache=cache, skip_same_lang=False).translate_all(DOC))
     assert again == []
     assert tr.doc_glossary and set(out) == {"译文"}
 
 
-def test_the_same_file_keeps_its_glossary_when_extraction_changes(tmp_path):
+def test_the_same_file_keeps_its_glossary_when_extraction_changes(tmp_path: Path) -> None:
     """For the same file, the candidate list changes when extraction rules change, but the glossary fixed the first
     time is still used, so unchanged paragraphs still hit the cache and the document is not retranslated."""
     cache = Cache(tmp_path / "c.sqlite3")
-    first = Runner(_translator([]), cache=cache, skip_same_lang=False)
+    first_tr = _translator([])
+    first = Runner(first_tr, cache=cache, skip_same_lang=False)
     first.set_document("sha-of-file")
     asyncio.run(first.translate_all(DOC))
 
     changed = DOC + ["A new paragraph mentions the lattice and the lattice again, the lattice."]
-    requests = []
+    requests: list[tuple[str, str]] = []
     tr = _translator(requests)
     again = Runner(tr, cache=cache, skip_same_lang=False)
     again.set_document("sha-of-file")
     asyncio.run(again.translate_all(changed))
     assert not any("terminology list" in system for system, _user in requests)
-    assert tr.doc_glossary == first.translator.doc_glossary
+    assert tr.doc_glossary == first_tr.doc_glossary
     # Only the newly added paragraph is requested
     sent = [user for system, user in requests]
     assert len(sent) == 1 and "A new paragraph" in sent[0]
 
 
-def test_translate_file_names_the_document(tmp_path):
+def test_translate_file_names_the_document(tmp_path: Path) -> None:
     from app.formats import translate_file
 
     src = tmp_path / "a.md"
@@ -165,7 +172,7 @@ def test_translate_file_names_the_document(tmp_path):
     assert runner.document and len(runner.document) == 40
 
 
-def test_clearing_a_document_defines_terms_and_translates_again(tmp_path):
+def test_clearing_a_document_defines_terms_and_translates_again(tmp_path: Path) -> None:
     """Retranslating after clearing a file's cache: the glossary and paragraphs are registered under this file, are
     cleared together and requested again."""
     cache = Cache(tmp_path / "c.sqlite3")
@@ -173,7 +180,7 @@ def test_clearing_a_document_defines_terms_and_translates_again(tmp_path):
     first.set_document("doc")
     asyncio.run(first.translate_all(DOC))
     cache.purge("doc", cache.owned("doc"))
-    requests = []
+    requests: list[tuple[str, str]] = []
     again = Runner(_translator(requests), cache=cache, skip_same_lang=False)
     again.set_document("doc")
     asyncio.run(again.translate_all(DOC))
@@ -181,28 +188,28 @@ def test_clearing_a_document_defines_terms_and_translates_again(tmp_path):
     assert sum(user.count("[[p") for system, user in requests if "terminology list" not in system) == len(DOC)
 
 
-def test_relayout_only_never_asks_for_terms(tmp_path):
+def test_relayout_only_never_asks_for_terms(tmp_path: Path) -> None:
     """When only typesetting, a missing glossary is not requested; lookup uses cache keys without a glossary, so old
     records can still regenerate outputs."""
     cache = Cache(tmp_path / "c.sqlite3")
     plain = _translator([])
     plain.auto_glossary = False
     asyncio.run(Runner(plain, cache=cache, skip_same_lang=False).translate_all(DOC))
-    requests = []
+    requests: list[tuple[str, str]] = []
     tr = _translator(requests)
     out = asyncio.run(Runner(tr, cache=cache, skip_same_lang=False, cache_only=True).translate_all(DOC))
     assert requests == [] and tr.doc_glossary == []
     assert set(out) == {"译文"}
 
 
-def test_loose_user_lines_go_with_every_batch():
+def test_loose_user_lines_go_with_every_batch() -> None:
     tr = _translator([])
     tr.glossary = "Keep product names in English\nview = 视图"
     assert tr.glossary_for(["a lattice"]) == "Keep product names in English"
     assert tr.glossary_for(["each view"]) == "Keep product names in English\nview = 视图"
 
 
-def test_covered_terms_are_found_anywhere_inside_longer_ones():
+def test_covered_terms_are_found_anywhere_inside_longer_ones() -> None:
     from collections import Counter
 
     from app.glossary import _drop_covered
@@ -213,7 +220,7 @@ def test_covered_terms_are_found_anywhere_inside_longer_ones():
     assert _drop_covered(terms, counts) == ["language", "large language model"]
 
 
-def test_parse_table_reads_csv_tsv_and_equals_lines():
+def test_parse_table_reads_csv_tsv_and_equals_lines() -> None:
     assert parse_table('原文,译文\ndata cube,数据立方体\n"a, b",甲乙\n') == [
         ("data cube", "数据立方体"),
         ("a, b", "甲乙"),
@@ -228,25 +235,26 @@ def test_parse_table_reads_csv_tsv_and_equals_lines():
     assert parse_table("") == []
 
 
-def test_csv_export_imports_back():
+def test_csv_export_imports_back() -> None:
     entries = [("a, b", '甲"乙"'), ("view", "视图")]
     assert parse_table(to_csv(entries)) == entries
 
 
-def test_terms_with_an_equals_sign_survive_saving():
+def test_terms_with_an_equals_sign_survive_saving() -> None:
     assert parse("view=视图\nE=mc2 = 质能方程") == [("view", "视图"), ("E=mc2", "质能方程")]
     entries = parse_table("E=mc2,质能方程\nview,视图")
     assert entries == [("E=mc2", "质能方程"), ("view", "视图")] and parse(render(entries)) == entries
 
 
-def test_glossary_store_saves_only_entries(tmp_path):
+def test_glossary_store_saves_only_entries(tmp_path: Path) -> None:
     path = tmp_path / "glossaries.json"
     store = GlossaryStore(path)
     item = store.create({"name": " 数据库 ", "entries": "view = 视图\nnot an entry\n= x\nOLAP = 联机分析处理"})
     assert item["name"] == "数据库" and item["entries"] == "view = 视图\nOLAP = 联机分析处理"
     assert store.list()[0]["count"] == 2
     store.update(item["id"], {"name": "数据库 2", "entries": "view = 视图"})
-    assert GlossaryStore(path).get(item["id"])["name"] == "数据库 2"
+    saved = GlossaryStore(path).get(item["id"])
+    assert saved is not None and saved["name"] == "数据库 2"
     with pytest.raises(GlossaryError):
         store.create({"name": "  "})
     with pytest.raises(GlossaryNotFound):
@@ -257,7 +265,7 @@ def test_glossary_store_saves_only_entries(tmp_path):
         store.delete(item["id"])
 
 
-def test_entries_text_keeps_order_and_skips_deleted(tmp_path):
+def test_entries_text_keeps_order_and_skips_deleted(tmp_path: Path) -> None:
     store = GlossaryStore(tmp_path / "glossaries.json")
     a = store.create({"name": "a", "entries": "view = 视图"})["id"]
     b = store.create({"name": "b", "entries": "cube = 立方体"})["id"]
@@ -265,7 +273,7 @@ def test_entries_text_keeps_order_and_skips_deleted(tmp_path):
     assert store.entries_text([]) == ""
 
 
-def test_glossary_api_and_job_selection(app_env):
+def test_glossary_api_and_job_selection(app_env: ModuleType) -> None:
     main = app_env
     with TestClient(main.app) as client:
         made = client.post("/api/glossaries", json={"name": "法学", "entries": "Book = 卷"}).json()
@@ -294,7 +302,7 @@ def test_glossary_api_and_job_selection(app_env):
         assert client.delete(f"/api/glossaries/{made['id']}").status_code == 404
 
 
-def test_job_glossaries_follow_the_services_own_entries():
+def test_job_glossaries_follow_the_services_own_entries() -> None:
     service = {"id": "s", "glossary": "OLAP = 联机分析"}
     assert job_control._with_glossaries(service, "view = 视图")["glossary"] == "OLAP = 联机分析\nview = 视图"
     assert job_control._with_glossaries({"id": "s"}, "view = 视图")["glossary"] == "view = 视图"
@@ -302,12 +310,14 @@ def test_job_glossaries_follow_the_services_own_entries():
     assert job_control._with_glossaries(service, "") is service
 
 
-def test_job_keeps_the_glossary_entries_its_translations_were_made_with(app_env, monkeypatch):
-    used = []
+def test_job_keeps_the_glossary_entries_its_translations_were_made_with(
+    app_env: ModuleType, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    used: list[str] = []
 
-    def recording(service, *args):
+    def recording(service: Service, target_lang: str, source_lang: str = "auto") -> Translator:
         used.append(service.get("glossary", ""))
-        return create_translator(service, *args)
+        return create_translator(service, target_lang, source_lang)
 
     monkeypatch.setattr(job_control, "create_translator", recording)
     gid = state.glossaries.create({"name": "g", "entries": "view = 视图"})["id"]
@@ -321,7 +331,7 @@ def test_job_keeps_the_glossary_entries_its_translations_were_made_with(app_env,
         assert used[1:] == ["view = 视图", "view = 视图"]
         # Translating again uses the edited glossary, and later keys follow it
         wait_done(client, client.post(f"/api/jobs/{job['id']}/retry").json()["id"])
-        assert state.jobs.get(job["id"]).glossary_text == "view = 视界"
+        assert _job(state.jobs, job["id"]).glossary_text == "view = 视界"
         state.glossaries.delete(gid)
         assert client.get(f"/api/jobs/{job['id']}/cache").status_code == 200
         # Continuing checks the configuration, the job creates its engine when it starts, then the cache is read

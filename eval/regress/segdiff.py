@@ -7,13 +7,15 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 E = Path(os.environ.get("EVALSET", Path.home() / "doc-translator-evalset"))
 a_tag, b_tag = sys.argv[1], sys.argv[2]
 only = sys.argv[3] if len(sys.argv) > 3 else None
 
 
-def fmt(r):
+# A plan row is a JSON array of mixed types: [page, skip, text sent for translation, [[formula text, box]...], ...]
+def fmt(r: list[Any]) -> tuple[str, int, bool]:
     # Plans with unit boxes (the seg format of plandump_mfdcache.py) have an extra column of boxes, not compared
     p, s, t, fs = r[:4]
     return f"{t} || " + " ; ".join(x[0].replace("\x01", "").replace("\x02", "") for x in fs), p, s

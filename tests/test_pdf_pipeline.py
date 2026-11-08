@@ -1,6 +1,9 @@
 """PDF translation end to end and the stages not covered by the other PDF test files."""
 
 import zipfile
+from collections.abc import Callable
+from pathlib import Path
+from typing import Concatenate
 
 import pymupdf
 import pytest
@@ -8,12 +11,22 @@ import pytest
 from app.formats import translate_file
 from app.formats.markdown import collect_segments, render, split_blocks
 from app.formats.pdf_blocks import _join_lines
+from app.formats.pdf_types import PdfDict
 from app.runner import Runner
 from app.translators import MockTranslator
 from tests.helpers import SAMPLES, MemCache, _pdf_with_text, _write_epub, run, runner
 
+# A preparation stage as reported to the runner: name, done, total, unit
+Stage = tuple[str, int, int, str]
+# A box as its corner coordinates: x0, y0, x1, y1
+Corners = tuple[float, float, float, float]
 
-def test_pdf(tmp_path):
+
+def _bbox(rect: pymupdf.Rect) -> Corners:
+    return rect.x0, rect.y0, rect.x1, rect.y1
+
+
+def test_pdf(tmp_path: Path) -> None:
     src = SAMPLES / "attention.pdf"
     if not src.exists():
         pytest.skip("sample missing")
@@ -27,7 +40,7 @@ def test_pdf(tmp_path):
             assert doc[0].rect.width == pytest.approx(pymupdf.open(src)[0].rect.width * 2)
 
 
-def test_epub2_outline_reads_the_ncx(tmp_path):
+def test_epub2_outline_reads_the_ncx(tmp_path: Path) -> None:
     """An EPUB2 without a nav document takes its table of contents from toc.ncx, nested by navPoint."""
     from app.formats.epub import book_outline
 
@@ -54,7 +67,7 @@ def test_epub2_outline_reads_the_ncx(tmp_path):
     ]
 
 
-def test_markdown_setext_headings():
+def test_markdown_setext_headings() -> None:
     """The underline of a Setext heading is not sent for translation; the original underline stays below the
     translation."""
     blocks = split_blocks("Main Title\n==========\n\nSection Name\n---\n\nBody text.")
@@ -69,7 +82,7 @@ def test_markdown_setext_headings():
     assert both.startswith("Main Title\n==========\n\nT:Main Title\n==========\n")
 
 
-def test_pdf_hyphen_joins_uppercase_word():
+def test_pdf_hyphen_joins_uppercase_word() -> None:
     """Words hyphenated at a line end are joined back, all-caps words too. A hyphen after a digit, or between a
     lowercase and an uppercase letter, belongs to the name and stays."""
     assert _join_lines(["word-", "wrap"]) == "wordwrap"
@@ -91,7 +104,7 @@ def test_pdf_hyphen_joins_uppercase_word():
     assert _join_lines(["end", ", next"]) == "end, next"
 
 
-def test_pdf_list_items_split_into_segments():
+def test_pdf_list_items_split_into_segments() -> None:
     """List items in one block each become a separate translation unit (common in slides); wrapped continuation
     lines still join the previous item."""
     from app.formats.pdf_extract import extract_blocks
@@ -101,7 +114,7 @@ def test_pdf_list_items_split_into_segments():
     assert texts == ["- First item here", "- Second item continues onto next line", "- Third item"]
 
 
-def test_pdf_hard_break_splits_lines():
+def test_pdf_hard_break_splits_lines() -> None:
     """A hard line break without a bullet (upper line much shorter than the widest line of the block, lower line
     starting with a capital, left-aligned) also splits into two paragraphs."""
     from app.formats.pdf_extract import extract_blocks
@@ -111,13 +124,13 @@ def test_pdf_hard_break_splits_lines():
     assert texts == ["Short Name", "A Much Longer Affiliation Line Here"]
 
 
-def test_a_small_caps_heading_takes_the_size_of_its_capitals():
+def test_a_small_caps_heading_takes_the_size_of_its_capitals() -> None:
     """In a small-caps heading the initial is one size larger and the rest one size smaller, so the longest piece is
     the small one. The block size follows the capitals, otherwise the translation would be smaller than the body
     text. A lowered subscript (BERT_LARGE) is not small caps."""
     from app.formats.pdf_extract import _block_size
 
-    def span(text, x0, size, base):
+    def span(text: str, x0: float, size: float, base: float) -> PdfDict:
         return {"text": text, "size": size, "origin": (x0, base), "bbox": (x0, base - size, x0 + 50, base + 2)}
 
     heading = [span("I", 123.0, 11.6, 362.0), span("NITIALIZATION", 127.0, 9.3, 362.0)]
@@ -126,7 +139,7 @@ def test_a_small_caps_heading_takes_the_size_of_its_capitals():
     assert _block_size(model[1], [model]) == 6.5
 
 
-def test_pdf_wrapped_body_on_attention_sample():
+def test_pdf_wrapped_body_on_attention_sample() -> None:
     """A first-line indent in the body of a paper must not cut a sentence in the middle."""
     src = SAMPLES / "attention.pdf"
     if not src.exists():
@@ -143,7 +156,7 @@ def test_pdf_wrapped_body_on_attention_sample():
         assert any(sentence in t for t in texts), sentence
 
 
-def test_pdf_list_continuation_must_be_indented():
+def test_pdf_list_continuation_must_be_indented() -> None:
     """A new line at the same x0 after a list item is not a continuation line (it may be the next paragraph); only an
     indented line with hanging alignment is."""
     from app.formats.pdf_extract import extract_blocks
@@ -152,7 +165,7 @@ def test_pdf_list_continuation_must_be_indented():
     assert [b.text for b in extract_blocks(doc)] == ["- Short item", "New paragraph at same indent"]
 
 
-def test_pdf_cjk_continuation_needs_sentence_end():
+def test_pdf_cjk_continuation_needs_sentence_end() -> None:
     """CJK line starts: when the previous line does not end with sentence-final punctuation the line is a
     continuation; the paragraph splits only after sentence-final punctuation."""
     from app.formats.pdf_extract import extract_blocks
@@ -165,7 +178,7 @@ def test_pdf_cjk_continuation_needs_sentence_end():
     assert len(extract_blocks(doc)) == 2
 
 
-def test_ieee_section_headings_are_headings():
+def test_ieee_section_headings_are_headings() -> None:
     """IEEE section headings have the body size: all caps (small caps) after a Roman numeral, or a whole italic line
     with a letter number, is a heading. Name initials in body text and author lines with commas are not."""
     from app.formats.pdf_roles import _is_lettered_title
@@ -178,7 +191,7 @@ def test_ieee_section_headings_are_headings():
     assert not _is_lettered_title("V. Vuletić, and M. D. Lukin,", styled=True)
 
 
-def test_translated_version_cut_from_the_bilingual_one_matches_a_fresh_render(tmp_path):
+def test_translated_version_cut_from_the_bilingual_one_matches_a_fresh_render(tmp_path: Path) -> None:
     """The translated-only version is taken from the bilingual version: text, links, page labels and bookmarks match
     a fresh layout. With rotated pages, or with bookmarks but no preview snapshot, it cannot be taken and a fresh
     layout is used."""
@@ -210,7 +223,7 @@ def test_translated_version_cut_from_the_bilingual_one_matches_a_fresh_render(tm
     assert data is not None
     cut, fresh = pymupdf.open("pdf", data), pymupdf.open(alone)
     assert len(cut) == len(fresh) == 2 and "[zh-CN]" in cut[0].get_text()
-    for a, b in zip(cut, fresh):
+    for a, b in zip(cut.pages(), fresh.pages()):
         assert a.rect == b.rect and a.get_text() == b.get_text()
         assert [(link["from"], link.get("page")) for link in a.get_links()] == [
             (link["from"], link.get("page")) for link in b.get_links()
@@ -225,7 +238,7 @@ def test_translated_version_cut_from_the_bilingual_one_matches_a_fresh_render(tm
     assert translated_from_bilingual(tmp_path / "turned.pdf", both, first.preview(-1)) is None
 
 
-def test_bookmarks_take_the_translation_shown_on_the_page_they_point_to():
+def test_bookmarks_take_the_translation_shown_on_the_page_they_point_to() -> None:
     """When the same heading has different translations (translated once on the contents page and once in the body),
     the one on the target page or the page after it is used, and the section number is dropped when the original
     bookmark has none. Bookmarks whose translation equals the original, or whose paragraph was skipped, keep the
@@ -249,7 +262,7 @@ def test_bookmarks_take_the_translation_shown_on_the_page_they_point_to():
     assert doc.get_toc() == [[1, "Approaches", 2], [1, "Results", 3], [1, "Notes", 3]]
 
 
-def test_skipped_bibliography_keeps_hanging_indent(tmp_path):
+def test_skipped_bibliography_keeps_hanging_indent(tmp_path: Path) -> None:
     """Skipped citations stay on the original page. An italic journal name must not trigger erasing and re-layout,
     otherwise the hanging indent and line-end hyphenation are lost."""
     from app.formats.pdf import translate_pdf
@@ -296,7 +309,7 @@ def test_skipped_bibliography_keeps_hanging_indent(tmp_path):
     assert all("Times" in name or "NimbusRom" in name for name in fonts)
 
 
-def test_pdf_scanned_error_guides_ocr(tmp_path):
+def test_pdf_scanned_error_guides_ocr(tmp_path: Path) -> None:
     from app.formats.pdf import translate_pdf
 
     src = tmp_path / "scan.pdf"
@@ -309,7 +322,7 @@ def test_pdf_scanned_error_guides_ocr(tmp_path):
         run(translate_pdf(src, tmp_path, runner(), False, "zh-CN"))
 
 
-def test_pdf_bookmarks_migrated(tmp_path):
+def test_pdf_bookmarks_migrated(tmp_path: Path) -> None:
     doc = _pdf_with_text("Chapter one content here for testing.")
     doc.set_toc([(1, "Chapter One", 1)])
     src = tmp_path / "book.pdf"
@@ -319,7 +332,7 @@ def test_pdf_bookmarks_migrated(tmp_path):
         assert pymupdf.open(out).get_toc() == [[1, "Chapter One", 1]]
 
 
-def test_subset_fonts_safe_returns_valid_doc():
+def test_subset_fonts_safe_returns_valid_doc() -> None:
     from app.formats.pdf_output import _subset_fonts_safe
 
     doc = _pdf_with_text("Some text for subsetting.")
@@ -327,7 +340,7 @@ def test_subset_fonts_safe_returns_valid_doc():
     assert out.page_count == doc.page_count and "Some text" in out[0].get_text()
 
 
-def _symbol_pdf(path, symbol: str):
+def _symbol_pdf(path: Path, symbol: str) -> None:
     """A run of Symbol-font glyphs in the middle of body text becomes a {v1} formula placeholder on extraction."""
     doc = pymupdf.open()
     page = doc.new_page(width=500, height=300)
@@ -340,7 +353,7 @@ def _symbol_pdf(path, symbol: str):
     doc.close()
 
 
-def test_a_display_formula_set_in_text_italic_is_left_as_it_is(tmp_path):
+def test_a_display_formula_set_in_text_italic_is_left_as_it_is(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A standalone formula line with variables in Times-Italic and operators in Symbol: after placeholders there is
     no text to translate, so the line is kept as it is, not sent for translation and not erased and laid out again
     (a two-line formula would be shrunk as one tall formula on re-layout)."""
@@ -370,11 +383,11 @@ def test_a_display_formula_set_in_text_italic_is_left_as_it_is(tmp_path):
     sent: list[str] = []
     original = tr.translate_batch
 
-    async def record(texts):
+    async def record(texts: list[str]) -> list[str]:
         sent.extend(texts)
         return await original(texts)
 
-    tr.translate_batch = record
+    monkeypatch.setattr(tr, "translate_batch", record)
     [out] = run(translate_file(src, tmp_path, Runner(tr, cache=MemCache(), skip_same_lang=False), False, "zh-CN"))
     assert not any("PE" in text or "{v" in text for text in sent), sent
     words = [w[4] for w in pymupdf.open(out)[0].get_text("words") if 80 <= w[1] <= 95]
@@ -382,7 +395,9 @@ def test_a_display_formula_set_in_text_italic_is_left_as_it_is(tmp_path):
     assert words[0].startswith("(PE") and not any("[zh-CN]" in w for w in words)
 
 
-def test_display_equations_and_text_fractions_are_left_as_they_are(tmp_path):
+def test_display_equations_and_text_fractions_are_left_as_they_are(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A fraction with words as numerator and denominator, and a formula with only a relation symbol and one or two
     names, are kept as they are and not sent for translation. Body text continuing below a link underline and a
     caption with an equals sign are translated."""
@@ -412,11 +427,11 @@ def test_display_equations_and_text_fractions_are_left_as_they_are(tmp_path):
     sent: list[str] = []
     original = tr.translate_batch
 
-    async def record(texts):
+    async def record(texts: list[str]) -> list[str]:
         sent.extend(texts)
         return await original(texts)
 
-    tr.translate_batch = record
+    monkeypatch.setattr(tr, "translate_batch", record)
     run(translate_file(src, tmp_path, Runner(tr, cache=MemCache(), skip_same_lang=False), False, "zh-CN"))
     assert not any("constituents" in text or "argmax" in text for text in sent), sent
     assert any("see the online tables" in text for text in sent), sent
@@ -427,15 +442,15 @@ class _PlaceholderDropper(MockTranslator):
     """A batch request writes {v1} out as text and loses it; with keep_on_retry set, retranslating the single segment
     keeps the placeholder."""
 
-    def __init__(self, *a, keep_on_retry=False, **kw):
-        super().__init__(*a, **kw)
+    def __init__(self, target_lang: str, *, keep_on_retry: bool = False) -> None:
+        super().__init__(target_lang)
         self.keep_on_retry = keep_on_retry
-        self.calls = []
+        self.calls: list[list[str]] = []
 
-    async def translate_batch(self, texts):
+    async def translate_batch(self, texts: list[str]) -> list[str]:
         self.calls.append(list(texts))
         retry = len(self.calls) > 1
-        out = []
+        out: list[str] = []
         for _text in texts:
             if retry and self.keep_on_retry:
                 out.append("当参数 k{v1} 较小时，贪心算法效果很好。")
@@ -444,7 +459,7 @@ class _PlaceholderDropper(MockTranslator):
         return out
 
 
-def test_lost_placeholder_is_retried_once(tmp_path):
+def test_lost_placeholder_is_retried_once(tmp_path: Path) -> None:
     """The model lost {v1}: the segment is translated once more on its own, the translation with the placeholder
     restored goes into the cache, and the formula is put back as usual."""
     src = tmp_path / "sym.pdf"
@@ -459,7 +474,7 @@ def test_lost_placeholder_is_retried_once(tmp_path):
     assert r.info.failed == 0
 
 
-def test_lost_small_placeholder_keeps_the_translation(tmp_path):
+def test_lost_small_placeholder_keeps_the_translation(tmp_path: Path) -> None:
     """Only a one-glyph formula was lost (the model wrote it out as text): the translation is accepted without falling
     back to the original."""
     src = tmp_path / "sym.pdf"
@@ -471,7 +486,7 @@ def test_lost_small_placeholder_keeps_the_translation(tmp_path):
     assert r.info.failed == 0
 
 
-def test_lost_large_placeholder_falls_back_and_counts_as_failed(tmp_path):
+def test_lost_large_placeholder_falls_back_and_counts_as_failed(tmp_path: Path) -> None:
     """A longer formula was lost: the whole segment falls back to the original and counts as a failed segment, so the
     job page shows a warning."""
     src = tmp_path / "sym.pdf"
@@ -482,7 +497,7 @@ def test_lost_large_placeholder_falls_back_and_counts_as_failed(tmp_path):
     assert r.info.failed == 1
 
 
-def test_equation_vs_prose_with_formula():
+def test_equation_vs_prose_with_formula() -> None:
     """Formula lines (many math characters, few body words) are skipped; ordinary sentences containing formulas are
     translated."""
     from app.formats.pdf_extract import extract_blocks
@@ -503,11 +518,12 @@ def test_equation_vs_prose_with_formula():
     assert not any("x + y = z" in t for t in texts)
 
 
-def test_formula_bitmaps_rendered_in_forked_workers_read_their_own_copy(tmp_path):
+def test_formula_bitmaps_rendered_in_forked_workers_read_their_own_copy(tmp_path: Path) -> None:
     """The writing subprocesses are forked and share the file position of the original file with the parent. Several
     subprocesses rendering formula bitmaps from the document the parent opened at the same time read bytes from
     other places and render wrongly or fail. Each subprocess must use a document it opened itself."""
     import multiprocessing
+    from multiprocessing.queues import Queue
 
     from app.formats.pdf_blocks import _FormulaImage
 
@@ -525,7 +541,7 @@ def test_formula_bitmaps_rendered_in_forked_workers_read_their_own_copy(tmp_path
     images = [_FormulaImage(shared, pno, clip) for pno, clip in clips]
     pymupdf.TOOLS.store_shrink(100)
 
-    def work(part: int, out) -> None:
+    def work(part: int, out: Queue[bool]) -> None:
         try:
             got = [pymupdf.Pixmap(images[k].png()).samples == expected[k] for k in range(part, len(images), 4)]
             out.put(all(got))
@@ -543,13 +559,13 @@ def test_formula_bitmaps_rendered_in_forked_workers_read_their_own_copy(tmp_path
     assert results == [True] * 4
 
 
-def test_a_small_caps_word_at_the_line_start_is_not_a_style_change():
+def test_a_small_caps_word_at_the_line_start_is_not_a_style_change() -> None:
     """An all-caps word one size smaller at the line start is a small-caps abbreviation (MUC (Vilain et al., 1995)
     and …) and counts at the body size; body text starting in bold or one size smaller still counts as a style
     change."""
     from app.formats.pdf_blocks import TextBlock, _styled_edge
 
-    def span(text, x0, size=10.0, font="NimbusRomNo9L-Regu", flags=0):
+    def span(text: str, x0: float, size: float = 10.0, font: str = "NimbusRomNo9L-Regu", flags: int = 0) -> PdfDict:
         return {
             "text": text,
             "font": font,
@@ -559,7 +575,7 @@ def test_a_small_caps_word_at_the_line_start_is_not_a_style_change():
             "origin": (x0, 441.5),
         }
 
-    def blk(spans):
+    def blk(spans: list[PdfDict]) -> TextBlock:
         return TextBlock(
             page=0,
             rect=pymupdf.Rect(142, 433, 475, 480),
@@ -578,7 +594,7 @@ def test_a_small_caps_word_at_the_line_start_is_not_a_style_change():
     assert _styled_edge(blk([span("note", 142.4, 8.0), span(" and the rest", 162)]), 0)
 
 
-def test_column_tail_drawn_before_its_host_keeps_the_paragraph(tmp_path):
+def test_column_tail_drawn_before_its_host_keeps_the_paragraph(tmp_path: Path) -> None:
     """When the content stream draws the right column first, the tail block at the top of the right column comes before
     its host in the left column. The whole translation must still be written."""
     from app.formats.pdf import translate_pdf
@@ -586,7 +602,7 @@ def test_column_tail_drawn_before_its_host_keeps_the_paragraph(tmp_path):
     doc = pymupdf.open()
     page = doc.new_page(width=600, height=800)
 
-    def para(x, y, lines):
+    def para(x: float, y: float, lines: list[str]) -> None:
         for i, line in enumerate(lines):
             page.insert_text((x, y + i * 12), line, fontsize=10)
 
@@ -620,7 +636,7 @@ def test_column_tail_drawn_before_its_host_keeps_the_paragraph(tmp_path):
     assert "continues the gamma sentence" in text
 
 
-def test_rotated_pages_lay_out_like_unrotated_ones(tmp_path):
+def test_rotated_pages_lay_out_like_unrotated_ones(tmp_path: Path) -> None:
     """On a page rotated by 90 degrees, a paragraph carried over to the next page is laid out as on an unrotated page:
     writing does not stop early and the font size does not shrink."""
     from app.formats.pdf import translate_pdf
@@ -657,14 +673,14 @@ def test_rotated_pages_lay_out_like_unrotated_ones(tmp_path):
                     for ln in blk["lines"]
                     for span in ln["spans"]
                 )
-                for page in pymupdf.open(out)
+                for page in pymupdf.open(out).pages()
             ]
         )
     plain, rotated = layouts
     assert rotated == plain
 
 
-def test_justify_extras_skip_punctuation_and_short_lines():
+def test_justify_extras_skip_punctuation_and_short_lines() -> None:
     """Justification spreads the slack between characters and does not open space before punctuation. With too little
     slack or too few gaps the line is not stretched."""
     from app.formats.pdf_align import justify_extras
@@ -683,7 +699,7 @@ def test_justify_extras_skip_punctuation_and_short_lines():
     assert extras[names.index(" ")] > 0
 
 
-def test_a_loose_mixed_line_stretches_word_spaces_before_the_chinese():
+def test_a_loose_mixed_line_stretches_word_spaces_before_the_chinese() -> None:
     """On a line mixing Chinese and English with a lot of slack, word spaces stretch first and Chinese characters only
     a little, so the result is not "常 识 推 理"."""
     from app.formats.pdf_align import justify_extras
@@ -704,7 +720,7 @@ def test_a_loose_mixed_line_stretches_word_spaces_before_the_chinese():
     assert len({round(extra, 6) for extra in extras}) == 1
 
 
-def test_snake_case_identifiers_are_one_word():
+def test_snake_case_identifiers_are_one_word() -> None:
     """An identifier such as l_partkey is one word: it does not wrap at the underscore, and justification does not open
     space around the underscore."""
     from app.formats.pdf_align import can_stretch
@@ -724,7 +740,7 @@ def test_snake_case_identifiers_are_one_word():
     ]
 
 
-def test_an_opening_bracket_does_not_end_a_line():
+def test_an_opening_bracket_does_not_end_a_line() -> None:
     """An opening bracket does not stay at the line end and wraps to the next line with the following word (instead of
     "{" hanging alone at the line end and "o_custkey}" on the next line)."""
     from app.formats.pdf_flow import break_lines
@@ -740,7 +756,7 @@ def test_an_opening_bracket_does_not_end_a_line():
     assert all(not line.rstrip().endswith("“") and not line.startswith("”") for line in quoted), quoted
 
 
-def test_garbled_figure_label_is_recognized():
+def test_garbled_figure_label_is_recognized() -> None:
     from app.formats.pdf_blocks import _garbled_label
 
     assert _garbled_label("(c)$Bo8om(up$sta.s.cs$deriva.on$")
@@ -748,7 +764,7 @@ def test_garbled_figure_label_is_recognized():
     assert not _garbled_label("Table 7 | Training costs, assuming the rental price is $2 per GPU hour.")
 
 
-def test_sentence_around_formulas_is_translated_and_bare_formula_line_is_not():
+def test_sentence_around_formulas_is_translated_and_bare_formula_line_is_not() -> None:
     """The three words If, then and Otherwise outside the formula make it a sentence, so it is translated. For all with
     a long formula is still a formula line."""
     from app.formats.pdf_extract import extract_blocks
@@ -756,7 +772,7 @@ def test_sentence_around_formulas_is_translated_and_bare_formula_line_is_not():
     doc = pymupdf.open()
     page = doc.new_page(width=500, height=200)
 
-    def write(y, pieces):
+    def write(y: float, pieces: list[tuple[str, str]]) -> None:
         x = 40.0
         for text, font in pieces:
             page.insert_text((x, y), text, fontsize=10, fontname=font)
@@ -780,12 +796,12 @@ def test_sentence_around_formulas_is_translated_and_bare_formula_line_is_not():
     assert not any("For all" in text for text in texts)
 
 
-def test_a_block_is_sized_by_its_base_line_text_not_a_subscript():
+def test_a_block_is_sized_by_its_base_line_text_not_a_subscript() -> None:
     """The model of d_model is a small subscript in the body font and the longest piece of the line; the block size
     still follows the and on the baseline."""
     from app.formats.pdf_extract import _main_span
 
-    def span(text, font, size, y):
+    def span(text: str, font: str, size: float, y: float) -> PdfDict:
         return {"text": text, "font": font, "size": size, "origin": (0, y)}
 
     line = [
@@ -797,7 +813,7 @@ def test_a_block_is_sized_by_its_base_line_text_not_a_subscript():
     assert _main_span([line])["text"] == "and"
 
 
-def test_white_label_on_a_black_box_is_pasted_back_as_is(tmp_path):
+def test_white_label_on_a_black_box_is_pasted_back_as_is(tmp_path: Path) -> None:
     """A white-on-black Figure label is not rewritten in the body text color but put back as it is; the caption after
     it is translated."""
     src = tmp_path / "label.pdf"
@@ -824,31 +840,28 @@ def test_white_label_on_a_black_box_is_pasted_back_as_is(tmp_path):
     assert label and all(span["color"] == 0xFFFFFF for span in label)
 
 
-def test_pdf_page_lines_and_tables_are_read_once_per_page(tmp_path, monkeypatch):
+def test_pdf_page_lines_and_tables_are_read_once_per_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Finding tables parses all text on the page, and each read of vector drawings or image boxes takes a few
     milliseconds too. Extraction, reading order and role detection share one result. Writing the translation reads
     them separately, which is not counted here."""
     from app.formats import pdf_layout
     from app.formats.pdf_extract import _extract
+    from app.formats.pdf_tables import page_tables
 
     calls: dict[str, list[int]] = {"tables": [], "drawings": [], "images": []}
-    tables, drawings, images = pdf_layout.page_tables, pymupdf.Page.get_drawings, pymupdf.Page.get_image_info
 
-    def counted_tables(page, *args):
-        calls["tables"].append(page.number)
-        return tables(page, *args)
+    def counted[**P, R](
+        key: str, read: Callable[Concatenate[pymupdf.Page, P], R]
+    ) -> Callable[Concatenate[pymupdf.Page, P], R]:
+        def call(page: pymupdf.Page, /, *args: P.args, **kwargs: P.kwargs) -> R:
+            calls[key].append(page.number)
+            return read(page, *args, **kwargs)
 
-    def counted_drawings(self, *args, **kwargs):
-        calls["drawings"].append(self.number)
-        return drawings(self, *args, **kwargs)
+        return call
 
-    def counted_images(self, *args, **kwargs):
-        calls["images"].append(self.number)
-        return images(self, *args, **kwargs)
-
-    monkeypatch.setattr(pdf_layout, "page_tables", counted_tables)
-    monkeypatch.setattr(pymupdf.Page, "get_drawings", counted_drawings)
-    monkeypatch.setattr(pymupdf.Page, "get_image_info", counted_images)
+    monkeypatch.setattr(pdf_layout, "page_tables", counted("tables", page_tables))
+    monkeypatch.setattr(pymupdf.Page, "get_drawings", counted("drawings", pymupdf.Page.get_drawings))
+    monkeypatch.setattr(pymupdf.Page, "get_image_info", counted("images", pymupdf.Page.get_image_info))
     doc = pymupdf.open()
     for _ in range(3):
         page = doc.new_page(width=420, height=240)
@@ -857,7 +870,7 @@ def test_pdf_page_lines_and_tables_are_read_once_per_page(tmp_path, monkeypatch)
     assert {key: sorted(pages) for key, pages in calls.items()} == {key: [0, 1, 2] for key in calls}
 
 
-def test_pdf_reports_its_preparation_and_writing_stages(tmp_path):
+def test_pdf_reports_its_preparation_and_writing_stages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Layout analysis and writing each take several minutes for a whole book. Progress is reported page by page so the
     job page does not look stuck."""
     from app.formats.pdf import translate_pdf
@@ -868,15 +881,15 @@ def test_pdf_reports_its_preparation_and_writing_stages(tmp_path):
         page.insert_text((40, 60), "A body paragraph long enough to be translated here.", fontsize=10)
     src = tmp_path / "pages.pdf"
     doc.save(src)
-    stages: list[tuple] = []
+    stages: list[Stage] = []
     r = runner()
     original = r.report_stage
 
-    def record(name, done=0, total=0, unit=""):
+    def record(name: str, done: int = 0, total: int = 0, unit: str = "") -> None:
         stages.append((name, done, total, unit))
         original(name, done, total, unit)
 
-    r.report_stage = record
+    monkeypatch.setattr(r, "report_stage", record)
     run(translate_pdf(src, tmp_path, r, False, "zh-CN"))
     assert stages[:4] == [("分析版面", n, 3, "页") for n in (1, 2, 3)] + [("整理段落", 0, 0, "")]
     assert stages[4][0] == "准备译文" and stages[4][1] == 0 and stages[4][3] == "段"
@@ -886,10 +899,11 @@ def test_pdf_reports_its_preparation_and_writing_stages(tmp_path):
     assert after[-1] == ("生成文件", 0, 0, "")
 
 
-def test_the_layout_model_reports_each_page_it_reads(tmp_path, monkeypatch):
+def test_the_layout_model_reports_each_page_it_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The layout model takes about two seconds per page; it runs page by page before roles are assigned, reporting
     progress per page, and then returns to the "整理段落" stage"""
     import numpy as np
+    import numpy.typing as npt
 
     from app.formats import pdf, pdf_units, pdf_vision
 
@@ -900,16 +914,16 @@ def test_the_layout_model_reports_each_page_it_reads(tmp_path, monkeypatch):
         name = "images"
 
     class NoBoxes:
-        def __init__(self):
+        def __init__(self) -> None:
             self.runs = 0
 
-        def get_modelmeta(self):
+        def get_modelmeta(self) -> Meta:
             return Meta()
 
-        def get_inputs(self):
+        def get_inputs(self) -> list[Input]:
             return [Input()]
 
-        def run(self, _outputs, _feeds):
+        def run(self, _outputs: list[str] | None, _feeds: dict[str, np.ndarray]) -> list[npt.NDArray[np.float32]]:
             self.runs += 1
             return [np.zeros((1, 0, 6), np.float32)]
 
@@ -924,31 +938,30 @@ def test_the_layout_model_reports_each_page_it_reads(tmp_path, monkeypatch):
     monkeypatch.setattr(
         pdf_units, "layout_detector", lambda doc, path, boxes=None: pdf_vision.ModelLayout(doc, session)
     )
-    stages: list[tuple] = []
+    stages: list[Stage] = []
 
-    class R:
-        def report_stage(self, name, done=0, total=0, unit=""):
-            stages.append((name, done, total, unit))
+    def record(name: str, done: int = 0, total: int = 0, unit: str = "") -> None:
+        stages.append((name, done, total, unit))
 
-        def set_title(self, title):
-            pass
-
-    pdf._plan_pdf(src, R(), "layout.onnx")
+    r = runner()
+    monkeypatch.setattr(r, "report_stage", record)
+    pdf._plan_pdf(src, r, "layout.onnx")
     start = stages.index(("版面模型分析", 1, 3, "页"))
     assert stages[start : start + 4] == [("版面模型分析", n, 3, "页") for n in (1, 2, 3)] + [("整理段落", 0, 0, "")]
     assert session.runs == 3
 
 
-def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path, monkeypatch):
+def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When a code change invalidates the saved analysis result, the analysis runs again: the boxes of both models are
     read back from boxes.json without running the models, and the result matches the first run"""
     import numpy as np
+    import numpy.typing as npt
 
     from app.formats import pdf, pdf_vision
     from app.formats.pdf_vision import FormulaModel
 
     class Meta:
-        def __init__(self, names):
+        def __init__(self, names: str) -> None:
             self.custom_metadata_map = {"names": names}
 
     class Input:
@@ -959,16 +972,16 @@ def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path, monkeyp
     class Formula:
         """Box one inline formula on Q7 (center, width and height, scores for both classes, before NMS)"""
 
-        def __init__(self, page):
+        def __init__(self, page: pymupdf.Page) -> None:
             self.page = page
 
-        def get_modelmeta(self):
+        def get_modelmeta(self) -> Meta:
             return Meta("{0: 'embedding', 1: 'isolated'}")
 
-        def get_inputs(self):
+        def get_inputs(self) -> list[Input]:
             return [Input()]
 
-        def run(self, _outputs, feeds):
+        def run(self, _outputs: list[str] | None, feeds: dict[str, np.ndarray]) -> list[npt.NDArray[np.float32]]:
             runs["mfd"] += 1
             height, width = feeds["images"].shape[2:]
             zoom = max(height, width) / max(self.page.rect.width, self.page.rect.height)
@@ -981,13 +994,13 @@ def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path, monkeyp
             ]
 
     class Layout:
-        def get_modelmeta(self):
+        def get_modelmeta(self) -> Meta:
             return Meta("{0: 'title'}")
 
-        def get_inputs(self):
+        def get_inputs(self) -> list[Input]:
             return [Input()]
 
-        def run(self, _outputs, _feeds):
+        def run(self, _outputs: list[str] | None, _feeds: dict[str, np.ndarray]) -> list[npt.NDArray[np.float32]]:
             runs["layout"] += 1
             return [np.zeros((1, 0, 6), np.float32)]
 
@@ -1006,20 +1019,13 @@ def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path, monkeyp
         lambda path, *args, **kwargs: [Formula(shown) if path.endswith("mfd.onnx") else Layout()],
     )
 
-    class R:
-        def report_stage(self, *args, **kwargs):
-            pass
-
-        def set_title(self, title):
-            pass
-
     plan_path = tmp_path / "plan.pickle"
     model = FormulaModel(str(tmp_path / "mfd.onnx"))
-    first = pdf._saved_plan(src, R(), str(tmp_path / "layout.onnx"), plan_path, model)
+    first = pdf._saved_plan(src, runner(), str(tmp_path / "layout.onnx"), plan_path, model)
     assert runs == {"mfd": 2, "layout": 2} and (tmp_path / "boxes.json").is_file()
     assert any(f.get("text") == "Q7" for formulas in first.formulas for f in formulas)
     monkeypatch.setattr(pdf, "_code_version", lambda: "changed")
-    again = pdf._saved_plan(src, R(), str(tmp_path / "layout.onnx"), plan_path, model)
+    again = pdf._saved_plan(src, runner(), str(tmp_path / "layout.onnx"), plan_path, model)
     assert runs == {"mfd": 2, "layout": 2}
     assert again.texts == first.texts and again.skips == first.skips
     assert [[f.get("text") for f in fs] for fs in again.formulas] == [
@@ -1027,14 +1033,14 @@ def test_reanalysis_after_a_code_change_reuses_the_model_boxes(tmp_path, monkeyp
     ]
 
 
-def test_pdf_keeps_lines_the_model_returns_unchanged(tmp_path):
+def test_pdf_keeps_lines_the_model_returns_unchanged(tmp_path: Path) -> None:
     """TeX's `u was composed into ù in the text sent for translation. When the model returns the line unchanged, it
     does not count as translated: the original glyphs stay and the line is not laid out again with the composed
     text."""
     from app.formats.pdf import translate_pdf
 
     class Echo(MockTranslator):
-        async def translate_batch(self, texts):
+        async def translate_batch(self, texts: list[str]) -> list[str]:
             return list(texts)
 
     src = tmp_path / "codes.pdf"
@@ -1049,7 +1055,7 @@ def test_pdf_keeps_lines_the_model_returns_unchanged(tmp_path):
     assert pymupdf.open(out)[0].get_text() == before
 
 
-def test_shaded_areas_join_cells_and_leave_out_page_background():
+def test_shaded_areas_join_cells_and_leave_out_page_background() -> None:
     """A table with one background per cell and gaps between cells is merged into one area; a paper background
     covering the whole page does not count."""
     from app.formats.pdf_layout import scan_page
@@ -1060,10 +1066,10 @@ def test_shaded_areas_join_cells_and_leave_out_page_background():
     for row in range(3):
         for x0, x1 in ((20, 60), (60.5, 150)):
             page.draw_rect(pymupdf.Rect(x0, 40 + row * 12.5, x1, 52 + row * 12.5), color=None, fill=(0.77, 0.86, 0.99))
-    assert [tuple(round(v) for v in area) for area in scan_page(page).shades] == [(20, 40, 150, 77)]
+    assert [tuple(round(v) for v in _bbox(area)) for area in scan_page(page).shades] == [(20, 40, 150, 77)]
 
 
-def test_styles_carry_over_line_breaks():
+def test_styles_carry_over_line_breaks() -> None:
     """Each broken line carries its own marks: bold and font size spanning lines are closed at the end of a line and
     reopened at the start of the next."""
     from app.formats.pdf_flow import break_lines
@@ -1074,7 +1080,7 @@ def test_styles_carry_over_line_breaks():
     assert lines[1].startswith("{z80}{b}")
 
 
-def test_cjk_line_keeps_bold_across_a_formula():
+def test_cjk_line_keeps_bold_across_a_formula() -> None:
     """A formula cuts a line into pieces; the piece after the formula continues the bold opened before it and returns
     to regular after the closing mark."""
     import pymupdf
@@ -1084,7 +1090,7 @@ def test_cjk_line_keeps_bold_across_a_formula():
 
     text = "前面{b}粗体\x01i\x021\x01/i\x02还是粗体{/b}后面"
     lines = typeset_lines(text, 10, 400, {1: FormulaMetric(10, 10, 8, 2)})
-    commands, _slots, _fonts = _place_lines(
+    placed = _place_lines(
         lines,
         pymupdf.Rect(0, 0, 400, 100),
         10,
@@ -1095,6 +1101,8 @@ def test_cjk_line_keeps_bold_across_a_formula():
         {},
         800,
     )
+    assert placed is not None
+    commands, _slots, _fonts = placed
     stroked, bold = [], False
     for op in commands.splitlines():
         if op == "2 Tr":
@@ -1106,7 +1114,7 @@ def test_cjk_line_keeps_bold_across_a_formula():
     assert stroked == [False, True, True, False]
 
 
-def test_cjk_lines_rise_to_stay_inside_a_tight_first_line_box():
+def test_cjk_lines_rise_to_stay_inside_a_tight_first_line_box() -> None:
     """When the line box of the first original line is shorter than the Chinese glyphs, the whole paragraph moves up
     so the bottom of the glyphs does not overlap the line right below; at most until the glyph tops are level with
     the top of the box. When the line box is tall enough, nothing moves."""
@@ -1117,8 +1125,8 @@ def test_cjk_lines_rise_to_stay_inside_a_tight_first_line_box():
 
     lines = typeset_lines("用于生成适合人类阅读的解答的提示词。", 10, 400, {})
 
-    def baseline(first_room):
-        _commands, slots, _fonts = _place_lines(
+    def baseline(first_room: float | None) -> float:
+        placed = _place_lines(
             lines,
             pymupdf.Rect(0, 100, 400, 200),
             10,
@@ -1130,7 +1138,8 @@ def test_cjk_lines_rise_to_stay_inside_a_tight_first_line_box():
             800,
             first_room=first_room,
         )
-        commands = _commands.splitlines()
+        assert placed is not None
+        commands = placed[0].splitlines()
         tm = next(op for op in commands if op.endswith(" Tm"))
         return 800 - float(tm.split()[5])
 
@@ -1140,14 +1149,14 @@ def test_cjk_lines_rise_to_stay_inside_a_tight_first_line_box():
     assert baseline(5.0) == pytest.approx(100 + 10 * 0.88, abs=0.01)
 
 
-def test_inline_colors_are_marked_relative_to_the_block():
+def test_inline_colors_are_marked_relative_to_the_block() -> None:
     """Text in the block color gets no mark; other colors get {cRRGGBB}, and spaces between words of the same color do
     not break the mark; white text (caption labels) gets none. Color goes inside font size and outside emphasis,
     and marks nest in pairs."""
     from app.formats.pdf_flow import Emphasis, writer_for
 
     plain = Emphasis(False, False)
-    spans = [
+    spans: list[PdfDict] = [
         {"text": "We cite ", "color": 0, "size": 10},
         {"text": "Clark", "color": 0x0000FF, "size": 10},
         {"text": " ", "color": 0, "size": 10},
@@ -1168,7 +1177,7 @@ def test_inline_colors_are_marked_relative_to_the_block():
     assert out + writer.close() == "{b}abc {/b}{z60}{cff0000}{b}x{/b}{/c}{/z}"
 
 
-def test_colors_carry_over_line_breaks():
+def test_colors_carry_over_line_breaks() -> None:
     """Each broken line carries its own marks: a color spanning lines and the bold inside it are closed at the end of a
     line and reopened at the start of the next."""
     from app.formats.pdf_flow import break_lines
@@ -1179,7 +1188,7 @@ def test_colors_carry_over_line_breaks():
     assert lines[1].startswith("{c0000ff}{b}")
 
 
-def test_pdf_keeps_inline_colors_in_the_translation(tmp_path):
+def test_pdf_keeps_inline_colors_in_the_translation(tmp_path: Path) -> None:
     """Blue citations and red strings in body text keep their colors in the translation, including the parts spanning
     lines; the rest of the text is in the block color. When the model garbles the color marks (a missing closing
     mark), the whole paragraph is written in the block color and the second half is not colored."""
@@ -1188,7 +1197,7 @@ def test_pdf_keeps_inline_colors_in_the_translation(tmp_path):
     long_blue = "这是一段很长很长的蓝色链接文字需要跨过换行才能写完" * 3
 
     class Colored(MockTranslator):
-        async def translate_batch(self, texts):
+        async def translate_batch(self, texts: list[str]) -> list[str]:
             out = []
             for text in texts:
                 if "{c0000ff}" not in text:
@@ -1205,7 +1214,7 @@ def test_pdf_keeps_inline_colors_in_the_translation(tmp_path):
     doc = pymupdf.open()
     page = doc.new_page(width=300, height=300)
     for y, middle in ((60, "Weizenbaum (1966)"), (140, "broken link")):
-        x = 40
+        x = 40.0
         for text, color in (
             ("We cite ", (0, 0, 0)),
             (middle, (0, 0, 1)),
@@ -1228,7 +1237,7 @@ def test_pdf_keeps_inline_colors_in_the_translation(tmp_path):
     assert "没有收尾的蓝色" in "".join(s["text"] for s in spans if s["color"] == 0)
 
 
-def test_cjk_line_keeps_colors_across_a_formula():
+def test_cjk_line_keeps_colors_across_a_formula() -> None:
     """A formula cuts a line into pieces; the piece after the formula continues the color opened before it and returns
     to the block color after the closing mark."""
     import pymupdf
@@ -1238,7 +1247,7 @@ def test_cjk_line_keeps_colors_across_a_formula():
 
     text = "前面{c0000ff}蓝色\x01i\x021\x01/i\x02还是蓝色{/c}后面"
     lines = typeset_lines(text, 10, 400, {1: FormulaMetric(10, 10, 8, 2)})
-    commands, _slots, _fonts = _place_lines(
+    placed = _place_lines(
         lines,
         pymupdf.Rect(0, 0, 400, 100),
         10,
@@ -1249,6 +1258,8 @@ def test_cjk_line_keeps_colors_across_a_formula():
         {},
         800,
     )
+    assert placed is not None
+    commands, _slots, _fonts = placed
     painted, now = [], None
     for op in commands.splitlines():
         if op.endswith(" rg"):
@@ -1259,7 +1270,7 @@ def test_cjk_line_keeps_colors_across_a_formula():
     assert painted == [black, blue, blue, black]
 
 
-def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path):
+def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path: Path) -> None:
     """Only the title of a contents entry is sent for translation: section number, leader and page number are not;
     the page number stays in place right-aligned, and the leader is extended to the end of the translation. The
     same holds when the dots share a span with the title, and for entries with a page number but no leader (a
@@ -1269,7 +1280,7 @@ def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path):
     sent: list[str] = []
 
     class Short(MockTranslator):
-        async def translate_batch(self, texts):
+        async def translate_batch(self, texts: list[str]) -> list[str]:
             sent.extend(texts)
             return ["标题" + str(index) for index, _ in enumerate(texts)]
 
@@ -1317,7 +1328,7 @@ def test_toc_entries_send_only_titles_and_keep_page_numbers(tmp_path):
             assert dots and dots[0]["bbox"][0] - title["bbox"][2] < 8
 
 
-def test_block_color_follows_most_characters_not_the_longest_span():
+def test_block_color_follows_most_characters_not_the_longest_span() -> None:
     """In a book with one span per word, the longest piece is a white-on-black caption label. Taking the color from it
     would write the translation of the whole caption in white."""
     from app.formats.pdf_blocks import _by_chars
@@ -1328,17 +1339,17 @@ def test_block_color_follows_most_characters_not_the_longest_span():
     assert _by_chars(spans, lambda span: span["color"]) == 0
 
 
-def test_a_contents_page_without_leader_dots_is_found_by_its_page_numbers():
+def test_a_contents_page_without_leader_dots_is_found_by_its_page_numbers() -> None:
     """A table of contents without leaders: the heading Table of Contents, and page numbers far from the line ends,
     right-aligned and increasing downward. A list of tables whose page numbers start over, and a continuation page
     without a heading after a contents page, count too. A table with a column of integers and no heading that is
     not next to a contents page does not."""
     from app.formats.pdf_extract import _toc_pages
 
-    def line(text, x0, x1, y):
+    def line(text: str, x0: float, x1: float, y: float) -> PdfDict:
         return {"dir": (1, 0), "bbox": (x0, y, x1, y + 12), "spans": [{"text": text, "size": 12.0}]}
 
-    def page(title, rows):
+    def page(title: str, rows: list[tuple[str, int]]) -> PdfDict:
         lines = [line(title, 241, 371, 70)] if title else []
         for k, (entry, number) in enumerate(rows):
             y = 100 + 14.5 * k
@@ -1371,13 +1382,13 @@ def test_a_contents_page_without_leader_dots_is_found_by_its_page_numbers():
     assert _toc_pages([counts, contents, following]) == {1, 2}
 
 
-def test_the_line_gap_is_measured_from_the_documents_body_lines():
+def test_the_line_gap_is_measured_from_the_documents_body_lines() -> None:
     """Two tightly set lines in a font with tall line boxes overlap a little, so the measured gap is negative. When
     there is too little body text to measure, a common value is used."""
     from app.formats.pdf_blocks import _LINE_GAP
     from app.formats.pdf_extract import _line_gap
 
-    def page(count, top=100.0, height=13.3, pitch=11.0, size=10.0):
+    def page(count: int, top: float = 100.0, height: float = 13.3, pitch: float = 11.0, size: float = 10.0) -> PdfDict:
         lines = [
             {
                 "dir": (1, 0),
@@ -1394,14 +1405,14 @@ def test_the_line_gap_is_measured_from_the_documents_body_lines():
     assert _line_gap([page(5)]) == _LINE_GAP
 
 
-def test_a_line_tail_pair_measures_its_gap_against_the_documents_line_gap():
+def test_a_line_tail_pair_measures_its_gap_against_the_documents_line_gap() -> None:
     """For a half sentence at the line end and its continuation back at the column edge, the line spacing also
     subtracts the gap between two tightly set lines of this document. Pairing at extraction and recognizing again
     at writing both use the same value stored on the block."""
     from app.formats.pdf_blocks import TextBlock, _same_page_line_pair
 
-    def pair(line_gap):
-        def blk(text, rect):
+    def pair(line_gap: float) -> tuple[TextBlock, TextBlock]:
+        def blk(text: str, rect: pymupdf.Rect) -> TextBlock:
             return TextBlock(
                 page=0, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False, line_gap=line_gap
             )
@@ -1415,13 +1426,13 @@ def test_a_line_tail_pair_measures_its_gap_against_the_documents_line_gap():
     assert not _same_page_line_pair(*pair(-0.2))
 
 
-def test_a_block_cut_by_a_margin_note_does_not_take_an_indented_new_paragraph():
+def test_a_block_cut_by_a_margin_note_does_not_take_an_indented_new_paragraph() -> None:
     """A side note cuts a body paragraph into an upper and a lower block, which are joined back once the side note is
     removed. A next block with its own first-line indent starts a new paragraph: a new paragraph follows the
     translation of an example. Only an unindented next block is the same sentence cut apart."""
     from app.formats.pdf_extract import _note_cut
 
-    def block(*lines):
+    def block(*lines: tuple[str, Corners]) -> PdfDict:
         return {
             "lines": [{"dir": (1, 0), "bbox": bbox, "spans": [{"text": text, "size": 10.0}]} for text, bbox in lines]
         }
@@ -1452,7 +1463,7 @@ def test_a_block_cut_by_a_margin_note_does_not_take_an_indented_new_paragraph():
     assert not _note_cut(item, after)
 
 
-def test_a_fragment_inside_a_kept_formula_is_part_of_it():
+def test_a_fragment_inside_a_kept_formula_is_part_of_it() -> None:
     """The denominator dx of a fraction forms its own line inside the box of a formula line that keeps its original
     glyphs (dv · dv), so it is a piece of that formula."""
     from app.formats.pdf_blocks import TextBlock
@@ -1467,23 +1478,23 @@ def test_a_fragment_inside_a_kept_formula_is_part_of_it():
     assert not _inside_kept_formula(block, [pymupdf.Rect(100, 100, 200, 120)])
 
 
-def test_no_borderless_table_is_found_on_an_index_page(monkeypatch):
+def test_no_borderless_table_is_found_on_an_index_page(monkeypatch: pytest.MonkeyPatch) -> None:
     """On an index page, columns of short entries with aligned line starts look like a table without rules. As on a
     contents page, no table search runs, and the entries are translated."""
     from dataclasses import replace
 
     from app.formats import pdf_extract
     from app.formats.pdf_drawings import RuledTable
+    from app.formats.pdf_layout import PageScan, scan_page
 
     doc = pymupdf.open()
     page = doc.new_page(width=500, height=700)
     for column, x in enumerate((60, 260)):
         for row in range(14):
             page.insert_text((x, 80 + 12 * row), f"entry term {column}{row}, {100 + row}", fontsize=8)
-    real = pdf_extract.scan_page
 
-    def scan(page):
-        found = real(page)
+    def scan(page: pymupdf.Page) -> PageScan:
+        found = scan_page(page)
         cells = tuple(pymupdf.Rect(x, 72 + 12 * row, x + 150, 84 + 12 * row) for row in range(3) for x in (58, 258))
         return replace(found, tables=(RuledTable(pymupdf.Rect(58, 72, 408, 108), cells),))
 
@@ -1493,7 +1504,7 @@ def test_no_borderless_table_is_found_on_an_index_page(monkeypatch):
     assert all(block.clip is None for block in blocks)
 
 
-def test_an_index_entry_with_many_page_numbers_is_translated():
+def test_an_index_entry_with_many_page_numbers_is_translated() -> None:
     """A headword followed by a run of page numbers, with letters making up less than 40 percent, is still an entry
     and does not keep the original text as a line of numbers. A line with only page numbers still keeps the
     original text. A headword of one or two letters (F0) is an entry too."""
@@ -1514,17 +1525,10 @@ def test_an_index_entry_with_many_page_numbers_is_translated():
     assert "F0, 340" in texts
 
 
-def test_the_index_at_the_back_stays_original(tmp_path):
+def test_the_index_at_the_back_stays_original(tmp_path: Path) -> None:
     """The index at the back of a book is sorted by the original alphabet and its page numbers point to the original
     pages, so the whole page keeps the original text. The body text before it is translated."""
     from app.formats.pdf import _plan_pdf
-
-    class Runner:
-        def report_stage(self, *args, **kwargs):
-            pass
-
-        def set_title(self, title):
-            pass
 
     doc = pymupdf.open()
     body = doc.new_page(width=500, height=700)
@@ -1534,14 +1538,14 @@ def test_the_index_at_the_back_stays_original(tmp_path):
         index.insert_text((60, 80 + 12 * row), f"entry term {row}, {100 + row}", fontsize=8)
     src = tmp_path / "book.pdf"
     doc.save(src)
-    plan = _plan_pdf(src, Runner(), "")
+    plan = _plan_pdf(src, runner(), "")
     skipped = {text: skip for text, skip in zip(plan.texts, plan.skips)}
     assert not skipped["Perplexity measures how well a model predicts a sample of text."]
     entries = [skip for text, skip in skipped.items() if text.startswith("entry term")]
     assert len(entries) == 16 and all(entries)
 
 
-def test_the_left_column_of_an_index_page_is_not_a_side_note():
+def test_the_left_column_of_an_index_page_is_not_a_side_note() -> None:
     """An index page has several columns, and the leftmost lies outside the text area of the body, like side notes in
     the margin. Short words in side notes keep the original text, so taking the column for side notes would leave
     the index entries untranslated."""
@@ -1564,7 +1568,7 @@ def test_the_left_column_of_an_index_page_is_not_a_side_note():
     assert index and not any(block.side_note for block in index)
 
 
-def test_a_clipped_plot_path_does_not_cover_the_text_below_it():
+def test_a_clipped_plot_path_does_not_cover_the_text_below_it() -> None:
     """The path box of a curve clipped into a figure frame reaches tens of thousands of points off the page. Clipped
     to the clip area, only the part inside the frame remains, so it cannot cover the body text below. Paths entirely
     outside the clip area are removed."""
@@ -1584,7 +1588,7 @@ def test_a_clipped_plot_path_does_not_cover_the_text_below_it():
     assert rects[0].y1 <= 842 - 628 + 1 and rects[0].y0 >= 842 - 782 - 1
 
 
-def test_the_margin_piece_of_a_wide_caption_line_is_not_a_side_note():
+def test_the_margin_piece_of_a_wide_caption_line_is_not_a_side_note() -> None:
     """In a caption reaching into the page margin, inline formulas cut a line into blocks, and that w[1] left in the
     margin forms a block of its own. The lines right above and below start at the same x and run into the text
     area, so it is a line of the caption, not a side note. A side note beside body text is still a side note."""
@@ -1603,10 +1607,11 @@ def test_the_margin_piece_of_a_wide_caption_line_is_not_a_side_note():
         ((160, 289, 493, 300), "body text that runs across the whole column of the page here", "f"),
         ((160, 301, 493, 312), "and goes on with more of the same body text below the note", "f"),
     ]
-    blocks = {}
-    lines, refs = [], []
+    blocks: dict[str, PdfDict] = {}
+    lines: list[FrameLine] = []
+    refs: list[tuple[PdfDict, PdfDict]] = []
     for bbox, text, key in rows:
-        line = {"bbox": bbox}
+        line: PdfDict = {"bbox": bbox}
         blocks.setdefault(key, {"lines": []})["lines"].append(line)
         lines.append(FrameLine(pymupdf.Rect(bbox), text, 9))
         refs.append((blocks[key], line))

@@ -16,7 +16,7 @@ def _geo(figures: list[pymupdf.Rect], width: float = 400, height: float = 500) -
     return PageGeometry.from_rects(width, [pymupdf.Rect(40, 40, 180, 54)], figures, height)
 
 
-def test_size_heading_stays_a_heading_and_author_stays_body():
+def test_size_heading_stays_a_heading_and_author_stays_body() -> None:
     items = [
         _item("Introduction", pymupdf.Rect(40, 40, 160, 54), size=12, bold=True),
         _item("Jakob Uszkoreit", pymupdf.Rect(40, 70, 160, 82), size=10, bold=True),
@@ -26,7 +26,7 @@ def test_size_heading_stays_a_heading_and_author_stays_body():
     assert roles == [Role.HEADING, Role.BODY, Role.BODY]
 
 
-def test_numbered_title_is_a_heading_but_a_quantity_is_not():
+def test_numbered_title_is_a_heading_but_a_quantity_is_not() -> None:
     items = [
         _item("3.1 Encoder", pymupdf.Rect(40, 40, 140, 54)),
         _item("1 引言", pymupdf.Rect(40, 60, 120, 74)),
@@ -37,7 +37,7 @@ def test_numbered_title_is_a_heading_but_a_quantity_is_not():
     assert roles == [Role.HEADING, Role.HEADING, Role.BODY, Role.BODY]
 
 
-def test_text_inside_a_figure_is_a_figure_and_a_caption_is_not():
+def test_text_inside_a_figure_is_a_figure_and_a_caption_is_not() -> None:
     figure = pymupdf.Rect(80, 80, 220, 180)
     items = [
         _item("axis", pymupdf.Rect(100, 110, 130, 122), size=8),
@@ -49,7 +49,7 @@ def test_text_inside_a_figure_is_a_figure_and_a_caption_is_not():
     assert roles == [Role.FIGURE, Role.CAPTION, Role.BODY, Role.BODY]
 
 
-def test_a_caption_on_the_figure_ground_stays_a_caption():
+def test_a_caption_on_the_figure_ground_stays_a_caption() -> None:
     """When a drawing program's white background encloses the caption too, a block starting with a caption label is
     still a caption, and the label may be followed by a vertical bar."""
     ground = pymupdf.Rect(60, 60, 340, 260)
@@ -61,14 +61,14 @@ def test_a_caption_on_the_figure_ground_stays_a_caption():
     assert roles == [Role.FIGURE, Role.CAPTION]
 
 
-def test_page_filling_image_does_not_swallow_the_text_layer():
+def test_page_filling_image_does_not_swallow_the_text_layer() -> None:
     page = pymupdf.Rect(0, 0, 400, 500)
     items = [_item("Recognized line of the scanned page.", pymupdf.Rect(40, 80, 300, 94))]
     roles = HeuristicLayout().classify(items, [_geo([page], height=500)], median=10)
     assert roles == [Role.BODY]
 
 
-def test_cross_page_does_not_merge_a_caption():
+def test_cross_page_does_not_merge_a_caption() -> None:
     left = TextBlock(
         page=0,
         rect=pymupdf.Rect(40, 700, 200, 714),
@@ -91,7 +91,7 @@ def test_cross_page_does_not_merge_a_caption():
     assert all(len(unit) == 1 for unit in units)
 
 
-def test_figure_label_stays_original_and_caption_is_translated(tmp_path: Path):
+def test_figure_label_stays_original_and_caption_is_translated(tmp_path: Path) -> None:
     from app.formats import translate_file
     from tests.helpers import run, runner
 
@@ -115,7 +115,7 @@ def test_figure_label_stays_original_and_caption_is_translated(tmp_path: Path):
     assert "[zh-CN] Body paragraph with enough letters here." in text
 
 
-def test_labels_and_listing_above_a_figure_caption_are_the_figure():
+def test_labels_and_listing_above_a_figure_caption_are_the_figure() -> None:
     """The picture environment draws lines with glyphs, without vector boxes. Everything above the caption up to the
     previous body paragraph is the figure. With two stacked figures, the caption of the first is the upper bound of
     the second and is not swallowed by it."""
@@ -133,7 +133,7 @@ def test_labels_and_listing_above_a_figure_caption_are_the_figure():
     assert roles == [Role.BODY, Role.FIGURE, Role.FIGURE, Role.CAPTION, Role.FIGURE, Role.CAPTION, Role.BODY]
 
 
-def test_body_starting_right_of_outdented_headings_bounds_the_figure():
+def test_body_starting_right_of_outdented_headings_bounds_the_figure() -> None:
     """The text frame starts at 160: running headers and protruding section headings are further left, and body
     paragraphs are still the upper bound of the figure area."""
     from app.formats.pdf_frame import TextFrame
@@ -160,7 +160,7 @@ def test_body_starting_right_of_outdented_headings_bounds_the_figure():
     assert roles[2] is Role.BODY and roles[3] is Role.FIGURE and roles[4] is Role.CAPTION
 
 
-def test_a_sentence_that_names_a_figure_is_not_its_caption():
+def test_a_sentence_that_names_a_figure_is_not_its_caption() -> None:
     items = [
         _item("We'll come back to precision and recall in Chapter 4.", pymupdf.Rect(160, 277, 491, 287)),
         _item("2.6.6 More Operators", pymupdf.Rect(160, 304, 279, 316), size=12),
@@ -173,7 +173,7 @@ def test_a_sentence_that_names_a_figure_is_not_its_caption():
     assert roles == [Role.BODY, Role.HEADING, Role.BODY, Role.FIGURE, Role.CAPTION]
 
 
-def test_smaller_pseudocode_above_a_caption_is_the_figure():
+def test_smaller_pseudocode_above_a_caption_is_the_figure() -> None:
     items = [
         _item("A body paragraph that ends right before the algorithm box starts.", pymupdf.Rect(160, 60, 493, 100)),
         _item(
@@ -188,7 +188,7 @@ def test_smaller_pseudocode_above_a_caption_is_the_figure():
     assert roles == [Role.BODY, Role.FIGURE, Role.CAPTION]
 
 
-def test_a_paragraph_in_a_framed_box_is_body_text():
+def test_a_paragraph_in_a_framed_box_is_body_text() -> None:
     """A shaded rounded box counts as a figure, but a paragraph of sentences in it is still body text; short labels in
     figures still count as figure."""
     box = pymupdf.Rect(100, 100, 500, 300)
@@ -206,7 +206,7 @@ def test_a_paragraph_in_a_framed_box_is_body_text():
     assert roles == [Role.BODY, Role.FIGURE]
 
 
-def test_a_prompt_box_is_translated_as_a_whole():
+def test_a_prompt_box_is_translated_as_a_whole() -> None:
     """When most of a box is paragraph text (a paragraph introducing what follows with a colon counts too),
     sentence-like list items and examples in it count as body text along with the paragraphs, so half of the box is
     not left in the original. Short labels of two or three words still count as figure."""

@@ -2,7 +2,10 @@ import asyncio
 import io
 import re
 import time
+from collections.abc import Callable
 from pathlib import Path
+from types import ModuleType
+from typing import Never
 
 import httpx
 import pymupdf
@@ -11,23 +14,27 @@ from fastapi.testclient import TestClient
 
 from app import main, state
 from app.history import Job
+from app.json_types import JSONDict
 from app.runner import Runner
 from app.translators import MockTranslator, TranslatorError
+from tests.test_translators import make_openai
 
 SAMPLES = Path(__file__).resolve().parent.parent / "samples"
 
 
 class MemCache:
-    def __init__(self, data=None):
+    """A cache keyed by text alone (the prefix is ignored)."""
+
+    def __init__(self, data: dict[str, str] | None = None) -> None:
         self.d = data or {}
 
-    def get_many(self, prefix, texts):
+    def get_many(self, prefix: str, texts: list[str]) -> dict[str, str]:
         return {t: self.d[t] for t in texts if t in self.d}
 
-    def put_many(self, prefix, pairs):
+    def put_many(self, prefix: str, pairs: dict[str, str]) -> None:
         self.d.update(pairs)
 
-    def drop_many(self, prefix, texts):
+    def drop_many(self, prefix: str, texts: list[str]) -> None:
         for text in texts:
             self.d.pop(text, None)
 
@@ -39,12 +46,14 @@ class RecordingTranslator(MockTranslator):
     max_batch_items = 2
     concurrency = 1
 
-    def __init__(self, *a, on_batch=None, **kw):
-        super().__init__(*a, **kw)
-        self.batches = []
+    def __init__(
+        self, target_lang: str, source_lang: str = "auto", on_batch: Callable[[int], None] | None = None
+    ) -> None:
+        super().__init__(target_lang, source_lang)
+        self.batches: list[list[str]] = []
         self.on_batch = on_batch
 
-    async def translate_batch(self, texts):
+    async def translate_batch(self, texts: list[str]) -> list[str]:
         self.batches.append(list(texts))
         if self.on_batch:
             self.on_batch(len(self.batches))
@@ -52,11 +61,11 @@ class RecordingTranslator(MockTranslator):
         return await super().translate_batch(texts)
 
 
-def paras(n):
+def paras(n: int) -> list[str]:
     return [f"Paragraph number {i} talks about something quite different from the others." for i in range(n)]
 
 
-def test_preview_incremental_and_duplicates():
+def test_preview_incremental_and_duplicates() -> None:
     texts = ["Title of the book", "Hello there my friend", "", "Hello there my friend"]
     runner = Runner(MockTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
     assert runner.preview() == {"ready": False, "version": 0}
@@ -73,7 +82,7 @@ def test_preview_incremental_and_duplicates():
     assert "segments" not in partial and len(partial["updates"]) == 2
 
 
-def test_positional_skip_does_not_suppress_the_same_sentence():
+def test_positional_skip_does_not_suppress_the_same_sentence() -> None:
     cite = "Smith, J. (2020). Some book. Press."
     texts = [cite, "Bibliography", cite]
     runner = Runner(MockTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
@@ -85,7 +94,7 @@ def test_positional_skip_does_not_suppress_the_same_sentence():
     assert runner.info.skipped == 1
 
 
-def test_cached_and_skipped_segments_show_immediately():
+def test_cached_and_skipped_segments_show_immediately() -> None:
     texts = ["Cached sentence here", "这一段本来就是中文，不需要再翻译成中文了。", "Fresh sentence to translate now"]
     runner = Runner(MockTranslator("zh-CN"), cache=MemCache({"Cached sentence here": "已缓存"}))
     asyncio.run(runner.translate_all(texts, preview=True))
@@ -96,19 +105,20 @@ def test_cached_and_skipped_segments_show_immediately():
     assert updates[0][1] == "已缓存" and updates[1][2] == 1 and updates[2][1].startswith("[zh-CN]")
 
 
-def test_first_batch_is_small():
+def test_first_batch_is_small() -> None:
     tr = RecordingTranslator("zh-CN")
     tr.max_batch_items = 20
     asyncio.run(Runner(tr, cache=MemCache(), skip_same_lang=False).translate_all(paras(30)))
     assert [len(b) for b in tr.batches] == [4, 20, 6]
 
 
-def test_focus_reorders_remaining_batches():
+def test_focus_reorders_remaining_batches() -> None:
     texts = paras(20)
-    runner = None
+    runner: Runner | None = None
 
-    def jump(n):
+    def jump(n: int) -> None:
         if n == 1:
+            assert runner is not None
             runner.focus(14)  # The user jumped to paragraph 14 during the first batch
 
     tr = RecordingTranslator("zh-CN", on_batch=jump)
@@ -122,7 +132,7 @@ def test_focus_reorders_remaining_batches():
     assert sum(len(b) for b in tr.batches) == 20
 
 
-def test_preview_endpoints(app_env):
+def test_preview_endpoints(app_env: ModuleType) -> None:
     md = b"# Title here\n\nFirst paragraph of the document.\n\n- item one in list\n"
     # The with block shares one event loop, so the background translation job keeps running between two requests
     with TestClient(main.app) as client:
@@ -138,7 +148,7 @@ def test_preview_endpoints(app_env):
             if status["status"] in ("done", "error"):
                 break
             time.sleep(0.05)
-        assert status["status"] == "done", status
+        assert status is not None and status["status"] == "done", status
         p = client.get(f"/api/jobs/{job['id']}/preview").json()
         assert p["ready"] and p["status"] == "done", p
         assert [s["k"] for s in p["segments"]] == ["h1", "p", "li"]
@@ -151,7 +161,7 @@ def test_preview_endpoints(app_env):
         assert pdf["preview"] is True
 
 
-def test_epub_preview_kinds_in_reading_order():
+def test_epub_preview_kinds_in_reading_order() -> None:
     src = SAMPLES / "alice.mobi"
     if not src.exists():
         pytest.skip("sample missing")
@@ -189,10 +199,11 @@ def _heading_pdf() -> bytes:
             fontname="helv",
         )
         y += 28
-    return doc.tobytes()
+    data: bytes = doc.tobytes()
+    return data
 
 
-def test_pdf_preview_marks_section_headings(tmp_path):
+def test_pdf_preview_marks_section_headings(tmp_path: Path) -> None:
     """A short bold block slightly larger than body text is a section heading; non-bold text of the same size and bold
     text no larger than body text are still paragraphs."""
     from app.formats import translate_file
@@ -210,17 +221,17 @@ def test_pdf_preview_marks_section_headings(tmp_path):
     assert body and all(s["k"] == "p" for s in body)
 
 
-def _wait_terminal(client, job_id):
+def _wait_terminal(client: TestClient, job_id: str) -> JSONDict:
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
-        job = client.get(f"/api/jobs/{job_id}").json()
+        job: JSONDict = client.get(f"/api/jobs/{job_id}").json()
         if job["status"] in ("done", "error"):
             return job
         time.sleep(0.05)
     raise AssertionError("job did not finish")
 
 
-def test_pdf_preview_headings_survive_the_job(app_env, tmp_path):
+def test_pdf_preview_headings_survive_the_job(app_env: ModuleType, tmp_path: Path) -> None:
     main = app_env
     src = tmp_path / "paper.pdf"
     src.write_bytes(_heading_pdf())
@@ -237,7 +248,7 @@ def test_pdf_preview_headings_survive_the_job(app_env, tmp_path):
         assert kinds["scholarly works."] == "p"
 
 
-def test_failed_pdf_stays_previewable_but_not_ready(app_env):
+def test_failed_pdf_stays_previewable_but_not_ready(app_env: ModuleType) -> None:
     """An encrypted PDF or one without text has the preview flag set but no paragraphs; the client must not keep
     polling for them."""
     main = app_env
@@ -246,7 +257,7 @@ def test_failed_pdf_stays_previewable_but_not_ready(app_env):
     locked = pymupdf.open()
     locked.new_page().insert_text((72, 72), "Secret text that cannot be read")
     buf = io.BytesIO()
-    locked.save(buf, encryption=pymupdf.PDF_ENCRYPT_AES_256, user_pw="secret", owner_pw="secret")
+    locked.save(buf, encryption=pymupdf.mupdf.PDF_ENCRYPT_AES_256, user_pw="secret", owner_pw="secret")
     cases = [("empty.pdf", empty.tobytes()), ("locked.pdf", buf.getvalue()), ("bad.pdf", b"%PDF-1.4")]
     with TestClient(main.app) as client:
         for name, data in cases:
@@ -258,7 +269,7 @@ def test_failed_pdf_stays_previewable_but_not_ready(app_env):
             assert preview["ready"] is False and preview["status"] == "error"
 
 
-def test_normalize_numbered_units():
+def test_normalize_numbered_units() -> None:
     from app.runner import normalize_numbered_units as norm
 
     texts = ["h1", "toc1", "toc2", "body", "cite", "long"]
@@ -289,11 +300,11 @@ def test_normalize_numbered_units():
         assert fix(cite, "zh-CN") == cite
 
 
-def test_normalize_numbered_units_updates_cache():
+def test_normalize_numbered_units_updates_cache() -> None:
     from app.runner import Runner
 
     class DictTranslator(MockTranslator):
-        async def translate_batch(self, texts):
+        async def translate_batch(self, texts: list[str]) -> list[str]:
             return ["第2卷" if t == "BOOK 2" else f"[zh-CN] {t}" for t in texts]
 
     runner = Runner(DictTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
@@ -307,13 +318,13 @@ def test_normalize_numbered_units_updates_cache():
     assert asyncio.run(body.translate_all(["BOOK 2"], kinds=["p"], preview=True)) == ["第2卷"]
 
 
-def test_normalize_applies_to_cache_hits():
+def test_normalize_applies_to_cache_hits() -> None:
     """Old-style translations in the cache (translated before normalization) are rewritten in place on a hit, and the
     preview shows the new style at once."""
     from app.runner import Runner
 
     class NeverCalled(MockTranslator):
-        async def translate_batch(self, texts):
+        async def translate_batch(self, texts: list[str]) -> Never:
             raise AssertionError("全部命中缓存，不该发请求")
 
     cache = MemCache({"BOOK 2": "第2卷", "BOOK 26": "第卷26", "cite": "第25卷第1期"})
@@ -326,7 +337,7 @@ def test_normalize_applies_to_cache_hits():
     assert updates[0] == "第二卷" and updates[1] == "第二十六卷" and updates[2] == "第25卷第1期"
 
 
-def test_normalize_punctuation():
+def test_normalize_punctuation() -> None:
     """Full-width punctuation in Chinese translations becomes half-width (comma-like marks get a following space);
     full stops, title marks and quotation marks stay full-width. New translations and cache hits are both rewritten;
     other languages are left alone."""
@@ -355,15 +366,16 @@ def test_normalize_punctuation():
     assert normalize_punctuation("苹果、香蕉……等水果", "zh-CN") == "苹果, 香蕉……等水果"
 
     class FullwidthTranslator(MockTranslator):
-        async def translate_batch(self, texts):
+        async def translate_batch(self, texts: list[str]) -> list[str]:
             return [f"译（{t}）文，完" for t in texts]
 
-    runner = Runner(FullwidthTranslator("zh-CN"), cache=MemCache(), skip_same_lang=False)
+    fresh = MemCache()
+    runner = Runner(FullwidthTranslator("zh-CN"), cache=fresh, skip_same_lang=False)
     assert asyncio.run(runner.translate_all(["para"], kinds=["p"], preview=True)) == ["译(para)文, 完"]
-    assert runner.cache.d["para"] == "译(para)文, 完"
+    assert fresh.d["para"] == "译(para)文, 完"
 
     class NeverCalled(MockTranslator):
-        async def translate_batch(self, texts):
+        async def translate_batch(self, texts: list[str]) -> Never:
             raise AssertionError("全部命中缓存，不该发请求")
 
     cache = MemCache({"old": "旧（缓存）译文，嗯"})
@@ -372,7 +384,7 @@ def test_normalize_punctuation():
     assert cache.d["old"] == "旧(缓存)译文, 嗯"
 
 
-def test_fix_numbered_unit_inside_html():
+def test_fix_numbered_unit_inside_html() -> None:
     """Rich-text translations: when a number is wrapped in <small> or nested in <a>, the text nodes are rewritten and
     the tags are kept as they are."""
     from app.runner import fix_numbered_unit
@@ -397,7 +409,7 @@ def test_fix_numbered_unit_inside_html():
     assert fix_numbered_unit(cite, "zh-CN", html=True) == cite
 
 
-def test_fix_numbered_unit_with_selfclosed_anchor():
+def test_fix_numbered_unit_with_selfclosed_anchor() -> None:
     """Numbers next to self-closing anchors (<a id="x"/>, <span id="x"/>) are normalized too, and the anchor structure
     is not swallowed."""
     from app.runner import fix_numbered_unit as fix
@@ -419,16 +431,16 @@ def test_fix_numbered_unit_with_selfclosed_anchor():
     assert re.search(r"<span [^>]*></span>", span)
 
 
-def test_empty_translations_backfilled_below_threshold():
+def test_empty_translations_backfilled_below_threshold() -> None:
     """An occasional empty translation is filled with the source text, and the job finishes as usual and counts it;
     only above the threshold does it fail."""
 
     class FlakyEmpty(MockTranslator):
-        def __init__(self, target_lang, empty_at):
+        def __init__(self, target_lang: str, empty_at: set[str]) -> None:
             super().__init__(target_lang)
             self.empty_at = empty_at
 
-        async def translate_batch(self, texts):
+        async def translate_batch(self, texts: list[str]) -> list[str]:
             return ["" if t in self.empty_at else f"[zh-CN] {t}" for t in texts]
 
     texts = [f"Sentence number {i} here." for i in range(20)]
@@ -443,12 +455,12 @@ def test_empty_translations_backfilled_below_threshold():
         asyncio.run(runner2.translate_all(texts))
 
 
-def test_echo_translations_retried_individually():
+def test_echo_translations_retried_individually() -> None:
     """A paragraph echoed whole in a batch (the translation is still in the source language) is retranslated once on
     its own; it is kept only if it still echoes."""
-    calls = []
+    calls: list[int] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         import json as _json
 
         n = len(_json.loads(request.content)["messages"][1]["content"].split("[[p"))
@@ -471,7 +483,7 @@ def test_echo_translations_retried_individually():
             200, json={"choices": [{"message": {"content": "这是一个相当长的句子，确实应该被翻译出来。"}}]}
         )
 
-    tr = __import__("tests.test_translators", fromlist=["make_openai"]).make_openai(handler)
+    tr = make_openai(handler)
     long_text = "This is a fairly long sentence that should really be translated."
     runner = Runner(tr, cache=MemCache(), skip_same_lang=False)
     out = asyncio.run(runner.translate_all([long_text, "LSTM"]))
@@ -480,7 +492,7 @@ def test_echo_translations_retried_individually():
     assert out[1] == "LSTM"  # Proper nouns are not affected
 
 
-def test_cached_prose_echo_is_dropped_and_retried():
+def test_cached_prose_echo_is_dropped_and_retried() -> None:
     """A whole English sentence echoed back does not stay in the cache. The next re-layout translates it again
     instead of pasting the English back every time."""
     src = (
@@ -488,9 +500,9 @@ def test_cached_prose_echo_is_dropped_and_retried():
         "benchmark so the comparison stays fair for every engine involved."
     )
     cache = MemCache({src: src})
-    calls = []
+    calls: list[int] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         calls.append(1)
         return httpx.Response(
             200,
@@ -506,7 +518,7 @@ def test_cached_prose_echo_is_dropped_and_retried():
             },
         )
 
-    tr = __import__("tests.test_translators", fromlist=["make_openai"]).make_openai(handler)
+    tr = make_openai(handler)
     runner = Runner(tr, cache=cache, skip_same_lang=False)
     out = asyncio.run(runner.translate_all([src]))
     assert calls
@@ -514,7 +526,7 @@ def test_cached_prose_echo_is_dropped_and_retried():
     assert cache.d[src] != src
 
 
-def test_stray_placeholders_cleaned_from_formula_free_blocks():
+def test_stray_placeholders_cleaned_from_formula_free_blocks() -> None:
     """Blocks without formulas: {vN} placeholders from model mismatches or hallucinations are always stripped and do
     not leak into the output."""
     from app.formats.pdf_restore import _STRAY_PLACEHOLDER_RE
@@ -524,7 +536,7 @@ def test_stray_placeholders_cleaned_from_formula_free_blocks():
     assert _STRAY_PLACEHOLDER_RE.sub("", "正常译文") == "正常译文"
 
 
-def test_finished_job_preview_returns_updates_after_last_poll(app_env):
+def test_finished_job_preview_returns_updates_after_last_poll(app_env: ModuleType) -> None:
     """When the last batch finishes between two polls and the job ends right after, the next incremental poll gets
     the translations of that batch."""
     job = Job(id="snap1", filename="a.md", preview=True, status="done")
@@ -544,7 +556,7 @@ def test_finished_job_preview_returns_updates_after_last_poll(app_env):
         assert client.get(f"/api/jobs/snap1/preview?since={snap['version']}").json()["updates"] == []
 
 
-def test_dotted_section_numbers_stay_in_digits():
+def test_dotted_section_numbers_stay_in_digits() -> None:
     """The source starts with 7.4 or 1.2.3, and the model, following "章节号写中文数字" (write section numbers in
     Chinese numerals), wrote "七点四" or "四.11", or added "第十二章" to a bare chapter number without Chapter: these
     are restored to the original, and old translations in the cache are rewritten on a hit too. Sources that spell out
@@ -571,7 +583,7 @@ def test_dotted_section_numbers_stay_in_digits():
     assert keep("16.2 and 6.2, with p = 0.5", "十六点二和六点二, 取 p = 零点五", "zh-CN") == "16.2和6.2, 取 p = 0.5"
 
     class NeverCalled(MockTranslator):
-        async def translate_batch(self, texts):
+        async def translate_batch(self, texts: list[str]) -> Never:
             raise AssertionError("全部命中缓存，不该发请求")
 
     cache = MemCache({"17.2.3 Residual vector quantization": "十七点二点三 残差向量量化"})
@@ -581,16 +593,16 @@ def test_dotted_section_numbers_stay_in_digits():
     assert cache.d["17.2.3 Residual vector quantization"] == "17.2.3 残差向量量化"
 
 
-def test_cached_translation_with_stray_script_is_dropped_and_retried():
+def test_cached_translation_with_stray_script_is_dropped_and_retried() -> None:
     """A cached translation containing foreign script is dropped and retranslated; when only typesetting, it cannot
     be retranslated and is used as is."""
     src = "Please take a moment to convince yourself."
     cache = MemCache({src: "请花一点时间 убед自己。"})
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"choices": [{"message": {"content": "请花一点时间说服自己。"}}]})
 
-    tr = __import__("tests.test_translators", fromlist=["make_openai"]).make_openai(handler)
+    tr = make_openai(handler)
     out = asyncio.run(Runner(tr, cache=cache, skip_same_lang=False).translate_all([src]))
     assert out[0] == "请花一点时间说服自己。"
     assert cache.d[src] == "请花一点时间说服自己。"
@@ -599,12 +611,12 @@ def test_cached_translation_with_stray_script_is_dropped_and_retried():
     assert out[0] == "请花一点时间 убед自己。"
 
 
-def test_notes_reach_the_prompt_and_key_the_cache():
+def test_notes_reach_the_prompt_and_key_the_cache() -> None:
     """Paragraphs with notes: the note goes into the system prompt with the batch, the cache key is the source text
     plus the note, and translations stored earlier without the note no longer hit."""
-    systems = []
+    systems: list[str] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         import json as _json
 
         messages = _json.loads(request.content)["messages"]
@@ -613,7 +625,7 @@ def test_notes_reach_the_prompt_and_key_the_cache():
             200, json={"choices": [{"message": {"content": "[[p0]]\n对数\n[[p1]]\n对数似然比, 531"}}]}
         )
 
-    tr = __import__("tests.test_translators", fromlist=["make_openai"]).make_openai(handler)
+    tr = make_openai(handler)
     cache = MemCache({"log": "日志"})
     texts = ["log", "log likelihood ratio, 531"]
     notes = ["An entry in the subject index at the back of the book.", ""]

@@ -1,13 +1,16 @@
 import concurrent.futures
 import time
+from collections.abc import Callable, Collection
+from pathlib import Path
 
 import pymupdf
+import pytest
 
 from app.formats import pdf_parts
 from app.formats.pdf_parts import plan_parts, render_in_parts
 
 
-def test_parts_are_balanced_and_never_split_a_paragraph_across_pages(monkeypatch):
+def test_parts_are_balanced_and_never_split_a_paragraph_across_pages(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pdf_parts, "_MIN_PART_PAGES", 2)
     weights = {pno: 1 for pno in range(12)}
     # A paragraph on page 5 continues on page 6, so no cut between pages 6 and 7; page 8 continues on page 9
@@ -18,25 +21,25 @@ def test_parts_are_balanced_and_never_split_a_paragraph_across_pages(monkeypatch
         assert any(host in part and tail in part for part in parts)
 
 
-def test_few_pages_are_written_in_one_part():
+def test_few_pages_are_written_in_one_part() -> None:
     assert plan_parts({pno: 3 for pno in range(10)}, [], 4) == [list(range(10))]
 
 
-def _book(path) -> None:
+def _book(path: Path) -> None:
     doc = pymupdf.open()
     for pno in range(4):
         doc.new_page(width=300, height=200).insert_text((40, 60), f"Original page {pno}", fontsize=12)
     # A link to another page must survive reassembly
-    for pno, page in enumerate(doc):
+    for pno, page in enumerate(doc.pages()):
         page.insert_link({"kind": pymupdf.LINK_GOTO, "from": pymupdf.Rect(40, 50, 140, 64), "page": 3 - pno})
     doc.save(path)
 
 
-def test_parts_written_in_other_processes_are_put_back_in_place(tmp_path):
+def test_parts_written_in_other_processes_are_put_back_in_place(tmp_path: Path) -> None:
     src = tmp_path / "book.pdf"
     _book(src)
 
-    def render(pages, on_page):
+    def render(pages: Collection[int] | None, on_page: Callable[[int, int], None] | None) -> pymupdf.Document:
         doc = pymupdf.open(src)
         for pno in pages if pages is not None else range(len(doc)):
             if on_page is not None:
@@ -57,20 +60,25 @@ def test_parts_written_in_other_processes_are_put_back_in_place(tmp_path):
             lambda done, total: progress.append((done, total)),
         ).result()
     assert out is not None and out.page_count == 4
-    assert [page.get_text().strip().splitlines()[-1] for page in out] == [f"Written page {pno}" for pno in range(4)]
-    assert [[link["page"] for link in page.get_links()] for page in out] == [[3], [2], [1], [0]]
+    assert [page.get_text().strip().splitlines()[-1] for page in out.pages()] == [
+        f"Written page {pno}" for pno in range(4)
+    ]
+    assert [[link["page"] for link in page.get_links()] for page in out.pages()] == [[3], [2], [1], [0]]
     # Same as writing the whole document in one process
     whole = render(None, None)
-    assert [page.get_pixmap(dpi=72).samples for page in out] == [page.get_pixmap(dpi=72).samples for page in whole]
+    assert [page.get_pixmap(dpi=72).samples for page in out.pages()] == [
+        page.get_pixmap(dpi=72).samples for page in whole.pages()
+    ]
     assert progress and all(total == 4 for _done, total in progress)
 
 
-def test_a_stuck_part_falls_back_to_writing_the_whole_book(tmp_path, monkeypatch):
+def test_a_stuck_part_falls_back_to_writing_the_whole_book(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     src = tmp_path / "book.pdf"
     _book(src)
     monkeypatch.setattr(pdf_parts, "_STALL_SECONDS", 1)
 
-    def render(pages, on_page):
+    def render(pages: Collection[int] | None, on_page: Callable[[int, int], None] | None) -> pymupdf.Document:
+        assert pages is not None
         if 2 in pages:
             time.sleep(60)
         return pymupdf.open(src)

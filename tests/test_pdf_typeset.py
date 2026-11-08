@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pymupdf
 
 from app.formats.pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, typeset_lines
@@ -5,7 +7,7 @@ from app.formats.pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, type
 _SENTINEL = "\x01i\x021\x01/i\x02"
 
 
-def test_formula_slot_sits_after_the_preceding_text():
+def test_formula_slot_sits_after_the_preceding_text() -> None:
     metrics = {1: FormulaMetric(slot_width=30, body_width=26, height=10, below=2)}
     lines = typeset_lines(f"译文 {_SENTINEL} 甲", em=10, max_width=200, metrics=metrics)
     assert len(lines) == 1
@@ -17,14 +19,14 @@ def test_formula_slot_sits_after_the_preceding_text():
     assert _SENTINEL not in text.text and _SENTINEL not in tail.text
 
 
-def test_wide_formula_is_its_own_line():
+def test_wide_formula_is_its_own_line() -> None:
     metrics = {1: FormulaMetric(slot_width=40, body_width=36, height=12, below=1)}
     lines = typeset_lines(f"甲{_SENTINEL}乙", em=10, max_width=20, metrics=metrics)
     assert any(isinstance(piece, FormulaPiece) and piece.x == 0 for line in lines for piece in line.pieces)
     assert all(_SENTINEL not in piece.text for line in lines for piece in line.pieces if isinstance(piece, TextPiece))
 
 
-def test_a_tall_inline_formula_opens_up_its_line():
+def test_a_tall_inline_formula_opens_up_its_line() -> None:
     """An inline formula with a summation and limits under a radical is taller than a line, so that line's spacing
     opens up and the following lines move down. A formula one line tall does not."""
     from app.formats.pdf_typeset import line_offsets
@@ -45,7 +47,7 @@ def test_a_tall_inline_formula_opens_up_its_line():
     )
 
 
-def test_style_marks_are_written_back(tmp_path):
+def test_style_marks_are_written_back(tmp_path: Path) -> None:
     """Bold, italic and smaller sizes are written from their markers, and the markers do not remain in the page text."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated
@@ -88,7 +90,7 @@ def test_style_marks_are_written_back(tmp_path):
     assert "{z" not in out[0].get_text() and "{b}" not in out[0].get_text()
 
 
-def test_plain_paragraph_keeps_parentheses_and_separates_lines(tmp_path):
+def test_plain_paragraph_keeps_parentheses_and_separates_lines(tmp_path: Path) -> None:
     """Paragraphs without formulas are also broken by the typesetter: short bracket groups stay on one line, and lines
     do not overlap."""
     from app.formats.pdf_blocks import TextBlock
@@ -128,7 +130,7 @@ def test_plain_paragraph_keeps_parentheses_and_separates_lines(tmp_path):
         assert above.y1 <= below.y0 + 0.5
 
 
-def test_typeset_formula_tracks_the_line_baseline(tmp_path):
+def test_typeset_formula_tracks_the_line_baseline(tmp_path: Path) -> None:
     """The bottom of the formula sits on the baseline of the text on the same line, not relative to the box top."""
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_write import _render_translated

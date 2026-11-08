@@ -10,7 +10,7 @@ from pathlib import Path
 a_dir, b_dir = map(Path, sys.argv[1:3])
 
 
-def iou(r, s):
+def iou(r: list[float], s: list[float]) -> float:
     w = min(r[2], s[2]) - max(r[0], s[0])
     h = min(r[3], s[3]) - max(r[1], s[1])
     if w <= 0 or h <= 0:
@@ -19,7 +19,9 @@ def iou(r, s):
     return inter / ((r[2] - r[0]) * (r[3] - r[1]) + (s[2] - s[0]) * (s[3] - s[1]) - inter)
 
 
-ref, hit, extra = Counter(), Counter(), Counter()
+ref: Counter[str] = Counter()
+hit: Counter[str] = Counter()
+extra: Counter[str] = Counter()
 files = 0
 for fa in sorted(a_dir.glob("*.json")):
     fb = b_dir / fa.name
@@ -27,7 +29,7 @@ for fa in sorted(a_dir.glob("*.json")):
         continue
     files += 1
     for pa, pb in zip(json.loads(Path(fa).read_text()), json.loads(Path(fb).read_text())):
-        used = set()
+        used: set[int] = set()
         for la, ra, *_ in pa:
             ref[la] += 1
             best = max(

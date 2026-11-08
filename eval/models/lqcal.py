@@ -37,7 +37,7 @@ images = quantize.calibration_images(
 print(len(pdfs), "pdfs", len(images), "pages", round(time.perf_counter() - t0, 1), "s", flush=True)
 
 
-def head_nodes(names):
+def head_nodes(names: list[str]) -> list[str]:
     blocks = [int(m.group(1)) for n in names if (m := re.match(r"/model\.(\d+)/", n))]
     head = f"/model.{max(blocks)}/"
     branch = re.compile(r"/(?:one2one_)?cv[23]\.\d+/")
@@ -45,11 +45,12 @@ def head_nodes(names):
     return [n for n in names if n.startswith(head) and (not branch.search(n) or last.search(n))]
 
 
-class Pages(CalibrationDataReader):
-    def __init__(self):
+# onnxruntime has no type information, so its base class is Any to mypy
+class Pages(CalibrationDataReader):  # type: ignore[misc]
+    def __init__(self) -> None:
         self.left = iter(images)
 
-    def get_next(self):
+    def get_next(self) -> dict[str, np.ndarray] | None:
         image = next(self.left, None)
         return None if image is None else {"images": image.astype(np.float32) / 255.0}
 

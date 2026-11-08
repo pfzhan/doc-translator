@@ -5,6 +5,7 @@ seg writes the format of plandump2.py (for score.py), math the format with formu
 
 import json
 import sys
+from collections.abc import Generator
 from pathlib import Path
 
 code, src, out, boxes_path, kind = sys.argv[1:6]
@@ -12,48 +13,72 @@ sys.path.insert(0, code)
 import pymupdf
 
 from app.formats import pdf, pdf_units
+from app.formats.pdf_roles import LayoutDetector
+from app.formats.pdf_vision import FormulaDetector, FormulaModel, ModelBoxes
+from app.runner import Runner
 
 boxes = json.loads(Path(boxes_path).read_text())
 
 
-class Cached:
-    def __init__(self):
+class Cached(FormulaDetector):
+    def __init__(self) -> None:
         self.isolated = {}
 
-    def pages(self):
+    def pages(self) -> Generator[list[pymupdf.Rect]]:
         for pno, found in enumerate(boxes):
             self.isolated[pno] = [pymupdf.Rect(r) for label, r, _s in found if label == "isolated"]
             yield [pymupdf.Rect(r) for label, r, _s in found if label == "embedding"]
 
 
-pdf_units.formula_detector = lambda doc, *args: Cached()
+def cached_formulas(
+    doc: pymupdf.Document, model: FormulaModel | None = None, saved: ModelBoxes | None = None
+) -> FormulaDetector | None:
+    return Cached()
+
+
+# pdf_units calls the detectors it imported from pdf_vision, so they are replaced there. setattr: pdf_units does
+# not re-export the names, and mypy rejects assigning them as attributes
+setattr(pdf_units, "formula_detector", cached_formulas)  # noqa: B010
 if len(sys.argv) > 6:
     from app.formats import pdf_vision
 
     regions = json.loads(Path(sys.argv[6]).read_text())
 
     class Layout(pdf_vision.ModelLayout):
-        def __init__(self, doc):
+        def __init__(self, doc: pymupdf.Document) -> None:
             self.doc = doc
             self._pages = {}
             self._boxes = None
             self._fresh = False
 
-        def regions(self, pno):
+        def regions(self, pno: int) -> list[pdf_vision.Region]:
             return [pdf_vision.Region(label, pymupdf.Rect(r), score) for label, r, score in regions[pno]]
 
-    pdf_units.layout_detector = lambda doc, *args: Layout(doc)
+    def cached_layout(doc: pymupdf.Document, model_path: str = "", saved: ModelBoxes | None = None) -> LayoutDetector:
+        return Layout(doc)
+
+    setattr(pdf_units, "layout_detector", cached_layout)  # noqa: B010
 
 
-class R:
-    def report_stage(self, *a, **k):
+class R(Runner):
+    """Planning only reports stages and sets the title: no translator or cache is set up."""
+
+    def __init__(self) -> None:
         pass
 
-    def set_title(self, t):
+    def report_stage(self, name: str, done: int = 0, total: int = 0, unit: str = "") -> None:
+        pass
+
+    def set_title(self, title: str) -> None:
         pass
 
 
-plan = pdf._plan_pdf(Path(src), R(), "", "cached")
+def corners(rect: pymupdf.Rect) -> list[float]:
+    return [round(rect.x0, 1), round(rect.y0, 1), round(rect.x1, 1), round(rect.y1, 1)]
+
+
+# The model setting is only passed on to the replaced formula_detector
+plan = pdf._plan_pdf(Path(src), R(), "", FormulaModel("cached"))
 rows = []
 for u, t, fs, s in zip(plan.units, plan.texts, plan.formulas, plan.skips):
     if kind == "math":
@@ -68,9 +93,9 @@ for u, t, fs, s in zip(plan.units, plan.texts, plan.formulas, plan.skips):
                 [],
                 [
                     last.page,
-                    [round(v, 1) for v in first.rect],
-                    [round(v, 1) for v in last.rect],
-                    [round(v, 1) for v in first.line_rects[0]] if first.line_rects else None,
+                    corners(first.rect),
+                    corners(last.rect),
+                    corners(first.line_rects[0]) if first.line_rects else None,
                 ],
             ]
         )

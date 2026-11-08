@@ -29,7 +29,7 @@ def expand(path: Path, depth: int = 0) -> str:
     if depth > 6:
         return text
 
-    def sub(match: re.Match) -> str:
+    def sub(match: re.Match[str]) -> str:
         name = match.group(2).strip()
         for candidate in (name, name + ".tex"):
             target = (path.parent / candidate).resolve()
@@ -95,7 +95,7 @@ body = re.sub(r"\$\$.*?\$\$", " \x02 ", body, flags=re.S)
 maths: list[str] = []
 
 
-def keep(match: re.Match) -> str:
+def keep(match: re.Match[str]) -> str:
     maths.append(match.group(1))
     return f" \x00{len(maths) - 1}\x00 "
 
@@ -122,7 +122,7 @@ body = re.sub(r"[{}~\\]", " ", body)
 
 # Words and formulas in sequence: ("w", word) / ("m", index) / ("x", break). Citations and cross-references are
 # typeset as numbers and also break anchors
-stream: list[tuple[str, object]] = []
+stream: list[tuple[str, str | int | None]] = []
 for piece in re.split(r"(\x00\d+\x00|\x02|\x03)", body):
     if not piece:
         continue
@@ -137,15 +137,20 @@ items = []
 for pos, (kind, value) in enumerate(stream):
     if kind != "m":
         continue
+    assert isinstance(value, int)
     left: list[str] = []
     k = pos - 1
     while k >= 0 and stream[k][0] == "w" and len(left) < CONTEXT:
-        left.insert(0, stream[k][1])
+        word = stream[k][1]
+        assert isinstance(word, str)
+        left.insert(0, word)
         k -= 1
     right: list[str] = []
     k = pos + 1
     while k < len(stream) and stream[k][0] == "w" and len(right) < CONTEXT:
-        right.append(stream[k][1])
+        word = stream[k][1]
+        assert isinstance(word, str)
+        right.append(word)
         k += 1
     if len(left) < MIN or len(right) < MIN:
         continue

@@ -5,13 +5,19 @@ from pathlib import Path
 code, src, out = sys.argv[1:4]
 sys.path.insert(0, code)
 from app.formats import pdf
+from app.runner import Runner
 
 
-class R:
-    def report_stage(self, *a, **k):
+class R(Runner):
+    """Planning only reports stages and sets the title: no translator or cache is set up."""
+
+    def __init__(self) -> None:
         pass
 
-    def set_title(self, t):
+    def report_stage(self, name: str, done: int = 0, total: int = 0, unit: str = "") -> None:
+        pass
+
+    def set_title(self, title: str) -> None:
         pass
 
 

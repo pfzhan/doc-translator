@@ -1,12 +1,12 @@
 from collections.abc import Awaitable, Callable
 from types import ModuleType
-from typing import Any
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from app import state
+from app.json_types import JSONDict
 from app.runner import get_cache
 from app.translators import MockTranslator, TranslatorError, create_translator
 
@@ -14,7 +14,7 @@ EN = "The quick brown fox jumps over the lazy dog near the river bank."
 ZH = "这是一段已经是中文的文字，不需要再翻译一遍。"
 
 
-def post(main: ModuleType, body: dict[str, Any], **headers: str) -> httpx.Response:
+def post(main: ModuleType, body: JSONDict, **headers: str) -> httpx.Response:
     resp: httpx.Response = TestClient(main.app).post("/api/web/translate", json=body, headers=headers)
     return resp
 
@@ -88,7 +88,9 @@ def test_uses_cache_across_requests(app_env: ModuleType, monkeypatch: pytest.Mon
 
 def test_unknown_or_disabled_service(app_env: ModuleType) -> None:
     assert post(app_env, {"texts": [EN], "service_id": "nope"}).status_code == 400
-    state.store.get("mock")["enabled"] = False
+    mock = state.store.get("mock")
+    assert mock is not None
+    mock["enabled"] = False
     assert post(app_env, {"texts": [EN], "service_id": "mock"}).status_code == 400
 
 
@@ -120,7 +122,7 @@ def test_unsupported_language(app_env: ModuleType) -> None:
 
 def test_request_size_limits(app_env: ModuleType) -> None:
     assert post(app_env, {"texts": [EN], "service_id": "mock", "title": "t" * 1001}).status_code == 422
-    big: dict[str, Any] = {"texts": ["a" * 9000] * 50, "service_id": "mock", "padding": "p" * (4 * 1024 * 1024)}
+    big: JSONDict = {"texts": ["a" * 9000] * 50, "service_id": "mock", "padding": "p" * (4 * 1024 * 1024)}
     assert post(app_env, big).status_code == 413
 
 
@@ -162,7 +164,9 @@ def test_clear_web_cache(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -
     shared = "A sentence that a translated document also contains, word for word."
     # A document translated earlier uses one of the sentences: it keeps it after the web cache is cleared
     cache = get_cache()
-    translator = create_translator(state.store.get("mock"), "zh-CN")
+    mock = state.store.get("mock")
+    assert mock is not None
+    translator = create_translator(mock, "zh-CN")
     cache.put_many(translator.cache_key, {shared: f"[zh-CN] {shared}"})
     cache.claim("documentdigest", translator.cache_key, [shared])
 
@@ -217,7 +221,8 @@ def test_requests_to_one_service_share_its_concurrency(app_env: ModuleType, monk
 
     async def scenario() -> None:
         requests = [
-            web.WebTranslateRequest(texts=[f"{EN} Number {i}."], source_lang="en", service_id="llm") for i in range(8)
+            web.WebTranslateRequest(texts=[f"{EN} Number {i}."], source_lang="en", service_id="llm", title="")
+            for i in range(8)
         ]
         await asyncio.gather(*(web.web_translate(r) for r in requests))
 

@@ -5,25 +5,25 @@ import httpx
 import pytest
 
 from app import langdetect
+from app.json_types import JSONDict
 from app.languages import LANGUAGES
 from app.prompts import build_messages, default_prompts
 from app.runner import Runner
 from app.translators import GoogleTranslator, MockTranslator, TranslatorError, create_translator
-
-
-def run(coro):
-    return asyncio.run(coro)
+from tests.helpers import run
 
 
 class MemCache:
-    def get_many(self, prefix, texts):
+    """A cache that never holds anything: every paragraph is translated."""
+
+    def get_many(self, prefix: str, texts: list[str]) -> dict[str, str]:
         return {}
 
-    def put_many(self, prefix, pairs):
+    def put_many(self, prefix: str, pairs: dict[str, str]) -> None:
         pass
 
 
-def test_language_table_from_plugin():
+def test_language_table_from_plugin() -> None:
     codes = [c for c, _, _ in LANGUAGES]
     assert codes[:5] == ["auto", "zh-CN", "zh-TW", "zh-HK", "en"]
     assert len(codes) == 128
@@ -42,11 +42,11 @@ def test_language_table_from_plugin():
         ("auto", "de", "You are a professional {{to}} native translator"),  # no specific version; the generic template
     ],
 )
-def test_lang_overrides_match_plugin_rules(src, dst, expected):
+def test_lang_overrides_match_plugin_rules(src: str, dst: str, expected: str) -> None:
     assert default_prompts(dst, src)["system"].startswith(expected)
 
 
-def test_zh_prompts_ask_for_chinese_numerals():
+def test_zh_prompts_ask_for_chinese_numerals() -> None:
     assert "中文数字" in default_prompts("zh-CN")["system"]
     assert "中文數字" in default_prompts("zh-TW")["system"]
     assert "中文数字" in default_prompts("zh-CN-NE")["system"]
@@ -55,7 +55,7 @@ def test_zh_prompts_ask_for_chinese_numerals():
     assert "第二卷" in system
 
 
-def test_from_and_to_placeholders():
+def test_from_and_to_placeholders() -> None:
     system, user = build_messages(["a", "b"], "it", source_lang="ja")
     assert system.startswith("You are a professional Italian native translator")
     assert user.startswith("Translate to Italian:")
@@ -65,7 +65,7 @@ def test_from_and_to_placeholders():
     assert user == "Auto Detect|x"
 
 
-def test_formula_placeholders_get_their_own_rule():
+def test_formula_placeholders_get_their_own_rule() -> None:
     """Paragraphs with {vN} need a separate explanation of formula placeholders, or the model guesses them to be "="
     and writes that."""
     system, _ = build_messages(["the case k {v1} 2 is the worst"], "zh-CN")
@@ -76,7 +76,7 @@ def test_formula_placeholders_get_their_own_rule():
     assert "## Formula placeholders" not in system
 
 
-def test_detect():
+def test_detect() -> None:
     assert langdetect.detect("Alice was beginning to get very tired of sitting by her sister on the bank") == "en"
     assert langdetect.detect("Die Katze sitzt auf der Matte und schläft den ganzen Tag lang ruhig") == "de"
     assert langdetect.detect("爱丽丝开始觉得很累了，她和姐姐坐在河边") == "zh-CN"
@@ -87,7 +87,7 @@ def test_detect():
     assert langdetect.detect("OK") is None  # too short to judge
 
 
-def test_same_language_rules():
+def test_same_language_rules() -> None:
     assert langdetect.same_language("en", "en")
     assert langdetect.same_language("pt", "pt-br")
     assert not langdetect.same_language("zh-CN", "zh-TW")  # Simplified and Traditional are not the same
@@ -96,7 +96,7 @@ def test_same_language_rules():
     assert not langdetect.same_language(None, "en")
 
 
-def test_runner_skips_paragraphs_already_in_target_and_detects_source():
+def test_runner_skips_paragraphs_already_in_target_and_detects_source() -> None:
     tr = MockTranslator("zh-CN")
     runner = Runner(tr, cache=MemCache())
     texts = [
@@ -115,10 +115,10 @@ def test_runner_skips_paragraphs_already_in_target_and_detects_source():
     assert run(runner.translate_all(texts))[2].startswith("[zh-CN] ")
 
 
-def test_llm_uses_detected_source_in_prompt():
-    seen = []
+def test_llm_uses_detected_source_in_prompt() -> None:
+    seen: list[JSONDict] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         seen.append(json.loads(request.content))
         return httpx.Response(200, json={"choices": [{"message": {"content": "x"}}]})
 
@@ -132,10 +132,10 @@ def test_llm_uses_detected_source_in_prompt():
     assert seen[0]["messages"][1]["content"].startswith("English->French: Alice")
 
 
-def test_google_language_codes():
-    log = []
+def test_google_language_codes() -> None:
+    log: list[httpx.Request] = []
 
-    def handler(request):
+    def handler(request: httpx.Request) -> httpx.Response:
         log.append(request)
         return httpx.Response(200, json=["ok"])
 
@@ -148,7 +148,7 @@ def test_google_language_codes():
         MockTranslator("xx-YY")
 
 
-def test_build_messages_html_suffix():
+def test_build_messages_html_suffix() -> None:
     system, _ = build_messages(["x <b>y</b>"], "zh-CN", contains_html=True)
     assert "HTML fragments" in system and "href" in system and "word order" in system
     assert "reorder" not in system
@@ -156,7 +156,7 @@ def test_build_messages_html_suffix():
     assert "HTML fragments" not in system
 
 
-def test_glossary_injected_into_messages_and_cache_key():
+def test_glossary_injected_into_messages_and_cache_key() -> None:
     system, _ = build_messages(["x"], "zh-CN", glossary="Book = 卷\n\nHBase = HBase")
     assert "Book = 卷" in system and "Glossary" in system
     system2, _ = build_messages(["x"], "zh-CN")
@@ -170,13 +170,13 @@ def test_glossary_injected_into_messages_and_cache_key():
     assert a.cache_key != b.cache_key and a.cache_key == c.cache_key
 
 
-def test_instant_translator_still_lets_other_requests_run():
+def test_instant_translator_still_lets_other_requests_run() -> None:
     """Even when the API returns at once, the event loop must be yielded between batches so that polling from the job
     page gets responses."""
     ticks = 0
     seen: list[int] = []  # how many polls had run at each progress report
 
-    async def scenario():
+    async def scenario() -> None:
         nonlocal ticks
         translator = MockTranslator("zh-CN")
         translator.concurrency = 1
@@ -184,7 +184,7 @@ def test_instant_translator_still_lets_other_requests_run():
             translator, progress=lambda done, total: seen.append(ticks), cache=MemCache(), skip_same_lang=False
         )
 
-        async def poll():
+        async def poll() -> None:
             nonlocal ticks
             while True:
                 ticks += 1

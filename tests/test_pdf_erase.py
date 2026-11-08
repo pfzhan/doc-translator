@@ -1,9 +1,10 @@
 import pymupdf
 
 from app.formats.pdf_erase import Erasure, erase
+from app.formats.pdf_types import PdfDict
 
 
-def _spans(page):
+def _spans(page: pymupdf.Page) -> list[PdfDict]:
     return [
         span
         for block in page.get_text("dict")["blocks"]
@@ -13,22 +14,22 @@ def _spans(page):
     ]
 
 
-def _words(page):
+def _words(page: pymupdf.Page) -> list[str]:
     return [word[4] for word in page.get_text("words")]
 
 
-def _ink(page, rect):
+def _ink(page: pymupdf.Page, rect: pymupdf.Rect) -> int:
     pix = page.get_pixmap(dpi=300, clip=rect, colorspace=pymupdf.csGRAY)
     return sum(1 for value in pix.samples if value < 128)
 
 
-def _erase_spans(page, spans, line_rects=None):
+def _erase_spans(page: pymupdf.Page, spans: list[PdfDict], line_rects: list[pymupdf.Rect] | None = None) -> int:
     erasure = Erasure()
     erasure.add_block([spans], line_rects or [pymupdf.Rect(spans[0]["bbox"])])
     return erase(page, erasure)
 
 
-def test_a_neighbor_reaching_into_the_line_box_is_kept():
+def test_a_neighbor_reaching_into_the_line_box_is_kept() -> None:
     """Descenders of the line above and an adjacent label reaching into the line box are not glyphs of this line.
     Erasing by rectangle would remove them too."""
     doc = pymupdf.open()
@@ -44,7 +45,7 @@ def test_a_neighbor_reaching_into_the_line_box_is_kept():
     assert _words(page) == ["x2", "gyp"]
 
 
-def test_bold_drawn_twice_is_erased_with_its_span():
+def test_bold_drawn_twice_is_erased_with_its_span() -> None:
     """Simulated bold draws the same glyph again slightly offset. PyMuPDF reports only one, and both must be erased."""
     doc = pymupdf.open()
     page = doc.new_page(width=300, height=200)
@@ -55,7 +56,7 @@ def test_bold_drawn_twice_is_erased_with_its_span():
     assert _ink(page, pymupdf.Rect(40, 60, 120, 90)) == 0
 
 
-def test_glyphs_are_found_through_the_content_transform():
+def test_glyphs_are_found_through_the_content_transform() -> None:
     """The content stream scales with cm before drawing text, so origins must be multiplied by the CTM to match
     PyMuPDF's coordinates."""
     doc = pymupdf.open()
@@ -68,7 +69,7 @@ def test_glyphs_are_found_through_the_content_transform():
     assert _words(page) == []
 
 
-def test_bitmap_glyphs_are_erased_by_their_origins():
+def test_bitmap_glyphs_are_erased_by_their_origins() -> None:
     """Font boxes of bitmap glyphs are unreliable, so the span carries origins and is matched by point. Glyphs outside
     the box stay."""
     doc = pymupdf.open()
@@ -83,7 +84,7 @@ def test_bitmap_glyphs_are_erased_by_their_origins():
     assert _words(page) == ["ab", "d"]
 
 
-def test_rules_inside_a_rewritten_line_are_erased():
+def test_rules_inside_a_rewritten_line_are_erased() -> None:
     """Old Ghostscript draws \\_ as a small one-pixel-high image. Those in lines being reflowed are erased, others
     stay."""
     doc = pymupdf.open()
@@ -102,7 +103,7 @@ def test_rules_inside_a_rewritten_line_are_erased():
     assert _ink(page, outside) > 0
 
 
-def test_only_lines_wholly_inside_the_line_box_are_erased():
+def test_only_lines_wholly_inside_the_line_box_are_erased() -> None:
     """An inline fraction bar lies entirely within the line and is erased with it. Table rules and figure borders
     crossing the line stay."""
     doc = pymupdf.open()
@@ -116,7 +117,7 @@ def test_only_lines_wholly_inside_the_line_box_are_erased():
     assert len(drawn) == 1 and drawn[0].x0 == 60
 
 
-def test_an_underline_below_the_line_box_goes_with_its_words():
+def test_an_underline_below_the_line_box_goes_with_its_words() -> None:
     """A link underline is below the baseline, slightly lower than the bottom of the font box, so line boxes miss
     it. When the text is erased the line must go too; a table rule further down stays."""
     doc = pymupdf.open()
@@ -143,7 +144,7 @@ def test_an_underline_below_the_line_box_goes_with_its_words():
     assert drawn == [(50, 90), (150, round(under)), (200, round(under))]
 
 
-def test_a_form_shared_with_another_page_is_left_alone():
+def test_a_form_shared_with_another_page_is_left_alone() -> None:
     """A Form shared by two pages (running header, template) is erased on this page and unchanged on the other."""
     src = pymupdf.open()
     src.new_page(width=300, height=200).insert_text((50, 80), "shared", fontsize=12)
@@ -155,13 +156,13 @@ def test_a_form_shared_with_another_page_is_left_alone():
     assert _words(doc[1]) == ["shared"]
 
 
-def _erasure_for(page):
+def _erasure_for(page: pymupdf.Page) -> Erasure:
     erasure = Erasure()
     erasure.add_block([_spans(page)], [pymupdf.Rect(0, 0, 300, 200)])
     return erasure
 
 
-def test_a_span_starting_with_a_space_is_found_by_its_glyphs():
+def test_a_span_starting_with_a_space_is_found_by_its_glyphs() -> None:
     """A span's origin is that of its first character. When a leading space sits on the baseline of a preceding
     subscript, a little off from the line, using it as the baseline misses the whole paragraph. Per-character
     origins are used instead."""
@@ -174,7 +175,7 @@ def test_a_span_starting_with_a_space_is_found_by_its_glyphs():
     assert _words(page) == []
 
 
-def test_shared_type3_glyphs_are_left_alone():
+def test_shared_type3_glyphs_are_left_alone() -> None:
     """When filtering recursively, MuPDF also enters the glyphs of Type3 fonts. Glyphs are shared by the whole
     document, and deleting from them would remove the same character elsewhere."""
     doc = pymupdf.open()
@@ -203,12 +204,12 @@ def test_shared_type3_glyphs_are_left_alone():
     assert doc.xref_stream(glyph) == before
 
 
-def test_a_color_repeated_in_a_new_color_space_survives():
+def test_a_color_repeated_in_a_new_color_space_survives() -> None:
     """When the color space changes and the same color value follows, MuPDF omits the color when rewriting, while
     the space change resets the color to black, turning a white background in a figure into a black block. An
     original stream that draws without setting a color still draws the initial color."""
     lab = "[/Lab <</WhitePoint [0.9505 1 1.089]>>]"
-    shades = {}
+    shades: dict[str, set[int]] = {}
     for name, stream in {
         "repeated": b"0 g 0 0 300 200 re f /L1 cs 100 0 0 sc 10 10 50 50 re f /L2 cs 100 0 0 sc 100 10 50 50 re f",
         "bare": b"1 g 0 0 300 200 re f /L1 cs 100 0 0 sc 10 10 50 50 re f /L2 cs 100 10 50 50 re f",

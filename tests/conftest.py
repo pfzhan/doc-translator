@@ -1,6 +1,8 @@
 import os
 import shutil
 import tempfile
+from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -15,12 +17,12 @@ os.environ["DOC_TRANSLATOR_DATA"] = _DATA_DIR
 from app import ccswitch  # noqa: E402
 
 
-def pytest_sessionfinish(session, exitstatus):
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     shutil.rmtree(_DATA_DIR, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)
-def local_test_client(monkeypatch):
+def local_test_client(monkeypatch: pytest.MonkeyPatch) -> None:
     """TestClient requests come from "testclient" to "testserver". Treat them as requests from this machine, as a
     browser on it would send; tests/test_access.py puts the real check back."""
     from app import access
@@ -29,13 +31,13 @@ def local_test_client(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def isolate_ccswitch(tmp_path, monkeypatch):
+def isolate_ccswitch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """By default tests do not read the real CC Switch database of this machine."""
     monkeypatch.setattr(ccswitch, "DB_PATH", tmp_path / "no-cc-switch.db")
 
 
 @pytest.fixture(autouse=True)
-def isolate_cache(tmp_path, monkeypatch):
+def isolate_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The translation cache also uses a temporary database instead of the real data/cache.sqlite3. Otherwise
     translations left by an earlier test run would break the assertions about retranslation, and fake test
     translations would end up in the real cache."""
@@ -45,7 +47,7 @@ def isolate_cache(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def app_env(tmp_path, monkeypatch):
+def app_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     """Move the web service's translation services, records and settings to a temporary directory and add a mock
     translation service. The model directory is replaced too: the formula detection model is on by default, and a
     model downloaded on this machine must not make tests run the real model."""
