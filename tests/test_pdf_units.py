@@ -1641,13 +1641,6 @@ def test_resumed_pdf_job_reads_back_its_layout_analysis(tmp_path: Path, monkeypa
     from app.translators import MockTranslator
     from tests.helpers import MemCache
 
-    class TitledTranslator(MockTranslator):
-        """A mock engine with the title attribute that Runner.set_title fills, as LLM engines have."""
-
-        def __init__(self, target_lang: str) -> None:
-            super().__init__(target_lang)
-            self.title = ""
-
     doc = pymupdf.open()
     page = doc.new_page(width=420, height=300)
     page.insert_text((40, 50), "Saved Analysis", fontsize=16)
@@ -1670,7 +1663,7 @@ def test_resumed_pdf_job_reads_back_its_layout_analysis(tmp_path: Path, monkeypa
 
     def translate(out: Path) -> tuple[pymupdf.Document, str, list[str]]:
         out.mkdir()
-        translator = TitledTranslator("zh-CN")
+        translator = MockTranslator("zh-CN")
         r = Runner(translator, cache=MemCache())
         stages: list[str] = []
 

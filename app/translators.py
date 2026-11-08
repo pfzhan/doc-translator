@@ -60,6 +60,8 @@ class Translator:
             raise TranslatorError(f"不支持的源语言: {source_lang}")
         self.target_lang = target_lang
         self.source_lang = source_lang
+        # Document title, context for the engines that use it (LLMs fill it into {{title_prompt}}); set by Runner
+        self.title = ""
         # When the source language is "自动检测", Runner fills this in after detecting the document language; used
         # for {{from}} in the prompt
         self.detected_source = ""
@@ -349,8 +351,6 @@ class LLMTranslator(Translator):
         # the result goes into doc_glossary)
         self.auto_glossary = auto_glossary
         self.doc_glossary: list[glossary_mod.Entry] = []
-        # Document title, filled into {{title_prompt}} of the prompt as context
-        self.title = ""
         self.client = httpx.AsyncClient(timeout=180, transport=transport)
 
     @property

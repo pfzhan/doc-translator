@@ -274,10 +274,7 @@ def test_docx_preview_kinds_and_title(tmp_path: Path) -> None:
         "<w:p><w:r><w:t>Body paragraph.</w:t></w:r></w:p>"
     )
 
-    class Titled(MockTranslator):
-        title = ""  # LLM engines have a title; set_title fills it
-
-    translator = Titled("zh-CN")
+    translator = MockTranslator("zh-CN")
     r = Runner(translator, cache=MemCache())
     run(translate_file(make_docx(tmp_path / "a.docx", body, title="Report title"), tmp_path, r, False, "zh-CN"))
     assert r.segments is not None

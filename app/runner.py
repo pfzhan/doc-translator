@@ -299,8 +299,7 @@ class Runner:
 
     def set_title(self, title: str) -> None:
         """Document title as translation context (used only by LLM engines)."""
-        if hasattr(self.translator, "title"):
-            self.translator.title = (title or "").strip()[:200]
+        self.translator.title = (title or "").strip()[:200]
 
     def _make_batches(self, texts: list[str]) -> list[list[str]]:
         tr = self.translator

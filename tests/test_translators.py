@@ -647,3 +647,14 @@ def test_engines_of_one_service_share_a_gate_and_others_do_not() -> None:
 
     assert run(peak(["a", "a"])) == 2
     assert run(peak(["a", "b"])) == 4
+
+
+def test_every_engine_takes_the_document_title() -> None:
+    """Runner.set_title fills the title of whatever engine it has; only LLM engines put it into the prompt."""
+    from app.runner import Runner
+    from app.translators import MockTranslator
+    from tests.helpers import MemCache
+
+    translator = MockTranslator("zh-CN")
+    Runner(translator, cache=MemCache()).set_title("  A Long Report Title  " + "x" * 300)
+    assert translator.title.startswith("A Long Report Title") and len(translator.title) == 200
