@@ -31,7 +31,9 @@ pdfs = sorted(
     if "bilingual" not in p.name and "translated" not in p.name and p.name not in skip
 )
 t0 = time.perf_counter()
-images = quantize.calibration_images(quantize.pick_pages(pdfs, count, seed), layout_model.sample_page)
+images = quantize.calibration_images(
+    quantize.pick_pages(pdfs, count, seed), layout_model.sample_page, quantize.SPECS["layout"].size
+)
 print(len(pdfs), "pdfs", len(images), "pages", round(time.perf_counter() - t0, 1), "s", flush=True)
 
 

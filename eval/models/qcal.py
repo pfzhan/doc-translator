@@ -30,7 +30,9 @@ pdfs = sorted(
 )
 print(len(pdfs), "pdfs", flush=True)
 t0 = time.perf_counter()
-images = quantize.calibration_images(quantize.pick_pages(pdfs, count, seed), layout_model.sample_page)
+images = quantize.calibration_images(
+    quantize.pick_pages(pdfs, count, seed), layout_model.sample_page, quantize.SPECS["formula"].size
+)
 print(len(images), "pages", round(time.perf_counter() - t0, 1), "s", flush=True)
 
 
