@@ -31,6 +31,7 @@ class TranslateRequest:
     texts: list[str]
     title: str
     service_id: str
+    authorization: str | None
 
 
 @dataclass
@@ -89,7 +90,7 @@ def make_handler(fake: FakeServer) -> type[BaseHTTPRequestHandler]:
             data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             texts: list[str] = data["texts"]
             title: str = data["title"]
-            fake.requests.append(TranslateRequest(texts, title, data["service_id"]))
+            fake.requests.append(TranslateRequest(texts, title, data["service_id"], self.headers["Authorization"]))
             if len(title) > MAX_TITLE:
                 detail = [{"msg": "String should have at most 1000 characters"}]
                 self.answer(422, "application/json", json.dumps({"detail": detail}))
@@ -139,6 +140,7 @@ def worker(browser: BrowserContext, fake_server: FakeServer) -> Worker:
     worker.evaluate(
         """async (server) => {
           await chrome.storage.sync.clear();
+          await chrome.storage.local.remove('token');
           await chrome.storage.sync.set({ server });
         }""",
         fake_server.origin,
@@ -220,6 +222,19 @@ def test_a_long_page_title_does_not_fail_the_translation(fake_server: FakeServer
     assert fake_server.requests[0].title.startswith("long title")
 
 
+def test_the_access_token_goes_with_each_translation(fake_server: FakeServer, worker: Worker, page: Page) -> None:
+    page.goto(fake_server.add_page("/plain", f"<!doctype html><title>t</title><p>{VISIBLE}</p>"))
+    press_shortcut(worker, page)
+    wait_for_translations(page, 1)
+    assert fake_server.requests[0].authorization is None
+
+    worker.evaluate("chrome.storage.local.set({ token: 'a-token-of-sixteen-chars' })")
+    page.reload()
+    press_shortcut(worker, page)
+    wait_for_translations(page, 1)
+    assert fake_server.requests[-1].authorization == "Bearer a-token-of-sixteen-chars"
+
+
 def open_options(browser: BrowserContext, worker: Worker) -> Page:
     extension_id = worker.url.split("/")[2]
     options = browser.new_page()
@@ -289,3 +304,25 @@ def test_a_document_without_html_elements_shows_a_failure_on_the_button(
         page.url,
     )
     assert badge == "×"
+
+
+def test_options_keep_the_access_token_out_of_synced_settings(browser: BrowserContext, worker: Worker) -> None:
+    options = open_options(browser, worker)
+    options.locator("#token").fill(" a-token-of-sixteen-chars ")
+    options.locator("#connect").click()
+    # The status already said 已连接 before the click, so wait for the token itself
+    worker.evaluate(
+        """async (wait) => {
+          const end = Date.now() + wait;
+          while (!(await chrome.storage.local.get('token')).token && Date.now() < end) {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+        }""",
+        WAIT_MS,
+    )
+    stored = worker.evaluate(
+        "async () => [(await chrome.storage.local.get('token')).token, (await chrome.storage.sync.get(null)).token]"
+    )
+    # A secret must not sync to the other browsers of the account
+    assert stored == ["a-token-of-sixteen-chars", None]
+    options.close()

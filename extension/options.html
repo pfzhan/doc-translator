@@ -48,8 +48,10 @@
       <input id="server" type="url" placeholder="http://127.0.0.1:8765">
       <button id="connect" type="button">连接</button>
     </div>
+    <label for="token">访问令牌</label>
+    <input id="token" type="password" autocomplete="off" placeholder="连接本机的服务时不需要">
     <p id="status" class="hint" role="status"></p>
-    <p class="hint">通常是本机的服务。连接其他机器上的服务时，浏览器会请求访问该地址的权限；服务端要监听外部地址并把它加入 ALLOWED_HOSTS。页面文字经网络发给该服务，http 地址不加密，请只在可信的网络里使用。</p>
+    <p class="hint">通常是本机的服务。连接其他机器上的服务时，浏览器会请求访问该地址的权限；服务端要监听外部地址，把它加入 ALLOWED_HOSTS，并设置 ACCESS_TOKEN，访问令牌填它的值。令牌只保存在这个浏览器里，不随账号同步。页面文字经网络发给该服务，http 地址不加密，请只在可信的网络里使用。</p>
   </section>
 
   <section>

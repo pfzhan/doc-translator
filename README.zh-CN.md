@@ -20,7 +20,14 @@ python3 -m venv .venv
 
 关闭终端后服务也会退出。需要在后台一直运行时，用 `nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 > server.log 2>&1 &` 启动，输出写在 `server.log`。
 
-服务只接受 `127.0.0.1`、`localhost` 等本机地址的访问。需要通过局域网 IP 或域名访问时，用环境变量 `ALLOWED_HOSTS` 追加（逗号分隔），例如 `ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8765`。
+服务只接受 `127.0.0.1`、`localhost` 等本机地址的访问。需要从其他机器通过局域网 IP 或域名访问时，用环境变量 `ALLOWED_HOSTS` 追加这些地址（逗号分隔），并用 `ACCESS_TOKEN` 设置访问令牌（至少 16 个字符）：
+
+```bash
+export ACCESS_TOKEN=$(.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(32))")
+ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8765
+```
+
+本机访问 `127.0.0.1` 或 `localhost` 不需要令牌，其他请求都需要：浏览器会先进入登录页，输入一次令牌后 30 天内保持登录（`HttpOnly` cookie）；浏览器扩展和脚本用 `Authorization: Bearer <令牌>` 请求头发送。没有设置 `ACCESS_TOKEN` 时，来自其他机器的请求一律拒绝。放在反向代理后面时，要让代理转发原始的 `Host` 头；带 `X-Forwarded-For` 或 `Forwarded` 头的请求总是需要令牌，即使代理就在本机。更换令牌后，所有浏览器都要重新登录。
 
 翻译记录、翻译缓存、设置、翻译服务、术语表和模型都保存在项目的 `data/` 目录。需要放到别处时，把环境变量 `DOC_TRANSLATOR_DATA` 设为该目录。测试会把它设为临时目录，所以运行测试不会碰到同一份代码启动的服务的数据。
 
@@ -129,7 +136,7 @@ python3 -m venv .venv
 - 显示方式可选「双语对照」（默认）或「仅显示译文」，在设置页修改，或用快捷键「切换双语对照 / 仅显示译文」（默认没有分配按键，在 `chrome://extensions/shortcuts` 设置），已翻译的页面立即切换。仅显示译文时，已翻译段落的原文被隐藏（原文节点留在页面里，只是清空文字），图片、表单控件照常显示；隐藏译文就恢复原文。
 - 只发送视口上下一屏内的段落，其余的随滚动翻译；折叠的面板展开后才翻译；页面之后加入的内容（无限滚动、单页应用）也会翻译。
 - 译文保留链接和行内格式（粗体、斜体、下划线、删除线、行内代码、上下标、高亮）。这样的段落以 HTML 发送，只含这几种标签，每个标签带编号、不带属性。译文不会当作 HTML 插入页面：先在不执行脚本的独立文档里解析，再用 DOM 接口重建。与原文对得上的标签（按编号，没有编号按标签依次对应）换成原页面元素去掉 `id` 后的副本，`href` 等属性都来自页面，不来自模型；其他标签只留文字，脚本、图片等直接丢弃。没有格式的段落仍以纯文本发送和插入。
-- 扩展只在按快捷键或点按钮时取得当前标签页的权限（`activeTab`）。安装时只能访问 `127.0.0.1` 和 `localhost`；在设置页连接其他机器上的服务时，浏览器才请求访问该地址（服务端要监听外部地址，并在 `ALLOWED_HOSTS` 里加入这个地址，连不上时设置页会说明原因）。http 地址不加密，页面文字以明文经过网络，请只在可信的网络里使用。页面文字只在按快捷键后，或在设为自动翻译的网站上（见下文），才发给所选的翻译服务。
+- 扩展只在按快捷键或点按钮时取得当前标签页的权限（`activeTab`）。安装时只能访问 `127.0.0.1` 和 `localhost`；在设置页连接其他机器上的服务时，浏览器才请求访问该地址（服务端要监听外部地址，在 `ALLOWED_HOSTS` 里加入这个地址并设置 `ACCESS_TOKEN`，设置页的「访问令牌」填它的值；连不上时设置页会说明原因）。令牌只保存在这个浏览器里，不随账号同步。http 地址不加密，页面文字以明文经过网络，请只在可信的网络里使用。页面文字只在按快捷键后，或在设为自动翻译的网站上（见下文），才发给所选的翻译服务。
 - 网页译文和文档共用翻译缓存，但不保存为记录，也不生成文档术语表（每页要多一次请求）；服务里填写的术语表仍然生效。
 - 扩展设置页显示缓存了多少条网页译文，可以一键清理（「清理网页翻译缓存」）。清理后，之后打开的网页会重新翻译，已经显示的译文不受影响；和文档共有的段落留给文档使用。加这个功能之前缓存的网页译文没有标记，清不掉，缓存满了会自动淘汰。接口是 `GET` / `DELETE /api/web/cache`。
 - 接口是 `POST /api/web/translate`，请求 `{"texts": [...], "html": [...], "target_lang", "source_lang", "alt_lang", "service_id", "title"}`，最多 50 段，每段最多 10000 字；`html` 与 `texts` 对齐，标出哪些是 HTML 片段，AI 翻译服务对这些段落使用 HTML 提示词，谷歌翻译使用 `format=html`。已是 `target_lang` 的段落保留原文，给了 `alt_lang` 时改译成 `alt_lang`。返回 `{"translations": [...], "langs": [...], "detected_lang"}`，`null` 表示保留原文，`langs` 是每段译文的语言。和所有会改动数据的请求一样，来自其他网页的请求会被拒绝（见「已知限制」）。
@@ -246,6 +253,7 @@ int8 版把模型的权重和中间结果换成 8 位整数。公式检测模型
 ```
 app/
   main.py          FastAPI 应用：中间件、启动时清理，挂载下面的路由
+  access.py        其他机器访问时的令牌检查和登录
   routes/          按功能分的接口：services、glossaries、web、jobs、settings、models
   state.py         各路由共用的存储、运行中的任务和模型下载（以 state.jobs 的形式读取）
   job_control.py   任务的启动、暂停、继续、删除和清理
@@ -268,7 +276,7 @@ app/
   layout_model.py  版面模型、公式检测模型的状态、下载、测试
   quantize.py      生成两个模型的 int8 版
   formats/         各格式的解析和回写（Word、HTML、字幕分别在 docx.py、html_page.py、subtitles.py）
-static/            前端页面
+static/            前端页面（login.html：从其他机器访问时登录）
 extension/         网页翻译的 Chrome 扩展
 scripts/           build_firefox.py：生成 Firefox 版扩展到 dist/firefox/
 tests/             测试（pytest）；test_extension_browser.py 在 Chromium 里运行扩展，没有安装 requirements-dev.txt 和 `playwright install chromium` 时跳过
@@ -293,7 +301,7 @@ GitHub Actions（`.github/workflows/ci.yml`）在每个 pull request 和推送�
 
 - Word 文档中行内内容控件、批注、图表和 SmartArt 里的文字不翻译。一句话跨几条字幕时按条分别翻译。译好的 HTML 页面仍按原来的相对路径引用图片和样式，放在原页面的文件旁边才能显示。
 - 暂不支持需要 OCR 的扫描版 PDF。没有表线、列缘也不对齐的表认不出来，其中的字仍会翻译。栏沟不明显时，阅读顺序可能与分栏不符。以英文大写字母开头的换行仍各自成段。
-- 服务没有鉴权，仅适合在本机使用（默认绑定 127.0.0.1）。但同一浏览器里打开的网页仍能向它发请求，所以会改动数据的请求（POST、PUT、PATCH、DELETE）只接受来自本服务自己的页面、浏览器扩展，以及不带 `Origin` 头的工具（curl、脚本）；其他 `Origin` 一律返回 403。否则任何网站都能在读不到结果的情况下暂停、删除任务，或消耗翻译额度。读取请求不检查：没有 CORS 头，其他网页读不到结果。
+- 服务主要供本机使用（默认绑定 127.0.0.1），从其他机器访问需要 `ACCESS_TOKEN` 设置的令牌（见上文）。同一浏览器里打开的网页仍能向它发请求，所以会改动数据的请求（POST、PUT、PATCH、DELETE）只接受来自本服务自己的页面、浏览器扩展，以及不带 `Origin` 头的工具（curl、脚本）；其他 `Origin` 一律返回 403。否则任何网站都能在读不到结果的情况下暂停、删除任务，或消耗翻译额度。读取请求不检查：没有 CORS 头，其他网页读不到结果。
 
 ## 许可证
 

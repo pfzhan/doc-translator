@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from . import access
 from .job_control import _cleanup_quietly
 from .routes import glossaries, jobs, models, services, settings, web
 
@@ -53,13 +54,10 @@ if not _log.handlers and not logging.getLogger().handlers:
 
 # Accept only local addresses. Otherwise a malicious web page could resolve its own domain to 127.0.0.1 (DNS
 # rebinding) and call these APIs as the same origin, for example to test an API address of its choice with a saved
-# Key. When accessing by IP on a LAN, add the address to the environment variable ALLOWED_HOSTS, comma-separated
-ALLOWED_HOSTS = [
-    "127.0.0.1",
-    "localhost",
-    "[::1]",
-    *(h.strip() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip()),
-]
+# Key. When accessing by IP on a LAN, add the address to the environment variable ALLOWED_HOSTS, comma-separated;
+# such requests also need the token in ACCESS_TOKEN (see access)
+EXTRA_HOSTS = [h.strip() for h in os.environ.get("ALLOWED_HOSTS", "").split(",") if h.strip()]
+ALLOWED_HOSTS = ["127.0.0.1", "localhost", "[::1]", *EXTRA_HOSTS]
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=ALLOWED_HOSTS)
 
 
@@ -111,6 +109,12 @@ async def limit_upload_size(request: Request, call_next: Callable[[Request], Awa
     return await call_next(request)
 
 
+# Added last, so it runs first: a request from another machine without the token gets no further
+app.middleware("http")(access.check_access)
+if EXTRA_HOSTS and not access.TOKEN:
+    _log.warning("ALLOWED_HOSTS is set but ACCESS_TOKEN is not: requests from other machines will be refused")
+
+
 class NoCacheStaticFiles(StaticFiles):
     """Keep the browser from using cached frontend files directly: it asks the server with an ETag each time and
     gets 304 when unchanged, or the new file when changed.
@@ -125,6 +129,6 @@ class NoCacheStaticFiles(StaticFiles):
 
 
 # The model routes take /api/{kind}-model, so they come after the others; the static files answer everything else
-for module in (services, glossaries, web, jobs, settings, models):
+for module in (access, services, glossaries, web, jobs, settings, models):
     app.include_router(module.router)
 app.mount("/", NoCacheStaticFiles(directory=ROOT / "static", html=True), name="static")

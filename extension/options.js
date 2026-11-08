@@ -44,8 +44,8 @@ function fill(select, options, value) {
   select.value = options.some(([v]) => v === value) ? value : options[0]?.[0] ?? '';
 }
 
-async function getJSON(server, path) {
-  const resp = await fetch(server + path);
+async function getJSON(s, path) {
+  const resp = await fetch(s.server + path, { headers: authHeaders(s) });
   if (!resp.ok) throw new HTTPError(resp.status);
   return resp.json();
 }
@@ -81,16 +81,23 @@ async function connect(byUser = false) {
   }
   const previous = (await loadSettings()).server;
   await chrome.storage.sync.set({ server });
+  await chrome.storage.local.set({ token: $('token').value.trim() });
   if (byUser && previous !== server) await releaseServer(previous);
   const s = await loadSettings();
   if (stale()) return;
   setStatus('连接中…');
   let services, languages;
   try {
-    [services, languages] = await Promise.all([getJSON(server, '/api/services'), getJSON(server, '/api/languages')]);
+    [services, languages] = await Promise.all([getJSON(s, '/api/services'), getJSON(s, '/api/languages')]);
   } catch (e) {
     if (stale()) return;
-    if (e.status === 400 && access) {
+    if (e.status === 401) {
+      const problem = s.token ? '访问令牌不对' : `${server} 需要访问令牌`;
+      setStatus(`${problem}，请填服务端 ACCESS_TOKEN 的值`, 'error');
+    } else if (e.status === 403 && access) {
+      // The server has no ACCESS_TOKEN and answers only requests from its own machine
+      setStatus(`${server} 只接受本机的请求：请在服务端设置环境变量 ACCESS_TOKEN，并在这里填它的值`, 'error');
+    } else if (e.status === 400 && access) {
       // TrustedHostMiddleware rejects host names that are not in ALLOWED_HOSTS
       setStatus(`${server} 拒绝了请求：请在服务端的环境变量 ALLOWED_HOSTS 中加入 ${new URL(server).hostname}`, 'error');
     } else if (access) {
@@ -113,14 +120,14 @@ async function connect(byUser = false) {
   fill($('source'), names, s.sourceLang);
   fill($('alt'), names.filter(([code]) => code !== 'auto'), s.altLang);
   setStatus(serviceGone ? '已连接。之前选的翻译服务已删除或停用，已改用默认服务' : '已连接', 'ok');
-  showCache(server);
+  showCache(s);
 }
 
 // ---------- Translation cache ----------
 
-async function showCache(server) {
+async function showCache(s) {
   try {
-    const { entries } = await getJSON(server, '/api/web/cache');
+    const { entries } = await getJSON(s, '/api/web/cache');
     $('cache-count').textContent = `${entries.toLocaleString()} 条`;
     $('clear-cache').disabled = entries === 0;
   } catch {
@@ -131,18 +138,19 @@ async function showCache(server) {
 }
 
 async function clearCache() {
-  const { server } = await loadSettings();
+  const s = await loadSettings();
+  const { server } = s;
   if (!confirm('清理网页翻译的缓存？之后打开的网页会重新请求翻译服务。')) return;
   $('clear-cache').disabled = true;
   try {
-    const resp = await fetch(`${server}/api/web/cache`, { method: 'DELETE' });
+    const resp = await fetch(`${server}/api/web/cache`, { method: 'DELETE', headers: authHeaders(s) });
     if (!resp.ok) throw new HTTPError(resp.status);
     const { entries } = await resp.json();
     $('cache-status').textContent = `已清理 ${entries.toLocaleString()} 条`;
   } catch {
     $('cache-status').textContent = `清理失败，请确认 ${server} 的服务已启动`;
   }
-  await showCache(server);
+  await showCache(s);
 }
 
 async function showShortcut() {
@@ -161,9 +169,11 @@ async function showShortcut() {
 async function init() {
   const s = await loadSettings();
   $('server').value = s.server;
+  $('token').value = s.token;
   $('connect').addEventListener('click', () => connect(true));
   $('clear-cache').addEventListener('click', clearCache);
   $('server').addEventListener('keydown', (e) => e.key === 'Enter' && connect(true));
+  $('token').addEventListener('keydown', (e) => e.key === 'Enter' && connect(true));
   $('service').addEventListener('change', (e) => chrome.storage.sync.set({ serviceId: e.target.value }));
   $('target').addEventListener('change', (e) => chrome.storage.sync.set({ targetLang: e.target.value }));
   $('source').addEventListener('change', (e) => chrome.storage.sync.set({ sourceLang: e.target.value }));

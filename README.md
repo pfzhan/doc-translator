@@ -27,9 +27,21 @@ The server exits when the terminal closes. To keep it running in the background,
 `nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 > server.log 2>&1 &`; output goes to
 `server.log`.
 
-The server accepts requests only for local host names such as `127.0.0.1` and `localhost`. To access it through a
-LAN IP address or a domain name, add them to the environment variable `ALLOWED_HOSTS` (comma-separated), for
-example `ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8765`.
+The server accepts requests only for local host names such as `127.0.0.1` and `localhost`. To access it from
+other machines, through a LAN IP address or a domain name, add those names to the environment variable
+`ALLOWED_HOSTS` (comma-separated) and set an access token in `ACCESS_TOKEN` (at least 16 characters):
+
+```bash
+export ACCESS_TOKEN=$(.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(32))")
+ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8765
+```
+
+Requests from this machine to `127.0.0.1` or `localhost` need no token. Any other request needs it: a browser
+is sent to a login page and, after entering the token once, stays signed in for 30 days (an `HttpOnly` cookie);
+the browser extension and scripts send it as `Authorization: Bearer <token>`. Without `ACCESS_TOKEN`, requests
+from other machines are refused. Behind a reverse proxy, have it pass on the original `Host` header; requests
+that carry `X-Forwarded-For` or `Forwarded` always need the token, even from a proxy on the same machine.
+Changing the token signs every browser out.
 
 Records, the translation cache, settings, services, glossaries and models are kept in `data/` in the project. To
 keep them elsewhere, set the environment variable `DOC_TRANSLATOR_DATA` to that directory. The tests set it to a
@@ -292,8 +304,9 @@ and each paragraph's translation appears below it. The server must be running.
   sent and inserted as plain text.
 - The extension asks for the current tab only when the shortcut is pressed or the button clicked (`activeTab`). At
   install it can reach only `127.0.0.1` and `localhost`; connecting to a server on another machine on the options
-  page makes the browser ask for access to that address (the server must listen on an outside address and list it
-  in `ALLOWED_HOSTS`; the options page says which is missing). An http address is not encrypted, so page text
+  page makes the browser ask for access to that address (the server must listen on an outside address, list it
+  in `ALLOWED_HOSTS` and set `ACCESS_TOKEN`, whose value goes into 访问令牌 (Access token) on the options page; the
+  options page says which is missing). The token is kept in this browser only and does not sync with the account. An http address is not encrypted, so page text
   crosses the network in the clear: use one only on a trusted network. Page text is sent to the translation
   service chosen, and only when the shortcut is pressed or on sites chosen for automatic translation (below).
 - Web page translations share the translation cache with documents but are not saved as records, and do not build
@@ -574,6 +587,7 @@ translated and marked as skipped in the preview.
 ```
 app/
   main.py          FastAPI app: middleware, startup cleanup, and the routes below
+  access.py        the access token for requests from other machines, and signing in
   routes/          the API by area: services, glossaries, web, jobs, settings, models
   state.py         stores, running jobs and model downloads shared by the routes (read as state.jobs)
   job_control.py   starting, pausing, resuming, deleting and clearing jobs
@@ -597,7 +611,7 @@ app/
   quantize.py      generating int8 versions of both models
   formats/         parsing and writing back each format (docx.py, html_page.py and subtitles.py for Word, HTML
                    and subtitles)
-static/            frontend pages
+static/            frontend pages (login.html: signing in from other machines)
 extension/         Chrome extension for web page translation
 scripts/           build_firefox.py: writes the Firefox version of the extension to dist/firefox/
 tests/             tests (pytest); test_extension_browser.py runs the extension in Chromium and is skipped without
@@ -617,9 +631,9 @@ eval/              evaluation scripts for PDF segmentation, inline formulas and 
 ```
 
 `mypy` reads its settings from `pyproject.toml` and checks all of `app/` with `--strict`. The dicts pymupdf returns
-(text spans, drawings) are typed as `PdfDict` in `app/formats/pdf_types.py`. Tests run
-against a temporary data directory (see `DOC_TRANSLATOR_DATA` above), never the project's `data/`. `tests/test_web_ui.py` opens the web page in Chromium
-and fails on any script error; it is skipped when Playwright or Chromium is missing.
+(text spans, drawings) are typed as `PdfDict` in `app/formats/pdf_types.py`. Tests run against a temporary data
+directory (see `DOC_TRANSLATOR_DATA` above), never the project's `data/`. `tests/test_web_ui.py` opens the web
+page in Chromium and fails on any script error; it is skipped when Playwright or Chromium is missing.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs the same checks on Python 3.12 and 3.14 for every pull request and
 push to `main`. It installs only `requirements-dev.txt`, so tests that need an optional package (such as
@@ -633,8 +647,8 @@ push to `main`. It installs only `requirements-dev.txt`, so tests that need an o
 - In Word documents, text in inline content controls, comments, charts and SmartArt is not translated. A subtitle
   sentence split over several cues is translated cue by cue. A translated HTML page refers to its images and styles
   by the same relative paths, so it shows them only when saved next to the original's files.
-- The server has no authentication and is meant for local use only (bound to 127.0.0.1 by default). Web pages
-  open in the same browser can still send requests to it, so requests that change something (POST, PUT, PATCH,
+- The server is meant for local use (bound to 127.0.0.1 by default); access from other machines needs the token
+  in `ACCESS_TOKEN` (see above). Web pages open in the same browser can still send requests to it, so requests that change something (POST, PUT, PATCH,
   DELETE) are accepted only from the server's own pages, browser extensions, and tools that send no `Origin`
   header (curl, scripts); any other `Origin` gets 403. Otherwise any site could pause or delete jobs or spend the
   translation quota without being able to read the answer. Reads are not checked: without CORS headers other pages

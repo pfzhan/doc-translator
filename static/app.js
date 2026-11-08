@@ -19,6 +19,8 @@ async function api(url, options = {}) {
     delete init.json;
   }
   const res = await fetch(url, init);
+  // Opened from another machine and signed out since (the session ended, or the server got a new ACCESS_TOKEN)
+  if (res.status === 401) location.assign(`/login.html${location.hash}`);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     const err = new Error(typeof data.detail === "string" ? data.detail : `请求失败 (${res.status})`);

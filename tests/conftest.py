@@ -20,6 +20,15 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 @pytest.fixture(autouse=True)
+def local_test_client(monkeypatch):
+    """TestClient requests come from "testclient" to "testserver". Treat them as requests from this machine, as a
+    browser on it would send; tests/test_access.py puts the real check back."""
+    from app import access
+
+    monkeypatch.setattr(access, "is_local", lambda client, host, forwarded: True)
+
+
+@pytest.fixture(autouse=True)
 def isolate_ccswitch(tmp_path, monkeypatch):
     """By default tests do not read the real CC Switch database of this machine."""
     monkeypatch.setattr(ccswitch, "DB_PATH", tmp_path / "no-cc-switch.db")

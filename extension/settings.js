@@ -11,5 +11,12 @@ const DEFAULTS = {
 };
 
 async function loadSettings() {
-  return { ...DEFAULTS, ...(await chrome.storage.sync.get(Object.keys(DEFAULTS))) };
+  // The access token stays in storage.local: a secret should not sync to every browser of the account
+  const { token = '' } = await chrome.storage.local.get('token');
+  return { ...DEFAULTS, ...(await chrome.storage.sync.get(Object.keys(DEFAULTS))), token };
+}
+
+/** Headers for a request to the server: the access token, needed when the server is on another machine. */
+function authHeaders(s, headers = {}) {
+  return s.token ? { ...headers, Authorization: `Bearer ${s.token}` } : headers;
 }

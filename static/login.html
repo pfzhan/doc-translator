@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · 文档翻译</title>
+<!-- Styles are inline: until the browser signs in, the server answers no other file -->
+<style>
+  :root {
+    --bg: #f5f6f8; --surface: #ffffff; --text: #1b1f27; --muted: #667085; --border: #e2e5ea;
+    --accent: #3a55d6; --accent-text: #ffffff; --error: #c42b2b; --focus: #3a55d6;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1115; --surface: #171a20; --text: #e7e9ee; --muted: #8b93a1; --border: #2a2f38;
+      --accent: #8197ff; --accent-text: #0f1115; --error: #ff7b7b; --focus: #8fa5ff;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 16px;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.6 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif;
+  }
+  form {
+    width: 100%; max-width: 360px; padding: 24px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--surface);
+  }
+  h1 { margin: 0 0 16px; font-size: 18px; }
+  label { display: block; margin-bottom: 6px; }
+  input {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; font: inherit;
+    background: var(--bg); color: var(--text);
+  }
+  input:focus-visible, button:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  button {
+    width: 100%; margin-top: 16px; padding: 8px; border: 0; border-radius: 7px; font: inherit; cursor: pointer;
+    background: var(--accent); color: var(--accent-text);
+  }
+  p { margin: 12px 0 0; color: var(--muted); font-size: 13px; }
+  .error { color: var(--error); }
+</style>
+</head>
+<body>
+<form method="post" action="/api/login">
+  <h1>文档翻译</h1>
+  <label for="token">访问令牌</label>
+  <input id="token" name="token" type="password" autocomplete="current-password" required autofocus>
+  <input id="fragment" name="fragment" type="hidden">
+  <p id="failed" class="error" role="alert" hidden>令牌不对，请重新输入</p>
+  <button type="submit">登录</button>
+  <p>从其他设备访问时需要令牌，它是服务端环境变量 ACCESS_TOKEN 的值。登录后这个浏览器 30 天内不用再输入。</p>
+</form>
+<script>
+  // The fragment (#read/<id>, say) does not reach the server; send it along to open that view after signing in
+  document.getElementById("fragment").value = location.hash;
+  document.getElementById("failed").hidden = !new URLSearchParams(location.search).has("failed");
+</script>
+</body>
+</html>

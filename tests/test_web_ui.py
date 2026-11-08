@@ -95,3 +95,33 @@ def test_a_document_is_translated_from_the_page(page: Page, server: str, tmp_pat
     translated = httpx.get(server + href).text
     assert "[zh-CN] The first paragraph of the document is here." in translated
     assert page.locator("#submit-error").is_hidden()
+
+
+def test_another_machine_signs_in_and_comes_back_to_its_view(
+    browser: Browser, server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app import access
+
+    token = "a-token-of-sixteen-chars"
+    monkeypatch.setattr(access, "is_local", lambda client, host, forwarded: False)
+    monkeypatch.setattr(access, "TOKEN", token)
+    context = browser.new_context(base_url=server)
+    page = context.new_page()
+    page.goto("/#read/abc")
+    page.wait_for_url("**/login.html#read/abc", timeout=WAIT_MS)
+
+    page.fill("#token", "wrong-token-of-length")
+    page.click("button[type=submit]")
+    page.wait_for_url("**/login.html?failed=1#read/abc", timeout=WAIT_MS)
+    assert page.locator("#failed").is_visible()
+
+    page.fill("#token", token)
+    page.click("button[type=submit]")
+    page.wait_for_url(f"{server}/#read/abc", timeout=WAIT_MS)
+    page.wait_for_selector("#service_id option[value='mock']", state="attached", timeout=WAIT_MS)
+
+    # A new token on the server signs the browser out; the page's next request takes it to the login page
+    monkeypatch.setattr(access, "TOKEN", "the-next-token-of-length")
+    page.evaluate("api('/api/jobs').catch(() => {})")
+    page.wait_for_url("**/login.html#read/abc", timeout=WAIT_MS)
+    context.close()

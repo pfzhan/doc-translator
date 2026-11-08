@@ -98,7 +98,8 @@ async function translatePdf(tab) {
     // The same file with the same settings opens the job submitted before, while the server still has it
     const key = `pdf ${JSON.stringify([s.server, url, s.targetLang, s.sourceLang, s.serviceId, s.mode])}`;
     const { [key]: known } = await chrome.storage.session.get(key);
-    const kept = known && (await fetch(`${s.server}/api/jobs/${known}`).catch(() => null))?.ok;
+    const job = known && (await fetch(`${s.server}/api/jobs/${known}`, { headers: authHeaders(s) }).catch(() => null));
+    const kept = job?.ok;
     const id = kept ? known : await submitPdf(s, await downloadPdf(url));
     await chrome.storage.session.set({ [key]: id });
     await chrome.tabs.create({ url: `${s.server}/#read/${id}`, index: tab.index + 1, openerTabId: tab.id });
@@ -157,7 +158,7 @@ async function submitPdf(s, { blob, name }) {
   form.append('mode', s.mode);
   let resp;
   try {
-    resp = await fetch(`${s.server}/api/jobs`, { method: 'POST', body: form });
+    resp = await fetch(`${s.server}/api/jobs`, { method: 'POST', body: form, headers: authHeaders(s) });
   } catch {
     throw new Error(unreachable(s.server));
   }
@@ -264,7 +265,7 @@ async function translate(texts, title, html = [], selected = false) {
   try {
     resp = await fetch(`${s.server}/api/web/translate`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(s, { 'Content-Type': 'application/json' }),
       body: JSON.stringify({
         texts,
         html,
