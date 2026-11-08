@@ -221,8 +221,7 @@ def test_requests_to_one_service_share_its_concurrency(app_env: ModuleType, monk
 
     async def scenario() -> None:
         requests = [
-            web.WebTranslateRequest(texts=[f"{EN} Number {i}."], source_lang="en", service_id="llm", title="")
-            for i in range(8)
+            web.WebTranslateRequest(texts=[f"{EN} Number {i}."], source_lang="en", service_id="llm") for i in range(8)
         ]
         await asyncio.gather(*(web.web_translate(r) for r in requests))
 

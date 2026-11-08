@@ -28,7 +28,7 @@ class WebTranslateRequest(BaseModel):
     target_lang: str = "zh-CN"
     source_lang: str = "auto"
     service_id: str = ""  # empty: the default service
-    title: str = Field("", max_length=1000)  # page title, context for LLM engines (cut to 200 characters there)
+    title: str = Field(default="", max_length=1000)  # page title, context for LLM engines (cut to 200 characters there)
     # Texts already in target_lang are translated into this language instead (for selected text); empty: they are
     # kept as they are
     alt_lang: str = ""
