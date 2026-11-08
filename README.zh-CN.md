@@ -306,7 +306,7 @@ npm run typecheck
 
 `tsconfig.static.json` 检查网页，`tsconfig.extension.json` 检查扩展（扩展的脚本共用一个全局作用域）；类型库里没有的声明，包括扩展各脚本之间的消息，写在 `types/extension.d.ts`。两份配置都放在 `extension/` 外面，扩展仍可原样加载和打包。
 
-GitHub Actions（`.github/workflows/ci.yml`）在每个 pull request 和推送到 `main` 时运行同样的检查，Python 部分用 3.12 和 3.14。它只安装 `requirements-dev.txt`，所以需要可选依赖的测试（例如模型用到的 `onnxruntime`）在那里会被跳过。
+GitHub Actions（`.github/workflows/ci.yml`）在每个 pull request 和推送到 `main` 时，在 Ubuntu 24.04 上运行同样的检查，Python 部分用 3.12 和 3.14。它只安装 `requirements-dev.txt`，所以需要可选依赖的测试（例如模型用到的 `onnxruntime`）在那里会被跳过。
 
 ## 已知限制
 

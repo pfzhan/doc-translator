@@ -652,8 +652,8 @@ npm run typecheck
 scope; `types/extension.d.ts` declares what the type libraries lack, including the messages between the extension's
 scripts. Both configurations live outside `extension/`, so the extension is still loaded and packaged as it is.
 
-GitHub Actions (`.github/workflows/ci.yml`) runs the same checks, the Python ones on 3.12 and 3.14, for every pull
-request and push to `main`. It installs only `requirements-dev.txt`, so tests that need an optional package (such as
+GitHub Actions (`.github/workflows/ci.yml`) runs the same checks on Ubuntu 24.04, the Python ones on 3.12 and 3.14,
+for every pull request and push to `main`. It installs only `requirements-dev.txt`, so tests that need an optional package (such as
 `onnxruntime` for the models) are skipped there.
 
 ## Known limitations

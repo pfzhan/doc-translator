@@ -10,7 +10,9 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest: `playwright install --with-deps` installs the browser's system
+    # libraries by distribution name, and the pinned Playwright does not know the newer Ubuntu releases.
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -23,9 +25,9 @@ jobs:
           cache: pip
           cache-dependency-path: requirements*.txt
       - name: Install dependencies
-        run: |
-          python -m pip install -r requirements-dev.txt
-          python -m playwright install --with-deps chromium
+        run: python -m pip install -r requirements-dev.txt
+      - name: Install Chromium
+        run: python -m playwright install --with-deps chromium
       - name: Lint
         run: |
           ruff check .
@@ -36,7 +38,7 @@ jobs:
         run: pytest --cov
 
   frontend:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
