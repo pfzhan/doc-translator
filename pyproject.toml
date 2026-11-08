@@ -55,3 +55,14 @@ untyped_calls_exclude = ["pymupdf"]
 # for the models, ultralytics for eval/models/export.py
 module = ["py3langid.*", "mobi.*", "lxml.*", "onnx.*", "onnxruntime.*", "ultralytics.*"]
 ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# About the level of today's tests (91%), so a change that drops tests or adds untested code fails CI. Raise it as
+# coverage grows
+fail_under = 90

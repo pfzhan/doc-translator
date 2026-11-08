@@ -627,13 +627,16 @@ eval/              evaluation scripts for PDF segmentation, inline formulas and 
 .venv/bin/playwright install chromium
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 .venv/bin/mypy
-.venv/bin/pytest
+.venv/bin/pytest --cov
 ```
 
 `mypy` reads its settings from `pyproject.toml` and checks `app/`, `tests/`, `scripts/` and `eval/` with `--strict`. The dicts pymupdf returns
 (text spans, drawings) are typed as `PdfDict` in `app/formats/pdf_types.py`. Tests run against a temporary data
 directory (see `DOC_TRANSLATOR_DATA` above), never the project's `data/`. `tests/test_web_ui.py` opens the web
 page in Chromium and fails on any script error; it is skipped when Playwright or Chromium is missing.
+
+`--cov` measures line and branch coverage of `app/` and lists the lines tests do not reach; it fails below the
+`fail_under` in `pyproject.toml` (90%). `--cov-report=html` writes a browsable report to `htmlcov/`.
 
 GitHub Actions (`.github/workflows/ci.yml`) runs the same checks on Python 3.12 and 3.14 for every pull request and
 push to `main`. It installs only `requirements-dev.txt`, so tests that need an optional package (such as
