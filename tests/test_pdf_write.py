@@ -9,7 +9,7 @@ import pymupdf
 import pytest
 
 from app.formats.pdf_blocks import TextBlock
-from app.formats.pdf_types import PdfDict
+from app.formats.pdf_types import Formula, Span
 
 # A box as its corner coordinates: x0, y0, x1, y1
 Corners = tuple[float, float, float, float]
@@ -991,7 +991,7 @@ def test_rendered_formulas_placed_once_in_own_slots(tmp_path: Path) -> None:
     r1 = d[0].search_for("BETA")[0]
     r2 = d[0].search_for("EPSILON")[0]
 
-    def record(name: str, mid: int, rect: pymupdf.Rect) -> PdfDict:
+    def record(name: str, mid: int, rect: pymupdf.Rect) -> Formula:
         return {
             "bbox": rect,
             "name": name,
@@ -1071,7 +1071,7 @@ def test_formulas_on_a_page_filter_their_own_lines() -> None:
     for row in range(16):
         page.insert_text((40, 30 + 22 * row), f"line {row} has v{row} inside", fontsize=10)
     whole = _page_form(doc, page)
-    formulas: list[PdfDict] = []
+    formulas: list[Formula] = []
     for row in range(16):
         box = page.search_for(f"v{row} ")[0] + (0, 0, -2, 0)
         formulas.append({"bbox": box, "spans": [{"bbox": _bbox(box)}]})
@@ -1128,7 +1128,7 @@ def test_a_formula_bitmap_is_rendered_only_when_used(monkeypatch: pytest.MonkeyP
         return call
 
     monkeypatch.setattr(pymupdf.Page, "get_pixmap", counted(pymupdf.Page.get_pixmap))
-    formula: PdfDict = {"png": _FormulaImage(doc, 0, pymupdf.Rect(15, 35, 60, 55))}
+    formula: Formula = {"png": _FormulaImage(doc, 0, pymupdf.Rect(15, 35, 60, 55))}
     assert calls == []
     png = _formula_png(formula)
     assert png is not None
@@ -1217,7 +1217,7 @@ def test_formula_passthrough_follows_a_shifted_crop_box(tmp_path: Path) -> None:
 
     d = pymupdf.open(src)
     rect = d[0].search_for("BETA")[0]
-    formula = {
+    formula: Formula = {
         "bbox": rect,
         "name": "a_1.png",
         "mid": 0,
@@ -1299,7 +1299,7 @@ def test_formula_clip_ignores_tall_bitmap_glyph_boxes(tmp_path: Path) -> None:
         return sum(1 for v in pix.samples if v < 128) / len(pix.samples)
 
     ink = ink_share(d[0].get_pixmap(dpi=150, clip=rect, colorspace=pymupdf.csGRAY))
-    formula = {
+    formula: Formula = {
         "bbox": rect,
         "name": "a_1.png",
         "mid": 0,
@@ -1334,7 +1334,7 @@ def test_formula_crop_trims_side_whitespace_to_the_ink() -> None:
     page.insert_text((40, 80), "word", fontsize=12, fontname="tiro")
     page.insert_text((100, 80), " y", fontsize=12, fontname="tiro")
     page.insert_text((40, 130), "a = b", fontsize=12, fontname="times-roman")
-    spans = [
+    spans: list[Span] = [
         span
         for block in page.get_text("dict")["blocks"]
         if block.get("type") == 0
@@ -1346,7 +1346,7 @@ def test_formula_crop_trims_side_whitespace_to_the_ink() -> None:
     word = next(span for span in spans if span["text"] == "word")
 
     wide = pymupdf.Rect(spaced["bbox"])
-    part = {
+    part: Formula = {
         "bbox": wide,
         "w": round(wide.width, 1),
         "dx": 0.0,
@@ -1375,7 +1375,7 @@ def test_formula_crop_trims_side_whitespace_to_the_ink() -> None:
     assert tight.x1 <= letter.x1 + 1.0
 
     inner = pymupdf.Rect(equation["bbox"])
-    kept = {"bbox": inner, "w": round(inner.width, 1), "spans": [equation], "curves": []}
+    kept: Formula = {"bbox": inner, "w": round(inner.width, 1), "spans": [equation], "curves": []}
     _tighten_formula_sides(kept, page)
     kept_box = pymupdf.Rect(kept["bbox"])
     assert kept_box.width > inner.width * 0.7
@@ -1384,7 +1384,7 @@ def test_formula_crop_trims_side_whitespace_to_the_ink() -> None:
 
     word_box = pymupdf.Rect(word["bbox"])
     overlapped = pymupdf.Rect(word_box.x1 - 4, wide.y0, wide.x1, wide.y1)
-    neighbor = {
+    neighbor: Formula = {
         "bbox": overlapped,
         "w": round(overlapped.width, 1),
         "spans": [spaced],
@@ -1396,7 +1396,7 @@ def test_formula_crop_trims_side_whitespace_to_the_ink() -> None:
 
     page.draw_line((70, 78), (96, 78), width=0.8)
     bar = pymupdf.Rect(70, 77.2, 96, 78.8)
-    with_bar = {
+    with_bar: Formula = {
         "bbox": pymupdf.Rect(bar.x0, wide.y0, wide.x1, wide.y1),
         "w": 40.0,
         "spans": [spaced],
@@ -1425,7 +1425,7 @@ def test_wrapped_formula_parts_stay_in_order(tmp_path: Path) -> None:
     sh_box = d[0].search_for("sh")[0]
     d.close()
 
-    def part(name: str, rect: pymupdf.Rect, text: str) -> PdfDict:
+    def part(name: str, rect: pymupdf.Rect, text: str) -> Formula:
         return {
             "bbox": rect,
             "name": name,
@@ -1528,7 +1528,7 @@ def test_translation_wraps_around_the_figure_its_paragraph_wraps_around() -> Non
         False,
         holes,
     )
-    spans = [
+    spans: list[Span] = [
         span
         for block in page.get_text("dict")["blocks"]
         for line in block.get("lines", [])
@@ -2020,7 +2020,7 @@ def test_shared_baseline_continuation_stays_in_its_lines(tmp_path: Path) -> None
         "zh-CN",
         continuations={id(host): tail},
     )
-    spans = [
+    spans: list[Span] = [
         span
         for block in out[0].get_text("dict")["blocks"]
         if block.get("type") == 0
@@ -2869,7 +2869,7 @@ def test_formula_does_not_jump_to_the_line_above(tmp_path: Path) -> None:
     d = pymupdf.open(src)
     box = d[0].search_for("t")[0]
     d.close()
-    formula = {
+    formula: Formula = {
         "bbox": box,
         "name": "f0_1.png",
         "w": round(box.width, 1),
@@ -2923,7 +2923,7 @@ def test_italic_run_does_not_open_a_wide_gap_before_the_formula(tmp_path: Path) 
     d = pymupdf.open(src)
     y_box = d[0].search_for("y=")[0]
     d.close()
-    formula = {
+    formula: Formula = {
         "bbox": y_box,
         "name": "f0_1.png",
         "w": round(y_box.width, 1),
@@ -2956,7 +2956,7 @@ def test_italic_run_does_not_open_a_wide_gap_before_the_formula(tmp_path: Path) 
         {id(block): [formula]},
     )
     page = out[0]
-    spans = [
+    spans: list[Span] = [
         span
         for blk in page.get_text("dict")["blocks"]
         if blk.get("type") == 0
@@ -2999,7 +2999,7 @@ def test_formula_keeps_a_space_before_following_text(tmp_path: Path) -> None:
     d = pymupdf.open(src)
     y_box = d[0].search_for("y=")[0]
     d.close()
-    formula = {
+    formula: Formula = {
         "bbox": y_box,
         "name": "f0_1.png",
         "w": round(y_box.width, 1),
@@ -3082,18 +3082,23 @@ def test_the_hole_for_a_neighbour_stays_inside_its_font_box() -> None:
     single glyphs (when the font box is wrong) is used as before."""
     from app.formats.pdf_place_formulas import _hole_ink
 
-    def box(span: PdfDict) -> tuple[float, ...]:
+    def box(span: Span) -> tuple[float, ...]:
         return tuple(round(v, 1) for v in _bbox(_hole_ink(span)))
 
-    url = {
+    url: Span = {
         "text": " https://artofproblemsolving.com",
         "bbox": (121.2, 420.0, 525.0, 432.0),
         "ink": (121.2, 420.0, 525.0, 437.5),
     }
     assert box(url) == (121.2, 420.0, 525.0, 432.0)
-    arrow = {"text": "←", "bbox": (130.2, 214.0, 139.9, 232.0), "ink": (130.2, 221.3, 139.9, 226.4)}
+    arrow: Span = {"text": "←", "bbox": (130.2, 214.0, 139.9, 232.0), "ink": (130.2, 221.3, 139.9, 226.4)}
     assert box(arrow) == (130.2, 221.3, 139.9, 226.4)
-    root = {"text": "√", "bbox": (330.5, 187.2, 337.0, 195.0), "ink": (330.5, 187.2, 337.0, 200.0), "ink_drawn": True}
+    root: Span = {
+        "text": "√",
+        "bbox": (330.5, 187.2, 337.0, 195.0),
+        "ink": (330.5, 187.2, 337.0, 200.0),
+        "ink_drawn": True,
+    }
     assert box(root) == (330.5, 187.2, 337.0, 200.0)
 
 
@@ -3102,21 +3107,21 @@ def test_formula_box_height_follows_the_glyph_ink() -> None:
     glyphs of the lines above and below."""
     from app.formats.pdf_crop import _tighten_formula_height
 
-    arrow = {"text": "←", "ink": (130.2, 221.3, 139.9, 226.4)}
-    zero = {"text": "0", "ink": (142.6, 219.8, 147.4, 226.5)}
-    part: PdfDict = {"bbox": pymupdf.Rect(114.7, 218.8, 147.4, 237.1), "h": 18.3, "d": 10.8, "spans": [arrow, zero]}
+    arrow: Span = {"text": "←", "ink": (130.2, 221.3, 139.9, 226.4)}
+    zero: Span = {"text": "0", "ink": (142.6, 219.8, 147.4, 226.5)}
+    part: Formula = {"bbox": pymupdf.Rect(114.7, 218.8, 147.4, 237.1), "h": 18.3, "d": 10.8, "spans": [arrow, zero]}
     _tighten_formula_height(part)
-    assert [round(v, 1) for v in part["bbox"]] == [114.7, 219.2, 147.4, 227.1]
+    assert [round(v, 1) for v in _bbox(part["bbox"])] == [114.7, 219.2, 147.4, 227.1]
     assert part["h"] == 7.9 and part["d"] == 0.8
     # The minus sign lies entirely above the baseline (math axis); after tightening its bottom edge is still above
     # the baseline and must not snap to it
-    minus = {"text": "−", "ink": (197.2, 713.4, 205.0, 715.0)}
+    minus: Span = {"text": "−", "ink": (197.2, 713.4, 205.0, 715.0)}
     part = {"bbox": pymupdf.Rect(197.2, 708.9, 205.0, 726.2), "h": 17.3, "d": 9.6, "spans": [minus]}
     _tighten_formula_height(part)
     baseline = 726.2 - 9.6
     assert part["d"] < 0 and abs(part["bbox"].y1 - part["d"] - baseline) < 0.1
     # Bitmap glyphs have no ink box, so the original box is used as before
-    unknown = {"bbox": pymupdf.Rect(0, 0, 10, 20), "h": 20, "d": 5, "spans": [{"text": "x"}]}
+    unknown: Formula = {"bbox": pymupdf.Rect(0, 0, 10, 20), "h": 20, "d": 5, "spans": [{"text": "x"}]}
     _tighten_formula_height(unknown)
     assert unknown["h"] == 20
 
@@ -3154,8 +3159,8 @@ def test_a_formula_only_takes_the_rules_its_glyphs_touch() -> None:
     the bar belongs to the formula on the next line."""
     from app.formats.pdf_crop import _absorb_one_box
 
-    def formula(bbox: Corners, inks: list[Corners]) -> PdfDict:
-        spans = [{"text": "x", "ink": ink} for ink in inks]
+    def formula(bbox: Corners, inks: list[Corners]) -> Formula:
+        spans: list[Span] = [{"text": "x", "ink": ink} for ink in inks]
         return {"bbox": pymupdf.Rect(bbox), "d": 3.0, "spans": spans}
 
     above = formula(
@@ -3180,13 +3185,13 @@ def test_a_fraction_bar_stays_when_its_numerator_stays() -> None:
     denominator, it would leave the numerator hanging in the air."""
     from app.formats.pdf_crop import _absorb_one_box
 
-    denominator = {"text": "1−α", "origin": (164.2, 500.0), "ink": (164.2, 496.4, 187.5, 502.0)}
-    numerator = {"text": "1−α", "origin": (159.7, 492.5), "ink": (159.7, 487.4, 187.5, 494.2)}
+    denominator: Span = {"text": "1−α", "origin": (164.2, 500.0), "ink": (164.2, 496.4, 187.5, 502.0)}
+    numerator: Span = {"text": "1−α", "origin": (159.7, 492.5), "ink": (159.7, 487.4, 187.5, 494.2)}
     bar = pymupdf.Rect(159.7, 494.9, 187.5, 495.3)
-    alone = {"bbox": pymupdf.Rect(164.2, 490.1, 197.2, 507.6), "d": 3.0, "spans": [denominator]}
+    alone: Formula = {"bbox": pymupdf.Rect(164.2, 490.1, 197.2, 507.6), "d": 3.0, "spans": [denominator]}
     _absorb_one_box(alone, [bar], [numerator, denominator])
     assert alone["curves"] == []
-    whole = {"bbox": pymupdf.Rect(159.7, 487.0, 197.2, 507.6), "d": 3.0, "spans": [numerator, denominator]}
+    whole: Formula = {"bbox": pymupdf.Rect(159.7, 487.0, 197.2, 507.6), "d": 3.0, "spans": [numerator, denominator]}
     _absorb_one_box(whole, [bar], [numerator, denominator])
     assert whole["curves"] == [bar]
 
@@ -3196,19 +3201,19 @@ def test_a_formula_leaves_the_edge_of_a_proof_box() -> None:
     sides, so it is a side of the box and does not move with the formula."""
     from app.formats.pdf_crop import _absorb_one_box
 
-    g = {"text": "g", "origin": (493.0, 571.0), "ink": (493.0, 566.5, 496.9, 574.6)}
-    paren = {"text": ")", "origin": (497.6, 569.5), "ink": (497.6, 562.5, 501.5, 572.0)}
+    g: Span = {"text": "g", "origin": (493.0, 571.0), "ink": (493.0, 566.5, 496.9, 574.6)}
+    paren: Span = {"text": ")", "origin": (497.6, 569.5), "ink": (497.6, 562.5, 501.5, 572.0)}
     top = pymupdf.Rect(496.9, 575.2, 503.3, 575.6)
     sides = [
         pymupdf.Rect(496.7, 575.0, 497.1, 582.1),
         pymupdf.Rect(503.1, 575.0, 503.5, 582.1),
         pymupdf.Rect(496.9, 581.5, 503.3, 581.9),
     ]
-    formula = {"bbox": pymupdf.Rect(461.7, 561.9, 501.5, 573.0), "d": 3.0, "spans": [g, paren]}
+    formula: Formula = {"bbox": pymupdf.Rect(461.7, 561.9, 501.5, 573.0), "d": 3.0, "spans": [g, paren]}
     _absorb_one_box(formula, [top, *sides], [g, paren])
     assert formula["curves"] == []
     bar = pymupdf.Rect(493.0, 575.2, 501.5, 575.6)
-    lone = {"bbox": pymupdf.Rect(461.7, 561.9, 501.5, 573.0), "d": 3.0, "spans": [g, paren]}
+    lone: Formula = {"bbox": pymupdf.Rect(461.7, 561.9, 501.5, 573.0), "d": 3.0, "spans": [g, paren]}
     _absorb_one_box(lone, [bar], [g, paren])
     assert lone["curves"] == [bar]
 
@@ -3222,14 +3227,14 @@ def test_formula_holes_follow_the_neighbours_ink_not_their_font_box() -> None:
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
     fms = _page_form(doc, page)
-    base = {"text": "N", "bbox": (327.5, 456.4, 336.9, 469.7)}
-    formula = {"bbox": pymupdf.Rect(base["bbox"]), "spans": [base]}
-    brace = {"text": "{", "bbox": (328.0, 445.3, 332.9, 462.3)}
+    base: Span = {"text": "N", "bbox": (327.5, 456.4, 336.9, 469.7)}
+    formula: Formula = {"bbox": pymupdf.Rect(base["bbox"]), "spans": [base]}
+    brace: Span = {"text": "{", "bbox": (328.0, 445.3, 332.9, 462.3)}
 
-    def hole_bottom(neighbour: PdfDict) -> float:
+    def hole_bottom(neighbour: Span) -> float:
         """Bottom edge of the hole (page coordinates). The first re is the clip box of the formula itself, the following
         ones are holes."""
-        xref = _formula_form(doc, page, fms, formula, "/Fx", [dict(base), neighbour])
+        xref = _formula_form(doc, page, fms, formula, "/Fx", [base.copy(), neighbour])
         rects = re.findall(r"([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) re", doc.xref_stream(xref).decode())
         [(_, y, _, _)] = rects[1:]
         bottom: float = page.rect.height - float(y)
@@ -3253,22 +3258,25 @@ def test_a_formula_cut_from_a_text_span_is_not_holed_by_that_span() -> None:
     page = doc.new_page(width=612, height=792)
     fms = _page_form(doc, page)
     whole = (269.5, 213.2, 277.4, 222.2)
-    sigma = {"text": "σ", "bbox": (272.0, 213.2, 277.4, 222.2), "source": whole}
-    square = {"text": "2", "bbox": (277.6, 206.0, 280.0, 214.0)}
-    formula = {"bbox": pymupdf.Rect(272.0, 206.0, 280.0, 222.2), "spans": [sigma, square]}
-    source = {
+    sigma: Span = {"text": "σ", "bbox": (272.0, 213.2, 277.4, 222.2), "source": whole}
+    square: Span = {"text": "2", "bbox": (277.6, 206.0, 280.0, 214.0)}
+    formula: Formula = {"bbox": pymupdf.Rect(272.0, 206.0, 280.0, 222.2), "spans": [sigma, square]}
+    source: Span = {
         "text": " σ",
         "bbox": whole,
-        "chars": [(" ", pymupdf.Rect(269.5, 213.2, 272.0, 222.2)), ("σ", pymupdf.Rect(272.0, 213.2, 277.4, 222.2))],
+        "char_boxes": [
+            (" ", pymupdf.Rect(269.5, 213.2, 272.0, 222.2)),
+            ("σ", pymupdf.Rect(272.0, 213.2, 277.4, 222.2)),
+        ],
     }
-    above = {"text": "p", "bbox": (273.0, 196.0, 276.0, 205.5)}
+    above: Span = {"text": "p", "bbox": (273.0, 196.0, 276.0, 205.5)}
 
-    def clip_rects(page_spans: list[PdfDict]) -> list[tuple[str, str, str, str]]:
+    def clip_rects(page_spans: list[Span]) -> list[tuple[str, str, str, str]]:
         xref = _formula_form(doc, page, fms, formula, "/Fx", page_spans)
         return re.findall(r"([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) re", doc.xref_stream(xref).decode())
 
-    assert len(clip_rects([dict(source), dict(square)])) == 1
-    assert len(clip_rects([dict(source), dict(square), above])) == 2
+    assert len(clip_rects([source.copy(), square.copy()])) == 1
+    assert len(clip_rects([source.copy(), square.copy(), above])) == 2
 
 
 def test_list_item_near_the_page_middle_stays_left_aligned() -> None:
@@ -3698,11 +3706,11 @@ def test_a_radical_bar_moves_with_its_formula_under_the_line_above() -> None:
     corner of the radical of this formula, so the bar still goes with the formula."""
     from app.formats.pdf_crop import _absorb_one_box
 
-    radical = {"text": "√", "origin": (339.8, 625.9), "ink": (339.8, 618.0, 348.1, 628.0)}
-    alpha = {"text": "α", "origin": (348.1, 625.5), "ink": (348.1, 619.6, 354.5, 625.7)}
+    radical: Span = {"text": "√", "origin": (339.8, 625.9), "ink": (339.8, 618.0, 348.1, 628.0)}
+    alpha: Span = {"text": "α", "origin": (348.1, 625.5), "ink": (348.1, 619.6, 354.5, 625.7)}
     bar = pymupdf.Rect(347.9, 618.0, 358.2, 618.4)
-    above = {"text": "p", "origin": (349.0, 613.5), "ink": (349.0, 608.8, 354.0, 616.6)}
-    formula = {"bbox": pymupdf.Rect(339.8, 617.0, 358.2, 628.6), "d": 3.0, "spans": [radical, alpha]}
+    above: Span = {"text": "p", "origin": (349.0, 613.5), "ink": (349.0, 608.8, 354.0, 616.6)}
+    formula: Formula = {"bbox": pymupdf.Rect(339.8, 617.0, 358.2, 628.6), "d": 3.0, "spans": [radical, alpha]}
     _absorb_one_box(formula, [bar], [radical, alpha, above])
     assert formula["curves"] == [bar]
 
@@ -3717,17 +3725,17 @@ def test_a_formula_clip_reaches_into_its_own_gaps_beside_a_comma() -> None:
     doc = pymupdf.open()
     page = doc.new_page(width=612, height=792)
     fms = _page_form(doc, page)
-    spans = [
+    spans: list[Span] = [
         {"text": "x", "bbox": (407.1, 490.1, 413.0, 500.1)},
         {"text": "∼N", "bbox": (424.5, 489.9, 444.3, 498.1)},
         {"text": "(", "bbox": (445.8, 490.1, 449.7, 500.1)},
         {"text": ")", "bbox": (464.2, 490.1, 468.0, 500.1)},
     ]
-    formula = {"bbox": pymupdf.Rect(407.1, 489.9, 468.0, 500.1), "spans": spans}
+    formula: Formula = {"bbox": pymupdf.Rect(407.1, 489.9, 468.0, 500.1), "spans": spans}
     # The for before and the comma after both sit right against the formula
-    word = {"text": "for", "bbox": (395.2, 489.9, 407.0, 500.0)}
-    comma = {"text": ",", "bbox": (468.0, 489.9, 470.6, 500.0)}
-    xref = _formula_form(doc, page, fms, formula, "/Fx", [dict(span) for span in spans] + [word, comma])
+    word: Span = {"text": "for", "bbox": (395.2, 489.9, 407.0, 500.0)}
+    comma: Span = {"text": ",", "bbox": (468.0, 489.9, 470.6, 500.0)}
+    xref = _formula_form(doc, page, fms, formula, "/Fx", [span.copy() for span in spans] + [word, comma])
     rects = [
         tuple(map(float, found))
         for found in re.findall(r"([\d.]+) ([\d.]+) ([\d.]+) ([\d.]+) re", doc.xref_stream(xref).decode())
@@ -3752,7 +3760,7 @@ def test_a_long_index_entry_takes_another_line_and_pushes_the_column_down() -> N
 
     def blk(text: str, x0: float, row: int) -> TextBlock:
         rect = pymupdf.Rect(x0, 100 + row * 9.6, x0 + 60, 110 + row * 9.6)
-        span: PdfDict = {"text": text, "size": 8.0, "font": "Times-Roman", "flags": 0, "color": 0, "bbox": _bbox(rect)}
+        span: Span = {"text": text, "size": 8.0, "font": "Times-Roman", "flags": 0, "color": 0, "bbox": _bbox(rect)}
         return TextBlock(
             page=0,
             rect=rect,
@@ -3798,7 +3806,7 @@ def test_an_index_entry_without_spans_that_keeps_its_text_still_moves() -> None:
 
     def blk(text: str, x0: float, row: int, spans: bool = True) -> TextBlock:
         rect = pymupdf.Rect(x0, 100 + row * 9.6, x0 + 60, 110 + row * 9.6)
-        span: PdfDict = {"text": text, "size": 8.0, "font": "Times-Roman", "flags": 0, "color": 0, "bbox": _bbox(rect)}
+        span: Span = {"text": text, "size": 8.0, "font": "Times-Roman", "flags": 0, "color": 0, "bbox": _bbox(rect)}
         return TextBlock(
             page=0,
             rect=rect,
@@ -3851,7 +3859,7 @@ def test_inline_formulas_keep_their_size_next_to_chinese() -> None:
     smaller; when the whole paragraph shrinks, formulas shrink with it."""
     from app.formats.pdf_place import _formula_slot
 
-    formula = {"has_img": True, "w": 40.0, "h": 8.0, "d": 2.0, "text": "f(x)"}
+    formula: Formula = {"has_img": True, "w": 40.0, "h": 8.0, "d": 2.0, "text": "f(x)"}
     scale, _, _ = _formula_slot(formula, 10.0, 8.8, 8.8)
     assert abs(scale - 1.0) < 1e-6
     scale, _, _ = _formula_slot(formula, 10.0, 8.8 * 0.9, 8.8)
@@ -3874,16 +3882,16 @@ def test_a_formula_form_box_keeps_the_overhang_of_an_italic_letter() -> None:
     page = doc.new_page(width=612, height=792)
     page.insert_font(fontname="ti", fontbuffer=pymupdf.Font("tiit").buffer)
     page.insert_text((350, 526), "If f is a", fontname="ti", fontsize=10)
-    spans: dict[str, list[PdfDict]] = {}
+    spans: dict[str, list[Span]] = {}
     for char in page.get_text("rawdict")["blocks"][0]["lines"][0]["spans"][0]["chars"]:
         if char["c"] in "fa":
             spans.setdefault(char["c"], []).append({"text": char["c"], "bbox": char["bbox"], "origin": char["origin"]})
     fms = _page_form(doc, page)
     glyphs = _GlyphInk(page)
 
-    def box(letter: PdfDict) -> Corners:
-        formula: PdfDict = {"bbox": pymupdf.Rect(letter["bbox"]), "spans": [letter]}
-        xref = _formula_form(doc, page, fms, formula, "/Fx", [dict(letter)], glyphs)
+    def box(letter: Span) -> Corners:
+        formula: Formula = {"bbox": pymupdf.Rect(letter["bbox"]), "spans": [letter]}
+        xref = _formula_form(doc, page, fms, formula, "/Fx", [letter.copy()], glyphs)
         x0, y0, x1, y1 = map(float, doc.xref_get_key(xref, "BBox")[1].strip("[]").split())
         return x0, 792 - y1, x1, 792 - y0
 
@@ -3910,7 +3918,7 @@ def test_a_formula_bitmap_keeps_the_overhang_of_an_italic_letter_on_a_clear_back
     page.insert_text((350, 526), "If f is a", fontname="ti", fontsize=10)
     chars = page.get_text("rawdict")["blocks"][0]["lines"][0]["spans"][0]["chars"]
     letter = next(char for char in chars[1:] if char["c"] == "f")
-    span = {"text": "f", "bbox": letter["bbox"], "origin": letter["origin"]}
+    span: Span = {"text": "f", "bbox": letter["bbox"], "origin": letter["origin"]}
     bbox = pymupdf.Rect(letter["bbox"])
     image = _FormulaImage(doc, 0, bbox, [span])
     area = image.area()

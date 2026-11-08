@@ -630,8 +630,10 @@ eval/              evaluation scripts for PDF segmentation, inline formulas and 
 .venv/bin/pytest --cov
 ```
 
-`mypy` reads its settings from `pyproject.toml` and checks `app/`, `tests/`, `scripts/` and `eval/` with `--strict`. The dicts pymupdf returns
-(text spans, drawings) are typed as `PdfDict` in `app/formats/pdf_types.py`. Tests run against a temporary data
+`mypy` reads its settings from `pyproject.toml` and checks `app/`, `tests/`, `scripts/` and `eval/` with `--strict`. pymupdf returns its
+text, drawing and image dicts untyped; `app/formats/pdf_types.py` declares their shapes as `TypedDict`s (`Span`,
+`Line`, `Block`, `Drawing`...), together with the formula records the PDF pipeline builds (`Formula`), and reads them
+through `text_dict`, `page_drawings` and `image_infos`, the only places they are cast. Tests run against a temporary data
 directory (see `DOC_TRANSLATOR_DATA` above), never the project's `data/`. `tests/test_web_ui.py` opens the web
 page in Chromium and fails on any script error; it is skipped when Playwright or Chromium is missing.
 

@@ -1,10 +1,12 @@
 """Pasting the images of inline formulas over their marker pixels (app/formats/pdf_formula_images.py)."""
 
+from typing import Unpack
+
 import pymupdf
 import pytest
 
 from app.formats.pdf_formula_images import _place_formula_images
-from app.formats.pdf_types import PdfDict
+from app.formats.pdf_types import Formula
 
 BASELINE = 100.0  # of the text line the markers sit on
 
@@ -22,7 +24,7 @@ def _marker(page: pymupdf.Page, rect: pymupdf.Rect, mid: int, blue: int = 200) -
     return xref
 
 
-def _formula(**extra: float) -> PdfDict:
+def _formula(**extra: Unpack[Formula]) -> Formula:
     """A formula 20 wide and 10 high whose baseline is 2 above its bottom, with a red bitmap."""
     return {"w": 20.0, "h": 10.0, "d": 2.0, "png": _pixmap(20, 10, (255, 0, 0)).tobytes("png"), **extra}
 
@@ -66,7 +68,8 @@ def test_the_formula_box_scales_and_a_raised_formula_moves_up() -> None:
     images = {img[0] for img in page.get_images(full=True)}
 
     # rs scales the box; raise is how far the formula's baseline lies above the body's (a lone superscript)
-    _place_formula_images(page, doc, set(), {0: _formula(rs=1.5, **{"raise": 1.0})})
+    raised: Formula = {"rs": 1.5, "raise": 1.0}
+    _place_formula_images(page, doc, set(), {0: _formula(**raised)})
 
     [placed] = _images(page, images)
     depth = (2.0 - 1.0) * 1.5

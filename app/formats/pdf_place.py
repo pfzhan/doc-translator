@@ -20,7 +20,7 @@ from .pdf_flow import (
     strip_style_marks,
 )
 from .pdf_place_formulas import _FormulaSources, _paint_formula_parts, _part_lead
-from .pdf_types import PdfDict
+from .pdf_types import Formula, Span, text_dict
 from .pdf_typeset import (
     FORMULA_PAD,
     FormulaMetric,
@@ -49,7 +49,7 @@ _FORMULA_DESCENT_EM = 1.3
 
 
 def _formula_metrics(
-    formulas: list[PdfDict],
+    formulas: list[Formula],
     block_size: float,
     em: float,
     reference: float | None = None,
@@ -68,7 +68,7 @@ def _formula_metrics(
 
 def _fit_typeset(
     text: str,
-    formulas: list[PdfDict],
+    formulas: list[Formula],
     rect: "pymupdf.Rect",
     em: float,
     block_size: float,
@@ -213,7 +213,7 @@ _CLAUSE_MARKS = "，、；：,;:"
 
 def _clause_lines(
     text: str,
-    formulas: list[PdfDict],
+    formulas: list[Formula],
     em: float,
     block_size: float,
     width: float,
@@ -315,7 +315,7 @@ def _hang_lanes(
 
 
 def _line_baseline(
-    spans: list[PdfDict],
+    spans: list[Span],
     line_top: float,
     line_h: float,
     em: float,
@@ -351,7 +351,7 @@ def _line_baseline(
     return line_top + em * (1.12 if cjk else 1.0)
 
 
-def _typeset_line_html(line: TypesetLine, formulas: list[PdfDict]) -> str:
+def _typeset_line_html(line: TypesetLine, formulas: list[Formula]) -> str:
     """HTML of one line. Formulas without an image fall back to the text in their record."""
     parts: list[str] = []
     for piece in line.pieces:
@@ -365,7 +365,7 @@ def _typeset_line_html(line: TypesetLine, formulas: list[PdfDict]) -> str:
     return "".join(parts)
 
 
-def _formula_draw_args(formulas: list[PdfDict]) -> tuple[frozenset[int], dict[int, str]]:
+def _formula_draw_args(formulas: list[Formula]) -> tuple[frozenset[int], dict[int, str]]:
     images = frozenset(index for index, formula in enumerate(formulas, 1) if formula.get("has_img"))
     fallback = {
         index: str(formula.get("text") or "") for index, formula in enumerate(formulas, 1) if index not in images
@@ -377,14 +377,14 @@ def _draw_cjk(
     page: "pymupdf.Page",
     doc: "pymupdf.Document",
     lines: list[TypesetLine],
-    formulas: list[PdfDict],
+    formulas: list[Formula],
     box: "pymupdf.Rect",
     em: float,
     gap: float,
     color: str,
     align: str,
     forms: "_FormulaSources | None",
-    page_spans: list[PdfDict] | None,
+    page_spans: list[Span] | None,
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
     justify_last: bool = False,
     lanes: Sequence[tuple[float, float]] = (),
@@ -433,7 +433,7 @@ def _draw_cjk(
 def _place_plain(
     page: "pymupdf.Page",
     text: str,
-    formulas: list[PdfDict],
+    formulas: list[Formula],
     rect: "pymupdf.Rect",
     em: float,
     block_size: float,
@@ -533,7 +533,7 @@ def _written_right(page: "pymupdf.Page", x0: float, y0: float, y1: float) -> flo
     this edge. Only glyphs whose baseline lies in this box count. Glyph boxes of the line above reach into the top
     of the box, and their right edge would push the formula to the column edge."""
     right = x0
-    for block in page.get_text("dict")["blocks"]:
+    for block in text_dict(page)["blocks"]:
         if block.get("type") != 0:
             continue
         for line in block["lines"]:
@@ -554,7 +554,7 @@ def _place_typeset(
     doc: "pymupdf.Document",
     block_size: float,
     text: str,
-    formulas: list[PdfDict],
+    formulas: list[Formula],
     rect: "pymupdf.Rect",
     em: float,
     cjk: bool,
@@ -565,7 +565,7 @@ def _place_typeset(
     obstacles: list["pymupdf.Rect"],
     right_limit: float | None,
     forms: "_FormulaSources | None",
-    page_spans: list[PdfDict] | None,
+    page_spans: list[Span] | None,
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
     justify_last: bool = False,
     holes: Sequence["pymupdf.Rect"] = (),
@@ -670,7 +670,7 @@ def _place_typeset(
         return end
     spans = [
         span
-        for blk in page.get_text("dict")["blocks"]
+        for blk in text_dict(page)["blocks"]
         if blk.get("type") == 0
         for ln in blk["lines"]
         for span in ln["spans"]
@@ -717,7 +717,7 @@ def _insert_contents_after(page: "pymupdf.Page", doc: "pymupdf.Document", after:
 
 
 def _formula_slot(
-    formula: PdfDict,
+    formula: Formula,
     block_size: float,
     render_size: float,
     reference: float | None = None,

@@ -31,7 +31,7 @@ from .pdf_paragraphs import _block_spans
 from .pdf_roles import Role
 from .pdf_rows import _vivid, _vivid_share
 from .pdf_split_lines import _EXAMPLE_NUMBER_RE, _RELATION_RE, _mono_span
-from .pdf_types import PdfDict
+from .pdf_types import Span
 from .pdf_vision import FormulaDetector
 
 # Maximum length of a bracketed label in an example sentence (Arg0, ArgM-TMP, PER)
@@ -501,7 +501,7 @@ def _concordance_ids(blocks: list[TextBlock]) -> set[int]:
             ),
             key=lambda span: float(span["origin"][1]),
         )
-        rows: list[list[PdfDict]] = []
+        rows: list[list[Span]] = []
         for span in spans:
             if rows and float(span["origin"][1]) - float(rows[-1][0]["origin"][1]) <= block.size * 0.3:
                 rows[-1].append(span)

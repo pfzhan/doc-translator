@@ -5,14 +5,15 @@ import math
 import re
 import struct
 from collections.abc import Sequence
+from typing import Literal
 
 import pymupdf
 
 from .pdf_blocks import _INK_PAD, CJK_RE, _by_chars, _font_is_math, _span_is_math
-from .pdf_types import LineItem, PdfDict
+from .pdf_types import Line, LineItem, PageDict, Span, text_dict
 
 
-def _line_box(line: PdfDict) -> pymupdf.Rect:
+def _line_box(line: Line) -> pymupdf.Rect:
     """Box of a line of text. Spans in math fonts only count one character height around the baseline.
 
     PyMuPDF sizes boxes by the font ascent and descent. CMSY and CMEX reserve that room for large brackets
@@ -41,7 +42,7 @@ def _line_box(line: PdfDict) -> pymupdf.Rect:
     return pymupdf.Rect(struct.unpack("4f", struct.pack("4f", x0, y0, x1, y1)))
 
 
-def _text_bounds(span: PdfDict) -> tuple[float, float, float, float]:
+def _text_bounds(span: Span) -> tuple[float, float, float, float]:
     """The four coordinates of _text_box."""
     x0, y0, x1, y1 = span["bbox"]
     ink = span.get("ink")
@@ -78,7 +79,7 @@ _UNDERLINE_TOP = 0.05
 _UNDERLINE_DEPTH = 0.35
 
 
-def _mark_underlines(page_chars: _PageChars, data: PdfDict, strokes: Sequence[pymupdf.Rect]) -> None:
+def _mark_underlines(page_chars: _PageChars, data: PageDict, strokes: Sequence[pymupdf.Rect]) -> None:
     """Lines drawn under text (the marked columns {A, D, G} in example 6 of opt_views). The line is not part
     of the font, so it is recognized as a thin horizontal rule below the baseline, within the descender, and
     not wider than the line of text. The characters above it become separate spans marked underline and are
@@ -117,7 +118,7 @@ def _mark_underlines(page_chars: _PageChars, data: PdfDict, strokes: Sequence[py
             if float(span.get("size") or 0) >= main * 0.85 and str(span.get("text") or "").strip()
         ]
         baseline = float(_by_chars(body, lambda span: round(span["origin"][1], 1))) if body else 0.0
-        out: list[PdfDict] = []
+        out: list[Span] = []
         for span in spans:
             size = float(span.get("size") or 10.0)
             raised = abs(span["origin"][1] - baseline) > size * 0.15
@@ -149,7 +150,7 @@ def _mark_underlines(page_chars: _PageChars, data: PdfDict, strokes: Sequence[py
 _RADICALS = "√∛∜"
 
 
-def _mark_radicands(page_chars: _PageChars, data: PdfDict, strokes: Sequence[pymupdf.Rect]) -> None:
+def _mark_radicands(page_chars: _PageChars, data: PageDict, strokes: Sequence[pymupdf.Rect]) -> None:
     """Mark the text under a radical bar, the radicand, as formula (the 81 of √81). When body text and
     formulas use the same fonts, the font cannot tell them apart: 81 would stay in the body text and the
     radical become a formula of its own, each typeset separately. Large CMEX radicals extract as the letter
@@ -179,7 +180,7 @@ def _mark_radicands(page_chars: _PageChars, data: PdfDict, strokes: Sequence[pym
         return
     chars = page_chars.boxes()
     for line in lines:
-        out: list[PdfDict] = []
+        out: list[Span] = []
         for span in line["spans"]:
             size = float(span.get("size") or 10.0)
             base = float(span["origin"][1])
@@ -202,7 +203,7 @@ def _mark_radicands(page_chars: _PageChars, data: PdfDict, strokes: Sequence[pym
 _OVERLAY_CHARS = 12
 
 
-def _mark_overlays(page_chars: _PageChars, data: PdfDict) -> None:
+def _mark_overlays(page_chars: _PageChars, data: PageDict) -> None:
     """Vector arrows drawn with glyphs over a word (esvect's \vv{king} extracts as "#    »") and overlines:
     spans with no letters or digits whose ink is a thin band wider than a character, resting on the ink of
     another word. Together with the covered characters they form one formula and are marked as such;
@@ -223,7 +224,7 @@ def _mark_overlays(page_chars: _PageChars, data: PdfDict) -> None:
             continue
         chars = page_chars.boxes()
         for overlay, box, size in overlays:
-            covered: list[tuple[PdfDict, pymupdf.Rect]] = []
+            covered: list[tuple[Span, pymupdf.Rect]] = []
             for span in spans:
                 ink = span.get("ink")
                 if span is overlay or ink is None or not any(char.isalpha() for char in str(span.get("text") or "")):
@@ -255,7 +256,7 @@ def _mark_overlays(page_chars: _PageChars, data: PdfDict) -> None:
             overlay["math"] = True
             targets = {id(span) for span, _word in covered}
             for line in block.get("lines", []):
-                out: list[PdfDict] = []
+                out: list[Span] = []
                 for span in line.get("spans", []):
                     if id(span) in targets:
                         out.extend(_split_covered(span, [under], chars, ([under.x0], [under.x1]), "math"))
@@ -272,7 +273,7 @@ _FORMULA_TRAIL = ",.;:?!"
 _NUMERIC_RE = re.compile(r"[\d\s.,()%+\-−]*")
 
 
-def _mark_detected_formulas(page_chars: _PageChars, data: PdfDict, rects: Sequence[pymupdf.Rect]) -> None:
+def _mark_detected_formulas(page_chars: _PageChars, data: PageDict, rects: Sequence[pymupdf.Rect]) -> None:
     """Cut out the characters inside inline formula boxes from the formula detection model and mark them
     detected_formula. The mark only counts when recognizing inline formula spans (see _is_formula_span);
     roles, skipping and paragraph joining still use the font-based math mark."""
@@ -292,7 +293,7 @@ def _mark_detected_formulas(page_chars: _PageChars, data: PdfDict, rects: Sequen
             ]
             if not here:
                 continue
-            out: list[PdfDict] = []
+            out: list[Span] = []
             for span in spans:
                 hit = (
                     []
@@ -309,7 +310,7 @@ def _mark_detected_formulas(page_chars: _PageChars, data: PdfDict, rects: Sequen
             line["spans"] = out
 
 
-def _box_holds_span(rect: pymupdf.Rect, span: PdfDict) -> bool:
+def _box_holds_span(rect: pymupdf.Rect, span: Span) -> bool:
     """The box and the span overlap horizontally and by at least half vertically, so boxes of the lines above
     and below that touch this line do not count."""
     box = pymupdf.Rect(span["bbox"])
@@ -320,7 +321,7 @@ def _box_holds_span(rect: pymupdf.Rect, span: PdfDict) -> bool:
 
 def _trim_formula_box(
     rect: pymupdf.Rect,
-    spans: list[PdfDict],
+    spans: list[Span],
     chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]],
 ) -> pymupdf.Rect | None:
     """Fit the box to the characters of this line: give up trailing punctuation, and drop boxes that only
@@ -352,7 +353,7 @@ _STACKED_ACCENTS = "ˆ˜¯´˙¨ˇ˘˚"
 _ASCII_ACCENTS = {"ˆ": "^", "˜": "~"}
 
 
-def _split_accents(page_chars: _PageChars, data: PdfDict) -> None:
+def _split_accents(page_chars: _PageChars, data: PageDict) -> None:
     """An accent often shares a span with the character before it ("(ˆ", "log ˆ"), and per span it cannot be
     seen that it sits over the next character or formula. Cut it into a piece of its own: over a formula it
     joins the formula, over a letter it is composed into ŷ or é before translation. A ˆ or ˜ that takes up
@@ -366,7 +367,7 @@ def _split_accents(page_chars: _PageChars, data: PdfDict) -> None:
         return
     chars = page_chars.boxes()
     for line in lines:
-        out: list[PdfDict] = []
+        out: list[Span] = []
         spans = line["spans"]
         for index, span in enumerate(spans):
             text = str(span.get("text") or "")
@@ -424,7 +425,7 @@ def _split_accents(page_chars: _PageChars, data: PdfDict) -> None:
 VISIBLE_SPACE = "\u2423"
 
 
-def _mark_visible_spaces(page_chars: _PageChars, data: PdfDict, cups: Sequence[pymupdf.Rect]) -> None:
+def _mark_visible_spaces(page_chars: _PageChars, data: PageDict, cups: Sequence[pymupdf.Rect]) -> None:
     """A drawn visible space ␣ is not in the font and extracts as a plain space or as nothing, so
     "merged to ␣re" reads as "merged to re". Where one sits on the baseline of a line in a gap between
     characters, write ␣ in its place: it replaces the space it covers, or is added as a new span when the gap
@@ -456,7 +457,7 @@ def _mark_visible_spaces(page_chars: _PageChars, data: PdfDict, cups: Sequence[p
                 chars = page_chars.boxes()
             boxes = chars.get((text, round(span["origin"][0], 1), round(span["origin"][1], 1)))
             if boxes is None or len(boxes) != len(text):
-                boxes = [(span["bbox"][0], span["bbox"][2], tuple(span["origin"]))] if len(text) == 1 else []
+                boxes = [(span["bbox"][0], span["bbox"][2], span["origin"])] if len(text) == 1 else []
             hit = next((i for i, (x0, x1, _o) in enumerate(boxes) if x0 <= middle <= x1), None)
             if hit is None or not text[hit].isspace():
                 continue
@@ -502,7 +503,7 @@ def _mark_visible_spaces(page_chars: _PageChars, data: PdfDict, cups: Sequence[p
         line["bbox"] = tuple(pymupdf.Rect(line["bbox"]) | pymupdf.Rect(box))
 
 
-def _glyph_box(span: PdfDict) -> pymupdf.Rect:
+def _glyph_box(span: Span) -> pymupdf.Rect:
     """Box taken by the glyph. When the font box is wrong and the ink was measured by drawing the glyph
     alone, the top and bottom come from the ink."""
     box = pymupdf.Rect(span["bbox"])
@@ -529,7 +530,7 @@ def _painted_stroke(page: pymupdf.Page, rect: pymupdf.Rect) -> bool:
 
 
 def _underline_strokes(
-    span: PdfDict,
+    span: Span,
     strokes: Sequence[pymupdf.Rect],
     left: float,
     right: float,
@@ -555,19 +556,19 @@ def _read_char_boxes(
     page: pymupdf.Page,
 ) -> dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]]:
     found: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]] = {}
-    raw = page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
+    raw = text_dict(page, "rawdict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
     for block in raw.get("blocks", []):
         for line in block.get("lines", []):
             for span in line.get("spans", []):
                 chars = span.get("chars") or []
                 text = "".join(char["c"] for char in chars)
                 key = (text, round(span["origin"][0], 1), round(span["origin"][1], 1))
-                found[key] = [(char["bbox"][0], char["bbox"][2], tuple(char["origin"])) for char in chars]
+                found[key] = [(char["bbox"][0], char["bbox"][2], char["origin"]) for char in chars]
     return found
 
 
 def _line_edges(
-    spans: list[PdfDict],
+    spans: list[Span],
     chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]],
 ) -> tuple[list[float], list[float]]:
     """Left and right edges of every character in a line."""
@@ -581,12 +582,12 @@ def _line_edges(
 
 
 def _split_covered(
-    span: PdfDict,
+    span: Span,
     under: list[pymupdf.Rect],
     chars: dict[tuple[str, float, float], list[tuple[float, float, tuple[float, float]]]],
     edges: tuple[list[float], list[float]] = ([], []),
-    flag: str = "underline",
-) -> list[PdfDict]:
+    flag: Literal["underline", "math", "detected_formula"] = "underline",
+) -> list[Span]:
     """Cut a span by character into pieces covered by the lines and pieces outside them, and mark the covered
     pieces with flag (underline, or the number under a radical). Without matching per-character boxes, the
     span is marked only if all of it lies within a line."""
@@ -604,7 +605,9 @@ def _split_covered(
             and covered(box.x0, box.x0 + 0.1)
             and covered(box.x1 - 0.1, box.x1)
         ):
-            return [{**span, flag: True}]
+            marked = span.copy()
+            marked[flag] = True
+            return [marked]
         return [span]
     # An underline runs from the left edge of one character to the right edge of another. Dashed lines in
     # figures, legend lines and fraction bars do not match character edges. The text under one line may be
@@ -621,7 +624,7 @@ def _split_covered(
     marks = [covered(x0, x1) and char != "_" for char, (x0, x1, _ox) in zip(text, boxes)]
     if not any(marks):
         return [span]
-    pieces: list[PdfDict] = []
+    pieces: list[Span] = []
     start = 0
     y0, y1 = span["bbox"][1], span["bbox"][3]
     for index in range(1, len(text) + 1):
@@ -631,10 +634,10 @@ def _split_covered(
         # The origin is that of the piece's first character. The span's origin belongs to its first character:
         # in " ." the space sits on the baseline of the subscript before it, and a period copying that origin
         # would not be found by baseline when erasing and would stay on the page
-        piece = {**span, "text": text[start:index], "bbox": (x0, y0, x1, y1), "origin": boxes[start][2]}
+        piece: Span = {**span, "text": text[start:index], "bbox": (x0, y0, x1, y1), "origin": boxes[start][2]}
         # The page still holds the span from before the cut; cropping formulas uses it to tell which characters
         # belong to the formula (see _outside_formula)
-        piece["source"] = span.get("source") or tuple(span["bbox"])
+        piece["source"] = span.get("source") or span["bbox"]
         if "ink" in span:
             piece["ink"] = (x0, span["ink"][1], x1, span["ink"][3])
         if marks[start]:
@@ -646,7 +649,7 @@ def _split_covered(
     return pieces
 
 
-def _script_parts(line: PdfDict, spans: list[PdfDict]) -> list[LineItem]:
+def _script_parts(line: Line, spans: list[Span]) -> list[LineItem]:
     """On a page in a Western language, a line with Chinese text, a gap of half an em or more and then Western
     text is two columns side by side (an epigraph with the Chinese original on the left and the English
     translation on the right). Split it into two pieces: the Chinese piece is kept as foreign text and the
@@ -655,13 +658,13 @@ def _script_parts(line: PdfDict, spans: list[PdfDict]) -> list[LineItem]:
         if _script_seam(spans[:k], spans[k:]):
             parts: list[LineItem] = []
             for part in (spans[:k], spans[k:]):
-                sub = dict(line, spans=part)
+                sub: Line = {**line, "spans": part}
                 parts.append(("".join(s["text"] for s in part), _line_box(sub), part, part))
             return parts
     return []
 
 
-def _script_seam(left: list[PdfDict], right: list[PdfDict]) -> bool:
+def _script_seam(left: list[Span], right: list[Span]) -> bool:
     """The left piece is Chinese only, the right piece starts with Western text, and the gap between them is
     half an em or more (see _script_parts)"""
     left = [span for span in left if str(span.get("text") or "").strip()]
@@ -688,7 +691,7 @@ _CM_UPRIGHT_RE = re.compile(r"^(?:[A-Z]{6}\+)?(?:CMR|CMBX|CMSS(?:BX|I)?|CMSL)\d"
 _MATH_ALPHABET_RE = re.compile(r"[\U0001D400-\U0001D7FF\u210E]")
 
 
-def _mark_math_alphabet(pages: list[PdfDict]) -> None:
+def _mark_math_alphabet(pages: list[PageDict]) -> None:
     """Mark every span math in fonts that map most of their letters to the mathematical alphanumeric block.
     This catches math italics that the font name lists miss (the names newtxmath gets with various text
     fonts), and commas and brackets in the same font count as formula as well."""
@@ -713,7 +716,7 @@ def _mark_math_alphabet(pages: list[PdfDict]) -> None:
                         span["math"] = True
 
 
-def _mark_formula_only_fonts(pages: list[PdfDict]) -> None:
+def _mark_formula_only_fonts(pages: list[PageDict]) -> None:
     """Mark every span math in fonts used only for one or two characters at a time, mostly next to formulas.
     A bitmap double-struck 1 (𝟙) is a Type 3 font named only by a number such as F74, and extracts as a
     plain 1."""
@@ -751,7 +754,7 @@ def _mark_formula_only_fonts(pages: list[PdfDict]) -> None:
                         span["math"] = True
 
 
-def _mark_math_roman(pages: list[PdfDict]) -> None:
+def _mark_math_roman(pages: list[PageDict]) -> None:
     """In documents whose body text is not Computer Modern, spans in upright CM fonts are formulas; mark them
     math.
 
@@ -799,7 +802,7 @@ _FRACTION_CENTER = 0.1
 _FRACTION_NEIGHBOR = 1.5
 
 
-def _fraction_parts(data: PdfDict, rules: Sequence[pymupdf.Rect]) -> set[int]:
+def _fraction_parts(data: PageDict, rules: Sequence[pymupdf.Rect]) -> set[int]:
     """The text above and below fraction bars whose numerator or denominator contains prose words
     (labeled recall = # of correct ... / # of total ...).
 
@@ -835,7 +838,7 @@ def _fraction_parts(data: PdfDict, rules: Sequence[pymupdf.Rect]) -> set[int]:
     return found
 
 
-def _plain_units(spans: list[PdfDict]) -> int:
+def _plain_units(spans: list[Span]) -> int:
     return _prose_units(" ".join(span["text"] for span in spans if not _span_is_math(span)))
 
 
@@ -843,7 +846,7 @@ def _within(offset: float, size: float, bounds: tuple[float, float]) -> bool:
     return bounds[0] * size <= offset <= bounds[1] * size
 
 
-def _centered_alone(row: list[PdfDict], spans: list[PdfDict], inner: set[int], bar: pymupdf.Rect) -> bool:
+def _centered_alone(row: list[Span], spans: list[Span], inner: set[int], bar: pymupdf.Rect) -> bool:
     x0 = min(span["bbox"][0] for span in row)
     x1 = max(span["bbox"][2] for span in row)
     if abs((x0 + x1) / 2 - (bar.x0 + bar.x1) / 2) > max(1.5, bar.width * _FRACTION_CENTER):
@@ -858,7 +861,7 @@ def _centered_alone(row: list[PdfDict], spans: list[PdfDict], inner: set[int], b
     return True
 
 
-def _beside_bar(span: PdfDict, bar: pymupdf.Rect, axis: float) -> bool:
+def _beside_bar(span: Span, bar: pymupdf.Rect, axis: float) -> bool:
     """Text beyond a bar end near the math axis: an equals sign or label before the fraction, an operator
     after it."""
     if not 0 <= span["origin"][1] - axis <= span["size"] * _FRACTION_AXIS:

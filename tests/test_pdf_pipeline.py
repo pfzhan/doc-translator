@@ -11,7 +11,7 @@ import pytest
 from app.formats import translate_file
 from app.formats.markdown import collect_segments, render, split_blocks
 from app.formats.pdf_blocks import _join_lines
-from app.formats.pdf_types import PdfDict
+from app.formats.pdf_types import Block, Line, PageDict, Span
 from app.runner import Runner
 from app.translators import MockTranslator
 from tests.helpers import SAMPLES, MemCache, _pdf_with_text, _write_epub, run, runner
@@ -130,7 +130,7 @@ def test_a_small_caps_heading_takes_the_size_of_its_capitals() -> None:
     text. A lowered subscript (BERT_LARGE) is not small caps."""
     from app.formats.pdf_extract import _block_size
 
-    def span(text: str, x0: float, size: float, base: float) -> PdfDict:
+    def span(text: str, x0: float, size: float, base: float) -> Span:
         return {"text": text, "size": size, "origin": (x0, base), "bbox": (x0, base - size, x0 + 50, base + 2)}
 
     heading = [span("I", 123.0, 11.6, 362.0), span("NITIALIZATION", 127.0, 9.3, 362.0)]
@@ -565,7 +565,7 @@ def test_a_small_caps_word_at_the_line_start_is_not_a_style_change() -> None:
     change."""
     from app.formats.pdf_blocks import TextBlock, _styled_edge
 
-    def span(text: str, x0: float, size: float = 10.0, font: str = "NimbusRomNo9L-Regu", flags: int = 0) -> PdfDict:
+    def span(text: str, x0: float, size: float = 10.0, font: str = "NimbusRomNo9L-Regu", flags: int = 0) -> Span:
         return {
             "text": text,
             "font": font,
@@ -575,7 +575,7 @@ def test_a_small_caps_word_at_the_line_start_is_not_a_style_change() -> None:
             "origin": (x0, 441.5),
         }
 
-    def blk(spans: list[PdfDict]) -> TextBlock:
+    def blk(spans: list[Span]) -> TextBlock:
         return TextBlock(
             page=0,
             rect=pymupdf.Rect(142, 433, 475, 480),
@@ -801,7 +801,7 @@ def test_a_block_is_sized_by_its_base_line_text_not_a_subscript() -> None:
     still follows the and on the baseline."""
     from app.formats.pdf_extract import _main_span
 
-    def span(text: str, font: str, size: float, y: float) -> PdfDict:
+    def span(text: str, font: str, size: float, y: float) -> Span:
         return {"text": text, "font": font, "size": size, "origin": (0, y)}
 
     line = [
@@ -826,7 +826,7 @@ def test_white_label_on_a_black_box_is_pasted_back_as_is(tmp_path: Path) -> None
     doc.close()
 
     [out] = run(translate_file(src, tmp_path, runner(), False, "zh-CN"))
-    spans = [
+    spans: list[Span] = [
         span
         for block in pymupdf.open(out)[0].get_text("dict")["blocks"]
         if block.get("type") == 0
@@ -1156,7 +1156,7 @@ def test_inline_colors_are_marked_relative_to_the_block() -> None:
     from app.formats.pdf_flow import Emphasis, writer_for
 
     plain = Emphasis(False, False)
-    spans: list[PdfDict] = [
+    spans: list[Span] = [
         {"text": "We cite ", "color": 0, "size": 10},
         {"text": "Clark", "color": 0x0000FF, "size": 10},
         {"text": " ", "color": 0, "size": 10},
@@ -1168,7 +1168,7 @@ def test_inline_colors_are_marked_relative_to_the_block() -> None:
     text = "".join(writer.text(s["text"], plain, s["size"], s["color"]) for s in spans) + writer.close()
     assert text == "We cite {c0000ff}Clark 2002{/c} here.Figure 2.1"
 
-    same = [{"text": "All black text.", "color": 0, "size": 10}]
+    same: list[Span] = [{"text": "All black text.", "color": 0, "size": 10}]
     writer = writer_for(same, 10, 0)
     assert writer.text("All black text.", plain, 10, 0) + writer.close() == "All black text."
 
@@ -1227,7 +1227,7 @@ def test_pdf_keeps_inline_colors_in_the_translation(tmp_path: Path) -> None:
     doc.save(src)
 
     [out] = run(translate_pdf(src, tmp_path, Runner(Colored("zh-CN"), cache=MemCache()), False, "zh-CN"))
-    spans = [
+    spans: list[Span] = [
         s for b in pymupdf.open(out)[0].get_text("dict")["blocks"] for line in b.get("lines", []) for s in line["spans"]
     ]
     blue = "".join(s["text"] for s in spans if s["color"] == 0x0000FF)
@@ -1333,9 +1333,10 @@ def test_block_color_follows_most_characters_not_the_longest_span() -> None:
     would write the translation of the whole caption in white."""
     from app.formats.pdf_blocks import _by_chars
 
-    spans = [{"text": "Figure 10.3", "color": 0xFFFFFF}] + [
+    words: list[Span] = [
         {"text": word, "color": 0} for word in ("The", "all-words", "WSD", "task,", "mapping", "from", "input")
     ]
+    spans: list[Span] = [{"text": "Figure 10.3", "color": 0xFFFFFF}, *words]
     assert _by_chars(spans, lambda span: span["color"]) == 0
 
 
@@ -1346,10 +1347,10 @@ def test_a_contents_page_without_leader_dots_is_found_by_its_page_numbers() -> N
     not next to a contents page does not."""
     from app.formats.pdf_extract import _toc_pages
 
-    def line(text: str, x0: float, x1: float, y: float) -> PdfDict:
+    def line(text: str, x0: float, x1: float, y: float) -> Line:
         return {"dir": (1, 0), "bbox": (x0, y, x1, y + 12), "spans": [{"text": text, "size": 12.0}]}
 
-    def page(title: str, rows: list[tuple[str, int]]) -> PdfDict:
+    def page(title: str, rows: list[tuple[str, int]]) -> PageDict:
         lines = [line(title, 241, 371, 70)] if title else []
         for k, (entry, number) in enumerate(rows):
             y = 100 + 14.5 * k
@@ -1388,8 +1389,8 @@ def test_the_line_gap_is_measured_from_the_documents_body_lines() -> None:
     from app.formats.pdf_blocks import _LINE_GAP
     from app.formats.pdf_extract import _line_gap
 
-    def page(count: int, top: float = 100.0, height: float = 13.3, pitch: float = 11.0, size: float = 10.0) -> PdfDict:
-        lines = [
+    def page(count: int, top: float = 100.0, height: float = 13.3, pitch: float = 11.0, size: float = 10.0) -> PageDict:
+        lines: list[Line] = [
             {
                 "dir": (1, 0),
                 "bbox": (72, top + pitch * k, 520, top + pitch * k + height),
@@ -1432,7 +1433,7 @@ def test_a_block_cut_by_a_margin_note_does_not_take_an_indented_new_paragraph() 
     translation of an example. Only an unindented next block is the same sentence cut apart."""
     from app.formats.pdf_extract import _note_cut
 
-    def block(*lines: tuple[str, Corners]) -> PdfDict:
+    def block(*lines: tuple[str, Corners]) -> Block:
         return {
             "lines": [{"dir": (1, 0), "bbox": bbox, "spans": [{"text": text, "size": 10.0}]} for text, bbox in lines]
         }
@@ -1607,11 +1608,11 @@ def test_the_margin_piece_of_a_wide_caption_line_is_not_a_side_note() -> None:
         ((160, 289, 493, 300), "body text that runs across the whole column of the page here", "f"),
         ((160, 301, 493, 312), "and goes on with more of the same body text below the note", "f"),
     ]
-    blocks: dict[str, PdfDict] = {}
+    blocks: dict[str, Block] = {}
     lines: list[FrameLine] = []
-    refs: list[tuple[PdfDict, PdfDict]] = []
+    refs: list[tuple[Block, Line]] = []
     for bbox, text, key in rows:
-        line: PdfDict = {"bbox": bbox}
+        line: Line = {"bbox": bbox}
         blocks.setdefault(key, {"lines": []})["lines"].append(line)
         lines.append(FrameLine(pymupdf.Rect(bbox), text, 9))
         refs.append((blocks[key], line))

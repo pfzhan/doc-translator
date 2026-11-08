@@ -1,10 +1,10 @@
 import pymupdf
 
 from app.formats.pdf_erase import Erasure, erase
-from app.formats.pdf_types import PdfDict
+from app.formats.pdf_types import Span
 
 
-def _spans(page: pymupdf.Page) -> list[PdfDict]:
+def _spans(page: pymupdf.Page) -> list[Span]:
     return [
         span
         for block in page.get_text("dict")["blocks"]
@@ -23,7 +23,7 @@ def _ink(page: pymupdf.Page, rect: pymupdf.Rect) -> int:
     return sum(1 for value in pix.samples if value < 128)
 
 
-def _erase_spans(page: pymupdf.Page, spans: list[PdfDict], line_rects: list[pymupdf.Rect] | None = None) -> int:
+def _erase_spans(page: pymupdf.Page, spans: list[Span], line_rects: list[pymupdf.Rect] | None = None) -> int:
     erasure = Erasure()
     erasure.add_block([spans], line_rects or [pymupdf.Rect(spans[0]["bbox"])])
     return erase(page, erasure)
@@ -78,7 +78,7 @@ def test_bitmap_glyphs_are_erased_by_their_origins() -> None:
     page.insert_text((150, 80), "cd", fontsize=12)
     origins = [char[2] for span in page.get_texttrace() for char in span["chars"]]
     erasure = Erasure()
-    span = {"text": "c", "bbox": (0, 0, 1, 1), "origin": (0, 0), "origins": [origins[2]]}
+    span: Span = {"text": "c", "bbox": (0, 0, 1, 1), "origin": (0, 0), "origins": [origins[2]]}
     erasure.add_block([[span]], [pymupdf.Rect(0, 0, 1, 1)])
     assert erase(page, erasure) == 1
     assert _words(page) == ["ab", "d"]

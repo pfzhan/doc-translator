@@ -13,7 +13,7 @@ from .pdf_drawings import (
     _rule_segments,
     _TextWord,
 )
-from .pdf_types import PdfDict
+from .pdf_types import Drawing, Line, Span, text_dict
 
 # Boundary between two adjacent rows of an algorithm box, as a share of the line spacing below the upper baseline
 _ROW_CUT = 0.35
@@ -30,7 +30,7 @@ _ALGORITHM_WORD_RE = re.compile(r"Algorithm|Procedure|算法", re.I)
 
 def algorithm_tables(
     page: pymupdf.Page,
-    drawings: list[PdfDict] | None = None,
+    drawings: list[Drawing] | None = None,
     words: Sequence[_TextWord] | None = None,
 ) -> tuple[RuledTable, ...]:
     """Treat pseudocode in an algorithm box as a one-column table with one cell per line.
@@ -45,7 +45,7 @@ def algorithm_tables(
     if words is not None and not any(_ALGORITHM_WORD_RE.search(word.text) for word in words):
         return ()
     try:
-        data = page.get_text("dict")
+        data = text_dict(page)
     except Exception:  # noqa: BLE001
         return ()
     lines = [
@@ -70,7 +70,7 @@ def algorithm_tables(
     return tuple(tables)
 
 
-def _algorithm_captions(line: PdfDict) -> list[tuple[pymupdf.Rect, float]]:
+def _algorithm_captions(line: Line) -> list[tuple[pymupdf.Rect, float]]:
     """Algorithm captions in one line (box, font size). Two algorithm boxes side by side often have their captions in
     the same line, separated by a column gap."""
     spans = [span for span in line["spans"] if span["text"].strip()]
@@ -132,7 +132,7 @@ _OPEN_END_RE = re.compile(r"[a-z,]$|[a-z]-$")
 def _join_wrapped_rows(
     rows: list[pymupdf.Rect],
     baselines: list[float],
-    spans: list[PdfDict],
+    spans: list[Span],
     main: float,
 ) -> list[pymupdf.Rect]:
     """In an algorithm with line numbers at the line starts (1: 2: ...), a line without a number after the numbered
@@ -198,7 +198,7 @@ def _distinct_rules(rules: list[pymupdf.Rect]) -> list[pymupdf.Rect]:
 
 
 def _code_rows(
-    lines: list[PdfDict],
+    lines: list[Line],
     body: pymupdf.Rect,
     rules: Sequence[pymupdf.Rect] = (),
 ) -> tuple[pymupdf.Rect, ...]:
@@ -236,7 +236,7 @@ def _code_rows(
     return tuple(_join_wrapped_rows(rows, baselines, spans, main))
 
 
-def _on_bar(span: PdfDict, bars: Sequence[pymupdf.Rect], size: float) -> bool:
+def _on_bar(span: Span, bars: Sequence[pymupdf.Rect], size: float) -> bool:
     """The span sits right above or below a short horizontal rule and within its horizontal extent: a numerator, a
     denominator, or text under a radical."""
     if not bars:

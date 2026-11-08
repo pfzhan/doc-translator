@@ -24,7 +24,7 @@ from .pdf_runs import (
     expand_box,
     intersecting_curves,
 )
-from .pdf_types import PdfDict
+from .pdf_types import Formula, Span, image_infos, text_dict
 
 
 def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
@@ -46,7 +46,7 @@ def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
         if not rect.is_empty:
             rects.append(rect)
     try:
-        images = page.get_image_info()
+        images = image_infos(page)
     except Exception:  # noqa: BLE001
         images = []
     for info in images:
@@ -56,7 +56,7 @@ def _page_curve_rects(page: pymupdf.Page) -> list[pymupdf.Rect]:
     return rects
 
 
-def _absorb_one_box(formula: PdfDict, drawings: list[pymupdf.Rect], glyphs: Sequence[PdfDict] = ()) -> None:
+def _absorb_one_box(formula: Formula, drawings: list[pymupdf.Rect], glyphs: Sequence[Span] = ()) -> None:
     """glyphs are the spans of the page (with ink), used to recognize rules that other text also touches."""
     old = pymupdf.Rect(formula["bbox"])
     # Search by glyph ink: the font boxes of math fonts reach into the lines above and below and would touch
@@ -90,23 +90,23 @@ _FORMULA_SIDE_PAD = 0.45
 _FORMULA_INK_DPI = 180
 
 
-def _page_text_spans(page: pymupdf.Page) -> list[PdfDict]:
-    data = page.get_text("dict", flags=_TEXT_FLAGS)
+def _page_text_spans(page: pymupdf.Page) -> list[Span]:
+    data = text_dict(page, flags=_TEXT_FLAGS)
     return [
         span for block in data["blocks"] if block.get("type") == 0 for line in block["lines"] for span in line["spans"]
     ]
 
 
-def _page_glyphs(page: pymupdf.Page) -> list[PdfDict]:
+def _page_glyphs(page: pymupdf.Page) -> list[Span]:
     """The spans of the page, with glyph ink."""
-    data = page.get_text("dict", flags=_TEXT_FLAGS)
+    data = text_dict(page, flags=_TEXT_FLAGS)
     _attach_ink(page, data)
     return [
         span for block in data["blocks"] if block.get("type") == 0 for line in block["lines"] for span in line["spans"]
     ]
 
 
-def _span_ink_boxes(span: PdfDict, char_index: _CharIndex) -> list[pymupdf.Rect]:
+def _span_ink_boxes(span: Span, char_index: _CharIndex) -> list[pymupdf.Rect]:
     """Boxes of the non-blank characters. Blanks have no ink; without character data the whole span counts as
     one box if it has text."""
     raw = span.get("bbox")
@@ -171,9 +171,9 @@ def _ink_x_bounds(
 
 
 def _tighten_formula_sides(
-    part: PdfDict,
+    part: Formula,
     page: pymupdf.Page,
-    page_spans: list[PdfDict] | None = None,
+    page_spans: list[Span] | None = None,
     char_index: _CharIndex | None = None,
     display: pymupdf.DisplayList | None = None,
 ) -> None:
@@ -245,7 +245,7 @@ def _tighten_formula_sides(
         part["dx"] = round(float(part.get("dx") or 0) + (new_x0 - bbox.x0), 1)
 
 
-def _tighten_formula_height(part: PdfDict) -> None:
+def _tighten_formula_height(part: Formula) -> None:
     """Shrink the top and bottom of the formula box to a narrow margin outside the glyph ink.
 
     A box from the font ascent and descent is much taller than the glyphs. Layout scales a formula by its box
@@ -276,7 +276,7 @@ def _tighten_formula_height(part: PdfDict) -> None:
     part["d"] = round(float(part.get("d") or 0) - (bbox.y1 - bottom), 1)
 
 
-def _origin_key(span: PdfDict) -> tuple[float, float]:
+def _origin_key(span: Span) -> tuple[float, float]:
     return round(span["origin"][0], 1), round(span["origin"][1], 1)
 
 
@@ -305,7 +305,7 @@ def _joins_outer_shape(
     return False
 
 
-def _radical_bar(curve: pymupdf.Rect, spans: list[PdfDict]) -> bool:
+def _radical_bar(curve: pymupdf.Rect, spans: list[Span]) -> bool:
     """The left end of the rule meets the top right corner of a glyph in this formula: it is a radical bar.
     The radicand is below the bar, and descenders of the line above often touch it from above, which must not
     keep it in place. Large CMEX radicals extract as letters, so they are recognized by position."""
@@ -324,7 +324,7 @@ def _radical_bar(curve: pymupdf.Rect, spans: list[PdfDict]) -> bool:
 _RADICAL_JOIN = 1.0
 
 
-def _rests_on(curve: pymupdf.Rect, glyphs: Sequence[PdfDict], own: set[tuple[float, float]]) -> bool:
+def _rests_on(curve: pymupdf.Rect, glyphs: Sequence[Span], own: set[tuple[float, float]]) -> bool:
     """The rule touches text outside the formula above or below it. When the numerator is in another block
     that stays in place, the fraction bar is shared and must not move with the formula."""
     if curve.height > _RULE_IMAGE_THICK:
@@ -346,7 +346,7 @@ def _rests_on(curve: pymupdf.Rect, glyphs: Sequence[PdfDict], own: set[tuple[flo
     return False
 
 
-def _spans_ink(spans: list[PdfDict]) -> pymupdf.Rect | None:
+def _spans_ink(spans: list[Span]) -> pymupdf.Rect | None:
     """Union of the glyph ink of several spans. Returns None if any span has no measurable ink (bitmap glyphs)."""
     ink = pymupdf.Rect()
     for span in spans:
@@ -355,17 +355,17 @@ def _spans_ink(spans: list[PdfDict]) -> pymupdf.Rect | None:
         found = span.get("ink")
         if found is None:
             return None
-        found = pymupdf.Rect(found)
-        if not found.is_empty:
-            ink |= found
+        box = pymupdf.Rect(found)
+        if not box.is_empty:
+            ink |= box
     return ink
 
 
 def _absorb_curves(
-    formula: PdfDict,
+    formula: Formula,
     drawings: list[pymupdf.Rect],
     block: TextBlock,
-    glyphs: Sequence[PdfDict] = (),
+    glyphs: Sequence[Span] = (),
 ) -> None:
     """Add intersecting curves to the formula box and update the matching FormulaRun. Each piece of a formula
     broken across lines takes its own curves."""
@@ -400,14 +400,14 @@ def _marker_png(idx: int) -> bytes:
 def _crop_formulas(
     src_doc: pymupdf.Document,
     flat_units: list[list[TextBlock]],
-    sent_formulas: list[list[PdfDict]],
+    sent_formulas: list[list[Formula]],
 ) -> pymupdf.Archive:
     # A formula is cropped from the source page it is on. The page of the unit's last block would be wrong
     # for a unit across two pages. Curves intersecting the box join the crop so radicals and fraction bars
     # are not cut off.
     archive = pymupdf.Archive()
     curve_rects = [_page_curve_rects(page) for page in src_doc.pages()]
-    glyphs: dict[int, list[PdfDict]] = {}
+    glyphs: dict[int, list[Span]] = {}
     for unit, formulas in zip(flat_units, sent_formulas):
         background.check_stop()
         for f in formulas:
@@ -415,7 +415,7 @@ def _crop_formulas(
             if page_no not in glyphs:
                 glyphs[page_no] = _page_glyphs(src_doc[page_no])
             _absorb_curves(f, curve_rects[page_no], unit[int(f.get("owner") or 0)], glyphs[page_no])
-    span_cache: dict[int, list[PdfDict]] = {}
+    span_cache: dict[int, list[Span]] = {}
     char_cache: dict[int, _CharIndex] = {}
     # Keep only the display list of the latest page: formulas come roughly in page order, and keeping every
     # page would use too much memory

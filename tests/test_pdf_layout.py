@@ -13,7 +13,7 @@ from app.formats.pdf_extract import extract_blocks
 from app.formats.pdf_layout import PageGeometry, margin_skips, reading_order
 from app.formats.pdf_merge import _cross_page_units
 from app.formats.pdf_place import _expand_right
-from app.formats.pdf_types import PdfDict
+from app.formats.pdf_types import Block, Line, Span
 from app.formats.pdf_write import _render_translated
 from tests.helpers import runner
 
@@ -517,12 +517,12 @@ def test_figure_beside_a_short_column_still_stops_the_other_side() -> None:
     assert geo.right_limit(left[0], []) < figure.x0
 
 
-def _cjk_line(page: pymupdf.Page) -> PdfDict | None:
-    blocks: list[PdfDict] = page.get_text("dict")["blocks"]
+def _cjk_line(page: pymupdf.Page) -> Line | None:
+    blocks: list[Block] = page.get_text("dict")["blocks"]
     for block in blocks:
         if block.get("type") != 0:
             continue
-        lines: list[PdfDict] = block["lines"]
+        lines: list[Line] = block["lines"]
         for line in lines:
             text = "".join(span["text"] for span in line["spans"])
             if any("\u4e00" <= ch <= "\u9fff" for ch in text):
@@ -1058,7 +1058,7 @@ def test_algorithm_rows_ignore_radical_origins() -> None:
     its own cell."""
     from app.formats.pdf_algorithm_tables import _code_rows
 
-    def line(y: float, *spans: tuple[str, str, float]) -> PdfDict:
+    def line(y: float, *spans: tuple[str, str, float]) -> Line:
         return {
             "spans": [{"text": text, "font": font, "size": 10.0, "origin": (120, y + dy)} for text, font, dy in spans]
         }
@@ -1073,10 +1073,10 @@ def test_algorithm_rows_ignore_fraction_numerators_and_denominators() -> None:
     height above and below the baseline. Text touching a fraction bar does not get its own cell."""
     from app.formats.pdf_algorithm_tables import _code_rows
 
-    def span(text: str, font: str, x0: float, x1: float, y: float) -> PdfDict:
+    def span(text: str, font: str, x0: float, x1: float, y: float) -> Span:
         return {"text": text, "font": font, "size": 10.0, "origin": (x0, y), "bbox": (x0, y - 7.5, x1, y + 2.5)}
 
-    def row(y: float, numerator: str, denominator: str, comment: str) -> list[PdfDict]:
+    def row(y: float, numerator: str, denominator: str, comment: str) -> list[Line]:
         return [
             {"spans": [span("µ ←", "CMMI10", 321, 345, y), span(comment, "Times-Roman", 460, 540, y)]},
             {"spans": [span(numerator, "CMR10", 351, 356, y - 6.7)]},
@@ -1095,7 +1095,7 @@ def test_unnumbered_algorithm_rows_join_full_width_wraps() -> None:
     wraps to the next line, and the two lines are one cell."""
     from app.formats.pdf_algorithm_tables import _code_rows
 
-    def line(y: float, text: str, x1: float) -> PdfDict:
+    def line(y: float, text: str, x1: float) -> Line:
         return {
             "spans": [
                 {"text": text, "font": "Times-Roman", "size": 10.0, "origin": (140, y), "bbox": (140, y - 8, x1, y + 2)}
@@ -1182,7 +1182,7 @@ def test_an_algorithm_formula_beside_a_distant_comment_keeps_its_glyphs() -> Non
     def part(text: str, font: str, x0: float, x1: float) -> TextBlock:
         rect = pymupdf.Rect(x0, 585.0, x1, 607.0)
         bbox = (rect.x0, rect.y0, rect.x1, rect.y1)
-        span: PdfDict = {"text": text, "font": font, "size": 10.0, "bbox": bbox, "origin": (x0, 597.0)}
+        span: Span = {"text": text, "font": font, "size": 10.0, "bbox": bbox, "origin": (x0, 597.0)}
         return TextBlock(2, rect, [rect], text, 10.0, "#000", False, span_lines=[[span]], clip=clip)
 
     formula = part("σ ← (x − µ)", "CMMI10", 321.2, 420.0)

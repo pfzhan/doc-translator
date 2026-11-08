@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 import pymupdf
 import pymupdf.mupdf as mupdf
 
-from .pdf_types import PdfDict
+from .pdf_types import Span, text_dict
 
 # Allowed distance between an origin and the baseline (as a share of the font size). Glyphs of one span share
 # exactly one baseline, superscripts and subscripts are separate spans, and another line is at least one font
@@ -73,13 +73,13 @@ class Erasure:
     """What to erase on a page. lines are the line boxes being reflowed: blocks without spans match glyphs by
     them, and lines and thin images are removed by them too."""
 
-    spans: list[PdfDict] = field(default_factory=list)
+    spans: list[Span] = field(default_factory=list)
     lines: list[pymupdf.Rect] = field(default_factory=list)
     spanless: list[pymupdf.Rect] = field(default_factory=list)
     # Tells whether a span is formula text. A horizontal line below formula text is not erased as an underline
-    math: Callable[[PdfDict], bool] = lambda span: False
+    math: Callable[[Span], bool] = lambda span: False
 
-    def add_block(self, span_lines: Sequence[Sequence[PdfDict]] | None, line_rects: Iterable[pymupdf.Rect]) -> None:
+    def add_block(self, span_lines: Sequence[Sequence[Span]] | None, line_rects: Iterable[pymupdf.Rect]) -> None:
         rects = [pymupdf.Rect(rect) for rect in line_rects]
         self.lines.extend(rects)
         if not span_lines:
@@ -109,17 +109,13 @@ class _Owners:
         self.lines: list[_Line] = []
         self.boxes: list[pymupdf.Rect] = []
         chars = chars or {}
-        lined: list[PdfDict] = []
+        lined: list[Span] = []
         for span in erasure.spans:
             origins = span.get("origins")
             if origins is not None:
                 self.points.update(_key(x, y) for x, y in origins)
                 continue
             bbox = pymupdf.Rect(span["bbox"])
-            direction = span.get("dir", (1, 0))
-            if abs(direction[1]) > 0.01:
-                self.boxes.append(bbox)
-                continue
             size = float(span.get("size") or bbox.height)
             found = chars.get(_box_key(bbox))
             baseline = span["origin"][1]
@@ -201,7 +197,7 @@ _BLANKS = frozenset(" \t\n\u00a0\u2002\u2003\u2009\u3000")
 def _char_origins(page: pymupdf.Page) -> dict[tuple[float, ...], list[tuple[float, float]]]:
     """Per-character origins of each span on the page (whitespace excluded), looked up by span box. Uses the same
     parameters as extraction."""
-    data = page.get_text("rawdict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
+    data = text_dict(page, "rawdict", flags=pymupdf.TEXTFLAGS_TEXT & ~pymupdf.TEXT_PRESERVE_LIGATURES)
     out: dict[tuple[float, ...], list[tuple[float, float]]] = {}
     for block in data["blocks"]:
         if block.get("type") != 0:
@@ -211,9 +207,7 @@ def _char_origins(page: pymupdf.Page) -> dict[tuple[float, ...], list[tuple[floa
                 # Skip only real spaces. Control characters such as \r are glyphs without Unicode (the large norm
                 # bars of CMEX) and must be erased too
                 points = [
-                    tuple(char["origin"])
-                    for char in span.get("chars") or []
-                    if str(char.get("c") or " ") not in _BLANKS
+                    char["origin"] for char in span.get("chars") or [] if str(char.get("c") or " ") not in _BLANKS
                 ]
                 if points:
                     out.setdefault(_box_key(pymupdf.Rect(span["bbox"])), []).extend(points)

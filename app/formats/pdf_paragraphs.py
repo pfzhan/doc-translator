@@ -36,7 +36,7 @@ from .pdf_rows import (
     _voted_right,
 )
 from .pdf_split_lines import _OPERATOR_RE, NO_TEXT_RE, _label_lead, _typewriter_line
-from .pdf_types import PdfDict
+from .pdf_types import Span
 
 
 def _verbatim_block(block: TextBlock) -> bool:
@@ -67,7 +67,7 @@ def _is_formula_char(c: str) -> bool:
     return unicodedata.category(c) in ("Sm", "Sk", "Mn", "Co")
 
 
-def _math_chars(spans: list[PdfDict]) -> int:
+def _math_chars(spans: list[Span]) -> int:
     """Number of formula characters in a block: all characters in math fonts plus formula characters in body
     fonts."""
     n = 0
@@ -108,7 +108,7 @@ def _blocks_share_column(
     return geo.index_of(left.rect) == geo.index_of(right.rect) and not geo.spans_columns(left.rect | right.rect)
 
 
-def _line_spans(block: TextBlock) -> list[list[PdfDict]]:
+def _line_spans(block: TextBlock) -> list[list[Span]]:
     """Spans per line, one entry for each of line_rects. When they do not match, each line gets an empty list
     and no decision is made by span."""
     rows = len(block.line_rects) or 1
@@ -233,10 +233,10 @@ def _split_one_table_block(block: TextBlock, tables: tuple[RuledTable, ...]) -> 
     if len(lines) != len(block.line_rects):
         block.clip = _clip_key(cell_containing(block.rect, tables))
         return [block]
-    grouped: dict[tuple[float, float, float, float] | None, list[tuple[pymupdf.Rect, list[PdfDict]]]] = {}
+    grouped: dict[tuple[float, float, float, float] | None, list[tuple[pymupdf.Rect, list[Span]]]] = {}
     order: list[tuple[float, float, float, float] | None] = []
     for line_rect, spans in zip(block.line_rects, lines):
-        by_cell: dict[tuple[float, float, float, float] | None, list[PdfDict]] = {}
+        by_cell: dict[tuple[float, float, float, float] | None, list[Span]] = {}
         cell_order: list[tuple[float, float, float, float] | None] = []
         for span in spans:
             if not str(span.get("text", "")).strip():
@@ -291,11 +291,11 @@ def _split_one_table_block(block: TextBlock, tables: tuple[RuledTable, ...]) -> 
 
 
 def _remember_cell(
-    grouped: dict[tuple[float, float, float, float] | None, list[tuple[pymupdf.Rect, list[PdfDict]]]],
+    grouped: dict[tuple[float, float, float, float] | None, list[tuple[pymupdf.Rect, list[Span]]]],
     order: list[tuple[float, float, float, float] | None],
     key: tuple[float, float, float, float] | None,
     line_rect: pymupdf.Rect,
-    spans: list[PdfDict],
+    spans: list[Span],
 ) -> None:
     if key not in grouped:
         order.append(key)
@@ -407,7 +407,7 @@ def _column_right(x0: float, size: float, rows: Sequence[pymupdf.Rect], frame: T
     return frame.x1 if frame is not None else float("inf")
 
 
-def _untranslatable(spans: list[PdfDict], text: str, min_prose: int = 3, displayed: bool = False) -> bool:
+def _untranslatable(spans: list[Span], text: str, min_prose: int = 3, displayed: bool = False) -> bool:
     """Lines that are pure symbols, pure formula, or have almost no letters are not sent for translation and
     keep the original text.
 
@@ -441,7 +441,7 @@ def _untranslatable(spans: list[PdfDict], text: str, min_prose: int = 3, display
 _MATH_NAMES = frozenset(_OPERATOR_NAMES.split("|")) | {"argmax", "argmin", "softmax", "tanh", "sigmoid"}
 
 
-def _prose_words(spans: list[PdfDict], text: str) -> list[str]:
+def _prose_words(spans: list[Span], text: str) -> list[str]:
     """Words in the line separated by spaces on both sides and written in a body font (with lowercase letters,
     two or more letters).
     Words written together with symbols (H_dec, argmax_{char∈Alphabet}), all-capital matrix names (HU) and
@@ -587,11 +587,11 @@ def _joined_cell(parts: list[TextBlock]) -> TextBlock:
     )
 
 
-def _block_spans(block: TextBlock) -> list[PdfDict]:
+def _block_spans(block: TextBlock) -> list[Span]:
     return [span for line in block.span_lines or [] for span in line if str(span.get("text") or "").strip()]
 
 
-def _line_text(span_lines: list[list[PdfDict]], index: int) -> str:
+def _line_text(span_lines: list[list[Span]], index: int) -> str:
     return "".join(str(span.get("text") or "") for span in span_lines[index])
 
 

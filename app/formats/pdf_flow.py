@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import pymupdf
 
-from .pdf_types import PdfDict
+from .pdf_types import Span
 
 _SENTINEL_RE = re.compile(r"\x01i\x02(\d+)\x01/i\x02")
 STYLE_MARK_RE = re.compile(r"\{z\d+\}|\{/z\}|\{c[0-9a-f]{6}\}|\{/c\}|\{/?[biu]\}")
@@ -190,14 +190,14 @@ def emphasis_of(font: str, flags: int) -> Emphasis:
     return Emphasis(bold, italic)
 
 
-def span_emphasis(span: PdfDict) -> Emphasis:
+def span_emphasis(span: Span) -> Emphasis:
     """Weight and italic of the span, plus the underline found during extraction."""
     mark = emphasis_of(str(span.get("font") or ""), int(span.get("flags") or 0))
     return Emphasis(mark.bold, mark.italic, bool(span.get("underline")))
 
 
 def writer_for(
-    spans: list[PdfDict],
+    spans: list[Span],
     base_size: float = 0,
     base_color: int | None = None,
 ) -> EmphasisWriter:

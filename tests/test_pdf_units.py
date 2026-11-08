@@ -10,10 +10,8 @@ import pytest
 
 from app.formats import translate_file
 from app.formats.pdf_blocks import TextBlock
-from app.formats.pdf_types import PdfDict
+from app.formats.pdf_types import Box, Formula, PageDict, Span, SpanRun
 from tests.helpers import SAMPLES, _glyph, _pdf_with_text, run, runner
-
-Box = tuple[float, float, float, float]
 
 
 def _bbox(rect: pymupdf.Rect) -> Box:
@@ -27,7 +25,7 @@ def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces() -> None:
     break point."""
     from app.formats.pdf_formula_runs import _join_line_wrapped_formulas
 
-    def span(text: str, x0: float, x1: float, y: float, font: str = "LMMono10-Regular") -> PdfDict:
+    def span(text: str, x0: float, x1: float, y: float, font: str = "LMMono10-Regular") -> Span:
         return {
             "text": text,
             "size": 12.0,
@@ -37,7 +35,7 @@ def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces() -> None:
             "origin": (x0, y + 9),
         }
 
-    def lines(head_x0: float, tail_x1: float) -> list[list[PdfDict]]:
+    def lines(head_x0: float, tail_x1: float) -> list[list[Span]]:
         return [
             [
                 span("Olympiad ", 70.9, head_x0, 420.0, "URWPalladioL"),
@@ -49,10 +47,20 @@ def test_a_wrapped_formula_wider_than_a_line_stays_in_pieces() -> None:
             ],
         ]
 
-    def runs(span_lines: list[list[PdfDict]]) -> list[PdfDict]:
+    def runs(span_lines: list[list[Span]]) -> list[SpanRun]:
         return [
-            {"spans": [span_lines[0][1]], "bbox": pymupdf.Rect(span_lines[0][1]["bbox"]), "pos": (0, 1, 1)},
-            {"spans": [span_lines[1][0]], "bbox": pymupdf.Rect(span_lines[1][0]["bbox"]), "pos": (1, 0, 0)},
+            {
+                "spans": [span_lines[0][1]],
+                "bbox": pymupdf.Rect(span_lines[0][1]["bbox"]),
+                "max_size": 12.0,
+                "pos": (0, 1, 1),
+            },
+            {
+                "spans": [span_lines[1][0]],
+                "bbox": pymupdf.Rect(span_lines[1][0]["bbox"]),
+                "max_size": 12.0,
+                "pos": (1, 0, 0),
+            },
         ]
 
     short = lines(400.0, 200.0)
@@ -82,7 +90,7 @@ def test_scan_status_detection() -> None:
     assert _scan_status(doc) == "scanned"
 
 
-def _block_with_spans(span_lines: list[list[PdfDict]], size: float = 12.0) -> TextBlock:
+def _block_with_spans(span_lines: list[list[Span]], size: float = 12.0) -> TextBlock:
     return TextBlock(
         page=0,
         rect=pymupdf.Rect(0, 0, 1, 1),
@@ -104,10 +112,10 @@ def test_italic_letters_between_math_brackets_are_a_formula() -> None:
 
     x = [0.0]
 
-    def span(text: str, font: str, flags: int = 4, math: bool = False) -> PdfDict:
+    def span(text: str, font: str, flags: int = 4, math: bool = False) -> Span:
         x0 = x[0]
         x[0] += 5.0 * len(text)
-        out: PdfDict = {
+        out: Span = {
             "text": text,
             "font": font,
             "size": 10.0,
@@ -117,10 +125,10 @@ def test_italic_letters_between_math_brackets_are_a_formula() -> None:
         }
         return {**out, "math": True} if math else out
 
-    def italic(text: str) -> PdfDict:
+    def italic(text: str) -> Span:
         return span(text, "NimbusRomNo9L-ReguItal", flags=6)
 
-    def cm(text: str) -> PdfDict:
+    def cm(text: str) -> Span:
         return span(text, "CMR10", math=True)
 
     line = [
@@ -203,11 +211,11 @@ def test_accent_on_its_own_line_joins_the_formula_once() -> None:
     formula it covers, it no longer gets a placeholder of its own."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, font: str, size: float, x0: float, x1: float, y0: float, y1: float, base: float) -> PdfDict:
+    def span(text: str, font: str, size: float, x0: float, x1: float, y0: float, y1: float, base: float) -> Span:
         return {"text": text, "font": font, "size": size, "flags": 0, "bbox": (x0, y0, x1, y1), "origin": (x0, base)}
 
     # Recognized earlier as part of the formula and marked math
-    hat = [{**span("\u02c6", "CMR10", 10.0, 311.9, 317.4, 242.0, 252.9, 250.5), "math": True}]
+    hat: list[Span] = [{**span("\u02c6", "CMR10", 10.0, 311.9, 317.4, 242.0, 252.9, 250.5), "math": True}]
     line = [
         span("span ", "NimbusRomNo9L-Regu", 10.0, 280.0, 307.0, 242.2, 253.1, 250.5),
         span("s", "CMMI10", 10.0, 307.3, 312.4, 242.0, 252.9, 250.5),
@@ -224,7 +232,7 @@ def test_placeholderize_and_restore_roundtrip() -> None:
     from app.formats.pdf_restore import _restore_placeholders
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, font: str, size: float, x0: float = 0, y0: float = 0) -> PdfDict:
+    def span(text: str, font: str, size: float, x0: float = 0, y0: float = 0) -> Span:
         return {"text": text, "font": font, "size": size, "bbox": (x0, y0, x0 + 10, y0 + 10), "origin": (x0, y0 + 8)}
 
     spans = [
@@ -249,7 +257,7 @@ def test_placeholderize_and_restore_roundtrip() -> None:
 def test_placeholderize_marks_mixed_emphasis_only() -> None:
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, font: str = "TimesNewRomanPSMT", flags: int = 0, x0: float = 0) -> PdfDict:
+    def span(text: str, font: str = "TimesNewRomanPSMT", flags: int = 0, x0: float = 0) -> Span:
         return {
             "text": text,
             "font": font,
@@ -293,9 +301,7 @@ def test_formulas_set_in_text_italic_stay_whole() -> None:
     from a formula and lowercase italic words (is) are still body text."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(
-        text: str, x0: float, x1: float, font: str = "Times-Italic", size: float = 9.0, y0: float = 652.5
-    ) -> PdfDict:
+    def span(text: str, x0: float, x1: float, font: str = "Times-Italic", size: float = 9.0, y0: float = 652.5) -> Span:
         y1 = y0 + (11.2 if size > 8 else 7.7)
         return {
             "text": text,
@@ -306,7 +312,7 @@ def test_formulas_set_in_text_italic_stay_whole() -> None:
             "origin": (x0, y0 + (8.5 if size > 8 else 5.7)),
         }
 
-    def sub(text: str, x0: float, x1: float, y0: float = 656.9) -> PdfDict:
+    def sub(text: str, x0: float, x1: float, y0: float = 656.9) -> Span:
         return span(text, x0, x1, size=6.0, y0=y0)
 
     roman = "Times-Roman"
@@ -365,7 +371,7 @@ def test_formulas_set_in_text_italic_stay_whole() -> None:
 
     # The t of the ordinal t-th is in a math font, and PyMuPDF marks it italic too. An ordinal put back into the body
     # text must not be pulled into the formula next to it again
-    ordinal = [
+    ordinal: list[Span] = [
         span("and to predict the", 108.0, 176.3, "NimbusRomNo9L-Regu", 9.9, 206.5),
         {**span(" t", 176.3, 182.4, "CMMI10", 10.0, 206.5), "flags": 2},
         span("th", 182.4, 187.8, "NimbusRomNo9L-Regu", 7.0, 205.0),
@@ -383,7 +389,7 @@ def test_punctuation_alone_does_not_switch_the_font_size() -> None:
     if marked, the model applies {z65} to half a sentence."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, size: float = 9.0, font: str = "Times-Roman", x0: float = 0.0) -> PdfDict:
+    def span(text: str, size: float = 9.0, font: str = "Times-Roman", x0: float = 0.0) -> Span:
         return {
             "text": text,
             "font": font,
@@ -409,7 +415,7 @@ def test_punctuation_alone_does_not_switch_the_font_size() -> None:
 def test_placeholderize_no_formula_keeps_text_identical() -> None:
     from app.formats.pdf_units import _placeholderize
 
-    spans: list[PdfDict] = [
+    spans: list[Span] = [
         {"text": "Plain sentence ", "font": "TimesNewRomanPSMT", "size": 12.0},
         {"text": "without any math.", "font": "ArialMT", "size": 12.0},
     ]
@@ -424,7 +430,7 @@ def test_an_equation_in_an_algorithm_box_or_a_caption_is_translated() -> None:
     many equals signs it has."""
     from app.formats.pdf_unit_blocks import _equation_block
 
-    def spans(*texts: str) -> list[list[PdfDict]]:
+    def spans(*texts: str) -> list[list[Span]]:
         return [[{"text": text, "font": "Times-Roman", "size": 10.0} for text in texts]]
 
     assert _equation_block(_block_with_spans(spans("T = argmax s(T)")))
@@ -471,7 +477,7 @@ def test_formula_runs_merge_requires_deep_x_overlap() -> None:
 
     def span(
         text: str, font: str, size: float, x0: float, y0: float, x1: float | None = None, y1: float | None = None
-    ) -> PdfDict:
+    ) -> Span:
         return {
             "text": text,
             "font": font,
@@ -526,7 +532,7 @@ def test_body_font_symbols_and_script_bases_become_formulas() -> None:
         x1: float | None = None,
         y1: float | None = None,
         flags: int = 0,
-    ) -> PdfDict:
+    ) -> Span:
         return {
             "text": text,
             "font": font,
@@ -610,7 +616,7 @@ def test_a_script_on_the_next_line_does_not_join_the_letter_above_it() -> None:
     the base of the script, and when X is a formula the two are not merged into one formula."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, font: str, size: float, x0: float, y0: float, x1: float, y1: float, base: float) -> PdfDict:
+    def span(text: str, font: str, size: float, x0: float, y0: float, x1: float, y1: float, base: float) -> Span:
         return {"text": text, "font": font, "size": size, "flags": 0, "bbox": (x0, y0, x1, y1), "origin": (x0, base)}
 
     for x_font in ("CMSSBX10", "CMBX10"):
@@ -640,7 +646,7 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text() -> None:
     body text and is sent for translation as i-th. Distant digits and digits in Times are not taken in."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, font: str, size: float, x0: float, y0: float, x1: float, y1: float | None = None) -> PdfDict:
+    def span(text: str, font: str, size: float, x0: float, y0: float, x1: float, y1: float | None = None) -> Span:
         return {
             "text": text,
             "font": font,
@@ -698,7 +704,7 @@ def test_math_roman_pieces_join_the_formula_and_ordinals_stay_text() -> None:
 
     # The ∪ at the line end reaches into the next line by its CMSY font box and overlaps the {γ} at the start of
     # that line: they are still two pieces of a wrapped formula
-    def ink(item: PdfDict, top: float, bottom: float) -> PdfDict:
+    def ink(item: Span, top: float, bottom: float) -> Span:
         item["ink"] = (item["bbox"][0], top, item["bbox"][2], bottom)
         return item
 
@@ -880,7 +886,7 @@ def test_line_wrapped_formula_is_one_placeholder() -> None:
     with a formula at the start of the next line."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, font: str, size: float, x0: float, y0: float, x1: float, y1: float | None = None) -> PdfDict:
+    def span(text: str, font: str, size: float, x0: float, y0: float, x1: float, y1: float | None = None) -> Span:
         return {
             "text": text,
             "font": font,
@@ -934,7 +940,7 @@ def test_placeholderize_absorbs_accent_over_formula() -> None:
 
     def span(
         text: str, font: str, size: float, x0: float, y0: float, x1: float | None = None, y1: float | None = None
-    ) -> PdfDict:
+    ) -> Span:
         return {
             "text": text,
             "font": font,
@@ -1003,7 +1009,7 @@ def test_heading_does_not_turn_the_following_sentence_into_a_formula() -> None:
     formula image for being smaller than 12pt."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, size: float, x0: float, y0: float, font: str) -> PdfDict:
+    def span(text: str, size: float, x0: float, y0: float, font: str) -> Span:
         return {
             "text": text,
             "font": font,
@@ -1154,7 +1160,7 @@ def test_cross_page_formulas_keep_own_page_and_name() -> None:
     from app.formats.pdf_restore import _assign_restored_parts
     from app.formats.pdf_units import _prepare_unit
 
-    def span(text: str, font: str, size: float, x0: float, y0: float) -> PdfDict:
+    def span(text: str, font: str, size: float, x0: float, y0: float) -> Span:
         return {"text": text, "font": font, "size": size, "bbox": (x0, y0, x0 + 12, y0 + 10), "origin": (x0, y0 + 8)}
 
     def block(page: int, prose: str) -> TextBlock:
@@ -1233,7 +1239,7 @@ def test_wrapped_formula_tail_stays_one_placeholder_without_a_wide_box() -> None
 
     def span(
         text: str, font: str, size: float, x0: float, y0: float, x1: float | None = None, y1: float | None = None
-    ) -> PdfDict:
+    ) -> Span:
         return {
             "text": text,
             "font": font,
@@ -1279,7 +1285,7 @@ def test_block_of_typewriter_lines_is_code_and_inline_names_are_not() -> None:
     it is translated."""
     from app.formats.pdf_unit_blocks import _code_block
 
-    def span(text: str, font: str) -> PdfDict:
+    def span(text: str, font: str) -> Span:
         return {"text": text, "font": font, "size": 10.0, "bbox": (0, 0, 10, 10), "origin": (0, 8)}
 
     sql = _block_with_spans(
@@ -1320,7 +1326,7 @@ def test_lone_relation_symbol_from_a_symbol_font_stays_a_formula() -> None:
     sign in body text."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, font: str, x0: float) -> PdfDict:
+    def span(text: str, font: str, x0: float) -> Span:
         return {"text": text, "font": font, "size": 10.0, "bbox": (x0, 0, x0 + 20, 10), "origin": (x0, 8)}
 
     block = _block_with_spans(
@@ -1342,7 +1348,7 @@ def test_inline_typewriter_words_keep_their_glyphs() -> None:
     entirely in monospace are not handled here; those are code blocks."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, font: str, x0: float) -> PdfDict:
+    def span(text: str, font: str, x0: float) -> Span:
         return {"text": text, "font": font, "size": 10.0, "bbox": (x0, 0, x0 + 40, 10), "origin": (x0, 8)}
 
     block = _block_with_spans(
@@ -1369,7 +1375,7 @@ def test_list_number_keeps_its_point() -> None:
     assert _list_number("Figure 12: Bars", "图 12: 条") == "图 12: 条"
 
 
-def _page_data(*lines: list[tuple[str, str]]) -> PdfDict:
+def _page_data(*lines: list[tuple[str, str]]) -> PageDict:
     """Minimal get_text("dict") structure: each argument is the span list of one line as (font, text)."""
     return {
         "blocks": [
@@ -1468,7 +1474,7 @@ def test_small_caps_heading_is_sent_without_size_marks() -> None:
     is inserted inside the word."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, size: float, x0: float) -> PdfDict:
+    def span(text: str, size: float, x0: float) -> Span:
         return {
             "text": text,
             "font": "NimbusRomNo9L-Regu",
@@ -1499,7 +1505,7 @@ def test_small_caps_words_in_body_text_take_the_body_size() -> None:
     the Chinese translation would cram it together."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, size: float, x0: float, base: float = 110) -> PdfDict:
+    def span(text: str, size: float, x0: float, base: float = 110) -> Span:
         return {
             "text": text,
             "font": "NimbusRomNo9L-Regu",
@@ -1789,7 +1795,7 @@ def test_a_split_off_period_keeps_its_own_baseline() -> None:
     own origin so erasing can find it."""
     from app.formats.pdf_math import _split_covered
 
-    span = {
+    span: Span = {
         "text": " .",
         "font": "NimbusRomNo9L-Regu",
         "size": 10.0,
@@ -1870,7 +1876,7 @@ def test_a_relation_word_after_an_equals_sign_in_the_formula_is_dropped() -> Non
     result reads "y_c = 为 1"."""
     from app.formats.pdf_restore import _restore_placeholders
 
-    formulas = [{"text": "y\x01b\x02c\x01/b\x02 ="}, {"text": "n\x01b\x020\x01/b\x02"}]
+    formulas: list[Formula] = [{"text": "y\x01b\x02c\x01/b\x02 ="}, {"text": "n\x01b\x020\x01/b\x02"}]
     out = _restore_placeholders("其中 {v1} 为 1, 而 {v2} 为 2", formulas)
     assert out == "其中 \x01i\x021\x01/i\x02 1, 而 \x01i\x022\x01/i\x02 为 2"
     assert _restore_placeholders("而 {v1} 大于 1 时", [{"text": "β <"}]) == "而 \x01i\x021\x01/i\x02 1 时"
@@ -1903,8 +1909,8 @@ def test_a_wrapped_formula_with_tall_glyph_boxes_is_split_by_baseline() -> None:
     Values from ed3book p226."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, font: str, size: float, box: Box, base: float, ink: Box | None = None) -> PdfDict:
-        out: PdfDict = {"text": text, "font": font, "size": size, "bbox": box, "origin": (box[0], base)}
+    def span(text: str, font: str, size: float, box: Box, base: float, ink: Box | None = None) -> Span:
+        out: Span = {"text": text, "font": font, "size": size, "bbox": box, "origin": (box[0], base)}
         if ink is not None:
             out["ink"] = ink
         return out
@@ -2022,7 +2028,7 @@ def test_wrapped_monospace_phrase_keeps_its_word_space() -> None:
     from app.formats.pdf_blocks import _PART_GAP
     from app.formats.pdf_unit_blocks import _wrap_gap
 
-    def span(text: str, x0: float, x1: float) -> PdfDict:
+    def span(text: str, x0: float, x1: float) -> Span:
         return {"text": text, "font": "NimbusMonL-Regu", "size": 9.0, "bbox": (x0, 0, x1, 9)}
 
     line = [
@@ -2047,10 +2053,10 @@ def test_a_font_that_only_writes_single_marks_beside_formulas_is_math() -> None:
     from app.formats.pdf_blocks import _span_is_math
     from app.formats.pdf_math import _mark_formula_only_fonts
 
-    def span(font: str, text: str, x0: float, x1: float) -> PdfDict:
+    def span(font: str, text: str, x0: float, x1: float) -> Span:
         return {"font": font, "text": text, "size": 10.0, "bbox": (x0, 50, x1, 60)}
 
-    data: PdfDict = {
+    data: PageDict = {
         "blocks": [
             {
                 "type": 0,
@@ -2085,7 +2091,7 @@ def test_a_script_left_of_a_letter_is_not_its_script() -> None:
     line, with . Each token in between them; x is not its base."""
     from app.formats.pdf_formula_runs import _script_base
 
-    x = {
+    x: Span = {
         "text": " x",
         "bbox": (223.9, 596.6, 230.4, 608.5),
         "origin": (223.9, 606.0),
@@ -2105,7 +2111,7 @@ def test_a_wrapped_fraction_piece_sits_on_its_line_baseline() -> None:
     numerator onto the previous line."""
     from app.formats.pdf_units import _placeholderize
 
-    def span(text: str, font: str, size: float, x0: float, x1: float, base: float, top: float | None = None) -> PdfDict:
+    def span(text: str, font: str, size: float, x0: float, x1: float, base: float, top: float | None = None) -> Span:
         return {
             "text": text,
             "font": font,

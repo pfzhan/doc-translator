@@ -25,7 +25,7 @@ from .pdf_drawings import (
     page_words,
     text_page_rect,
 )
-from .pdf_types import PdfDict
+from .pdf_types import Drawing
 
 _CELL_MIN_W = 18.0
 
@@ -82,7 +82,7 @@ _BAND_SHORT_SHARE = 0.6
 _LABEL_RE = re.compile(r"(?:Figure|Fig\.|Table|Tab\.)\s*\d+(?:\.\d+)*\b")
 
 
-def ruled_tables(page: pymupdf.Page, drawings: list[PdfDict] | None = None) -> tuple[RuledTable, ...]:
+def ruled_tables(page: pymupdf.Page, drawings: list[Drawing] | None = None) -> tuple[RuledTable, ...]:
     """Only cells enclosed by horizontal and vertical rules count. False tables formed by aligned text and grids of
     formula strokes are left out. drawings holds the vector graphics of this page (including rules drawn as images,
     see _page_drawings); read now when not given.
@@ -116,7 +116,7 @@ def ruled_tables(page: pymupdf.Page, drawings: list[PdfDict] | None = None) -> t
     return tuple(tables)
 
 
-def _table_clip(page: pymupdf.Page, drawings: Sequence[PdfDict]) -> pymupdf.Rect | None:
+def _table_clip(page: pymupdf.Page, drawings: Sequence[Drawing]) -> pymupdf.Rect | None:
     """The area from which find_tables takes text. All rules lie inside it, so the tables found are the same as
     without a limit; only the text outside the area is not converted.
 
@@ -151,7 +151,7 @@ def _table_clip(page: pymupdf.Page, drawings: Sequence[PdfDict]) -> pymupdf.Rect
 _TABLE_CLIP_PAD = 5.0
 
 
-def _grid_possible(drawings: Sequence[PdfDict]) -> bool:
+def _grid_possible(drawings: Sequence[Drawing]) -> bool:
     """At least two horizontal and two vertical rules.
 
     Counted the way lines_strict takes edges: line segments and the edges of rectangles and quads all count,
@@ -284,7 +284,7 @@ def _merge_rows(cells: list[pymupdf.Rect], horizontal: list[pymupdf.Rect]) -> li
 
 def page_tables(
     page: pymupdf.Page,
-    drawings: list[PdfDict] | None = None,
+    drawings: list[Drawing] | None = None,
     words: Sequence[_TextWord] | None = None,
 ) -> tuple[RuledTable, ...]:
     """Ruled tables and tables made of shaded cells, plus short-cell tables with aligned column edges and algorithm
@@ -636,7 +636,7 @@ def _header_row(row: Sequence[_TextWord], lines: Sequence[float]) -> bool:
 
 def filled_tables(
     page: pymupdf.Page,
-    drawings: list[PdfDict],
+    drawings: list[Drawing],
     words: Sequence[_TextWord],
     ruled: Sequence[RuledTable] = (),
 ) -> tuple[RuledTable, ...]:
@@ -654,7 +654,8 @@ def filled_tables(
         pymupdf.Rect(drawing["rect"])
         for drawing in drawings
         if light_fill(drawing)
-        and min(drawing["fill"]) < 0.97
+        and (shade := drawing["fill"]) is not None
+        and min(shade) < 0.97
         and not (
             drawing["rect"].width > bounds.width * _PAGE_FILL and drawing["rect"].height > bounds.height * _PAGE_FILL
         )

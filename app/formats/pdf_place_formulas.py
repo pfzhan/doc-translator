@@ -10,24 +10,24 @@ import pymupdf.mupdf as mupdf
 
 from .pdf_align import page_origin
 from .pdf_blocks import _PART_GAP, _formula_parts, _FormulaImage, _GlyphInk, _outside_formula
-from .pdf_types import PdfDict
+from .pdf_types import Formula, Span
 from .pdf_typeset import (
     FORMULA_PAD,
 )
 
 
-def _part_lead(part: PdfDict, scale: float) -> float:
+def _part_lead(part: Formula, scale: float) -> float:
     """The gap between this part and the previous one, scaled with the formula."""
     return max(_PART_GAP, float(part.get("lead") or 0) * scale)
 
 
-def _formula_png(formula: PdfDict) -> bytes | None:
+def _formula_png(formula: Formula) -> bytes | None:
     """The bitmap of a formula: tests give a PNG directly, the normal pipeline gives a _FormulaImage."""
     png = formula.get("png")
     return png.png() if isinstance(png, _FormulaImage) else png
 
 
-def _formula_png_rect(formula: PdfDict, target: pymupdf.Rect) -> pymupdf.Rect:
+def _formula_png_rect(formula: Formula, target: pymupdf.Rect) -> pymupdf.Rect:
     """Where the bitmap goes. The parts of the cropped image that extend past the formula box (see
     _FormulaImage.area) are placed on both sides, scaled by the same factor as the formula box to target."""
     png, bbox = formula.get("png"), formula.get("bbox")
@@ -263,11 +263,11 @@ class _FormulaSources:
     line all lie inside. A lookup finds by position the smallest part that covers the whole formula, so formulas
     that were not registered are found too; at worst it is the whole page."""
 
-    def __init__(self, doc: "pymupdf.Document", page: "pymupdf.Page", form: int, formulas: Iterable[PdfDict]) -> None:
+    def __init__(self, doc: "pymupdf.Document", page: "pymupdf.Page", form: int, formulas: Iterable[Formula]) -> None:
         # Keep only the page top needed for converting to PDF coordinates (see _pdf_rect), not the page object
         self.top = page_origin(page)[1]
         self.glyphs = _GlyphInk(page)
-        group: list[tuple[tuple[float, float], PdfDict]] = []
+        group: list[tuple[tuple[float, float], Formula]] = []
         for formula in formulas:
             for part in _formula_parts(formula):
                 source_page = part.get("page")
@@ -275,7 +275,7 @@ class _FormulaSources:
                 if band is not None and (source_page is None or int(source_page) == page.number):
                     group.append((band, part))
 
-        def build(source: int, group: list[tuple[tuple[float, float], PdfDict]]) -> _LinesNode:
+        def build(source: int, group: list[tuple[tuple[float, float], Formula]]) -> _LinesNode:
             bands = _merge_bands([band for band, _part in group])
             node = _LinesNode(bands, _lines_form(doc, source, bands), [])
             if len(group) > 4:
@@ -286,7 +286,7 @@ class _FormulaSources:
 
         self.root = _LinesNode([], form, [build(form, group)] if group else [])
 
-    def _band(self, formula: PdfDict) -> tuple[float, float] | None:
+    def _band(self, formula: Formula) -> tuple[float, float] | None:
         rects = [s["bbox"] for s in formula.get("spans") or []] + list(formula.get("curves") or [])
         if formula.get("bbox") is not None:
             rects.append(formula["bbox"])
@@ -294,7 +294,7 @@ class _FormulaSources:
             return None
         return self.top - max(rect[3] for rect in rects) - 2, self.top - min(rect[1] for rect in rects) + 2
 
-    def source(self, formula: PdfDict) -> int:
+    def source(self, formula: Formula) -> int:
         band = self._band(formula)
         node = self.root
         while band is not None:
@@ -308,7 +308,7 @@ class _FormulaSources:
         return node.xref
 
 
-def _hole_ink(span: PdfDict) -> pymupdf.Rect:
+def _hole_ink(span: Span) -> pymupdf.Rect:
     """The hole a foreign span cuts in the formula clip: its ink box, clipped to its font box. An exact box larger
     than the font box (the exact box of LMMono extends half a line downward) is not ink, so the hole follows the
     font box; otherwise it would shave off the tops of the glyphs on the next line. Ink measured by drawing the
@@ -324,9 +324,9 @@ def _formula_form(
     doc: "pymupdf.Document",
     page: "pymupdf.Page",
     fmS: int,
-    f: PdfDict,
+    f: Formula,
     f_name: str,
-    page_spans: list[PdfDict] | None = None,
+    page_spans: list[Span] | None = None,
     glyphs: _GlyphInk | None = None,
 ) -> int:
     """Build a wrapper Form with a tight BBox for one formula (clipped span by span, then referencing the source
@@ -529,10 +529,10 @@ def _formula_form(
 def _paint_formula(
     page: "pymupdf.Page",
     doc: "pymupdf.Document",
-    formula: PdfDict,
+    formula: Formula,
     target: "pymupdf.Rect",
     forms: "_FormulaSources | None",
-    page_spans: list[PdfDict] | None,
+    page_spans: list[Span] | None,
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]] | None = None,
 ) -> None:
@@ -583,11 +583,11 @@ def _paint_formula(
 def _paint_formula_parts(
     page: "pymupdf.Page",
     doc: "pymupdf.Document",
-    formula: PdfDict,
+    formula: Formula,
     slot_x: float,
     baseline: float,
     forms: "_FormulaSources | None",
-    page_spans: list[PdfDict] | None,
+    page_spans: list[Span] | None,
     draws: list[str],
     deferred_png: list[tuple["pymupdf.Rect", bytes]],
 ) -> None:

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pymupdf
 
+from app.formats.pdf_types import Formula
 from app.formats.pdf_typeset import FormulaMetric, FormulaPiece, TextPiece, typeset_lines
 
 _SENTINEL = "\x01i\x021\x01/i\x02"
@@ -144,7 +145,7 @@ def test_typeset_formula_tracks_the_line_baseline(tmp_path: Path) -> None:
 
     opened = pymupdf.open(src)
     rect = opened[0].search_for("BETA")[0]
-    formula = {
+    formula: Formula = {
         "bbox": rect,
         "name": "a_1.png",
         "mid": 0,

@@ -3,7 +3,7 @@
 import pymupdf
 
 from .pdf_place_formulas import _FormulaSources, _paint_formula
-from .pdf_types import PdfDict
+from .pdf_types import Formula, Span, text_dict
 
 
 def _white_pixmap(doc: "pymupdf.Document") -> "pymupdf.Pixmap":
@@ -16,9 +16,9 @@ def _place_formula_images(
     page: "pymupdf.Page",
     doc: "pymupdf.Document",
     before: set[int],
-    mid_map: dict[int, PdfDict],
+    mid_map: dict[int, Formula],
     forms: "_FormulaSources | None" = None,
-    page_spans: list[PdfDict] | None = None,
+    page_spans: list[Span] | None = None,
 ) -> None:
     """Replace the placeholder markers with formula content and correct the baseline.
 
@@ -41,7 +41,7 @@ def _place_formula_images(
     # line is the most reliable
     text_spans = [
         s
-        for blk in page.get_text("dict")["blocks"]
+        for blk in text_dict(page)["blocks"]
         if blk.get("type") == 0
         for ln in blk["lines"]
         for s in ln["spans"]

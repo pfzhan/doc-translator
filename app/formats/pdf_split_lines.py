@@ -17,7 +17,7 @@ from .pdf_flow import (
 )
 from .pdf_math import _prose_units
 from .pdf_rows import _INDEX_REFS_ONLY_RE, _number_cells, _stacked_rows
-from .pdf_types import LineItem, PdfDict
+from .pdf_types import LineItem, Span
 
 MONO_FONT_RE = re.compile(
     r"Courier|NimbusMon|Mono|Consolas|Menlo|Monaco|CMTT|Typewriter|Inconsolata|Fira ?Code|Lucida ?Console|Source ?Code",
@@ -96,7 +96,7 @@ def _same_line_word(
 _NUMBERED_LABEL_RE = re.compile(r"[A-Z][a-z]+\s+\d+(?:\.\d+)*\.\s")
 
 
-def _label_lead(spans: list[PdfDict]) -> bool:
+def _label_lead(spans: list[Span]) -> bool:
     """The line starts with a bold label ending in a colon or period, followed by body text that is not bold
     (Speaker demographics: What..., On the Optimality of the Level Schedule. Recall...). One bold word followed
     by a number is a label of the theorem kind (Proposition 5 (Efficiency ...). Under...); the number is often
@@ -241,7 +241,7 @@ def _row_labels(items: list[LineItem], cells: Collection[int]) -> set[int]:
     return found
 
 
-def _math_seam(left: list[PdfDict], right: list[PdfDict]) -> bool:
+def _math_seam(left: list[Span], right: list[Span]) -> bool:
     """The seam is math: the left side ends with a formula, the right side starts with one, or one side is all
     symbols.
     Only the seam is checked: a line in the left column that starts with a formula and ends with body text
@@ -255,7 +255,7 @@ def _math_seam(left: list[PdfDict], right: list[PdfDict]) -> bool:
     return _span_is_math(left[-1]) or _span_is_math(right[0])
 
 
-def _typewriter_line(spans: list[PdfDict]) -> bool:
+def _typewriter_line(spans: list[Span]) -> bool:
     """The whole line is monospaced Latin text. Chinese and Japanese fonts are also often marked monospaced and
     do not count."""
     visible = [span for span in spans if str(span.get("text") or "").strip()]
@@ -264,7 +264,7 @@ def _typewriter_line(spans: list[PdfDict]) -> bool:
     return all(_mono_span(span) for span in visible)
 
 
-def _row_style(spans: list[PdfDict]) -> tuple[bool, bool]:
+def _row_style(spans: list[Span]) -> tuple[bool, bool]:
     """Style of a line: whether the whole line is bold, and whether it is all monospaced. Only body spans with
     letters are considered; superscript asterisks after names and braces in a math font around email
     addresses do not count."""
@@ -832,7 +832,7 @@ def _split_lines(items: list[LineItem], whole_rows: bool = False) -> list[list[i
     return groups
 
 
-def _caption_opens(spans: list[PdfDict], above: list[PdfDict]) -> bool:
+def _caption_opens(spans: list[Span], above: list[Span]) -> bool:
     """The line starts with a caption label set apart (Figure 21.17 in bold or in another font): the first line
     of a caption.
     The caption of a wide figure sits further out on the left than the text in the figure, which looks like
@@ -849,7 +849,7 @@ def _caption_opens(spans: list[PdfDict], above: list[PdfDict]) -> bool:
 _CAPTION_SPAN_RE = re.compile(r"^(?:Figure|Fig\.?|Table|Tab\.?)\s*\d+(?:[.\-]\d+)*\s*[:.]?$", re.I)
 
 
-def _text_size(spans: list[PdfDict]) -> float:
+def _text_size(spans: list[Span]) -> float:
     """The font size with the most characters in a line."""
     count: dict[float, int] = {}
     for span in spans:
@@ -863,7 +863,7 @@ def _text_size(spans: list[PdfDict]) -> float:
 _RELATION_RE = re.compile(r"[=≤≥≈≡≠∝∈∉⊂⊆⊇≜]|(?:^|\s)[<>](?=\s|$)")
 
 
-def _mono_span(span: PdfDict) -> bool:
+def _mono_span(span: Span) -> bool:
     """Monospaced font: recognized by font name, and also by the monospace flag in the PDF (fonts such as txtt
     whose names lack Mono)."""
     return bool(MONO_FONT_RE.search(str(span.get("font") or "")) or int(span.get("flags") or 0) & 8)

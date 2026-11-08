@@ -5,7 +5,7 @@ import pymupdf
 
 from app.formats.pdf_extract import extract_blocks
 from app.formats.pdf_frame import FrameLine, margin_notes, note_groups, note_pitch, text_frames
-from app.formats.pdf_types import LineItem, PdfDict
+from app.formats.pdf_types import Block, Line, LineItem, PageDict, Span
 
 _LINE = "a body line of running text that is long enough to vote"
 # Every body line has different text; the same sentence at the same height on every page is a running header
@@ -193,7 +193,7 @@ def test_displayed_formula_with_a_big_brace_keeps_its_rows() -> None:
     from app.formats.pdf_skip import _display_formula_ids
 
     def block(text: str, rect: tuple[float, float, float, float], font: str = "NimbusRomNo9L-Regu") -> TextBlock:
-        span: PdfDict = {"text": text, "font": font, "size": 10.0}
+        span: Span = {"text": text, "font": font, "size": 10.0}
         return TextBlock(
             page=0,
             rect=pymupdf.Rect(rect),
@@ -289,26 +289,26 @@ def test_a_centered_wide_formula_close_to_the_left_edge_is_displayed() -> None:
 def test_body_cut_at_a_margin_note_is_joined_back() -> None:
     from app.formats.pdf_extract import _rejoin_note_cuts
 
-    def line(text: str, x0: float, y0: float, x1: float, size: float = 10.0) -> PdfDict:
+    def line(text: str, x0: float, y0: float, x1: float, size: float = 10.0) -> Line:
         return {
             "dir": (1, 0),
             "bbox": (x0, y0, x1, y0 + size),
             "spans": [{"text": text, "size": size, "font": "Times", "flags": 0, "color": 0}],
         }
 
-    upper: PdfDict = {
+    upper: Block = {
         "type": 0,
         "lines": [
             line("Starting in the 1960s, the characters (like the ones used", 160, 341, 493),
             line("in this sentence), were represented with ASCII (American Standard", 160, 353, 493),
         ],
     }
-    lower: PdfDict = {
+    lower: Block = {
         "type": 0,
         "lines": [line("Code for Information Interchange). ASCII used one byte.", 160, 365, 493)],
     }
-    after: PdfDict = {"type": 0, "lines": [line("Chinese has about 100,000 characters in Unicode.", 175, 377, 493)]}
-    data: PdfDict = {"blocks": [upper, lower, after]}
+    after: Block = {"type": 0, "lines": [line("Chinese has about 100,000 characters in Unicode.", 175, 377, 493)]}
+    data: PageDict = {"blocks": [upper, lower, after]}
     _rejoin_note_cuts(data, {id(upper)})
     assert len(upper["lines"]) == 3 and lower["lines"] == []
     assert after["lines"]  # the previous line ends a sentence and the next block is indented: a new paragraph
@@ -321,7 +321,7 @@ def test_a_bold_caption_label_starts_its_own_paragraph() -> None:
     from app.formats.pdf_split_lines import _split_lines
 
     def item(*spans: tuple[str, str], x0: float, y0: float) -> LineItem:
-        parts: list[PdfDict] = [
+        parts: list[Span] = [
             {"text": text, "size": 9.0 if font.endswith("Medi") else 8.0, "font": font, "flags": 0}
             for text, font in spans
         ]
@@ -350,7 +350,7 @@ def test_typewriter_dialogue_keeps_one_line_per_turn() -> None:
     from app.formats.pdf_split_lines import _split_lines
 
     def item(text: str, x0: float, y0: float, x1: float, font: str = "txtt", flags: int = 8) -> LineItem:
-        span: PdfDict = {"text": text, "size": 9.0, "font": font, "flags": flags}
+        span: Span = {"text": text, "size": 9.0, "font": font, "flags": flags}
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 9), [span], [span])
 
     turns = [
@@ -371,7 +371,7 @@ def test_prose_after_typewriter_lines_starts_a_new_paragraph() -> None:
     from app.formats.pdf_split_lines import _split_lines
 
     def item(text: str, x0: float, y0: float, x1: float, size: float, font: str, flags: int) -> LineItem:
-        span: PdfDict = {"text": text, "size": size, "font": font, "flags": flags}
+        span: Span = {"text": text, "size": size, "font": font, "flags": flags}
         return (text, pymupdf.Rect(x0, y0, x1, y0 + size), [span], [span])
 
     items = [
@@ -400,7 +400,7 @@ def test_a_larger_line_below_a_slide_formula_starts_a_new_paragraph() -> None:
     from app.formats.pdf_split_lines import _split_lines
 
     def item(text: str, x0: float, y0: float, x1: float, size: float, font: str = "TimesNewRomanPSMT") -> LineItem:
-        span: PdfDict = {"text": text, "size": size, "font": font, "flags": 0}
+        span: Span = {"text": text, "size": size, "font": font, "flags": 0}
         return (text, pymupdf.Rect(x0, y0, x1, y0 + size * 1.2), [span], [span])
 
     slide = [
@@ -423,7 +423,7 @@ def test_the_short_last_line_of_an_example_does_not_open_the_next_paragraph() ->
     from app.formats.pdf_split_lines import _split_lines
 
     def item(text: str, x0: float, y0: float, x1: float) -> LineItem:
-        span: PdfDict = {"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}
+        span: Span = {"text": text, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0}
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [span], [span])
 
     example = [
@@ -454,9 +454,7 @@ def test_a_bold_label_after_a_finished_sentence_opens_the_next_item() -> None:
     from app.formats.pdf_split_lines import _split_lines
 
     def item(label: str, rest: str, y0: float, x1: float) -> LineItem:
-        spans: list[PdfDict] = (
-            [{"text": label, "size": 10.0, "font": "NimbusRomNo9L-Medi", "flags": 16}] if label else []
-        )
+        spans: list[Span] = [{"text": label, "size": 10.0, "font": "NimbusRomNo9L-Medi", "flags": 16}] if label else []
         spans.append({"text": rest, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 0})
         return (label + rest, pymupdf.Rect(147, y0, x1, y0 + 10), spans, spans)
 
@@ -480,7 +478,7 @@ def test_a_bold_label_after_a_short_unfinished_item_opens_the_next_item() -> Non
     from app.formats.pdf_split_lines import _split_lines
 
     def item(label: str, rest: str, y0: float, x1: float) -> LineItem:
-        spans: list[PdfDict] = [
+        spans: list[Span] = [
             {"text": label, "size": 10.0, "font": "CMSSBX10", "flags": 20},
             {"text": " :" + rest, "size": 10.0, "font": "NimbusRomNo9L-Regu", "flags": 4},
         ]
@@ -541,7 +539,7 @@ def test_an_inline_enumeration_wrapping_onto_a_new_line_is_not_a_list() -> None:
     from app.formats.pdf_split_lines import _split_lines
 
     def item(text: str, y: float, x1: float = 504) -> LineItem:
-        span: PdfDict = {"text": text, "size": 9.0, "font": "Times-Roman", "flags": 0}
+        span: Span = {"text": text, "size": 9.0, "font": "Times-Roman", "flags": 0}
         return (text, pymupdf.Rect(108, y, x1, y + 10), [span], [span])
 
     caption = [
@@ -601,7 +599,7 @@ def test_gloss_line_is_split_from_its_free_translation() -> None:
     from app.formats.pdf_unit_blocks import _split_gloss_lines
 
     lines = [pymupdf.Rect(174, 400, 399, 410), pymupdf.Rect(174, 414, 389, 424)]
-    spans = [
+    spans: list[list[Span]] = [
         [{"text": "1SG.S-E-midnight-big-E-sew-1SG.S[PFV]", "size": 10.0}],
         [{"text": "“I sewed a lot of yurt covers.”", "size": 10.0}],
     ]
@@ -654,7 +652,7 @@ def test_a_centered_name_list_wrapping_at_commas_stays_one_unit() -> None:
 
     def row(text: str, x0: float, y0: float, x1: float) -> TextBlock:
         rect = pymupdf.Rect(x0, y0, x1, y0 + 10)
-        span: PdfDict = {"text": text, "font": "NimbusRomNo9L-Medi", "flags": 20, "size": 10.0}
+        span: Span = {"text": text, "font": "NimbusRomNo9L-Medi", "flags": 20, "size": 10.0}
         return TextBlock(
             page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000", bold=True, span_lines=[[span]]
         )
@@ -681,7 +679,7 @@ def test_a_formula_wrapping_after_an_operator_keeps_its_tail() -> None:
     from app.formats.pdf_split_lines import _split_lines
 
     def item(text: str, x0: float, y: float, x1: float = 504) -> LineItem:
-        span: PdfDict = {"text": text, "size": 10.0, "font": "Times-Roman", "flags": 0}
+        span: Span = {"text": text, "size": 10.0, "font": "Times-Roman", "flags": 0}
         return (text, pymupdf.Rect(x0, y, x1, y + 10), [span], [span])
 
     wrapped = [
@@ -704,7 +702,7 @@ def test_a_justified_row_with_an_italic_variable_stays_one_row() -> None:
 
     def piece(x0: float, x1: float, y: float, *spans: tuple[str, str]) -> LineItem:
         text = "".join(t for t, _ in spans)
-        parts: list[PdfDict] = [{"text": t, "font": f, "size": 10.0, "flags": 0} for t, f in spans]
+        parts: list[Span] = [{"text": t, "font": f, "size": 10.0, "flags": 0} for t, f in spans]
         return (text, pymupdf.Rect(x0, y, x1, y + 12), parts, parts)
 
     roman = "Times-Roman"
@@ -728,7 +726,7 @@ def test_a_line_opening_with_a_closing_bracket_continues_the_row() -> None:
 
     def piece(x0: float, x1: float, y: float, *spans: tuple[str, str]) -> LineItem:
         text = "".join(t for t, _ in spans)
-        parts: list[PdfDict] = [{"text": t, "font": f, "size": 10.0, "flags": 0} for t, f in spans]
+        parts: list[Span] = [{"text": t, "font": f, "size": 10.0, "flags": 0} for t, f in spans]
         return (text, pymupdf.Rect(x0, y, x1, y + 10), parts, parts)
 
     roman, mono = "NimbusRomNo9L-Regu", "txtt"
@@ -774,7 +772,7 @@ def test_a_figure_row_pressed_onto_the_caption_is_its_own_row() -> None:
         font: str = "NimbusRomNo9L-Regu",
         size: float = 9.0,
     ) -> LineItem:
-        span: PdfDict = {"text": text, "size": size, "font": font, "flags": 0, "origin": (x0, base)}
+        span: Span = {"text": text, "size": size, "font": font, "flags": 0, "origin": (x0, base)}
         return (text, pymupdf.Rect(x0, y0, x1, y1), [span], [span])
 
     items = _left_to_right(
@@ -799,7 +797,7 @@ def test_a_figure_row_pressed_onto_the_caption_is_its_own_row() -> None:
     assert _split_lines(items) == [[0, 1], [2, 3, 4]]
 
     def fraction_line(x0: float, y0: float, x1: float, y1: float, pieces: list[tuple[str, float, float]]) -> LineItem:
-        spans: list[PdfDict] = [
+        spans: list[Span] = [
             {"text": text, "size": size, "font": "NimbusRomNo9L-Regu", "flags": 0, "origin": (x0, base)}
             for text, size, base in pieces
         ]
@@ -939,8 +937,8 @@ def test_an_underline_is_written_as_a_mark_and_drawn_under_the_words() -> None:
     from app.formats.pdf_flow import span_emphasis, writer_for
     from app.formats.pdf_typeset import typeset_lines
 
-    plain: PdfDict = {"text": "Now consider ", "font": "Times-Roman", "flags": 0}
-    marked: PdfDict = {"text": "A", "font": "Times-Roman", "flags": 0, "underline": True}
+    plain: Span = {"text": "Now consider ", "font": "Times-Roman", "flags": 0}
+    marked: Span = {"text": "A", "font": "Times-Roman", "flags": 0, "underline": True}
     writer = writer_for([plain, marked])
     text = writer.text(plain["text"], span_emphasis(plain)) + writer.text("A", span_emphasis(marked)) + writer.close()
     assert text == "Now consider {u}A{/u}"
@@ -960,7 +958,7 @@ def test_a_value_column_beside_a_word_label_is_its_own_paragraph() -> None:
     from app.formats.pdf_split_lines import _split_lines
 
     def item(text: str, x0: float, y0: float, x1: float) -> LineItem:
-        span: PdfDict = {"text": text, "size": 9.0, "font": "Times-Roman", "flags": 0}
+        span: Span = {"text": text, "size": 9.0, "font": "Times-Roman", "flags": 0}
         return (text, pymupdf.Rect(x0, y0, x1, y0 + 12), [span], [span])
 
     ranges = [

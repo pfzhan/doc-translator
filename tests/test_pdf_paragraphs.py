@@ -6,7 +6,7 @@ import pymupdf
 import pytest
 
 from app.formats.pdf_blocks import TextBlock
-from app.formats.pdf_types import PdfDict
+from app.formats.pdf_types import Line, PageDict, Span
 
 # A line of a test block: one (x0, x1) piece, or several pieces cut by inline formulas
 _Row = tuple[float, float] | list[tuple[float, float]]
@@ -401,7 +401,7 @@ def test_formula_font_and_char_rules() -> None:
     # The blocklist comes first: Noto text fonts do not match the broad *Sans* heuristic
     assert _is_formula_char("α") and _is_formula_char("∑") and _is_formula_char("∂")
     assert not _is_formula_char("a") and not _is_formula_char("中")
-    spans = [
+    spans: list[Span] = [
         {"text": "E = mc", "font": "TimesNewRomanPSMT"},
         {"text": "αβγ", "font": "TimesNewRomanPSMT"},
         {"text": " + more text here", "font": "ArialMT"},
@@ -1997,10 +1997,10 @@ def test_a_line_with_three_words_among_formulas_is_translated() -> None:
     sentence."""
     from app.formats.pdf_paragraphs import _untranslatable
 
-    def span(text: str, font: str) -> PdfDict:
+    def span(text: str, font: str) -> Span:
         return {"text": text, "font": font}
 
-    spans = [
+    spans: list[Span] = [
         span("p(ϵ)", "CMMI10"),
         span("Therefore", "Times-Roman"),
         span(",", "Times-Roman"),
@@ -2021,11 +2021,14 @@ def test_a_centred_definition_line_keeps_its_glyphs() -> None:
     from app.formats.pdf_extract import _displayed, _left_margins
     from app.formats.pdf_paragraphs import _untranslatable
 
-    body = {"bbox": (72, 0, 540, 12), "spans": [{"text": "A body line long enough to count as the column margin."}]}
-    data = {"blocks": [{"type": 0, "lines": [body] * 4}]}
+    body: Line = {
+        "bbox": (72, 0, 540, 12),
+        "spans": [{"text": "A body line long enough to count as the column margin."}],
+    }
+    data: PageDict = {"blocks": [{"type": 0, "lines": [body] * 4}]}
     margins = _left_margins(data)
     assert margins == [72]
-    spans = [
+    spans: list[Span] = [
         {"text": "(a1, …, an) ⪯ (b1, …, bn)", "font": "CMMI10", "size": 10.0},
         {"text": "if and only if", "font": "Times-Roman", "size": 10.0},
         {"text": "ai ⪯ bi", "font": "CMMI10", "size": 10.0},
@@ -2548,7 +2551,7 @@ def test_table_split_keeps_space_spans() -> None:
     from app.formats.pdf_drawings import RuledTable
     from app.formats.pdf_paragraphs import _split_table_blocks
 
-    def span(text: str, x0: float, x1: float) -> PdfDict:
+    def span(text: str, x0: float, x1: float) -> Span:
         return {"text": text, "bbox": (x0, 100, x1, 110), "origin": (x0, 108), "font": "Times", "size": 10.0}
 
     first = [
@@ -2558,7 +2561,7 @@ def test_table_split_keeps_space_spans() -> None:
         span(" ", 220, 226),
         span("rule.", 226, 250),
     ]
-    second = [
+    second: list[Span] = [
         {**item, "bbox": (item["bbox"][0], 112, item["bbox"][2], 122), "origin": (item["origin"][0], 120)}
         for item in (span("We", 140, 152), span(" ", 152, 158), span("used", 158, 180))
     ]
@@ -2588,7 +2591,7 @@ def test_a_displayed_formula_set_in_the_text_italic_is_kept() -> None:
     its own line (L(ŷ,y) = How much ŷ differs from the true y) is translated."""
     from app.formats.pdf_paragraphs import _untranslatable
 
-    def spans(*parts: tuple[str, str]) -> list[PdfDict]:
+    def spans(*parts: tuple[str, str]) -> list[Span]:
         return [{"text": text, "font": font, "size": 10.0, "flags": 2 if "Ital" in font else 0} for text, font in parts]
 
     roman, italic, sans, cmr = "NimbusRomNo9L-Regu", "NimbusRomNo9L-ReguItal", "CMSSBX10", "CMR10"
@@ -2679,7 +2682,7 @@ def test_an_index_entry_ends_at_its_page_numbers() -> None:
     from app.formats.pdf_continuations import _merge_continuations
     from app.formats.pdf_extract import _index_page
 
-    def page(lines: list[str]) -> PdfDict:
+    def page(lines: list[str]) -> PageDict:
         return {"blocks": [{"type": 0, "lines": [{"spans": [{"text": line}]} for line in lines]}]}
 
     entries = [f"term number {i}, {100 + i}" for i in range(12)] + [
@@ -2931,7 +2934,7 @@ def test_a_fraction_wrapped_to_the_line_start_ends_the_sentence_above() -> None:
     # A number one line high is a cell of the table below
     assert not _wraps_from_above([host], 0, pymupdf.Rect(143.4, 537.0, 170.0, 548.0), "0.00025", rows, frame)
 
-    def span(text: str, font: str) -> PdfDict:
+    def span(text: str, font: str) -> Span:
         return {"text": text, "size": 7.4, "font": font, "bbox": _box(tail)}
 
     fraction = TextBlock(
@@ -2964,7 +2967,7 @@ def test_a_line_ending_on_an_equals_sign_runs_on() -> None:
 
     def blk(text: str, y0: float, y1: float) -> TextBlock:
         rect = pymupdf.Rect(167, y0, 475, y1)
-        span: PdfDict = {"text": text, "font": "NimbusRomNo9L-Regu", "size": 10.0, "flags": 0}
+        span: Span = {"text": text, "font": "NimbusRomNo9L-Regu", "size": 10.0, "flags": 0}
         return TextBlock(
             page=0, rect=rect, line_rects=[rect], text=text, size=10, color="#000", bold=False, span_lines=[[span]]
         )

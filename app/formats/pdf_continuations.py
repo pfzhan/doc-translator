@@ -29,7 +29,7 @@ from .pdf_math import (
 from .pdf_paragraphs import _absorb_block, _index_refs_tail, _verbatim_seam
 from .pdf_rows import _INDEX_REFS_ONLY_RE
 from .pdf_split_lines import _MID_ABBREV_RE, _centered_rows, _label_lead, _open_operator_end, _row_boxes, _row_style
-from .pdf_types import PdfDict
+from .pdf_types import Span
 
 
 def _new_voice(host: TextBlock, guest: TextBlock) -> bool:
@@ -53,7 +53,7 @@ def _restyled_seam(host: TextBlock, guest: TextBlock) -> bool:
         return False
     gap = max(host.size * 0.4, 2.0)
 
-    def row_spans(block: TextBlock, at: pymupdf.Rect) -> list[PdfDict]:
+    def row_spans(block: TextBlock, at: pymupdf.Rect) -> list[Span]:
         return [
             span
             for rect, spans in zip(block.line_rects, block.span_lines or [])

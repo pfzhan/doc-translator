@@ -8,7 +8,7 @@ from typing import Any
 
 import pymupdf
 
-from app.formats.pdf_types import PdfDict
+from app.formats.pdf_types import Span
 from app.runner import Runner
 from app.translators import MockTranslator
 
@@ -79,8 +79,8 @@ def _glyph(
     bbox: tuple[float, float, float, float],
     ink: tuple[float, float, float, float],
     math: bool = False,
-) -> PdfDict:
-    span: PdfDict = {
+) -> Span:
+    span: Span = {
         "text": text,
         "font": font,
         "size": size,

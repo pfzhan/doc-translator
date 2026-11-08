@@ -57,7 +57,7 @@ from .pdf_restore import (
     _sync_unit_preview,
     _with_label,
 )
-from .pdf_types import PdfDict
+from .pdf_types import Formula
 from .pdf_units import _PdfPlan, _plan_document
 from .pdf_vision import FormulaModel, ModelBoxes
 from .pdf_write import _render_translated
@@ -255,7 +255,7 @@ async def translate_pdf(
         archive = await background.run(_crop_formulas, src_doc, flat_units, sent_formulas)
 
     per_block: dict[int, str] = {}
-    block_formulas: dict[int, list[PdfDict]] = {}
+    block_formulas: dict[int, list[Formula]] = {}
     fallbacks = 0
     kept_ids = set(skip_ids)
     labels = plan.labels or [""] * len(flat_units)
@@ -279,7 +279,7 @@ async def translate_pdf(
         if restored is None:
             fallbacks += 1
             parts = [b.text for b in unit]  # the model lost a placeholder: the whole unit falls back to the original
-            formula_lists: list[list[PdfDict]] = [[] for _ in unit]
+            formula_lists: list[list[Formula]] = [[] for _ in unit]
             shown = _join_lines(parts)
         else:
             parts, formula_lists = _assign_restored_parts(restored, unit, formulas, apart)

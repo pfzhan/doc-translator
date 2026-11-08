@@ -20,7 +20,7 @@ from .pdf_drawings import text_page_rect
 from .pdf_flow import separate_after_formula, space_around_latin
 from .pdf_layout import PageGeometry
 from .pdf_place import _box_height, _formula_metrics, _glyph_bottom
-from .pdf_types import PdfDict
+from .pdf_types import Formula
 from .pdf_typeset import typeset_lines
 from .pdf_write_geometry import (
     _affiliation_write_rects,
@@ -41,7 +41,7 @@ from .pdf_write_rect import _write_rect
 
 # The first half of a half sentence that shares a baseline with its continuation (see _same_page_line_pair): the text
 # staying on the host's line, the host's own line box, the formulas, and whether the continuation gets text too
-_SharedHead = tuple[str, pymupdf.Rect, list[PdfDict], bool]
+_SharedHead = tuple[str, pymupdf.Rect, list[Formula], bool]
 
 
 class _WriteContext:
@@ -55,7 +55,7 @@ class _WriteContext:
         blocks: list[TextBlock],
         translations: list[str],
         target_lang: str,
-        formulas_map: dict[int, list[PdfDict]] | None,
+        formulas_map: dict[int, list[Formula]] | None,
         geometries: list[PageGeometry] | None,
         continuations: dict[int, TextBlock] | None,
         pages: Collection[int] | None,
@@ -69,7 +69,7 @@ class _WriteContext:
         self.cjk = target_lang.split("-")[0] in ("zh", "ja", "ko", "yue", "wyw")
         # Line spacing of the translation, in font sizes
         self.gap = 1.45 if self.cjk else 1.2
-        self.formulas: dict[int, list[PdfDict]] = formulas_map or {}
+        self.formulas: dict[int, list[Formula]] = formulas_map or {}
         self.geometries = geometries
         self.continuations: dict[int, TextBlock] = continuations or {}
         self.by_page = _pages_to_write(blocks, translations)
@@ -482,7 +482,7 @@ class _PageBreak:
     font size written, block_size the source block's"""
 
     text: str
-    formulas: list[PdfDict]
+    formulas: list[Formula]
     size: float
     block_size: float
     width: float

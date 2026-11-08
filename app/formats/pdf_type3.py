@@ -17,7 +17,6 @@ import re
 import statistics
 from collections import Counter, defaultdict
 from collections.abc import Callable
-from typing import Any
 
 import numpy as np
 import pymupdf
@@ -44,6 +43,7 @@ from .pdf_type3_glyphs import (
 from .pdf_type3_lines import _line_dict
 from .pdf_type3_ocr import _ocr_pages, _vote_labels
 from .pdf_type3_roles import _learn_roles
+from .pdf_types import Block, Line, PageDict
 
 _CUSTOM_NAME = re.compile(r"^[A-Za-z]\d+$")
 
@@ -98,10 +98,6 @@ _MONO_PITCH = 0.5
 # Characters that are very narrow in body-text fonts (around 0.28 font sizes). In monospace fonts they also fill a
 # whole cell
 _NARROW = set("iljI.,;:’'!|")
-
-
-# Structure of PyMuPDF get_text("dict"). Its fields change between versions, so it only passes through this layer.
-PageData = dict[str, Any]
 
 
 _RULE_HEIGHT = 1.2
@@ -184,7 +180,7 @@ class Type3Reader:
         return {pno: page_lines for pno, page_lines in lines.items() if _readable(glyphs[pno], self.labels)}
 
 
-def recover_type3_page(page: pymupdf.Page, data: PageData, reader: Type3Reader | None = None) -> bool:
+def recover_type3_page(page: pymupdf.Page, data: PageDict, reader: Type3Reader | None = None) -> bool:
     """When most of this page is bitmap font text with a made-up encoding, replace the character codes with the
     recognized text layer.
 
@@ -737,7 +733,7 @@ def _proportional_kinds(pages: dict[int, list[_Line]], mono: dict[Key, float]) -
     return found
 
 
-def _group_lines(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+def _group_lines(lines: list[Line]) -> list[list[Line]]:
     """Lines within the leading that overlap horizontally and have similar font sizes are grouped into one block, as
     PyMuPDF does for ordinary fonts. Paragraph splitting is left to later steps.
 
@@ -745,11 +741,11 @@ def _group_lines(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     boxes of two lines mean nothing.
     """
     ordered = sorted(lines, key=lambda line: (_baseline(line), float(line["bbox"][0])))
-    groups: list[list[dict[str, Any]]] = []
+    groups: list[list[Line]] = []
     for line in ordered:
         box = pymupdf.Rect(line["bbox"])
         size = _line_size(line)
-        best: list[dict[str, Any]] | None = None
+        best: list[Line] | None = None
         for group in groups:
             prev = pymupdf.Rect(group[-1]["bbox"])
             prev_size = _line_size(group[-1])
@@ -768,12 +764,12 @@ def _group_lines(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return groups
 
 
-def _baseline(line: dict[str, Any]) -> float:
+def _baseline(line: Line) -> float:
     spans = [span for span in line["spans"] if span["font"] in (_TEXT_FONT, _MONO_FONT)] or line["spans"]
     return float(max(spans, key=lambda span: float(span["size"]))["origin"][1])
 
 
-def _line_size(line: dict[str, Any]) -> float:
+def _line_size(line: Line) -> float:
     sizes = [float(span["size"]) for span in line["spans"] if span["font"] in (_TEXT_FONT, _MONO_FONT)]
     return max(sizes) if sizes else max(float(span["size"]) for span in line["spans"])
 
@@ -795,7 +791,7 @@ def _custom_encoding(doc: pymupdf.Document, xref: int) -> bool:
     return len(custom) >= 8
 
 
-def _broken_share(data: PageData, names: set[str]) -> float:
+def _broken_share(data: PageDict, names: set[str]) -> float:
     total = 0
     broken = 0
     for block in data["blocks"]:
@@ -812,21 +808,21 @@ def _broken_share(data: PageData, names: set[str]) -> float:
     return broken / total
 
 
-def _drop_broken_lines(data: PageData, names: set[str]) -> None:
+def _drop_broken_lines(data: PageDict, names: set[str]) -> None:
     """Remove the character codes. Images and normal fonts stay, and so do normal characters mixed into the same
     line."""
-    kept: list[dict[str, Any]] = []
+    kept: list[Block] = []
     for block in data["blocks"]:
         if block.get("type") != 0:
             kept.append(block)
             continue
-        lines: list[dict[str, Any]] = []
+        lines: list[Line] = []
         for line in block["lines"]:
             spans = [span for span in line["spans"] if span.get("font") not in names]
             if not spans:
                 continue
             if len(spans) != len(line["spans"]):
-                line = dict(line)
+                line = line.copy()
                 line["spans"] = spans
                 line["bbox"] = _union_bbox([{"bbox": span["bbox"]} for span in spans if span.get("bbox")])
             lines.append(line)
@@ -837,7 +833,7 @@ def _drop_broken_lines(data: PageData, names: set[str]) -> None:
     data["blocks"] = kept
 
 
-def _union_bbox(lines: list[dict[str, Any]]) -> tuple[float, float, float, float]:
+def _union_bbox(lines: list[Line]) -> tuple[float, float, float, float]:
     box = pymupdf.Rect()
     for line in lines:
         raw = line.get("bbox")

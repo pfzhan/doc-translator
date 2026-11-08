@@ -36,6 +36,7 @@ import pymupdf.mupdf as mupdf
 
 from .pdf_blocks import TextBlock
 from .pdf_erase import _NUMBER_RE, _operators, _page_point
+from .pdf_types import text_dict
 
 _MARK_RE = re.compile(rb"/DTr(\d+)\s+MP")
 _POSITION = {b"Td", b"TD", b"Tm", b"T*"}
@@ -611,7 +612,7 @@ class ReadingOrder:
         _kind, contents = self.doc.xref_get_key(self.page.xref, "Contents")
         self.doc.xref_set_key(self.page.xref, "Contents", "[" + " ".join(f"{x} 0 R" for x in streams) + "]")
         try:
-            text = self.page.get_text("dict", flags=pymupdf.TEXTFLAGS_DICT | pymupdf.TEXT_ACCURATE_BBOXES)
+            text = text_dict(self.page, flags=pymupdf.TEXTFLAGS_DICT | pymupdf.TEXT_ACCURATE_BBOXES)
         finally:
             self.doc.xref_set_key(self.page.xref, "Contents", contents)
         found = [

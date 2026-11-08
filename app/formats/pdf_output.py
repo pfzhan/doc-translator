@@ -8,13 +8,13 @@ from typing import TYPE_CHECKING
 
 import pymupdf
 
+from ..json_types import JSONDict
 from .pdf_blocks import _NUMBER_LABEL_RE, TextBlock, _pages_to_write
 from .pdf_dedupe import merge_duplicates
 from .pdf_flow import (
     strip_style_marks,
 )
 from .pdf_parts import Render, plan_parts, render_in_parts, worker_count
-from .pdf_types import PdfDict
 
 if TYPE_CHECKING:
     from multiprocessing.queues import Queue
@@ -54,7 +54,7 @@ def _render_side_by_side(src: pymupdf.Document, translated: pymupdf.Document) ->
     return out
 
 
-def translated_from_bilingual(src: Path, bilingual: Path, preview: PdfDict | None) -> bytes | None:
+def translated_from_bilingual(src: Path, bilingual: Path, preview: JSONDict | None) -> bytes | None:
     """Build the translated-only PDF from the right halves of the bilingual one, in a few seconds.
 
     Rendering a book again takes minutes. The translated pages go into a copy of the source, which keeps
@@ -117,7 +117,7 @@ def _save(doc: pymupdf.Document, deflate: bool = False) -> bytes:
     return data
 
 
-def translate_bookmarks(doc: pymupdf.Document, preview: PdfDict | None) -> None:
+def translate_bookmarks(doc: pymupdf.Document, preview: JSONDict | None) -> None:
     """Replace the bookmark titles of the translated-only PDF with the translations of the matching headings.
     preview is the result of Runner.preview(-1).
 

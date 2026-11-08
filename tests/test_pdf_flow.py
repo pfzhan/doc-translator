@@ -12,7 +12,7 @@ from app.formats.pdf_flow import (
     strip_style_marks,
     writer_for,
 )
-from app.formats.pdf_types import PdfDict
+from app.formats.pdf_types import Span
 
 _SENTINEL = "\x01i\x021\x01/i\x02"
 
@@ -142,7 +142,7 @@ def test_writer_marks_size_outside_emphasis() -> None:
 
 
 def test_writer_for_marks_the_differing_span() -> None:
-    spans = [
+    spans: list[Span] = [
         {"text": "See ", "font": "TimesNewRomanPSMT", "flags": 0},
         {"text": "this", "font": "TimesNewRomanPS-BoldMT", "flags": 16},
         {"text": " word", "font": "TimesNewRomanPSMT", "flags": 0},
@@ -156,12 +156,12 @@ def test_writer_for_marks_the_differing_span() -> None:
     assert uniform.text("All regular words", Emphasis(False, False)) == "All regular words"
 
 
-def _span(text: str, bold: bool = False, italic: bool = False) -> PdfDict:
+def _span(text: str, bold: bool = False, italic: bool = False) -> Span:
     font = "Times-" + ("Bold" if bold else "") + ("Italic" if italic else "") if bold or italic else "Times-Roman"
     return {"text": text, "font": font, "flags": (16 if bold else 0) | (2 if italic else 0)}
 
 
-def _write(spans: list[PdfDict]) -> str:
+def _write(spans: list[Span]) -> str:
     writer = writer_for(spans)
     return "".join(writer.text(s["text"], emphasis_of(s["font"], s["flags"])) for s in spans) + writer.close()
 
@@ -169,7 +169,7 @@ def _write(spans: list[PdfDict]) -> str:
 def test_a_bold_label_before_body_split_into_short_spans_keeps_its_mark() -> None:
     """When citations cut the body into many short spans, the longest one is the bold label. Bold is written only
     through {b}, so the base style must not be bold."""
-    spans = [
+    spans: list[Span] = [
         _span("•"),
         _span(" ", bold=True),
         _span("Commonsense Reasoning (0-shot):", bold=True),
@@ -198,7 +198,7 @@ def test_a_bold_label_before_body_split_into_short_spans_keeps_its_mark() -> Non
 
 
 def test_spaces_do_not_open_a_mark_and_close_the_one_that_ends() -> None:
-    spans = [
+    spans: list[Span] = [
         _span("Theorem 1.", bold=True),
         _span(" ", bold=False),
         _span("The minimum is"),

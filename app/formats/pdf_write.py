@@ -31,7 +31,7 @@ from .pdf_place import (
 )
 from .pdf_place_formulas import _FormulaSources
 from .pdf_type3 import broken_type3_names
-from .pdf_types import PdfDict
+from .pdf_types import Formula, Span, text_dict
 from .pdf_write_flow import _last_fitting, _off_body_size, _PageBreak, _PageFlow, _SharedHead, _WriteContext
 from .pdf_write_geometry import (
     _affiliation_write_rects,
@@ -74,7 +74,7 @@ def _render_translated(
     blocks: list[TextBlock],
     translations: list[str],
     target_lang: str = "",
-    formulas_map: dict[int, list[PdfDict]] | None = None,
+    formulas_map: dict[int, list[Formula]] | None = None,
     archive: pymupdf.Archive | None = None,
     geometries: list[PageGeometry] | None = None,
     continuations: dict[int, TextBlock] | None = None,
@@ -160,7 +160,7 @@ class _PageWriter:
         items = _hosts_first(items, ctx.continuations)
         self.visible = [(b, t) for b, t in items if t != SPILL_TAIL]
         self.geo = ctx.geometry(pno)
-        self.mid_map: dict[int, PdfDict] = {
+        self.mid_map: dict[int, Formula] = {
             f["mid"]: f for b, _ in self.visible for f in ctx.formulas.get(id(b), []) if "mid" in f
         }
         self.page_spans, self.forms, self.glyphs = self._formula_sources()
@@ -221,7 +221,7 @@ class _PageWriter:
 
     # Preparing the page
 
-    def _formula_sources(self) -> tuple[list[PdfDict] | None, _FormulaSources | None, dict[int, bytes]]:
+    def _formula_sources(self) -> tuple[list[Span] | None, _FormulaSources | None, dict[int, bytes]]:
         """What formula images on this page are cut from, read before the page is erased: the spans of the page,
         the page packed into a Form, and the bitmap glyphs to restore afterwards. Nothing when the page has no
         formulas."""
@@ -233,7 +233,7 @@ class _PageWriter:
         bitmap_fonts = broken_type3_names(doc, page) if mid_map else set()
         page_spans = None
         if mid_map:
-            page_data = page.get_text("dict")
+            page_data = text_dict(page)
             _attach_ink(page, page_data)
             page_spans = [
                 s
@@ -380,7 +380,7 @@ class _PageWriter:
         text: str,
         rect: pymupdf.Rect,
         align: str,
-        formulas: list[PdfDict] | None = None,
+        formulas: list[Formula] | None = None,
         justify_last: bool = False,
         # source: the original block when block is a moved copy (index entry); the reading order marker is on the
         # original block
@@ -467,7 +467,7 @@ class _PageWriter:
             obstacles = [*obstacles, *self.geo.figures, *(table.rect for table in self.geo.tables)]
         return obstacles
 
-    def _typeset(self, block: TextBlock, text: str, formulas: list[PdfDict], at: _Placement) -> float | None:
+    def _typeset(self, block: TextBlock, text: str, formulas: list[Formula], at: _Placement) -> float | None:
         """Draw text on the page as placed by at. Returns the bottom of the last line box, or None when it is not
         known (right-to-left text, or text the typesetter did not write)."""
         cjk, page, div_attrs = self.cjk, self.page, self.writer.div_attrs
@@ -766,7 +766,7 @@ class _PageWriter:
         rest: str,
         rest_box: pymupdf.Rect,
         side: str,
-        bformulas: list[PdfDict],
+        bformulas: list[Formula],
         tail: TextBlock,
     ) -> None:
         """Write the lines below the first line of a two-box paragraph that is carried over to the next page: what
@@ -996,7 +996,7 @@ class _PageWriter:
         self.order.assemble()
 
 
-def _part_page(part: PdfDict, formula: PdfDict, pno: int) -> int:
+def _part_page(part: Formula, formula: Formula, pno: int) -> int:
     """The page a formula part lies on: its own, else the formula's, else the page being written."""
     # Bound to an int first: with an Any default, mypy picks dict.get's None-default overload
     default: int = formula.get("page", pno)

@@ -64,6 +64,12 @@ class R(Runner):
         pass
 
 
+def _corners(box: pymupdf.Rect) -> tuple[float, float, float, float]:
+    """Corners of a formula box. pymupdf.Rect also takes the tuple an older version of the code may hold there."""
+    rect = pymupdf.Rect(box)
+    return rect.x0, rect.y0, rect.x1, rect.y1
+
+
 plan = pdf._plan_pdf(Path(src), R(), "cached")
 rows = []
 for u, t, fs, s in zip(plan.units, plan.texts, plan.formulas, plan.skips):
@@ -72,7 +78,10 @@ for u, t, fs, s in zip(plan.units, plan.texts, plan.formulas, plan.skips):
             u[0].page,
             s,
             t,
-            [[f.get("text", ""), [round(v, 1) for v in f["bbox"]] if f.get("bbox") is not None else None] for f in fs],
+            [
+                [f.get("text", ""), [round(v, 1) for v in _corners(f["bbox"])] if f.get("bbox") is not None else None]
+                for f in fs
+            ],
         ]
     )
 Path(out).write_text(json.dumps(rows, ensure_ascii=False))

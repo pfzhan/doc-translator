@@ -21,7 +21,7 @@ from .pdf_layout import (
 from .pdf_place import (
     _formula_metrics,
 )
-from .pdf_types import PdfDict
+from .pdf_types import Formula
 from .pdf_typeset import (
     typeset_lines,
 )
@@ -33,7 +33,7 @@ def _index_reflow(
     blocks: list[TextBlock],
     geo: PageGeometry | None,
     cjk: bool,
-    formulas_map: dict[int, list[PdfDict]],
+    formulas_map: dict[int, list[Formula]],
     fixed: set[int],
     bottom: float,
     ink: Sequence[pymupdf.Rect] = (),

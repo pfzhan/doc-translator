@@ -2,11 +2,11 @@
 
 import pymupdf
 
-from app.formats.pdf_types import LineItem, PdfDict
+from app.formats.pdf_types import Line, LineItem, PageDict, Span
 from tests.helpers import _glyph
 
 
-def _item(text: str, rect: pymupdf.Rect, spans: list[PdfDict]) -> LineItem:
+def _item(text: str, rect: pymupdf.Rect, spans: list[Span]) -> LineItem:
     """A text line whose spans all carry text, so the spans with text are all the spans of the line."""
     return (text, rect, spans, spans)
 
@@ -153,7 +153,7 @@ def test_a_table_row_name_is_cut_from_its_numbers_and_the_rows_around() -> None:
     from app.formats.pdf_rows import _drop_number_tails
     from app.formats.pdf_split_lines import _split_lines
 
-    def span(text: str, x0: float, x1: float, y: float) -> PdfDict:
+    def span(text: str, x0: float, x1: float, y: float) -> Span:
         return {"text": text, "size": 9.0, "bbox": (x0, y, x1, y + 9), "origin": (x0, y + 7), "font": "Times"}
 
     def item(parts: list[tuple[str, float, float]], y: float) -> LineItem:
@@ -206,10 +206,10 @@ def test_header_cells_over_number_columns_are_cut_apart() -> None:
     justified body line would give half sentences, so it is not split."""
     from app.formats.pdf_rows import _cut_header_cells
 
-    def span(text: str, x0: float, x1: float, y: float = 238.1) -> PdfDict:
+    def span(text: str, x0: float, x1: float, y: float = 238.1) -> Span:
         return {"text": text, "size": 9.0, "bbox": (x0, y, x1, y + 9), "origin": (x0, y + 7), "font": "Times"}
 
-    def item(spans: list[PdfDict]) -> LineItem:
+    def item(spans: list[Span]) -> LineItem:
         text = "".join(one["text"] for one in spans)
         rect = pymupdf.Rect(spans[0]["bbox"][0], spans[0]["bbox"][1], spans[-1]["bbox"][2], spans[0]["bbox"][3])
         return (text, rect, [one for one in spans if one["text"].strip()], spans)
@@ -384,7 +384,7 @@ def test_the_tail_of_a_wrapped_url_does_not_end_the_verbatim_text() -> None:
     monospace and has not switched back to the body font, so the paragraph is not split."""
     from app.formats.pdf_split_lines import _split_lines
 
-    def span(text: str, mono: bool) -> PdfDict:
+    def span(text: str, mono: bool) -> Span:
         return {
             "text": text,
             "size": 12.0 if mono else 11.0,
@@ -585,7 +585,7 @@ def test_rows_of_a_table_or_a_list_with_one_opening_are_cut_into_lines() -> None
         return _item(text, rect, [{"text": text, "size": size, "bbox": _bbox(rect)}])
 
     def row(parts: list[tuple[str, float, float]], y: float) -> LineItem:
-        spans: list[PdfDict] = [{"text": text, "size": 9.96, "bbox": (x0, y, x1, y + 11.9)} for text, x0, x1 in parts]
+        spans: list[Span] = [{"text": text, "size": 9.96, "bbox": (x0, y, x1, y + 11.9)} for text, x0, x1 in parts]
         return _item(" ".join(p[0] for p in parts), pymupdf.Rect(parts[0][1], y, parts[-1][2], y + 11.9), spans)
 
     table = [
@@ -712,14 +712,14 @@ def test_a_line_split_into_two_blocks_is_put_back_together() -> None:
     the first half."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0: float, x1: float, y0: float, y1: float, text: str) -> PdfDict:
+    def line(x0: float, x1: float, y0: float, y1: float, text: str) -> Line:
         return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
 
     head = line(100, 400, 150, 162, "All operations are element-wise. With β")
     tail = line(398, 440, 150, 163, "1 and β")
     nxt = line(100, 300, 162, 174, "we denote the power t.")
     other = line(100, 400, 200, 212, "Require: a step size")
-    data: PdfDict = {
+    data: PageDict = {
         "blocks": [
             {"type": 0, "bbox": (100, 150, 400, 162), "lines": [head]},
             {"type": 0, "bbox": (100, 150, 440, 212), "lines": [tail, nxt, other]},
@@ -733,11 +733,11 @@ def test_a_line_split_into_two_blocks_is_put_back_together() -> None:
 def test_a_two_column_gutter_is_not_a_split_line() -> None:
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0: float, x1: float, text: str) -> PdfDict:
+    def line(x0: float, x1: float, text: str) -> Line:
         return {"bbox": (x0, 150, x1, 162), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
 
     left, right = line(60, 290, "left column text"), line(305, 540, "right column text")
-    data: PdfDict = {
+    data: PageDict = {
         "blocks": [
             {"type": 0, "bbox": (60, 150, 290, 162), "lines": [left]},
             {"type": 0, "bbox": (305, 150, 540, 162), "lines": [right]},
@@ -760,7 +760,7 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line() 
         font: str = "Times-Roman",
         size: float = 10.0,
         y1: float | None = None,
-    ) -> PdfDict:
+    ) -> Line:
         box = (x0, y0, x1, y1 if y1 is not None else y0 + 13)
         return {"bbox": box, "dir": (1, 0), "spans": [{"text": text, "font": font, "size": size, "bbox": box}]}
 
@@ -771,7 +771,7 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line() 
     rest = line(311, 540, 662, "the training set, and E[x] is the mean")
     number = line(311, 326, 659, "3.2", "Times-Bold", 14.3)
     title = line(337.9, 540, 659, "Batch-Normalized Convolutional Net-", "Times-Bold", 14.3)
-    data: PdfDict = {
+    data: PageDict = {
         "blocks": [
             {"type": 0, "bbox": (72, 638, 301.3, 687), "lines": list(para)},
             {"type": 0, "bbox": (311, 650, 540, 675), "lines": [formula, rest]},
@@ -813,7 +813,7 @@ def test_a_narrow_gutter_next_to_math_or_a_section_number_is_not_a_split_line() 
     # compare: the font size is much larger, so it is not the second half of that line
     top = line(72, 301.1, 35.5, "not have to readjust to compensate for the change in the")
     tail = line(72, 138.8, 47.5, "distribution of x.")
-    heading = [
+    heading: list[Line] = [
         line(311, 318.2, 31, "2", "Times-Bold", 14.3, 50.9),
         line(332.5, 385.3, 31, "Towards", "Times-Bold", 14.3, 50.9),
     ]
@@ -834,13 +834,13 @@ def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line() 
 
     Box = tuple[float, float, float, float]
 
-    def span(text: str, font: str, size: float, box: Box, ink: Box | None = None) -> PdfDict:
-        item: PdfDict = {"text": text, "font": font, "size": size, "bbox": box, "origin": (box[0], box[3] - 2)}
+    def span(text: str, font: str, size: float, box: Box, ink: Box | None = None) -> Span:
+        item: Span = {"text": text, "font": font, "size": size, "bbox": box, "origin": (box[0], box[3] - 2)}
         if ink is not None:
             item["ink"] = ink
         return item
 
-    def line(*spans: PdfDict) -> PdfDict:
+    def line(*spans: Span) -> Line:
         box = pymupdf.Rect(spans[0]["bbox"])
         for item in spans[1:]:
             box |= pymupdf.Rect(item["bbox"])
@@ -861,7 +861,7 @@ def test_a_formula_whose_font_box_reaches_the_next_line_stays_on_its_own_line() 
     nxt = line(
         span("input to the model, we may choose the parameterization", "Times-Roman", 10.0, (108, 201.7, 331.3, 211.7))
     )
-    data: PdfDict = {
+    data: PageDict = {
         "blocks": [
             {"type": 0, "bbox": (108, 187.2, 305, 199.9), "lines": [lead]},
             {"type": 0, "bbox": (307.6, 185.3, 361.7, 206.1), "lines": [minus, numerator, denominator]},
@@ -879,7 +879,7 @@ def test_a_split_line_goes_to_its_nearest_left_neighbour() -> None:
     and forth between the two blocks."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0: float, x1: float, y0: float, text: str, font: str = "CMMI10") -> PdfDict:
+    def line(x0: float, x1: float, y0: float, text: str, font: str = "CMMI10") -> Line:
         box = (x0, y0, x1, y0 + 10)
         return {"bbox": box, "dir": (1, 0), "spans": [{"text": text, "font": font, "size": 10.0, "bbox": box}]}
 
@@ -888,7 +888,7 @@ def test_a_split_line_goes_to_its_nearest_left_neighbour() -> None:
     far = line(72, 262, 96, "the rule is", "Times-Roman")
     near = line(250, 264, 104, "c =")
     piece = line(265, 300, 100, "d − e")
-    data: PdfDict = {
+    data: PageDict = {
         "blocks": [
             {"type": 0, "bbox": (72, 96, 262, 106), "lines": [far]},
             {"type": 0, "bbox": (250, 104, 264, 114), "lines": [near]},
@@ -905,7 +905,7 @@ def test_a_justified_heading_split_word_by_word_stays_one_paragraph() -> None:
     from app.formats.pdf_split_lines import _split_lines
 
     def item(text: str, x0: float, x1: float, y0: float) -> LineItem:
-        span: PdfDict = {"text": text, "font": "Times-Bold", "size": 14.3}
+        span: Span = {"text": text, "font": "Times-Bold", "size": 14.3}
         return _item(text, pymupdf.Rect(x0, y0, x1, y0 + 20), [span])
 
     items = [
@@ -922,7 +922,7 @@ def test_table_cells_on_one_baseline_stay_apart() -> None:
     from app.formats.pdf_split_lines import _split_lines
 
     def item(text: str, x0: float, x1: float) -> LineItem:
-        span: PdfDict = {"text": text, "font": "Times-Roman", "size": 9.0}
+        span: Span = {"text": text, "font": "Times-Roman", "size": 9.0}
         return _item(text, pymupdf.Rect(x0, 100, x1, 110), [span])
 
     items = [item("Training", 128, 158), item("Inference needed", 184, 246), item("No difficulties", 437, 489)]
@@ -934,12 +934,12 @@ def test_fraction_pieces_rejoin_their_line_with_less_overlap() -> None:
     40 percent."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0: float, x1: float, y0: float, y1: float, text: str) -> PdfDict:
+    def line(x0: float, x1: float, y0: float, y1: float, text: str) -> Line:
         return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "size": 10.0}]}
 
     root = line(188, 202.4, 259.0, 271.2, "√αt")
     paren = line(205.8, 211.7, 253.9, 263.8, "(")
-    data: PdfDict = {
+    data: PageDict = {
         "blocks": [
             {"type": 0, "bbox": (108, 258, 202, 274), "lines": [line(108, 184, 258, 274, "to compute x ="), root]},
             {"type": 0, "bbox": (205, 253, 212, 264), "lines": [paren]},
@@ -955,7 +955,7 @@ def test_math_line_box_follows_glyph_ink() -> None:
     from app.formats.pdf_math import _line_box
     from app.formats.pdf_rows import _text_box
 
-    arrow: PdfDict = {
+    arrow: Span = {
         "text": "←",
         "font": "CMSY10",
         "size": 9.7,
@@ -963,7 +963,7 @@ def test_math_line_box_follows_glyph_ink() -> None:
         "origin": (130.2, 226.3),
         "ink": (130.2, 221.3, 139.9, 226.4),
     }
-    word: PdfDict = {
+    word: Span = {
         "text": "(Initialize",
         "font": "NimbusRomNo9L-Regu",
         "size": 9.7,
@@ -973,7 +973,7 @@ def test_math_line_box_follows_glyph_ink() -> None:
     }
     assert [round(v, 1) for v in _bbox(_text_box(arrow))] == [130.2, 220.7, 139.9, 227.0]
     assert _text_box(word) == pymupdf.Rect(147.4, 217.3, 194.8, 229.0)
-    line: PdfDict = {"bbox": (130.2, 217.3, 194.8, 235.6), "spans": [arrow, word]}
+    line: Line = {"bbox": (130.2, 217.3, 194.8, 235.6), "spans": [arrow, word]}
     assert [round(v, 1) for v in _bbox(_line_box(line))] == [130.2, 217.3, 194.8, 229.0]
 
 
@@ -1011,7 +1011,7 @@ def test_an_inline_fraction_rejoins_its_line_in_reading_order() -> None:
     denominator can join the equals sign."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0: float, x1: float, y0: float, y1: float, *spans: tuple[str, str]) -> PdfDict:
+    def line(x0: float, x1: float, y0: float, y1: float, *spans: tuple[str, str]) -> Line:
         # CMR inside Times body text is already marked as formula during extraction
         return {
             "bbox": (x0, y0, x1, y1),
@@ -1024,7 +1024,7 @@ def test_an_inline_fraction_rejoins_its_line_in_reading_order() -> None:
     host = line(72, 219.4, 136, 149.3, ("rameters to be learned, and", "Times-Roman"), ("g(x) =", "CMR10"))
     numerator = line(243.2, 247.2, 137.3, 143.2, ("1", "CMR7"))
     denominator = line(225.6, 301, 136, 151.7, ("1+exp(−x)", "CMR10"), (". As", "Times-Roman"))
-    data: PdfDict = {
+    data: PageDict = {
         "blocks": [
             {"type": 0, "bbox": (72, 136, 247, 149), "lines": [host, numerator]},
             {"type": 0, "bbox": (225, 136, 301, 152), "lines": [denominator]},
@@ -1054,7 +1054,7 @@ def test_pieces_of_one_row_are_read_left_to_right() -> None:
 def test_plain_words_a_wide_gap_apart_are_not_rejoined() -> None:
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0: float, x1: float, text: str) -> PdfDict:
+    def line(x0: float, x1: float, text: str) -> Line:
         return {
             "bbox": (x0, 136, x1, 149),
             "dir": (1, 0),
@@ -1062,7 +1062,7 @@ def test_plain_words_a_wide_gap_apart_are_not_rejoined() -> None:
         }
 
     left, right = line(72, 219, "learned, and the"), line(227, 301, "output of the layer")
-    data: PdfDict = {
+    data: PageDict = {
         "blocks": [
             {"type": 0, "bbox": (72, 136, 219, 149), "lines": [left]},
             {"type": 0, "bbox": (227, 136, 301, 149), "lines": [right]},
@@ -1079,7 +1079,7 @@ def test_a_lone_numerator_goes_back_to_its_fraction() -> None:
 
     def line(
         x0: float, x1: float, y0: float, y1: float, *spans: tuple[str, str, float, tuple[float, float, float, float]]
-    ) -> PdfDict:
+    ) -> Line:
         return {
             "bbox": (x0, y0, x1, y1),
             "dir": (1, 0),
@@ -1091,7 +1091,7 @@ def test_a_lone_numerator_goes_back_to_its_fraction() -> None:
     above = line(108, 504, 243, 262, ("where the model predicts noise", "Times-Roman", 9.9, (108, 243, 504, 262)))
     denominator = line(235, 296, 258, 276, ("√1−αt", "CMSY7", 7.0, (235, 264.4, 260, 270.2)))
     numerator = line(243, 251, 256, 263, ("βt", "CMMI7", 7.0, (243.4, 256.2, 250.7, 262.5)))
-    data: PdfDict = {
+    data: PageDict = {
         "blocks": [
             {"type": 0, "bbox": (108, 243, 504, 262), "lines": [above]},
             {"type": 0, "bbox": (235, 258, 296, 276), "lines": [denominator]},
@@ -1111,7 +1111,7 @@ def test_large_chapter_number_stays_apart_from_the_title() -> None:
     from app.formats.pdf_split_lines import _split_lines
 
     def item(text: str, rect: tuple[float, float, float, float], size: float) -> LineItem:
-        span: PdfDict = {"text": text, "size": size, "font": "Times", "flags": 0}
+        span: Span = {"text": text, "size": size, "font": "Times", "flags": 0}
         return _item(text, pymupdf.Rect(rect), [span])
 
     chapter = [item("2", (98, 142, 128, 202), 59.8), item("Words and Tokens", (167, 142, 364, 166), 24.8)]
@@ -1126,7 +1126,7 @@ def test_a_long_toc_title_with_two_leader_dots_keeps_its_page_number() -> None:
     left alone."""
     from app.formats.pdf_rows import _cut_leaders
 
-    def span(text: str, x0: float, x1: float, y: float = 278.7) -> PdfDict:
+    def span(text: str, x0: float, x1: float, y: float = 278.7) -> Span:
         return {"text": text, "size": 10.0, "bbox": (x0, y, x1, y + 12), "origin": (x0, y + 9.5), "color": 0}
 
     parts = [
@@ -1163,13 +1163,13 @@ def test_a_denominator_split_into_the_next_lines_block_rejoins_its_fraction() ->
 
     reg, ital, cmr = "NimbusRomNo9L-Regu", "NimbusRomNo9L-ReguItal", "CMR10"
 
-    def line(*spans: PdfDict) -> PdfDict:
+    def line(*spans: Span) -> Line:
         box = pymupdf.Rect(spans[0]["bbox"])
         for span in spans[1:]:
             box |= pymupdf.Rect(span["bbox"])
         return {"bbox": _bbox(box), "dir": (1, 0), "spans": list(spans)}
 
-    def data(numerator: float) -> PdfDict:
+    def data(numerator: float) -> PageDict:
         score = line(
             _glyph(
                 "The backoff terminates in the unigram, which has score",
@@ -1288,7 +1288,7 @@ def test_a_line_in_a_column_of_its_own_font_stays_in_its_block() -> None:
     that column and is not moved over as the cut-off second half of the body text on the left."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(text: str, bbox: tuple[float, float, float, float], font: str) -> PdfDict:
+    def line(text: str, bbox: tuple[float, float, float, float], font: str) -> Line:
         return {
             "dir": (1, 0),
             "bbox": bbox,
@@ -1305,7 +1305,7 @@ def test_a_line_in_a_column_of_its_own_font_stays_in_its_block() -> None:
             ],
         }
 
-    def page(with_mate: bool) -> PdfDict:
+    def page(with_mate: bool) -> PageDict:
         prose = line("according to its probability p(w|<s>)", (38, 221, 523, 256), "Calibri")
         sample = line("I want", (520, 232, 693, 265), "CourierNewPSMT")
         column = [line("<s> I", (520, 194, 607, 227), "CourierNewPSMT")] if with_mate else []
@@ -1330,7 +1330,7 @@ def test_a_small_fraction_after_a_relation_joins_the_line() -> None:
     block and be skipped as a formula line, leaving the right half of the formula missing from the translation."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def line(x0: float, x1: float, y0: float, y1: float, text: str, font: str, size: float) -> PdfDict:
+    def line(x0: float, x1: float, y0: float, y1: float, text: str, font: str, size: float) -> Line:
         return {"bbox": (x0, y0, x1, y1), "dir": (1, 0), "spans": [{"text": text, "font": font, "size": size}]}
 
     head = line(108, 315, 84, 94, "that a differentiable estimator can be constructed:", "NimbusRomNo9L-Regu", 10.0)
@@ -1338,7 +1338,7 @@ def test_a_small_fraction_after_a_relation_joins_the_line() -> None:
     numerator = line(414, 418, 82, 89, "1", "CMR7", 7.0)
     numerator["spans"][0]["math"] = True  # The mark _mark_math_roman puts on upright digits in a formula
     denominator = line(414, 419, 90, 97, "L", "CMMI7", 7.0)
-    data: PdfDict = {
+    data: PageDict = {
         "blocks": [
             {"type": 0, "bbox": (108, 84, 406, 95), "lines": [head, rel]},
             {"type": 0, "bbox": (414, 82, 419, 97), "lines": [numerator, denominator]},
@@ -1356,7 +1356,7 @@ def test_a_numerator_left_in_its_own_block_rejoins_the_paragraph() -> None:
 
     reg, cmmi = "NimbusRomNo9L-Regu", "CMMI7"
 
-    def line(*spans: PdfDict) -> PdfDict:
+    def line(*spans: Span) -> Line:
         box = pymupdf.Rect(spans[0]["bbox"])
         for span in spans[1:]:
             box |= pymupdf.Rect(span["bbox"])
@@ -1382,7 +1382,7 @@ def test_a_numerator_left_in_its_own_block_rejoins_the_paragraph() -> None:
         _glyph("4", "CMR5", 4.8, 0, (223.6, 555.4, 226.9, 560.3), (223.6, 555.4, 226.9, 559.1), math=True),
     )
     sub = line(_glyph("T,i", "CMMI5", 4.8, 0, (223.3, 560.3, 232.7, 565.1), (223.3, 560.3, 232.7, 563.9), math=True))
-    data: PdfDict = {
+    data: PageDict = {
         "blocks": [
             {"type": 0, "bbox": (105.0, 558.9, 490.3, 573.2), "lines": [lead, denominator, tail]},
             {"type": 0, "bbox": (219.6, 555.4, 232.7, 565.1), "lines": [g4, sub]},
@@ -1645,16 +1645,16 @@ def test_a_period_after_a_small_denominator_does_not_make_it_a_heading() -> None
     character, so the denominator is still joined back to the line of the fraction."""
     from app.formats.pdf_rejoin import _larger_text
 
-    denominator = {
+    denominator: Line = {
         "spans": [
             {"text": "j", "font": "CMMI6", "size": 6.0},
             {"text": "e", "font": "CMMI8", "size": 8.0},
             {"text": " .", "font": "NimbusRomNo9L-Regu", "size": 10.9},
         ]
     }
-    sigma = {"spans": [{"text": "P", "font": "CMEX8", "size": 8.0}]}
+    sigma: Line = {"spans": [{"text": "P", "font": "CMEX8", "size": 8.0}]}
     assert not _larger_text(denominator, sigma)
-    heading = {"spans": [{"text": "4.2 SQuAD", "font": "NimbusRomNo9L-Medi", "size": 12.0}]}
+    heading: Line = {"spans": [{"text": "4.2 SQuAD", "font": "NimbusRomNo9L-Medi", "size": 12.0}]}
     assert _larger_text(heading, {"spans": [{"text": "words", "font": "NimbusRomNo9L-Regu", "size": 9.0}]})
 
 
@@ -1664,7 +1664,7 @@ def test_a_bold_run_in_label_starts_a_paragraph() -> None:
     new paragraph. Spaces are added between spans split by word before recognizing them."""
     from app.formats.pdf_split_lines import _label_lead, _split_lines
 
-    def span(text: str, x0: float, x1: float, bold: bool = False) -> PdfDict:
+    def span(text: str, x0: float, x1: float, bold: bool = False) -> Span:
         return {
             "text": text,
             "size": 10.0,
@@ -1673,8 +1673,8 @@ def test_a_bold_run_in_label_starts_a_paragraph() -> None:
             "flags": 20 if bold else 4,
         }
 
-    def words(text: str, x0: float, bold_words: int = 0) -> list[PdfDict]:
-        out: list[PdfDict] = []
+    def words(text: str, x0: float, bold_words: int = 0) -> list[Span]:
+        out: list[Span] = []
         x = x0
         for k, word in enumerate(text.split()):
             out.append(span(word, x, x + 5 * len(word), bold=k < bold_words))
@@ -1742,7 +1742,7 @@ def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator() -> 
     original glyphs, on top of the translation."""
     from app.formats.pdf_rejoin import _rejoin_split_lines
 
-    def span(text: str, x0: float, y0: float, x1: float, y1: float, size: float, base: float) -> PdfDict:
+    def span(text: str, x0: float, y0: float, x1: float, y1: float, size: float, base: float) -> Span:
         return {
             "text": text,
             "bbox": (x0, y0, x1, y1),
@@ -1752,7 +1752,7 @@ def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator() -> 
             "flags": 4,
         }
 
-    def line(*spans: PdfDict) -> PdfDict:
+    def line(*spans: Span) -> Line:
         box = pymupdf.Rect()
         for item in spans:
             box |= pymupdf.Rect(item["bbox"])
@@ -1764,7 +1764,7 @@ def test_a_numeral_denominator_cut_into_the_next_block_joins_its_numerator() -> 
     )
     denominator = line(span("75", 377.8, 628.9, 384.8, 637.3, 7.0, 634.4))
     nxt = line(span("the encoder and decoder is a quantization step producing", 77.4, 634.9, 352.1, 645.7, 9.0, 642.6))
-    data: PdfDict = {
+    data: PageDict = {
         "blocks": [
             {"type": 0, "bbox": head["bbox"], "lines": [head]},
             {"type": 0, "bbox": (77.4, 628.9, 384.8, 645.7), "lines": [denominator, nxt]},

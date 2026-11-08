@@ -4,7 +4,7 @@ from app.formats.pdf_blocks import TextBlock
 from app.formats.pdf_crop import _absorb_curves
 from app.formats.pdf_restore import _assign_restored_parts
 from app.formats.pdf_runs import FormulaRun, TextRun, intersecting_curves, split_page_boundary, strip_boundary
-from app.formats.pdf_types import PdfDict
+from app.formats.pdf_types import Formula, Span
 from app.formats.pdf_units import _placeholderize, _prepare_unit
 from app.prompts import build_messages
 
@@ -17,7 +17,7 @@ def _span(
     x0: float = 0.0,
     y0: float = 0.0,
     x1: float | None = None,
-) -> PdfDict:
+) -> Span:
     width = 12 if x1 is None else x1 - x0
     return {
         "text": text,
@@ -29,7 +29,7 @@ def _span(
     }
 
 
-def _block(span_lines: list[list[PdfDict]], size: float = 12.0) -> TextBlock:
+def _block(span_lines: list[list[Span]], size: float = 12.0) -> TextBlock:
     return TextBlock(
         page=0,
         rect=pymupdf.Rect(0, 0, 200, 20),
@@ -155,7 +155,7 @@ def test_assign_splits_a_paragraph_cut_by_a_display_at_the_boundary() -> None:
         color="#000",
         bold=False,
     )
-    formulas = [{"name": "a", "owner": 0}, {"name": "b", "owner": 1}]
+    formulas: list[Formula] = [{"name": "a", "owner": 0}, {"name": "b", "owner": 1}]
     restored = "初始学习率\x01i\x021\x01/i\x02为 0.1：{|}单次更新步骤要用到\x01i\x022\x01/i\x02。"
     parts, lists = _assign_restored_parts(restored, [left, right], formulas, apart=True)
     assert parts == ["初始学习率\x01i\x021\x01/i\x02为 0.1：", "单次更新步骤要用到\x01i\x021\x01/i\x02。"]
@@ -185,7 +185,7 @@ def test_intersecting_curve_joins_the_formula_box() -> None:
     rule = pymupdf.Rect(0, 40, 400, 41)  # full-width rule, not merged
     curves = intersecting_curves(box, [bar, rule])
     assert curves == (pymupdf.Rect(bar),)
-    formula: PdfDict = {
+    formula: Formula = {
         "bbox": pymupdf.Rect(box),
         "d": 4.0,
         "dx": 10.0,

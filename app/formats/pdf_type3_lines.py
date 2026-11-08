@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import statistics
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import pymupdf
 
@@ -20,6 +20,7 @@ from .pdf_type3_glyphs import (
     _sure,
     _text_of,
 )
+from .pdf_types import Line, Span
 
 if TYPE_CHECKING:
     from .pdf_type3 import Type3Reader
@@ -48,7 +49,7 @@ _PAD = 0.6
 # ---- Writing PyMuPDF lines ----
 
 
-def _line_dict(line: _Line, reader: Type3Reader) -> dict[str, Any] | None:
+def _line_dict(line: _Line, reader: Type3Reader) -> Line | None:
     styles = _glyph_styles(line, reader)
     items: list[tuple[str, Glyph]] = []
     for index, token in enumerate(line.tokens):
@@ -61,7 +62,7 @@ def _line_dict(line: _Line, reader: Type3Reader) -> dict[str, Any] | None:
         if glyph is _SPACE:
             before, after = items[index - 1][0], items[index + 1][0]
             items[index] = (before if before in _PROSE or after not in _PROSE else after, glyph)
-    spans: list[dict[str, Any]] = []
+    spans: list[Span] = []
     run: list[Glyph] = []
     current = ""
     for style, glyph in items:
@@ -363,7 +364,7 @@ def _label_text(glyph: Glyph, reader: Type3Reader) -> str:
     return _text_of(glyph, reader.labels)
 
 
-def _span(run: list[Glyph], style: str, line: _Line, reader: Type3Reader) -> dict[str, Any]:
+def _span(run: list[Glyph], style: str, line: _Line, reader: Type3Reader) -> Span:
     glyphs = [glyph for glyph in run if glyph is not _SPACE]
     text = "".join(" " if glyph is _SPACE else _label_text(glyph, reader) for glyph in run)
     ink = pymupdf.Rect()

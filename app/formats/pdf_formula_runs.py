@@ -22,7 +22,7 @@ from .pdf_runs import (
     TextRun,
 )
 from .pdf_split_lines import MONO_FONT_RE
-from .pdf_types import PdfDict
+from .pdf_types import Span, SpanRun
 
 
 def _is_symbol_span(text: str) -> bool:
@@ -34,7 +34,7 @@ def _is_symbol_span(text: str) -> bool:
     return all(_is_formula_char(c) for c in stripped)
 
 
-def _smaller_prose_line(spans: list[PdfDict], main_size: float) -> bool:
+def _smaller_prose_line(spans: list[Span], main_size: float) -> bool:
     """The whole line is smaller than the largest heading in the block and is a complete sentence. That is body text
     under the heading, not a script."""
     visible = [span for span in spans if str(span.get("text") or "").strip()]
@@ -45,13 +45,13 @@ def _smaller_prose_line(spans: list[PdfDict], main_size: float) -> bool:
     return _prose_units("".join(str(span.get("text") or "") for span in visible)) >= 4
 
 
-def _light_text(span: PdfDict) -> bool:
+def _light_text(span: Span) -> bool:
     color = int(span.get("color") or 0)
     red, green, blue = (color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF
     return bool(span["text"].strip()) and 0.299 * red + 0.587 * green + 0.114 * blue >= 220
 
 
-def _is_formula_span(span: PdfDict, main_size: float, *, prose_line: bool = False, code: bool = False) -> bool:
+def _is_formula_span(span: Span, main_size: float, *, prose_line: bool = False, code: bool = False) -> bool:
     """Inline formula: a span in a math font, characters boxed by the formula detection model, or a script span
     clearly smaller than body text (citation numbers and the like).
     One or two characters in bold CM (CMBX and similar) count as a single mathbf letter; bold words are still body text.
@@ -80,7 +80,7 @@ def _is_formula_span(span: PdfDict, main_size: float, *, prose_line: bool = Fals
     return _is_symbol_span(span["text"])
 
 
-def _formula_markup(run_spans: list[PdfDict], main_size: float) -> str:
+def _formula_markup(run_spans: list[Span], main_size: float) -> str:
     """Join a formula run into a string with superscript and subscript sentinels (\\x01s\\x02..\\x01/s\\x02 for a
     superscript, b for a subscript).
     After they are restored into the translation the rendering layer turns them into <sup>/<sub>, so y_1^T is no
@@ -131,7 +131,7 @@ _VARIABLE_BASE_RE = re.compile(r"^[A-Za-z]['′]?$")
 _ASSIGN_OPS = {"=", "<", ">", "+", "-", "−"}
 
 
-def _letter_formula_runs(span_lines: list[list[PdfDict]], runs: list[PdfDict]) -> list[PdfDict]:
+def _letter_formula_runs(span_lines: list[list[Span]], runs: list[SpanRun]) -> list[SpanRun]:
     """Single italic letters in a text font mixed with brackets and equals signs that the whole-text font pass marked
     as formula (P(y = 1), f(x)): P and y are body italics and the brackets and equals signs are each isolated
     punctuation, so none of them is a formula alone. A contiguous sequence on one line that contains both punctuation
@@ -141,19 +141,19 @@ def _letter_formula_runs(span_lines: list[list[PdfDict]], runs: list[PdfDict]) -
     sequence covers are merged into it. Returns the new sequences; covered formulas are removed from runs"""
     taken = {id(span) for run in runs for span in run["spans"]}
 
-    def math_mark(span: PdfDict) -> bool:
+    def math_mark(span: Span) -> bool:
         return bool(span.get("math")) and _LONE_PUNCT_RE.match(span["text"].strip() or " ") is not None
 
-    def italic(span: PdfDict) -> bool:
+    def italic(span: Span) -> bool:
         return bool(int(span.get("flags") or 0) & 2)
 
-    def letter(span: PdfDict) -> bool:
+    def letter(span: Span) -> bool:
         return italic(span) and _VARIABLE_BASE_RE.match(span["text"].strip()) is not None
 
-    def edge(span: PdfDict) -> bool:
+    def edge(span: Span) -> bool:
         return math_mark(span) or letter(span) or id(span) in taken
 
-    def assigned(window: list[PdfDict]) -> bool:
+    def assigned(window: list[Span]) -> bool:
         """The sequence ends with a number directly preceded by an operator marked as formula (= 1, < 0)"""
         words = [span for span in window if span["text"].strip()]
         return (
@@ -163,7 +163,7 @@ def _letter_formula_runs(span_lines: list[list[PdfDict]], runs: list[PdfDict]) -
             and words[-2]["text"].strip() in _ASSIGN_OPS
         )
 
-    found: list[PdfDict] = []
+    found: list[SpanRun] = []
     for line_no, spans in enumerate(span_lines):
         i, n = 0, len(spans)
         while i < n:
@@ -205,7 +205,7 @@ def _letter_formula_runs(span_lines: list[list[PdfDict]], runs: list[PdfDict]) -
 
 
 def _script_base(
-    span: PdfDict,
+    span: Span,
     bbox: pymupdf.Rect,
     block_size: float,
     math: bool = False,
@@ -242,7 +242,7 @@ def _script_base(
     return math or base.x0 - 1 <= center <= base.x1 + 2.0
 
 
-def _has_text_base(run: PdfDict, span_lines: list[list[PdfDict]], members: set[int], block_size: float) -> bool:
+def _has_text_base(run: SpanRun, span_lines: list[list[Span]], members: set[int], block_size: float) -> bool:
     """A run of small characters only has a character at body size, not in a formula, directly to its left on the same
     line: that character is its base."""
     if run["max_size"] >= block_size * 0.79:
@@ -263,7 +263,7 @@ def _has_text_base(run: PdfDict, span_lines: list[list[PdfDict]], members: set[i
     return False
 
 
-def _absorb_script_bases(runs: list[PdfDict], span_lines: list[list[PdfDict]], block_size: float) -> None:
+def _absorb_script_bases(runs: list[SpanRun], span_lines: list[list[Span]], block_size: float) -> None:
     """Merge upright variables attached to a script into that script. Words and citation numbers stay in body text.
     Only the scripts at the start of a run are considered: when the scripts of N are followed by an arrow or equals
     sign, the letter is still their base."""
@@ -284,7 +284,7 @@ def _absorb_script_bases(runs: list[PdfDict], span_lines: list[list[PdfDict]], b
         if scripts.is_empty:
             continue
         line_no, start, end = run["pos"]
-        candidates: list[tuple[int, int, PdfDict]] = []
+        candidates: list[tuple[int, int, Span]] = []
         if start > 0:
             candidates.append((line_no, start - 1, span_lines[line_no][start - 1]))
         if line_no > 0:
@@ -318,7 +318,7 @@ _MATH_GLUE_RE = re.compile(rf"^(?:{_GLUE_ATOM})(?:\s+{_GLUE_ATOM})*$")
 _ORDINAL_SUFFIXES = {"st", "nd", "rd", "th"}
 
 
-def _absorb_inner_blanks(runs: list[PdfDict], span_lines: list[list[PdfDict]]) -> None:
+def _absorb_inner_blanks(runs: list[SpanRun], span_lines: list[list[Span]]) -> None:
     """Merge whitespace spans between two members of one formula on the same line into the formula. Once several
     pieces are merged into one, a space between them belongs to no piece, and left in body text it becomes an extra
     space after the placeholder."""
@@ -342,7 +342,7 @@ _ITALIC_GLUE_RE = re.compile(r"^[\s()\[\]{}.,=<>+\-*/'A-Za-z0-9]+$")
 _ITALIC_OPERATOR_RE = re.compile(r"[()\[\]{}=<>+\-*/]")
 
 
-def _is_math_glue(span: PdfDict) -> bool:
+def _is_math_glue(span: Span) -> bool:
     """Digits, brackets, operators or operator names in CMR; variables, brackets and operators in a body italic. The
     same characters in an upright text font are not taken.
     Spans in a math font are taken only as single punctuation: other ones outside a formula were put back into body
@@ -369,7 +369,7 @@ def _is_math_glue(span: PdfDict) -> bool:
     return operator or bool(re.search(r"[A-Za-z0-9]", text))
 
 
-def _attach_span(run: PdfDict, span: PdfDict, line_no: int, index: int) -> None:
+def _attach_span(run: SpanRun, span: Span, line_no: int, index: int) -> None:
     run["spans"].append(span)
     run["bbox"] |= pymupdf.Rect(span["bbox"])
     run["max_size"] = max(float(run["max_size"]), float(span.get("size") or 0))
@@ -379,9 +379,9 @@ def _attach_span(run: PdfDict, span: PdfDict, line_no: int, index: int) -> None:
 
 
 def _gap_is_clear(
-    span: PdfDict,
-    run: PdfDict,
-    span_lines: list[list[PdfDict]],
+    span: Span,
+    run: SpanRun,
+    span_lines: list[list[Span]],
     taken: set[int],
 ) -> bool:
     """No characters outside a formula may lie between the two boxes. Whitespace may."""
@@ -407,17 +407,17 @@ def _gap_is_clear(
 
 
 def _glue_host(
-    span: PdfDict,
-    runs: list[PdfDict],
-    span_lines: list[list[PdfDict]],
+    span: Span,
+    runs: list[SpanRun],
+    span_lines: list[list[Span]],
     block_size: float,
     taken: set[int],
-) -> PdfDict | None:
+) -> SpanRun | None:
     box = pymupdf.Rect(span["bbox"])
     # Vertical comparison uses character height: the font boxes of the CMSY minus sign and vertical bar reach the next
     # line, and P( at the start of the next line would attach to the formula on the line above
     text = _text_box(span)
-    best: tuple[float, PdfDict] | None = None
+    best: tuple[float, SpanRun] | None = None
     for run in runs:
         other = run["bbox"]
         ink = _run_text_box(run)
@@ -435,11 +435,11 @@ def _glue_host(
 
 
 def _blanks_between(
-    span: PdfDict,
-    run: PdfDict,
-    span_lines: list[list[PdfDict]],
+    span: Span,
+    run: SpanRun,
+    span_lines: list[list[Span]],
     taken: set[int],
-) -> list[tuple[int, int, PdfDict]]:
+) -> list[tuple[int, int, Span]]:
     """Whitespace between the formula and this glue span. Once it is merged into the formula, the text sent for
     translation has no leftover gap."""
     box = pymupdf.Rect(span["bbox"])
@@ -450,7 +450,7 @@ def _blanks_between(
         left, right = other.x1, box.x0
     if right - left <= 0.4:
         return []
-    found: list[tuple[int, int, PdfDict]] = []
+    found: list[tuple[int, int, Span]] = []
     for line_no, line in enumerate(span_lines):
         for index, item in enumerate(line):
             if id(item) in taken or str(item.get("text") or "").strip():
@@ -465,8 +465,8 @@ def _blanks_between(
 
 
 def _absorb_math_glue(
-    runs: list[PdfDict],
-    span_lines: list[list[PdfDict]],
+    runs: list[SpanRun],
+    span_lines: list[list[Span]],
     block_size: float,
 ) -> None:
     """Merge CMR digits, brackets and operator names attached to a formula into it. Distant digits stay body text."""
@@ -486,7 +486,7 @@ def _absorb_math_glue(
     ]
     while pending:
         attached = False
-        still: list[tuple[int, int, PdfDict]] = []
+        still: list[tuple[int, int, Span]] = []
         for line_no, index, span in pending:
             host = _glue_host(span, runs, span_lines, block_size, taken)
             if host is None:
@@ -503,7 +503,7 @@ def _absorb_math_glue(
         pending = still
 
 
-def _runs_into_word(line: list[PdfDict], index: int, taken: set[int]) -> bool:
+def _runs_into_word(line: list[Span], index: int, taken: set[int]) -> bool:
     """The span is followed without a space by letters or digits of body text: in B/T = 0.31, "= 0" is followed by "."
     and "31 likely". Merging it into a formula would split a number in two, so the whole sequence stays in body text.
     Spans in between that could also be merged are skipped over."""
@@ -523,7 +523,7 @@ def _runs_into_word(line: list[PdfDict], index: int, taken: set[int]) -> bool:
     return False
 
 
-def _ordinal_reading(run: PdfDict, block_size: float) -> str | None:
+def _ordinal_reading(run: SpanRun, block_size: float) -> str | None:
     """Ordinals such as i^{th} and 1^{st}. A script whose superscript is not st/nd/rd/th is not an ordinal."""
     base: list[str] = []
     suffix: list[str] = []
@@ -542,10 +542,10 @@ def _ordinal_reading(run: PdfDict, block_size: float) -> str | None:
     return f"{head}-{tail}"
 
 
-def _release_ordinals(runs: list[PdfDict], block_size: float) -> tuple[dict[int, str], set[int]]:
+def _release_ordinals(runs: list[SpanRun], block_size: float) -> tuple[dict[int, str], set[int]]:
     """Ordinals are not turned into formula images; they are sent for translation as i-th so the model can translate
     them as "第 i 个"."""
-    kept: list[PdfDict] = []
+    kept: list[SpanRun] = []
     ordinal_at: dict[int, str] = {}
     ordinal_skip: set[int] = set()
     for run in runs:
@@ -577,12 +577,12 @@ def _release_ordinals(runs: list[PdfDict], block_size: float) -> tuple[dict[int,
 _ACCENT_CHARS = {"^", "ˆ", "̂", "~", "˜", "̃", "¯", "̄", "´", "`", "˙", "̇", "¨", "̈", "ˇ", "̌", "˘", "̆", "˚", "̊", "⃗"}
 
 
-def _line_x0(spans: list[PdfDict]) -> float:
+def _line_x0(spans: list[Span]) -> float:
     xs = [pymupdf.Rect(s["bbox"]).x0 for s in spans if s.get("bbox") is not None]
     return min(xs) if xs else 0.0
 
 
-def _span_box(span: PdfDict) -> pymupdf.Rect:
+def _span_box(span: Span) -> pymupdf.Rect:
     raw = span.get("bbox")
     return pymupdf.Rect(raw) if raw is not None else pymupdf.Rect(0, 0, 0, 0)
 
@@ -601,7 +601,7 @@ def _union_box(a: pymupdf.Rect, b: pymupdf.Rect) -> pymupdf.Rect:
     return pymupdf.Rect(struct.unpack("4f", struct.pack("4f", *box)))
 
 
-def _same_text_style(pending: TextRun, span: PdfDict, emphasis: Emphasis) -> bool:
+def _same_text_style(pending: TextRun, span: Span, emphasis: Emphasis) -> bool:
     return (
         pending.emphasis == emphasis
         and pending.font == str(span.get("font") or "")
@@ -609,7 +609,7 @@ def _same_text_style(pending: TextRun, span: PdfDict, emphasis: Emphasis) -> boo
     )
 
 
-def _extend_text_run(pending: TextRun | None, span: PdfDict, emphasis: Emphasis, line: int) -> TextRun:
+def _extend_text_run(pending: TextRun | None, span: Span, emphasis: Emphasis, line: int) -> TextRun:
     """Merge adjacent spans on the same line with the same font and emphasis into one text run."""
     bbox = _span_box(span)
     baseline = span["origin"][1] if span.get("origin") else bbox.y1
@@ -628,7 +628,7 @@ def _extend_text_run(pending: TextRun | None, span: PdfDict, emphasis: Emphasis,
     )
 
 
-def _line_edge(span_lines: list[list[PdfDict]], line_no: int, side: str) -> float:
+def _line_edge(span_lines: list[list[Span]], line_no: int, side: str) -> float:
     edges: list[float] = []
     for span in span_lines[line_no]:
         raw = span.get("bbox")
@@ -641,16 +641,16 @@ def _line_edge(span_lines: list[list[PdfDict]], line_no: int, side: str) -> floa
     return min(edges) if side == "x0" else max(edges)
 
 
-def _only_this_run(run: PdfDict, span_lines: list[list[PdfDict]], head: bool) -> bool:
+def _only_this_run(run: SpanRun, span_lines: list[list[Span]], head: bool) -> bool:
     line_no, start, end = run["pos"]
     spans = span_lines[line_no][:start] if head else span_lines[line_no][end + 1 :]
     return not any(str(span.get("text") or "").strip() for span in spans)
 
 
 def _continues_wrapped_formula(
-    prev: PdfDict,
-    nxt: PdfDict,
-    span_lines: list[list[PdfDict]],
+    prev: SpanRun,
+    nxt: SpanRun,
+    span_lines: list[list[Span]],
     block_size: float,
 ) -> bool:
     """A formula at a line end continues at the start of the next line: one formula split by a line break. No body
@@ -671,7 +671,7 @@ def _continues_wrapped_formula(
     return -block_size * 0.5 <= y_gap < block_size * 1.8
 
 
-def _ends_row(run: PdfDict, span_lines: list[list[PdfDict]]) -> bool:
+def _ends_row(run: SpanRun, span_lines: list[list[Span]]) -> bool:
     """No other characters to the right of run at the same line height."""
     box = _run_text_box(run)
     own = {id(span) for span in run["spans"]}
@@ -686,7 +686,7 @@ def _ends_row(run: PdfDict, span_lines: list[list[PdfDict]]) -> bool:
     return True
 
 
-def _run_text_box(run: PdfDict) -> pymupdf.Rect:
+def _run_text_box(run: SpanRun) -> pymupdf.Rect:
     box = pymupdf.Rect()
     for span in run["spans"]:
         if str(span.get("text") or "").strip() and "bbox" in span:
@@ -694,7 +694,7 @@ def _run_text_box(run: PdfDict) -> pymupdf.Rect:
     return box if not box.is_empty else pymupdf.Rect(run["bbox"])
 
 
-def _fraction_pair(a: PdfDict, b: PdfDict, block_size: float) -> bool:
+def _fraction_pair(a: SpanRun, b: SpanRun, block_size: float) -> bool:
     """One run is entirely small and touches a small band of the other run vertically, centered horizontally: they are
     the numerator and denominator of one inline fraction.
     Footnote marks at the start of two adjacent lines also align vertically, but they are a line apart and do not
@@ -703,7 +703,7 @@ def _fraction_pair(a: PdfDict, b: PdfDict, block_size: float) -> bool:
     for whole, other in ((a, b), (b, a)):
         if whole["max_size"] >= small:
             continue
-        piece = _small_band(other, whole["bbox"], small)
+        piece = _small_band(other["spans"], whole["bbox"], small)
         if piece is None:
             continue
         box = whole["bbox"]
@@ -716,7 +716,7 @@ def _fraction_pair(a: PdfDict, b: PdfDict, block_size: float) -> bool:
     return False
 
 
-def _run_baseline(run: PdfDict) -> float:
+def _run_baseline(run: SpanRun) -> float:
     """Median baseline of the body-size spans in a formula run. Raised and lowered scripts do not count."""
     sizes = [float(span.get("size") or 0) for span in run["spans"] if span.get("origin") is not None]
     top = max(sizes, default=0.0)
@@ -729,10 +729,10 @@ def _run_baseline(run: PdfDict) -> float:
 
 
 def _join_line_wrapped_formulas(
-    runs: list[PdfDict],
-    span_lines: list[list[PdfDict]],
+    runs: list[SpanRun],
+    span_lines: list[list[Span]],
     block_size: float,
-) -> list[PdfDict]:
+) -> list[SpanRun]:
     """Collect a formula split by line breaks into several pieces of one placeholder. The bboxes are not merged, or
     the crop would include the full column width of blank space between the two lines.
     Pieces wider than a line when placed side by side are not collected (a long URL across two lines): a placeholder
@@ -748,7 +748,7 @@ def _join_line_wrapped_formulas(
         ),
         default=0.0,
     )
-    joined: list[PdfDict] = []
+    joined: list[SpanRun] = []
     for run in runs:
         if joined and _continues_wrapped_formula(joined[-1], run, span_lines, block_size):
             pieces = [joined[-1], *joined[-1].get("extras", []), run]

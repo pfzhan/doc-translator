@@ -293,7 +293,7 @@ eval/              PDF 分段、行内公式和模型的评测脚本，用法和
 .venv/bin/pytest --cov
 ```
 
-`mypy` 的设置在 `pyproject.toml` 里，`app/`、`tests/`、`scripts/` 和 `eval/` 全部按 `--strict` 检查。pymupdf 返回的字典（文字 span、绘图路径）在 `app/formats/pdf_types.py` 里统一标注为 `PdfDict`。测试使用临时数据目录（见上文 `DOC_TRANSLATOR_DATA`），不会用到项目的 `data/`。`tests/test_web_ui.py` 在 Chromium 里打开网页，出现任何脚本错误都会失败；没装 Playwright 或 Chromium 时跳过。
+`mypy` 的设置在 `pyproject.toml` 里，`app/`、`tests/`、`scripts/` 和 `eval/` 全部按 `--strict` 检查。pymupdf 返回的文字、绘图和图片字典没有类型，`app/formats/pdf_types.py` 用 `TypedDict` 声明了它们的结构（`Span`、`Line`、`Block`、`Drawing` 等）以及 PDF 流程自己构造的公式记录（`Formula`），并只通过 `text_dict`、`page_drawings` 和 `image_infos` 读取，类型转换只发生在这几处。测试使用临时数据目录（见上文 `DOC_TRANSLATOR_DATA`），不会用到项目的 `data/`。`tests/test_web_ui.py` 在 Chromium 里打开网页，出现任何脚本错误都会失败；没装 Playwright 或 Chromium 时跳过。
 
 `--cov` 统计 `app/` 的行覆盖率和分支覆盖率，并列出测试没有覆盖到的行；低于 `pyproject.toml` 里的 `fail_under`（90%）时失败。加 `--cov-report=html` 会在 `htmlcov/` 生成可浏览的报告。
 

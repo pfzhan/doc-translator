@@ -17,10 +17,10 @@ from .pdf_math import (
     _line_box,
     _text_bounds,
 )
-from .pdf_types import LineItem, PdfDict
+from .pdf_types import Line, LineItem, Span
 
 
-def _text_box(span: PdfDict) -> pymupdf.Rect:
+def _text_box(span: Span) -> pymupdf.Rect:
     """The height of the line the span occupies. Math fonts are measured by glyph ink, the rest by PyMuPDF's
     box.
 
@@ -29,7 +29,7 @@ def _text_box(span: PdfDict) -> pymupdf.Rect:
     return pymupdf.Rect(_text_bounds(span))
 
 
-def _stacked_rows(upper: list[PdfDict], lower: list[PdfDict]) -> bool:
+def _stacked_rows(upper: list[Span], lower: list[Span]) -> bool:
     """Both pieces are body text of the same size and their baselines differ by more than about a third of the
     font size: they are two lines close above each other, not one line (an action line in a figure pressed onto
     the caption, with ink boxes overlapping by more than half). Superscripts and subscripts are smaller, and
@@ -282,7 +282,7 @@ def _cut_header_cells(items: list[LineItem], columns: Sequence[float]) -> tuple[
     found: set[int] = set()
     for row in rows:
         spans = sorted((span for index in row for span in items[index][2]), key=lambda span: span["bbox"][0])
-        pieces: list[list[PdfDict]] = []
+        pieces: list[list[Span]] = []
         for span in spans:
             if pieces and float(span["bbox"][0]) - float(pieces[-1][-1]["bbox"][2]) < float(span["size"]) * 0.5:
                 pieces[-1].append(span)
@@ -402,9 +402,9 @@ def _cut_leaders(items: list[LineItem], toc_page: bool = False) -> tuple[list[Li
         cut = _leader_start(pieces, text, toc_page)
         if cut is None or not re.search(r"[^\W\d_]", text[:cut]):
             continue
-        kept: dict[int, list[PdfDict]] = {index: [] for index in row}
-        dropped: list[PdfDict] = []
-        shared: list[PdfDict] = []
+        kept: dict[int, list[Span]] = {index: [] for index in row}
+        dropped: list[Span] = []
+        shared: list[Span] = []
         offset = 0
         for index, span in pieces:
             body = str(span["text"])
@@ -429,7 +429,8 @@ def _cut_leaders(items: list[LineItem], toc_page: bool = False) -> tuple[list[Li
             if not any(str(span["text"]).strip() for span in spans):
                 replaced[index] = None
                 continue
-            line = {"spans": spans, "bbox": items[index][1]}
+            row_box = items[index][1]
+            line: Line = {"spans": spans, "bbox": (row_box.x0, row_box.y0, row_box.x1, row_box.y1)}
             replaced[index] = (
                 "".join(str(span["text"]) for span in spans),
                 _line_box(line),
@@ -451,7 +452,7 @@ def _cut_leaders(items: list[LineItem], toc_page: bool = False) -> tuple[list[Li
     return out, leaders
 
 
-def _leader_start(pieces: list[tuple[int, PdfDict]], text: str, toc_page: bool) -> int | None:
+def _leader_start(pieces: list[tuple[int, Span]], text: str, toc_page: bool) -> int | None:
     """Character position where the leader starts. On a contents page a leader may have only two or three
     dots; without a leader, check whether the last piece is a page number far from the rest."""
     found = _LEADER_RE.search(text)
@@ -473,8 +474,8 @@ def _leader_start(pieces: list[tuple[int, PdfDict]], text: str, toc_page: bool) 
     return None
 
 
-def _span_offsets(pieces: list[tuple[int, PdfDict]]) -> list[tuple[int, PdfDict]]:
-    out: list[tuple[int, PdfDict]] = []
+def _span_offsets(pieces: list[tuple[int, Span]]) -> list[tuple[int, Span]]:
+    out: list[tuple[int, Span]] = []
     offset = 0
     for _, span in pieces:
         out.append((offset, span))
@@ -482,18 +483,18 @@ def _span_offsets(pieces: list[tuple[int, PdfDict]]) -> list[tuple[int, PdfDict]
     return out
 
 
-def _split_span(span: PdfDict, at: int) -> tuple[PdfDict, PdfDict]:
+def _split_span(span: Span, at: int) -> tuple[Span, Span]:
     """Cut span in two at character at, dividing the box in proportion to character counts. Used when the
     leader and the title are in the same span."""
     body = str(span["text"])
     box = pymupdf.Rect(span["bbox"])
     middle = box.x0 + box.width * at / max(len(body), 1)
-    left = {**span, "text": body[:at], "bbox": (box.x0, box.y0, middle, box.y1)}
-    right = {**span, "text": body[at:], "bbox": (middle, box.y0, box.x1, box.y1)}
+    left: Span = {**span, "text": body[:at], "bbox": (box.x0, box.y0, middle, box.y1)}
+    right: Span = {**span, "text": body[at:], "bbox": (middle, box.y0, box.x1, box.y1)}
     return left, right
 
 
-def _leader_of(spans: list[PdfDict], shared: list[PdfDict]) -> Leader | None:
+def _leader_of(spans: list[Span], shared: list[Span]) -> Leader | None:
     """spans are the leader and page number cut off; shared are the original spans that held the title as
     well and were cut."""
     visible = [span for span in spans if str(span["text"]).strip()]
@@ -600,7 +601,7 @@ def _vivid(color: int) -> bool:
     return max(rgb) - min(rgb) >= 0x60
 
 
-def _vivid_share(spans: Sequence[PdfDict]) -> float:
+def _vivid_share(spans: Sequence[Span]) -> float:
     """Share of letters in vivid colors, 0 when there are no letters"""
     letters = sum(char.isalpha() for span in spans for char in str(span.get("text") or ""))
     vivid = sum(
@@ -733,7 +734,7 @@ def _cut_item_breaks(group: list[int], items: list[LineItem], page_rows: Sequenc
     lefts = sorted({round(row.x0) for row in page_rows if first.x0 - 3 * size <= row.x0 <= first.x0 + 1})
     right = next((edge for left in lefts if (edge := _voted_right(left, size, page_rows)) is not None), None)
 
-    def spans(row: list[int]) -> list[PdfDict]:
+    def spans(row: list[int]) -> list[Span]:
         return [span for i in row for span in items[i][2]]
 
     parts = [list(rows[0])]

@@ -3,7 +3,7 @@
 import pymupdf
 import pytest
 
-from app.formats.pdf_types import PdfDict
+from app.formats.pdf_types import Span
 from tests.helpers import SAMPLES
 
 # A box as its corner coordinates: x0, y0, x1, y1
@@ -926,7 +926,7 @@ def test_blocks_inside_a_display_formula_box_are_kept() -> None:
 
     def block(text: str, corners: Corners, page: int = 0) -> TextBlock:
         rect = pymupdf.Rect(corners)
-        spans: list[PdfDict] = [{"text": text, "font": "TimesNewRomanPSMT", "size": 10.0, "flags": 0}]
+        spans: list[Span] = [{"text": text, "font": "TimesNewRomanPSMT", "size": 10.0, "flags": 0}]
         return TextBlock(
             page=page, rect=rect, line_rects=[rect], text=text, size=10.0, color="#000", bold=False, span_lines=[spans]
         )
@@ -960,7 +960,7 @@ def test_a_concordance_with_aligned_bold_keywords_stays_original() -> None:
     from app.formats.pdf_blocks import TextBlock
     from app.formats.pdf_skip import _concordance_ids
 
-    def span(text: str, x0: float, x1: float, y: float, bold: bool = False) -> PdfDict:
+    def span(text: str, x0: float, x1: float, y: float, bold: bool = False) -> Span:
         return {
             "text": text,
             "font": "NimbusRomNo9L-Medi" if bold else "NimbusRomNo9L-Regu",
@@ -970,7 +970,7 @@ def test_a_concordance_with_aligned_bold_keywords_stays_original() -> None:
             "origin": (x0, y),
         }
 
-    def blk(span_lines: list[list[PdfDict]]) -> TextBlock:
+    def blk(span_lines: list[list[Span]]) -> TextBlock:
         return TextBlock(
             page=0,
             rect=pymupdf.Rect(161, 108, 492, 157),
@@ -1077,7 +1077,7 @@ def test_shaded_panel_of_monospace_text_is_kept_whole() -> None:
 
     def block(y: float, *spans: tuple[str, str, int]) -> TextBlock:
         rect = pymupdf.Rect(160, y, 380, y + 10)
-        span_lines: list[list[PdfDict]] = [
+        span_lines: list[list[Span]] = [
             [
                 {"text": text, "font": font, "flags": flags, "size": 10.0, "bbox": _bbox(rect)}
                 for text, font, flags in spans
@@ -1177,7 +1177,7 @@ def test_the_rest_of_a_numbered_example_stays_original() -> None:
 
     def blk(text: str, corners: Corners, label: str = "") -> TextBlock:
         rect = pymupdf.Rect(corners)
-        spans: list[PdfDict] = [{"text": text, "bbox": _bbox(rect), "size": 10.0}]
+        spans: list[Span] = [{"text": text, "bbox": _bbox(rect), "size": 10.0}]
         if label:
             cut = rect.x0 + 30
             spans = [
@@ -1465,7 +1465,7 @@ def test_a_chinese_line_beside_its_english_rendering_is_kept_apart() -> None:
     from app.formats.pdf_math import _script_seam
     from app.formats.pdf_skip import _foreign_ids
 
-    def span(text: str, x0: float, x1: float) -> PdfDict:
+    def span(text: str, x0: float, x1: float) -> Span:
         return {
             "text": text,
             "font": "Times",
@@ -1506,7 +1506,7 @@ def test_the_english_rendering_below_a_chinese_example_stays_original() -> None:
     from app.formats.pdf_skip import _foreign_ids
 
     def blk(text: str, x0: float, y0: float, y1: float, first: str | None = None) -> TextBlock:
-        span: PdfDict = {"text": first or text, "font": "Times", "size": 10.0, "flags": 0}
+        span: Span = {"text": first or text, "font": "Times", "size": 10.0, "flags": 0}
         return TextBlock(
             page=0,
             rect=pymupdf.Rect(x0, y0, 470, y1),

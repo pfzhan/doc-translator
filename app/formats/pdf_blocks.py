@@ -23,7 +23,7 @@ from .pdf_layout import (
 from .pdf_runs import (
     Run,
 )
-from .pdf_types import PdfDict
+from .pdf_types import Formula, PageDict, Span, text_dict
 
 MATH_FONT_RE = re.compile(r"CMMI|CMB?SY|CMEX|MSBM|MSAM|Math|Symbol|StandardSym|STIX|Cambria Math", re.I)
 # Allowlist of exact math font names (a match means formula directly)
@@ -111,7 +111,7 @@ class Leader:
     baseline: float
     size: float
     color: int
-    dots: tuple[PdfDict, ...] = ()
+    dots: tuple[Span, ...] = ()
 
 
 # Gap from the bottom of one line box to the top of the next at normal line spacing, in units of font size. Used
@@ -130,7 +130,7 @@ class TextBlock:
     bold: bool
     # Original spans of each line (including whitespace spans): the text sent for translation rebuilt from them
     # matches the original character for character. None after merging blocks when one of them had none
-    span_lines: list[list[PdfDict]] | None = None
+    span_lines: list[list[Span]] | None = None
     # Ordered runs after placeholder rebuilding. Empty during extraction, filled in before translation.
     runs: list[Run] = field(default_factory=list)
     # Cell of a ruled table. Writing must not go outside it; blocks in different cells must not be merged into one
@@ -239,19 +239,19 @@ def _list_item(text: str) -> bool:
 _INK_PAD = 0.6
 
 
-def _attach_ink(page: pymupdf.Page, data: PdfDict) -> None:
+def _attach_ink(page: pymupdf.Page, data: PageDict) -> None:
     """Record for each span the ink box measured from the glyph outlines (span["ink"]), matched by text and origin.
 
     The default get_text box comes from the font's ascender and descender, independent of the glyphs. CMSY and CMEX
     reserve their ascender and descender for large brackets and radicals, so the box of a single arrow can cover the
     lines above and below."""
-    accurate = page.get_text("dict", flags=_TEXT_FLAGS | pymupdf.TEXT_ACCURATE_BBOXES)
+    accurate = text_dict(page, flags=_TEXT_FLAGS | pymupdf.TEXT_ACCURATE_BBOXES)
     found: dict[tuple[str, float, float], tuple[float, float, float, float]] = {}
     for block in accurate["blocks"]:
         for line in block.get("lines", []):
             for span in line["spans"]:
                 key = (span["text"], round(span["origin"][0], 1), round(span["origin"][1], 1))
-                found[key] = tuple(span["bbox"])
+                found[key] = span["bbox"]
     fonts: dict[str, list[tuple[bytes, bytes]]] | None = None
     glyphs: dict[tuple[str, float, float], list[tuple[int, float, float]]] | None = None
     for block in data.get("blocks", []):
@@ -300,7 +300,7 @@ def _char_origins(page: pymupdf.Page) -> dict[tuple[str, float, float], list[tup
         if char[1] >= 0
     }
     found: dict[tuple[str, float, float], list[tuple[int, float, float]]] = {}
-    for block in page.get_text("rawdict", flags=_TEXT_FLAGS).get("blocks", []):
+    for block in text_dict(page, "rawdict", flags=_TEXT_FLAGS).get("blocks", []):
         for line in block.get("lines", []):
             for span in line.get("spans", []):
                 chars = span.get("chars") or []
@@ -316,7 +316,7 @@ def _char_origins(page: pymupdf.Page) -> dict[tuple[str, float, float], list[tup
 
 
 def _drawn_ink(
-    span: PdfDict,
+    span: Span,
     fonts: list[tuple[bytes, bytes]],
     glyphs: list[tuple[int, float, float]],
 ) -> tuple[float, float, float, float] | None:
@@ -424,7 +424,7 @@ class _GlyphInk:
             if char[1] >= 0 and char[0] != 32
         ]
 
-    def x_bounds(self, span: PdfDict) -> tuple[float, float] | None:
+    def x_bounds(self, span: Span) -> tuple[float, float] | None:
         """Leftmost and rightmost ink of the characters in span. None if any character cannot be measured."""
         origin = span.get("origin")
         if not origin:
@@ -461,7 +461,7 @@ def _font_is_math(font: str) -> bool:
     return bool(MATH_FONT_RE.search(font))
 
 
-def _span_is_math(span: PdfDict) -> bool:
+def _span_is_math(span: Span) -> bool:
     """Formula check by font. math is set during extraction from the fonts of the whole text (see _mark_math_roman)."""
     return bool(span.get("math")) or _font_is_math(str(span.get("font") or ""))
 
@@ -480,7 +480,7 @@ def _color_value(color: str) -> int | None:
     return int(color[1:], 16) if re.fullmatch(r"#[0-9a-fA-F]{6}", color or "") else None
 
 
-def _small_caps_sizes(span_lines: list[list[PdfDict]]) -> dict[int, float]:
+def _small_caps_sizes(span_lines: list[list[Span]]) -> dict[int, float]:
     """The smaller part of small caps (INTRODUCTION with a larger first letter and smaller remaining letters), mapped to
     the size of the capitals.
 
@@ -590,7 +590,7 @@ class _CharIndex(list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]]):
 
 
 def _page_char_index(page: pymupdf.Page) -> _CharIndex:
-    data = page.get_text("rawdict", flags=_TEXT_FLAGS)
+    data = text_dict(page, "rawdict", flags=_TEXT_FLAGS)
     index: list[tuple[pymupdf.Rect, list[tuple[str, pymupdf.Rect]]]] = []
     for block in data["blocks"]:
         if block.get("type") != 0:
@@ -616,10 +616,10 @@ def _boxes_match(left: pymupdf.Rect, right: pymupdf.Rect) -> bool:
 
 
 def _outside_formula(
-    page_spans: list[PdfDict],
-    run_spans: Sequence[PdfDict],
+    page_spans: list[Span],
+    run_spans: Sequence[Span],
     char_index: _CharIndex | None = None,
-) -> list[PdfDict]:
+) -> list[Span]:
     """Spans on the page, excluding the formula's own characters.
 
     A formula's characters may have been cut out of a body text span (σ or y = 1 boxed by the formula detection model,
@@ -627,18 +627,18 @@ def _outside_formula(
     formula's spans, so the whole span would be treated as someone else's characters: when the formula is tall and
     wide (with fractions or superscripts) and a hole is cut for it, the formula's own characters are cut away. Such a
     span keeps only the non-whitespace characters left after the cut, as contiguous pieces. Character boxes come from
-    the span's chars (see _attach_chars), or from char_index when it has none."""
+    the span's char_boxes (see _attach_chars), or from char_index when it has none."""
     sources = [pymupdf.Rect(span["source"]) for span in run_spans if span.get("source") is not None]
     if not sources:
         return page_spans
     pieces = [pymupdf.Rect(span["bbox"]) for span in run_spans if span.get("bbox") is not None]
-    out: list[PdfDict] = []
+    out: list[Span] = []
     for span in page_spans:
         box = pymupdf.Rect(span["bbox"])
         if not any(_boxes_match(box, source) for source in sources):
             out.append(span)
             continue
-        chars = span.get("chars")
+        chars = span.get("char_boxes")
         if chars is None and char_index is not None:
             chars = char_index.find(box)
         if chars is None:
@@ -656,7 +656,7 @@ def _outside_formula(
                 continue
             if group:
                 x0, x1 = min(r.x0 for _c, r in group), max(r.x1 for _c, r in group)
-                rest = {**span, "text": "".join(c for c, _r in group), "bbox": (x0, box.y0, x1, box.y1)}
+                rest: Span = {**span, "text": "".join(c for c, _r in group), "bbox": (x0, box.y0, x1, box.y1)}
                 if span.get("ink") is not None:
                     rest["ink"] = (x0, span["ink"][1], x1, span["ink"][3])
                 out.append(rest)
@@ -668,11 +668,11 @@ def _outside_formula(
 _PART_GAP = 1.5
 
 
-def _formula_parts(formula: PdfDict) -> list[PdfDict]:
+def _formula_parts(formula: Formula) -> list[Formula]:
     return formula.get("parts") or [formula]
 
 
-def _by_chars[T: Hashable](spans: list[PdfDict], key: Callable[[PdfDict], T]) -> T:
+def _by_chars[T: Hashable](spans: list[Span], key: Callable[[Span], T]) -> T:
     """The value that covers the most characters."""
     counts: dict[T, int] = {}
     for span in spans:
@@ -828,7 +828,7 @@ class _FormulaImage:
     get bytes from elsewhere, bitmap font glyphs lose strokes or are drawn as black blocks, and the page tree is read
     corrupted. A child opens its own copy by file name (see _own_source)."""
 
-    def __init__(self, doc: pymupdf.Document, page: int, clip: pymupdf.Rect, spans: Sequence[PdfDict] = ()):
+    def __init__(self, doc: pymupdf.Document, page: int, clip: pymupdf.Rect, spans: Sequence[Span] = ()):
         self.doc, self.page, self.clip = doc, page, pymupdf.Rect(clip)
         self.spans = list(spans)
         self._pid = os.getpid()

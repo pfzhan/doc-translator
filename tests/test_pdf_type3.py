@@ -25,7 +25,7 @@ from app.formats.pdf_type3_glyphs import Glyph, Key, Label, OcrChar, OcrWord, _L
 from app.formats.pdf_type3_lines import _glyph_styles, _is_script
 from app.formats.pdf_type3_ocr import _HocrWords, _vote_labels
 from app.formats.pdf_type3_roles import _learn_roles
-from app.formats.pdf_types import PdfDict
+from app.formats.pdf_types import Line, PageDict, Span
 from app.formats.pdf_unit_blocks import _code_block
 
 PAPER = next(iter(sorted(Path("data/jobs").glob("*/implementing_data_cube.pdf"))), None)
@@ -438,8 +438,8 @@ def test_lines_join_by_baseline_even_when_their_boxes_overlap() -> None:
     """A tall inline bracket stretches the line box into the line above, but by baseline distance it is still the same
     paragraph."""
 
-    def line(y: float, top: float) -> PdfDict:
-        span = {
+    def line(y: float, top: float) -> Line:
+        span: Span = {
             "text": "word word",
             "font": "Times-Roman",
             "size": 10.0,
@@ -453,7 +453,7 @@ def test_lines_join_by_baseline_even_when_their_boxes_overlap() -> None:
 
 
 def test_drop_broken_lines_keeps_images_and_normal_spans() -> None:
-    data: PdfDict = {
+    data: PageDict = {
         "blocks": [
             {"type": 1, "bbox": (0, 0, 10, 10)},
             {

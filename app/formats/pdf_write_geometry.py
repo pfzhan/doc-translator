@@ -45,17 +45,17 @@ from .pdf_place import (
     _formula_slot,
     _inline_marks,
 )
-from .pdf_types import PdfDict
+from .pdf_types import Formula, Span, text_dict
 
 
-def _attach_chars(page: pymupdf.Page, spans: list[PdfDict]) -> None:
-    """Record the per-character boxes of each span (span["chars"]), matched by the span's box. Once the page has
+def _attach_chars(page: pymupdf.Page, spans: list[Span]) -> None:
+    """Record the per-character boxes of each span (span["char_boxes"]), matched by the span's box. Once the page has
     been erased they can no longer be looked up."""
     index = {_rect_key(rect): chars for rect, chars in _page_char_index(page)}
     for span in spans:
         chars = index.get(_rect_key(pymupdf.Rect(span["bbox"])))
         if chars is not None:
-            span["chars"] = chars
+            span["char_boxes"] = chars
 
 
 def _rect_key(rect: pymupdf.Rect) -> tuple[float, float, float, float]:
@@ -209,7 +209,7 @@ def _extend_leader(page: "pymupdf.Page", block: TextBlock, leader: Leader) -> No
         return
     band = pymupdf.Rect(block.rect.x0 - 1, block.rect.y0 - 1, leader.number.x0 - 0.5, block.rect.y1 + 1)
     right = band.x0
-    for item in page.get_text("dict", clip=band)["blocks"]:
+    for item in text_dict(page, clip=band)["blocks"]:
         for line in item.get("lines", []):
             for span in line["spans"]:
                 # Entries above and below are close, and their boxes reach into this line. Only glyphs with their
@@ -259,7 +259,7 @@ def _nowrap_parens(body: str) -> str:
 
 def _translation_html(
     text: str,
-    formulas: list[PdfDict],
+    formulas: list[Formula],
     block_size: float,
     render_size: float,
     max_width: float,
@@ -356,7 +356,7 @@ def _body_first_starts(
     blocks: list[TextBlock],
     items: list[tuple[TextBlock, str]],
     cjk: bool,
-    formulas_map: dict[int, list[PdfDict]] | None,
+    formulas_map: dict[int, list[Formula]] | None,
 ) -> dict[int, float]:
     """Fill the first-line space left free by a short translated label. When the translation is wider than the
     English, the body moves to the right of the label."""
@@ -568,7 +568,7 @@ class _Carry:
     larger size cannot hold them, and one character is pushed out at the end of each line"""
 
     text: str
-    formulas: list[PdfDict]
+    formulas: list[Formula]
     width: float
     size: float
     own_line: bool = False
@@ -832,7 +832,7 @@ def _room_below(
 
 def _split_filled_lines(
     text: str,
-    formulas: list[PdfDict],
+    formulas: list[Formula],
     em: float,
     block_size: float,
     width: float,
@@ -922,7 +922,7 @@ def _after_first_line(source: str, head: str) -> str:
 
 def _split_own_lines(
     text: str,
-    formulas: list[PdfDict],
+    formulas: list[Formula],
     em: float,
     block_size: float,
     host_width: float,
