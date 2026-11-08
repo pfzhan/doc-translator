@@ -11,6 +11,9 @@ requires-python = ">=3.12"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The project is not installed as a package. Without this only `python -m pytest` finds `app`, because only it puts
+# the current directory on sys.path; the `pytest` command, which CI and the README use, stops at tests/conftest.py
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 120
