@@ -304,7 +304,10 @@ and each paragraph's translation appears below it. The server must be running.
 - Paragraphs come from the page's layout: inline elements belong to the surrounding paragraph, and a blank line
   (`<br><br>`) starts a new one. Code blocks, form controls, editable content (`contenteditable`) and blocks marked
   `translate="no"` or `notranslate` are skipped, as are paragraphs already in the target language and text visible
-  only to screen readers. Marked text inside a sentence (a command name) stays in the translation unchanged. A
+  only to screen readers; such text inside a sentence (a link's longer name) is left out without splitting the
+  sentence. Marked text inside a sentence (a command name) stays in the translation unchanged, and so do rendered
+  formulas (KaTeX, MathJax, MathML, Wikipedia's): each is sent as its TeX source and copied from the page into the
+  translation, while a formula on a line of its own is left as it is. A
   translation goes below its original, except in flex and grid rows and inside inline boxes (tag chips,
   button-like links), where it follows the original on the same line so the layout holds.
 - The translation scope (翻译范围) on the options page is the whole page (the default) or only the main content

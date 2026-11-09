@@ -250,6 +250,78 @@ def test_screen_reader_text_is_not_sent(fake_server: FakeServer, worker: Worker,
     assert fake_server.sent_texts() == [VISIBLE]
 
 
+def test_screen_reader_text_inside_a_sentence_does_not_split_it(
+    fake_server: FakeServer, worker: Worker, page: Page
+) -> None:
+    # Positioning makes these blocks, which used to end the paragraph around them
+    html = """<!doctype html><title>t</title><style>
+        .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden;
+          clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+        .clipped { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); }
+      </style>
+      <p>Read the <a href="/guide">guide<span class="sr-only"> to installing the tool</span></a> before you
+        start<span class="clipped"> (opens a new window)</span>, then come back here.</p>"""
+    page.goto(fake_server.add_page("/sr-inline", html))
+    press_shortcut(worker, page)
+    wait_for_translations(page, 1)
+    assert fake_server.sent_texts() == ['Read the <a i="0">guide</a> before you start, then come back here.']
+    assert translations(page) == [TRANSLATED + "Read the guide before you start, then come back here."]
+
+
+KATEX = """<style>
+    .katex-mathml { position: absolute; clip: rect(1px, 1px, 1px, 1px); padding: 0; border: 0; height: 1px;
+      width: 1px; overflow: hidden; }
+    .katex .base { display: inline-block; }
+    .katex .vlist { display: table-cell; }
+  </style><span class="katex"><span class="katex-mathml"><math><semantics><mrow><mi>E</mi><mo>=</mo><mi>m</mi>
+  <msup><mi>c</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">E=mc^2</annotation></semantics>
+  </math></span><span class="katex-html" aria-hidden="true"><span class="base"><span class="mord">E</span>
+  <span class="mrel">=</span><span class="mord">m</span><span class="mord">c<span class="vlist">2</span></span></span>
+  </span></span>"""
+MATHJAX = """<style>
+    mjx-container { display: inline-block; }
+    mjx-assistive-mml { position: absolute !important; top: 0; left: 0; clip: rect(1px, 1px, 1px, 1px) !important;
+      padding: 1px 0 0 0 !important; display: block !important; width: auto !important; overflow: hidden !important; }
+  </style><mjx-container class="MathJax" jax="CHTML"><mjx-math aria-hidden="true"><mjx-mi>E</mjx-mi><mjx-mo>=</mjx-mo>
+  <mjx-mi>m</mjx-mi><mjx-msup><mjx-mi>c</mjx-mi><mjx-script style="display: block">2</mjx-script></mjx-msup>
+  </mjx-math><mjx-assistive-mml><math alttext="E=mc^2"><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn>
+  </msup></math></mjx-assistive-mml></mjx-container>"""
+WIKIPEDIA_MATH = """<span class="mwe-math-element"><span class="mwe-math-mathml-inline mwe-math-mathml-a11y"
+  style="display: none;"><math alttext="{\\displaystyle E=mc^{2}}"><mi>E</mi></math></span><img
+  class="mwe-math-fallback-image-inline" aria-hidden="true" alt="{\\displaystyle E=mc^{2}}"
+  src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" style="width: 6em; height: 1em"></span>"""
+MATHML = "<math><mi>E</mi><mo>=</mo><mi>m</mi><msup><mi>c</mi><mn>2</mn></msup></math>"
+
+
+@pytest.mark.parametrize(
+    ("formula", "source"),
+    [
+        (KATEX, "E=mc^2"),
+        (MATHJAX, "E=mc^2"),
+        (WIKIPEDIA_MATH, "{\\displaystyle E=mc^{2}}"),
+        (MATHML, "E=mc2"),
+    ],
+    ids=["katex", "mathjax", "wikipedia", "mathml"],
+)
+def test_a_formula_stays_in_its_sentence_and_is_copied_into_the_translation(
+    fake_server: FakeServer, worker: Worker, page: Page, formula: str, source: str
+) -> None:
+    html = f"""<!doctype html><title>t</title>
+      <p>Mass and energy are related by {formula} in special relativity.</p>
+      <math display="block"><mi>x</mi><mo>=</mo><mn>1</mn></math>"""
+    page.goto(fake_server.add_page("/formula", html))
+    press_shortcut(worker, page)
+    wait_for_translations(page, 1)
+    # One sentence, the formula sent as its source; the display formula on its own line is not sent
+    assert fake_server.sent_texts() == [
+        f'Mass and energy are related by <span translate="no" i="0">{source}</span> in special relativity.'
+    ]
+    # The formula in the translation is a copy of the page's, not text from the model
+    original = page.evaluate("() => document.querySelector('p > :not(style)').outerHTML")
+    copied = page.evaluate("() => document.querySelector('dt-trans > *').outerHTML")
+    assert copied == original
+
+
 def test_a_long_page_title_does_not_fail_the_translation(fake_server: FakeServer, worker: Worker, page: Page) -> None:
     html = f"<!doctype html><title>{'long title ' * 200}</title><p>{VISIBLE}</p>"
     page.goto(fake_server.add_page("/long-title", html))

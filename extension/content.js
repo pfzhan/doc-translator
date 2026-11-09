@@ -20,8 +20,15 @@
   const IGNORED_TAGS = new Set([
     'script', 'style', 'noscript', 'template', 'link', 'meta', 'wbr', 'hr',
     'img', 'picture', 'video', 'audio', 'canvas', 'iframe', 'object', 'embed',
-    'svg', 'math', 'input', 'textarea', 'select', 'button', 'option', 'slot', TRANS_TAG,
+    'svg', 'input', 'textarea', 'select', 'button', 'option', 'slot', TRANS_TAG,
   ]);
+  // Text kept for screen readers only, by the class names sites and CSS frameworks give it. Other such text is
+  // recognized by its style (see visuallyHidden)
+  const SR_ONLY = '.sr-only, .visually-hidden, .visuallyhidden, .screen-reader-text';
+  // Rendered math: KaTeX, MathJax 2 and 3, Wikipedia, and MathML. Each formula is copied whole into the translation,
+  // within its sentence; a display formula on its own line is left as it is. Their parts for screen readers and
+  // their glyphs are never read as text
+  const MATH = '.katex, .MathJax, mjx-container, .mwe-math-element, math';
   // Hosts of this extension's own boxes (status, selected text, PDF notices)
   const OWN_HOSTS = new Set(['dt-toast', 'dt-selection']);
   // Blocks kept as they are. Inline code inside a sentence stays part of the sentence
@@ -268,10 +275,31 @@
     return el !== document.body && el !== document.documentElement && el.matches(OPT_OUT);
   }
 
-  /** Copied whole into the translation: text marked not to translate, and inline shadow hosts whose text is all in
-   * their shadow root.
+  /** A rendered formula (see MATH): read as one piece, never entered.
    * @param {Element} el */
-  const keptWhole = (el) => optedOut(el) || slotless(el);
+  const isMath = (el) => el.matches(MATH);
+
+  /** Copied whole into the translation: text marked not to translate, formulas, and inline shadow hosts whose text
+   * is all in their shadow root.
+   * @param {Element} el */
+  const keptWhole = (el) => optedOut(el) || isMath(el) || slotless(el);
+
+  /** Whether el is clipped out of sight while screen readers still read it: positioned and cut to at most a pixel by
+   * its size, clip or clip-path. Being positioned makes it a block, which would split the sentence around it.
+   * @param {Element} el
+   * @param {CSSStyleDeclaration} style */
+  function visuallyHidden(el, style) {
+    if (el.matches(SR_ONLY)) return true;
+    if (style.position !== 'absolute' && style.position !== 'fixed') return false;
+    const tiny = parseFloat(style.width) <= 1 && parseFloat(style.height) <= 1;
+    if (tiny && (style.overflow !== 'visible' || style.clip !== 'auto' || style.clipPath !== 'none')) return true;
+    if (/^inset\(\s*50%/.test(style.clipPath)) return true;
+    // rect(top, right, bottom, left): nothing shows when the rectangle has no area
+    const rect = style.clip.match(/^rect\(([-\d.]+)px,? ([-\d.]+)px,? ([-\d.]+)px,? ([-\d.]+)px\)$/);
+    if (!rect) return false;
+    const [top, right, bottom, left] = rect.slice(1).map(Number);
+    return right - left <= 1 && bottom - top <= 1;
+  }
 
   /** ignore: contributes nothing; inline: part of the current paragraph; block: ends it; skip: ends it, not entered
    * @param {Element} el
@@ -280,12 +308,19 @@
     if (IGNORED_TAGS.has(el.localName)) return 'ignore';
     // Hidden by translation-only mode: still the inline element it was when collected
     if (el.hasAttribute('data-dt-original')) return 'inline';
-    const display = getComputedStyle(el).display;
+    const style = getComputedStyle(el);
+    const display = style.display;
     if (display === 'none' && PHRASING_TAGS.has(el.localName)) return 'ignore';
-    const inline = display.startsWith('inline') || display === 'contents';
+    // Screen-reader-only text inside a sentence (a link's longer name, the MathML behind a rendered formula) is
+    // dropped rather than splitting the sentence; such a block is not worth translating either
+    if (visuallyHidden(el, style)) return 'ignore';
+    // MathML's own display value is "math" inline and "block math" on a line of its own
+    const inline = display.startsWith('inline') || display === 'contents' || display === 'math';
     // Text marked not to translate stays in its sentence and comes back unchanged (see richOf); editable content
     // and marked blocks are left out
     if (optedOut(el)) return inline && !el.matches(EDITABLE) ? 'inline' : 'skip';
+    // A formula in a sentence is copied into its translation (see keptWhole); one on its own line stays as it is
+    if (isMath(el)) return inline ? 'inline' : 'skip';
     // A shadow host shows its shadow root, with its own children placed at the slots. An inline one holding only
     // inline content stays in its sentence: one that shows its children (a styled link) like any inline element, one
     // that does not (a date, a badge) copied whole into the translation (see keptWhole). Any other is laid out apart
@@ -304,7 +339,8 @@
     for (const child of el.children) {
       const kind = classify(child);
       if (kind === 'block' || kind === 'skip') return true;
-      if (kind === 'inline' && hasBlockChild(child)) return true;
+      // A formula's own layout (stacked fractions, matrices) is made of blocks inside an inline box
+      if (kind === 'inline' && !isMath(child) && hasBlockChild(child)) return true;
     }
     return false;
   }
@@ -402,7 +438,7 @@
       if (kind !== 'skip') noteShadow(node, kind);
       // An inline element is taken whole, unless it wraps blocks (a card inside a link): then its children are
       // split like a block's
-      if (kind === 'inline' && !hasBlockChild(node)) {
+      if (kind === 'inline' && (isMath(node) || !hasBlockChild(node))) {
         run.push(node);
         // Custom elements in it defined later may change how it is read (see rescan)
         for (const el of node.querySelectorAll(':not(:defined)')) noteShadow(el, kind);
@@ -430,7 +466,8 @@
   /** @param {Node} node */
   const isBreak = (node) => isElement(node) && node.localName === 'br';
 
-  /** The text of a paragraph, without what classify ignores (hidden labels, icon names).
+  /** The text of a paragraph, without what classify ignores (hidden labels, icon names) and without formulas, whose
+   * glyphs are no words to translate.
    * @param {Node[]} nodes */
   function textOf(nodes) {
     let text = '';
@@ -438,7 +475,7 @@
     const walk = (node) => {
       if (isText(node)) text += dataOf(node);
       else if (isBreak(node)) text += ' ';
-      else if (isElement(node) && classify(node) !== 'ignore') node.childNodes.forEach(walk);
+      else if (isElement(node) && classify(node) !== 'ignore' && !isMath(node)) node.childNodes.forEach(walk);
     };
     nodes.forEach(walk);
     return text.replace(/\s+/g, ' ').trim();
@@ -454,7 +491,7 @@
     /** @param {Node} node */
     const walk = (node) => {
       if (isText(node)) text += dataOf(node);
-      else if (!isElement(node) || optedOut(node) || classify(node) === 'ignore') return;
+      else if (!isElement(node) || optedOut(node) || isMath(node) || classify(node) === 'ignore') return;
       else if (slotless(node)) hosts.push(node);
       else node.childNodes.forEach(walk);
     };
@@ -468,8 +505,24 @@
     return (text.match(/\p{L}/gu) || []).length >= 2;
   }
 
+  const MAX_MATH_TEXT = 200;
+
+  /** What stands for a formula in the text sent: its TeX source when the page has it, so the model reads the
+   * sentence with the formula in it. The formula itself is copied from the page (see buildRich).
+   * @param {Element} el */
+  function mathText(el) {
+    const source =
+      el.querySelector('annotation[encoding="application/x-tex"]')?.textContent ||
+      (el.localName === 'math' ? el : el.querySelector('math'))?.getAttribute('alttext') ||
+      el.querySelector('img[alt]')?.getAttribute('alt') ||
+      el.textContent ||
+      '';
+    const text = source.replace(/\s+/g, ' ').trim();
+    return text.length > MAX_MATH_TEXT ? `${text.slice(0, MAX_MATH_TEXT)}…` : text;
+  }
+
   /** @type {Record<string, string>} */
-  const ENTITIES = { '&': 'amp', '<': 'lt', '>': 'gt', '"': 'quot' };
+  const ENTITIES ={ '&': 'amp', '<': 'lt', '>': 'gt', '"': 'quot' };
   /** @param {string} s */
   const escapeHTML = (s) => s.replace(/[&<>"]/g, (c) => `&${ENTITIES[c]};`);
 
@@ -488,7 +541,8 @@
       if (!isElement(node) || classify(node) === 'ignore') return '';
       if (keptWhole(node)) {
         refs.push(node);
-        return `<span translate="no" i="${refs.length - 1}">${escapeHTML(textOf([node]))}</span>`;
+        const text = isMath(node) ? mathText(node) : textOf([node]);
+        return `<span translate="no" i="${refs.length - 1}">${escapeHTML(text)}</span>`;
       }
       const inner = [...node.childNodes].map(walk).join('');
       if (!RICH_TAGS.has(node.localName)) return inner;
@@ -864,7 +918,8 @@
           originals.delete(node);
         }
       } else if (isElement(node)) {
-        const keep = node.matches(KEEP_SELECTOR) || node.querySelector(KEEP_SELECTOR);
+        // A formula is copied into the translation, images and all
+        const keep = !isMath(node) && (node.matches(KEEP_SELECTOR) || node.querySelector(KEEP_SELECTOR));
         node.toggleAttribute('data-dt-original', !visible && !keep);
       }
     }
@@ -1012,8 +1067,8 @@
       if (!target.isConnected || target === document.documentElement) continue;
       // An element added to body is scanned on its own: scanning body again would scan the whole page
       const root = target.parentElement === document.body ? target : blockAncestor(target);
-      // Inside a skipped block, or below an opt-out (one on body or html does not count, see optedOut)
-      const skipped = closestComposed(root, `${SKIP_TAGS.join(',')}, ${OPT_OUT}`);
+      // Inside a skipped block or a formula, or below an opt-out (one on body or html does not count, see optedOut)
+      const skipped = closestComposed(root, `${SKIP_TAGS.join(',')}, ${MATH}, ${OPT_OUT}`);
       if (skipped && skipped !== document.body && skipped !== document.documentElement) continue;
       roots.add(root);
     }
