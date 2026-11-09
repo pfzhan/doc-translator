@@ -457,6 +457,49 @@ def test_an_error_of_the_settings_stops_until_the_shortcut_retries(
     wait_for_translations(page, 3)
 
 
+def test_boxes_that_cut_a_translation_off_are_lifted_until_it_is_hidden(
+    fake_server: FakeServer, worker: Worker, page: Page
+) -> None:
+    html = """<!doctype html><title>t</title><style>
+        .grid { display: grid; grid-template-columns: 300px 300px; gap: 8px; overflow: hidden; }
+        .card { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden;
+          line-height: 20px; }
+        .preview { max-height: 20px; overflow: hidden; line-height: 20px; }
+        .scroller { height: 20px; overflow: auto; line-height: 20px; }
+      </style>
+      <div class="grid">
+        <div class="card" style="color: navy">A card title on one line.</div>
+        <div class="preview">A preview cut to one line.</div>
+      </div>
+      <div class="scroller">A box that scrolls its overflow.</div>"""
+    page.goto(fake_server.add_page("/clamped", html))
+    boxes = "document.querySelectorAll('.grid, .card, .preview, .scroller')"
+    styles = f"() => [...{boxes}].map((el) => el.getAttribute('style'))"
+    widths = "() => [...document.querySelectorAll('.card, .preview')].map((el) => el.getBoundingClientRect().width)"
+    before = page.evaluate(styles)
+    card_widths = page.evaluate(widths)
+    press_shortcut(worker, page)
+    wait_for_translations(page, 3)
+    # Each translation shows in full inside its box; the boxes keep their width in the grid
+    cut_off = """() => [...document.querySelectorAll('dt-trans')].map((el) => {
+      const box = el.parentElement;
+      return el.getBoundingClientRect().bottom > box.getBoundingClientRect().top + box.clientTop + box.clientHeight + 1;
+    })"""
+    assert page.evaluate(cut_off) == [False, False, True]
+    assert page.evaluate(widths) == card_widths
+    grid, card, preview, scroller = page.evaluate(styles)
+    assert card == "color: navy; -webkit-line-clamp: none !important;"
+    assert preview == "max-height: none !important;"
+    # Neither the grid, which no longer cuts anything off, nor a box that scrolls is changed
+    assert (grid, scroller) == (before[0], before[3])
+
+    # Hidden translations need no room: the page's own styles come back, and go again when they are shown
+    press_shortcut(worker, page)
+    assert page.evaluate(styles) == before
+    press_shortcut(worker, page)
+    assert page.evaluate(cut_off) == [False, False, True]
+
+
 def test_a_long_page_title_does_not_fail_the_translation(fake_server: FakeServer, worker: Worker, page: Page) -> None:
     html = f"<!doctype html><title>{'long title ' * 200}</title><p>{VISIBLE}</p>"
     page.goto(fake_server.add_page("/long-title", html))

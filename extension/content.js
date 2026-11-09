@@ -935,6 +935,7 @@
     ownerOf.set(el, unit);
     shown.add(unit);
     setOriginalVisible(unit, originalVisible());
+    unclamp(el);
   }
 
   /** Put el, a translation or a notice, where the translation of unit goes, laid out to fit there.
@@ -960,6 +961,89 @@
     else el.removeAttribute('slot');
     if (el.parentNode !== unit.parent) unit.parent.insertBefore(el, after);
     styleShadow(el);
+  }
+
+  // ---------- Boxes that cut translations off ----------
+
+  // Cards and previews often show a fixed number of lines (line-clamp) or a fixed height with the overflow hidden. A
+  // translation inserted in such a box falls in the part cut off, so the constraints of the boxes around it are
+  // lifted, as far as needed for it to show, and put back when the translations are hidden or gone
+  const UNCLAMP_DEPTH = 5; // boxes looked at above a translation
+  // Lifted in this order, each only while the translation is still cut off
+  const LIFTS = [
+    ['-webkit-line-clamp', 'none'],
+    ['line-clamp', 'none'],
+    ['max-height', 'none'],
+    ['height', 'auto'],
+  ];
+  /** @typedef {{ name: string, value: string, priority: string, ours: string }} SavedStyle */
+  /** A box whose constraints were lifted: its style attribute before and after, the properties lifted, and the
+   * translations that need it.
+   * @typedef {{ attr: string | null, after: string | null, saved: SavedStyle[], translations: Set<Element> }} Lifted */
+  /** @type {Map<HTMLElement, Lifted>} */
+  const lifted = new Map();
+
+  /** Whether box hides the bottom of el: its overflow is cut off at its padding box.
+   * @param {Element} el
+   * @param {HTMLElement} box */
+  const cutOff = (el, box) =>
+    el.getBoundingClientRect().bottom > box.getBoundingClientRect().top + box.clientTop + box.clientHeight + 1;
+
+  /** Lift what in the boxes around translation el cuts it off.
+   * @param {Element} el */
+  function unclamp(el) {
+    let box = parentOf(el);
+    for (let depth = 0; box && depth < UNCLAMP_DEPTH; depth++, box = parentOf(box)) {
+      if (box === document.body || box === document.documentElement) break;
+      // HTML, SVG and MathML elements all have inline styles (a cast rather than instanceof, see isElement)
+      const styled = /** @type {HTMLElement} */ (box);
+      lifted.get(styled)?.translations.add(el);
+      // Scrolling boxes show everything; only hidden overflow loses it
+      const style = getComputedStyle(box);
+      if (!/hidden|clip/.test(style.overflowY) || !styled.style) continue;
+      for (const [name, value] of LIFTS) {
+        if (!cutOff(el, styled)) break;
+        if (style.getPropertyValue(name) !== value) lift(styled, name, value, el);
+      }
+    }
+  }
+
+  /** @param {HTMLElement} box
+   * @param {string} name
+   * @param {string} value
+   * @param {Element} translation */
+  function lift(box, name, value, translation) {
+    const attr = box.getAttribute('style');
+    const before = { name, value: box.style.getPropertyValue(name), priority: box.style.getPropertyPriority(name) };
+    // !important, or the page's own !important rules would win
+    box.style.setProperty(name, value, 'important');
+    const ours = box.style.getPropertyValue(name);
+    if (ours === before.value) return; // a property this browser does not have
+    let entry = lifted.get(box);
+    if (!entry) lifted.set(box, (entry = { attr, after: null, saved: [], translations: new Set() }));
+    entry.translations.add(translation);
+    if (!entry.saved.some((saved) => saved.name === name)) entry.saved.push({ ...before, ours });
+    entry.after = box.getAttribute('style');
+  }
+
+  /** Put back the styles of the boxes whose translations are gone, or of all of them.
+   * @param {boolean} all */
+  function relax(all) {
+    for (const [box, { attr, after, saved, translations }] of lifted) {
+      for (const el of translations) if (!el.isConnected) translations.delete(el);
+      if (!all && translations.size && box.isConnected) continue;
+      lifted.delete(box);
+      if (box.getAttribute('style') === after) {
+        // Untouched since: the attribute as the page wrote it
+        if (attr === null) box.removeAttribute('style');
+        else box.setAttribute('style', attr);
+        continue;
+      }
+      // A value the page set since is the page's
+      for (const { name, value, priority, ours } of saved) {
+        if (box.style.getPropertyValue(name) === ours) box.style.setProperty(name, value, priority);
+      }
+    }
   }
 
   // ---------- Colors ----------
@@ -1066,6 +1150,9 @@
       if (unit.attr) setAttrVisible(unit, originalVisible());
       else setOriginalVisible(unit, originalVisible());
     }
+    // Hidden translations need no room; shown ones may need it again, and other room in the other mode
+    relax(hidden);
+    if (!hidden) for (const unit of shown) if (!unit.attr && unit.el) unclamp(unit.el);
   }
 
   /** Drop what the page removed, so that long sessions in single-page apps do not keep growing, and return the
@@ -1202,6 +1289,7 @@
       if (![...roots].some((other) => other !== root && containsComposed(other, root))) register(collect(root));
     }
     for (const el of orphans) if (!reused.has(el)) el.remove();
+    relax(false);
   }
 
   // ---------- Tooltips (title) ----------

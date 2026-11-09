@@ -313,7 +313,10 @@ and each paragraph's translation appears below it. The server must be running.
   formulas (KaTeX, MathJax, MathML, Wikipedia's): each is sent as its TeX source and copied from the page into the
   translation, while a formula on a line of its own is left as it is. A
   translation goes below its original, except in flex and grid rows and inside inline boxes (tag chips,
-  button-like links), where it follows the original on the same line so the layout holds.
+  button-like links), where it follows the original on the same line so the layout holds. A box that would cut the
+  translation off, one showing a fixed number of lines (`line-clamp`, common on cards and previews) or with a fixed
+  or maximum height and its overflow hidden, has that limit lifted, up to five boxes above the translation and only
+  as far as the translation needs; the page's own styles come back when the translations are hidden or gone.
 - The translation scope (翻译范围) on the options page is the whole page (the default) or only the main content
   (只翻译正文). With only the main content, a page that marks it (`<main>` or `role="main"`) has only that
   translated, without the navigation and sidebars inside it; a page that does not has everything translated except
