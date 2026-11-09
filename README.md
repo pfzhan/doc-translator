@@ -63,15 +63,22 @@ tested on its own.
 | OpenAI-compatible API | Chat Completions | Entered by the user, such as DeepSeek, Qwen, Kimi, OpenRouter, Ollama |
 
 Each service has an API key, a name, an API URL and a model (from a preset list, typed in, or fetched from the
-API). The advanced settings cover concurrency, paragraphs and characters per batch, temperature, the system
-prompt and the prompt. Concurrency limits the service as a whole: jobs, web page requests and service tests
-using the same service share it. A request holds its place only while it is being sent: one waiting to retry
-after an error gives it to the others. When the service answers 429 or 503, every request to it waits as long as
+API). The advanced settings cover concurrency, paragraphs and characters per batch, temperature, the
+reasoning setting, the system prompt and the prompt. Concurrency limits the service as a whole: jobs, web page
+requests and service tests using the same service share it. A request holds its place only while it is being
+sent: one waiting to retry after an error gives it to the others. When the service answers 429 or 503, every request to it waits as long as
 the answer asks (`Retry-After` in seconds or as a date, or `retry-after-ms`; at most 60 seconds, exponential
 backoff when it does not say), instead of each request running into the limit on its own. Each attempt must
 finish within a deadline sized from its batch (60 seconds plus 1 second per 25 characters, between 90 and 300
 seconds) and is retried when it does not; all attempts of one request together stop after 2.5 times that, so a
 stuck answer cannot hold a place for long.
+
+The reasoning setting tells a reasoning model how hard to think: not set (the default, nothing is sent), off,
+minimal, low, medium or high. It becomes `reasoning_effort` for Chat Completions, `reasoning.effort` for the
+Responses API, adaptive thinking with an effort level for Claude (off sends `thinking: disabled`; with thinking on,
+temperature is left out and the output limit raised to 16000 tokens) and a `thinkingConfig` budget for Gemini. When
+the API answers 400 to it, the setting is dropped for the rest of the job and the request sent again, as with
+temperature. Like temperature it is not part of the cache key: changing it keeps the translations already cached.
 
 The glossary is kept in the advanced settings, one `source = translation` entry per line. By default, LLM
 services also count terms that recur in the document before translating (multi-word phrases, acronyms,

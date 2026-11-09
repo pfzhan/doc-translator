@@ -13,7 +13,7 @@ import re
 import time
 import unicodedata
 import weakref
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -485,6 +485,20 @@ def _with_default_path(url: str, path: str) -> str:
     return url
 
 
+# Reasoning settings a service can have: "" sends nothing (the model's default), "none" turns reasoning off where
+# the model allows it, and the rest ask for more or less of it. Each engine maps them to its provider's parameter
+REASONING_LEVELS = ("", "none", "minimal", "low", "medium", "high")
+# A 400 whose message mentions one of these is taken as the API rejecting the reasoning setting
+_REASONING_WORDS = ("reasoning", "thinking", "effort", "output_config")
+# Claude's effort has no "minimal"; the lowest it has is "low"
+_CLAUDE_EFFORT = {"minimal": "low", "low": "low", "medium": "medium", "high": "high"}
+# Gemini's thinking budget in tokens; 0 turns thinking off on models that allow it
+_GEMINI_THINKING_BUDGET = {"none": 0, "minimal": 512, "low": 1024, "medium": 8192, "high": 24576}
+# Claude's max_tokens: what a translation needs, and more when the model thinks, since thinking counts against it
+_CLAUDE_MAX_TOKENS = 8192
+_CLAUDE_MAX_TOKENS_THINKING = 16000
+
+
 # Version path appended when only a domain is given: /v1 for Claude and the OpenAI family, /v1beta for Gemini
 DEFAULT_API_PATH = {"openai": "/v1", "grok": "/v1", "custom": "/v1", "claude": "/v1", "gemini": "/v1beta"}
 
@@ -505,6 +519,7 @@ class LLMTranslator(Translator):
         max_items: int = 20,
         max_chars: int = 3000,
         temperature: float | None = 0.0,
+        reasoning: str = "",
         prompt: str = "",
         user_prompt: str = "",
         api_format: str = "",
@@ -516,6 +531,10 @@ class LLMTranslator(Translator):
         super().__init__(target_lang, source_lang)
         if not model:
             raise TranslatorError("未设置模型")
+        if reasoning not in REASONING_LEVELS:
+            raise TranslatorError(f"不支持的推理强度: {reasoning}")
+        # How hard a reasoning model thinks (see REASONING_LEVELS); "" sends nothing and leaves it to the model
+        self.reasoning = reasoning
         # api_format: the OpenAI family may choose "responses" (Responses API); the default is Chat Completions
         # auth_style: Claude may choose "bearer" (Authorization: Bearer, common with relay services); the default is
         # x-api-key
@@ -621,9 +640,10 @@ class LLMTranslator(Translator):
         log.info("%s declined a request (%s)", self.service_id or self.provider, why)
         return ""
 
-    async def _post(self, url: str, payload: JSONDict, headers: dict[str, str], call: Call) -> JSONDict:
-        """POST with retries. Some reasoning models do not accept temperature; on such a 400 it is removed and the
-        request is sent again.
+    async def _post(self, url: str, build: Callable[[], JSONDict], headers: dict[str, str], call: Call) -> JSONDict:
+        """POST the payload build() makes, with retries. Some reasoning models do not accept temperature, and some
+        models or relays do not know the reasoning setting; on such a 400 it is dropped and the payload built and
+        sent again.
 
         Relay services often wrap occasional upstream failures (account pool rotation, a channel going offline
         temporarily) as a 400, and the same request succeeds a few seconds later, so a 400 is treated as retryable
@@ -639,6 +659,7 @@ class LLMTranslator(Translator):
         error; all attempts together get _DEADLINE_BUDGET times that, so one stuck batch cannot hold a worker for
         long. Time waiting for the gate does not count: it is spent queueing, not on this request.
         """
+        payload = build()
         limit = _attempt_deadline(call.chars)
         budget = limit * _DEADLINE_BUDGET
         spent = 0.0
@@ -681,14 +702,20 @@ class LLMTranslator(Translator):
             if resp.status_code in _OVERLOADED:
                 self._pause(delay)
             msg = _error_text(resp)
-            # The last attempt does not strip temperature and resend, so the real error is raised
-            if resp.status_code == 400 and "temperature" in msg.lower() and self.temperature is not None and not last:
-                self.temperature = None
-                payload = {k: v for k, v in payload.items() if k != "temperature"}
-                gen = payload.get("generationConfig")
-                if isinstance(gen, dict):
-                    payload["generationConfig"] = {k: v for k, v in gen.items() if k != "temperature"}
-                continue
+            # A parameter the model does not take is dropped for the rest of this engine's requests and the payload
+            # built again: temperature first (a model thinking may refuse it, and say so mentioning thinking), then
+            # the reasoning setting. The last attempt does not drop anything, so the real error is raised
+            if resp.status_code == 400 and not last:
+                lowered = msg.lower()
+                if "temperature" in lowered and self.temperature is not None:
+                    self.temperature = None
+                    payload = build()
+                    continue
+                if self.reasoning and any(word in lowered for word in _REASONING_WORDS):
+                    log.info("%s rejected the reasoning setting %r: %s", self.model, self.reasoning, msg)
+                    self.reasoning = ""
+                    payload = build()
+                    continue
             # A 400 is retried unchanged only once (for occasional failures); if it fails again, translate_batch splits
             # the batch instead of waiting here in vain
             if _retryable(resp.status_code) and not last and not (resp.status_code == 400 and attempt >= 1):
@@ -827,13 +854,19 @@ class OpenAITranslator(LLMTranslator):
     async def _complete(self, system: str, user: str, call: Call) -> str:
         if self.api_format == "responses":
             return await self._complete_responses(system, user, call)
-        payload: JSONDict = {
-            "model": self.model,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        }
-        if self.temperature is not None:
-            payload["temperature"] = self.temperature
-        data = await self._post(f"{self.base_url}/chat/completions", payload, self._headers(), call)
+
+        def build() -> JSONDict:
+            payload: JSONDict = {
+                "model": self.model,
+                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            }
+            if self.temperature is not None:
+                payload["temperature"] = self.temperature
+            if self.reasoning:
+                payload["reasoning_effort"] = self.reasoning
+            return payload
+
+        data = await self._post(f"{self.base_url}/chat/completions", build, self._headers(), call)
         try:
             choice = data["choices"][0]
             message = choice["message"]
@@ -854,10 +887,16 @@ class OpenAITranslator(LLMTranslator):
 
     async def _complete_responses(self, system: str, user: str, call: Call) -> str:
         """OpenAI Responses API (the default for Codex / Grok Build)."""
-        payload = {"model": self.model, "instructions": system, "input": user, "store": False}
-        if self.temperature is not None:
-            payload["temperature"] = self.temperature
-        data = await self._post(f"{self.base_url}/responses", payload, self._headers(), call)
+
+        def build() -> JSONDict:
+            payload: JSONDict = {"model": self.model, "instructions": system, "input": user, "store": False}
+            if self.temperature is not None:
+                payload["temperature"] = self.temperature
+            if self.reasoning:
+                payload["reasoning"] = {"effort": self.reasoning}
+            return payload
+
+        data = await self._post(f"{self.base_url}/responses", build, self._headers(), call)
         if data.get("status") == "incomplete":
             reason = _incomplete_reason(data)
             if reason == "max_output_tokens":
@@ -920,15 +959,27 @@ class ClaudeTranslator(LLMTranslator):
         return str(data.get("stop_reason") or "")
 
     async def _complete(self, system: str, user: str, call: Call) -> str:
-        payload = {
-            "model": self.model,
-            "max_tokens": 8192,
-            "system": system,
-            "messages": [{"role": "user", "content": user}],
-        }
-        if self.temperature is not None:
-            payload["temperature"] = self.temperature
-        data = await self._post(f"{self.base_url}/messages", payload, self._headers(), call)
+
+        def build() -> JSONDict:
+            thinking = self.reasoning not in ("", "none")
+            payload: JSONDict = {
+                "model": self.model,
+                "max_tokens": _CLAUDE_MAX_TOKENS_THINKING if thinking else _CLAUDE_MAX_TOKENS,
+                "system": system,
+                "messages": [{"role": "user", "content": user}],
+            }
+            if thinking:
+                # Adaptive thinking with an effort level; a thinking model takes no temperature
+                payload["thinking"] = {"type": "adaptive"}
+                payload["output_config"] = {"effort": _CLAUDE_EFFORT[self.reasoning]}
+            else:
+                if self.reasoning == "none":
+                    payload["thinking"] = {"type": "disabled"}
+                if self.temperature is not None:
+                    payload["temperature"] = self.temperature
+            return payload
+
+        data = await self._post(f"{self.base_url}/messages", build, self._headers(), call)
         stop = data.get("stop_reason")
         # The reply ran out of room: output limit, or the context window with the prompt
         if stop in ("max_tokens", "model_context_window_exceeded"):
@@ -977,16 +1028,21 @@ class GeminiTranslator(LLMTranslator):
         return f"blocked: {feedback.get('blockReason')}" if isinstance(feedback, dict) else ""
 
     async def _complete(self, system: str, user: str, call: Call) -> str:
-        gen = {}
-        if self.temperature is not None:
-            gen["temperature"] = self.temperature
-        payload = {
-            "systemInstruction": {"parts": [{"text": system}]},
-            "contents": [{"role": "user", "parts": [{"text": user}]}],
-            "generationConfig": gen,
-        }
+
+        def build() -> JSONDict:
+            gen: JSONDict = {}
+            if self.temperature is not None:
+                gen["temperature"] = self.temperature
+            if self.reasoning:
+                gen["thinkingConfig"] = {"thinkingBudget": _GEMINI_THINKING_BUDGET[self.reasoning]}
+            return {
+                "systemInstruction": {"parts": [{"text": system}]},
+                "contents": [{"role": "user", "parts": [{"text": user}]}],
+                "generationConfig": gen,
+            }
+
         model = self.model.removeprefix("models/")
-        data = await self._post(f"{self.base_url}/models/{model}:generateContent", payload, self._headers(), call)
+        data = await self._post(f"{self.base_url}/models/{model}:generateContent", build, self._headers(), call)
         candidates = data.get("candidates") or []
         if not candidates:
             reason = (data.get("promptFeedback") or {}).get("blockReason")
@@ -1180,6 +1236,7 @@ def _build_translator(
         max_items=service.get("max_items") or 20,
         max_chars=service.get("max_chars") or 3000,
         temperature=None if temperature in (None, "") else float(temperature),
+        reasoning=str(service.get("reasoning") or ""),
         prompt=service.get("prompt") or "",
         user_prompt=service.get("user_prompt") or "",
         api_format=service.get("api_format") or "",

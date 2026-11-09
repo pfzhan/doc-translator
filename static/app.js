@@ -151,8 +151,8 @@ function messageOf(err) {
  * active in CC Switch, whose connection details are read from there (_ccswitch_services).
  * @typedef {{
  *   id: string, provider: string, builtin: boolean, name: string, enabled: boolean, base_url: string, model: string,
- *   concurrency: number, max_items: number, max_chars: number, temperature: number | null, prompt: string,
- *   user_prompt: string, glossary: string, auto_glossary: boolean, api_key_hint: string
+ *   concurrency: number, max_items: number, max_chars: number, temperature: number | null, reasoning: string,
+ *   prompt: string, user_prompt: string, glossary: string, auto_glossary: boolean, api_key_hint: string
  * }} ServiceFields
  * @typedef {ServiceFields & { source?: undefined, available?: undefined }} LocalService
  * @typedef {ServiceFields & {
@@ -642,7 +642,8 @@ function svcFields() {
   return {
     api_key: input("api_key"), name: input("name"), base_url: input("base_url"), model: input("model"),
     concurrency: input("concurrency"), max_items: input("max_items"), max_chars: input("max_chars"),
-    temperature: input("temperature"), prompt: textarea("prompt"), user_prompt: textarea("user_prompt"),
+    temperature: input("temperature"), reasoning: field(svcForm, "reasoning", HTMLSelectElement),
+    prompt: textarea("prompt"), user_prompt: textarea("user_prompt"),
     glossary: textarea("glossary"), auto_glossary: input("auto_glossary"),
   };
 }
@@ -734,6 +735,7 @@ function renderDetail() {
   f.max_items.value = String(s.max_items);
   f.max_chars.value = String(s.max_chars);
   f.temperature.value = String(s.temperature ?? "");
+  f.reasoning.value = s.reasoning || "";
   f.prompt.value = s.prompt;
   f.user_prompt.value = s.user_prompt || "";
   f.glossary.value = s.glossary || "";
@@ -832,6 +834,7 @@ function formPayload() {
     max_items: f.max_items.value,
     max_chars: f.max_chars.value,
     temperature: f.temperature.value,
+    reasoning: f.reasoning.value,
     prompt: f.prompt.value,
     user_prompt: f.user_prompt.value,
     glossary: f.glossary.value,

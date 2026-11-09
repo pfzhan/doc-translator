@@ -12,6 +12,7 @@ from typing import Any
 
 from . import ccswitch
 from .paths import DATA_DIR
+from .translators import REASONING_LEVELS
 
 DATA_PATH = DATA_DIR / "services.json"
 
@@ -87,6 +88,7 @@ FIELDS = {
     "max_items": 20,
     "max_chars": 3000,
     "temperature": 0,
+    "reasoning": "",
     "prompt": "",
     "user_prompt": "",
     "glossary": "",
@@ -114,6 +116,7 @@ CCSWITCH_LOCAL_FIELDS = {
     "max_items",
     "max_chars",
     "temperature",
+    "reasoning",
     "prompt",
     "user_prompt",
     "glossary",
@@ -150,6 +153,10 @@ def _clean(data: Service) -> Service:
                     v = max(0.0, min(float(v), 2.0))
                 except (TypeError, ValueError):
                     raise ServiceError("temperature 必须是数字") from None
+        elif k == "reasoning":
+            v = str(v or "").strip()
+            if v not in REASONING_LEVELS:
+                raise ServiceError(f"推理强度无效: {v}")
         else:
             v = str(v or "") if k in ("prompt", "user_prompt", "glossary") else str(v or "").strip()
         out[k] = v
