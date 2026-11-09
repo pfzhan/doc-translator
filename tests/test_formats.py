@@ -14,7 +14,7 @@ from app.formats.markdown import collect_segments, render, split_blocks
 from app.formats.mobi import _read_mobi7_html, _xhtml_from_mobi7
 from app.formats.pdf_blocks import _join_lines
 from app.runner import Runner
-from app.translators import MockTranslator, OpenAITranslator
+from app.translators import Call, MockTranslator, OpenAITranslator
 from tests.helpers import SAMPLES, MemCache, _write_epub, run, runner
 from tests.test_html_page import _attr, _tag
 
@@ -100,7 +100,7 @@ def test_llm_unparseable_batch_falls_back_to_single(monkeypatch: pytest.MonkeyPa
     tr = OpenAITranslator("zh-CN", api_key="x", base_url="http://localhost", model="m")
     calls: list[str] = []
 
-    async def fake_complete(system: str, content: str) -> str:
+    async def fake_complete(system: str, content: str, call: Call) -> str:
         calls.append(content)
         return "garbage" if len(calls) == 1 else "你好"
 

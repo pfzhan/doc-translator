@@ -142,6 +142,13 @@ system's limit.
   back as long as the source file and the models are unchanged, and only the rules run again: for an 86-page
   paper with both models enabled, analysis drops from 4.5 minutes to just over 20 seconds.
 - A failed job can be retried (重试).
+- Every request sent to the translation service, retries included, is appended to `requests.jsonl` in the
+  record's directory: when it started, how long it waited for the service's concurrency limit and how long the
+  HTTP call took, the status or error, the attempt number, the tokens and the model name the API reported, the
+  number of paragraphs and characters, and why it was sent (the batch itself, asked again, a paragraph translated
+  on its own, half of a split batch, the glossary). Hovering over a finished record's status line shows a summary:
+  requests and retries, mean and 90th-percentile latency, mean wait. The log is cleared with the record's cache
+  and deleted with the record. The server also logs each request at debug level (logger `app.translators`).
 - 清理无用缓存… (Clear unused cache), under the retention period on the Records page, clears the cached
   translations no record uses: those of web pages and of records deleted before deleting cleared their cache.
   What records use stays, so they continue and regenerate without new requests. Entries cached before the cache
@@ -600,6 +607,7 @@ app/
   runner.py        deduplication, caching, batching, concurrency
   background.py    threaded work such as reading layout and writing output, stopped when a job is paused
   translators.py   translation engines (Google / OpenAI / Claude / Gemini / Grok / compatible APIs)
+  request_log.py   the log of requests a job sent (requests.jsonl) and its summary
   services.py      creating, reading, updating and deleting service configurations
   ccswitch.py      reading the providers active in CC Switch
   prompts.py       default prompts and the segment protocol

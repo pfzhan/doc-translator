@@ -117,8 +117,13 @@ function messageOf(err) {
  *   finished: number, source_lang: string, target_lang: string, mode: string, service_id: string,
  *   service_name: string, glossary_ids: string[], queue_position: number, model: string, size: number,
  *   detected_lang: string, skipped: number, failed: number, prompt_tokens: number, completion_tokens: number,
- *   same_lang: boolean, preview: boolean, stage: JobStage | null, outputs: JobOutput[]
+ *   requests: RequestStats | null, same_lang: boolean, preview: boolean, stage: JobStage | null,
+ *   outputs: JobOutput[]
  * }} Job
+ * @typedef {{
+ *   count: number, retries: number, failed: number, mean_latency: number, p90_latency: number,
+ *   mean_gate_wait: number, reasons: Record<string, number>
+ * }} RequestStats
  * @typedef {{ jobs: Job[], disk_usage: number, retention_days: number }} JobList
  */
 
@@ -1559,6 +1564,25 @@ function tokensTitle(job) {
   return `输入 ${(job.prompt_tokens || 0).toLocaleString()} · 输出 ${(job.completion_tokens || 0).toLocaleString()}`;
 }
 
+// What the record's requests to the service looked like (requests.jsonl in its directory holds each one), to tell
+// why one run was slower than another: more requests (retranslated or split batches), retries, or slower answers
+const REQUEST_REASONS = /** @type {Record<string, string>} */ ({
+  repeat: "重新请求", retranslate: "单段补译", split: "拆分重译", terms: "术语表",
+});
+
+/** @param {Job} job */
+function requestsTitle(job) {
+  const r = job.requests;
+  if (!r || !r.count) return "";
+  const lines = [
+    `请求 ${r.count} 次${r.retries ? `（重试 ${r.retries} 次）` : ""}${r.failed ? `，失败 ${r.failed} 次` : ""}`,
+    `平均耗时 ${r.mean_latency.toFixed(1)} 秒 · P90 ${r.p90_latency.toFixed(1)} 秒 · 平均排队 ${r.mean_gate_wait.toFixed(1)} 秒`,
+  ];
+  const extra = Object.entries(r.reasons || {}).filter(([reason]) => reason in REQUEST_REASONS);
+  if (extra.length) lines.push(extra.map(([reason, n]) => `${REQUEST_REASONS[reason]} ${n}`).join(" · "));
+  return lines.join("\n");
+}
+
 /** @param {Job} job */
 function expiryText(job) {
   const days = state.retentionDays;
@@ -1676,7 +1700,8 @@ function jobRow(job, selectable = false) {
     const exp = expiryText(job);
     if (exp) parts.push(exp);
     const hint = el("span", "hint", parts.filter(Boolean).join(" · "));
-    if (tokens) hint.title = tokensTitle(job);  // hover to see input/output separately
+    // Hover to see input/output separately, and how the requests went
+    hint.title = [tokens ? tokensTitle(job) : "", requestsTitle(job)].filter(Boolean).join("\n");
     status.append(hint);
   }
   // Status has its own column between the details and the buttons on wide screens, below the details when narrow

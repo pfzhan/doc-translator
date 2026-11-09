@@ -24,12 +24,14 @@ from pathlib import Path
 from . import glossary
 from .formats.pdf import saved_texts
 from .history import Job, JobStore
+from .request_log import LOG_NAME
 from .runner import Cache, noted_key
 from .translators import Translator
 
 # Files and directories generated in the record directory during translation. The source file and job.json are not
-# among them; only the translations inside out/ are cleared, and the directory stays for the next run
-_GENERATED = ("preview.json", ".variant", ".run")
+# among them; only the translations inside out/ are cleared, and the directory stays for the next run. The request
+# log goes with the cache, like the token counts it adds up to
+_GENERATED = ("preview.json", ".variant", ".run", LOG_NAME)
 
 
 @dataclass

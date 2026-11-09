@@ -14,6 +14,7 @@ from .formats.pdf import mupdf_turn
 from .formats.pdf_output import translated_from_bilingual
 from .history import Job
 from .model_files import _formula_model, _model_path
+from .request_log import RequestLog
 from .runner import Runner, get_cache
 from .services import Service
 from .translators import Translator, TranslatorError, create_translator
@@ -112,6 +113,7 @@ async def _run_job(job: Job, translator: Translator, bilingual: bool) -> None:
 
     # Files are written here and replace the translations of the last run only when this run succeeds
     stage = state.jobs.dir(job.id) / RUN_STAGE
+    request_log = translator.request_log = RequestLog(state.jobs.requests_path(job.id))
     try:
         # Inside the try: when the record cannot be written at start (a full disk), the job fails and frees its place
         # below instead of staying "running" for good
@@ -152,6 +154,8 @@ async def _run_job(job: Job, translator: Translator, bilingual: bool) -> None:
             if usage:
                 job.prompt_tokens += usage.get("prompt", 0)
                 job.completion_tokens += usage.get("completion", 0)
+            # Write the requests still buffered and sum up all of the record's requests
+            job.requests = await asyncio.to_thread(request_log.summary) or job.requests
             # The snapshot may be large, so it is written in a thread
             await asyncio.to_thread(state.jobs.save_preview, job)
             job.sync_info()

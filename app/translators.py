@@ -8,10 +8,14 @@ Providers differ only in request format, which subclasses implement in _complete
 
 import asyncio
 import hashlib
+import logging
 import re
+import time
 import unicodedata
 import weakref
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
@@ -20,6 +24,9 @@ from . import glossary as glossary_mod
 from . import prompts
 from .json_types import JSONDict
 from .languages import GOOGLE_CODES, LANGUAGES
+from .request_log import RequestLog, RequestReason, RequestRecord
+
+log = logging.getLogger(__name__)
 
 # Language list for the frontend drop-down: [(code, English name, native name)], in the same order as the plugin
 LANG_CODES = {code for code, _, _ in LANGUAGES}
@@ -47,6 +54,31 @@ _GATES: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[tuple[str, int
 )
 
 
+@dataclass
+class Call:
+    """What one request is for, besides its prompt; it goes into the request log with every attempt."""
+
+    reason: RequestReason
+    items: int  # paragraphs in the request
+    chars: int  # characters of their source text
+    # Seconds the request waited for the concurrency gate before its first attempt; later attempts wait none
+    gate_wait: float = 0.0
+
+    @classmethod
+    def of(cls, texts: list[str], reason: RequestReason) -> "Call":
+        return cls(reason, len(texts), sum(len(t) for t in texts))
+
+
+@dataclass
+class _Attempt:
+    """Timing of one attempt of a request."""
+
+    number: int  # 1 for the first attempt
+    started: float  # wall clock
+    gate_wait: float
+    duration: float = 0.0
+
+
 class Translator:
     # Maximum paragraphs and characters per batch, used by Runner to split batches
     max_batch_items = 20
@@ -71,6 +103,8 @@ class Translator:
         # Token usage returned by the API (LLM engines accumulate it in _complete); stays 0 for engines that do not
         # report it, such as Google
         self.usage = {"prompt": 0, "completion": 0}
+        # Where every request sent upstream is recorded; set by the job that runs this engine (see request_log.py)
+        self.request_log: RequestLog | None = None
         # Filled in by Runner from the caller's flags: these source texts are e-book rich-text fragments, which
         # cannot be guessed from angle brackets
         self.html_texts: set[str] = set()
@@ -96,6 +130,64 @@ class Translator:
             if not self.service_id:
                 weakref.finalize(self, gates.pop, key, None)
         return gate
+
+    @asynccontextmanager
+    async def _gate(self, call: Call) -> AsyncIterator[None]:
+        """Hold a place of the concurrency gate, recording in call how long it took to get one."""
+        start = time.perf_counter()
+        async with self._sem:
+            call.gate_wait = time.perf_counter() - start
+            yield
+
+    @staticmethod
+    def _start_attempt(call: Call, number: int) -> _Attempt:
+        """Begin timing an attempt. The gate wait measured before the first one belongs to it alone."""
+        wait, call.gate_wait = call.gate_wait, 0.0
+        return _Attempt(number=number, started=time.time(), gate_wait=wait)
+
+    def _log_request(
+        self,
+        call: Call,
+        attempt: _Attempt,
+        status: int | None,
+        error: str = "",
+        model: str = "",
+        tokens: tuple[int | None, int | None] = (None, None),
+    ) -> None:
+        """Record one attempt: a debug line in the server log, and a line in the job's request log."""
+        log.debug(
+            "%s %s attempt %d: status %s%s, gate %.2fs, http %.2fs, %d items, %d chars, tokens %s/%s, model %s",
+            self.service_id or type(self).__name__,
+            call.reason,
+            attempt.number,
+            status,
+            f" ({error})" if error else "",
+            attempt.gate_wait,
+            attempt.duration,
+            call.items,
+            call.chars,
+            tokens[0],
+            tokens[1],
+            model or "-",
+        )
+        if self.request_log is None:
+            return
+        self.request_log.add(
+            RequestRecord(
+                started=attempt.started,
+                gate_wait=attempt.gate_wait,
+                duration=attempt.duration,
+                attempt=attempt.number,
+                status=status,
+                error=error,
+                reason=call.reason,
+                items=call.items,
+                chars=call.chars,
+                model=model,
+                input_tokens=tokens[0],
+                output_tokens=tokens[1],
+            )
+        )
 
     def is_html_item(self, text: str) -> bool:
         return text in self.html_texts
@@ -264,6 +356,11 @@ def _retryable(status: int) -> bool:
     return status not in FATAL_STATUS
 
 
+def _failure_kind(error: httpx.HTTPError) -> str:
+    """How a request without a response failed, for the request log."""
+    return "timeout" if isinstance(error, httpx.TimeoutException) else "network"
+
+
 def _retry_delay(resp: httpx.Response, default: float) -> float:
     """Retry delay: use the Retry-After response header when present (capped at 60 s), otherwise the given
     exponential backoff value."""
@@ -389,8 +486,9 @@ class LLMTranslator(Translator):
             title=self.title,
             excerpt=excerpt,
         )
-        async with self._sem:
-            content = await self._complete(system, user)
+        call = Call.of(terms, "terms")
+        async with self._gate(call):
+            content = await self._complete(system, user, call)
         wanted = {term.casefold(): term for term in terms}
         return [
             (wanted[source.casefold()], target)
@@ -411,10 +509,18 @@ class LLMTranslator(Translator):
             notes=[self.notes.get(t, "") for t in texts],
         )
 
-    async def _complete(self, system: str, user: str) -> str:
+    async def _complete(self, system: str, user: str, call: Call) -> str:
         raise NotImplementedError
 
-    async def _post(self, url: str, payload: JSONDict, headers: dict[str, str]) -> JSONDict:
+    def _reported_tokens(self, data: JSONDict) -> tuple[int | None, int | None]:
+        """(input, output) tokens of a reply as the API reports them; None for a count it leaves out."""
+        raise NotImplementedError
+
+    def _reported_model(self, data: JSONDict) -> str:
+        """The model that answered, as the reply names it."""
+        return str(data.get("model") or "")
+
+    async def _post(self, url: str, payload: JSONDict, headers: dict[str, str], call: Call) -> JSONDict:
         """POST with retries. Some reasoning models do not accept temperature; on such a 400 it is removed and the
         request is sent again.
 
@@ -424,15 +530,29 @@ class LLMTranslator(Translator):
         """
         for attempt in range(self.retries):
             last = attempt == self.retries - 1
+            timing = self._start_attempt(call, attempt + 1)
+            clock = time.perf_counter()
             try:
                 resp = await self.client.post(url, json=payload, headers=headers)
             except httpx.HTTPError as e:
+                timing.duration = time.perf_counter() - clock
+                self._log_request(call, timing, None, _failure_kind(e))
                 if last:
                     raise TranslatorError(f"请求失败: {e}") from e
                 await asyncio.sleep(2**attempt)
                 continue
+            timing.duration = time.perf_counter() - clock
             if resp.status_code == 200:
-                return _json_or_error(resp, url)
+                try:
+                    data = _json_or_error(resp, url)
+                except TranslatorError:
+                    self._log_request(call, timing, 200, "format")
+                    raise
+                tokens = self._reported_tokens(data)
+                self._record_usage(*tokens)
+                self._log_request(call, timing, 200, model=self._reported_model(data), tokens=tokens)
+                return data
+            self._log_request(call, timing, resp.status_code, "http")
             msg = _error_text(resp)
             # The last attempt does not strip temperature and resend, so the real error is raised
             if resp.status_code == 400 and "temperature" in msg.lower() and self.temperature is not None and not last:
@@ -463,17 +583,22 @@ class LLMTranslator(Translator):
         raise NotImplementedError
 
     async def translate_batch(self, texts: list[str]) -> list[str]:
+        return await self._translate(texts, "normal")
+
+    async def _translate(self, texts: list[str], reason: RequestReason) -> list[str]:
+        """translate_batch, told why the batch is sent; the reason goes into the request log."""
         system, user = self.build_messages(texts)
         try:
             # The only place that actually sends requests; recursive batch splitting / retranslation ends up here too,
             # all limited by the same semaphore
-            async with self._sem:
-                content = await self._complete(system, user)
+            call = Call.of(texts, reason)
+            async with self._gate(call):
+                content = await self._complete(system, user, call)
                 # An empty reply is mostly an occasional upstream failure; ask again unchanged. If it is still empty,
                 # a batch is retranslated paragraph by paragraph below, and for a single paragraph Runner falls back
                 # to the source text
                 if not content.strip():
-                    content = await self._complete(system, user)
+                    content = await self._complete(system, user, Call.of(texts, "repeat"))
         except TranslatorError as e:
             # Relay services consistently reject some combinations of paragraphs (measured: the same batch of 8
             # paragraphs got a 400 every time, while each part translated after splitting).
@@ -489,7 +614,9 @@ class LLMTranslator(Translator):
             mid = len(texts) // 2
             # Translate both halves in parallel: serially, the deeper the splitting goes, the longer the last
             # paragraphs wait in the queue
-            left, right = await asyncio.gather(self.translate_batch(texts[:mid]), self.translate_batch(texts[mid:]))
+            left, right = await asyncio.gather(
+                self._translate(texts[:mid], "split"), self._translate(texts[mid:], "split")
+            )
             return left + right
         if len(texts) == 1:
             out = prompts.clean_output(content)
@@ -497,8 +624,9 @@ class LLMTranslator(Translator):
             # retranslates it at the next re-layout
             if stray_chars(texts[0], out, self.target_lang):
                 try:
-                    async with self._sem:
-                        again = prompts.clean_output(await self._complete(system, user))
+                    call = Call.of(texts, "repeat")
+                    async with self._gate(call):
+                        again = prompts.clean_output(await self._complete(system, user, call))
                 except TruncatedError:
                     again = ""
                 if again.strip() and not stray_chars(texts[0], again, self.target_lang):
@@ -519,7 +647,7 @@ class LLMTranslator(Translator):
             if shifted or i not in found or stray_chars(texts[i], found[i], self.target_lang)
         ]
         if missing:
-            redone = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in missing))
+            redone = await asyncio.gather(*(self._translate([texts[i]], "retranslate") for i in missing))
             for i, [text] in zip(missing, redone):
                 found[i] = text
             # A reply to a single retranslation may also not be a translation ("请提供完整的原文"), so check again
@@ -528,7 +656,7 @@ class LLMTranslator(Translator):
             # cached
             typical = typical_ratio((texts[i], found[i]) for i in found)
             wrong = [i for i in missing if misplaced(texts[i], found[i], typical)]
-            rechecked = await asyncio.gather(*(self.translate_batch([texts[i]]) for i in wrong))
+            rechecked = await asyncio.gather(*(self._translate([texts[i]], "retranslate") for i in wrong))
             for i, [retried] in zip(wrong, rechecked):
                 found[i] = "" if misplaced(texts[i], retried, typical) else retried
         return [found[i] for i in range(len(texts))]
@@ -545,18 +673,22 @@ class OpenAITranslator(LLMTranslator):
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
-    async def _complete(self, system: str, user: str) -> str:
+    def _reported_tokens(self, data: JSONDict) -> tuple[int | None, int | None]:
+        usage = data.get("usage") or {}
         if self.api_format == "responses":
-            return await self._complete_responses(system, user)
+            return usage.get("input_tokens"), usage.get("output_tokens")
+        return usage.get("prompt_tokens"), usage.get("completion_tokens")
+
+    async def _complete(self, system: str, user: str, call: Call) -> str:
+        if self.api_format == "responses":
+            return await self._complete_responses(system, user, call)
         payload: JSONDict = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
         }
         if self.temperature is not None:
             payload["temperature"] = self.temperature
-        data = await self._post(f"{self.base_url}/chat/completions", payload, self._headers())
-        usage = data.get("usage") or {}
-        self._record_usage(usage.get("prompt_tokens"), usage.get("completion_tokens"))
+        data = await self._post(f"{self.base_url}/chat/completions", payload, self._headers(), call)
         try:
             choice = data["choices"][0]
             message = choice["message"]
@@ -568,14 +700,12 @@ class OpenAITranslator(LLMTranslator):
         # reply from other APIs
         return (message.get("content") if isinstance(message, dict) else "") or ""
 
-    async def _complete_responses(self, system: str, user: str) -> str:
+    async def _complete_responses(self, system: str, user: str, call: Call) -> str:
         """OpenAI Responses API (the default for Codex / Grok Build)."""
         payload = {"model": self.model, "instructions": system, "input": user, "store": False}
         if self.temperature is not None:
             payload["temperature"] = self.temperature
-        data = await self._post(f"{self.base_url}/responses", payload, self._headers())
-        usage = data.get("usage") or {}
-        self._record_usage(usage.get("input_tokens"), usage.get("output_tokens"))
+        data = await self._post(f"{self.base_url}/responses", payload, self._headers(), call)
         if data.get("status") == "incomplete" and (data.get("incomplete_details") or {}).get("reason") == (
             "max_output_tokens"
         ):
@@ -620,7 +750,11 @@ class ClaudeTranslator(LLMTranslator):
             return {"Authorization": f"Bearer {self.api_key}", "anthropic-version": self.api_version}
         return {"x-api-key": self.api_key, "anthropic-version": self.api_version}
 
-    async def _complete(self, system: str, user: str) -> str:
+    def _reported_tokens(self, data: JSONDict) -> tuple[int | None, int | None]:
+        usage = data.get("usage") or {}
+        return usage.get("input_tokens"), usage.get("output_tokens")
+
+    async def _complete(self, system: str, user: str, call: Call) -> str:
         payload = {
             "model": self.model,
             "max_tokens": 8192,
@@ -629,9 +763,7 @@ class ClaudeTranslator(LLMTranslator):
         }
         if self.temperature is not None:
             payload["temperature"] = self.temperature
-        data = await self._post(f"{self.base_url}/messages", payload, self._headers())
-        usage = data.get("usage") or {}
-        self._record_usage(usage.get("input_tokens"), usage.get("output_tokens"))
+        data = await self._post(f"{self.base_url}/messages", payload, self._headers(), call)
         if data.get("stop_reason") == "max_tokens":
             raise TruncatedError()
         return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
@@ -649,7 +781,18 @@ class GeminiTranslator(LLMTranslator):
     def _headers(self) -> dict[str, str]:
         return {"x-goog-api-key": self.api_key}
 
-    async def _complete(self, system: str, user: str) -> str:
+    def _reported_tokens(self, data: JSONDict) -> tuple[int | None, int | None]:
+        usage = data.get("usageMetadata") or {}
+        if not usage:
+            return None, None
+        # Thinking tokens are billed; counting only candidates would undercount the usage of reasoning models
+        completion = (usage.get("candidatesTokenCount") or 0) + (usage.get("thoughtsTokenCount") or 0)
+        return usage.get("promptTokenCount"), completion
+
+    def _reported_model(self, data: JSONDict) -> str:
+        return str(data.get("modelVersion") or "")
+
+    async def _complete(self, system: str, user: str, call: Call) -> str:
         gen = {}
         if self.temperature is not None:
             gen["temperature"] = self.temperature
@@ -659,11 +802,7 @@ class GeminiTranslator(LLMTranslator):
             "generationConfig": gen,
         }
         model = self.model.removeprefix("models/")
-        data = await self._post(f"{self.base_url}/models/{model}:generateContent", payload, self._headers())
-        usage = data.get("usageMetadata") or {}
-        # Thinking tokens are billed; counting only candidates would undercount the usage of reasoning models
-        completion = (usage.get("candidatesTokenCount") or 0) + (usage.get("thoughtsTokenCount") or 0)
-        self._record_usage(usage.get("promptTokenCount"), completion)
+        data = await self._post(f"{self.base_url}/models/{model}:generateContent", payload, self._headers(), call)
         candidates = data.get("candidates") or []
         if not candidates:
             reason = (data.get("promptFeedback") or {}).get("blockReason", "无返回内容")
@@ -734,16 +873,24 @@ class GoogleTranslator(Translator):
 
     async def _request(self, texts: list[str], html: bool) -> list[str]:
         params = {"client": "gtx", "sl": self.sl, "tl": self.tl, "format": "html" if html else "text"}
+        call = Call.of(texts, "normal")
         for attempt in range(self.retries):
             last = attempt == self.retries - 1
-            try:
-                async with self._sem:
+            async with self._gate(call):
+                timing = self._start_attempt(call, attempt + 1)
+                clock = time.perf_counter()
+                failure: httpx.HTTPError | None = None
+                try:
                     resp = await self.client.post(
                         "https://translate.googleapis.com/translate_a/t", params=params, data={"q": texts}
                     )
-            except httpx.HTTPError as e:
+                except httpx.HTTPError as e:
+                    failure = e
+                timing.duration = time.perf_counter() - clock
+            if failure is not None:
+                self._log_request(call, timing, None, _failure_kind(failure))
                 if last:
-                    raise TranslatorError(f"Google 请求失败: {e}") from e
+                    raise TranslatorError(f"Google 请求失败: {failure}") from failure
                 await asyncio.sleep(2**attempt)
                 continue
             if resp.status_code == 200:
@@ -753,6 +900,7 @@ class GoogleTranslator(Translator):
                     data = resp.json()
                 except ValueError:
                     data = None
+                self._log_request(call, timing, 200, "" if isinstance(data, list) else "format")
                 if isinstance(data, list):
                     # One item per q: [translation, detected language] with sl=auto, otherwise the translation itself
                     out = [d[0] if isinstance(d, list) else d for d in data]
@@ -763,6 +911,7 @@ class GoogleTranslator(Translator):
                     raise TranslatorError("Google 返回的不是 JSON（可能已被限流，请稍后重试或改用 AI 翻译服务）")
                 await asyncio.sleep(_retry_delay(resp, min(2 ** (attempt + 1), 30)))
                 continue
+            self._log_request(call, timing, resp.status_code, "http")
             # A 302 redirect to the captcha page / 429 both mean rate limiting; retry with backoff
             if resp.status_code not in (302, 429, 500, 503) or last:
                 raise TranslatorError(

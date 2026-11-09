@@ -18,7 +18,7 @@ import shutil
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import quote
@@ -27,6 +27,7 @@ from .formats import document_digest
 from .json_types import JSONDict
 from .langdetect import same_language
 from .paths import DATA_DIR
+from .request_log import LOG_NAME, RequestStats
 
 if TYPE_CHECKING:
     from .runner import Runner
@@ -85,11 +86,19 @@ class Job:
     # Entries of those glossaries when the latest run started. The other version and cache clearing use them, so
     # editing or deleting a glossary does not change the cache keys of translations already made
     glossary_text: str = ""
+    # Summary of the requests sent upstream by all runs (see request_log.py); None before the first one. The
+    # requests themselves are in requests.jsonl in the record's directory
+    requests: RequestStats | None = None
 
     # Runtime fields that are not saved
     runner: Runner | None = field(default=None, repr=False, compare=False)
     # Place in the queue while waiting to start, 1 for the next one; 0 otherwise
     queue_position: int = field(default=0, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        # job.json holds the summary as a plain object
+        if not isinstance(self.requests, RequestStats | None):
+            self.requests = RequestStats.from_dict(self.requests)
 
     def sync_info(self) -> None:
         """Copy the live detection results from the Runner to the record."""
@@ -107,6 +116,7 @@ class Job:
         self.status, self.error = "idle", ""
         self.done = self.total = self.skipped = self.failed = 0
         self.prompt_tokens = self.completion_tokens = 0
+        self.requests = None
         self.outputs, self.finished, self.detected_lang = [], 0.0, ""
 
     def to_dict(self) -> JSONDict:
@@ -134,6 +144,7 @@ class Job:
             "failed": self.failed,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
+            "requests": asdict(self.requests) if self.requests else None,
             # The extension's sameLangCheck: warn when the detected source language equals the target language
             "same_lang": same_language(self.detected_lang, self.target_lang),
             "preview": self.preview,
@@ -172,6 +183,10 @@ class JobStore:
 
     def source_path(self, job: Job) -> Path:
         return self.dir(job.id) / job.filename
+
+    def requests_path(self, job_id: str) -> Path:
+        """Log of the requests the record's runs sent upstream (see request_log.py)."""
+        return self.dir(job_id) / LOG_NAME
 
     def document(self, job: Job) -> str:
         """Digest of the record's file. Older records lack it; it is computed and saved while the source file exists,
@@ -272,7 +287,9 @@ class JobStore:
         path = self.dir(job.id) / "job.json"
         if not path.parent.exists():
             return  # the record has been deleted
-        _write_atomic(path, json.dumps({k: getattr(job, k) for k in _PERSISTED}, ensure_ascii=False, indent=1))
+        data = {k: getattr(job, k) for k in _PERSISTED}
+        data["requests"] = asdict(job.requests) if job.requests else None
+        _write_atomic(path, json.dumps(data, ensure_ascii=False, indent=1))
 
     def add(self, job: Job) -> None:
         with self.lock:
