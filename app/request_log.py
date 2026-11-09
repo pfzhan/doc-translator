@@ -35,8 +35,8 @@ class RequestRecord:
     duration: float
     attempt: int  # 1 for the first attempt of a request, 2 for its first retry, ...
     status: int | None  # HTTP status, None when no response came back
-    # "" when a usable answer came back; otherwise "network", "timeout", "http" (an error status) or "format" (an
-    # answer that was not JSON)
+    # "" when a usable answer came back; otherwise "network", "timeout" (httpx's), "deadline" (the attempt's own),
+    # "http" (an error status) or "format" (an answer that was not JSON)
     error: str
     reason: RequestReason
     items: int  # paragraphs in the request

@@ -68,7 +68,10 @@ prompt and the prompt. Concurrency limits the service as a whole: jobs, web page
 using the same service share it. A request holds its place only while it is being sent: one waiting to retry
 after an error gives it to the others. When the service answers 429 or 503, every request to it waits as long as
 the answer asks (`Retry-After` in seconds or as a date, or `retry-after-ms`; at most 60 seconds, exponential
-backoff when it does not say), instead of each request running into the limit on its own.
+backoff when it does not say), instead of each request running into the limit on its own. Each attempt must
+finish within a deadline sized from its batch (60 seconds plus 1 second per 25 characters, between 90 and 300
+seconds) and is retried when it does not; all attempts of one request together stop after 2.5 times that, so a
+stuck answer cannot hold a place for long.
 
 The glossary is kept in the advanced settings, one `source = translation` entry per line. By default, LLM
 services also count terms that recur in the document before translating (multi-word phrases, acronyms,

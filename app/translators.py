@@ -398,9 +398,25 @@ def _retryable(status: int) -> bool:
     return status not in FATAL_STATUS
 
 
-def _failure_kind(error: httpx.HTTPError) -> str:
-    """How a request without a response failed, for the request log."""
+def _failure_kind(error: httpx.HTTPError | TimeoutError) -> str:
+    """How a request without a response failed, for the request log: past its deadline (see LLMTranslator._post),
+    an httpx timeout, or another network error."""
+    if isinstance(error, TimeoutError):
+        return "deadline"
     return "timeout" if isinstance(error, httpx.TimeoutException) else "network"
+
+
+def _attempt_deadline(chars: int) -> float:
+    """Seconds one attempt of a request with chars characters of source text may take. The model writes about as
+    much as it reads, so time grows with the batch: 60 s plus 1 s per 25 characters (3000 characters, the default
+    batch, get 180 s, the httpx timeout of one read), at least 90 s for slow first tokens and at most 300 s."""
+    return min(300.0, max(90.0, 60 + chars / 25))
+
+
+# All attempts of one request together may spend this many attempt deadlines in HTTP calls
+_DEADLINE_BUDGET = 2.5
+# An attempt is not started with less than this share of a deadline left; it would most likely run out
+_DEADLINE_LEFTOVER = 0.1
 
 
 def _retry_after(resp: httpx.Response) -> float | None:
@@ -592,21 +608,36 @@ class LLMTranslator(Translator):
         Each attempt takes a place of the service's gate (see _slot) and gives it back before backing off. A 429 or
         503 pauses the whole service for the delay it asks for, so the other requests stop too instead of each
         running into the limit on its own; the retry then waits out that pause in the gate.
+
+        httpx's timeout applies to each phase (connecting, each read), so an answer trickling in, or a relay keeping
+        the connection open, could hold a worker for many minutes over the retries. Each attempt therefore has a
+        deadline from the size of the batch (_attempt_deadline), and an attempt past it is retried like a network
+        error; all attempts together get _DEADLINE_BUDGET times that, so one stuck batch cannot hold a worker for
+        long. Time waiting for the gate does not count: it is spent queueing, not on this request.
         """
+        limit = _attempt_deadline(call.chars)
+        budget = limit * _DEADLINE_BUDGET
+        spent = 0.0
         for attempt in range(self.retries):
+            if budget - spent <= limit * _DEADLINE_LEFTOVER:
+                raise TranslatorError(f"请求超时：{attempt} 次尝试共 {spent:.0f} 秒仍未完成")
             last = attempt == self.retries - 1
-            failure: httpx.HTTPError | None = None
+            failure: httpx.HTTPError | TimeoutError | None = None
             async with self._slot() as waited:
                 timing = self._start_attempt(attempt + 1, waited)
                 clock = time.perf_counter()
                 try:
-                    resp = await self.client.post(url, json=payload, headers=headers)
-                except httpx.HTTPError as e:
+                    async with asyncio.timeout(min(limit, budget - spent)):
+                        resp = await self.client.post(url, json=payload, headers=headers)
+                except (httpx.HTTPError, TimeoutError) as e:
                     failure = e
                 timing.duration = time.perf_counter() - clock
+                spent += timing.duration
             if failure is not None:
                 self._log_request(call, timing, None, _failure_kind(failure))
                 if last:
+                    if isinstance(failure, TimeoutError):
+                        raise TranslatorError(f"请求超时：{self.retries} 次尝试共 {spent:.0f} 秒仍未完成") from failure
                     raise TranslatorError(f"请求失败: {failure}") from failure
                 await asyncio.sleep(2**attempt)
                 continue

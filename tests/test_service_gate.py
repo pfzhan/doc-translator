@@ -2,15 +2,19 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 import httpx
 import pytest
 
 from app.json_types import JSONDict
-from app.translators import LLMTranslator, TranslatorError, create_translator
+from app.request_log import RequestLog, read_records
+from app.translators import LLMTranslator, TranslatorError, _attempt_deadline, create_translator
 from tests.helpers import run
 
 OK = {"choices": [{"message": {"content": "好"}}]}
+# The tests replace asyncio.sleep for the code under test; a hanging service still needs the real one
+_real_sleep = asyncio.sleep
 
 
 def _service(sid: str, concurrency: int = 4) -> JSONDict:
@@ -127,3 +131,59 @@ def test_backoff_gives_the_place_to_other_requests(monkeypatch: pytest.MonkeyPat
 
     assert run(scenario()) == [["好"], ["好"]]
     assert sent == ["first", "second", "first"]
+
+
+@pytest.mark.parametrize("chars,seconds", [(0, 90.0), (500, 90.0), (3000, 180.0), (6000, 300.0), (50000, 300.0)])
+def test_the_deadline_grows_with_the_batch(chars: int, seconds: float) -> None:
+    assert _attempt_deadline(chars) == seconds
+
+
+def _hanging(hang: list[bool]) -> httpx.MockTransport:
+    """A service that, for each request, hangs when the next value of hang is True and answers otherwise."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if hang.pop(0):
+            await _real_sleep(30)
+        return httpx.Response(200, json=OK)
+
+    return httpx.MockTransport(handler)
+
+
+def test_an_attempt_past_its_deadline_is_retried(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """httpx's timeout is per read, so an answer that never finishes used to hold the worker; an attempt past its
+    deadline is now given up and retried, and the request log says why."""
+    _record_sleeps(monkeypatch)
+    monkeypatch.setattr("app.translators._attempt_deadline", lambda chars: 0.05)
+
+    async def scenario() -> list[str]:
+        engine = _engine("svc", _hanging([True, False]))
+        engine.request_log = RequestLog(tmp_path / "requests.jsonl")
+        try:
+            return await engine.translate_batch(["Hello."])
+        finally:
+            engine.request_log.flush()
+            await engine.aclose()
+
+    assert run(scenario()) == ["好"]
+    late, ok = read_records(tmp_path / "requests.jsonl")
+    assert (late.status, late.error) == (None, "deadline")
+    assert 0.05 <= late.duration < 1
+    assert (ok.attempt, ok.error) == (2, "")
+
+
+def test_all_attempts_together_have_a_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A request that keeps hanging stops after its attempts have used 2.5 deadlines, before using up its retries."""
+    _record_sleeps(monkeypatch)
+    monkeypatch.setattr("app.translators._attempt_deadline", lambda chars: 0.05)
+    hang = [True] * 10
+
+    async def scenario() -> None:
+        engine = _engine("svc", _hanging(hang))
+        try:
+            await engine.translate_batch(["Hello."])
+        finally:
+            await engine.aclose()
+
+    with pytest.raises(TranslatorError, match="请求超时"):
+        run(scenario())
+    assert len(hang) == 7  # Three attempts: two whole deadlines and the half left, not the four retries allow
