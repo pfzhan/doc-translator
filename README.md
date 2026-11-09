@@ -332,8 +332,10 @@ and each paragraph's translation appears below it. The server must be running.
 - Only paragraphs within a screen of the viewport are sent; the rest are translated as the page scrolls, a
   collapsed panel once it opens, and content the page adds later (infinite scrolling, single-page apps) is picked up
   too.
-- Links and inline formatting (bold, italic, underline, strikethrough, inline code, sub- and superscript,
-  highlighting) are kept in translations. Such a paragraph is sent as HTML with only those tags, each numbered and
+- Links and inline formatting (bold, italic, underline, strikethrough, sub- and superscript, highlighting) are kept
+  in translations. Inline code, keyboard keys, sample output and variables (`code`, `kbd`, `samp`, `var`) are sent
+  with their sentence like marked text and copied from the page into the translation unchanged; a paragraph that
+  is only code is not sent. Such a paragraph is sent as HTML with only those tags, each numbered and
   without attributes. The translation is never inserted as HTML: it is parsed in an inert document and rebuilt
   with DOM APIs, every tag that matches one of the paragraph's (by number, else by tag in order) becoming a copy of
   that page element without its `id`, so `href` and other attributes come from the page, never from the model; any
@@ -446,8 +448,8 @@ for s in 16 32 48 128; do rsvg-convert -w $s -h $s extension/icons/icon.svg -o e
 
 | Format | Approach | Output |
 | --- | --- | --- |
-| Markdown | Split into blocks, skipping code blocks and front matter, keeping the structure of headings, lists, quotations and tables | `.md` |
-| EPUB | Find the body files through the OPF spine and translate the innermost block elements, including the table of contents (nav / ncx); inline formatting within paragraphs (bold, italic, links, page anchors) is kept, and other resources are packed back unchanged | `.epub` |
+| Markdown | Split into blocks, skipping code blocks and front matter, keeping the structure of headings, lists, quotations and tables. Inline code is sent with its sentence, and each code span of the translation gets the source's text back | `.md` |
+| EPUB | Find the body files through the OPF spine and translate the innermost block elements, including the table of contents (nav / ncx); inline formatting within paragraphs (bold, italic, links, page anchors) is kept, inline code, keys and variables (`code`, `kbd`, `samp`, `var`) get the source's content back after translation, and other resources are packed back unchanged | `.epub` |
 | MOBI / AZW3 | Unpacked first. KF8 files yield their EPUB directly; old MOBI7 files are converted to XHTML and assembled into an EPUB. Then translated as EPUB | `.epub`, plus a copy in the original format when Calibre is installed |
 | PDF | Extract text blocks, erase the original text and write the translation in its place; images, vector graphics and bookmarks are kept. See the PDF section below | Translation only: the original layout; bilingual: original and translation side by side |
 | Word (.docx) | Translate the paragraphs of the body, tables, text boxes, headers, footers, footnotes and endnotes. Runs whose formatting differs from the rest of the paragraph (bold, italic, links) are sent as tags, so the formatting follows the translated words; images, tabs, breaks, footnote references and fields stay in place. Styles, numbering and the rest of the package are copied unchanged. A bibliography section keeps the original | `.docx`; bilingual: each paragraph followed by its translation, without list numbering |

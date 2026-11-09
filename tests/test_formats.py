@@ -1129,3 +1129,63 @@ def test_preview_override_replaces_shared_translation() -> None:
     runner._log = ["2 Proposed"]
     runner._index_overrides[0] = "2 所提"
     assert runner.preview()["updates"] == [[0, "2 所提", 0]]
+
+
+def test_inline_code_gets_the_source_text_back_in_html() -> None:
+    """Models translate variable names and retype commands; the source's code, keys and variables are written back,
+    markup inside them included, wherever the model moved them."""
+    from app.formats import html_blocks as hb
+
+    soup = hb.parse(
+        _xhtml("<p>Set <var>count</var> with <code>--jobs <b>4</b></code>, then press <kbd>Q</kbd>.</p>"), True
+    )
+    el, _, html = hb.find_blocks(soup)[0]
+    assert html is not None
+    hb.apply_translation_html(
+        soup, el, html, "按 <kbd>Q</kbd> 之前，用 <code>--任务 4</code> 设置 <var>计数</var>。", False, "zh-CN"
+    )
+    p = _tag(soup.find("p"))
+    assert [str(t) for t in p.find_all(["var", "code", "kbd"], recursive=False)] == [
+        "<kbd>Q</kbd>",
+        "<code>--jobs <b>4</b></code>",
+        "<var>count</var>",
+    ]
+    assert p.get_text() == "按 Q 之前，用 --jobs 4 设置 count。"
+
+
+def test_inline_code_the_model_dropped_leaves_the_rest_alone_in_html() -> None:
+    from app.formats import html_blocks as hb
+
+    src = "Use <code>a</code>, <code>b</code> or <code>c</code>."
+    nodes = hb._sanitize_translation(src, "用 <code>甲</code> 或 <code>c</code>。")
+    assert nodes is not None
+    # Which of a and b became 甲 cannot be told: it stays as the model wrote it, while c is matched by its text
+    assert "".join(str(n) for n in nodes) == "用 <code>甲</code> 或 <code>c</code>。"
+
+
+def test_match_verbatim() -> None:
+    from app.formats.verbatim import match_verbatim
+
+    # Unchanged spans by content, wherever they went; the rest in order
+    assert match_verbatim(["a", "b", "c"], ["c", "x", "y"]) == [2, 0, 1]
+    # A dropped span: only the unchanged ones are matched
+    assert match_verbatim(["a", "b", "c"], ["x", "c"]) == [None, 2]
+    # A duplicated span keeps the source text; an invented one is left alone
+    assert match_verbatim(["a"], ["a", "a", "x"]) == [0, 0, None]
+    assert match_verbatim([], ["x"]) == [None]
+
+
+def test_markdown_code_spans() -> None:
+    from app.formats.markdown import code_spans
+
+    text = r"Run `a`, ``b ` c``, not \`d\` or ```e``, and `f`."
+    assert [text[a:b] for a, b in code_spans(text)] == ["`a`", "``b ` c``", "`f`"]
+
+
+def test_markdown_code_spans_get_the_source_text_back() -> None:
+    blocks = split_blocks("Call `getName()` with ``a`b`` first.\n\n- `x` and `y`\n")
+    texts = collect_segments(blocks)
+    assert texts == ["Call `getName()` with ``a`b`` first.", "`x` and `y`"]
+    out = render(blocks, ["先用 ``a`b`` 调用 `获取名称()`。", "`x` 与 `x` 和 `y` 和 `z`"], bilingual=False)
+    # Moved and translated spans get the source back; with spans added, only those equal to a source span are kept
+    assert out.split("\n") == ["先用 ``a`b`` 调用 `getName()`。", "", "- `x` 与 `x` 和 `y` 和 `z`", ""]

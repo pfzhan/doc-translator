@@ -33,6 +33,9 @@
   const OWN_HOSTS = new Set(['dt-toast', 'dt-selection']);
   // Blocks kept as they are. Inline code inside a sentence stays part of the sentence
   const SKIP_TAGS = ['pre', 'code', 'kbd', 'samp'];
+  // Inline code, keys, sample output and variables: sent with their sentence, and copied from the page into the
+  // translation, so neither their text nor their formatting comes from the model
+  const CODE_TAGS = new Set(['code', 'kbd', 'samp', 'var']);
   // Tags that only occur inside a sentence. Hidden ones are dropped instead of splitting the sentence around them
   const PHRASING_TAGS = new Set([
     'a', 'abbr', 'b', 'bdi', 'bdo', 'cite', 'data', 'dfn', 'em', 'font', 'i', 'label', 'mark', 'q', 's',
@@ -40,7 +43,7 @@
   ]);
   // Inline formatting kept in translations. A paragraph containing one is sent as HTML with these tags only, each
   // numbered (i="N") and without attributes; other inline wrappers (span, font...) are sent as their text
-  const RICH_TAGS = new Set(['a', 'b', 'strong', 'i', 'em', 'u', 's', 'code', 'sub', 'sup', 'mark']);
+  const RICH_TAGS = new Set(['a', 'b', 'strong', 'i', 'em', 'u', 's', 'sub', 'sup', 'mark']);
   // Content being edited is never collected, so what the user types is not sent anywhere
   const EDITABLE = '[contenteditable]:not([contenteditable="false"])';
   const OPT_OUT = `[translate="no"], .notranslate, ${EDITABLE}`;
@@ -279,10 +282,10 @@
    * @param {Element} el */
   const isMath = (el) => el.matches(MATH);
 
-  /** Copied whole into the translation: text marked not to translate, formulas, and inline shadow hosts whose text
-   * is all in their shadow root.
+  /** Copied whole into the translation: text marked not to translate, formulas, inline code (see CODE_TAGS), and
+   * inline shadow hosts whose text is all in their shadow root.
    * @param {Element} el */
-  const keptWhole = (el) => optedOut(el) || isMath(el) || slotless(el);
+  const keptWhole = (el) => optedOut(el) || isMath(el) || CODE_TAGS.has(el.localName) || slotless(el);
 
   /** Whether el is clipped out of sight while screen readers still read it: positioned and cut to at most a pixel by
    * its size, clip or clip-path. Being positioned makes it a block, which would split the sentence around it.
@@ -467,15 +470,16 @@
   const isBreak = (node) => isElement(node) && node.localName === 'br';
 
   /** The text of a paragraph, without what classify ignores (hidden labels, icon names) and without formulas, whose
-   * glyphs are no words to translate.
+   * glyphs are no words to translate. code: with the text of inline code (see CODE_TAGS).
    * @param {Node[]} nodes */
-  function textOf(nodes) {
+  function textOf(nodes, code = true) {
     let text = '';
     /** @param {Node} node */
     const walk = (node) => {
       if (isText(node)) text += dataOf(node);
       else if (isBreak(node)) text += ' ';
-      else if (isElement(node) && classify(node) !== 'ignore' && !isMath(node)) node.childNodes.forEach(walk);
+      else if (!isElement(node) || isMath(node) || (!code && CODE_TAGS.has(node.localName))) return;
+      else if (classify(node) !== 'ignore') node.childNodes.forEach(walk);
     };
     nodes.forEach(walk);
     return text.replace(/\s+/g, ' ').trim();
@@ -673,8 +677,9 @@
     for (const old of olds) retire(old);
     unit.reuse = [...[...olds].map((old) => old.el), unit.after].find(free);
     unit.text = textOf(unit.nodes);
-    // Not recorded when not worth translating: text added later may make it worth it
-    const wanted = worth(unit.text);
+    // Not recorded when not worth translating: text added later may make it worth it. Inline code alone (an option
+    // name in a table cell) comes back unchanged anyway
+    const wanted = worth(unit.text) && worth(textOf(unit.nodes, false));
     if (wanted) unit.nodes.forEach((node) => unitOf.set(node, unit));
     if (wanted && (churn.get(unit.parent) || 0) < MAX_CHURN) {
       unit.rich = richOf(unit.nodes);

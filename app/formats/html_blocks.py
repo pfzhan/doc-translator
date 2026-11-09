@@ -15,6 +15,7 @@ from bs4.element import NavigableString, PageElement
 from lxml import etree
 
 from ..languages import RTL_LANGUAGES
+from .verbatim import match_verbatim
 
 BLOCK_TAGS = {
     "p",
@@ -59,7 +60,7 @@ BLOCK_TAGS = {
 # Content inside these elements is not translated
 SKIP_TAGS = {"pre", "code", "script", "style", "svg", "math", "head", "title", "kbd", "samp", "var"}
 # Inline code, keys and variables: the text stays in the paragraph as is and is sent to the translation service
-# with it
+# with it; the translation gets the source's content back (see _restore_verbatim)
 VERBATIM_TAGS = {"code", "kbd", "samp", "var"}
 # The translation is appended inside these elements: inserting a sibling would break list numbering / table
 # structure, and a copied heading would show up twice in the table of contents
@@ -651,6 +652,25 @@ def _prose_of(el: Tag) -> str:
     return _join_lines("".join(parts))
 
 
+def _outer_verbatim(root: Tag) -> list[Tag]:
+    """Inline code, keys, sample output and variables in root, without those inside another one."""
+    found = root.find_all(lambda t: _local(t.name) in VERBATIM_TAGS)
+    return [t for t in found if not any(isinstance(p, Tag) and _local(p.name) in VERBATIM_TAGS for p in t.parents)]
+
+
+def _restore_verbatim(src: Tag, frag: Tag) -> None:
+    """Give each code, kbd, samp and var element of the translation the content the source has, matched among the
+    elements of its tag (see verbatim.match_verbatim): models translate variable names and retype commands."""
+    found = _outer_verbatim(src)
+    for name in {_local(t.name) for t in found}:
+        sources = [t for t in found if _local(t.name) == name]
+        outputs = [t for t in _outer_verbatim(frag) if _local(t.name) == name]
+        matches = match_verbatim([t.get_text() for t in sources], [t.get_text() for t in outputs])
+        for out, j in zip(outputs, matches):
+            if j is not None:
+                out.replace_with(copy.copy(sources[j]))
+
+
 def _sanitize_translation(src_html: str, translated_html: str) -> list[PageElement] | None:
     """Validate and clean a translated HTML fragment and return the list of nodes to insert; return None when
     it is rejected (the caller falls back to plain text).
@@ -675,6 +695,7 @@ def _sanitize_translation(src_html: str, translated_html: str) -> list[PageEleme
             t.unwrap()
     _clean_attrs(src, frag)
     _restore_page_anchors(src, frag)
+    _restore_verbatim(src, frag)
     # Page numbers are inside page anchors and do not count as translation after being restored. If the source
     # has text without its anchors and the translation has none, the model emptied the paragraph.
     if _prose_of(src) and not _prose_of(frag):

@@ -6,7 +6,7 @@ Needs the packages in requirements-dev.txt and `playwright install chromium`; sk
 import json
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -42,6 +42,8 @@ class FakeServer:
     port: int = 0
     pages: dict[str, tuple[str, str]] = field(default_factory=dict)  # path -> content type, body
     requests: list[TranslateRequest] = field(default_factory=list)
+    # What the stand-in model does to each text before marking it; reset for each test
+    rewrite: Callable[[str], str] | None = None
 
     @property
     def origin(self) -> str:
@@ -97,7 +99,7 @@ def make_handler(fake: FakeServer) -> type[BaseHTTPRequestHandler]:
                 self.answer(422, "application/json", json.dumps({"detail": detail}))
                 return
             answer = {
-                "translations": [TRANSLATED + text for text in texts],
+                "translations": [TRANSLATED + (fake.rewrite(text) if fake.rewrite else text) for text in texts],
                 "langs": [data["target_lang"]] * len(texts),
                 "detected_lang": "en",
             }
@@ -147,6 +149,7 @@ def worker(browser: BrowserContext, fake_server: FakeServer) -> Worker:
         fake_server.origin,
     )
     fake_server.requests.clear()
+    fake_server.rewrite = None
     return worker
 
 
@@ -201,6 +204,29 @@ def test_a_formatted_paragraph_keeps_the_pages_own_link(fake_server: FakeServer,
     assert link.get_attribute("href") == "/guide" and link.get_attribute("class") == "nav"
     assert link.get_attribute("id") is None and link.get_attribute("i") is None
     assert page.locator("dt-trans").text_content() == TRANSLATED + "Read the full guide before you start."
+
+
+def test_inline_code_is_copied_from_the_page(fake_server: FakeServer, worker: Worker, page: Page) -> None:
+    html = f"""<!doctype html><title>t</title><p>{VISIBLE}</p>
+      <p>Run <code class="cmd">npm <b>install</b></code> and press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop
+        <var>count</var> workers.</p>
+      <ul><li><code>--verbose</code></li></ul>"""
+    page.goto(fake_server.add_page("/inline-code", html))
+    # A model that translates what it should not
+    fake_server.rewrite = lambda text: text.replace("count", "计数").replace("install", "安装")
+    press_shortcut(worker, page)
+    wait_for_translations(page, 2)
+    sent = fake_server.sent_texts()
+    assert sent == [
+        VISIBLE,
+        'Run <span translate="no" i="0">npm install</span> and press <span translate="no" i="1">Ctrl</span>+'
+        '<span translate="no" i="2">C</span> to stop <span translate="no" i="3">count</span> workers.',
+    ]
+    # Code alone (an option name) is not sent; in the sentence, each piece of code is the page's own
+    code = "(selector) => [...document.querySelectorAll(selector)].map((el) => el.outerHTML)"
+    assert page.evaluate(code, "dt-trans code, dt-trans kbd, dt-trans var") == page.evaluate(
+        code, "p > code, p > kbd, p > var"
+    )
 
 
 def test_translation_only_mode_hides_the_originals_of_what_it_translated(

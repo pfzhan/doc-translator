@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .html_blocks import BIBLIO_HEADING_RE
+from .verbatim import match_verbatim
 
 if TYPE_CHECKING:
     from ..runner import Runner
@@ -433,15 +434,76 @@ def _quote_units(lines: list[str]) -> list[tuple[str, int, str, str, str, list[s
     return units
 
 
+def code_spans(text: str) -> list[tuple[int, int]]:
+    """(start, end) of each code span in text, backticks included (CommonMark): a run of backticks opens one, the
+    next run of the same length closes it, and a run nothing closes is literal. A backslash before a backtick
+    outside code makes it literal."""
+    spans: list[tuple[int, int]] = []
+    pos = 0
+    while (opening := _backtick_run(text, pos, escapable=True)) is not None:
+        start, end = opening
+        # An opening run without its closing one is literal text; the search goes on after it
+        pos = search = end
+        while (run := _backtick_run(text, search, escapable=False)) is not None:
+            if run[1] - run[0] == end - start:
+                spans.append((start, run[1]))
+                pos = run[1]
+                break
+            search = run[1]
+    return spans
+
+
+def _backtick_run(text: str, pos: int, escapable: bool) -> tuple[int, int] | None:
+    """The next whole run of backticks at or after pos. Outside code a backslash escapes the first backtick."""
+    i = text.find("`", pos)
+    while i >= 0:
+        end = i
+        while end < len(text) and text[end] == "`":
+            end += 1
+        if escapable and _escaped(text, i):
+            i += 1
+            if i < end:
+                return i, end
+            i = text.find("`", end)
+            continue
+        return i, end
+    return None
+
+
+def _escaped(text: str, i: int) -> bool:
+    """Whether text[i] follows an odd number of backslashes."""
+    count = 0
+    while i - count - 1 >= 0 and text[i - count - 1] == "\\":
+        count += 1
+    return count % 2 == 1
+
+
+def restore_code_spans(source: str, translated: str) -> str:
+    """The translation with each code span written as the source has it (see verbatim.match_verbatim)."""
+    sources = [source[a:b] for a, b in code_spans(source)]
+    if not sources:
+        return translated
+    spans = code_spans(translated)
+    outputs = [translated[a:b] for a, b in spans]
+    out: list[str] = []
+    pos = 0
+    for (a, b), j in zip(spans, match_verbatim(sources, outputs)):
+        out.append(translated[pos:a])
+        out.append(translated[a:b] if j is None else sources[j])
+        pos = b
+    out.append(translated[pos:])
+    return "".join(out)
+
+
 def render(blocks: list[Block], translations: list[str], bilingual: bool) -> str:
     """translations match the texts returned by collect_segments by position. They are not looked up by source
     text: when the same sentence appears once in the body and once in the bibliography, one is translated and
-    the other keeps the original."""
+    the other keeps the original. Code spans in a translation get the source's text back."""
     out: list[str] = []
     pending = iter(translations)
 
-    def t(_s: str) -> str:
-        return next(pending)
+    def t(s: str) -> str:
+        return restore_code_spans(s, next(pending))
 
     for b in blocks:
         if b.kind == "raw" or not b.segments:
