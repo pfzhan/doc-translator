@@ -729,6 +729,49 @@
 
   // ---------- Translating ----------
 
+  // Queued paragraphs farther than this many screens from the viewport (the page was scrolled on before their turn)
+  // wait again until they come near; they entered the queue within one screen (see visibility)
+  const FAR_SCREENS = 2;
+
+  /** How far the unit is from the viewport, in pixels: 0 when any of it is in view, Infinity when it has no box.
+   * @param {Unit} unit */
+  function distance(unit) {
+    let box;
+    if (unit.attr) box = unit.target.getBoundingClientRect();
+    else {
+      // The paragraph's own text, rather than its parent, which may hold many paragraphs. The page may have removed
+      // some of its nodes meanwhile
+      const nodes = unit.nodes.filter((node) => node.parentNode === unit.parent);
+      const range = document.createRange();
+      if (nodes.length) {
+        range.setStartBefore(nodes[0]);
+        range.setEndAfter(nodes[nodes.length - 1]);
+      }
+      box = range.getBoundingClientRect();
+      if (!box.width && !box.height) box = boxOf(elementOf(unit.parent)).getBoundingClientRect();
+    }
+    if (!box.width && !box.height) return Infinity;
+    if (box.bottom < 0) return -box.bottom;
+    return Math.max(0, box.top - innerHeight);
+  }
+
+  /** Put what is in view first, then the nearest, and send the paragraphs the page was scrolled away from back to
+   * wait for the viewport. Translations then follow the reader instead of the order paragraphs were found in. */
+  function prioritize() {
+    const far = FAR_SCREENS * innerHeight;
+    /** @type {{ unit: Unit, d: number }[]} */
+    const near = [];
+    for (const unit of queue) {
+      if (!current(unit)) continue; // removed or changed by the page before its turn
+      const d = distance(unit);
+      if (d <= far) near.push({ unit, d });
+      else watch(unit, unit.attr ? unit.target : boxOf(elementOf(unit.parent)));
+    }
+    // A stable sort: paragraphs equally far, all those in view among them, keep the order of the page
+    near.sort((a, b) => a.d - b.d);
+    queue.splice(0, queue.length, ...near.map(({ unit }) => unit));
+  }
+
   function nextBatch() {
     /** @type {Unit[]} */
     const batch = [];
@@ -748,7 +791,9 @@
   }
 
   function pump() {
-    while (started && !hidden && !failed.length && inflight < MAX_INFLIGHT && queue.length) {
+    if (!started || hidden || failed.length || inflight >= MAX_INFLIGHT || !queue.length) return;
+    prioritize();
+    while (inflight < MAX_INFLIGHT && queue.length) {
       const batch = nextBatch();
       if (batch.length) send(batch);
     }

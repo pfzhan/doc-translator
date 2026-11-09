@@ -44,6 +44,7 @@ class FakeServer:
     requests: list[TranslateRequest] = field(default_factory=list)
     # What the stand-in model does to each text before marking it; reset for each test
     rewrite: Callable[[str], str] | None = None
+    delay: float = 0  # seconds each translation takes
 
     @property
     def origin(self) -> str:
@@ -94,6 +95,7 @@ def make_handler(fake: FakeServer) -> type[BaseHTTPRequestHandler]:
             texts: list[str] = data["texts"]
             title: str = data["title"]
             fake.requests.append(TranslateRequest(texts, title, data["service_id"], self.headers["Authorization"]))
+            time.sleep(fake.delay)
             if len(title) > MAX_TITLE:
                 detail = [{"msg": "String should have at most 1000 characters"}]
                 self.answer(422, "application/json", json.dumps({"detail": detail}))
@@ -150,6 +152,7 @@ def worker(browser: BrowserContext, fake_server: FakeServer) -> Worker:
     )
     fake_server.requests.clear()
     fake_server.rewrite = None
+    fake_server.delay = 0
     return worker
 
 
@@ -346,6 +349,55 @@ def test_a_formula_stays_in_its_sentence_and_is_copied_into_the_translation(
     original = page.evaluate("() => document.querySelector('p > :not(style)').outerHTML")
     copied = page.evaluate("() => document.querySelector('dt-trans > *').outerHTML")
     assert copied == original
+
+
+# Paragraphs of a screen-sized page, two to a request (the extension sends at most 3000 characters at once)
+FILLER = "Each of these paragraphs is long enough to fill half a request. " * 22
+TALL = "<style>p { height: 300px; margin: 0; overflow: hidden; font-size: 4px; }</style>"
+
+
+def tall_page(count: int) -> str:
+    return f"<!doctype html><title>t</title>{TALL}" + "".join(f"<p>P{i}. {FILLER}</p>" for i in range(count))
+
+
+def sent_numbers(fake: FakeServer) -> list[list[int]]:
+    """The paragraphs of tall_page each request carried, by number."""
+    return [[int(text[1 : text.index(".")]) for text in request.texts] for request in fake.requests]
+
+
+def test_paragraphs_in_view_are_sent_first(fake_server: FakeServer, worker: Worker, page: Page) -> None:
+    page.goto(fake_server.add_page("/tall", tall_page(20)))
+    # P10 to P12 are in view (720 pixels high); P7 to P14 are within a screen
+    page.evaluate("scrollTo(0, 3000)")
+    press_shortcut(worker, page)
+    wait_for_translations(page, 8)
+    sent = sent_numbers(fake_server)
+    assert sorted(n for batch in sent for n in batch) == list(range(7, 15))
+    # In view first, then the nearest
+    assert {10, 11, 12} <= set(sent[0] + sent[1])
+
+
+def test_paragraphs_scrolled_away_from_wait_for_the_viewport(
+    fake_server: FakeServer, worker: Worker, page: Page
+) -> None:
+    fake_server.delay = 1
+    page.goto(fake_server.add_page("/tall-scrolled", tall_page(30)))
+    # P0 to P4 are within a screen: two requests go out and P4 waits for its turn
+    press_shortcut(worker, page)
+    deadline = time.monotonic() + WAIT_MS / 1000
+    while len(fake_server.requests) < 2 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    page.evaluate("scrollTo(0, document.body.scrollHeight)")
+    wait_for_translations(page, 4 + 5)
+    sent = [n for batch in sent_numbers(fake_server) for n in batch]
+    # The bottom of the page was translated, and P4, now far above, was not sent
+    assert 4 not in sent and {25, 26, 27, 28, 29} <= set(sent)
+
+    page.evaluate("scrollTo(0, 0)")
+    page.wait_for_function(
+        "() => [...document.querySelectorAll('dt-trans')].some((el) => el.textContent.includes('P4.'))",
+        timeout=WAIT_MS,
+    )
 
 
 def test_a_long_page_title_does_not_fail_the_translation(fake_server: FakeServer, worker: Worker, page: Page) -> None:

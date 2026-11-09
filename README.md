@@ -331,7 +331,8 @@ and each paragraph's translation appears below it. The server must be running.
   controls stay visible; hiding the translations brings the originals back.
 - Only paragraphs within a screen of the viewport are sent; the rest are translated as the page scrolls, a
   collapsed panel once it opens, and content the page adds later (infinite scrolling, single-page apps) is picked up
-  too.
+  too. Paragraphs in view are sent first, then the nearest ones; those the page was scrolled more than two screens
+  away from before their turn wait until they come near again.
 - Links and inline formatting (bold, italic, underline, strikethrough, sub- and superscript, highlighting) are kept
   in translations. Inline code, keyboard keys, sample output and variables (`code`, `kbd`, `samp`, `var`) are sent
   with their sentence like marked text and copied from the page into the translation unchanged; a paragraph that
