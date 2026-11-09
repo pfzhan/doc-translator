@@ -271,6 +271,13 @@ incomplete Responses reply), the cut-off reply is not used: a batch is translate
 single paragraph that still does not fit keeps its original text and is not cached. Lowering the characters per
 batch in the service's advanced settings avoids the extra requests.
 
+A reply the model or the provider's filter declined is not used either, even when it carries part of a
+translation: Claude stopping for any reason other than `end_turn` or `stop_sequence` (such as `refusal`),
+`finish_reason: content_filter` or a `refusal` message from Chat Completions, an incomplete or refused Responses
+reply, and a Gemini reply stopped by a filter or a blocked prompt. It counts as an empty reply: the batch is asked
+again once, then translated paragraph by paragraph, so only the paragraph that set off the filter keeps its
+original text (and is not cached) while the job goes on. The request log records each stop reason.
+
 ## Web page translation (Chrome extension)
 
 The browser extension in `extension/` translates the web page being viewed through this server: press the shortcut

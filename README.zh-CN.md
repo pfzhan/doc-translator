@@ -123,6 +123,8 @@ ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 
 模型输出达到长度上限时（`finish_reason: length`、`stop_reason: max_tokens`、`MAX_TOKENS`，或 Responses 接口返回未完成），截断的回复不会被采用：整批拆成两半重新翻译；单独一段仍放不下时保留原文，也不写入缓存。在翻译服务的高级设置里调小每批字数可以省去这些额外请求。
 
+模型或服务商的过滤器拒绝的回复同样不采用，即使其中有一部分译文：Claude 的 `stop_reason` 不是 `end_turn` 或 `stop_sequence`（例如 `refusal`），Chat Completions 返回 `finish_reason: content_filter` 或 `refusal` 消息，Responses 接口返回未完成或拒绝，Gemini 的回复被过滤器中止或提示词被拦截。这类回复按空回复处理：整批再请求一次，仍不行就逐段翻译，只有触发过滤的那一段保留原文（也不写入缓存），任务继续进行。请求日志会记下每次回复的停止原因。
+
 ## 网页翻译（Chrome 扩展）
 
 `extension/` 目录里的浏览器扩展通过本服务翻译正在看的网页：按下快捷键，每段译文显示在原文下方。使用时本服务需要在运行。

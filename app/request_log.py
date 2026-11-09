@@ -42,6 +42,8 @@ class RequestRecord:
     items: int  # paragraphs in the request
     chars: int  # characters of their source text
     model: str = ""  # the model the API says answered, which a relay may change
+    # Why the model stopped, in the provider's words (end_turn, length, content_filter, refusal, SAFETY, ...)
+    stop: str = ""
     # Tokens as in usage.Usage; all None when the API did not report usage
     input_tokens: int | None = None
     output_tokens: int | None = None

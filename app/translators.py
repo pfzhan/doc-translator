@@ -196,6 +196,7 @@ class Translator:
         error: str = "",
         model: str = "",
         usage: Usage | None = None,
+        stop: str = "",
     ) -> None:
         """Record one attempt: a debug line in the server log, and a line in the job's request log."""
         tokens = usage if usage is not None and usage.reported else None
@@ -205,7 +206,7 @@ class Translator:
             call.reason,
             attempt.number,
             status,
-            f" ({error})" if error else "",
+            f" ({error or stop})" if error or stop else "",
             attempt.gate_wait,
             attempt.duration,
             call.items,
@@ -227,6 +228,7 @@ class Translator:
                 items=call.items,
                 chars=call.chars,
                 model=model,
+                stop=stop,
                 input_tokens=tokens.input if tokens else None,
                 output_tokens=tokens.output if tokens else None,
                 reasoning_tokens=tokens.reasoning if tokens else None,
@@ -468,6 +470,12 @@ def _json_or_error(resp: httpx.Response, url: str) -> JSONDict:
     return data
 
 
+def _incomplete_reason(data: JSONDict) -> str:
+    """Why a Responses API reply is incomplete (max_output_tokens, content_filter)."""
+    details = data.get("incomplete_details")
+    return str(details.get("reason") or "") if isinstance(details, dict) else ""
+
+
 def _with_default_path(url: str, path: str) -> str:
     """Append the version path when the API address is only a domain (no path), as clients such as the OpenAI SDK
     and Cherry Studio do."""
@@ -597,6 +605,22 @@ class LLMTranslator(Translator):
         """The model that answered, as the reply names it."""
         return str(data.get("model") or "")
 
+    def _reported_stop(self, data: JSONDict) -> str:
+        """Why the model stopped, as the reply says (end_turn, length, content_filter, ...), for the request log."""
+        return ""
+
+    def _declined(self, why: str) -> str:
+        """The model or the provider's filter declined the request (a refusal, a content filter, a blocked prompt):
+        the reply is not a translation, even when it carries some text.
+
+        It is treated as an empty reply rather than an error. translate_batch asks once more, then translates a
+        batch paragraph by paragraph, so the paragraph that set off the filter is found and the others are still
+        translated; one paragraph that is declined again comes back empty, and Runner keeps its original without
+        caching it. Raising an error would fail the whole job on one paragraph, and retrying the same request
+        unchanged mostly gets the same answer."""
+        log.info("%s declined a request (%s)", self.service_id or self.provider, why)
+        return ""
+
     async def _post(self, url: str, payload: JSONDict, headers: dict[str, str], call: Call) -> JSONDict:
         """POST with retries. Some reasoning models do not accept temperature; on such a 400 it is removed and the
         request is sent again.
@@ -649,7 +673,8 @@ class LLMTranslator(Translator):
                     raise
                 usage = self._reported_usage(data)
                 self.usage.add(usage)
-                self._log_request(call, timing, 200, model=self._reported_model(data), usage=usage)
+                model, stop = self._reported_model(data), self._reported_stop(data)
+                self._log_request(call, timing, 200, model=model, usage=usage, stop=stop)
                 return data
             self._log_request(call, timing, resp.status_code, "http")
             delay = _retry_delay(resp, 2 ** (attempt + 1))
@@ -791,6 +816,14 @@ class OpenAITranslator(LLMTranslator):
             cached_input=cached if cached is not None else nested(usage, "prompt_cache_hit_tokens"),
         )
 
+    def _reported_stop(self, data: JSONDict) -> str:
+        if self.api_format == "responses":
+            status = str(data.get("status") or "")
+            return f"{status}: {_incomplete_reason(data)}" if status == "incomplete" else status
+        choices = data.get("choices")
+        choice = choices[0] if isinstance(choices, list) and choices else None
+        return str(choice.get("finish_reason") or "") if isinstance(choice, dict) else ""
+
     async def _complete(self, system: str, user: str, call: Call) -> str:
         if self.api_format == "responses":
             return await self._complete_responses(system, user, call)
@@ -806,8 +839,15 @@ class OpenAITranslator(LLMTranslator):
             message = choice["message"]
         except (KeyError, IndexError, TypeError) as e:
             raise TranslatorError(f"返回格式异常: {str(data)[:200]}") from e
-        if isinstance(choice, dict) and choice.get("finish_reason") == "length":
+        finish = choice.get("finish_reason") if isinstance(choice, dict) else None
+        if finish == "length":
             raise TruncatedError()
+        # Relays name the normal stop differently ("stop", "eos", none at all), so only a filtered or refused reply
+        # is turned down; content cut by the filter may be a partial translation
+        if finish == "content_filter":
+            return self._declined("content_filter")
+        if isinstance(message, dict) and message.get("refusal"):
+            return self._declined("refusal")
         # Relay services occasionally return a message without content; treat it as an empty reply, like an empty
         # reply from other APIs
         return (message.get("content") if isinstance(message, dict) else "") or ""
@@ -818,20 +858,25 @@ class OpenAITranslator(LLMTranslator):
         if self.temperature is not None:
             payload["temperature"] = self.temperature
         data = await self._post(f"{self.base_url}/responses", payload, self._headers(), call)
-        if data.get("status") == "incomplete" and (data.get("incomplete_details") or {}).get("reason") == (
-            "max_output_tokens"
-        ):
-            raise TruncatedError()
+        if data.get("status") == "incomplete":
+            reason = _incomplete_reason(data)
+            if reason == "max_output_tokens":
+                raise TruncatedError()
+            # Stopped for another reason (content_filter): whatever text came is not a whole translation
+            return self._declined(f"incomplete: {reason}")
+        contents = [
+            c
+            for item in data.get("output") or []
+            if isinstance(item, dict) and item.get("type") == "message"
+            for c in item.get("content") or []
+            if isinstance(c, dict)
+        ]
+        if any(c.get("type") == "refusal" for c in contents):
+            return self._declined("refusal")
         output_text = data.get("output_text")
         if isinstance(output_text, str):
             return output_text
-        texts = [
-            c.get("text", "")
-            for item in data.get("output") or []
-            if item.get("type") == "message"
-            for c in item.get("content") or []
-            if c.get("type") in ("output_text", "text")
-        ]
+        texts = [c.get("text", "") for c in contents if c.get("type") in ("output_text", "text")]
         if not texts and data.get("status") not in (None, "completed"):
             raise TranslatorError(
                 f"返回状态异常: {data.get('status')} {str(data.get('incomplete_details') or '')[:200]}"
@@ -871,6 +916,9 @@ class ClaudeTranslator(LLMTranslator):
         total = None if fresh is None else fresh + (cache_read or 0) + (cache_write or 0)
         return reported(total, nested(usage, "output_tokens"), cached_input=cache_read, cache_write=cache_write)
 
+    def _reported_stop(self, data: JSONDict) -> str:
+        return str(data.get("stop_reason") or "")
+
     async def _complete(self, system: str, user: str, call: Call) -> str:
         payload = {
             "model": self.model,
@@ -881,8 +929,14 @@ class ClaudeTranslator(LLMTranslator):
         if self.temperature is not None:
             payload["temperature"] = self.temperature
         data = await self._post(f"{self.base_url}/messages", payload, self._headers(), call)
-        if data.get("stop_reason") == "max_tokens":
+        stop = data.get("stop_reason")
+        # The reply ran out of room: output limit, or the context window with the prompt
+        if stop in ("max_tokens", "model_context_window_exceeded"):
             raise TruncatedError()
+        # Only a finished turn is a translation; a refusal (or a pause, a tool call) is not, whatever text it has.
+        # Some relays leave stop_reason out
+        if stop not in (None, "end_turn", "stop_sequence"):
+            return self._declined(str(stop))
         return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
 
     async def list_models(self) -> list[str]:
@@ -914,6 +968,14 @@ class GeminiTranslator(LLMTranslator):
     def _reported_model(self, data: JSONDict) -> str:
         return str(data.get("modelVersion") or "")
 
+    def _reported_stop(self, data: JSONDict) -> str:
+        candidates = data.get("candidates")
+        first = candidates[0] if isinstance(candidates, list) and candidates else None
+        if isinstance(first, dict):
+            return str(first.get("finishReason") or "")
+        feedback = data.get("promptFeedback")
+        return f"blocked: {feedback.get('blockReason')}" if isinstance(feedback, dict) else ""
+
     async def _complete(self, system: str, user: str, call: Call) -> str:
         gen = {}
         if self.temperature is not None:
@@ -927,10 +989,17 @@ class GeminiTranslator(LLMTranslator):
         data = await self._post(f"{self.base_url}/models/{model}:generateContent", payload, self._headers(), call)
         candidates = data.get("candidates") or []
         if not candidates:
-            reason = (data.get("promptFeedback") or {}).get("blockReason", "无返回内容")
-            raise TranslatorError(f"Gemini 未返回结果: {reason}")
-        if candidates[0].get("finishReason") == "MAX_TOKENS":
+            reason = (data.get("promptFeedback") or {}).get("blockReason")
+            # The prompt was blocked: like a refusal, another grouping of the paragraphs may pass
+            if reason:
+                return self._declined(f"blocked: {reason}")
+            raise TranslatorError("Gemini 未返回结果: 无返回内容")
+        finish = candidates[0].get("finishReason")
+        if finish == "MAX_TOKENS":
             raise TruncatedError()
+        # SAFETY, RECITATION, PROHIBITED_CONTENT and the like: stopped by a filter, not finished
+        if finish not in (None, "STOP", "FINISH_REASON_UNSPECIFIED"):
+            return self._declined(str(finish))
         parts = (candidates[0].get("content") or {}).get("parts", [])
         # Thinking models may include thought parts; take only the main text
         return "".join(p.get("text", "") for p in parts if not p.get("thought"))
