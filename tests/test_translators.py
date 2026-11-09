@@ -5,6 +5,7 @@ import asyncio
 import json
 import re
 from collections.abc import Callable, Coroutine
+from datetime import UTC, datetime, timedelta
 from typing import TypedDict, Unpack
 
 import httpx
@@ -239,28 +240,49 @@ def test_google_200_html_treated_as_rate_limit(monkeypatch: pytest.MonkeyPatch) 
     run(tr.aclose())
 
 
-@pytest.mark.parametrize("retry_after,expected", [("2", 2.0), ("70", 60.0)])
-def test_retry_after_header_drives_backoff(monkeypatch: pytest.MonkeyPatch, retry_after: str, expected: float) -> None:
-    """A 429 with Retry-After waits for that long (at most 60 s) instead of the default exponential backoff."""
+def _http_date(seconds_from_now: float) -> str:
+    from email.utils import format_datetime
+
+    return format_datetime(datetime.now(UTC) + timedelta(seconds=seconds_from_now), usegmt=True)
+
+
+@pytest.mark.parametrize(
+    "headers,expected",
+    [
+        ({"Retry-After": "2"}, 2.0),
+        ({"Retry-After": "70"}, 60.0),
+        ({"retry-after-ms": "1500", "Retry-After": "2"}, 1.5),  # OpenAI's milliseconds are more precise
+        ({"Retry-After": "date+30"}, 30.0),  # An HTTP date 30 seconds from when the test runs
+        ({"Retry-After": "date-30"}, 2.0),  # A date in the past asks for nothing: exponential backoff
+        ({"Retry-After": "soon"}, 2.0),
+    ],
+)
+def test_retry_after_header_drives_backoff(
+    monkeypatch: pytest.MonkeyPatch, headers: dict[str, str], expected: float
+) -> None:
+    """A 429 waits for as long as Retry-After or retry-after-ms asks (at most 60 s) instead of the default
+    exponential backoff."""
     delays: list[float] = []
 
     async def record_sleep(seconds: float) -> None:
         delays.append(seconds)
 
     monkeypatch.setattr("app.translators.asyncio.sleep", record_sleep)
+    monkeypatch.setattr("app.translators._clock", lambda: 1000.0)
+    if headers.get("Retry-After", "").startswith("date"):
+        headers = {"Retry-After": _http_date(float(headers["Retry-After"].removeprefix("date")))}
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request)
         if len(calls) == 1:
-            return httpx.Response(
-                429, json={"error": {"message": "rate limited"}}, headers={"Retry-After": retry_after}
-            )
+            return httpx.Response(429, json={"error": {"message": "rate limited"}}, headers=headers)
         return httpx.Response(200, json={"choices": [{"message": {"content": "好"}}]})
 
     tr = make_openai(handler)
     assert run(tr.translate_batch(["good"])) == ["好"]
-    assert delays == [expected]
+    # An HTTP date has whole seconds
+    assert delays == [pytest.approx(expected, abs=1 if "GMT" in headers.get("Retry-After", "") else 1e-6)]
     run(tr.aclose())
 
 

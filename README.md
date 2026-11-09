@@ -65,7 +65,10 @@ tested on its own.
 Each service has an API key, a name, an API URL and a model (from a preset list, typed in, or fetched from the
 API). The advanced settings cover concurrency, paragraphs and characters per batch, temperature, the system
 prompt and the prompt. Concurrency limits the service as a whole: jobs, web page requests and service tests
-using the same service share it.
+using the same service share it. A request holds its place only while it is being sent: one waiting to retry
+after an error gives it to the others. When the service answers 429 or 503, every request to it waits as long as
+the answer asks (`Retry-After` in seconds or as a date, or `retry-after-ms`; at most 60 seconds, exponential
+backoff when it does not say), instead of each request running into the limit on its own.
 
 The glossary is kept in the advanced settings, one `source = translation` entry per line. By default, LLM
 services also count terms that recur in the document before translating (multi-word phrases, acronyms,

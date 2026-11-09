@@ -15,7 +15,9 @@ import unicodedata
 import weakref
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 import httpx
@@ -48,11 +50,25 @@ class TruncatedError(TranslatorError):
         super().__init__("模型输出达到长度上限，译文不完整")
 
 
-# Concurrency gates by event loop, then by (service id, concurrency); see Translator._sem. A semaphore belongs to the
-# loop it is first used in, and the tests run each scenario in a loop of its own
-_GATES: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[tuple[str, int], asyncio.Semaphore]] = (
-    weakref.WeakKeyDictionary()
-)
+@dataclass
+class _Service:
+    """What the engines of one service share: its concurrency gate and the pause after it said it was overloaded."""
+
+    # Semaphores by concurrency: changing the service's concurrency gives the jobs started after it a new gate
+    gates: dict[int, asyncio.Semaphore] = field(default_factory=dict)
+    # No request of the service is sent before this time (_clock) after a 429 or 503
+    paused_until: float = 0.0
+
+
+# Shared state of services by event loop, then by service id; see Translator._service. A semaphore belongs to the loop
+# it is first used in, and the tests run each scenario in a loop of its own
+_SERVICES: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, dict[str, _Service]] = weakref.WeakKeyDictionary()
+
+# The clock of service pauses; a name of its own so tests can move it without touching the event loop's clock
+_clock = time.monotonic
+
+# Statuses that mean the whole service is overloaded or rate-limited, not just this request
+_OVERLOADED = {429, 503}
 
 
 @dataclass
@@ -62,8 +78,6 @@ class Call:
     reason: RequestReason
     items: int  # paragraphs in the request
     chars: int  # characters of their source text
-    # Seconds the request waited for the concurrency gate before its first attempt; later attempts wait none
-    gate_wait: float = 0.0
 
     @classmethod
     def of(cls, texts: list[str], reason: RequestReason) -> "Call":
@@ -114,37 +128,65 @@ class Translator:
         self.notes: dict[str, str] = {}
 
     @property
-    def _sem(self) -> asyncio.Semaphore:
-        """The concurrency gate every request of this engine goes through, including the batch splitting and
-        retranslation inside translate_batch, which would otherwise bypass Runner's worker limit.
+    def _service(self) -> _Service:
+        """What this engine shares with the other engines of its service.
 
         Engines made from the same service share one gate, so the service's concurrency limits all of its requests
         together: several jobs, web page requests and service tests. Each job and request makes its own engine, and
-        a gate per engine let them add up to many times the limit and run into rate limits. An engine without a
-        service id (tests) has a gate of its own."""
-        loop = asyncio.get_running_loop()
-        gates = _GATES.setdefault(loop, {})
-        key = (self.service_id, self.concurrency) if self.service_id else (f"engine:{id(self)}", self.concurrency)
-        gate = gates.get(key)
-        if gate is None:
-            gate = gates[key] = asyncio.Semaphore(self.concurrency)
+        a gate per engine let them add up to many times the limit and run into rate limits. They share the pause
+        after a 429 or 503 for the same reason. An engine without a service id (tests) has a state of its own."""
+        services = _SERVICES.setdefault(asyncio.get_running_loop(), {})
+        key = self.service_id or f"engine:{id(self)}"
+        shared = services.get(key)
+        if shared is None:
+            shared = services[key] = _Service()
             if not self.service_id:
-                weakref.finalize(self, gates.pop, key, None)
+                weakref.finalize(self, services.pop, key, None)
+        return shared
+
+    @property
+    def _sem(self) -> asyncio.Semaphore:
+        """The concurrency gate every request of this engine goes through, including the batch splitting and
+        retranslation inside translate_batch, which would otherwise bypass Runner's worker limit."""
+        gates = self._service.gates
+        gate = gates.get(self.concurrency)
+        if gate is None:
+            gate = gates[self.concurrency] = asyncio.Semaphore(self.concurrency)
         return gate
 
     @asynccontextmanager
-    async def _gate(self, call: Call) -> AsyncIterator[None]:
-        """Hold a place of the concurrency gate, recording in call how long it took to get one."""
+    async def _slot(self) -> AsyncIterator[float]:
+        """Hold a place of the concurrency gate for one attempt, once the service's pause is over; yield the seconds
+        it took to get there.
+
+        A place is held only while a request is on the wire: backoff between attempts happens outside, so a request
+        waiting to retry does not keep others of the service from being sent. The pause is waited out with the
+        place held, since every other request of the service waits for it too."""
         start = time.perf_counter()
         async with self._sem:
-            call.gate_wait = time.perf_counter() - start
-            yield
+            await self._wait_pause()
+            yield time.perf_counter() - start
+
+    async def _wait_pause(self) -> None:
+        """Sleep until the service's pause is over. A pause extended while sleeping (another 429) is waited out too;
+        a pause that did not change is not checked again, so a clock that stands still cannot loop."""
+        shared = self._service
+        slept_until = 0.0
+        while (until := shared.paused_until) > slept_until:
+            slept_until = until
+            wait = until - _clock()
+            if wait <= 0:
+                break
+            await asyncio.sleep(wait)
+
+    def _pause(self, seconds: float) -> None:
+        """Hold back every request of the service for seconds, after it answered that it is overloaded."""
+        shared = self._service
+        shared.paused_until = max(shared.paused_until, _clock() + seconds)
 
     @staticmethod
-    def _start_attempt(call: Call, number: int) -> _Attempt:
-        """Begin timing an attempt. The gate wait measured before the first one belongs to it alone."""
-        wait, call.gate_wait = call.gate_wait, 0.0
-        return _Attempt(number=number, started=time.time(), gate_wait=wait)
+    def _start_attempt(number: int, gate_wait: float) -> _Attempt:
+        return _Attempt(number=number, started=time.time(), gate_wait=gate_wait)
 
     def _log_request(
         self,
@@ -361,14 +403,35 @@ def _failure_kind(error: httpx.HTTPError) -> str:
     return "timeout" if isinstance(error, httpx.TimeoutException) else "network"
 
 
-def _retry_delay(resp: httpx.Response, default: float) -> float:
-    """Retry delay: use the Retry-After response header when present (capped at 60 s), otherwise the given
-    exponential backoff value."""
+def _retry_after(resp: httpx.Response) -> float | None:
+    """Seconds the response asks to wait: retry-after-ms (OpenAI), or Retry-After as seconds or as an HTTP date.
+    None when it asks for nothing usable."""
     try:
-        delay = float(resp.headers.get("retry-after") or 0)
+        ms = float(resp.headers.get("retry-after-ms") or 0)
     except ValueError:
-        delay = 0
-    return min(delay, 60) if delay > 0 else default
+        ms = 0
+    if ms > 0:
+        return ms / 1000
+    value = (resp.headers.get("retry-after") or "").strip()
+    if not value:
+        return None
+    try:
+        delay = float(value)
+    except ValueError:
+        try:
+            when = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+        if when.tzinfo is None:
+            when = when.replace(tzinfo=UTC)
+        delay = (when - datetime.now(UTC)).total_seconds()
+    return delay if delay > 0 else None
+
+
+def _retry_delay(resp: httpx.Response, default: float) -> float:
+    """Retry delay: what the response asks for (capped at 60 s), otherwise the given exponential backoff value."""
+    delay = _retry_after(resp)
+    return min(delay, 60) if delay else default
 
 
 def _json_or_error(resp: httpx.Response, url: str) -> JSONDict:
@@ -486,9 +549,7 @@ class LLMTranslator(Translator):
             title=self.title,
             excerpt=excerpt,
         )
-        call = Call.of(terms, "terms")
-        async with self._gate(call):
-            content = await self._complete(system, user, call)
+        content = await self._complete(system, user, Call.of(terms, "terms"))
         wanted = {term.casefold(): term for term in terms}
         return [
             (wanted[source.casefold()], target)
@@ -527,21 +588,28 @@ class LLMTranslator(Translator):
         Relay services often wrap occasional upstream failures (account pool rotation, a channel going offline
         temporarily) as a 400, and the same request succeeds a few seconds later, so a 400 is treated as retryable
         too, except when it clearly comes from a configuration error on our side.
+
+        Each attempt takes a place of the service's gate (see _slot) and gives it back before backing off. A 429 or
+        503 pauses the whole service for the delay it asks for, so the other requests stop too instead of each
+        running into the limit on its own; the retry then waits out that pause in the gate.
         """
         for attempt in range(self.retries):
             last = attempt == self.retries - 1
-            timing = self._start_attempt(call, attempt + 1)
-            clock = time.perf_counter()
-            try:
-                resp = await self.client.post(url, json=payload, headers=headers)
-            except httpx.HTTPError as e:
+            failure: httpx.HTTPError | None = None
+            async with self._slot() as waited:
+                timing = self._start_attempt(attempt + 1, waited)
+                clock = time.perf_counter()
+                try:
+                    resp = await self.client.post(url, json=payload, headers=headers)
+                except httpx.HTTPError as e:
+                    failure = e
                 timing.duration = time.perf_counter() - clock
-                self._log_request(call, timing, None, _failure_kind(e))
+            if failure is not None:
+                self._log_request(call, timing, None, _failure_kind(failure))
                 if last:
-                    raise TranslatorError(f"请求失败: {e}") from e
+                    raise TranslatorError(f"请求失败: {failure}") from failure
                 await asyncio.sleep(2**attempt)
                 continue
-            timing.duration = time.perf_counter() - clock
             if resp.status_code == 200:
                 try:
                     data = _json_or_error(resp, url)
@@ -553,6 +621,9 @@ class LLMTranslator(Translator):
                 self._log_request(call, timing, 200, model=self._reported_model(data), usage=usage)
                 return data
             self._log_request(call, timing, resp.status_code, "http")
+            delay = _retry_delay(resp, 2 ** (attempt + 1))
+            if resp.status_code in _OVERLOADED:
+                self._pause(delay)
             msg = _error_text(resp)
             # The last attempt does not strip temperature and resend, so the real error is raised
             if resp.status_code == 400 and "temperature" in msg.lower() and self.temperature is not None and not last:
@@ -565,7 +636,9 @@ class LLMTranslator(Translator):
             # A 400 is retried unchanged only once (for occasional failures); if it fails again, translate_batch splits
             # the batch instead of waiting here in vain
             if _retryable(resp.status_code) and not last and not (resp.status_code == 400 and attempt >= 1):
-                await asyncio.sleep(_retry_delay(resp, 2 ** (attempt + 1)))
+                # After a 429/503 the next attempt waits out the service's pause in the gate
+                if resp.status_code not in _OVERLOADED:
+                    await asyncio.sleep(delay)
                 continue
             raise TranslatorError(f"接口错误 {resp.status_code}: {msg}", status=resp.status_code)
         raise TranslatorError("已达到最大重试次数")
@@ -589,16 +662,14 @@ class LLMTranslator(Translator):
         """translate_batch, told why the batch is sent; the reason goes into the request log."""
         system, user = self.build_messages(texts)
         try:
-            # The only place that actually sends requests; recursive batch splitting / retranslation ends up here too,
-            # all limited by the same semaphore
-            call = Call.of(texts, reason)
-            async with self._gate(call):
-                content = await self._complete(system, user, call)
-                # An empty reply is mostly an occasional upstream failure; ask again unchanged. If it is still empty,
-                # a batch is retranslated paragraph by paragraph below, and for a single paragraph Runner falls back
-                # to the source text
-                if not content.strip():
-                    content = await self._complete(system, user, Call.of(texts, "repeat"))
+            # Every request, including those of the recursive batch splitting / retranslation below, goes through the
+            # service's gate in _post, one attempt at a time
+            content = await self._complete(system, user, Call.of(texts, reason))
+            # An empty reply is mostly an occasional upstream failure; ask again unchanged. If it is still empty, a
+            # batch is retranslated paragraph by paragraph below, and for a single paragraph Runner falls back to the
+            # source text
+            if not content.strip():
+                content = await self._complete(system, user, Call.of(texts, "repeat"))
         except TranslatorError as e:
             # Relay services consistently reject some combinations of paragraphs (measured: the same batch of 8
             # paragraphs got a 400 every time, while each part translated after splitting).
@@ -624,9 +695,7 @@ class LLMTranslator(Translator):
             # retranslates it at the next re-layout
             if stray_chars(texts[0], out, self.target_lang):
                 try:
-                    call = Call.of(texts, "repeat")
-                    async with self._gate(call):
-                        again = prompts.clean_output(await self._complete(system, user, call))
+                    again = prompts.clean_output(await self._complete(system, user, Call.of(texts, "repeat")))
                 except TruncatedError:
                     again = ""
                 if again.strip() and not stray_chars(texts[0], again, self.target_lang):
@@ -898,8 +967,8 @@ class GoogleTranslator(Translator):
         call = Call.of(texts, "normal")
         for attempt in range(self.retries):
             last = attempt == self.retries - 1
-            async with self._gate(call):
-                timing = self._start_attempt(call, attempt + 1)
+            async with self._slot() as waited:
+                timing = self._start_attempt(attempt + 1, waited)
                 clock = time.perf_counter()
                 failure: httpx.HTTPError | None = None
                 try:
@@ -929,17 +998,22 @@ class GoogleTranslator(Translator):
                     if len(out) != len(texts):
                         raise TranslatorError("Google 返回的译文条数与请求不一致")
                     return out
+                # Rate limiting holds back every request to Google, like a 429 below; the retry waits in the gate
+                self._pause(_retry_delay(resp, min(2 ** (attempt + 1), 30)))
                 if last:
                     raise TranslatorError("Google 返回的不是 JSON（可能已被限流，请稍后重试或改用 AI 翻译服务）")
-                await asyncio.sleep(_retry_delay(resp, min(2 ** (attempt + 1), 30)))
                 continue
             self._log_request(call, timing, resp.status_code, "http")
             # A 302 redirect to the captcha page / 429 both mean rate limiting; retry with backoff
+            delay = _retry_delay(resp, min(2 ** (attempt + 1), 30))
+            if resp.status_code in (302, *_OVERLOADED):
+                self._pause(delay)
             if resp.status_code not in (302, 429, 500, 503) or last:
                 raise TranslatorError(
                     f"Google 接口错误 {resp.status_code}（可能已被限流，请稍后重试或改用 AI 翻译服务）"
                 )
-            await asyncio.sleep(_retry_delay(resp, min(2 ** (attempt + 1), 30)))
+            if resp.status_code == 500:
+                await asyncio.sleep(delay)
         raise TranslatorError("已达到最大重试次数")
 
     async def aclose(self) -> None:
