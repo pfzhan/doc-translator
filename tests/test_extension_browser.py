@@ -45,6 +45,9 @@ class FakeServer:
     # What the stand-in model does to each text before marking it; reset for each test
     rewrite: Callable[[str], str] | None = None
     delay: float = 0  # seconds each translation takes
+    # Requests with a text containing fail_on are answered with this HTTP status
+    fail_on: str = ""
+    fail_status: int = 502
 
     @property
     def origin(self) -> str:
@@ -96,6 +99,9 @@ def make_handler(fake: FakeServer) -> type[BaseHTTPRequestHandler]:
             title: str = data["title"]
             fake.requests.append(TranslateRequest(texts, title, data["service_id"], self.headers["Authorization"]))
             time.sleep(fake.delay)
+            if fake.fail_on and any(fake.fail_on in text for text in texts):
+                self.answer(fake.fail_status, "application/json", json.dumps({"detail": "服务出错"}))
+                return
             if len(title) > MAX_TITLE:
                 detail = [{"msg": "String should have at most 1000 characters"}]
                 self.answer(422, "application/json", json.dumps({"detail": detail}))
@@ -153,6 +159,8 @@ def worker(browser: BrowserContext, fake_server: FakeServer) -> Worker:
     fake_server.requests.clear()
     fake_server.rewrite = None
     fake_server.delay = 0
+    fake_server.fail_on = ""
+    fake_server.fail_status = 502
     return worker
 
 
@@ -398,6 +406,55 @@ def test_paragraphs_scrolled_away_from_wait_for_the_viewport(
         "() => [...document.querySelectorAll('dt-trans')].some((el) => el.textContent.includes('P4.'))",
         timeout=WAIT_MS,
     )
+
+
+def three_requests_page() -> str:
+    """Three paragraphs in view, each too long to share a request."""
+    return f"<!doctype html><title>t</title>{TALL}" + "".join(
+        f"<p>Part {name}. {FILLER * 2}</p>" for name in ("one", "two", "three")
+    )
+
+
+def test_a_failed_request_marks_its_paragraph_and_the_rest_go_on(
+    fake_server: FakeServer, worker: Worker, page: Page
+) -> None:
+    fake_server.fail_on = "Part two."
+    page.goto(fake_server.add_page("/partial-failure", three_requests_page()))
+    press_shortcut(worker, page)
+    page.wait_for_function(
+        "() => document.querySelectorAll('dt-trans:not([data-dt-failed])').length === 2", timeout=WAIT_MS
+    )
+    mark = page.locator("p:nth-of-type(2) > dt-trans[data-dt-failed]")
+    assert mark.text_content() == "翻译失败 重试"
+
+    # The button sends that paragraph again, and its translation replaces the notice
+    fake_server.fail_on = ""
+    page.locator("dt-trans[data-dt-failed] button").click()
+    page.wait_for_function(
+        "() => document.querySelectorAll('dt-trans:not([data-dt-failed])').length === 3", timeout=WAIT_MS
+    )
+    assert page.locator("dt-trans[data-dt-failed]").count() == 0
+    assert page.locator("p:nth-of-type(2) > dt-trans").text_content() == TRANSLATED + f"Part two. {FILLER * 2}".strip()
+
+
+def test_an_error_of_the_settings_stops_until_the_shortcut_retries(
+    fake_server: FakeServer, worker: Worker, page: Page
+) -> None:
+    fake_server.fail_on = "Part"
+    fake_server.fail_status = 401  # a wrong access token: every request would fail
+    page.goto(fake_server.add_page("/settings-failure", three_requests_page()))
+    press_shortcut(worker, page)
+    deadline = time.monotonic() + WAIT_MS / 1000
+    while len(fake_server.requests) < 2 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    time.sleep(0.5)
+    # The two requests sent at once failed, and the third was not sent; no paragraph is marked
+    assert len(fake_server.requests) == 2
+    assert page.locator("dt-trans").count() == 0
+
+    fake_server.fail_on = ""
+    press_shortcut(worker, page)
+    wait_for_translations(page, 3)
 
 
 def test_a_long_page_title_does_not_fail_the_translation(fake_server: FakeServer, worker: Worker, page: Page) -> None:

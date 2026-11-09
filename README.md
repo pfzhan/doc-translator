@@ -294,7 +294,11 @@ and each paragraph's translation appears below it. The server must be running.
 
 1. Open `chrome://extensions`, turn on developer mode, click "Load unpacked" and choose the `extension/` directory.
 2. Press `Alt+T` (Option+T on macOS) or click the extension's toolbar button. The first press starts translating;
-   the next ones hide and show the translations. After a failed request, the next press retries it.
+   the next ones hide and show the translations. When a request fails (the translation service answered with an
+   error or not in time), its paragraphs show 翻译失败 (Translation failed) with a 重试 (Retry) button, and the rest
+   of the page goes on; an error every request would get (the server cannot be reached, a wrong access token, a
+   service that does not exist or is disabled) stops translating instead. Either way, the next press retries every
+   failed paragraph.
 3. The shortcut is changed on Chrome's `chrome://extensions/shortcuts` page (extensions cannot set it themselves).
    The extension's options page shows the current shortcut with a button that opens that page, and sets the server
    address, the translation service and the languages; the services are those enabled on the server, and keys,

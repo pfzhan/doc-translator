@@ -3,7 +3,8 @@
 // plain translations are written with textContent, and formatted ones are rebuilt node by node (see buildRich).
 //
 // Each shortcut press: the first starts translating; after a failed request it retries; otherwise it hides or shows
-// the translations. Nothing new is sent while they are hidden. In translation-only mode (setting "mode") the original
+// the translations. Nothing new is sent while they are hidden. A request that fails for its own reasons marks its
+// paragraphs with a retry button and the rest go on; an error of the settings or the server stops all requests. In translation-only mode (setting "mode") the original
 // of each translated paragraph is hidden; hiding the translations brings the originals back. With the setting
 // "scope" set to "main", only the page's main content is translated (see inScope).
 
@@ -79,6 +80,7 @@
    * @property {string} payload what is sent: its text, or its HTML when it has inline formatting (see richOf)
    * @property {Rich | null} rich
    * @property {HTMLElement} [el] its translation, once shown
+   * @property {HTMLElement} [mark] the notice that its request failed, with a retry button (see markFailed)
    * @property {HTMLElement} [reuse] the translation of its earlier version, which it takes over
    * @property {boolean} [stale]
    * @property {boolean} [redo] read again on the next scan even if unchanged (see rescan)
@@ -106,6 +108,8 @@
   let pageHasMain = false; // whether the page marks its main content; updated by collect
   /** @type {Unit[]} */
   let failed = []; // paragraphs of failed requests; non-empty means the next press retries
+  let stopped = false; // an error that every request would get (see TranslateAnswer): nothing is sent until a retry
+  let failure = ''; // the error of the last failed request
   let inflight = 0;
   /** @type {WeakMap<Node, Paragraph>} */
   const unitOf = new WeakMap(); // node of a collected paragraph -> that paragraph
@@ -635,7 +639,8 @@
    * @param {ChildNode | null | undefined} el
    * @returns {el is HTMLElement} */
   const free = (el) =>
-    !!el && isElement(el) && el.localName === TRANS_TAG && el.isConnected && !current(ownerOf.get(el));
+    !!el && isElement(el) && el.localName === TRANS_TAG && el.isConnected && !current(ownerOf.get(el)) &&
+    !el.hasAttribute('data-dt-failed');
 
   /** Whether a run found again is the paragraph collected before, unchanged. One marked redo is read again anyway:
    * a custom element in it was defined since.
@@ -724,7 +729,10 @@
     if (shown.has(unit) && !unit.attr) churn.set(unit.parent, (churn.get(unit.parent) || 0) + 1);
     unit.stale = true;
     shown.delete(unit);
-    if (!unit.attr) setOriginalVisible(unit, true, true);
+    if (!unit.attr) {
+      unit.mark?.remove();
+      setOriginalVisible(unit, true, true);
+    }
   }
 
   // ---------- Translating ----------
@@ -791,7 +799,7 @@
   }
 
   function pump() {
-    if (!started || hidden || failed.length || inflight >= MAX_INFLIGHT || !queue.length) return;
+    if (!started || hidden || stopped || inflight >= MAX_INFLIGHT || !queue.length) return;
     prioritize();
     while (inflight < MAX_INFLIGHT && queue.length) {
       const batch = nextBatch();
@@ -814,6 +822,9 @@
    * @param {unknown} result */
   const errorOf = (result) =>
     typeof result === 'object' && result !== null && 'error' in result && result.error ? String(result.error) : '';
+  /** Whether that error would stop every request (see TranslateAnswer).
+   * @param {unknown} result */
+  const fatal = (result) => typeof result === 'object' && result !== null && 'fatal' in result && !!result.fatal;
 
   /** @param {Unit[]} batch */
   async function send(batch) {
@@ -832,19 +843,65 @@
       result = await chrome.runtime.sendMessage(message);
     } catch {
       // The extension was reloaded or removed; the script left in this page can no longer reach it
-      result = { error: '扩展已更新，请刷新页面后重试' };
+      result = { error: '扩展已更新，请刷新页面后重试', fatal: true };
     }
     inflight--;
     const error = errorOf(result);
     if (error || !usable(result, batch)) {
+      failure = error || '翻译服务返回的结果无法识别';
       failed.push(...batch);
-      toast(`翻译失败：${error || '翻译服务返回的结果无法识别'}。按快捷键重试`, true);
-      return;
+      if (fatal(result)) {
+        // Other requests would fail the same way: nothing more is sent until the user retries
+        stopped = true;
+        toast(`翻译失败：${failure}。按快捷键重试`, true);
+        return;
+      }
+      for (const unit of batch) if (!unit.attr) markFailed(unit);
+    } else {
+      const { translations, lang } = result;
+      batch.forEach((unit, i) => show(unit, translations[i], lang));
     }
-    const { translations, lang } = result;
-    batch.forEach((unit, i) => show(unit, translations[i], lang));
     pump();
-    if (!inflight && !failed.length && !hidden) toast('');
+    if (inflight || hidden || stopped) return;
+    toast(failed.length ? `部分段落翻译失败：${failure}。点段落下的「重试」或按快捷键重试` : '', !!failed.length);
+  }
+
+  /** Mark a paragraph whose request failed where its translation goes, with a button that sends it again.
+   * @param {Paragraph} unit */
+  function markFailed(unit) {
+    if (!current(unit)) return;
+    const mark = unit.mark || document.createElement(TRANS_TAG);
+    mark.setAttribute('data-dt-failed', '');
+    mark.setAttribute('lang', 'zh-CN');
+    mark.setAttribute('translate', 'no');
+    mark.title = failure;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = '重试';
+    button.addEventListener('click', (e) => {
+      // The paragraph may be in a link
+      e.preventDefault();
+      e.stopPropagation();
+      retry([unit]);
+      pump();
+    });
+    mark.replaceChildren('翻译失败 ', button);
+    place(unit, mark);
+    unit.mark = mark;
+  }
+
+  /** Send units that failed again: in view, they go first.
+   * @param {Unit[]} units */
+  function retry(units) {
+    for (const unit of units) {
+      if (unit.attr || !unit.mark) continue;
+      unit.mark.remove();
+      delete unit.mark;
+    }
+    failed = failed.filter((unit) => !units.includes(unit));
+    queue.unshift(...units.filter(current));
+    stopped = false;
+    if (!failed.length) toast('');
   }
 
   /** @param {Unit} unit
@@ -868,6 +925,23 @@
     const el = [unit.reuse, after].find(free) || document.createElement(TRANS_TAG);
     el.setAttribute('lang', lang);
     el.setAttribute('translate', 'no');
+    if (unit.rich) el.replaceChildren(buildRich(translation, unit.rich.refs));
+    else el.textContent = translation;
+    // A notice that an earlier request failed gives way
+    unit.mark?.remove();
+    delete unit.mark;
+    place(unit, el);
+    unit.el = el;
+    ownerOf.set(el, unit);
+    shown.add(unit);
+    setOriginalVisible(unit, originalVisible());
+  }
+
+  /** Put el, a translation or a notice, where the translation of unit goes, laid out to fit there.
+   * @param {Paragraph} unit
+   * @param {HTMLElement} el */
+  function place(unit, el) {
+    const after = unit.after?.parentNode === unit.parent ? unit.after : null;
     // Text at the top of a shadow root is laid out in its host
     const box = elementOf(unit.parent);
     // In a flex or grid row, or inside an inline box (a tag chip, a button-like link), a block below the original
@@ -884,14 +958,8 @@
     const slot = textEl?.getAttribute('slot');
     if (slot) el.setAttribute('slot', slot);
     else el.removeAttribute('slot');
-    if (unit.rich) el.replaceChildren(buildRich(translation, unit.rich.refs));
-    else el.textContent = translation;
     if (el.parentNode !== unit.parent) unit.parent.insertBefore(el, after);
     styleShadow(el);
-    unit.el = el;
-    ownerOf.set(el, unit);
-    shown.add(unit);
-    setOriginalVisible(unit, originalVisible());
   }
 
   // ---------- Colors ----------
@@ -1014,6 +1082,11 @@
       if (alive(unit)) dirty.add(unit.parent);
       else if (unit.el?.isConnected) orphans.push(unit.el);
     }
+    failed = failed.filter((unit) => {
+      if (!unit.stale && alive(unit)) return true; // current(), which would narrow unit to never below
+      if (!unit.attr) unit.mark?.remove();
+      return false;
+    });
     for (const [el, units] of waiting) {
       if (el.isConnected && units.some(current)) continue;
       visibility.unobserve(el);
@@ -1214,8 +1287,7 @@
   }
 
   function retryFailed() {
-    queue.unshift(...failed.filter(current));
-    failed = [];
+    retry(failed);
   }
 
   async function toggle() {

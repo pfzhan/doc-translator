@@ -36,6 +36,23 @@ dt-trans[data-dt-inline] {
   box-decoration-break: clone;
 }
 
+/* Where a paragraph's translation failed: a short notice with a retry button. The page's own button styles stay out */
+dt-trans[data-dt-failed] {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+
+dt-trans[data-dt-failed] button {
+  all: unset;
+  color: var(--dt-accent);
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+dt-trans[data-dt-failed] button:focus-visible {
+  outline: 2px solid var(--dt-accent);
+}
+
 html[data-dt-hidden] {
   --dt-shown: none;
 }

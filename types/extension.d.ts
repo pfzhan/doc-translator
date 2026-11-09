@@ -43,9 +43,10 @@ interface CssMessage {
   type: 'dt-css';
 }
 
-/** The service worker's answer to a TranslateMessage. A null translation keeps the original. */
+/** The service worker's answer to a TranslateMessage. A null translation keeps the original. fatal: the error comes
+ * from the settings or the server, not from these texts, so every other request would fail the same way. */
 type TranslateAnswer =
-  | { error: string }
+  | { error: string; fatal?: boolean }
   | { translations: (string | null)[]; lang: string; langs: (string | null)[] };
 
 /** What the content script of a frame reports after a ControlMessage. */

@@ -341,6 +341,11 @@ const unreachable = (server) => `连不上翻译服务（${server}），请先�
 
 // A request the server has not answered by then has failed; LLM services take tens of seconds for a full batch
 const REQUEST_TIMEOUT = 120000;
+// Answers that no other request would get past either: an invalid request or a service that does not exist or is
+// not enabled (400), a missing or wrong access token (401), a page or address the server does not accept (403), an
+// address that is not this server (404). A failure of the translation service itself (502) or a timeout may pass
+// on the next request
+const SETTINGS_ERRORS = new Set([400, 401, 403, 404]);
 // The server rejects a longer page title, and uses only the start of one as context
 const MAX_TITLE = 1000;
 
@@ -375,11 +380,11 @@ async function translate(texts, title, html = [], selected = false) {
     });
   } catch (e) {
     if (e instanceof DOMException && e.name === 'TimeoutError') return { error: `翻译服务 ${REQUEST_TIMEOUT / 1000} 秒内没有回应` };
-    return { error: unreachable(s.server) };
+    return { error: unreachable(s.server), fatal: true };
   }
   /** @type {unknown} */
   const body = await resp.json().catch(() => null);
-  if (!resp.ok) return { error: errorText(body, resp.status) };
+  if (!resp.ok) return { error: errorText(body, resp.status), fatal: SETTINGS_ERRORS.has(resp.status) };
   // Another program on the configured port, or a proxy page, answers 200 with something else
   /**
    * @param {unknown} list
@@ -387,7 +392,10 @@ async function translate(texts, title, html = [], selected = false) {
    */
   const aligned = (list) =>
     Array.isArray(list) && list.length === texts.length && list.every((t) => t === null || typeof t === 'string');
-  const notOurs = { error: `${s.server} 的回应不是 Doc Translator 的翻译结果，请检查扩展设置里的服务地址` };
+  const notOurs = {
+    error: `${s.server} 的回应不是 Doc Translator 的翻译结果，请检查扩展设置里的服务地址`,
+    fatal: true,
+  };
   const list = field(body, 'translations');
   if (!aligned(list)) return notOurs;
   // Servers from before alt_lang leave langs out and translate everything into the target language
