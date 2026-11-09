@@ -142,6 +142,11 @@ system's limit.
   back as long as the source file and the models are unchanged, and only the rules run again: for an 86-page
   paper with both models enabled, analysis drops from 4.5 minutes to just over 20 seconds.
 - A failed job can be retried (重试).
+- A finished record shows the tokens the service reported, added up over continues and retries. Input counts
+  every input token, those read from or written to a prompt cache included (Claude reports them apart from
+  `input_tokens`); output counts reasoning too. Hovering shows how many input tokens hit the cache and how many
+  output tokens were reasoning. Counts sent as strings are read as numbers. A service that sent requests but
+  reported no usage (some relays) shows tokens 未提供 (not reported) instead of 0.
 - Every request sent to the translation service, retries included, is appended to `requests.jsonl` in the
   record's directory: when it started, how long it waited for the service's concurrency limit and how long the
   HTTP call took, the status or error, the attempt number, the tokens and the model name the API reported, the
@@ -608,6 +613,7 @@ app/
   background.py    threaded work such as reading layout and writing output, stopped when a job is paused
   translators.py   translation engines (Google / OpenAI / Claude / Gemini / Grok / compatible APIs)
   request_log.py   the log of requests a job sent (requests.jsonl) and its summary
+  usage.py         token usage in one shape for every provider
   services.py      creating, reading, updating and deleting service configurations
   ccswitch.py      reading the providers active in CC Switch
   prompts.py       default prompts and the segment protocol

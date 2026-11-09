@@ -28,6 +28,7 @@ from .json_types import JSONDict
 from .langdetect import same_language
 from .paths import DATA_DIR
 from .request_log import LOG_NAME, RequestStats
+from .usage import Usage
 
 if TYPE_CHECKING:
     from .runner import Runner
@@ -74,10 +75,15 @@ class Job:
     detected_lang: str = ""
     skipped: int = 0
     failed: int = 0  # paragraphs where the service returned an empty translation and the original was filled in
-    # Token usage reported by LLM APIs, accumulated across continues and retries; Google and similar APIs do not
-    # report it, so it stays 0
+    # Token usage reported by LLM APIs, accumulated across continues and retries, as in usage.Usage: prompt_tokens
+    # counts every input token (cached ones included), completion_tokens every output token (reasoning included).
+    # Google and relays that leave usage out report nothing: tokens_reported stays False and the counts 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    reasoning_tokens: int = 0
+    cached_tokens: int = 0
+    cache_write_tokens: int = 0
+    tokens_reported: bool = False
     # Digest of the source file's content, used to register cache entries as belonging to this file. Older records
     # lack it and compute it when needed
     document: str = ""
@@ -99,6 +105,18 @@ class Job:
         # job.json holds the summary as a plain object
         if not isinstance(self.requests, RequestStats | None):
             self.requests = RequestStats.from_dict(self.requests)
+        # Records from before tokens_reported: counts above 0 were reported
+        if self.prompt_tokens or self.completion_tokens:
+            self.tokens_reported = True
+
+    def add_usage(self, usage: Usage) -> None:
+        """Add the token usage of a run."""
+        self.prompt_tokens += usage.input
+        self.completion_tokens += usage.output
+        self.reasoning_tokens += usage.reasoning
+        self.cached_tokens += usage.cached_input
+        self.cache_write_tokens += usage.cache_write
+        self.tokens_reported = self.tokens_reported or usage.reported
 
     def sync_info(self) -> None:
         """Copy the live detection results from the Runner to the record."""
@@ -116,6 +134,8 @@ class Job:
         self.status, self.error = "idle", ""
         self.done = self.total = self.skipped = self.failed = 0
         self.prompt_tokens = self.completion_tokens = 0
+        self.reasoning_tokens = self.cached_tokens = self.cache_write_tokens = 0
+        self.tokens_reported = False
         self.requests = None
         self.outputs, self.finished, self.detected_lang = [], 0.0, ""
 
@@ -144,6 +164,10 @@ class Job:
             "failed": self.failed,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
+            "cached_tokens": self.cached_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "tokens_reported": self.tokens_reported,
             "requests": asdict(self.requests) if self.requests else None,
             # The extension's sameLangCheck: warn when the detected source language equals the target language
             "same_lang": same_language(self.detected_lang, self.target_lang),

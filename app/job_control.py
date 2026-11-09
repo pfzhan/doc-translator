@@ -150,10 +150,7 @@ async def _run_job(job: Job, translator: Translator, bilingual: bool) -> None:
         try:
             job.finished = time.time()
             # Accumulate the token usage of this run (resume/retry adds to the earlier count)
-            usage = getattr(translator, "usage", None)
-            if usage:
-                job.prompt_tokens += usage.get("prompt", 0)
-                job.completion_tokens += usage.get("completion", 0)
+            job.add_usage(translator.usage)
             # Write the requests still buffered and sum up all of the record's requests
             job.requests = await asyncio.to_thread(request_log.summary) or job.requests
             # The snapshot may be large, so it is written in a thread

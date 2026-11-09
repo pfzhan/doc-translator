@@ -42,8 +42,12 @@ class RequestRecord:
     items: int  # paragraphs in the request
     chars: int  # characters of their source text
     model: str = ""  # the model the API says answered, which a relay may change
-    input_tokens: int | None = None  # None when the API did not report usage
+    # Tokens as in usage.Usage; all None when the API did not report usage
+    input_tokens: int | None = None
     output_tokens: int | None = None
+    reasoning_tokens: int | None = None
+    cached_tokens: int | None = None
+    cache_write_tokens: int | None = None
 
     def to_json(self) -> str:
         data = asdict(self)

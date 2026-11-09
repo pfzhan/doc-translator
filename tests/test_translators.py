@@ -19,6 +19,7 @@ from app.translators import (
     TranslatorError,
     _error_text,
 )
+from app.usage import Usage
 from tests.helpers import run
 
 # What httpx.MockTransport accepts: a function that answers a request, plain or async
@@ -358,12 +359,12 @@ def test_llm_token_usage_accumulated() -> None:
     tr = make_openai(handler)
     run(tr.translate_batch(["one"]))
     run(tr.translate_batch(["two"]))
-    assert tr.usage == {"prompt": 200, "completion": 40}
+    assert tr.usage == Usage(input=200, output=40, reported=True)
     run(tr.aclose())
 
 
 def test_gemini_token_usage_mapping() -> None:
-    """The field names of Gemini usageMetadata map to prompt/completion."""
+    """The field names of Gemini usageMetadata map to input/output; thinking counts as output."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -380,7 +381,7 @@ def test_gemini_token_usage_mapping() -> None:
         "zh-CN", api_key="x", base_url="http://localhost", model="m", transport=httpx.MockTransport(handler)
     )
     assert run(tr.translate_batch(["one"])) == ["译"]
-    assert tr.usage == {"prompt": 50, "completion": 40}
+    assert tr.usage == Usage(input=50, output=40, reasoning=30, reported=True)
     run(tr.aclose())
 
 

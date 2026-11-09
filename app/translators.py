@@ -25,6 +25,7 @@ from . import prompts
 from .json_types import JSONDict
 from .languages import GOOGLE_CODES, LANGUAGES
 from .request_log import RequestLog, RequestReason, RequestRecord
+from .usage import Usage, nested, reported
 
 log = logging.getLogger(__name__)
 
@@ -100,9 +101,9 @@ class Translator:
         # Translation service id, part of the cache key: a different service translates again, the same service
         # reuses the cache
         self.service_id = ""
-        # Token usage returned by the API (LLM engines accumulate it in _complete); stays 0 for engines that do not
-        # report it, such as Google
-        self.usage = {"prompt": 0, "completion": 0}
+        # Token usage the API reported, summed over every request (LLM engines add to it in _post); stays unreported
+        # for engines without it, such as Google, and relays that leave it out
+        self.usage = Usage()
         # Where every request sent upstream is recorded; set by the job that runs this engine (see request_log.py)
         self.request_log: RequestLog | None = None
         # Filled in by Runner from the caller's flags: these source texts are e-book rich-text fragments, which
@@ -152,11 +153,12 @@ class Translator:
         status: int | None,
         error: str = "",
         model: str = "",
-        tokens: tuple[int | None, int | None] = (None, None),
+        usage: Usage | None = None,
     ) -> None:
         """Record one attempt: a debug line in the server log, and a line in the job's request log."""
+        tokens = usage if usage is not None and usage.reported else None
         log.debug(
-            "%s %s attempt %d: status %s%s, gate %.2fs, http %.2fs, %d items, %d chars, tokens %s/%s, model %s",
+            "%s %s attempt %d: status %s%s, gate %.2fs, http %.2fs, %d items, %d chars, tokens %s, model %s",
             self.service_id or type(self).__name__,
             call.reason,
             attempt.number,
@@ -166,8 +168,7 @@ class Translator:
             attempt.duration,
             call.items,
             call.chars,
-            tokens[0],
-            tokens[1],
+            f"{tokens.input}/{tokens.output}" if tokens else "-",
             model or "-",
         )
         if self.request_log is None:
@@ -184,17 +185,16 @@ class Translator:
                 items=call.items,
                 chars=call.chars,
                 model=model,
-                input_tokens=tokens[0],
-                output_tokens=tokens[1],
+                input_tokens=tokens.input if tokens else None,
+                output_tokens=tokens.output if tokens else None,
+                reasoning_tokens=tokens.reasoning if tokens else None,
+                cached_tokens=tokens.cached_input if tokens else None,
+                cache_write_tokens=tokens.cache_write if tokens else None,
             )
         )
 
     def is_html_item(self, text: str) -> bool:
         return text in self.html_texts
-
-    def _record_usage(self, prompt: int | None, completion: int | None) -> None:
-        self.usage["prompt"] += prompt or 0
-        self.usage["completion"] += completion or 0
 
     @property
     def effective_source(self) -> str:
@@ -512,8 +512,8 @@ class LLMTranslator(Translator):
     async def _complete(self, system: str, user: str, call: Call) -> str:
         raise NotImplementedError
 
-    def _reported_tokens(self, data: JSONDict) -> tuple[int | None, int | None]:
-        """(input, output) tokens of a reply as the API reports them; None for a count it leaves out."""
+    def _reported_usage(self, data: JSONDict) -> Usage:
+        """Token usage of a reply, in the shape of Usage whatever the provider's field names."""
         raise NotImplementedError
 
     def _reported_model(self, data: JSONDict) -> str:
@@ -548,9 +548,9 @@ class LLMTranslator(Translator):
                 except TranslatorError:
                     self._log_request(call, timing, 200, "format")
                     raise
-                tokens = self._reported_tokens(data)
-                self._record_usage(*tokens)
-                self._log_request(call, timing, 200, model=self._reported_model(data), tokens=tokens)
+                usage = self._reported_usage(data)
+                self.usage.add(usage)
+                self._log_request(call, timing, 200, model=self._reported_model(data), usage=usage)
                 return data
             self._log_request(call, timing, resp.status_code, "http")
             msg = _error_text(resp)
@@ -673,11 +673,23 @@ class OpenAITranslator(LLMTranslator):
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
-    def _reported_tokens(self, data: JSONDict) -> tuple[int | None, int | None]:
-        usage = data.get("usage") or {}
+    def _reported_usage(self, data: JSONDict) -> Usage:
+        usage = data.get("usage")
         if self.api_format == "responses":
-            return usage.get("input_tokens"), usage.get("output_tokens")
-        return usage.get("prompt_tokens"), usage.get("completion_tokens")
+            return reported(
+                nested(usage, "input_tokens"),
+                nested(usage, "output_tokens"),
+                reasoning=nested(usage, "output_tokens_details", "reasoning_tokens"),
+                cached_input=nested(usage, "input_tokens_details", "cached_tokens"),
+            )
+        # Chat Completions; DeepSeek reports its cache hits as prompt_cache_hit_tokens instead
+        cached = nested(usage, "prompt_tokens_details", "cached_tokens")
+        return reported(
+            nested(usage, "prompt_tokens"),
+            nested(usage, "completion_tokens"),
+            reasoning=nested(usage, "completion_tokens_details", "reasoning_tokens"),
+            cached_input=cached if cached is not None else nested(usage, "prompt_cache_hit_tokens"),
+        )
 
     async def _complete(self, system: str, user: str, call: Call) -> str:
         if self.api_format == "responses":
@@ -750,9 +762,14 @@ class ClaudeTranslator(LLMTranslator):
             return {"Authorization": f"Bearer {self.api_key}", "anthropic-version": self.api_version}
         return {"x-api-key": self.api_key, "anthropic-version": self.api_version}
 
-    def _reported_tokens(self, data: JSONDict) -> tuple[int | None, int | None]:
-        usage = data.get("usage") or {}
-        return usage.get("input_tokens"), usage.get("output_tokens")
+    def _reported_usage(self, data: JSONDict) -> Usage:
+        # input_tokens leaves out the tokens read from and written to the prompt cache, which are billed too
+        usage = data.get("usage")
+        fresh = nested(usage, "input_tokens")
+        cache_read = nested(usage, "cache_read_input_tokens")
+        cache_write = nested(usage, "cache_creation_input_tokens")
+        total = None if fresh is None else fresh + (cache_read or 0) + (cache_write or 0)
+        return reported(total, nested(usage, "output_tokens"), cached_input=cache_read, cache_write=cache_write)
 
     async def _complete(self, system: str, user: str, call: Call) -> str:
         payload = {
@@ -781,13 +798,18 @@ class GeminiTranslator(LLMTranslator):
     def _headers(self) -> dict[str, str]:
         return {"x-goog-api-key": self.api_key}
 
-    def _reported_tokens(self, data: JSONDict) -> tuple[int | None, int | None]:
-        usage = data.get("usageMetadata") or {}
-        if not usage:
-            return None, None
+    def _reported_usage(self, data: JSONDict) -> Usage:
+        usage = data.get("usageMetadata")
+        candidates = nested(usage, "candidatesTokenCount")
+        thoughts = nested(usage, "thoughtsTokenCount")
         # Thinking tokens are billed; counting only candidates would undercount the usage of reasoning models
-        completion = (usage.get("candidatesTokenCount") or 0) + (usage.get("thoughtsTokenCount") or 0)
-        return usage.get("promptTokenCount"), completion
+        output = None if candidates is None and thoughts is None else (candidates or 0) + (thoughts or 0)
+        return reported(
+            nested(usage, "promptTokenCount"),
+            output,
+            reasoning=thoughts,
+            cached_input=nested(usage, "cachedContentTokenCount"),
+        )
 
     def _reported_model(self, data: JSONDict) -> str:
         return str(data.get("modelVersion") or "")

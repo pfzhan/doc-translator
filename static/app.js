@@ -117,6 +117,7 @@ function messageOf(err) {
  *   finished: number, source_lang: string, target_lang: string, mode: string, service_id: string,
  *   service_name: string, glossary_ids: string[], queue_position: number, model: string, size: number,
  *   detected_lang: string, skipped: number, failed: number, prompt_tokens: number, completion_tokens: number,
+ *   reasoning_tokens: number, cached_tokens: number, cache_write_tokens: number, tokens_reported: boolean,
  *   requests: RequestStats | null, same_lang: boolean, preview: boolean, stage: JobStage | null,
  *   outputs: JobOutput[]
  * }} Job
@@ -1550,18 +1551,26 @@ function timeAgo(ts) {
   return new Date(ts * 1000).toLocaleDateString();
 }
 
-// Token usage: only LLM APIs report it; Google and similar return 0, which is not shown
+// Token usage: only LLM APIs report it. Google reports none and shows nothing; an LLM service (a relay) that sent
+// requests without reporting usage shows 未提供 rather than a misleading 0
 /** @param {Job} job */
 function tokensText(job) {
+  if (!job.tokens_reported) return job.requests && job.requests.count && job.model ? "tokens 未提供" : "";
   const total = (job.prompt_tokens || 0) + (job.completion_tokens || 0);
-  if (!total) return "";
   const text = total >= 1e6 ? `${(total / 1e6).toFixed(2)}M` : total >= 1e3 ? `${(total / 1e3).toFixed(1)}k` : `${total}`;
   return `${text} tokens`;
 }
 
 /** @param {Job} job */
 function tokensTitle(job) {
-  return `输入 ${(job.prompt_tokens || 0).toLocaleString()} · 输出 ${(job.completion_tokens || 0).toLocaleString()}`;
+  if (!job.tokens_reported) return "翻译服务没有返回 token 用量";
+  /** @param {number} n */
+  const n = (n) => (n || 0).toLocaleString();
+  const input = [`输入 ${n(job.prompt_tokens)}`];
+  if (job.cached_tokens) input.push(`其中缓存命中 ${n(job.cached_tokens)}`);
+  if (job.cache_write_tokens) input.push(`写入缓存 ${n(job.cache_write_tokens)}`);
+  const output = `输出 ${n(job.completion_tokens)}${job.reasoning_tokens ? `（其中推理 ${n(job.reasoning_tokens)}）` : ""}`;
+  return `${input.length > 1 ? `${input[0]}（${input.slice(1).join("，")}）` : input[0]} · ${output}`;
 }
 
 // What the record's requests to the service looked like (requests.jsonl in its directory holds each one), to tell
