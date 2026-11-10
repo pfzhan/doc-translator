@@ -423,6 +423,25 @@ The command has no shortcut by default; one can be set on `chrome://extensions/s
   fields for secrets, which are never sent. With the shortcut, the selection is taken from the frame the user is in; text in
   iframes the extension may enter works too (with `activeTab`, those from the same origin as the page).
 
+#### Looking up a word
+
+When the selection is a single word or a phrase of up to four words (40 characters at most), it is looked up
+instead of translated: the bubble shows a dictionary entry written in the target language, with the word's
+dictionary form, its pronunciation, what it means in the selected sentence ("此处", here) and up to five common senses
+with their parts of speech.
+
+- The sentence the word was selected from is sent with it, so that the model picks the right sense; quotes and
+  punctuation a double click takes along are dropped.
+- Only words in scripts that put spaces between words are looked up. Text in Chinese, Japanese, Thai and the like
+  is translated as before, since a selection there does not tell where a word ends.
+- With an LLM service the entry comes from the model, in one request that is not cached. Google translates the
+  word, which becomes the only sense.
+- The API is `POST /api/web/lookup` with `{"text", "context", "target_lang", "source_lang", "service_id", "title"}`
+  (`text` up to 100 characters, `context`, the sentence, up to 2,000). It answers `{"headword", "phonetic", "senses":
+  [{"pos", "meaning"}], "in_context"}`, or 502 when the service fails or the model's reply is not an entry.
+- If the lookup fails (a reply not in the expected format twice, a service error, a server from before this
+  feature), the selection is translated as before.
+
 ### Sites translated automatically
 
 Right-click an empty part of a page and choose "总是翻译此网站" (always translate this site): the browser asks for

@@ -404,8 +404,68 @@ async function translate(texts, title, html = [], selected = false) {
   return { translations: list, lang: s.targetLang, langs };
 }
 
+// The lookup is one short request; past this the selection is translated instead (see selection.js)
+const LOOKUP_TIMEOUT = 60000;
+
+/**
+ * A dictionary entry for a selected word or short phrase. Any failure, including a server from before lookups
+ * (404), is given as an error: selection.js then translates the selection as before.
+ * @param {string} text
+ * @param {string} context the sentence the text was selected from
+ * @param {string} title
+ * @returns {Promise<LookupAnswer>}
+ */
+async function lookUp(text, context, title) {
+  const s = await loadSettings();
+  let resp;
+  try {
+    resp = await fetch(`${s.server}/api/web/lookup`, {
+      method: 'POST',
+      headers: authHeaders(s, { 'Content-Type': 'application/json' }),
+      body: JSON.stringify({
+        text,
+        context,
+        title: title.slice(0, MAX_TITLE),
+        target_lang: s.targetLang,
+        source_lang: s.sourceLang,
+        service_id: s.serviceId,
+      }),
+      signal: AbortSignal.timeout(LOOKUP_TIMEOUT),
+    });
+  } catch {
+    return { error: unreachable(s.server) };
+  }
+  /** @type {unknown} */
+  const body = await resp.json().catch(() => null);
+  if (!resp.ok) return { error: errorText(body, resp.status) };
+  /** @param {unknown} value */
+  const isText = (value) => typeof value === 'string';
+  const senses = field(body, 'senses');
+  const entry = {
+    headword: field(body, 'headword'),
+    phonetic: field(body, 'phonetic'),
+    senses,
+    in_context: field(body, 'in_context'),
+  };
+  const valid =
+    isText(entry.headword) &&
+    isText(entry.phonetic) &&
+    isText(entry.in_context) &&
+    Array.isArray(senses) &&
+    senses.every((sense) => isText(field(sense, 'pos')) && isText(field(sense, 'meaning')));
+  if (!valid) return { error: `${s.server} 的回应不是 Doc Translator 的释义` };
+  return { entry: /** @type {WordEntry} */ (entry), lang: s.targetLang };
+}
+
 chrome.runtime.onMessage.addListener((/** @type {unknown} */ msg, _sender, sendResponse) => {
   const type = field(msg, 'type');
+  if (type === 'dt-lookup') {
+    const { text, context, title } = /** @type {LookupMessage} */ (msg);
+    lookUp(text, context, title)
+      .catch((e) => ({ error: e instanceof Error ? e.message : String(e) }))
+      .then(sendResponse);
+    return true;
+  }
   if (type === 'dt-css') {
     // For the shadow roots content.js enters, which content.css injected into the page does not reach
     fetch(chrome.runtime.getURL('content.css'))

@@ -27,6 +27,7 @@ from . import glossary as glossary_mod
 from . import prompts
 from .json_types import JSONDict
 from .languages import GOOGLE_CODES, LANGUAGES
+from .lookup import Sense, WordEntry, parse_entry
 from .request_log import RequestLog, RequestReason, RequestRecord
 from .usage import Usage, nested, reported
 
@@ -278,6 +279,13 @@ class Translator:
 
     async def translate_batch(self, texts: list[str]) -> list[str]:
         raise NotImplementedError
+
+    async def lookup(self, text: str, context: str = "") -> WordEntry:
+        """A dictionary entry for a word or short phrase selected on a web page; context is the sentence it was
+        selected from. An engine without a model can only translate the word, which becomes the entry's one sense."""
+        [translation] = await self.translate_batch([text])
+        meaning = translation.strip() or text
+        return WordEntry(headword=text, senses=[Sense(meaning=meaning)])
 
     async def aclose(self) -> None:
         pass
@@ -627,6 +635,18 @@ class LLMTranslator(Translator):
             for source, target in glossary_mod.parse(prompts.clean_output(content))
             if source.casefold() in wanted
         ]
+
+    async def lookup(self, text: str, context: str = "") -> WordEntry:
+        """The model writes the entry as JSON (see prompts.LOOKUP_SYSTEM_PROMPT). A reply that is not such an entry
+        (an empty or declined one, prose, broken JSON) is asked for once more, then raised as an error."""
+        system, user = prompts.build_lookup_messages(text, context, self.target_lang, title=self.title)
+        call = Call("lookup", 1, len(text) + len(context))
+        for _ in range(2):
+            entry = parse_entry(await self._complete(system, user, call), text)
+            if entry is not None:
+                return entry
+            call = Call("repeat", 1, call.chars)
+        raise TranslatorError("模型没有按格式给出释义")
 
     def build_messages(self, texts: list[str]) -> tuple[str, str]:
         return prompts.build_messages(

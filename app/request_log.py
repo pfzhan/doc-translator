@@ -18,8 +18,9 @@ log = logging.getLogger(__name__)
 
 # Why a request was sent: the batch itself ("normal"), the same request again after an empty or unusable reply
 # ("repeat"), one paragraph translated on its own because the batch reply left it out or shifted it ("retranslate"),
-# half of a batch the service rejected or cut off ("split"), or fixing the document glossary ("terms")
-RequestReason = Literal["normal", "repeat", "retranslate", "split", "terms"]
+# half of a batch the service rejected or cut off ("split"), fixing the document glossary ("terms"), or looking up a
+# word selected on a web page ("lookup")
+RequestReason = Literal["normal", "repeat", "retranslate", "split", "terms", "lookup"]
 
 # File name of the log in a job's directory
 LOG_NAME = "requests.jsonl"

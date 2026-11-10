@@ -38,6 +38,26 @@ interface TranslateMessage {
   title: string;
 }
 
+/** selection.js to the service worker: look up a selected word or short phrase. */
+interface LookupMessage {
+  type: 'dt-lookup';
+  text: string;
+  /** The sentence the text was selected from; empty when there is none. */
+  context: string;
+  title: string;
+}
+
+/** A dictionary entry, as POST /api/web/lookup gives it (WordEntry in app/lookup.py). */
+interface WordEntry {
+  headword: string;
+  phonetic: string;
+  senses: { pos: string; meaning: string }[];
+  in_context: string;
+}
+
+/** The service worker's answer to a LookupMessage; lang is the language the entry is written in. */
+type LookupAnswer = { error: string } | { entry: WordEntry; lang: string };
+
 /** The content style sheet, for the shadow roots content.js enters. */
 interface CssMessage {
   type: 'dt-css';

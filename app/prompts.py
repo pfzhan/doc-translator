@@ -153,6 +153,23 @@ Output nothing else."""
 
 TERMS_USER_PROMPT = "Document excerpt:\n{{excerpt}}\n\nCandidate terms:\n{{terms}}"
 
+# Looking up a word or short phrase selected on a web page (see lookup.py); the sentence it was selected from tells
+# which sense is meant
+LOOKUP_SYSTEM_PROMPT = """You are a dictionary for a reader of {{to}}. The user selected a word or short phrase on a web page and gives the sentence it was selected from.{{title_prompt}}
+
+Write its dictionary entry, every explanation in {{to}}:
+- headword: the selection in its dictionary form (the base form of an inflected word; a phrase stays whole).
+- phonetic: its usual pronunciation, in IPA between slashes; empty when the language has no such convention.
+- senses: its common senses, most common first, at most 5. For each, "pos" is the part of speech as an English
+  abbreviation (n., v., adj., adv., prep., conj., pron., num., int., phr.) and "meaning" gives one to three short
+  {{to}} renderings, separated by semicolons.
+- in_context: what it means in the given sentence, as a short {{to}} phrase; empty when no sentence is given.
+
+Reply with one JSON object and nothing else:
+{"headword": "", "phonetic": "", "senses": [{"pos": "", "meaning": ""}], "in_context": ""}"""
+
+LOOKUP_USER_PROMPT = "Selection: {{text}}\n\nSentence: {{context}}"
+
 SOURCE_END = "[[source_end]]"
 MARKER_RE = re.compile(r"^\[\[(p\d+)\]\]$", re.I)
 CONTROL_RE = re.compile(r"^\[\[(?:p\d+|source_end|terms|term|end)\]\]$", re.I)
@@ -280,6 +297,16 @@ def build_terms_messages(
     }
     system = fill(TERMS_SYSTEM_PROMPT, values)
     user = TERMS_USER_PROMPT.replace("{{terms}}", "\n".join(terms)).replace("{{excerpt}}", excerpt.strip() or "(none)")
+    return system, user
+
+
+def build_lookup_messages(text: str, context: str, target_lang: str, *, title: str = "") -> tuple[str, str]:
+    """(system, user) for looking up a selected word or phrase; context is the sentence it was selected from."""
+    values = {"to": lang_name(target_lang), "title_prompt": TITLE_PROMPT if title else "", "imt_title": title}
+    system = fill(LOOKUP_SYSTEM_PROMPT, values)
+    # Both filled in one pass, so that a {{context}} in the selected text is not taken as a placeholder
+    parts = {"text": text.strip(), "context": context.strip() or "(none)"}
+    user = re.sub(r"\{\{(text|context)\}\}", lambda m: parts[m.group(1)], LOOKUP_USER_PROMPT)
     return system, user
 
 

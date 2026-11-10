@@ -7,7 +7,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from .. import state
+from ..lookup import WordEntry
 from ..runner import WEB_CACHE_OWNER, Runner, get_cache
+from ..services import Service
 from ..translators import Translator, TranslatorError, create_translator
 
 router = APIRouter()
@@ -51,13 +53,8 @@ async def web_translate(data: WebTranslateRequest) -> WebTranslateResponse:
         raise HTTPException(400, f"单段文字太长（上限 {MAX_WEB_TEXT} 字）")
     if len(data.html) > len(data.texts):
         raise HTTPException(400, "html 比 texts 长")
-    service = state.store.get(data.service_id or state.store.effective_default())
-    if not service or not service.get("enabled"):
-        raise HTTPException(400, "翻译服务不存在或未启用")
-    try:
-        translator = create_translator(service, data.target_lang, data.source_lang)
-    except TranslatorError as e:
-        raise HTTPException(400, str(e)) from e
+    service = _service(data.service_id)
+    translator = _translator(service, data.target_lang, data.source_lang)
     async with AsyncExitStack() as stack:
         stack.push_async_callback(translator.aclose)
         try:
@@ -92,6 +89,21 @@ async def web_translate(data: WebTranslateRequest) -> WebTranslateResponse:
     )
 
 
+def _service(service_id: str) -> Service:
+    """The enabled service of that id, or the default one for an empty id."""
+    service = state.store.get(service_id or state.store.effective_default())
+    if not service or not service.get("enabled"):
+        raise HTTPException(400, "翻译服务不存在或未启用")
+    return service
+
+
+def _translator(service: Service, target_lang: str, source_lang: str) -> Translator:
+    try:
+        return create_translator(service, target_lang, source_lang)
+    except TranslatorError as e:
+        raise HTTPException(400, str(e)) from e
+
+
 async def _translate(
     translator: Translator, texts: list[str], html: list[bool], title: str
 ) -> tuple[list[str], Runner]:
@@ -105,6 +117,39 @@ async def _translate(
     runner.set_document(WEB_CACHE_OWNER)
     runner.set_title(title)
     return await runner.translate_all(texts, html=html), runner
+
+
+# ---------- Looking up a selected word ----------
+
+# A selection the extension looks up is a word or a phrase of a few words; anything longer is translated instead
+MAX_LOOKUP_TEXT = 100
+# The sentence around the selection, which the extension cuts to a few hundred characters
+MAX_LOOKUP_CONTEXT = 2000
+
+
+class WebLookupRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=MAX_LOOKUP_TEXT)
+    context: str = Field(default="", max_length=MAX_LOOKUP_CONTEXT)  # the sentence the text was selected from
+    target_lang: str = "zh-CN"  # the language the entry is written in
+    source_lang: str = "auto"
+    service_id: str = ""  # empty: the default service
+    title: str = Field(default="", max_length=1000)  # page title, context for LLM engines (cut to 200 characters)
+
+
+@router.post("/api/web/lookup")
+async def web_lookup(data: WebLookupRequest) -> WordEntry:
+    """A dictionary entry for a word or short phrase selected on a web page. Not cached: the sense given depends on
+    the sentence, and one lookup is a single short request."""
+    if not data.text.strip():
+        raise HTTPException(400, "没有要查的词")
+    translator = _translator(_service(data.service_id), data.target_lang, data.source_lang)
+    translator.title = data.title.strip()[:200]
+    try:
+        return await translator.lookup(data.text.strip(), data.context)
+    except TranslatorError as e:
+        raise HTTPException(502, str(e)) from e
+    finally:
+        await translator.aclose()
 
 
 class WebCacheInfo(BaseModel):

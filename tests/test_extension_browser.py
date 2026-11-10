@@ -48,6 +48,9 @@ class FakeServer:
     # Requests with a text containing fail_on are answered with this HTTP status
     fail_on: str = ""
     fail_status: int = 502
+    # What the extension sent to POST /api/web/lookup, and the status it answers with (200: LOOKUP_ENTRY)
+    lookups: list[dict[str, str]] = field(default_factory=list)
+    lookup_status: int = 200
 
     @property
     def origin(self) -> str:
@@ -69,6 +72,13 @@ API_ANSWERS: dict[str, object] = {
         {"code": "en", "native": "English", "name": "English"},
     ],
     "/api/web/cache": {"entries": 0},
+}
+
+LOOKUP_ENTRY = {
+    "headword": "bank",
+    "phonetic": "/bæŋk/",
+    "senses": [{"pos": "n.", "meaning": "银行"}, {"pos": "n.", "meaning": "河岸"}],
+    "in_context": "河岸",
 }
 
 
@@ -95,6 +105,13 @@ def make_handler(fake: FakeServer) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:
             data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if self.path == "/api/web/lookup":
+                fake.lookups.append({key: data[key] for key in ("text", "context", "title")})
+                if fake.lookup_status == 200:
+                    self.answer(200, "application/json", json.dumps(LOOKUP_ENTRY))
+                else:
+                    self.answer(fake.lookup_status, "application/json", json.dumps({"detail": "Not Found"}))
+                return
             texts: list[str] = data["texts"]
             title: str = data["title"]
             fake.requests.append(TranslateRequest(texts, title, data["service_id"], self.headers["Authorization"]))
@@ -161,6 +178,8 @@ def worker(browser: BrowserContext, fake_server: FakeServer) -> Worker:
     fake_server.delay = 0
     fake_server.fail_on = ""
     fake_server.fail_status = 502
+    fake_server.lookups.clear()
+    fake_server.lookup_status = 200
     return worker
 
 
@@ -643,3 +662,100 @@ def test_selected_text_is_sent_for_translation(fake_server: FakeServer, worker: 
     while not fake_server.requests and time.monotonic() < deadline:
         time.sleep(0.05)
     assert fake_server.sent_texts() == [VISIBLE]
+
+
+def bubble_text(worker: Worker, page: Page, expected: str) -> str:
+    """The text of the selection bubble once it holds expected. Its shadow root is closed, open only to the
+    extension."""
+    script = """async (url) => {
+      const [tab] = await chrome.tabs.query({ url });
+      const [{ result }] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: () => {
+          const host = document.querySelector('dt-selection');
+          const root = host && chrome.dom.openOrClosedShadowRoot(host);
+          return root ? root.querySelector('.bubble').innerText : '';
+        },
+      });
+      return result;
+    }"""
+    deadline = time.monotonic() + WAIT_MS / 1000
+    text = ""
+    while expected not in text and time.monotonic() < deadline:
+        text = worker.evaluate(script, page.url)
+        time.sleep(0.05)
+    return text
+
+
+def select_text(page: Page, selector: str, start: int, end: int) -> None:
+    """Select characters start to end of the text in the element, across its child nodes."""
+    page.evaluate(
+        """([selector, start, end]) => {
+          const walker = document.createTreeWalker(document.querySelector(selector), NodeFilter.SHOW_TEXT);
+          const range = document.createRange();
+          let offset = 0;
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const length = node.textContent.length;
+            if (offset <= start && start <= offset + length) range.setStart(node, start - offset);
+            if (offset <= end && end <= offset + length) { range.setEnd(node, end - offset); break; }
+            offset += length;
+          }
+          getSelection().removeAllRanges();
+          getSelection().addRange(range);
+        }""",
+        [selector, start, end],
+    )
+
+
+RIVER = "It was warm. They sat on the <em>banks</em>, watching the river. Then they left."
+RIVER_TEXT = RIVER.replace("<em>", "").replace("</em>", "")
+
+
+def test_a_selected_word_is_looked_up_with_its_sentence(fake_server: FakeServer, worker: Worker, page: Page) -> None:
+    page.goto(fake_server.add_page("/word", f"<!doctype html><title>Rivers</title><p id='p'>{RIVER}</p>"))
+    # The comma and the space a double click may take along are not part of the word
+    start = RIVER_TEXT.index("banks")
+    select_text(page, "#p", start, start + len("banks, "))
+    translate_selection(worker, page)
+    text = bubble_text(worker, page, "银行")
+    assert fake_server.lookups == [
+        {"text": "banks", "context": "They sat on the banks, watching the river.", "title": "Rivers"}
+    ]
+    assert fake_server.requests == []
+    assert [line for line in text.split("\n") if line] == ["bank /bæŋk/", "此处 河岸", "n. 银行", "n. 河岸"]
+
+
+def test_a_word_in_a_text_field_is_looked_up_with_its_sentence(
+    fake_server: FakeServer, worker: Worker, page: Page
+) -> None:
+    value = "First line. A bank of fog rolled in! Last line."
+    page.goto(fake_server.add_page("/field", f"<!doctype html><title>t</title><textarea id='f'>{value}</textarea>"))
+    page.focus("#f")
+    start = value.index("bank")
+    page.evaluate("([start, end]) => document.getElementById('f').setSelectionRange(start, end)", [start, start + 4])
+    translate_selection(worker, page)
+    bubble_text(worker, page, "银行")
+    assert fake_server.lookups == [{"text": "bank", "context": "A bank of fog rolled in!", "title": "t"}]
+
+
+def test_a_failed_lookup_translates_the_selection_instead(fake_server: FakeServer, worker: Worker, page: Page) -> None:
+    # A server from before lookups answers 404
+    fake_server.lookup_status = 404
+    page.goto(fake_server.add_page("/old-server", f"<!doctype html><title>t</title><p id='p'>{RIVER}</p>"))
+    start = RIVER_TEXT.index("banks")
+    select_text(page, "#p", start, start + len("banks"))
+    translate_selection(worker, page)
+    assert TRANSLATED + "banks" in bubble_text(worker, page, TRANSLATED)
+    assert [lookup["text"] for lookup in fake_server.lookups] == ["banks"]
+    assert fake_server.sent_texts() == ["banks"]
+
+
+def test_text_in_a_script_without_spaces_is_translated_not_looked_up(
+    fake_server: FakeServer, worker: Worker, page: Page
+) -> None:
+    page.goto(fake_server.add_page("/han", "<!doctype html><title>t</title><p id='p'>他去银行取钱。</p>"))
+    select_text(page, "#p", 2, 4)
+    translate_selection(worker, page)
+    bubble_text(worker, page, TRANSLATED)
+    assert fake_server.lookups == []
+    assert fake_server.sent_texts() == ["银行"]
