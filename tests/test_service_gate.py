@@ -1,6 +1,8 @@
 """The gate every request of a service goes through: its concurrency, and the pause after it reports overload."""
 
 import asyncio
+import itertools
+import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -187,3 +189,27 @@ def test_all_attempts_together_have_a_deadline(monkeypatch: pytest.MonkeyPatch) 
     with pytest.raises(TranslatorError, match="请求超时"):
         run(scenario())
     assert len(hang) == 7  # Three attempts: two whole deadlines and the half left, not the four retries allow
+
+
+def test_a_late_wakeup_does_not_eat_into_the_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On a busy machine the event loop wakes an attempt cut off by its deadline a little late; that delay is not
+    time the request took, so it does not cost the request one of its attempts."""
+    _record_sleeps(monkeypatch)
+    monkeypatch.setattr("app.translators._attempt_deadline", lambda chars: 0.05)
+    real = time.perf_counter
+    calls = itertools.count()
+    # Every reading of the clock is 30 ms later than the one before on top of the real time: each attempt seems to
+    # end 30 ms past its deadline
+    monkeypatch.setattr("app.translators.time.perf_counter", lambda: real() + 0.03 * next(calls))
+    hang = [True] * 10
+
+    async def scenario() -> None:
+        engine = _engine("svc", _hanging(hang))
+        try:
+            await engine.translate_batch(["Hello."])
+        finally:
+            await engine.aclose()
+
+    with pytest.raises(TranslatorError, match="请求超时"):
+        run(scenario())
+    assert len(hang) == 7

@@ -699,13 +699,16 @@ class LLMTranslator(Translator):
             async with self._slot() as waited:
                 timing = self._start_attempt(attempt + 1, waited)
                 clock = time.perf_counter()
+                allowed = min(limit, budget - spent)
                 try:
-                    async with asyncio.timeout(min(limit, budget - spent)):
+                    async with asyncio.timeout(allowed):
                         resp = await self.client.post(url, json=payload, headers=headers)
                 except (httpx.HTTPError, TimeoutError) as e:
                     failure = e
                 timing.duration = time.perf_counter() - clock
-                spent += timing.duration
+                # An attempt cut off by its deadline counts as the time it was allowed: the event loop wakes it a little
+                # late, more so on a busy machine, and that delay is not time the request took
+                spent += allowed if isinstance(failure, TimeoutError) else timing.duration
             if failure is not None:
                 self._log_request(call, timing, None, _failure_kind(failure))
                 if last:
