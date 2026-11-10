@@ -88,6 +88,7 @@ ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 - 默认跟随翻译进度；手动滚动或点击大纲后暂停跟随，底部出现「跟随翻译进度」按钮。跳转到某处后，后台优先翻译该处之后的内容。
 - 地址栏为 `#read/<任务 id>`，刷新后仍停留在原文档；按 Esc 返回。
 - 预览只推送已完成的段落，不重建输出文件，不影响翻译速度。
+- 翻译完成后可以手动修改某一段的译文：鼠标移到段落上点「编辑」，改好后保存（Ctrl+Enter）。修改后的译文按这条记录原译文的缓存键存入翻译缓存，再从缓存重新生成记录的文件，不请求翻译服务（PDF 要重新排版，耗时和当初写出时相当）；阅读器里立即显示新译文。原文相同的段落共用这条译文，一起改变；之后重新翻译这条记录也会保留修改。公式和图片按出现顺序显示为 `{v1}`、`{v2}`…，每个都要保留一次；电子书里 `<b>` 这样的行内标签用来保留格式。接口是 `PUT /api/jobs/{id}/segments/{index}`，请求 `{"text": "..."}`。
 
 ### CC Switch
 
@@ -270,6 +271,7 @@ app/
   paths.py         数据存放位置（data/，或 DOC_TRANSLATOR_DATA）
   json_types.py    JSON 请求体和返回值的类型
   runner.py        去重、缓存、切批、并发
+  edits.py         阅读器里手动修改的译文，按记录的缓存键存入缓存
   background.py    读版面、写回等线程里的活，任务暂停时让线程停下
   translators.py   翻译引擎（Google / OpenAI / Claude / Gemini / Grok / 兼容接口）
   request_log.py   任务发出的请求日志（requests.jsonl）及其汇总

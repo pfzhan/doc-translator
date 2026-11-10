@@ -125,3 +125,33 @@ def test_another_machine_signs_in_and_comes_back_to_its_view(
     page.evaluate("api('/api/jobs').catch(() => {})")
     page.wait_for_url("**/login.html#read/abc", timeout=WAIT_MS)
     context.close()
+
+
+def test_a_translation_is_corrected_in_the_reader(page: Page, server: str) -> None:
+    files = {"file": ("book.md", MD.encode())}
+    job = httpx.post(server + "/api/jobs", files=files, data={"service_id": "mock", "target_lang": "zh-CN"}).json()
+    deadline = time.monotonic() + WAIT_MS / 1000
+    while httpx.get(f"{server}/api/jobs/{job['id']}").json()["status"] != "done":
+        assert time.monotonic() < deadline, "job did not finish"
+        time.sleep(0.05)
+    # The page restores the reader of the address on load
+    page.goto(f"/#read/{job['id']}")
+    page.reload()
+    para = page.locator(".seg", has_text="The first paragraph of the document is here.")
+    para.locator(".dst", has_text="[zh-CN]").wait_for(timeout=WAIT_MS)
+    para.hover()
+    para.get_by_role("button", name="编辑").click()
+    editor = para.locator("textarea")
+    assert editor.input_value() == "[zh-CN] The first paragraph of the document is here."
+    editor.fill("文档的第一段，人工改过。")
+    para.get_by_role("button", name="保存").click()
+    para.locator(".dst", has_text="文档的第一段").wait_for(timeout=WAIT_MS)
+    page.wait_for_function("() => !document.querySelector('.seg.saving')", timeout=WAIT_MS)
+    url = httpx.get(f"{server}/api/jobs/{job['id']}").json()["outputs"][0]["url"]
+    assert "文档的第一段" in httpx.get(server + url).text
+
+    # Esc in the editor closes it and leaves the reader open
+    para.hover()
+    para.get_by_role("button", name="编辑").click()
+    para.locator("textarea").press("Escape")
+    assert para.locator("textarea").count() == 0 and page.locator("#reader").is_visible()

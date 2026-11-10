@@ -209,6 +209,13 @@ translate, and the reader stops at the error message without polling further.
 - The address bar shows `#read/<job id>`, so a reload stays on the same document; Esc goes back.
 - The preview pushes only finished paragraphs and does not rebuild the output file, so it does not slow
   translation down.
+- Once a record is done, a paragraph's translation can be corrected by hand: hover it and click 编辑 (Edit), change
+  the text and save (Ctrl+Enter). The edit goes into the translation cache under the key of the record's own
+  translation, and the record's files are made again from the cache without requests to the translation service (for
+  a PDF this takes as long as writing it did); the reader shows the new text at once. Paragraphs with the same
+  original share the translation and change with it, and translating the record again keeps the edit. Formulas and
+  images appear as `{v1}`, `{v2}`… in the order they appear, and each has to stay once; in e-books inline tags such as
+  `<b>` keep their formatting. The API is `PUT /api/jobs/{id}/segments/{index}` with `{"text": "..."}`.
 
 ### CC Switch
 
@@ -645,6 +652,7 @@ app/
   paths.py         where data is kept (data/, or DOC_TRANSLATOR_DATA)
   json_types.py    types for JSON request bodies and answers
   runner.py        deduplication, caching, batching, concurrency
+  edits.py         translations corrected by hand in the reader, stored under the record's cache keys
   background.py    threaded work such as reading layout and writing output, stopped when a job is paused
   translators.py   translation engines (Google / OpenAI / Claude / Gemini / Grok / compatible APIs)
   request_log.py   the log of requests a job sent (requests.jsonl) and its summary

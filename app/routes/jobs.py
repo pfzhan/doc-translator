@@ -10,9 +10,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, Body, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .. import cleanup, state
+from ..edits import EditedCache
 from ..formats import PREVIEW_FORMATS, SUPPORTED, html_page, output_variant, translate_file
 from ..formats.epub import book_outline
 from ..history import Job
@@ -356,6 +357,116 @@ async def build_variant(job_id: str) -> JSONDict:
         if state.jobs.get(job.id) is None:
             raise HTTPException(404, "翻译记录不存在")
         return current.to_dict()
+    finally:
+        state.variant_tasks.pop(job.id, None)
+        if stage.exists():
+            shutil.rmtree(stage, ignore_errors=True)
+        if translator is not None:
+            await translator.aclose()
+
+
+# Far more than a paragraph's translation takes; the reader's paragraphs are a few thousand characters at most
+MAX_EDIT = 20000
+
+
+class SegmentEdit(BaseModel):
+    # The translation of the paragraph as the reader shows it: formula and image placeholders numbered {v1}, {v2}...
+    # in the order they appear (see edits.with_placeholders)
+    text: str = Field(max_length=MAX_EDIT)
+
+
+class SegmentEdited(BaseModel):
+    job: JSONDict
+    # Preview updates ([paragraph index, translation, 0]) of every paragraph with the same text: they share one
+    # cache entry, so all of them now read the edit
+    updates: list[tuple[int, str, int]]
+
+
+@router.put("/api/jobs/{job_id}/segments/{index}")
+async def edit_segment(job_id: str, index: int, data: SegmentEdit) -> SegmentEdited:
+    """Replace the translation of paragraph index of a finished record with the user's, and make the record's files
+    again from the cache with it, without requests to the translation service (see app/edits.py)."""
+    job = _job_or_404(job_id)
+    text = data.text.strip()
+    if not text:
+        raise HTTPException(400, "译文不能为空")
+    if job.status != "done":
+        raise HTTPException(400, "翻译完成后才能修改译文")
+    snap = await asyncio.to_thread(state.jobs.load_preview, job) or {}
+    segments = snap.get("segments")
+    if not isinstance(segments, list) or not 0 <= index < len(segments):
+        raise HTTPException(404, "段落不存在")
+    source = str(segments[index].get("s") or "")
+    if not source.strip():
+        raise HTTPException(404, "段落不存在")
+    if any(update[0] == index and update[2] for update in snap.get("updates") or []):
+        raise HTTPException(400, "这一段保留原文，没有译文可改")
+    if job.id in state.cleaning:
+        raise HTTPException(409, "该记录正在清理，请稍后重试")
+    if job.id in state.variant_tasks:
+        raise HTTPException(409, "正在生成文件，请稍候")
+    task = asyncio.current_task()
+    if task is None:
+        raise HTTPException(500, "无法修改译文")
+    # Registered before the next await, as for the other version: resuming, clearing and deleting wait for it
+    state.variant_tasks[job.id] = task
+    translator = None
+    stage = state.jobs.dir(job.id) / ".variant"
+    try:
+        if not state.jobs.source_path(job).exists():
+            raise HTTPException(400, "原文件已不存在，无法修改")
+        service = state.store.get(job.service_id)
+        if not service:
+            raise HTTPException(400, "原翻译服务已不存在，无法修改")
+        translator = _make_translator(job, _variant_service(job, service))
+        if stage.exists():
+            shutil.rmtree(stage)
+        stage.mkdir(parents=True)
+        # Each version the record has is made again. The edit is stored only once all of them are made, so the cache
+        # and the files never disagree
+        variants = [v for v in ("bilingual", "translated") if any(output_variant(n) == v for n in job.outputs)]
+        edited = EditedCache(get_cache(), source, text)
+        outputs: list[Path] = []
+        preview: JSONDict | None = None
+        try:
+            for n, variant in enumerate(variants or [job.mode]):
+                runner = Runner(translator, cache=edited, cache_only=True)
+                outputs += await translate_file(
+                    state.jobs.source_path(job),
+                    stage,
+                    runner,
+                    variant == "bilingual",
+                    job.target_lang,
+                    layout_model=_model_path("layout"),
+                    plan_path=state.jobs.plan_path(job),
+                    formula_model=_formula_model(),
+                )
+                if n == 0:
+                    if not edited.edited:
+                        raise HTTPException(400, "这一段的译文不在翻译缓存中，请重新翻译")
+                    preview = runner.preview(-1)
+        except (TranslatorError, ValueError) as e:
+            raise HTTPException(400, str(e)) from e
+        current = state.jobs.get(job.id)
+        if current is None or not state.jobs.dir(job.id).exists():
+            raise HTTPException(404, "翻译记录不存在")
+        edited.commit()
+        out_dir = state.jobs.out_dir(job.id)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for path in outputs:
+            path.replace(out_dir / path.name)
+            if path.name not in current.outputs:
+                current.outputs.append(path.name)
+        state.jobs.save(current)
+        if preview is None:  # set by the first run, which always runs
+            raise HTTPException(500, "无法修改译文")
+        await asyncio.to_thread(state.jobs.write_preview, current, preview)
+        updates = [
+            (i, translation, 0)
+            for i, translation, skipped in preview.get("updates") or []
+            if not skipped and i < len(segments) and segments[i].get("s") == source
+        ]
+        return SegmentEdited(job=current.to_dict(), updates=updates)
     finally:
         state.variant_tasks.pop(job.id, None)
         if stage.exists():

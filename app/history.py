@@ -363,7 +363,10 @@ class JobStore:
     def save_preview(self, job: Job) -> None:
         if job.runner is None or not job.preview:
             return
-        data = job.runner.preview(-1)
+        self.write_preview(job, job.runner.preview(-1))
+
+    def write_preview(self, job: Job, data: JSONDict) -> None:
+        """Store a Runner's whole preview (preview(-1)) as the snapshot of a finished job."""
         if not data.get("ready"):
             return
         path = self.dir(job.id) / "preview.json"

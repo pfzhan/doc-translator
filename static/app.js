@@ -2339,16 +2339,16 @@ $("retention-form").addEventListener("submit", (e) => {
 
 /**
  * The record open in the reader. nodes are its paragraphs, in document order; version is the preview's, -1 before
- * the first fetch.
+ * the first fetch. raw holds each translated paragraph's translation as the preview gives it, markup included.
  * @type {{
  *   jobId: string | null, job: Job | null, version: number, nodes: HTMLDivElement[], headings: Heading[],
  *   done: number, total: number, timer: number | undefined, focusTimer: number | undefined, lastFocus: number,
- *   following: boolean, autoScrolling: boolean, outline?: OutlineEntry[]
+ *   following: boolean, autoScrolling: boolean, outline?: OutlineEntry[], raw: Map<number, string>
  * }}
  */
 const reader = {
   jobId: null, job: null, version: -1, nodes: [], headings: [], done: 0, total: 0,
-  timer: undefined, focusTimer: undefined, lastFocus: -1, following: true, autoScrolling: false,
+  timer: undefined, focusTimer: undefined, lastFocus: -1, following: true, autoScrolling: false, raw: new Map(),
 };
 const HEADING = /^h[1-6]$/;
 
@@ -2371,6 +2371,7 @@ function openReader(id) {
 function closeReader(keepHash) {
   clearTimeout(reader.timer);
   Object.assign(reader, { jobId: null, job: null, version: -1, nodes: [], headings: [], done: 0, total: 0, lastFocus: -1 });
+  reader.raw = new Map();
   $("reader").hidden = true;
   $("reader").classList.remove("show-outline");
   document.body.classList.remove("reading");
@@ -2565,6 +2566,8 @@ function renderNotice(job) {
   // Once the job stops, paragraphs not yet translated no longer show the blinking loading state and switch to a
   // static untranslated state
   $("reader-content").classList.toggle("stopped", !ACTIVE.has(job.status));
+  // Translations of a finished record can be corrected by hand (see editSegment)
+  $("reader-content").classList.toggle("editable", job.status === "done");
 }
 
 /** @param {Segment[]} segments */
@@ -2586,7 +2589,11 @@ function buildReader(segments) {
     const src = el("div", "src", previewText(reader.job, seg.s));
     const dst = el("div", "dst");
     if (lang) dst.lang = lang;
-    div.append(src, dst);
+    const edit = el("button", "seg-edit", "编辑");
+    edit.type = "button";
+    edit.title = "修改这一段的译文";
+    edit.addEventListener("click", () => editSegment(i));
+    div.append(src, dst, edit);
     // The book's own table of contents (nav / ncx) goes into a collapsible block, so it does not interrupt the text
     if (seg.k === "toc") {
       if (!toc) {
@@ -2605,6 +2612,117 @@ function buildReader(segments) {
   reader.total = segments.filter((s) => s.s.trim()).length;
   reader.done = 0;
   buildOutline();
+}
+
+// ---------- Correcting a translation ----------
+// A finished record's paragraph can be edited in place: the server stores the text in the translation cache under the
+// key of the record's translation and makes the files again from the cache, without asking the translation service.
+// Every paragraph with the same original shares that translation and changes with it
+
+/**
+ * The translation as the editor shows it: formulas and images as {v1}, {v2}... in the order they appear, which is
+ * how the server reads them back (edits.with_placeholders); PDFs without their style and page break marks.
+ * @param {Job | null} job
+ * @param {string} raw
+ */
+function editableText(job, raw) {
+  let n = 0;
+  const slot = () => `{v${++n}}`;
+  if (!/\.pdf$/i.test(job?.filename || "")) return raw.replace(/\{v\d+\}/g, slot);
+  return raw
+    .replace(/\s*\{\|\}\s*/g, " ")
+    .replace(/\{\/?[bi]\}|\{z\d+\}|\{\/z\}/g, "")
+    .replace(/\x01i\x02\d+\x01\/i\x02|\{v\d+\}/g, slot);
+}
+
+/** @param {number} i */
+function editSegment(i) {
+  const div = reader.nodes[i];
+  const raw = reader.raw.get(i);
+  const job = reader.job;
+  if (!div || raw === undefined || !job || job.status !== "done" || div.querySelector(".seg-editor")) return;
+  // One paragraph at a time
+  for (const open of queryAll(document, ".seg-editor", HTMLElement)) open.dispatchEvent(new Event("cancel"));
+  const dst = query(div, ".dst");
+  const form = el("form", "seg-editor");
+  const area = el("textarea");
+  area.value = editableText(job, raw);
+  area.rows = Math.min(12, Math.max(3, Math.ceil(area.value.length / 40)));
+  area.setAttribute("aria-label", "这一段的译文");
+  if (job.target_lang) area.lang = job.target_lang;
+  const hints = [];
+  if (/\{v\d+\}/.test(area.value)) hints.push("{v1} 这样的占位符是公式或图片，请各保留一次");
+  if (/<[a-z]/i.test(area.value)) hints.push("标签（如 <b>）保留格式");
+  const save = el("button", "btn sm primary", "保存");
+  save.type = "submit";
+  const cancel = el("button", "btn sm ghost", "取消");
+  cancel.type = "button";
+  const actions = el("div", "seg-editor-actions");
+  actions.append(save, cancel, el("span", "hint", ["Ctrl+Enter 保存", ...hints].join("；")));
+  form.append(area, actions);
+  dst.hidden = true;
+  div.classList.add("editing");
+  div.append(form);
+  area.focus();
+
+  const close = () => {
+    form.remove();
+    dst.hidden = false;
+    div.classList.remove("editing");
+  };
+  form.addEventListener("cancel", close);
+  cancel.addEventListener("click", close);
+  area.addEventListener("keydown", (e) => {
+    // Esc closes the editor, not the reader
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      close();
+    } else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      form.requestSubmit();
+    }
+  });
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const text = area.value.trim();
+    if (!text) {
+      toast("译文不能为空");
+      return;
+    }
+    close();
+    const before = dst.textContent;
+    // Shown at once; the files are made again on the server, which takes a while for a PDF
+    dst.textContent = previewText(job, text.replace(/\{v\d+\}/g, ""));
+    div.classList.add("saving");
+    try {
+      const result = /** @type {{ job: Job, updates: PreviewUpdate[] }} */ (
+        await api(`/api/jobs/${job.id}/segments/${i}`, { method: "PUT", json: { text } })
+      );
+      if (reader.jobId !== job.id) return;
+      reader.job = result.job;
+      upsertJob(result.job);
+      for (const [k, translation] of result.updates) {
+        const node = reader.nodes[k];
+        if (!node) continue;
+        reader.raw.set(k, translation);
+        query(node, ".dst").textContent = previewText(result.job, translation);
+        node.classList.add("fresh");
+        setTimeout(() => node.classList.remove("fresh"), 1500);
+      }
+      refreshOutlineState();
+      toast(result.updates.length > 1 ? `已保存，原文相同的 ${result.updates.length} 段一起更新` : "已保存");
+    } catch (err) {
+      if (reader.jobId !== job.id) return;
+      dst.textContent = before;
+      toast(`保存失败：${messageOf(err)}`);
+      // The text typed is not lost
+      editSegment(i);
+      const reopened = div.querySelector("textarea");
+      if (reopened) reopened.value = text;
+    } finally {
+      div.classList.remove("saving");
+    }
+  });
 }
 
 // Outline on the left: headings from the document, up to three levels; hidden when there are too few headings
@@ -2649,6 +2767,7 @@ function applyUpdates(updates, initial) {
     div.classList.remove("pending");
     div.classList.toggle("skipped", !!skipped);
     query(div, ".dst").textContent = skipped ? "" : previewText(reader.job, text);
+    if (!skipped) reader.raw.set(i, text);
     if (!initial) {
       div.classList.add("fresh");
       setTimeout(() => div.classList.remove("fresh"), 1500);

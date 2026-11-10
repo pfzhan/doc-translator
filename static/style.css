@@ -430,6 +430,25 @@ body.reading .topbar { display: none; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 .seg.fresh .dst { animation: arrive 1.4s ease-out; }
 @keyframes arrive { from { background: var(--accent-soft); } to { background: transparent; } }
+/* Correcting a translation of a finished record: a small button at the paragraph's corner, shown on hover or
+   focus, and an editor in place of the translation */
+.seg { position: relative; }
+.seg-edit { display: none; }
+.reader-content.editable .seg:not(.pending):not(.skipped):not(.editing) .seg-edit {
+  display: block; position: absolute; top: 6px; right: 0; opacity: 0; padding: 1px 8px; cursor: pointer;
+  border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--text-2);
+  font: 12px/1.6 var(--ui-font);
+}
+.reader-content.editable .seg:hover .seg-edit, .reader-content.editable .seg .seg-edit:focus-visible { opacity: 1; }
+.reader-content.editable .seg .seg-edit:hover { background: var(--surface-2); color: var(--text); }
+.view-src .seg .seg-edit { display: none; }
+.seg.saving .dst { opacity: 0.55; }
+.seg-editor textarea {
+  width: 100%; box-sizing: border-box; padding: 8px 10px; resize: vertical; font: inherit; line-height: 1.6;
+  border: 1px solid var(--border-strong); border-radius: 6px; background: var(--surface); color: var(--text);
+}
+.seg-editor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; font-family: var(--ui-font); }
+.seg-editor-actions .hint { font-size: 12px; color: var(--muted); }
 /* Paragraphs already in the target language that need no translation: shown once */
 .seg.skipped { grid-template-columns: minmax(0, 1fr); }
 .seg.skipped .dst { display: none; }
