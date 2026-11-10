@@ -13,6 +13,7 @@ import re
 import time
 import unicodedata
 import weakref
+from collections import deque
 from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -52,12 +53,15 @@ class TruncatedError(TranslatorError):
 
 @dataclass
 class _Service:
-    """What the engines of one service share: its concurrency gate and the pause after it said it was overloaded."""
+    """What the engines of one service share: its concurrency gate, the pause after it said it was overloaded and the
+    times of its recent requests for the requests-per-minute limit."""
 
     # Semaphores by concurrency: changing the service's concurrency gives the jobs started after it a new gate
     gates: dict[int, asyncio.Semaphore] = field(default_factory=dict)
     # No request of the service is sent before this time (_clock) after a 429 or 503
     paused_until: float = 0.0
+    # When (_clock) each request of the last _RATE_WINDOW seconds was sent, oldest first
+    sent: deque[float] = field(default_factory=deque)
 
 
 # Shared state of services by event loop, then by service id; see Translator._service. A semaphore belongs to the loop
@@ -69,6 +73,9 @@ _clock = time.monotonic
 
 # Statuses that mean the whole service is overloaded or rate-limited, not just this request
 _OVERLOADED = {429, 503}
+
+# The window of the requests-per-minute limit, in seconds
+_RATE_WINDOW = 60.0
 
 
 @dataclass
@@ -99,6 +106,9 @@ class Translator:
     max_batch_items = 20
     max_batch_chars = 3000
     concurrency = 4
+    # Requests per minute the service allows, counted over a sliding window shared by all its engines; None is no
+    # limit
+    rpm: int | None = None
 
     def __init__(self, target_lang: str, source_lang: str = "auto") -> None:
         if target_lang not in LANG_CODES or target_lang == "auto":
@@ -156,16 +166,34 @@ class Translator:
 
     @asynccontextmanager
     async def _slot(self) -> AsyncIterator[float]:
-        """Hold a place of the concurrency gate for one attempt, once the service's pause is over; yield the seconds
-        it took to get there.
+        """Hold a place of the concurrency gate for one attempt, once the service's pause is over and its
+        requests-per-minute limit lets it go; yield the seconds it took to get there.
 
         A place is held only while a request is on the wire: backoff between attempts happens outside, so a request
-        waiting to retry does not keep others of the service from being sent. The pause is waited out with the
-        place held, since every other request of the service waits for it too."""
+        waiting to retry does not keep others of the service from being sent. The pause and the rate limit are
+        waited out with the place held, since every other request of the service waits for them too."""
         start = time.perf_counter()
         async with self._sem:
-            await self._wait_pause()
+            await self._wait_turn()
             yield time.perf_counter() - start
+
+    async def _wait_turn(self) -> None:
+        """Wait out the service's pause, then for the requests-per-minute window to have room, and count this request
+        in it. A pause that starts while waiting for room (another request got a 429) is waited out as well."""
+        sent = self._service.sent
+        while True:
+            await self._wait_pause()
+            if not self.rpm:
+                return
+            now = _clock()
+            while sent and sent[0] <= now - _RATE_WINDOW:
+                sent.popleft()
+            if len(sent) < self.rpm:
+                sent.append(now)
+                return
+            # The oldest request leaves the window at sent[0] + _RATE_WINDOW. The window holds more than this
+            # engine's rpm only if another engine of the service has a higher one; the oldest still leaves first
+            await asyncio.sleep(sent[0] + _RATE_WINDOW - now)
 
     async def _wait_pause(self) -> None:
         """Sleep until the service's pause is over. A pause extended while sleeping (another 429) is waited out too;
@@ -1201,6 +1229,8 @@ def create_translator(
     """Create an engine from a translation service configuration (see services.py)."""
     translator = _build_translator(service, target_lang, source_lang, transport)
     translator.service_id = service.get("id") or ""
+    rpm = service.get("rpm")
+    translator.rpm = rpm if isinstance(rpm, int) and not isinstance(rpm, bool) and rpm > 0 else None
     return translator
 
 

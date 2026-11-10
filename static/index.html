@@ -258,6 +258,9 @@
             <label class="field">temperature
               <input name="temperature" type="number" min="0" max="2" step="0.1" placeholder="默认">
             </label>
+            <label class="field">每分钟请求数
+              <input name="rpm" type="number" min="0" max="10000" placeholder="不限" title="同一服务的所有请求合计，留空或 0 不限">
+            </label>
             <label class="field">推理强度
               <select name="reasoning" title="思考型模型的推理力度；接口不支持时会自动去掉重试">
                 <option value="">不设置</option>

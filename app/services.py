@@ -89,6 +89,7 @@ FIELDS = {
     "max_chars": 3000,
     "temperature": 0,
     "reasoning": "",
+    "rpm": None,
     "prompt": "",
     "user_prompt": "",
     "glossary": "",
@@ -117,6 +118,7 @@ CCSWITCH_LOCAL_FIELDS = {
     "max_chars",
     "temperature",
     "reasoning",
+    "rpm",
     "prompt",
     "user_prompt",
     "glossary",
@@ -153,6 +155,8 @@ def _clean(data: Service) -> Service:
                     v = max(0.0, min(float(v), 2.0))
                 except (TypeError, ValueError):
                     raise ServiceError("temperature 必须是数字") from None
+        elif k == "rpm":
+            v = _rpm(v)
         elif k == "reasoning":
             v = str(v or "").strip()
             if v not in REASONING_LEVELS:
@@ -161,6 +165,17 @@ def _clean(data: Service) -> Service:
             v = str(v or "") if k in ("prompt", "user_prompt", "glossary") else str(v or "").strip()
         out[k] = v
     return out
+
+
+def _rpm(value: object) -> int | None:
+    """Requests per minute: empty or 0 is no limit, anything else an integer from 1 to 10000."""
+    if value in (None, "", 0, "0"):
+        return None
+    try:
+        rpm = int(str(value).strip())
+    except ValueError:
+        raise ServiceError("每分钟请求数必须是整数") from None
+    return None if rpm <= 0 else min(rpm, 10000)
 
 
 def _same_url(a: object, b: object) -> bool:
