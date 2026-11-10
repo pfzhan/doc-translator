@@ -408,8 +408,10 @@ async function translate(texts, title, html = [], selected = false) {
 const LOOKUP_TIMEOUT = 60000;
 
 /**
- * A dictionary entry for a selected word or short phrase. Any failure, including a server from before lookups
- * (404), is given as an error: selection.js then translates the selection as before.
+ * A dictionary entry for a selected word or short phrase, written in the target language, or in the second language
+ * (altLang) for a word already in the target language. Any failure, including a server from before lookups (404)
+ * and a service that does not look words up (501), is given as an error: selection.js then translates the
+ * selection as before.
  * @param {string} text
  * @param {string} context the sentence the text was selected from
  * @param {string} title
@@ -428,6 +430,7 @@ async function lookUp(text, context, title) {
         title: title.slice(0, MAX_TITLE),
         target_lang: s.targetLang,
         source_lang: s.sourceLang,
+        alt_lang: s.altLang,
         service_id: s.serviceId,
       }),
       signal: AbortSignal.timeout(LOOKUP_TIMEOUT),
@@ -446,15 +449,17 @@ async function lookUp(text, context, title) {
     phonetic: field(body, 'phonetic'),
     senses,
     in_context: field(body, 'in_context'),
+    lang: field(body, 'lang'),
   };
   const valid =
     isText(entry.headword) &&
     isText(entry.phonetic) &&
     isText(entry.in_context) &&
+    isText(entry.lang) &&
     Array.isArray(senses) &&
     senses.every((sense) => isText(field(sense, 'pos')) && isText(field(sense, 'meaning')));
   if (!valid) return { error: `${s.server} 的回应不是 Doc Translator 的释义` };
-  return { entry: /** @type {WordEntry} */ (entry), lang: s.targetLang };
+  return { entry: /** @type {WordEntry} */ (entry) };
 }
 
 chrome.runtime.onMessage.addListener((/** @type {unknown} */ msg, _sender, sendResponse) => {

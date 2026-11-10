@@ -106,9 +106,11 @@ def make_handler(fake: FakeServer) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:
             data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             if self.path == "/api/web/lookup":
-                fake.lookups.append({key: data[key] for key in ("text", "context", "title")})
+                fake.lookups.append({key: data[key] for key in ("text", "context", "title", "alt_lang")})
                 if fake.lookup_status == 200:
-                    self.answer(200, "application/json", json.dumps(LOOKUP_ENTRY))
+                    chinese = any("\u4e00" <= char <= "\u9fff" for char in data["text"])
+                    lang = data["alt_lang"] if chinese else data["target_lang"]
+                    self.answer(200, "application/json", json.dumps({**LOOKUP_ENTRY, "lang": lang}))
                 else:
                     self.answer(fake.lookup_status, "application/json", json.dumps({"detail": "Not Found"}))
                 return
@@ -664,9 +666,14 @@ def test_selected_text_is_sent_for_translation(fake_server: FakeServer, worker: 
     assert fake_server.sent_texts() == [VISIBLE]
 
 
-def bubble_text(worker: Worker, page: Page, expected: str) -> str:
-    """The text of the selection bubble once it holds expected. Its shadow root is closed, open only to the
-    extension."""
+@dataclass
+class Bubble:
+    lines: list[str]  # the lines of text it shows
+    langs: list[str]  # the lang attributes of its paragraphs that have one
+
+
+def bubble(worker: Worker, page: Page, expected: str) -> Bubble:
+    """The selection bubble once its text holds expected. Its shadow root is closed, open only to the extension."""
     script = """async (url) => {
       const [tab] = await chrome.tabs.query({ url });
       const [{ result }] = await chrome.scripting.executeScript({
@@ -674,17 +681,21 @@ def bubble_text(worker: Worker, page: Page, expected: str) -> str:
         func: () => {
           const host = document.querySelector('dt-selection');
           const root = host && chrome.dom.openOrClosedShadowRoot(host);
-          return root ? root.querySelector('.bubble').innerText : '';
+          if (!root) return { text: '', langs: [] };
+          const langs = [...root.querySelectorAll('p[lang]')].map((p) => p.lang);
+          return { text: root.querySelector('.bubble').innerText, langs };
         },
       });
       return result;
     }"""
     deadline = time.monotonic() + WAIT_MS / 1000
-    text = ""
-    while expected not in text and time.monotonic() < deadline:
-        text = worker.evaluate(script, page.url)
+    shown: dict[str, object] = {"text": "", "langs": []}
+    while expected not in str(shown["text"]) and time.monotonic() < deadline:
+        shown = worker.evaluate(script, page.url)
         time.sleep(0.05)
-    return text
+    langs = shown["langs"]
+    assert isinstance(langs, list)
+    return Bubble([line for line in str(shown["text"]).split("\n") if line], [str(lang) for lang in langs])
 
 
 def select_text(page: Page, selector: str, start: int, end: int) -> None:
@@ -717,12 +728,12 @@ def test_a_selected_word_is_looked_up_with_its_sentence(fake_server: FakeServer,
     start = RIVER_TEXT.index("banks")
     select_text(page, "#p", start, start + len("banks, "))
     translate_selection(worker, page)
-    text = bubble_text(worker, page, "银行")
-    assert fake_server.lookups == [
-        {"text": "banks", "context": "They sat on the banks, watching the river.", "title": "Rivers"}
-    ]
+    shown = bubble(worker, page, "银行")
+    context = "They sat on the banks, watching the river."
+    assert fake_server.lookups == [{"text": "banks", "context": context, "title": "Rivers", "alt_lang": "en"}]
     assert fake_server.requests == []
-    assert [line for line in text.split("\n") if line] == ["bank /bæŋk/", "此处 河岸", "n. 银行", "n. 河岸"]
+    assert shown.lines == ["bank /bæŋk/", "此处 河岸", "n. 银行", "n. 河岸"]
+    assert shown.langs == ["zh-CN"] * 3
 
 
 def test_a_word_in_a_text_field_is_looked_up_with_its_sentence(
@@ -734,8 +745,10 @@ def test_a_word_in_a_text_field_is_looked_up_with_its_sentence(
     start = value.index("bank")
     page.evaluate("([start, end]) => document.getElementById('f').setSelectionRange(start, end)", [start, start + 4])
     translate_selection(worker, page)
-    bubble_text(worker, page, "银行")
-    assert fake_server.lookups == [{"text": "bank", "context": "A bank of fog rolled in!", "title": "t"}]
+    bubble(worker, page, "银行")
+    assert [(lookup["text"], lookup["context"]) for lookup in fake_server.lookups] == [
+        ("bank", "A bank of fog rolled in!")
+    ]
 
 
 def test_a_failed_lookup_translates_the_selection_instead(fake_server: FakeServer, worker: Worker, page: Page) -> None:
@@ -745,17 +758,31 @@ def test_a_failed_lookup_translates_the_selection_instead(fake_server: FakeServe
     start = RIVER_TEXT.index("banks")
     select_text(page, "#p", start, start + len("banks"))
     translate_selection(worker, page)
-    assert TRANSLATED + "banks" in bubble_text(worker, page, TRANSLATED)
+    assert bubble(worker, page, TRANSLATED).lines == [TRANSLATED + "banks"]
     assert [lookup["text"] for lookup in fake_server.lookups] == ["banks"]
     assert fake_server.sent_texts() == ["banks"]
 
 
-def test_text_in_a_script_without_spaces_is_translated_not_looked_up(
+HAN_TEXT = "天气很热。他去银行取钱。后来他走了。"
+
+
+def test_a_chinese_word_is_looked_up_in_its_sentence_and_explained_in_the_second_language(
     fake_server: FakeServer, worker: Worker, page: Page
 ) -> None:
-    page.goto(fake_server.add_page("/han", "<!doctype html><title>t</title><p id='p'>他去银行取钱。</p>"))
-    select_text(page, "#p", 2, 4)
+    page.goto(fake_server.add_page("/han", f"<!doctype html><title>t</title><p id='p'>{HAN_TEXT}</p>"))
+    start = HAN_TEXT.index("银行")
+    select_text(page, "#p", start, start + 2)
     translate_selection(worker, page)
-    bubble_text(worker, page, TRANSLATED)
+    shown = bubble(worker, page, "银行")
+    assert [(lookup["text"], lookup["context"]) for lookup in fake_server.lookups] == [("银行", "他去银行取钱。")]
+    assert shown.langs == ["en"] * 3
+
+
+def test_a_chinese_clause_is_translated_not_looked_up(fake_server: FakeServer, worker: Worker, page: Page) -> None:
+    page.goto(fake_server.add_page("/han-clause", f"<!doctype html><title>t</title><p id='p'>{HAN_TEXT}</p>"))
+    start = HAN_TEXT.index("他")
+    select_text(page, "#p", start, start + len("他去银行取钱。"))
+    translate_selection(worker, page)
+    bubble(worker, page, TRANSLATED)
     assert fake_server.lookups == []
-    assert fake_server.sent_texts() == ["银行"]
+    assert fake_server.sent_texts() == ["他去银行取钱。"]

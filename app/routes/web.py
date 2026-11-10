@@ -10,7 +10,7 @@ from .. import state
 from ..lookup import WordEntry
 from ..runner import WEB_CACHE_OWNER, Runner, get_cache
 from ..services import Service
-from ..translators import Translator, TranslatorError, create_translator
+from ..translators import LANG_CODES, LLMTranslator, Translator, TranslatorError, create_translator
 
 router = APIRouter()
 
@@ -132,6 +132,9 @@ class WebLookupRequest(BaseModel):
     context: str = Field(default="", max_length=MAX_LOOKUP_CONTEXT)  # the sentence the text was selected from
     target_lang: str = "zh-CN"  # the language the entry is written in
     source_lang: str = "auto"
+    # A word already in target_lang is explained in this language instead, as selected text is translated into it;
+    # empty: in target_lang
+    alt_lang: str = ""
     service_id: str = ""  # empty: the default service
     title: str = Field(default="", max_length=1000)  # page title, context for LLM engines (cut to 200 characters)
 
@@ -139,13 +142,20 @@ class WebLookupRequest(BaseModel):
 @router.post("/api/web/lookup")
 async def web_lookup(data: WebLookupRequest) -> WordEntry:
     """A dictionary entry for a word or short phrase selected on a web page. Not cached: the sense given depends on
-    the sentence, and one lookup is a single short request."""
+    the sentence, and one lookup is a single short request.
+
+    Only LLM engines write entries; for the others the answer is 501, and the extension translates the selection
+    instead, which keeps a word already in the target language apart as /api/web/translate does."""
     if not data.text.strip():
         raise HTTPException(400, "没有要查的词")
+    if data.alt_lang and (data.alt_lang not in LANG_CODES or data.alt_lang == "auto"):
+        raise HTTPException(400, f"不支持的语言: {data.alt_lang}")
     translator = _translator(_service(data.service_id), data.target_lang, data.source_lang)
-    translator.title = data.title.strip()[:200]
     try:
-        return await translator.lookup(data.text.strip(), data.context)
+        if not isinstance(translator, LLMTranslator):
+            raise HTTPException(501, "当前翻译服务不支持查词")
+        translator.title = data.title.strip()[:200]
+        return await translator.lookup(data.text.strip(), data.context, data.alt_lang)
     except TranslatorError as e:
         raise HTTPException(502, str(e)) from e
     finally:

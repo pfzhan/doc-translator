@@ -15,16 +15,20 @@
   const MAX_TEXT = 10000;
   const GAP = 8; // between the bubble and the selection, and the bubble and the edges of the viewport
 
-  // A selection looked up rather than translated: up to four words of letters, in a script that puts spaces between
-  // words. In Chinese, Japanese, Thai and the like a selection's bounds say little about where a word ends, so such
-  // text is translated as before
+  // A selection looked up rather than translated. In a script that puts spaces between words: up to four words of
+  // letters. In Chinese, Japanese, Thai and the like: letters only, which the browser splits into at most
+  // MAX_UNSPACED_WORDS words (as for a double click). Words, idioms and compounds such as 银行, 画蛇添足, 人工智能 or
+  // 東京大学 are one or two; a clause such as 他去银行取钱 is more
   const PHRASE = /^[\p{L}\p{M}][\p{L}\p{M}'’.-]*(?: [\p{L}\p{M}][\p{L}\p{M}'’.-]*){0,3}$/u;
   const UNSPACED = /[\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}\p{sc=Thai}\p{sc=Lao}\p{sc=Khmer}\p{sc=Myanmar}]/u;
+  const LETTERS = /^[\p{L}\p{M}]+$/u;
   const MAX_LOOKUP = 40;
+  const MAX_UNSPACED_WORDS = 2;
   // Characters of the selection's sentence sent on either side of it, for a sentence that never seems to end
   const CONTEXT_SIDE = 300;
-  // The end of a sentence: its mark, closing quotes or brackets, then a space or the end of the text
-  const SENTENCE_END = /[.!?。！？]["'”’)\]]*(?=\s|$)/g;
+  // The end of a sentence: its mark and any closing quotes or brackets; after a Western mark, also a space or the
+  // end of the text (U.S. or 3.5 does not end one), while CJK marks end one as they are
+  const SENTENCE_END = /[。！？][”’」』）)\]]*|[.!?]["'”’)\]]*(?=\s|$)/g;
 
   // Fields whose selected text may be translated; passwords and other secrets never leave the page
   const TEXT_FIELDS = new Set(['text', 'search', 'url', 'tel', 'email']);
@@ -141,7 +145,19 @@
       .replace(/^[^\p{L}\p{M}]+/u, '')
       .replace(/[^\p{L}\p{M}.]+$/u, '');
     if (word.endsWith('.') && word.indexOf('.') === word.length - 1) word = word.slice(0, -1);
-    return word.length <= MAX_LOOKUP && PHRASE.test(word) && !UNSPACED.test(word) ? word : '';
+    if (word.length > MAX_LOOKUP) return '';
+    if (UNSPACED.test(word)) return LETTERS.test(word) && wordsIn(word) <= MAX_UNSPACED_WORDS ? word : '';
+    return PHRASE.test(word) ? word : '';
+  }
+
+  /**
+   * How many words the browser finds in text written without spaces. Without Intl.Segmenter (Firefox before 125),
+   * up to two characters count as a word and anything longer as too many.
+   * @param {string} text
+   */
+  function wordsIn(text) {
+    if (typeof Intl.Segmenter !== 'function') return [...text].length <= 2 ? 1 : Infinity;
+    return [...new Intl.Segmenter(undefined, { granularity: 'word' }).segment(text)].length;
   }
 
   /**
@@ -295,12 +311,12 @@
 
   /**
    * The entry of a word looked up: the headword with its pronunciation, its sense in the selected sentence, then its
-   * senses. lang: the language the entry is written in.
+   * senses.
    * @param {Bubble} open
    * @param {WordEntry} entry
-   * @param {string} lang
    */
-  function showEntry(open, entry, lang) {
+  function showEntry(open, entry) {
+    const { lang } = entry;
     /**
      * @param {string} tag
      * @param {string} className
@@ -353,7 +369,7 @@
       }
       if (bubble !== current) return;
       if (result && 'entry' in result) {
-        showEntry(current, result.entry, result.lang);
+        showEntry(current, result.entry);
         setStatus(current, '');
         return;
       }

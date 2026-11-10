@@ -155,18 +155,23 @@ TERMS_USER_PROMPT = "Document excerpt:\n{{excerpt}}\n\nCandidate terms:\n{{terms
 
 # Looking up a word or short phrase selected on a web page (see lookup.py); the sentence it was selected from tells
 # which sense is meant
-LOOKUP_SYSTEM_PROMPT = """You are a dictionary for a reader of {{to}}. The user selected a word or short phrase on a web page and gives the sentence it was selected from.{{title_prompt}}
+LOOKUP_SYSTEM_PROMPT = """You are a dictionary. The user selected a word or short phrase on a web page and gives the sentence it was selected from.{{title_prompt}}
 
-Write its dictionary entry, every explanation in {{to}}:
+Write its dictionary entry, every explanation in {{to}}.{{alt_rule}}
 - headword: the selection in its dictionary form (the base form of an inflected word; a phrase stays whole).
-- phonetic: its usual pronunciation, in IPA between slashes; empty when the language has no such convention.
+- phonetic: its usual pronunciation: IPA between slashes, pinyin with tone marks for Chinese, kana for Japanese
+  words written in kanji; empty when there is no such convention.
 - senses: its common senses, most common first, at most 5. For each, "pos" is the part of speech as an English
   abbreviation (n., v., adj., adv., prep., conj., pron., num., int., phr.) and "meaning" gives one to three short
-  {{to}} renderings, separated by semicolons.
-- in_context: what it means in the given sentence, as a short {{to}} phrase; empty when no sentence is given.
+  renderings, separated by semicolons.
+- in_context: what it means in the given sentence, as a short phrase; empty when no sentence is given.
+- in_target_language: true when the selection itself is {{to}}, otherwise false.
 
 Reply with one JSON object and nothing else:
-{"headword": "", "phonetic": "", "senses": [{"pos": "", "meaning": ""}], "in_context": ""}"""
+{"headword": "", "phonetic": "", "senses": [{"pos": "", "meaning": ""}], "in_context": "", "in_target_language": false}"""
+
+# Selected text already in the target language is explained in the second language, as it is translated into it
+LOOKUP_ALT_RULE = " When the selection itself is {{to}}, write every explanation in {{alt}} instead."
 
 LOOKUP_USER_PROMPT = "Selection: {{text}}\n\nSentence: {{context}}"
 
@@ -300,9 +305,18 @@ def build_terms_messages(
     return system, user
 
 
-def build_lookup_messages(text: str, context: str, target_lang: str, *, title: str = "") -> tuple[str, str]:
-    """(system, user) for looking up a selected word or phrase; context is the sentence it was selected from."""
-    values = {"to": lang_name(target_lang), "title_prompt": TITLE_PROMPT if title else "", "imt_title": title}
+def build_lookup_messages(
+    text: str, context: str, target_lang: str, *, alt_lang: str = "", title: str = ""
+) -> tuple[str, str]:
+    """(system, user) for looking up a selected word or phrase; context is the sentence it was selected from.
+    alt_lang: the language to explain a selection already in target_lang in; empty explains it in target_lang."""
+    values = {
+        "to": lang_name(target_lang),
+        "alt": lang_name(alt_lang),
+        "alt_rule": LOOKUP_ALT_RULE if alt_lang and alt_lang != target_lang else "",
+        "title_prompt": TITLE_PROMPT if title else "",
+        "imt_title": title,
+    }
     system = fill(LOOKUP_SYSTEM_PROMPT, values)
     # Both filled in one pass, so that a {{context}} in the selected text is not taken as a placeholder
     parts = {"text": text.strip(), "context": context.strip() or "(none)"}

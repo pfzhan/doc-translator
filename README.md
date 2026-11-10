@@ -425,22 +425,28 @@ The command has no shortcut by default; one can be set on `chrome://extensions/s
 
 #### Looking up a word
 
-When the selection is a single word or a phrase of up to four words (40 characters at most), it is looked up
-instead of translated: the bubble shows a dictionary entry written in the target language, with the word's
-dictionary form, its pronunciation, what it means in the selected sentence ("此处", here) and up to five common senses
-with their parts of speech.
+With an LLM service, a selected word or short phrase is looked up instead of translated: the bubble shows a
+dictionary entry with the word's dictionary form, its pronunciation (pinyin for Chinese), what it means in the
+selected sentence ("此处", here) and up to five common senses with their parts of speech.
 
+- What counts as a word: in scripts that put spaces between words, up to four words of letters (40 characters at
+  most); in Chinese, Japanese, Thai and the like, letters only that the browser's word breaking (`Intl.Segmenter`,
+  as for a double click) splits into at most two words, such as 银行, 画蛇添足 or 人工智能. A clause such as
+  他去银行取钱 is translated.
+- The entry follows the rule for selected text: it is written in the target language, or in the second language
+  ("选中的文字已是目标语言时译成") when the word is itself in the target language. With Chinese as the target, an
+  English word is explained in Chinese and a Chinese word in English. The model tells which, since the language of
+  a single word cannot be detected reliably.
 - The sentence the word was selected from is sent with it, so that the model picks the right sense; quotes and
-  punctuation a double click takes along are dropped.
-- Only words in scripts that put spaces between words are looked up. Text in Chinese, Japanese, Thai and the like
-  is translated as before, since a selection there does not tell where a word ends.
-- With an LLM service the entry comes from the model, in one request that is not cached. Google translates the
-  word, which becomes the only sense.
-- The API is `POST /api/web/lookup` with `{"text", "context", "target_lang", "source_lang", "service_id", "title"}`
-  (`text` up to 100 characters, `context`, the sentence, up to 2,000). It answers `{"headword", "phonetic", "senses":
-  [{"pos", "meaning"}], "in_context"}`, or 502 when the service fails or the model's reply is not an entry.
-- If the lookup fails (a reply not in the expected format twice, a service error, a server from before this
-  feature), the selection is translated as before.
+  punctuation a double click takes along are dropped. One request per lookup, not cached.
+- Services without a model, such as Google, do not look words up; the selection is translated as before. So it is
+  when the lookup fails (a reply not in the expected format twice, a service error, a server from before this
+  feature).
+- The API is `POST /api/web/lookup` with `{"text", "context", "target_lang", "source_lang", "alt_lang",
+  "service_id", "title"}` (`text` up to 100 characters, `context`, the sentence, up to 2,000). It answers
+  `{"headword", "phonetic", "senses": [{"pos", "meaning"}], "in_context", "lang"}`, where `lang` is the language the
+  entry is written in; 501 for a service without a model, 502 when the service fails or the model's reply is not an
+  entry.
 
 ### Sites translated automatically
 

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.json_types import JSONDict
 from app.lookup import MAX_SENSES, parse_entry
 from app.prompts import build_lookup_messages
+from app.routes import web
 from app.translators import ClaudeTranslator, MockTranslator, OpenAITranslator, TranslatorError
 from tests.helpers import run
 
@@ -22,7 +23,7 @@ ENTRY: JSONDict = {
 SENTENCE = "They sat on the bank of the river."
 
 
-def openai(replies: list[str], seen: list[JSONDict] | None = None) -> OpenAITranslator:
+def openai(replies: list[str], seen: list[JSONDict] | None = None, target: str = "zh-CN") -> OpenAITranslator:
     """An engine whose model gives these replies in turn."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -31,7 +32,7 @@ def openai(replies: list[str], seen: list[JSONDict] | None = None) -> OpenAITran
         return httpx.Response(200, json={"choices": [{"message": {"content": replies.pop(0)}}]})
 
     return OpenAITranslator(
-        "zh-CN", api_key="k", base_url="https://api.example.com/v1", model="m", transport=httpx.MockTransport(handler)
+        target, api_key="k", base_url="https://api.example.com/v1", model="m", transport=httpx.MockTransport(handler)
     )
 
 
@@ -40,6 +41,15 @@ def test_the_prompt_carries_the_selection_its_sentence_and_the_language() -> Non
     assert "Chinese" in system and "Rivers" in system
     assert user == f"Selection: bank\n\nSentence: {SENTENCE}"
     assert build_lookup_messages("bank", " ", "zh-CN")[1].endswith("Sentence: (none)")
+    assert "instead" not in system
+
+
+def test_a_word_in_the_target_language_is_explained_in_the_second_one() -> None:
+    system, _ = build_lookup_messages("银行", SENTENCE, "zh-CN", alt_lang="en")
+    assert "When the selection itself is Simplified Chinese, write every explanation in English instead." in system
+    assert "{{" not in system
+    # Without a second language, or with the target as the second one, the target language is used throughout
+    assert "instead" not in build_lookup_messages("银行", "", "zh-CN", alt_lang="zh-CN")[0]
 
 
 def test_placeholders_in_the_page_text_stay_as_written() -> None:
@@ -85,7 +95,7 @@ def test_the_model_is_asked_with_the_sentence_and_its_entry_returned() -> None:
     seen: list[JSONDict] = []
     tr = openai([json.dumps(ENTRY)], seen)
     entry = run(tr.lookup("bank", SENTENCE))
-    assert entry.in_context == "河岸"
+    assert entry.in_context == "河岸" and entry.lang == "zh-CN"
     assert len(seen) == 1
     assert SENTENCE in seen[0]["messages"][-1]["content"]
 
@@ -117,11 +127,15 @@ def test_a_declined_lookup_is_asked_for_once_more() -> None:
     assert replies == []
 
 
-def test_an_engine_without_a_model_gives_the_translation_as_the_only_sense() -> None:
-    entry = run(MockTranslator("zh-CN").lookup("bank", SENTENCE))
-    assert entry.headword == "bank"
-    assert [(s.pos, s.meaning) for s in entry.senses] == [("", "[zh-CN] bank")]
-    assert entry.in_context == ""
+@pytest.mark.parametrize(
+    ("in_target", "alt", "lang"),
+    [(False, "en", "zh-CN"), (True, "en", "en"), (True, "", "zh-CN"), (True, "zh-CN", "zh-CN")],
+)
+def test_the_entry_says_which_language_it_is_written_in(in_target: bool, alt: str, lang: str) -> None:
+    tr = openai([json.dumps({**ENTRY, "in_target_language": in_target, "lang": "fr"})])
+    entry = run(tr.lookup("银行", SENTENCE, alt))
+    assert entry.lang == lang
+    assert "in_target_language" not in entry.model_dump()
 
 
 def lookup(main: ModuleType, body: JSONDict) -> httpx.Response:
@@ -129,33 +143,65 @@ def lookup(main: ModuleType, body: JSONDict) -> httpx.Response:
     return resp
 
 
-def test_the_route_answers_with_the_entry(app_env: ModuleType) -> None:
-    resp = lookup(app_env, {"text": " bank ", "context": SENTENCE, "target_lang": "zh-CN", "service_id": "mock"})
+def with_model(monkeypatch: pytest.MonkeyPatch, replies: list[str], seen: list[JSONDict]) -> list[str]:
+    """Make the route's services LLM engines giving these replies; returns the target languages they were made
+    for."""
+    targets: list[str] = []
+
+    def create(service: JSONDict, target_lang: str, source_lang: str = "auto") -> OpenAITranslator:
+        targets.append(target_lang)
+        return openai(replies, seen, target_lang)
+
+    monkeypatch.setattr(web, "create_translator", create)
+    return targets
+
+
+def test_the_route_answers_with_the_entry(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[JSONDict] = []
+    reply = {**ENTRY, "headword": "银行", "in_target_language": True}
+    targets = with_model(monkeypatch, [json.dumps(reply, ensure_ascii=False)], seen)
+    body = {"text": " 银行 ", "context": "他去银行取钱。", "alt_lang": "en", "service_id": "mock", "title": "T"}
+    resp = lookup(app_env, body)
     assert resp.status_code == 200
     assert resp.json() == {
-        "headword": "bank",
-        "phonetic": "",
-        "senses": [{"pos": "", "meaning": "[zh-CN] bank"}],
-        "in_context": "",
+        "headword": "银行",
+        "phonetic": "/bæŋk/",
+        "senses": ENTRY["senses"],
+        "in_context": "河岸",
+        "lang": "en",
     }
+    assert targets == ["zh-CN"]
+    system, user = (m["content"] for m in seen[0]["messages"])
+    assert "in English instead" in system and "T" in system
+    assert user == "Selection: 银行\n\nSentence: 他去银行取钱。"
 
 
 def test_the_route_closes_the_engine_when_the_lookup_fails(
     app_env: ModuleType, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     closed: list[bool] = []
+    with_model(monkeypatch, ["银行", "还是银行"], [])
 
-    async def failing(self: MockTranslator, text: str, context: str = "") -> None:
-        raise TranslatorError("接口错误 500")
+    async def aclose(self: OpenAITranslator) -> None:
+        closed.append(True)
+
+    monkeypatch.setattr(OpenAITranslator, "aclose", aclose)
+    resp = lookup(app_env, {"text": "bank", "service_id": "mock"})
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "模型没有按格式给出释义"
+    assert closed == [True]
+
+
+def test_an_engine_without_a_model_does_not_look_up(app_env: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The extension translates the selection instead, which keeps a word already in the target language apart."""
+    closed: list[bool] = []
 
     async def aclose(self: MockTranslator) -> None:
         closed.append(True)
 
-    monkeypatch.setattr(MockTranslator, "lookup", failing)
     monkeypatch.setattr(MockTranslator, "aclose", aclose)
     resp = lookup(app_env, {"text": "bank", "service_id": "mock"})
-    assert resp.status_code == 502
-    assert resp.json()["detail"] == "接口错误 500"
+    assert resp.status_code == 501
     assert closed == [True]
 
 
@@ -164,6 +210,8 @@ def test_the_route_closes_the_engine_when_the_lookup_fails(
     [
         ({"text": "bank", "service_id": "missing"}, 400),
         ({"text": "bank", "service_id": "mock", "target_lang": "xx"}, 400),
+        ({"text": "bank", "service_id": "mock", "alt_lang": "xx"}, 400),
+        ({"text": "bank", "service_id": "mock", "alt_lang": "auto"}, 400),
         ({"text": "   ", "service_id": "mock"}, 400),
         ({"text": "", "service_id": "mock"}, 422),
         ({"text": "w" * 101, "service_id": "mock"}, 422),

@@ -53,10 +53,12 @@ interface WordEntry {
   phonetic: string;
   senses: { pos: string; meaning: string }[];
   in_context: string;
+  /** The language the entry is written in: the target language, or the second one for a word already in it. */
+  lang: string;
 }
 
-/** The service worker's answer to a LookupMessage; lang is the language the entry is written in. */
-type LookupAnswer = { error: string } | { entry: WordEntry; lang: string };
+/** The service worker's answer to a LookupMessage. */
+type LookupAnswer = { error: string } | { entry: WordEntry };
 
 /** The content style sheet, for the shadow roots content.js enters. */
 interface CssMessage {
