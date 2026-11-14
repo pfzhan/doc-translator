@@ -29,7 +29,22 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "base_url": "",
         "needs_key": False,
         "llm": False,
+        "configurable": False,
         "models": [],
+    },
+    "deepl": {
+        "label": "DeepL",
+        "desc": "DeepL 官方 API，机器翻译，速度快、译文准确。需要 API Key，免费版每月 50 万字符。",
+        "base_url": "",
+        "url_hint": "留空时按 Key 自动选择：免费版 Key（以 :fx 结尾）用 api-free.deepl.com，其余用 api.deepl.com",
+        "needs_key": True,
+        "llm": False,
+        "configurable": True,
+        "key_url": "https://www.deepl.com/your-account/keys",
+        "models": [],
+        # Fields a new service of this kind starts with instead of the FIELDS defaults: DeepL takes up to 50 texts
+        # per request and is billed by character, not by request
+        "defaults": {"concurrency": 2, "max_items": 50, "max_chars": 5000},
     },
     "openai": {
         "label": "OpenAI",
@@ -37,6 +52,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "base_url": "https://api.openai.com/v1",
         "needs_key": True,
         "llm": True,
+        "configurable": True,
         "key_url": "https://platform.openai.com/api-keys",
         "models": ["gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "gpt-4o", "gpt-5-mini", "gpt-5"],
     },
@@ -46,6 +62,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "base_url": "https://api.anthropic.com/v1",
         "needs_key": True,
         "llm": True,
+        "configurable": True,
         "key_url": "https://console.anthropic.com/settings/keys",
         "models": ["claude-sonnet-5-5", "claude-haiku-4-5-20251001", "claude-opus-5-5", "claude-fable-5-1"],
     },
@@ -55,6 +72,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "base_url": "https://generativelanguage.googleapis.com/v1beta",
         "needs_key": True,
         "llm": True,
+        "configurable": True,
         "key_url": "https://aistudio.google.com/apikey",
         "models": ["gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-2.5-pro"],
     },
@@ -64,6 +82,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "base_url": "https://api.x.ai/v1",
         "needs_key": True,
         "llm": True,
+        "configurable": True,
         "key_url": "https://console.x.ai",
         "models": ["grok-4", "grok-3", "grok-3-mini"],
     },
@@ -73,6 +92,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "base_url": "",
         "needs_key": False,
         "llm": True,
+        "configurable": True,
         "models": [],
     },
 }
@@ -306,13 +326,14 @@ class ServiceStore:
 
     def create(self, data: Service) -> Service:
         provider = data.get("provider")
-        if provider not in PROVIDERS or provider == "google":
+        if provider not in PROVIDERS or not PROVIDERS[provider]["configurable"]:
             raise ServiceError("不支持的服务类型")
         meta = PROVIDERS[provider]
         with self.lock:
             svc = {"id": uuid.uuid4().hex[:8], "provider": provider, "builtin": False, **FIELDS}
             svc["name"] = meta["label"]
             svc["model"] = meta["models"][0] if meta["models"] else ""
+            svc.update(meta.get("defaults", {}))
             svc.update(_clean(data))
             if not svc["name"]:
                 svc["name"] = meta["label"]

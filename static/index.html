@@ -231,6 +231,7 @@
           <input name="base_url" id="base_url" spellcheck="false">
         </label>
 
+        <div class="llm-only">
         <label class="field">模型
           <select id="model-select"></select>
           <input name="model" id="model-input" spellcheck="false" placeholder="输入模型名称，如 deepseek-chat" hidden>
@@ -241,6 +242,7 @@
             <span class="hint" id="fetch-models-status" aria-live="polite"></span>
             <button type="button" class="link" id="fetch-models">获取模型列表</button>
           </span>
+        </div>
         </div>
 
         <details>
@@ -255,13 +257,13 @@
             <label class="field">每批最多字符数
               <input name="max_chars" type="number" min="200" max="50000">
             </label>
-            <label class="field">temperature
+            <label class="field llm-only">temperature
               <input name="temperature" type="number" min="0" max="2" step="0.1" placeholder="默认">
             </label>
             <label class="field">每分钟请求数
               <input name="rpm" type="number" min="0" max="10000" placeholder="不限" title="同一服务的所有请求合计，留空或 0 不限">
             </label>
-            <label class="field">推理强度
+            <label class="field llm-only">推理强度
               <select name="reasoning" title="思考型模型的推理力度；接口不支持时会自动去掉重试">
                 <option value="">不设置</option>
                 <option value="none">关闭</option>
@@ -272,6 +274,7 @@
               </select>
             </label>
           </div>
+          <div class="llm-only">
           <label class="field">System Prompt
             <textarea name="prompt" id="prompt" rows="8" spellcheck="false"></textarea>
           </label>
@@ -291,6 +294,7 @@
             可用变量：<code>{{to}}</code> 目标语言，<code>{{from}}</code> 源语言，<code>{{text}}</code> 待翻译文本，<code>{{title_prompt}}</code> 文档标题上下文。
             多段时会自动附加 [[p0]]、[[p1]] 分段协议说明。
           </p>
+          </div>
         </details>
       </div>
 

@@ -165,17 +165,18 @@ function messageOf(err) {
  */
 
 /**
- * A kind of translation service (PROVIDERS in app/services.py).
+ * A kind of translation service (PROVIDERS in app/services.py). configurable kinds can be added and edited;
+ * the model, prompt and glossary fields are for llm kinds only.
  * @typedef {{
- *   label: string, desc: string, base_url: string, needs_key: boolean, llm: boolean, key_url?: string,
- *   models: string[]
+ *   label: string, desc: string, base_url: string, needs_key: boolean, llm: boolean, configurable: boolean,
+ *   key_url?: string, url_hint?: string, models: string[]
  * }} Provider
  */
 
 /**
  * @typedef {{ system: string, user: string }} DefaultPrompts
  * @typedef {{ source: string, result: string, ms: number }} ServiceTest
- * @typedef {{ code: string, name: string, native: string, google: boolean }} Language
+ * @typedef {{ code: string, name: string, native: string, google: boolean, deepl: boolean }} Language
  * @typedef {{ id: string, name: string, entries: string, count: number }} Glossary
  * @typedef {{ entries: string, count: number }} GlossaryImport
  * @typedef {{ retention_days: number, max_jobs: number }} Settings
@@ -471,6 +472,7 @@ const ICONS = {
   claude: '<path fill="currentColor" d="M12 2.5l1.5 6.2 4.9-4.1-2.6 5.8 6.2-1.4-5.4 3.4 5.4 3.4-6.2-1.4 2.6 5.8-4.9-4.1L12 21.5l-1.5-6.2-4.9 4.1 2.6-5.8-6.2 1.4 5.4-3.4-5.4-3.4 6.2 1.4-2.6-5.8 4.9 4.1z"/>',
   gemini: '<path fill="currentColor" d="M12 2c.6 5.4 4.6 9.4 10 10-5.4.6-9.4 4.6-10 10-.6-5.4-4.6-9.4-10-10 5.4-.6 9.4-4.6 10-10z"/>',
   grok: '<circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M6.2 19.2L18.4 5.6"/>',
+  deepl: '<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M4 5h16v11h-9l-4.5 3.5V16H4z"/><path stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M8 9h8M8 12.5h5"/>',
   custom: '<circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1M18.4 5.6l-2.1 2.1m-8.6 8.6l-2.1 2.1"/>',
 };
 
@@ -684,7 +686,7 @@ function renderDetail() {
   $("save-status").textContent = "";
 
   const fromCC = s.source === "ccswitch";
-  const editable = meta.llm && (!fromCC || s.available);
+  const editable = meta.configurable && (!fromCC || s.available);
   $("svc-fields").hidden = !editable;
   $("save-btn").hidden = !editable;
   $("delete-btn").hidden = s.builtin;
@@ -703,6 +705,7 @@ function renderDetail() {
       : `CC Switch 当前生效的「${s.name.split(" · ").pop()}」无法用于翻译：${s.unavailable_reason}。请在 CC Switch 中切换到配置了 API Key 的供应商，然后点击「刷新」。`;
   }
   if (!editable) return;
+  for (const el of svcForm.querySelectorAll(".llm-only")) /** @type {HTMLElement} */ (el).hidden = !meta.llm;
 
   const notice = $("key-notice");
   notice.replaceChildren();
@@ -730,8 +733,9 @@ function renderDetail() {
   byId("show-key", HTMLInputElement).checked = false;
   f.name.value = s.name;
   f.base_url.value = s.base_url;
-  f.base_url.placeholder = meta.base_url || "例如 https://api.deepseek.com/v1";
-  f.base_url.required = !meta.base_url;
+  f.base_url.placeholder = meta.base_url || meta.url_hint || "例如 https://api.deepseek.com/v1";
+  // Only an LLM service without a preset address needs one; DeepL picks its address from the key
+  f.base_url.required = !!meta.llm && !meta.base_url;
   f.concurrency.value = String(s.concurrency);
   f.max_items.value = String(s.max_items);
   f.max_chars.value = String(s.max_chars);
@@ -850,7 +854,8 @@ function formPayload() {
 svcForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   const payload = formPayload();
-  if (!payload.model && selected()?.source !== "ccswitch") {
+  const s = selected();
+  if (!payload.model && s && state.providers[s.provider]?.llm && s.source !== "ccswitch") {
     $("save-status").textContent = "请先选择或输入模型";
     return;
   }
@@ -894,7 +899,7 @@ $("test-btn").addEventListener("click", async () => {
     try {
       // As formPayload, which fails the same way when no service is selected
       if (!s) throw new Error("没有选中的翻译服务");
-      const payload = state.providers[s.provider]?.llm ? formPayload() : { id: s.id, provider: s.provider };
+      const payload = state.providers[s.provider]?.configurable ? formPayload() : { id: s.id, provider: s.provider };
       const r = /** @type {ServiceTest} */ (await api("/api/services/test", { json: payload }));
       box.classList.add("ok");
       box.textContent = `测试成功（${r.ms} ms）：${r.source} → ${r.result}`;
@@ -1037,9 +1042,12 @@ function checkLangPair() {
   const msgs = [];
   if (from !== "auto" && from === to) msgs.push("源语言与目标语言相同，无需翻译。");
   const svc = selectedService();
-  if (svc && svc.provider === "google") {
-    const bad = [from, to].filter((c) => c !== "auto" && !langInfo(c)?.google);
-    if (bad.length) msgs.push(`谷歌翻译不支持${bad.map(langLabel).join("、")}，请换用 AI 翻译服务。`);
+  // Machine translation services support only some languages; the flag of each is in the language list
+  if (svc && (svc.provider === "google" || svc.provider === "deepl")) {
+    const provider = svc.provider;
+    const bad = [from, to].filter((c) => c !== "auto" && !langInfo(c)?.[provider]);
+    const name = provider === "google" ? "谷歌翻译" : "DeepL ";
+    if (bad.length) msgs.push(`${name}不支持${bad.map(langLabel).join("、")}，请换用 AI 翻译服务。`);
   }
   warn.textContent = msgs.join(" ");
   warn.hidden = !msgs.length;
@@ -2909,7 +2917,7 @@ async function init() {
     targetLang.add(new Option(label, lang.code));
   }
   for (const [key, meta] of Object.entries(providers)) {
-    if (meta.llm) byId("add-provider", HTMLSelectElement).add(new Option(meta.label, key));
+    if (meta.configurable) byId("add-provider", HTMLSelectElement).add(new Option(meta.label, key));
   }
   const saved = loadSettings();
   for (const name of ["source_lang", "target_lang", "mode"]) {

@@ -7,7 +7,7 @@ from fastapi import APIRouter, Body, HTTPException
 
 from .. import state
 from ..json_types import JSONDict
-from ..languages import GOOGLE_CODES, LANGUAGES
+from ..languages import DEEPL_CODES, GOOGLE_CODES, LANGUAGES
 from ..prompts import default_prompts
 from ..services import PROVIDERS, ServiceError
 from ..translators import LLMTranslator, Translator, TranslatorError, create_translator
@@ -17,10 +17,16 @@ router = APIRouter()
 
 @router.get("/api/languages")
 def languages() -> list[JSONDict]:
-    """Language list in the same order as the plugin. The google field tells whether Google Translate supports
-    the language."""
+    """Language list in the same order as the plugin. The google and deepl fields tell whether Google Translate
+    and DeepL support the language."""
     return [
-        {"code": code, "name": en, "native": native, "google": code == "auto" or code in GOOGLE_CODES}
+        {
+            "code": code,
+            "name": en,
+            "native": native,
+            "google": code == "auto" or code in GOOGLE_CODES,
+            "deepl": code == "auto" or code in DEEPL_CODES,
+        }
         for code, en, native in LANGUAGES
     ]
 

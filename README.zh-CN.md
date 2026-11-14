@@ -38,6 +38,7 @@ ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 | 类型 | 接口 | 默认地址 |
 | --- | --- | --- |
 | 谷歌翻译 | 免费网页接口，无需 Key，量大可能被限流 | 内置 |
+| DeepL | DeepL 官方 API（免费版或付费版），需要 API Key | 按 Key 自动选择：免费版 Key（以 `:fx` 结尾）用 `https://api-free.deepl.com/v2`，其余用 `https://api.deepl.com/v2` |
 | OpenAI | Chat Completions | `https://api.openai.com/v1` |
 | Claude | Anthropic Messages | `https://api.anthropic.com/v1` |
 | Gemini | generateContent | `https://generativelanguage.googleapis.com/v1beta` |
@@ -45,6 +46,8 @@ ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 | OpenAI 兼容接口 | Chat Completions | 自行填写，如 DeepSeek、通义、Kimi、OpenRouter、Ollama |
 
 每个服务可配置 API Key、名称、API 地址、模型（预置列表、自定义输入或从接口获取列表）。高级设置包含并发数、每批段落数和字符数、temperature、每分钟请求数、推理强度、System Prompt 和 Prompt。并发数是整个服务的上限：同时使用该服务的翻译任务、网页翻译和服务测试合计不超过它。请求只在发送期间占用名额，出错后等待重试的请求会把名额让给其他请求。服务返回 429 或 503 时，发往它的所有请求都按返回的要求暂停（`Retry-After` 秒数或日期，或 `retry-after-ms`；最多 60 秒，没有说明时按指数退避），而不是各自再撞一次限流。每次请求要在按批大小算出的时限内完成（60 秒加每 25 个字符 1 秒，介于 90 到 300 秒之间），超时就重试；同一请求的所有尝试累计超过这个时限的 2.5 倍就停止，卡住的回复不会长时间占着名额。每分钟请求数（默认留空，不限）限制该服务任意 60 秒内的请求数（含重试）；和并发数一样，使用该服务的所有任务和网页翻译合计计算，超出的请求会等到最早的一个请求移出窗口再发送。
+
+DeepL 和谷歌翻译一样是机器翻译：表单里有 Key、名称、地址和批大小、并发、每分钟请求数，没有模型、提示词和术语表。一次请求最多 50 段（新建的 DeepL 服务默认每批 50 段、5000 字符、并发 2，填得更大时按 DeepL 的上限截断）。富文本段落用 `tag_handling=html` 发送，文档标题作为 `context` 发送，这部分 DeepL 不计费。429 和 5xx 与其他服务一样重试；Key 错误（403）或额度用完（456）直接报错并说明原因。不使用 bob-plugin-akl-deepl-free-translate 这类插件逆向的免费网页接口：DeepL 现在对它返回 200，「译文」却是一段要求升级应用的提示。
 
 推理强度控制思考型模型的推理力度：不设置（默认，不发送任何参数）、关闭、最低、低、中、高。对 Chat Completions 发送 `reasoning_effort`，对 Responses API 发送 `reasoning.effort`，对 Claude 使用自适应思考加 effort 档位（关闭时发送 `thinking: disabled`；开启思考时不发送 temperature，输出上限提高到 16000 tokens），对 Gemini 设置 `thinkingConfig` 的思考预算。接口对它返回 400 时，本次任务后续请求都不再带这个参数并重发请求，与 temperature 的处理相同。它和 temperature 一样不计入缓存键：修改后已缓存的译文仍然有效。
 
@@ -108,6 +111,7 @@ ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 - 已经是目标语言的段落不翻译（例如英文书中引用的中文，翻成中文时跳过）。简体与繁体互译不算同一种语言。
 - 检测到文档语言与目标语言一致时，任务页会给出提示，对应插件的 sameLangCheck。
 - 谷歌翻译按插件的代码映射转换语言（zh-HK→zh-TW、fil→tl 等）；不支持的语言（如文言文）会提示改用 AI 服务。
+- DeepL 支持其 API 的 33 种语言。目标语言按 DeepL 的要求带区域变体（zh-CN→ZH-HANS，zh-TW 和 zh-HK→ZH-HANT，en→EN-US，pt→PT-PT，pt-br→PT-BR），挪威语用 NB。其他语言在翻译页的提示与谷歌翻译相同。
 - 译文元素带 `lang` 属性；阿拉伯语、希伯来语等从右到左的语言加 `dir="rtl"`，PDF 中右对齐。
 
 ### 提示词
@@ -146,7 +150,7 @@ ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 - 扩展只在按快捷键或点按钮时取得当前标签页的权限（`activeTab`）。安装时只能访问 `127.0.0.1` 和 `localhost`；在设置页连接其他机器上的服务时，浏览器才请求访问该地址（服务端要监听外部地址，在 `ALLOWED_HOSTS` 里加入这个地址并设置 `ACCESS_TOKEN`，设置页的「访问令牌」填它的值；连不上时设置页会说明原因）。令牌只保存在这个浏览器里，不随账号同步。http 地址不加密，页面文字以明文经过网络，请只在可信的网络里使用。页面文字只在按快捷键后，或在设为自动翻译的网站上（见下文），才发给所选的翻译服务。
 - 网页译文和文档共用翻译缓存，但不保存为记录，也不生成文档术语表（每页要多一次请求）；服务里填写的术语表仍然生效。
 - 扩展设置页显示缓存了多少条网页译文，可以一键清理（「清理网页翻译缓存」）。清理后，之后打开的网页会重新翻译，已经显示的译文不受影响；和文档共有的段落留给文档使用。加这个功能之前缓存的网页译文没有标记，清不掉，缓存满了会自动淘汰。接口是 `GET` / `DELETE /api/web/cache`。
-- 接口是 `POST /api/web/translate`，请求 `{"texts": [...], "html": [...], "target_lang", "source_lang", "alt_lang", "service_id", "title"}`，最多 50 段，每段最多 10000 字；`html` 与 `texts` 对齐，标出哪些是 HTML 片段，AI 翻译服务对这些段落使用 HTML 提示词，谷歌翻译使用 `format=html`。已是 `target_lang` 的段落保留原文，给了 `alt_lang` 时改译成 `alt_lang`。返回 `{"translations": [...], "langs": [...], "detected_lang"}`，`null` 表示保留原文，`langs` 是每段译文的语言。和所有会改动数据的请求一样，来自其他网页的请求会被拒绝（见「已知限制」）。
+- 接口是 `POST /api/web/translate`，请求 `{"texts": [...], "html": [...], "target_lang", "source_lang", "alt_lang", "service_id", "title"}`，最多 50 段，每段最多 10000 字；`html` 与 `texts` 对齐，标出哪些是 HTML 片段，AI 翻译服务对这些段落使用 HTML 提示词，谷歌翻译使用 `format=html`，DeepL 使用 `tag_handling=html`。已是 `target_lang` 的段落保留原文，给了 `alt_lang` 时改译成 `alt_lang`。返回 `{"translations": [...], "langs": [...], "detected_lang"}`，`null` 表示保留原文，`langs` 是每段译文的语言。和所有会改动数据的请求一样，来自其他网页的请求会被拒绝（见「已知限制」）。
 - 扩展能访问的 iframe 随页面一起翻译（与页面同一网站的 iframe 总能访问，其他网站的要有该网站的权限），也随快捷键一起隐藏、显示；之后才加入的 iframe 在下次按快捷键时开始翻译。输入框的占位文字（`placeholder`）随页面翻译，提示文字（`title`）在鼠标悬停时才翻译，因为大多不会被看到。双语对照时属性同时显示两种文字（`原文 / 译文`，提示文字分两行）；隐藏译文就恢复原文；页面之后自己改过的值不再动。`alt`、`aria-label` 不翻译，它们不显示在页面上。
 - shadow DOM 里的文字也会翻译，封闭（`closed`）的 shadow root 也包括在内。块级的宿主元素里，shadow root 里的文字和放进它插槽的子元素各自分段，放进具名插槽的原文，译文也放进同一个插槽。内联的宿主元素留在周围的句子里：用插槽显示子元素的，和普通内联元素一样处理；只显示自身内容的（相对时间、徽标等），原样复制到译文里，单独成段时才翻译它的内容。页面的样式进不了 shadow root，扩展在每个放了译文的 shadow root 里加一个 `<style>`，内容和页面上的相同。页面加载后才定义的自定义元素，在页面下一次变动时补上翻译。
 - Chrome 自己的页面和应用商店不能翻译，此时工具栏按钮显示 `×`。
@@ -175,7 +179,7 @@ ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 - 哪些算一个词：以空格分词的文字，最多 4 个词、40 个字符，只含字母；中文、日文、泰文等，只含文字、且浏览器的分词（`Intl.Segmenter`，和双击选词用的一样）分出不超过 2 个词，例如「银行」「画蛇添足」「人工智能」。「他去银行取钱」这样的句子仍按原来的方式翻译。
 - 词条的语言和选中文字的翻译规则一致：用目标语言写；选中的词本身就是目标语言时，改用设置页「选中的文字已是目标语言时译成」的语言。目标语言是中文时，选中英文词用中文解释，选中中文词用英文解释。由模型判断选中的词是哪种语言，因为单个词的语言检测不可靠。
 - 选中的词所在的句子会一起发出，让模型选对词义；双击时一并选中的引号、标点会去掉。每次查词一次请求，不缓存。
-- Google 等非 LLM 服务不查词，仍按原来的方式翻译选中的文字。查词失败时也一样（模型连续两次没按格式回答、翻译服务出错、服务是加入查词之前的旧版本）。
+- Google、DeepL 等非 LLM 服务不查词，仍按原来的方式翻译选中的文字。查词失败时也一样（模型连续两次没按格式回答、翻译服务出错、服务是加入查词之前的旧版本）。
 - 接口是 `POST /api/web/lookup`，请求 `{"text", "context", "target_lang", "source_lang", "alt_lang", "service_id", "title"}`（`text` 最多 100 字，`context` 即所在句子，最多 2000 字），返回 `{"headword", "phonetic", "senses": [{"pos", "meaning"}], "in_context", "lang"}`，`lang` 是词条所用的语言；非 LLM 服务返回 501，翻译服务出错或模型回答不是词条时返回 502。
 
 ### 自动翻译的网站
@@ -283,13 +287,13 @@ app/
   runner.py        去重、缓存、切批、并发
   edits.py         阅读器里手动修改的译文，按记录的缓存键存入缓存
   background.py    读版面、写回等线程里的活，任务暂停时让线程停下
-  translators.py   翻译引擎（Google / OpenAI / Claude / Gemini / Grok / 兼容接口）
+  translators.py   翻译引擎（Google / DeepL / OpenAI / Claude / Gemini / Grok / 兼容接口）
   request_log.py   任务发出的请求日志（requests.jsonl）及其汇总
   usage.py         各家接口的 token 用量统一成同一种结构
   services.py      翻译服务配置的增删改查
   ccswitch.py      读取 CC Switch 当前生效的供应商
   prompts.py       默认提示词和分段协议
-  languages.py     语言表、提示词覆盖规则、谷歌语言码映射
+  languages.py     语言表、提示词覆盖规则、谷歌和 DeepL 语言码映射
   langdetect.py    文档语言检测
   glossary.py      术语表：找候选术语、按批筛选、CSV 导入导出
   glossaries.py    术语表库（data/glossaries.json）

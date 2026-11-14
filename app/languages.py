@@ -251,6 +251,49 @@ GOOGLE_CODES = {
     "zu": "zu",
 }
 
+# DeepL API codes by our code: (source_lang, target_lang). Taken from the languages of DeepL's OpenAPI spec (the
+# translation memory enums list them all). A source language has no regional variant; a target language needs one
+# for English and Portuguese (plain EN and PT are deprecated as targets) and for the Chinese script. Languages not in
+# the table cannot use DeepL
+DEEPL_CODES: dict[str, tuple[str, str]] = {
+    "ar": ("AR", "AR"),
+    "bg": ("BG", "BG"),
+    "cs": ("CS", "CS"),
+    "da": ("DA", "DA"),
+    "de": ("DE", "DE"),
+    "el": ("EL", "EL"),
+    "en": ("EN", "EN-US"),
+    "es": ("ES", "ES"),
+    "et": ("ET", "ET"),
+    "fi": ("FI", "FI"),
+    "fr": ("FR", "FR"),
+    "he": ("HE", "HE"),
+    "hu": ("HU", "HU"),
+    "id": ("ID", "ID"),
+    "it": ("IT", "IT"),
+    "ja": ("JA", "JA"),
+    "ko": ("KO", "KO"),
+    "lt": ("LT", "LT"),
+    "lv": ("LV", "LV"),
+    "no": ("NB", "NB"),
+    "nl": ("NL", "NL"),
+    "pl": ("PL", "PL"),
+    "pt": ("PT", "PT-PT"),
+    "pt-br": ("PT", "PT-BR"),
+    "ro": ("RO", "RO"),
+    "ru": ("RU", "RU"),
+    "sk": ("SK", "SK"),
+    "sl": ("SL", "SL"),
+    "sv": ("SV", "SV"),
+    "th": ("TH", "TH"),
+    "tr": ("TR", "TR"),
+    "uk": ("UK", "UK"),
+    "vi": ("VI", "VI"),
+    "zh-CN": ("ZH", "ZH-HANS"),
+    "zh-TW": ("ZH", "ZH-HANT"),
+    "zh-HK": ("ZH", "ZH-HANT"),
+}
+
 RTL_LANGUAGES = ["ar", "arc", "az", "dv", "he", "ckb", "fa", "ur", "ug"]
 
 # langOverrides of the extension: id is "<from>2<to>", and extends means another entry is inherited first

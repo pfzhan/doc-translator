@@ -14,7 +14,7 @@ import time
 import unicodedata
 import weakref
 from collections import deque
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -26,7 +26,7 @@ import httpx
 from . import glossary as glossary_mod
 from . import prompts
 from .json_types import JSONDict
-from .languages import GOOGLE_CODES, LANGUAGES
+from .languages import DEEPL_CODES, GOOGLE_CODES, LANGUAGES
 from .lookup import WordEntry, parse_entry
 from .request_log import RequestLog, RequestReason, RequestRecord
 from .usage import Usage, nested, reported
@@ -268,6 +268,28 @@ class Translator:
 
     def is_html_item(self, text: str) -> bool:
         return text in self.html_texts
+
+    async def _by_format(
+        self, texts: list[str], request: Callable[[list[str], bool], Awaitable[list[str]]]
+    ) -> list[str]:
+        """Translate rich-text and plain-text paragraphs in separate requests, for machine translation engines that
+        take a format switch, and put the results back in order. A mixed batch is split into two groups by the
+        caller's flags; nothing is guessed from angle brackets."""
+        html_idx = [i for i, t in enumerate(texts) if self.is_html_item(t)]
+        if not html_idx or len(html_idx) == len(texts):
+            return await request(texts, bool(html_idx))
+        html_set = set(html_idx)
+        plain_idx = [i for i in range(len(texts)) if i not in html_set]
+        html_out, plain_out = await asyncio.gather(
+            request([texts[i] for i in html_idx], True),
+            request([texts[i] for i in plain_idx], False),
+        )
+        out = [""] * len(texts)
+        for i, t in zip(html_idx, html_out):
+            out[i] = t
+        for i, t in zip(plain_idx, plain_out):
+            out[i] = t
+        return out
 
     @property
     def effective_source(self) -> str:
@@ -1151,23 +1173,9 @@ class GoogleTranslator(Translator):
         return f"{self.service_id}:google:{self.source_lang}:{self.target_lang}"
 
     async def translate_batch(self, texts: list[str]) -> list[str]:
-        # A mixed batch is split into two groups by the caller's flags: the rich-text group uses format=html to keep
-        # inline formatting, and the plain-text group keeps format=text so that characters such as & are not
-        # entity-escaped. Nothing is guessed from angle brackets.
-        html_idx = [i for i, t in enumerate(texts) if self.is_html_item(t)]
-        if not html_idx or len(html_idx) == len(texts):
-            return await self._request(texts, html=bool(html_idx))
-        plain_idx = [i for i in range(len(texts)) if i not in set(html_idx)]
-        html_out, plain_out = await asyncio.gather(
-            self._request([texts[i] for i in html_idx], html=True),
-            self._request([texts[i] for i in plain_idx], html=False),
-        )
-        out = [""] * len(texts)
-        for i, t in zip(html_idx, html_out):
-            out[i] = t
-        for i, t in zip(plain_idx, plain_out):
-            out[i] = t
-        return out
+        # The rich-text group uses format=html to keep inline formatting, and the plain-text group keeps format=text
+        # so that characters such as & are not entity-escaped
+        return await self._by_format(texts, self._request)
 
     async def _request(self, texts: list[str], html: bool) -> list[str]:
         params = {"client": "gtx", "sl": self.sl, "tl": self.tl, "format": "html" if html else "text"}
@@ -1227,6 +1235,160 @@ class GoogleTranslator(Translator):
         await self.client.aclose()
 
 
+def deepl_base_url(base_url: str, api_key: str) -> str:
+    """The /v2 address of the DeepL API. Left empty, it follows the key: a DeepL API Free key ends in ":fx" and only
+    works on api-free.deepl.com, any other key on api.deepl.com. A domain alone gets /v2, and an address pasted with
+    /translate at the end loses it."""
+    url = base_url.strip().rstrip("/")
+    if not url:
+        return DEEPL_FREE_URL if api_key.strip().endswith(":fx") else DEEPL_PRO_URL
+    url = url.removesuffix("/translate")
+    return _with_default_path(url, "/v2")
+
+
+DEEPL_FREE_URL = "https://api-free.deepl.com/v2"
+DEEPL_PRO_URL = "https://api.deepl.com/v2"
+
+
+class DeepLTranslator(Translator):
+    """The official DeepL API (Free or Pro), which needs an authentication key. Machine translation like Google:
+    no prompt, glossary or token usage; the document title goes in as context, which DeepL does not bill."""
+
+    retries = 5
+    # DeepL takes up to 50 texts in one request, within a 128 KiB body: 30000 characters stay under it even when
+    # every character takes three bytes, as Chinese does, with room for JSON escapes
+    _MAX_ITEMS = 50
+    _MAX_CHARS = 30000
+
+    def __init__(
+        self,
+        target_lang: str,
+        source_lang: str = "auto",
+        *,
+        api_key: str,
+        base_url: str = "",
+        concurrency: int = 2,
+        max_items: int = 50,
+        max_chars: int = 5000,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        super().__init__(target_lang, source_lang)
+        if target_lang not in DEEPL_CODES:
+            raise TranslatorError(f"DeepL 不支持目标语言「{prompts.lang_name(target_lang)}」，请换用 AI 翻译服务")
+        if source_lang != "auto" and source_lang not in DEEPL_CODES:
+            raise TranslatorError(
+                f"DeepL 不支持源语言「{prompts.lang_name(source_lang)}」，请改为自动检测或换用 AI 翻译服务"
+            )
+        self.target_code = DEEPL_CODES[target_lang][1]
+        # Left out of the request for automatic detection
+        self.source_code = "" if source_lang == "auto" else DEEPL_CODES[source_lang][0]
+        self.api_key = api_key
+        self.url = deepl_base_url(base_url, api_key) + "/translate"
+        self.concurrency = concurrency
+        self.max_batch_items = max(1, min(max_items, self._MAX_ITEMS))
+        self.max_batch_chars = max(1, min(max_chars, self._MAX_CHARS))
+        self.client = httpx.AsyncClient(timeout=60, transport=transport)
+
+    @property
+    def cache_key(self) -> str:
+        return f"{self.service_id}:deepl:{self.source_lang}:{self.target_lang}"
+
+    async def translate_batch(self, texts: list[str]) -> list[str]:
+        # tag_handling=html for rich text keeps its inline tags in place; plain text is sent as text, so that a
+        # stray < or & in it is not taken for markup
+        return await self._by_format(texts, self._request)
+
+    def _body(self, texts: list[str], html: bool) -> JSONDict:
+        body: JSONDict = {"text": texts, "target_lang": self.target_code}
+        if self.source_code:
+            body["source_lang"] = self.source_code
+        if html:
+            body["tag_handling"] = "html"
+        if self.title:
+            body["context"] = self.title
+        return body
+
+    async def _request(self, texts: list[str], html: bool) -> list[str]:
+        body = self._body(texts, html)
+        headers = {"Authorization": f"DeepL-Auth-Key {self.api_key}"}
+        call = Call.of(texts, "normal")
+        for attempt in range(self.retries):
+            last = attempt == self.retries - 1
+            async with self._slot() as waited:
+                timing = self._start_attempt(attempt + 1, waited)
+                clock = time.perf_counter()
+                failure: httpx.HTTPError | None = None
+                try:
+                    resp = await self.client.post(self.url, json=body, headers=headers)
+                except httpx.HTTPError as e:
+                    failure = e
+                timing.duration = time.perf_counter() - clock
+            if failure is not None:
+                self._log_request(call, timing, None, _failure_kind(failure))
+                if last:
+                    raise TranslatorError(f"DeepL 请求失败: {failure}") from failure
+                await asyncio.sleep(2**attempt)
+                continue
+            status = resp.status_code
+            if status == 200:
+                out = self._translations(resp, len(texts))
+                self._log_request(call, timing, 200, "" if out is not None else "format")
+                if out is None:
+                    raise TranslatorError(f"DeepL 返回格式异常: {resp.text[:200]}")
+                return out
+            self._log_request(call, timing, status, "http")
+            # 429 is DeepL's rate limit and 503 an overload: both hold back every request to it. Other 5xx are
+            # passing failures of this request; DeepL's documentation asks to retry both kinds with backoff
+            delay = _retry_delay(resp, min(2 ** (attempt + 1), 30))
+            if status in _OVERLOADED:
+                self._pause(delay)
+            elif status >= 500:
+                if not last:
+                    await asyncio.sleep(delay)
+            else:
+                raise TranslatorError(_deepl_error(resp), status=status)
+            if last:
+                raise TranslatorError(f"DeepL 接口错误 {status}: {_error_text(resp)}", status=status)
+        raise TranslatorError("已达到最大重试次数")
+
+    @staticmethod
+    def _translations(resp: httpx.Response, count: int) -> list[str] | None:
+        """The translations of a 200 response, in request order; None when it is not what DeepL answers."""
+        try:
+            data = resp.json()
+        except ValueError:
+            return None
+        items = data.get("translations") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            return None
+        out = [item.get("text") if isinstance(item, dict) else None for item in items]
+        if not all(isinstance(t, str) for t in out):
+            return None
+        if len(out) != count:
+            raise TranslatorError("DeepL 返回的译文条数与请求不一致")
+        return [t for t in out if isinstance(t, str)]
+
+    async def aclose(self) -> None:
+        await self.client.aclose()
+
+
+def _deepl_error(resp: httpx.Response) -> str:
+    """A readable message for a DeepL error that retrying does not fix."""
+    detail = _error_text(resp)
+    match resp.status_code:
+        case 401 | 403:
+            return (
+                "DeepL API Key 无效，或与 API 地址不匹配（免费版 Key 以 :fx 结尾，只能用 api-free.deepl.com）"
+                f": {detail}"
+            )
+        case 456:
+            return "DeepL 本期的字符额度已用完，请等下个计费周期或升级套餐"
+        case 413:
+            return "请求过大，请在高级设置中调小每批最多字符数"
+        case _:
+            return f"DeepL 接口错误 {resp.status_code}: {detail}"
+
+
 class MockTranslator(Translator):
     """For tests: prefix the text with a marker."""
 
@@ -1267,6 +1429,20 @@ def _build_translator(
         return GoogleTranslator(target_lang, source_lang, transport=transport)
     if provider == "mock":
         return MockTranslator(target_lang, source_lang)
+    if provider == "deepl":
+        key = (service.get("api_key") or "").strip()
+        if not key:
+            raise TranslatorError(f"「{service.get('name') or 'DeepL'}」需要先填写 API Key")
+        return DeepLTranslator(
+            target_lang,
+            source_lang,
+            api_key=key,
+            base_url=service.get("base_url") or "",
+            concurrency=service.get("concurrency") or 2,
+            max_items=service.get("max_items") or 50,
+            max_chars=service.get("max_chars") or 5000,
+            transport=transport,
+        )
     cls = LLM_CLASSES.get(provider)
     if cls is None:
         raise TranslatorError(f"未知的服务类型: {provider}")

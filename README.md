@@ -56,6 +56,7 @@ tested on its own.
 | Type | API | Default URL |
 | --- | --- | --- |
 | Google Translate | Free web endpoint, no key needed; heavy use may be rate-limited | built in |
+| DeepL | Official DeepL API (Free or Pro), needs an API key | Picked from the key: `https://api-free.deepl.com/v2` for a Free key (ending in `:fx`), otherwise `https://api.deepl.com/v2` |
 | OpenAI | Chat Completions | `https://api.openai.com/v1` |
 | Claude | Anthropic Messages | `https://api.anthropic.com/v1` |
 | Gemini | generateContent | `https://generativelanguage.googleapis.com/v1beta` |
@@ -74,6 +75,14 @@ seconds) and is retried when it does not; all attempts of one request together s
 stuck answer cannot hold a place for long. Requests per minute (empty by default: no limit) caps the
 requests of the service, retries included, in any 60 seconds; like concurrency it counts every job and web page
 request using the service, and a request over the limit waits for the oldest one to leave the window.
+
+DeepL is machine translation like Google Translate: its form has the key, name, URL and the batch, concurrency and
+rate settings, but no model, prompt or glossary. Up to 50 paragraphs go in one request (new DeepL services start
+with 50 paragraphs and 5,000 characters per batch and a concurrency of 2; larger values are capped at what DeepL
+accepts). Rich-text paragraphs are sent with `tag_handling=html`, and the document title as `context`, which
+DeepL does not bill. 429 and 5xx are retried like the other services; a wrong key (403) or a used-up quota (456)
+fails at once with a message saying so. The free web endpoint that plugins such as bob-plugin-akl-deepl-free-translate
+reverse-engineered is not used: DeepL now answers it with a 200 whose "translation" is a notice to update the app.
 
 The reasoning setting tells a reasoning model how hard to think: not set (the default, nothing is sent), off,
 minimal, low, medium or high. It becomes `reasoning_effort` for Chat Completions, `reasoning.effort` for the
@@ -245,6 +254,9 @@ Chinese, Cantonese and Northeastern Mandarin) is taken from Immersive Translate.
   sameLangCheck in the extension.
 - Google Translate converts language codes with the extension's mapping (zh-HK→zh-TW, fil→tl and so on);
   unsupported languages (such as Classical Chinese) prompt switching to an AI service.
+- DeepL supports the 33 languages of its API. Targets get a regional variant where DeepL wants one (zh-CN→ZH-HANS,
+  zh-TW and zh-HK→ZH-HANT, en→EN-US, pt→PT-PT, pt-br→PT-BR); Norwegian goes as NB. Other languages are flagged on
+  the translate page like Google's.
 - Translated elements carry a `lang` attribute; right-to-left languages such as Arabic and Hebrew get
   `dir="rtl"` and are right-aligned in PDFs.
 
@@ -371,7 +383,8 @@ and each paragraph's translation appears below it. The server must be running.
   not cleared; the cache drops them when it fills up. The API is `GET` / `DELETE /api/web/cache`.
 - The API is `POST /api/web/translate` with `{"texts": [...], "html": [...], "target_lang", "source_lang",
   "alt_lang", "service_id", "title"}`, at most 50 texts of 10,000 characters each; `html` is aligned with `texts` and
-  marks HTML fragments, which LLM services get the HTML prompt for and Google Translate gets `format=html` for.
+  marks HTML fragments, which LLM services get the HTML prompt for, Google Translate `format=html` and DeepL
+  `tag_handling=html`.
   Texts already in `target_lang` are kept, or translated into `alt_lang` when it is given. It answers
   `{"translations": [...], "langs": [...], "detected_lang"}`, where `null` keeps the original and `langs` gives the
   language of each translation. Like every request that changes something, it is rejected when another web page
@@ -439,7 +452,7 @@ selected sentence ("此处", here) and up to five common senses with their parts
   a single word cannot be detected reliably.
 - The sentence the word was selected from is sent with it, so that the model picks the right sense; quotes and
   punctuation a double click takes along are dropped. One request per lookup, not cached.
-- Services without a model, such as Google, do not look words up; the selection is translated as before. So it is
+- Services without a model, such as Google and DeepL, do not look words up; the selection is translated as before. So it is
   when the lookup fails (a reply not in the expected format twice, a service error, a server from before this
   feature).
 - The API is `POST /api/web/lookup` with `{"text", "context", "target_lang", "source_lang", "alt_lang",
@@ -679,13 +692,13 @@ app/
   runner.py        deduplication, caching, batching, concurrency
   edits.py         translations corrected by hand in the reader, stored under the record's cache keys
   background.py    threaded work such as reading layout and writing output, stopped when a job is paused
-  translators.py   translation engines (Google / OpenAI / Claude / Gemini / Grok / compatible APIs)
+  translators.py   translation engines (Google / DeepL / OpenAI / Claude / Gemini / Grok / compatible APIs)
   request_log.py   the log of requests a job sent (requests.jsonl) and its summary
   usage.py         token usage in one shape for every provider
   services.py      creating, reading, updating and deleting service configurations
   ccswitch.py      reading the providers active in CC Switch
   prompts.py       default prompts and the segment protocol
-  languages.py     language table, prompt override rules, Google language code mapping
+  languages.py     language table, prompt override rules, Google and DeepL language code mappings
   langdetect.py    document language detection
   glossary.py      glossary: finding candidate terms, filtering per batch, CSV import and export
   glossaries.py    the glossary library (data/glossaries.json)
