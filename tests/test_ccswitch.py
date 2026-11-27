@@ -149,7 +149,7 @@ def test_store_merges_ccswitch_services(tmp_path: Path, cc_db: Path) -> None:
     store = ServiceStore(tmp_path / "s.json", ccswitch_db=cc_db)
     listed = store.list()
     ids = [s["id"] for s in listed["services"]]
-    assert ids == ["google", "ccswitch-claude", "ccswitch-codex", "ccswitch-gemini", "ccswitch-grok"]
+    assert ids == ["google", "deepl-free", "ccswitch-claude", "ccswitch-codex", "ccswitch-gemini", "ccswitch-grok"]
     assert all("api_key" not in s for s in listed["services"])
     claude = next(s for s in listed["services"] if s["id"] == "ccswitch-claude")
     assert claude["name"] == "Claude · relay-claude" and claude["api_key_hint"] == "sk-…3456"

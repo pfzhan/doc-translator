@@ -25,6 +25,7 @@ import httpx
 
 from . import glossary as glossary_mod
 from . import prompts
+from .deepl_free import DEEPL_FREE_CODES, MAX_REQUEST_UNITS, pack, split_paragraph, target_tag, utf16_len
 from .json_types import JSONDict
 from .languages import DEEPL_CODES, GOOGLE_CODES, LANGUAGES
 from .lookup import WordEntry, parse_entry
@@ -1255,6 +1256,8 @@ class DeepLTranslator(Translator):
     no prompt, glossary or token usage; the document title goes in as context, which DeepL does not bill."""
 
     retries = 5
+    # Statuses that hold back every request to the service: DeepL's rate limit (429) and overload (503)
+    _overloaded: set[int] = _OVERLOADED
     # DeepL takes up to 50 texts in one request, within a 128 KiB body: 30000 characters stay under it even when
     # every character takes three bytes, as Chinese does, with room for JSON escapes
     _MAX_ITEMS = 50
@@ -1308,9 +1311,12 @@ class DeepLTranslator(Translator):
             body["context"] = self.title
         return body
 
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"DeepL-Auth-Key {self.api_key}"}
+
     async def _request(self, texts: list[str], html: bool) -> list[str]:
         body = self._body(texts, html)
-        headers = {"Authorization": f"DeepL-Auth-Key {self.api_key}"}
+        headers = self._headers()
         call = Call.of(texts, "normal")
         for attempt in range(self.retries):
             last = attempt == self.retries - 1
@@ -1331,7 +1337,7 @@ class DeepLTranslator(Translator):
                 continue
             status = resp.status_code
             if status == 200:
-                out = self._translations(resp, len(texts))
+                out = self._translations(resp, texts)
                 self._log_request(call, timing, 200, "" if out is not None else "format")
                 if out is None:
                     raise TranslatorError(f"DeepL 返回格式异常: {resp.text[:200]}")
@@ -1340,20 +1346,24 @@ class DeepLTranslator(Translator):
             # 429 is DeepL's rate limit and 503 an overload: both hold back every request to it. Other 5xx are
             # passing failures of this request; DeepL's documentation asks to retry both kinds with backoff
             delay = _retry_delay(resp, min(2 ** (attempt + 1), 30))
-            if status in _OVERLOADED:
+            if status in self._overloaded:
                 self._pause(delay)
             elif status >= 500:
                 if not last:
                     await asyncio.sleep(delay)
             else:
-                raise TranslatorError(_deepl_error(resp), status=status)
+                raise TranslatorError(self._error(resp), status=status)
             if last:
                 raise TranslatorError(f"DeepL 接口错误 {status}: {_error_text(resp)}", status=status)
         raise TranslatorError("已达到最大重试次数")
 
-    @staticmethod
-    def _translations(resp: httpx.Response, count: int) -> list[str] | None:
+    def _error(self, resp: httpx.Response) -> str:
+        """A readable message for an error that retrying does not fix."""
+        return _deepl_error(resp)
+
+    def _translations(self, resp: httpx.Response, texts: list[str]) -> list[str] | None:
         """The translations of a 200 response, in request order; None when it is not what DeepL answers."""
+        count = len(texts)
         try:
             data = resp.json()
         except ValueError:
@@ -1387,6 +1397,110 @@ def _deepl_error(resp: httpx.Response) -> str:
             return "请求过大，请在高级设置中调小每批最多字符数"
         case _:
             return f"DeepL 接口错误 {resp.status_code}: {detail}"
+
+
+DEEPL_FREE_URL_WEB = "https://oneshot-free.www.deepl.com/v1/translate"
+# A request answered with every paragraph unchanged, although DeepL found them in another language, is taken for
+# the endpoint failing silently (see app/deepl_free.py) once it holds this many letters; below that it may be
+# names and terms that stay as they are
+_UNCHANGED_LETTERS = 200
+
+
+class DeepLFreeTranslator(DeepLTranslator):
+    """DeepL's free web endpoint (oneshot-free), which needs no key. It is not part of DeepL's public API: DeepL may
+    rate-limit it, change it or take it away. A request carries at most 1500 UTF-16 code units, so paragraphs are
+    packed into requests by that limit and longer ones are cut after a sentence (see app/deepl_free.py)."""
+
+    retries = 6
+    # 529 is the endpoint's "too many requests", as 429
+    _overloaded = {*_OVERLOADED, 529}
+
+    def __init__(
+        self, target_lang: str, source_lang: str = "auto", transport: httpx.AsyncBaseTransport | None = None
+    ) -> None:
+        if target_lang in LANG_CODES and target_lang not in DEEPL_FREE_CODES:
+            raise TranslatorError(
+                f"DeepL（免费）不支持目标语言「{prompts.lang_name(target_lang)}」，请换用其他翻译服务"
+            )
+        if source_lang in LANG_CODES and source_lang != "auto" and source_lang not in DEEPL_FREE_CODES:
+            raise TranslatorError(
+                f"DeepL（免费）不支持源语言「{prompts.lang_name(source_lang)}」，请改为自动检测或换用其他翻译服务"
+            )
+        super().__init__(
+            target_lang,
+            source_lang,
+            api_key="",
+            concurrency=2,
+            max_items=50,
+            max_chars=MAX_REQUEST_UNITS,
+            transport=transport,
+        )
+        self.url = DEEPL_FREE_URL_WEB
+        self.target_code = target_tag(DEEPL_CODES[target_lang][1])
+        # Spaces between the pieces of a cut paragraph are dropped in languages that do not put them between sentences
+        self._joins_without_space = self.target_code.split("-")[0] in ("zh", "ja")
+
+    @property
+    def cache_key(self) -> str:
+        return f"{self.service_id}:deepl-free:{self.source_lang}:{self.target_lang}"
+
+    async def translate_batch(self, texts: list[str]) -> list[str]:
+        return await self._by_format(texts, self._request_pieces)
+
+    async def _request_pieces(self, texts: list[str], html: bool) -> list[str]:
+        """Translate paragraphs of one format in as many requests as the length limit needs."""
+        pieces = [(owner, piece, gap) for owner, text in enumerate(texts) for piece, gap in split_paragraph(text, html)]
+        # Blank pieces are not sent; they stay as they are
+        sent = [k for k, (_, piece, _) in enumerate(pieces) if piece.strip()]
+        groups = pack([utf16_len(pieces[k][1]) for k in sent], max_items=self.max_batch_items)
+        results = await asyncio.gather(*(self._request([pieces[sent[j]][1] for j in g], html) for g in groups))
+        translated = [piece for _, piece, _ in pieces]
+        for group, result in zip(groups, results):
+            for j, text in zip(group, result):
+                translated[sent[j]] = text
+        out = [""] * len(texts)
+        for (owner, _, gap), text in zip(pieces, translated):
+            if gap and self._joins_without_space and "\n" not in gap:
+                gap = ""
+            out[owner] += text + gap
+        return out
+
+    def _headers(self) -> dict[str, str]:
+        return {}
+
+    def _body(self, texts: list[str], html: bool) -> JSONDict:
+        body = super()._body(texts, html)
+        # The endpoint takes context as an object and rejects the API's string with a 400
+        body.pop("context", None)
+        return body
+
+    def _error(self, resp: httpx.Response) -> str:
+        detail = _error_text(resp)
+        match resp.status_code:
+            case 401 | 403:
+                return f"DeepL 免费接口拒绝了请求（可能限制了本机的访问），请稍后再试或换用其他翻译服务: {detail}"
+            case 404:
+                return "DeepL 免费接口已不可用（404），请换用其他翻译服务"
+            case 456:
+                return "DeepL 免费接口的额度已用完，请稍后再试或换用其他翻译服务"
+            case _:
+                return f"DeepL 免费接口错误 {resp.status_code}: {detail}"
+
+    def _translations(self, resp: httpx.Response, texts: list[str]) -> list[str] | None:
+        out = super()._translations(resp, texts)
+        if out is not None and out == texts and self._foreign(resp):
+            letters = sum(len(re.findall(r"[^\W\d_]", t)) for t in texts)
+            if letters >= _UNCHANGED_LETTERS:
+                raise TranslatorError("DeepL 免费接口原样返回了原文，没有翻译（接口可能已变更），请换用其他翻译服务")
+        return out
+
+    def _foreign(self, resp: httpx.Response) -> bool:
+        """Whether DeepL found any paragraph of the response in a language other than the target."""
+        target = self.target_code.split("-")[0]
+        data = resp.json()
+        items = data.get("translations") if isinstance(data, dict) else None
+        detected = [item.get("detected_source_language") for item in items or [] if isinstance(item, dict)]
+        return any(isinstance(d, str) and d.split("-")[0].lower() != target for d in detected)
 
 
 class MockTranslator(Translator):
@@ -1427,6 +1541,8 @@ def _build_translator(
     provider = str(service.get("provider") or "")
     if provider == "google":
         return GoogleTranslator(target_lang, source_lang, transport=transport)
+    if provider == "deepl-free":
+        return DeepLFreeTranslator(target_lang, source_lang, transport=transport)
     if provider == "mock":
         return MockTranslator(target_lang, source_lang)
     if provider == "deepl":

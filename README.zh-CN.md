@@ -38,6 +38,7 @@ ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 | 类型 | 接口 | 默认地址 |
 | --- | --- | --- |
 | 谷歌翻译 | 免费网页接口，无需 Key，量大可能被限流 | 内置 |
+| DeepL（免费） | DeepL 网页版的免费接口，无需 Key；不属于 DeepL 公开的 API，可能被限流或失效 | 内置 |
 | DeepL | DeepL 官方 API（免费版或付费版），需要 API Key | 按 Key 自动选择：免费版 Key（以 `:fx` 结尾）用 `https://api-free.deepl.com/v2`，其余用 `https://api.deepl.com/v2` |
 | OpenAI | Chat Completions | `https://api.openai.com/v1` |
 | Claude | Anthropic Messages | `https://api.anthropic.com/v1` |
@@ -47,7 +48,13 @@ ALLOWED_HOSTS=192.168.1.20 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 
 
 每个服务可配置 API Key、名称、API 地址、模型（预置列表、自定义输入或从接口获取列表）。高级设置包含并发数、每批段落数和字符数、temperature、每分钟请求数、推理强度、System Prompt 和 Prompt。并发数是整个服务的上限：同时使用该服务的翻译任务、网页翻译和服务测试合计不超过它。请求只在发送期间占用名额，出错后等待重试的请求会把名额让给其他请求。服务返回 429 或 503 时，发往它的所有请求都按返回的要求暂停（`Retry-After` 秒数或日期，或 `retry-after-ms`；最多 60 秒，没有说明时按指数退避），而不是各自再撞一次限流。每次请求要在按批大小算出的时限内完成（60 秒加每 25 个字符 1 秒，介于 90 到 300 秒之间），超时就重试；同一请求的所有尝试累计超过这个时限的 2.5 倍就停止，卡住的回复不会长时间占着名额。每分钟请求数（默认留空，不限）限制该服务任意 60 秒内的请求数（含重试）；和并发数一样，使用该服务的所有任务和网页翻译合计计算，超出的请求会等到最早的一个请求移出窗口再发送。
 
-DeepL 和谷歌翻译一样是机器翻译：表单里有 Key、名称、地址和批大小、并发、每分钟请求数，没有模型、提示词和术语表。一次请求最多 50 段（新建的 DeepL 服务默认每批 50 段、5000 字符、并发 2，填得更大时按 DeepL 的上限截断）。富文本段落用 `tag_handling=html` 发送，文档标题作为 `context` 发送，这部分 DeepL 不计费。429 和 5xx 与其他服务一样重试；Key 错误（403）或额度用完（456）直接报错并说明原因。不使用 bob-plugin-akl-deepl-free-translate 这类插件逆向的免费网页接口：DeepL 现在对它返回 200，「译文」却是一段要求升级应用的提示。
+DeepL 和谷歌翻译一样是机器翻译：表单里有 Key、名称、地址和批大小、并发、每分钟请求数，没有模型、提示词和术语表。一次请求最多 50 段（新建的 DeepL 服务默认每批 50 段、5000 字符、并发 2，填得更大时按 DeepL 的上限截断）。富文本段落用 `tag_handling=html` 发送，文档标题作为 `context` 发送，这部分 DeepL 不计费。429 和 5xx 与其他服务一样重试；Key 错误（403）或额度用完（456）直接报错并说明原因。
+
+「DeepL（免费）」和谷歌翻译一样是内置服务，不需要 Key。它调用 `oneshot-free.www.deepl.com`，也就是 bob-plugin-DL-translate 这类 Bob 插件用的接口：请求格式和 API 相同，只是不带 Key；但它不属于 DeepL 公开的 API，DeepL 可能限流、修改或关闭它。它和 API 的不同之处由引擎处理：
+- 一次请求的所有段落合计最多 1500 个 UTF-16 码元，所以按这个上限把段落装进请求；更长的段落在句末切开，翻译后再拼回去。富文本只在标签以外切开；单个链接或粗体超过上限时，去掉标签发送。
+- 目标语言用 BCP 47 写法（`zh-Hans`、`en-US`、`de`）。API 的大写代码和接口不支持的语言都会返回 200 和原文，所以不提供泰语；一次请求里的外文（合计 200 个字母以上）被原样返回时报错，而不是当作译文保留。
+- 文档标题不作为 `context` 发送，这个接口要的是另一种格式。
+- 429 和 529（请求过多）会暂停该服务并重试；403 和 456 直接报错。
 
 推理强度控制思考型模型的推理力度：不设置（默认，不发送任何参数）、关闭、最低、低、中、高。对 Chat Completions 发送 `reasoning_effort`，对 Responses API 发送 `reasoning.effort`，对 Claude 使用自适应思考加 effort 档位（关闭时发送 `thinking: disabled`；开启思考时不发送 temperature，输出上限提高到 16000 tokens），对 Gemini 设置 `thinkingConfig` 的思考预算。接口对它返回 400 时，本次任务后续请求都不再带这个参数并重发请求，与 temperature 的处理相同。它和 temperature 一样不计入缓存键：修改后已缓存的译文仍然有效。
 
@@ -111,7 +118,7 @@ DeepL 和谷歌翻译一样是机器翻译：表单里有 Key、名称、地址�
 - 已经是目标语言的段落不翻译（例如英文书中引用的中文，翻成中文时跳过）。简体与繁体互译不算同一种语言。
 - 检测到文档语言与目标语言一致时，任务页会给出提示，对应插件的 sameLangCheck。
 - 谷歌翻译按插件的代码映射转换语言（zh-HK→zh-TW、fil→tl 等）；不支持的语言（如文言文）会提示改用 AI 服务。
-- DeepL 支持其 API 的 33 种语言。目标语言按 DeepL 的要求带区域变体（zh-CN→ZH-HANS，zh-TW 和 zh-HK→ZH-HANT，en→EN-US，pt→PT-PT，pt-br→PT-BR），挪威语用 NB。其他语言在翻译页的提示与谷歌翻译相同。
+- DeepL 支持其 API 的 33 种语言。目标语言按 DeepL 的要求带区域变体（zh-CN→ZH-HANS，zh-TW 和 zh-HK→ZH-HANT，en→EN-US，pt→PT-PT，pt-br→PT-BR），挪威语用 NB。其他语言在翻译页的提示与谷歌翻译相同。「DeepL（免费）」支持的语言相同，只是没有泰语。
 - 译文元素带 `lang` 属性；阿拉伯语、希伯来语等从右到左的语言加 `dir="rtl"`，PDF 中右对齐。
 
 ### 提示词
@@ -294,6 +301,7 @@ app/
   ccswitch.py      读取 CC Switch 当前生效的供应商
   prompts.py       默认提示词和分段协议
   languages.py     语言表、提示词覆盖规则、谷歌和 DeepL 语言码映射
+  deepl_free.py    DeepL 免费接口：支持的语言，按长度上限切分和装批
   langdetect.py    文档语言检测
   glossary.py      术语表：找候选术语、按批筛选、CSV 导入导出
   glossaries.py    术语表库（data/glossaries.json）

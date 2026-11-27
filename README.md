@@ -56,6 +56,7 @@ tested on its own.
 | Type | API | Default URL |
 | --- | --- | --- |
 | Google Translate | Free web endpoint, no key needed; heavy use may be rate-limited | built in |
+| DeepL (free) | DeepL's free web endpoint, no key needed; not part of DeepL's public API, so it may be rate-limited or stop working | built in |
 | DeepL | Official DeepL API (Free or Pro), needs an API key | Picked from the key: `https://api-free.deepl.com/v2` for a Free key (ending in `:fx`), otherwise `https://api.deepl.com/v2` |
 | OpenAI | Chat Completions | `https://api.openai.com/v1` |
 | Claude | Anthropic Messages | `https://api.anthropic.com/v1` |
@@ -81,8 +82,20 @@ rate settings, but no model, prompt or glossary. Up to 50 paragraphs go in one r
 with 50 paragraphs and 5,000 characters per batch and a concurrency of 2; larger values are capped at what DeepL
 accepts). Rich-text paragraphs are sent with `tag_handling=html`, and the document title as `context`, which
 DeepL does not bill. 429 and 5xx are retried like the other services; a wrong key (403) or a used-up quota (456)
-fails at once with a message saying so. The free web endpoint that plugins such as bob-plugin-akl-deepl-free-translate
-reverse-engineered is not used: DeepL now answers it with a 200 whose "translation" is a notice to update the app.
+fails at once with a message saying so.
+
+DeepL (free), 「DeepL（免费）」 in the list, is built in like Google Translate and needs no key. It uses
+`oneshot-free.www.deepl.com`, the endpoint that Bob plugins such as bob-plugin-DL-translate call: it takes the API's
+request without a key, but it is not part of DeepL's public API, so DeepL may rate-limit it, change it or take it
+away. It differs from the API in ways the engine handles:
+- One request carries at most 1,500 UTF-16 code units, all paragraphs together, so paragraphs are packed into
+  requests by that limit, and a longer paragraph is cut after a sentence and put back together after translation.
+  Rich text is cut only outside its tags; a single link or bold run longer than the limit is sent without its tags.
+- The target language is a BCP 47 tag (`zh-Hans`, `en-US`, `de`). Upper-case API codes, and languages the endpoint
+  does not support, come back as a 200 carrying the original text, so Thai is not offered, and a request of
+  foreign text (200 letters or more) answered with the original is reported as an error rather than kept.
+- The document title is not sent as `context`, which the endpoint takes in another form.
+- 429 and 529 (too many requests) pause the service and are retried; 403 and 456 fail at once.
 
 The reasoning setting tells a reasoning model how hard to think: not set (the default, nothing is sent), off,
 minimal, low, medium or high. It becomes `reasoning_effort` for Chat Completions, `reasoning.effort` for the
@@ -256,7 +269,7 @@ Chinese, Cantonese and Northeastern Mandarin) is taken from Immersive Translate.
   unsupported languages (such as Classical Chinese) prompt switching to an AI service.
 - DeepL supports the 33 languages of its API. Targets get a regional variant where DeepL wants one (zh-CN→ZH-HANS,
   zh-TW and zh-HK→ZH-HANT, en→EN-US, pt→PT-PT, pt-br→PT-BR); Norwegian goes as NB. Other languages are flagged on
-  the translate page like Google's.
+  the translate page like Google's. DeepL (free) supports the same languages except Thai.
 - Translated elements carry a `lang` attribute; right-to-left languages such as Arabic and Hebrew get
   `dir="rtl"` and are right-aligned in PDFs.
 
@@ -699,6 +712,7 @@ app/
   ccswitch.py      reading the providers active in CC Switch
   prompts.py       default prompts and the segment protocol
   languages.py     language table, prompt override rules, Google and DeepL language code mappings
+  deepl_free.py    DeepL's free endpoint: its languages, and cutting and packing text within its length limit
   langdetect.py    document language detection
   glossary.py      glossary: finding candidate terms, filtering per batch, CSV import and export
   glossaries.py    the glossary library (data/glossaries.json)

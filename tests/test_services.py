@@ -429,7 +429,7 @@ def _saved(store: ServiceStore, sid: str) -> Service:
 
 def test_store_crud(tmp_path: Path) -> None:
     store = ServiceStore(tmp_path / "s.json")
-    assert [s["id"] for s in store.services] == ["google"]
+    assert [s["id"] for s in store.services] == ["google", "deepl-free"]
     svc = store.create({"provider": "claude", "name": "my-claude", "api_key": "sk-ant-1234567890"})
     assert "api_key" not in svc and svc["api_key_hint"] == "sk-…7890"
     assert svc["model"]  # With preset models the first one is selected
@@ -518,7 +518,7 @@ def test_corrupted_services_json_falls_back(tmp_path: Path) -> None:
     path = tmp_path / "s.json"
     path.write_text("{not json", encoding="utf-8")
     store = ServiceStore(path)
-    assert [s["id"] for s in store.services] == ["google"]
+    assert [s["id"] for s in store.services] == ["google", "deepl-free"]
     assert store.default_id == "google"
     assert store.list()["default"] == "google"
 

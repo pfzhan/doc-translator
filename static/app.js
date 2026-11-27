@@ -176,7 +176,7 @@ function messageOf(err) {
 /**
  * @typedef {{ system: string, user: string }} DefaultPrompts
  * @typedef {{ source: string, result: string, ms: number }} ServiceTest
- * @typedef {{ code: string, name: string, native: string, google: boolean, deepl: boolean }} Language
+ * @typedef {{ code: string, name: string, native: string, google: boolean, deepl: boolean, "deepl-free": boolean }} Language
  * @typedef {{ id: string, name: string, entries: string, count: number }} Glossary
  * @typedef {{ entries: string, count: number }} GlossaryImport
  * @typedef {{ retention_days: number, max_jobs: number }} Settings
@@ -473,6 +473,7 @@ const ICONS = {
   gemini: '<path fill="currentColor" d="M12 2c.6 5.4 4.6 9.4 10 10-5.4.6-9.4 4.6-10 10-.6-5.4-4.6-9.4-10-10 5.4-.6 9.4-4.6 10-10z"/>',
   grok: '<circle cx="12" cy="12" r="8.2" fill="none" stroke="currentColor" stroke-width="2"/><path stroke="currentColor" stroke-width="2.4" stroke-linecap="round" d="M6.2 19.2L18.4 5.6"/>',
   deepl: '<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M4 5h16v11h-9l-4.5 3.5V16H4z"/><path stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M8 9h8M8 12.5h5"/>',
+  "deepl-free": '<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M4 5h16v11h-9l-4.5 3.5V16H4z"/><path stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M8 9h8M8 12.5h5"/>',
   custom: '<circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.8"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" d="M12 3v3m0 12v3M3 12h3m12 0h3M5.6 5.6l2.1 2.1m8.6 8.6l2.1 2.1M18.4 5.6l-2.1 2.1m-8.6 8.6l-2.1 2.1"/>',
 };
 
@@ -1043,10 +1044,12 @@ function checkLangPair() {
   if (from !== "auto" && from === to) msgs.push("源语言与目标语言相同，无需翻译。");
   const svc = selectedService();
   // Machine translation services support only some languages; the flag of each is in the language list
-  if (svc && (svc.provider === "google" || svc.provider === "deepl")) {
-    const provider = svc.provider;
+  const provider = svc?.provider;
+  if (provider === "google" || provider === "deepl" || provider === "deepl-free") {
     const bad = [from, to].filter((c) => c !== "auto" && !langInfo(c)?.[provider]);
-    const name = provider === "google" ? "谷歌翻译" : "DeepL ";
+    // A Latin name needs a space before the Chinese text that follows it
+    const label = state.providers[provider]?.label || provider;
+    const name = /[A-Za-z]$/.test(label) ? `${label} ` : label;
     if (bad.length) msgs.push(`${name}不支持${bad.map(langLabel).join("、")}，请换用 AI 翻译服务。`);
   }
   warn.textContent = msgs.join(" ");

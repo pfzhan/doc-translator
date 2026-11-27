@@ -32,6 +32,15 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "configurable": False,
         "models": [],
     },
+    "deepl-free": {
+        "label": "DeepL（免费）",
+        "desc": "DeepL 网页版的免费接口，无需 API Key。不属于 DeepL 公开的 API，可能被限流，也可能随时失效。",
+        "base_url": "",
+        "needs_key": False,
+        "llm": False,
+        "configurable": False,
+        "models": [],
+    },
     "deepl": {
         "label": "DeepL",
         "desc": "DeepL 官方 API，机器翻译，速度快、译文准确。需要 API Key，免费版每月 50 万字符。",
@@ -116,7 +125,10 @@ FIELDS = {
     "auto_glossary": True,
 }
 
-BUILTIN = [{"id": "google", "provider": "google", "builtin": True, **FIELDS, "name": "谷歌翻译"}]
+BUILTIN = [
+    {"id": "google", "provider": "google", "builtin": True, **FIELDS, "name": "谷歌翻译"},
+    {"id": "deepl-free", "provider": "deepl-free", "builtin": True, **FIELDS, "name": "DeepL（免费）"},
+]
 
 
 class ServiceError(Exception):
@@ -232,10 +244,10 @@ class ServiceStore:
         self.default_id: str = data.get("default", "google")
         # Local settings of CC Switch services: {service id: {enabled, model, prompt, ...}}
         self.ccswitch_settings: dict[str, Service] = data.get("ccswitch", {})
-        # Built-in services always exist; the user can enable or disable them
-        for b in BUILTIN:
+        # Built-in services always exist, at the top in BUILTIN's order; the user can enable or disable them
+        for i, b in enumerate(BUILTIN):
             if not any(s["id"] == b["id"] for s in self.services):
-                self.services.insert(0, dict(b))
+                self.services.insert(i, dict(b))
         # CC Switch services may be temporarily unreadable (for example when the database is locked); the default is
         # kept and list() handles the fallback
         if not self.get(self.default_id) and not self.default_id.startswith("ccswitch-"):

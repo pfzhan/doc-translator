@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from fastapi import APIRouter, Body, HTTPException
 
 from .. import state
+from ..deepl_free import DEEPL_FREE_CODES
 from ..json_types import JSONDict
 from ..languages import DEEPL_CODES, GOOGLE_CODES, LANGUAGES
 from ..prompts import default_prompts
@@ -17,8 +18,8 @@ router = APIRouter()
 
 @router.get("/api/languages")
 def languages() -> list[JSONDict]:
-    """Language list in the same order as the plugin. The google and deepl fields tell whether Google Translate
-    and DeepL support the language."""
+    """Language list in the same order as the plugin. The google, deepl and deepl-free fields tell whether Google
+    Translate, DeepL and DeepL's free endpoint support the language."""
     return [
         {
             "code": code,
@@ -26,6 +27,7 @@ def languages() -> list[JSONDict]:
             "native": native,
             "google": code == "auto" or code in GOOGLE_CODES,
             "deepl": code == "auto" or code in DEEPL_CODES,
+            "deepl-free": code == "auto" or code in DEEPL_FREE_CODES,
         }
         for code, en, native in LANGUAGES
     ]
