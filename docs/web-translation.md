@@ -85,17 +85,18 @@ POST http://127.0.0.1:8765/api/web/translate（app/routes/web.py）
 
 ```python
 class WebTranslateRequest(BaseModel):
-    texts: list[str]               # 上限：50 条，单条 10000 字
-    html: list[bool] = []          # 和 texts 对齐，标出哪些是 HTML 片段（交给 Runner 的 html 参数）
+    texts: list[str]  # 上限：50 条，单条 10000 字
+    html: list[bool] = []  # 和 texts 对齐，标出哪些是 HTML 片段（交给 Runner 的 html 参数）
     target_lang: str = "zh-CN"
     source_lang: str = "auto"
-    service_id: str = ""           # 空则用默认服务
-    title: str = ""                # 页面标题，作为 LLM 上下文；上限 1000 字，发给模型时截到 200 字
-    alt_lang: str = ""             # 已是 target_lang 的段落改译成这个语言（划词翻译用）；空则保留原文
+    service_id: str = ""  # 空则用默认服务
+    title: str = ""  # 页面标题，作为 LLM 上下文；上限 1000 字，发给模型时截到 200 字
+    alt_lang: str = ""  # 已是 target_lang 的段落改译成这个语言（划词翻译用）；空则保留原文
+
 
 class WebTranslateResponse(BaseModel):
-    translations: list[str | None] # 和 texts 一一对应；None 表示保持原文（空白、已是目标语言、译文和原文相同）
-    langs: list[str | None]        # 和 texts 对齐：每段译文的语言（target_lang 或 alt_lang）；保留原文的为 None
+    translations: list[str | None]  # 和 texts 一一对应；None 表示保持原文（空白、已是目标语言、译文和原文相同）
+    langs: list[str | None]  # 和 texts 对齐：每段译文的语言（target_lang 或 alt_lang）；保留原文的为 None
     detected_lang: str
 ```
 
