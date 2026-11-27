@@ -85,41 +85,44 @@ def _wait(host: str, port: int, up: bool, timeout: float) -> bool:
 
 def install(host: str, port: int) -> int:
     if not (ROOT / ".venv" / "bin" / "python").exists():
-        print(f"没有找到 {ROOT / '.venv'}，请先按 README 创建虚拟环境并安装依赖", file=sys.stderr)
+        print(f"{ROOT / '.venv'} not found: create it and install the requirements as the README says", file=sys.stderr)
         return 1
     # An earlier copy of this agent is replaced; the port must then be free, or another server holds it
     _unload()
     if not _wait(host, port, up=False, timeout=10):
-        print(f"{host}:{port} 已被其他程序占用（比如手动启动的服务），请先停止它", file=sys.stderr)
+        print(
+            f"{host}:{port} is taken by another program, such as a server started by hand; stop it first",
+            file=sys.stderr,
+        )
         return 1
     AGENT.parent.mkdir(parents=True, exist_ok=True)
     AGENT.write_bytes(plistlib.dumps(agent(ROOT, host, port, os.environ)))
     AGENT.chmod(0o600)  # may hold ACCESS_TOKEN
     subprocess.run(["launchctl", "bootstrap", _domain(), str(AGENT)], check=True)
     if not _wait(host, port, up=True, timeout=START_TIMEOUT):
-        print(f"服务没有在 {START_TIMEOUT} 秒内启动，请查看 {ROOT / 'server.log'}", file=sys.stderr)
+        print(f"The server did not answer within {START_TIMEOUT} seconds; see {ROOT / 'server.log'}", file=sys.stderr)
         return 1
-    print(f"已安装 {AGENT}，服务运行在 http://{host}:{port}，登录后自动启动")
+    print(f"Installed {AGENT}: the server runs on http://{host}:{port} and starts at login")
     return 0
 
 
 def uninstall() -> int:
     _unload()
     AGENT.unlink(missing_ok=True)
-    print(f"已停止服务并删除 {AGENT}")
+    print(f"Stopped the server and removed {AGENT}")
     return 0
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="在 macOS 上用 launchd 让服务在后台常驻")
+    parser = argparse.ArgumentParser(description="Keep the server running in the background on macOS with launchd")
     commands = parser.add_subparsers(dest="command", required=True)
-    setup = commands.add_parser("install", help="安装并启动（再次运行会按当前设置重装）")
+    setup = commands.add_parser("install", help="install and start it (again: reinstall with the current settings)")
     setup.add_argument("--host", default="127.0.0.1")
     setup.add_argument("--port", type=int, default=8765)
-    commands.add_parser("uninstall", help="停止并删除")
+    commands.add_parser("uninstall", help="stop it and remove the agent")
     args = parser.parse_args(argv)
     if sys.platform != "darwin":
-        print("launchd 只在 macOS 上可用", file=sys.stderr)
+        print("launchd is only available on macOS", file=sys.stderr)
         return 1
     if args.command == "install":
         return install(args.host, args.port)
