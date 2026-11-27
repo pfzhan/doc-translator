@@ -261,3 +261,44 @@ def test_api_lists_its_languages(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert langs["auto"]["deepl-free"] and langs["zh-TW"]["deepl-free"]
     assert langs["th"]["deepl"] and not langs["th"]["deepl-free"]
     assert any(s["id"] == "deepl-free" for s in client.get("/api/services").json()["services"])
+
+
+def test_chinese_and_japanese_are_cut_after_a_full_stop() -> None:
+    """Full-width marks end a sentence without a space after them, and nothing is lost between the pieces."""
+    text = "这是一个用来测试切分的中文句子，它会重复很多次。" * 80
+    pieces = split_paragraph(text, html_text=False)
+    assert [len(piece) for piece, _ in pieces] == [1488, 432]
+    assert pieces[0] == (text[:1488], "") and pieces[0][0].endswith("次。")
+    japanese = "今日はとても良い天気ですね！" * 120
+    assert all(piece.endswith("！") for piece, _ in split_paragraph(japanese, html_text=False))
+
+
+def test_a_closing_quote_stays_with_its_sentence() -> None:
+    text = "他说：“明天见。”" * 300
+    first, _ = split_paragraph(text, html_text=False)[0]
+    assert first.endswith("。”")
+    english = 'He said "See you tomorrow." ' * 80
+    first, gap = split_paragraph(english.strip(), html_text=False)[0]
+    assert first.endswith('tomorrow."') and gap == " "
+
+
+def test_a_full_stop_inside_a_number_or_address_ends_no_sentence() -> None:
+    """Without a sentence end, the cut falls before a space rather than inside 3.14 or example.com."""
+    text = "pi is 3.14 and the site is example.com " * 60
+    pieces = split_paragraph(text.strip(), html_text=False)
+    assert len(pieces) == 2
+    first, gap = pieces[0]
+    assert gap == " "
+    # Every word of both pieces is whole: a cut inside 3.14 or example.com would leave "3." or "example."
+    for piece, _ in pieces:
+        assert set(piece.split()) <= {"pi", "is", "3.14", "and", "the", "site", "example.com"}
+
+
+def test_line_breaks_and_void_tags_do_not_hold_rich_text_open() -> None:
+    """<br> and self-closing tags open nothing, so the text after them can still be cut."""
+    for br in ("<br>", "<br/>"):
+        text = f"The first line of a long poem ends here.{br}" * 60
+        pieces = split_paragraph(text, html_text=True)
+        assert len(pieces) == 2
+        assert all(utf16_len(piece) <= MAX_REQUEST_UNITS for piece, _ in pieces)
+        assert "".join(piece + gap for piece, gap in pieces) == text
