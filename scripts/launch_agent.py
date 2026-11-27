@@ -32,7 +32,9 @@ PASSED_ENV = ("ALLOWED_HOSTS", "ACCESS_TOKEN", "DOC_TRANSLATOR_DATA", "CC_SWITCH
 PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
 # A server that keeps failing at start (port taken, broken install) is restarted at most this often, in seconds
 THROTTLE = 30
+# Seconds to wait for the server to answer after loading, and for the port to be free after unloading
 START_TIMEOUT = 60
+FREE_TIMEOUT = 10
 
 
 def agent(root: Path, host: str, port: int, environ: Mapping[str, str]) -> dict[str, object]:
@@ -89,7 +91,7 @@ def install(host: str, port: int) -> int:
         return 1
     # An earlier copy of this agent is replaced; the port must then be free, or another server holds it
     _unload()
-    if not _wait(host, port, up=False, timeout=10):
+    if not _wait(host, port, up=False, timeout=FREE_TIMEOUT):
         print(
             f"{host}:{port} is taken by another program, such as a server started by hand; stop it first",
             file=sys.stderr,
