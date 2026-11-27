@@ -27,6 +27,18 @@ The server exits when the terminal closes. To keep it running in the background,
 `nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 > server.log 2>&1 &`; output goes to
 `server.log`.
 
+On macOS, `python3 scripts/launch_agent.py install` runs the server as a launchd agent instead: it starts at login,
+is restarted when it exits, and no longer stops with the terminal or editor it was started from. The agent is
+`~/Library/LaunchAgents/com.doc-translator.server.plist`; it runs `scripts/doc-translator`, so System Settings >
+General > Login Items lists it as "doc-translator". Output goes to `server.log`.
+
+- `--host` and `--port` change the address (default `127.0.0.1:8765`). launchd does not read the shell's
+  environment, so `ALLOWED_HOSTS`, `ACCESS_TOKEN`, `DOC_TRANSLATOR_DATA` and `CC_SWITCH_DB` set while installing are
+  written into the agent, which only the current user can read. Run `install` again after changing them or moving
+  the project; it replaces the agent.
+- Restart it, after updating the code for example, with `launchctl kickstart -k gui/$(id -u)/com.doc-translator.server`.
+- `python3 scripts/launch_agent.py uninstall` stops the server and removes the agent.
+
 The server accepts requests only for local host names such as `127.0.0.1` and `localhost`. To access it from
 other machines, through a LAN IP address or a domain name, add those names to the environment variable
 `ALLOWED_HOSTS` (comma-separated) and set an access token in `ACCESS_TOKEN` (at least 16 characters):
@@ -723,6 +735,7 @@ app/
 static/            frontend pages (login.html: signing in from other machines)
 extension/         Chrome extension for web page translation
 scripts/           build_firefox.py: writes the Firefox version of the extension to dist/firefox/
+                   launch_agent.py: runs the server as a launchd agent on macOS, through the doc-translator wrapper
 tests/             tests (pytest); test_extension_browser.py runs the extension in Chromium and is skipped without
                    requirements-dev.txt and `playwright install chromium`
 eval/              evaluation scripts for PDF segmentation, inline formulas and models; usage and the paper list

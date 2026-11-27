@@ -20,6 +20,12 @@ python3 -m venv .venv
 
 关闭终端后服务也会退出。需要在后台一直运行时，用 `nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8765 > server.log 2>&1 &` 启动，输出写在 `server.log`。
 
+在 macOS 上，也可以运行 `python3 scripts/launch_agent.py install`，把服务装成 launchd 代理：登录后自动启动，退出后自动重启，不再随启动它的终端或编辑器一起退出。代理文件是 `~/Library/LaunchAgents/com.doc-translator.server.plist`，它运行 `scripts/doc-translator`，所以在「系统设置 › 通用 › 登录项」里显示为「doc-translator」。输出写在 `server.log`。
+
+- `--host` 和 `--port` 修改地址（默认 `127.0.0.1:8765`）。launchd 不读取 shell 的环境变量，所以安装时设置的 `ALLOWED_HOSTS`、`ACCESS_TOKEN`、`DOC_TRANSLATOR_DATA` 和 `CC_SWITCH_DB` 会写进代理文件，这个文件只有当前用户能读。修改这些变量或移动项目后，再运行一次 `install`，会替换原来的代理。
+- 更新代码后等需要重启时，运行 `launchctl kickstart -k gui/$(id -u)/com.doc-translator.server`。
+- `python3 scripts/launch_agent.py uninstall` 停止服务并删除代理。
+
 服务只接受 `127.0.0.1`、`localhost` 等本机地址的访问。需要从其他机器通过局域网 IP 或域名访问时，用环境变量 `ALLOWED_HOSTS` 追加这些地址（逗号分隔），并用 `ACCESS_TOKEN` 设置访问令牌（至少 16 个字符）：
 
 ```bash
@@ -311,6 +317,7 @@ app/
 static/            前端页面（login.html：从其他机器访问时登录）
 extension/         网页翻译的 Chrome 扩展
 scripts/           build_firefox.py：生成 Firefox 版扩展到 dist/firefox/
+                   launch_agent.py：在 macOS 上通过 doc-translator 启动脚本，把服务作为 launchd 代理运行
 tests/             测试（pytest）；test_extension_browser.py 在 Chromium 里运行扩展，没有安装 requirements-dev.txt 和 `playwright install chromium` 时跳过
 eval/              PDF 分段、行内公式和模型的评测脚本，用法和论文列表见 eval/README.zh-CN.md
 ```

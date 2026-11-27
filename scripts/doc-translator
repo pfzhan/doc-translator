@@ -1,0 +1,8 @@
+#!/bin/sh
+# Start the Doc Translator server: python -m uvicorn from the project's .venv. HOST and PORT choose the address
+# (default 127.0.0.1:8765); other settings come from the environment as usual (ALLOWED_HOSTS, ACCESS_TOKEN, ...).
+#
+# The launchd agent that scripts/launch_agent.py installs runs this file. macOS lists a login item by the name of
+# the program it starts, so the server shows up as "doc-translator" rather than as "python3" or "sh".
+cd "$(dirname "$0")/.." || exit 1
+exec .venv/bin/python -m uvicorn app.main:app --host "${HOST:-127.0.0.1}" --port "${PORT:-8765}"
